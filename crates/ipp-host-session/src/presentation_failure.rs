@@ -8,3 +8,12 @@ pub struct HostPresentationFailure {
     /// Diagnostic retained separately from semantic mutation outcomes.
     pub message: String,
 }
+
+/// A platform input context failed without invalidating evaluation outcomes.
+#[derive(Clone, Debug)]
+pub struct HostInputFailure {
+    /// Exact root whose platform input context failed.
+    pub output: ipp_core::OutputRef,
+    /// Diagnostic retained separately from semantic mutation outcomes.
+    pub message: String,
+}

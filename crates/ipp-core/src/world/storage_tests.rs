@@ -4,6 +4,24 @@ use super::*;
 use crate::components::{CustomMaterial, dynamic_properties::clone_count};
 use crate::{DynamicProperties, DynamicValue};
 
+/// Rendered meshes and materials with the evaluators they require.
+const RENDER_SYSTEMS: &[crate::systems::SystemId] = &[
+    crate::systems::animation::AnimationSystem::ID,
+    crate::systems::asset_dependencies::AssetDependencySystem::ID,
+    crate::systems::hierarchy::HierarchySystem::ID,
+    crate::systems::look_at::LookAtSystem::ID,
+    crate::systems::hierarchy::FinalPropagationSystem::ID,
+    crate::systems::geometry::GeometrySystem::ID,
+    crate::systems::render::RenderSystem::ID,
+];
+
+/// Transforms and final World-space propagation.
+const SPATIAL_SYSTEMS: &[crate::systems::SystemId] = &[
+    crate::systems::hierarchy::HierarchySystem::ID,
+    crate::systems::look_at::LookAtSystem::ID,
+    crate::systems::hierarchy::FinalPropagationSystem::ID,
+];
+
 /// Addresses of a material's stable slot and of its heap-owned payloads.
 fn material_addresses(world: &crate::WorldContext<'_>, entity: EntityId) -> [usize; 2] {
     let material = world
@@ -22,7 +40,16 @@ fn ordinary_components_retain_exactly_one_payload_after_commit_and_unrelated_upd
     let mut properties = DynamicProperties::default();
     properties.set("seed", DynamicValue::F32(1.0)).unwrap();
     let mut host = crate::HostRuntime::new();
-    let id = host.create_world(WorldLimits::default()).unwrap();
+    let id = host
+        .create_world(
+            WorldLimits::default(),
+            &[
+                &[crate::systems::constraints::ConstraintSystem::ID],
+                RENDER_SYSTEMS,
+            ]
+            .concat(),
+        )
+        .unwrap();
     let mut world = host.world_mut(id).unwrap();
     world
         .enqueue(Batch {
@@ -33,11 +60,12 @@ fn ordinary_components_retain_exactly_one_payload_after_commit_and_unrelated_upd
                         Command::Create {
                             alias,
                             metadata: EntityMetadata::default(),
+                            adopt: false,
                         },
                         Command::insert_value(
                             EntityRef::Alias(alias),
                             ComponentValue::CustomMaterial(CustomMaterial {
-                                source: format!("file:///materials/{alias}.shader"),
+                                source: format!("file:///materials/{alias}.shader").into(),
                                 properties: properties.clone(),
                                 ..CustomMaterial::default()
                             }),
@@ -46,6 +74,7 @@ fn ordinary_components_retain_exactly_one_payload_after_commit_and_unrelated_upd
                             entity: EntityRef::Alias(alias),
                             component: ComponentValue::SCALAR,
                             fields: Vec::new(),
+                            adopt: false,
                         },
                     ]
                 })
@@ -58,16 +87,15 @@ fn ordinary_components_retain_exactly_one_payload_after_commit_and_unrelated_upd
         .iter()
         .map(|(_, entity)| material_addresses(&world, *entity))
         .collect();
-    // Neither an authored component nor a resolved component remains beside
-    // the single effective value.
+    // No staged copy remains beside the single stored value after commit.
     assert!(
         world
             .world
             .state
             .entities
             .values()
-            .flat_map(|record| record.layers.values())
-            .all(|layer| layer.inputs.retained_inputs().next().is_none())
+            .flat_map(|record| record.components.values())
+            .all(|state| state.staged.is_none())
     );
 
     clone_count::take();
@@ -99,296 +127,40 @@ fn ordinary_components_retain_exactly_one_payload_after_commit_and_unrelated_upd
             .state
             .entities
             .values()
-            .flat_map(|record| record.layers.values())
-            .all(|layer| layer.inputs.retained_inputs().next().is_none())
+            .flat_map(|record| record.components.values())
+            .all(|state| state.staged.is_none())
     );
 }
 
 #[test]
-fn scalar_constraints_keep_restoration_only_for_bound_targets() {
+fn removing_a_component_releases_its_asset_demand() {
     let mut host = crate::HostRuntime::new();
-    let id = host.create_world(WorldLimits::default()).unwrap();
-    let mut world = host.world_mut(id).unwrap();
-    let mut operations: Vec<_> = (0..64)
-        .flat_map(|alias| {
-            [
-                Command::Create {
-                    alias,
-                    metadata: EntityMetadata::default(),
-                },
-                Command::InsertComponent {
-                    entity: EntityRef::Alias(alias),
-                    component: ComponentValue::SCALAR,
-                    fields: vec![FieldWrite {
-                        offset: std::mem::offset_of!(Scalar, value) as u32,
-                        value: FieldValue::F32(alias as f32),
-                    }],
-                },
-            ]
-        })
-        .collect();
-    operations.push(Command::InsertComponent {
-        entity: EntityRef::Alias(1),
-        component: ComponentValue::LINEAR_DRIVER,
-        fields: vec![FieldWrite {
-            offset: std::mem::offset_of!(crate::components::LinearDriver, source) as u32,
-            value: FieldValue::Entity(EntityRef::Alias(0)),
-        }],
-    });
-    world
-        .enqueue(Batch {
-            id: 1,
-            operations,
-        })
+    let id = host
+        .create_world(WorldLimits::default(), RENDER_SYSTEMS)
         .unwrap();
-    let report = world.step(0.0).unwrap();
-    let entities = report.outcomes[0].result.as_ref().unwrap();
-    let target = entities[1].1;
-    assert_eq!(
+    let mut world = host.world_mut(id).unwrap();
+    let demand = |world: &crate::WorldContext<'_>| {
         world
-            .system::<systems::constraints::ConstraintSystem>(
-                systems::constraints::ConstraintSystem::ID
+            .system::<systems::asset_dependencies::AssetDependencySystem>(
+                systems::asset_dependencies::AssetDependencySystem::ID,
             )
             .unwrap()
             .state
-            .restores
-            .len(),
-        1
-    );
-    assert_eq!(
-        world
-            .system::<systems::constraints::ConstraintSystem>(
-                systems::constraints::ConstraintSystem::ID
-            )
-            .unwrap()
-            .state
-            .restores[&target]
-            .base
-            .value,
-        1.0
-    );
-    let snapshot = world.inspect(target).unwrap();
-    assert!(
-        snapshot
-            .base
-            .iter()
-            .any(|value| matches!(value, ComponentValue::Scalar(value) if value.value == 1.0))
-    );
-    assert!(
-        snapshot
-            .effective
-            .iter()
-            .any(|value| matches!(value, ComponentValue::Scalar(value) if value.value == 0.0))
-    );
-    world
-        .enqueue(Batch {
-            id: 2,
-            operations: vec![Command::RemoveComponent {
-                entity: EntityRef::Handle(target),
-                component: ComponentValue::LINEAR_DRIVER,
-            }],
-        })
-        .unwrap();
-    assert!(world.step(0.0).unwrap().outcomes[0].result.is_ok());
-    assert!(
-        world
-            .system::<systems::constraints::ConstraintSystem>(
-                systems::constraints::ConstraintSystem::ID
-            )
-            .unwrap()
-            .state
-            .restores
-            .is_empty()
-    );
-    assert_eq!(
-        world
-            .world
-            .components
-            .scalar(target.index() as usize)
-            .unwrap()
-            .value,
-        1.0
-    );
-}
-
-#[test]
-fn forced_overlay_cleanup_preserves_unrelated_evaluation_and_latest_producer_input() {
-    use crate::{ComponentOverlayMode, EntityOverlayMode, StateOverlayRef};
-
-    let mut host = crate::HostRuntime::new();
-    let id = host.create_world(WorldLimits::default()).unwrap();
-    let mut world = host.world_mut(id).unwrap();
-    let mut operations: Vec<_> = (0..4)
-        .flat_map(|alias| {
-            [
-                Command::Create {
-                    alias,
-                    metadata: EntityMetadata {
-                        symbolic_id: Some(format!("entity-{alias}")),
-                        classes: Vec::new(),
-                    },
-                },
-                Command::InsertComponent {
-                    entity: EntityRef::Alias(alias),
-                    component: ComponentValue::SCALAR,
-                    fields: vec![FieldWrite {
-                        offset: std::mem::offset_of!(Scalar, value) as u32,
-                        value: FieldValue::F32(alias as f32),
-                    }],
-                },
-            ]
-        })
-        .collect();
-    for target in [1, 3] {
-        operations.push(Command::InsertComponent {
-            entity: EntityRef::Alias(target),
-            component: ComponentValue::LINEAR_DRIVER,
-            fields: vec![FieldWrite {
-                offset: std::mem::offset_of!(crate::components::LinearDriver, source) as u32,
-                value: FieldValue::Entity(EntityRef::Alias(target - 1)),
-            }],
-        });
-    }
-    operations.extend([
-        Command::CreateStateOverlayOwner {
-            alias: 0,
-        },
-        Command::AttachEntityOverlayBinding {
-            owner: StateOverlayRef::Alias(0),
-            alias: 1,
-            symbolic_id: "entity-1".into(),
-            mode: EntityOverlayMode::Bound,
-        },
-        Command::AttachComponentStateOverlay {
-            owner: StateOverlayRef::Alias(0),
-            binding: StateOverlayRef::Alias(1),
-            alias: 2,
-            component: ComponentValue::SCALAR,
-            mode: ComponentOverlayMode::Bound,
-            fields: vec![FieldWrite {
-                offset: std::mem::offset_of!(Scalar, value) as u32,
-                value: FieldValue::F32(9.0),
-            }],
-        },
-    ]);
-    world
-        .enqueue(Batch {
-            id: 1,
-            operations,
-        })
-        .unwrap();
-    let report = world.step(0.0).unwrap();
-    let entities = report.outcomes[0].result.as_ref().unwrap();
-    let owner = report.outcomes[0].state_overlays[0].id;
-    let target = entities[1].1;
-    let other = entities[3].1;
-    assert_eq!(
-        world
-            .world
-            .components
-            .scalar(target.index() as usize)
-            .unwrap()
-            .value,
-        0.0
-    );
-    assert_eq!(
-        world
-            .world
-            .components
-            .scalar(other.index() as usize)
-            .unwrap()
-            .value,
-        2.0
-    );
-
-    world.release_state_overlay_owners([owner]);
-    assert_eq!(
-        world
-            .world
-            .components
-            .scalar(target.index() as usize)
-            .unwrap()
-            .value,
-        1.0
-    );
-    assert_eq!(
-        world
-            .world
-            .components
-            .scalar(other.index() as usize)
-            .unwrap()
-            .value,
-        2.0
-    );
-    assert!(
-        world
-            .inspect(target)
-            .unwrap()
-            .base
-            .iter()
-            .any(|value| matches!(value, ComponentValue::Scalar(value) if value.value == 1.0))
-    );
-    world.step(0.0).unwrap();
-    assert_eq!(
-        world
-            .world
-            .components
-            .scalar(target.index() as usize)
-            .unwrap()
-            .value,
-        0.0
-    );
-    world.release_state_overlay_owners([owner]);
-    assert_eq!(
-        world
-            .world
-            .components
-            .scalar(target.index() as usize)
-            .unwrap()
-            .value,
-        0.0,
-        "repeated cleanup must not withdraw an unrelated constraint contribution"
-    );
-}
-
-#[test]
-fn forced_overlay_cleanup_releases_departing_asset_demand_after_preparation() {
-    use crate::{ComponentOverlayMode, EntityOverlayMode, StateOverlayRef};
-
-    let mut host = crate::HostRuntime::new();
-    let id = host.create_world(WorldLimits::default()).unwrap();
-    let mut world = host.world_mut(id).unwrap();
+            .authored_demand()
+            .len()
+    };
     world
         .enqueue(Batch {
             id: 1,
             operations: vec![
                 Command::Create {
                     alias: 0,
-                    metadata: EntityMetadata {
-                        symbolic_id: Some("mesh".into()),
-                        classes: Vec::new(),
-                    },
+                    metadata: EntityMetadata::default(),
+                    adopt: false,
                 },
                 Command::InsertComponent {
                     entity: EntityRef::Alias(0),
                     component: ComponentValue::MESH_INSTANCE,
-                    fields: Vec::new(),
-                },
-                Command::CreateStateOverlayOwner {
-                    alias: 0,
-                },
-                Command::AttachEntityOverlayBinding {
-                    owner: StateOverlayRef::Alias(0),
-                    alias: 1,
-                    symbolic_id: "mesh".into(),
-                    mode: EntityOverlayMode::Bound,
-                },
-                Command::AttachComponentStateOverlay {
-                    owner: StateOverlayRef::Alias(0),
-                    binding: StateOverlayRef::Alias(1),
-                    alias: 2,
-                    component: ComponentValue::MESH_INSTANCE,
-                    mode: ComponentOverlayMode::Bound,
                     fields: vec![FieldWrite {
                         offset: std::mem::offset_of!(crate::components::MeshInstance, source)
                             as u32,
@@ -396,52 +168,53 @@ fn forced_overlay_cleanup_releases_departing_asset_demand_after_preparation() {
                             "ipp://mesh/cube?width=1&height=1&length=1".into(),
                         ),
                     }],
+                    adopt: false,
                 },
             ],
         })
         .unwrap();
     let report = world.step(0.0).unwrap();
-    assert!(report.outcomes[0].result.is_ok());
-    let owner = report.outcomes[0].state_overlays[0].id;
+    let entity = report.outcomes[0].result.as_ref().unwrap()[0].1;
+    assert_eq!(demand(&world), 1);
+
+    world
+        .enqueue(Batch {
+            id: 2,
+            operations: vec![Command::RemoveComponent {
+                entity: EntityRef::Handle(entity),
+                component: ComponentValue::MESH_INSTANCE,
+            }],
+        })
+        .unwrap();
+    assert!(world.step(0.0).unwrap().outcomes[0].result.is_ok());
     assert_eq!(
-        world
-            .system::<systems::asset_dependencies::AssetDependencySystem>(
-                systems::asset_dependencies::AssetDependencySystem::ID
-            )
-            .unwrap()
-            .state
-            .authored_demand()
-            .len(),
-        1
-    );
-    world.release_state_overlay_owners([owner]);
-    assert!(
-        world
-            .system::<systems::asset_dependencies::AssetDependencySystem>(
-                systems::asset_dependencies::AssetDependencySystem::ID
-            )
-            .unwrap()
-            .state
-            .authored_demand()
-            .is_empty(),
-        "the resolved payload and its demand must leave with the overlay owner"
+        demand(&world),
+        0,
+        "the removed payload's demand leaves with the component"
     );
 }
 
 #[test]
 fn commit_growth_failed_preparation_and_neighbor_reuse_preserve_occupied_address() {
     let mut host = crate::HostRuntime::new();
-    let id = host.create_world(Default::default()).unwrap();
+    let id = host
+        .create_world(
+            Default::default(),
+            &[crate::systems::constraints::ConstraintSystem::ID],
+        )
+        .unwrap();
     let mut world = host.world_mut(id).unwrap();
     let scalar_id = ComponentValue::SCALAR;
     let make = |alias| Command::Create {
         alias,
         metadata: EntityMetadata::default(),
+        adopt: false,
     };
     let insert = |entity| Command::InsertComponent {
         entity,
         component: scalar_id,
         fields: vec![],
+        adopt: false,
     };
     world
         .enqueue(Batch {
@@ -511,16 +284,20 @@ fn commit_growth_failed_preparation_and_neighbor_reuse_preserve_occupied_address
 #[test]
 fn typed_scene_slots_survive_growth_failed_preparation_and_neighbor_reuse() {
     let mut host = crate::HostRuntime::new();
-    let id = host.create_world(Default::default()).unwrap();
+    let id = host
+        .create_world(Default::default(), SPATIAL_SYSTEMS)
+        .unwrap();
     let mut world = host.world_mut(id).unwrap();
     let create = |alias| Command::Create {
         alias,
         metadata: EntityMetadata::default(),
+        adopt: false,
     };
     let insert = |entity| Command::InsertComponent {
         entity,
         component: crate::ComponentValue::TRANSFORM,
         fields: vec![],
+        adopt: false,
     };
     world
         .enqueue(Batch {
@@ -642,12 +419,13 @@ use crate::{FieldValue, FieldWrite, components::Transform};
 #[test]
 fn recycled_command_buffers_bound_retained_capacity_and_release_payloads() {
     let mut host = crate::HostRuntime::new();
-    let id = host.create_world(WorldLimits::default()).unwrap();
+    let id = host.create_world(WorldLimits::default(), &[]).unwrap();
     let mut world = host.world_mut(id).unwrap();
     let mut bounded = Vec::with_capacity(256);
     bounded.push(Command::Create {
         alias: 1,
         metadata: EntityMetadata::default(),
+        adopt: false,
     });
     let pointer = bounded.as_ptr();
     world.recycle_command_buffer(bounded);
@@ -661,5 +439,15 @@ fn recycled_command_buffers_bound_retained_capacity_and_release_payloads() {
     world.recycle_command_buffer(Vec::with_capacity(100_000));
     let reused = world.take_command_buffer();
     assert_eq!(reused.as_ptr(), pointer);
-    assert!(world.take_command_buffer().capacity() <= 256);
+    assert_eq!(world.take_command_buffer().capacity(), 0);
+
+    // Hosts that decode pages elsewhere only return buffers; the pool stays bounded.
+    for _ in 0..16 {
+        world.recycle_command_buffer(Vec::with_capacity(crate::RECYCLED_COMMAND_BUFFER_COMMANDS));
+    }
+    let mut kept = 0;
+    while world.take_command_buffer().capacity() > 0 {
+        kept += 1;
+    }
+    assert_eq!(kept, 2);
 }

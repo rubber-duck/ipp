@@ -1,7 +1,12 @@
 //! Controller snapshot budgets and bounded durable-target lookup.
 
+mod support;
+
+use support::selection::{ASSETS, CONSTRAINTS, select};
+
 use ipp_core::services::world_serialization::{
-    WorldPersistenceLimits, WorldSerializedEntity, WorldSnapshot,
+    WorldGraphNode, WorldGraphNodeId, WorldGraphSnapshot, WorldPersistenceLimits,
+    WorldSerializedEntity,
 };
 use ipp_core::systems::animation::*;
 use ipp_core::{
@@ -53,7 +58,7 @@ static ALLOCATOR: AllocationCounter = AllocationCounter;
 
 fn driver(target: EntityId, source: String) -> AnimationDriverDescription {
     AnimationDriverDescription {
-        source,
+        source: std::sync::Arc::<str>::from(&*source),
         variant: 0,
         track: 0,
         target,
@@ -61,6 +66,7 @@ fn driver(target: EntityId, source: String) -> AnimationDriverDescription {
             component: ComponentValue::SCALAR,
             offsets: vec![0],
         }),
+        entity_bindings: Vec::new(),
         weight: 1.0,
         additive: false,
         reference_time: 0.0,
@@ -71,7 +77,9 @@ fn driver(target: EntityId, source: String) -> AnimationDriverDescription {
 #[test]
 fn rejected_capture_does_not_allocate_the_controller_graph() {
     let mut host = HostRuntime::new();
-    let id = host.create_world(Default::default()).unwrap();
+    let id = host
+        .create_world(Default::default(), &select(&[ASSETS, CONSTRAINTS]))
+        .unwrap();
     let mut world = host.world_mut(id).unwrap();
     world
         .enqueue(Batch {
@@ -80,11 +88,13 @@ fn rejected_capture_does_not_allocate_the_controller_graph() {
                 Command::Create {
                     alias: 0,
                     metadata: EntityMetadata::default(),
+                    adopt: false,
                 },
                 Command::InsertComponent {
                     entity: EntityRef::Alias(0),
                     component: ComponentValue::SCALAR,
                     fields: Vec::new(),
+                    adopt: false,
                 },
             ],
         })
@@ -127,7 +137,9 @@ fn rejected_capture_does_not_allocate_the_controller_graph() {
 #[test]
 fn many_controllers_resolve_late_durable_targets_and_reject_excluded_references() {
     let mut host = HostRuntime::new();
-    let id = host.create_world(Default::default()).unwrap();
+    let id = host
+        .create_world(Default::default(), &select(&[ASSETS, CONSTRAINTS]))
+        .unwrap();
     let mut snapshot = host
         .world_mut(id)
         .unwrap()
@@ -138,6 +150,10 @@ fn many_controllers_resolve_late_durable_targets_and_reject_excluded_references(
     snapshot.entities = (1..=ENTITIES)
         .map(|id| WorldSerializedEntity {
             persistent_id: EntityPersistentId(id),
+            link: ipp_core::services::world_serialization::WorldSerializedEntityLink {
+                parent: None,
+                order: ipp_core::EntityOrder::from_value(id as u128).unwrap(),
+            },
             metadata: EntityMetadata::default(),
             components: Vec::new(),
         })
@@ -162,6 +178,7 @@ fn many_controllers_resolve_late_durable_targets_and_reject_excluded_references(
             .collect(),
         transitions: Vec::new(),
         directional_starts: Vec::new(),
+        contributions: Vec::new(),
     };
 
     let limits = WorldPersistenceLimits::default();
@@ -169,22 +186,36 @@ fn many_controllers_resolve_late_durable_targets_and_reject_excluded_references(
         AnimationSystem::ID.0.to_owned(),
         animation.encode(limits.max_bytes).unwrap(),
     );
+    let snapshot = WorldGraphSnapshot {
+        root: WorldGraphNodeId(0),
+        nodes: vec![WorldGraphNode {
+            id: WorldGraphNodeId(0),
+            world: snapshot,
+            references: Vec::new(),
+        }],
+    };
     let bytes = snapshot.encode(123, limits).unwrap();
-    let mut decoded = WorldSnapshot::decode(&bytes, 123, limits).unwrap();
+    let mut decoded = WorldGraphSnapshot::decode(&bytes, 123, limits).unwrap();
     assert_eq!(decoded, snapshot);
 
     animation.controllers[0].description.drivers[0].target = EntityId::from_bits(ENTITIES + 1);
     assert!(
         animation
-            .validate_entities(&decoded.entities)
+            .validate_entities(&decoded.nodes[0].world.entities)
             .unwrap_err()
             .contains("excluded or missing entity")
     );
     animation.controllers[0].description.drivers[0].target = EntityId::from_bits(ENTITIES);
-    decoded.entities.last_mut().unwrap().components.clear();
+    decoded.nodes[0]
+        .world
+        .entities
+        .last_mut()
+        .unwrap()
+        .components
+        .clear();
     assert!(
         animation
-            .validate_entities(&decoded.entities)
+            .validate_entities(&decoded.nodes[0].world.entities)
             .unwrap_err()
             .contains("excluded or missing component")
     );

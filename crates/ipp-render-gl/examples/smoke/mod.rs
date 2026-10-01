@@ -3,6 +3,8 @@
 pub(crate) mod deferred_removal;
 pub(crate) mod egl;
 pub(crate) mod frame_stats;
+#[allow(dead_code)]
+pub(crate) mod selection;
 pub(crate) mod world;
 
 #[cfg(feature = "surfaces")]

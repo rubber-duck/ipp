@@ -1,11 +1,4 @@
-//! GLES presentation of the testing host: platform services, the loopback
-//! presentation channel and the diagnostics statistics a capture reports.
-//!
-//! Like the browser worker, the host presents the single World most recently
-//! attached by a connection and forgets the previous World's renderer caches.
-//! Ordinary frames render without readback; a frame request is answered after
-//! the presented World's first frame at or after its tick, and only a capture
-//! reads pixels back and collects statistics.
+//! GLES surface integration and diagnostics controls. Authoring sessions never select it.
 
 mod channel;
 mod services;

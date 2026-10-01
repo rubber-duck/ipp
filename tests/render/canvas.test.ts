@@ -23,8 +23,8 @@ import type {
 } from "./canvas-fixture.js";
 
 const workspace = resolve(process.cwd());
-const render = browserBuild("render");
-const overlays = browserBuild("headless");
+const render = browserBuild("render-surfaces");
+const headless = browserBuild("headless");
 
 for (const variant of ["development", "production"] as const) {
   test(`${variant}: nested scenes route to independent canvases and clean up`, {
@@ -36,7 +36,7 @@ for (const variant of ["development", "production"] as const) {
       {
         workspace,
         build: render,
-        mismatchBuild: overlays,
+        mismatchBuild: headless,
         operationTimeoutMs: 12_000,
         closeTimeoutMs: 5_000,
         evidenceParent: resolve(
@@ -88,14 +88,11 @@ for (const variant of ["development", "production"] as const) {
               `canvas-producer-${observation.id}`,
             ]);
             assert.equal(observation.ownedExists, true);
-            assert.equal(observation.producer.baseX, 0);
-            assertApprox(observation.producer.effectiveX, -0.55);
+            // React's bound declaration writes over the application's
+            // inserted Transform and color: last write wins.
+            assertApprox(observation.producer.x, -0.55);
             assert.deepEqual(
-              observation.producer.baseColor?.map(rounded),
-              [0.82, 0.18, 0.12],
-            );
-            assert.deepEqual(
-              observation.producer.effectiveColor?.map(rounded),
+              observation.producer.color?.map(rounded),
               [0.15, 0.82, 0.28],
             );
             assert.equal(observation.width, 320);
@@ -111,6 +108,39 @@ for (const variant of ["development", "production"] as const) {
             `${variant}-left-initial`,
           );
           requireCube(initialFrame, "initial nested World");
+          const links = await invoke<{
+            frames: CanvasCaptureReport[];
+            restored: ImageDifference;
+          }>(scenario.page, moduleUrl, "probeTransformedLinks");
+          for (const frame of links.frames) {
+            requireCube(frame, frame.label);
+            const dataUrl = await invoke<string>(
+              scenario.page,
+              moduleUrl,
+              "canvasCaptureDataUrl",
+              [frame.label],
+            );
+            await writeDataUrl(
+              join(scenario.evidence.directory, `${frame.label}.png`),
+              dataUrl,
+            );
+          }
+          assert.ok(
+            links.frames[1]!.summary.centroidX! >
+              links.frames[0]!.summary.centroidX! + 10,
+            "parent translation must move the rendered child",
+          );
+          assert.ok(
+            links.frames[2]!.summary.centroidX! >
+              links.frames[1]!.summary.centroidX! + 5,
+            "retained parent updates must move the rendered child again",
+          );
+          assert.equal(
+            links.restored.changedPixels,
+            0,
+            "withdrawing the link must restore the original pixels",
+          );
+          scenario.evidence.record("React transformed hierarchy", links);
 
           const updated = await invoke<readonly CanvasObservation[]>(
             scenario.page,
@@ -121,9 +151,9 @@ for (const variant of ["development", "production"] as const) {
           for (const observation of updated) {
             const prior = initial.find(({ id }) => id === observation.id);
             assert.equal(observation.session, prior?.session);
-            assertApprox(observation.producer.effectiveX, 0.62);
+            assertApprox(observation.producer.x, 0.62);
             assert.deepEqual(
-              observation.producer.effectiveColor?.map(rounded),
+              observation.producer.color?.map(rounded),
               [0.72, 0.25, 0.9],
             );
           }
@@ -168,14 +198,14 @@ for (const variant of ["development", "production"] as const) {
               readonly observation: CanvasObservation;
             }>(scenario.page, moduleUrl, "rejectSceneUpdate", ["left"]);
             assert.match(rejected.error, /nonfinite|finite/i);
-            assertApprox(rejected.observation.producer.effectiveX, 0.62);
+            assertApprox(rejected.observation.producer.x, 0.62);
             const recovered = await invoke<CanvasObservation>(
               scenario.page,
               moduleUrl,
               "recoverSceneUpdate",
               ["left"],
             );
-            assertApprox(recovered.producer.effectiveX, 0.62);
+            assertApprox(recovered.producer.x, 0.62);
             const callbackFailure = await invoke<{
               readonly error: string;
               readonly duringFailure: CanvasObservation;
@@ -185,11 +215,8 @@ for (const variant of ["development", "production"] as const) {
               callbackFailure.error,
               /async onCommit failed for left/,
             );
-            assertApprox(
-              callbackFailure.duringFailure.producer.effectiveX,
-              0.72,
-            );
-            assertApprox(callbackFailure.recovered.producer.effectiveX, 0.82);
+            assertApprox(callbackFailure.duringFailure.producer.x, 0.72);
+            assertApprox(callbackFailure.recovered.producer.x, 0.82);
           }
 
           const replacement = await invoke<{
@@ -207,11 +234,11 @@ for (const variant of ["development", "production"] as const) {
             "canvas-producer-left",
           ]);
           assertApprox(
-            replacement.replacement.producer.effectiveX,
+            replacement.replacement.producer.x,
             variant === "development" ? 0.82 : 0.62,
           );
           assertApprox(
-            replacement.other.producer.effectiveX,
+            replacement.other.producer.x,
             variant === "development" ? 0.82 : 0.62,
           );
           assert.equal(replacement.transfers.duplicateTransfers, 0);
@@ -236,12 +263,17 @@ for (const variant of ["development", "production"] as const) {
             readonly removed: CanvasObservation;
             readonly other: CanvasObservation;
           }>(scenario.page, moduleUrl, "removeScene", ["left"]);
-          assert.equal(removed.removed.ownedExists, false);
-          assert.equal(removed.removed.producer.baseX, 0);
-          assert.equal(removed.removed.producer.effectiveX, 0);
+          // Removing the scene unmounts its root, which deletes nothing:
+          // the entity React created stays, and the producer it only binds
+          // to keeps its components and the last values React wrote.
+          assert.equal(removed.removed.ownedExists, true);
+          assertApprox(
+            removed.removed.producer.x,
+            variant === "development" ? 0.82 : 0.62,
+          );
           assert.equal(removed.other.ownedExists, true);
           assertApprox(
-            removed.other.producer.effectiveX,
+            removed.other.producer.x,
             variant === "development" ? 0.82 : 0.62,
           );
           const producerFrame = await capture(
@@ -307,7 +339,7 @@ test("StrictMode unmount aborts a real worker during gated WASM startup", {
     {
       workspace,
       build: render,
-      mismatchBuild: overlays,
+      mismatchBuild: headless,
       operationTimeoutMs: 12_000,
       closeTimeoutMs: 5_000,
       evidenceParent: resolve(
@@ -407,7 +439,7 @@ for (const variant of ["development", "production"] as const) {
       {
         workspace,
         build: render,
-        mismatchBuild: overlays,
+        mismatchBuild: headless,
         operationTimeoutMs: 15000,
         closeTimeoutMs: 5000,
         evidenceParent: resolve(
@@ -551,7 +583,7 @@ test("saved World HTTP fetch aborts and closes its already connected Host", {
     {
       workspace,
       build: render,
-      mismatchBuild: overlays,
+      mismatchBuild: headless,
       operationTimeoutMs: 12000,
       closeTimeoutMs: 5000,
       evidenceParent: resolve(
@@ -607,7 +639,60 @@ test("saved World HTTP fetch aborts and closes its already connected Host", {
   );
 });
 
-function browserBuild(name: "render" | "headless"): BrowserBuildConfiguration {
+for (const variant of ["development", "production"] as const) {
+  test(`${variant}: failed Canvas cleanup retains a reachable worker owner`, {
+    timeout: 60_000,
+  }, async (context) => {
+    await runBrowserEnvironment(
+      `canvas recovery ${variant}`,
+      {
+        workspace,
+        build: render,
+        mismatchBuild: headless,
+        operationTimeoutMs: 20_000,
+      },
+      context.signal,
+      async (scenario) => {
+        const module = fixtureUrl(scenario.urls.origin, variant);
+        const configuration = {
+          generatedModuleUrl: scenario.urls.generated,
+          workerScriptUrl: scenario.urls.workerScript,
+          wasmUrl: scenario.urls.wasm,
+        };
+        for (const abandon of [false, true]) {
+          await invoke(scenario.page, module, "mountCanvasApplication", [
+            configuration,
+            false,
+          ]);
+          await invoke(scenario.page, module, "waitForCanvasApplication");
+          await capture(
+            scenario.page,
+            module,
+            scenario.evidence.directory,
+            "left",
+            `cleanup-${abandon}`,
+          );
+          const failed = await invoke<{
+            worlds: number;
+            bindings: number;
+          }>(scenario.page, module, "failCanvasTeardown");
+          assert.equal(failed.worlds, 1);
+          assert.equal(failed.bindings, 1);
+          await waitForWorkerCount(scenario.page, 1);
+          const result = await invoke<{
+            bindings: number;
+          }>(scenario.page, module, "recoverCanvasTeardown", [abandon]);
+          assert.equal(result.bindings, abandon ? 1 : 0);
+          await waitForWorkerCount(scenario.page, 0);
+        }
+      },
+    );
+  });
+}
+
+function browserBuild(
+  name: "render-surfaces" | "headless",
+): BrowserBuildConfiguration {
   const directory = resolve(workspace, "target/browser-build", name);
   return {
     name,
@@ -753,7 +838,7 @@ test("saved World HTTP assets fetch through connection mappings without changing
     {
       workspace,
       build: render,
-      mismatchBuild: overlays,
+      mismatchBuild: headless,
       operationTimeoutMs: 15000,
       closeTimeoutMs: 5000,
       evidenceParent: resolve(

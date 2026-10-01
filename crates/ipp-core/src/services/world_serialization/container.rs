@@ -1,4 +1,4 @@
-//! IPPW v3: generic System payloads, with compatible-build v2 decoding.
+//! IPPW v7: one bounded authored graph with graph-local typed references.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -14,17 +14,47 @@ pub(crate) fn checksum(bytes: &[u8]) -> u64 {
     hash.0
 }
 
-impl WorldSnapshot {
+impl WorldGraphSnapshot {
     /// Encode bounded owned state without opening or rewriting resource references.
     pub fn encode(&self, contract: u64, limits: WorldPersistenceLimits) -> Result<Vec<u8>, String> {
+        self.validate_budget(limits)?;
         self.validate_references()?;
         let mut writer = WorldBinaryWriter::new(limits.max_bytes);
         writer.raw(b"IPPW")?;
-        writer.u32(3)?;
+        writer.u32(7)?;
         writer.u64(contract)?;
         writer.u64(0)?;
         writer.u64(0)?;
-        encode_snapshot(&mut writer, self)?;
+        writer.u32(self.root.0)?;
+        writer.count(self.nodes.len())?;
+        for node in &self.nodes {
+            writer.u32(node.id.0)?;
+            encode_snapshot(&mut writer, &node.world)?;
+            writer.count(node.references.len())?;
+            for reference in &node.references {
+                writer.u64(reference.entity.0)?;
+                writer.u16(reference.component)?;
+                writer.u32(reference.field)?;
+                match &reference.value {
+                    WorldSerializedReferenceValue::World(world) => {
+                        writer.u8(0)?;
+                        writer.u32(world.0)?;
+                    }
+                    WorldSerializedReferenceValue::Output(output) => {
+                        writer.u8(1)?;
+                        writer.u32(output.world.0)?;
+                        match (output.kind, output.entity) {
+                            (crate::OutputKind::Canvas, None) => writer.u8(0)?,
+                            (crate::OutputKind::Camera, Some(entity)) => {
+                                writer.u8(1)?;
+                                writer.u64(entity.0)?;
+                            }
+                            _ => return Err("Invalid persistent output".into()),
+                        }
+                    }
+                }
+            }
+        }
 
         let length = writer.bytes.len() as u64;
         let digest = checksum(&writer.bytes[32..]);
@@ -47,7 +77,7 @@ impl WorldSnapshot {
             return Err("Unsupported World container".into());
         }
         let version = reader.u32()?;
-        if !matches!(version, 2 | 3) {
+        if version != 7 {
             return Err("Unsupported World container".into());
         }
         if reader.u64()? != contract {
@@ -56,19 +86,116 @@ impl WorldSnapshot {
         if reader.u64()? != bytes.len() as u64 || reader.u64()? != checksum(&bytes[32..]) {
             return Err("World file length or checksum mismatch".into());
         }
-        let snapshot = decode_snapshot(&mut reader, limits.max_bytes, version)?;
+        let root = WorldGraphNodeId(reader.u32()?);
+        let count = reader.count(8)?;
+        reader.claim(count.saturating_mul(512))?;
+        let mut nodes = Vec::new();
+        for _ in 0..count {
+            let id = WorldGraphNodeId(reader.u32()?);
+            let world = decode_snapshot(&mut reader, limits.max_bytes)?;
+            let count = reader.count(19)?;
+            reader.claim(count.saturating_mul(128))?;
+            let mut references = Vec::new();
+            for _ in 0..count {
+                let entity = EntityPersistentId(reader.u64()?);
+                let component = reader.u16()?;
+                let field = reader.u32()?;
+                let value = match reader.u8()? {
+                    0 => WorldSerializedReferenceValue::World(WorldGraphNodeId(reader.u32()?)),
+                    1 => {
+                        let world = WorldGraphNodeId(reader.u32()?);
+                        let (kind, entity) = match reader.u8()? {
+                            0 => (crate::OutputKind::Canvas, None),
+                            1 => (
+                                crate::OutputKind::Camera,
+                                Some(EntityPersistentId(reader.u64()?)),
+                            ),
+                            _ => return Err("Invalid persistent output kind".into()),
+                        };
+                        WorldSerializedReferenceValue::Output(WorldSerializedOutput {
+                            world,
+                            kind,
+                            entity,
+                        })
+                    }
+                    _ => return Err("Invalid graph reference kind".into()),
+                };
+                references.push(WorldSerializedReference {
+                    entity,
+                    component,
+                    field,
+                    value,
+                });
+            }
+            nodes.push(WorldGraphNode {
+                id,
+                world,
+                references,
+            });
+        }
+        let snapshot = Self {
+            root,
+            nodes,
+        };
         reader.end()?;
+        snapshot.validate_budget(limits)?;
         snapshot.validate_references()?;
         Ok(snapshot)
     }
+}
 
-    fn validate_references(&self) -> Result<(), String> {
+impl WorldSnapshot {
+    pub(super) fn validate_references(&self) -> Result<(), String> {
+        let mut selected = BTreeSet::new();
+        for system in &self.selected_systems {
+            if system.is_empty() || !selected.insert(system.as_str()) {
+                return Err("Invalid or duplicate selected System identity".into());
+            }
+        }
+        if self
+            .systems
+            .keys()
+            .any(|system| !selected.contains(system.as_str()))
+        {
+            return Err("Persistent System state has no selected System".into());
+        }
         let ids: BTreeSet<_> = self
             .entities
             .iter()
             .map(|entity| entity.persistent_id.0)
             .collect();
+        let parents: BTreeMap<_, _> = self
+            .entities
+            .iter()
+            .map(|entity| (entity.persistent_id, entity.link.parent))
+            .collect();
+        let mut completed = BTreeSet::new();
         for entity in &self.entities {
+            let mut path = BTreeSet::new();
+            let mut current = Some(entity.persistent_id);
+            while let Some(id) = current {
+                if completed.contains(&id) {
+                    break;
+                }
+                if !path.insert(id) {
+                    return Err("Cyclic persistent entity links".into());
+                }
+                current = *parents
+                    .get(&id)
+                    .ok_or("Missing persistent parent reference")?;
+            }
+            completed.extend(path);
+        }
+        for entity in &self.entities {
+            if entity
+                .link
+                .parent
+                .is_some_and(|parent| !ids.contains(&parent.0))
+            {
+                return Err("Missing persistent parent reference".into());
+            }
+            crate::EntityOrder::from_value(entity.link.order.value())
+                .map_err(|error| error.to_string())?;
             for component in &entity.components {
                 for (offset, field) in component.fields() {
                     if let FieldValue::Entity(id) = field
@@ -91,9 +218,18 @@ fn encode_snapshot(writer: &mut WorldBinaryWriter, snapshot: &WorldSnapshot) -> 
     writer.raw(&snapshot.metadata.persistent_id.0.to_le_bytes())?;
     writer.u64(snapshot.next_entity_id)?;
     encode_hints(writer, &snapshot.capacity_hints)?;
+    writer.count(snapshot.selected_systems.len())?;
+    for system in &snapshot.selected_systems {
+        if system.is_empty() {
+            return Err("Missing selected System identity".into());
+        }
+        writer.string(system)?;
+    }
     writer.count(snapshot.entities.len())?;
     for entity in &snapshot.entities {
         writer.u64(entity.persistent_id.0)?;
+        writer.u64(entity.link.parent.map_or(0, |parent| parent.0))?;
+        writer.raw(&entity.link.order.value().to_le_bytes())?;
         writer.u8(u8::from(entity.metadata.symbolic_id.is_some()))?;
         if let Some(symbol) = &entity.metadata.symbolic_id {
             writer.string(symbol)?;
@@ -127,7 +263,6 @@ fn encode_snapshot(writer: &mut WorldBinaryWriter, snapshot: &WorldSnapshot) -> 
 fn decode_snapshot(
     reader: &mut WorldBinaryReader<'_>,
     max_bytes: usize,
-    version: u32,
 ) -> Result<WorldSnapshot, String> {
     let symbolic_id = reader.string()?;
     crate::world::validate_world_symbolic_id(&symbolic_id)?;
@@ -139,7 +274,18 @@ fn decode_snapshot(
     }
     let next_entity_id = reader.u64()?;
     let capacity_hints = decode_hints(reader)?;
-    let count = reader.count(17)?;
+    let selected_count = reader.count(4)?;
+    reader.claim(selected_count.saturating_mul(128))?;
+    let mut selected_systems = Vec::new();
+    let mut selected_set = BTreeSet::new();
+    for _ in 0..selected_count {
+        let system = reader.string()?;
+        if system.is_empty() || !selected_set.insert(system.clone()) {
+            return Err("Invalid or duplicate selected System identity".into());
+        }
+        selected_systems.push(system);
+    }
+    let count = reader.count(41)?;
     reader.claim(count.saturating_mul(128))?;
     let mut retained = 0usize;
     let mut entities = Vec::new();
@@ -153,6 +299,14 @@ fn decode_snapshot(
         {
             return Err("Invalid or duplicate persistent entity identity".into());
         }
+        let parent = match reader.u64()? {
+            0 => None,
+            identity => Some(EntityPersistentId(identity)),
+        };
+        let order = crate::EntityOrder::from_value(u128::from_le_bytes(
+            reader.raw(16)?.try_into().expect("checked length"),
+        ))
+        .map_err(|error| error.to_string())?;
         let symbolic_id = match reader.u8()? {
             0 => None,
             1 => Some(reader.string()?),
@@ -202,9 +356,6 @@ fn decode_snapshot(
             {
                 return Err("Incomplete serialized component".into());
             }
-            component
-                .validate_lifecycle()
-                .map_err(|error| error.to_string())?;
             components.push(component);
         }
         let metadata_bytes = symbolic_id.as_ref().map_or(0, String::len)
@@ -223,6 +374,10 @@ fn decode_snapshot(
         }
         entities.push(WorldSerializedEntity {
             persistent_id,
+            link: WorldSerializedEntityLink {
+                parent,
+                order,
+            },
             metadata: EntityMetadata {
                 symbolic_id,
                 classes,
@@ -231,32 +386,20 @@ fn decode_snapshot(
         });
     }
     let mut systems = BTreeMap::new();
-    if version == 2 {
+    let count = reader.count(8)?;
+    reader.claim(count.saturating_mul(128))?;
+    for _ in 0..count {
+        let system = reader.string()?;
+        if system.is_empty()
+            || systems
+                .last_key_value()
+                .is_some_and(|(previous, _)| previous >= &system)
         {
-            let state = crate::systems::animation::decode_legacy_persistent_state(reader)?;
-            let bytes = state.encode(max_bytes)?;
-            reader.claim(bytes.len())?;
-            systems.insert(
-                crate::systems::animation::AnimationSystem::ID.0.to_owned(),
-                bytes,
-            );
+            return Err("Unordered or duplicate persistent System identity".into());
         }
-    } else {
-        let count = reader.count(8)?;
-        reader.claim(count.saturating_mul(128))?;
-        for _ in 0..count {
-            let system = reader.string()?;
-            if system.is_empty()
-                || systems
-                    .last_key_value()
-                    .is_some_and(|(previous, _)| previous >= &system)
-            {
-                return Err("Unordered or duplicate persistent System identity".into());
-            }
-            let bytes = reader.blob()?;
-            reader.claim(bytes.len())?;
-            systems.insert(system, bytes.to_vec());
-        }
+        let bytes = reader.blob()?;
+        reader.claim(bytes.len())?;
+        systems.insert(system, bytes.to_vec());
     }
     Ok(WorldSnapshot {
         metadata: WorldMetadata {
@@ -264,6 +407,7 @@ fn decode_snapshot(
             persistent_id,
         },
         capacity_hints,
+        selected_systems,
         next_entity_id,
         entities,
         systems,
@@ -322,6 +466,10 @@ pub(crate) fn decode_hints(
 fn encode_field(writer: &mut WorldBinaryWriter, field: FieldValue) -> Result<(), String> {
     writer.u8(field.kind() as u8)?;
     match field {
+        FieldValue::World(None) | FieldValue::Output(None) => Ok(()),
+        FieldValue::World(Some(_)) | FieldValue::Output(Some(_)) => {
+            Err("Runtime reference in durable component".into())
+        }
         FieldValue::Dynamic(value) => writer.blob(&value.encode()),
         FieldValue::F32(value) => writer.u32(value.to_bits()),
         FieldValue::U32(value) => writer.u32(value),
@@ -347,7 +495,7 @@ fn decode_field(reader: &mut WorldBinaryReader<'_>) -> Result<FieldValue, String
         2 => FieldValue::Entity(EntityId::from_bits(reader.u64()?)),
         3 => FieldValue::U32(reader.u32()?),
         4 => FieldValue::U64(reader.u64()?),
-        5 => FieldValue::String(reader.string()?),
+        5 => FieldValue::String(reader.text()?),
         6 => {
             let bytes = reader.blob()?;
             reader.claim(bytes.len())?;
@@ -371,180 +519,12 @@ fn decode_field(reader: &mut WorldBinaryReader<'_>) -> Result<FieldValue, String
             reader.claim(bytes.len())?;
             FieldValue::Rows(bytes.to_vec())
         }
+        12 => FieldValue::World(None),
+        13 => FieldValue::Output(None),
         _ => return Err("Unknown serialized field kind".into()),
     })
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn container(version: u32, body: &[u8]) -> Vec<u8> {
-        let mut writer = WorldBinaryWriter::new(4096);
-        writer.raw(b"IPPW").unwrap();
-        writer.u32(version).unwrap();
-        writer.u64(123).unwrap();
-        writer.u64((32 + body.len()) as u64).unwrap();
-        writer.u64(checksum(body)).unwrap();
-        writer.raw(body).unwrap();
-        writer.bytes
-    }
-
-    fn empty_body() -> Vec<u8> {
-        let mut writer = WorldBinaryWriter::new(4096);
-        writer.string("legacy").unwrap();
-        writer.raw(&1u128.to_le_bytes()).unwrap();
-        writer.u64(0).unwrap();
-        writer.u32(0).unwrap(); // Entity reservation.
-        writer.u32(0).unwrap(); // System reservations.
-        writer.u32(0).unwrap(); // Authored entities.
-        writer.bytes
-    }
-
-    #[test]
-    fn legacy_v2_decodes_into_system_owned_payloads() {
-        #[allow(unused_mut)]
-        let mut body = empty_body();
-        {
-            body.extend_from_slice(&1u64.to_le_bytes());
-            body.extend_from_slice(&0u32.to_le_bytes());
-        }
-        let snapshot =
-            WorldSnapshot::decode(&container(2, &body), 123, Default::default()).unwrap();
-        assert_eq!(snapshot.metadata.symbolic_id, "legacy");
-        assert!(snapshot.entities.is_empty());
-        assert_eq!(
-            crate::systems::animation::AnimationPersistentState::decode(
-                &snapshot.systems[crate::systems::animation::AnimationSystem::ID.0],
-                4096,
-            )
-            .unwrap(),
-            crate::systems::animation::AnimationPersistentState::default(),
-        );
-        let encoded = snapshot.encode(123, Default::default()).unwrap();
-        assert_eq!(u32::from_le_bytes(encoded[4..8].try_into().unwrap()), 3);
-        assert_eq!(
-            WorldSnapshot::decode(&encoded, 123, Default::default()).unwrap(),
-            snapshot
-        );
-    }
-
-    #[test]
-    fn rows_fields_persist_as_one_table_record_each() {
-        use crate::components::{RowsFixture, RowsFixtureItem, RowsFixtureTag};
-        use crate::services::asset_management::{AssetSource, AssetTypeId};
-
-        let mut fixture = RowsFixture::default();
-        fixture
-            .items
-            .push(RowsFixtureItem {
-                weight: 2.0,
-                texture: Some(AssetSource {
-                    kind: AssetTypeId(4),
-                    uri: "textures/row.png".into(),
-                    variant: 1,
-                }),
-                ..Default::default()
-            })
-            .unwrap();
-        fixture
-            .items
-            .push(RowsFixtureItem {
-                label: Some("zoë ✓".into()),
-                ..Default::default()
-            })
-            .unwrap();
-        fixture.items.remove(0);
-        fixture
-            .tags
-            .insert(
-                3,
-                RowsFixtureTag {
-                    value: 7,
-                },
-            )
-            .unwrap();
-
-        let component = ComponentValue::RowsFixture(fixture);
-        assert_eq!(
-            component
-                .fields()
-                .iter()
-                .filter(|(_, value)| matches!(value, FieldValue::Rows(_)))
-                .count(),
-            2
-        );
-
-        let snapshot = WorldSnapshot {
-            metadata: crate::WorldMetadata {
-                symbolic_id: "rows".into(),
-                persistent_id: WorldPersistentId(1),
-            },
-            capacity_hints: Default::default(),
-            next_entity_id: 1,
-            entities: vec![WorldSerializedEntity {
-                persistent_id: EntityPersistentId(1),
-                metadata: EntityMetadata::default(),
-                components: vec![component],
-            }],
-            systems: BTreeMap::new(),
-        };
-        let encoded = snapshot.encode(5, Default::default()).unwrap();
-        let decoded = WorldSnapshot::decode(&encoded, 5, Default::default()).unwrap();
-        assert_eq!(decoded, snapshot);
-        let ComponentValue::RowsFixture(restored) = &decoded.entities[0].components[0] else {
-            panic!("restored component type");
-        };
-        assert_eq!(restored.items.next_slot(), 2);
-        assert!(!restored.items.is_live(0));
-        assert_eq!(
-            restored.items.get(1).unwrap().label.as_deref(),
-            Some("zoë ✓")
-        );
-        assert_eq!(restored.tags.next_slot(), 4);
-
-        // A table that fails row validation rejects the whole candidate.
-        let table = restored.tags.encode();
-        let at = encoded
-            .windows(table.len())
-            .position(|window| window == table)
-            .unwrap();
-        let mut corrupt = encoded.clone();
-        corrupt[at..at + 4].copy_from_slice(&0u32.to_le_bytes());
-        let digest = checksum(&corrupt[32..]);
-        corrupt[24..32].copy_from_slice(&digest.to_le_bytes());
-        assert!(
-            WorldSnapshot::decode(&corrupt, 5, Default::default())
-                .unwrap_err()
-                .contains("Invalid persistent field")
-        );
-    }
-
-    #[test]
-    fn v3_round_trips_opaque_extension_sections_and_rejects_duplicate_keys() {
-        let mut body = WorldBinaryWriter::new(4096);
-        body.raw(&empty_body()).unwrap();
-        body.u32(2).unwrap();
-        body.string("extension.first").unwrap();
-        body.blob(&[0xff, 0, 7]).unwrap();
-        body.string("extension.second").unwrap();
-        body.blob(&[1, 2]).unwrap();
-        let bytes = container(3, &body.bytes);
-        let snapshot = WorldSnapshot::decode(&bytes, 123, Default::default()).unwrap();
-        assert_eq!(snapshot.systems["extension.first"], [0xff, 0, 7]);
-        assert_eq!(snapshot.encode(123, Default::default()).unwrap(), bytes);
-
-        let mut duplicate = WorldBinaryWriter::new(4096);
-        duplicate.raw(&empty_body()).unwrap();
-        duplicate.u32(2).unwrap();
-        for _ in 0..2 {
-            duplicate.string("extension.first").unwrap();
-            duplicate.blob(&[]).unwrap();
-        }
-        assert!(
-            WorldSnapshot::decode(&container(3, &duplicate.bytes), 123, Default::default())
-                .unwrap_err()
-                .contains("duplicate persistent System")
-        );
-    }
-}
+#[path = "container_tests.rs"]
+mod tests;

@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { browserRuntime } from "@ipp/client";
-import { IppCanvas } from "@ipp/react/web";
+import { IppCanvas, World } from "@ipp/react/web";
 import { createGuiUnhandledInputGate } from "@ipp/react/gui";
 import { ShapesWorld } from "./worlds/geometry/world.js";
 import {
@@ -40,8 +40,8 @@ import {
   INITIAL_PARTICLES,
 } from "./worlds/particles/controls.js";
 import { GuiWorld } from "./worlds/gui/scene.js";
-import { GUI_WHEEL_STEP } from "./worlds/gui/dashboard.js";
 import { GuiControls, useGuiScene } from "./worlds/gui/controls.js";
+import { GUI_WHEEL_STEP } from "./worlds/gui/dashboard.js";
 import {
   PLATFORMER_ASSETS,
   PLATFORMER_SOURCE,
@@ -56,12 +56,34 @@ import {
 import { ResponsiveControls, ScenePicker } from "./gallery-shell.js";
 import { galleryScene } from "./scene-catalog.js";
 
+/** Systems of the authored gallery World: animated and skinned meshes, lights
+ * and particles under a camera, and the Surface anchor presenting the GUI panel
+ * World. The panel World itself selects Canvas and GUI. */
+const GALLERY_SYSTEMS = [
+  "ipp.world-attachment",
+  "ipp.lifecycle-publisher",
+  "ipp.animation",
+  "ipp.asset-dependencies",
+  "ipp.skeleton",
+  "ipp.skinning",
+  "ipp.hierarchy",
+  "ipp.look-at",
+  "ipp.final-propagation",
+  "ipp.geometry",
+  "ipp.camera",
+  "ipp.particles",
+  "ipp.surface",
+  "ipp.render",
+] as const;
+
 /** The DOM shell composes the gallery worlds and retains their authored state. */
 export function Gallery() {
   const guiInputGate = useMemo(createGuiUnhandledInputGate, []);
   const gallery = useGallery();
   const {
     canvas,
+    output,
+    viewChanged,
     canvasFrame,
     page,
     switching,
@@ -174,11 +196,14 @@ export function Gallery() {
         >
           <IppCanvas
             key={page === "platformer" ? page : "authored"}
+            world={
+              page === "platformer"
+                ? { load: { url: PLATFORMER_WORLD } }
+                : { create: { selectedSystems: GALLERY_SYSTEMS } }
+            }
+            output={output}
             {...(page === "platformer"
-              ? {
-                  worldUrl: PLATFORMER_WORLD,
-                  initialize: initializePlatformerScene,
-                }
+              ? { initialize: initializePlatformerScene }
               : {})}
             id="stage"
             className="stage"
@@ -199,14 +224,15 @@ export function Gallery() {
                   }
                 : {}),
             }}
-            {...(page === "gui"
+            // IppCanvas fixes guiInput when the canvas starts (K12), so the
+            // authored canvas opens it on every page: the GUI page then gets
+            // its input gate even when the gallery started on another page.
+            {...(page !== "platformer"
               ? {
                   guiInput: {
-                    preventDefaultPointer: true,
                     unhandledInputGate: guiInputGate,
                     wheelStep: GUI_WHEEL_STEP,
                     blockers: gui.blockers,
-                    onError: (failure: Error) => setError(failure.message),
                   },
                 }
               : {})}
@@ -216,21 +242,33 @@ export function Gallery() {
                 setError(message(failure)),
               );
             }}
+            onViewChange={viewChanged}
             onError={(failure) => setError(failure.message)}
           >
-            {page === "shapes" ? (
-              controls.mounted && (
-                <ShapesWorld shape={controls.shape} meshes={controls.meshes} />
-              )
-            ) : page === "particles" ? (
-              <ParticlesWorld settings={particles} />
-            ) : page === "lighting" ? (
-              <LightingWorld objects={objects} selected={selected} />
-            ) : page === "gui" ? (
-              <GuiWorld scene={gui} />
-            ) : page === "platformer" ? (
+            {page === "platformer" ? (
               <PlatformerWorld onCommit={platformer.onCommit} />
-            ) : null}
+            ) : (
+              <>
+                {/* Unmounting a React root deletes nothing, so the authored
+                    pages share one mounted World root: leaving a page removes
+                    its declarations, which deletes what it created. */}
+                <World>
+                  {page === "shapes" ? (
+                    controls.mounted && (
+                      <ShapesWorld
+                        shape={controls.shape}
+                        meshes={controls.meshes}
+                      />
+                    )
+                  ) : page === "particles" ? (
+                    <ParticlesWorld settings={particles} />
+                  ) : page === "lighting" ? (
+                    <LightingWorld objects={objects} selected={selected} />
+                  ) : null}
+                </World>
+                <GuiWorld scene={gui} active={page === "gui"} />
+              </>
+            )}
           </IppCanvas>
           {page === "platformer" && status !== "ready" && (
             <div

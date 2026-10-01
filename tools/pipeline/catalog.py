@@ -37,17 +37,28 @@ REGRESSION_GROUPS = {
             "animation",
             "hierarchy",
             "command-streaming",
+            "multiplex",
             "react",
+            "react-attached",
+            "headless-client",
         ),
+        ("test:presentation:host-wire",),
     ),
     "browser": RegressionGroup(
-        "Chromium worker/WASM transport and lifecycle", ("browser",)
+        "Chromium worker/WASM transport and lifecycle",
+        ("browser",),
+        (
+            "test:presentation:webgl",
+            "test:presentation:diagnostics",
+            "test:gui-local:worker",
+            "test:multiplex:worker-startup",
+            "test:react-gui-authoring:worker",
+        ),
     ),
     "rendering": RegressionGroup(
         "WebGL frames, cameras, geometry, materials, lighting, deformation and resource recovery",
         (
             "render",
-            "canvas",
             "cameras",
             "geometry",
             "custom-materials",
@@ -58,11 +69,31 @@ REGRESSION_GROUPS = {
             "textures",
             "shapes",
             "render-residency",
+            "render-publications",
+            "composed-queries",
+        ),
+        (
+            "test:canvas:lifecycle",
+            "test:canvas:dom",
+            "test:canvas:controller-webgl",
+            "test:react-gui-authoring:webgl",
+            "test:presentation:webgl",
+            "test:presentation:diagnostics",
         ),
     ),
     "gui": RegressionGroup(
         "Surface/GUI state, input, retained rendering and Surface cache correctness",
-        ("surfaces", "gui", "retained-gui", "surface-cache"),
+        (
+            "surfaces",
+            "gui",
+            "gui-local",
+            "gui-motion",
+            "output-inclusion",
+            "react-gui-authoring",
+            "retained-gui",
+            "surface-cache",
+            "gui-stress",
+        ),
     ),
     "gallery": RegressionGroup(
         "Published gallery and interactive GUI, camera, particle and platformer demos",
@@ -76,11 +107,16 @@ REGRESSION_GROUPS = {
     ),
     "blender": RegressionGroup(
         "Blender packaging, exports, streaming and browser presentation",
-        ("blender", "particles-blender"),
+        ("blender", "blender-headless", "blender-disk-headless", "particles-blender"),
     ),
     "gles": RegressionGroup(
         "All native GLES frame scenarios; requires configured EGL/GLES libraries",
-        steps=tuple(record["id"] for record in GLES_CHECKS),
+        steps=(
+            *tuple(record["id"] for record in GLES_CHECKS),
+            "test:canvas:controller-gles",
+            "test:presentation:native-gles",
+            "test:react-gui-authoring:gles",
+        ),
     ),
     "matrix": RegressionGroup(
         "Minimal/expanded Rust, WASM builds, target contracts and browser distribution identities",
@@ -133,6 +169,19 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
         )
 
     build("client", (), ("packages/ipp-client/dist",), ("node", "npm"))
+    add(
+        Task(
+            "build:presentation-wire-host",
+            "Compile the pinned Rust Host cancellation conformance driver",
+            (
+                node(),
+                "crates/ipp-protocol/tests/presentation-cancellation.mjs",
+                "--build",
+            ),
+            requirements=("node", "npm", "rust"),
+            outputs=("target/presentation-wire-host",),
+        )
+    )
     build(
         "native",
         (),
@@ -142,13 +191,66 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
             "target/integration-artifacts/native.contract",
         ),
     )
-    build("typescript", ("native", "client"), ("dist",))
+    # Target-specific GUI contract declarations resolve the root project's aliases.
+    build(
+        "typescript",
+        ("native", "client", "react-gui-authoring", "gui-stress-fixtures"),
+        ("dist",),
+    )
+    build("headless-client", ("native",), ("target/headless-client",), ("node", "npm"))
+    build(
+        "asset-rejection-tests",
+        ("native", "client"),
+        ("target/asset-rejection-tests",),
+        ("node", "npm"),
+    )
     build("react", ("client",), ("packages/ipp-react/dist",), ("node", "npm"))
+    build(
+        "asset-rejection-worker-tests",
+        ("native", "client"),
+        ("target/asset-rejection-worker-tests",),
+        ("node", "npm"),
+    )
+    build(
+        "react-gui-authoring",
+        ("react", "gui-host", "native"),
+        ("target/react-gui-authoring", "target/react-gui-contract"),
+        ("node", "npm"),
+    )
+    build(
+        "react-attached",
+        ("react", "native"),
+        ("target/react-attached",),
+        ("node", "npm"),
+    )
     build(
         "world-hosts", (), ("target/world-host-build",), ("node", "npm", "rust", "wasm")
     )
     build("scaling-host", (), ("target/scaling-host-build",))
+    build(
+        "lifecycle-diagnostics-hosts",
+        (),
+        ("target/lifecycle-diagnostics-build",),
+        ("node", "npm", "rust", "wasm"),
+    )
+    build(
+        "transport-fixtures", ("native",), ("target/multiplex-tests",), ("node", "npm")
+    )
+    build(
+        "composed-query-fixtures",
+        ("native",),
+        ("target/composed-queries",),
+        ("node", "npm"),
+    )
+    build("gui-motion-fixtures", (), ("target/gui-motion",), ("node", "npm"))
+    build(
+        "gui-stress-fixtures",
+        ("react", "gui-host", "native"),
+        ("target/gui-stress", "target/gui-stress-contract"),
+        ("node", "npm"),
+    )
     build("builtin-exporter", (), ("target/builtin-exporter",), ("rust",))
+    build("render-fixtures", (), ("target/render-fixtures",), ("node", "npm"))
     for name in PROFILES["browser"]:
         build(
             f"browser:{name}",
@@ -185,7 +287,12 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
         ("target/gallery-fixtures",),
     )
     build("react-fixtures", ("react",), ("target/react-build",), ("node", "npm"))
-    build("canvas-fixtures", ("react",), ("target/canvas-build",), ("node", "npm"))
+    build(
+        "canvas-fixtures",
+        ("react", "native"),
+        ("target/canvas-build",),
+        ("node", "npm"),
+    )
     build("textures", ("react", "builtin-exporter"), ("target/texture-build",))
     build("shapes", ("react", "builtin-exporter"), ("target/shapes-build",))
     build(
@@ -214,8 +321,14 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
     )
     build(
         "surface-fixtures",
-        ("react", "surface-assets"),
+        ("react", "native", "surface-assets"),
         ("target/surface-build",),
+        ("node", "npm"),
+    )
+    build(
+        "surface-gui-fixtures",
+        ("surface-fixtures",),
+        ("target/surface-gui-build",),
         ("node", "npm"),
     )
     build("surface-host", (), ("target/surface-host",), ("node", "npm", "rust"))
@@ -235,8 +348,18 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
     )
     build(
         "blender-fixtures",
-        ("react",),
-        ("target/blender-test/blender-fixture.js",),
+        ("react", "native"),
+        ("target/blender-test",),
+        ("node", "npm"),
+    )
+    build(
+        "blender-headless-fixtures",
+        (),
+        (
+            "target/blender-headless/scenario.js",
+            "target/blender-headless/blender-headless.test.js",
+            "target/blender-headless/blender-disk-headless.test.js",
+        ),
         ("node", "npm"),
     )
     build(
@@ -262,7 +385,12 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
         "typecheck",
         (node(), "node_modules/typescript/bin/tsc", "--noEmit"),
         ("node", "npm"),
-        ("build:native", "build:client"),
+        (
+            "build:native",
+            "build:client",
+            "build:react-gui-authoring",
+            "build:gui-stress-fixtures",
+        ),
     )
     check("python-types", operation("python-types"), ("python-tools",))
     for language, requirements in {
@@ -353,6 +481,8 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
                 "@node": node(),
                 "@blender": blender(),
             }
+            if egl_directory:
+                replacements["@egl"] = egl_directory
             command = tuple(replacements.get(part, part) for part in entry["command"])
             add(
                 Task(

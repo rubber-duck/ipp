@@ -122,14 +122,23 @@ export class ReactAnimationRegistry {
             ? binding.target
             : target(binding.target.entity);
         if (entity === undefined) break;
+        const { entityBindings, ...fields } = binding;
+        const resolvedBindings = entityBindings?.map((reference) =>
+          typeof reference === "bigint" ? reference : target(reference.entity),
+        );
+        if (resolvedBindings?.some((reference) => reference === undefined))
+          break;
         drivers.push({
-          ...binding,
+          ...fields,
           source:
             typeof binding.source === "string"
               ? binding.source
               : resource!.current!.source,
           variant: resource?.current?.variant ?? binding.variant ?? 0,
           target: entity,
+          ...(resolvedBindings === undefined
+            ? {}
+            : { entityBindings: resolvedBindings as bigint[] }),
         });
       }
       if (drivers.length !== declaration.bindings.length) continue;
@@ -189,8 +198,22 @@ export class ReactAnimationRegistry {
     this.unsubscribe?.();
   }
 
-  async dispose() {
+  /**
+   * Fence every declaration's playback mailbox. Unmount leaves controllers
+   * in the World; `remove` deletes them, as removing their declarations
+   * does.
+   */
+  async dispose(remove = false) {
     this.close();
-    await this.removeExcept(new Set());
+    if (remove) {
+      await this.removeExcept(new Set());
+      return;
+    }
+    for (const entry of this.entries.values()) {
+      entry.declaration.mailbox.dispatch = () =>
+        Promise.reject(new Error("Animation is unmounted"));
+      entry.declaration.mailbox.pending = [];
+    }
+    this.entries.clear();
   }
 }

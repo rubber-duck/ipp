@@ -122,8 +122,18 @@ fn every_world_finishes_handlers_before_payload_drop_and_identity_reuse() {
         }));
     }
     let mut host = HostRuntime::with_system_factories(factories).unwrap();
-    let first = host.create_world(WorldLimits::default()).unwrap();
-    let second = host.create_world(WorldLimits::default()).unwrap();
+    let first = host
+        .create_world(
+            WorldLimits::default(),
+            &[SystemId("fixture.first"), SystemId("fixture.second")],
+        )
+        .unwrap();
+    let second = host
+        .create_world(
+            WorldLimits::default(),
+            &[SystemId("fixture.first"), SystemId("fixture.second")],
+        )
+        .unwrap();
     let loader_trace = Arc::clone(&trace);
     let kind = AssetTypeId(65000);
     host.asset_resources_mut()
@@ -199,6 +209,7 @@ impl System for UpdateRelease {
         if let Some(key) = self.request.lock().unwrap().take() {
             assert!(assets.get_typed::<Payload>(key).is_some());
             assets.release(key);
+            assert!(assets.get_typed::<Payload>(key).is_some());
         }
         self.trace
             .lock()
@@ -208,7 +219,7 @@ impl System for UpdateRelease {
 }
 
 #[test]
-fn update_requested_release_waits_for_every_prepared_world() {
+fn update_requested_release_waits_for_live_phase_not_later_prepared_world() {
     let trace = Trace::default();
     let request = Arc::new(Mutex::new(None));
     let mut factories = compiled_system_factories();
@@ -221,8 +232,24 @@ fn update_requested_release_waits_for_every_prepared_world() {
         trace: trace.clone(),
     }));
     let mut host = HostRuntime::with_system_factories(factories).unwrap();
-    let first = host.create_world(Default::default()).unwrap();
-    let second = host.create_world(Default::default()).unwrap();
+    let first = host
+        .create_world(
+            Default::default(),
+            &[
+                SystemId("fixture.update-release"),
+                SystemId("fixture.observer"),
+            ],
+        )
+        .unwrap();
+    let second = host
+        .create_world(
+            Default::default(),
+            &[
+                SystemId("fixture.update-release"),
+                SystemId("fixture.observer"),
+            ],
+        )
+        .unwrap();
     let kind = AssetTypeId(65000);
     let output = trace.clone();
     host.asset_resources_mut()
@@ -245,20 +272,20 @@ fn update_requested_release_waits_for_every_prepared_world() {
     host.world_mut(second).unwrap().prepare_update(0.0).unwrap();
     host.world_mut(first).unwrap().step(0.0).unwrap();
     host.flush_resource_lifecycle();
-    assert!(host.asset_resources().get_typed::<Payload>(key).is_some());
-    assert_eq!(*trace.lock().unwrap(), [format!("update:{}", first.0)]);
+    assert!(host.has_pending_world_updates());
+    assert!(host.asset_resources().get(key).is_none());
     host.world_mut(second).unwrap().step(0.0).unwrap();
     host.flush_resource_lifecycle();
     assert_eq!(
         *trace.lock().unwrap(),
         [
             format!("update:{}", first.0),
-            format!("update:{}", second.0),
             format!("before:{}:fixture.observer", first.0),
             format!("before:{}:fixture.observer", second.0),
             "drop".into(),
             format!("removed:{}:fixture.observer", first.0),
             format!("removed:{}:fixture.observer", second.0),
+            format!("update:{}", second.0),
         ]
     );
     assert!(host.asset_resources().get(key).is_none());

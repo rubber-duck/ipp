@@ -14,9 +14,15 @@ import {
   testingChannel,
   validateGlyphAtlasLimits,
   validateSurfaceCacheBudget,
-  type ClientPresentation,
+  type RenderDiagnostics,
   type GlyphAtlasLimits,
 } from "./presentation.js";
+
+export { lifecycleTesting } from "./lifecycle-diagnostics.js";
+export type {
+  LifecycleDiagnosticSample,
+  LifecycleTesting,
+} from "./lifecycle-diagnostics.js";
 
 export type { GlyphAtlasLimits } from "./presentation.js";
 export { nativePresentationTransport } from "./native-presentation.js";
@@ -42,7 +48,7 @@ export interface PresentationTesting {
  * for later World sessions and through context loss.
  */
 export function presentationTesting(
-  presentation: ClientPresentation,
+  presentation: RenderDiagnostics,
 ): PresentationTesting {
   const send = testingChannel(presentation);
   return {
@@ -53,7 +59,7 @@ export function presentationTesting(
       send({
         type: "glyph-atlas-limits",
         maxPages: limits.maxPages,
-        idlePagePublications: limits.idlePagePublications,
+        idlePageFrames: limits.idlePageFrames,
       });
     },
     setSurfaceCacheBudget: (bytes) => {

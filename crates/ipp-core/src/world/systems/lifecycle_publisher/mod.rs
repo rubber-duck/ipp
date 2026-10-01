@@ -164,17 +164,32 @@ pub struct LifecyclePublication {
     pub observation: LifecycleObservation,
 }
 
-/// Transport drains these owned values without retaining runtime storage.
+/// Ordered applied effects for one session, drained without retaining runtime storage.
+/// Every matching observation is kept until the Host drains it; the Host charges it to the
+/// connection's reliable output account.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum LifecyclePublisherOutput {
-    /// Ordered applied effects for this session.
-    Events(Vec<LifecyclePublication>),
-    /// All subscriptions in this session ended because its queue filled.
-    Overflow {
-        /// Number of observations discarded, including the triggering observation.
-        dropped: u64,
-    },
-}
+pub struct LifecyclePublisherOutput(pub Vec<LifecyclePublication>);
 
 mod system;
 pub use system::{LifecyclePublisherSystem, LifecyclePublisherSystemFactory};
+
+mod membership;
+mod output;
+mod target_index;
+mod targets;
+mod value_observation;
+
+#[cfg(any(test, feature = "diagnostics"))]
+mod diagnostics;
+#[cfg(any(test, feature = "diagnostics"))]
+pub use diagnostics::{LifecycleTargetWork, LifecycleWatchTraffic};
+
+pub use membership::{
+    LifecycleMembershipCommand, LifecycleMembershipPrepareError, LifecycleMembershipPrepareFailure,
+};
+pub use output::{LifecycleWatchDelivery, LifecycleWatchMember, LifecycleWatchOutput};
+pub use targets::{
+    LifecycleMembershipAction, LifecycleMembershipBaseline, LifecycleMembershipRejection,
+    LifecycleMembershipResult, LifecycleTargetLifetime, LifecycleWatchEncoding, LifecycleWatchId,
+    LifecycleWatchKinds, LifecycleWatchRecord, LifecycleWatchRecordBody, LifecycleWatchTarget,
+};

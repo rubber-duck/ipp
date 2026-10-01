@@ -49,16 +49,12 @@ fn exact_filters_preserve_sequence_and_session_isolation() {
     system.observe(1, &entity(8));
     system.observe(2, &entity(7));
     let one = output(&mut system, 1);
-    let LifecyclePublisherOutput::Events(events) = &one[0] else {
-        panic!()
-    };
+    let LifecyclePublisherOutput(events) = &one[0];
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].sequence, 2);
     assert_eq!(events[0].tick, 2);
     let two = output(&mut system, 2);
-    let LifecyclePublisherOutput::Events(events) = &two[0] else {
-        panic!()
-    };
+    let LifecyclePublisherOutput(events) = &two[0];
     assert_eq!(events.len(), 2);
     assert!(output(&mut system, 3).is_empty());
 }
@@ -86,26 +82,26 @@ fn unsubscribe_and_release_discard_pending_events_and_never_retarget() {
 }
 
 #[test]
-fn overflow_is_explicit_terminal_bounded_and_recoverable() {
+fn every_observation_is_kept_in_order_until_drained() {
     let mut system = LifecyclePublisherSystem::default();
     subscribe(&mut system, 1, 10, LifecycleFilter::default());
     for id in 1..=10_000 {
-        system.observe(1, &entity(id));
+        system.observe(id, &entity(id));
     }
-    assert!(system.sessions[&1].observations.is_empty());
-    assert!(system.sessions[&1].subscriptions.is_empty());
-    assert_eq!(
-        output(&mut system, 1),
-        vec![LifecyclePublisherOutput::Overflow {
-            dropped: 129
-        }]
+    let drained = output(&mut system, 1);
+    let [LifecyclePublisherOutput(events)] = drained.as_slice() else {
+        panic!("expected one drained output");
+    };
+    assert_eq!(events.len(), 10_000);
+    assert!(
+        events
+            .iter()
+            .zip(1..)
+            .all(|(event, id)| event.sequence == id
+                && event.tick == id
+                && event.observation == entity(id))
     );
-    subscribe(&mut system, 1, 11, LifecycleFilter::default());
-    system.observe(2, &entity(7));
-    assert!(matches!(
-        output(&mut system, 1).as_slice(),
-        [LifecyclePublisherOutput::Events(_)]
-    ));
+    assert_eq!(system.sessions[&1].subscriptions.len(), 1);
 }
 
 #[test]
@@ -130,9 +126,7 @@ fn component_incarnations_and_asset_residency_are_owned_observations() {
     };
     system.observe(1, &observation);
     let values = output(&mut system, 1);
-    let LifecyclePublisherOutput::Events(events) = &values[0] else {
-        panic!()
-    };
+    let LifecyclePublisherOutput(events) = &values[0];
     assert_eq!(events[0].observation, observation);
 
     {
@@ -160,9 +154,7 @@ fn component_incarnations_and_asset_residency_are_owned_observations() {
             },
         );
         let values = output(&mut system, 1);
-        let LifecyclePublisherOutput::Events(events) = &values[0] else {
-            panic!()
-        };
+        let LifecyclePublisherOutput(events) = &values[0];
         assert_eq!(events.len(), 2);
         assert!(
             matches!(&events[0].observation, LifecycleObservation::Asset { resource, .. } if resource.id == 5 && resource.status == crate::AssetResourceStatus::Loaded)

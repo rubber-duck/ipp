@@ -19,11 +19,7 @@ use ipp_core::{
     },
 };
 use support::WorldTestDriver;
-
-#[cfg(feature = "surfaces")]
-use ipp_core::{
-    DynamicValue, Surface, SurfaceCommand, SurfaceItemContent, SurfaceItemId, SurfaceItemStyle,
-};
+use support::selection::{ASSETS, CONSTRAINTS, RENDER, select};
 
 fn create(world: &mut WorldContext<'_>, alias: u32, value: f32) -> EntityId {
     world
@@ -33,6 +29,7 @@ fn create(world: &mut WorldContext<'_>, alias: u32, value: f32) -> EntityId {
                 Command::Create {
                     alias,
                     metadata: Default::default(),
+                    adopt: false,
                 },
                 Command::insert_value(
                     EntityRef::Alias(alias),
@@ -95,7 +92,7 @@ fn description(asset: u64, targets: &[EntityId], speed: f32) -> AnimationControl
         drivers: targets
             .iter()
             .map(|&target| AnimationDriverDescription {
-                source: format!("asset://10/{asset}"),
+                source: std::sync::Arc::<str>::from(format!("asset://10/{asset}")),
                 variant: 0,
                 track: 0,
                 target,
@@ -103,6 +100,7 @@ fn description(asset: u64, targets: &[EntityId], speed: f32) -> AnimationControl
                     component: ComponentValue::SCALAR,
                     offsets: vec![offset_of!(Scalar, value) as u32],
                 }),
+                entity_bindings: Vec::new(),
                 weight: 1.0,
                 additive: false,
                 reference_time: 0.0,
@@ -148,7 +146,8 @@ fn seek_and_play(world: &mut WorldContext<'_>, controller: AnimationControllerId
 }
 
 #[allow(irrefutable_let_patterns)]
-fn scalar(world: &WorldContext<'_>, target: EntityId) -> (f32, f32) {
+/// The stored Scalar: authored, or sampled while a driver binds it.
+fn scalar(world: &WorldContext<'_>, target: EntityId) -> f32 {
     let snapshot = world.inspect(target).unwrap();
     let read = |values: &[ComponentValue]| {
         values
@@ -162,39 +161,15 @@ fn scalar(world: &WorldContext<'_>, target: EntityId) -> (f32, f32) {
             })
             .unwrap()
     };
-    (read(&snapshot.base), read(&snapshot.effective))
-}
-
-#[cfg(feature = "surfaces")]
-fn edit_surface(world: &mut WorldContext<'_>, request: u64, command: SurfaceCommand) {
-    world
-        .enqueue_surface_command_with_reply(1, request, command)
-        .unwrap();
-    assert_eq!(
-        world.update_for_test(0.0).unwrap().system_command_outcomes[0].result,
-        Ok(())
-    );
-}
-
-#[cfg(feature = "surfaces")]
-fn opacity_track(name: String) -> AnimationTrack {
-    AnimationTrack {
-        target: AnimationTrackTarget::DynamicProperty {
-            component: ComponentValue::SURFACE,
-            name,
-        },
-        keys: vec![AnimationKeyframe {
-            time: 0.0,
-            value: AnimationValue::Field(FieldValue::Dynamic(DynamicValue::F32(0.5))),
-            interpolation: AnimationInterpolation::Step,
-        }],
-    }
+    read(&snapshot.components)
 }
 
 #[test]
 fn removing_and_reusing_a_source_only_component_does_not_rebind_the_transition() {
     let mut host = HostRuntime::new();
-    let world_id = host.create_world(WorldLimits::default()).unwrap();
+    let world_id = host
+        .create_world(WorldLimits::default(), &select(&[ASSETS, CONSTRAINTS]))
+        .unwrap();
     let mut world = host.world_mut(world_id).unwrap();
     let removed = create(&mut world, 1, 100.0);
     let survivor = create(&mut world, 2, 200.0);
@@ -230,21 +205,23 @@ fn removing_and_reusing_a_source_only_component_does_not_rebind_the_transition()
         })
         .unwrap();
     world.update_for_test(0.0).unwrap();
-    assert_eq!(scalar(&world, removed), (333.0, 333.0));
+    assert_eq!(scalar(&world, removed), 333.0);
     let stopped = world.animation_controller(controller).unwrap();
     assert_eq!(stopped.state, AnimationPlaybackStatus::Stopped);
     assert_eq!(stopped.transition, None);
-    assert_eq!(scalar(&world, survivor), (200.0, 200.0));
+    assert_eq!(scalar(&world, survivor), 200.0);
 
     world.update_for_test(0.5).unwrap();
-    assert_eq!(scalar(&world, removed), (333.0, 333.0));
-    assert_eq!(scalar(&world, survivor), (200.0, 200.0));
+    assert_eq!(scalar(&world, removed), 333.0);
+    assert_eq!(scalar(&world, survivor), 200.0);
 }
 
 #[test]
 fn pending_frozen_source_only_replacement_invalidates_the_held_program() {
     let mut host = HostRuntime::new();
-    let world_id = host.create_world(WorldLimits::default()).unwrap();
+    let world_id = host
+        .create_world(WorldLimits::default(), &select(&[ASSETS, CONSTRAINTS]))
+        .unwrap();
     let mut world = host.world_mut(world_id).unwrap();
     let removed = create(&mut world, 1, 100.0);
     let survivor = create(&mut world, 2, 200.0);
@@ -295,19 +272,52 @@ fn pending_frozen_source_only_replacement_invalidates_the_held_program() {
         .unwrap();
     world.update_for_test(0.0).unwrap();
 
-    assert_eq!(scalar(&world, removed), (333.0, 333.0));
-    assert_eq!(scalar(&world, survivor), (200.0, 200.0));
+    assert_eq!(scalar(&world, removed), 333.0);
+    assert_eq!(scalar(&world, survivor), 200.0);
     let stopped = world.animation_controller(controller).unwrap();
     assert_eq!(stopped.state, AnimationPlaybackStatus::Stopped);
     assert_eq!(stopped.transition, None);
 }
 
-#[cfg(feature = "surfaces")]
+fn material_track(name: &str) -> AnimationTrack {
+    AnimationTrack {
+        target: AnimationTrackTarget::DynamicProperty {
+            component: ComponentValue::CUSTOM_MATERIAL,
+            name: name.into(),
+        },
+        keys: vec![AnimationKeyframe {
+            time: 0.0,
+            value: AnimationValue::Field(FieldValue::Dynamic(ipp_core::DynamicValue::F32(0.5))),
+            interpolation: AnimationInterpolation::Step,
+        }],
+    }
+}
+
+fn material_properties(world: &WorldContext<'_>, entity: EntityId) -> ipp_core::DynamicProperties {
+    let snapshot = world.inspect(entity).unwrap();
+    let read = |values: Vec<ComponentValue>| {
+        values
+            .into_iter()
+            .find_map(|value| match value {
+                ComponentValue::CustomMaterial(material) => Some(material.properties),
+                _ => None,
+            })
+            .unwrap()
+    };
+    read(snapshot.components)
+}
+
 #[test]
-fn pending_frozen_dynamic_property_reuse_does_not_write_through_old_descriptor() {
+fn pending_frozen_material_property_reuse_does_not_write_through_old_descriptor() {
     let mut host = HostRuntime::new();
-    let world_id = host.create_world(WorldLimits::default()).unwrap();
+    let world_id = host.create_world(WorldLimits::default(), RENDER).unwrap();
     let mut world = host.world_mut(world_id).unwrap();
+    let set = |name: &str, value: f32| Command::SetDynamicProperty {
+        entity: EntityRef::Alias(1),
+        component: ComponentValue::CUSTOM_MATERIAL,
+        name: name.into(),
+        value: ipp_core::DynamicValue::F32(value),
+    };
     world
         .enqueue(Batch {
             id: 30,
@@ -315,11 +325,16 @@ fn pending_frozen_dynamic_property_reuse_does_not_write_through_old_descriptor()
                 Command::Create {
                     alias: 1,
                     metadata: Default::default(),
+                    adopt: false,
                 },
-                Command::insert_value(
-                    EntityRef::Alias(1),
-                    ComponentValue::Surface(Surface::default()),
-                ),
+                Command::InsertComponent {
+                    entity: EntityRef::Alias(1),
+                    component: ComponentValue::CUSTOM_MATERIAL,
+                    fields: vec![],
+                    adopt: false,
+                },
+                set("amount_a", 1.0),
+                set("amount_b", 1.0),
             ],
         })
         .unwrap();
@@ -328,37 +343,26 @@ fn pending_frozen_dynamic_property_reuse_does_not_write_through_old_descriptor()
         .as_ref()
         .unwrap()[0]
         .1;
-    for id in [1, 2] {
-        edit_surface(
-            &mut world,
-            30 + u64::from(id),
-            SurfaceCommand::Insert {
-                entity,
-                id: SurfaceItemId(id),
-                index: id - 1,
-                content: SurfaceItemContent::Drawing,
-                style: SurfaceItemStyle::default(),
-            },
-        );
-    }
-    let names = [
-        Surface::property_name(SurfaceItemId(1), "opacity").unwrap(),
-        Surface::property_name(SurfaceItemId(2), "opacity").unwrap(),
-    ];
-    let source =
-        AnimationClip::new(1.0, names.iter().cloned().map(opacity_track).collect()).unwrap();
-    let destination = AnimationClip::new(1.0, vec![opacity_track(names[1].clone())]).unwrap();
+    let reused_offset = material_properties(&world, entity).descriptors()["amount_a"].offset;
+
+    let source = AnimationClip::new(
+        1.0,
+        vec![material_track("amount_a"), material_track("amount_b")],
+    )
+    .unwrap();
+    let destination = AnimationClip::new(1.0, vec![material_track("amount_b")]).unwrap();
     upload(&mut world, 101, &source);
     upload(&mut world, 102, &destination);
-    let driver = |asset, track, name: String| AnimationDriverDescription {
-        source: format!("asset://10/{asset}"),
+    let driver = |asset, track, name: &str| AnimationDriverDescription {
+        source: std::sync::Arc::<str>::from(format!("asset://10/{asset}")),
         variant: 0,
         track,
         target: entity,
         property: AnimationTrackTarget::DynamicProperty {
-            component: ComponentValue::SURFACE,
-            name,
+            component: ComponentValue::CUSTOM_MATERIAL,
+            name: name.into(),
         },
+        entity_bindings: Vec::new(),
         weight: 1.0,
         additive: false,
         reference_time: 0.0,
@@ -366,10 +370,7 @@ fn pending_frozen_dynamic_property_reuse_does_not_write_through_old_descriptor()
     };
     let controller = world
         .create_animation_controller(AnimationControllerDescription {
-            drivers: vec![
-                driver(101, 0, names[0].clone()),
-                driver(101, 1, names[1].clone()),
-            ],
+            drivers: vec![driver(101, 0, "amount_a"), driver(101, 1, "amount_b")],
             ..Default::default()
         })
         .unwrap();
@@ -377,11 +378,14 @@ fn pending_frozen_dynamic_property_reuse_does_not_write_through_old_descriptor()
         .control_animation_controller(controller, AnimationPlaybackControl::Play)
         .unwrap();
     world.update_for_test(0.0).unwrap();
+
+    // Interrupt a live transition with one whose destination never loads, so
+    // the controller holds a frozen source that still covers `amount_a`.
     transition(
         &mut world,
         controller,
         AnimationControllerDescription {
-            drivers: vec![driver(102, 0, names[1].clone())],
+            drivers: vec![driver(102, 0, "amount_b")],
             ..Default::default()
         },
         2.0,
@@ -391,44 +395,66 @@ fn pending_frozen_dynamic_property_reuse_does_not_write_through_old_descriptor()
         &mut world,
         controller,
         AnimationControllerDescription {
-            drivers: vec![driver(999, 0, names[1].clone())],
+            drivers: vec![driver(999, 0, "amount_b")],
             ..Default::default()
         },
         2.0,
     );
-    edit_surface(
-        &mut world,
-        40,
-        SurfaceCommand::Remove {
-            entity,
-            id: SurfaceItemId(1),
-        },
+    assert!(
+        world
+            .animation_controller(controller)
+            .unwrap()
+            .transition
+            .unwrap()
+            .pending
     );
-    edit_surface(
-        &mut world,
-        41,
-        SurfaceCommand::Insert {
-            entity,
-            id: SurfaceItemId(3),
-            index: 0,
-            content: SurfaceItemContent::Drawing,
-            style: SurfaceItemStyle {
-                opacity: 0.9,
-                ..Default::default()
-            },
-        },
+
+    // Remove the property, then define a new one of the same kind in its bytes.
+    world
+        .enqueue(Batch {
+            id: 40,
+            operations: vec![Command::RemoveDynamicProperty {
+                entity: EntityRef::Handle(entity),
+                component: ComponentValue::CUSTOM_MATERIAL,
+                name: "amount_a".into(),
+            }],
+        })
+        .unwrap();
+    assert!(
+        world.update_for_test(0.0).unwrap().outcomes[0]
+            .result
+            .is_ok()
     );
+    world
+        .enqueue(Batch {
+            id: 41,
+            operations: vec![Command::SetDynamicProperty {
+                entity: EntityRef::Handle(entity),
+                component: ComponentValue::CUSTOM_MATERIAL,
+                name: "amount_c".into(),
+                value: ipp_core::DynamicValue::F32(0.9),
+            }],
+        })
+        .unwrap();
+    assert!(
+        world.update_for_test(0.0).unwrap().outcomes[0]
+            .result
+            .is_ok()
+    );
+    assert_eq!(
+        material_properties(&world, entity).descriptors()["amount_c"].offset,
+        reused_offset,
+        "the new property reuses the removed property's storage"
+    );
+
     assert_eq!(
         world.animation_controller(controller).unwrap().state,
         AnimationPlaybackStatus::Stopped
     );
+    world.update_for_test(0.5).unwrap();
     assert_eq!(
-        world
-            .surface(entity)
-            .unwrap()
-            .properties
-            .get(&Surface::property_name(SurfaceItemId(3), "opacity").unwrap()),
-        Some(DynamicValue::F32(0.9))
+        material_properties(&world, entity).get("amount_c"),
+        Some(ipp_core::DynamicValue::F32(0.9))
     );
 }
 
@@ -436,7 +462,9 @@ fn pending_frozen_dynamic_property_reuse_does_not_write_through_old_descriptor()
 fn interrupted_disjoint_union_restores_every_original_on_stop_and_delete() {
     for delete in [false, true] {
         let mut host = HostRuntime::new();
-        let world_id = host.create_world(WorldLimits::default()).unwrap();
+        let world_id = host
+            .create_world(WorldLimits::default(), &select(&[ASSETS, CONSTRAINTS]))
+            .unwrap();
         let mut world = host.world_mut(world_id).unwrap();
         let a = create(&mut world, 1, 101.0);
         let b = create(&mut world, 2, 202.0);
@@ -452,9 +480,9 @@ fn interrupted_disjoint_union_restores_every_original_on_stop_and_delete() {
         world.update_for_test(0.5).unwrap();
         transition(&mut world, controller, description(3, &[c], 0.0), 2.0);
         world.update_for_test(0.5).unwrap();
-        assert_ne!(scalar(&world, a).1, 101.0);
-        assert_ne!(scalar(&world, b).1, 202.0);
-        assert_ne!(scalar(&world, c).1, 303.0);
+        assert_ne!(scalar(&world, a), 101.0);
+        assert_ne!(scalar(&world, b), 202.0);
+        assert_ne!(scalar(&world, c), 303.0);
 
         if delete {
             world.remove_animation_controller(controller).unwrap();
@@ -464,9 +492,9 @@ fn interrupted_disjoint_union_restores_every_original_on_stop_and_delete() {
                 .unwrap();
         }
         world.update_for_test(0.0).unwrap();
-        assert_eq!(scalar(&world, a), (101.0, 101.0));
-        assert_eq!(scalar(&world, b), (202.0, 202.0));
-        assert_eq!(scalar(&world, c), (303.0, 303.0));
+        assert_eq!(scalar(&world, a), 101.0);
+        assert_eq!(scalar(&world, b), 202.0);
+        assert_eq!(scalar(&world, c), 303.0);
     }
 }
 
@@ -475,7 +503,9 @@ fn outgoing_asset_unload_holds_transition_until_reload_then_target_removal_stops
     use support::HostWorldTestDriver;
 
     let mut host = HostRuntime::new();
-    let world_id = host.create_world(WorldLimits::default()).unwrap();
+    let world_id = host
+        .create_world(WorldLimits::default(), &select(&[ASSETS, CONSTRAINTS]))
+        .unwrap();
     let mut world = host.world_mut(world_id).unwrap();
     let source_only = create(&mut world, 1, 100.0);
     let survivor = create(&mut world, 2, 200.0);
@@ -492,8 +522,8 @@ fn outgoing_asset_unload_holds_transition_until_reload_then_target_removal_stops
         2.0,
     );
     world.update_for_test(0.5).unwrap();
-    let held_source = scalar(&world, source_only).1;
-    let held_survivor = scalar(&world, survivor).1;
+    let held_source = scalar(&world, source_only);
+    let held_survivor = scalar(&world, survivor);
     let before = world.animation_controller(controller).unwrap();
     let key = world
         .resolve_asset_key(AssetUploadIdentity {
@@ -515,8 +545,8 @@ fn outgoing_asset_unload_holds_transition_until_reload_then_target_removal_stops
         before.transition.unwrap().elapsed
     );
     assert_eq!(pending.time, before.time);
-    assert_eq!(scalar(&world, source_only).1, held_source);
-    assert_eq!(scalar(&world, survivor).1, held_survivor);
+    assert_eq!(scalar(&world, source_only), held_source);
+    assert_eq!(scalar(&world, survivor), held_survivor);
     drop(world);
 
     for _ in 0..16 {
@@ -555,15 +585,17 @@ fn outgoing_asset_unload_holds_transition_until_reload_then_target_removal_stops
     let stopped = world.animation_controller(controller).unwrap();
     assert_eq!(stopped.state, AnimationPlaybackStatus::Stopped);
     assert_eq!(stopped.transition, None);
-    assert_eq!(scalar(&world, survivor), (200.0, 200.0));
+    assert_eq!(scalar(&world, survivor), 200.0);
     world.update_for_test(2.0).unwrap();
-    assert_eq!(scalar(&world, survivor), (200.0, 200.0));
+    assert_eq!(scalar(&world, survivor), 200.0);
 }
 
 #[test]
 fn interrupted_disjoint_union_round_trips_with_only_destination_asset_and_resumes() {
     let mut host = HostRuntime::new();
-    let world_id = host.create_world(WorldLimits::default()).unwrap();
+    let world_id = host
+        .create_world(WorldLimits::default(), &select(&[ASSETS, CONSTRAINTS]))
+        .unwrap();
     let mut world = host.world_mut(world_id).unwrap();
     let a = create(&mut world, 1, 101.0);
     let b = create(&mut world, 2, 202.0);
@@ -579,11 +611,7 @@ fn interrupted_disjoint_union_round_trips_with_only_destination_asset_and_resume
     world.update_for_test(0.5).unwrap();
     transition(&mut world, controller, description(3, &[c], 0.0), 2.0);
     world.update_for_test(0.5).unwrap();
-    let held = [
-        scalar(&world, a).1,
-        scalar(&world, b).1,
-        scalar(&world, c).1,
-    ];
+    let held = [scalar(&world, a), scalar(&world, b), scalar(&world, c)];
     let saved = world.animation_persistent_state();
     let decoded =
         AnimationPersistentState::decode(&saved.encode(1 << 20).unwrap(), 1 << 20).unwrap();
@@ -593,11 +621,14 @@ fn interrupted_disjoint_union_round_trips_with_only_destination_asset_and_resume
     drop(world);
 
     let mut restored_host = HostRuntime::new();
-    let restored_world_id = restored_host.create_world(WorldLimits::default()).unwrap();
+    let restored_world_id = restored_host
+        .create_world(WorldLimits::default(), &select(&[ASSETS, CONSTRAINTS]))
+        .unwrap();
     let mut world = restored_host.world_mut(restored_world_id).unwrap();
-    let restored_a = create(&mut world, 1, 101.0);
-    let restored_b = create(&mut world, 2, 202.0);
-    let restored_c = create(&mut world, 3, 303.0);
+    // Fields hold what was saved, contributions included, as a loaded World's do.
+    let restored_a = create(&mut world, 1, held[0]);
+    let restored_b = create(&mut world, 2, held[1]);
+    let restored_c = create(&mut world, 3, held[2]);
     upload(&mut world, 3, &clip(50.0, 70.0));
     let remap = |target: &mut EntityId| {
         *target = if *target == a {
@@ -637,6 +668,9 @@ fn interrupted_disjoint_union_round_trips_with_only_destination_asset_and_resume
             }
         }
     }
+    for contribution in &mut decoded.contributions {
+        remap(&mut contribution.target);
+    }
     for asset in [1, 2] {
         assert!(
             world
@@ -654,9 +688,9 @@ fn interrupted_disjoint_union_round_trips_with_only_destination_asset_and_resume
     assert!(!restored.transition.unwrap().pending);
     assert_eq!(
         [
-            scalar(&world, restored_a).1,
-            scalar(&world, restored_b).1,
-            scalar(&world, restored_c).1
+            scalar(&world, restored_a),
+            scalar(&world, restored_b),
+            scalar(&world, restored_c)
         ],
         held
     );
@@ -667,9 +701,9 @@ fn interrupted_disjoint_union_round_trips_with_only_destination_asset_and_resume
     assert!(resumed.transition.unwrap().elapsed > elapsed);
     assert_ne!(
         [
-            scalar(&world, restored_a).1,
-            scalar(&world, restored_b).1,
-            scalar(&world, restored_c).1
+            scalar(&world, restored_a),
+            scalar(&world, restored_b),
+            scalar(&world, restored_c)
         ],
         held
     );
@@ -689,7 +723,7 @@ fn interrupted_disjoint_union_round_trips_with_only_destination_asset_and_resume
         .control_animation_controller(controller, AnimationPlaybackControl::Stop)
         .unwrap();
     world.update_for_test(0.0).unwrap();
-    assert_eq!(scalar(&world, restored_a), (101.0, 101.0));
-    assert_eq!(scalar(&world, restored_b), (202.0, 202.0));
-    assert_eq!(scalar(&world, restored_c), (303.0, 303.0));
+    assert_eq!(scalar(&world, restored_a), 101.0);
+    assert_eq!(scalar(&world, restored_b), 202.0);
+    assert_eq!(scalar(&world, restored_c), 303.0);
 }

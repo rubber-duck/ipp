@@ -37,6 +37,7 @@ mod enabled {
         Command::Create {
             alias,
             metadata: EntityMetadata::default(),
+            adopt: false,
         }
     }
 
@@ -142,7 +143,7 @@ mod enabled {
         configure(Level::Debug, Some(sink));
         let mut world_host = ipp_core::HostRuntime::new();
         let world_id = world_host
-            .create_world(ipp_core::WorldLimits::default())
+            .create_world(ipp_core::WorldLimits::default(), &[])
             .unwrap();
         let mut world = world_host.world_mut(world_id).unwrap();
         let report = run(&mut world, 1, vec![create(1)]);
@@ -226,10 +227,13 @@ mod enabled {
         configure(Level::Warn, Some(sink));
         let mut world_host = ipp_core::HostRuntime::new();
         let world_id = world_host
-            .create_world(ipp_core::WorldLimits {
-                max_operations: 256,
-                ..Default::default()
-            })
+            .create_world(
+                ipp_core::WorldLimits {
+                    max_operations: 256,
+                    ..Default::default()
+                },
+                &[],
+            )
             .unwrap();
         let mut world = world_host.world_mut(world_id).unwrap();
         let operations = (0..257).map(create).collect();
@@ -255,69 +259,19 @@ mod enabled {
     }
 
     #[test]
-    fn owned_cleanup_and_bound_release_report_actual_entity_effects() {
-        use ipp_core::{EntityOverlayMode, StateOverlayRef};
-
-        configure(Level::Debug, Some(sink));
-        let mut world_host = ipp_core::HostRuntime::new();
-        let world_id = world_host
-            .create_world(ipp_core::WorldLimits::default())
-            .unwrap();
-        let mut world = world_host.world_mut(world_id).unwrap();
-        let operations = vec![
-            Command::CreateStateOverlayOwner {
-                alias: 0,
-            },
-            Command::AttachEntityOverlayBinding {
-                owner: StateOverlayRef::Alias(0),
-                alias: 1,
-                symbolic_id: "private-name".into(),
-                mode: EntityOverlayMode::Owned,
-            },
-            Command::CreateStateOverlayOwner {
-                alias: 2,
-            },
-            Command::AttachEntityOverlayBinding {
-                owner: StateOverlayRef::Alias(2),
-                alias: 3,
-                symbolic_id: "private-name".into(),
-                mode: EntityOverlayMode::Bound,
-            },
-            Command::ReleaseStateOverlayOwner {
-                owner: StateOverlayRef::Alias(2),
-            },
-            Command::ReleaseStateOverlayOwner {
-                owner: StateOverlayRef::Alias(0),
-            },
-        ];
-        let report = run(&mut world, 10, operations.clone());
-        assert!(report.outcomes[0].result.is_ok());
-        let lines = effects();
-        assert_eq!(lines.len(), 2);
-        assert!(lines[0].contains("entity.create batch=10 entity=4294967296"));
-        assert!(lines[1].contains("entity.delete batch=10 entity=4294967296"));
-        assert!(world.entities().is_empty());
-
-        let mut rejected = operations;
-        rejected.push(Command::Delete {
-            entity: EntityRef::Alias(99),
-        });
-        assert!(run(&mut world, 11, rejected).outcomes[0].result.is_err());
-        let lines = effects();
-        assert_eq!(lines.len(), 2);
-        assert!(lines[0].contains("entity.create batch=11"));
-        assert!(lines[1].contains("entity.delete batch=11"));
-        configure(Level::Off, None);
-    }
-
-    #[test]
     fn rejected_system_commands_warn_without_replies_or_committed_effect_logs() {
         use ipp_core::{CameraMotion, EntityId, RenderStatePatch};
 
         configure(Level::Debug, Some(sink));
         let mut world_host = ipp_core::HostRuntime::new();
         let world_id = world_host
-            .create_world(ipp_core::WorldLimits::default())
+            .create_world(
+                ipp_core::WorldLimits::default(),
+                &crate::support::selection::select(&[
+                    crate::support::selection::CAMERA,
+                    crate::support::selection::RENDER,
+                ]),
+            )
             .unwrap();
         let mut world = world_host.world_mut(world_id).unwrap();
         world
@@ -340,7 +294,7 @@ mod enabled {
         assert!(report.camera_state_changes.is_empty());
         assert!(report.render_state_changes.is_empty());
         assert_eq!(world.active_camera(), None);
-        assert!(!world.render_state().show_all_debug_geometries);
+        assert!(!world.render_state().unwrap().show_all_debug_geometries);
         let lines = take();
         assert_eq!(lines.len(), 3);
         assert!(

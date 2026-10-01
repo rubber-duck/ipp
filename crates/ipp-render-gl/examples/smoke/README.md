@@ -34,6 +34,12 @@ LIBGL_ALWAYS_SOFTWARE=1 \
 
 `--lighting-only` before the positional arguments selects focused lighting scenarios. The [runner](../egl_smoke.rs) owns the complete CLI and scenario selection.
 
+The regression selections `check:gles-spatial` and `check:gles-custom-materials` build the shared gallery cube through `build:render-fixtures`, without compiling browser adapters. The fixture builder imports the maintained gallery asset generator rather than duplicating its mesh data. Publication composition captures use `check:gles-publications` and `check:gles-publications-expanded` with the same EGL driver. Run these selections through `python tools/ipp.py regression --only <selection>`; their direct-core/GLES scope does not establish transport coverage.
+
+`check:gles-publications-gui` adds the [ordinary layout scene](gui_publications.rs): parent and nested Canvas Worlds combine `GuiLayout`, boxes, converted-font text and a Surface attachment. Completed captures and headless geometry check padding, clipping, visual transforms and text changes; retained storage and work counters check warm reuse.
+
+The [ordinary control scene](gui_control_publications.rs) joins real `GuiCanvasPublication` observations to the same completed Canvas hits and paint. Independent geometry and pixel assertions cover checked/unchecked and tall checkboxes, an explicit unchecked theme indicator, slider rail/thumb placement, disabled/button paint and converted-font labels. Field writes change checkbox, slider and text values; unchanged glyphs/parts remain retained, boolean/scalar edits avoid reflow, and warm captures remain identical with no uploads. These scenes prove producer/renderer integration, not routed input, semantic action admission or platform adapters. Focus coverage is unfocused paint only until ordinary focus admission is available.
+
 ## Evidence and scope
 
 Scenarios cover ready/pending resources, transforms, textures, lighting, private geometry visualization and recovery with independent image assertions. [Deferred removals](deferred_removal.rs) verify that later Systems can still read queued targets, invalidation sees old storage, the next presentation contains no stale mesh, and a peer World keeps drawing shared resources.

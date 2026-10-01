@@ -1,5 +1,5 @@
 //! Controlled submissions of identical evaluated scenes through real native GLES.
-use super::{HEIGHT, Renderer, Result, WIDTH, draw_probe as probe, fixture::Scene, measurement};
+use super::{Renderer, Result, draw_probe as probe, fixture::Scene, measurement};
 use ipp_core::systems::animation::AnimationPlaybackControl;
 use std::{io::Write, path::Path, time::Instant};
 
@@ -21,11 +21,7 @@ fn render(
 ) -> Result<Sample> {
     probe::start(mode, timing);
     let started = Instant::now();
-    let result = renderer.render(
-        &mut scene.host.world_mut(scene.world).unwrap(),
-        WIDTH,
-        HEIGHT,
-    );
+    let result = scene.render(renderer);
     let render_ms = started.elapsed().as_secs_f64() * 1000.0;
     let (attempted, submitted, metrics) = probe::stop();
     let waiting = Instant::now();

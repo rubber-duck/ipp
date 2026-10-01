@@ -5,7 +5,7 @@ import { runBrowserEnvironment } from "../browser/environment.js";
 import { openGallery, galleryEnvironment, entity } from "./gallery-driver.js";
 
 const emitter = (inspection: Inspection) =>
-  entity(inspection, "particle-fountain").effective.find(
+  entity(inspection, "particle-fountain").components.find(
     (component) => "lifetime_random" in component.fields,
   )!.fields;
 
@@ -42,7 +42,7 @@ test("particle gallery renders sprites and meshes, updates settings and cleans u
       await g.waitFor((inspection) => emitter(inspection).rate === 300);
       await g.page.locator("#particle-presentation").selectOption("meshes");
       await g.waitFor((inspection) =>
-        entity(inspection, "particle-fountain").effective.some(
+        entity(inspection, "particle-fountain").components.some(
           (component) =>
             component.fields.source ===
             "ipp://mesh/cube?width=1&height=1&length=1",

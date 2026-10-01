@@ -3,6 +3,7 @@
 
 mod support;
 use support::WorldTestDriver;
+use support::selection::{RENDER, SURFACE, select};
 
 use ipp_core::{
     Batch, Command, ComponentValue, EntityRef, FieldValue, FieldWrite, HostRuntime, Surface,
@@ -30,7 +31,9 @@ fn apply(world: &mut ipp_core::WorldContext<'_>, operations: Vec<Command>) {
 #[test]
 fn surface_bounds_follow_transform_and_dimension_changes_without_picking() {
     let mut host = HostRuntime::new();
-    let id = host.create_world(WorldLimits::default()).unwrap();
+    let id = host
+        .create_world(WorldLimits::default(), &select(&[RENDER, SURFACE]))
+        .unwrap();
     let mut world = host.world_mut(id).unwrap();
     let mut mesh_bytes = b"IPPM".to_vec();
     for value in [3u32, 3, 3, 1] {
@@ -58,15 +61,17 @@ fn surface_bounds_follow_transform_and_dimension_changes_without_picking() {
         .unwrap();
     assert!(world.await_upload_for_test().assets[0].result.is_ok());
 
-    let mut surface = Surface::default();
-    surface.width = 4.0;
-    surface.height = 2.0;
+    let surface = Surface {
+        width: 4.0,
+        height: 2.0,
+    };
     apply(
         &mut world,
         vec![
             Command::Create {
                 alias: 1,
                 metadata: Default::default(),
+                adopt: false,
             },
             Command::insert_value(
                 EntityRef::Alias(1),

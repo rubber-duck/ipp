@@ -7,18 +7,18 @@ IPP (Interactive Presentation Platform) is a headless Rust runtime for interacti
 ```mermaid
 flowchart TD
     clients["Applications / authoring"] --> sdk["Generated SDK"]
-    sdk -->|"Ordered batches"| world["World: headless evaluation"]
+    sdk -->|"World sessions / ordered batches"| world["Worlds: headless evaluation"]
     world -->|"Outcomes and events"| sdk
-    host["Host: clock / lifecycle"] -->|"Advances"| world
+    host["Host: clock / lifecycle"] -->|"Schedules attachment graph"| world
     clients -->|"Owned asset data"| assets["Host asset services"]
     assets -->|"Shared resources"| world
-    world -->|"Evaluated inputs"| render["RenderService: GPU"]
-    host -->|"Context and surface"| render
+    world -->|"Completed outputs"| render["RenderService: composition / GPU"]
+    host -->|"Root output / context / surface"| render
 ```
 
 ## Design principles
 
-One mutation owner, stable storage, sparse state overrides, demand-driven resources, target-correct contracts and one evaluation owner per operation. The owning topics below define these contracts; architecture describes accepted direction, not implementation status.
+One mutation owner, one stored value per component field, stable storage, demand-driven resources, target-correct contracts and one evaluation owner per operation. Uniform Worlds compose through explicit attachments; GUI is one selection of ordinary entity systems. The owning topics below define these contracts; architecture describes accepted direction on the way to v1, not implementation status.
 
 ## Architecture topics
 
@@ -28,7 +28,7 @@ One mutation owner, stable storage, sparse state overrides, demand-driven resour
 | [Protocol and schema](architecture/protocol-and-schema.md) | Sessions, generated contracts and persistence |
 | [Assets](architecture/assets.md) | Identity, demand, I/O, loading and recovery |
 | [Rendering](architecture/rendering.md) | GPU boundary, materials, cameras and interaction |
-| [GUI](architecture/gui.md) | Surface interfaces, layout, local controls and platform input |
+| [GUI](architecture/gui.md) | Canvas content, layout, local controls and platform input |
 | [Authoring](architecture/authoring.md) | React and Blender integration boundaries |
 | [Rust workspace](architecture/rust-workspace.md) | Crates, capabilities and dependencies |
 

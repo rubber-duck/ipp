@@ -1,7 +1,7 @@
 //! Reusable CPU preparation storage shared by sequential World submissions.
 //! Entries are frame-local indices; no World references or GPU borrows survive a call.
 
-use ipp_core::{DebugRenderItem, RenderItem};
+use super::scene::{RenderEntity, SceneDebug as DebugRenderItem, SceneItem as RenderItem};
 
 #[derive(Clone, Copy)]
 pub(super) enum RenderDrawIndex {
@@ -12,18 +12,18 @@ pub(super) enum RenderDrawIndex {
 }
 
 pub(super) enum RenderDrawItem<'a> {
-    Visual(&'a RenderItem),
+    Visual(&'a RenderItem<'a>),
     Debug(&'a DebugRenderItem),
     #[cfg(feature = "surfaces")]
-    Surface(&'a ipp_core::SurfaceRenderItem),
+    Surface(&'a super::scene::SceneOutputSurface),
 }
 
 impl RenderDrawIndex {
     pub fn resolve<'a>(
         self,
-        items: &'a [RenderItem],
+        items: &'a [RenderItem<'a>],
         debug: &'a [DebugRenderItem],
-        #[cfg(feature = "surfaces")] surfaces: &'a [ipp_core::SurfaceRenderItem],
+        #[cfg(feature = "surfaces")] surfaces: &'a [super::scene::SceneOutputSurface],
     ) -> RenderDrawItem<'a> {
         match self {
             Self::Visual(index) => RenderDrawItem::Visual(&items[index]),
@@ -44,7 +44,7 @@ impl RenderDrawIndex {
 
 pub(super) struct RenderDraw {
     pub index: RenderDrawIndex,
-    pub key: (ipp_core::EntityId, u8),
+    pub key: (RenderEntity, u8),
     pub depth: f64,
     pub material: super::draw_order::RenderMaterialKey,
     pub phase: u8,

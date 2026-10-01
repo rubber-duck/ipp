@@ -69,7 +69,7 @@ pub struct RenderItem {
     pub texture: Option<crate::TextureKey>,
 }
 
-/// A diagnostic declaration whose private asset belongs to the renderer.
+/// One unfiltered derived diagnostic part whose private asset belongs to the renderer.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DebugRenderItem {
     /// Live entity identity.
@@ -78,8 +78,10 @@ pub struct DebugRenderItem {
     pub model: [f32; 16],
     /// Private mesh parameters for this evaluated primitive.
     pub geometry: crate::systems::geometry::GeometryPrimitiveVisual,
-    /// Resolved uniform linear RGB color.
-    pub color: [f32; 3],
+    /// Individual declaration visibility, independent of containing-camera overrides.
+    pub is_rendered: bool,
+    /// Explicit linear RGB override; absence uses the containing camera's default.
+    pub color_override: Option<[f32; 3]>,
 }
 
 /// A data-dependent incompatibility for a single renderable use.
@@ -97,12 +99,6 @@ pub use system_state::RenderSystemState;
 mod system;
 pub use system::{RenderSystem, RenderSystemFactory};
 
-#[cfg(feature = "gui")]
-mod gui_presentation;
-
-#[cfg(feature = "surfaces")]
-mod surface_cache_inputs;
-
 pub(in crate::world) struct RenderReadAccess<'a> {
     world: &'a WorldSimulationState,
     assets: &'a AssetManagementService,
@@ -110,4 +106,9 @@ pub(in crate::world) struct RenderReadAccess<'a> {
 }
 
 mod preparation;
+mod publication;
+pub use publication::{
+    PublishedCustomMaterial, PublishedLight, PublishedMaterialProperty, PublishedRenderItem,
+    RenderPublication,
+};
 mod read;

@@ -124,7 +124,7 @@ impl GlesRenderDevice {
             targets: Default::default(),
             #[cfg(feature = "surfaces")]
             surface_quad_vao: 0,
-            #[cfg(feature = "gui")]
+            #[cfg(feature = "surfaces")]
             glyph_atlas_target: None,
             #[cfg(feature = "surfaces")]
             surface_instance_scratch: Vec::new(),

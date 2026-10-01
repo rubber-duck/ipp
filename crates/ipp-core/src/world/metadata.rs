@@ -1,6 +1,6 @@
 //! World discovery metadata and creation policy.
 
-use crate::{WorldCapacityHints, WorldId};
+use crate::{WorldCapacityHints, WorldId, systems::SystemId};
 
 /// Durable World identity, assigned by the Host and retained through file round trips.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
@@ -31,12 +31,32 @@ pub struct WorldDescriptor {
 }
 
 /// Empty-World construction configuration. Reservations do not cap live state.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+///
+/// Every creation names its System selection; there is no default selection.
+#[derive(Clone, Debug, PartialEq)]
 pub struct WorldCreateOptions {
     /// Empty requests an automatically assigned Host-unique name.
     pub symbolic_id: String,
     /// Reservations to merge with selected system defaults.
     pub capacity_hints: WorldCapacityHints,
+    /// Exactly the registered factories this World instantiates, including
+    /// every required predecessor. Empty selects no Systems.
+    pub selected_systems: Vec<SystemId>,
+    /// Initial canvas extent and density, accepted only when the selection
+    /// includes the Canvas System; absent selects the defaults.
+    pub canvas: Option<crate::CanvasState>,
+}
+
+impl WorldCreateOptions {
+    /// Automatically named options with default reservations for this selection.
+    pub fn new(selected_systems: impl IntoIterator<Item = SystemId>) -> Self {
+        Self {
+            symbolic_id: String::new(),
+            capacity_hints: WorldCapacityHints::default(),
+            selected_systems: selected_systems.into_iter().collect(),
+            canvas: None,
+        }
+    }
 }
 
 /// World selection at the Host attachment boundary.

@@ -44,46 +44,46 @@ pub struct RenderStatistics {
     pub shadow_resident_bytes: u32,
     /// Retained GUI box and glyph batches drawn. Consecutive batches of a Surface
     /// share draws, which [`RenderFrameSummary::draw_calls`] counts.
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     pub gui_batches: u32,
     /// GUI box primitives whose CPU geometry was regenerated, plus glyph batches
     /// rebuilt after a text edit or the retirement of an atlas page they sampled.
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     pub gui_rebuilds: u32,
     /// Retained GUI batches written to GPU storage during this frame.
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     pub gui_allocations: u32,
     /// Resident bytes of retained per-Surface GUI GPU storage across every World
     /// presented through this context.
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     pub gui_resident_bytes: u32,
     /// Distinct glyph atlas entries that visible text demanded but did not find
     /// during this submission, including entries the population budget or a failure
     /// back-off defers to a later frame.
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     pub glyph_misses: u32,
     /// Glyph atlas entries rasterized during this submission, before the main pass.
     /// A frame populates at least [`crate::GLYPH_MIN_POPULATES_PER_FRAME`] missing
     /// entries, then as many as the population time budget covers; later entries
     /// count as misses and their text stays analytic until a following frame
     /// populates them.
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     pub glyph_populates: u32,
     /// Recoverable glyph atlas allocation or rasterization failures during this
     /// submission. Each glyph backs off and its text uses analytic glyphs meanwhile.
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     pub glyph_population_failures: u32,
     /// Glyph atlas pages retired since the previous completed submission: idle past
     /// the renderer's limit, reclaimed under allocation pressure or released when no
     /// World demands any glyph. Context loss is not counted.
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     pub glyph_page_retirements: u32,
     /// Number of resident glyph atlas pages shared by every World on this context.
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     pub glyph_pages: u32,
     /// Total resident bytes occupied by the shared glyph atlas page textures: one
     /// byte per texel of single-channel coverage.
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     pub glyph_resident_bytes: usize,
     /// Resident bytes of retained analytic Surface glyph instance streams across every
     /// World presented through this context, sixteen `f32` lanes per instance.

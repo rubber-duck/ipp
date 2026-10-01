@@ -860,3 +860,46 @@ fn direct_presentation_for_other_reasons_resets_the_animated_state() {
     paint += 1;
     assert_eq!(frame(&mut store, fast(1, paint)).animated, 1);
 }
+
+#[test]
+fn composed_plan_reserves_all_world_images_before_allocating_and_finishes_independently() {
+    let mut store = Store::new();
+    let other = WorldId(2);
+    let inputs = [(WORLD, input(1, 5.0, 1, 1)), (other, input(1, 5.0, 1, 1))];
+    store
+        .cache
+        .plan_outputs(&[WORLD, other], 0.0, 4096, &inputs, &mut store.targets)
+        .unwrap();
+    assert_eq!(store.targets.creates, 2);
+    for world in [WORLD, other] {
+        assert_eq!(
+            store.cache.action(world, entity(1)),
+            Some(SurfaceCacheAction::Repaint)
+        );
+        store.cache.repainted(world, entity(1), 0.0, &[], 0);
+        store.cache.presented(world, entity(1), 0.0);
+    }
+    store
+        .cache
+        .finish_frame(WORLD, 0.0, true, &mut store.targets);
+    assert_eq!(
+        store.cache.action(other, entity(1)),
+        Some(SurfaceCacheAction::Repaint)
+    );
+    store
+        .cache
+        .finish_frame(other, 0.0, true, &mut store.targets);
+    assert_eq!(store.targets.live.len(), 2);
+    store
+        .cache
+        .plan_outputs(&[WORLD, other], 1.0, 4096, &inputs[1..], &mut store.targets)
+        .unwrap();
+    store
+        .cache
+        .finish_frame(WORLD, 1.0, true, &mut store.targets);
+    assert_eq!(store.targets.live.len(), 1);
+    assert_eq!(
+        store.cache.action(other, entity(1)),
+        Some(SurfaceCacheAction::Reuse)
+    );
+}

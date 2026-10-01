@@ -2,6 +2,7 @@
 
 mod support;
 use support::WorldTestDriver;
+use support::selection::CAMERA;
 
 use ipp_core::{
     Batch, Command, ComponentValue, EntityId, EntityMetadata, EntityRef, ErrorReason, WorldLimits,
@@ -33,6 +34,7 @@ fn camera(world: &mut ipp_core::WorldContext<'_>, name: &str) -> EntityId {
                     symbolic_id: Some(name.into()),
                     classes: vec![],
                 },
+                adopt: false,
             },
             insert(
                 EntityRef::Alias(0),
@@ -51,7 +53,7 @@ fn camera(world: &mut ipp_core::WorldContext<'_>, name: &str) -> EntityId {
 fn activation_is_explicit_ordered_and_failed_activation_preserves_selection() {
     let mut world_host = ipp_core::HostRuntime::new();
     let world_id = world_host
-        .create_world(ipp_core::WorldLimits::default())
+        .create_world(ipp_core::WorldLimits::default(), CAMERA)
         .unwrap();
     let mut world = world_host.world_mut(world_id).unwrap();
     assert_eq!(world.active_camera(), None);
@@ -99,7 +101,7 @@ fn active_deletion_and_required_removal_are_accepted_and_leave_the_selection_unu
         Some(ComponentValue::TRANSFORM),
     ] {
         let mut host = ipp_core::HostRuntime::new();
-        let id = host.create_world(Default::default()).unwrap();
+        let id = host.create_world(Default::default(), CAMERA).unwrap();
         let mut world = host.world_mut(id).unwrap();
         let first = camera(&mut world, "first");
         let second = camera(&mut world, "second");
@@ -133,7 +135,7 @@ fn active_deletion_and_required_removal_are_accepted_and_leave_the_selection_unu
                 !world
                     .inspect(first)
                     .unwrap()
-                    .effective
+                    .components
                     .iter()
                     .any(|value| value.type_id() == component)
             );
@@ -152,7 +154,7 @@ fn active_deletion_and_required_removal_are_accepted_and_leave_the_selection_unu
 fn invalid_projection_updates_can_be_corrected_explicitly() {
     let mut world_host = ipp_core::HostRuntime::new();
     let world_id = world_host
-        .create_world(ipp_core::WorldLimits::default())
+        .create_world(ipp_core::WorldLimits::default(), CAMERA)
         .unwrap();
     let mut world = world_host.world_mut(world_id).unwrap();
     let entity = camera(&mut world, "camera");
@@ -245,10 +247,13 @@ fn invalid_projection_updates_can_be_corrected_explicitly() {
 fn activation_observes_prior_mutations_and_shares_queue_bounds() {
     let mut world_host = ipp_core::HostRuntime::new();
     let world_id = world_host
-        .create_world(WorldLimits {
-            max_queued_batches: 2,
-            ..WorldLimits::default()
-        })
+        .create_world(
+            WorldLimits {
+                max_queued_batches: 2,
+                ..WorldLimits::default()
+            },
+            CAMERA,
+        )
         .unwrap();
     let mut world = world_host.world_mut(world_id).unwrap();
     let entity = camera(&mut world, "camera");
@@ -275,154 +280,4 @@ fn activation_observes_prior_mutations_and_shares_queue_bounds() {
     assert!(report.outcomes[0].result.is_ok());
     assert!(report.camera_state_changes.is_empty());
     assert_eq!(world.active_camera(), None);
-}
-
-mod overlays {
-    use super::*;
-    use ipp_core::{ComponentOverlayMode, EntityOverlayMode, StateOverlayRef};
-
-    #[test]
-    fn owned_camera_cleanup_is_accepted_and_leaves_the_selection_unusable() {
-        for cleanup in 0..4 {
-            let mut world_host = ipp_core::HostRuntime::new();
-            let world_id = world_host
-                .create_world(ipp_core::WorldLimits::default())
-                .unwrap();
-            let mut world = world_host.world_mut(world_id).unwrap();
-            let report = run(
-                &mut world,
-                vec![
-                    Command::CreateStateOverlayOwner {
-                        alias: 0,
-                    },
-                    Command::AttachEntityOverlayBinding {
-                        owner: StateOverlayRef::Alias(0),
-                        alias: 1,
-                        symbolic_id: "owned".into(),
-                        mode: EntityOverlayMode::Owned,
-                    },
-                    Command::AttachComponentStateOverlay {
-                        owner: StateOverlayRef::Alias(0),
-                        binding: StateOverlayRef::Alias(1),
-                        alias: 2,
-                        component: ComponentValue::CAMERA,
-                        mode: ComponentOverlayMode::Owned,
-                        fields: vec![],
-                    },
-                    Command::AttachComponentStateOverlay {
-                        owner: StateOverlayRef::Alias(0),
-                        binding: StateOverlayRef::Alias(1),
-                        alias: 3,
-                        component: ComponentValue::TRANSFORM,
-                        mode: ComponentOverlayMode::Owned,
-                        fields: vec![],
-                    },
-                ],
-            );
-            assert!(report.outcomes[0].result.is_ok(), "{report:?}");
-            let resources = &report.outcomes[0].state_overlays;
-            let owner = StateOverlayRef::Handle(resources[0].id);
-            let entity = world.entities()[0].id;
-            let alternate = camera(&mut world, "alternate");
-            world.enqueue_camera_activate(entity).unwrap();
-            world.update_for_test(0.0).unwrap();
-            world
-                .enqueue_camera_navigate(ipp_core::CameraMotion::Zoom {
-                    amount: 0.5,
-                })
-                .unwrap();
-            let report = world.update_for_test(0.0).unwrap();
-            assert!(report.camera_state_changes.is_empty());
-            assert!(report.diagnostics.is_empty());
-            let operation = [
-                Command::ReleaseEntityOverlayBinding {
-                    owner,
-                    binding: StateOverlayRef::Handle(resources[1].id),
-                },
-                Command::ReleaseStateOverlayOwner {
-                    owner,
-                },
-                Command::ReleaseComponentStateOverlay {
-                    owner,
-                    overlay: StateOverlayRef::Handle(resources[2].id),
-                },
-                Command::ReleaseComponentStateOverlay {
-                    owner,
-                    overlay: StateOverlayRef::Handle(resources[3].id),
-                },
-            ][cleanup]
-                .clone();
-            {
-                let report = run(&mut world, vec![operation]);
-                assert!(report.outcomes[0].result.is_ok(), "{report:?}");
-                assert!(world.prepare_camera(100, 100).is_err());
-                assert_eq!(world.active_camera(), Some(entity));
-            }
-            world.enqueue_camera_activate(alternate).unwrap();
-            assert!(
-                run(
-                    &mut world,
-                    vec![Command::ReleaseStateOverlayOwner {
-                        owner
-                    }]
-                )
-                .outcomes[0]
-                    .result
-                    .is_ok()
-            );
-            assert!(world.inspect(entity).is_none());
-        }
-    }
-
-    #[test]
-    fn auto_fallback_preserves_active_required_components_until_final_release() {
-        let mut world_host = ipp_core::HostRuntime::new();
-        let world_id = world_host
-            .create_world(ipp_core::WorldLimits::default())
-            .unwrap();
-        let mut world = world_host.world_mut(world_id).unwrap();
-        let entity = camera(&mut world, "camera");
-        let report = run(
-            &mut world,
-            vec![
-                Command::CreateStateOverlayOwner {
-                    alias: 0,
-                },
-                Command::AttachEntityOverlayBinding {
-                    owner: StateOverlayRef::Alias(0),
-                    alias: 1,
-                    symbolic_id: "camera".into(),
-                    mode: EntityOverlayMode::Bound,
-                },
-                Command::AttachComponentStateOverlay {
-                    owner: StateOverlayRef::Alias(0),
-                    binding: StateOverlayRef::Alias(1),
-                    alias: 2,
-                    component: ComponentValue::CAMERA,
-                    mode: ComponentOverlayMode::Auto,
-                    fields: vec![],
-                },
-            ],
-        );
-        let owner = StateOverlayRef::Handle(report.outcomes[0].state_overlays[0].id);
-        world.enqueue_camera_activate(entity).unwrap();
-        let report = run(
-            &mut world,
-            vec![Command::RemoveComponent {
-                entity: EntityRef::Handle(entity),
-                component: ComponentValue::CAMERA,
-            }],
-        );
-        assert!(report.outcomes[0].result.is_ok());
-        assert_eq!(world.active_camera(), Some(entity));
-        let report = run(
-            &mut world,
-            vec![Command::ReleaseStateOverlayOwner {
-                owner,
-            }],
-        );
-        assert!(report.outcomes[0].result.is_ok());
-        assert_eq!(world.active_camera(), Some(entity));
-        assert!(world.prepare_camera(100, 100).is_err());
-    }
 }

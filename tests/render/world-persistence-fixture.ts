@@ -2,30 +2,42 @@ import { presentationTesting } from "../../packages/ipp-client/src/testing.js";
 import type {
   AnimationWorldClient,
   AnimationControllerSnapshot,
-  CameraWorldClient,
-  FrameCapture,
+  PresentedCapture,
   WorldPersistenceHostClient,
+  WorldReference,
 } from "@ipp/client";
 import { AnimationFixture, check } from "../integration/animation-fixtures.js";
 import { compareImages, summarizeImage } from "./image-assertions.js";
+import {
+  RootPresentation,
+  capturedImage,
+  recoverRestoredContext,
+} from "./root-presentation.js";
+import {
+  CONSTRAINTS,
+  SCENE,
+  selectSystems,
+} from "../integration/system-selections.js";
 
-type WorldClient = AnimationWorldClient & CameraWorldClient;
 type Configuration = { generated: string; workerScript: string; wasm: string };
+const VIEWPORT = { width: 320, height: 240 };
 let configuration: Configuration;
-let host: WorldPersistenceHostClient<WorldClient> | undefined;
-let client: WorldClient;
+let host: WorldPersistenceHostClient<AnimationWorldClient> | undefined;
+let client: AnimationWorldClient;
+let presentation: RootPresentation | undefined;
+let worlds: WorldReference[] = [];
 let saved: Uint8Array;
 let controller: bigint;
 let source: string;
 let savedController: AnimationControllerSnapshot;
-const frames = new Map<string, FrameCapture>();
+const frames = new Map<string, PresentedCapture>();
 
 async function connect(config: Configuration) {
   configuration = config;
   const contract = await import(config.generated);
   const canvas = document.createElement("canvas");
-  canvas.width = 320;
-  canvas.height = 240;
+  canvas.width = VIEWPORT.width;
+  canvas.height = VIEWPORT.height;
   document.body.replaceChildren(canvas);
   host = await contract.IppHostClient.connectWorker(
     config.workerScript,
@@ -35,6 +47,43 @@ async function connect(config: Configuration) {
     },
   );
   return contract;
+}
+
+async function openSaved() {
+  await connect(configuration);
+  const graph = await host!.loadWorld(saved);
+  worlds = [...graph.created.values()];
+  client = await host!.openWorld(graph.root);
+}
+
+async function present(camera: bigint) {
+  presentation = await RootPresentation.camera(
+    host!,
+    worldReference(),
+    camera,
+    VIEWPORT,
+  );
+}
+
+function worldReference(): WorldReference {
+  const reference = client.worldReference;
+  check(reference, "World client has no World reference");
+  return reference;
+}
+
+async function closeHost() {
+  const current = host;
+  host = undefined;
+  if (!current) return;
+  try {
+    await presentation?.close();
+    for (const session of current.sessions.values()) await session.close();
+    for (const world of worlds) await current.destroyWorld(world);
+  } finally {
+    presentation = undefined;
+    worlds = [];
+    await current.close();
+  }
 }
 
 async function ready() {
@@ -60,12 +109,16 @@ async function ready() {
 
 async function capture(label: string) {
   const state = await client.inspect();
-  const frame = await client.presentation!.capture(state.tick);
-  check(frame.tick > state.tick, "Capture did not finish a new frame");
+  check(presentation, "Camera presentation is not selected");
+  const frame = await presentation.capture();
+  check(
+    presentation.sourceTick(frame) > state.tick,
+    "Capture does not include the inspected World state",
+  );
   frames.set(label, frame);
   return {
     label,
-    summary: summarizeImage(frame),
+    summary: summarizeImage(capturedImage(frame)),
     drawCalls: frame.drawCalls,
     triangles: frame.triangles,
   };
@@ -74,13 +127,18 @@ async function capture(label: string) {
 export async function prepare(config: Configuration, clipSource: string) {
   const contract = await connect(config);
   source = clipSource;
-  client = await host!.createWorld({ symbolicId: "external-animation" });
+  const created = await host!.createWorld({
+    selectedSystems: selectSystems(SCENE, CONSTRAINTS),
+    symbolicId: "external-animation",
+  });
+  worlds = [created.reference];
+  client = await host!.openWorld(created.reference);
   const fixture = new AnimationFixture(client, contract, async () => {});
   const camera = await fixture.create("camera", {
     Transform: { z: 6 },
     Camera: { projection: 1, focus_distance: 6, ortho_height: 4 },
   });
-  client.sendCommand({ type: "CameraActivateCommand", entity: camera });
+  await present(camera);
   const targets = [];
   for (const [index, x] of [-1, 1].entries())
     targets.push(
@@ -176,8 +234,8 @@ export async function prepare(config: Configuration, clipSource: string) {
     "Prepared transition did not reach a paused in-flight sample",
   );
   const before = await capture("saved-paused");
-  saved = await host!.saveWorld();
-  const again = await host!.saveWorld();
+  saved = await host!.saveWorld(client.session);
+  const again = await host!.saveWorld(client.session);
   check(
     saved.length === again.length &&
       saved.every((byte, i) => byte === again[i]),
@@ -191,14 +249,12 @@ export async function prepare(config: Configuration, clipSource: string) {
     !new TextDecoder().decode(saved).includes("bundle://"),
     "Save embedded a bundle",
   );
-  await host!.close();
-  host = undefined;
+  await closeHost();
   return { bytes: saved.length, before, controller: savedController };
 }
 
 export async function restore() {
-  await connect(configuration);
-  client = await host!.loadWorld(saved);
+  await openSaved();
   const state = await ready();
   check(
     state.controllers?.length === 1,
@@ -236,33 +292,35 @@ export async function restore() {
     (entity) => entity.metadata.symbolicId === "camera",
   );
   check(camera, "Saved camera missing");
-  client.sendCommand({ type: "CameraActivateCommand", entity: camera.id });
+  await present(camera.id);
   const after = await capture("restored-paused");
   return {
     after,
     difference: compareImages(
-      frames.get("saved-paused")!,
-      frames.get("restored-paused")!,
+      capturedImage(frames.get("saved-paused")!),
+      capturedImage(frames.get("restored-paused")!),
     ),
   };
 }
 
 export async function recoverAndStop() {
-  presentationTesting(client.presentation!).loseContext();
+  check(presentation, "Camera presentation is not selected");
+  presentationTesting(presentation.diagnostics).loseContext();
   await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-  presentationTesting(client.presentation!).restoreContext();
+  presentationTesting(presentation.diagnostics).restoreContext();
+  await recoverRestoredContext(presentation);
   await ready();
   await capture("recovered-paused");
   const recovery = compareImages(
-    frames.get("restored-paused")!,
-    frames.get("recovered-paused")!,
+    capturedImage(frames.get("restored-paused")!),
+    capturedImage(frames.get("recovered-paused")!),
   );
   await client.controlAnimationController(controller, { action: "stop" });
   const state = await client.inspect();
   for (const entity of state.entities.filter((entity) =>
     entity.metadata.symbolicId?.startsWith("cube-"),
   )) {
-    const transform = entity.effective.find(
+    const transform = entity.components.find(
       (component) => component.component === client.components.Transform!.id,
     );
     check(
@@ -272,23 +330,21 @@ export async function recoverAndStop() {
   }
   const stopped = await capture("restored-stopped");
   const difference = compareImages(
-    frames.get("restored-paused")!,
-    frames.get("restored-stopped")!,
+    capturedImage(frames.get("restored-paused")!),
+    capturedImage(frames.get("restored-stopped")!),
   );
-  await host!.close();
-  host = undefined;
+  await closeHost();
   return { recovery, stopped, difference };
 }
 
 export async function restoreAndComplete() {
-  await connect(configuration);
-  client = await host!.loadWorld(saved);
+  await openSaved();
   let state = await ready();
   const camera = state.entities.find(
     (entity) => entity.metadata.symbolicId === "camera",
   );
   check(camera, "Saved camera missing");
-  client.sendCommand({ type: "CameraActivateCommand", entity: camera.id });
+  await present(camera.id);
   await client.controlAnimationController(controller, { action: "play" });
   const deadline = performance.now() + 10_000;
   for (;;) {
@@ -306,7 +362,7 @@ export async function restoreAndComplete() {
       for (const entity of state.entities.filter((entry) =>
         entry.metadata.symbolicId?.startsWith("cube-"),
       )) {
-        const transform = entity.effective.find(
+        const transform = entity.components.find(
           (component) =>
             component.component === client.components.Transform!.id,
         );
@@ -317,8 +373,7 @@ export async function restoreAndComplete() {
         );
       }
       const completed = await capture("restored-transition-completed");
-      await host!.close();
-      host = undefined;
+      await closeHost();
       return { controller: stableRestored, completed };
     }
     check(
@@ -329,8 +384,7 @@ export async function restoreAndComplete() {
 }
 
 export async function restoreUnavailable() {
-  await connect(configuration);
-  client = await host!.loadWorld(saved);
+  await openSaved();
   const deadline = performance.now() + 10_000;
   for (;;) {
     const state = await client.inspect();
@@ -369,17 +423,14 @@ export async function restoreUnavailable() {
 export function captureDataUrl(label: string) {
   const frame = frames.get(label);
   check(frame, `Missing capture ${label}`);
+  const { width, height, pixels } = capturedImage(frame);
   const canvas = document.createElement("canvas");
-  canvas.width = frame.width;
-  canvas.height = frame.height;
+  canvas.width = width;
+  canvas.height = height;
   canvas
     .getContext("2d")!
     .putImageData(
-      new ImageData(
-        new Uint8ClampedArray(frame.pixels.slice(0)),
-        frame.width,
-        frame.height,
-      ),
+      new ImageData(new Uint8ClampedArray(pixels.slice(0)), width, height),
       0,
       0,
     );
@@ -387,6 +438,5 @@ export function captureDataUrl(label: string) {
 }
 
 export async function close() {
-  await host?.close();
-  host = undefined;
+  await closeHost();
 }

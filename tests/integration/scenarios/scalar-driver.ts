@@ -38,7 +38,8 @@ export async function scalarBaseAndEffectiveValues(
       context.driver.inspect(target, { signal: context.signal }),
     ),
   );
-  assert.deepEqual(first.scalar, { base: 99, effective: 9 });
+  // The constraint writes its evaluated value into the Scalar itself.
+  assert.deepEqual(first.scalar, { value: 9 });
   assert.deepEqual(first.linearDriver, {
     source,
     scale: 2,
@@ -61,7 +62,7 @@ export async function scalarBaseAndEffectiveValues(
         context.driver.inspect(target, { signal: context.signal }),
       ),
     ).scalar,
-    { base: 99, effective: 13 },
+    { value: 13 },
   );
 }
 
@@ -96,7 +97,7 @@ export async function sourceDeletionDoesNotReconnect(
       await context.execute("inspect before source deletion", target, () =>
         context.driver.inspect(target, { signal: context.signal }),
       ),
-    ).scalar?.effective,
+    ).scalar?.value,
     22,
   );
 
@@ -123,7 +124,8 @@ export async function sourceDeletionDoesNotReconnect(
     scale: 3,
     bias: -2,
   });
-  assert.deepEqual(invalidated.scalar, { base: 40, effective: 40 });
+  // An invalidated binding leaves the last value it wrote.
+  assert.deepEqual(invalidated.scalar, { value: 22 });
 
   const replacementOutcome = committed(
     await context.execute("reuse deleted source slot", { batchId: 32n }, () =>
@@ -151,5 +153,5 @@ export async function sourceDeletionDoesNotReconnect(
     scale: 3,
     bias: -2,
   });
-  assert.deepEqual(afterReuse.scalar, { base: 40, effective: 40 });
+  assert.deepEqual(afterReuse.scalar, { value: 22 });
 }

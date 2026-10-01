@@ -80,12 +80,6 @@ try {
           signal: environment.signal,
         }),
       );
-      let client: BlenderClient | undefined;
-      const create = host.createWorld.bind(host);
-      host.createWorld = async (options) => {
-        client = await create(options);
-        return client;
-      };
       const assetName = (uri: string) => {
         const match = /^\/assets\/([A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*)$/.exec(
           uri,
@@ -102,9 +96,10 @@ try {
           read: (uri) => `http://127.0.0.1:${address.port}/${assetName(uri)}`,
           publishAnimation: publish,
         },
-        { symbolicId: "stress", clipsOnly: true, deferPresentation: true },
+        { symbolicId: "stress", clipsOnly: true },
       );
-      assert.ok(client);
+      const graph = await host.loadWorld(imported.bytes);
+      const client = await host.openWorld(graph.root);
       const features = await addStressFeatures(
         client,
         contract,
@@ -147,7 +142,6 @@ try {
         await client.controlAnimationController(id, { action: "play" });
         await client.controlAnimationController(id, { action: "pause" });
       }
-      const connected = client;
       const coverage = await checkStressFeatures(
         client,
         fixture,
@@ -155,7 +149,7 @@ try {
           for (let offset = 0; offset < controllers.length; offset += 32) {
             await Promise.all(
               controllers.slice(offset, offset + 32).map((id) =>
-                connected.controlAnimationController(id, {
+                client.controlAnimationController(id, {
                   action: "seek",
                   time,
                 }),
@@ -163,6 +157,11 @@ try {
             );
           }
         },
+        async (camera, viewport) =>
+          host.setRootOutput(
+            await host.bindOutput(graph.root, camera, "camera"),
+            viewport,
+          ),
         entities.get(imported.manifest.camera)!,
       );
       await writeFile(
@@ -180,7 +179,10 @@ try {
         resolve(output, "camera.txt"),
         imported.manifest.camera + "\n",
       );
-      await writeFile(resolve(output, "benchmark.ipp"), await host.saveWorld());
+      await writeFile(
+        resolve(output, "benchmark.ipp"),
+        await host.saveWorld(client.session),
+      );
       await writeFile(
         resolve(output, "manifest.json"),
         JSON.stringify(imported.manifest, null, 2),

@@ -16,8 +16,7 @@ export interface ResourcePressureObservation {
   readonly resources: readonly ResourceObservation[];
   readonly declarations: readonly {
     readonly entity: string;
-    readonly baseSource: unknown;
-    readonly effectiveSource: unknown;
+    readonly source: unknown;
   }[];
 }
 
@@ -46,12 +45,10 @@ export async function resourcePressurePreservesSession(
   requireCondition(
     pressureSources.every((source) =>
       committed.declarations.some(
-        (declaration) =>
-          declaration.baseSource === source &&
-          declaration.effectiveSource === source,
+        (declaration) => declaration.source === source,
       ),
     ),
-    "Both source references must be authored and effective",
+    "Both source references must be authored",
   );
 
   const settled = await waitFor(driver, (state) =>
@@ -105,11 +102,10 @@ export async function resourcePressurePreservesSession(
         state.declarations.some(
           (declaration) =>
             declaration.entity === original.entity &&
-            declaration.baseSource === original.baseSource &&
-            declaration.effectiveSource === original.effectiveSource,
+            declaration.source === original.source,
         ),
       ),
-      "Asset growth must preserve each entity's base and effective source reference",
+      "Asset growth must preserve each entity's source reference",
     );
   }
   const manySources = Array.from(

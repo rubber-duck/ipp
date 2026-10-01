@@ -18,7 +18,9 @@ pub use spatial::{
     GeometryPreparedBounds, GeometryQueryResults, GeometryQueryScratch, GeometrySpatialBackend,
     GeometrySpatialIndex,
 };
+mod publication;
 mod update;
+pub use publication::{GeometryPublication, PublishedGeometry};
 
 pub(crate) use update::GeometryEvaluationState;
 pub(in crate::world) use update::update_evaluation_mesh_demand;

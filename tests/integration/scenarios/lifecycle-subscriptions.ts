@@ -7,6 +7,12 @@ import type {
 } from "@ipp/client";
 import { aliasId, createEntity, successfulBatch } from "../camera-fixtures.js";
 import type { DriverConnectOptions } from "../driver.js";
+import {
+  LIFECYCLE,
+  CONSTRAINTS,
+  RENDER,
+  selectSystems,
+} from "../system-selections.js";
 
 function check(value: unknown, message: string): asserts value {
   if (!value) throw new Error(message);
@@ -364,14 +370,18 @@ export async function assetLifecycleSubscriptions(
 export async function lifecycleSessionIsolation(
   host: HostClientBase<SpatialWorldClient>,
 ) {
-  const first = await host.createWorld({ symbolicId: "lifecycle-session" });
+  const world = await host.createWorld({
+    selectedSystems: selectSystems(RENDER, CONSTRAINTS, LIFECYCLE),
+    symbolicId: "lifecycle-session",
+  });
+  const first = await host.openWorld(world.reference);
   const oldEvents: LifecycleNotification[] = [];
   await first.subscribeLifecycle({ assets: false }, (event) =>
     oldEvents.push(event),
   );
   const firstSession = first.session;
-  await host.detachWorld();
-  const next = await host.attachWorld("lifecycle-session");
+  await first.close();
+  const next = await host.openWorld(world.reference);
   check(next.session !== firstSession, "Reattachment requires a new session");
   const fresh: LifecycleNotification[] = [];
   const subscription = await next.subscribeLifecycle(
@@ -392,7 +402,7 @@ export async function lifecycleSessionIsolation(
       "Replacement session starts one fresh subscription",
     );
     await next.close();
-    const third = await host.attachWorld("lifecycle-session");
+    const third = await host.openWorld(world.reference);
     successfulBatch(await third.batch([createEntity(2, "after-client-close")]));
     await barrier(third);
     check(
@@ -406,60 +416,60 @@ export async function lifecycleSessionIsolation(
     };
   } finally {
     await subscription.unsubscribe();
-    await host.destroyWorld("lifecycle-session");
+    await host.destroyWorld(world.reference);
   }
 }
 
-/** A burst in one indivisible batch proves bounded publication without transport mocks. */
-export async function lifecycleOverflow(
+/**
+ * A burst in one indivisible batch spans several lifecycle responses: every observation is
+ * delivered in order, bounded only by the connection's byte budget.
+ */
+export async function lifecycleBurst(
   client: SpatialWorldClient,
   record: DriverConnectOptions["record"],
 ) {
   const events: LifecycleNotification[] = [];
-  await client.subscribeLifecycle(
+  const subscription = await client.subscribeLifecycle(
     { components: false, assets: false },
     (event) => events.push(event),
   );
   const created = successfulBatch(
     await client.batch(
-      Array.from({ length: 140 }, (_, alias) =>
-        createEntity(alias, `lifecycle-overflow-${alias}`),
+      Array.from({ length: 300 }, (_, alias) =>
+        createEntity(alias, `lifecycle-burst-${alias}`),
       ),
     ),
   );
   const ids = created.aliases.map((alias) => alias.id);
   try {
     await barrier(client);
+    const observed = changes(events);
     check(
-      events.length === 1 && events[0]!.kind === "overflow",
-      "A bounded queue publishes exactly one terminal overflow",
-    );
-    check(
-      events[0]!.dropped === 129n,
-      "Overflow reports queued and triggering observations",
-    );
-    const resumed: LifecycleNotification[] = [];
-    const next = await client.subscribeLifecycle(
-      { components: false, assets: false },
-      (event) => resumed.push(event),
+      observed.length === ids.length &&
+        observed.every(
+          (event, index) =>
+            event.observation.kind === "entity" &&
+            event.observation.change === "created" &&
+            event.observation.entity === ids[index] &&
+            (index === 0 || event.sequence > observed[index - 1]!.sequence),
+        ),
+      `A 300-entity burst lost or reordered observations: ${observed.length}`,
     );
     const later = successfulBatch(
-      await client.batch([createEntity(0, "lifecycle-after-overflow")]),
+      await client.batch([createEntity(0, "lifecycle-after-burst")]),
     );
     ids.push(aliasId(later, 0));
     await barrier(client);
     check(
-      changes(resumed).length === 1,
-      "The live session can subscribe after overflow",
+      changes(events).length === ids.length && !client.closure,
+      "The subscription did not continue after a burst",
     );
-    check(events.length === 1, "Overflow ends prior subscriptions permanently");
-    await next.unsubscribe();
-    await record("lifecycle.overflow", {
-      events,
-      resumed,
+    await subscription.unsubscribe();
+    await record("lifecycle.burst", {
+      events: events.length,
       entities: ids.length,
     });
-    return { overflow: events[0], resumed: resumed.length };
+    return { events: events.length };
   } finally {
     successfulBatch(
       await client.batch(
@@ -478,11 +488,19 @@ export async function sharedLifecycleSubscriptions(
   const [leftHost, rightHost, peerHost] = hosts;
   check(leftHost && rightHost && peerHost, "Three Host connections required");
   try {
-    const left = await leftHost.createWorld({ symbolicId: "lifecycle-left" });
-    const right = await rightHost.createWorld({
+    const leftWorld = await leftHost.createWorld({
+      selectedSystems: selectSystems(RENDER, CONSTRAINTS, LIFECYCLE),
+      symbolicId: "lifecycle-left",
+    });
+    const left = await leftHost.openWorld(leftWorld.reference);
+    const rightWorld = await rightHost.createWorld({
+      selectedSystems: selectSystems(RENDER, CONSTRAINTS, LIFECYCLE),
       symbolicId: "lifecycle-right",
     });
-    const peer = await peerHost.attachWorld("lifecycle-left");
+    const right = await rightHost.openWorld(rightWorld.reference);
+    const peer = await peerHost.openWorld(
+      await peerHost.resolveWorld("lifecycle-left"),
+    );
     const leftEvents: LifecycleNotification[] = [];
     const rightEvents: LifecycleNotification[] = [];
     const peerEvents: LifecycleNotification[] = [];
@@ -554,8 +572,8 @@ export async function sharedLifecycleSubscriptions(
       rightSubscription.unsubscribe(),
       peerSubscription.unsubscribe(),
     ]);
-    await rightHost.destroyWorld("lifecycle-right");
-    await peerHost.destroyWorld("lifecycle-left");
+    await rightHost.destroyWorld(rightWorld.reference);
+    await peerHost.destroyWorld(leftWorld.reference);
     return {
       left: leftEvents.length,
       peer: peerEvents.length,

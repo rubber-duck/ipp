@@ -3,7 +3,57 @@
 
 #![allow(dead_code)]
 
+pub mod selection;
+pub mod world_failures;
+
 use ipp_core::{ErrorReason, WorldContext, WorldUpdateReport};
+
+#[cfg(feature = "gui")]
+pub mod gui_panel;
+
+/// Select a World's canvas with its stored extent and density.
+#[cfg(feature = "surfaces")]
+pub trait CanvasTestHost {
+    /// Queue the canvas state for the next mutation boundary and return the
+    /// World's canvas output.
+    fn canvas_output(
+        &mut self,
+        world: ipp_core::WorldRef,
+        extent: [f32; 2],
+        density: f32,
+    ) -> ipp_core::OutputRef;
+}
+
+#[cfg(feature = "surfaces")]
+impl CanvasTestHost for ipp_core::HostRuntime {
+    fn canvas_output(
+        &mut self,
+        world: ipp_core::WorldRef,
+        extent: [f32; 2],
+        density: f32,
+    ) -> ipp_core::OutputRef {
+        self.world_mut(world.id())
+            .unwrap()
+            .enqueue_canvas_state_update(ipp_core::CanvasStateUpdate {
+                extent: Some(extent),
+                units_per_metre: Some(density),
+            })
+            .unwrap();
+        ipp_core::OutputRef::canvas(world)
+    }
+}
+
+/// The first top-level entity of a World: the root a canvas fixture creates.
+pub fn top_level_root(
+    host: &mut ipp_core::HostRuntime,
+    world: ipp_core::WorldId,
+) -> ipp_core::EntityId {
+    host.world_mut(world)
+        .unwrap()
+        .entity_children(None)
+        .next()
+        .expect("a top-level root")
+}
 
 pub trait WorldTestDriver {
     fn update_for_test(&mut self, dt: f64) -> Result<WorldUpdateReport, ErrorReason>;
@@ -82,4 +132,27 @@ pub fn unskinned_mesh_metadata_bytes(index_count: usize) -> usize {
         } else {
             0
         }
+}
+
+/// Minimal immutable font: fallback and A, with independently known advance metrics.
+pub fn canvas_font_bytes() -> Vec<u8> {
+    let mut bytes = b"IPPF".to_vec();
+    bytes.extend(1_u32.to_le_bytes());
+    bytes.extend(1000_u32.to_le_bytes());
+    for value in [800.0_f32, -200.0, 200.0] {
+        bytes.extend(value.to_le_bytes());
+    }
+    bytes.extend(2_u32.to_le_bytes());
+    bytes.extend(1_u32.to_le_bytes());
+    bytes.extend(0_u32.to_le_bytes());
+    for advance in [500.0_f32, 600.0] {
+        bytes.extend(advance.to_le_bytes());
+        for _ in 0..5 {
+            bytes.extend(0.0_f32.to_le_bytes());
+        }
+        bytes.extend(0_u32.to_le_bytes());
+    }
+    bytes.extend(u32::from('A').to_le_bytes());
+    bytes.extend(1_u32.to_le_bytes());
+    bytes
 }

@@ -1,13 +1,32 @@
 /** Observable checks outside timing windows, shared by native and browser imports. */
-import type { EntitySnapshot, PickingWorldClient } from "@ipp/client";
+import type {
+  EntitySnapshot,
+  PickingWorldClient,
+  PresentationViewport,
+  RootBinding,
+} from "@ipp/client";
 import type { BlenderClient } from "../../integrations/blender/client/adapter.js";
 import { check } from "../integration/animation-fixtures.js";
 import type { StressFixture } from "./features.js";
+
+/** Exact root view of every query; the orthographic pick expectations use its aspect. */
+export const STRESS_QUERY_VIEWPORT: PresentationViewport = Object.freeze({
+  width: 800,
+  height: 600,
+  devicePixelRatio: 1,
+});
+
+/** Explicitly root-binds one Camera of the checked World at `viewport`. */
+export type SelectStressCamera = (
+  camera: bigint,
+  viewport: PresentationViewport,
+) => Promise<RootBinding>;
 
 export async function checkStressFeatures(
   client: BlenderClient,
   fixture: StressFixture,
   seek: (time: number) => Promise<void>,
+  selectCamera: SelectStressCamera,
   originalCamera: bigint,
 ) {
   const state = await client.inspect();
@@ -18,7 +37,7 @@ export async function checkStressFeatures(
     Object.entries(client.components).map(([name, descriptor]) => [
       name,
       state.entities.filter((e) =>
-        e.effective.some((c) => c.component === descriptor.id),
+        e.components.some((c) => c.component === descriptor.id),
       ).length,
     ]),
   );
@@ -28,13 +47,15 @@ export async function checkStressFeatures(
   check(
     state.entities.some(
       (e) =>
-        e.effective.some((c) => c.component === client.components.Skin!.id) &&
-        e.effective.some((c) => c.component === client.components.MeshPose!.id),
+        e.components.some((c) => c.component === client.components.Skin!.id) &&
+        e.components.some(
+          (c) => c.component === client.components.MeshPose!.id,
+        ),
     ),
     "Pose-before-skin workload missing",
   );
   const fields = (entity: EntitySnapshot, name: string) => {
-    const component = entity.effective.find(
+    const component = entity.components.find(
       (c) => c.component === client.components[name]!.id,
     );
     check(component, `${entity.metadata.symbolicId}: missing ${name}`);
@@ -52,6 +73,12 @@ export async function checkStressFeatures(
       `${message}: expected ${expected}, got ${String(actual)}`,
     );
   };
+  // The projection track starts at the authored fov; the field holds the
+  // sampled value, so read the authored one at the track's start.
+  await seek(0);
+  const authoredFov = Number(
+    fields(await get("benchmark-camera"), "Camera").fov_y,
+  );
   const samples = [];
   const queries = client as BlenderClient & PickingWorldClient;
   try {
@@ -73,37 +100,33 @@ export async function checkStressFeatures(
           value,
           name,
         );
-      const material = (await get("feature-material-0")).effective.find(
+      const material = (await get("feature-material-0")).components.find(
         (c) => c.component === client.components.CustomMaterial!.id,
       )!;
       const tint = material.properties?.tint;
       check(tint?.kind === "vec4", "Animated custom tint missing");
       close(tint.value[0], 0.2 + u * 0.8, "dynamic tint");
-      const displaced = (await get("feature-material-3")).effective.find(
+      const displaced = (await get("feature-material-3")).components.find(
         (c) => c.component === client.components.CustomMaterial!.id,
       )!.properties?.shift;
       check(displaced?.kind === "f32", "Animated vertex displacement missing");
       close(displaced.value, -0.35 + u * 0.7, "custom vertex displacement");
       const camera = await get("benchmark-camera");
-      const baseline = camera.base.find(
-        (c) => c.component === client.components.Camera!.id,
-      )!;
       close(
         fields(camera, "Camera").fov_y,
-        Number(baseline.fields.fov_y) * (1 - time * 0.005),
+        authoredFov * (1 - time * 0.005),
         "animated projection",
       );
-      client.sendCommand({
-        type: "CameraActivateCommand",
-        entity: entities.get("feature-look-camera")!.id,
-      });
+      const look = await selectCamera(
+        entities.get("feature-look-camera")!.id,
+        STRESS_QUERY_VIEWPORT,
+      );
       const z = fixture.grid * 0.65 + 11;
       const projected = await queries.query({
         type: "CameraProjectQuery",
+        view: { kind: "bound", binding: look },
         x: 0.5,
         y: 0.5,
-        width: 800,
-        height: 600,
         plane: { point: [0, 2, z], normal: [0, 0, 1] },
       });
       check(projected.ok && projected.position, "LookAt projection failed");
@@ -126,20 +149,22 @@ export async function checkStressFeatures(
       );
       poseSamples.push({ name: probe.name, frame: probe.frame, weight });
     }
-    client.sendCommand({
-      type: "CameraActivateCommand",
-      entity: entities.get("feature-orthographic")!.id,
-    });
+    const orthographic = await selectCamera(
+      entities.get("feature-orthographic")!.id,
+      STRESS_QUERY_VIEWPORT,
+    );
     const picks = [];
     for (let index = 0; index < 4; index++) {
       // Independent orthographic projection: width = height * viewport aspect.
       const x = (index - 1.5) * 2;
       const result = await queries.query({
         type: "GeometryPickQuery",
-        x: 0.5 + x / ((8 * 800) / 600),
+        view: { kind: "bound", binding: orthographic },
+        x:
+          0.5 +
+          x /
+            ((8 * STRESS_QUERY_VIEWPORT.width) / STRESS_QUERY_VIEWPORT.height),
         y: 0.5,
-        width: 800,
-        height: 600,
         includeViewPlane: true,
       });
       check(
@@ -152,10 +177,7 @@ export async function checkStressFeatures(
     }
     return { components: counts, samples, poseSamples, picks };
   } finally {
-    client.sendCommand({
-      type: "CameraActivateCommand",
-      entity: originalCamera,
-    });
+    await selectCamera(originalCamera, STRESS_QUERY_VIEWPORT);
     await seek(0.5);
   }
 }

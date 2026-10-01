@@ -12,124 +12,28 @@ use crate::systems::{
 pub struct AnimationSystem {
     pub(in crate::world) state: AnimationSystemState,
     #[cfg(feature = "gui")]
-    skin_controllers:
-        std::collections::BTreeMap<super::GuiSkinAnimationOwner, GuiSkinAnimationController>,
-}
-
-/// Observable state of one derived skin controller; see
-/// [`AnimationSystem::skin_controller_states`].
-#[cfg(feature = "gui")]
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(in crate::world) struct GuiSkinControllerState {
-    owner: super::GuiSkinAnimationOwner,
-    request: u64,
-    rejection: Option<crate::ErrorReason>,
-    controller: Option<(
-        super::AnimationPlaybackStatus,
-        Option<crate::ErrorReason>,
-        bool,
-    )>,
-}
-
-#[cfg(feature = "gui")]
-#[derive(Clone, Copy, Debug)]
-struct GuiSkinAnimationController {
-    id: Option<super::AnimationControllerId>,
-    request: u64,
-    rejection: Option<crate::ErrorReason>,
+    motion: super::gui_motion::GuiMotionAnimations,
+    #[cfg(feature = "gui")]
+    gui: Option<crate::systems::SystemDependencyBinding<crate::systems::gui::GuiSystem>>,
 }
 
 impl AnimationSystem {
     /// Stable factory and instance identity.
     pub const ID: SystemId = SystemId("ipp.animation");
 
-    #[cfg(feature = "gui")]
-    pub(in crate::world) fn skin_controller(
+    #[cfg(all(feature = "gui", feature = "diagnostics"))]
+    pub(in crate::world) fn motion_work(
         &self,
-        owner: super::GuiSkinAnimationOwner,
-    ) -> Option<(
-        u64,
-        &super::AnimationControllerSnapshot,
-        Option<crate::ErrorReason>,
-    )> {
-        let owned = self.skin_controllers.get(&owner)?;
-        let controller = self.state.controllers.get(&owned.id?)?;
-        let failure = controller.failure.or_else(|| {
-            (controller.snapshot.state == super::AnimationPlaybackStatus::Stopped)
-                .then_some(crate::ErrorReason::InvalidValue)
-        });
-        Some((owned.request, &controller.snapshot, failure))
-    }
-
-    /// Everything skin presentation observes about each derived skin
-    /// controller, in owner order: its request, rejection, and the owned
-    /// controller's playback status, failure and whether it is still
-    /// crossfading. Clock time is excluded; sampled values reach the
-    /// GuiRoot through ordinary numeric writes.
-    #[cfg(feature = "gui")]
-    pub(in crate::world) fn skin_controller_states(&self) -> Vec<GuiSkinControllerState> {
-        self.skin_controllers
-            .iter()
-            .map(|(&owner, owned)| GuiSkinControllerState {
-                owner,
-                request: owned.request,
-                rejection: owned.rejection,
-                controller: owned.id.and_then(|id| {
-                    let controller = self.state.controllers.get(&id)?;
-                    Some((
-                        controller.snapshot.state,
-                        controller.failure,
-                        controller.snapshot.transition.is_some(),
-                    ))
-                }),
-            })
-            .collect()
-    }
-
-    #[cfg(feature = "gui")]
-    pub(in crate::world) fn skin_controller_rejection(
-        &self,
-        owner: super::GuiSkinAnimationOwner,
-    ) -> Option<(u64, crate::ErrorReason)> {
-        let owned = self.skin_controllers.get(&owner)?;
-        Some((owned.request, owned.rejection?))
-    }
-
-    #[cfg(feature = "gui")]
-    pub(super) fn is_derived_skin_controller(&self, id: super::AnimationControllerId) -> bool {
-        self.skin_controllers
-            .values()
-            .any(|owned| owned.id == Some(id))
-    }
-
-    #[cfg(not(feature = "gui"))]
-    pub(super) fn is_derived_skin_controller(&self, _id: super::AnimationControllerId) -> bool {
-        false
-    }
-
-    /// Reject an ordinary client operation directed at a private derived controller.
-    pub(super) fn ensure_ordinary_controller(
-        &self,
-        id: super::AnimationControllerId,
-    ) -> Result<(), crate::ErrorReason> {
-        if self.is_derived_skin_controller(id) {
-            return Err(crate::ErrorReason::InvalidValue);
-        }
-        Ok(())
-    }
-
-    #[cfg(feature = "gui")]
-    pub(super) fn invalidate_skin_controller_associations(&mut self) {
-        self.skin_controllers.clear();
+    ) -> crate::systems::gui::motion::GuiMotionSamplingWork {
+        self.motion.statistics
     }
 
     /// Inspect ordinary controllers in deterministic identity order.
     pub(in crate::world) fn ordinary_controllers(&self) -> Vec<super::AnimationControllerSnapshot> {
         self.state
             .controllers
-            .iter()
-            .filter(|(id, _)| !self.is_derived_skin_controller(**id))
-            .map(|(_, controller)| controller.snapshot.clone())
+            .values()
+            .map(|controller| controller.snapshot.clone())
             .collect()
     }
 
@@ -153,7 +57,6 @@ impl AnimationSystem {
                 std::ops::Bound::Excluded(super::AnimationControllerId::from_bits(after)),
                 std::ops::Bound::Unbounded,
             ))
-            .filter(|(id, _)| !self.is_derived_skin_controller(**id))
             .take(limit)
             .map(|(_, controller)| controller.snapshot.clone())
             .collect()
@@ -164,9 +67,6 @@ impl AnimationSystem {
         &self,
         id: super::AnimationControllerId,
     ) -> Option<super::AnimationControllerSnapshot> {
-        if self.is_derived_skin_controller(id) {
-            return None;
-        }
         Some(self.state.controllers.get(&id)?.snapshot.clone())
     }
 }
@@ -180,8 +80,29 @@ impl SystemFactory for AnimationSystemFactory {
         AnimationSystem::ID
     }
 
+    fn capabilities(&self) -> crate::systems::SystemCapabilities {
+        #[allow(unused_mut)]
+        let mut capabilities = crate::systems::SystemCapabilities::new(
+            [],
+            [crate::systems::WorldOperation::Animation],
+        );
+        #[cfg(feature = "skeletal-animation")]
+        capabilities
+            .operations
+            .push(crate::systems::SystemCapability::requiring(
+                crate::systems::WorldOperation::JointAnimation,
+                [crate::systems::skeleton::SkeletonSystem::ID],
+            ));
+        capabilities
+    }
+
+    // Constraints write their targets first; animation contributions apply on top.
     fn dependencies(&self) -> &[SystemDependency] {
-        &[]
+        &[
+            SystemDependency::After(crate::systems::constraints::ConstraintSystem::ID),
+            #[cfg(feature = "gui")]
+            SystemDependency::After(crate::systems::gui::GuiSystem::ID),
+        ]
     }
 
     fn capacity_hints(&self) -> crate::WorldSystemCapacityHints {
@@ -192,20 +113,17 @@ impl SystemFactory for AnimationSystemFactory {
         &self,
         _context: &mut SystemInitContext<'_>,
     ) -> Result<Box<dyn System>, SystemInitError> {
-        Ok(Box::new(AnimationSystem::default()))
+        Ok(Box::new(AnimationSystem {
+            #[cfg(feature = "gui")]
+            gui: _context
+                .dependency::<crate::systems::gui::GuiSystem>(crate::systems::gui::GuiSystem::ID)
+                .ok(),
+            ..Default::default()
+        }))
     }
 }
 
 impl System for AnimationSystem {
-    fn restore_component_input(
-        &self,
-        entity: crate::EntityId,
-        incarnation: u64,
-        value: &mut crate::ComponentValue,
-    ) {
-        self.state.restore_underlying(entity, incarnation, value);
-    }
-
     fn command(
         &mut self,
         context: &mut SystemCommandContext<'_>,
@@ -219,7 +137,7 @@ impl System for AnimationSystem {
             system: self,
             context: &mut context.world,
         };
-        let result = match command.clone() {
+        match command.clone() {
             super::world_api::AnimationCommand::Controller {
                 request_id,
                 command,
@@ -227,33 +145,30 @@ impl System for AnimationSystem {
             super::world_api::AnimationCommand::Playback {
                 id,
                 control,
-            } => access.control_ordinary_playback(id, control),
-            #[cfg(feature = "gui")]
-            super::world_api::AnimationCommand::Internal(commands) => {
-                for command in commands {
-                    // A stale owner or unavailable source is local to one part;
-                    // unrelated derived controllers still reconcile.
-                    let _ = apply_skin_animation_command(&mut access, command);
-                }
-                Ok(())
-            }
-        };
-        #[cfg(feature = "gui")]
-        access.system.skin_controllers.retain(|_, owned| {
-            owned.rejection.is_some()
-                || owned
-                    .id
-                    .is_some_and(|id| access.system.state.controllers.contains_key(&id))
-        });
-        result
+            } => access.control_playback(id, control),
+        }
     }
 
-    fn prepare_mutation(&mut self, context: &mut SystemUpdateContext<'_, '_>) {
-        super::AnimationAccess {
-            system: self,
-            context: &mut context.world,
+    fn after_operation(
+        &mut self,
+        context: &mut crate::systems::SystemOperationContext<'_>,
+    ) -> Result<(), crate::ErrorReason> {
+        // A placement written over a structural driver's lasts until the
+        // driver's next frame, like a write to a field an absolute driver writes.
+        if let crate::Command::PlaceEntity {
+            entity,
+            ..
+        } = context.command
+            && let Ok(entity) = context.staged.resolve(entity, context.aliases)
+            && context.staged.links.operation_changed.contains(&entity)
+        {
+            self.state.resample_structural_target(entity);
         }
-        .restore_animation_inputs(true);
+        Ok(())
+    }
+
+    fn before_absolute_writes(&mut self, fields: &[(crate::EntityId, u16, u32)]) {
+        self.forget_overwritten(fields);
     }
 
     fn before_asset_release(
@@ -261,6 +176,12 @@ impl System for AnimationSystem {
         context: &mut SystemAssetContext<'_>,
         event: &crate::services::asset_management::AssetLifecycleEvent,
     ) {
+        #[cfg(feature = "gui")]
+        {
+            self.motion
+                .reconcile_sources(&context.world, self.gui, event);
+            self.motion.release(&mut context.world, event);
+        }
         use crate::services::asset_management::AssetLifecycleKind;
         if event.kind == AssetLifecycleKind::StatusChanged {
             self.suspend_asset(
@@ -273,6 +194,11 @@ impl System for AnimationSystem {
         if event.kind != AssetLifecycleKind::Removed {
             return;
         }
+        super::AnimationAccess {
+            system: self,
+            context: &mut context.world,
+        }
+        .invalidate_structural_asset(event.key);
         let restorations = self.invalidate_asset(
             context.world.world,
             context.world.asset_acquisition,
@@ -295,22 +221,22 @@ impl System for AnimationSystem {
         Ok(())
     }
 
+    #[cfg(feature = "gui")]
+    fn asset_lifecycle(
+        &mut self,
+        context: &mut SystemAssetContext<'_>,
+        event: &crate::services::asset_management::AssetLifecycleEvent,
+    ) {
+        self.motion
+            .reconcile_sources(&context.world, self.gui, event);
+        self.motion.asset_lifecycle(&mut context.world, event);
+    }
+
     fn finish_update(
         &mut self,
         _context: &mut SystemUpdateContext<'_, '_>,
         report: &mut crate::WorldUpdateReport,
     ) {
-        #[cfg(feature = "gui")]
-        {
-            let derived: std::collections::BTreeSet<_> = self
-                .skin_controllers
-                .values()
-                .filter_map(|owned| owned.id)
-                .collect();
-            self.state
-                .playback_events
-                .retain(|event| !derived.contains(&event.controller.id));
-        }
         report
             .playback_events
             .append(&mut self.state.playback_events);
@@ -320,11 +246,15 @@ impl System for AnimationSystem {
     }
 
     fn before_commit(&mut self, context: &mut SystemCommitContext<'_>) {
+        #[cfg(feature = "gui")]
+        self.motion.before_commit(context);
         self.invalidate_changes(context);
     }
 
+    #[cfg(feature = "gui")]
     fn after_commit(&mut self, context: &mut SystemCommitContext<'_>) {
-        self.refresh_after_commit(context);
+        self.motion
+            .flush_demand(context.world_data.id, context.assets);
     }
 
     fn save_persistent_state(
@@ -366,315 +296,29 @@ impl System for AnimationSystem {
         self.state.controllers.clear();
         self.state.rebuild_target_index();
         self.state.affected_controllers.clear();
-        self.state.pending_restorations.clear();
         self.state.controller_outcomes.clear();
         self.state.playback_events.clear();
         self.state.animation_sources.clear();
         #[cfg(feature = "gui")]
-        self.skin_controllers.clear();
+        {
+            self.motion = Default::default();
+        }
     }
 
     fn update(&mut self, context: &mut SystemUpdateContext<'_, '_>) {
         let dt = context.dt();
+        #[cfg(feature = "gui")]
+        {
+            let changes = self
+                .gui
+                .and_then(|binding| context.dependency(binding))
+                .map_or_else(Vec::new, |gui| gui.motion_changes().to_vec());
+            self.motion.update(&mut context.world, dt, &changes);
+        }
         super::AnimationAccess {
             system: self,
             context: &mut context.world,
         }
         .evaluate_animation(dt);
     }
-}
-
-#[cfg(feature = "gui")]
-fn apply_skin_animation_command(
-    access: &mut super::AnimationAccess<'_, '_>,
-    command: super::AnimationInternalCommand,
-) -> Result<(), crate::ErrorReason> {
-    use super::AnimationInternalCommand;
-
-    match command {
-        AnimationInternalCommand::EnsureSkinTransition {
-            owner,
-            request,
-            source,
-            source_time,
-            source_sample,
-            transition,
-            destination_sample,
-        } => {
-            if request == 0 || !skin_animation_owner_live(access, owner) {
-                delete_skin_animation_controller(access, owner)?;
-                return Err(crate::ErrorReason::InvalidValue);
-            }
-            let current = access.system.skin_controllers.get(&owner).copied();
-            if current
-                .is_some_and(|current| current.request == request && current.rejection.is_some())
-            {
-                return Ok(());
-            }
-            if let Some(current) = current
-                && let Some(id) = current.id
-                && access.system.state.controllers.contains_key(&id)
-            {
-                if current.request == request {
-                    return Ok(());
-                }
-
-                match validate_skin_transition_samples(
-                    access,
-                    &source,
-                    source_time,
-                    source_sample,
-                    &transition.description,
-                    skin_transition_destination_time(&transition),
-                    destination_sample,
-                ) {
-                    Ok(true) => {}
-                    Ok(false) => return Err(crate::ErrorReason::MissingAsset),
-                    Err(reason) => {
-                        reject_skin_animation_controller(access, owner, request, reason)?;
-                        return Err(reason);
-                    }
-                }
-                if let Err(reason) = access.transition_animation_controller(id, transition) {
-                    if skin_animation_failure_retryable(reason) {
-                        return Err(reason);
-                    }
-                    reject_skin_animation_controller(access, owner, request, reason)?;
-                    return Err(reason);
-                }
-                access.system.skin_controllers.insert(
-                    owner,
-                    GuiSkinAnimationController {
-                        id: Some(id),
-                        request,
-                        rejection: None,
-                    },
-                );
-                return Ok(());
-            }
-            access.system.skin_controllers.remove(&owner);
-
-            match validate_skin_transition_samples(
-                access,
-                &source,
-                source_time,
-                source_sample,
-                &transition.description,
-                skin_transition_destination_time(&transition),
-                destination_sample,
-            ) {
-                Ok(true) => {}
-                Ok(false) => return Err(crate::ErrorReason::MissingAsset),
-                Err(reason) => {
-                    reject_skin_animation_controller(access, owner, request, reason)?;
-                    return Err(reason);
-                }
-            }
-            let id = match access.create_animation_controller(source) {
-                Ok(id) => id,
-                Err(reason) => {
-                    if !skin_animation_failure_retryable(reason) {
-                        reject_skin_animation_controller(access, owner, request, reason)?;
-                    }
-                    return Err(reason);
-                }
-            };
-            let result = access
-                .control_playback(id, super::AnimationPlaybackControl::Seek(source_time))
-                .and_then(|()| access.control_playback(id, super::AnimationPlaybackControl::Play))
-                .and_then(|()| access.transition_animation_controller(id, transition));
-            if let Err(reason) = result {
-                let _ = access.remove_animation_controller(id);
-                if !skin_animation_failure_retryable(reason) {
-                    reject_skin_animation_controller(access, owner, request, reason)?;
-                }
-                return Err(reason);
-            }
-            access.system.skin_controllers.insert(
-                owner,
-                GuiSkinAnimationController {
-                    id: Some(id),
-                    request,
-                    rejection: None,
-                },
-            );
-            Ok(())
-        }
-        AnimationInternalCommand::DeleteSkin(owner) => {
-            delete_skin_animation_controller(access, owner)
-        }
-    }
-}
-
-#[cfg(feature = "gui")]
-fn delete_skin_animation_controller(
-    access: &mut super::AnimationAccess<'_, '_>,
-    owner: super::GuiSkinAnimationOwner,
-) -> Result<(), crate::ErrorReason> {
-    let Some(owned) = access.system.skin_controllers.remove(&owner) else {
-        return Ok(());
-    };
-    if let Some(id) = owned.id
-        && access.system.state.controllers.contains_key(&id)
-    {
-        access.remove_animation_controller(id)?;
-    }
-    Ok(())
-}
-
-#[cfg(feature = "gui")]
-fn reject_skin_animation_controller(
-    access: &mut super::AnimationAccess<'_, '_>,
-    owner: super::GuiSkinAnimationOwner,
-    request: u64,
-    reason: crate::ErrorReason,
-) -> Result<(), crate::ErrorReason> {
-    if let Some(id) = access
-        .system
-        .skin_controllers
-        .get(&owner)
-        .and_then(|owned| owned.id)
-        && access.system.state.controllers.contains_key(&id)
-    {
-        access.remove_animation_controller(id)?;
-    }
-    access.system.skin_controllers.insert(
-        owner,
-        GuiSkinAnimationController {
-            id: None,
-            request,
-            rejection: Some(reason),
-        },
-    );
-    Ok(())
-}
-
-#[cfg(feature = "gui")]
-fn skin_animation_failure_retryable(reason: crate::ErrorReason) -> bool {
-    matches!(
-        reason,
-        crate::ErrorReason::Capacity | crate::ErrorReason::MissingAsset
-    )
-}
-
-#[cfg(feature = "gui")]
-fn skin_transition_destination_time(transition: &super::AnimationControllerTransition) -> f64 {
-    match transition.start_time {
-        super::AnimationTransitionStartTime::Seek(time) => time,
-        super::AnimationTransitionStartTime::Restart
-        | super::AnimationTransitionStartTime::Preserve
-        | super::AnimationTransitionStartTime::MatchPhase => 0.0,
-    }
-}
-
-#[cfg(feature = "gui")]
-fn validate_skin_transition_samples(
-    access: &super::AnimationAccess<'_, '_>,
-    source: &super::AnimationControllerDescription,
-    source_time: f64,
-    source_sample: super::GuiSkinAnimationSample,
-    destination: &super::AnimationControllerDescription,
-    destination_time: f64,
-    destination_sample: super::GuiSkinAnimationSample,
-) -> Result<bool, crate::ErrorReason> {
-    Ok(
-        validate_skin_sample(access, source, source_time, source_sample)?
-            && validate_skin_sample(access, destination, destination_time, destination_sample)?,
-    )
-}
-
-#[cfg(feature = "gui")]
-fn validate_skin_sample(
-    access: &super::AnimationAccess<'_, '_>,
-    description: &super::AnimationControllerDescription,
-    time: f64,
-    expected: super::GuiSkinAnimationSample,
-) -> Result<bool, crate::ErrorReason> {
-    use crate::DynamicValue;
-    use crate::components::schema::FieldValue;
-
-    let expected: Vec<_> = [
-        DynamicValue::Vec4(expected.color),
-        DynamicValue::F32(expected.opacity),
-        DynamicValue::Vec2(expected.scale),
-    ]
-    .into_iter()
-    .chain(expected.align_x.map(DynamicValue::F32))
-    .collect();
-    if description.drivers.len() != expected.len() || !time.is_finite() || time < 0.0 {
-        return Err(crate::ErrorReason::InvalidValue);
-    }
-    for (driver, expected) in description.drivers.iter().zip(expected) {
-        let read = access.read();
-        let Some(key) = read.source_key(driver) else {
-            return Ok(false);
-        };
-        if !read.clip_ready(key)? {
-            return Ok(false);
-        }
-        let clip = read
-            .clip_by_key(key)
-            .ok_or(crate::ErrorReason::InvalidAsset)?;
-        if time > clip.duration() {
-            return Err(crate::ErrorReason::InvalidValue);
-        }
-        let track = driver.track as usize;
-        if clip.tracks().get(track).is_none() {
-            return Err(crate::ErrorReason::InvalidField);
-        }
-        let sampled = clip.sample(track, time);
-        let super::AnimationValue::Field(FieldValue::Dynamic(sampled)) = sampled else {
-            return Err(crate::ErrorReason::InvalidField);
-        };
-        if !skin_samples_match(&sampled, &expected) {
-            return Err(crate::ErrorReason::InvalidValue);
-        }
-    }
-    Ok(true)
-}
-
-#[cfg(feature = "gui")]
-fn skin_samples_match(actual: &crate::DynamicValue, expected: &crate::DynamicValue) -> bool {
-    const EPSILON: f32 = 1.0e-5;
-
-    let components_match = |actual: &[f32], expected: &[f32]| {
-        actual
-            .iter()
-            .zip(expected)
-            .all(|(actual, expected)| (*actual - *expected).abs() <= EPSILON)
-    };
-    match (actual, expected) {
-        (crate::DynamicValue::F32(actual), crate::DynamicValue::F32(expected)) => {
-            (*actual - *expected).abs() <= EPSILON
-        }
-        (crate::DynamicValue::Vec2(actual), crate::DynamicValue::Vec2(expected)) => {
-            components_match(actual, expected)
-        }
-        (crate::DynamicValue::Vec4(actual), crate::DynamicValue::Vec4(expected)) => {
-            components_match(actual, expected)
-        }
-        _ => false,
-    }
-}
-
-#[cfg(feature = "gui")]
-fn skin_animation_owner_live(
-    access: &super::AnimationAccess<'_, '_>,
-    owner: super::GuiSkinAnimationOwner,
-) -> bool {
-    let Some(record) = access.context.world.state.entities.get(&owner.entity) else {
-        return false;
-    };
-    if record
-        .input(crate::ComponentValue::GUI_ROOT)
-        .is_none_or(|input| input.incarnation != owner.primitive.root_incarnation)
-    {
-        return false;
-    }
-    access
-        .context
-        .world
-        .components
-        .gui_root(owner.entity.index() as usize)
-        .is_some_and(|root| root.nodes().node(owner.primitive.node).is_some())
 }

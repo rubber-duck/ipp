@@ -26,7 +26,6 @@ export async function customMaterialProperties(
       Entity,
       { id: "custom-owned" },
       React.createElement(CustomMaterial, {
-        bound: false,
         source: "file:///custom.shader",
         alpha_mode: 1,
         amount: value,
@@ -44,16 +43,15 @@ export async function customMaterialProperties(
     const entity = state.entities.find(
       (e) => e.metadata.symbolicId === "custom-owned",
     )!;
-    const properties = entity.effective.find((v) => v.component === component)!
+    const properties = entity.components.find((v) => v.component === component)!
       .properties!;
-    const fields = entity.effective.find(
+    const fields = entity.components.find(
       (v) => v.component === component,
     )!.fields;
     if (
       fields.source !== "file:///custom.shader" ||
       fields.alpha_mode !== 1 ||
-      "source" in properties ||
-      "bound" in properties
+      "source" in properties
     )
       throw new Error(
         "Fixed material fields were treated as custom properties",
@@ -83,13 +81,14 @@ export async function customMaterialProperties(
         value: { kind: "vec4", value: [0, 1, 0, 1] },
       },
     ]);
-    if (!result.ok) throw new Error("Producer tint update failed");
+    if (!result.ok) throw new Error("Client tint update failed");
+    // Removing the tint prop leaves the client's newer value in place.
     await root.render(describe(0.5, undefined, false));
     await observe();
     await root.unmount();
     const state = await client.inspect();
-    if (state.entities.some((e) => e.metadata.symbolicId === "custom-owned"))
-      throw new Error("Custom material owner leaked after unmount");
+    if (!state.entities.some((e) => e.metadata.symbolicId === "custom-owned"))
+      throw new Error("Unmount deleted the custom material entity");
     return observations;
   } finally {
     await settleRoots([root]);
@@ -136,7 +135,7 @@ export async function createShaderPreview(client: Client) {
       { bindTo: "left" },
       React.createElement(
         CustomMaterial,
-        { bound: true, tint: state.tint, source: assetRef("preview") },
+        { tint: state.tint, source: assetRef("preview") },
         React.createElement(
           ShaderAsset,
           { id: "preview", recipe: {}, parameters: { tint: "vec4" } },

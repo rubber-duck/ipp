@@ -19,9 +19,11 @@ Hosts depend on session, protocol, optional renderer and core; session depends o
 
 ## Compile-time composition
 
-The headless baseline includes spatial state, property animation, constraints, overlays, persistence, material/texture/light declarations and geometry queries. Rendering includes unlit/PBR, textures and geometry visualization. Skeletal animation, mesh poses, particles, surfaces, shadows and built-ins are optional scene capabilities. Surface conversion dependencies stay in offline tooling; disabling surfaces omits their types, registrations and shaders.
+The headless baseline includes spatial state, property animation, constraints, persistence, material/texture/light declarations and geometry queries. Rendering includes unlit/PBR, textures and geometry visualization. Skeletal animation, mesh poses, particles, surfaces, shadows and built-ins are optional scene capabilities. Surface conversion dependencies stay in offline tooling; disabling surfaces omits their types, registrations and shaders.
 
-The optional [GUI capability](gui.md) depends on surfaces. Its layout and interaction remain headless; browser input services stay in client adapters. GUI-specific registrations, text-editing dependencies and rendering extensions are omitted when disabled, while ordinary Surface labels remain available. Target contracts advertise implemented operations only.
+The optional [GUI capability](gui.md) depends on surfaces. Its layout and interaction remain headless; browser input services stay in client adapters. GUI-specific registrations, text-editing dependencies and rendering extensions are omitted when disabled, while ordinary Canvas text remains available. Target contracts advertise implemented operations only.
+
+Compiled capabilities define the build's schema and available System factories. Each World chooses an immutable dependency-checked subset under the [runtime composition contract](runtime.md#system-composition), with a manifest for the operations it can evaluate. Selection does not register runtime types or change compiled field layouts; unused Systems and component pages need not allocate merely because their capability exists in the build.
 
 One skeletal selection covers pose evaluation, joint animation, skin bindings/palettes and deformation through separate ordered systems. Runtime demand selects work/resources within compiled capabilities. Disabled capabilities omit code, registrations, dispatch, assets and shaders; do not add placeholder flags.
 

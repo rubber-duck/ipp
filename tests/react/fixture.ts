@@ -32,6 +32,7 @@ import {
   type EntityProps,
 } from "@ipp/react";
 import { workerTransport } from "@ipp/client";
+import { reactRootSystems } from "../integration/system-selections.js";
 
 interface DeliveryGateReport {
   readonly bufferedResponses: number;
@@ -40,17 +41,23 @@ interface DeliveryGateReport {
   readonly unmountPendingBeforeRelease: boolean;
 }
 
-export async function ownershipAndAutomaticLifecycle(
+/**
+ * React writes plain component fields: bound entities are adopted and written
+ * in place, last write wins between roots and clients, a removed prop leaves
+ * its value, and cleanup deletes declared entities and removes only the
+ * components the root inserted.
+ */
+export async function plainFieldLifecycle(
   configuration: ReactRuntimeConfiguration,
 ): Promise<{
   readonly boundValues: readonly ScalarObservation[];
-  readonly sharedFallbackValues: readonly ScalarObservation[];
+  readonly sharedValues: readonly ScalarObservation[];
   readonly boundMissingRejection: string;
   readonly boundMissingAfterRejection: ScalarObservation;
-  readonly ownedComponentValues: readonly ScalarObservation[];
-  readonly autoEntityValues: readonly ScalarObservation[];
-  readonly ownedBeforeClear: ScalarObservation;
-  readonly ownedExistsAfterClear: boolean;
+  readonly insertedComponentValues: readonly ScalarObservation[];
+  readonly adoptedEntityValues: readonly ScalarObservation[];
+  readonly declaredBeforeClear: ScalarObservation;
+  readonly declaredExistsAfterClear: boolean;
   readonly boundExistsAfterClear: boolean;
 }> {
   const { contract, client } = await connect(configuration);
@@ -62,78 +69,51 @@ export async function ownershipAndAutomaticLifecycle(
       }),
       contract.Scalar.insert(contract.Entity.alias(1), { value: 10 }),
       contract.Entity.create(2, {
-        symbolicId: "react-shared-fallback",
+        symbolicId: "react-shared",
         classes: ["react-fixture"],
       }),
       contract.Entity.create(3, {
-        symbolicId: "react-owned-component",
+        symbolicId: "react-inserted-component",
         classes: ["react-fixture"],
       }),
       contract.Entity.create(4, {
-        symbolicId: "react-auto-entity",
+        symbolicId: "react-adopted-entity",
         classes: ["react-fixture"],
       }),
       contract.Scalar.insert(contract.Entity.alias(4), { value: 4 }),
-      contract.Entity.create(5, {
-        symbolicId: "react-bound-missing",
-        classes: ["react-fixture"],
-      }),
     ]),
   );
   const boundEntity = requireAlias(producer, 1);
-  const ownedComponentEntity = requireAlias(producer, 3);
-  const autoEntity = requireAlias(producer, 4);
+  const insertedComponentEntity = requireAlias(producer, 3);
+  const adoptedEntity = requireAlias(producer, 4);
+  const observe = (symbolicId: string) =>
+    observeScalar(client, contract.Scalar.id, symbolicId);
 
   const boundRoot = createRoot(client);
-  const firstFallbackRoot = createRoot(client);
-  const secondFallbackRoot = createRoot(client);
-  const ownedRoot = createRoot(client);
+  const firstSharedRoot = createRoot(client);
+  const secondSharedRoot = createRoot(client);
+  const declaredRoot = createRoot(client);
   const boundMissingRoot = createRoot(client);
-  const ownedComponentRoot = createRoot(client);
-  const autoEntityRoot = createRoot(client);
+  const insertedComponentRoot = createRoot(client);
+  const adoptedEntityRoot = createRoot(client);
   try {
+    // The bound entity's existing Scalar is adopted and written in place.
     await boundRoot.render(
-      declaration({
-        bindTo: "react-bound",
-        scalar: { value: 20 },
-      }),
+      declaration({ bindTo: "react-bound", scalar: { value: 20 } }),
     );
-    const initial = await observeScalar(
-      client,
-      contract.Scalar.id,
-      "react-bound",
-    );
-
+    const adopted = await observe("react-bound");
+    // A client write is the newest value.
     await requireSuccess(
       client.batch([
         contract.Scalar.setValue(contract.Entity.handle(boundEntity), 30),
       ]),
     );
-    const hiddenBaseUpdate = await observeScalar(
-      client,
-      contract.Scalar.id,
-      "react-bound",
-    );
-
-    await boundRoot.render(
-      declaration({
-        bindTo: "react-bound",
-        scalar: {},
-      }),
-    );
-    const cleared = await observeScalar(
-      client,
-      contract.Scalar.id,
-      "react-bound",
-    );
-
+    const clientWrite = await observe("react-bound");
+    // Removing the prop writes nothing.
+    await boundRoot.render(declaration({ bindTo: "react-bound", scalar: {} }));
+    const propRemoved = await observe("react-bound");
     await requireSuccess(client.batch([removeScalar(contract, boundEntity)]));
-    const fallbackAfterRemoval = await observeScalar(
-      client,
-      contract.Scalar.id,
-      "react-bound",
-    );
-
+    const componentRemoved = await observe("react-bound");
     await requireSuccess(
       client.batch([
         contract.Scalar.insert(contract.Entity.handle(boundEntity), {
@@ -141,18 +121,12 @@ export async function ownershipAndAutomaticLifecycle(
         }),
       ]),
     );
-    const baseAfterAddition = await observeScalar(
-      client,
-      contract.Scalar.id,
-      "react-bound",
-    );
-
+    const componentInserted = await observe("react-bound");
+    // Declaring the prop again writes it again.
     await boundRoot.render(
-      declaration({
-        bindTo: "react-bound",
-        scalar: { value: 50 },
-      }),
+      declaration({ bindTo: "react-bound", scalar: { value: 50 } }),
     );
+    const declaredAgain = await observe("react-bound");
     await requireSuccess(
       client.batch([
         removeScalar(contract, boundEntity),
@@ -161,173 +135,98 @@ export async function ownershipAndAutomaticLifecycle(
         }),
       ]),
     );
-    const overlayAfterReplacement = await observeScalar(
-      client,
-      contract.Scalar.id,
-      "react-bound",
-    );
+    const replaced = await observe("react-bound");
 
-    await firstFallbackRoot.render(
-      declaration({
-        bindTo: "react-shared-fallback",
-        scalar: { value: 11 },
-      }),
+    // Two roots write one field: the last write wins, and removing either
+    // root's declaration removes the component, adopted or inserted; the
+    // other root's later removal finds it already gone.
+    await firstSharedRoot.render(
+      declaration({ bindTo: "react-shared", scalar: { value: 11 } }),
     );
-    const firstFallback = await observeScalar(
-      client,
-      contract.Scalar.id,
-      "react-shared-fallback",
+    const firstInserted = await observe("react-shared");
+    await secondSharedRoot.render(
+      declaration({ bindTo: "react-shared", scalar: { value: 22 } }),
     );
-    await secondFallbackRoot.render(
-      declaration({
-        bindTo: "react-shared-fallback",
-        scalar: { value: 22 },
-      }),
+    const secondWrote = await observe("react-shared");
+    await firstSharedRoot.render(
+      declaration({ bindTo: "react-shared", scalar: { value: 33 } }),
     );
-    const secondWins = await observeScalar(
-      client,
-      contract.Scalar.id,
-      "react-shared-fallback",
+    const firstWroteLast = await observe("react-shared");
+    await secondSharedRoot.render(null);
+    const adopterUnmounted = await observe("react-shared");
+    await firstSharedRoot.render(
+      declaration({ bindTo: "react-shared", scalar: {} }),
     );
-    await firstFallbackRoot.render(
-      declaration({
-        bindTo: "react-shared-fallback",
-        scalar: { value: 33 },
-      }),
-    );
-    const newerStillWins = await observeScalar(
-      client,
-      contract.Scalar.id,
-      "react-shared-fallback",
-    );
-    await secondFallbackRoot.render(null);
-    const firstRevealed = await observeScalar(
-      client,
-      contract.Scalar.id,
-      "react-shared-fallback",
-    );
-    await firstFallbackRoot.render(
-      declaration({
-        bindTo: "react-shared-fallback",
-        scalar: {},
-      }),
-    );
-    const defaultRevealed = await observeScalar(
-      client,
-      contract.Scalar.id,
-      "react-shared-fallback",
-    );
-    await firstFallbackRoot.render(null);
-    const fallbackReleased = await observeScalar(
-      client,
-      contract.Scalar.id,
-      "react-shared-fallback",
-    );
+    const firstPropRemoved = await observe("react-shared");
+    await firstSharedRoot.render(null);
+    const inserterUnmounted = await observe("react-shared");
 
+    // A bound entity that does not exist rejects the commit.
     const boundMissingRejection = await rejectedMessage(
       boundMissingRoot.render(
-        declaration({
-          bindTo: "react-bound-missing",
-          scalar: { bound: true, value: 6 },
-        }),
+        declaration({ bindTo: "react-bound-missing", scalar: { value: 6 } }),
       ),
     );
-    const boundMissingAfterRejection = await observeScalar(
-      client,
-      contract.Scalar.id,
-      "react-bound-missing",
-    );
+    const boundMissingAfterRejection = await observe("react-bound-missing");
 
-    await ownedComponentRoot.render(
+    // A removed component declaration removes the component even after a
+    // client replaced it: removal is not fenced by incarnation.
+    await insertedComponentRoot.render(
       declaration({
-        bindTo: "react-owned-component",
-        scalar: { bound: false, value: 13 },
+        bindTo: "react-inserted-component",
+        scalar: { value: 13 },
       }),
     );
-    const ownedComponentMounted = await observeScalar(
-      client,
-      contract.Scalar.id,
-      "react-owned-component",
-    );
-    await requireSuccess(
-      client.batch([removeScalar(contract, ownedComponentEntity)]),
-    );
+    const insertedMounted = await observe("react-inserted-component");
     await requireSuccess(
       client.batch([
-        contract.Scalar.insert(contract.Entity.handle(ownedComponentEntity), {
-          value: 17,
-        }),
+        removeScalar(contract, insertedComponentEntity),
+        contract.Scalar.insert(
+          contract.Entity.handle(insertedComponentEntity),
+          { value: 17 },
+        ),
       ]),
     );
-    const ownedComponentReplacement = await observeScalar(
-      client,
-      contract.Scalar.id,
-      "react-owned-component",
-    );
-    await ownedComponentRoot.render(null);
-    const ownedComponentAfterStaleCleanup = await observeScalar(
-      client,
-      contract.Scalar.id,
-      "react-owned-component",
-    );
+    const insertedReplaced = await observe("react-inserted-component");
+    await insertedComponentRoot.render(null);
+    const insertedAfterUnmount = await observe("react-inserted-component");
 
-    await autoEntityRoot.render(
-      declaration({
-        bindTo: "react-auto-entity",
-        scalar: { value: 91 },
-      }),
+    // A bound entity replaced by a client under the same symbolic id is
+    // written through its symbol, and removing the declaration removes the
+    // replacement's component through the same symbol.
+    await adoptedEntityRoot.render(
+      declaration({ bindTo: "react-adopted-entity", scalar: { value: 91 } }),
     );
-    const autoEntityMounted = await observeScalar(
-      client,
-      contract.Scalar.id,
-      "react-auto-entity",
-    );
+    const adoptedMounted = await observe("react-adopted-entity");
     await requireSuccess(
       client.batch([
-        contract.Entity.delete(contract.Entity.handle(autoEntity)),
+        contract.Entity.delete(contract.Entity.handle(adoptedEntity)),
       ]),
     );
     await client.waitForFrame();
-    const autoEntityDeleted = await observeScalar(
-      client,
-      contract.Scalar.id,
-      "react-auto-entity",
-    );
+    const adoptedDeleted = await observe("react-adopted-entity");
     await requireSuccess(
       client.batch([
         contract.Entity.create(1, {
-          symbolicId: "react-auto-entity",
+          symbolicId: "react-adopted-entity",
           classes: ["producer-replacement"],
         }),
         contract.Scalar.insert(contract.Entity.alias(1), { value: 27 }),
       ]),
     );
-    const autoEntityReplacement = await observeScalar(
-      client,
-      contract.Scalar.id,
-      "react-auto-entity",
-    );
-    await autoEntityRoot.render(null);
-    const autoEntityAfterStaleCleanup = await observeScalar(
-      client,
-      contract.Scalar.id,
-      "react-auto-entity",
-    );
+    const adoptedReplacement = await observe("react-adopted-entity");
+    await adoptedEntityRoot.render(null);
+    const adoptedAfterUnmount = await observe("react-adopted-entity");
 
-    await ownedRoot.render(
-      declaration({
-        id: "react-owned",
-        scalar: { bound: false, value: 7 },
-      }),
+    // A declared entity is created with its values and deleted when its
+    // declaration is removed.
+    await declaredRoot.render(
+      declaration({ id: "react-declared", scalar: { value: 7 } }),
     );
-    const ownedBeforeClear = await observeScalar(
-      client,
-      contract.Scalar.id,
-      "react-owned",
-    );
-    await ownedRoot.render(null);
-    const ownedExistsAfterClear =
-      findEntity(await client.inspect(), "react-owned") !== undefined;
+    const declaredBeforeClear = await observe("react-declared");
+    await declaredRoot.render(null);
+    const declaredExistsAfterClear =
+      findEntity(await client.inspect(), "react-declared") !== undefined;
 
     await boundRoot.render(null);
     const boundExistsAfterClear =
@@ -335,53 +234,59 @@ export async function ownershipAndAutomaticLifecycle(
 
     return {
       boundValues: [
-        initial,
-        hiddenBaseUpdate,
-        cleared,
-        fallbackAfterRemoval,
-        baseAfterAddition,
-        overlayAfterReplacement,
+        adopted,
+        clientWrite,
+        propRemoved,
+        componentRemoved,
+        componentInserted,
+        declaredAgain,
+        replaced,
       ],
-      sharedFallbackValues: [
-        firstFallback,
-        secondWins,
-        newerStillWins,
-        firstRevealed,
-        defaultRevealed,
-        fallbackReleased,
+      sharedValues: [
+        firstInserted,
+        secondWrote,
+        firstWroteLast,
+        adopterUnmounted,
+        firstPropRemoved,
+        inserterUnmounted,
       ],
       boundMissingRejection,
       boundMissingAfterRejection,
-      ownedComponentValues: [
-        ownedComponentMounted,
-        ownedComponentReplacement,
-        ownedComponentAfterStaleCleanup,
+      insertedComponentValues: [
+        insertedMounted,
+        insertedReplaced,
+        insertedAfterUnmount,
       ],
-      autoEntityValues: [
-        autoEntityMounted,
-        autoEntityDeleted,
-        autoEntityReplacement,
-        autoEntityAfterStaleCleanup,
+      adoptedEntityValues: [
+        adoptedMounted,
+        adoptedDeleted,
+        adoptedReplacement,
+        adoptedAfterUnmount,
       ],
-      ownedBeforeClear,
-      ownedExistsAfterClear,
+      declaredBeforeClear,
+      declaredExistsAfterClear,
       boundExistsAfterClear,
     };
   } finally {
     await settleRoots([
       boundRoot,
-      firstFallbackRoot,
-      secondFallbackRoot,
-      ownedRoot,
+      firstSharedRoot,
+      secondSharedRoot,
+      declaredRoot,
       boundMissingRoot,
-      ownedComponentRoot,
-      autoEntityRoot,
+      insertedComponentRoot,
+      adoptedEntityRoot,
     ]);
     await client.close();
   }
 }
 
-export async function strictBindingAndCorrection(
+/**
+ * Rejected and unsent commits leave the World and the root's records
+ * consistent, a corrected render continues from them, and large declaration
+ * sets write in order.
+ */
+export async function rejectionAndCorrection(
   configuration: ReactRuntimeConfiguration,
 ): Promise<{
   readonly rejection: string;
@@ -392,11 +297,10 @@ export async function strictBindingAndCorrection(
   readonly afterUnsentCorrection: ScalarObservation;
   readonly afterLargeBatch: ScalarObservation;
   readonly afterLargeBatchCleanup: ScalarObservation;
-  readonly diagnostics: readonly string[];
-  readonly afterStrictLoss: ScalarObservation;
+  readonly afterLoss: ScalarObservation;
   readonly afterReplacement: ScalarObservation;
-  readonly afterStaleCleanup: ScalarObservation;
-  readonly afterExplicitRecovery: ScalarObservation;
+  readonly afterRemoval: ScalarObservation;
+  readonly afterRecovery: ScalarObservation;
 }> {
   const { contract, client } = await connect(configuration);
   const producer = await requireSuccess(
@@ -409,64 +313,37 @@ export async function strictBindingAndCorrection(
     ]),
   );
   const entity = requireAlias(producer, 1);
-  const diagnostics: string[] = [];
-  const root = createRoot(client, {
-    onDiagnostic: (diagnostic) => diagnostics.push(diagnostic.reason),
-  });
+  const observe = () =>
+    observeScalar(client, contract.Scalar.id, "react-strict");
+  const root = createRoot(client);
   try {
+    // A symbolic reference to an absent entity rejects in the World.
     const rejection = await rejectedMessage(
       root.render(
-        declaration({
-          bindTo: "react-strict",
-          scalar: { bound: false, value: 6 },
-        }),
+        declaration({ bindTo: "react-strict-absent", scalar: { value: 6 } }),
       ),
     );
-    const afterRejection = await observeScalar(
-      client,
-      contract.Scalar.id,
-      "react-strict",
-    );
+    const afterRejection = await observe();
 
     await root.render(
-      declaration({
-        bindTo: "react-strict",
-        scalar: { bound: true, value: 8 },
-      }),
+      declaration({ bindTo: "react-strict", scalar: { value: 8 } }),
     );
-    const corrected = await observeScalar(
-      client,
-      contract.Scalar.id,
-      "react-strict",
-    );
+    const corrected = await observe();
 
     const unsentRejection = await rejectedMessage(
       root.render(
-        declaration({
-          bindTo: "react-strict",
-          scalar: { bound: true, value: NaN },
-        }),
+        declaration({ bindTo: "react-strict", scalar: { value: NaN } }),
       ),
     );
-    const afterUnsentRejection = await observeScalar(
-      client,
-      contract.Scalar.id,
-      "react-strict",
-    );
+    const afterUnsentRejection = await observe();
     await root.render(
-      declaration({
-        bindTo: "react-strict",
-        scalar: { bound: true, value: 10 },
-      }),
+      declaration({ bindTo: "react-strict", scalar: { value: 10 } }),
     );
-    const afterUnsentCorrection = await observeScalar(
-      client,
-      contract.Scalar.id,
-      "react-strict",
-    );
+    const afterUnsentCorrection = await observe();
 
-    // The current host has no operation-count quota. Preserve attachment order
-    // and cleanup across a batch larger than the retired 256-operation limit.
+    // The current host has no operation-count quota. Declarations of one
+    // component write in order across a batch larger than the retired
+    // 256-operation limit; the last write wins.
     await root.render(
       React.createElement(
         Entity,
@@ -476,61 +353,35 @@ export async function strictBindingAndCorrection(
         ),
       ),
     );
-    const afterLargeBatch = await observeScalar(
-      client,
-      contract.Scalar.id,
-      "react-strict",
-    );
+    const afterLargeBatch = await observe();
     await root.render(
-      declaration({
-        bindTo: "react-strict",
-        scalar: { bound: true, value: 11 },
-      }),
+      declaration({ bindTo: "react-strict", scalar: { value: 11 } }),
     );
-    const afterLargeBatchCleanup = await observeScalar(
-      client,
-      contract.Scalar.id,
-      "react-strict",
-    );
+    const afterLargeBatchCleanup = await observe();
 
     await requireSuccess(client.batch([removeScalar(contract, entity)]));
     await client.waitForFrame();
-    const afterStrictLoss = await observeScalar(
-      client,
-      contract.Scalar.id,
-      "react-strict",
-    );
+    const afterLoss = await observe();
 
     await requireSuccess(
       client.batch([
         contract.Scalar.insert(contract.Entity.handle(entity), { value: 9 }),
       ]),
     );
-    const afterReplacement = await observeScalar(
-      client,
-      contract.Scalar.id,
-      "react-strict",
-    );
+    const afterReplacement = await observe();
 
+    // Removing the declaration removes the component, adopted or inserted.
     await root.render(null);
-    const afterStaleCleanup = await observeScalar(
-      client,
-      contract.Scalar.id,
-      "react-strict",
-    );
+    const afterRemoval = await observe();
 
     await root.render(
       declaration({
         bindTo: "react-strict",
         key: "recovered",
-        scalar: { bound: true, value: 12 },
+        scalar: { value: 12 },
       }),
     );
-    const afterExplicitRecovery = await observeScalar(
-      client,
-      contract.Scalar.id,
-      "react-strict",
-    );
+    const afterRecovery = await observe();
 
     return {
       rejection,
@@ -541,11 +392,10 @@ export async function strictBindingAndCorrection(
       afterUnsentCorrection,
       afterLargeBatch,
       afterLargeBatchCleanup,
-      diagnostics,
-      afterStrictLoss,
+      afterLoss,
       afterReplacement,
-      afterStaleCleanup,
-      afterExplicitRecovery,
+      afterRemoval,
+      afterRecovery,
     };
   } finally {
     await settleRoots([root]);
@@ -581,6 +431,7 @@ export async function hooksAndStrictMode(
       (candidate) => candidate.metadata.symbolicId === "react-hooks",
     ).length;
 
+    // Unmount deletes nothing.
     await root.unmount();
     const existsAfterUnmount =
       findEntity(await client.inspect(), "react-hooks") !== undefined;
@@ -605,6 +456,7 @@ export async function pendingUnmountUsesRealAcknowledgement(
   );
   const gate = new BatchDeliveryGate(transport);
   const client = await contract.IppClient.connectTransport(gate, {
+    selectedSystems: reactRootSystems(contract.CAPABILITIES),
     timeoutMs: configuration.timeoutMs,
   });
   const root = createRoot(client);
@@ -619,7 +471,7 @@ export async function pendingUnmountUsesRealAcknowledgement(
       React.createElement(
         Entity,
         { id: "react-pending-unmount" },
-        React.createElement(Scalar, { bound: false, value: 71 }),
+        React.createElement(Scalar, { value: 71 }),
         React.createElement(
           Children,
           null,
@@ -634,6 +486,7 @@ export async function pendingUnmountUsesRealAcknowledgement(
     const bufferedResponses = gate.bufferedResponses;
     const bufferedFrames = gate.bufferedFrames;
 
+    // The pending render commits; unmount then deletes nothing.
     gate.release();
     await Promise.all([render, unmount]);
     const afterUnmount = await client.inspect();
@@ -663,19 +516,13 @@ function StatefulDeclaration(): React.ReactNode {
   React.useLayoutEffect(() => {
     setValue(42);
   }, []);
-  return declaration({
-    id: "react-hooks",
-    scalar: { bound: false, value },
-  });
+  return declaration({ id: "react-hooks", scalar: { value } });
 }
 
 function declaration(
   options: EntityProps & {
     readonly key?: string;
-    readonly scalar: {
-      readonly bound?: boolean | null;
-      readonly value?: number;
-    };
+    readonly scalar: { readonly value?: number };
   },
 ): React.ReactElement {
   const entityProps =

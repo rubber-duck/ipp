@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import test from "node:test";
 import { runNativeEnvironment } from "./environment.js";
 import { hierarchyLifecycle } from "./scenarios/hierarchy.js";
+import { LIFECYCLE, SPATIAL, selectSystems } from "./system-selections.js";
 
 test("native hierarchy and look-at lifecycle through the generated WebSocket client", {
   timeout: 30_000,
@@ -28,6 +29,7 @@ test("native hierarchy and look-at lifecycle through the generated WebSocket cli
     async (environment) => {
       const client = await environment.track<AnimationWorldClient>(
         contract.IppClient.connectWebSocket(environment.url, {
+          selectedSystems: selectSystems(SPATIAL, LIFECYCLE),
           signal: environment.signal,
         }),
       );

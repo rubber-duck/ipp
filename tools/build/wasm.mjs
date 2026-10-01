@@ -8,7 +8,12 @@ export async function instantiate(path) {
   // real rendering is separately exercised by the Chromium/OffscreenCanvas harness.
   for (const item of WebAssembly.Module.imports(module)) {
     assert.ok(
-      ["ipp_gl", "ipp_diagnostics", "ipp_profiling"].includes(item.module),
+      [
+        "ipp_gl",
+        "ipp_presentation",
+        "ipp_diagnostics",
+        "ipp_profiling",
+      ].includes(item.module),
     );
     assert.equal(item.kind, "function");
     imports[item.module] ??= {};

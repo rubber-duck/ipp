@@ -70,8 +70,8 @@ fn graphics_blob_loader() -> impl AssetLoader<Data = GraphicsBlob> {
 
 fn fixture() -> (AssetManagementService, DataSourceManagementService) {
     let mut assets = AssetManagementService::empty();
-    // Retention mechanics need an explicit budget now that the Host default
-    // evicts unused resources to preserve lifecycle retirement.
+    // Retention mechanics need an unbounded budget so the default soft target
+    // never evicts during these tests.
     assets.set_idle_resident_bytes_target(usize::MAX);
     assets
         .register_loader(AssetTypeId(42), blob_loader)
@@ -83,8 +83,24 @@ fn fixture() -> (AssetManagementService, DataSourceManagementService) {
 }
 
 #[test]
-fn idle_cache_defaults_to_eviction_and_remains_host_configurable() {
+fn idle_cache_retains_by_default_and_remains_host_configurable() {
     let mut assets = AssetManagementService::empty();
+    assert_eq!(
+        AssetManagementService::DEFAULT_IDLE_RESIDENT_BYTES_TARGET,
+        64 * 1024 * 1024
+    );
+    assert_eq!(
+        assets.idle_resident_bytes_target(),
+        AssetManagementService::DEFAULT_IDLE_RESIDENT_BYTES_TARGET
+    );
+    assert_eq!(
+        ipp_core::HostRuntime::new()
+            .asset_resources()
+            .idle_resident_bytes_target(),
+        AssetManagementService::DEFAULT_IDLE_RESIDENT_BYTES_TARGET
+    );
+
+    assets.set_idle_resident_bytes_target(0);
     assert_eq!(assets.idle_resident_bytes_target(), 0);
 
     assets.set_idle_resident_bytes_target(3 * 1024 * 1024 * 1024);
@@ -629,7 +645,7 @@ fn typed_source_variants_and_producer_namespaces_do_not_alias() {
                 let key = assets
                     .get_or_create(AssetSource {
                         kind: AssetTypeId(kind),
-                        uri: format!("producer://{producer}/{kind}/1"),
+                        uri: std::sync::Arc::<str>::from(format!("producer://{producer}/{kind}/1")),
                         variant,
                     })
                     .unwrap();
@@ -755,8 +771,8 @@ fn shared_world_ownership_survives_one_teardown_and_private_content_dies_with_th
     host.asset_resources_mut()
         .register_loader(AssetTypeId(42), blob_loader)
         .unwrap();
-    let first_world = host.create_world(Default::default()).unwrap();
-    let second_world = host.create_world(Default::default()).unwrap();
+    let first_world = host.create_world(Default::default(), &[]).unwrap();
+    let second_world = host.create_world(Default::default(), &[]).unwrap();
     let source = source("client://shared/private");
     host.asset_resources_mut()
         .register_client_source(first_world, source.clone(), b"private".to_vec())
@@ -782,7 +798,7 @@ fn private_preparation_reclaimed_before_the_release_barrier_preserves_identity()
     host.asset_resources_mut()
         .register_loader(AssetTypeId(42), blob_loader)
         .unwrap();
-    let world = host.create_world(Default::default()).unwrap();
+    let world = host.create_world(Default::default(), &[]).unwrap();
     let source = source("ipp-render://fixture/recipe");
     let key = host
         .asset_resources_mut()
@@ -825,7 +841,7 @@ fn private_preparation_reclaimed_before_the_release_barrier_preserves_identity()
 fn headless_shader_sources_are_retained_without_claiming_gpu_readiness() {
     use shader::{SHADER_TYPE, ShaderBackendSource, ShaderDefinition};
     let mut host = ipp_core::HostRuntime::new();
-    let world = host.create_world(Default::default()).unwrap();
+    let world = host.create_world(Default::default(), &[]).unwrap();
     let source = AssetSource {
         kind: SHADER_TYPE,
         uri: "client://1/scene/glow#guid".into(),

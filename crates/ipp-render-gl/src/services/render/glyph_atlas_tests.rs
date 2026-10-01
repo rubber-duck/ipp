@@ -9,13 +9,13 @@ use super::super::gui_batch::{GuiBatchRenderCache, GuiVertex};
 use super::super::retained_surfaces::SurfacePaint;
 use super::{
     ATLAS_PAGE_SIZE, GlyphAtlas, GlyphAtlasLimits, GlyphBatchRenderCache, GlyphFrameWork, GlyphKey,
-    GlyphPopulationBudget, MAX_POPULATES_PER_FRAME, MIN_POPULATES_PER_FRAME, POPULATE_RETRY_TICKS,
+    GlyphPopulationBudget, MAX_POPULATES_PER_FRAME, MIN_POPULATES_PER_FRAME, POPULATE_RETRY_FRAMES,
     RESOLUTION_BANDS, TextRun, select_resolution_band,
 };
 use crate::services::render::frame_statistics::RenderFrameWork;
 use crate::{RenderDevice, RenderError};
 use ipp_core::services::asset_management::AssetKey;
-use ipp_core::systems::surface::{SurfaceGlyph, SurfacePrimitiveIdentity, SurfacePrimitiveStyle};
+use ipp_core::systems::canvas::{CanvasGlyph, CanvasPrimitiveId, CanvasPrimitiveStyle};
 
 #[derive(Default)]
 struct MockAtlasDevice {
@@ -264,21 +264,33 @@ fn key(glyph_id: u32, resolution_band: u16) -> GlyphKey {
     }
 }
 
-fn style(item: u32) -> SurfacePrimitiveStyle {
-    SurfacePrimitiveStyle {
-        identity: SurfacePrimitiveIdentity::Authored(ipp_core::SurfaceItemId(item)),
+fn style(item: u32) -> CanvasPrimitiveStyle {
+    CanvasPrimitiveStyle {
+        identity: CanvasPrimitiveId {
+            target: ipp_core::systems::canvas::CanvasTarget {
+                entity: ipp_core::EntityId::from_bits(u64::from(item)),
+                component: ipp_core::ComponentValue::CANVAS_GLYPH_RUN,
+                incarnation: 1,
+            },
+            part: ipp_core::systems::canvas::CanvasPart::Content,
+        },
         position: [0.0; 2],
         scale: [1.0; 2],
         color: [1.0; 4],
         opacity: 1.0,
-        clip: None,
+        clip: [
+            f32::NEG_INFINITY,
+            f32::NEG_INFINITY,
+            f32::INFINITY,
+            f32::INFINITY,
+        ],
     }
 }
 
-fn glyphs(ids: &[u32]) -> Vec<SurfaceGlyph> {
+fn glyphs(ids: &[u32]) -> Vec<CanvasGlyph> {
     ids.iter()
         .enumerate()
-        .map(|(index, &glyph_id)| SurfaceGlyph {
+        .map(|(index, &glyph_id)| CanvasGlyph {
             glyph_id,
             position: [0.1 * index as f32, 0.1],
             color: None,
@@ -288,8 +300,8 @@ fn glyphs(ids: &[u32]) -> Vec<SurfaceGlyph> {
 
 fn text_run<'a>(
     entity: u64,
-    style: &'a SurfacePrimitiveStyle,
-    glyphs: &'a [SurfaceGlyph],
+    style: &'a CanvasPrimitiveStyle,
+    glyphs: &'a [CanvasGlyph],
 ) -> TextRun<'a> {
     TextRun {
         entity: ipp_core::EntityId::from_bits(entity),
@@ -318,8 +330,15 @@ impl TestWorld {
         }
     }
 
-    /// Publish one frame: `shown` runs are visible and `kept` Surfaces are culled.
+    /// Publish in a Host frame of its own: `shown` runs are visible and `kept` Surfaces
+    /// are culled.
     fn publish(&mut self, atlas: &mut Atlas, shown: &[(TextRun<'_>, f32)], kept: &[u64]) {
+        atlas.begin_frame();
+        self.publish_in_frame(atlas, shown, kept);
+    }
+
+    /// Publish within the current Host frame, beside other Worlds publishing in it.
+    fn publish_in_frame(&mut self, atlas: &mut Atlas, shown: &[(TextRun<'_>, f32)], kept: &[u64]) {
         self.work.clear();
         atlas.begin_publication();
         self.cache.begin_publication();
@@ -702,23 +721,25 @@ fn runs_leaving_a_shown_surface_release_demand_and_batches() {
     assert_eq!(atlas.take_retired_pages(), 1);
 }
 
-#[cfg(feature = "gui")]
+#[cfg(feature = "surfaces")]
 #[test]
 fn committed_and_provisional_runs_of_one_node_keep_separate_batches() {
-    use ipp_core::systems::gui::GuiNodeId;
-    use ipp_core::systems::surface::{GuiPrimitiveId, GuiPrimitivePart};
+    use ipp_core::systems::canvas::CanvasPart;
 
     let (_, mut atlas, mut world) = setup();
-    let gui_style = |part| SurfacePrimitiveStyle {
-        identity: SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
-            root_incarnation: 1,
-            node: GuiNodeId(2),
+    let gui_style = |part| CanvasPrimitiveStyle {
+        identity: CanvasPrimitiveId {
+            target: ipp_core::systems::canvas::CanvasTarget {
+                entity: ipp_core::EntityId::from_bits(2),
+                component: ipp_core::ComponentValue::CANVAS_BOX,
+                incarnation: 1,
+            },
             part,
-        }),
+        },
         ..style(0)
     };
-    let label = gui_style(GuiPrimitivePart::Label);
-    let composition = gui_style(GuiPrimitivePart::Composition);
+    let label = gui_style(CanvasPart::Label);
+    let composition = gui_style(CanvasPart::Composition);
     let committed = glyphs(&[3]);
     let provisional = glyphs(&[5, 5]);
     let label_run = text_run(42, &label, &committed);
@@ -835,11 +856,11 @@ fn band_oscillation_neither_repopulates_nor_retires_pages() {
 }
 
 #[test]
-fn idle_pages_persist_until_the_configured_publication_limit() {
+fn idle_pages_persist_until_the_configured_frame_limit() {
     let (_, mut atlas, mut world) = setup();
     atlas.set_limits(GlyphAtlasLimits {
         max_pages: 4,
-        idle_page_publications: 3,
+        idle_page_frames: 3,
     });
     let [kept, dropped] = [style(1), style(2)];
     let glyphs_kept = glyphs(&[1]);
@@ -858,7 +879,7 @@ fn idle_pages_persist_until_the_configured_publication_limit() {
     world.populate(&mut atlas, 500);
     assert_eq!(atlas.page_count(), 2);
 
-    // The dropped run's page stays for the configured number of idle publications.
+    // The dropped run's page stays for the configured number of idle frames.
     world.publish(&mut atlas, &[(kept_run, BAND_32_HEIGHT)], &[]);
     for _ in 0..2 {
         world.publish(&mut atlas, &[(kept_run, BAND_32_HEIGHT)], &[]);
@@ -870,12 +891,86 @@ fn idle_pages_persist_until_the_configured_publication_limit() {
     assert!(atlas.get(&key(1, 32)).is_some());
 }
 
+/// Begin one Host frame in which every World publishes `shown`.
+fn publish_frame(atlas: &mut Atlas, worlds: &mut [TestWorld], shown: &[(TextRun<'_>, f32)]) {
+    atlas.begin_frame();
+    for world in worlds {
+        world.publish_in_frame(atlas, shown, &[]);
+    }
+}
+
+/// Host frames after a page loses its last demand until it retires, while `panels`
+/// Worlds publish glyph demand in every frame.
+fn idle_retirement_frames(panels: usize) -> u64 {
+    let (device, mut atlas, _) = setup();
+    let mut worlds: Vec<TestWorld> = (0..panels).map(|_| TestWorld::new(&device)).collect();
+    let [kept, dropped] = [style(1), style(2)];
+    let glyphs_kept = glyphs(&[1]);
+    let glyphs_dropped = glyphs(&[2]);
+    let kept_run = [(text_run(1, &kept, &glyphs_kept), BAND_32_HEIGHT)];
+    let both = [
+        kept_run[0],
+        (text_run(1, &dropped, &glyphs_dropped), BAND_32_HEIGHT),
+    ];
+    let mut frame = |atlas: &mut Atlas, shown: &[(TextRun<'_>, f32)]| {
+        publish_frame(atlas, &mut worlds, shown);
+        worlds[0].populate(atlas, 500);
+    };
+
+    // Each run's glyph lands on its own page; then every panel drops one of them.
+    frame(&mut atlas, &kept_run);
+    frame(&mut atlas, &both);
+    assert_eq!(atlas.page_count(), 2);
+    frame(&mut atlas, &kept_run);
+    for frames in 1..=1000 {
+        frame(&mut atlas, &kept_run);
+        if atlas.page_count() == 1 {
+            assert!(atlas.get(&key(1, 32)).is_some());
+            return frames;
+        }
+    }
+    panic!("idle page never retired");
+}
+
+/// Host frames a glyph whose population just failed waits before it is queued again,
+/// while `panels` Worlds publish its demand in every frame.
+fn population_retry_frames(panels: usize) -> u64 {
+    let (device, mut atlas, _) = setup();
+    let mut worlds: Vec<TestWorld> = (0..panels).map(|_| TestWorld::new(&device)).collect();
+    let style = style(1);
+    let glyphs = glyphs(&[1, 2]);
+    let shown = [(text_run(1, &style, &glyphs), BAND_32_HEIGHT)];
+    publish_frame(&mut atlas, &mut worlds, &shown);
+    atlas.allocate_slot(key(1, 32), 20, 20, INK).unwrap();
+    atlas.allocate_slot(key(2, 32), 20, 20, INK).unwrap();
+    atlas.abandon_population(key(2, 32));
+    for frames in 1..=64 {
+        publish_frame(&mut atlas, &mut worlds, &shown);
+        let queue = worlds[0].work.take_queue(MAX_POPULATES_PER_FRAME);
+        if queue == [key(2, 32)] {
+            return frames;
+        }
+    }
+    panic!("backed-off glyph never retried");
+}
+
+#[test]
+fn many_presented_canvases_age_the_atlas_once_per_host_frame() {
+    // Sixteen panels publishing in one Host frame advance the clocks once, not sixteen
+    // times: idle pages and failed glyphs wait the same frames as with one panel.
+    let idle = GlyphAtlasLimits::DEFAULT.idle_page_frames;
+    assert_eq!(idle_retirement_frames(1), idle);
+    assert_eq!(idle_retirement_frames(16), idle);
+    assert_eq!(population_retry_frames(1), POPULATE_RETRY_FRAMES);
+    assert_eq!(population_retry_frames(16), POPULATE_RETRY_FRAMES);
+}
+
 #[test]
 fn retiring_one_page_rebuilds_only_the_runs_that_sample_it() {
     let (device, mut atlas, mut world) = setup();
     atlas.set_limits(GlyphAtlasLimits {
         max_pages: 2,
-        idle_page_publications: 600,
+        idle_page_frames: 600,
     });
     let [first, second, third] = [style(1), style(2), style(3)];
     let [glyphs_a, glyphs_b, glyphs_c] = [glyphs(&[1]), glyphs(&[2]), glyphs(&[3])];
@@ -1047,7 +1142,7 @@ fn lowered_page_budget_retires_pages_at_the_next_publication() {
 
     atlas.set_limits(GlyphAtlasLimits {
         max_pages: 1,
-        idle_page_publications: 600,
+        idle_page_frames: 600,
     });
     world.publish(&mut atlas, &[(run, BAND_32_HEIGHT)], &[]);
     assert_eq!(atlas.page_count(), 1);
@@ -1150,7 +1245,7 @@ fn clipped_glyphs_never_generate_vertices_and_long_runs_split_bounded_batches() 
     let (device, mut atlas, mut world) = setup();
     let style = style(1);
     let mut glyphs = vec![
-        SurfaceGlyph {
+        CanvasGlyph {
             glyph_id: 1,
             position: [0.1; 2],
             color: None,
@@ -1158,7 +1253,7 @@ fn clipped_glyphs_never_generate_vertices_and_long_runs_split_bounded_batches() 
         600
     ];
     glyphs.extend(vec![
-        SurfaceGlyph {
+        CanvasGlyph {
             glyph_id: 1,
             position: [20.0; 2],
             color: None,
@@ -1190,10 +1285,11 @@ fn unchanged_paint_revisions_skip_run_hashing_until_revision_or_band_change() {
     let edited = glyphs(&[1, 3]);
     let publish = |world: &mut TestWorld,
                    atlas: &mut Atlas,
-                   glyphs: &[SurfaceGlyph],
+                   glyphs: &[CanvasGlyph],
                    paint: SurfacePaint,
                    height: f32| {
         world.work.clear();
+        atlas.begin_frame();
         atlas.begin_publication();
         world.cache.begin_publication();
         world.cache.publish_run(
@@ -1208,6 +1304,7 @@ fn unchanged_paint_revisions_skip_run_hashing_until_revision_or_band_change() {
         world.work.misses
     };
     let paint = |revision, reusable| SurfacePaint {
+        opacity: 1.0,
         revision,
         reusable,
     };
@@ -1255,10 +1352,10 @@ fn population_queue_is_bounded_per_frame_and_resumes_next_frame() {
     let style = style(1);
     let ids: Vec<u32> = (100..100 + MAX_POPULATES_PER_FRAME as u32 + 8).collect();
     // Rows of 64 keep every glyph inside the clip.
-    let glyphs: Vec<SurfaceGlyph> = ids
+    let glyphs: Vec<CanvasGlyph> = ids
         .iter()
         .enumerate()
-        .map(|(index, &glyph_id)| SurfaceGlyph {
+        .map(|(index, &glyph_id)| CanvasGlyph {
             glyph_id,
             position: [0.1 * (index % 64) as f32, 0.1 + 0.5 * (index / 64) as f32],
             color: None,
@@ -1360,15 +1457,15 @@ fn failed_population_backs_off_without_invalidating_retained_runs() {
         "populated runs keep their UVs"
     );
 
-    // Publications until the glyph is queued for population again.
-    let deferred_publications = |atlas: &mut Atlas, world: &mut TestWorld| {
-        for publications in 1..=64 {
+    // Frames until the glyph is queued for population again.
+    let deferred_frames = |atlas: &mut Atlas, world: &mut TestWorld| {
+        for frames in 1..=64 {
             world.publish(atlas, &shown, &[]);
             let queue = world.work.take_queue(MAX_POPULATES_PER_FRAME);
             let queued = queue == [key(2, 32)];
             world.work.restore_queue(queue);
             if queued {
-                return publications;
+                return frames;
             }
 
             assert!(atlas.population_deferred(&key(2, 32)));
@@ -1376,15 +1473,15 @@ fn failed_population_backs_off_without_invalidating_retained_runs() {
         panic!("backed-off glyph never retried");
     };
     assert_eq!(
-        deferred_publications(&mut atlas, &mut world),
-        POPULATE_RETRY_TICKS
+        deferred_frames(&mut atlas, &mut world),
+        POPULATE_RETRY_FRAMES
     );
 
     // A repeated failure doubles the wait instead of retrying every frame.
     atlas.abandon_population(key(2, 32));
     assert_eq!(
-        deferred_publications(&mut atlas, &mut world),
-        2 * POPULATE_RETRY_TICKS
+        deferred_frames(&mut atlas, &mut world),
+        2 * POPULATE_RETRY_FRAMES
     );
 
     // Losing demand clears the back-off state.

@@ -19,4 +19,6 @@ These reports preserve the original machine, revision and methodology. Historica
 
 The [retained Surface rendering guide](retained-gui.md) compares analytic and retained browser text presentation and defines the pending iPhone 14 Pro GUI procedure.
 
+The [React GUI stress benchmark](gui-stress.md) runs one GUI-enabled build per revision through a fixed logical workload on real browser/WebGL or native/GLES paths, with separate timing, capture, work and allocation windows.
+
 The [Blender streaming harness](blender-stream.md) compares full and indexed imports, checks command page bounds and pending source delivery, and captures matching completed frames. [Stress profiling](stress.md) supports worker CPU/allocation sampling and save/load stage measurements on verified hardware WebGL.

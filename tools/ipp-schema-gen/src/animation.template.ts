@@ -5,17 +5,11 @@ export function encodeAnimationClip(
   if (!Number.isFinite(clip.duration) || clip.duration <= 0)
     fail("animation duration");
   if (!clip.tracks.length) fail("animation track count");
-  const dynamic = clip.tracks.some(
-    (track) =>
-      track.property?.name !== undefined ||
-      track.keys.some((key) => key.value.kind === "dynamic"),
-  );
   const poses = clip.tracks.some((track) => track.joints !== undefined);
   if (poses && !CAPABILITIES.skeletalAnimation)
     fail("skeleton animation unavailable");
   const w = new Writer(Number.MAX_SAFE_INTEGER);
-  for (const byte of [73, 80, 80, 65, dynamic ? 3 : poses ? 2 : 1, 0, 0, 0])
-    w.u8(byte);
+  for (const byte of [73, 80, 80, 65, 4, 0, 0, 0]) w.u8(byte);
   w.f64(clip.duration);
   w.u32(clip.tracks.length);
   function value(v: AnimationValue) {
@@ -63,6 +57,11 @@ export function encodeAnimationClip(
         w.u8(8);
         for (const number of v.value) w.f32(number);
         break;
+      case "entityPlacement":
+        w.u8(10);
+        for (const slot of [v.value.parent, v.value.before])
+          w.u32(slot === null ? 0xffff_ffff : uint(slot, 0xffff_fffe));
+        break;
       // #if skeletal-animation
       case "pose":
         if (!v.value.length || v.value.length > MAX_JOINTS)
@@ -79,40 +78,53 @@ export function encodeAnimationClip(
   for (const track of clip.tracks) {
     if (!track.keys.length) fail("animation key count");
     const kind = track.keys[0]!.value.kind;
-    if (poses || dynamic)
-      w.u8(
-        track.property?.name !== undefined
+    w.u8(
+      track.property?.entityLink === true
+        ? 3
+        : track.property?.name !== undefined
           ? 2
           : track.joints === undefined
             ? 0
             : 1,
-      );
-    if (track.property?.name !== undefined) {
+    );
+    if (track.property?.entityLink === true) {
+      if (kind !== "entityPlacement")
+        fail("structural animation value required");
+    } else if (track.property?.name !== undefined) {
       if (kind !== "dynamic") fail("dynamic animation value required");
       w.u16(track.property.component);
       w.string(track.property.name, 0xffff_ffff);
     } else if (track.joints !== undefined) {
+      if (!CAPABILITIES.skeletalAnimation) fail("animation joint target");
+      // #if skeletal-animation
       if (
-        !CAPABILITIES.skeletalAnimation ||
         !track.joints.length ||
-        track.joints.length > 32 ||
+        track.joints.length > MAX_JOINTS ||
         kind !== "pose"
       )
         fail("animation joint target");
       w.u32(track.joints.length);
       let previous = -1;
       for (const joint of track.joints) {
-        uint(joint, 31);
+        uint(joint, MAX_JOINTS - 1);
         if (joint <= previous) fail("duplicate/unordered joint target");
         previous = joint;
         w.u32(joint);
       }
+      // #endif
     } else {
-      const { component, offsets } = track.property;
+      const property = track.property;
+      if (!property || property.offsets === undefined)
+        fail("animation property target");
+      const { component, offsets } = property;
       if (![1, 4].includes(offsets.length)) fail("animation property offsets");
       if (new Set(offsets).size !== offsets.length)
         fail("duplicate animation property offset");
-      if ((kind === "rotation") !== (offsets.length === 4) || kind === "pose")
+      if (
+        (kind === "rotation") !== (offsets.length === 4) ||
+        kind === "pose" ||
+        kind === "entityPlacement"
+      )
         fail("animation property kind");
       w.u16(component);
       w.u8(offsets.length);

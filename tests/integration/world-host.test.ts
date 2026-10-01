@@ -1,9 +1,10 @@
 import type { SpatialWorldClient } from "@ipp/client";
+import type { HostedWorldClient } from "./camera-fixtures.js";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
 import { runNativeEnvironment } from "./environment.js";
-import { worldHostCases } from "./world-host-cases.js";
+import { WORLD_HOST_SYSTEMS, worldHostCases } from "./world-host-cases.js";
 
 for (const scenario of worldHostCases) {
   test(`native ${scenario.name}`, { timeout: 30_000 }, async (context) => {
@@ -29,8 +30,9 @@ for (const scenario of worldHostCases) {
           "client connect",
           { url: environment.url },
           () =>
-            environment.track<SpatialWorldClient>(
+            environment.track<HostedWorldClient<SpatialWorldClient>>(
               contract.IppClient.connectWebSocket(environment.url, {
+                selectedSystems: WORLD_HOST_SYSTEMS,
                 signal: environment.signal,
               }),
             ),
@@ -40,6 +42,7 @@ for (const scenario of worldHostCases) {
             client,
             contract,
             environment.evidence.record.bind(environment.evidence),
+            client.host,
           ),
         );
       },
@@ -76,6 +79,7 @@ test("native worlds share Host assets and isolate producer/session state", {
           () =>
             environment.track(
               contract.IppClient.connectWebSocket(environment.url, {
+                selectedSystems: WORLD_HOST_SYSTEMS,
                 signal: environment.signal,
               }),
             ),

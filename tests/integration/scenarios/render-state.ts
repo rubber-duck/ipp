@@ -80,15 +80,14 @@ export async function renderStatePreservesDeclarations(
     return entities.map((id) => {
       const entity = inspection.entities.find((entity) => entity.id === id);
       check(entity, "Debug entity must survive global overrides");
-      return [entity.base, entity.effective].map((layer) => {
-        const value = layer.find((value) => value.component === component.id)
-          ?.fields.is_rendered;
-        check(
-          typeof value === "boolean",
-          "Inspected visibility must remain a boolean",
-        );
-        return value;
-      });
+      const value = entity.components.find(
+        (value) => value.component === component.id,
+      )?.fields.is_rendered;
+      check(
+        typeof value === "boolean",
+        "Inspected visibility must remain a boolean",
+      );
+      return value;
     });
   };
   try {
@@ -107,7 +106,7 @@ export async function renderStatePreservesDeclarations(
     entities.push(aliasId(created, 1), aliasId(created, 2));
     const before = await inspectVisibility();
     check(
-      JSON.stringify(before) === "[[true,true],[false,false]]",
+      JSON.stringify(before) === "[true,false]",
       "Per-entity visibility must begin independently",
     );
     await update({ showAllDebugGeometries: true });
@@ -121,7 +120,7 @@ export async function renderStatePreservesDeclarations(
     await update({ showAllDebugGeometries: false });
     check(
       JSON.stringify(await inspectVisibility()) === JSON.stringify(before),
-      "Global settings must preserve authored and effective visibility",
+      "Global settings must preserve authored visibility",
     );
 
     const seen = events.length;
@@ -161,8 +160,8 @@ export async function renderStatePreservesDeclarations(
       ]),
     );
     check(
-      JSON.stringify(await inspectVisibility()) === "[[true,true],[true,true]]",
-      "Boolean mutations must round-trip through both layers",
+      JSON.stringify(await inspectVisibility()) === "[true,true]",
+      "Boolean mutations must round-trip through the component store",
     );
     return {
       updates: events.length,

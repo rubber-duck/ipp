@@ -1,14 +1,22 @@
-import type {
-  AnimationWorldClient,
-  CameraWorldClient,
-  FrameCapture,
-} from "@ipp/client";
+import type { AnimationWorldClient, PresentedCapture } from "@ipp/client";
 import {
   AnimationFixture,
   check,
   propertyAnimationScenario,
 } from "../integration/animation-fixtures.js";
+import type { HostedWorldClient } from "../integration/camera-fixtures.js";
 import { compareImages, summarizeImage } from "./image-assertions.js";
+import {
+  RootPresentation,
+  captureSummary,
+  capturedImage,
+  worldReference,
+} from "./root-presentation.js";
+import {
+  CONSTRAINTS,
+  SCENE,
+  selectSystems,
+} from "../integration/system-selections.js";
 
 /** Same production assets/client path in a lean worker and a WebGL worker. */
 export async function run(
@@ -20,11 +28,12 @@ export async function run(
   canvas.width = 320;
   canvas.height = 240;
   document.body.replaceChildren(canvas);
-  const client: AnimationWorldClient & CameraWorldClient =
+  const client: HostedWorldClient<AnimationWorldClient> =
     await contract.IppClient.connectWorker(
       configuration.workerScript,
       configuration.wasm,
       {
+        selectedSystems: selectSystems(SCENE, CONSTRAINTS),
         ...(rendering ? { canvas: canvas.transferControlToOffscreen() } : {}),
         timeoutMs: 10_000,
       },
@@ -49,18 +58,24 @@ export async function run(
         captures: [],
         differences: [],
       };
-    check(client.presentation, "animation renderer missing");
     const fixture = new AnimationFixture(client, contract, record);
     const camera = await fixture.create("animation-camera", {
       Transform: { z: 6 },
       Camera: { projection: 1, focus_distance: 6, ortho_height: 4 },
     });
-    client.sendCommand({ type: "CameraActivateCommand", entity: camera });
+    const presentation = await RootPresentation.camera(
+      client.host,
+      worldReference(client),
+      camera,
+      { width: canvas.width, height: canvas.height },
+    );
     const mesh = "ipp://mesh/cube?width=2&height=2&length=2";
+    // Authored where the clip starts: the controller adds the clip's change,
+    // and stopping returns the cube to this left red base.
     const target = await fixture.create("animated-cube", {
-      Transform: { sx: 0.4, sy: 0.4, sz: 0.4 },
+      Transform: { x: -1, sx: 0.4, sy: 0.4, sz: 0.4 },
       MeshInstance: { source: mesh },
-      UnlitMaterial: { r: 0, g: 0, b: 1 },
+      UnlitMaterial: { r: 1, g: 0, b: 0 },
     });
     const transform = client.components.Transform!;
     const material = client.components.UnlitMaterial!;
@@ -125,30 +140,29 @@ export async function run(
       check(performance.now() < deadline, "render mesh did not become ready");
       await client.waitForFrame(inspection.tick);
     }
-    const frames: FrameCapture[] = [];
+    const frames: PresentedCapture[] = [];
     const captures = [];
     for (const [label, time] of [
       ["left-red", 0],
       ["bezier-middle", 0.4375],
       ["right-green", 2],
       ["paused-green", 2],
-      ["stopped-blue", null],
+      ["stopped-red", null],
     ] as const) {
       if (time === null) client.playback(controller, { action: "stop" });
       else if (label !== "paused-green")
         await fixture.seekPaused(controller, time);
       const inspection = await fixture.inspect();
-      const frame = await client.presentation.capture(inspection.tick);
+      const frame = await presentation.capture();
       check(
-        frame.tick > inspection.tick && frame.session === client.session,
-        "capture is not a completed session frame",
+        presentation.sourceTick(frame) > inspection.tick,
+        "capture does not include the inspected animation state",
       );
       frames.push(frame);
-      const { pixels: _pixels, ...metadata } = frame;
       const captured = {
         label,
-        metadata,
-        summary: summarizeImage(frame),
+        metadata: captureSummary(frame),
+        summary: summarizeImage(capturedImage(frame)),
         dataUrl: dataUrl(frame),
       };
       captures.push(captured);
@@ -158,8 +172,8 @@ export async function run(
     return {
       captures,
       differences: [
-        compareImages(frames[0]!, frames[2]!),
-        compareImages(frames[2]!, frames[3]!),
+        compareImages(capturedImage(frames[0]!), capturedImage(frames[2]!)),
+        compareImages(capturedImage(frames[2]!), capturedImage(frames[3]!)),
       ],
     };
   } finally {
@@ -168,18 +182,15 @@ export async function run(
   }
 }
 
-function dataUrl(frame: FrameCapture) {
+function dataUrl(frame: PresentedCapture) {
+  const { width, height, pixels } = capturedImage(frame);
   const canvas = document.createElement("canvas");
-  canvas.width = frame.width;
-  canvas.height = frame.height;
+  canvas.width = width;
+  canvas.height = height;
   const context = canvas.getContext("2d");
   check(context, "PNG evidence needs Canvas 2D");
   context.putImageData(
-    new ImageData(
-      new Uint8ClampedArray(frame.pixels),
-      frame.width,
-      frame.height,
-    ),
+    new ImageData(new Uint8ClampedArray(pixels), width, height),
     0,
     0,
   );

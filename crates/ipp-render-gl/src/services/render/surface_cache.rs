@@ -10,16 +10,16 @@
 //! # Store
 //!
 //! [`SurfaceTextureCache`] belongs to the Host's RenderService and is shared by
-//! every World on its context. Entries are keyed by World and generational
-//! entity identity, so a recreated entity or replacement World never meets an
-//! image from a previous lifetime. Each entry remembers its band, image and
-//! size, the paint and resource revisions it last painted, the World time of
+//! every World on its context. Entries are keyed by the parent World and Surface
+//! entity; the compositor additionally fences the exact parent World lifetime,
+//! child output and attachment token before admitting reuse. Each entry remembers its band, image and
+//! size, the paint and resource revisions it last painted, the Host presentation time of
 //! that paint and of its last cached presentation, its cumulative counters and
 //! the presentation selected by the last planned frame.
 //!
 //! # Frame decisions
 //!
-//! Planning runs once per World frame, before any GPU work:
+//! Planning reserves all opted-in images of the presented output graph together:
 //!
 //! 1. Culled Surfaces do nothing and keep their image.
 //! 2. Interaction, the direct band, a device limit of zero, a zero budget, an
@@ -55,7 +55,7 @@
 //!
 //! Resolution is the band's texel density times the content size, scaled
 //! uniformly to fit `min(device limit, SURFACE_CACHE_MAX_DIMENSION)`. The
-//! refresh clock is World time supplied by the Host, never frame counts.
+//! refresh clock is Host presentation time supplied by the Host, never frame counts.
 //!
 //! # Memory
 //!
@@ -68,7 +68,7 @@
 //! presented this frame are then evicted, least recently presented first with
 //! ties broken by World and entity. Recoverable allocation or repaint failures
 //! release the image and present directly for [`SURFACE_CACHE_RETRY_SECONDS`] of
-//! World time. Images not presented cached for [`SURFACE_CACHE_IDLE_SECONDS`]
+//! Host presentation time. Images not presented cached for [`SURFACE_CACHE_IDLE_SECONDS`]
 //! are released at the end of a frame, and entries of Surfaces that are no
 //! longer live or opted in are removed after every completed frame. Failed
 //! and cameraless frames keep every entry. Context loss and unload release
@@ -76,7 +76,7 @@
 
 use super::RenderError;
 use ipp_core::{EntityId, SurfaceCachePolicy, WorldId, services::asset_management::AssetKey};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Context-wide byte budget for resident Surface cache images: 32 MiB, two images at
 /// the largest cache dimension or many smaller panels, a small share of the memory
@@ -89,10 +89,10 @@ pub const SURFACE_CACHE_BUDGET_BYTES: usize = 32 << 20;
 /// reports its raw device limit and this service applies the cap for every device.
 pub const SURFACE_CACHE_MAX_DIMENSION: u32 = 2048;
 
-/// World seconds without cached presentation after which an image is released.
+/// Host seconds without cached presentation after which an image is released.
 pub const SURFACE_CACHE_IDLE_SECONDS: f64 = 10.0;
 
-/// World seconds a Surface presents directly after a recoverable cache failure.
+/// Host seconds a Surface presents directly after a recoverable cache failure.
 pub const SURFACE_CACHE_RETRY_SECONDS: f64 = 1.0;
 
 /// Consecutive planned frames whose paint changed and were each repainted at the
@@ -110,7 +110,7 @@ pub const SURFACE_CACHE_SETTLE_FRAMES: u32 = 8;
 pub enum SurfaceCachePresentation {
     /// Direct presentation because the Surface is inside its direct distance.
     Near,
-    /// Direct presentation because its GuiRoot has live focus, hover, press or capture.
+    /// Direct presentation because its GUI content has live focus, hover, press or capture.
     Interaction,
     /// Direct presentation after budget pressure or a recoverable allocation or
     /// repaint failure.
@@ -172,7 +172,7 @@ pub struct SurfaceCacheDiagnostic {
     pub repaints: u32,
     /// Frames composited from an unchanged image since the entry was created.
     pub reuses: u32,
-    /// World time in seconds of the last repaint.
+    /// Host presentation time in seconds of the last repaint.
     pub painted_at: f64,
     /// Resident image bytes, four per texel.
     pub resident_bytes: u32,
@@ -272,11 +272,11 @@ struct SurfaceCacheEntry<T> {
     /// Resources the last repaint skipped because they were not resident.
     missing: Vec<AssetKey>,
     painted_at: f64,
-    /// World time of the last cached presentation, for idle release.
+    /// Host presentation time of the last cached presentation, for idle release.
     cached_at: f64,
     /// Context-wide plan stamp of the last cached presentation, for eviction order.
     used: u64,
-    /// World time before which the Surface presents directly after a failure.
+    /// Host presentation time before which the Surface presents directly after a failure.
     retry_at: f64,
     /// Composited by the previous planned frame of this World.
     shown: bool,
@@ -346,8 +346,8 @@ pub(crate) struct SurfaceTextureCache<T> {
     entries: BTreeMap<(WorldId, EntityId), SurfaceCacheEntry<T>>,
     /// Incremented by every plan; orders least-recent use across Worlds.
     stamp: u64,
-    /// World whose frame is planned and not yet finished.
-    planned: Option<WorldId>,
+    /// Worlds participating in the current output-graph plan.
+    planned: BTreeSet<WorldId>,
     #[cfg(any(test, feature = "diagnostics"))]
     counts: SurfaceCacheFrameCounts,
     /// Reused budget ordering scratch.
@@ -362,7 +362,7 @@ impl<T> Default for SurfaceTextureCache<T> {
             resident_images: 0,
             entries: BTreeMap::new(),
             stamp: 0,
-            planned: None,
+            planned: BTreeSet::new(),
             #[cfg(any(test, feature = "diagnostics"))]
             counts: SurfaceCacheFrameCounts::default(),
             order: Vec::new(),
@@ -383,16 +383,12 @@ impl<T> SurfaceTextureCache<T> {
         self.budget_bytes = bytes;
     }
 
-    /// Whether any World has an entry; lets default frames skip cache work.
-    pub(crate) fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-
     /// Select this frame's presentation for every opted-in Surface of `world`,
     /// apply the budget and allocate or resize images.
     ///
     /// `inputs` lists every live opted-in Surface, visible or not. Only context
     /// loss is returned; other allocation failures present directly.
+    #[cfg(test)]
     pub(crate) fn plan<A: SurfaceCacheTargets<Target = T>>(
         &mut self,
         world: WorldId,
@@ -401,23 +397,35 @@ impl<T> SurfaceTextureCache<T> {
         inputs: &[SurfaceCacheInput],
         targets: &mut A,
     ) -> Result<(), RenderError> {
+        let inputs: Vec<_> = inputs.iter().map(|input| (world, *input)).collect();
+        self.plan_outputs(&[world], time, limit, &inputs, targets)
+    }
+
+    pub(crate) fn plan_outputs<A: SurfaceCacheTargets<Target = T>>(
+        &mut self,
+        worlds: &[WorldId],
+        time: f64,
+        limit: u32,
+        inputs: &[(WorldId, SurfaceCacheInput)],
+        targets: &mut A,
+    ) -> Result<(), RenderError> {
         self.stamp += 1;
-        self.planned = Some(world);
+        self.planned = worlds.iter().copied().collect();
         #[cfg(any(test, feature = "diagnostics"))]
         {
             self.counts = SurfaceCacheFrameCounts::default();
         }
         let limit = limit.min(SURFACE_CACHE_MAX_DIMENSION);
-
-        for input in inputs {
-            self.select(world, time, limit, input);
+        for (world, input) in inputs {
+            self.select(*world, time, limit, input);
         }
-
         self.apply_budget(targets);
-        let allocated = self.allocate(world, time, targets);
-        #[cfg(any(test, feature = "diagnostics"))]
-        self.count_plan(world);
-        allocated
+        for world in worlds {
+            self.allocate(*world, time, targets)?;
+            #[cfg(any(test, feature = "diagnostics"))]
+            self.count_plan(*world);
+        }
+        Ok(())
     }
 
     /// Count this plan's presentations for the frame statistics.
@@ -733,24 +741,8 @@ impl<T> SurfaceTextureCache<T> {
     pub(crate) fn action(&self, world: WorldId, entity: EntityId) -> Option<SurfaceCacheAction> {
         self.entries
             .get(&(world, entity))
-            .filter(|entry| entry.live == self.stamp && self.planned == Some(world))
+            .filter(|entry| entry.live == self.stamp && self.planned.contains(&world))
             .map(|entry| entry.action)
-    }
-
-    /// Whether the current plan repaints any image of `world`.
-    pub(crate) fn repaints_planned(&self, world: WorldId) -> bool {
-        self.planned == Some(world)
-            && self.world_entries(world).any(|entry| {
-                entry.live == self.stamp && entry.action == SurfaceCacheAction::Repaint
-            })
-    }
-
-    /// Whether the current plan composites any image of `world`.
-    pub(crate) fn composites_planned(&self, world: WorldId) -> bool {
-        self.planned == Some(world)
-            && self
-                .world_entries(world)
-                .any(|entry| entry.live == self.stamp && entry.cached())
     }
 
     /// The image and its size for a Surface planned to repaint or reuse.
@@ -759,6 +751,50 @@ impl<T> SurfaceTextureCache<T> {
             .get(&(world, entity))
             .and_then(|entry| entry.image.as_ref())
             .map(|image| (&image.target, image.size))
+    }
+
+    pub(crate) fn take_image(&mut self, world: WorldId, entity: EntityId) -> Option<(T, [u32; 2])> {
+        let image = self.entries.get_mut(&(world, entity))?.image.take()?;
+        self.resident_bytes -= image.bytes();
+        self.resident_images -= 1;
+        Some((image.target, image.size))
+    }
+
+    pub(crate) fn put_image(
+        &mut self,
+        world: WorldId,
+        entity: EntityId,
+        target: T,
+        size: [u32; 2],
+    ) {
+        let entry = self
+            .entries
+            .get_mut(&(world, entity))
+            .expect("planned cache entry");
+        assert!(entry.image.is_none());
+        entry.image = Some(SurfaceCacheImage {
+            target,
+            size,
+        });
+        self.resident_bytes += image_bytes(size);
+        self.resident_images += 1;
+    }
+
+    pub(crate) fn forget_surface<A: SurfaceCacheTargets<Target = T>>(
+        &mut self,
+        world: WorldId,
+        entity: EntityId,
+        targets: &mut A,
+    ) {
+        if let Some(image) = self
+            .entries
+            .remove(&(world, entity))
+            .and_then(|entry| entry.image)
+        {
+            self.resident_bytes -= image.bytes();
+            self.resident_images -= 1;
+            targets.delete(image.target);
+        }
     }
 
     /// Record a completed repaint. `missing` lists the resources whose
@@ -800,7 +836,7 @@ impl<T> SurfaceTextureCache<T> {
     /// Text runs the Surface's current image drew analytically while they waited
     /// for atlas population; zero without an image. The caller compares them with
     /// the runs waiting now in the next plan.
-    #[cfg(any(test, feature = "gui"))]
+    #[cfg(any(test, feature = "surfaces"))]
     pub(crate) fn unpopulated(&self, world: WorldId, entity: EntityId) -> u32 {
         self.entries
             .get(&(world, entity))
@@ -810,6 +846,7 @@ impl<T> SurfaceTextureCache<T> {
 
     /// Resources the Surface's current image skipped; empty for a complete
     /// image or no image. The caller reports their residency in the next plan.
+    #[cfg(test)]
     pub(crate) fn missing(&self, world: WorldId, entity: EntityId) -> &[AssetKey] {
         match self.entries.get(&(world, entity)) {
             Some(entry) if entry.painted.is_some_and(|painted| !painted.complete) => &entry.missing,
@@ -865,7 +902,7 @@ impl<T> SurfaceTextureCache<T> {
         }
     }
 
-    /// End the World frame. A completed plan removes entries of Surfaces no
+    /// Finish one World's portion of the output-graph plan. A completed plan removes entries of Surfaces no
     /// longer live or opted in and releases idle images and returns `true`;
     /// otherwise every entry is kept.
     pub(crate) fn finish_frame<A: SurfaceCacheTargets<Target = T>>(
@@ -875,7 +912,7 @@ impl<T> SurfaceTextureCache<T> {
         completed: bool,
         targets: &mut A,
     ) -> bool {
-        let planned = self.planned.take() == Some(world);
+        let planned = self.planned.remove(&world);
         if !(planned && completed) {
             // Nothing planned was necessarily presented.
             for (_, entry) in self.entries.range_mut(world_range(world)) {
@@ -939,9 +976,7 @@ impl<T> SurfaceTextureCache<T> {
         });
         self.resident_bytes -= released;
         self.resident_images -= images;
-        if self.planned == Some(world) {
-            self.planned = None;
-        }
+        self.planned.remove(&world);
     }
 
     /// Release every entry after unload or context loss.
@@ -954,7 +989,7 @@ impl<T> SurfaceTextureCache<T> {
 
         self.resident_bytes = 0;
         self.resident_images = 0;
-        self.planned = None;
+        self.planned.clear();
     }
 
     /// Append one World's entries in entity order.
@@ -983,12 +1018,6 @@ impl<T> SurfaceTextureCache<T> {
             u32::try_from(self.resident_images).unwrap_or(u32::MAX),
             u32::try_from(self.resident_bytes).unwrap_or(u32::MAX),
         )
-    }
-
-    fn world_entries(&self, world: WorldId) -> impl Iterator<Item = &SurfaceCacheEntry<T>> {
-        self.entries
-            .range(world_range(world))
-            .map(|(_, entry)| entry)
     }
 }
 

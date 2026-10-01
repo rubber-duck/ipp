@@ -150,3 +150,20 @@ test("keys during an open composition belong to the IME", () => {
   assert.equal(isComposingKeyEvent({ isComposing: false, keyCode: 13 }), false);
   assert.equal(isComposingKeyEvent({}), false);
 });
+
+test("external invalidation fences late composition updates and ends", () => {
+  const sent: BrowserGuiInputCommand[] = [];
+  const bridge = createImeBridge({ send: (command) => sent.push(command) });
+  bridge.compositionStart();
+  bridge.compositionUpdate("old");
+  bridge.reset();
+  bridge.compositionUpdate("late");
+  bridge.compositionEnd("late");
+  assert.equal(sent.length, 1);
+  bridge.compositionStart();
+  bridge.compositionEnd("new");
+  assert.deepEqual(sent.slice(1), [
+    { kind: "composition", text: "new", caretStart: 3, caretEnd: 3 },
+    { kind: "commitComposition" },
+  ]);
+});

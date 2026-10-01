@@ -3,6 +3,7 @@
 
 mod support;
 use support::WorldTestDriver;
+use support::selection::RENDER;
 
 use ipp_core::services::asset_management::builtin;
 use ipp_core::{ErrorReason, MeshKey, MeshUpload, TextureKey, TextureUpload};
@@ -23,7 +24,7 @@ fn cube_extents_winding_white_rgb_and_face_uvs_survive_normal_publication() {
     };
     let mut world_host = ipp_core::HostRuntime::new();
     let world_id = world_host
-        .create_world(ipp_core::WorldLimits::default())
+        .create_world(ipp_core::WorldLimits::default(), RENDER)
         .unwrap();
     let mut world = world_host.world_mut(world_id).unwrap();
     world
@@ -110,7 +111,7 @@ fn checker_rectangular_cells_cycle_exact_srgb_rgb_and_support_large_odd_dimensio
     };
     let mut world_host = ipp_core::HostRuntime::new();
     let world_id = world_host
-        .create_world(ipp_core::WorldLimits::default())
+        .create_world(ipp_core::WorldLimits::default(), RENDER)
         .unwrap();
     let mut world = world_host.world_mut(world_id).unwrap();
     world
@@ -211,7 +212,7 @@ fn uv_grid_marks_both_axes_and_triangle_orientation_in_rgb8() {
     };
     let mut world_host = ipp_core::HostRuntime::new();
     let world_id = world_host
-        .create_world(ipp_core::WorldLimits::default())
+        .create_world(ipp_core::WorldLimits::default(), RENDER)
         .unwrap();
     let mut world = world_host.world_mut(world_id).unwrap();
     world
@@ -417,7 +418,9 @@ fn publish_colored<'a>(
 
         variant: 0,
     };
-    let world_id = host.create_world(ipp_core::WorldLimits::default()).unwrap();
+    let world_id = host
+        .create_world(ipp_core::WorldLimits::default(), RENDER)
+        .unwrap();
     let mut world = host.world_mut(world_id).unwrap();
     world
         .enqueue_mesh(MeshUpload {
@@ -726,7 +729,7 @@ fn axis_arrows_preserve_winding_normals_and_independent_linear_colors() {
         let bytes = builtin::mesh(&format!("{source}{suffix}")).unwrap();
         let mut world_host = ipp_core::HostRuntime::new();
         let world_id = world_host
-            .create_world(ipp_core::WorldLimits::default())
+            .create_world(ipp_core::WorldLimits::default(), RENDER)
             .unwrap();
         let mut world = world_host.world_mut(world_id).unwrap();
         world
@@ -1360,7 +1363,7 @@ fn new_recipes_reject_malformed_extreme_and_collapsed_parameters() {
 fn generated_shapes_obey_ordinary_immutable_asset_id_publication() {
     let mut world_host = ipp_core::HostRuntime::new();
     let world_id = world_host
-        .create_world(ipp_core::WorldLimits::default())
+        .create_world(ipp_core::WorldLimits::default(), RENDER)
         .unwrap();
     let mut world = world_host.world_mut(world_id).unwrap();
     let key = MeshKey {

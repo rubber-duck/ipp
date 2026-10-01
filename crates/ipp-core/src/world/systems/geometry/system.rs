@@ -48,6 +48,16 @@ impl SystemFactory for GeometrySystemFactory {
         GeometrySystem::ID
     }
 
+    fn capabilities(&self) -> crate::systems::SystemCapabilities {
+        crate::systems::SystemCapabilities::new(
+            [
+                crate::ComponentValue::BOUNDING_GEOMETRY,
+                crate::ComponentValue::PICKING_GEOMETRY,
+            ],
+            [crate::systems::WorldOperation::Geometry],
+        )
+    }
+
     fn dependencies(&self) -> &[SystemDependency] {
         &[
             SystemDependency::Required(SystemId("ipp.asset-dependencies")),
@@ -70,13 +80,23 @@ impl SystemFactory for GeometrySystemFactory {
 }
 
 impl System for GeometrySystem {
+    fn publish_output(
+        &self,
+        world: &crate::WorldContext<'_>,
+        output: &mut crate::host::WorldOutputBuilder<'_>,
+    ) -> Result<(), crate::ErrorReason> {
+        self.publish(world, output)
+    }
+
     fn before_numeric_update(&mut self, context: &mut crate::systems::SystemNumericContext<'_>) {
         self.refresh = true;
         let _ = context;
     }
 
     fn before_commit(&mut self, context: &mut crate::systems::SystemCommitContext<'_>) {
-        if context.changed_components().next().is_none() {
+        if context.changed_components().next().is_none()
+            && context.changed_entity_links().next().is_none()
+        {
             return;
         }
         self.state.spatial_bounds.invalidate();
@@ -88,7 +108,7 @@ impl System for GeometrySystem {
         self.state
             .picking
             .before_commit(context, crate::ComponentValue::PICKING_GEOMETRY);
-        self.refresh |= context.changed_components().next().is_some();
+        self.refresh = true;
         #[cfg(feature = "skeletal-animation")]
         self.before_geometry_commit(context);
     }

@@ -1,7 +1,7 @@
 uniform highp sampler2D u_shadow_map;
-uniform mat4 u_shadow_matrix[8];
+uniform mat4 u_shadow_matrix[IPP_MAX_LIGHTS];
 // Per light: atlas tile (-1 disables), depth bias, inverse tile size, grid side.
-uniform vec4 u_shadow_settings[8];
+uniform vec4 u_shadow_settings[IPP_MAX_LIGHTS];
 
 bool shadow_contains(vec2 uv) {
     return all(greaterThanEqual(uv, vec2(0.0))) && all(lessThanEqual(uv, vec2(1.0)));

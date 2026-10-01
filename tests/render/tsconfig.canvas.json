@@ -1,0 +1,5 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": { "noEmit": true },
+  "include": ["canvas-fixture.tsx", "canvas.test.ts", "dpi.test.ts", "canvas-controller.tsx", "canvas-controller.test.ts", "../../packages/ipp-react/tests/canvas-presentation.test.ts"]
+}

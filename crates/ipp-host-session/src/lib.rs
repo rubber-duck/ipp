@@ -9,19 +9,30 @@ use ipp_core::systems::lifecycle_publisher::{LifecyclePublisherOutput, Lifecycle
 use ipp_core::{WorldContext, WorldId};
 use ipp_protocol::{Request, RequestBody, Response, ResponseBody};
 
+mod attachment_receipts;
 mod inspection;
+mod outbox;
 mod presentation_failure;
+mod progress;
 pub mod services;
-pub use presentation_failure::HostPresentationFailure;
+pub use presentation_failure::{HostInputFailure, HostPresentationFailure};
+pub use services::connection::HostConnectionMessage;
+pub use services::presentation::{PresentationCompletion, PresentationDrawSummary};
 
 pub use services::asset_provider::deliver_resource;
 
 #[cfg(feature = "builtin-assets")]
 pub use services::asset_provider::builtin_resource;
 
-const MAX_PENDING: usize = 64;
-const EVENT_RESERVE: usize = 21;
-const MAX_OUTBOX: usize = MAX_PENDING + EVENT_RESERVE;
+/// Requests a connection may queue, and a session may hold admitted but unanswered, before the
+/// Host refuses more ingress. Clients control this count, so it is their backpressure: admission
+/// reserves each reply's output before acceptance, and uncorrelated output never counts against
+/// it. Reliable output is bounded separately by bytes (`reliable_output::MAX_OUTPUT_BYTES`).
+///
+/// Transports size their read-ahead from this window so a resuming Host refills at once. 64
+/// keeps many requests in flight on one connection while its reserved replies stay a small
+/// share of the connection's output budget; a request beyond it fails that connection.
+pub const MAX_PENDING: usize = 64;
 
 /// HostServices work executed at Host-owned service and frame boundaries.
 pub trait HostServices {
@@ -38,17 +49,90 @@ pub trait HostServices {
         None
     }
 
-    /// Select a presentation target when a logical World session attaches.
-    fn attach_world(&mut self, _world: WorldId) -> Result<(), String> {
+    /// Observe the completed Host evaluation boundary without advancing or mutating Worlds.
+    #[cfg(feature = "diagnostics")]
+    fn record_frame(
+        &mut self,
+        _host: &mut ipp_core::HostRuntime,
+        _frame: &ipp_core::HostFrameReport,
+    ) {
+    }
+
+    /// Admit composed input, continuing healthy roots and returning scoped failures.
+    fn route_input(
+        &mut self,
+        _host: &mut ipp_core::HostRuntime,
+        _frame: &ipp_core::HostFrameReport,
+    ) -> Vec<HostInputFailure> {
+        #[cfg(feature = "gui")]
+        {
+            let surface = self.presentation_surface().ok();
+            if let Some(input) = self.gui_input() {
+                input.route(_host, surface);
+            }
+        }
+        Vec::new()
+    }
+
+    /// Optional physical GUI adapter. Headless semantic commands do not use this owner.
+    #[cfg(feature = "gui")]
+    fn gui_input(&mut self) -> Option<&mut services::gui_input::GuiHostInputService> {
+        None
+    }
+
+    /// Physical selection lifetime hook, independent of authoring sessions.
+    fn presentation_selection(
+        &mut self,
+        _host: &mut ipp_core::HostRuntime,
+        _selection: Option<ipp_protocol::presentation::PresentationView>,
+    ) {
+        #[cfg(feature = "gui")]
+        if let Some(input) = self.gui_input() {
+            input.selection(_host, _selection);
+        }
+    }
+
+    /// Prepare renderer demand without borrowing live World component values.
+    fn prepare_presentation(
+        &mut self,
+        _host: &mut ipp_core::HostRuntime,
+        _selected: Option<(ipp_core::OutputRef, ipp_core::WorldPublicationId)>,
+    ) -> Result<(), HostPresentationFailure> {
         Ok(())
     }
 
-    /// Release a presentation attachment without destroying the World.
-    fn detach_world(&mut self, _world: WorldId) {}
+    /// Present an explicitly selected completed root output, independently of sessions.
+    fn present(
+        &mut self,
+        _host: &ipp_core::HostRuntime,
+        _output: ipp_core::OutputRef,
+        _publication: ipp_core::WorldPublicationId,
+        _viewport: ipp_core::WorldViewport,
+        _presentation_time: f64,
+        _completion: PresentationCompletion<'_>,
+    ) -> Result<PresentationDrawSummary, HostPresentationFailure> {
+        Err(HostPresentationFailure {
+            scope: ipp_protocol::RuntimeFailureScope::Context,
+            message: "presentation is unsupported".into(),
+        })
+    }
 
-    /// Present after core evaluation and before resource/event publication.
-    fn present(&mut self, _world: &mut WorldContext<'_>) -> Result<(), HostPresentationFailure> {
-        Ok(())
+    /// Actual surface/context identity and device bounds, independent of World sessions.
+    fn presentation_surface(
+        &self,
+    ) -> Result<
+        ipp_protocol::presentation::PresentationSurface,
+        ipp_protocol::presentation::PresentationError,
+    > {
+        Err(ipp_protocol::presentation::PresentationError::Unsupported)
+    }
+
+    /// Configure the exact acknowledged extent; adapters must not silently clamp it.
+    fn configure_presentation(
+        &mut self,
+        _viewport: ipp_core::WorldViewport,
+    ) -> Result<(), ipp_protocol::presentation::PresentationError> {
+        Err(ipp_protocol::presentation::PresentationError::Unsupported)
     }
 
     /// Service provider cancellations and requests at the host boundary.
@@ -78,9 +162,20 @@ pub struct WorldSession {
     pending: VecDeque<Request>,
     replies: Vec<(u64, WorldSessionReply)>,
     prepared: bool,
-    outbox: VecDeque<Vec<u8>>,
+    outbox: outbox::SessionOutbox,
+    progress_leases: std::rc::Rc<std::cell::Cell<usize>>,
+    connection_progress_leases: std::rc::Rc<std::cell::Cell<usize>>,
+    progress: Option<progress::WorldProgress>,
+    receipts: attachment_receipts::SharedReceipts,
+    lifecycle_watch: Option<lifecycle_watch::SessionLifecycleWatch>,
+    #[cfg(feature = "gui")]
+    gui_observations: Option<gui_observations::SessionObservations>,
+    reply_budget: attachment_receipts::SharedReplyBudget,
+    reply_reservations:
+        std::collections::BTreeMap<u64, attachment_receipts::SharedReplyReservation>,
     private_world: bool,
-    command_batch: Option<command_batches::HostCommandBatch>,
+    /// Buffered page bytes of assembled batches still waiting in `pending`.
+    batch_leases: std::collections::BTreeMap<u64, command_batches::BatchBytesLease>,
     last_failure: Option<(ipp_protocol::RuntimeFailureScope, bool, String)>,
     request_origins: std::collections::BTreeMap<u64, (u64, Option<u64>)>,
     pending_errors: std::collections::BTreeMap<u64, String>,
@@ -90,29 +185,26 @@ pub struct WorldSession {
     >,
     source_transfers:
         std::collections::BTreeMap<u64, services::connection::asset_sources::SourceTransfer>,
-    owners: std::collections::BTreeSet<u64>,
 }
 
+mod reliable_output;
+use reliable_output::ReliableResponse as QueuedResponse;
+pub use reliable_output::{PreparedOutputCopy, ReliableResponse, ResponseLease};
+
 enum WorldSessionReply {
-    #[cfg(feature = "surfaces")]
-    SurfaceCommand,
-    #[cfg(feature = "gui")]
-    GuiCommands,
-    #[cfg(feature = "gui")]
-    GuiInspect(ipp_core::systems::gui::GuiInspectQuery),
-    #[cfg(feature = "gui")]
-    GuiInput,
-    #[cfg(feature = "gui")]
-    GuiSemanticSnapshot(ipp_core::GuiSemanticSnapshotQuery),
+    CameraNavigate,
     LifecycleSubscription,
+    #[cfg(feature = "diagnostics")]
+    LifecycleDiagnostics(ipp_protocol::lifecycle_diagnostics::LifecycleDiagnosticQuery),
     Batch {
         #[cfg(feature = "diagnostics")]
         operations: usize,
     },
     AnimationController,
     Inspect(ipp_protocol::InspectionQuery),
-    GeometryPick(Result<(), ipp_core::ErrorReason>),
-    CameraProject(Result<(), ipp_core::ErrorReason>),
+    GeometryPick(ipp_protocol::views::GeometryPickQuery),
+    CameraProject(ipp_protocol::views::CameraProjectQuery),
+    CompletedView(ResponseBody),
     Rejected(String),
 }
 
@@ -121,15 +213,16 @@ pub struct WorldSessionContext<'a, P: HostServices> {
     session: &'a mut WorldSession,
     world: WorldContext<'a>,
     services: &'a mut P,
-    response_buffers: &'a mut Vec<Vec<u8>>,
 }
 
 mod command_batches;
 mod frame;
 mod host;
+mod lifecycle_watch;
 mod publication;
 mod session;
-pub(crate) use session::{is_command_batch_continuation, next_ingress_id};
+mod view_queries;
+pub(crate) use session::next_ingress_id;
 
 /// Process/worker owner of shared services, worlds and world-scoped sessions.
 /// World sessions contain routing and protocol queues, never services or worlds.
@@ -139,15 +232,14 @@ pub struct Host<P: HostServices> {
     runtime: ipp_core::HostRuntime,
     services: P,
     frame_scratch: HostFrameScratch,
-    response_buffers: Vec<Vec<u8>>,
+    presentation_time: f64,
+    presentation: services::presentation::PresentationCoordinator,
 }
 
 #[derive(Default)]
 struct HostFrameScratch {
     sessions: Vec<u64>,
     prepared: Vec<u64>,
-    worlds: Vec<WorldId>,
-    evaluating: Vec<WorldId>,
 }
 
 #[cfg(test)]
@@ -161,14 +253,5 @@ mod render_state_tests;
 
 #[cfg(test)]
 mod command_batches_tests;
-#[cfg(all(test, feature = "gui"))]
-mod gui_command_batches_tests;
-
-#[cfg(all(test, feature = "gui"))]
-mod gui_input_tests;
-
 #[cfg(feature = "gui")]
-mod gui_semantics;
-
-#[cfg(all(test, feature = "gui"))]
-mod gui_semantics_tests;
+mod gui_observations;

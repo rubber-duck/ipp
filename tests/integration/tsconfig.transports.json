@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": { "noEmit": true },
+  "include": [
+    "worker-startup.ts",
+    "worker-startup.test.ts",
+    "scenarios/lifecycle-targets.ts",
+    "lifecycle-target-transport.ts",
+    "../../packages/ipp-client/tests/lifecycle-watches.test.ts",
+    "scenarios/multiplex.ts",
+    "scenarios/selected-world.ts",
+    "scenarios/world-persistence.ts",
+    "scenarios/lifecycle-subscriptions.ts",
+    "host-transport-driver.ts"
+  ]
+}

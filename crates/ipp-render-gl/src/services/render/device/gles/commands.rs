@@ -35,10 +35,10 @@ impl RenderDevice for GlesRenderDevice {
     #[cfg(feature = "shadows")]
     type ShadowMap = lighting::GlesShadowMap;
 
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     type GuiBatch = super::GlesGuiBatch;
 
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     type GlyphAtlasPage = super::GlesGlyphAtlasPage;
 
     fn set_lighting(
@@ -258,8 +258,10 @@ impl RenderDevice for GlesRenderDevice {
         target: &Self::SurfaceCacheTarget,
         mvp: &[f32; 16],
         size: &[f32; 2],
+        clip: &[f32; 4],
+        opacity: f32,
     ) -> Result<(), RenderError> {
-        self.draw_surface_cache(program, target, mvp, size)
+        self.draw_surface_cache(program, target, mvp, size, clip, opacity)
     }
 
     #[cfg(feature = "surfaces")]
@@ -267,12 +269,12 @@ impl RenderDevice for GlesRenderDevice {
         self.delete_surface_cache_target(target);
     }
 
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     fn create_gui_batch(&mut self, capacity: usize) -> Result<Self::GuiBatch, RenderError> {
         self.create_gui_batch(capacity)
     }
 
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     fn write_gui_batch(
         &mut self,
         batch: &mut Self::GuiBatch,
@@ -282,12 +284,12 @@ impl RenderDevice for GlesRenderDevice {
         self.write_gui_batch(batch, first, vertices)
     }
 
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     fn delete_gui_batch(&mut self, batch: Self::GuiBatch) {
         self.delete_gui_batch(batch);
     }
 
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     fn draw_gui_batch(
         &mut self,
         program: &Self::Program,
@@ -300,7 +302,7 @@ impl RenderDevice for GlesRenderDevice {
         self.draw_gui_batch(program, batch, atlas, mvp, first, count)
     }
 
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     fn create_glyph_atlas_page(
         &mut self,
         width: u32,
@@ -309,22 +311,22 @@ impl RenderDevice for GlesRenderDevice {
         self.create_glyph_atlas_page(width, height)
     }
 
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     fn delete_glyph_atlas_page(&mut self, page: Self::GlyphAtlasPage) {
         self.delete_glyph_atlas_page(page);
     }
 
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     fn begin_glyph_atlas_page(&mut self, page: &Self::GlyphAtlasPage) -> Result<(), RenderError> {
         self.begin_glyph_atlas_page(page)
     }
 
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     fn end_glyph_atlas_page(&mut self) -> Result<(), RenderError> {
         self.end_glyph_atlas_page()
     }
 
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     fn glyph_atlas_texture(page: &Self::GlyphAtlasPage) -> &Self::Texture {
         &page.texture
     }
@@ -644,6 +646,15 @@ impl RenderDevice for GlesRenderDevice {
             (self.gl.bind_texture)(0x0DE1, 0);
         }
         self.check()
+    }
+
+    #[cfg(feature = "surfaces")]
+    fn begin_camera_target(
+        &mut self,
+        target: &mut Self::SurfaceCacheTarget,
+        clear: &[f32; 4],
+    ) -> Result<(), RenderError> {
+        self.begin_camera_target(target, clear)
     }
 
     fn begin_frame(

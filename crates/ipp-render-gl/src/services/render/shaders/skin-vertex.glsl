@@ -1,6 +1,6 @@
 layout(location = 5) in vec4 a_joints;
 layout(location = 6) in vec4 a_joint_weights;
-uniform mat4 u_joints[32];
+uniform mat4 u_joints[IPP_MAX_JOINTS];
 
 mat4 skin_matrix() {
     ivec4 joints = ivec4(a_joints);

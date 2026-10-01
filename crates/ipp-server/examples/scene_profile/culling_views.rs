@@ -27,6 +27,7 @@ fn camera(scene: &mut Scene, projection: Camera) -> Result<EntityId> {
                     symbolic_id: Some("benchmark-interior-camera".into()),
                     classes: vec![],
                 },
+                adopt: false,
             },
             insert(
                 EntityRef::Alias(0),
@@ -74,8 +75,8 @@ fn select(scene: &mut Scene, entity: EntityId, yaw: f32, projection: Camera) -> 
             ),
         ],
     })?;
-    world.enqueue_camera_activate(entity)?;
     drop(world);
+    scene.select_camera(entity)?;
     scene.update(0.0)
 }
 
@@ -106,14 +107,16 @@ fn query_comparison(
             return Err(format!("{label}: flat scan and BVH pixels differ").into());
         }
         reference = Some(pixels);
+        let frustum = frustum_planes(scene.camera()?.prepare(WIDTH, HEIGHT)?.view_projection);
         let world = scene.host.world_mut(scene.world).unwrap();
-        let frustum = frustum_planes(world.prepare_camera(WIDTH, HEIGHT)?.view_projection);
         let entities: BTreeSet<_> = world
             .render_items()
             .iter()
             .map(|item| item.entity)
             .collect();
-        let index = world.geometry_spatial_index();
+        let index = world
+            .geometry_spatial_index()
+            .ok_or("geometry evaluator is unavailable")?;
         let mut results = GeometryQueryResults::default();
         let mut scratch = GeometryQueryScratch::default();
         for _ in 0..8 {
@@ -177,11 +180,7 @@ pub(super) fn run(
     output: &Path,
     bundle: &Path,
 ) -> Result<()> {
-    let world = scene.host.world_mut(scene.world).unwrap();
-    let projection = *world
-        .active_camera_component()
-        .ok_or("missing camera projection")?;
-    drop(world);
+    let projection = scene.camera()?.projection;
     let mut queries = std::fs::File::create(output.join("camera-queries.csv"))?;
     writeln!(
         queries,
@@ -209,15 +208,15 @@ pub(super) fn run(
         if !scene.host.destroy_world(scene.world) {
             return Err("camera comparison World reset failed".into());
         }
-        renderer.unload_host(&mut scene.host);
+        renderer.prepare(&mut scene.host, None)?;
+        renderer.unload_host(&mut scene.host)?;
         *renderer = Renderer::new(context.device()?)?;
         *scene = Scene::load(bundle, renderer)?;
         let overview = scene
-            .host
-            .world_mut(scene.world)
-            .unwrap()
-            .active_camera()
-            .ok_or("missing reloaded overview camera")?;
+            .camera()?
+            .selection
+            .camera_entity()
+            .ok_or("profile root output is not a camera")?;
         let interior = camera(scene, projection)?;
         scene.control(AnimationPlaybackControl::Pause)?;
         scene.control(AnimationPlaybackControl::Seek(0.0))?;
@@ -232,11 +231,7 @@ pub(super) fn run(
                 },
             )?;
         } else {
-            scene
-                .host
-                .world_mut(scene.world)
-                .unwrap()
-                .enqueue_camera_activate(overview)?;
+            scene.select_camera(overview)?;
             scene.update(0.0)?;
         }
         writeln!(cameras, "{label}: yaw={yaw:?}; far={far}")?;
@@ -267,11 +262,7 @@ pub(super) fn run(
             output,
         )?;
         scene.control(AnimationPlaybackControl::Pause)?;
-        scene
-            .host
-            .world_mut(scene.world)
-            .unwrap()
-            .enqueue_camera_activate(overview)?;
+        scene.select_camera(overview)?;
         scene.update(0.0)?;
     }
     Ok(())

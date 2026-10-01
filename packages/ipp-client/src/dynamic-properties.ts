@@ -1,5 +1,5 @@
 /** Named typed component parameters; CPU descriptors and GPU packing are independent. */
-import type { Command, EntityRef, StateOverlayRef } from "./types.js";
+import type { Command, EntityRef } from "./types.js";
 
 export type DynamicPropertyKind =
   | "f32"
@@ -308,20 +308,6 @@ export const DynamicProperty = {
   },
   remove(entity: EntityRef, component: number, name: string): Command {
     return { kind: "removeDynamicProperty", entity, component, name };
-  },
-  override(
-    owner: StateOverlayRef,
-    overlay: StateOverlayRef,
-    properties: Record<string, DynamicValue>,
-    clear: string[] = [],
-  ): Command {
-    return {
-      kind: "updateDynamicComponentStateOverlay",
-      owner,
-      overlay,
-      properties,
-      clear,
-    };
   },
 };
 

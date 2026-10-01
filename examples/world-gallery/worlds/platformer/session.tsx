@@ -45,6 +45,8 @@ export interface PlatformerPlayback {
 const TRANSITION_SECONDS = 0.32;
 const ORB_DURATION = 12;
 const TURN_DISTANCE = 0.24;
+/** Facing clips hold their heading from this time; the facing clock stays there. */
+const FACING_HOLD_TIME = 1;
 
 function rotationValue(heading: number) {
   return {
@@ -351,8 +353,9 @@ export class PlatformerSession {
         await client.waitForFrame(state.tick);
       }
       // The first completed frame of the loaded scene, without readback.
-      await canvas.flush();
-      await client.presentation!.frame((await client.inspectPage()).tick);
+      const view = canvas.view;
+      if (!view) throw new Error("The platformer camera is not presented");
+      await canvas.frame({ afterOutputs: [view.binding.output] });
       signal.throwIfAborted();
       await session.applyPlayback();
       await session.releasePreparations();
@@ -412,13 +415,13 @@ export class PlatformerSession {
               : "platformer-facing-reverse",
           )}
           target={this.gaitDrivers.walk[0]!.target}
-          speed={1}
+          speed={0}
           looping
           autoPlay={false}
           transition={{
             duration: TRANSITION_SECONDS,
             easing: "smoothstep",
-            startTime: { policy: "preserve" },
+            startTime: { policy: "seek", time: FACING_HOLD_TIME },
           }}
         />
         <Animation
@@ -512,11 +515,16 @@ export class PlatformerSession {
     );
   }
 
+  /**
+   * A controller adds its clip's change from time 0, so facing is a clip that
+   * turns from the authored heading to `heading` and holds it; the facing
+   * controller stays at the hold time and a transition blends the turn.
+   */
   private facingClip(heading: number): AnimationClipSource {
     const property = this.client.components.Transform;
     if (!property) throw new Error("Platformer requires Transform support");
     return {
-      duration: 1,
+      duration: 2 * FACING_HOLD_TIME,
       tracks: [
         {
           property: {
@@ -528,7 +536,11 @@ export class PlatformerSession {
               property.fields.qw!.offset,
             ],
           },
-          keys: [{ time: 0, value: rotationValue(heading) }],
+          keys: [
+            { time: 0, value: rotationValue(0) },
+            { time: FACING_HOLD_TIME, value: rotationValue(heading) },
+            { time: 2 * FACING_HOLD_TIME, value: rotationValue(heading) },
+          ],
         },
       ],
     };
@@ -546,7 +558,7 @@ export class PlatformerSession {
     }
     await this.routeRef.current?.playAtSpeed(this.routeSpeed());
     await this.gaitRef.current?.playAtSpeed(1);
-    await this.facingRef.current?.playAtSpeed(1);
+    await this.facingRef.current?.playAtSpeed(0);
     await this.orbRef.current?.play();
   }
 
@@ -618,7 +630,6 @@ export class PlatformerSession {
       await Promise.all([
         this.routeRef.current?.seek(0),
         this.gaitRef.current?.seek(0),
-        this.facingRef.current?.seek(0),
         this.orbRef.current?.seek(0),
       ]);
       this.state = { ...this.state, direction: 1 };

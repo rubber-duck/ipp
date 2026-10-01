@@ -40,6 +40,11 @@ pub fn run<D: RenderDevice>(
     output: &Path,
 ) -> Result<()> {
     let mut world_host = ipp_core::HostRuntime::new();
+
+    // Proves the eviction path: a released texture is uploaded again on return.
+    world_host
+        .asset_resources_mut()
+        .set_idle_resident_bytes_target(0);
     renderer.install(&mut world_host)?;
     let mut world = super::world::fixture_world(&mut world_host)?;
     let texture_type = ComponentValue::UNLIT_TEXTURE;
@@ -49,11 +54,13 @@ pub fn run<D: RenderDevice>(
             Command::Create {
                 alias: 1,
                 metadata: Default::default(),
+                adopt: false,
             },
             Command::InsertComponent {
                 entity: EntityRef::Alias(1),
                 component: ComponentValue::TRANSFORM,
                 fields: vec![],
+                adopt: false,
             },
             Command::InsertComponent {
                 entity: EntityRef::Alias(1),
@@ -63,6 +70,7 @@ pub fn run<D: RenderDevice>(
                     float(std::mem::offset_of!(UnlitMaterial, g), MATERIAL[1]),
                     float(std::mem::offset_of!(UnlitMaterial, b), MATERIAL[2]),
                 ],
+                adopt: false,
             },
             Command::InsertComponent {
                 entity: EntityRef::Alias(1),
@@ -71,6 +79,7 @@ pub fn run<D: RenderDevice>(
                     offset: std::mem::offset_of!(MeshInstance, source) as u32,
                     value: FieldValue::String("fixture:///fixture.mesh".into()),
                 }],
+                adopt: false,
             },
             texture_component(EntityRef::Alias(1)),
         ],
@@ -142,7 +151,7 @@ pub fn run<D: RenderDevice>(
     apply(
         &mut world,
         vec![Command::RemoveComponent {
-            entity,
+            entity: entity.clone(),
             component: texture_type,
         }],
     )?;
@@ -168,7 +177,7 @@ pub fn run<D: RenderDevice>(
         "texture removal must visibly change the cube"
     );
 
-    apply(&mut world, vec![texture_component(entity)])?;
+    apply(&mut world, vec![texture_component(entity.clone())])?;
     let stats = deliver!(renderer, world_host, world, &mesh, Some(&texture))?;
     assert_eq!(
         stats.uploaded_bytes, pixel_bytes,
@@ -197,6 +206,7 @@ pub fn run<D: RenderDevice>(
         ),
     )?;
     drop(world);
+    renderer.prepare(&mut world_host, None)?;
     drop(world_host);
     optional_streams(renderer, mesh, &mut capture, &mut rebuild, output)?;
     Ok(())
@@ -285,13 +295,18 @@ fn streaming_reload<D: RenderDevice>(
     assert_eq!(uploaded as usize, texture.len() - 16);
     assert_eq!(coverage(&capture()?).0, 0);
     world.asset_input_end(replacement.id, Ok(()));
-    assert_eq!(
-        super::world::present_world!(renderer, host, world, WIDTH, HEIGHT)?.draw_calls,
-        1
-    );
+
+    // The renderer's loader completes the texture while preparing this
+    // presentation, after the World published it; the next publication
+    // includes the textured cube without any resubmission.
+    super::world::present_world!(renderer, host, world, WIDTH, HEIGHT)?;
     let resource = world.asset_resources().get(key).unwrap();
     assert_eq!(resource.status(), &AssetLoadStatus::Loaded);
     assert_eq!(resource.key(), key);
+    assert_eq!(
+        super::world::present_world!(finish; renderer, host, world, WIDTH, HEIGHT)?.draw_calls,
+        1
+    );
     let loaded = capture()?;
     assert_eq!(loaded, expected);
     save(output, "stream-loaded", &loaded)?;
@@ -339,6 +354,7 @@ fn texture_component(entity: EntityRef) -> Command {
             offset: std::mem::offset_of!(UnlitTexture, source) as u32,
             value: FieldValue::String("fixture:///fixture.texture".into()),
         }],
+        adopt: false,
     }
 }
 
@@ -591,7 +607,11 @@ fn optional_streams<D: RenderDevice>(
     let odd_source = |x, y| ODD_RGB[(y * 3 + x) as usize];
 
     let mut source_host = ipp_core::HostRuntime::new();
-    let source_id = source_host.create_world(Default::default())?;
+    // Mesh uploads and reads belong to the Render System.
+    let source_id = source_host.create_world(
+        Default::default(),
+        &super::selection::select(&[super::selection::RENDER]),
+    )?;
     let mut source = source_host.world_mut(source_id).unwrap();
     source
         .enqueue_mesh(MeshUpload {
@@ -626,23 +646,23 @@ fn optional_streams<D: RenderDevice>(
     renderer.replace_device(&mut ipp_core::HostRuntime::new(), rebuild()?)?;
     let mut empty_host = ipp_core::HostRuntime::new();
     let mut empty = super::world::empty_world(&mut empty_host);
-    super::world::render_frame(renderer, &mut empty, WIDTH, HEIGHT)?;
+    super::world::present_world!(renderer, empty_host, empty, WIDTH, HEIGHT)?;
     assert_eq!(
         super::world::resident_programs(empty.asset_resources()),
         0,
         "no eager shader compilation: an empty world needs no program"
     );
     drop(empty);
+    renderer.prepare(&mut empty_host, None)?;
     let mut solid = None;
     let mut textured = None;
     let mut evidence = String::from("layout,vertex_bytes,upload_bytes,programs\n");
     for (name, color, uv, weights) in cases {
-        super::world::render_frame(
-            renderer,
-            &mut super::world::empty_world(&mut ipp_core::HostRuntime::new()),
-            WIDTH,
-            HEIGHT,
-        )?;
+        renderer.clear(ipp_core::WorldViewport {
+            width: WIDTH,
+            height: HEIGHT,
+            device_pixel_ratio: 1.0,
+        })?;
         let vertex_bytes = n
             * (12 + usize::from(color) * 12 + usize::from(uv) * 8 + usize::from(weights.is_some()));
         let bytes = optional_payload(mesh, color, uv, weights.clone());
@@ -653,11 +673,13 @@ fn optional_streams<D: RenderDevice>(
             Command::Create {
                 alias: 1,
                 metadata: Default::default(),
+                adopt: false,
             },
             Command::InsertComponent {
                 entity: EntityRef::Alias(1),
                 component: ComponentValue::TRANSFORM,
                 fields: vec![],
+                adopt: false,
             },
             Command::InsertComponent {
                 entity: EntityRef::Alias(1),
@@ -667,6 +689,7 @@ fn optional_streams<D: RenderDevice>(
                     float(std::mem::offset_of!(UnlitMaterial, g), MATERIAL[1]),
                     float(std::mem::offset_of!(UnlitMaterial, b), MATERIAL[2]),
                 ],
+                adopt: false,
             },
             Command::InsertComponent {
                 entity: EntityRef::Alias(1),
@@ -675,6 +698,7 @@ fn optional_streams<D: RenderDevice>(
                     offset: std::mem::offset_of!(MeshInstance, source) as u32,
                     value: FieldValue::String("fixture:///fixture.mesh".into()),
                 }],
+                adopt: false,
             },
         ];
         if uv {
@@ -797,7 +821,10 @@ fn optional_streams<D: RenderDevice>(
                 super::world::resident_programs(world_host.asset_resources()),
                 1
             );
+        } else {
+            drop(world);
         }
+        renderer.prepare(&mut world_host, None)?;
     }
     std::fs::write(output.join("optional-streams.csv"), evidence)?;
     Ok(())

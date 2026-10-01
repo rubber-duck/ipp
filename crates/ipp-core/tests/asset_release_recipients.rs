@@ -1,5 +1,9 @@
 //! Public Host subscriptions retain release recipients across independently stepped Worlds.
 
+mod support;
+
+use support::selection::{LIFECYCLE, RENDER, select};
+
 use ipp_core::{
     AssetResourceStatus, Batch, Command, ComponentValue, EntityRef, HostRuntime, MESH_TYPE,
     WorldId,
@@ -15,13 +19,17 @@ const SOURCE: &str = "fixture://release-recipients.mesh";
 const SESSION: u64 = 1;
 
 #[test]
-fn later_world_reconciliation_preserves_original_asset_release_subscribers() {
+fn later_world_reconciliation_preserves_completed_release_observations() {
     let mut host = HostRuntime::new();
     host.data_sources_mut()
         .register_stream("fixture://")
         .unwrap();
-    let first = host.create_world(Default::default()).unwrap();
-    let second = host.create_world(Default::default()).unwrap();
+    let first = host
+        .create_world(Default::default(), &select(&[LIFECYCLE, RENDER]))
+        .unwrap();
+    let second = host
+        .create_world(Default::default(), &select(&[LIFECYCLE, RENDER]))
+        .unwrap();
     for world in [first, second] {
         host.world_mut(world)
             .unwrap()
@@ -48,6 +56,7 @@ fn later_world_reconciliation_preserves_original_asset_release_subscribers() {
                 Command::Create {
                     alias: 0,
                     metadata: Default::default(),
+                    adopt: false,
                 },
                 Command::insert_value(
                     EntityRef::Alias(0),
@@ -117,11 +126,9 @@ fn later_world_reconciliation_preserves_original_asset_release_subscribers() {
             .is_empty()
     );
     host.flush_resource_lifecycle();
-    assert!(host.asset_resources().get(key).is_some());
-    assert!(drain(&mut host, first).is_empty());
+    assert!(host.asset_resources().get(key).is_none());
+    assert!(host.has_pending_world_updates());
 
-    // A later World reconciles the same unused resource before the Host can
-    // complete the all-World barrier; this must not erase the first recipient.
     host.world_mut(second).unwrap().step(0.0).unwrap();
     host.flush_resource_lifecycle();
     assert!(host.asset_resources().get(key).is_none());
@@ -131,7 +138,7 @@ fn later_world_reconciliation_preserves_original_asset_release_subscribers() {
             .iter()
             .filter(|event| matches!(event,
                 LifecycleObservation::Asset { resource, kind: AssetLifecycleKind::Removed }
-                    if resource.id == key.to_u64() && resource.source == SOURCE
+                    if resource.id == key.to_u64() && resource.source == std::sync::Arc::<str>::from(SOURCE)
             ))
             .count(),
         1,
@@ -143,6 +150,114 @@ fn later_world_reconciliation_preserves_original_asset_release_subscribers() {
     );
     host.flush_resource_lifecycle();
     assert!(drain(&mut host, first).is_empty());
+}
+
+#[test]
+fn release_deferred_by_a_publication_lease_still_reaches_the_departed_consumer() {
+    let mut host = HostRuntime::new();
+    // This test proves eviction at final demand, so the Host keeps no idle cache.
+    host.asset_resources_mut().set_idle_resident_bytes_target(0);
+    host.data_sources_mut()
+        .register_stream("fixture://")
+        .unwrap();
+    let world = host
+        .create_world(Default::default(), &select(&[LIFECYCLE, RENDER]))
+        .unwrap();
+    host.world_mut(world)
+        .unwrap()
+        .enqueue_system_command(
+            LifecyclePublisherSystem::ID,
+            SESSION,
+            LifecyclePublisherCommand::Subscribe {
+                subscription: 1,
+                filter: LifecycleFilter {
+                    entities: false,
+                    components: false,
+                    assets: true,
+                    ..Default::default()
+                },
+            },
+        )
+        .unwrap();
+    host.world_mut(world)
+        .unwrap()
+        .enqueue(Batch {
+            id: 1,
+            operations: vec![
+                Command::Create {
+                    alias: 0,
+                    metadata: Default::default(),
+                    adopt: false,
+                },
+                Command::insert_value(
+                    EntityRef::Alias(0),
+                    ComponentValue::MeshInstance(MeshInstance {
+                        source: SOURCE.into(),
+                        variant: 0,
+                    }),
+                ),
+            ],
+        })
+        .unwrap();
+    let source = AssetSource {
+        kind: MESH_TYPE,
+        uri: SOURCE.into(),
+        variant: 0,
+    };
+    let mut events = Vec::new();
+    for _ in 0..16 {
+        host.frame(0.0).unwrap();
+        events.extend(drain(&mut host, world));
+        for request in host.take_resource_requests() {
+            host.complete_resource(request.id, Ok(triangle())).unwrap();
+        }
+        if host
+            .asset_resources()
+            .find(&source)
+            .and_then(|key| host.asset_resources().get(key))
+            .is_some_and(|resource| *resource.status() == AssetLoadStatus::Loaded)
+        {
+            break;
+        }
+    }
+    let key = host.asset_resources().find(&source).unwrap();
+    host.frame(0.0).unwrap();
+    events.extend(drain(&mut host, world));
+    assert!(events.iter().any(|event| matches!(event,
+        LifecycleObservation::Asset { resource, kind: AssetLifecycleKind::StatusChanged }
+            if resource.id == key.to_u64() && resource.status == AssetResourceStatus::Loaded
+    )));
+
+    let entity = host.world_mut(world).unwrap().entities()[0].id;
+    host.world_mut(world)
+        .unwrap()
+        .enqueue(Batch {
+            id: 2,
+            operations: vec![Command::Delete {
+                entity: EntityRef::Handle(entity),
+            }],
+        })
+        .unwrap();
+
+    // The World reconciles its observed sources during evaluation, while the
+    // completed publication still leases the mesh; the release follows later.
+    let mut events = Vec::new();
+    for _ in 0..4 {
+        host.frame(0.0).unwrap();
+        events.extend(drain(&mut host, world));
+    }
+    assert!(host.asset_resources().get(key).is_none());
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event,
+                LifecycleObservation::Asset { resource, kind: AssetLifecycleKind::Removed }
+                    if resource.id == key.to_u64() && resource.source == std::sync::Arc::<str>::from(SOURCE)
+            ))
+            .count(),
+        1,
+        "the departed consumer receives exactly one identity removal: {events:?}"
+    );
 }
 
 fn frame(host: &mut HostRuntime, worlds: [WorldId; 2]) {
@@ -161,15 +276,8 @@ fn drain(host: &mut HostRuntime, world: WorldId) -> Vec<LifecycleObservation> {
         .unwrap()
         .drain_system_events::<LifecyclePublisherOutput>(LifecyclePublisherSystem::ID, SESSION)
         .into_iter()
-        .flat_map(|output| match output {
-            LifecyclePublisherOutput::Events(events) => events
-                .into_iter()
-                .map(|event| event.observation)
-                .collect::<Vec<_>>(),
-            LifecyclePublisherOutput::Overflow {
-                ..
-            } => panic!("bounded fixture overflowed"),
-        })
+        .flat_map(|LifecyclePublisherOutput(events)| events)
+        .map(|event| event.observation)
         .collect()
 }
 

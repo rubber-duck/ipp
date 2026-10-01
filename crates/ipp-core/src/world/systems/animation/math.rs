@@ -160,7 +160,7 @@ pub(in crate::world) fn bezier_value(
     }
 }
 
-fn multiply(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
+pub(in crate::world) fn multiply(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
     let [x, y, z, w] = a;
     let [i, j, k, l] = b;
     normalize([

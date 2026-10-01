@@ -15,7 +15,9 @@ const imports = {};
 // Contract export is headless even when this target also includes rendering.
 // Throwing imports prove that inspecting target layouts performs no host I/O.
 for (const item of WebAssembly.Module.imports(module)) {
-  assert.ok(["ipp_gl", "ipp_diagnostics"].includes(item.module));
+  assert.ok(
+    ["ipp_gl", "ipp_presentation", "ipp_diagnostics"].includes(item.module),
+  );
   assert.equal(item.kind, "function");
   imports[item.module] ??= {};
   imports[item.module][item.name] = () => {
@@ -103,6 +105,9 @@ function component(r) {
       const v = r.u8();
       assert.ok(v <= 1);
       value = v === 1;
+    } else if (kind === 12 || kind === 13) {
+      assert.equal(r.u8(), 0, "Runtime reference defaults must be null");
+      value = null;
     } else throw new Error("unknown fixture kind");
     fields[name] = { offset, size, alignment, kind, default: value, rows };
   }
@@ -133,13 +138,19 @@ function contract(bytes) {
   for (const b of bytes.slice(16))
     actual = BigInt.asUintN(64, (actual ^ BigInt(b)) * 0x100000001b3n);
   assert.equal(hash, actual);
-  assert.equal(r.u16(), 4);
+  assert.equal(r.u16(), 6);
   const arch = r.string(),
     os = r.string(),
     pointerBits = r.u8();
   const features = [];
   for (let i = 0, n = r.u8(); i < n; i++)
     features.push({ id: r.u8(), enabled: r.u8() === 1, name: r.string() });
+  const rowLimits = {
+    regionSpan: r.u32(),
+    fields: r.u8(),
+    properties: r.u16(),
+    textBytes: r.u32(),
+  };
   const count = r.u16();
   const components = [];
   for (let i = 0; i < count; i++) {
@@ -148,13 +159,23 @@ function contract(bytes) {
     assert.ok(dynamicProperties <= 1);
     components.push({ ...entry, dynamicProperties: dynamicProperties === 1 });
   }
-  assert.equal(r.u16(), 1);
+  const paintKeys = [];
+  for (let index = 0, count = r.u16(); index < count; index++)
+    paintKeys.push({
+      index: r.u32(),
+      part: r.string(),
+      state: r.string() || null,
+      variant: r.string() || null,
+    });
+  assert.equal(r.u16(), 2);
   const capabilities = [];
   for (let i = 0, n = r.u8(); i < n; i++)
     capabilities.push({ id: r.u8(), enabled: r.u8() === 1, name: r.string() });
   const conventions = [];
   for (let i = 0, n = r.u16(); i < n; i++)
     conventions.push([r.string(), r.string()]);
+  const limits = [];
+  for (let i = 0, n = r.u16(); i < n; i++) limits.push([r.string(), r.u32()]);
   const layouts = [];
   for (let i = 0, n = r.u16(); i < n; i++) {
     const name = r.string(),
@@ -196,8 +217,11 @@ function contract(bytes) {
     pointerBits,
     features,
     components,
+    paintKeys,
+    rowLimits,
     capabilities,
     conventions,
+    limits,
     layouts,
     tags,
     assetFormats,
@@ -211,8 +235,10 @@ function fixtureContract(bytes) {
     layout = component(r),
     bound = component(r),
     rows = component(r);
+  const rowsExample = [...r.raw(r.u32())];
+  const paintExample = [...r.raw(r.u32())];
   r.done();
-  return { pointerBits, ...layout, bound, rows };
+  return { pointerBits, ...layout, bound, rows, rowsExample, paintExample };
 }
 const native = contract(await readFile(nativePath)),
   target = contract(wasm);
@@ -232,15 +258,37 @@ assert.deepEqual(
 assert.deepEqual(target.tags, native.tags);
 assert.deepEqual(target.capabilities, native.capabilities);
 assert.deepEqual(target.conventions, native.conventions);
+assert.deepEqual(target.limits, native.limits);
+assert.deepEqual(target.rowLimits, native.rowLimits);
 assert.deepEqual(target.layouts, native.layouts);
 assert.deepEqual(target.assetFormats, native.assetFormats);
 assert.deepEqual(target.reasons, native.reasons);
+assert.deepEqual(target.paintKeys, native.paintKeys);
 for (const schema of [native, target]) {
+  const gui = schema.features.find(
+    (feature) => feature.name === "gui",
+  )?.enabled;
+  assert.equal(schema.paintKeys.length > 0, gui);
+  assert.equal(
+    new Set(schema.paintKeys.map((key) => key.index)).size,
+    schema.paintKeys.length,
+  );
+  assert.ok(
+    schema.paintKeys.every((key) => key.variant === null || key.state !== null),
+  );
+  const skeletalAnimation = schema.features.find(
+    (feature) => feature.name === "skeletal-animation",
+  )?.enabled;
+  assert.equal(
+    schema.layouts.some((layout) => layout.name === "animation-target-joints"),
+    skeletalAnimation,
+  );
+  assert.equal(
+    schema.tags.some((tag) => tag.name === "ANIMATION_TARGET_JOINTS"),
+    skeletalAnimation,
+  );
   for (const entry of schema.components) {
-    assert.equal(
-      entry.dynamicProperties,
-      ["CustomMaterial", "Surface", "GuiRoot"].includes(entry.name),
-    );
+    assert.equal(entry.dynamicProperties, entry.name === "CustomMaterial");
     if (["ParticleEmitter", "ParticlePlayback"].includes(entry.name)) {
       assert.equal(Object.hasOwn(entry.fields, "runtime"), false);
     }
@@ -299,6 +347,11 @@ for (const f of [nf, wf]) {
       { name: "rotation", kind: 7, optional: true, hint: 1 },
       { name: "source", kind: 12, optional: true, hint: 0 },
       { name: "label", kind: 13, optional: true, hint: 0, maxBytes: 8 },
+      { name: "flag", kind: 4, optional: true, hint: 0 },
+      { name: "count", kind: 3, optional: true, hint: 0 },
+      { name: "signed", kind: 2, optional: true, hint: 0 },
+      { name: "pair", kind: 5, optional: true, hint: 0 },
+      { name: "triple", kind: 6, optional: true, hint: 0 },
     ],
   });
 }
@@ -307,10 +360,12 @@ assert.deepEqual(
   wf.rows.fields.rows.default,
   // next slot 2, one live row at slot 1 with its weight (0.5) and label ("ok").
   [
-    2, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0b1001, 0, 0, 0, 0x3f, 2, 0, 0, 0, 0x6f,
-    0x6b,
+    2, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0b1001, 0, 0, 0, 0, 0x3f, 2, 0, 0, 0,
+    0x6f, 0x6b,
   ],
 );
+assert.deepEqual(wf.rowsExample, nf.rowsExample);
+assert.deepEqual(wf.paintExample, nf.paintExample);
 if (nf.pointerBits === 64) {
   assert.notEqual(
     nf.rows.fields.rows.offset,

@@ -1,15 +1,106 @@
 //! Real Host/World/asset-provider Surface frame scenario.
+//!
+//! The fixture camera World places a Surface anchor whose attachment presents
+//! the Canvas output of a child World. Raw Canvas drawing, text and bitmap
+//! entities in that child receive fonts, drawings and bitmaps through the
+//! Host's streamed asset provider.
 
 use std::{collections::BTreeMap, path::Path};
 
 use ipp_core::{
-    Batch, Command, ComponentValue, EntityRef, Surface, SurfaceItemContent, SurfaceItemStyle,
-    components::{Hierarchy, Transform},
+    Batch, CanvasState, Command, ComponentValue, EntityId, EntityPlacementRef, EntityRef,
+    HostRuntime, OutputRef, WorldAttachment, WorldCreateOptions, WorldId,
+    components::{CanvasBitmap, CanvasDrawing, CanvasStyle, CanvasText, Surface, Transform},
     services::asset_management::{AssetSource, AssetTypeId, STREAM_CAPACITY},
 };
 use ipp_render_gl::{RenderDevice, RenderService};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+
+/// Physical Surface extent in metres; one Canvas logical unit per metre.
+const EXTENT: [f32; 2] = [2.2, 1.4];
+
+/// Queue one ordered batch and apply it in a Host frame.
+fn apply(
+    host: &mut HostRuntime,
+    world: WorldId,
+    operations: Vec<Command>,
+) -> Result<Vec<(u32, EntityId)>> {
+    host.world_mut(world)
+        .ok_or_else(|| format!("unknown World {world:?}"))?
+        .enqueue(Batch {
+            id: 1,
+            operations,
+        })?;
+
+    let update = host
+        .frame(0.0)?
+        .worlds
+        .remove(&world)
+        .ok_or_else(|| format!("World {world:?} was not updated"))?
+        .map_err(|reason| format!("World {world:?} update: {reason:?}"))?;
+    let outcome = update
+        .outcomes
+        .into_iter()
+        .next()
+        .ok_or_else(|| format!("World {world:?} reported no batch outcome"))?;
+
+    Ok(outcome
+        .result
+        .map_err(|error| format!("Surface fixture batch failed: {error:?}"))?)
+}
+
+/// Create one entity with `values`, optionally as the last child of `parent`.
+fn create(
+    host: &mut HostRuntime,
+    world: WorldId,
+    parent: Option<EntityId>,
+    values: Vec<ComponentValue>,
+) -> Result<EntityId> {
+    let mut operations = vec![Command::Create {
+        alias: 0,
+        metadata: Default::default(),
+        adopt: false,
+    }];
+    operations.extend(
+        values
+            .into_iter()
+            .map(|value| Command::insert_value(EntityRef::Alias(0), value)),
+    );
+    if let Some(parent) = parent {
+        operations.push(Command::PlaceEntity {
+            entity: EntityRef::Alias(0),
+            placement: EntityPlacementRef {
+                parent: Some(EntityRef::Handle(parent)),
+                before: None,
+            },
+        });
+    }
+
+    Ok(apply(host, world, operations)?[0].1)
+}
+
+/// Place one top-level raw Canvas leaf with its authored placement, scale and tint.
+fn leaf(
+    host: &mut HostRuntime,
+    canvas: OutputRef,
+    content: ComponentValue,
+    style: CanvasStyle,
+) -> Result<EntityId> {
+    create(
+        host,
+        canvas.world().id(),
+        None,
+        vec![content, ComponentValue::CanvasStyle(style)],
+    )
+}
+
+fn drawing(source: &AssetSource) -> ComponentValue {
+    ComponentValue::CanvasDrawing(CanvasDrawing {
+        source: source.uri.clone(),
+        variant: source.variant,
+    })
+}
 
 pub(crate) fn run<D: RenderDevice>(
     renderer: &mut RenderService<D>,
@@ -19,88 +110,107 @@ pub(crate) fn run<D: RenderDevice>(
     mut rebuild: impl FnMut() -> Result<D>,
     output: &Path,
 ) -> Result<()> {
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = HostRuntime::new();
     renderer.install(&mut host)?;
     host.data_sources_mut().register_stream("fixture://")?;
-    let mut world = super::world::fixture_world(&mut host)?;
+    let id = super::world::fixture_world(&mut host)?.id();
+
+    let mut options = WorldCreateOptions::new(super::selection::panel());
+    options.canvas = Some(CanvasState {
+        extent: EXTENT,
+        units_per_metre: 1.0,
+    });
+    let content = host.create_world_with_options(Default::default(), options)?;
+    let canvas = OutputRef::canvas(host.world_ref(content).unwrap());
 
     let source = |kind, name: &str| AssetSource {
         kind: AssetTypeId(kind),
-        uri: format!("fixture:///{name}"),
+        uri: format!("fixture:///{name}").into(),
         variant: 0,
     };
     let font = source(17, "shure-tech-mono.ippf");
     let panel = source(18, "panel.ippd");
     let icon = source(18, "icon.ippd");
     let badge = source(2, "badge.ippt");
-    let mut surface = Surface::default();
-    surface.width = 2.2;
-    surface.height = 1.4;
-    surface.insert_item(
-        0,
-        SurfaceItemContent::Drawing,
-        SurfaceItemStyle {
-            position: [1.1, 0.7],
-            scale: [1.9, 1.1],
-            color: [0.35, 0.45, 0.7, 0.75],
-            asset: Some(panel.clone()),
-            ..Default::default()
-        },
-    )?;
-    surface.insert_item(
-        1,
-        SurfaceItemContent::Drawing,
-        SurfaceItemStyle {
-            position: [0.28, 0.6],
-            scale: [0.025, 0.025],
-            asset: Some(icon.clone()),
-            ..Default::default()
-        },
-    )?;
-    surface.insert_item(
-        2,
-        SurfaceItemContent::Label("AOg0".into()),
-        SurfaceItemStyle {
-            position: [0.65, 0.65],
-            color: [1.0, 0.8, 0.15, 1.0],
-            font_size: 0.28,
-            asset: Some(font.clone()),
-            ..Default::default()
-        },
-    )?;
-    surface.insert_item(
-        3,
-        SurfaceItemContent::Bitmap {
-            size: [0.42, 0.42],
-        },
-        SurfaceItemStyle {
-            position: [1.64, 0.41],
-            opacity: 0.7,
-            asset: Some(badge.clone()),
-            ..Default::default()
-        },
-    )?;
-    world.enqueue(Batch {
-        id: 90,
-        operations: vec![
-            Command::Create {
-                alias: 9,
-                metadata: Default::default(),
+    let leaves = vec![
+        leaf(
+            &mut host,
+            canvas,
+            drawing(&panel),
+            CanvasStyle {
+                x: 1.1,
+                y: 0.7,
+                scale_x: 1.9,
+                scale_y: 1.1,
+                red: 0.35,
+                green: 0.45,
+                blue: 0.7,
+                alpha: 0.75,
+                ..Default::default()
             },
-            Command::insert_value(
-                EntityRef::Alias(9),
-                ComponentValue::Transform(Transform::default()),
-            ),
-            Command::insert_value(EntityRef::Alias(9), ComponentValue::Surface(surface)),
+        )?,
+        leaf(
+            &mut host,
+            canvas,
+            drawing(&icon),
+            CanvasStyle {
+                x: 0.28,
+                y: 0.6,
+                scale_x: 0.025,
+                scale_y: 0.025,
+                ..Default::default()
+            },
+        )?,
+        leaf(
+            &mut host,
+            canvas,
+            ComponentValue::CanvasText(CanvasText {
+                text: "AOg0".into(),
+                source: font.uri.clone(),
+                variant: font.variant,
+                font_size: 0.28,
+            }),
+            CanvasStyle {
+                x: 0.65,
+                y: 0.65,
+                red: 1.0,
+                green: 0.8,
+                blue: 0.15,
+                ..Default::default()
+            },
+        )?,
+        leaf(
+            &mut host,
+            canvas,
+            ComponentValue::CanvasBitmap(CanvasBitmap {
+                source: badge.uri.clone(),
+                variant: badge.variant,
+                width: 0.42,
+                height: 0.42,
+            }),
+            CanvasStyle {
+                x: 1.64,
+                y: 0.41,
+                opacity: 0.7,
+                ..Default::default()
+            },
+        )?,
+    ];
+
+    let surface = Surface {
+        width: EXTENT[0],
+        height: EXTENT[1],
+    };
+    let entity = create(
+        &mut host,
+        id,
+        None,
+        vec![
+            ComponentValue::Transform(Transform::default()),
+            ComponentValue::Surface(surface),
+            ComponentValue::WorldAttachment(WorldAttachment::surface(canvas)),
         ],
-    })?;
-    let entity = world.step(0.0)?.outcomes[0]
-        .result
-        .as_ref()
-        .map_err(|error| format!("Surface fixture batch failed: {error:?}"))?[0]
-        .1;
-    let id = world.id();
-    drop(world);
+    )?;
 
     let payloads = BTreeMap::from([
         (
@@ -125,7 +235,7 @@ pub(crate) fn run<D: RenderDevice>(
                 .ok_or_else(|| format!("unexpected Surface request {}", request.source))?;
             host.complete_resource(request.id, Ok(bytes.clone()))?;
         }
-        host.world_mut(id).unwrap().step(0.0)?;
+
         let stats = super::world::render_host_frame(
             renderer,
             &mut host,
@@ -139,11 +249,10 @@ pub(crate) fn run<D: RenderDevice>(
         }
     }
     let stats = ready_stats.ok_or_else(|| {
-        let world = host.world_mut(id).unwrap();
-        let resource = world
+        let resource = host
             .asset_resources()
             .find(&font)
-            .and_then(|key| world.asset_resources().get(key));
+            .and_then(|key| host.asset_resources().get(key));
         format!(
             "Surface glyph GPU resources did not become ready: {:?}",
             resource.map(|resource| (resource.status(), resource.representation()))
@@ -193,7 +302,7 @@ pub(crate) fn run<D: RenderDevice>(
                 .ok_or_else(|| format!("unexpected recovery request {}", request.source))?;
             host.complete_resource(request.id, Ok(bytes.clone()))?;
         }
-        host.world_mut(id).unwrap().step(0.0)?;
+
         if super::world::render_host_frame(
             renderer,
             &mut host,
@@ -225,61 +334,48 @@ pub(crate) fn run<D: RenderDevice>(
         &mut host,
         id,
         entity,
+        canvas,
+        &leaves,
         &panel,
         &mut capture,
         output,
-    )
+    )?;
+    renderer.prepare(&mut host, None)?;
+    Ok(())
 }
 
 /// The complete live Surface remains visible from behind with comparable
 /// glyph/drawing/bitmap coverage and a visibly reflected asymmetric image.
 fn rear_view<D: RenderDevice>(
     renderer: &mut RenderService<D>,
-    host: &mut ipp_core::HostRuntime,
-    id: ipp_core::WorldId,
-    entity: ipp_core::EntityId,
+    host: &mut HostRuntime,
+    id: WorldId,
+    entity: EntityId,
     capture: &mut impl FnMut() -> Result<Vec<u8>>,
     front: &[u8],
     output: &Path,
 ) -> Result<()> {
-    let parent = {
-        let mut world = host.world_mut(id).unwrap();
-        world.enqueue(Batch {
-            id: world.tick() + 1,
-            operations: vec![
-                Command::Create {
-                    alias: 77,
-                    metadata: Default::default(),
-                },
-                Command::insert_value(
-                    EntityRef::Alias(77),
-                    ComponentValue::Transform(Transform {
-                        qy: 1.0,
-                        qw: 0.0,
-                        ..Default::default()
-                    }),
-                ),
-            ],
-        })?;
-        world.step(0.0)?.outcomes[0]
-            .result
-            .as_ref()
-            .map_err(|error| format!("rear parent creation failed: {error:?}"))?[0]
-            .1
-    };
-    {
-        let mut world = host.world_mut(id).unwrap();
-        super::world::apply(
-            &mut world,
-            vec![Command::insert_value(
-                EntityRef::Handle(entity),
-                ComponentValue::Hierarchy(Hierarchy {
-                    parent,
-                    ..Default::default()
-                }),
-            )],
-        )?;
-    }
+    let parent = create(
+        host,
+        id,
+        None,
+        vec![ComponentValue::Transform(Transform {
+            qy: 1.0,
+            qw: 0.0,
+            ..Default::default()
+        })],
+    )?;
+    apply(
+        host,
+        id,
+        vec![Command::PlaceEntity {
+            entity: EntityRef::Handle(entity),
+            placement: EntityPlacementRef {
+                parent: Some(EntityRef::Handle(parent)),
+                before: None,
+            },
+        }],
+    )?;
     super::world::render_host_frame(
         renderer,
         host,
@@ -328,56 +424,68 @@ fn rear_view<D: RenderDevice>(
             "front_content={front_content}\nrear_content={rear_content}\nfront_glyph={front_glyph}\nrear_glyph={rear_glyph}\ndifferent_pixels={different}\n"
         ),
     )?;
-    {
-        let mut world = host.world_mut(id).unwrap();
-        super::world::apply(
-            &mut world,
-            vec![
-                Command::RemoveComponent {
-                    entity: EntityRef::Handle(entity),
-                    component: ComponentValue::HIERARCHY,
-                },
-                Command::Delete {
-                    entity: EntityRef::Handle(parent),
-                },
-            ],
-        )?;
-    }
+    apply(
+        host,
+        id,
+        vec![
+            Command::PlaceEntity {
+                entity: EntityRef::Handle(entity),
+                placement: EntityPlacementRef::default(),
+            },
+            Command::Delete {
+                entity: EntityRef::Handle(parent),
+            },
+        ],
+    )?;
     Ok(())
 }
 
 /// Top-left/Y-down content must appear top-left on screen and follow the entity transform.
+#[allow(clippy::too_many_arguments)]
 fn orientation<D: RenderDevice>(
     renderer: &mut RenderService<D>,
-    host: &mut ipp_core::HostRuntime,
-    id: ipp_core::WorldId,
-    entity: ipp_core::EntityId,
+    host: &mut HostRuntime,
+    id: WorldId,
+    entity: EntityId,
+    canvas: OutputRef,
+    leaves: &[EntityId],
     panel: &AssetSource,
     capture: &mut impl FnMut() -> Result<Vec<u8>>,
     output: &Path,
 ) -> Result<()> {
-    const RED: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
-    const GREEN: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
+    const RED: [f32; 3] = [1.0, 0.0, 0.0];
+    const GREEN: [f32; 3] = [0.0, 1.0, 0.0];
 
-    let mut surface = Surface::default();
-    surface.width = 2.2;
-    surface.height = 1.4;
-    for (index, (position, color)) in [([0.3, 0.3], RED), ([1.9, 1.1], GREEN)]
-        .into_iter()
-        .enumerate()
-    {
-        surface.insert_item(
-            index,
-            SurfaceItemContent::Drawing,
-            SurfaceItemStyle {
-                position,
-                scale: [0.3, 0.3],
-                color,
-                asset: Some(panel.clone()),
+    // The attached Canvas now holds only two asymmetric markers. They are added
+    // before the old leaves go, so the shared drawing stays referenced.
+    for (position, color) in [([0.3, 0.3], RED), ([1.9, 1.1], GREEN)] {
+        leaf(
+            host,
+            canvas,
+            drawing(panel),
+            CanvasStyle {
+                x: position[0],
+                y: position[1],
+                scale_x: 0.3,
+                scale_y: 0.3,
+                red: color[0],
+                green: color[1],
+                blue: color[2],
                 ..Default::default()
             },
         )?;
     }
+    apply(
+        host,
+        canvas.world().id(),
+        leaves
+            .iter()
+            .map(|leaf| Command::Delete {
+                entity: EntityRef::Handle(*leaf),
+            })
+            .collect(),
+    )?;
+
     let rotation = |half_turn: bool| {
         let (qz, qw) = if half_turn {
             (1.0, 0.0)
@@ -398,31 +506,8 @@ fn orientation<D: RenderDevice>(
         })
     };
     let mut centroids = Vec::new();
-    for (batch, half_turn) in [(91, false), (92, true)] {
-        let mut operations = rotation(half_turn).to_vec();
-        if !half_turn {
-            operations.splice(
-                0..0,
-                [
-                    Command::RemoveComponent {
-                        entity: EntityRef::Handle(entity),
-                        component: ComponentValue::SURFACE,
-                    },
-                    Command::insert_value(
-                        EntityRef::Handle(entity),
-                        ComponentValue::Surface(surface.clone()),
-                    ),
-                ],
-            );
-        }
-        {
-            let mut world = host.world_mut(id).unwrap();
-            world.enqueue(Batch {
-                id: batch,
-                operations,
-            })?;
-            world.step(0.0)?;
-        }
+    for half_turn in [false, true] {
+        apply(host, id, rotation(half_turn).to_vec())?;
         super::world::render_host_frame(
             renderer,
             host,

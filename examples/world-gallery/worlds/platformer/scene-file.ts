@@ -10,7 +10,8 @@ export const PLATFORMER_SOURCE = "https://platformer.ipp.invalid/";
 export const PLATFORMER_WORLD = PLATFORMER_ASSETS + "platformer.ipp";
 export const PLATFORMER_ROUTE = PLATFORMER_ASSETS + "route.json";
 
-/** Restore the imported presentation after the Host attaches the saved World. */
+/** Restore the imported render state after the Host opens the saved World.
+ * The gallery selects the saved camera as the Canvas root output. */
 export async function initializePlatformerScene(
   base: Client,
   signal: AbortSignal,
@@ -22,13 +23,7 @@ export async function initializePlatformerScene(
   const manifest: BlenderDiskManifest = await response.json();
   if (manifest.format !== 1)
     throw new Error("Unsupported platformer asset manifest");
-  const state = await client.inspect();
   signal.throwIfAborted();
-  const camera = state.entities.find(
-    (entity) => entity.metadata.symbolicId === "platformer-camera",
-  );
-  if (!camera) throw new Error("Saved platformer camera is missing");
-  client.sendCommand({ type: "CameraActivateCommand", entity: camera.id });
   client.sendCommand({
     type: "RenderStateUpdateCommand",
     changes: { ambientLight: manifest.ambientLight },

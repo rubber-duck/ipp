@@ -1,10 +1,13 @@
+import { sameOutputReference } from "../../packages/ipp-client/src/references.js";
 import { StrictMode } from "react";
 import { createRoot, type Root as ReactDomRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
 import type {
   AssetWorldClient,
-  FrameCapture,
   AssetResourceSnapshot,
+  OutputReference,
+  PresentationView,
+  PresentedCapture,
 } from "@ipp/client";
 import {
   Entity,
@@ -20,14 +23,25 @@ import {
   type IppCanvasHandle,
 } from "@ipp/react/web";
 import { ReadyGeometry } from "../../examples/world-gallery/shared/ready-geometry.js";
-import { activateFixtureCamera } from "../integration/camera-fixtures.js";
-import { compareImages, summarizeImage } from "./image-assertions.js";
+import { createFixtureCamera } from "../integration/camera-fixtures.js";
+import {
+  compareImages,
+  summarizeImage,
+  type FramePixels,
+} from "./image-assertions.js";
+import { capturedImage, worldReference } from "./root-presentation.js";
+import {
+  LIFECYCLE,
+  SCENE,
+  selectSystems,
+} from "../integration/system-selections.js";
 
 let root: ReactDomRoot;
 let handle: IppCanvasHandle;
 let configuration: CanvasRuntimeConfiguration;
 let strict: boolean;
-let baseline: FrameCapture;
+let baseline: FramePixels;
+let output: OutputReference | null = null;
 let source = "ipp://mesh/cube?width=2&height=2&length=2";
 let texture: string | undefined;
 let mounted = true;
@@ -49,51 +63,77 @@ export async function initialize(
     ready = resolve;
     reject = fail;
   });
+  onViewChange = (view) => {
+    if (view && output && sameOutputReference(view.binding.output, output))
+      ready();
+  };
   onReady = (canvas) => {
     handle = canvas;
     (canvas.client as AssetWorldClient).onResourceChange((event) =>
       events.push(event),
     );
-    void activateFixtureCamera(canvas.client).then(ready, reject);
+    void (async () => {
+      const camera = await createFixtureCamera(canvas.client);
+      output = await canvas.host.bindOutput(
+        worldReference(canvas.client),
+        camera,
+        "camera",
+      );
+      render();
+    })().catch(reject);
   };
   render();
   await connected;
   await waitForSource(source);
-  baseline = await handle.capture();
+  baseline = capturedImage(await capture());
 }
 
 let onReady: (canvas: IppCanvasHandle) => void;
+let onViewChange: (view: PresentationView | null) => void;
+
+/** A completed draw including the selected Camera's content admitted before the request. */
+function capture(): Promise<PresentedCapture> {
+  if (!output) throw new Error("Fixture Camera output is not bound");
+  return handle.capture({ afterOutputs: [output] });
+}
 
 function render() {
   const app = (
     <IppCanvas
       runtime={configuration}
+      world={{ create: { selectedSystems: selectSystems(SCENE, LIFECYCLE) } }}
+      output={output}
       width={320}
       height={240}
       onReady={onReady}
+      onViewChange={onViewChange}
       onError={(error) => errors.push(error.message)}
     >
-      {mounted && (
-        <World>
-          <Entity id="replacement-shared">
-            <MeshInstance source="ipp://mesh/cube?width=2&height=2&length=2" />
-          </Entity>
-          <ReadyGeometry
-            id="replacement-pending"
-            mesh={source}
-            texture={texture}
-          >
-            {({ mesh, texture }) => (
-              <Entity id="replacement-visible">
-                <Transform />
-                <UnlitMaterial />
-                <MeshInstance source={mesh} />
-                {texture !== undefined && <UnlitTexture source={texture} />}
-              </Entity>
-            )}
-          </ReadyGeometry>
-        </World>
-      )}
+      {/* Unmounting a World root deletes nothing, so the scene is removed
+          as declarations while the root stays mounted. */}
+      <World>
+        {mounted && (
+          <>
+            <Entity id="replacement-shared">
+              <MeshInstance source="ipp://mesh/cube?width=2&height=2&length=2" />
+            </Entity>
+            <ReadyGeometry
+              id="replacement-pending"
+              mesh={source}
+              texture={texture}
+            >
+              {({ mesh, texture }) => (
+                <Entity id="replacement-visible">
+                  <Transform />
+                  <UnlitMaterial />
+                  <MeshInstance source={mesh} />
+                  {texture !== undefined && <UnlitTexture source={texture} />}
+                </Entity>
+              )}
+            </ReadyGeometry>
+          </>
+        )}
+      </World>
     </IppCanvas>
   );
   flushSync(() => root.render(strict ? <StrictMode>{app}</StrictMode> : app));
@@ -113,7 +153,7 @@ export async function inspect() {
     (entity) => entity.metadata.symbolicId === "replacement-visible",
   );
   const fields = (name: string) =>
-    entity?.effective.find(
+    entity?.components.find(
       (entry) => entry.component === handle.client.components[name]!.id,
     )?.fields;
   return {
@@ -147,27 +187,32 @@ export async function waitForSource(mesh: string) {
 
 /** Capture during acquisition, deliberately without a resource-readiness barrier. */
 export async function sample() {
-  const frame = await handle.capture();
+  const frame = await capture();
+  const image = capturedImage(frame);
   const canvas = document.createElement("canvas");
-  canvas.width = frame.width;
-  canvas.height = frame.height;
+  canvas.width = image.width;
+  canvas.height = image.height;
   canvas
     .getContext("2d")!
     .putImageData(
       new ImageData(
-        new Uint8ClampedArray(frame.pixels),
-        frame.width,
-        frame.height,
+        new Uint8ClampedArray(image.pixels),
+        image.width,
+        image.height,
       ),
       0,
       0,
     );
   const { pixels: _pixels, ...metadata } = frame;
+  const [selected] = metadata.sources;
+  if (!selected || !output || !sameOutputReference(selected.output, output))
+    throw new Error("Completed draw omitted the fixture Camera output");
   return {
     ...(await inspect()),
     frame: metadata,
-    summary: summarizeImage(frame),
-    difference: compareImages(baseline, frame),
+    tick: selected.tick,
+    summary: summarizeImage(image),
+    difference: compareImages(baseline, image),
     dataUrl: canvas.toDataURL("image/png"),
   };
 }

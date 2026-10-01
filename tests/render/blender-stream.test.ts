@@ -86,10 +86,10 @@ test("Blender streamed imports overlap extraction and preserve complete images a
             "importMeasurements",
           );
         timing.ready = state.readyMilliseconds;
-        assert.ok(timing.maxBatchCommands <= 256);
+        assert.ok(timing.maxBatchCommands <= timing.pageCommands);
         if (!blend) {
           assert.ok(timing.commandBatches > 1);
-          if (!size) assert.equal(timing.maxBatchCommands, 256);
+          if (!size) assert.equal(timing.maxBatchCommands, timing.pageCommands);
         }
         if (process.env.IPP_BROWSER_ANGLE)
           verifyHardwareRenderer(state.statistics!.device.unmaskedRenderer);
@@ -157,8 +157,9 @@ test("Blender streamed imports overlap extraction and preserve complete images a
         console.log(JSON.stringify(runs.at(-1)));
       }
       if (!blend) {
-        // Reject a later chunk after earlier buffers have really applied. The
-        // same adapter must retain its acknowledged handles for a full correction.
+        // Reject a later chunk that the adapter cannot encode. Its streamed
+        // batch then fails as a whole, so no earlier chunk applies, and the
+        // same adapter recovers with a full correction.
         let entityChunks = 0;
         await page.routeWebSocket(/\/v1\/updates/, (socket) => {
           const server = socket.connectToServer();
@@ -188,7 +189,10 @@ test("Blender streamed imports overlap extraction and preserve complete images a
               throw new Error("Failed stream advanced the completed revision");
           }
         });
-        assert.ok(partial.length >= 100);
+        assert.ok(
+          partial.length < 100,
+          `a failed stream applied ${partial.length} entities`,
+        );
         await page.evaluate(async () => {
           const params = new URLSearchParams(location.hash.slice(1));
           const url = new URL("/v1/sync", params.get("endpoint")!);
@@ -223,19 +227,19 @@ test("Blender streamed imports overlap extraction and preserve complete images a
           Awaited<ReturnType<typeof Fixture.correctCommandEncodingFailure>>
         >("correctCommandEncodingFailure");
         assert.match(encoding.error, /Invalid numeric field/);
-        assert.ok(encoding.acknowledged >= 256);
+        // Encoding fails before any page leaves, so nothing of the batch applied.
+        assert.equal(encoding.acknowledged, 0);
         assert.equal(encoding.preserved, true);
         assert.equal(encoding.entities, expectedCount);
         const boundary = await call<
           Awaited<ReturnType<typeof Fixture.captureCommandBatchBoundary>>
         >("captureCommandBatchBoundary");
-        assert.equal(boundary.firstTick, boundary.secondTick);
-        // The open batch withholds presentation: the latest presented frame
-        // stays at the acknowledged tick while the worker keeps running.
-        assert.equal(boundary.firstTick, boundary.heldTick);
-        assert.ok(boundary.heldTick >= boundary.presentedBefore);
-        assert.equal(boundary.advancedDuringHold, false);
-        assert.ok(boundary.completeTick > boundary.heldTick);
+        // The World keeps evaluating while the batch is open, but no page of
+        // it is visible before its final page.
+        assert.deepEqual(boundary.pages, [boundary.pageCommands, 1]);
+        assert.ok(boundary.openTick > boundary.evaluatedBefore);
+        assert.equal(boundary.openDifference.changedPixels, 0);
+        assert.ok(boundary.completeTick > boundary.openTick);
         assert.ok(boundary.completedDifference.changedPixels > 100);
         assert.equal(boundary.restoredDifference.changedPixels, 0);
         await environment.evidence.writeJson(

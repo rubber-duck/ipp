@@ -1,26 +1,45 @@
 use ipp_protocol::MAX_MESSAGE_BYTES;
 
+use crate::connection_output::{
+    CONNECTION_METADATA_BYTES, ConnectionOutput, Delivery, MAX_CONNECTIONS, MAX_DELIVERIES,
+    MAX_FAILURE_BYTES,
+};
 use crate::host::WasmHost;
+use std::collections::BTreeMap;
+
+#[cfg(test)]
+#[path = "boundary_output_tests.rs"]
+mod output_tests;
 
 pub(crate) struct WasmHostBoundary {
     last_session: u64,
+    last_connection: u64,
+    last_delivery: u64,
+    connections: BTreeMap<u64, ConnectionOutput>,
     host: Option<WasmHost>,
     input: Vec<u8>,
     output: Vec<u8>,
+    borrowed_delivery: Option<(u64, u64)>,
 }
 
 impl WasmHostBoundary {
     pub(crate) const fn new() -> Self {
         Self {
             last_session: 0,
+            last_connection: 0,
+            last_delivery: 0,
+            connections: BTreeMap::new(),
             host: None,
             input: Vec::new(),
             output: Vec::new(),
+            borrowed_delivery: None,
         }
     }
 
     pub(crate) fn open(&mut self, id: u64) -> bool {
-        self.close();
+        if self.host.is_some() || !self.connections.is_empty() {
+            return self.diagnostic("Dispose the previous Host endpoints before reopening");
+        }
         if id <= self.last_session {
             return self.fail("session ID must be nonzero and strictly increasing");
         }
@@ -28,16 +47,95 @@ impl WasmHostBoundary {
         self.last_session = id;
         #[cfg(feature = "diagnostics")]
         crate::diagnostics::set_session(id);
-        match WasmHost::new().and_then(|mut host| {
-            host.open_connection(id)?;
-            Ok(host)
-        }) {
+        match WasmHost::new() {
             Ok(session) => {
                 self.host = Some(session);
                 true
             }
             Err(error) => self.fail(&error),
         }
+    }
+
+    pub(crate) fn connection_open(&mut self, id: u64) -> bool {
+        self.release_output();
+        if id == 0 || id <= self.last_connection || self.connections.len() >= MAX_CONNECTIONS {
+            return self
+                .diagnostic("connection identity is stale or connection capacity exhausted");
+        }
+        let Some(host) = self.host.as_mut() else {
+            return self.diagnostic("Host is closed");
+        };
+        if let Err(error) = host.open_connection(id) {
+            return self.diagnostic(&error);
+        }
+        let connection = host
+            .reserve_connection_output_bytes(id, CONNECTION_METADATA_BYTES)
+            .and_then(ConnectionOutput::new);
+        match connection {
+            Ok(connection) => {
+                self.last_connection = id;
+                self.connections.insert(id, connection);
+                true
+            }
+            Err(error) => {
+                host.close_connection(id);
+                self.diagnostic(&error)
+            }
+        }
+    }
+
+    pub(crate) fn connection_close(&mut self, id: u64) -> bool {
+        self.release_output();
+        let Some(connection) = self.connections.get_mut(&id) else {
+            return false;
+        };
+        connection.live = false;
+        if let Some(host) = self.host.as_mut() {
+            host.close_connection(id);
+        }
+        true
+    }
+
+    pub(crate) fn connection_dispose(&mut self, id: u64) -> bool {
+        if !self.connection_close(id) {
+            return false;
+        }
+        self.connections.remove(&id);
+        true
+    }
+
+    pub(crate) fn connection_pending(&self, id: u64) -> usize {
+        self.connections
+            .get(&id)
+            .map_or(0, |connection| connection.deliveries.len())
+    }
+
+    pub(crate) fn connection_failure(&mut self, id: u64) -> bool {
+        self.release_output();
+        let Some(error) = self
+            .connections
+            .get(&id)
+            .and_then(|connection| connection.failure.as_deref())
+        else {
+            return false;
+        };
+        self.output.extend_from_slice(error.as_bytes());
+        true
+    }
+
+    fn fail_connection(&mut self, id: u64, error: &str) -> bool {
+        self.connection_close(id);
+        if let Some(connection) = self.connections.get_mut(&id) {
+            connection.fail(error);
+        }
+        self.diagnostic(error)
+    }
+
+    fn diagnostic(&mut self, error: &str) -> bool {
+        self.release_output();
+        let end = error.floor_char_boundary(MAX_FAILURE_BYTES.min(error.len()));
+        self.output.extend_from_slice(&error.as_bytes()[..end]);
+        false
     }
 
     pub(crate) fn set_identity_namespace(&mut self, namespace: u64) -> bool {
@@ -72,9 +170,14 @@ impl WasmHostBoundary {
     }
 
     pub(crate) fn close(&mut self) {
-        self.host = None;
+        if let Some(mut host) = self.host.take() {
+            for &id in self.connections.keys() {
+                host.close_connection(id);
+            }
+        }
         self.input = Vec::new();
         self.release_output();
+        self.connections.clear();
     }
 
     pub(crate) fn fail(&mut self, error: &str) -> bool {
@@ -84,10 +187,15 @@ impl WasmHostBoundary {
             self.last_session,
             error
         );
-        self.close();
-        let end = error.floor_char_boundary(MAX_MESSAGE_BYTES.min(error.len()));
-        self.output = error.as_bytes()[..end].to_vec();
-        false
+        self.input = Vec::new();
+        self.release_output();
+        if let Some(mut host) = self.host.take() {
+            for (&id, connection) in &mut self.connections {
+                host.close_connection(id);
+                connection.fail(error);
+            }
+        }
+        self.diagnostic(error)
     }
 
     pub(crate) fn reserve(&mut self, len: usize) -> *mut u8 {
@@ -127,10 +235,11 @@ impl WasmHostBoundary {
         self.input.as_mut_ptr()
     }
 
-    pub(crate) fn receive(&mut self, len: usize) -> bool {
+    pub(crate) fn receive(&mut self, connection: u64, len: usize) -> bool {
         self.release_output();
         if len == 0 || len != self.input.len() {
-            return self.fail("receive length must equal a live reservation");
+            return self
+                .fail_connection(connection, "receive length must equal a live reservation");
         }
         let Some(session) = self.host.as_mut() else {
             return self.fail("session is closed");
@@ -138,19 +247,23 @@ impl WasmHostBoundary {
 
         // Consume the reservation even on failure; decoded values own their data.
         let input = std::mem::take(&mut self.input);
-        let result = session.receive_connection(self.last_session, &input);
+        let result = session.receive_connection(connection, &input);
         drop(input);
 
         match result {
             Ok(()) => true,
-            Err(error) => self.fail(&error),
+            Err(error) => self.fail_connection(connection, &error),
         }
     }
 
-    pub(crate) fn accepts_input(&mut self) -> bool {
-        self.host
-            .as_mut()
-            .is_some_and(|host| host.connection_accepts_input(self.last_session))
+    pub(crate) fn accepts_input(&mut self, id: u64) -> bool {
+        self.connections
+            .get(&id)
+            .is_some_and(|connection| connection.live)
+            && self
+                .host
+                .as_mut()
+                .is_some_and(|host| host.connection_accepts_input(id))
     }
 
     pub(crate) fn maintain_connections(&mut self, now: std::time::Duration) -> bool {
@@ -167,8 +280,13 @@ impl WasmHostBoundary {
             return self.fail("session is closed");
         };
 
-        match session.tick(dt) {
-            Ok(()) => true,
+        match session.tick_worlds(dt) {
+            Ok(failures) => {
+                for (connection, error) in failures {
+                    self.fail_connection(connection, &error);
+                }
+                true
+            }
             Err(error) => self.fail(&error),
         }
     }
@@ -197,34 +315,120 @@ impl WasmHostBoundary {
         }
     }
 
-    pub(crate) fn poll(&mut self) -> bool {
+    pub(crate) fn poll(&mut self, id: u64) -> i32 {
         self.release_output();
+        let Some(connection) = self.connections.get(&id) else {
+            self.diagnostic("Connection is closed");
+            return -1;
+        };
+        if !connection.live {
+            if !self.connection_failure(id) {
+                self.diagnostic("Connection is closing");
+            }
+            return -1;
+        }
+        if connection.deliveries.len() >= MAX_DELIVERIES {
+            return 0;
+        }
         let Some(output) = self
             .host
             .as_mut()
-            .and_then(|host| host.take_connection_response(self.last_session))
+            .and_then(|host| host.take_connection_response(id))
         else {
-            return false;
+            return 0;
         };
+        let Some(delivery) = self.last_delivery.checked_add(1) else {
+            self.fail_connection(id, "Output delivery identity exhausted");
+            return -1;
+        };
+        let output = match output.prepare_copy() {
+            Ok(output) => output,
+            Err((output, _)) => {
+                drop(output);
+                self.fail_connection(
+                    id,
+                    "connection congestion: reliable output copy capacity exhausted",
+                );
+                return -1;
+            }
+        };
+        self.last_delivery = delivery;
+        self.connections
+            .get_mut(&id)
+            .unwrap()
+            .deliveries
+            .push_back(Delivery {
+                id: delivery,
+                output,
+                copied: false,
+            });
+        self.borrowed_delivery = Some((id, delivery));
+        1
+    }
 
-        self.output = output;
+    fn release_output(&mut self) {
+        self.output = Vec::new();
+        if let Some((connection, delivery)) = self.borrowed_delivery.take()
+            && let Some(record) = self
+                .connections
+                .get_mut(&connection)
+                .and_then(|connection| connection.deliveries.back_mut())
+        {
+            assert_eq!(record.id, delivery);
+            record.output.release_source();
+            record.copied = true;
+        }
+    }
+
+    pub(crate) fn output_delivery_id(&self) -> u64 {
+        self.borrowed_delivery.map_or(0, |(_, delivery)| delivery)
+    }
+
+    pub(crate) fn output_copied(&mut self, connection: u64, delivery: u64) -> bool {
+        if self.borrowed_delivery != Some((connection, delivery)) {
+            return self.fail_connection(connection, "Copied output identity is stale");
+        }
+        self.release_output();
         true
     }
 
-    // ABI output is borrowed only until the next mutating call. The worker has
-    // copied it before that call, so exclusive storage can return to the Host.
-    fn release_output(&mut self) {
-        let bytes = std::mem::take(&mut self.output);
-        if let Some(host) = &mut self.host {
-            host.recycle_response_buffer(bytes);
+    pub(crate) fn delivery_complete(&mut self, connection: u64, delivery: u64) -> bool {
+        let Some(front) = self
+            .connections
+            .get(&connection)
+            .and_then(|connection| connection.deliveries.front())
+        else {
+            return self.fail_connection(connection, "Unexpected output acknowledgement");
+        };
+        if front.id != delivery || !front.copied {
+            return self.fail_connection(
+                connection,
+                "Output acknowledgement is stale or out of order",
+            );
+        }
+        self.connections
+            .get_mut(&connection)
+            .unwrap()
+            .deliveries
+            .pop_front();
+        true
+    }
+
+    fn output_bytes(&self) -> &[u8] {
+        if let Some((connection, delivery)) = self.borrowed_delivery {
+            let record = self.connections[&connection].deliveries.back().unwrap();
+            assert_eq!(record.id, delivery);
+            record.output.bytes()
+        } else {
+            &self.output
         }
     }
 
     pub(crate) fn output_ptr(&self) -> *const u8 {
-        if self.output.is_empty() {
+        if self.output_bytes().is_empty() {
             std::ptr::null()
         } else {
-            self.output.as_ptr()
+            self.output_bytes().as_ptr()
         }
     }
 
@@ -333,7 +537,7 @@ impl WasmHostBoundary {
     }
 
     pub(crate) fn output_len(&self) -> usize {
-        self.output.len()
+        self.output_bytes().len()
     }
 
     #[cfg(all(feature = "render", target_arch = "wasm32"))]
@@ -365,6 +569,6 @@ impl WasmHostBoundary {
 
     #[cfg(test)]
     pub(crate) fn output(&self) -> &[u8] {
-        &self.output
+        self.output_bytes()
     }
 }

@@ -4,7 +4,7 @@
 fn baseline_texture_registration_and_optional_feature_contract() {
     let mut bytes = vec![];
     ipp_core::components::registry::write_contract(&mut bytes);
-    assert_eq!(u16::from_le_bytes(bytes[..2].try_into().unwrap()), 4);
+    assert_eq!(u16::from_le_bytes(bytes[..2].try_into().unwrap()), 6);
 
     let mut cursor = 2;
     for _ in 0..2 {
@@ -53,7 +53,7 @@ fn baseline_texture_registration_and_optional_feature_contract() {
             vec![
                 (
                     offset_of!(UnlitTexture, source) as u32,
-                    FieldValue::String(String::new())
+                    FieldValue::String(std::sync::Arc::<str>::default())
                 ),
                 (offset_of!(UnlitTexture, variant) as u32, FieldValue::U32(0)),
             ]

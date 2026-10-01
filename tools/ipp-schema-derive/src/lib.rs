@@ -24,7 +24,7 @@ pub fn component(input: TokenStream) -> TokenStream {
 /// Derives a schema row layout and indexed property access for a named struct whose
 /// fields are required (`T`) or optional (`Option<T>`) row property values.
 /// `#[schema(rotation)]` marks a Vec4 quaternion property, and
-/// `#[schema(text = N)]` declares a `String` property's UTF-8 byte bound.
+/// `#[schema(text = N)]` declares an `Arc<str>` text property's UTF-8 byte bound.
 #[proc_macro_derive(SchemaRow, attributes(schema))]
 pub fn row(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);

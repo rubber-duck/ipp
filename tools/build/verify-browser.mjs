@@ -68,7 +68,6 @@ const reports = [];
       true,
       `${method} availability differs from the snapshot capability`,
     );
-  assert.equal(client.CAPABILITIES.stateOverlays, true);
   assert.equal(client.CAPABILITIES.skeletalAnimation, skeletalAnimation);
   assert.equal(client.CAPABILITIES.meshPoses, meshPoses);
   assert.equal(!!client.components.MeshPose, meshPoses);
@@ -82,9 +81,9 @@ const reports = [];
   );
   const source = await readFile(sourcePath, "utf8");
   assert.equal(
-    source.includes('case "attachComponentStateOverlay"'),
+    source.includes('case "setFieldIf"'),
     true,
-    "baseline overlay codecs are missing",
+    "baseline command codecs are missing",
   );
   assert.equal(client.CAPABILITIES.spatial, true);
   assert.equal(client.CAPABILITIES.textures, true);
@@ -94,15 +93,27 @@ const reports = [];
   assert.equal(client.CAPABILITIES.shadows, shadows);
   assert.equal(client.CAPABILITIES.surfaces, surfaces);
   assert.equal(!!client.components.Surface, surfaces);
-  assert.equal(typeof client.encodeSurfaceItems === "function", surfaces);
-  assert.equal(typeof client.encodeSurfaceEdit === "function", surfaces);
-  assert.equal("editSurface" in client.IppClient.prototype, surfaces);
+  assert.equal(typeof client.encodeSurfaceItems, "undefined");
+  assert.equal(typeof client.encodeSurfaceEdit, "undefined");
+  assert.equal("editSurface" in client.IppClient.prototype, false);
   assert.equal(client.CAPABILITIES.gui, gui);
-  assert.equal(!!client.components.GuiRoot, gui);
-  assert.equal(typeof client.encodeGuiEdits === "function", gui);
-  assert.equal("editGui" in client.IppClient.prototype, gui);
-  assert.equal("editGuiBatch" in client.IppClient.prototype, gui);
-  assert.equal("editGuiBatchChunk" in client.IppClient.prototype, gui);
+  assert.equal(client.components.GuiRoot, undefined);
+  assert.equal(typeof client.encodeGuiEdits, "undefined");
+  for (const method of [
+    "editGui",
+    "editGuiBatch",
+    "editGuiBatchChunk",
+    "submitGuiInput",
+    "semanticSnapshot",
+    "createGuiNodeHandle",
+    "guiSnapshot",
+    "guiSnapshotPage",
+    "replaceControl",
+  ])
+    assert.equal(method in client.IppClient.prototype, false);
+  assert.equal("semanticAction" in client.IppClient.prototype, false);
+  assert.equal("subscribeGuiEffects" in client.IppClient.prototype, gui);
+  assert.equal("guiAction" in client.Entity, gui);
   assert.equal(!!client.components.Light, true);
   assert.equal(!!client.components.PbrMaterial, true);
   assert.equal(client.CAPABILITIES.debugGeometry, true);
@@ -189,8 +200,8 @@ const reports = [];
     ])
       assert.equal(
         bridge.includes(name),
-        gui,
-        `GUI bridge dispatch ${name} differs from selected capability`,
+        surfaces,
+        `Canvas bridge dispatch ${name} differs from selected capability`,
       );
     assert.equal(
       bridge.includes("set_lighting"),
@@ -225,7 +236,7 @@ const reports = [];
     "BoundingGeometry",
     "PickingGeometry",
     ...(meshPoses ? ["MeshPose"] : []),
-    "Hierarchy",
+    ...(skeletalAnimation ? ["ParentJoint"] : []),
     "LookAt",
     "BaseColorTexture",
     "CustomMaterial",
@@ -238,8 +249,36 @@ const reports = [];
         ]
       : []),
     ...(surfaces ? ["Surface"] : []),
-    ...(gui ? ["GuiRoot"] : []),
     ...(surfaces ? ["SurfaceCache"] : []),
+    "WorldAttachment",
+    ...(surfaces
+      ? [
+          "CanvasStyle",
+          "CanvasText",
+          "CanvasGlyphRun",
+          "CanvasDrawing",
+          "CanvasBitmap",
+          "CanvasBox",
+        ]
+      : []),
+    ...(gui
+      ? [
+          "GuiBehavior",
+          "GuiButton",
+          "GuiCheckbox",
+          "GuiSlider",
+          "GuiTextInput",
+          "GuiLayout",
+          "GuiTheme",
+          "GuiSkin",
+          "GuiFont",
+          "GuiThemeMotion",
+          "GuiScrollView",
+          "GuiVirtualList",
+          "GuiVirtualItem",
+          "CanvasBounds",
+        ]
+      : []),
   ]);
   assert.equal(client.components.UnlitTexture.id, 6);
   assert.equal(client.components.BaseColorTexture.id, 19);
@@ -276,7 +315,7 @@ const reports = [];
   );
   const runtimeBytes = await readFile(runtimePath);
   assert.equal(
-    runtimeBytes.includes(Buffer.from("u_lights[32]")),
+    runtimeBytes.includes(Buffer.from("u_lights[IPP_MAX_LIGHTS")),
     rendering,
     "lit shader inclusion differs from PBR selection",
   );
@@ -309,6 +348,10 @@ const reports = [];
     "GL imports leaked into a headless build",
   );
   assert.equal(
+    glImports.some((entry) => entry.module === "ipp_presentation"),
+    rendering,
+  );
+  assert.equal(
     glImports.some((entry) => entry.module === "ipp_diagnostics"),
     features.includes("diagnostics"),
     "diagnostic imports differ from selected capability",
@@ -333,10 +376,22 @@ const reports = [];
   assert.equal(typeof runtime.ipp_resource_complete === "function", true);
   assert.equal(typeof runtime.ipp_resource_input_reserve === "function", true);
   for (const name of [
-    "ipp_session_open",
+    "ipp_host_open",
+    "ipp_host_close",
+    "ipp_connection_limit",
+    "ipp_delivery_limit",
+    "ipp_request_window",
+    "ipp_connection_open",
+    "ipp_connection_close",
+    "ipp_connection_dispose",
+    "ipp_connection_pending",
+    "ipp_connection_failed",
     "ipp_receive",
     "ipp_tick",
-    "ipp_poll",
+    "ipp_connection_poll",
+    "ipp_output_delivery_id",
+    "ipp_output_copied",
+    "ipp_delivery_complete",
   ]) {
     assert.equal(
       typeof runtime[name],
@@ -361,17 +416,20 @@ const reports = [];
   );
   assert.equal(
     glImports.some((entry) => entry.name === "create_gui_batch"),
-    rendering && gui,
-    "GUI batch imports differ from selected capability",
+    rendering && surfaces,
+    "Canvas batch imports differ from selected capability",
   );
   // Statistics, records and testing overrides are diagnostics exports; the
   // frame summary and viewport limits are always present in render builds.
   const diagnostics = features.includes("diagnostics");
   for (const [name, expected] of [
-    ["ipp_render_draw_calls", rendering],
-    ["ipp_render_triangles", rendering],
-    ["ipp_render_failed_draw_calls", rendering],
-    ["ipp_render_invalid_camera", rendering],
+    ["ipp_render_tick", false],
+    ["ipp_render_resize", false],
+    ["ipp_render_draw_calls", false],
+    ["ipp_render_triangles", false],
+    ["ipp_render_failed_draw_calls", false],
+    ["ipp_render_invalid_camera", false],
+    ["ipp_render_detach", rendering],
     ["ipp_render_max_viewport_width", rendering],
     ["ipp_render_max_viewport_height", rendering],
     ["ipp_render_statistics_ptr", rendering && diagnostics],

@@ -1,11 +1,21 @@
-import { PortTransport, type Client } from "@ipp/client";
+import { PortTransport, type Client, type WorldReference } from "@ipp/client";
 import {
   HostWireReader,
   HostWireWriter,
 } from "../../packages/ipp-client/src/host-protocol.js";
+import {
+  readWorldReference,
+  writeWorldReference,
+} from "../../packages/ipp-client/src/references.js";
 import type { BrowserRuntimeConfiguration } from "./browser-runtime.js";
+import {
+  LIFECYCLE,
+  CONSTRAINTS,
+  RENDER,
+  selectSystems,
+} from "../integration/system-selections.js";
 
-const HOST_RESPONSE_MAGIC = new Uint8Array([73, 80, 80, 65, 1, 0, 0, 0]);
+const HOST_RESPONSE_MAGIC = new Uint8Array([73, 80, 80, 65, 2, 0, 0, 0]);
 
 interface FrameSchedulerObservation {
   callbacks: number;
@@ -144,7 +154,16 @@ export async function observeResourceProgressWithoutFrames(
   const worker = new Worker(workerUrl, { type: "module" });
   const probe = new MessageChannel();
   const channel = new MessageChannel();
-  const transport = new PortTransport(channel.port1, () => worker.terminate());
+  const hostControl = new MessageChannel();
+  const connection = 1n;
+  const transport = new PortTransport(channel.port1, connection, () => {
+    channel.port1.close();
+    hostControl.port1.postMessage({ type: "dispose", connection });
+  });
+  hostControl.port1.onmessage = (event) => {
+    if (event.data.type === "error")
+      transport.fail(new Error(event.data.message));
+  };
   let nextControl = 1;
   const controls = new Map<
     number,
@@ -185,13 +204,18 @@ export async function observeResourceProgressWithoutFrames(
       {
         type: "init",
         wasmUrl: configuration.wasmUrl,
-        port: channel.port2,
+        port: hostControl.port2,
         maxMessageBytes: contract.MAX_MESSAGE_BYTES,
         probePort: probe.port2,
       },
-      [channel.port2, probe.port2],
+      [hostControl.port2, probe.port2],
+    );
+    hostControl.port1.postMessage(
+      { type: "connect", connection, port: channel.port2 },
+      [channel.port2],
     );
     const connected = await contract.IppClient.connectTransport(transport, {
+      selectedSystems: selectSystems(RENDER, CONSTRAINTS, LIFECYCLE),
       timeoutMs: configuration.timeoutMs,
     });
     client = connected;
@@ -247,6 +271,7 @@ export async function observeResourceProgressWithoutFrames(
     await client?.close().catch(() => undefined);
     await transport.close().catch(() => undefined);
     worker.terminate();
+    hostControl.port1.close();
     probe.port1.close();
     URL.revokeObjectURL(workerUrl);
   }
@@ -284,8 +309,12 @@ export async function observeVisibility(
     };
     self.addEventListener("message", event => {
       const port = event.data.schedulerPort;
-      port.onmessage = () => port.postMessage({
+      const observe = () => port.postMessage({
         callbacks, cancelled, pending: pending.size,
+      });
+      port.onmessage = observe;
+      event.data.port.addEventListener("message", message => {
+        if (message.data.type === "visibility") observe();
       });
     }, { once: true });
   `;
@@ -300,7 +329,21 @@ export async function observeVisibility(
       scheduler.port1.postMessage(null);
     });
   const channel = new MessageChannel();
-  const transport = new PortTransport(channel.port1, () => worker.terminate());
+  const hostControl = new MessageChannel();
+  const connection = 1n;
+  const transport = new PortTransport(channel.port1, connection, () => {
+    channel.port1.close();
+    hostControl.port1.postMessage({ type: "dispose", connection });
+  });
+  hostControl.port1.onmessage = (event) => {
+    if (event.data.type === "error")
+      transport.fail(new Error(event.data.message));
+  };
+  const setVisibility = (hidden: boolean) =>
+    new Promise<FrameSchedulerObservation>((resolve) => {
+      scheduler.port1.onmessage = (event) => resolve(event.data);
+      hostControl.port1.postMessage({ type: "visibility", hidden });
+    });
   worker.addEventListener("error", (event) =>
     transport.fail(new Error(event.message || "Worker failed")),
   );
@@ -310,20 +353,24 @@ export async function observeVisibility(
       {
         type: "init",
         wasmUrl: configuration.wasmUrl,
-        port: channel.port2,
+        port: hostControl.port2,
         maxMessageBytes: contract.MAX_MESSAGE_BYTES,
         schedulerPort: scheduler.port2,
         hidden: initiallyHidden,
       },
-      [channel.port2, scheduler.port2],
+      [hostControl.port2, scheduler.port2],
+    );
+    hostControl.port1.postMessage(
+      { type: "connect", connection, port: channel.port2 },
+      [channel.port2],
     );
     client = await contract.IppClient.connectTransport(transport, {
+      selectedSystems: selectSystems(RENDER, CONSTRAINTS, LIFECYCLE),
       timeoutMs: configuration.timeoutMs,
     });
     const initial = await client.waitForFrame();
     const initialScheduler = await observeScheduler();
-    channel.port1.postMessage({ type: "visibility", hidden: true });
-    // Same-port ordering makes this a barrier after the visibility message.
+    await setVisibility(true);
     const paused = await client.inspect();
     const pausedScheduler = await observeScheduler();
     const firstPausedFrame = await client.waitForFrame(paused.tick);
@@ -334,7 +381,7 @@ export async function observeVisibility(
     ]);
     const whilePaused = await client.inspect();
     const whilePausedScheduler = await observeScheduler();
-    channel.port1.postMessage({ type: "visibility", hidden: false });
+    await setVisibility(false);
     const resumed = await client.inspect();
     const resumedScheduler = await observeScheduler();
     return {
@@ -354,6 +401,7 @@ export async function observeVisibility(
     await client?.close().catch(() => undefined);
     await transport.close().catch(() => undefined);
     worker.terminate();
+    hostControl.port1.close();
     scheduler.port1.close();
     URL.revokeObjectURL(workerUrl);
   }
@@ -368,11 +416,20 @@ export async function observeStalledReceiver(
   )) as typeof import("../../target/integration-artifacts/client/generated.js");
   const worker = new Worker(configuration.workerScriptUrl, { type: "module" });
   const channel = new MessageChannel();
+  const hostControl = new MessageChannel();
+  const endpoint = 1n;
   let delivered = 0;
   let frames = 0;
   let connection: bigint | undefined;
+  let world: WorldReference | undefined;
   let session: bigint | undefined;
+  let lastDelivery = 0n;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const send = (bytes: Uint8Array<ArrayBuffer>) =>
+    channel.port1.postMessage(
+      { type: "data", connection: endpoint, bytes: bytes.buffer },
+      [bytes.buffer],
+    );
   try {
     return await new Promise<{
       delivered: number;
@@ -384,34 +441,50 @@ export async function observeStalledReceiver(
         configuration.timeoutMs,
       );
       worker.onerror = (event) => reject(new Error(event.message));
+      hostControl.port1.onmessage = (event) => {
+        if (event.data.type === "error") reject(new Error(event.data.message));
+      };
       channel.port1.onmessage = (event) => {
         try {
           const data = event.data;
+          if (data.connection !== endpoint)
+            throw new Error("Foreign stalled receiver envelope");
           if (data.type === "ready") {
-            const bytes = contract.bootstrap();
-            channel.port1.postMessage({ type: "data", bytes: bytes.buffer }, [
-              bytes.buffer,
-            ]);
+            send(contract.bootstrap());
           } else if (data.type === "data") {
-            delivered++;
+            if (
+              typeof data.delivery !== "bigint" ||
+              data.delivery <= lastDelivery ||
+              !(data.bytes instanceof ArrayBuffer)
+            )
+              throw new Error("Invalid stalled receiver delivery");
+            lastDelivery = data.delivery;
             const bytes = new Uint8Array(data.bytes);
             if (connection === undefined) {
               connection = contract.acceptBootstrap(bytes);
-              // Host negotiation does not create a World or emit its frames.
+              channel.port1.postMessage({
+                type: "ack",
+                connection: endpoint,
+                delivery: data.delivery,
+              });
               const request = new HostWireWriter();
-              request.raw(new Uint8Array([73, 80, 80, 72, 1, 0, 0, 0]));
+              request.raw(new Uint8Array([73, 80, 80, 72, 2, 0, 0, 0]));
               request.u64(connection);
               request.u64(1n);
               request.u8(2);
               request.string("stalled-receiver");
               request.hints();
+              // An explicit, empty System selection.
               request.u8(1);
-              const create = request.finish();
-              channel.port1.postMessage(
-                { type: "data", bytes: create.buffer },
-                [create.buffer],
-              );
-            } else if (session === undefined) {
+              request.u32(0);
+              // No Canvas state, since the Canvas System is not selected.
+              request.u8(0);
+              request.u8(1);
+              send(request.finish());
+              return;
+            }
+            delivered++;
+            if (world === undefined) {
               const response = new HostWireReader(bytes);
               if (
                 !response
@@ -421,14 +494,50 @@ export async function observeStalledReceiver(
                   ) ||
                 response.u64() !== connection ||
                 response.u64() !== 1n ||
+                response.u8() !== 12
+              )
+                throw new Error(
+                  "Expected the stalled receiver's World creation",
+                );
+              const descriptor = response.world();
+              world = readWorldReference(response);
+              response.end();
+              if (world.id !== descriptor.id)
+                throw new Error("Invalid stalled receiver World reference");
+              const open = new HostWireWriter();
+              open.raw(new Uint8Array([73, 80, 80, 72, 2, 0, 0, 0]));
+              open.u64(connection);
+              open.u64(2n);
+              open.u8(3);
+              writeWorldReference(open, world);
+              send(open.finish());
+            } else if (session === undefined) {
+              const response = new HostWireReader(bytes);
+              if (
+                !response
+                  .raw(8)
+                  .every(
+                    (byte, index) => byte === HOST_RESPONSE_MAGIC[index],
+                  ) ||
+                response.u64() !== connection ||
+                response.u64() !== 2n ||
                 response.u8() !== 2
               )
                 throw new Error(
                   "Expected the stalled receiver's World attachment",
                 );
-              response.world();
+              const descriptor = response.world();
               session = response.u64();
+              response.manifest();
+              const reference = readWorldReference(response);
               response.end();
+              if (
+                session === 0n ||
+                descriptor.id !== world.id ||
+                reference.id !== world.id ||
+                reference.incarnation !== world.incarnation
+              )
+                throw new Error("Invalid stalled receiver World attachment");
             } else {
               const response = contract.decodeResponse(bytes, session);
               if (
@@ -441,10 +550,10 @@ export async function observeStalledReceiver(
               }
               frames++;
             }
-            // Intentionally no ack: no mocked worker, runtime or response.
           } else if (data.type === "error") {
             resolve({ delivered, frames, error: data.message });
-          } else {
+          } else if (data.type !== "credit") {
+            // This probe sends three messages, far within its ingress credit.
             throw new Error(`Unexpected worker envelope: ${data.type}`);
           }
         } catch (error) {
@@ -456,15 +565,21 @@ export async function observeStalledReceiver(
         {
           type: "init",
           wasmUrl: configuration.wasmUrl,
-          port: channel.port2,
+          port: hostControl.port2,
           maxMessageBytes: contract.MAX_MESSAGE_BYTES,
         },
+        [hostControl.port2],
+      );
+      hostControl.port1.postMessage(
+        { type: "connect", connection: endpoint, port: channel.port2 },
         [channel.port2],
       );
     });
   } finally {
     clearTimeout(timer);
     channel.port1.close();
+    hostControl.port1.postMessage({ type: "dispose", connection: endpoint });
     worker.terminate();
+    hostControl.port1.close();
   }
 }

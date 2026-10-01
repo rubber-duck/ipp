@@ -98,6 +98,9 @@ jobs:
       - name: Compare cached and direct Surface frames
         if: ${{ !cancelled() }}
         run: python tools/ipp.py test surface-cache
+      - name: Verify explicit worker presentation and headless GUI delivery
+        if: ${{ !cancelled() }}
+        run: python tools/ipp.py regression --only test:presentation:webgl --only test:gui-local:worker
       - name: Preserve retained GUI evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -107,6 +110,7 @@ jobs:
             target/pipeline/runs/
             target/integration-artifacts/retained-gui/
             target/integration-artifacts/surface-cache/
+            target/integration-artifacts/browser/
           if-no-files-found: warn
 
   deploy:

@@ -36,7 +36,8 @@ export function clientAssetSource(
 type Waiter = {
   resolve(): void;
   reject(error: Error): void;
-  timer: ReturnType<typeof setTimeout>;
+  /** The reply deadline, from when the chunk goes on the wire. */
+  timer: ReturnType<typeof setTimeout> | undefined;
 };
 
 /** Owned source delivery with bounded framing, independent of World command outcomes. */
@@ -48,7 +49,9 @@ export class ClientAssetSources {
 
   constructor(
     private readonly session: () => bigint,
-    private readonly send: (bytes: Uint8Array<ArrayBuffer>) => void,
+    private readonly send: (
+      bytes: Uint8Array<ArrayBuffer>,
+    ) => Promise<void> | undefined,
     private readonly timeoutMs: number,
     private readonly fail: (error: Error) => void,
   ) {}
@@ -157,12 +160,19 @@ export class ClientAssetSources {
         writer.u8(tag);
         encode(writer);
         const bytes = writer.finish();
-        const timer = setTimeout(
-          () => this.fail(new Error("Asset source delivery timed out")),
-          this.timeoutMs,
-        );
-        this.pending.set(id, { resolve, reject, timer });
-        this.send(bytes);
+        const waiter: Waiter = { resolve, reject, timer: undefined };
+        this.pending.set(id, waiter);
+        // The reply deadline starts when the chunk goes on the wire.
+        const deadline = () => {
+          if (this.pending.get(id) === waiter)
+            waiter.timer = setTimeout(
+              () => this.fail(new Error("Asset source delivery timed out")),
+              this.timeoutMs,
+            );
+        };
+        const leaving = this.send(bytes);
+        if (leaving) void leaving.then(deadline);
+        else deadline();
       } catch (error) {
         const waiter = this.pending.get(id);
         if (waiter) clearTimeout(waiter.timer);

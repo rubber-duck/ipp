@@ -1,17 +1,15 @@
 import {
-  boundViewport,
   SURFACE_CACHE_MODES,
   validateGlyphAtlasLimits,
   validateSurfaceCacheBudget,
   validateViewport,
 } from "./presentation.js";
 import type {
-  FrameCapture,
-  FrameSummary,
   GlyphAtlasLimits,
   IngressStatistics,
   RenderDeviceInfo,
   RenderStatisticsSnapshot,
+  HostGuiLayoutStatistics,
   SurfaceCacheRecord,
   ViewportLimits,
 } from "./presentation.js";
@@ -33,13 +31,7 @@ interface WebGlHostExports {
 interface RenderHostExports {
   memory: WebAssembly.Memory;
   ipp_render_attach(width: number, height: number): number;
-  ipp_render_resize(width: number, height: number): number;
-  ipp_render_detach(): void;
-  ipp_render_tick(): bigint;
-  ipp_render_draw_calls(): number;
-  ipp_render_triangles(): number;
-  ipp_render_failed_draw_calls(): number;
-  ipp_render_invalid_camera(): number;
+  ipp_render_detach(): number;
   ipp_render_max_viewport_width(): number;
   ipp_render_max_viewport_height(): number;
 }
@@ -51,11 +43,13 @@ interface RenderHostExports {
 interface RenderDiagnosticsExports {
   ipp_render_statistics_ptr?(): number;
   ipp_render_statistics_len?(): number;
+  ipp_render_gui_layout_ptr?(): number;
+  ipp_render_gui_layout_len?(): number;
   ipp_render_surface_cache_records_ptr?(): number;
   ipp_render_surface_cache_records_len?(): number;
   ipp_render_set_glyph_atlas_limits?(
     maxPages: number,
-    idlePagePublications: number,
+    idlePageFrames: number,
   ): number;
   ipp_render_set_surface_cache_budget?(bytes: number): number;
   ipp_render_set_exhaustive_draw_checks?(enabled: number): number;
@@ -110,6 +104,7 @@ const RECORD = {
 } as const;
 
 const RECORD_WORDS = 40;
+const RECORD_LAYOUT = 8;
 
 /** Capability groups compiled into the runtime, as bits of `RECORD.flags`. */
 const RECORD_SHADOWS = 1;
@@ -128,13 +123,6 @@ function pick<K extends keyof typeof RECORD>(
   ) as Record<K, number>;
 }
 
-interface FrameRequest {
-  id: number;
-  session: bigint;
-  afterTick: bigint;
-  readback: boolean;
-}
-
 export class RenderWorkerService {
   readonly imports: WebAssembly.Imports;
   private runtime: (RenderHostExports & RenderDiagnosticsExports) | undefined;
@@ -147,17 +135,12 @@ export class RenderWorkerService {
   private exhaustiveDrawChecks: boolean | undefined;
   private session = 0n;
   private generation = 0;
-  /** Render tick before this frame's evaluation, read only while requests wait. */
-  private tickBeforeFrame: bigint | undefined;
   private attached = false;
   private closed = false;
   private lossObserved = false;
   private restoreRequested = false;
   private restoreTimer: ReturnType<typeof setTimeout> | undefined;
-  private readonly requests = new Map<number, FrameRequest>();
-  /** Latest requested drawing-buffer size; the device limits bound the size used. */
-  private requestedWidth: number;
-  private requestedHeight: number;
+  private readbackMs = 0;
   private limits: ViewportLimits | undefined;
 
   private constructor(
@@ -167,9 +150,43 @@ export class RenderWorkerService {
     private readonly fail: (error: Error) => void,
     private readonly logger: DiagnosticLogger,
   ) {
-    this.requestedWidth = canvas.width;
-    this.requestedHeight = canvas.height;
-    this.imports = { ipp_gl: device.imports };
+    this.imports = {
+      ipp_gl: device.imports,
+      ipp_presentation: {
+        resize: (width: number, height: number): number => {
+          try {
+            validateViewport(width, height);
+            if (device.isContextLost()) return 0;
+            device.resize(width, height);
+            return Number(canvas.width === width && canvas.height === height);
+          } catch {
+            return 0;
+          }
+        },
+        capture: (pointer: number, length: number): number => {
+          try {
+            const runtime = this.runtime;
+            if (
+              !runtime ||
+              device.isContextLost() ||
+              length !== canvas.width * canvas.height * 4
+            )
+              return 0;
+            const started = performance.now();
+            const pixels = device.capture();
+            this.readbackMs = performance.now() - started;
+            if (pixels.byteLength !== length || device.isContextLost())
+              return 0;
+            new Uint8Array(runtime.memory.buffer, pointer >>> 0, length).set(
+              pixels,
+            );
+            return 1;
+          } catch {
+            return 0;
+          }
+        },
+      },
+    };
     canvas.addEventListener("webglcontextlost", this.lost);
     canvas.addEventListener("webglcontextrestored", this.restored);
   }
@@ -212,13 +229,7 @@ export class RenderWorkerService {
     const candidate = exports as Record<string, unknown>;
     for (const name of [
       "ipp_render_attach",
-      "ipp_render_resize",
       "ipp_render_detach",
-      "ipp_render_tick",
-      "ipp_render_draw_calls",
-      "ipp_render_triangles",
-      "ipp_render_failed_draw_calls",
-      "ipp_render_invalid_camera",
       "ipp_render_max_viewport_width",
       "ipp_render_max_viewport_height",
     ]) {
@@ -230,7 +241,6 @@ export class RenderWorkerService {
     this.runtime = exports as RenderHostExports & RenderDiagnosticsExports;
     this.ingress = ingress;
     this.session = session;
-    this.tickBeforeFrame = undefined;
     this.device.setMemory(this.runtime.memory);
     this.applyTestingOverrides();
     if (!this.device.isContextLost()) this.attach();
@@ -247,12 +257,12 @@ export class RenderWorkerService {
         "glyph atlas limits",
         "a GUI render build",
       );
-      if (apply(limits.maxPages, limits.idlePagePublications) !== 1)
+      if (apply(limits.maxPages, limits.idlePageFrames) !== 1)
         throw new Error("Rust renderer rejected the glyph atlas limits");
       this.logger.log("debug", "renderer.glyph_atlas_limits", () => ({
         session: this.session,
         maxPages: limits.maxPages,
-        idlePagePublications: limits.idlePagePublications,
+        idlePageFrames: limits.idlePageFrames,
       }));
     }
     const bytes = this.surfaceCacheBudget;
@@ -310,21 +320,10 @@ export class RenderWorkerService {
     this.post({ type: "viewport-limits", limits: this.limits }, []);
   }
 
-  private get viewport(): { width: number; height: number } {
-    return boundViewport(
-      this.requestedWidth,
-      this.requestedHeight,
-      this.limits,
-    );
-  }
-
   private attach(): void {
     if (!this.runtime || this.closed) return;
     this.refreshLimits();
-    // Layout can change while the context is unavailable. Apply the latest
-    // surface intent before rebuilding graphics in the existing world session.
-    const { width, height } = this.viewport;
-    this.device.resize(width, height);
+    const { width, height } = this.canvas;
     if (this.runtime.ipp_render_attach(width, height) !== 1)
       throw new Error("Rust renderer initialization failed");
     this.attached = true;
@@ -364,7 +363,8 @@ export class RenderWorkerService {
   };
 
   private suspend(): void {
-    if (this.attached) this.runtime?.ipp_render_detach();
+    if (this.attached && this.runtime?.ipp_render_detach() !== 1)
+      throw new Error("Rust renderer detach failed");
     this.attached = false;
   }
 
@@ -394,63 +394,6 @@ export class RenderWorkerService {
     if (this.device.isContextLost()) this.suspend();
   }
 
-  /** Called by the frame loop immediately before it evaluates the World. */
-  beforeTick(): void {
-    this.beforeFrame();
-    // Most frames have no pending request; they make no renderer calls.
-    this.tickBeforeFrame =
-      this.requests.size !== 0 && this.attached
-        ? this.runtime?.ipp_render_tick()
-        : undefined;
-  }
-
-  afterFrame(): void {
-    const before = this.tickBeforeFrame;
-    this.tickBeforeFrame = undefined;
-    if (this.requests.size === 0) return;
-    const runtime = this.runtime;
-    if (!runtime || !this.attached || this.device.isContextLost()) return;
-    const tick = runtime.ipp_render_tick();
-    if (tick === 0n) return;
-    // The drawing buffer holds a frame only until the browser composites it,
-    // after this task; read back only a frame rendered in this task.
-    const rendered = before !== undefined && tick !== before;
-    for (const [id, request] of this.requests) {
-      if (tick < request.afterTick || (request.readback && !rendered)) continue;
-      this.requests.delete(id);
-      if (!request.readback) {
-        this.post({ type: "frame-result", id, frame: this.summary(tick) }, []);
-        continue;
-      }
-      // capture finishes pending GPU work and copies top-left RGBA pixels.
-      const readbackStarted = performance.now();
-      const pixels = this.device.capture();
-      const readbackMs = performance.now() - readbackStarted;
-      const statistics = this.statistics(runtime, readbackMs);
-      const frame: FrameCapture = {
-        ...this.summary(tick),
-        pixels: pixels.buffer,
-        ...(statistics ? { statistics } : {}),
-      };
-      this.post({ type: "frame-result", id, frame }, [pixels.buffer]);
-    }
-  }
-
-  private summary(tick: bigint): FrameSummary {
-    const runtime = this.runtime!;
-    return {
-      session: this.session,
-      tick,
-      width: this.canvas.width,
-      height: this.canvas.height,
-      drawCalls: runtime.ipp_render_draw_calls(),
-      triangles: runtime.ipp_render_triangles(),
-      failedDrawCalls: runtime.ipp_render_failed_draw_calls(),
-      invalidCamera: runtime.ipp_render_invalid_camera() !== 0,
-      contextGeneration: this.generation,
-    };
-  }
-
   /** Read the packed record of a diagnostics build; only captures call this. */
   private statistics(
     runtime: RenderHostExports & RenderDiagnosticsExports,
@@ -473,8 +416,26 @@ export class RenderWorkerService {
       RECORD_WORDS,
     ).slice();
     const flags = words[RECORD.flags]!;
+    let guiLayout: HostGuiLayoutStatistics | null | undefined;
+    if (
+      runtime.ipp_render_gui_layout_ptr &&
+      runtime.ipp_render_gui_layout_len
+    ) {
+      const layoutPointer = runtime.ipp_render_gui_layout_ptr() >>> 0;
+      const layoutLength = runtime.ipp_render_gui_layout_len() >>> 0;
+      if (layoutPointer === 0 || layoutLength === 0)
+        throw new Error("GUI layout diagnostics unavailable");
+      guiLayout = JSON.parse(
+        new TextDecoder("utf-8", { fatal: true }).decode(
+          new Uint8Array(runtime.memory.buffer, layoutPointer, layoutLength),
+        ),
+      );
+    }
+    if (flags & RECORD_LAYOUT && !guiLayout)
+      throw new Error("GUI layout counters have no membership evidence");
     return {
       readbackMs,
+      ...(guiLayout === undefined ? {} : { guiLayout }),
       frame: pick(words, [
         "uploadedBytes",
         "totalUploadedBytes",
@@ -487,28 +448,34 @@ export class RenderWorkerService {
         : {}),
       ...(flags & RECORD_GUI
         ? {
-            gui: pick(words, [
-              "guiBatches",
-              "guiRebuilds",
-              "guiAllocations",
-              "guiResidentBytes",
-              "glyphMisses",
-              "glyphPopulates",
-              "glyphPopulationFailures",
-              "glyphPageRetirements",
-              "glyphPages",
-              "glyphResidentBytes",
-              "totalGuiRebuilds",
-              "totalGuiAllocations",
-              "totalGlyphMisses",
-              "totalGlyphPopulates",
-              "totalGlyphPopulationFailures",
-              "totalGlyphPageRetirements",
-              "guiLayoutReflows",
-              "guiTextMeasurements",
-              "totalGuiLayoutReflows",
-              "totalGuiTextMeasurements",
-            ]),
+            gui: {
+              ...pick(words, [
+                "guiBatches",
+                "guiRebuilds",
+                "guiAllocations",
+                "guiResidentBytes",
+                "glyphMisses",
+                "glyphPopulates",
+                "glyphPopulationFailures",
+                "glyphPageRetirements",
+                "glyphPages",
+                "glyphResidentBytes",
+                "totalGuiRebuilds",
+                "totalGuiAllocations",
+                "totalGlyphMisses",
+                "totalGlyphPopulates",
+                "totalGlyphPopulationFailures",
+                "totalGlyphPageRetirements",
+              ]),
+              ...(flags & RECORD_LAYOUT
+                ? pick(words, [
+                    "guiLayoutReflows",
+                    "guiTextMeasurements",
+                    "totalGuiLayoutReflows",
+                    "totalGuiTextMeasurements",
+                  ])
+                : {}),
+            },
           }
         : {}),
       ...(flags & RECORD_SURFACES
@@ -580,58 +547,18 @@ export class RenderWorkerService {
   }
 
   receive(data: Record<string, unknown>): boolean {
-    if (data.type === "frame") {
-      if (
-        !Number.isSafeInteger(data.id) ||
-        (data.id as number) <= 0 ||
-        typeof data.session !== "bigint" ||
-        typeof data.afterTick !== "bigint" ||
-        typeof data.readback !== "boolean" ||
-        data.afterTick < 0n ||
-        data.afterTick > 0xffff_ffff_ffff_ffffn
-      )
-        throw new Error("Invalid frame request");
-      const id = data.id as number;
-      if (
-        data.session !== this.session ||
-        this.requests.size >= 4 ||
-        this.requests.has(id)
-      ) {
-        this.post(
-          {
-            type: "frame-error",
-            id,
-            message: "Frame session mismatch or queue full",
-          },
-          [],
-        );
-      } else
-        this.requests.set(id, {
-          id,
-          session: data.session,
-          afterTick: data.afterTick,
-          readback: data.readback,
-        });
-      return true;
-    }
-    if (data.type === "frame-cancel") {
-      this.requests.delete(data.id as number);
-      return true;
-    }
-    if (data.type === "resize") {
-      validateViewport(data.width as number, data.height as number);
-      this.requestedWidth = data.width as number;
-      this.requestedHeight = data.height as number;
-      if (!this.attached || this.device.isContextLost()) return true;
-      const { width, height } = this.viewport;
-      this.device.resize(width, height);
-      if (this.runtime?.ipp_render_resize(width, height) !== 1)
-        throw new Error("Rust renderer resize failed");
-      this.logger.log("debug", "renderer.resized", () => ({
-        session: this.session,
-        width,
-        height,
-      }));
+    if (data.type === "render-statistics") {
+      const runtime = this.runtime;
+      if (!runtime || !this.reportsStatistics(runtime))
+        throw new Error("Render statistics require a diagnostics runtime");
+      this.post(
+        {
+          type: "render-statistics",
+          id: data.id,
+          statistics: this.statistics(runtime, this.readbackMs),
+        },
+        [],
+      );
       return true;
     }
     return this.receiveTesting(data);
@@ -645,7 +572,7 @@ export class RenderWorkerService {
     if (data.type === "glyph-atlas-limits") {
       const limits = {
         maxPages: data.maxPages as number,
-        idlePagePublications: data.idlePagePublications as number,
+        idlePageFrames: data.idlePageFrames as number,
       };
       validateGlyphAtlasLimits(limits);
       this.glyphAtlasLimits = limits;
@@ -701,7 +628,6 @@ export class RenderWorkerService {
     this.canvas.removeEventListener("webglcontextlost", this.lost);
     this.canvas.removeEventListener("webglcontextrestored", this.restored);
     this.suspend();
-    this.requests.clear();
     this.device.dispose();
     this.logger.log("info", "renderer.closed", () => ({
       session: this.session,

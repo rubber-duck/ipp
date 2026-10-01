@@ -1,25 +1,26 @@
-//! Host-only snapshot lifecycle; candidates remain private until fully validated.
+//! Host-only snapshot lifecycle; no candidate World is published before graph validation.
 
 use crate::services::world_serialization::{
-    WorldLoadOptions, WorldPersistenceLimits, WorldSnapshot,
+    WorldGraphLoadResult, WorldGraphSnapshot, WorldLoadOptions, WorldPersistenceError,
+    WorldPersistenceLimits,
 };
-use crate::{HostRuntime, World, WorldConstructionError, WorldId, WorldLimits};
+use crate::{HostRuntime, WorldId, WorldLimits};
 
 impl HostRuntime {
-    /// Capture and encode one World at a mutation boundary without reading any assets.
-    /// The returned bytes remain valid after subsequent mutation or World destruction.
+    /// Capture the complete authored descendant graph at one applied-state boundary.
     pub fn save_world(
         &mut self,
         id: WorldId,
         contract: u64,
         limits: WorldPersistenceLimits,
-    ) -> Result<Vec<u8>, String> {
-        let world = self.world_mut(id).ok_or("World does not exist")?;
-        world.capture_world(limits)?.encode(contract, limits)
+    ) -> Result<Vec<u8>, WorldPersistenceError> {
+        self.capture_world_graph(id, limits)?
+            .encode(contract, limits)
+            .map_err(Into::into)
     }
 
-    /// Deserialize into a new World and publish only after all typed data and references
-    /// validate. Existing Worlds, names, sessions and asset consumers survive failure.
+    /// Restore fresh independently living Worlds. Failure publishes none of the graph.
+    /// The result acknowledges every created World; dropping it has no lifecycle effect.
     pub fn load_world(
         &mut self,
         bytes: &[u8],
@@ -27,55 +28,19 @@ impl HostRuntime {
         options: WorldLoadOptions,
         budgets: WorldLimits,
         limits: WorldPersistenceLimits,
-    ) -> Result<WorldId, String> {
-        let mut snapshot = WorldSnapshot::decode(bytes, contract, limits)?;
-        if let Some(symbol) = options.symbolic_id {
-            snapshot.metadata.symbolic_id = symbol;
+    ) -> Result<WorldGraphLoadResult, WorldPersistenceError> {
+        let mut graph = WorldGraphSnapshot::decode(bytes, contract, limits)?;
+        graph.rename(&options)?;
+        for node in &mut graph.nodes {
+            self.validate_new_world_symbol(&node.world.metadata.symbolic_id, None)?;
+            if node.id == graph.root {
+                node.world.capacity_hints = options
+                    .capacity_hints
+                    .apply(&node.world.capacity_hints)
+                    .resolve(&node.world.capacity_hints)
+                    .map_err(|error| error.to_string())?;
+            }
         }
-        self.validate_new_world_symbol(&snapshot.metadata.symbolic_id, None)?;
-        snapshot.capacity_hints = options
-            .capacity_hints
-            .apply(&snapshot.capacity_hints)
-            .resolve(&snapshot.capacity_hints)
-            .map_err(|error| error.to_string())?;
-        let selected: Result<Vec<_>, _> = snapshot
-            .capacity_hints
-            .systems
-            .keys()
-            .map(|name| {
-                self.system_factories
-                    .ids()
-                    .find(|id| id.0 == name)
-                    .ok_or_else(|| format!("World requires unavailable system {name}"))
-            })
-            .collect();
-        let factories = self
-            .system_factories
-            .select(&selected?)
-            .map_err(|error| error.to_string())?;
-        let id = self.next_world_id().map_err(|error| error.to_string())?;
-        let result = World::construct(
-            id,
-            budgets,
-            snapshot.capacity_hints.clone(),
-            &factories,
-            &mut self.assets,
-            &mut self.data_sources,
-        );
-        let mut world = result.map_err(|error| {
-            self.assets.release_world(id);
-            error.to_string()
-        })?;
-        world.data.metadata = snapshot.metadata.clone();
-        let restored = world
-            .context(&mut self.assets, &mut self.data_sources)
-            .restore_world_snapshot(&snapshot, limits);
-        if let Err(error) = restored {
-            world.teardown(&mut self.assets, &mut self.data_sources);
-            self.assets.release_world(id);
-            return Err(error);
-        }
-        self.publish_world(id, Ok::<_, WorldConstructionError>(world))
-            .map_err(|error| error.to_string())
+        self.restore_world_graph(graph, budgets, limits)
     }
 }

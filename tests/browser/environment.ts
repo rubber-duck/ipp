@@ -38,7 +38,10 @@ export interface BrowserBuildConfiguration {
   readonly name:
     | "headless"
     | "headless-builtins"
+    | "headless-surfaces"
     | "headless-gui"
+    | "semantic-gui"
+    | "gui-stress-profile"
     | "render-baseline"
     | "render"
     | "render-shadows"

@@ -2,7 +2,7 @@ use super::{LookAt, math};
 
 use crate::systems::{
     self,
-    hierarchy::{HierarchyGraph, HierarchySystem, evaluated_affine, parent_affine},
+    hierarchy::{HierarchySystem, evaluated_affine, parent_affine},
 };
 use crate::{ComponentValue, ErrorReason};
 use std::collections::BTreeSet;
@@ -24,12 +24,46 @@ impl LookAtSystem {
     pub const ID: SystemId = SystemId("ipp.look-at");
 }
 
+fn changes_aim_frame(component: u16) -> bool {
+    if component == ComponentValue::LOOK_AT {
+        return true;
+    }
+    #[cfg(feature = "skeletal-animation")]
+    {
+        component == ComponentValue::PARENT_JOINT
+    }
+    #[cfg(not(feature = "skeletal-animation"))]
+    {
+        false
+    }
+}
+
+fn changed_dependencies(context: &systems::SystemCommitContext<'_>) -> BTreeSet<crate::EntityId> {
+    let mut changed: BTreeSet<_> = context
+        .changed_components()
+        .filter(|(_, component)| changes_aim_frame(*component))
+        .map(|(entity, _)| entity)
+        .collect();
+    if context.changed_entity_links().next().is_some() {
+        changed.extend(context.staged.links.affected.iter().copied());
+        changed.extend(context.changed_entity_links());
+    }
+    changed
+}
+
 /// Fresh terminal constraint evaluator per World.
 pub struct LookAtSystemFactory;
 
 impl SystemFactory for LookAtSystemFactory {
     fn id(&self) -> SystemId {
         LookAtSystem::ID
+    }
+
+    fn capabilities(&self) -> crate::systems::SystemCapabilities {
+        crate::systems::SystemCapabilities::new(
+            [crate::ComponentValue::LOOK_AT],
+            [crate::systems::WorldOperation::LookAt],
+        )
     }
 
     fn dependencies(&self) -> &[systems::SystemDependency] {
@@ -60,27 +94,23 @@ impl System for LookAtSystem {
             ComponentValue::LOOK_AT,
             std::mem::offset_of!(LookAt, target) as u32,
         );
-        let hierarchy = context
-            .dependency(self.bindings.get().hierarchy)
-            .expect("hierarchy dependency");
-        let changed: BTreeSet<_> = context
+        let mut changed: BTreeSet<_> = context
             .staged
             .operation_components
             .iter()
             .filter(|(_, c)| *c == ComponentValue::LOOK_AT)
             .map(|(entity, _)| *entity)
             .chain(context.staged.operation_deleted.iter().copied())
-            .chain(hierarchy.graph.affected.iter().copied())
             .collect();
+        if !context.staged.links.operation_changed.is_empty() {
+            changed.extend(context.staged.links.affected.iter().copied());
+        }
         if changed.is_empty() {
             return Ok(());
         }
-        let rejected = self.dependencies.reconcile(
-            context.world_data,
-            context.staged,
-            &hierarchy.graph,
-            changed,
-        );
+        let rejected = self
+            .dependencies
+            .reconcile(context.world_data, context.staged, changed);
         self.refresh = true;
         if rejected {
             Err(ErrorReason::UnsupportedDependency)
@@ -97,15 +127,8 @@ impl System for LookAtSystem {
         if state.is_some() {
             return Err("LookAt state is derived".into());
         }
-        let hierarchy = context
-            .world
-            .dependency(self.bindings.get().hierarchy)
-            .ok_or("Missing restored hierarchy dependency")?;
-        self.dependencies.rebuild(
-            context.world.world,
-            &context.world.world.state,
-            &hierarchy.graph,
-        );
+        self.dependencies
+            .rebuild(context.world.world, &context.world.world.state);
         self.references.rebuild(
             context.world.world,
             &context.world.world.state,
@@ -123,16 +146,13 @@ impl System for LookAtSystem {
         context: &systems::SystemCommitContext<'_>,
     ) -> Result<(), ErrorReason> {
         if context.is_evaluated()
-            && context
-                .changed_components()
-                .any(|(_, c)| [ComponentValue::HIERARCHY, ComponentValue::LOOK_AT].contains(&c))
+            && self.dependencies.would_reject(
+                context.world_data,
+                context.staged,
+                changed_dependencies(context),
+            )
         {
-            let graph = HierarchyGraph::build(context.world_data, context.staged);
-            let mut dependencies = super::system_state::LookAtDependencies::default();
-            dependencies.rebuild(context.world_data, context.staged, &graph);
-            if !dependencies.invalid.is_empty() {
-                return Err(ErrorReason::UnsupportedDependency);
-            }
+            return Err(ErrorReason::UnsupportedDependency);
         }
         Ok(())
     }
@@ -154,15 +174,13 @@ impl System for LookAtSystem {
         if context.world_data.restoring {
             return;
         }
-        if context.is_evaluated()
-            && context
-                .changed_components()
-                .any(|(_, c)| [ComponentValue::HIERARCHY, ComponentValue::LOOK_AT].contains(&c))
-        {
-            let graph = HierarchyGraph::build(context.world_data, context.staged);
-            self.dependencies
-                .rebuild(context.world_data, context.staged, &graph);
-            self.refresh = true;
+        if context.is_evaluated() {
+            let changed = changed_dependencies(context);
+            if !changed.is_empty() {
+                self.dependencies
+                    .reconcile(context.world_data, context.staged, changed);
+                self.refresh = true;
+            }
         }
         for &(entity, _) in context.staged.changed.keys() {
             if let Some(value) = context
@@ -173,7 +191,8 @@ impl System for LookAtSystem {
                 value.runtime.rotation = None;
             }
         }
-        self.refresh |= context.changed_components().next().is_some();
+        self.refresh |= context.changed_components().next().is_some()
+            || context.changed_entity_links().next().is_some();
     }
 
     fn finish_update(
@@ -191,7 +210,12 @@ impl System for LookAtSystem {
 
 #[systems::system_update]
 impl LookAtSystem {
-    fn update(&mut self, ecs: systems::SystemEcsAccess<'_>, hierarchy: &HierarchySystem, _dt: f64) {
+    fn update(
+        &mut self,
+        ecs: systems::SystemEcsAccess<'_>,
+        _hierarchy: &HierarchySystem,
+        _dt: f64,
+    ) {
         for &entity in self.dependencies.targets.keys() {
             let index = entity.index() as usize;
             let Some(value) = ecs.world.components.look_at(index) else {
@@ -209,8 +233,8 @@ impl LookAtSystem {
                         return None;
                     }
                 };
-                let parent = match hierarchy.graph.parents.get(&entity) {
-                    Some(&parent) => match parent_affine(ecs.world, entity, parent) {
+                let parent = match ecs.world.state.links.parent(entity) {
+                    Some(parent) => match parent_affine(ecs.world, entity, parent) {
                         Ok(parent) => parent,
                         Err(_) => {
                             invalid = true;
@@ -234,8 +258,8 @@ impl LookAtSystem {
             let runtime = &mut ecs.world.components.look_at_mut(index).unwrap().runtime;
             runtime.rotation = rotation;
             runtime.invalid = invalid;
-            if let Some(runtime) = ecs.world.components.transform_runtime_mut(index) {
-                runtime.affine.take();
+            if let Some(runtime) = ecs.world.state.links.transform_mut(entity) {
+                runtime.clear();
             }
         }
         self.refresh = false;

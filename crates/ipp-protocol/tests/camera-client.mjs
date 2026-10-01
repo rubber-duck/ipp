@@ -1,6 +1,6 @@
 // Focused target generation and framing; shared scenarios exercise real hosts.
 import assert from "node:assert/strict";
-import test, { mock } from "node:test";
+import test from "node:test";
 import {
   encodeManifestLayout,
   generateClient,
@@ -8,19 +8,63 @@ import {
   manifestVariant,
 } from "./generated-client.mjs";
 
-const minimal = await generateClient("camera-minimal");
-const scene = await generateClient("camera-scene", []);
 const client = await generateClient("camera-picking", []);
 const { codec, manifest } = client;
 const layout = (name, fields) => encodeManifestLayout(client, name, fields);
 const tag = (name) => manifestVariant(client, name);
-const center = {
-  type: "GeometryPickQuery",
-  x: 0.5,
-  y: 0.5,
-  width: 640,
-  height: 480,
+const output = {
+  world: { id: 3n, incarnation: 9n },
+  entity: 4n,
+  kind: "camera",
+  incarnation: 8n,
 };
+const viewport = { width: 640, height: 480, devicePixelRatio: 1.25 };
+const publication = { host: 7n, revision: 11n };
+const binding = {
+  output,
+  viewport,
+  generation: { host: 7n, serial: 2n },
+};
+const view = { kind: "root", output, expectedViewport: viewport };
+const center = { type: "GeometryPickQuery", view, x: 0.5, y: 0.5 };
+const descriptor = { output, publication, viewport };
+
+const outputLayout = (value) =>
+  layout("output-reference", {
+    world: layout("world-reference", value.world),
+    target:
+      value.kind === "canvas"
+        ? layout("output-target-canvas", { tag: tag("OUTPUT_TARGET_CANVAS") })
+        : layout("output-target-camera", {
+            tag: tag("OUTPUT_TARGET_CAMERA"),
+            entity: value.entity,
+            incarnation: value.incarnation,
+          }),
+  });
+const viewportLayout = (value) =>
+  layout("view-viewport", {
+    width: value.width,
+    height: value.height,
+    device_pixel_ratio: value.devicePixelRatio,
+  });
+const publicationLayout = (value) => layout("publication-reference", value);
+const viewRootLayout = layout("view-root", {
+  tag: tag("VIEW_ROOT"),
+  output: outputLayout(output),
+  expected_viewport: viewportLayout(viewport),
+});
+const descriptorLayout = layout("view-descriptor", {
+  output: outputLayout(output),
+  publication: publicationLayout(publication),
+  viewport: viewportLayout(viewport),
+});
+const bindingLayout = layout("root-binding", {
+  output: outputLayout(output),
+  width: viewport.width,
+  height: viewport.height,
+  device_pixel_ratio: viewport.devicePixelRatio,
+  generation: layout("presentation-identity", binding.generation),
+});
 
 test("view plane requests default to false and require boolean flags", () => {
   for (const includeViewPlane of [undefined, false, true]) {
@@ -39,10 +83,9 @@ test("view plane requests default to false and require boolean flags", () => {
         session: 7n,
         request_id: 1n,
         tag: tag("REQUEST_GEOMETRY_PICK"),
+        view: viewRootLayout,
         x: 0.5,
         y: 0.5,
-        width: 640,
-        height: 480,
         include_view_plane: includeViewPlane ?? false,
       }).bytes,
     );
@@ -58,43 +101,74 @@ test("view plane requests default to false and require boolean flags", () => {
       /boolean/,
     );
   }
+  assert.throws(
+    () =>
+      codec.encodeRequest({
+        session: 7n,
+        requestId: 1n,
+        body: {
+          kind: "query",
+          query: { ...center, view: { ...view, kind: "latest" } },
+        },
+      }),
+    /view target required/,
+  );
 });
 
-test("primitive and compound responses carry optional finite planes and reject malformed payloads", () => {
+function hitLayout(part, include, requestId = 1n) {
+  return layout("response-geometry-pick", {
+    session: 7n,
+    request_id: requestId,
+    tick: 3n,
+    tag: tag("RESPONSE_GEOMETRY_PICK"),
+    result: layout("pick-result-hit", {
+      tag: tag("PICK_OUTCOME_HIT"),
+      view: descriptorLayout,
+      world: layout("world-reference", { id: 5n, incarnation: 6n }),
+      publication: publicationLayout(publication),
+      entity: 42n,
+      incarnation: 2n,
+      position_x: 1,
+      position_y: 2,
+      position_z: 3,
+      distance: 4,
+      part,
+      path: [
+        layout("view-path-entry", {
+          world: layout("world-reference", { id: 5n, incarnation: 6n }),
+          anchor: 12n,
+        }),
+      ],
+      view_plane: include
+        ? layout("pick-view-plane", {
+            point_x: 1,
+            point_y: 2,
+            point_z: 3,
+            normal_x: 0,
+            normal_y: 0,
+            normal_z: -1,
+          })
+        : null,
+    }),
+  }).bytes;
+}
+
+test("hit responses carry exact view, identity, path and optional finite planes and reject malformed payloads", () => {
   for (const part of [0, 8]) {
     for (const include of [false, true]) {
-      const bytes = layout("response-geometry-pick", {
-        session: 7n,
-        request_id: 1n,
-        tick: 3n,
-        tag: tag("RESPONSE_GEOMETRY_PICK"),
-        camera: 41n,
-        result: layout("pick-result-hit", {
-          tag: tag("PICK_OUTCOME_HIT"),
-          entity: 42n,
-          position_x: 1,
-          position_y: 2,
-          position_z: 3,
-          distance: 4,
-          part,
-          view_plane: include
-            ? layout("pick-view-plane", {
-                point_x: 1,
-                point_y: 2,
-                point_z: 3,
-                normal_x: 0,
-                normal_y: 0,
-                normal_z: -1,
-              })
-            : null,
-        }),
-      }).bytes;
+      const bytes = hitLayout(part, include);
       const event = codec.decodeResponse(bytes, 7n).body.event;
+      assert.deepEqual(event.view, descriptor);
+      assert.equal(event.ok, true);
       assert.deepEqual(event.hit, {
+        world: { id: 5n, incarnation: 6n },
+        publication,
         entity: 42n,
+        incarnation: 2n,
         position: [1, 2, 3],
         distance: 4,
         part,
+        path: [{ world: { id: 5n, incarnation: 6n }, anchor: 12n }],
         ...(include
           ? { viewPlane: { point: [1, 2, 3], normal: [0, 0, -1] } }
           : {}),
@@ -150,7 +224,7 @@ async function connect(sendFailure) {
         closes++;
       },
     },
-    { logLevel: "off" },
+    { selectedSystems: [], logLevel: "off" },
   );
   return {
     client,
@@ -162,43 +236,60 @@ async function connect(sendFailure) {
   };
 }
 
-function selection(camera, tick = 1n, requestId = 0n) {
-  return layout("response-camera-state-changed", {
-    session: 7n,
-    request_id: requestId,
-    tick,
-    tag: tag("RESPONSE_CAMERA_STATE_CHANGED"),
-    changes: layout("camera-state-patch", {
-      mask: 1,
-      activeCamera: layout("camera-entity", { id: camera }),
-    }),
-  }).bytes;
-}
-function result(requestId, camera = 41n, error, tick = 1n) {
+function result(requestId, error, tick = 1n) {
   return layout("response-geometry-pick", {
     session: 7n,
     request_id: requestId,
     tick,
     tag: tag("RESPONSE_GEOMETRY_PICK"),
-    camera,
     result: error
       ? layout("pick-result-failure", {
           tag: tag("PICK_OUTCOME_FAILURE"),
           reason: error,
         })
-      : layout("pick-result-miss", { tag: tag("PICK_OUTCOME_MISS") }),
+      : layout("pick-result-miss", {
+          tag: tag("PICK_OUTCOME_MISS"),
+          view: descriptorLayout,
+        }),
   }).bytes;
 }
 
-test("baseline contracts expose camera commands, geometry queries and registrations", () => {
-  for (const name of ["sendCommand", "query", "onCameraStateChanged"])
-    assert.equal(name in minimal.codec.IppClient.prototype, true);
-  assert.equal("query" in scene.codec.IppClient.prototype, true);
+function navigated(requestId, tick = 1n) {
+  return layout("response-camera-navigated", {
+    session: 7n,
+    request_id: requestId,
+    tick,
+    tag: tag("RESPONSE_CAMERA_NAVIGATED"),
+  }).bytes;
+}
+
+function renderState(requestId = 0n) {
+  return layout("response-render-state-updated", {
+    session: 7n,
+    request_id: requestId,
+    tick: 1n,
+    tag: tag("RESPONSE_RENDER_STATE_UPDATED"),
+    changes: layout("render-state-patch", {
+      mask: 1,
+      showAllDebugGeometries: true,
+      debugGeometryColor: null,
+      ambientLight: null,
+    }),
+  }).bytes;
+}
+
+const requestId = (bytes) =>
+  new DataView(bytes.buffer, bytes.byteOffset).getBigUint64(8, true);
+
+test("baseline contracts expose camera navigation, geometry queries and registrations", () => {
+  for (const name of ["sendCommand", "query", "navigateCamera"])
+    assert.equal(name in codec.IppClient.prototype, true);
   assert.equal("sendEvent" in codec.IppClient.prototype, false);
-  assert.equal("Camera" in minimal.codec.components, true);
-  assert.equal("PickingGeometry" in scene.codec.components, true);
-  assert.equal("REQUEST_CAMERA_NAVIGATE" in minimal.codec.WIRE, true);
-  assert.equal("REQUEST_GEOMETRY_PICK" in scene.codec.WIRE, true);
+  assert.equal("onCameraStateChanged" in codec.IppClient.prototype, false);
+  assert.equal("Camera" in codec.components, true);
+  assert.equal("PickingGeometry" in codec.components, true);
+  assert.equal("REQUEST_CAMERA_NAVIGATE" in codec.WIRE, true);
+  assert.equal("REQUEST_GEOMETRY_PICK" in codec.WIRE, true);
   assert.equal(codec.Camera.id, codec.components.Camera.id);
   assert.equal(codec.GEOMETRY_TYPE, codec.WIRE.ASSET_GEOMETRY);
   assert.equal(
@@ -206,66 +297,34 @@ test("baseline contracts expose camera commands, geometry queries and registrati
     codec.GEOMETRY_TYPE,
   );
   assert.ok(manifest.ASSET_FORMATS.ASSET_GEOMETRY.format.startsWith("IPPG;"));
-  assert.equal("encodeBoundingShape" in minimal.codec, true);
+  assert.equal("encodeBoundingShape" in codec, true);
   assert.equal(codec.Camera.fields.focus_distance.default, 6);
-  assert.equal(codec.SCHEMA_HASH, scene.codec.SCHEMA_HASH);
-  assert.doesNotThrow(() =>
-    scene.codec.encodeRequest({
-      session: 7n,
-      requestId: 1n,
-      body: { kind: "query", query: center },
-    }),
-  );
 });
 
-test("commands allocate no identities or timers and queries preserve terminal correlation", async () => {
+test("queries and navigation keep ordered correlation and exact terminal results", async () => {
   const { client, sent, emit } = await connect();
   try {
-    const timer = mock.method(globalThis, "setTimeout");
-    try {
-      for (let i = 0; i < 80; i++)
-        assert.equal(
-          client.sendCommand({ type: "CameraActivateCommand", entity: 41n }),
-          undefined,
-        );
-      assert.equal(timer.mock.callCount(), 0);
-    } finally {
-      timer.mock.restore();
-    }
-    for (const bytes of sent.slice(1))
-      assert.equal(new DataView(bytes.buffer).getBigUint64(8, true), 0n);
-    const seen = [];
-    client.onCameraStateChanged((event) => seen.push(event));
     const first = client.query(center);
-    client.sendCommand({
-      type: "CameraNavigateCommand",
+    const navigation = client.navigateCamera({
+      binding,
       motion: { kind: "zoom", amount: 0.25 },
     });
     const second = client.query(center);
-    assert.equal(new DataView(sent.at(-3).buffer).getBigUint64(8, true), 1n);
-    assert.equal(new DataView(sent.at(-1).buffer).getBigUint64(8, true), 2n);
-    emit(selection(41n));
+    assert.deepEqual(sent.slice(-3).map(requestId), [1n, 2n, 3n]);
     emit(result(1n));
-    emit(result(2n, null, "NoActiveCamera"));
+    emit(navigated(2n));
+    emit(result(3n, "camera binding is stale"));
     assert.deepEqual(await first, {
       session: 7n,
       requestId: 1n,
       tick: 1n,
       type: "GeometryPickResultEvent",
-      camera: 41n,
+      view: descriptor,
       ok: true,
       hit: null,
     });
-    assert.equal((await second).error, "NoActiveCamera");
-    assert.deepEqual(seen, [
-      {
-        session: 7n,
-        requestId: 0n,
-        tick: 1n,
-        type: "CameraStateChangedEvent",
-        changes: { activeCamera: 41n },
-      },
-    ]);
+    assert.equal(await navigation, undefined);
+    assert.equal((await second).error, "camera binding is stale");
   } finally {
     await client.close();
   }
@@ -273,46 +332,46 @@ test("commands allocate no identities or timers and queries preserve terminal co
 
 test("all motion variants conform to the canonical manifest and malformed fields reject locally", async () => {
   const { client, sent } = await connect();
+  const pending = [];
   try {
-    for (const motion of [
-      { kind: "rotate", yaw: 0.25, pitch: -0.5 },
-      { kind: "pan", x: 0.25, y: -0.5, width: 640, height: 480 },
-      { kind: "zoom", amount: 0.25 },
+    for (const [kind, motion, first, second] of [
+      [0, { kind: "rotate", yaw: 0.25, pitch: -0.5 }, 0.25, -0.5],
+      [1, { kind: "pan", x: 0.25, y: -0.5 }, 0.25, -0.5],
+      [2, { kind: "zoom", amount: 0.25 }, 0.25, 0],
     ]) {
-      client.sendCommand({ type: "CameraNavigateCommand", motion });
-      const { kind, ...fields } = motion;
+      pending.push(
+        client.navigateCamera({ binding, publication, motion }).catch(() => {}),
+      );
       assert.deepEqual(
         sent.at(-1),
         layout("request-camera-navigate", {
           session: 7n,
-          request_id: 0n,
+          request_id: requestId(sent.at(-1)),
           tag: tag("REQUEST_CAMERA_NAVIGATE"),
-          motion: layout(`camera-motion-${kind}`, {
-            tag: tag(`CAMERA_MOTION_${kind.toUpperCase()}`),
-            ...fields,
-          }),
+          binding: bindingLayout,
+          publication: publicationLayout(publication),
+          kind,
+          first,
+          second,
         }).bytes,
       );
     }
     for (const motion of [
       { kind: "rotate", yaw: NaN, pitch: 0 },
       { kind: "rotate", yaw: 0, pitch: 0, extra: 1 },
-      { kind: "pan", x: 0, y: 0, width: -1, height: 2 },
+      { kind: "pan", x: 0, y: 0, width: 10, height: 10 },
       { kind: "zoom", amount: Infinity },
       { kind: "teleport", amount: 1 },
-      null,
     ])
-      assert.throws(
-        () => client.sendCommand({ type: "CameraNavigateCommand", motion }),
-        { code: "IPP_REQUEST_NOT_SENT" },
-      );
-    assert.throws(
-      () =>
-        client.sendCommand({
-          type: "CameraActivateCommand",
-          entity: 41n,
-          unknown: true,
-        }),
+      await assert.rejects(client.navigateCamera({ binding, motion }), {
+        code: "IPP_REQUEST_NOT_SENT",
+      });
+    await assert.rejects(
+      client.navigateCamera({
+        binding,
+        motion: { kind: "zoom", amount: 1 },
+        unknown: true,
+      }),
       { code: "IPP_REQUEST_NOT_SENT" },
     );
     await assert.rejects(client.query({ ...center, x: NaN }), {
@@ -323,67 +382,47 @@ test("all motion variants conform to the canonical manifest and malformed fields
     });
   } finally {
     await client.close();
+    await Promise.all(pending);
   }
 });
 
-test("command and query ID rules and malformed sparse notifications reject", () => {
+test("command and query ID rules and misrouted notifications reject", () => {
   for (const [requestId, body] of [
     [
       1n,
       {
         kind: "command",
-        command: { type: "CameraActivateCommand", entity: 41n },
+        command: {
+          type: "RenderStateUpdateCommand",
+          changes: { showAllDebugGeometries: true },
+        },
       },
     ],
     [0n, { kind: "query", query: center }],
+    [
+      0n,
+      {
+        kind: "cameraNavigate",
+        request: { binding, motion: { kind: "zoom", amount: 1 } },
+      },
+    ],
   ])
     assert.throws(
       () => codec.encodeRequest({ session: 7n, requestId, body }),
       /reserved request identity/,
     );
   assert.throws(
-    () => codec.decodeResponse(selection(41n, 1n, 1n), 7n),
+    () => codec.decodeResponse(renderState(1n), 7n),
     /reserved response identity/,
   );
   assert.throws(
     () => codec.decodeResponse(result(0n), 7n),
     /reserved response identity/,
   );
-  for (const mask of [0, 2, 65535]) {
-    const bytes = selection(41n);
-    new DataView(bytes.buffer).setUint16(25, mask, true);
-    assert.throws(() => codec.decodeResponse(bytes, 7n), /camera state mask/);
-  }
-  assert.throws(() => codec.decodeResponse(selection(41n).slice(0, -1), 7n));
-});
-
-test("camera observers receive each notification once with isolated patches and unsubscribe", async () => {
-  const { client, emit } = await connect();
-  const seen = [];
-  try {
-    client.onCameraStateChanged((event) => {
-      event.changes.activeCamera = 999n;
-      throw new Error("observer failed");
-    });
-    const remove = client.onCameraStateChanged((event) => seen.push(event));
-    emit(selection(41n));
-    emit(selection(42n));
-    assert.deepEqual(
-      seen.map((event) => event.changes.activeCamera),
-      [41n, 42n],
-    );
-    assert.ok(
-      seen.every(
-        (event) =>
-          !Object.hasOwn(event, "ok") && !Object.hasOwn(event, "error"),
-      ),
-    );
-    remove();
-    emit(selection(43n));
-    assert.equal(seen.length, 2);
-  } finally {
-    await client.close();
-  }
+  assert.throws(
+    () => codec.decodeResponse(navigated(0n), 7n),
+    /reserved response identity/,
+  );
 });
 
 test("wrong query identity, old sessions, and transport failures terminate only their session", async () => {
@@ -401,8 +440,8 @@ test("wrong query identity, old sessions, and transport failures terminate only 
     assert.throws(
       () =>
         connection.client.sendCommand({
-          type: "CameraActivateCommand",
-          entity: 41n,
+          type: "RenderStateUpdateCommand",
+          changes: { showAllDebugGeometries: true },
         }),
       /closed/,
     );
@@ -412,8 +451,8 @@ test("wrong query identity, old sessions, and transport failures terminate only 
   assert.throws(
     () =>
       connection.client.sendCommand({
-        type: "CameraActivateCommand",
-        entity: 41n,
+        type: "RenderStateUpdateCommand",
+        changes: { showAllDebugGeometries: true },
       }),
     /transport unavailable/,
   );
@@ -424,7 +463,7 @@ test("wrong query identity, old sessions, and transport failures terminate only 
 test("a malformed notification cannot consume a pending batch correlation", async () => {
   const { client, emit } = await connect();
   const pending = client.batch([]);
-  emit(selection(41n, 1n, 1n));
+  emit(renderState(1n));
   await assert.rejects(pending, /reserved response identity/);
   await client.close();
 });
@@ -432,10 +471,9 @@ test("a malformed notification cannot consume a pending batch correlation", asyn
 test("projection queries preserve their own result type and reject cross-query replies", async () => {
   const projection = {
     type: "CameraProjectQuery",
+    view,
     x: 1.25,
     y: -0.5,
-    width: 640,
-    height: 480,
     plane: { point: [0, 0, 0], normal: [0, 0, -1] },
   };
   const connection = await connect();
@@ -449,13 +487,15 @@ test("projection queries preserve their own result type and reject cross-query r
         request_id: 1n,
         tick: 1n,
         tag: tag("RESPONSE_CAMERA_PROJECT"),
-        camera: 41n,
+        view: descriptorLayout,
         ok: true,
         position: layout("world-point", { x: 1, y: 2, z: 0 }),
         error: null,
       }).bytes,
     );
-    assert.deepEqual((await pendingProjection).position, [1, 2, 0]);
+    const projected = await pendingProjection;
+    assert.deepEqual(projected.view, descriptor);
+    assert.deepEqual(projected.position, [1, 2, 0]);
     assert.equal((await pendingPick).hit, null);
     for (const plane of [
       null,
@@ -479,7 +519,7 @@ test("projection queries preserve their own result type and reject cross-query r
 
 test("geometry encoding grows beyond prior part and byte quotas and rejects cycles", () => {
   const leaf = { type: "sphere", radius: 1 };
-  const encoded = minimal.codec.encodeBoundingShape({
+  const encoded = codec.encodeBoundingShape({
     type: "compound",
     parts: Array(14_000).fill(leaf),
   });
@@ -488,10 +528,10 @@ test("geometry encoding grows beyond prior part and byte quotas and rejects cycl
   let nested = leaf;
   for (let i = 0; i < 40; i++) nested = { type: "compound", parts: [nested] };
   assert.deepEqual(
-    minimal.codec.encodeBoundingShape(nested),
-    minimal.codec.encodeBoundingShape(leaf),
+    codec.encodeBoundingShape(nested),
+    codec.encodeBoundingShape(leaf),
   );
   const cyclic = { type: "compound", parts: [] };
   cyclic.parts.push(cyclic);
-  assert.throws(() => minimal.codec.encodeBoundingShape(cyclic), /nesting/);
+  assert.throws(() => codec.encodeBoundingShape(cyclic), /nesting/);
 });

@@ -7,7 +7,6 @@ ipp_schema_derive::component_registry! {
         #[cfg(test)]
         RowsFixture = 60001,
         LinearDriver = 2,
-        #[runtime(crate::systems::hierarchy::ObjectTransformRuntime)]
         Transform = 3,
         UnlitMaterial = 4,
         MeshInstance = 5,
@@ -23,7 +22,8 @@ ipp_schema_derive::component_registry! {
         PickingGeometry = 15,
         #[cfg(feature = "mesh-poses")]
         MeshPose = 16,
-        Hierarchy = 17,
+        #[cfg(feature = "skeletal-animation")]
+        ParentJoint = 17,
         LookAt = 18,
         BaseColorTexture = 19,
         CustomMaterial = 20,
@@ -37,10 +37,51 @@ ipp_schema_derive::component_registry! {
         ParticleMesh = 24,
         #[cfg(feature = "surfaces")]
         Surface = 25,
-        #[cfg(feature = "gui")]
-        GuiRoot = 26,
+        // 26 was GuiRoot; retired identities are never reused.
         #[cfg(feature = "surfaces")]
         SurfaceCache = 27,
+        WorldAttachment = 28,
+        // 29 was Canvas; a World's canvas is Canvas System state.
+        #[cfg(feature = "surfaces")]
+        CanvasStyle = 30,
+        #[cfg(feature = "surfaces")]
+        CanvasText = 31,
+        #[cfg(feature = "surfaces")]
+        CanvasGlyphRun = 32,
+        #[cfg(feature = "surfaces")]
+        CanvasDrawing = 33,
+        #[cfg(feature = "surfaces")]
+        CanvasBitmap = 34,
+        #[cfg(feature = "surfaces")]
+        CanvasBox = 35,
+        #[cfg(feature = "gui")]
+        GuiBehavior = 36,
+        #[cfg(feature = "gui")]
+        GuiButton = 37,
+        #[cfg(feature = "gui")]
+        GuiCheckbox = 38,
+        #[cfg(feature = "gui")]
+        GuiSlider = 39,
+        #[cfg(feature = "gui")]
+        GuiTextInput = 40,
+        #[cfg(feature = "gui")]
+        GuiLayout = 41,
+        #[cfg(feature = "gui")]
+        GuiTheme = 42,
+        #[cfg(feature = "gui")]
+        GuiSkin = 43,
+        #[cfg(feature = "gui")]
+        GuiFont = 44,
+        #[cfg(feature = "gui")]
+        GuiThemeMotion = 45,
+        #[cfg(feature = "gui")]
+        GuiScrollView = 46,
+        #[cfg(feature = "gui")]
+        GuiVirtualList = 47,
+        #[cfg(feature = "gui")]
+        GuiVirtualItem = 48,
+        #[cfg(feature = "gui")]
+        CanvasBounds = 49,
     }
 }
 
@@ -62,7 +103,7 @@ pub(crate) trait ComponentCellVisitor {
 
 /// Streams target/build identity and the feature-conditioned compiled registry.
 pub fn write_contract(sink: &mut impl ContractSink) {
-    sink.write(&4u16.to_le_bytes());
+    sink.write(&6u16.to_le_bytes());
     write_string(sink, std::env::consts::ARCH);
     write_string(sink, std::env::consts::OS);
     sink.write(&[usize::BITS as u8]);
@@ -85,7 +126,17 @@ pub fn write_contract(sink: &mut impl ContractSink) {
         sink.write(&[id, u8::from(enabled)]);
         write_string(sink, name);
     }
+    // Rows addressing and size bounds, so generated codecs and the generator's export
+    // validation read them instead of repeating them.
+    sink.write(&super::rows::ROW_REGION_SPAN.to_le_bytes());
+    sink.write(&[super::rows::MAX_ROW_FIELDS as u8]);
+    sink.write(&(super::rows::MAX_ROW_PROPERTIES as u16).to_le_bytes());
+    sink.write(&super::rows::MAX_ROW_TEXT_BYTES.to_le_bytes());
     ComponentValue::write_contract(sink);
+    #[cfg(feature = "gui")]
+    crate::systems::gui::presentation::write_paint_contract(sink);
+    #[cfg(not(feature = "gui"))]
+    sink.write(&0u16.to_le_bytes());
 }
 
 /// Create a producer component using the compiled factory.
@@ -117,6 +168,8 @@ pub(crate) fn write_field(
     use crate::components::dynamic_properties::{DYNAMIC_METADATA, is_dynamic_field};
 
     let value = schema_value(field)?;
+    validate_asset_field(component.type_id(), field.offset, &value)?;
+    let rows = matches!(value, crate::components::schema::FieldValue::Rows(_));
     if field.offset == DYNAMIC_METADATA {
         let mut staged = component.clone();
         staged.set_field(field.offset, value).map_err(field_error)?;
@@ -138,7 +191,13 @@ pub(crate) fn write_field(
     component
         .set_field(field.offset, value)
         .map_err(field_error)?;
-    if let Err(reason) = component.validate_field_lifecycle(field.offset) {
+    let mut validation = component.validate_field_lifecycle(field.offset);
+    if rows && validation.is_ok() {
+        component.visit_row_field_assets(field.offset, &mut |source| {
+            validation = validation.and(source.validate());
+        });
+    }
+    if let Err(reason) = validation {
         component
             .set_field(field.offset, previous)
             .expect("previous field value remains writable");
@@ -147,6 +206,62 @@ pub(crate) fn write_field(
     Ok(match before {
         Some(before) => stored(component) != before,
         None => component.field(field.offset).ok().as_ref() != Some(&previous),
+    })
+}
+
+/// [`write_field`] on a stored value whose whole invariants must still hold.
+///
+/// Components that validate after every operation (see
+/// `ComponentLifecycle::validates_after_operation`) check the complete result;
+/// a result that fails restores the previous value, so a rejected write has no
+/// effect.
+pub(crate) fn write_stored_field(
+    component: &mut ComponentValue,
+    field: &crate::FieldWrite,
+) -> Result<bool, crate::ErrorReason> {
+    use crate::components::dynamic_properties::DYNAMIC_METADATA;
+
+    if !component.validates_after_operation() {
+        return write_field(component, field);
+    }
+    if field.offset == DYNAMIC_METADATA {
+        let mut candidate = component.clone();
+        let changed = write_field(&mut candidate, field)?;
+        candidate.validate_lifecycle()?;
+        *component = candidate;
+        return Ok(changed);
+    }
+
+    let previous = component.field(field.offset).map_err(field_error)?;
+    let changed = write_field(component, field)?;
+    if let Err(reason) = component.validate_lifecycle() {
+        component
+            .set_field(field.offset, previous)
+            .expect("previous field value remains writable");
+        return Err(reason);
+    }
+    Ok(changed)
+}
+
+/// Whether a stored field equals the value a compare-and-set expects.
+///
+/// Text compares by shared reference first and then by content; every other
+/// kind compares by value. An expected value of another type than the field's
+/// is an invalid field write.
+pub(crate) fn field_matches(
+    component: &ComponentValue,
+    expected: &crate::FieldWrite,
+) -> Result<bool, crate::ErrorReason> {
+    use crate::components::schema::{FieldValue, same_text};
+
+    let expected_value = schema_value(expected)?;
+    ComponentValue::validate_field(component.type_id(), expected.offset, expected_value.kind())
+        .map_err(field_error)?;
+
+    let current = component.field(expected.offset).map_err(field_error)?;
+    Ok(match (&current, &expected_value) {
+        (FieldValue::String(current), FieldValue::String(expected)) => same_text(current, expected),
+        _ => current == expected_value,
     })
 }
 
@@ -163,6 +278,51 @@ pub(crate) fn assign(
         .map_err(field_error)
 }
 
+fn validate_asset_field(
+    component: u16,
+    offset: u32,
+    value: &crate::components::schema::FieldValue,
+) -> Result<(), crate::ErrorReason> {
+    if let crate::components::schema::FieldValue::Dynamic(crate::DynamicValue::Asset(source)) =
+        value
+    {
+        source.validate()?;
+    }
+    if let crate::components::schema::FieldValue::String(source) = value
+        && let Some(reference) = ComponentValue::asset_references(component)
+            .iter()
+            .find(|reference| reference.source_offset == offset)
+    {
+        crate::services::asset_management::validate_reference(
+            Some(crate::services::asset_management::AssetTypeId(
+                reference.kind,
+            )),
+            source,
+        )?;
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_asset_references(value: &ComponentValue) -> Result<(), crate::ErrorReason> {
+    for reference in ComponentValue::asset_references(value.type_id()) {
+        let field = value.field(reference.source_offset).map_err(field_error)?;
+        validate_asset_field(value.type_id(), reference.source_offset, &field)?;
+    }
+    let mut result = Ok(());
+    value.visit_row_assets(&mut |source| {
+        result = result.and(source.validate());
+    });
+    result?;
+    if let Some(properties) = value.dynamic_properties() {
+        let mut demand = std::collections::BTreeSet::new();
+        properties.resource_demand(&mut demand);
+        for selection in demand {
+            selection.descriptor().validate()?;
+        }
+    }
+    Ok(())
+}
+
 /// Replay a field write that already passed validation on an identical value.
 pub(crate) fn replay_field(
     component: &mut ComponentValue,
@@ -177,6 +337,11 @@ fn schema_value(
     field: &crate::FieldWrite,
 ) -> Result<crate::components::schema::FieldValue, crate::ErrorReason> {
     Ok(match field.value.clone() {
+        crate::FieldValue::UnresolvedWorld(_) | crate::FieldValue::UnresolvedOutput(_) => {
+            return Err(crate::ErrorReason::InvalidValue);
+        }
+        crate::FieldValue::World(value) => crate::components::schema::FieldValue::World(value),
+        crate::FieldValue::Output(value) => crate::components::schema::FieldValue::Output(value),
         crate::FieldValue::Dynamic(v) => crate::components::schema::FieldValue::Dynamic(v),
         crate::FieldValue::F32(v) => crate::components::schema::FieldValue::F32(v),
         crate::FieldValue::U32(v) => crate::components::schema::FieldValue::U32(v),
@@ -189,7 +354,7 @@ fn schema_value(
         crate::FieldValue::Entity(crate::EntityRef::Handle(id)) => {
             crate::components::schema::FieldValue::Entity(id)
         }
-        crate::FieldValue::Entity(crate::EntityRef::Alias(_)) => {
+        crate::FieldValue::Entity(crate::EntityRef::Alias(_) | crate::EntityRef::Symbol(_)) => {
             return Err(crate::ErrorReason::UnknownAlias);
         }
     })
@@ -215,6 +380,91 @@ mod tests {
     use crate::{FieldValue, FieldWrite, components::MeshInstance};
 
     #[test]
+    fn private_dynamic_assignments_defer_reference_admission_to_the_final_value() {
+        use crate::services::asset_management::{AssetSource, AssetTypeId};
+        let asset = |uri: &str| {
+            crate::DynamicValue::Asset(AssetSource {
+                kind: AssetTypeId(2),
+                uri: uri.into(),
+                variant: 0,
+            })
+        };
+        let mut component = ComponentValue::CustomMaterial(Default::default());
+        let key = component
+            .dynamic_properties_mut()
+            .unwrap()
+            .set("selected", asset("asset://2/42"))
+            .unwrap();
+        let valid = component.clone();
+        let invalid = FieldWrite {
+            offset: key,
+            value: FieldValue::Dynamic(asset("producer://7/2/not-an-id")),
+        };
+        assign(&mut component, &invalid).unwrap();
+        assert_eq!(
+            validate_asset_references(&component),
+            Err(crate::ErrorReason::InvalidAsset)
+        );
+        assign(
+            &mut component,
+            &FieldWrite {
+                offset: key,
+                value: FieldValue::Dynamic(asset("asset://2/42")),
+            },
+        )
+        .unwrap();
+        assert_eq!(validate_asset_references(&component), Ok(()));
+        assert_eq!(component, valid);
+        assert_eq!(
+            write(&mut component, &invalid),
+            Err(crate::ErrorReason::InvalidAsset)
+        );
+        assert_eq!(component, valid);
+        assert!(
+            component
+                .dynamic_properties_mut()
+                .unwrap()
+                .set_key(key, asset("asset://malformed"))
+                .is_err()
+        );
+        assert_eq!(component, valid);
+    }
+
+    #[test]
+    fn static_asset_fields_validate_the_declared_kind_before_replacement() {
+        for mut component in [
+            ComponentValue::MeshInstance(MeshInstance::default()),
+            ComponentValue::CustomMaterial(crate::components::CustomMaterial::default()),
+            ComponentValue::UnlitTexture(crate::components::UnlitTexture::default()),
+        ] {
+            let reference = ComponentValue::asset_references(component.type_id())[0];
+            let previous = component.clone();
+            for source in [
+                "asset://malformed".to_owned(),
+                format!("asset://{}/42", reference.kind + 1),
+            ] {
+                let field = FieldWrite {
+                    offset: reference.source_offset,
+                    value: FieldValue::String(source.into()),
+                };
+                assert_eq!(
+                    write(&mut component, &field),
+                    Err(crate::ErrorReason::InvalidAsset)
+                );
+                assert_eq!(component, previous);
+            }
+            write(
+                &mut component,
+                &FieldWrite {
+                    offset: reference.source_offset,
+                    value: FieldValue::String(format!("asset://{}/42", reference.kind).into()),
+                },
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
     fn resource_source_policy_runs_in_the_component_hook_after_typed_dispatch() {
         let source = "archive!/mesh?name=ordinary text";
         let mut component = ComponentValue::MeshInstance(MeshInstance::default());
@@ -234,7 +484,7 @@ mod tests {
                 &mut component,
                 &FieldWrite {
                     offset: std::mem::offset_of!(MeshInstance, source) as u32,
-                    value: FieldValue::String("x".repeat(4097,)),
+                    value: FieldValue::String("x".repeat(4097).into()),
                 },
             ),
             Ok(())
@@ -243,7 +493,7 @@ mod tests {
         assert_eq!(
             component,
             ComponentValue::MeshInstance(MeshInstance {
-                source: "x".repeat(4097),
+                source: "x".repeat(4097).into(),
                 variant: 0,
             })
         );

@@ -30,6 +30,7 @@ impl AssetDependencySystemState {
         }
     }
 
+    #[cfg(test)]
     pub(in crate::world) fn authored_demand(&self) -> BTreeSet<AssetDemandSelection> {
         self.source_users.keys().cloned().collect()
     }
@@ -40,26 +41,20 @@ fn component_sources(
     authored: &WorldEntityState,
     entity: EntityId,
     component: u16,
-    overlay: Option<&crate::systems::state_overlay::StateOverlaySystem>,
 ) -> BTreeSet<AssetDemandSelection> {
     let mut demand = BTreeSet::new();
-    let Some(layer) = authored
+    let Some(state) = authored
         .entities
         .get(&entity)
-        .and_then(|record| record.layers.get(&component))
+        .and_then(|record| record.components.get(&component))
     else {
         return demand;
     };
-    for input in layer.inputs.retained_inputs() {
-        input.resource_demand(&mut demand);
-    }
-    if layer.inputs.input_value().is_none() && layer.input().is_some() {
-        world
+    match &state.staged {
+        Some(value) => value.resource_demand(&mut demand),
+        None => world
             .components
-            .resource_demand(component, entity.index() as usize, &mut demand);
-    }
-    if let Some(overlay) = overlay {
-        overlay.component_resource_demand(layer, &mut demand);
+            .resource_demand(component, entity.index() as usize, &mut demand),
     }
     demand
 }
@@ -69,44 +64,54 @@ impl AssetDependencySystem {
         &mut self,
         context: &mut crate::systems::SystemOperationContext<'_>,
     ) -> Result<(), ErrorReason> {
-        let overlay = context.dependency(self.bindings.get().overlay);
-        let mut changed_demand = BTreeSet::new();
+        let mut error = None;
         for &(entity, component) in &context.staged.operation_components {
-            let demand = component_sources(
+            let mut demand = component_sources(
                 context.world_data,
                 &context.staged.entities_state,
                 entity,
                 component,
-                overlay,
             );
-            changed_demand.extend(demand.iter().cloned());
+            demand.retain(|selection| {
+                let source =
+                    AssetManagementService::scoped_selection(context.world_data.id, selection)
+                        .descriptor();
+                match context.assets.validate_reference(&source) {
+                    Ok(()) => true,
+                    Err(_) => {
+                        error.get_or_insert(ErrorReason::InvalidAsset);
+                        false
+                    }
+                }
+            });
             self.state
                 .replace_component_sources((entity, component), demand);
         }
-        context
-            .assets
-            .validate_users(context.world_data.id, changed_demand)
-            .map_err(|_| ErrorReason::Capacity)?;
-        Ok(())
+        error.map_or(Ok(()), Err)
     }
 
     pub(super) fn restore_authored_demand(
         &mut self,
         runtime: &mut SystemRuntimeAccess<'_>,
     ) -> Result<(), String> {
-        self.state.component_sources.clear();
-        self.state.source_users.clear();
+        let mut sources = Vec::new();
+        let mut demand = BTreeSet::new();
         for (&entity, record) in &runtime.world.state.entities {
-            for &component in record.layers.keys() {
-                let demand =
-                    component_sources(runtime.world, &runtime.world.state, entity, component, None);
-                self.state
-                    .replace_component_sources((entity, component), demand);
+            for &component in record.components.keys() {
+                let component_demand =
+                    component_sources(runtime.world, &runtime.world.state, entity, component);
+                demand.extend(component_demand.iter().cloned());
+                sources.push(((entity, component), component_demand));
             }
         }
-        let demand = self.state.authored_demand();
         runtime
             .asset_acquisition
-            .validate_users(runtime.world.id, demand)
+            .validate_users(runtime.world.id, demand)?;
+        self.state.component_sources.clear();
+        self.state.source_users.clear();
+        for (key, demand) in sources {
+            self.state.replace_component_sources(key, demand);
+        }
+        Ok(())
     }
 }

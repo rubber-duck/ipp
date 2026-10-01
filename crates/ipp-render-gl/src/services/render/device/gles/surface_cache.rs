@@ -11,11 +11,8 @@
 use super::targets::GlesTarget;
 use super::{GlesRenderDevice, GlesRenderProgram};
 use crate::RenderError;
+use crate::services::render::surface_cache::SURFACE_CACHE_MAX_DIMENSION;
 use std::ptr;
-
-/// Largest cache image edge requested from a context, independent of how much
-/// larger the device could allocate. Keeps a single image within 16 MiB.
-const SURFACE_CACHE_MAX_DIMENSION: u32 = 2048;
 
 const TEXTURE_2D: u32 = 0x0DE1;
 const FRAMEBUFFER: u32 = 0x8D40;
@@ -29,6 +26,7 @@ const PREMULTIPLIED_BLEND: u8 = 4;
 pub struct GlesSurfaceCacheTarget {
     texture: u32,
     framebuffer: u32,
+    depth: u32,
     width: u32,
     height: u32,
 }
@@ -95,6 +93,7 @@ impl GlesRenderDevice {
         let mut target = GlesSurfaceCacheTarget {
             texture: 0,
             framebuffer: 0,
+            depth: 0,
             width,
             height,
         };
@@ -174,6 +173,11 @@ impl GlesRenderDevice {
             (self.gl.bind_texture)(TEXTURE_2D, target.texture);
             self.specify_surface_cache_storage(width, height);
             (self.gl.bind_texture)(TEXTURE_2D, 0);
+            if target.depth != 0 {
+                (self.gl.bind_renderbuffer)(0x8D41, target.depth);
+                (self.gl.renderbuffer_storage)(0x8D41, 0x81A6, width as i32, height as i32);
+                (self.gl.bind_renderbuffer)(0x8D41, 0);
+            }
         }
 
         // Dimensions describe the storage only after GL accepted it.
@@ -181,6 +185,58 @@ impl GlesRenderDevice {
         target.width = width;
         target.height = height;
         Ok(())
+    }
+
+    pub(super) fn begin_camera_target(
+        &mut self,
+        target: &mut GlesSurfaceCacheTarget,
+        clear: &[f32; 4],
+    ) -> Result<(), RenderError> {
+        self.begin_surface_cache_target(target)?;
+        self.set_depth_mask(true);
+        // SAFETY: This current context exclusively owns the bound target and its
+        // depth attachment. No CPU pointer is retained; deletion owns both handles.
+        let complete = unsafe {
+            if target.depth == 0 {
+                (self.gl.gen_renderbuffers)(1, &mut target.depth);
+                (self.gl.bind_renderbuffer)(0x8D41, target.depth);
+                (self.gl.renderbuffer_storage)(
+                    0x8D41,
+                    0x81A6,
+                    target.width as i32,
+                    target.height as i32,
+                );
+                (self.gl.framebuffer_renderbuffer)(FRAMEBUFFER, 0x8D00, 0x8D41, target.depth);
+            }
+            (self.gl.enable)(0x0B71);
+            (self.gl.enable)(0x0B44);
+            (self.gl.disable)(0x0BE2);
+            (self.gl.disable)(0x0BD0);
+            (self.gl.disable)(0x8037);
+            (self.gl.disable)(0x809E);
+            (self.gl.disable)(0x80A0);
+            (self.gl.disable)(0x8C89);
+            (self.gl.depth_func)(0x0201);
+            (self.gl.front_face)(0x0901);
+            (self.gl.cull_face)(0x0405);
+            (self.gl.clear_color)(clear[0], clear[1], clear[2], clear[3]);
+            (self.gl.clear_depth)(1.0);
+            (self.gl.clear)(COLOR_BUFFER_BIT | 0x00000100);
+            target.depth != 0 && (self.gl.check_framebuffer)(FRAMEBUFFER) == FRAMEBUFFER_COMPLETE
+        };
+        let result = self.check().and_then(|()| {
+            if complete {
+                Ok(())
+            } else {
+                Err(RenderError::RenderDevice(
+                    "Camera depth target unavailable".into(),
+                ))
+            }
+        });
+        if result.is_err() {
+            self.restore_surface_cache_binding();
+        }
+        result
     }
 
     pub(super) fn begin_surface_cache_target(
@@ -192,7 +248,7 @@ impl GlesRenderDevice {
                 "Surface cache targets cannot nest".into(),
             ));
         }
-        #[cfg(feature = "gui")]
+        #[cfg(feature = "surfaces")]
         if self.glyph_atlas_target.is_some() {
             return Err(RenderError::RenderDevice(
                 "Surface cache target inside glyph atlas population".into(),
@@ -262,6 +318,8 @@ impl GlesRenderDevice {
         target: &GlesSurfaceCacheTarget,
         mvp: &[f32; 16],
         size: &[f32; 2],
+        clip: &[f32; 4],
+        opacity: f32,
     ) -> Result<(), RenderError> {
         if self
             .surface_cache_target
@@ -305,7 +363,8 @@ impl GlesRenderDevice {
         let location = |name| self.surface_location(program, name);
         self.program_mat4(program, program.mvp, mvp);
         self.program_vec4(program, location(c"u_placement"), &rectangle);
-        self.program_vec4(program, location(c"u_clip"), &rectangle);
+        self.program_vec4(program, location(c"u_clip"), clip);
+        self.program_float(program, location(c"u_opacity"), opacity);
         self.program_int(program, location(c"u_surface_cache"), 0);
         self.bind_vertex_array(self.surface_quad_vao);
 
@@ -344,6 +403,7 @@ impl GlesRenderDevice {
         unsafe {
             if target.framebuffer != 0 {
                 (self.gl.delete_framebuffers)(1, &target.framebuffer);
+                (self.gl.delete_renderbuffers)(1, &target.depth);
             }
             if target.texture != 0 {
                 (self.gl.delete_textures)(1, &target.texture);

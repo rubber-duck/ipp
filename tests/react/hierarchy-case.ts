@@ -3,13 +3,18 @@ import {
   createRoot,
   Children,
   Entity,
-  Hierarchy,
+  EntityLink,
+  ParentJoint,
   LookAt,
   Transform,
 } from "@ipp/react";
 import type { Inspection } from "@ipp/client";
+import { exerciseLinkAnimation } from "./link-animation-case.js";
+import { exerciseReparenting } from "./reparent-case.js";
 import {
   type ReactRuntimeConfiguration,
+  type GeneratedClient,
+  type GeneratedModule,
   connect,
   requireSuccess,
   requireAlias,
@@ -23,25 +28,30 @@ export async function childrenHierarchy(
   configuration: ReactRuntimeConfiguration,
 ): Promise<string[]> {
   const { contract, client } = await connect(configuration);
+  try {
+    return await exerciseEntityLinks(client, contract);
+  } finally {
+    await client.close();
+  }
+}
+
+export async function exerciseEntityLinks(
+  client: GeneratedClient,
+  contract: GeneratedModule,
+): Promise<string[]> {
   const root = createRoot(client, { onError: () => {} });
+  const peer = createRoot(client, { onError: () => {} });
   const checks: string[] = [];
   const check = (condition: boolean, label: string) => {
     if (!condition) throw new Error(label);
     checks.push(label);
   };
-  const hierarchy = client.components.Hierarchy!;
-  const parentWrite = (id: bigint) => ({
-    offset: hierarchy.fields.parent!.offset,
-    value: { kind: "entity" as const, value: { kind: "handle" as const, id } },
-  });
-  const parentOf = (
-    state: Inspection,
-    symbol: string,
-    layer: "base" | "effective" = "effective",
-  ) =>
-    findEntity(state, symbol)?.[layer].find(
-      (value) => value.component === hierarchy.id,
-    )?.fields.parent;
+  const parentOf = (state: Inspection, symbol: string) =>
+    findEntity(state, symbol)?.link.parent;
+  const childrenOf = async (parent: bigint): Promise<bigint[]> => {
+    const page = await client.inspectTreePage({ root: parent, maxDepth: 1 });
+    return page.nodes.filter((node) => node.depth === 1).map((node) => node.id);
+  };
   try {
     const producer = await requireSuccess(
       client.batch([
@@ -50,16 +60,15 @@ export async function childrenHierarchy(
         contract.Entity.create(3, { symbolicId: "producer-child" }),
       ]),
     );
-    const a = requireAlias(producer, 1);
-    const b = requireAlias(producer, 2);
+    const parentA = requireAlias(producer, 1);
+    const parentB = requireAlias(producer, 2);
     const child = requireAlias(producer, 3);
     await requireSuccess(
       client.batch([
         {
-          kind: "insertComponent",
+          kind: "placeEntity",
           entity: contract.Entity.handle(child),
-          component: hierarchy.id,
-          fields: [parentWrite(a)],
+          placement: { parent: contract.Entity.handle(parentA), before: null },
         },
       ]),
     );
@@ -107,16 +116,26 @@ export async function childrenHierarchy(
       "Children assigns each enclosing parent through fragments and function components",
     );
     check(
-      parentOf(state, "react-plain-nested") === undefined &&
-        parentOf(state, "producer-child", "base") === a,
-      "plain nesting leaves parenting explicit and preserves producer base",
+      parentOf(state, "react-plain-nested") === null,
+      "plain nesting leaves parenting explicit",
     );
     await root.render(scene("react-parent", true));
     state = await client.inspect();
     check(
       findEntity(state, "react-sibling")?.id === sibling &&
-        findEntity(state, "react-grandchild")?.id === grandchild,
-      "keyed reordering preserves owned generations",
+        findEntity(state, "react-grandchild")?.id === grandchild &&
+        (await childrenOf(parent)).join() === [sibling, child].join(),
+      "keyed reordering changes core sibling order and preserves generations",
+    );
+    await requireSuccess(
+      client.batch([
+        contract.Entity.create(4, { symbolicId: "foreign-child" }),
+        {
+          kind: "placeEntity",
+          entity: contract.Entity.alias(4),
+          placement: { parent: contract.Entity.handle(parent), before: null },
+        },
+      ]),
     );
     await root.render(scene("react-parent-renamed", true));
     state = await client.inspect();
@@ -128,41 +147,46 @@ export async function childrenHierarchy(
         findEntity(state, "react-sibling")?.id === sibling,
       "parent replacement updates retained child relationships",
     );
+    check(
+      parentOf(state, "foreign-child") === null,
+      "declared parent deletion leaves an unrelated client child alive as a root",
+    );
     await requireSuccess(
       client.batch([
         {
-          kind: "setField",
+          kind: "placeEntity",
           entity: contract.Entity.handle(child),
-          component: hierarchy.id,
-          field: parentWrite(b),
+          placement: { parent: contract.Entity.handle(parentB), before: null },
         },
       ]),
     );
     await root.render(null);
     state = await client.inspect();
     check(
-      parentOf(state, "producer-child") === b &&
+      parentOf(state, "producer-child") === parentB &&
         !state.entities.some((entity) =>
           entity.metadata.symbolicId?.startsWith("react-"),
         ),
-      "unmount deletes owned descendants and reveals latest bound parent",
+      "unmount deletes declared descendants and leaves the bound child where a client placed it",
     );
 
     const references = (target: bigint) =>
       React.createElement(
         Entity,
         { id: "react-references" },
-        React.createElement(Hierarchy, { parent: target }),
+        React.createElement(EntityLink, { parent: target }),
+        client.components.ParentJoint &&
+          React.createElement(ParentJoint, { ordinal: 0xffffffff }),
         React.createElement(LookAt, { target }),
       );
-    await root.render(references(a));
-    await root.render(references(b));
+    await root.render(references(parentA));
+    await root.render(references(parentB));
     state = await client.inspect();
-    const target = findEntity(state, "react-references")!.effective.find(
+    const target = findEntity(state, "react-references")!.components.find(
       (value) => value.component === client.components.LookAt!.id,
     )?.fields.target;
     check(
-      parentOf(state, "react-references") === b && target === b,
+      parentOf(state, "react-references") === parentB && target === parentB,
       "explicit entity reference props update by handle value",
     );
     await root.render(null);
@@ -182,6 +206,60 @@ export async function childrenHierarchy(
         ),
       ),
     );
+    const permutations = (values: string[]): string[][] =>
+      values.length === 0
+        ? [[]]
+        : values.flatMap((value, index) =>
+            permutations(
+              values.filter((_, position) => position !== index),
+            ).map((tail) => [value, ...tail]),
+          );
+    const orderedScene = (order: string[]) =>
+      React.createElement(
+        Entity,
+        { id: "ordered-parent" },
+        React.createElement(
+          Children,
+          null,
+          order.map((id) => React.createElement(Entity, { key: id, id })),
+        ),
+      );
+    const symbols = [
+      "ordered-first",
+      "ordered-second",
+      "ordered-third",
+      "ordered-fourth",
+    ];
+    await root.render(orderedScene(symbols));
+    const orderedState = await client.inspect();
+    const generations = new Map(
+      symbols.map((symbol) => [symbol, findEntity(orderedState, symbol)!.id]),
+    );
+    const orderedParent = findEntity(orderedState, "ordered-parent")!.id;
+    for (const order of permutations(symbols)) {
+      await root.render(orderedScene(order));
+      const actual = await childrenOf(orderedParent);
+      if (
+        actual.join() !== order.map((symbol) => generations.get(symbol)!).join()
+      )
+        throw new Error(
+          `Keyed sibling permutation did not preserve order and identity: ${order}`,
+        );
+    }
+    await root.render(
+      orderedScene([symbols[2]!, "ordered-inserted", symbols[0]!]),
+    );
+    state = await client.inspect();
+    check(
+      (await childrenOf(orderedParent)).join() ===
+        [
+          generations.get(symbols[2]!),
+          findEntity(state, "ordered-inserted")!.id,
+          generations.get(symbols[0]!),
+        ].join(),
+      "all keyed permutations and insertion-removal preserve explicit order and retained identities",
+    );
+    await root.render(null);
     check(
       (await rejectedMessage(root.render(duplicate))).includes("Children"),
       "Children rejects two declarations bound to the same actual entity",
@@ -202,14 +280,70 @@ export async function childrenHierarchy(
       React.createElement(
         Entity,
         { bindTo: "producer-child" },
-        React.createElement(Hierarchy, { parent: a }),
+        React.createElement(EntityLink, { parent: parentA }),
       ),
     );
     check(
       (await rejectedMessage(root.render(explicitConflict))).includes(
         "Children",
       ),
-      "Children rejects an explicit Hierarchy on another binding to its child",
+      "Children rejects an EntityLink on another binding to its child",
+    );
+    await root.render(null);
+
+    const listed = (keys: readonly string[]) =>
+      React.createElement(
+        Entity,
+        { id: "listed-parent" },
+        React.createElement(
+          Children,
+          null,
+          ...keys.map((key) =>
+            React.createElement(Entity, { key, id: "listed-item" }),
+          ),
+        ),
+      );
+    await root.render(listed(["first"]));
+    state = await client.inspect();
+    const listedParent = findEntity(state, "listed-parent")!.id;
+    const listedItem = findEntity(state, "listed-item")!.id;
+    await root.render(listed(["second"]));
+    state = await client.inspect();
+    check(
+      findEntity(state, "listed-item")?.id === listedItem &&
+        parentOf(state, "listed-item") === listedParent,
+      "a keyed remount of an Entity id keeps its entity and placement",
+    );
+    const duplicateMessage = await rejectedMessage(
+      root.render(listed(["second", "third"])),
+    );
+    const afterDuplicate = await client.inspect();
+    check(
+      duplicateMessage.includes("Duplicate Entity id: listed-item") &&
+        afterDuplicate.entities.length === state.entities.length &&
+        findEntity(afterDuplicate, "listed-item")?.id === listedItem &&
+        parentOf(afterDuplicate, "listed-item") === listedParent,
+      "two Entity declarations of one id reject the render and send nothing",
+    );
+    await root.render(null);
+
+    const direct = (parent: bigint | null) =>
+      React.createElement(
+        Entity,
+        { bindTo: "producer-child" },
+        React.createElement(EntityLink, { parent }),
+      );
+    await root.render(direct(parentA));
+    await peer.render(direct(parentB));
+    await root.render(direct(null));
+    check(
+      parentOf(await client.inspect(), "producer-child") === null,
+      "multiple roots place one entity and the last placement wins",
+    );
+    await peer.render(null);
+    check(
+      parentOf(await client.inspect(), "producer-child") === null,
+      "withdrawing a root's link leaves the entity where it was last placed",
     );
     await root.render(null);
 
@@ -222,10 +356,12 @@ export async function childrenHierarchy(
         React.createElement(Entity, { bindTo: "react-partial-parent" }),
       ),
     );
+    checks.push(...(await exerciseLinkAnimation(client, parentA, parentB)));
+    checks.push(...(await exerciseReparenting(client)));
     await rejectedMessage(root.render(invalid));
     check(
       findEntity(await client.inspect(), "react-partial-parent") !== undefined,
-      "a rejected parent relationship retains acknowledged partial ownership",
+      "a rejected parent relationship keeps its applied creation",
     );
     await root.render(scene("react-corrected-parent"));
     state = await client.inspect();
@@ -233,18 +369,29 @@ export async function childrenHierarchy(
       findEntity(state, "react-partial-parent") === undefined &&
         parentOf(state, "producer-child") ===
           findEntity(state, "react-corrected-parent")?.id,
-      "corrected rendering cleans partial ownership and rebuilds relationships",
+      "corrected rendering deletes the partial entity and rebuilds relationships",
     );
+    const mounted = (await client.inspect()).entities.length;
     await root.unmount();
+    check(
+      (await client.inspect()).entities.length === mounted,
+      "unmount deletes nothing",
+    );
+    // Removing the declarations deletes the declared entities. The bound
+    // child's last parent was a declared entity, so deleting it leaves the
+    // child a root.
+    const cleanup = createRoot(client);
+    await cleanup.render(scene("react-corrected-parent"));
+    await cleanup.render(null);
+    await cleanup.unmount();
     state = await client.inspect();
     check(
-      state.entities.length === 3 && parentOf(state, "producer-child") === b,
-      "final cleanup preserves only producer entities",
+      state.entities.length === 4 && parentOf(state, "producer-child") === null,
+      "removing the declarations preserves only client entities",
     );
     return checks;
   } finally {
-    await settleRoots([root]);
-    await client.close();
+    await settleRoots([root, peer]);
   }
 }
 

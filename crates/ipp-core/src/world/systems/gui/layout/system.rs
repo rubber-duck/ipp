@@ -1,138 +1,32 @@
 //! World pass retaining GUI constraint evaluation across frames.
 //!
-//! [`GuiLayoutSystem`] runs after the GUI state, animation and Surface
-//! passes, borrows effective [`GuiRoot`](super::super::GuiRoot) and
-//! [`Surface`](crate::systems::surface::Surface) values, and retains one
-//! [`GuiEvaluatedView`](super::super::GuiEvaluatedView) per root entity in its
-//! [`GuiLayoutCache`](super::super::GuiLayoutCache). Input routing, skinning and
-//! semantic readers borrow the retained views through the declared
-//! dependency; render preparation consumes retained paint through the
-//! internal Surface path. The pass never mutates components, never issues
-//! client commands and never advances simulation time.
+//! [`GuiLayoutSystem`] runs after the GUI state and animation passes and
+//! retains the evaluated geometry of ordinary `GuiLayout` entities for Canvas
+//! production. The pass writes the scroll geometry, wanted range and
+//! normalized position fields of scrolling controls it evaluated; it never
+//! issues client commands and never advances simulation time.
 
-use super::evaluation::{
-    GuiEvaluatedView, GuiFontResolution, GuiLayoutCache, GuiLayoutRequest, GuiResourceResolver,
-};
-use crate::services::asset_management::font::FontAsset;
-use crate::services::asset_management::{AssetManagementService, AssetSource};
-use crate::systems::surface::SurfaceRenderResource;
+use crate::ComponentValue;
 use crate::systems::{
     System, SystemDependency, SystemFactory, SystemId, SystemInitContext, SystemInitError,
 };
-use crate::{ComponentValue, EntityId, WorldId};
-use std::collections::{BTreeMap, BTreeSet};
 
 /// Retained GUI layout pass. See the module documentation for the pass
-/// contract; algorithmic detail lives in [`super::evaluation`].
+/// contract.
 #[derive(Default)]
 pub struct GuiLayoutSystem {
-    cache: GuiLayoutCache,
-    bindings: crate::systems::SystemBindings<Self>,
-    /// Entities holding a GuiRoot, in entity order, maintained by the
-    /// commit lifecycle so each frame visits roots rather than every entity.
-    roots: crate::world::component_query::ComponentQuery<super::super::GuiRoot>,
-    /// Roots whose GuiRoot or Surface changed through a commit or numeric
-    /// write since their last evaluation. Other retained roots keep their
-    /// output without recomputing input fingerprints.
-    stale: BTreeSet<EntityId>,
-    /// Every root re-evaluates: resource readiness, replacement or release
-    /// can change measurement and paint without a component change.
-    all_stale: bool,
-    /// Count of committed GuiRoot changes per root entity. Numeric writes do
-    /// not advance it, so consumers of authored (restored) input can tell a
-    /// commit from an animation sample.
-    commits: BTreeMap<EntityId, u64>,
-    /// Work of the latest scheduled pass, observed by diagnostics readers.
-    #[cfg(any(test, feature = "diagnostics"))]
-    latest: super::evaluation::GuiLayoutWork,
+    gui: Option<crate::systems::SystemDependencyBinding<super::super::GuiSystem>>,
+    pub(super) entity_layout: super::entity_layout::GuiEntityLayoutState,
 }
-
-/// Layout work counters of diagnostics builds: the latest scheduled pass
-/// and the totals of every pass of this World.
-#[cfg(any(test, feature = "diagnostics"))]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct GuiLayoutStatistics {
-    /// Work of the latest scheduled layout pass.
-    pub latest: super::evaluation::GuiLayoutWork,
-    /// Work of every layout pass of this World.
-    pub total: super::evaluation::GuiLayoutWork,
-}
-
-crate::system_parameter!(super::super::GuiSystem);
-crate::system_parameter!(crate::systems::surface::SurfaceSystem);
 
 impl GuiLayoutSystem {
     /// Stable system identity.
     pub const ID: SystemId = SystemId("ipp.gui-layout");
 
-    /// Read-only retained view for one root entity, if ever evaluated.
-    /// Returned borrows end before the next update; consumers must not
-    /// retain them across frames.
-    pub fn view(&self, entity: EntityId) -> Option<&GuiEvaluatedView> {
-        self.cache.view(entity)
-    }
-
-    /// Current paint revision for one root entity, if ever evaluated.
-    pub fn paint_revision(&self, entity: EntityId) -> Option<u64> {
-        self.cache.paint_revision(entity)
-    }
-
-    /// Every evaluated root entity with its current paint revision, in
-    /// entity order. Render preparation consumes this to rebuild Surface
-    /// primitives only when retained paint actually changed.
-    pub fn paint_states(&self) -> Vec<(EntityId, u64)> {
-        let mut states = Vec::new();
-        // GuiLayoutCache borrows views by entity; collect identities here
-        // so preparation can compare without holding the borrow.
-        for entity in self.evaluated_entities() {
-            if let Some(revision) = self.cache.paint_revision(entity) {
-                states.push((entity, revision));
-            }
-        }
-        states
-    }
-
-    /// Every evaluated root entity with the revisions consumers of its
-    /// evaluated records key on, in entity order: the content revision,
-    /// which follows paint except across in-place translations, and the
-    /// count of committed GuiRoot changes.
-    pub(crate) fn content_states(&self) -> Vec<(EntityId, u64, u64)> {
-        self.evaluated_entities()
-            .into_iter()
-            .filter_map(|entity| {
-                let revision = self.cache.content_revision(entity)?;
-                let commits = self.commits.get(&entity).copied().unwrap_or(0);
-                Some((entity, revision, commits))
-            })
-            .collect()
-    }
-
-    /// Reflow and text measurement counters of diagnostics builds.
-    #[cfg(any(test, feature = "diagnostics"))]
-    pub fn statistics(&self) -> GuiLayoutStatistics {
-        GuiLayoutStatistics {
-            latest: self.latest,
-            total: self.cache.work(),
-        }
-    }
-
-    /// Entities with retained layout output, in ascending order.
-    pub fn evaluated_entities(&self) -> Vec<EntityId> {
-        self.cache.entities()
-    }
-
-    /// Evaluate one root against explicit inputs without a World, sharing the
-    /// retained cache with the scheduled pass, which re-evaluates the root
-    /// from World inputs on its next update.
-    #[cfg(test)]
-    pub(super) fn evaluate_for_test(
-        &mut self,
-        entity: EntityId,
-        request: &GuiLayoutRequest<'_>,
-        resolver: &dyn GuiResourceResolver,
-    ) -> &GuiEvaluatedView {
-        self.stale.insert(entity);
-        self.cache.evaluate(entity, request, resolver)
+    pub(in crate::world::systems) fn entity_view(
+        &self,
+    ) -> Option<&std::sync::Arc<super::entity_layout::GuiEntityLayoutView>> {
+        self.entity_layout.view.as_ref()
     }
 }
 
@@ -143,6 +37,17 @@ pub struct GuiLayoutSystemFactory;
 impl SystemFactory for GuiLayoutSystemFactory {
     fn id(&self) -> SystemId {
         GuiLayoutSystem::ID
+    }
+
+    fn capabilities(&self) -> crate::systems::SystemCapabilities {
+        let mut capabilities = crate::systems::SystemCapabilities::default();
+        capabilities
+            .components
+            .push(crate::systems::SystemCapability::requiring(
+                ComponentValue::GUI_LAYOUT,
+                [crate::systems::canvas::CanvasSystem::ID],
+            ));
+        capabilities
     }
 
     fn dependencies(&self) -> &[SystemDependency] {
@@ -158,14 +63,8 @@ impl SystemFactory for GuiLayoutSystemFactory {
         context: &mut SystemInitContext<'_>,
     ) -> Result<Box<dyn System>, SystemInitError> {
         Ok(Box::new(GuiLayoutSystem {
-            cache: GuiLayoutCache::default(),
-            bindings: crate::systems::SystemBindings::resolve(context)?,
-            roots: Default::default(),
-            stale: BTreeSet::new(),
-            all_stale: true,
-            commits: BTreeMap::new(),
-            #[cfg(any(test, feature = "diagnostics"))]
-            latest: Default::default(),
+            gui: Some(context.dependency::<super::super::GuiSystem>(super::super::GuiSystem::ID)?),
+            entity_layout: Default::default(),
         }))
     }
 }
@@ -173,23 +72,12 @@ impl SystemFactory for GuiLayoutSystemFactory {
 impl System for GuiLayoutSystem {
     fn before_numeric_update(&mut self, context: &mut crate::systems::SystemNumericContext<'_>) {
         for &(entity, component) in context.changed_components() {
-            if layout_input(component) {
-                self.stale.insert(entity);
-            }
+            self.entity_layout.dirty(entity, component);
         }
     }
 
     fn before_commit(&mut self, context: &mut crate::systems::SystemCommitContext<'_>) {
-        for (entity, component) in context.changed_components() {
-            if layout_input(component) {
-                self.stale.insert(entity);
-            }
-            if component == ComponentValue::GUI_ROOT {
-                let commits = self.commits.entry(entity).or_default();
-                *commits = commits.wrapping_add(1);
-            }
-        }
-        self.roots.before_commit(context, ComponentValue::GUI_ROOT);
+        self.entity_layout.before_commit(context);
     }
 
     fn before_asset_release(
@@ -197,7 +85,7 @@ impl System for GuiLayoutSystem {
         _context: &mut crate::systems::SystemAssetContext<'_>,
         _event: &crate::services::asset_management::AssetLifecycleEvent,
     ) {
-        self.all_stale = true;
+        self.entity_layout.resources_changed();
     }
 
     fn asset_lifecycle(
@@ -205,192 +93,19 @@ impl System for GuiLayoutSystem {
         _context: &mut crate::systems::SystemAssetContext<'_>,
         _event: &crate::services::asset_management::AssetLifecycleEvent,
     ) {
-        self.all_stale = true;
+        self.entity_layout.resources_changed();
     }
 
-    fn after_commit(&mut self, context: &mut crate::systems::SystemCommitContext<'_>) {
-        self.roots.after_commit(
-            context,
-            ComponentValue::GUI_ROOT,
-            crate::components::registry::ComponentStorage::gui_root_ptr,
+    fn update(&mut self, context: &mut crate::systems::SystemUpdateContext<'_, '_>) {
+        self.entity_layout.update(
+            &context.world,
+            self.gui
+                .and_then(|binding| context.world.dependency(binding)),
         );
+        let world = &mut *context.world.world;
+        self.entity_layout
+            .write_scroll_fields(&mut world.components, &world.state);
     }
-
-    crate::system_update!(bindings);
 }
 
 crate::system_parameter!(GuiLayoutSystem);
-
-/// Host asset lookup bridging component asset references to the immutable
-/// resources measurement and paint need. Missing registrations resolve to
-/// [`GuiFontResolution::Missing`]; registered but undecoded assets resolve
-/// to [`GuiFontResolution::Pending`]. Metrics are never guessed.
-struct SystemResolver<'a> {
-    world: WorldId,
-    assets: &'a AssetManagementService,
-}
-
-impl GuiResourceResolver for SystemResolver<'_> {
-    fn text_font(&self, source: &AssetSource) -> GuiFontResolution<'_> {
-        let Some(key) =
-            self.assets
-                .find_source(self.world, source.kind, &source.uri, source.variant)
-        else {
-            return GuiFontResolution::Missing;
-        };
-
-        match self
-            .assets
-            .get(key)
-            .and_then(|resource| resource.data())
-            .and_then(|asset| asset.decoded().downcast_ref::<FontAsset>())
-        {
-            Some(font) => GuiFontResolution::Ready {
-                key,
-                font,
-            },
-            None => GuiFontResolution::Pending {
-                key,
-            },
-        }
-    }
-
-    fn surface_resource(&self, source: &AssetSource) -> Option<SurfaceRenderResource> {
-        let key = self
-            .assets
-            .find_source(self.world, source.kind, &source.uri, source.variant)?;
-        self.assets.get(key)?.data()?;
-        Some(SurfaceRenderResource {
-            key,
-            source: source.clone(),
-        })
-    }
-
-    /// Slot generation while decoded data backs retained output. Pending
-    /// or missing sources report nothing, so a readiness flip rebuilds
-    /// only affected branches through the layout fingerprint; replacement
-    /// and recovery flow through the same signal without authored edits.
-    fn resource_generation(&self, source: &AssetSource) -> Option<u64> {
-        let key = self
-            .assets
-            .find_source(self.world, source.kind, &source.uri, source.variant)?;
-        self.assets
-            .get(key)?
-            .data()
-            .map(|_| u64::from(key.generation))
-    }
-}
-
-#[crate::systems::system_update(
-    SystemDependency::Required(super::super::GuiSystem::ID),
-    SystemDependency::After(crate::systems::animation::AnimationSystem::ID),
-    SystemDependency::After(crate::systems::surface::SurfaceSystem::ID)
-)]
-impl GuiLayoutSystem {
-    fn update(
-        &mut self,
-        ecs: crate::systems::SystemEcsAccess<'_>,
-        assets: &crate::services::asset_management::AssetManagementService,
-        state: &super::super::GuiSystem,
-        _animation: &crate::systems::animation::AnimationSystem,
-        _surface: &crate::systems::surface::SurfaceSystem,
-        _dt: f64,
-    ) {
-        let world_id = ecs.id();
-        let tick = ecs.world.tick;
-        #[cfg(any(test, feature = "diagnostics"))]
-        let before = self.cache.work();
-        let resolver = SystemResolver {
-            world: world_id,
-            assets,
-        };
-        self.roots.prepare(
-            ecs.world,
-            crate::components::registry::ComponentStorage::gui_root_ptr,
-        );
-
-        let mut live = BTreeSet::new();
-        for &(entity, _) in self.roots.entries() {
-            let index = entity.index() as usize;
-            let (Some(surface), Some(root)) = (
-                ecs.world.components.surface(index),
-                ecs.world.components.gui_root(index),
-            ) else {
-                continue;
-            };
-            // Raw-authored Surfaces never carry layout output; the content
-            // owner rule keeps the domains disjoint.
-            if !surface.items().is_empty() {
-                continue;
-            }
-
-            let root_incarnation = ecs
-                .world
-                .state
-                .entities
-                .get(&entity)
-                .and_then(|record| record.input(ComponentValue::GUI_ROOT))
-                .map(|input| input.incarnation)
-                .unwrap_or(0);
-            live.insert(entity);
-
-            // Unchanged inputs keep retained output; only the evaluation
-            // tick advances, as it would on a no-op refresh.
-            if !self.all_stale
-                && !self.stale.contains(&entity)
-                && self.cache.is_current(entity, root_incarnation)
-            {
-                self.cache.touch(entity, tick);
-                continue;
-            }
-
-            // The GUI System derives child order at every commit; a root it
-            // has not indexed yet is derived here for this evaluation.
-            let derived;
-            let tree = match state
-                .tree(entity)
-                .filter(|tree| tree.incarnation() == root_incarnation)
-            {
-                Some(tree) => tree,
-                None => {
-                    derived = super::super::GuiTreeIndex::new(root, root_incarnation);
-                    &derived
-                }
-            };
-            let request = GuiLayoutRequest {
-                root,
-                tree,
-                root_incarnation,
-                surface_size: [surface.width, surface.height],
-                units_per_metre: root.units_per_metre,
-                evaluation_tick: tick,
-            };
-            self.cache.evaluate(entity, &request, &resolver);
-        }
-
-        // Entities and components that went away invalidate their retained
-        // output before any identity can be reused.
-        self.cache.retain_entities(&live);
-        self.commits.retain(|entity, _| live.contains(entity));
-        self.stale.clear();
-        self.all_stale = false;
-
-        #[cfg(any(test, feature = "diagnostics"))]
-        {
-            let after = self.cache.work();
-            self.latest = super::evaluation::GuiLayoutWork {
-                reflows: after.reflows - before.reflows,
-                text_measurements: after.text_measurements - before.text_measurements,
-            };
-        }
-    }
-}
-
-/// Components whose changes can alter a root's evaluated layout or paint.
-fn layout_input(component: u16) -> bool {
-    component == ComponentValue::GUI_ROOT || component == ComponentValue::SURFACE
-}
-
-#[cfg(test)]
-#[path = "system_tests.rs"]
-mod tests;

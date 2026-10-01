@@ -1,5 +1,12 @@
 use super::*;
 
+fn test_link() -> ipp_core::EntityLink {
+    ipp_core::EntityLink {
+        parent: None,
+        order: ipp_core::EntityOrder::from_value(1).unwrap(),
+    }
+}
+
 fn request(tag: u8) -> Vec<u8> {
     let mut bytes = 7u64.to_le_bytes().to_vec();
     bytes.extend_from_slice(&9u64.to_le_bytes());
@@ -7,6 +14,7 @@ fn request(tag: u8) -> Vec<u8> {
     if tag == REQUEST_INSPECT {
         bytes.extend_from_slice(&[0; 17]);
         bytes.extend_from_slice(&256u16.to_le_bytes());
+        bytes.extend_from_slice(&0u16.to_le_bytes());
     }
     bytes
 }
@@ -180,7 +188,7 @@ fn row_property_writes_use_raw_offsets_while_named_properties_stay_rejected() {
 #[test]
 fn inspected_rows_tables_encode_once_with_their_kind_tag() {
     let table = vec![1, 0, 0, 0, 0, 0, 0, 0];
-    let mut writer = Writer(Vec::new());
+    let mut writer = Writer::new(Vec::new());
     writer
         .resolved_field(24, ResolvedValue::Rows(table.clone()))
         .unwrap();
@@ -190,7 +198,7 @@ fn inspected_rows_tables_encode_once_with_their_kind_tag() {
     expected.extend_from_slice(&table);
     assert_eq!(writer.0, expected);
 
-    let mut writer = Writer(Vec::new());
+    let mut writer = Writer::new(Vec::new());
     writer
         .resolved_field(0x1000_0000, ResolvedValue::Unset)
         .unwrap();
@@ -260,7 +268,7 @@ fn string_fields_own_strict_bounded_utf8_and_encode_at_target_offsets() {
         .field()
         .unwrap()
         .value,
-        FieldValue::String(String::new())
+        FieldValue::String("".into())
     );
 }
 
@@ -271,7 +279,7 @@ fn resource_events_are_ordered_bounded_and_unsolicited() {
         representation: Default::default(),
         id: 1,
         kind: ipp_core::services::asset_management::AssetTypeId(1),
-        source: "x".repeat(4097),
+        source: "x".repeat(4097).into(),
         variant: u32::MAX,
         status: AssetResourceStatus::Failed("e".repeat(2048)),
     };
@@ -301,7 +309,7 @@ fn resource_events_are_ordered_bounded_and_unsolicited() {
     assert!(encode(vec![resource.clone(); 2], 0).is_ok());
     for invalid in [
         AssetResourceSnapshot {
-            source: "x".repeat(65537),
+            source: "x".repeat(65537).into(),
             ..resource.clone()
         },
         AssetResourceSnapshot {
@@ -336,6 +344,12 @@ fn inspection_encodes_current_resource_statuses_after_entities() {
         request_id: 1,
         tick: 9,
         body: ResponseBody::Inspect {
+            #[cfg(feature = "gui")]
+            gui_focus: Vec::new(),
+            #[cfg(feature = "gui")]
+            gui_pointers: Vec::new(),
+            #[cfg(feature = "surfaces")]
+            canvas: None,
             next: 0,
             controllers: Vec::new(),
             time: 0.5,
@@ -384,6 +398,14 @@ fn inspection_encodes_current_resource_statuses_after_entities() {
     assert_eq!(reader.u64().unwrap(), 0x100000001);
     assert_eq!(reader.string().unwrap(), "InvalidAsset");
     assert_eq!(reader.u32().unwrap(), 0);
+    // GUI builds append the empty focus and pointer collections.
+    #[cfg(feature = "gui")]
+    for _ in 0..2 {
+        assert_eq!(reader.u32().unwrap(), 0);
+    }
+    // Surface builds append the absent Canvas System record.
+    #[cfg(feature = "surfaces")]
+    assert_eq!(reader.u8().unwrap(), 0);
     assert_eq!(reader.at, bytes.len());
 }
 
@@ -411,14 +433,20 @@ fn inspection_encodes_dynamic_components_beyond_static_field_limits() {
         request_id: 1,
         tick: 9,
         body: ResponseBody::Inspect {
+            #[cfg(feature = "gui")]
+            gui_focus: Vec::new(),
+            #[cfg(feature = "gui")]
+            gui_pointers: Vec::new(),
+            #[cfg(feature = "surfaces")]
+            canvas: None,
             next: 0,
             controllers: Vec::new(),
             time: 0.5,
             entities: vec![ipp_core::EntitySnapshot {
                 id: EntityId::from_bits(42),
                 metadata: EntityMetadata::default(),
-                base: vec![ComponentValue::CustomMaterial(material)],
-                effective: Vec::new(),
+                link: test_link(),
+                components: vec![ComponentValue::CustomMaterial(material)],
             }],
             resources: Vec::new(),
             render_diagnostics: Vec::new(),
@@ -426,120 +454,18 @@ fn inspection_encodes_dynamic_components_beyond_static_field_limits() {
     })
     .unwrap();
 
-    // Response envelope, inspection header, entity identity/metadata and the
-    // base-component count precede this component's u16 type and u32 count.
+    // Response envelope, inspection header, entity identity/metadata, link and
+    // the component count precede this component's u16 type and u32 count.
     assert_eq!(
-        u32::from_le_bytes(bytes[64..68].try_into().unwrap()) as usize,
+        u32::from_le_bytes(bytes[88..92].try_into().unwrap()) as usize,
         field_count
     );
     assert!(bytes.len() < MAX_MESSAGE_BYTES);
 }
 
 #[test]
-fn effective_inspection_refers_to_an_identical_base_descriptor_table() {
-    let mut material = ipp_core::components::CustomMaterial::default();
-    for index in 0..3000 {
-        material
-            .properties
-            .set(
-                &format!("node_{index}_background_corner_radius"),
-                ipp_core::DynamicValue::F32(index as f32),
-            )
-            .unwrap();
-    }
-    let table = descriptor_table(&material.properties);
-    assert!(table.len() > 65_536);
-
-    // An animated effective value keeps the same descriptor identities.
-    let mut animated = material.clone();
-    animated
-        .properties
-        .set(
-            "node_0_background_corner_radius",
-            ipp_core::DynamicValue::F32(9.0),
-        )
-        .unwrap();
-    let mut renamed = material.clone();
-    renamed
-        .properties
-        .set("extra", ipp_core::DynamicValue::F32(1.0))
-        .unwrap();
-    let encode = |base: Vec<ComponentValue>, effective: Vec<ComponentValue>| {
-        encode_response(&Response {
-            session: 7,
-            request_id: 1,
-            tick: 9,
-            body: ResponseBody::Inspect {
-                next: 0,
-                controllers: Vec::new(),
-                time: 0.5,
-                entities: vec![ipp_core::EntitySnapshot {
-                    id: EntityId::from_bits(42),
-                    metadata: EntityMetadata::default(),
-                    base,
-                    effective,
-                }],
-                resources: Vec::new(),
-                render_diagnostics: Vec::new(),
-            },
-        })
-        .unwrap()
-    };
-    let occurrences = |bytes: &[u8]| bytes.windows(table.len()).filter(|w| *w == table).count();
-
-    let base_only = encode(
-        vec![ComponentValue::CustomMaterial(material.clone())],
-        vec![],
-    );
-    let shared = encode(
-        vec![ComponentValue::CustomMaterial(material.clone())],
-        vec![ComponentValue::CustomMaterial(animated)],
-    );
-    assert_eq!(occurrences(&shared), 1);
-    // The effective copy adds its values and a one-byte reference, not a second table.
-    assert!(shared.len() - base_only.len() < base_only.len() - table.len());
-    let reference = [
-        DYNAMIC_METADATA_OFFSET.to_le_bytes().as_slice(),
-        &[SNAPSHOT_VALUE_BASE_DESCRIPTORS],
-    ]
-    .concat();
-    assert!(shared.windows(reference.len()).any(|w| w == reference));
-
-    // Different descriptors, or no base counterpart, still carry a complete table.
-    let changed = encode(
-        vec![ComponentValue::CustomMaterial(material.clone())],
-        vec![ComponentValue::CustomMaterial(renamed.clone())],
-    );
-    assert_eq!(occurrences(&changed), 1);
-    let renamed_table = descriptor_table(&renamed.properties);
-    assert!(
-        changed
-            .windows(renamed_table.len())
-            .any(|w| w == renamed_table)
-    );
-    let effective_only = encode(vec![], vec![ComponentValue::CustomMaterial(material)]);
-    assert_eq!(occurrences(&effective_only), 1);
-    assert!(
-        !effective_only
-            .windows(reference.len())
-            .any(|w| w == reference)
-    );
-}
-
-const DYNAMIC_METADATA_OFFSET: u32 = ipp_core::components::dynamic_properties::DYNAMIC_METADATA;
-
-fn descriptor_table(
-    properties: &ipp_core::components::dynamic_properties::DynamicProperties,
-) -> Vec<u8> {
-    match properties.field(DYNAMIC_METADATA_OFFSET) {
-        Ok(ResolvedValue::Bytes(table)) => table,
-        other => panic!("descriptor table unavailable: {other:?}"),
-    }
-}
-
-#[test]
 fn large_inspected_byte_fields_still_obey_the_message_budget() {
-    let mut writer = Writer(Vec::new());
+    let mut writer = Writer::new(Vec::new());
     assert_eq!(
         writer.resolved_field(0, ResolvedValue::Bytes(vec![0; MAX_MESSAGE_BYTES])),
         Err(ProtocolError::Limit("message")),
@@ -573,103 +499,59 @@ fn omitted_asset_capabilities_reject_their_wire_tags() {
 }
 
 #[test]
-fn camera_notifications_and_geometry_results_enforce_distinct_identities() {
+fn geometry_results_enforce_request_and_tick_correlation() {
     let mut response = Response {
         session: 7,
-        request_id: 0,
+        request_id: 9,
         tick: 11,
-        body: ResponseBody::CameraStateChangedEvent(ipp_core::CameraStateChange {
+        body: ResponseBody::GeometryPickResultEvent(crate::views::ViewQueryOutcome {
+            request_id: 9,
             tick: 11,
-            changes: ipp_core::CameraStatePatch {
-                active_camera: Some(EntityId::from_bits(9)),
-            },
+            result: Err(ipp_core::ErrorReason::InvalidEntity),
         }),
     };
     assert!(encode_response(&response).is_ok());
-    response.request_id = 9;
-    assert_eq!(
-        encode_response(&response),
-        Err(ProtocolError::Malformed("reserved response identity"))
-    );
     response.request_id = 0;
-    response.tick = 12;
+    assert!(encode_response(&response).is_err());
+    response.request_id = 10;
     assert_eq!(
         encode_response(&response),
-        Err(ProtocolError::Malformed("camera state change tick"))
+        Err(ProtocolError::Malformed("geometry outcome correlation"))
     );
-    response.tick = 11;
-    response.body = ResponseBody::CameraStateChangedEvent(ipp_core::CameraStateChange {
-        tick: 11,
-        changes: ipp_core::CameraStatePatch::default(),
-    });
+    response.request_id = 9;
+    response.tick = 12;
     assert!(encode_response(&response).is_err());
+}
 
-    {
-        response.body = ResponseBody::GeometryPickResultEvent(ipp_core::GeometryPickOutcome {
-            request_id: 9,
-            tick: 11,
-            camera: None,
-            result: Err(ipp_core::ErrorReason::NoActiveCamera),
-        });
-        assert!(encode_response(&response).is_err());
-        response.request_id = 9;
-        assert!(encode_response(&response).is_ok());
-        response.request_id = 10;
-        assert_eq!(
-            encode_response(&response),
-            Err(ProtocolError::Malformed("geometry outcome correlation"))
-        );
-        response.request_id = 9;
-        response.tick = 12;
-        assert_eq!(
-            encode_response(&response),
-            Err(ProtocolError::Malformed("geometry outcome correlation"))
-        );
-    }
+fn root_view_bytes() -> Vec<u8> {
+    let mut writer = Writer::new(Vec::new());
+    writer.u8(VIEW_ROOT).unwrap();
+    writer
+        .output_reference(crate::references::OutputReference {
+            world: crate::references::WorldReference {
+                id: 1,
+                incarnation: 2,
+            },
+            target: crate::references::OutputTarget::Camera {
+                entity: 3,
+                incarnation: 4,
+            },
+        })
+        .unwrap();
+    writer.u32(640).unwrap();
+    writer.u32(480).unwrap();
+    writer.f64(1.0).unwrap();
+    writer.0
 }
 
 #[test]
-fn system_input_identities_and_malformed_navigation_reject_before_queueing() {
-    for (tag, payload) in [
-        (REQUEST_CAMERA_ACTIVATE, 9u64.to_le_bytes().to_vec()),
-        (REQUEST_RENDER_STATE_UPDATE, 0u16.to_le_bytes().to_vec()),
-        (
-            REQUEST_CAMERA_NAVIGATE,
-            [vec![CAMERA_MOTION_ZOOM], 0.5f32.to_le_bytes().to_vec()].concat(),
-        ),
-    ] {
+fn obsolete_implicit_camera_controls_are_not_protocol_operations() {
+    for tag in [8, 11] {
         let mut bytes = request(tag);
-        bytes.extend(payload);
-        assert_eq!(
-            decode_request(&bytes, 7),
-            Err(ProtocolError::Malformed("reserved request identity"))
-        );
-        bytes[8..16].copy_from_slice(&0u64.to_le_bytes());
-        assert!(decode_request(&bytes, 7).is_ok());
-        let mut trailing = bytes.clone();
-        trailing.push(0);
-        assert!(decode_request(&trailing, 7).is_err());
-        bytes.pop();
-        assert!(decode_request(&bytes, 7).is_err());
-    }
-    let mut bytes = request(REQUEST_CAMERA_NAVIGATE);
-    bytes[8..16].copy_from_slice(&0u64.to_le_bytes());
-    bytes.push(255);
-    assert_eq!(
-        decode_request(&bytes, 7),
-        Err(ProtocolError::Malformed("camera motion tag"))
-    );
-    bytes[17] = CAMERA_MOTION_ZOOM;
-    bytes.extend_from_slice(&f32::NAN.to_le_bytes());
-    assert!(decode_request(&bytes, 7).is_err());
-
-    {
-        let mut bytes = request(REQUEST_GEOMETRY_PICK);
-        bytes.extend_from_slice(&[0; 17]);
         bytes[8..16].copy_from_slice(&0u64.to_le_bytes());
         assert_eq!(
             decode_request(&bytes, 7),
-            Err(ProtocolError::Malformed("reserved request identity"))
+            Err(ProtocolError::Unsupported(tag))
         );
     }
 }
@@ -689,10 +571,9 @@ fn unavailable_transient_events_reject_before_payload_decode() {
 #[test]
 fn geometry_pick_flags_require_a_canonical_boolean_and_exact_payload() {
     let mut bytes = request(REQUEST_GEOMETRY_PICK);
+    bytes.extend(root_view_bytes());
     bytes.extend_from_slice(&0.5f32.to_le_bytes());
     bytes.extend_from_slice(&0.5f32.to_le_bytes());
-    bytes.extend_from_slice(&640u32.to_le_bytes());
-    bytes.extend_from_slice(&480u32.to_le_bytes());
     assert!(decode_request(&bytes, 7).is_err());
     for flag in 0..=255 {
         let mut encoded = bytes.clone();
@@ -745,9 +626,32 @@ fn session_truncation_trailing_and_tags_reject() {
 }
 
 #[test]
+fn tree_query_bounds_and_cursor_form_are_enforced() {
+    let mut bytes = request(REQUEST_INSPECT);
+    bytes[17] = INSPECT_ENTITY_TREE;
+    bytes[18..26].copy_from_slice(&42u64.to_le_bytes());
+    bytes[26..34].copy_from_slice(&41u64.to_le_bytes());
+    bytes[36..38].copy_from_slice(&64u16.to_le_bytes());
+    assert!(matches!(
+        decode_request(&bytes, 7).unwrap().body,
+        RequestBody::Inspect(_)
+    ));
+    bytes[36..38].copy_from_slice(&65u16.to_le_bytes());
+    assert!(decode_request(&bytes, 7).is_err());
+    bytes[36..38].copy_from_slice(&0u16.to_le_bytes());
+    bytes[17] = INSPECT_ENTITIES;
+    assert!(decode_request(&bytes, 7).is_err());
+    bytes[17] = INSPECT_ENTITY_TREE;
+    for end in 0..bytes.len() {
+        assert!(decode_request(&bytes[..end], 7).is_err());
+    }
+}
+
+#[test]
 fn bound_counts_before_allocating() {
-    let mut b = request(REQUEST_BATCH);
-    b.extend_from_slice(&1u64.to_le_bytes());
+    let mut b = request(REQUEST_SUBMIT_BATCH);
+    b.extend_from_slice(&1u32.to_le_bytes());
+    b.push(1);
     b.extend_from_slice(&u32::MAX.to_le_bytes());
     assert!(matches!(
         decode_request(&b, 7),
@@ -809,6 +713,12 @@ fn frame_encoding_and_response_identity_are_fenced() {
             message: "rejected".into(),
         },
         ResponseBody::Inspect {
+            #[cfg(feature = "gui")]
+            gui_focus: Vec::new(),
+            #[cfg(feature = "gui")]
+            gui_pointers: Vec::new(),
+            #[cfg(feature = "surfaces")]
+            canvas: None,
             next: 0,
             controllers: Vec::new(),
             time: 0.0,
@@ -816,11 +726,15 @@ fn frame_encoding_and_response_identity_are_fenced() {
             resources: vec![],
             render_diagnostics: vec![],
         },
-        ResponseBody::Batch(BatchOutcome {
-            batch_id: 1,
-            tick: 11,
-            result: Ok(vec![]),
-            state_overlays: vec![],
+        ResponseBody::Batch(crate::attachment_receipts::ReceiptBatchOutcome {
+            outcome: BatchOutcome {
+                batch_id: 1,
+                tick: 11,
+                result: Ok(vec![]),
+                symbols: vec![],
+                effects: vec![],
+            },
+            effects: vec![],
         }),
     ] {
         response.body = body;
@@ -844,6 +758,12 @@ fn response_times_are_finite_and_nonnegative() {
             (
                 1,
                 ResponseBody::Inspect {
+                    #[cfg(feature = "gui")]
+                    gui_focus: Vec::new(),
+                    #[cfg(feature = "gui")]
+                    gui_pointers: Vec::new(),
+                    #[cfg(feature = "surfaces")]
+                    canvas: None,
                     next: 0,
                     controllers: Vec::new(),
                     time,
@@ -868,8 +788,9 @@ fn response_times_are_finite_and_nonnegative() {
 
 #[test]
 fn decoded_metadata_owns_source() {
-    let mut b = request(REQUEST_BATCH);
-    b.extend_from_slice(&1u64.to_le_bytes());
+    let mut b = request(REQUEST_SUBMIT_BATCH);
+    b.extend_from_slice(&1u32.to_le_bytes());
+    b.push(1);
     b.extend_from_slice(&1u32.to_le_bytes());
     b.push(COMMAND_CREATE);
     b.extend_from_slice(&4u32.to_le_bytes());
@@ -877,9 +798,10 @@ fn decoded_metadata_owns_source() {
     b.extend_from_slice(&3u32.to_le_bytes());
     b.extend_from_slice(b"abc");
     b.extend_from_slice(&0u32.to_le_bytes());
+    b.push(0);
     let decoded = decode_request(&b, 7).unwrap();
     b.fill(0);
-    let RequestBody::Batch(batch) = decoded.body else {
+    let RequestBody::SubmitBatch(batch) = decoded.body else {
         panic!()
     };
     assert_eq!(
@@ -889,73 +811,12 @@ fn decoded_metadata_owns_source() {
             metadata: EntityMetadata {
                 symbolic_id: Some("abc".into()),
                 classes: vec![]
-            }
+            },
+            adopt: false,
         }]
     );
 }
 
-#[test]
-fn declarations_keep_owned_data_and_reject_truncation_and_invalid_modes() {
-    let mut w = Writer(request(REQUEST_BATCH));
-    w.u64(1).unwrap();
-    w.u32(1).unwrap();
-    w.u8(COMMAND_ATTACH_ENTITY_OVERLAY_BINDING).unwrap();
-    w.u8(REF_ALIAS).unwrap();
-    w.u32(3).unwrap();
-    w.u32(4).unwrap();
-    w.string("owned entity").unwrap();
-    w.u8(0).unwrap();
-    let decoded = decode_request(&w.0, 7).unwrap();
-    for length in 0..w.0.len() {
-        assert!(decode_request(&w.0[..length], 7).is_err());
-    }
-    *w.0.last_mut().unwrap() = 2;
-    assert_eq!(
-        decode_request(&w.0, 7),
-        Err(ProtocolError::Malformed("entity mode"))
-    );
-    w.0.fill(0);
-    let RequestBody::Batch(batch) = decoded.body else {
-        panic!()
-    };
-    assert_eq!(
-        batch.operations,
-        vec![Command::AttachEntityOverlayBinding {
-            owner: ipp_core::StateOverlayRef::Alias(3),
-            alias: 4,
-            symbolic_id: "owned entity".into(),
-            mode: ipp_core::EntityOverlayMode::Owned,
-        }]
-    );
-}
-
-#[test]
-fn lifecycle_uses_unsolicited_identity_and_scoped_resource_handles() {
-    let mut response = Response {
-        session: 7,
-        request_id: 0,
-        tick: 9,
-        body: ResponseBody::Lifecycle {
-            diagnostics: vec![ipp_core::StateOverlayLifecycleDiagnostic {
-                owner: 11,
-                state_overlay: 12,
-                entity: ipp_core::EntityId::from_bits(13),
-                component: Some(1),
-                reason: ipp_core::StateOverlayLifecycleReason::ComponentReplaced,
-            }],
-        },
-    };
-    let bytes = encode_response(&response).unwrap();
-    assert_eq!(bytes[24], RESPONSE_STATE_OVERLAY_LIFECYCLE);
-    assert_eq!(&bytes[25..29], &1u32.to_le_bytes());
-    assert_eq!(&bytes[29..37], &11u64.to_le_bytes());
-    assert_eq!(&bytes[37..45], &12u64.to_le_bytes());
-    response.request_id = 1;
-    assert_eq!(
-        encode_response(&response),
-        Err(ProtocolError::Malformed("reserved response identity"))
-    );
-}
 #[test]
 fn boolean_wire_values_reject_noncanonical_encodings() {
     for byte in [0, 1, 2, 255] {
@@ -1046,8 +907,9 @@ fn direct_asset_failure_encoding_enforces_the_shared_utf8_byte_limit() {
 #[test]
 fn decoder_reuses_grown_command_capacity_and_preserves_failure_fences() {
     let batch = |count: u32| {
-        let mut bytes = request(REQUEST_BATCH);
-        bytes.extend(1u64.to_le_bytes());
+        let mut bytes = request(REQUEST_SUBMIT_BATCH);
+        bytes.extend(1u32.to_le_bytes());
+        bytes.push(1);
         bytes.extend(count.to_le_bytes());
         for _ in 0..count {
             bytes.extend([5, 0]); // scalar SetField and concrete entity
@@ -1064,7 +926,7 @@ fn decoder_reuses_grown_command_capacity_and_preserves_failure_fences() {
     for count in [1, 16, 200, 256, 3, 0, 256] {
         let pointer = buffer.as_ptr();
         let decoded = decode_request_with_buffer(&batch(count), 7, &mut buffer).unwrap();
-        let RequestBody::Batch(decoded) = decoded.body else {
+        let RequestBody::SubmitBatch(decoded) = decoded.body else {
             panic!("batch expected");
         };
         assert_eq!(decoded.operations.len(), count as usize);
@@ -1078,7 +940,11 @@ fn decoder_reuses_grown_command_capacity_and_preserves_failure_fences() {
     }
     let pointer = buffer.as_ptr();
     assert!(matches!(
-        decode_request_with_buffer(&batch(257), 7, &mut buffer),
+        decode_request_with_buffer(
+            &batch(crate::COMMAND_PAGE_COMMANDS as u32 + 1),
+            7,
+            &mut buffer
+        ),
         Err(ProtocolError::Limit(_))
     ));
     assert_eq!(buffer.as_ptr(), pointer);
@@ -1090,7 +956,7 @@ fn decoder_reuses_grown_command_capacity_and_preserves_failure_fences() {
     let bytes = batch(2);
     assert!(decode_request_with_buffer(&bytes[..bytes.len() - 1], 7, &mut buffer).is_err());
     buffer.clear();
-    let RequestBody::Batch(decoded) = decode_request_with_buffer(&batch(1), 7, &mut buffer)
+    let RequestBody::SubmitBatch(decoded) = decode_request_with_buffer(&batch(1), 7, &mut buffer)
         .unwrap()
         .body
     else {
@@ -1140,1332 +1006,112 @@ fn response_encoding_reuses_growth_and_clears_failed_partial_messages() {
     assert_eq!((bytes.as_ptr(), bytes.capacity()), grown);
 }
 
-#[cfg(feature = "gui")]
 #[test]
-fn gui_input_decodes_every_action_and_rejects_before_queueing() {
-    use ipp_core::{GuiInputCommand, GuiKey, GuiPointerButton};
-    let frame = |payload: &[u8], request_id: u64| {
-        let mut bytes = 7u64.to_le_bytes().to_vec();
-        bytes.extend_from_slice(&request_id.to_le_bytes());
-        bytes.push(REQUEST_GUI_INPUT);
-        bytes.extend_from_slice(&(payload.len() as u32).to_le_bytes());
-        bytes.extend_from_slice(payload);
-        bytes
-    };
-    let text_payload = |action: u8, text: &str| {
-        [
-            vec![1, action],
-            (text.len() as u32).to_le_bytes().to_vec(),
-            text.as_bytes().to_vec(),
-            vec![0],
-        ]
-        .concat()
-    };
-    let down = [
-        vec![1, 1],
-        5u32.to_le_bytes().to_vec(),
-        vec![1],
-        42u64.to_le_bytes().to_vec(),
-        1.5f32.to_le_bytes().to_vec(),
-        2.5f32.to_le_bytes().to_vec(),
-        vec![1],
-        0u32.to_le_bytes().to_vec(),
-        vec![0],
-    ]
-    .concat();
-    assert_eq!(
-        decode_request(&frame(&down, 3), 7).unwrap().body,
-        RequestBody::GuiInput(Box::new(GuiInputCommand::PointerDown {
-            pointer: 5,
-            panel: Some(EntityId::from_bits(42)),
-            position: [1.5, 2.5],
-            button: GuiPointerButton::Secondary,
-            blockers: Vec::new(),
-            panel_distance: None,
-        }))
-    );
-    let mut zero_panel = down.clone();
-    zero_panel[7..15].fill(0);
-    assert!(matches!(
-        decode_request(&frame(&zero_panel, 3), 7),
-        Err(ProtocolError::Malformed("GUI input panel entity"))
-    ));
-    let up = [
-        vec![1, 2],
-        5u32.to_le_bytes().to_vec(),
-        vec![0],
-        1.5f32.to_le_bytes().to_vec(),
-        2.5f32.to_le_bytes().to_vec(),
-        vec![2],
-        1u32.to_le_bytes().to_vec(),
-        43u64.to_le_bytes().to_vec(),
-        0.5f32.to_le_bytes().to_vec(),
-        vec![1],
-        3.25f32.to_le_bytes().to_vec(),
-    ]
-    .concat();
-    assert_eq!(
-        decode_request(&frame(&up, 3), 7).unwrap().body,
-        RequestBody::GuiInput(Box::new(GuiInputCommand::PointerUp {
-            pointer: 5,
-            panel: None,
-            position: [1.5, 2.5],
-            button: GuiPointerButton::Auxiliary,
-            blockers: vec![ipp_core::GuiBlockerHit {
-                entity: EntityId::from_bits(43),
-                distance: 0.5,
-            }],
-            panel_distance: Some(3.25),
-        }))
-    );
-    let mut zero_blocker = up.clone();
-    zero_blocker[20..28].fill(0);
-    assert!(matches!(
-        decode_request(&frame(&zero_blocker, 3), 7),
-        Err(ProtocolError::Malformed("GUI input blocker entity"))
-    ));
-    let moved = [
-        vec![1, 3],
-        9u32.to_le_bytes().to_vec(),
-        vec![0],
-        0.5f32.to_le_bytes().to_vec(),
-        0.75f32.to_le_bytes().to_vec(),
-        0u32.to_le_bytes().to_vec(),
-        vec![0],
-    ]
-    .concat();
-    assert_eq!(
-        decode_request(&frame(&moved, 3), 7).unwrap().body,
-        RequestBody::GuiInput(Box::new(GuiInputCommand::PointerMove {
-            pointer: 9,
-            panel: None,
-            position: [0.5, 0.75],
-            blockers: Vec::new(),
-            panel_distance: None,
-        }))
-    );
-    assert_eq!(
-        decode_request(&frame(&[1, 4, 9, 0, 0, 0], 3), 7)
-            .unwrap()
-            .body,
-        RequestBody::GuiInput(Box::new(GuiInputCommand::PointerCancel {
-            pointer: 9
-        }))
-    );
-    let scroll = [
-        vec![1, 5],
-        vec![0],
-        1.5f32.to_le_bytes().to_vec(),
-        2.5f32.to_le_bytes().to_vec(),
-        0.0f32.to_le_bytes().to_vec(),
-        (-4.0f32).to_le_bytes().to_vec(),
-        0u32.to_le_bytes().to_vec(),
-        vec![0],
-    ]
-    .concat();
-    assert_eq!(
-        decode_request(&frame(&scroll, 3), 7).unwrap().body,
-        RequestBody::GuiInput(Box::new(GuiInputCommand::Scroll {
-            panel: None,
-            position: [1.5, 2.5],
-            delta: [0.0, -4.0],
-            blockers: Vec::new(),
-            panel_distance: None,
-        }))
-    );
-    assert_eq!(
-        decode_request(&frame(&[1, 6, 10, 0], 3), 7).unwrap().body,
-        RequestBody::GuiInput(Box::new(GuiInputCommand::Key {
-            key: GuiKey::Home,
-            pressed: false,
-        }))
-    );
-    assert_eq!(
-        decode_request(&frame(&[1, 6, 12, 1], 3), 7).unwrap().body,
-        RequestBody::GuiInput(Box::new(GuiInputCommand::Key {
-            key: GuiKey::BackTab,
-            pressed: true,
-        }))
-    );
-    assert_eq!(
-        decode_request(&frame(&text_payload(7, "héllo"), 3), 7)
-            .unwrap()
-            .body,
-        RequestBody::GuiInput(Box::new(GuiInputCommand::Text {
-            text: "héllo".into(),
-            fence: None,
-        }))
-    );
-    let legal_text = "a".repeat(ipp_core::MAX_GUI_TEXT_BYTES);
-    assert_eq!(
-        decode_request(&frame(&text_payload(7, &legal_text), 3), 7)
-            .unwrap()
-            .body,
-        RequestBody::GuiInput(Box::new(GuiInputCommand::Text {
-            text: legal_text,
-            fence: None,
-        }))
-    );
-    assert!(
-        decode_request(
-            &frame(
-                &text_payload(7, &"a".repeat(ipp_core::MAX_GUI_TEXT_BYTES + 1)),
-                3,
-            ),
-            7,
-        )
-        .is_err()
-    );
-    let focus = [
-        vec![1, 8],
-        7u64.to_le_bytes().to_vec(),
-        42u64.to_le_bytes().to_vec(),
-        3u64.to_le_bytes().to_vec(),
-        9u32.to_le_bytes().to_vec(),
-    ]
-    .concat();
-    assert_eq!(
-        decode_request(&frame(&focus, 3), 7).unwrap().body,
-        RequestBody::GuiInput(Box::new(GuiInputCommand::Focus {
-            handle: ipp_core::systems::gui::GuiNodeHandle::new(
-                7,
-                EntityId::from_bits(42),
-                3,
-                ipp_core::systems::gui::GuiNodeId(9),
-            ),
-        }))
-    );
-    assert_eq!(
-        decode_request(&frame(&[1, 9], 3), 7).unwrap().body,
-        RequestBody::GuiInput(Box::new(GuiInputCommand::Blur))
-    );
-    let fence = ipp_core::GuiTextFence {
-        context_generation: 4,
-        focus_generation: 5,
-        target: ipp_core::GuiInputTarget {
-            entity: EntityId::from_bits(42),
-            node: ipp_core::systems::gui::GuiNodeId(9),
-            root_incarnation: 3,
-        },
-        revision: 6,
-    };
-    let fence_bytes = [
-        vec![1],
-        4u64.to_le_bytes().to_vec(),
-        5u64.to_le_bytes().to_vec(),
-        42u64.to_le_bytes().to_vec(),
-        3u64.to_le_bytes().to_vec(),
-        9u32.to_le_bytes().to_vec(),
-        6u32.to_le_bytes().to_vec(),
-    ]
-    .concat();
-    assert_eq!(
-        decode_request(
-            &frame(
-                &[vec![1, 10, 2, 0, 0, 0, 7, 0, 0, 0], fence_bytes.clone()].concat(),
-                3
-            ),
-            7
-        )
-        .unwrap()
-        .body,
-        RequestBody::GuiInput(Box::new(GuiInputCommand::SetTextSelection {
-            start: 2,
-            end: 7,
-            fence: Some(fence),
-        }))
-    );
-    // A fence names a live target; a zero entity or node is malformed.
-    let mut zero_target = fence_bytes.clone();
-    zero_target[17..25].fill(0);
-    assert!(
-        decode_request(
-            &frame(
-                &[vec![1, 10, 2, 0, 0, 0, 7, 0, 0, 0], zero_target].concat(),
-                3
-            ),
-            7
-        )
-        .is_err()
-    );
-    let composition = [
-        vec![1, 11],
-        ("世界".len() as u32).to_le_bytes().to_vec(),
-        "世界".as_bytes().to_vec(),
-        6u32.to_le_bytes().to_vec(),
-        6u32.to_le_bytes().to_vec(),
-        vec![0],
-    ]
-    .concat();
-    assert_eq!(
-        decode_request(&frame(&composition, 3), 7).unwrap().body,
-        RequestBody::GuiInput(Box::new(GuiInputCommand::UpdateComposition {
-            text: "世界".into(),
-            caret_start: 6,
-            caret_end: 6,
-            fence: None,
-        }))
-    );
-    assert_eq!(
-        decode_request(&frame(&[vec![1, 12], fence_bytes].concat(), 3), 7)
-            .unwrap()
-            .body,
-        RequestBody::GuiInput(Box::new(GuiInputCommand::CommitComposition {
-            fence: Some(fence),
-        }))
-    );
-    assert_eq!(
-        decode_request(&frame(&[1, 13, 0], 3), 7).unwrap().body,
-        RequestBody::GuiInput(Box::new(GuiInputCommand::CancelComposition {
-            fence: None,
-        }))
-    );
-
-    // Correlated inputs require a nonzero request identity.
-    assert_eq!(
-        decode_request(&frame(&[1, 9], 0), 7),
-        Err(ProtocolError::Malformed("reserved request identity"))
-    );
-    for payload in [
-        vec![2, 9],
-        vec![1, 14],
-        vec![1, 1, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3],
-        vec![1, 6, 13, 1],
-        {
-            let mut bad = vec![1, 3, 9, 0, 0, 0, 0, 0];
-            bad.extend_from_slice(&f32::NAN.to_le_bytes());
-            bad.extend_from_slice(&0.75f32.to_le_bytes());
-            bad.extend_from_slice(&0u32.to_le_bytes());
-            bad.push(0);
-            bad
-        },
-        {
-            let mut bad = vec![1, 5, 0];
-            bad.extend_from_slice(&1.5f32.to_le_bytes());
-            bad.extend_from_slice(&2.5f32.to_le_bytes());
-            bad.extend_from_slice(&0.0f32.to_le_bytes());
-            bad.extend_from_slice(&(-4.0f32).to_le_bytes());
-            bad.extend_from_slice(&1025u32.to_le_bytes());
-            bad.push(0);
-            bad
-        },
-    ] {
-        assert!(decode_request(&frame(&payload, 3), 7).is_err());
-    }
-    let mut trailing = frame(&[1, 9], 3);
-    trailing.push(0);
-    assert!(decode_request(&trailing, 7).is_err());
-    let truncated = frame(&[1, 9], 3);
-    for end in 0..truncated.len() {
-        assert!(decode_request(&truncated[..end], 7).is_err());
-    }
-    let bytes = encode_response(&Response {
-        session: 7,
-        request_id: 3,
-        tick: 11,
-        body: ResponseBody::GuiInput {
-            tick: 11,
-            unhandled: None,
-        },
-    })
-    .unwrap();
-    assert_eq!(bytes[24], RESPONSE_GUI_INPUT);
-    assert_eq!(bytes.len(), 36);
-}
-
-#[cfg(feature = "gui")]
-#[test]
-fn gui_input_responses_require_correlated_identity() {
-    let mut response = Response {
-        session: 7,
-        request_id: 3,
-        tick: 11,
-        body: ResponseBody::GuiInput {
-            tick: 11,
-            unhandled: Some(ipp_core::GuiUnhandledReason::NoPanelHit),
-        },
-    };
-    assert!(encode_response(&response).is_ok());
-    response.request_id = 0;
-    assert_eq!(
-        encode_response(&response),
-        Err(ProtocolError::Malformed("reserved response identity"))
-    );
-}
-
-#[cfg(feature = "gui")]
-#[test]
-fn gui_inspection_envelope_fits_one_legal_maximum_text_value() {
-    use ipp_core::{GuiControlValue, GuiInspectResponse, GuiInspectedNode, GuiNodeData};
-
-    let response = |text: String| Response {
-        session: 7,
-        request_id: 3,
-        tick: 11,
-        body: ResponseBody::GuiInspect(GuiInspectResponse {
-            root_entity: EntityId::from_bits(42),
-            root_incarnation: 3,
-            nodes: vec![GuiInspectedNode {
-                id: ipp_core::GuiNodeId(1),
-                parent: None,
-                children: Vec::new(),
-                data: GuiNodeData::Text(text),
-                values: ipp_core::GuiNodeDataRow::default(),
-                style: ipp_core::GuiNodeStyle::default(),
-                control_value: GuiControlValue::None,
-                control_revision: 0,
-            }],
-        }),
-    };
-
-    let encoded = encode_response(&response("a".repeat(ipp_core::MAX_GUI_TEXT_BYTES))).unwrap();
-    assert!(encoded.len() > 65_536);
-    assert!(encoded.len() < MAX_MESSAGE_BYTES);
-    assert_eq!(
-        encode_response(&response("a".repeat(ipp_core::MAX_GUI_TEXT_BYTES + 1))),
-        Err(ProtocolError::Limit("GUI text"))
-    );
-}
-
-#[cfg(feature = "gui")]
-#[test]
-fn gui_semantics_decode_bounded_queries_and_fenced_actions() {
-    use ipp_core::{GuiSemanticAction, GuiSemanticActionRequest, GuiSemanticSnapshotQuery};
-    let frame = |tag: u8, payload: &[u8], request_id: u64| {
-        let mut bytes = 7u64.to_le_bytes().to_vec();
-        bytes.extend_from_slice(&request_id.to_le_bytes());
-        bytes.push(tag);
-        bytes.extend_from_slice(&(payload.len() as u32).to_le_bytes());
-        bytes.extend_from_slice(payload);
-        bytes
-    };
-    let query = [
-        vec![1],
-        42u64.to_le_bytes().to_vec(),
-        10u32.to_le_bytes().to_vec(),
-        50u32.to_le_bytes().to_vec(),
-    ]
-    .concat();
-    assert_eq!(
-        decode_request(&frame(REQUEST_GUI_SEMANTIC_SNAPSHOT, &query, 3), 7)
-            .unwrap()
-            .body,
-        RequestBody::GuiSemanticSnapshot(GuiSemanticSnapshotQuery {
-            entity: EntityId::from_bits(42),
-            max_depth: 10,
-            limit: 50,
-        })
-    );
-    let action = |kind: u8, payload: &[u8]| {
-        [
-            vec![2],
-            42u64.to_le_bytes().to_vec(),
-            3u64.to_le_bytes().to_vec(),
-            9u32.to_le_bytes().to_vec(),
-            2u32.to_le_bytes().to_vec(),
-            vec![kind],
-            payload.to_vec(),
-        ]
-        .concat()
-    };
-    for (kind, payload, expected) in [
-        (0, vec![], GuiSemanticAction::Press),
-        (1, vec![], GuiSemanticAction::Toggle),
-        (
-            2,
-            1.5f32.to_le_bytes().to_vec(),
-            GuiSemanticAction::SetScalar(1.5),
-        ),
-        (
-            3,
-            [
-                ("héllo".len() as u32).to_le_bytes().to_vec(),
-                "héllo".as_bytes().to_vec(),
-            ]
-            .concat(),
-            GuiSemanticAction::SetText("héllo".into()),
-        ),
-        (4, vec![], GuiSemanticAction::Focus),
-    ] {
-        assert_eq!(
-            decode_request(
-                &frame(REQUEST_GUI_SEMANTIC_ACTION, &action(kind, &payload), 3),
-                7
-            )
-            .unwrap()
-            .body,
-            RequestBody::GuiSemanticAction(Box::new(GuiSemanticActionRequest {
-                entity: EntityId::from_bits(42),
-                root_incarnation: 3,
-                node: ipp_core::GuiNodeId(9),
-                expected_revision: 2,
-                action: expected,
-            }))
-        );
-    }
-    let legal_text = "a".repeat(ipp_core::MAX_GUI_TEXT_BYTES);
-    let legal_payload = [
-        (legal_text.len() as u32).to_le_bytes().to_vec(),
-        legal_text.as_bytes().to_vec(),
-    ]
-    .concat();
-    assert_eq!(
-        decode_request(
-            &frame(REQUEST_GUI_SEMANTIC_ACTION, &action(3, &legal_payload), 3),
-            7,
-        )
-        .unwrap()
-        .body,
-        RequestBody::GuiSemanticAction(Box::new(GuiSemanticActionRequest {
-            entity: EntityId::from_bits(42),
-            root_incarnation: 3,
-            node: ipp_core::GuiNodeId(9),
-            expected_revision: 2,
-            action: GuiSemanticAction::SetText(legal_text),
-        }))
-    );
-    let oversize = [
-        ((ipp_core::MAX_GUI_TEXT_BYTES + 1) as u32)
-            .to_le_bytes()
-            .to_vec(),
-        vec![b'a'; ipp_core::MAX_GUI_TEXT_BYTES + 1],
-    ]
-    .concat();
-    assert!(
-        decode_request(
-            &frame(REQUEST_GUI_SEMANTIC_ACTION, &action(3, &oversize), 3),
-            7,
-        )
-        .is_err()
-    );
-    // Correlated queries require a nonzero request identity.
-    assert_eq!(
-        decode_request(&frame(REQUEST_GUI_SEMANTIC_SNAPSHOT, &query, 0), 7),
-        Err(ProtocolError::Malformed("reserved request identity"))
-    );
-    assert_eq!(
-        decode_request(&frame(REQUEST_GUI_SEMANTIC_ACTION, &action(1, &[]), 0), 7),
-        Err(ProtocolError::Malformed("reserved request identity"))
-    );
-    // Zero targets, unknown actions, bad versions and nonfinite scalars
-    // reject before queueing.
-    let mut bad_entity = vec![1];
-    bad_entity.extend_from_slice(&0u64.to_le_bytes());
-    bad_entity.extend_from_slice(&10u32.to_le_bytes());
-    bad_entity.extend_from_slice(&50u32.to_le_bytes());
-    let mut bad_node = vec![2];
-    bad_node.extend_from_slice(&42u64.to_le_bytes());
-    bad_node.extend_from_slice(&3u64.to_le_bytes());
-    bad_node.extend_from_slice(&0u32.to_le_bytes());
-    bad_node.extend_from_slice(&1u32.to_le_bytes());
-    bad_node.extend_from_slice(&2u32.to_le_bytes());
-    bad_node.push(1);
-    let mut bad_scalar = vec![2];
-    bad_scalar.extend_from_slice(&42u64.to_le_bytes());
-    bad_scalar.extend_from_slice(&3u64.to_le_bytes());
-    bad_scalar.extend_from_slice(&9u32.to_le_bytes());
-    bad_scalar.extend_from_slice(&1u32.to_le_bytes());
-    bad_scalar.extend_from_slice(&2u32.to_le_bytes());
-    bad_scalar.push(2);
-    bad_scalar.extend_from_slice(&f32::NAN.to_le_bytes());
-    for (tag, payload) in [
-        (
-            REQUEST_GUI_SEMANTIC_SNAPSHOT,
-            vec![2, 0, 0, 0, 0, 0, 0, 0, 0],
-        ),
-        (REQUEST_GUI_SEMANTIC_SNAPSHOT, bad_entity),
-        (REQUEST_GUI_SEMANTIC_ACTION, bad_node),
-        (REQUEST_GUI_SEMANTIC_ACTION, action(5, &[])),
-        (REQUEST_GUI_SEMANTIC_ACTION, bad_scalar),
-    ] {
-        assert!(decode_request(&frame(tag, &payload, 3), 7).is_err());
-    }
-    let mut trailing = frame(REQUEST_GUI_SEMANTIC_SNAPSHOT, &query, 3);
-    trailing.push(0);
-    assert!(decode_request(&trailing, 7).is_err());
-    let truncated = frame(REQUEST_GUI_SEMANTIC_ACTION, &action(1, &[]), 3);
-    for end in 0..truncated.len() {
-        assert!(decode_request(&truncated[..end], 7).is_err());
-    }
-}
-
-#[cfg(feature = "gui")]
-#[test]
-fn gui_semantic_snapshots_preserve_legal_text_and_reject_oversize() {
-    use ipp_core::{
-        GuiControlValue, GuiSemanticFocus, GuiSemanticNode, GuiSemanticRole, GuiSemanticTree,
-    };
-    let tree = GuiSemanticTree {
-        entity: EntityId::from_bits(42),
-        root_incarnation: 3,
-        evaluation_tick: 12,
-        nodes: vec![GuiSemanticNode {
-            id: ipp_core::GuiNodeId(5),
-            parent: None,
-            role: GuiSemanticRole::TextInput,
-            name: Some("name".into()),
-            value: GuiControlValue::Text("é".repeat(ipp_core::MAX_GUI_TEXT_BYTES / 2)),
-            revision: 3,
-            bounds: [1.0, 4.0, 4.0, 1.0],
-            enabled: true,
-            visible: true,
-            available: true,
-            focus_scope: false,
-            actions: vec![
-                ipp_core::GuiSemanticActionKind::SetText,
-                ipp_core::GuiSemanticActionKind::Focus,
-            ],
-            scroll: None,
-            virtual_list: None,
-        }],
-        focused: Some(GuiSemanticFocus {
-            id: ipp_core::GuiNodeId(5),
-        }),
-    };
-    let mut response = Response {
-        session: 7,
-        request_id: 3,
-        tick: 12,
-        body: ResponseBody::GuiSemanticSnapshot(tree),
-    };
-    let bytes = encode_response(&response).unwrap();
-    assert_eq!(bytes[24], RESPONSE_GUI_SEMANTIC_SNAPSHOT);
-    assert!(bytes.len() < MAX_MESSAGE_BYTES);
-    let text_bytes = &bytes[81..81 + ipp_core::MAX_GUI_TEXT_BYTES];
-    assert_eq!(
-        text_bytes,
-        "é".repeat(ipp_core::MAX_GUI_TEXT_BYTES / 2).as_bytes()
-    );
-
-    if let ResponseBody::GuiSemanticSnapshot(tree) = &mut response.body {
-        tree.nodes[0].value = GuiControlValue::Text("a".repeat(ipp_core::MAX_GUI_TEXT_BYTES + 1));
-    }
-    assert_eq!(
-        encode_response(&response),
-        Err(ProtocolError::Limit("count"))
-    );
-    if let ResponseBody::GuiSemanticSnapshot(tree) = &mut response.body {
-        tree.nodes[0].value = GuiControlValue::Text("ok".into());
-    }
-    response.request_id = 0;
-    assert_eq!(
-        encode_response(&response),
-        Err(ProtocolError::Malformed("reserved response identity"))
-    );
-}
-
-#[cfg(feature = "gui")]
-#[test]
-fn gui_observations_encode_committed_state_unsolicited() {
-    use ipp_core::{
-        GuiControlValue, GuiInputCancelReason, GuiInputCancellation, GuiInputCommand,
-        GuiInputConflict, GuiInputConflictReason, GuiInputEffect, GuiInputEffectKind,
-        GuiInputTarget, GuiNodeId, GuiUnhandledInput, GuiUnhandledReason,
-    };
-    let button = GuiInputEffect {
-        session: 7,
-        source_tick: 11,
-        effect_tick: 12,
-        kind: GuiInputEffectKind::ButtonPressed {
-            entity: EntityId::from_bits(100),
-            root_incarnation: 3,
-            node: GuiNodeId(20),
-            path: vec![GuiNodeId(10), GuiNodeId(20)],
-        },
-    };
-    let conflict = GuiInputConflict {
-        session: 7,
-        source_tick: 11,
-        effect_tick: 12,
-        target: Some(GuiInputTarget {
-            entity: EntityId::from_bits(100),
-            node: GuiNodeId(30),
-            root_incarnation: 3,
-        }),
-        reason: GuiInputConflictReason::RevisionMismatch {
-            expected: 1,
-            found: 2,
-        },
-    };
-    let cancel = GuiInputCancellation {
-        session: 7,
-        source_tick: 11,
-        effect_tick: 12,
-        target: None,
-        reason: GuiInputCancelReason::GestureCancelled,
-    };
-    let mut response = Response {
-        session: 7,
-        request_id: 0,
-        tick: 12,
-        body: ResponseBody::GuiObservations {
-            effects: vec![button],
-            conflicts: vec![conflict],
-            cancellations: vec![cancel],
-            text_focus_updates: Vec::new(),
-        },
-    };
-    let bytes = encode_response(&response).unwrap();
-    assert_eq!(bytes.len(), 183);
-    assert_eq!(bytes[24], RESPONSE_GUI_OBSERVATIONS);
-    assert_eq!(&bytes[25..29], &154u32.to_le_bytes());
-    assert_eq!(bytes[29], 4);
-    assert_eq!(&bytes[30..34], &1u32.to_le_bytes());
-    assert_eq!(bytes[34], 0);
-    assert_eq!(&bytes[35..43], &7u64.to_le_bytes());
-    assert_eq!(&bytes[75..79], &20u32.to_le_bytes());
-    assert_eq!(&bytes[79..83], &2u32.to_le_bytes());
-    assert_eq!(&bytes[83..87], &10u32.to_le_bytes());
-    assert_eq!(&bytes[87..91], &20u32.to_le_bytes());
-    assert_eq!(bytes[140], 0);
-    assert_eq!(&bytes[141..145], &1u32.to_le_bytes());
-    assert_eq!(&bytes[145..149], &2u32.to_le_bytes());
-    assert_eq!(bytes[178], 3);
-    response.request_id = 1;
-    assert_eq!(
-        encode_response(&response),
-        Err(ProtocolError::Malformed("reserved response identity"))
-    );
-    response.request_id = 0;
-    response.body = ResponseBody::GuiObservations {
-        effects: Vec::new(),
-        conflicts: Vec::new(),
-        cancellations: Vec::new(),
-        text_focus_updates: Vec::new(),
-    };
-    assert_eq!(
-        encode_response(&response),
-        Err(ProtocolError::Malformed("empty gui observations"))
-    );
-
-    let control = GuiInputEffect {
-        session: 7,
-        source_tick: 11,
-        effect_tick: 12,
-        kind: GuiInputEffectKind::ControlCommitted {
-            entity: EntityId::from_bits(100),
-            root_incarnation: 3,
-            node: GuiNodeId(30),
-            value: GuiControlValue::Text("hello".into()),
-            revision: 2,
-            path: Vec::new(),
-            source: ipp_core::GuiCommitSource::External,
-        },
-    };
-    let bytes = encode_response(&Response {
-        session: 7,
-        request_id: 0,
-        tick: 12,
-        body: ResponseBody::GuiObservations {
-            effects: vec![control],
-            conflicts: Vec::new(),
-            cancellations: Vec::new(),
-            text_focus_updates: Vec::new(),
-        },
-    })
-    .unwrap();
-    assert_eq!(bytes.len(), 110);
-    assert_eq!(bytes[34], 1);
-    assert_eq!(&bytes[83..87], &2u32.to_le_bytes());
-    assert_eq!(bytes[87], 3);
-    assert_eq!(&bytes[88..92], &5u32.to_le_bytes());
-    assert_eq!(&bytes[92..97], b"hello");
-    assert_eq!(bytes[97], 2);
-
-    let submitted = GuiInputEffect {
-        session: 7,
-        source_tick: 11,
-        effect_tick: 12,
-        kind: GuiInputEffectKind::Submitted {
-            entity: EntityId::from_bits(100),
-            root_incarnation: 3,
-            node: GuiNodeId(30),
-            revision: 4,
-            text: "hello".into(),
-            path: Vec::new(),
-        },
-    };
-    let bytes = encode_response(&Response {
-        session: 7,
-        request_id: 0,
-        tick: 12,
-        body: ResponseBody::GuiObservations {
-            effects: vec![submitted],
-            conflicts: Vec::new(),
-            cancellations: Vec::new(),
-            text_focus_updates: Vec::new(),
-        },
-    })
-    .unwrap();
-    assert_eq!(bytes.len(), 108);
-    assert_eq!(bytes[34], 2);
-    assert_eq!(&bytes[83..87], &4u32.to_le_bytes());
-    assert_eq!(&bytes[87..91], &5u32.to_le_bytes());
-    assert_eq!(&bytes[91..96], b"hello");
-
-    // A wanted range is runtime-originated: no session, then ticks, list
-    // identity, the half-open range and its revision; a reversed range is
-    // malformed.
-    let range = |first: u32, last: u32| GuiInputEffect {
-        session: 0,
-        source_tick: 11,
-        effect_tick: 11,
-        kind: GuiInputEffectKind::VirtualRangeChanged {
-            entity: EntityId::from_bits(100),
-            node: GuiNodeId(31),
-            first,
-            last,
-            revision: 6,
-        },
-    };
-    let observations = |effect: GuiInputEffect| Response {
-        session: 7,
-        request_id: 0,
-        tick: 12,
-        body: ResponseBody::GuiObservations {
-            effects: vec![effect],
-            conflicts: Vec::new(),
-            cancellations: Vec::new(),
-            text_focus_updates: Vec::new(),
-        },
-    };
-    let bytes = encode_response(&observations(range(40, 58))).unwrap();
-    assert_eq!(bytes.len(), 87);
-    assert_eq!(bytes[34], 3);
-    assert_eq!(&bytes[35..43], &11u64.to_le_bytes());
-    assert_eq!(&bytes[51..59], &100u64.to_le_bytes());
-    assert_eq!(&bytes[59..63], &31u32.to_le_bytes());
-    assert_eq!(&bytes[63..67], &40u32.to_le_bytes());
-    assert_eq!(&bytes[67..71], &58u32.to_le_bytes());
-    assert_eq!(&bytes[71..75], &6u32.to_le_bytes());
-    assert_eq!(
-        encode_response(&observations(range(9, 8))),
-        Err(ProtocolError::Malformed("gui virtual range"))
-    );
-
-    let unhandled = Response {
-        session: 7,
-        request_id: 0,
-        tick: 11,
-        body: ResponseBody::GuiUnhandledInputs {
-            inputs: vec![GuiUnhandledInput {
-                session: 7,
-                source_request_id: 0,
-                tick: 11,
-                input: GuiInputCommand::Blur,
-                reason: GuiUnhandledReason::NoFocus,
-            }],
-        },
-    };
-    let bytes = encode_response(&unhandled).unwrap();
-    assert_eq!(bytes.len(), 53);
-    assert_eq!(bytes[24], RESPONSE_GUI_UNHANDLED);
-    assert_eq!(bytes[50], 1);
-    assert_eq!(bytes[51], 9);
-    assert_eq!(bytes[52], 3);
-}
-
-#[cfg(feature = "gui")]
-#[test]
-fn gui_observation_text_encodes_whole_or_rejects() {
-    use ipp_core::{GuiControlValue, GuiInputEffect, GuiInputEffectKind, GuiNodeId};
-    let control = |text: String| GuiInputEffect {
-        session: 7,
-        source_tick: 11,
-        effect_tick: 12,
-        kind: GuiInputEffectKind::ControlCommitted {
-            entity: EntityId::from_bits(100),
-            root_incarnation: 3,
-            node: GuiNodeId(30),
-            value: GuiControlValue::Text(text),
-            revision: 2,
-            path: Vec::new(),
-            source: ipp_core::GuiCommitSource::External,
-        },
-    };
-    let bytes = encode_response(&Response {
-        session: 7,
-        request_id: 0,
-        tick: 12,
-        body: ResponseBody::GuiObservations {
-            effects: vec![control("a".repeat(ipp_core::MAX_GUI_TEXT_BYTES))],
-            conflicts: Vec::new(),
-            cancellations: Vec::new(),
-            text_focus_updates: Vec::new(),
-        },
-    })
-    .unwrap();
-    assert_eq!(
-        &bytes[88..92],
-        &(ipp_core::MAX_GUI_TEXT_BYTES as u32).to_le_bytes()
-    );
-    assert_eq!(
-        &bytes[92..92 + ipp_core::MAX_GUI_TEXT_BYTES],
-        "a".repeat(ipp_core::MAX_GUI_TEXT_BYTES).as_bytes()
-    );
-    assert_eq!(
-        encode_response(&Response {
-            session: 7,
-            request_id: 0,
-            tick: 12,
-            body: ResponseBody::GuiObservations {
-                effects: vec![control("a".repeat(ipp_core::MAX_GUI_TEXT_BYTES + 1))],
-                conflicts: Vec::new(),
-                cancellations: Vec::new(),
-                text_focus_updates: Vec::new(),
-            },
-        }),
-        Err(ProtocolError::Limit("count"))
-    );
-    assert_eq!(
-        encode_response(&Response {
-            session: 7,
-            request_id: 0,
-            tick: 12,
-            body: ResponseBody::GuiObservations {
-                effects: vec![control(format!("{}é", "a".repeat(65535)))],
-                conflicts: Vec::new(),
-                cancellations: Vec::new(),
-                text_focus_updates: Vec::new(),
-            },
-        }),
-        Err(ProtocolError::Limit("count"))
-    );
-}
-
-#[cfg(feature = "gui")]
-#[test]
-fn gui_observation_bodies_broadcast_virtual_ranges_and_skip_scroll_cursors() {
-    use crate::gui_observation_bodies;
-    use ipp_core::{GuiInputEffect, GuiInputEffectKind, GuiNodeId, WorldUpdateReport};
-    let report = WorldUpdateReport {
-        gui_input_effects: vec![
-            GuiInputEffect {
-                session: 0,
-                source_tick: 4,
-                effect_tick: 4,
-                kind: GuiInputEffectKind::VirtualRangeChanged {
-                    entity: EntityId::from_bits(100),
-                    node: GuiNodeId(31),
-                    first: 0,
-                    last: 8,
-                    revision: 1,
-                },
-            },
-            GuiInputEffect {
-                session: 7,
-                source_tick: 4,
-                effect_tick: 4,
-                kind: GuiInputEffectKind::ScrollChanged {
-                    entity: EntityId::from_bits(100),
-                    node: GuiNodeId(31),
-                    offset: [0.0, 3.0],
-                },
-            },
-        ],
-        ..WorldUpdateReport::default()
-    };
-    for session in [7, 8] {
-        let bodies = gui_observation_bodies(&report, session);
-        assert_eq!(bodies.len(), 1);
-        match &bodies[0] {
-            ResponseBody::GuiObservations {
-                effects,
-                ..
-            } => {
-                assert_eq!(effects.len(), 1);
-                assert!(matches!(
-                    effects[0].kind,
-                    GuiInputEffectKind::VirtualRangeChanged { .. }
-                ));
-            }
-            other => panic!("expected observations, got {other:?}"),
+fn batch_pages_carry_client_identity_and_an_exact_completion_flag() {
+    let page = |last: u8| {
+        let mut bytes = request(REQUEST_SUBMIT_BATCH);
+        if last == 0 {
+            // Only the final page is correlated.
+            bytes[8..16].fill(0);
         }
-    }
-}
-
-#[cfg(feature = "gui")]
-#[test]
-fn gui_observation_bodies_chunk_broadcast_and_filter_unhandled() {
-    use crate::gui_observation_bodies;
-    use ipp_core::{
-        GuiControlValue, GuiInputCancelReason, GuiInputCancellation, GuiInputCommand,
-        GuiInputConflict, GuiInputConflictReason, GuiInputEffect, GuiInputEffectKind, GuiNodeId,
-        GuiUnhandledInput, GuiUnhandledReason, WorldUpdateReport,
-    };
-    let effect = |node: u32| GuiInputEffect {
-        session: 7,
-        source_tick: 11,
-        effect_tick: 12,
-        kind: GuiInputEffectKind::ControlCommitted {
-            entity: EntityId::from_bits(100),
-            root_incarnation: 3,
-            node: GuiNodeId(node),
-            value: GuiControlValue::Bool(true),
-            revision: 2,
-            path: vec![GuiNodeId(10), GuiNodeId(node)],
-            source: ipp_core::GuiCommitSource::User,
-        },
-    };
-    let report = WorldUpdateReport {
-        gui_input_effects: vec![
-            effect(20),
-            effect(30),
-            GuiInputEffect {
-                session: 7,
-                source_tick: 11,
-                effect_tick: 12,
-                kind: GuiInputEffectKind::FocusChanged {
-                    focus: None,
-                },
-            },
-        ],
-        gui_input_conflicts: vec![GuiInputConflict {
-            session: 7,
-            source_tick: 11,
-            effect_tick: 12,
-            target: None,
-            reason: GuiInputConflictReason::TouchArbitration {
-                owner_pointer: 3,
-            },
-        }],
-        gui_input_cancellations: vec![GuiInputCancellation {
-            session: 7,
-            source_tick: 11,
-            effect_tick: 12,
-            target: None,
-            reason: GuiInputCancelReason::SessionReplaced,
-        }],
-        gui_unhandled_inputs: vec![
-            GuiUnhandledInput {
-                session: 7,
-                source_request_id: 71,
-                tick: 11,
-                input: GuiInputCommand::Blur,
-                reason: GuiUnhandledReason::NoFocus,
-            },
-            GuiUnhandledInput {
-                session: 8,
-                source_request_id: 72,
-                tick: 11,
-                input: GuiInputCommand::Blur,
-                reason: GuiUnhandledReason::NotOwner,
-            },
-        ],
-        ..Default::default()
-    };
-    let bodies = gui_observation_bodies(&report, 7);
-    assert_eq!(bodies.len(), 4);
-    let ResponseBody::GuiObservations {
-        effects,
-        conflicts,
-        cancellations,
-        ..
-    } = &bodies[0]
-    else {
-        panic!("effects expected")
-    };
-    assert_eq!(effects.len(), 2);
-    assert!(conflicts.is_empty() && cancellations.is_empty());
-    let ResponseBody::GuiUnhandledInputs {
-        inputs,
-    } = bodies.last().unwrap()
-    else {
-        panic!("unhandled expected")
-    };
-    assert_eq!(inputs.len(), 1);
-    assert_eq!(inputs[0].session, 7);
-    for body in &bodies {
-        assert!(
-            encode_response(&Response {
-                session: 7,
-                request_id: 0,
-                tick: 12,
-                body: body.clone(),
-            })
-            .is_ok()
-        );
-    }
-    let foreign = gui_observation_bodies(&report, 8);
-    let ResponseBody::GuiUnhandledInputs {
-        inputs,
-    } = foreign.last().unwrap()
-    else {
-        panic!("unhandled expected")
-    };
-    assert_eq!(inputs.len(), 1);
-    assert_eq!(inputs[0].session, 8);
-
-    let report = WorldUpdateReport {
-        gui_input_effects: (0u32..130).map(|node| effect(node + 1)).collect(),
-        ..Default::default()
-    };
-    let bodies = gui_observation_bodies(&report, 7);
-    assert_eq!(bodies.len(), 2);
-    for body in &bodies {
-        assert!(
-            encode_response(&Response {
-                session: 7,
-                request_id: 0,
-                tick: 12,
-                body: body.clone(),
-            })
-            .is_ok()
-        );
-    }
-    assert!(
-        encode_response(&Response {
-            session: 7,
-            request_id: 0,
-            tick: 12,
-            body: ResponseBody::GuiObservations {
-                effects: (0u32..129).map(|node| effect(node + 1)).collect(),
-                conflicts: Vec::new(),
-                cancellations: Vec::new(),
-                text_focus_updates: Vec::new(),
-            },
-        })
-        .is_err()
-    );
-}
-
-#[cfg(feature = "gui")]
-#[test]
-fn gui_edit_style_and_values_follow_the_row_layouts() {
-    use ipp_core::components::rows::encode_row;
-    use ipp_core::{
-        EntityId, GuiCommand, GuiNodeData, GuiNodeDataRow, GuiNodeHandle, GuiNodeId, GuiNodePatch,
-        GuiNodeStyle, GuiNodeStyleRow,
-    };
-    let frame = |payload: &[u8]| {
-        let mut bytes = 7u64.to_le_bytes().to_vec();
-        bytes.extend_from_slice(&9u64.to_le_bytes());
-        bytes.push(REQUEST_GUI);
-        bytes.push(0);
-        bytes.extend_from_slice(&(payload.len() as u32).to_le_bytes());
-        bytes.extend_from_slice(payload);
+        bytes.extend_from_slice(&u32::MAX.to_le_bytes());
+        bytes.push(last);
+        bytes.extend_from_slice(&0u32.to_le_bytes());
         bytes
     };
-    let batch = |command: Vec<u8>| {
-        let mut payload = vec![5];
-        payload.extend_from_slice(&1u32.to_le_bytes());
-        payload.extend_from_slice(&command);
-        payload
-    };
-    let decode = |command: Vec<u8>| match decode_request(&frame(&batch(command)), 7).map(|r| r.body)
-    {
-        Ok(RequestBody::GuiCommands {
-            batch_id: None,
-            mut commands,
-        }) => Ok(commands.remove(0)),
-        Ok(other) => panic!("expected gui command, got {other:?}"),
-        Err(error) => Err(error),
-    };
-
-    // Insert: data tag, then the data and style rows in their row encodings.
-    let style = GuiNodeStyle {
-        enabled: false,
-        width: Some(2.0),
-        position: [0.5, -0.25],
-        ..GuiNodeStyle::default()
-    };
-    let mut insert = vec![1];
-    insert.extend_from_slice(&42u64.to_le_bytes());
-    insert.extend_from_slice(&3u64.to_le_bytes());
-    insert.extend_from_slice(&1u32.to_le_bytes());
-    insert.push(0);
-    insert.extend_from_slice(&0u32.to_le_bytes());
-    insert.push(7);
-    encode_row(&GuiNodeDataRow::slider(0.5, 0.0, 1.0, 0.25), &mut insert);
-    encode_row(&GuiNodeStyleRow::from(&style), &mut insert);
-    assert_eq!(
-        decode(insert),
-        Ok(GuiCommand::InsertNode {
-            entity: EntityId::from_bits(42),
-            root_incarnation: 3,
-            id: GuiNodeId(1),
-            parent: None,
-            index: 0,
-            data: GuiNodeData::Slider,
-            values: GuiNodeDataRow::slider(0.5, 0.0, 1.0, 0.25),
-            style,
-        })
-    );
-
-    // Update: no data, no values, then changed and set masks over the style
-    // layout (three bytes each) with the set values in layout order.
-    let patch = |changed: [u8; 3], set: [u8; 3], values: &[u8]| {
-        let mut payload = vec![2];
-        payload.extend_from_slice(&1u64.to_le_bytes());
-        payload.extend_from_slice(&42u64.to_le_bytes());
-        payload.extend_from_slice(&3u64.to_le_bytes());
-        payload.extend_from_slice(&1u32.to_le_bytes());
-        payload.extend_from_slice(&[0, 0]);
-        payload.extend_from_slice(&changed);
-        payload.extend_from_slice(&set);
-        payload.extend_from_slice(values);
-        payload
-    };
-    // Bit 0 enabled (set false), bit 1 width (cleared), bit 15 position (set).
-    let mut values = 0u32.to_le_bytes().to_vec();
-    values.extend_from_slice(&1.0f32.to_le_bytes());
-    values.extend_from_slice(&2.0f32.to_le_bytes());
-    assert_eq!(
-        decode(patch(
-            [0b11, 0b1000_0000, 0],
-            [0b01, 0b1000_0000, 0],
-            &values
-        )),
-        Ok(GuiCommand::UpdateNode {
-            handle: GuiNodeHandle::new(1, EntityId::from_bits(42), 3, GuiNodeId(1)),
-            patch: GuiNodePatch {
-                enabled: Some(false),
-                width: Some(None),
-                position: Some([1.0, 2.0]),
-                ..GuiNodePatch::default()
-            },
-        })
-    );
-    // Clearing a required property, setting an unchanged one and undeclared
-    // mask bits are malformed.
-    assert!(decode(patch([0, 0x10, 0], [0, 0, 0], &[])).is_err());
-    assert!(decode(patch([0, 0, 0], [1, 0, 0], &0u32.to_le_bytes())).is_err());
-    assert!(decode(patch([0, 0, 0x10], [0, 0, 0], &[])).is_err());
-    // Bit 19 is the theme reference; changed-but-unset clears it.
-    assert_eq!(
-        decode(patch([0, 0, 0x08], [0, 0, 0x08], &7u32.to_le_bytes())),
-        Ok(GuiCommand::UpdateNode {
-            handle: GuiNodeHandle::new(1, EntityId::from_bits(42), 3, GuiNodeId(1)),
-            patch: GuiNodePatch {
-                theme: Some(Some(7)),
-                ..GuiNodePatch::default()
-            },
-        })
-    );
-
-    // Theme and part edits: part identities by dense index, then changed and
-    // set masks over the 23 part properties (three bytes each).
-    use ipp_core::systems::gui::{GuiPartId, GuiPartPatch, GuiPartProperty, GuiSkinState};
-    use ipp_core::systems::surface::GuiPrimitivePart;
-    let part_patch = |changed: [u8; 3], set: [u8; 3], values: &[u8]| {
-        let mut payload = changed.to_vec();
-        payload.extend_from_slice(&set);
-        payload.extend_from_slice(values);
-        payload
-    };
-    let mut theme = vec![6];
-    theme.extend_from_slice(&42u64.to_le_bytes());
-    theme.extend_from_slice(&3u64.to_le_bytes());
-    theme.extend_from_slice(&11u32.to_le_bytes());
-    // Background (0) hovered (state 1): qualifier 1 + 1 * 3 = 4.
-    theme.push(4);
-    // Bit 0 colour (set), bit 1 opacity (cleared).
-    let mut color = Vec::new();
-    for channel in [0.25f32, 0.5, 0.75, 1.0] {
-        color.extend_from_slice(&channel.to_le_bytes());
+    for (flag, last) in [(0, false), (1, true)] {
+        let mut miscorrelated = page(flag);
+        miscorrelated[8] ^= 9;
+        assert_eq!(
+            decode_request(&miscorrelated, 7),
+            Err(ProtocolError::Malformed("reserved request identity"))
+        );
+        assert_eq!(
+            decode_request(&page(flag), 7).unwrap().body,
+            RequestBody::SubmitBatch(crate::BatchPage {
+                batch_id: u32::MAX,
+                last,
+                operations: vec![],
+            })
+        );
     }
-    theme.extend(part_patch([0b11, 0, 0], [0b01, 0, 0], &color));
     assert_eq!(
-        decode(theme),
-        Ok(GuiCommand::UpdateTheme {
-            entity: EntityId::from_bits(42),
-            root_incarnation: 3,
-            theme: 11,
-            part: GuiPartId::state(GuiPrimitivePart::Background, GuiSkinState::Hovered),
-            patch: GuiPartPatch::default()
-                .set(
-                    GuiPartProperty::Color,
-                    ipp_core::DynamicValue::Vec4([0.25, 0.5, 0.75, 1.0]),
-                )
-                .clear(GuiPartProperty::Opacity),
-        })
-    );
-    let mut part_index_out_of_range = vec![6];
-    part_index_out_of_range.extend_from_slice(&42u64.to_le_bytes());
-    part_index_out_of_range.extend_from_slice(&3u64.to_le_bytes());
-    part_index_out_of_range.extend_from_slice(&11u32.to_le_bytes());
-    part_index_out_of_range.push(117);
-    part_index_out_of_range.extend(part_patch([0; 3], [0; 3], &[]));
-    assert!(decode(part_index_out_of_range).is_err());
-
-    // A VirtualList is container kind 7 with its item and anchor properties
-    // in the data row; scroll-to-index is action 9 over a node handle.
-    let mut list = vec![1];
-    list.extend_from_slice(&42u64.to_le_bytes());
-    list.extend_from_slice(&3u64.to_le_bytes());
-    list.extend_from_slice(&2u32.to_le_bytes());
-    list.push(0);
-    list.extend_from_slice(&0u32.to_le_bytes());
-    list.extend_from_slice(&[1, 7]);
-    encode_row(&GuiNodeDataRow::virtual_list(100_000, 1.5, 3, 1), &mut list);
-    encode_row(&GuiNodeStyleRow::default(), &mut list);
-    assert_eq!(
-        decode(list),
-        Ok(GuiCommand::InsertNode {
-            entity: EntityId::from_bits(42),
-            root_incarnation: 3,
-            id: GuiNodeId(2),
-            parent: None,
-            index: 0,
-            data: GuiNodeData::Container(ipp_core::GuiContainerKind::VirtualList),
-            values: GuiNodeDataRow::virtual_list(100_000, 1.5, 3, 1),
-            style: GuiNodeStyle::default(),
-        })
-    );
-    let mut scroll = vec![9];
-    scroll.extend_from_slice(&1u64.to_le_bytes());
-    scroll.extend_from_slice(&42u64.to_le_bytes());
-    scroll.extend_from_slice(&3u64.to_le_bytes());
-    scroll.extend_from_slice(&2u32.to_le_bytes());
-    scroll.extend_from_slice(&5_000u32.to_le_bytes());
-    scroll.extend_from_slice(&0.25f32.to_le_bytes());
-    assert_eq!(
-        decode(scroll.clone()),
-        Ok(GuiCommand::ScrollToIndex {
-            node: GuiNodeHandle::new(1, EntityId::from_bits(42), 3, GuiNodeId(2)),
-            index: 5_000,
-            offset: 0.25,
-        })
-    );
-    scroll.pop();
-    assert!(decode(scroll).is_err());
-
-    let mut remove = vec![7];
-    remove.extend_from_slice(&42u64.to_le_bytes());
-    remove.extend_from_slice(&3u64.to_le_bytes());
-    remove.extend_from_slice(&11u32.to_le_bytes());
-    assert_eq!(
-        decode(remove),
-        Ok(GuiCommand::RemoveTheme {
-            entity: EntityId::from_bits(42),
-            root_incarnation: 3,
-            theme: 11,
-        })
+        decode_request(&page(2), 7),
+        Err(ProtocolError::Malformed("batch page completion flag"))
     );
 
-    let part = |base: u8, changed: [u8; 3], set: [u8; 3], values: &[u8]| {
-        let mut payload = vec![8];
-        payload.extend_from_slice(&1u64.to_le_bytes());
-        payload.extend_from_slice(&42u64.to_le_bytes());
-        payload.extend_from_slice(&3u64.to_le_bytes());
-        payload.extend_from_slice(&1u32.to_le_bytes());
-        payload.push(base);
-        payload.extend(part_patch(changed, set, values));
-        payload
+    let mut oversized = page(1);
+    oversized.resize(crate::COMMAND_PAGE_BYTES + 1, 0);
+    assert_eq!(
+        decode_request(&oversized, 7),
+        Err(ProtocolError::Limit("command page bytes"))
+    );
+}
+
+#[test]
+fn malformed_page_content_belongs_to_its_batch_and_a_malformed_header_to_the_connection() {
+    let page = |last: u8, commands: &[&[u8]]| {
+        let mut bytes = request(REQUEST_SUBMIT_BATCH);
+        if last == 0 {
+            bytes[8..16].fill(0);
+        }
+        bytes.extend_from_slice(&5u32.to_le_bytes());
+        bytes.push(last);
+        bytes.extend_from_slice(&(commands.len() as u32).to_le_bytes());
+        for command in commands {
+            bytes.extend_from_slice(command);
+        }
+        bytes
     };
-    // Icon (3), bit 6 border width set.
+    let rejected = |last: bool, error| {
+        Err(RequestDecodeError::BatchPage(RejectedBatchPage {
+            session: 7,
+            request_id: if last {
+                9
+            } else {
+                0
+            },
+            batch_id: 5,
+            last,
+            error,
+        }))
+    };
+    let delete: &[u8] = &[COMMAND_DELETE, REF_ALIAS, 1, 0, 0, 0];
+    let unknown: &[u8] = &[250];
+
+    // Any session is accepted without Host state; the Host fences it afterwards.
+    let decoded = decode_world_request(&page(0, &[delete]), None, &mut Vec::new()).unwrap();
+    assert_eq!(decoded.session, 7);
+    for (flag, last) in [(0, false), (1, true)] {
+        assert_eq!(
+            decode_world_request(&page(flag, &[delete, unknown]), None, &mut Vec::new()),
+            rejected(last, ProtocolError::Unsupported(250))
+        );
+        let mut trailing = page(flag, &[delete]);
+        trailing.push(0);
+        assert_eq!(
+            decode_world_request(&trailing, None, &mut Vec::new()),
+            rejected(last, ProtocolError::Malformed("trailing bytes"))
+        );
+        let mut oversized = page(flag, &[]);
+        oversized.resize(crate::COMMAND_PAGE_BYTES + 1, 0);
+        assert_eq!(
+            decode_world_request(&oversized, None, &mut Vec::new()),
+            rejected(last, ProtocolError::Limit("command page bytes"))
+        );
+    }
+
+    // A page that cannot name its batch fails its connection.
+    let mut miscorrelated = page(0, &[delete]);
+    miscorrelated[8] = 1;
     assert_eq!(
-        decode(part(3, [0x40, 0, 0], [0x40, 0, 0], &0.5f32.to_le_bytes())),
-        Ok(GuiCommand::UpdatePart {
-            handle: GuiNodeHandle::new(1, EntityId::from_bits(42), 3, GuiNodeId(1)),
-            part: GuiPrimitivePart::Icon,
-            patch: GuiPartPatch::default().set(
-                GuiPartProperty::BorderWidth,
-                ipp_core::DynamicValue::F32(0.5)
-            ),
-        })
+        decode_world_request(&miscorrelated, None, &mut Vec::new()),
+        Err(RequestDecodeError::Request(ProtocolError::Malformed(
+            "reserved request identity"
+        )))
     );
-    // Unknown base parts and mask bits past the 23 part properties are malformed.
-    assert!(decode(part(9, [0; 3], [0; 3], &[])).is_err());
-    assert!(decode(part(3, [0, 0, 0x80], [0, 0, 0], &[])).is_err());
+    assert_eq!(
+        decode_world_request(&page(0, &[delete]), Some(8), &mut Vec::new()),
+        Err(RequestDecodeError::Request(ProtocolError::SessionMismatch))
+    );
 }

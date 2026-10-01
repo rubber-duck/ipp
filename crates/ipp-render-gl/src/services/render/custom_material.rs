@@ -1,11 +1,12 @@
 //! Material candidate preparation, program caching and evaluated parameter uploads.
+use super::scene::{RenderEntity as EntityId, RenderScene, SceneItem};
 use super::{
     assets::GlTextureData, custom_shader, shader::RenderShaderConfig, shader_asset::GlShaderData,
 };
 use crate::{RenderDevice, RenderError, RenderService};
 use ipp_core::{
-    EntityId, WorldContext,
-    services::asset_management::{AssetKey, shader::SHADER_TYPE},
+    DynamicProperties, DynamicValue, services::asset_management::AssetKey,
+    systems::render::PublishedMaterialProperty,
 };
 use std::collections::BTreeMap;
 
@@ -39,7 +40,7 @@ pub struct CustomMaterialFallback {
     pub error: RenderError,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(super) struct PreparedCustomMaterial {
     pub material: CustomDrawState,
     pub key: CustomProgramKey,
@@ -51,8 +52,8 @@ pub(super) struct PreparedCustomMaterial {
 impl<D: RenderDevice> RenderService<D> {
     pub(super) fn prepare_custom_materials(
         &mut self,
-        world: &WorldContext<'_>,
-        items: &[ipp_core::RenderItem],
+        world: &RenderScene<'_>,
+        items: &[SceneItem<'_>],
     ) -> Result<BTreeMap<EntityId, PreparedCustomMaterial>, RenderError> {
         #[cfg(feature = "profiling")]
         let _allocation_scope = ipp_core::profiling::AllocationScope::new(224, "gl.custom-prepare");
@@ -64,7 +65,9 @@ impl<D: RenderDevice> RenderService<D> {
             items
                 .binary_search_by_key(entity, |item| item.entity)
                 .is_ok()
-                && world.custom_material(*entity).is_some()
+                && items
+                    .iter()
+                    .any(|item| item.entity == *entity && item.published.custom.is_some())
         });
         #[cfg(any(test, feature = "diagnostics"))]
         self.custom_fallbacks.retain(|entity, _| {
@@ -87,7 +90,7 @@ impl<D: RenderDevice> RenderService<D> {
             }
             let material = item
                 .custom_material
-                .then(|| world.custom_material(item.entity))
+                .then_some(item.published.custom.as_ref())
                 .flatten();
             let Some(material) = material else {
                 #[cfg(any(test, feature = "diagnostics"))]
@@ -96,14 +99,11 @@ impl<D: RenderDevice> RenderService<D> {
             };
             let prepared = ready.entry(item.entity).or_default();
             let result = (|| {
-                let asset = world
-                    .asset_source_key(SHADER_TYPE, &material.source, material.variant)
-                    .ok_or_else(|| {
-                        RenderError::RenderDevice("shader definition pending or unset".into())
-                    })?;
+                let asset = material.shader.ok_or_else(|| {
+                    RenderError::RenderDevice("shader definition pending or unset".into())
+                })?;
                 let shader = world
-                    .asset_resources()
-                    .get(asset)
+                    .resource(asset)
                     .and_then(|resource| {
                         resource.data()?.as_any().downcast_ref::<GlShaderData<D>>()
                     })
@@ -120,26 +120,37 @@ impl<D: RenderDevice> RenderService<D> {
                         "required custom vertex attribute missing".into(),
                     ));
                 }
-                custom_shader::parameter_words(
-                    definition,
-                    &material.properties,
-                    &mut prepared.words,
-                )?;
+                let mut properties = DynamicProperties::default();
+                for name in definition.parameters.keys() {
+                    let property = material.properties.get(name.as_str()).ok_or_else(|| {
+                        RenderError::RenderDevice("missing published material property".into())
+                    })?;
+                    let value = match property {
+                        PublishedMaterialProperty::Value(value) => value.clone(),
+                        PublishedMaterialProperty::Resource(key) => DynamicValue::Asset(
+                            world
+                                .resource(key.ok_or(RenderError::MissingTexture)?)
+                                .ok_or(RenderError::MissingTexture)?
+                                .source()
+                                .clone(),
+                        ),
+                    };
+                    properties.set(name, value).map_err(|_| {
+                        RenderError::RenderDevice("invalid published material property".into())
+                    })?;
+                }
+                custom_shader::parameter_words(definition, &properties, &mut prepared.words)?;
                 let mut texture_index = 0;
                 for (name, kind) in &definition.parameters {
                     if *kind != ipp_core::services::asset_management::shader::ShaderParameterKind::Texture2D {
                         continue;
                     }
-                    let texture = material
-                        .properties
-                        .asset(name)
-                        .expect("validated texture parameter");
-                    let key = world
-                        .asset_source_key(texture.kind, &texture.uri, texture.variant)
-                        .ok_or(RenderError::MissingTexture)?;
+                    let key = match material.properties.get(name.as_str()) {
+                        Some(PublishedMaterialProperty::Resource(Some(key))) => *key,
+                        _ => return Err(RenderError::MissingTexture),
+                    };
                     if world
-                        .asset_resources()
-                        .get(key)
+                        .resource(key)
                         .and_then(|r| r.data()?.as_any().downcast_ref::<GlTextureData<D>>())
                         .and_then(|d| d.gpu.as_ref())
                         .is_none()
@@ -178,7 +189,11 @@ impl<D: RenderDevice> RenderService<D> {
                 let config = config.with_particles(item.particle.is_some(), false);
                 let key = CustomProgramKey {
                     asset: asset.to_u64(),
-                    variant: material.variant,
+                    variant: world
+                        .resource(asset)
+                        .ok_or(RenderError::MissingTexture)?
+                        .source()
+                        .variant,
                     config,
                     lit: material.receives_light,
                     shadow: false,
@@ -222,7 +237,14 @@ impl<D: RenderDevice> RenderService<D> {
                 Err(error) => {
                     ready.remove(&item.entity);
                     #[cfg(any(test, feature = "diagnostics"))]
-                    self.record_custom_fallback(item.entity, &material.source, error);
+                    self.record_custom_fallback(
+                        item.entity,
+                        material
+                            .shader
+                            .and_then(|key| world.resource(key))
+                            .map_or("unavailable shader", |resource| &*resource.source().uri),
+                        error,
+                    );
                 }
             }
         }
@@ -255,13 +277,12 @@ impl<D: RenderDevice> RenderService<D> {
     }
 
     pub(super) fn custom_program<'a>(
-        world: &'a WorldContext<'_>,
+        world: &'a RenderScene<'_>,
         key: CustomProgramKey,
         shadow: bool,
     ) -> Result<&'a D::Program, RenderError> {
         let shader = world
-            .asset_resources()
-            .get(AssetKey::from_u64(key.asset))
+            .resource(AssetKey::from_u64(key.asset))
             .and_then(|resource| resource.data()?.as_any().downcast_ref::<GlShaderData<D>>())
             .ok_or_else(|| RenderError::RenderDevice("compiled shader unavailable".into()))?;
         (if shadow {
@@ -274,7 +295,7 @@ impl<D: RenderDevice> RenderService<D> {
 
     fn prepare_custom_material(
         &self,
-        world: &WorldContext<'_>,
+        world: &RenderScene<'_>,
         material: &PreparedCustomMaterial,
         shadow: bool,
     ) -> Result<(), RenderError> {
@@ -287,15 +308,14 @@ impl<D: RenderDevice> RenderService<D> {
 
     pub(super) fn upload_custom_material(
         &self,
-        world: &WorldContext<'_>,
+        world: &RenderScene<'_>,
         material: &PreparedCustomMaterial,
         shadow: bool,
     ) -> Result<(), RenderError> {
         let program = Self::custom_program(world, material.key, shadow)?;
         let textures = material.textures.iter().map(|(name, key)| {
             let texture = world
-                .asset_resources()
-                .get(*key)
+                .resource(*key)
                 .and_then(|r| r.data()?.as_any().downcast_ref::<GlTextureData<D>>())
                 .and_then(|d| d.gpu.as_ref())
                 .ok_or(RenderError::MissingTexture)?;

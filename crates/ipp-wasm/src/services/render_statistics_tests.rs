@@ -120,24 +120,58 @@ fn totals_saturate() {
 
 #[cfg(feature = "gui")]
 #[test]
-fn layout_words_follow_the_rendered_world() {
+fn layout_words_require_a_supported_host_sample() {
     let mut record = RenderStatisticsRecord::new();
     let statistics = RenderStatistics::default();
-    record.record_layout(ipp_core::GuiLayoutStatistics {
-        latest: ipp_core::GuiLayoutWork {
-            reflows: 1,
-            text_measurements: 2,
-        },
-        total: ipp_core::GuiLayoutWork {
-            reflows: 7,
-            text_measurements: u64::MAX,
-        },
-    });
+    assert_eq!(record.fill(&statistics)[FLAGS] & FLAG_LAYOUT, 0);
+    record.layout = Some([1, 2, 7, u32::MAX]);
 
     let words = record.fill(&statistics);
+    assert_ne!(words[FLAGS] & FLAG_LAYOUT, 0);
 
     assert_eq!(words[GUI_LAYOUT_REFLOWS], 1);
     assert_eq!(words[GUI_TEXT_MEASUREMENTS], 2);
     assert_eq!(words[TOTAL_GUI_LAYOUT_REFLOWS], 7);
     assert_eq!(words[TOTAL_GUI_TEXT_MEASUREMENTS], u32::MAX);
+
+    record.layout = None;
+    assert_eq!(record.fill(&statistics)[FLAGS] & FLAG_LAYOUT, 0);
+}
+
+#[cfg(feature = "gui")]
+#[test]
+fn host_layout_membership_and_words_share_the_same_sample() {
+    let mut record = RenderStatisticsRecord::new();
+    assert_eq!(record.layout_json(), "null");
+    assert_eq!(record.layout_json_len(), 4);
+
+    let mut host = ipp_core::HostRuntime::new();
+    let identity = host
+        .create_world(
+            Default::default(),
+            &[
+                ipp_core::systems::canvas::CanvasSystem::ID,
+                ipp_core::systems::gui::GuiSystem::ID,
+                ipp_core::systems::gui::GuiLayoutSystem::ID,
+            ],
+        )
+        .unwrap();
+    let world = host.world_ref(identity).unwrap();
+    let frame = host.frame(0.01).unwrap();
+    record.record_frame(&mut host, &frame);
+
+    assert_ne!(
+        record.fill(&RenderStatistics::default())[FLAGS] & FLAG_LAYOUT,
+        0
+    );
+    let json = record.layout_json();
+    assert!(json.contains("\"scope\":\"host\""));
+    assert!(json.contains("\"complete\":true"));
+    assert!(json.contains(&format!(
+        "\"world\":{{\"id\":\"{}\",\"incarnation\":\"{}\"}}",
+        identity.0,
+        world.incarnation()
+    )));
+    let length = json.len();
+    assert_eq!(record.layout_json_len(), length);
 }

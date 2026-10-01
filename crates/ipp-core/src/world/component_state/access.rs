@@ -2,26 +2,40 @@
 //!
 //! Pure reads used by commit validation, lifecycle observers and systems.
 //! Ownership lives in [`super::super`]; this module only hosts the read path.
+//! A component's current value is its batch's staged copy while one exists,
+//! the commit's prepared value while a commit installs it, and otherwise the
+//! retained storage.
 
 use super::super::*;
 
 impl WorldEntityState {
+    fn prepared_value(&self, key: (EntityId, u16)) -> Option<&ComponentValue> {
+        (!self.dirty.contains(&key))
+            .then(|| self.prepared.get(&key))
+            .flatten()
+    }
+
+    fn staged_value(&self, entity: EntityId, component: u16) -> Option<&ComponentValue> {
+        self.entities
+            .get(&entity)?
+            .components
+            .get(&component)?
+            .staged
+            .as_deref()
+    }
+
     pub(in crate::world) fn input_value(
         &self,
         components: &registry::ComponentStorage,
         entity: EntityId,
         component: u16,
     ) -> Option<ComponentValue> {
-        let layer = self.entities.get(&entity)?.layers.get(&component)?;
-        layer.input()?;
-        if !self.dirty.contains(&(entity, component))
-            && let Some(value) = self.prepared.get(&(entity, component))
-        {
+        self.entities.get(&entity)?.input(component)?;
+        if let Some(value) = self.prepared_value((entity, component)) {
             return Some(value.clone());
         }
-        let mut value = layer
-            .inputs
-            .input_value()
+        let mut value = self
+            .staged_value(entity, component)
             .cloned()
             .or_else(|| components.get(component, entity.index() as usize))?;
         if self.evaluated_target == Some((entity, component)) {
@@ -39,11 +53,8 @@ impl WorldEntityState {
         component: u16,
         offset: u32,
     ) -> Option<crate::components::schema::FieldValue> {
-        let layer = self.entities.get(&entity)?.layers.get(&component)?;
-        layer.input()?;
-        let prepared = (!self.dirty.contains(&(entity, component)))
-            .then(|| self.prepared.get(&(entity, component)))
-            .flatten();
+        self.entities.get(&entity)?.input(component)?;
+        let prepared = self.prepared_value((entity, component));
         if prepared.is_none()
             && self.evaluated_target == Some((entity, component))
             && let Some((_, value)) = self
@@ -53,7 +64,7 @@ impl WorldEntityState {
         {
             return Some(value.clone());
         }
-        match prepared.or_else(|| layer.inputs.input_value()) {
+        match prepared.or_else(|| self.staged_value(entity, component)) {
             Some(value) => value.field(offset).ok(),
             None => components.field(component, entity.index() as usize, offset),
         }
@@ -65,56 +76,23 @@ impl WorldEntityState {
         components: &'a registry::ComponentStorage,
         entity: EntityId,
     ) -> Option<std::borrow::Cow<'a, crate::components::Skeleton>> {
-        let layer = self
-            .entities
+        self.entities
             .get(&entity)?
-            .layers
-            .get(&ComponentValue::SKELETON)?;
-        layer.input()?;
-        let prepared = (!self.dirty.contains(&(entity, ComponentValue::SKELETON)))
-            .then(|| self.prepared.get(&(entity, ComponentValue::SKELETON)))
-            .flatten();
-        let value = match prepared.or_else(|| layer.inputs.input_value()) {
+            .input(ComponentValue::SKELETON)?;
+        let value = match self
+            .prepared_value((entity, ComponentValue::SKELETON))
+            .or_else(|| self.staged_value(entity, ComponentValue::SKELETON))
+        {
             Some(ComponentValue::Skeleton(value)) => value,
             Some(_) => return None,
             None => components.skeleton(entity.index() as usize)?,
         };
         Some(std::borrow::Cow::Borrowed(value))
     }
-
-    pub(in crate::world) fn producer_value(
-        &self,
-        components: &registry::ComponentStorage,
-        entity: EntityId,
-        component: u16,
-    ) -> Option<ComponentValue> {
-        let layer = self.entities.get(&entity)?.layers.get(&component)?;
-        layer.inputs.base()?;
-        if let Some(value) = layer.inputs.base_value() {
-            return Some(value.clone());
-        }
-        let mut value = components.get(component, entity.index() as usize)?;
-        layer.inputs.restore_producer(&mut value);
-        Some(value)
-    }
-
-    /// Apply sparse overlay originals after animation/constraint restoration.
-    pub(in crate::world) fn restore_producer_value(
-        &self,
-        entity: EntityId,
-        value: &mut ComponentValue,
-    ) {
-        if let Some(layer) = self
-            .entities
-            .get(&entity)
-            .and_then(|record| record.layers.get(&value.type_id()))
-        {
-            layer.inputs.restore_producer(value);
-        }
-    }
 }
 
 impl WorldMutationState {
+    /// The current value of a present component, or the reason it cannot be read.
     pub(in crate::world) fn component(
         &self,
         components: &registry::ComponentStorage,
@@ -123,7 +101,7 @@ impl WorldMutationState {
     ) -> Result<ComponentValue, ErrorReason> {
         ComponentValue::field_count(component).map_err(|_| ErrorReason::UnknownComponent)?;
         self.entities_state
-            .producer_value(components, id, component)
+            .input_value(components, id, component)
             .ok_or(ErrorReason::MissingComponent)
     }
 }

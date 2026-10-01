@@ -1,13 +1,15 @@
 import { presentationTesting } from "../../packages/ipp-client/src/testing.js";
-import type { FrameCapture } from "@ipp/client";
+import type { PresentedCapture } from "@ipp/client";
 import { createRoot, Entity, Transform, type ReactWorldRoot } from "@ipp/react";
 import type { BlenderViewerHandle } from "../../examples/blender-viewer/main.js";
-import type { BlenderClient } from "../../integrations/blender/client/adapter.js";
+import { sameOutput } from "../../examples/blender-viewer/camera.js";
 import type { BlenderSnapshot } from "../../integrations/blender/client/types.js";
 import { compareImages, summarizeImage } from "./image-assertions.js";
+import { capturedPixels } from "./canvas-fixture-helpers.js";
 
-const captures = new Map<string, FrameCapture>();
-let overlay: ReactWorldRoot | undefined;
+const captures = new Map<string, PresentedCapture>();
+/** A React root that binds a Blender entity and writes its Transform. */
+let overrideRoot: ReactWorldRoot | undefined;
 
 function viewer(): BlenderViewerHandle {
   const current = window.ippBlender;
@@ -22,13 +24,18 @@ export async function observe(revision = 0, timeoutMs = 30_000) {
     if (current?.error) throw new Error(current.error);
     if (current?.latest && current.latest.revision >= revision) {
       await current.adapter.flush();
+      await current.presentation;
+      await current.canvas.flush();
       const inspection = await current.canvas.client.inspect();
       const failed = inspection.resources.find(
         (resource) => resource.status === "failed",
       );
       if (failed) throw new Error(`Resource failed: ${failed.error}`);
       if (
-        inspection.resources.every((resource) => resource.status === "loaded")
+        inspection.resources.every(
+          (resource) => resource.status === "loaded",
+        ) &&
+        sameOutput(current.output, current.canvas.view?.binding.output)
       )
         return {
           session: current.canvas.client.session,
@@ -62,7 +69,7 @@ export async function capture(
     // Timing ends at readiness. Wall-clock-driven effects cannot produce an
     // exact cross-run image; stop autoplay and withdraw native emitters only
     // for this comparison capture, after validating their imported resources.
-    const client = viewer().canvas.client as BlenderClient;
+    const client = viewer().client;
     for (const controller of state.inspection.controllers ?? [])
       if (controller.state === "playing")
         client.playback(controller.id, { action: "stop" });
@@ -71,7 +78,9 @@ export async function capture(
       const outcome = await client.batch(
         state.inspection.entities
           .filter((entity) =>
-            entity.base.some((component) => component.component === emitter.id),
+            entity.components.some(
+              (component) => component.component === emitter.id,
+            ),
           )
           .map((entity) => ({
             kind: "removeComponent",
@@ -84,32 +93,41 @@ export async function capture(
     }
     state.inspection = await client.inspect();
   }
-  const frame = await viewer().canvas.capture();
-  if (frame.session !== state.session || frame.tick < state.inspection.tick)
-    throw new Error("Blender capture belongs to an earlier session/frame");
+  const current = viewer();
+  await current.client.waitForFrame(state.inspection.tick);
+  const barrier = await current.canvas.frame();
+  const frame = await current.canvas.capture({
+    afterSequence: barrier.sequence,
+  });
+  if (
+    viewer() !== current ||
+    current.client.session !== state.session ||
+    !sameOutput(current.output, frame.view.binding.output)
+  )
+    throw new Error("Blender capture belongs to another session/output");
   captures.set(label, frame);
   return {
     ...state,
     drawCalls: frame.drawCalls,
     triangles: frame.triangles,
-    tick: frame.tick,
-    contextGeneration: frame.contextGeneration,
-    summary: summarizeImage(frame),
+    sequence: frame.sequence,
+    publication: frame.publication,
+    contextGeneration: frame.view.surface.context,
+    summary: summarizeImage(capturedPixels(frame)),
     failedDrawCalls: frame.failedDrawCalls,
-    invalidCamera: frame.invalidCamera,
-    statistics: frame.statistics,
+    statistics: await diagnostics().statistics(),
   };
 }
 
 export async function overrideTransform(id: string, x: number) {
-  if (!overlay) overlay = createRoot(viewer().canvas.client);
+  if (!overrideRoot) overrideRoot = createRoot(viewer().canvas.client);
   const current = viewer();
   const handle = current.latest?.entities.get(id);
   const name = (await current.canvas.client.inspect()).entities.find(
     (entity) => entity.id === handle,
   )?.metadata.symbolicId;
   if (!name) throw new Error(`No named Blender entity ${id}`);
-  await overlay.render(
+  await overrideRoot.render(
     <Entity bindTo={name}>
       <Transform x={x} />
     </Entity>,
@@ -117,15 +135,16 @@ export async function overrideTransform(id: string, x: number) {
   return viewer().canvas.client.inspect();
 }
 
-export async function releaseComponentStateOverlay() {
-  await overlay?.unmount();
-  overlay = undefined;
+/** Unmount the override root; unmount deletes nothing, so the bound cube keeps the written Transform. */
+export async function unmountTransformOverride() {
+  await overrideRoot?.unmount();
+  overrideRoot = undefined;
   return viewer().canvas.client.inspect();
 }
 
 export async function seek(target: string, time: number) {
   const current = viewer();
-  const client = current.canvas.client as BlenderClient;
+  const client = current.client;
   const inspection = await client.inspect();
   const targetHandle = current.latest?.entities.get(target);
   const controllers =
@@ -144,7 +163,7 @@ export async function seek(target: string, time: number) {
 }
 
 export async function stopPlayers() {
-  const client = viewer().canvas.client as BlenderClient;
+  const client = viewer().client;
   for (const controller of (await client.inspect()).controllers ?? [])
     client.playback(controller.id, { action: "stop" });
   return client.inspect();
@@ -167,9 +186,9 @@ export async function rejectInvalidRevision() {
     name: "partial-entity",
   });
   const client = current.canvas.client;
-  const batch = client.batchChunk.bind(client);
-  client.batchChunk = (id, commands) =>
-    batch(id, [
+  const batch = client.batch.bind(client);
+  client.batch = (commands) =>
+    batch([
       ...commands,
       { kind: "delete", entity: { kind: "handle", id: 0xffffffffffffffffn } },
     ]);
@@ -179,13 +198,16 @@ export async function rejectInvalidRevision() {
   } catch (caught) {
     error = String(caught);
   } finally {
-    client.batchChunk = batch;
+    client.batch = batch;
   }
   return { error, revision: current.latest!.revision };
 }
 
 export function compare(first: string, second: string) {
-  return compareImages(requireCapture(first), requireCapture(second));
+  return compareImages(
+    capturedPixels(requireCapture(first)),
+    capturedPixels(requireCapture(second)),
+  );
 }
 
 export function colorCounts(label: string) {
@@ -204,11 +226,45 @@ export function colorCounts(label: string) {
 }
 
 export async function restoreContext() {
-  const presentation = viewer().canvas.client.presentation!;
-  presentationTesting(presentation).loseContext();
-  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-  presentationTesting(presentation).restoreContext();
-  await viewer().canvas.client.waitForFrame();
+  const current = viewer();
+  const previous = await current.canvas.host.presentation.surface();
+  const testing = presentationTesting(diagnostics());
+  const deadline = performance.now() + 20_000;
+  testing.loseContext();
+  for (;;) {
+    try {
+      await current.canvas.frame();
+    } catch (error) {
+      if (!(error instanceof Error) || !("reason" in error)) throw error;
+      if (error.reason !== "unavailable" && error.reason !== "staleView")
+        throw error;
+      break;
+    }
+    if (performance.now() >= deadline)
+      throw new Error("Blender presentation did not observe context loss");
+    await animationFrames(1);
+  }
+  testing.restoreContext();
+  for (;;) {
+    try {
+      const surface = await current.canvas.host.presentation.surface();
+      if (surface.context > previous.context) break;
+    } catch (error) {
+      if (!(error instanceof Error) || !("reason" in error)) throw error;
+      if (error.reason !== "unavailable" && error.reason !== "staleView")
+        throw error;
+    }
+    if (performance.now() >= deadline)
+      throw new Error("Blender presentation context did not recover");
+    await animationFrames(1);
+  }
+  await current.canvas.recoverPresentation();
+}
+
+function diagnostics() {
+  const value = viewer().canvas.host.renderDiagnostics;
+  if (!value) throw new Error("Blender fixture requires render diagnostics");
+  return value;
 }
 
 export function captureMetadata(label: string) {
@@ -218,16 +274,13 @@ export function captureMetadata(label: string) {
 
 export function captureDataUrl(label: string) {
   const frame = requireCapture(label);
+  const { width, height } = frame.view.binding.viewport;
   const canvas = document.createElement("canvas");
-  canvas.width = frame.width;
-  canvas.height = frame.height;
+  canvas.width = width;
+  canvas.height = height;
   const context = canvas.getContext("2d")!;
   context.putImageData(
-    new ImageData(
-      new Uint8ClampedArray(frame.pixels.slice(0)),
-      frame.width,
-      frame.height,
-    ),
+    new ImageData(new Uint8ClampedArray(frame.pixels.slice(0)), width, height),
     0,
     0,
   );
@@ -260,7 +313,7 @@ export async function correctPartialControllerRevision() {
     id,
     autoplay: false,
   }));
-  const client = current.canvas.client as BlenderClient;
+  const client = current.client;
   const create = client.createAnimationController.bind(client);
   const acknowledged: bigint[] = [];
   let calls = 0;
@@ -329,12 +382,22 @@ export async function correctPartialControllerRevision() {
   }
 }
 
+/** Commands in one full batch page of the viewer's generated client. */
+function pageCommands(): number {
+  return (
+    viewer().canvas.client as unknown as {
+      commandPageLimits: { commands: number };
+    }
+  ).commandPageLimits.commands;
+}
+
 export function importMeasurements() {
   const current = viewer();
   return {
     ...current.adapter.importProfile,
     ready: performance.now() - current.adapter.importProfile.started,
     clips: current.latest?.clips.length,
+    pageCommands: pageCommands(),
   };
 }
 
@@ -394,7 +457,7 @@ export async function correctCommandEncodingFailure() {
   };
 }
 
-/** Capture the last completed GPU frame while authored transforms are held mid-batch. */
+/** Capture completed GPU frames while a batch's first page waits for its final page. */
 export async function captureCommandBatchBoundary() {
   const current = viewer();
   const client = current.canvas.client;
@@ -404,8 +467,8 @@ export async function captureCommandBatchBoundary() {
   const transform = client.components.Transform!;
   const original = state.entities
     .find((entity) => entity.id === handle)!
-    .base.find((component) => component.component === transform.id)!.fields
-    .x as number;
+    .components.find((component) => component.component === transform.id)!
+    .fields.x as number;
   const write = (x: number) => ({
     kind: "setField" as const,
     entity: { kind: "handle" as const, id: handle },
@@ -415,47 +478,54 @@ export async function captureCommandBatchBoundary() {
       value: { kind: "f32" as const, value: x },
     },
   });
-  const before = await current.canvas.capture();
+  await client.waitForFrame(state.tick);
+  const beforeBarrier = await current.canvas.frame();
+  const before = await current.canvas.capture({
+    afterSequence: beforeBarrier.sequence,
+  });
   captures.set("batch-before", before);
-  // `waitForFrame(0n)` returns the latest presented frame without waiting.
-  const presentedBefore = (await client.waitForFrame(0n)).tick;
-  const id = await client.beginBatch();
-  const first = await client.batchChunk(id, [write(1000)]);
-  if (!first.ok) throw new Error("Batch fixture transform rejected");
-  // An open batch withholds evaluation and presentation, so no frame renders
-  // and no pixels can be captured until it ends. Give the worker several of
-  // its frames, well inside the batch deadline, and observe that no frame
-  // after the acknowledged tick was presented.
-  let advancedDuringHold = false;
-  client.waitForFrame(first.tick).then(
-    () => {
-      advancedDuringHold = true;
-    },
-    () => {},
-  );
+  const evaluatedBefore = (await client.waitForFrame(0n)).tick;
+  // A full first page of moves leaves at once; the batch applies at finish().
+  const batch = client.openBatch();
+  batch.write(Array.from({ length: pageCommands() + 1 }, () => write(1000)));
   await animationFrames(6);
-  await new Promise((resolve) => setTimeout(resolve, 250));
-  const heldObservation = advancedDuringHold;
-  const heldTick = (await client.waitForFrame(0n)).tick;
-  const second = await client.batchChunk(id, []);
-  await client.endBatch(id);
-  await client.waitForFrame(first.tick);
-  const complete = await current.canvas.capture();
+  const openTick = (await client.waitForFrame(evaluatedBefore)).tick;
+  const openBarrier = await current.canvas.frame();
+  const open = await current.canvas.capture({
+    afterSequence: openBarrier.sequence,
+  });
+  const applied = await batch.finish();
+  if (!applied.ok) throw new Error("Batch fixture transform rejected");
+  const evaluated = await client.waitForFrame(applied.tick);
+  const completeBarrier = await current.canvas.frame();
+  const complete = await current.canvas.capture({
+    afterSequence: completeBarrier.sequence,
+  });
   captures.set("batch-complete", complete);
   const restored = await client.batch([write(original)]);
   if (!restored.ok) throw new Error("Batch fixture restoration rejected");
-  const after = await current.canvas.capture();
+  await client.waitForFrame(restored.tick);
+  const restoredBarrier = await current.canvas.frame();
+  const after = await current.canvas.capture({
+    afterSequence: restoredBarrier.sequence,
+  });
   captures.set("batch-restored", after);
   return {
-    presentedBefore,
-    firstTick: first.tick,
-    secondTick: second.tick,
-    heldTick,
-    advancedDuringHold: heldObservation,
-    completeTick: complete.tick,
-    completedDifference: compareImages(before, complete),
-    restoredDifference: compareImages(before, after),
-    renderer: complete.statistics!.device.unmaskedRenderer,
+    evaluatedBefore,
+    openTick,
+    pages: batch.pages,
+    pageCommands: pageCommands(),
+    completeTick: evaluated.tick,
+    openDifference: compareImages(capturedPixels(before), capturedPixels(open)),
+    completedDifference: compareImages(
+      capturedPixels(before),
+      capturedPixels(complete),
+    ),
+    restoredDifference: compareImages(
+      capturedPixels(before),
+      capturedPixels(after),
+    ),
+    renderer: (await diagnostics().statistics()).device.unmaskedRenderer,
   };
 }
 

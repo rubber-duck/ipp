@@ -163,7 +163,7 @@ for (const mode of ["development", "production"] as const) {
           );
           await wait("unmount cancellation", gates.get("unmount")!.aborted);
           gates.get("unmount")!.release();
-          return { tick: replaced.frame.tick };
+          return { tick: replaced.tick };
         } finally {
           for (const gate of gates.values()) gate.release();
           await call("close");

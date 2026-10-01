@@ -1,6 +1,6 @@
 use super::*;
 use ipp_core::{
-    MeshKey,
+    EntityId, MeshKey, RenderItem,
     components::{Transform, UnlitMaterial},
 };
 
@@ -36,20 +36,50 @@ fn item(id: u64, z: f32) -> RenderItem {
 }
 
 fn ordered(items: &[RenderItem], customs: &BTreeMap<EntityId, PreparedCustomMaterial>) -> Vec<u64> {
+    let published: Vec<_> = items
+        .iter()
+        .map(|item| ipp_core::systems::render::PublishedRenderItem {
+            item: *item,
+            incarnation: 1,
+            custom: None,
+            #[cfg(feature = "skeletal-animation")]
+            palette: None,
+        })
+        .collect();
+    let items: Vec<_> = published
+        .iter()
+        .map(|published| super::super::scene::SceneItem {
+            entity: super::super::scene::test_entity(published.item.entity.to_bits()),
+            value: published.item,
+            published,
+        })
+        .collect();
+    let customs: BTreeMap<_, _> = customs
+        .iter()
+        .map(|(entity, custom)| {
+            (
+                super::super::scene::test_entity(entity.to_bits()),
+                custom.clone(),
+            )
+        })
+        .collect();
     let mut draws = Vec::new();
     prepare(
         &mut draws,
-        items,
+        &items,
         &[],
         #[cfg(feature = "surfaces")]
         &[],
-        customs,
+        &customs,
         &PreparedLighting::default(),
         &[
             0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
         ],
     );
-    draws.iter().map(|d| u64::from(d.key.0.index())).collect()
+    draws
+        .iter()
+        .map(|d| u64::from(d.key.0.entity.index()))
+        .collect()
 }
 
 fn custom(shader: u64, alpha_mode: u32) -> PreparedCustomMaterial {

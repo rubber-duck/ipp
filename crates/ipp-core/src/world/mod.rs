@@ -1,6 +1,12 @@
 mod serialization;
 
+pub(crate) mod composition;
+mod host_ingress;
 mod metadata;
+
+mod entity_link_evaluation;
+mod entity_links;
+pub use entity_links::{EntityLink, EntityOrder, EntityPlacement, EntityPlacementRef};
 
 pub(crate) use metadata::validate_world_symbolic_id;
 pub use metadata::{
@@ -15,7 +21,15 @@ pub use capacity::{WorldCapacityHints, WorldCapacityHintsPatch, WorldSystemCapac
 #[cfg(test)]
 mod storage_tests;
 
+#[cfg(test)]
+mod selection_tests;
+
+#[cfg(test)]
+mod asset_barrier_tests;
+
 mod mutation;
+mod operation_effects;
+pub use operation_effects::{OperationImpact, SystemOperationPreparationContext};
 mod mutation_map;
 mod removals;
 
@@ -26,12 +40,6 @@ use access::{SystemInstanceAccess, WorldReadContext};
 pub mod systems;
 
 pub use systems::render::{DebugRenderItem, RenderDiagnostic, RenderItem};
-
-use systems::state_overlay;
-
-use crate::StateOverlayLifecycleDiagnostic;
-
-use state_overlay::ComponentStateOverlayInputs as WorldComponentInputs;
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -64,17 +72,17 @@ impl Default for WorldLimits {
     }
 }
 
-/// Owned, read-only observation of the actual world state.
+/// Owned, read-only observation of one live entity.
 #[derive(Clone, Debug, PartialEq)]
 pub struct EntitySnapshot {
     /// World-local identity.
     pub id: EntityId,
     /// Current normalized metadata.
     pub metadata: EntityMetadata,
-    /// Retained producer components in registry order.
-    pub base: Vec<ComponentValue>,
-    /// Evaluated components in registry order.
-    pub effective: Vec<ComponentValue>,
+    /// Ordered relationship: parent and sibling order.
+    pub link: EntityLink,
+    /// Stored components in registry order.
+    pub components: Vec<ComponentValue>,
 }
 
 /// Stage 8 publication after mutation and evaluation complete.
@@ -104,70 +112,44 @@ pub struct WorldUpdateReport {
     pub assets: Vec<crate::services::asset_management::AssetUploadOutcome>,
     /// Terminal provider outcomes committed this frame, in completion order.
     pub resource_changes: Vec<crate::AssetResourceSnapshot>,
-    /// Committed lifecycle losses, in batch and deterministic resource order.
-    pub diagnostics: Vec<StateOverlayLifecycleDiagnostic>,
-    /// Ordered GUI input effects committed at this frame, with source/effect ticks.
-    /// Routed against one immutable per-tick snapshot; applied at the next
-    /// mutation boundary before animation with liveness revalidation.
-    #[cfg(feature = "gui")]
-    pub gui_input_effects: Vec<crate::systems::gui::GuiInputEffect>,
-    /// GUI inputs cancelled between routing and application (removal,
-    /// hide/disable, capture loss, platform blur, session replacement).
-    /// Carries source/effect ticks; never mixed with effects.
-    #[cfg(feature = "gui")]
-    pub gui_input_cancellations: Vec<crate::systems::gui::GuiInputCancellation>,
-    /// GUI action conflicts (revision mismatch, admission failure, touch
-    /// arbitration). Reported separately from effects and cancellations.
-    #[cfg(feature = "gui")]
-    pub gui_input_conflicts: Vec<crate::systems::gui::GuiInputConflict>,
-    /// Unhandled GUI inputs observable for scene controls. Each source input
-    /// appears here at most once and never alongside an effect (no duplicate
-    /// dispatch).
-    #[cfg(feature = "gui")]
-    pub gui_unhandled_inputs: Vec<crate::systems::gui::GuiUnhandledInput>,
-    /// Authoritative focused-editable state changes for native platform bridges.
-    #[cfg(feature = "gui")]
-    pub gui_text_focus_updates: Vec<crate::systems::gui::GuiTextFocusUpdate>,
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct ComponentStateInstance<T> {
-    pub(crate) base: T,
+pub(crate) struct ComponentStateInstance {
     pub(crate) incarnation: u64,
 }
 
-#[derive(Default)]
+/// One present component: its incarnation and, while a batch touches it, the
+/// batch's single transient staged copy. The copy moves to the commit's prepared
+/// values once the batch commits, so retained storage stays the only store.
 pub(super) struct WorldComponentState {
-    inputs: WorldComponentInputs,
-}
-
-impl WorldComponentState {
-    fn input(&self) -> Option<&ComponentStateInstance<()>> {
-        self.inputs.input()
-    }
+    instance: ComponentStateInstance,
+    staged: Option<Box<ComponentValue>>,
 }
 
 #[derive(Default)]
 pub(crate) struct WorldEntityRecord {
     persistent_id: EntityPersistentId,
     metadata: EntityMetadata,
-    layers: BTreeMap<u16, WorldComponentState>,
+    components: BTreeMap<u16, WorldComponentState>,
 }
 
 impl WorldEntityRecord {
-    fn input(&self, component: u16) -> Option<&ComponentStateInstance<()>> {
-        self.layers.get(&component)?.input()
+    /// Incarnation of a present component.
+    fn input(&self, component: u16) -> Option<&ComponentStateInstance> {
+        self.components.get(&component).map(|state| &state.instance)
     }
 }
 
 #[derive(Default)]
 pub(crate) struct WorldEntityState {
+    pub(in crate::world) links: entity_links::EntityLinkStore,
     pub(crate) dirty: BTreeSet<(EntityId, u16)>,
     operation_components: BTreeSet<(EntityId, u16)>,
-    // Keys this operation touched through a path other than in-place producer
+    // Keys this operation touched through a path other than in-place staged
     // writes; their observation compares whole values.
     operation_untracked: BTreeSet<(EntityId, u16)>,
-    // In-place producer writes of this operation and whether each changed the value.
+    // In-place staged writes of this operation and whether each changed the value.
     operation_writes: Vec<(
         (EntityId, u16),
         component_state::observations::ComponentStagedWrite,
@@ -175,6 +157,8 @@ pub(crate) struct WorldEntityState {
     )>,
     operation_created: BTreeSet<EntityId>,
     operation_deleted: BTreeSet<EntityId>,
+    // Whether this operation adopted an existing entity or component.
+    operation_adopted: bool,
     lifecycle_effects: Vec<systems::lifecycle_publisher::LifecycleObservation>,
     observed_components: BTreeMap<(EntityId, u16), (Option<u64>, Option<ComponentValue>)>,
     // In-place writes applied after a component's observed value (or retained
@@ -183,14 +167,12 @@ pub(crate) struct WorldEntityState {
         BTreeMap<(EntityId, u16), Vec<component_state::observations::ComponentStagedWrite>>,
     changed: mutation_map::MutationMap<(EntityId, u16), Option<u64>>,
     prepared: mutation_map::MutationMap<(EntityId, u16), ComponentValue>,
-    // Staged inputs whose effective copy is made once at the next commit boundary.
+    // Staged copies moved into `prepared` once, at the next commit boundary.
     deferred_preparation: BTreeSet<(EntityId, u16)>,
     // A sparse candidate for one existing-property commit. Cleared after publish;
     // the retained Vec is capacity only, not a second component value store.
     evaluated_target: Option<(EntityId, u16)>,
     evaluated_properties: Vec<(u32, crate::components::schema::FieldValue)>,
-    #[cfg(feature = "surfaces")]
-    deferred_mutations: Vec<DeferredComponentMutation>,
     explicit_fields: BTreeSet<(EntityId, u16, u32)>,
     allocator: Allocator,
     retired_entities: Vec<EntityId>,
@@ -202,17 +184,6 @@ pub(crate) struct WorldEntityState {
     classes: BTreeMap<String, BTreeSet<EntityId>>,
     next_incarnation: u64,
     next_persistent_entity_id: u64,
-}
-
-#[cfg(feature = "surfaces")]
-type DeferredComponentMutationOperation =
-    Box<dyn FnOnce(&mut registry::ComponentStorage) -> Result<(), ErrorReason>>;
-
-#[cfg(feature = "surfaces")]
-pub(crate) struct DeferredComponentMutation {
-    entity: EntityId,
-    component: u16,
-    apply: DeferredComponentMutationOperation,
 }
 
 /// Exclusive mutation state moved from ECS and participating systems, never cloned.
@@ -238,8 +209,7 @@ impl std::ops::DerefMut for WorldMutationState {
 /// Single mutation owner of a headless ECS.
 ///
 /// Batches mutate metadata and affected values without snapshots or rollback.
-/// Occupied effective components stay in stable boxed pages.
-/// Standard System composition includes StateOverlay declarations and scalar constraints.
+/// Occupied components stay in stable boxed pages, one value per field.
 /// Systems own evaluation, dependency validation and lifecycle cleanup.
 pub struct World {
     pub(crate) data: WorldSimulationState,
@@ -250,14 +220,7 @@ pub struct World {
 pub struct WorldSimulationState {
     updating: bool,
     prepared_frame: bool,
-    mutation_prepared: bool,
-    /// Restore precedes ingress that queue inspection cannot see: subsystem
-    /// input admitted at Accept or a Host command stream. Restoration then
-    /// returns every retained evaluated output before inputs are staged.
-    admitting_ingress: bool,
-    command_stream: Option<BTreeMap<u32, EntityId>>,
     accepting_removals: bool,
-    forced_cleanup: bool,
     restoring: bool,
     fault: Option<ErrorReason>,
     deferred_removals: Vec<removals::DeferredRemoval>,
@@ -267,6 +230,7 @@ pub struct WorldSimulationState {
     pub(crate) metadata: WorldMetadata,
     limits: WorldLimits,
     pub(crate) capacity_hints: WorldCapacityHints,
+    pub(crate) manifest: systems::WorldManifest,
     state: WorldEntityState,
     components: registry::ComponentStorage,
     queue: VecDeque<Ingress>,
@@ -289,7 +253,10 @@ enum Ingress {
         request_id: u64,
         commands: Vec<Box<dyn std::any::Any>>,
     },
-    Batch(Batch),
+    Batch {
+        batch: Batch,
+        effect_sink: Option<Box<dyn crate::OperationEffectSink>>,
+    },
 }
 
 /// A world is unpublished until its limits and complete selected graph validate.
@@ -308,6 +275,9 @@ pub enum WorldConstructionError {
         /// Concrete dependency or factory failure.
         error: systems::SystemInitError,
     },
+    /// Invalid Canvas creation state, or Canvas state for a World that does not
+    /// select the Canvas System.
+    Canvas(ErrorReason),
 }
 
 impl std::fmt::Display for WorldConstructionError {
@@ -320,27 +290,36 @@ impl std::fmt::Display for WorldConstructionError {
                 system,
                 error,
             } => write!(f, "initializing {}: {}", system.0, error),
+            Self::Canvas(error) => write!(f, "World creation Canvas state: {error}"),
         }
     }
 }
 
 impl std::error::Error for WorldConstructionError {}
 
+/// Largest command capacity a World keeps for reuse: one full batch page, so
+/// hosts can decode any page into a recycled buffer. Larger assembled batches
+/// are released instead of cached.
+pub const RECYCLED_COMMAND_BUFFER_COMMANDS: usize = 1024;
+
+/// Recycled buffers a World keeps, at most 128 KiB of command slots each. Hosts
+/// that decode pages away from the World return applied batches without taking
+/// buffers, so the pool must not grow with the number of applied batches.
+const RECYCLED_COMMAND_BUFFERS: usize = 2;
+
 impl WorldContext<'_> {
     /// Reuse capacity from a consumed batch. The buffer contains no live commands.
     /// Hosts may grow it for larger input; queued batches retain exclusive ownership.
-    /// Retained capacity is capped at 256 commands; larger native batches are not cached.
     pub fn take_command_buffer(&mut self) -> Vec<Command> {
-        self.world
-            .command_buffers
-            .pop()
-            .unwrap_or_else(|| Vec::with_capacity(256))
+        self.world.command_buffers.pop().unwrap_or_default()
     }
 
     /// Return unused decode capacity without retaining command payloads or identities.
     pub fn recycle_command_buffer(&mut self, mut commands: Vec<Command>) {
         commands.clear();
-        if (1..=256).contains(&commands.capacity()) {
+        if (1..=RECYCLED_COMMAND_BUFFER_COMMANDS).contains(&commands.capacity())
+            && self.world.command_buffers.len() < RECYCLED_COMMAND_BUFFERS
+        {
             self.world.command_buffers.push(commands);
         }
     }
@@ -371,10 +350,13 @@ mod diagnostic_invariants {
 }
 
 mod component_state;
+mod entity_aliases;
 mod entity_state;
 
+use entity_aliases::EntityAliases;
+
 mod runtime;
-use runtime::metadata_bytes;
+use crate::commands::metadata_bytes;
 
 mod queries;
 

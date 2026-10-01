@@ -1,5 +1,5 @@
 mod error_checks;
-#[cfg(feature = "gui")]
+#[cfg(feature = "surfaces")]
 mod retained_vertices;
 mod uniform_cache;
 
@@ -68,7 +68,7 @@ pub(super) fn pack_surface_instances(
     }));
 }
 
-#[cfg(feature = "gui")]
+#[cfg(feature = "surfaces")]
 pub use super::gui_batch::GuiVertex;
 
 #[cfg(feature = "surfaces")]
@@ -189,11 +189,11 @@ pub trait RenderDevice: 'static {
 
     /// Context-owned retained GUI vertex storage of one Surface: boxes and glyph
     /// quads in the [`GuiVertex`] layout.
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     type GuiBatch;
 
     /// Context-owned glyph atlas page texture and framebuffer target.
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     type GlyphAtlasPage;
 
     /// Enable exhaustive error polling for diagnostics: every draw, uniform,
@@ -415,6 +415,19 @@ pub trait RenderDevice: 'static {
         0
     }
 
+    /// Bind a linear-color target with independent depth for a nested Camera.
+    /// Ends through `end_surface_cache_target`, without display conversion.
+    #[cfg(feature = "surfaces")]
+    fn begin_camera_target(
+        &mut self,
+        _target: &mut Self::SurfaceCacheTarget,
+        _clear: &[f32; 4],
+    ) -> Result<(), RenderError> {
+        Err(RenderError::RenderDevice(
+            "Camera targets unavailable".into(),
+        ))
+    }
+
     /// Allocate a target cleared to transparent black, with linear filtering
     /// and edge clamping, and validate framebuffer completeness. Dimensions
     /// are positive and no larger than [`Self::surface_cache_limit`].
@@ -472,9 +485,10 @@ pub trait RenderDevice: 'static {
     }
 
     /// Composite a premultiplied image over Surface content `[0, 0, size]` at
-    /// `mvp`, scaled by root-clip coverage, with premultiplied blending, scene
+    /// `mvp`, scaled by root-clip coverage and opacity, with premultiplied blending, scene
     /// depth testing and no depth writes. Callers select double-sided
-    /// rasterization as for direct Surface draws.
+    /// rasterization as for direct Surface draws. Canvas cache opacity is already
+    /// baked per primitive and supplies one; Camera images supply their slot opacity.
     #[cfg(feature = "surfaces")]
     fn draw_surface_cache(
         &mut self,
@@ -482,6 +496,8 @@ pub trait RenderDevice: 'static {
         _target: &Self::SurfaceCacheTarget,
         _mvp: &[f32; 16],
         _size: &[f32; 2],
+        _clip: &[f32; 4],
+        _opacity: f32,
     ) -> Result<(), RenderError> {
         Err(RenderError::RenderDevice(
             "Surface cache targets unavailable".into(),
@@ -493,7 +509,7 @@ pub trait RenderDevice: 'static {
     fn delete_surface_cache_target(&mut self, _target: Self::SurfaceCacheTarget) {}
 
     /// Allocate retained GUI vertex storage for `capacity` vertices, all zero.
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     fn create_gui_batch(&mut self, _capacity: usize) -> Result<Self::GuiBatch, RenderError> {
         Err(RenderError::RenderDevice("gui batches unavailable".into()))
     }
@@ -504,7 +520,7 @@ pub trait RenderDevice: 'static {
     /// provide that. On failure the contents are unknown and callers release the
     /// storage. GL errors surface here only in exhaustive mode, otherwise at this
     /// frame's end.
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     fn write_gui_batch(
         &mut self,
         _batch: &mut Self::GuiBatch,
@@ -515,13 +531,13 @@ pub trait RenderDevice: 'static {
     }
 
     /// Release one context-owned GUI storage allocation.
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     fn delete_gui_batch(&mut self, _batch: Self::GuiBatch) {}
 
     /// Draw `count` vertices from vertex `first` of retained GUI storage as triangles
     /// in painter order, each clipped by its own rectangle. `atlas` is bound for
     /// ranges containing glyph quads.
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     #[allow(clippy::too_many_arguments)]
     fn draw_gui_batch(
         &mut self,
@@ -537,7 +553,7 @@ pub trait RenderDevice: 'static {
 
     /// Allocate a single-channel R8 coverage page texture, cleared to zero, with
     /// linear filtering and a render target.
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     fn create_glyph_atlas_page(
         &mut self,
         _width: u32,
@@ -547,26 +563,26 @@ pub trait RenderDevice: 'static {
     }
 
     /// Release an atlas page allocation.
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     fn delete_glyph_atlas_page(&mut self, _page: Self::GlyphAtlasPage) {}
 
     /// Bind the atlas page framebuffer and viewport.
     ///
     /// The first begin saves the host draw target. Further begins before
     /// [`Self::end_glyph_atlas_page`] switch pages and keep that saved target.
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     fn begin_glyph_atlas_page(&mut self, _page: &Self::GlyphAtlasPage) -> Result<(), RenderError> {
         Err(RenderError::RenderDevice("glyph atlas unavailable".into()))
     }
 
     /// Restore the host draw target and viewport saved by the first begin.
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     fn end_glyph_atlas_page(&mut self) -> Result<(), RenderError> {
         Err(RenderError::RenderDevice("glyph atlas unavailable".into()))
     }
 
     /// Borrow the atlas page's underlying color texture for sampling.
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     fn glyph_atlas_texture(page: &Self::GlyphAtlasPage) -> &Self::Texture;
 
     /// Replace the transient instance stream; empty restores ordinary draws.

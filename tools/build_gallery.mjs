@@ -34,7 +34,7 @@ async function validateWorldContract(path, label, contract) {
   if (
     world.byteLength < 32 ||
     world.toString("ascii", 0, 4) !== "IPPW" ||
-    ![2, 3].includes(world.readUInt32LE(4)) ||
+    world.readUInt32LE(4) !== 7 ||
     world.readBigUInt64LE(16) !== BigInt(world.byteLength)
   ) {
     throw new Error(`${label} is not a complete IPPW container`);

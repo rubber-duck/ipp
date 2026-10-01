@@ -1,10 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { GuiObservationBatch, GuiTextFocusState } from "@ipp/client";
+import type { GuiNativeTextState } from "@ipp/client";
 import {
   clampUtf8Offset,
   createTextBridgeModel,
-  observeTextBridgeBatch,
   selectedCommittedText,
   stampTextFence,
   textFenceOf,
@@ -13,35 +12,25 @@ import {
   viewportToBridgeOffset,
 } from "../src/gui/text-bridge.js";
 
-function focus(overrides: Partial<GuiTextFocusState> = {}): GuiTextFocusState {
-  return {
-    session: 7n,
-    contextGeneration: 2n,
-    focusGeneration: 3n,
+const FENCE = {
+  target: {
+    world: { id: 1n, incarnation: 2n },
     entity: 11n,
-    rootIncarnation: 5n,
-    node: 13,
-    revision: 19,
+    component: 28,
+    incarnation: 5n,
+  },
+  generation: 3n,
+};
+
+function focus(
+  overrides: Partial<GuiNativeTextState> = {},
+): GuiNativeTextState {
+  return {
+    fence: FENCE,
     text: "a😀b",
     selectionStart: 1,
     selectionEnd: 5,
     ...overrides,
-  };
-}
-
-const FENCE = {
-  contextGeneration: 2n,
-  focusGeneration: 3n,
-  entity: 11n,
-  rootIncarnation: 5n,
-  node: 13,
-  revision: 19,
-};
-
-function batch(textFocus?: GuiTextFocusState | null): GuiObservationBatch {
-  return {
-    effects: [],
-    ...(textFocus === undefined ? {} : { textFocus }),
   };
 }
 
@@ -91,7 +80,7 @@ test("clipboard selection slices authoritative UTF-8 offsets", () => {
 test("authoritative focus supplies text and UTF-8 selection", () => {
   const model = createTextBridgeModel(7n);
   const before = model.token();
-  assert.equal(observeTextBridgeBatch(model, batch(focus())), true);
+  assert.equal(model.observe(focus()), true);
   assert.deepEqual(model.committed(), {
     text: "a😀b",
     caretUtf8: 5,
@@ -99,17 +88,21 @@ test("authoritative focus supplies text and UTF-8 selection", () => {
     fence: FENCE,
   });
   assert.notEqual(model.token(), before);
-  assert.equal(observeTextBridgeBatch(model, batch(focus())), false);
+  assert.equal(model.observe(focus()), false);
 });
 
-test("focus and context generations fence replacements at the same node", () => {
+test("edit generation and component incarnation fence replacements at the same entity", () => {
   const model = createTextBridgeModel(7n);
   model.observe(focus());
   const original = model.token();
-  model.observe(focus({ focusGeneration: 4n }));
+  model.observe(focus({ fence: { ...FENCE, generation: 4n } }));
   assert.notEqual(model.token(), original);
   const refocused = model.token();
-  model.observe(focus({ contextGeneration: 3n, focusGeneration: 1n }));
+  model.observe(
+    focus({
+      fence: { ...FENCE, target: { ...FENCE.target, incarnation: 6n } },
+    }),
+  );
   assert.notEqual(model.token(), refocused);
 });
 
@@ -164,34 +157,13 @@ test("local activations and selections fence delayed clipboard work", () => {
   );
 });
 
-test("foreign sessions are ignored and explicit null clears focus", () => {
+test("undefined state cannot infer focus and explicit null clears it", () => {
   const model = createTextBridgeModel(7n);
   model.observe(focus());
-  assert.equal(model.observe(focus({ session: 8n, text: "wrong" })), false);
+  assert.equal(model.observe(undefined), false);
   assert.equal(model.committed()?.text, "a😀b");
-  assert.equal(observeTextBridgeBatch(model, batch(null)), true);
+  assert.equal(model.observe(null), true);
   assert.equal(model.committed(), null);
-});
-
-test("ordinary effects never infer or clear native text focus", () => {
-  const model = createTextBridgeModel(7n);
-  model.observe(focus());
-  assert.equal(
-    observeTextBridgeBatch(model, {
-      effects: [
-        {
-          kind: "controlCommitted",
-          entity: 99n,
-          rootIncarnation: 1n,
-          node: 1,
-          value: { kind: "bool", value: true },
-          revision: 1,
-        },
-      ],
-    }),
-    false,
-  );
-  assert.equal(model.committed()?.text, "a😀b");
 });
 
 test("text edits stamp the fence of the state they were made against", () => {
@@ -209,9 +181,8 @@ test("text edits stamp the fence of the state they were made against", () => {
     kind: "commitComposition",
     fence: FENCE,
   });
-  // Keys, pointers and unfenced sends pass through unchanged.
-  const key = { kind: "key", key: "backspace", pressed: true } as const;
-  assert.equal(stampTextFence(key, FENCE), key);
+  const key = { kind: "key", key: "backspace" } as const;
+  assert.deepEqual(stampTextFence(key, FENCE), { ...key, fence: FENCE });
   const text = { kind: "text", text: "x" } as const;
   assert.equal(stampTextFence(text, undefined), text);
 });
@@ -220,12 +191,12 @@ test("a replaced focused text moves the fence and resynchronizes", () => {
   const model = createTextBridgeModel(7n);
   model.observe(focus());
   const before = model.token();
-  // An external replacement republishes the same target with a moved focus
-  // generation and the new revision; edits made afterwards stamp both.
   assert.equal(
-    observeTextBridgeBatch(
-      model,
-      batch(focus({ focusGeneration: 4n, revision: 20, text: "reset" })),
+    model.observe(
+      focus({
+        fence: { ...FENCE, generation: 4n },
+        text: "reset",
+      }),
     ),
     true,
   );
@@ -233,7 +204,6 @@ test("a replaced focused text moves the fence and resynchronizes", () => {
   assert.equal(model.committed()?.text, "reset");
   assert.deepEqual(model.committed()?.fence, {
     ...FENCE,
-    focusGeneration: 4n,
-    revision: 20,
+    generation: 4n,
   });
 });

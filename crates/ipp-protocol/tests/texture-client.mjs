@@ -39,6 +39,7 @@ async function connect({
       sent.push(parts);
     };
   const client = await selected.IppClient.connectTransport(transport, {
+    selectedSystems: [],
     timeoutMs,
   });
   return { client, sent, emit: (bytes) => events.message(bytes) };
@@ -49,7 +50,6 @@ test("baseline texture contract retains component ID6 while built-in providers r
     snapshot: true,
     animation: true,
     assets: true,
-    stateOverlays: true,
     spatial: true,
     textures: true,
     builtinAssets: true,

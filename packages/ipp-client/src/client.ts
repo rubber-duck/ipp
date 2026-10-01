@@ -1,4 +1,21 @@
-import { applyPlannedCommandPages, planCommandPages } from "./command-pages.js";
+import { GuiObservations } from "./gui-observations.js";
+import { LifecycleWatches } from "./lifecycle-watches.js";
+import type {
+  LifecycleTargetSelection,
+  LifecycleTargetWatch,
+  LifecycleWatchEvent,
+} from "./lifecycle-types.js";
+import {
+  BatchIdentities,
+  type CommandBatchSink,
+  type CommandBatchWriter,
+  CommandPageCodec,
+  type CommandPageLimits,
+  type EncodedCommandPage,
+  encodeCommandPages,
+  openCommandBatch,
+  submitCommandPages,
+} from "./command-pages.js";
 import { ClientAssetSources, clientAssetSource } from "./asset-sources.js";
 import type { ResourceUrlMapping } from "./resource-urls.js";
 export type { ResourceUrlMapping } from "./resource-urls.js";
@@ -16,13 +33,11 @@ import type {
   Command,
   ComponentDescriptor,
   Inspection,
-  StateOverlayLifecycleDiagnostic,
   Request,
   RequestBody,
   Response,
   AssetResourceSnapshot,
   ClientAssetSource,
-  CameraStateChangedEvent,
   GeometryPickQuery,
   GeometryPickResultEvent,
   CameraProjectQuery,
@@ -32,71 +47,54 @@ import type {
   SystemCommand,
   RenderStateUpdatedEvent,
 } from "./types.js";
-import type { WorldDescriptor } from "./host-protocol.js";
-import type { MessageTransport } from "./transport.js";
-import {
-  bindTestingChannel,
-  testingChannel,
-  type ClientPresentation,
-} from "./presentation.js";
+import type { WorldDescriptor, WorldManifest } from "./host-protocol.js";
+import type { WorldReference } from "./types.js";
+import type { BatchIdentitySource, MessageTransport } from "./transport.js";
 import { DiagnosticLogger, logLevelValue, type LogLevel } from "./logging.js";
 
 export type { LogLevel } from "./logging.js";
 
-/** Public asynchronous session contract implemented by each generated client. */
-export interface SurfaceWorldClient extends Client {
-  editSurface(edit: import("./surface-types.js").SurfaceEdit): Promise<void>;
-  encodeSurfaceItems(
-    collection: import("./surface-types.js").SurfaceCollection,
-  ): Uint8Array<ArrayBuffer>;
-  decodeSurfaceItems(
-    bytes: Uint8Array,
-  ): import("./surface-types.js").SurfaceCollection;
+/**
+ * Root-independent GUI effect observation. Control values are ordinary
+ * component fields: read them through inspection, observe them through
+ * lifecycle value watches and change them conditionally with `setFieldIf`.
+ * Semantic actions are `guiAction` batch commands (`Entity.guiAction`).
+ */
+export interface GuiWorldClient extends CanvasWorldClient {
+  subscribeGuiEffects(
+    listener: (effect: import("./gui-types.js").GuiObservedEffect) => void,
+    options?: import("./gui-types.js").GuiObservationOptions,
+  ): Promise<import("./gui-types.js").GuiEffectSubscription>;
 }
 
-/** Public asynchronous session contract for GUI trees and incremental edits. */
-export interface GuiWorldClient extends Client {
-  subscribeGuiObservations(
-    listener: (batch: import("./gui-types.js").GuiObservationBatch) => void,
-  ): () => void;
-  editGui(edit: import("./gui-types.js").GuiEdit): Promise<void>;
-  editGuiBatch(
-    edits: readonly import("./gui-types.js").GuiEdit[],
-  ): Promise<import("./gui-types.js").GuiEditBatchOutcome>;
-  editGuiBatchChunk(
-    batchId: bigint,
-    edits: readonly import("./gui-types.js").GuiEdit[],
-  ): Promise<import("./gui-types.js").GuiEditBatchOutcome>;
-  submitGuiInput(
-    input: import("./gui-types.js").GuiInputCommand,
-  ): Promise<import("./gui-types.js").GuiInputRoutingOutcome>;
-  inspectGui(
-    query: import("./gui-types.js").GuiInspectQuery,
-  ): Promise<import("./gui-types.js").GuiInspectResponse>;
-  semanticSnapshot(
-    query: import("./gui-types.js").GuiSemanticSnapshotQuery,
-  ): Promise<import("./gui-types.js").GuiSemanticTree>;
-  semanticAction(
-    action: import("./gui-types.js").GuiSemanticActionRequest,
-  ): Promise<void>;
-  createGuiNodeHandle(
-    entity: bigint,
-    rootIncarnation: bigint,
-    nodeId: import("./gui-types.js").GuiNodeId,
-  ): import("./gui-types.js").GuiNodeHandle;
+/** A World that selects the Canvas System takes `CanvasStateUpdateCommand`s:
+ * sparse, uncorrelated updates of its canvas extent and density. */
+export interface CanvasWorldClient extends Client {
+  sendCommand(command: SystemCommand): void;
+}
+
+/** Terminal local session state; it does not acknowledge remote declaration cleanup. */
+export interface ClientClosure {
+  readonly reason: Error;
 }
 
 /** Public asynchronous session contract implemented by each generated client. */
 export interface Client {
-  readonly presentation?: ClientPresentation | undefined;
+  watchLifecycle(
+    targets: readonly LifecycleTargetSelection[],
+    listener: (event: LifecycleWatchEvent) => void,
+  ): Promise<LifecycleTargetWatch>;
   readonly session: bigint;
+  readonly closure: ClientClosure | undefined;
+  readonly closed: Promise<ClientClosure>;
   readonly world?: WorldDescriptor | undefined;
+  readonly worldReference?: WorldReference | undefined;
+  readonly manifest?: WorldManifest | undefined;
   readonly schemaHash: bigint;
   readonly components: Readonly<Record<string, ComponentDescriptor>>;
   readonly capabilities: {
     readonly animation?: boolean;
     readonly assets?: boolean;
-    readonly stateOverlays: boolean;
     readonly spatial: boolean;
     readonly textures: boolean;
     readonly builtinAssets: boolean;
@@ -114,17 +112,11 @@ export interface Client {
     filter: LifecycleFilter,
     listener: (event: LifecycleNotification) => void,
   ): Promise<LifecycleSubscription>;
-  onDiagnostic(
-    listener: (diagnostic: StateOverlayLifecycleDiagnostic) => void,
-  ): () => void;
   onRuntimeFailure(
     listener: (
       failure: import("./types.js").RuntimeFailure & { tick: bigint },
     ) => void,
   ): () => void;
-  beginBatch(): Promise<bigint>;
-  batchChunk(batchId: bigint, operations: Command[]): Promise<BatchOutcome>;
-  endBatch(batchId: bigint): Promise<void>;
   onBatchAborted(
     listener: (failure: {
       batchId: bigint;
@@ -132,10 +124,22 @@ export interface Client {
       tick: bigint;
     }) => void,
   ): () => void;
-  batch(operations: Command[], batchId?: bigint): Promise<BatchOutcome>;
+  /**
+   * Apply one logical batch. Large batches travel as several pages sent back to
+   * back; the Host applies the whole batch at its final page, whose reply
+   * resolves this promise.
+   */
+  batch(operations: Command[]): Promise<BatchOutcome>;
+  /** Open a batch for a producer whose commands arrive over time. */
+  openBatch(): CommandBatchWriter;
+  attachmentRetirement(receipt: bigint): Promise<"pending" | "retired">;
+  releaseAttachmentReceipt(receipt: bigint): Promise<void>;
   inspectPage(
     query?: import("./types.js").InspectionQuery,
   ): Promise<import("./types.js").InspectionPage>;
+  inspectTreePage(
+    query?: import("./types.js").EntityTreeQuery,
+  ): Promise<import("./types.js").EntityTreePage>;
   inspect(): Promise<Inspection>;
   waitForFrame(afterTick?: bigint): Promise<{ tick: bigint; time: number }>;
   close(): Promise<void>;
@@ -191,12 +195,12 @@ export interface AnimationWorldClient extends AssetWorldClient {
   ): () => void;
 }
 
-/** World camera commands and independently observed selection changes. */
+/** Generated System command submission; camera view selection belongs to the Host. */
 export interface CameraWorldClient extends SpatialWorldClient {
   sendCommand(command: SystemCommand): void;
-  onCameraStateChanged(
-    listener: (event: CameraStateChangedEvent) => void,
-  ): () => void;
+  navigateCamera(
+    request: import("./types.js").CameraNavigateRequest,
+  ): Promise<void>;
 }
 
 /** Optional geometry picking is available without a renderer. */
@@ -232,11 +236,26 @@ export interface ConnectOptions {
 /** Worker connection transfers the optional canvas to its owning runtime host. */
 export interface WorkerConnectOptions extends ConnectOptions {
   canvas?: OffscreenCanvas;
-  /** Host idle-resource retention target in bytes; omitted uses the runtime default. */
+  /**
+   * Soft target in bytes for completed assets the Host keeps after their last
+   * consumer. Omitted keeps the Host default (64 MiB); 0 evicts on release.
+   */
   assetCacheBytes?: number;
   /** HTTP fetch locations; retained resource identities are unchanged. */
   resourceUrls?: readonly ResourceUrlMapping[];
 }
+
+/** Convenience connection that creates and owns a temporary World. */
+export interface WorldConnectOptions extends ConnectOptions {
+  /** Registered System names the temporary World instantiates, exactly.
+   * Required: there is no default selection. */
+  selectedSystems: readonly string[];
+}
+
+/** Worker convenience connection that creates and owns a temporary World. */
+export interface WorkerWorldConnectOptions
+  extends WorkerConnectOptions,
+    WorldConnectOptions {}
 
 /** A local rejection with no bytes submitted; corrected work can reuse the session. */
 export class RequestNotSentError extends Error {
@@ -260,9 +279,12 @@ export class RequestRejectedError extends Error {
 
 interface Pending {
   expectedEvent: string | undefined;
+  /** A final batch page is answered only by its batch outcome or an error. */
+  expectsBatch: boolean;
   resolve: (response: Response) => void;
   reject: (error: Error) => void;
-  timer: ReturnType<typeof setTimeout>;
+  /** The reply deadline, from when the request goes on the wire. */
+  timer: ReturnType<typeof setTimeout> | undefined;
 }
 
 interface FrameWaiter {
@@ -289,68 +311,6 @@ export abstract class ClientBase implements Client {
     return () => this.batchFailures.delete(listener);
   }
 
-  /** Observe committed GUI effects with their conflicts, cancellations and
-   * supplier-private unhandled inputs. Each host chunk arrives as one batch;
-   * unhandled inputs naming another session are dropped on receipt. A new
-   * listener first receives the latest text focus and the latest wanted
-   * range of every VirtualList, which the runtime publishes only when they
-   * change. */
-  subscribeGuiObservations(
-    listener: (batch: import("./gui-types.js").GuiObservationBatch) => void,
-  ): () => void {
-    if (this.stopped) throw new Error("Client is closed");
-    if (
-      this.latestGuiTextFocus !== undefined ||
-      this.latestVirtualRanges.size > 0
-    ) {
-      try {
-        listener({
-          effects: [],
-          ...(this.latestVirtualRanges.size === 0
-            ? {}
-            : { virtualRanges: [...this.latestVirtualRanges.values()] }),
-          ...(this.latestGuiTextFocus === undefined
-            ? {}
-            : { textFocus: this.latestGuiTextFocus }),
-        });
-      } catch (error) {
-        try {
-          globalThis.reportError?.(error);
-        } catch {}
-        return () => {};
-      }
-    }
-    this.guiObservationListeners.add(listener);
-    return () => this.guiObservationListeners.delete(listener);
-  }
-
-  private publishGuiObservations(
-    batch: import("./gui-types.js").GuiObservationBatch,
-  ): void {
-    if (batch.textFocus !== undefined)
-      this.latestGuiTextFocus = batch.textFocus;
-    for (const range of batch.virtualRanges ?? [])
-      this.latestVirtualRanges.set(`${range.entity}:${range.node}`, range);
-    for (const listener of [...this.guiObservationListeners]) {
-      try {
-        listener({
-          effects: [...batch.effects],
-          virtualRanges: [...(batch.virtualRanges ?? [])],
-          conflicts: [...(batch.conflicts ?? [])],
-          cancellations: [...(batch.cancellations ?? [])],
-          unhandled: [...(batch.unhandled ?? [])],
-          ...(batch.textFocus === undefined
-            ? {}
-            : { textFocus: batch.textFocus }),
-        });
-      } catch (error) {
-        try {
-          globalThis.reportError?.(error);
-        } catch {}
-      }
-    }
-  }
-
   private readonly runtimeFailures = new Set<
     (failure: import("./types.js").RuntimeFailure & { tick: bigint }) => void
   >();
@@ -371,7 +331,6 @@ export abstract class ClientBase implements Client {
   abstract readonly capabilities: {
     readonly animation?: boolean;
     readonly assets?: boolean;
-    readonly stateOverlays: boolean;
     readonly spatial: boolean;
     readonly textures: boolean;
     readonly builtinAssets: boolean;
@@ -383,24 +342,21 @@ export abstract class ClientBase implements Client {
     readonly meshPoses: boolean;
     readonly particles?: boolean;
     readonly surfaces?: boolean;
+    readonly gui?: boolean;
   };
   private sessionId = 0n;
   private readonly assetSources: ClientAssetSources;
   private worldDescriptor?: WorldDescriptor;
+  private attachedWorldReference?: WorldReference;
+  private worldManifest?: WorldManifest;
   private nextId = 1n;
   private observedTick = 0n;
   private pending = new Map<bigint, Pending>();
-  private queuedRequests = 0;
+  private readonly batchIdentities: BatchIdentitySource;
   private latestFrame?: { tick: bigint; time: number };
   private frameWaiters = new Set<FrameWaiter>();
-  private diagnosticListeners = new Set<
-    (diagnostic: StateOverlayLifecycleDiagnostic) => void
-  >();
   private resourceListeners = new Set<
     (resource: AssetResourceSnapshot) => void
-  >();
-  private cameraStateListeners = new Set<
-    (event: CameraStateChangedEvent) => void
   >();
   private renderStateListeners = new Set<
     (event: RenderStateUpdatedEvent) => void
@@ -413,19 +369,30 @@ export abstract class ClientBase implements Client {
     bigint,
     (event: LifecycleNotification) => void
   >();
-  private guiObservationListeners = new Set<
-    (batch: import("./gui-types.js").GuiObservationBatch) => void
-  >();
-  private latestGuiTextFocus:
-    | import("./gui-types.js").GuiTextFocusState
-    | null
-    | undefined;
-  /** Latest wanted range per VirtualList, keyed `entity:node`. */
-  private readonly latestVirtualRanges = new Map<
-    string,
-    import("./gui-types.js").GuiVirtualRangeChangedEffect
-  >();
+  private readonly guiObservations = new GuiObservations({
+    nextId: () => this.nextId++,
+    send: (request, control) =>
+      this.request({ kind: "guiObservation", control }, request),
+    definitelyUnapplied: (error) =>
+      error instanceof RequestNotSentError ||
+      error instanceof RequestRejectedError,
+    fail: (error) => this.stop(error),
+  });
   private stopped = false;
+  private readonly lifecycleWatches = new LifecycleWatches({
+    nextId: () => this.nextId++,
+    send: (request, control) =>
+      this.request({ kind: "lifecycleWatch", control }, request),
+    definitelyUnapplied: (error) =>
+      error instanceof RequestNotSentError ||
+      error instanceof RequestRejectedError,
+    fail: (error) => this.stop(error),
+  });
+  private terminalClosure: ClientClosure | undefined;
+  private resolveClosed!: (closure: ClientClosure) => void;
+  readonly closed = new Promise<ClientClosure>((resolve) => {
+    this.resolveClosed = resolve;
+  });
   private readonly timeoutMs: number;
   private readonly logger: DiagnosticLogger;
 
@@ -434,16 +401,20 @@ export abstract class ClientBase implements Client {
     options: ConnectOptions = {},
   ) {
     this.timeoutMs = options.timeoutMs ?? 10_000;
+    this.batchIdentities = transport.batchIdentities ?? new BatchIdentities();
     this.logger = new DiagnosticLogger("client", options.logLevel);
     this.assetSources = new ClientAssetSources(
       () => this.sessionId,
-      (bytes) => this.transport.send(bytes),
+      (bytes) => this.transport.send(bytes) ?? undefined,
       this.timeoutMs,
       (error) => this.stop(error),
     );
   }
 
   protected abstract bootstrap(): Uint8Array<ArrayBuffer>;
+  protected abstract readonly lifecyclePageMembers: number;
+  /** The target contract's batch page bounds. */
+  protected abstract readonly commandPageLimits: CommandPageLimits;
   protected abstract acceptBootstrap(bytes: Uint8Array): bigint;
   protected abstract encodeRequest(request: Request): Uint8Array<ArrayBuffer>;
   protected abstract decodeResponse(
@@ -455,41 +426,39 @@ export abstract class ClientBase implements Client {
     return this.sessionId;
   }
 
-  get presentation(): ClientPresentation | undefined {
-    const host = this.transport.presentation;
-    if (!host) return undefined;
-    return bindTestingChannel(
-      {
-        capture: (afterTick = this.observedTick) => {
-          if (this.stopped)
-            return Promise.reject(new Error("Client is closed"));
-          return host.frame(this.sessionId, afterTick, this.timeoutMs, true);
-        },
-        frame: (afterTick = this.observedTick) => {
-          if (this.stopped)
-            return Promise.reject(new Error("Client is closed"));
-          return host.frame(this.sessionId, afterTick, this.timeoutMs, false);
-        },
-        resize: (width, height) => host.resize(width, height),
-        get viewportLimits() {
-          return host.viewportLimits;
-        },
-        onViewportLimits: (listener) => host.onViewportLimits(listener),
-      } satisfies ClientPresentation,
-      (message) => testingChannel(host)(message),
-    );
+  get closure(): ClientClosure | undefined {
+    return this.terminalClosure;
   }
 
   get world(): WorldDescriptor | undefined {
     return this.worldDescriptor;
   }
 
+  get worldReference(): WorldReference | undefined {
+    return this.attachedWorldReference;
+  }
+
+  get manifest(): WorldManifest | undefined {
+    return this.worldManifest;
+  }
+
+  protected installWorldManifest(manifest: WorldManifest): void {
+    this.worldManifest = manifest;
+  }
+
   /** A Host already negotiated compatibility and allocated this fresh World session. */
-  protected initializeAttached(session: bigint, world: WorldDescriptor): this {
+  protected initializeAttached(
+    session: bigint,
+    world: WorldDescriptor,
+    manifest: WorldManifest,
+    reference: WorldReference,
+  ): this {
     if (session === 0n || this.sessionId !== 0n)
       throw new Error("Invalid World session");
     this.sessionId = session;
     this.worldDescriptor = world;
+    this.attachedWorldReference = reference;
+    this.worldManifest = manifest;
     this.transport.start({
       ready: () => {},
       error: (error) => this.stop(error, true),
@@ -579,9 +548,20 @@ export abstract class ClientBase implements Client {
   private receive(bytes: Uint8Array): void {
     if (this.assetSources.receive(bytes)) return;
     const response = this.decodeResponse(bytes, this.sessionId);
-    if (response.tick < this.observedTick)
-      throw new Error("Response tick moved backwards");
-    this.observedTick = response.tick;
+    if (this.guiObservations.receive(response)) return;
+    if (this.lifecycleWatches.receive(response)) return;
+    if (
+      response.body.kind === "guiObservation" ||
+      response.body.kind === "lifecycleWatch" ||
+      response.body.kind === "lifecycleDiagnostics"
+    ) {
+      if (response.tick !== 0n)
+        throw new Error("Invalid GUI observation outer tick");
+    } else {
+      if (response.tick < this.observedTick)
+        throw new Error("Response tick moved backwards");
+      this.observedTick = response.tick;
+    }
     if (response.requestId === 0n) {
       if (response.body.kind === "batchAborted") {
         const failure = response.body;
@@ -614,20 +594,6 @@ export abstract class ClientBase implements Client {
         }
         return;
       }
-      if (response.body.kind === "lifecycleOverflow") {
-        const listeners = [...this.lifecycleListeners];
-        this.lifecycleListeners.clear();
-        for (const [subscription, listener] of listeners)
-          this.notifyLifecycle(listener, {
-            session: response.session,
-            requestId: 0n,
-            tick: response.tick,
-            kind: "overflow",
-            subscription,
-            dropped: response.body.dropped,
-          });
-        return;
-      }
       if (response.body.kind === "runtimeFailure") {
         for (const listener of [...this.runtimeFailures]) {
           try {
@@ -641,10 +607,6 @@ export abstract class ClientBase implements Client {
         return;
       }
       if (response.body.kind === "event") {
-        if (response.body.event.type === "CameraStateChangedEvent") {
-          this.publishCameraState(response);
-          return;
-        }
         if (response.body.event.type === "RenderStateUpdatedEvent") {
           this.publishRenderState(response);
           return;
@@ -702,51 +664,6 @@ export abstract class ClientBase implements Client {
         }
         return;
       }
-      if (response.body.kind === "guiObservations") {
-        this.publishGuiObservations({
-          effects: [...response.body.observations.effects],
-          virtualRanges: [...(response.body.observations.virtualRanges ?? [])],
-          conflicts: [...(response.body.observations.conflicts ?? [])],
-          cancellations: [...(response.body.observations.cancellations ?? [])],
-          unhandled: [],
-          ...(response.body.observations.textFocus === undefined
-            ? {}
-            : { textFocus: response.body.observations.textFocus }),
-        });
-        return;
-      }
-      if (response.body.kind === "guiUnhandledInputs") {
-        const unhandled = response.body.inputs.filter((input) => {
-          if (input.session !== this.sessionId) {
-            this.logger.log("warn", "gui.unhandled.filtered", () => ({
-              session: this.sessionId,
-            }));
-            return false;
-          }
-          return true;
-        });
-        if (unhandled.length === 0) return;
-        this.publishGuiObservations({ effects: [], unhandled });
-        return;
-      }
-      if (response.body.kind === "lifecycle") {
-        for (const diagnostic of response.body.diagnostics) {
-          this.logger.log("warn", "ownership.lost", () => ({
-            session: this.sessionId,
-            owner: diagnostic.owner,
-            resource: diagnostic.stateOverlay,
-          }));
-          for (const listener of [...this.diagnosticListeners]) {
-            // Application observers cannot poison the shared transport/session.
-            try {
-              listener(diagnostic);
-            } catch (error) {
-              globalThis.reportError?.(error);
-            }
-          }
-        }
-        return;
-      }
       if (response.body.kind !== "frame")
         throw new Error("Expected unsolicited frame event");
       if (
@@ -765,13 +682,7 @@ export abstract class ClientBase implements Client {
       }
       return;
     }
-    if (
-      response.body.kind === "frame" ||
-      response.body.kind === "lifecycle" ||
-      response.body.kind === "resources" ||
-      response.body.kind === "guiObservations" ||
-      response.body.kind === "guiUnhandledInputs"
-    )
+    if (response.body.kind === "frame" || response.body.kind === "resources")
       throw new Error("Reserved frame event identity");
     const pending = this.pending.get(response.requestId);
     if (!pending) throw new Error("Unexpected response request identity");
@@ -782,6 +693,12 @@ export abstract class ClientBase implements Client {
         response.body.event.type !== pending.expectedEvent)
     )
       throw new Error("Invalid query response correlation");
+    if (
+      pending.expectsBatch &&
+      response.body.kind !== "error" &&
+      response.body.kind !== "batch"
+    )
+      throw new Error("Batch response correlation mismatch");
     this.pending.delete(response.requestId);
     clearTimeout(pending.timer);
     if (response.body.kind === "error") {
@@ -803,10 +720,13 @@ export abstract class ClientBase implements Client {
     }
   }
 
+  /**
+   * Correlated request. The connection's transport holds it until its flow
+   * control lets it leave, so a busy Host delays requests instead of refusing them.
+   */
   private request(
     body: RequestBody,
     requestId = this.nextId++,
-    automaticOperation?: symbol,
   ): Promise<Response> {
     if (this.stopped) return Promise.reject(new Error("Client is closed"));
     let bytes: Uint8Array<ArrayBuffer>;
@@ -821,43 +741,31 @@ export abstract class ClientBase implements Client {
         new RequestNotSentError(asError(error).message, error),
       );
     }
+    return this.sendRequest(body, requestId, bytes);
+  }
+
+  /** Correlate and send one encoded request. */
+  private sendRequest(
+    body: RequestBody,
+    requestId: bigint,
+    bytes: Uint8Array<ArrayBuffer>,
+  ): Promise<Response> {
     const expectedEvent =
       body.kind === "query"
         ? body.query.type === "GeometryPickQuery"
           ? "GeometryPickResultEvent"
           : "CameraProjectResultEvent"
         : undefined;
-    const dispatch = () => {
-      if (this.stopped) return Promise.reject(new Error("Client is closed"));
-      // Worker transport transfers and detaches the buffer during send.
-      const byteLength = bytes.byteLength;
-      const result = this.send(requestId, bytes, expectedEvent);
-      this.logRequest(body, requestId, byteLength);
-      return result;
-    };
-    const batchTransport = isBatchTransportBody(body);
-    const bypassesAutomaticGate = batchTransport || body.kind === "guiInput";
-    const ownsAutomaticGate =
-      automaticOperation !== undefined &&
-      automaticOperation === this.activeAutomaticWorldOperation;
-    const gate =
-      bypassesAutomaticGate || ownsAutomaticGate
-        ? undefined
-        : this.automaticWorldGate;
-    if (!gate) {
-      const occupied =
-        this.pending.size + (batchTransport ? 0 : this.queuedRequests);
-      if (occupied >= 64)
-        return Promise.reject(new RequestNotSentError("Pending request limit"));
-      return dispatch();
-    }
-    if (this.pending.size + this.queuedRequests >= 64)
-      return Promise.reject(new RequestNotSentError("Pending request limit"));
-    this.queuedRequests++;
-    return gate.then(() => {
-      this.queuedRequests--;
-      return dispatch();
-    });
+    // Worker transport transfers and detaches the buffer once it sends it.
+    const byteLength = bytes.byteLength;
+    const result = this.send(
+      requestId,
+      bytes,
+      expectedEvent,
+      body.kind === "submitBatch",
+    );
+    this.logRequest(body, requestId, byteLength);
+    return result;
   }
 
   private logRequest(
@@ -865,20 +773,19 @@ export abstract class ClientBase implements Client {
     requestId: bigint,
     byteLength: number,
   ): void {
-    if (body.kind === "batch" && !this.stopped) {
+    if (body.kind === "submitBatch" && !this.stopped) {
       this.logger.log("debug", "command.sent", () => ({
         session: this.sessionId,
         request: requestId,
-        batch: body.batch.id,
-        operations: body.batch.operations.length,
+        batch: body.batchId,
+        last: body.last,
+        operations: body.operations.length,
         bytes: byteLength,
       }));
       this.logger.log("trace", "command.kinds", () => ({
         session: this.sessionId,
         request: requestId,
-        kinds: body.batch.operations
-          .map((operation) => operation.kind)
-          .join(","),
+        kinds: body.operations.map((operation) => operation.kind).join(","),
       }));
     }
   }
@@ -887,15 +794,30 @@ export abstract class ClientBase implements Client {
     requestId: bigint,
     bytes: Uint8Array<ArrayBuffer>,
     expectedEvent?: string,
+    expectsBatch = false,
   ): Promise<Response> {
     return new Promise<Response>((resolve, reject) => {
-      const timer = setTimeout(
-        () => this.stop(new Error("Request timed out")),
-        this.timeoutMs,
-      );
-      this.pending.set(requestId, { resolve, reject, timer, expectedEvent });
+      const pending: Pending = {
+        resolve,
+        reject,
+        timer: undefined,
+        expectedEvent,
+        expectsBatch,
+      };
+      this.pending.set(requestId, pending);
+      // Waiting for connection credit is not a Host delay: the reply deadline
+      // starts when the request goes on the wire.
+      const deadline = () => {
+        if (this.pending.get(requestId) === pending)
+          pending.timer = setTimeout(
+            () => this.stop(new Error("Request timed out")),
+            this.timeoutMs,
+          );
+      };
       try {
-        this.transport.send(bytes);
+        const leaving = this.transport.send(bytes);
+        if (leaving) void leaving.then(deadline);
+        else deadline();
       } catch (error) {
         this.stop(asError(error));
       }
@@ -916,23 +838,20 @@ export abstract class ClientBase implements Client {
       throw new RequestNotSentError(asError(error).message, error);
     }
     try {
-      const gate = this.automaticWorldGate;
-      if (gate) {
-        void gate.then(() => {
-          if (this.stopped) return;
-          try {
-            this.transport.send(bytes);
-          } catch (error) {
-            this.stop(asError(error));
-          }
-        });
-        return;
-      }
       this.transport.send(bytes);
     } catch (error) {
       this.stop(asError(error));
       throw error;
     }
+  }
+
+  /** Edits the exact bound Camera and rejects stale/gated gesture work without replay. */
+  async navigateCamera(
+    request: import("./types.js").CameraNavigateRequest,
+  ): Promise<void> {
+    const response = await this.request({ kind: "cameraNavigate", request });
+    if (response.body.kind !== "cameraNavigated")
+      throw new Error("Invalid camera navigation response correlation");
   }
 
   /** Queries retain a single correlated terminal result while the session lives. */
@@ -968,77 +887,18 @@ export abstract class ClientBase implements Client {
     return response.body.id;
   }
 
-  protected async submitSurface(
-    edit: import("./surface-types.js").SurfaceEdit,
-  ): Promise<void> {
-    const response = await this.request({ kind: "surface", edit });
-    if (response.body.kind !== "surface")
-      throw new Error("Invalid Surface response correlation");
-  }
-
-  protected async submitGui(
-    edits: readonly import("./gui-types.js").GuiEdit[],
-    batchId?: bigint,
-    automaticOperation?: symbol,
-  ): Promise<import("./gui-types.js").GuiEditBatchOutcome> {
-    const response = await this.request(
-      batchId === undefined
-        ? { kind: "gui", edits }
-        : { kind: "gui", batchId, edits },
-      undefined,
-      automaticOperation,
-    );
-    if (response.body.kind !== "gui")
-      throw new Error("Invalid GUI response correlation");
-    return response.body.outcome;
-  }
-
-  protected async submitGuiInspect(
-    query: import("./gui-types.js").GuiInspectQuery,
-  ): Promise<import("./gui-types.js").GuiInspectResponse> {
-    const response = await this.request({ kind: "guiInspect", query });
-    if (response.body.kind !== "guiInspect")
-      throw new Error("Invalid GUI inspect response correlation");
-    return response.body.response;
-  }
-
-  protected async submitGuiInput(
-    input: import("./gui-types.js").GuiInputCommand,
-  ): Promise<import("./gui-types.js").GuiInputRoutingOutcome> {
-    const response = await this.request({ kind: "guiInput", input });
-    if (response.body.kind !== "guiInput")
-      throw new Error("Invalid GUI input response correlation");
-    return response.body.outcome;
-  }
-
-  protected async submitGuiSemanticSnapshot(
-    query: import("./gui-types.js").GuiSemanticSnapshotQuery,
-  ): Promise<import("./gui-types.js").GuiSemanticTree> {
-    const response = await this.request({ kind: "guiSemanticSnapshot", query });
-    if (response.body.kind !== "guiSemanticSnapshot")
-      throw new Error("Invalid GUI semantic snapshot response correlation");
-    return response.body.snapshot;
-  }
-
-  protected async submitGuiSemanticAction(
-    action: import("./gui-types.js").GuiSemanticActionRequest,
-  ): Promise<void> {
-    const response = await this.request({ kind: "guiSemanticAction", action });
-    if (response.body.kind !== "gui" && response.body.kind !== "guiInput")
-      throw new Error("Invalid GUI semantic action response correlation");
-  }
-
-  createGuiNodeHandle(
-    entity: bigint,
-    rootIncarnation: bigint,
-    nodeId: import("./gui-types.js").GuiNodeId,
-  ): import("./gui-types.js").GuiNodeHandle {
-    return {
-      session: this.session,
-      entity,
-      rootIncarnation,
-      nodeId,
-    };
+  protected submitGuiSubscription(
+    listener: (effect: import("./gui-types.js").GuiObservedEffect) => void,
+    options: import("./gui-types.js").GuiObservationOptions = {},
+  ): Promise<import("./gui-types.js").GuiEffectSubscription> {
+    const world = this.worldReference;
+    if (!world)
+      return Promise.reject(
+        new RequestNotSentError(
+          "GUI subscriptions require an exact World session",
+        ),
+      );
+    return this.guiObservations.subscribe(world, listener, options);
   }
 
   protected async submitClientAsset(
@@ -1072,139 +932,147 @@ export abstract class ClientBase implements Client {
     return source;
   }
 
-  /** Allocate a session-fenced identity. The first buffer starts the deadline. */
-  async beginBatch(): Promise<bigint> {
-    const response = await this.request({ kind: "beginBatch" });
-    if (response.body.kind !== "batchStarted" || response.body.batchId === 0n)
-      throw new Error("Invalid batch allocation response");
-    return response.body.batchId;
-  }
-
-  /** Apply a buffer without evaluation; size never signals logical completion. */
-  async batchChunk(
-    batchId: bigint,
-    operations: Command[],
-  ): Promise<BatchOutcome> {
+  async attachmentRetirement(receipt: bigint): Promise<"pending" | "retired"> {
     const response = await this.request({
-      kind: "batchChunk",
-      batch: { id: batchId, operations },
+      kind: "attachmentReceipt",
+      receipt,
+      release: false,
     });
     if (
-      response.body.kind !== "batch" ||
-      response.body.outcome.batchId !== batchId ||
-      response.body.outcome.tick !== response.tick
+      response.body.kind !== "attachmentReceipt" ||
+      response.body.receipt !== receipt ||
+      response.body.state === "released"
     )
-      throw new Error("Batch buffer response correlation mismatch");
-    return response.body.outcome;
+      throw new Error("Invalid attachment retirement response");
+    return response.body.state;
   }
 
-  /** Explicitly terminate the batch and permit evaluation of its applied effects. */
-  async endBatch(batchId: bigint): Promise<void> {
-    const response = await this.request({ kind: "endBatch", batchId });
+  async releaseAttachmentReceipt(receipt: bigint): Promise<void> {
+    const response = await this.request({
+      kind: "attachmentReceipt",
+      receipt,
+      release: true,
+    });
     if (
-      response.body.kind !== "batchFinished" ||
-      response.body.batchId !== batchId
+      response.body.kind !== "attachmentReceipt" ||
+      response.body.receipt !== receipt ||
+      response.body.state !== "released"
     )
-      throw new Error("Invalid batch terminator response");
+      throw new Error("Invalid attachment receipt release response");
   }
 
-  private automaticBatchTail: Promise<void> | undefined;
-  private automaticWorldGate: Promise<void> | undefined;
-  private activeAutomaticWorldOperation: symbol | undefined;
-
-  batch(operations: Command[], batchId?: bigint): Promise<BatchOutcome> {
-    let snapshot: Command[];
-    let pages: Command[][];
+  batch(operations: Command[]): Promise<BatchOutcome> {
+    if (this.stopped) return Promise.reject(new Error("Client is closed"));
+    let pages: EncodedCommandPage[];
     try {
-      // A queued paged batch may outlive the caller's current turn. Retain an
-      // owned command snapshot just as transport encoding owns submitted bytes.
-      snapshot = structuredClone(operations);
-      pages = planCommandPages(snapshot, (request) =>
-        this.encodeRequest(request),
-      );
+      pages = encodeCommandPages(operations, this.pageCodec());
     } catch (error) {
       return Promise.reject(
         new RequestNotSentError(asError(error).message, error),
       );
     }
-    const submit = () =>
-      pages.length <= 1
-        ? this.submitSingleBatch(snapshot, batchId)
-        : applyPlannedCommandPages(this, pages).then((outcome) =>
-            batchId === undefined ? outcome : { ...outcome, batchId },
-          );
-    return this.queueAutomaticWorldBatch(pages.length <= 1, submit);
-  }
-
-  /** Serialize automatic logical batches and hold unrelated client requests. */
-  protected queueAutomaticWorldBatch<T>(
-    singleBuffer: boolean,
-    submit: (operation?: symbol) => Promise<T>,
-  ): Promise<T> {
-    const previous = this.automaticBatchTail;
-    if (!previous && singleBuffer) return submit();
-    const operation = Symbol("automatic World operation");
-    const execute = () => {
-      if (this.activeAutomaticWorldOperation !== undefined)
-        throw new Error("Automatic World operations overlapped");
-      this.activeAutomaticWorldOperation = operation;
-      let submitted: Promise<T>;
-      try {
-        submitted = submit(operation);
-      } catch (error) {
-        this.activeAutomaticWorldOperation = undefined;
-        throw error;
-      }
-      return submitted.finally(() => {
-        if (this.activeAutomaticWorldOperation === operation)
-          this.activeAutomaticWorldOperation = undefined;
-      });
-    };
-    const result = previous ? previous.then(execute) : execute();
-    const completion = result.then(
-      () => {},
-      () => {},
-    );
-    this.automaticBatchTail = completion;
-    this.automaticWorldGate = completion;
-    void completion.then(() => {
-      if (this.automaticBatchTail === completion)
-        this.automaticBatchTail = undefined;
-      if (this.automaticWorldGate === completion)
-        this.automaticWorldGate = undefined;
-    });
-    return result;
-  }
-
-  private async submitSingleBatch(
-    operations: Command[],
-    batchId?: bigint,
-  ): Promise<BatchOutcome> {
-    const id = batchId ?? this.nextId;
-    const response = await this.request({
-      kind: "batch",
-      batch: { id, operations },
-    });
-    if (
-      response.body.kind !== "batch" ||
-      response.body.outcome.batchId !== id ||
-      response.body.outcome.tick !== response.tick
-    ) {
-      this.stop(new Error("Batch response correlation mismatch"));
-      throw new Error("Batch response correlation mismatch");
+    try {
+      return submitCommandPages(this.batchIdentities, this.batchSink(), pages);
+    } catch (error) {
+      return Promise.reject(asError(error));
     }
-    const outcome = response.body.outcome;
-    this.logger.log(
-      outcome.ok ? "debug" : "warn",
-      outcome.ok ? "command.completed" : "command.rejected",
-      () => ({
-        session: this.sessionId,
-        request: response.requestId,
-        batch: id,
-        tick: outcome.tick,
-      }),
+  }
+
+  openBatch(): CommandBatchWriter {
+    if (this.stopped) throw new Error("Client is closed");
+    return openCommandBatch(
+      this.batchIdentities,
+      this.batchSink(),
+      this.pageCodec(),
     );
-    return response.body.outcome;
+  }
+
+  private commandPageCodec?: CommandPageCodec;
+
+  private pageCodec(): CommandPageCodec {
+    this.commandPageCodec ??= new CommandPageCodec(
+      (request) => this.encodeRequest(request),
+      this.commandPageLimits,
+    );
+    return this.commandPageCodec;
+  }
+
+  /** Pages of one batch; only the final page is correlated with a reply. */
+  private batchSink(): CommandBatchSink {
+    return {
+      page: (batchId, page) => {
+        if (this.stopped) throw new Error("Client is closed");
+        const bytes = this.pageCodec().message(
+          this.sessionId,
+          0n,
+          batchId,
+          false,
+          page,
+        );
+        this.logRequest(
+          {
+            kind: "submitBatch",
+            batchId,
+            last: false,
+            operations: page.operations,
+          },
+          0n,
+          bytes.byteLength,
+        );
+        try {
+          this.transport.send(bytes);
+        } catch (error) {
+          this.stop(asError(error));
+          throw error;
+        }
+      },
+      finish: async (batchId, page) => {
+        if (this.stopped) throw new Error("Client is closed");
+        const requestId = this.nextId++;
+        let bytes: Uint8Array<ArrayBuffer>;
+        try {
+          bytes = this.pageCodec().message(
+            this.sessionId,
+            requestId,
+            batchId,
+            true,
+            page,
+          );
+        } catch (error) {
+          throw new RequestNotSentError(asError(error).message, error);
+        }
+        const response = await this.sendRequest(
+          {
+            kind: "submitBatch",
+            batchId,
+            last: true,
+            operations: page.operations,
+          },
+          requestId,
+          bytes,
+        );
+        if (
+          response.body.kind !== "batch" ||
+          response.body.outcome.batchId !== BigInt(batchId) ||
+          response.body.outcome.tick !== response.tick
+        ) {
+          this.stop(new Error("Batch response correlation mismatch"));
+          throw new Error("Batch response correlation mismatch");
+        }
+        const outcome = response.body.outcome;
+        this.logger.log(
+          outcome.ok ? "debug" : "warn",
+          outcome.ok ? "command.completed" : "command.rejected",
+          () => ({
+            session: this.sessionId,
+            request: response.requestId,
+            batch: batchId,
+            tick: outcome.tick,
+          }),
+        );
+        return outcome;
+      },
+    };
   }
 
   /**
@@ -1263,11 +1131,36 @@ export abstract class ClientBase implements Client {
       ...(response.body.controllers
         ? { controllers: response.body.controllers }
         : {}),
+      ...(response.body.guiFocus ? { guiFocus: response.body.guiFocus } : {}),
+      ...(response.body.guiPointers
+        ? { guiPointers: response.body.guiPointers }
+        : {}),
+      ...(response.body.canvas !== undefined
+        ? { canvas: response.body.canvas }
+        : {}),
+    };
+  }
+
+  async inspectTreePage(
+    query: import("./types.js").EntityTreeQuery = {},
+  ): Promise<import("./types.js").EntityTreePage> {
+    const response = await this.request({ kind: "inspectTree", ...query });
+    if (response.body.kind !== "entityTree") {
+      this.stop(new Error("Expected entity tree response"));
+      throw new Error("Expected entity tree response");
+    }
+    return {
+      tick: response.tick,
+      time: response.body.time,
+      next: response.body.next,
+      nodes: response.body.nodes,
     };
   }
 
   /** Collect independent pages. Their ticks may differ; this is not an atomic snapshot. */
   async inspect(): Promise<Inspection> {
+    const manifest = this.manifest;
+    if (!manifest) throw new Error("World manifest unavailable");
     const result: Inspection = {
       tick: 0n,
       time: 0,
@@ -1282,6 +1175,13 @@ export abstract class ClientBase implements Client {
       "controllers",
       "renderDiagnostics",
     ] as const) {
+      if (
+        (collection === "controllers" &&
+          !manifest.operations.includes("animation")) ||
+        (collection === "renderDiagnostics" &&
+          !manifest.operations.includes("rendering"))
+      )
+        continue;
       let after = 0n;
       do {
         const page = await this.inspectPage({ collection, after });
@@ -1309,37 +1209,6 @@ export abstract class ClientBase implements Client {
     if (this.stopped) throw new Error("Client is closed");
     this.playbackListeners.add(listener);
     return () => this.playbackListeners.delete(listener);
-  }
-
-  protected addCameraStateListener(
-    listener: (event: CameraStateChangedEvent) => void,
-  ): () => void {
-    if (this.stopped) throw new Error("Client is closed");
-    this.cameraStateListeners.add(listener);
-    return () => this.cameraStateListeners.delete(listener);
-  }
-
-  private publishCameraState(response: Response): void {
-    if (
-      response.body.kind !== "event" ||
-      response.body.event.type !== "CameraStateChangedEvent"
-    )
-      return;
-    for (const listener of [...this.cameraStateListeners]) {
-      try {
-        listener({
-          session: response.session,
-          requestId: response.requestId,
-          tick: response.tick,
-          ...response.body.event,
-          changes: { ...response.body.event.changes },
-        });
-      } catch (error) {
-        try {
-          globalThis.reportError?.(error);
-        } catch {}
-      }
-    }
   }
 
   /** Generated world clients expose committed settings notifications. */
@@ -1397,6 +1266,57 @@ export abstract class ClientBase implements Client {
   }
 
   /** Subscribe to subsequent applied effects through the ordered production protocol. */
+  watchLifecycle(
+    targets: readonly LifecycleTargetSelection[],
+    listener: (event: LifecycleWatchEvent) => void,
+  ): Promise<LifecycleTargetWatch> {
+    const world = this.worldReference;
+    if (!world)
+      return Promise.reject(
+        new RequestNotSentError(
+          "Lifecycle targets require an exact World session",
+        ),
+      );
+    return this.lifecycleWatches.watch(
+      world,
+      targets,
+      listener,
+      this.lifecyclePageMembers,
+    );
+  }
+
+  protected async submitLifecycleStatistics(
+    output: bigint,
+  ): Promise<import("./lifecycle-diagnostics.js").LifecycleDiagnosticSample> {
+    const world = this.worldReference;
+    if (!world || output <= 0n)
+      throw new RequestNotSentError(
+        "Lifecycle diagnostics require an acknowledged exact endpoint",
+      );
+    const response = await this.request({
+      kind: "lifecycleDiagnostics",
+      query: { world, output },
+    });
+    if (
+      response.body.kind !== "lifecycleDiagnostics" ||
+      response.tick !== 0n ||
+      response.body.sample.world.id !== world.id ||
+      response.body.sample.world.incarnation !== world.incarnation ||
+      response.body.sample.output !== output
+    ) {
+      const error = new Error("Invalid lifecycle diagnostic provenance");
+      this.stop(error);
+      throw error;
+    }
+    const sample = response.body.sample;
+    return Object.freeze({
+      ...sample,
+      world: Object.freeze({ ...sample.world }),
+      work: Object.freeze({ ...sample.work }),
+      traffic: Object.freeze({ ...sample.traffic }),
+    });
+  }
+
   async subscribeLifecycle(
     filter: LifecycleFilter,
     listener: (event: LifecycleNotification) => void,
@@ -1459,24 +1379,13 @@ export abstract class ClientBase implements Client {
     };
   }
 
-  onDiagnostic(
-    listener: (diagnostic: StateOverlayLifecycleDiagnostic) => void,
-  ): () => void {
-    if (this.stopped) throw new Error("Client is closed");
-    this.diagnosticListeners.add(listener);
-    return () => {
-      this.diagnosticListeners.delete(listener);
-    };
-  }
-
   private stop(error: Error, expected = false): void {
     if (this.stopped) return;
     this.stopped = true;
-    if (this.latestGuiTextFocus !== undefined)
-      this.publishGuiObservations({ effects: [], textFocus: null });
-    this.latestGuiTextFocus = undefined;
-    this.latestVirtualRanges.clear();
-    this.guiObservationListeners.clear();
+    this.terminalClosure = Object.freeze({ reason: error });
+    this.resolveClosed(this.terminalClosure);
+    this.guiObservations.close(error);
+    this.lifecycleWatches.stop(error);
     this.assetSources.close(error);
     this.runtimeFailures.clear();
     this.batchFailures.clear();
@@ -1497,10 +1406,8 @@ export abstract class ClientBase implements Client {
       waiter.reject(error);
     }
     this.frameWaiters.clear();
-    this.diagnosticListeners.clear();
     this.resourceListeners.clear();
     this.renderStateListeners.clear();
-    this.cameraStateListeners.clear();
     void this.transport.close().catch(() => {});
   }
 
@@ -1526,14 +1433,4 @@ export abstract class ClientBase implements Client {
 
 function asError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
-}
-
-function isBatchTransportBody(body: RequestBody): boolean {
-  return (
-    body.kind === "batch" ||
-    body.kind === "beginBatch" ||
-    body.kind === "batchChunk" ||
-    body.kind === "endBatch" ||
-    (body.kind === "gui" && body.batchId !== undefined)
-  );
 }

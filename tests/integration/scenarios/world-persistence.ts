@@ -4,6 +4,7 @@ import type {
   WorldPersistenceHostClient,
 } from "@ipp/client";
 import { successfulBatch, aliasId } from "../camera-fixtures.js";
+import { CONSTRAINTS, RENDER, selectSystems } from "../system-selections.js";
 
 type PersistenceHost = WorldPersistenceHostClient<AssetWorldClient>;
 
@@ -32,10 +33,12 @@ function scalar(client: AssetWorldClient): ComponentDescriptor {
 
 /** Grow beyond the former metadata estimate through ordinary bounded batches. */
 export async function worldMetadataGrowth(host: PersistenceHost) {
-  const client = await host.createWorld({
+  const originalWorld = await host.createWorld({
+    selectedSystems: selectSystems(CONSTRAINTS),
     symbolicId: "metadata-growth",
     capacityHints: { entities: 1 },
   });
+  const client = await host.openWorld(originalWorld.reference);
   const classes = Array.from(
     { length: 48 },
     (_, index) => `class-${index}-${"x".repeat(96)}`,
@@ -59,7 +62,7 @@ export async function worldMetadataGrowth(host: PersistenceHost) {
   }
   const before = await client.inspect();
   check(before.entities.length === entityCount, "World growth lost entities");
-  const bytes = await host.saveWorld();
+  const bytes = await host.saveWorld(client.session);
   check(
     bytes.length > 8 * 65_536,
     "Fixture must span multiple transfer windows",
@@ -84,7 +87,8 @@ export async function worldMetadataGrowth(host: PersistenceHost) {
   const input = bytes.slice();
   const loading = host.loadWorld(input, { symbolicId: "metadata-copy" });
   input.fill(0);
-  const restored = await loading;
+  const restoredWorld = await loading;
+  const restored = await host.openWorld(restoredWorld.root);
   const after = await restored.inspect();
   const expectedClasses = [...classes].sort().join(",");
   check(
@@ -117,8 +121,8 @@ export async function worldMetadataGrowth(host: PersistenceHost) {
     (await restored.inspect()).entities.length === entityCount + 1,
     "Restored World could not grow further",
   );
-  await host.destroyWorld("metadata-copy");
-  await host.destroyWorld("metadata-growth");
+  await host.destroyWorld(restoredWorld.root);
+  await host.destroyWorld(originalWorld.reference);
   return {
     entities: entityCount,
     classesPerEntity: classes.length,
@@ -134,10 +138,12 @@ export async function namedWorldPersistence(
     (await host.listWorlds()).length === 0,
     "Connect must not create a World",
   );
-  const client = await host.createWorld({
+  const originalWorld = await host.createWorld({
+    selectedSystems: selectSystems(CONSTRAINTS),
     symbolicId: "authored",
     capacityHints: { entities: 1 },
   });
+  const client = await host.openWorld(originalWorld.reference);
   const world = client.world!;
   const component = scalar(client);
   const offset = component.fields.value!.offset;
@@ -165,38 +171,8 @@ export async function namedWorldPersistence(
     renamed.id === world.id && renamed.persistentId === world.persistentId,
     "Rename changed identity",
   );
-  const hints = await host.setCapacityHints({ entities: 4096 });
+  const hints = await host.setCapacityHints(client.session, { entities: 4096 });
   check(hints.capacityHints.entities === 4096, "World did not retain hints");
-
-  const declaration = successfulBatch(
-    await client.batch([
-      { kind: "createStateOverlayOwner", alias: 0 },
-      {
-        kind: "attachEntityOverlayBinding",
-        owner: { kind: "alias", alias: 0 },
-        alias: 1,
-        symbolicId: "base",
-        mode: "bound",
-      },
-      {
-        kind: "attachComponentStateOverlay",
-        owner: { kind: "alias", alias: 0 },
-        binding: { kind: "alias", alias: 1 },
-        alias: 2,
-        component: component.id,
-        mode: "bound",
-        fields: [{ offset, value: { kind: "f32", value: 99 } }],
-      },
-      {
-        kind: "attachEntityOverlayBinding",
-        owner: { kind: "alias", alias: 0 },
-        alias: 3,
-        symbolicId: "temporary",
-        mode: "owned",
-      },
-    ]),
-  );
-  check(declaration.stateOverlays.length === 4, "Overlay setup failed");
 
   // A save is ordered between its preceding and following authored writes, even
   // when all three operations are queued without awaiting intermediate results.
@@ -208,7 +184,7 @@ export async function namedWorldPersistence(
       field: { offset, value: { kind: "f32", value: 7 } },
     },
   ]);
-  const captured = host.saveWorld();
+  const captured = host.saveWorld(client.session);
   const after = client.batch([
     {
       kind: "setField",
@@ -240,10 +216,11 @@ export async function namedWorldPersistence(
     () => host.loadWorld(corrupt, { symbolicId: "corrupt" }),
     "Corrupt file must reject",
   );
-  const restored = await host.loadWorld(bytes, {
+  const restoredWorld = await host.loadWorld(bytes, {
     symbolicId: "copy",
     capacityHints: { entities: 2 },
   });
+  const restored = await host.openWorld(restoredWorld.root);
   check(restored.session !== client.session, "Load reused a World session");
   check(
     restored.world!.persistentId === world.persistentId,
@@ -254,24 +231,25 @@ export async function namedWorldPersistence(
     "Load override was ignored",
   );
   const inspection = await restored.inspect();
-  check(inspection.entities.length === 2, "Owned UI entity leaked into file");
+  check(inspection.entities.length === 2, "Restore changed the entity set");
   const base = inspection.entities.find(
     (entity) => entity.metadata.symbolicId === "base",
   );
   check(base, "Symbolic metadata lost");
-  const value = base.base.find((entry) => entry.component === component.id)
-    ?.fields.value;
-  check(value === 7, "Save captured an overlay, later write or stale base");
+  const value = base.components.find(
+    (entry) => entry.component === component.id,
+  )?.fields.value;
+  check(value === 7, "Save captured a later write or a stale value");
   await rejected(() => client.inspect(), "Ended World client remained usable");
-  await host.destroyWorld(restored.world!.id);
+  await host.destroyWorld(restoredWorld.root);
   await rejected(() => restored.inspect(), "Destroyed World remained usable");
-  const original = await host.attachWorld("renamed");
+  const original = await host.openWorld(await host.resolveWorld("renamed"));
   check(
     (await original.inspect()).entities.length === 2,
-    "Disconnect failed to clean owned entity",
+    "Disconnect changed the retained World",
   );
   await original.close();
-  await host.destroyWorld("renamed");
+  await host.destroyWorld(originalWorld.reference);
   check(
     (await host.listWorlds()).length === 0,
     "World discovery retained destroyed Worlds",
@@ -285,8 +263,14 @@ export async function sharedWorldSessions(
   const leftHost = await connect();
   const rightHost = await connect();
   try {
-    const left = await leftHost.createWorld({ symbolicId: "shared" });
-    const right = await rightHost.attachWorld("shared");
+    const world = await leftHost.createWorld({
+      selectedSystems: selectSystems(CONSTRAINTS),
+      symbolicId: "shared",
+    });
+    const left = await leftHost.openWorld(world.reference);
+    const right = await rightHost.openWorld(
+      await rightHost.resolveWorld("shared"),
+    );
     check(
       left.world!.id === right.world!.id && left.session !== right.session,
       "Shared World attachment failed",
@@ -294,72 +278,69 @@ export async function sharedWorldSessions(
     const component = scalar(left);
     const offset = component.fields.value!.offset;
     const [a, b] = await Promise.all([
-      left.batch(
-        [
-          {
-            kind: "create",
-            alias: 0,
-            metadata: { symbolicId: "left", classes: [] },
-          },
-        ],
-        1n,
-      ),
-      right.batch(
-        [
-          {
-            kind: "create",
-            alias: 0,
-            metadata: { symbolicId: "right", classes: [] },
-          },
-        ],
-        1n,
-      ),
+      left.batch([
+        {
+          kind: "create",
+          alias: 0,
+          metadata: { symbolicId: "left", classes: [] },
+        },
+      ]),
+      right.batch([
+        {
+          kind: "create",
+          alias: 0,
+          metadata: { symbolicId: "right", classes: [] },
+        },
+      ]),
     ]);
     check(
       aliasId(a, 0) !== aliasId(b, 0),
       "Colliding request IDs routed another session's reply",
     );
-    const owner = successfulBatch(
-      await left.batch([
-        { kind: "createStateOverlayOwner", alias: 0 },
-        {
-          kind: "attachEntityOverlayBinding",
-          owner: { kind: "alias", alias: 0 },
-          alias: 1,
-          symbolicId: "left-ui",
-          mode: "owned",
-        },
-        {
-          kind: "attachComponentStateOverlay",
-          owner: { kind: "alias", alias: 0 },
-          binding: { kind: "alias", alias: 1 },
-          alias: 2,
-          component: component.id,
-          mode: "owned",
-          fields: [{ offset, value: { kind: "f32", value: 5 } }],
-        },
-      ]),
-    ).stateOverlays[0]!.id;
-    await rejected(
-      () =>
-        right.batch([
+    // Entities of a shared World belong to no session: the last write wins
+    // whichever session wrote it, and a disconnect removes nothing.
+    const leftUi = aliasId(
+      successfulBatch(
+        await left.batch([
           {
-            kind: "releaseStateOverlayOwner",
-            owner: { kind: "handle", id: owner },
+            kind: "create",
+            alias: 0,
+            metadata: { symbolicId: "left-ui", classes: [] },
+          },
+          {
+            kind: "insertComponent",
+            entity: { kind: "alias", alias: 0 },
+            component: component.id,
+            fields: [{ offset, value: { kind: "f32", value: 5 } }],
           },
         ]),
-      "Another session released the owner",
+      ),
+      0,
     );
-    check(
-      (await right.inspect()).entities.length === 3,
-      "Foreign owner rejection changed World state",
+    successfulBatch(
+      await right.batch([
+        {
+          kind: "setField",
+          entity: { kind: "symbol", symbol: "left-ui" },
+          component: component.id,
+          field: { offset, value: { kind: "f32", value: 6 } },
+        },
+      ]),
     );
     await leftHost.close();
+    const survived = await right.inspect();
     check(
-      (await right.inspect()).entities.length === 2,
-      "Disconnect left owned UI entities",
+      survived.entities.length === 3,
+      "Disconnect removed entities of a shared World",
     );
-    await rightHost.destroyWorld("shared");
+    check(
+      survived.entities
+        .find((entity) => entity.id === leftUi)
+        ?.components.find((entry) => entry.component === component.id)?.fields
+        .value === 6,
+      "Another session's write did not win",
+    );
+    await rightHost.destroyWorld(world.reference);
     check(
       (await rightHost.listWorlds()).length === 0,
       "Shared destruction did not detach sessions",
@@ -381,14 +362,22 @@ export async function sharedWorldAssetSources(
   const leftHost = await connect();
   const rightHost = await connect();
   try {
-    const left = await leftHost.createWorld({ symbolicId: "shared-assets" });
-    const right = await rightHost.attachWorld("shared-assets");
+    const world = await leftHost.createWorld({
+      selectedSystems: selectSystems(RENDER, CONSTRAINTS),
+      symbolicId: "shared-assets",
+    });
+    const left = await leftHost.openWorld(world.reference);
+    const right = await rightHost.openWorld(
+      await rightHost.resolveWorld("shared-assets"),
+    );
     const a = new AnimationFixture(left, contract, async () => {});
     const b = new AnimationFixture(right, contract, async () => {});
     const targetA = await a.create("left-target", { Scalar: { value: 3 } });
     const targetB = await b.create("right-target", { Scalar: { value: 4 } });
     const sourceA = await a.upload(a.curve("Scalar", "value", 0, 0), 501n);
-    const sourceB = await b.upload(b.curve("Scalar", "value", 100, 100), 501n);
+    // At x=.4375 the left curve has changed by 6 and the right by 56; each
+    // controller adds that change to its target.
+    const sourceB = await b.upload(b.curve("Scalar", "value", 0, 100), 501n);
     const controllerA = await a.controller([
       a.driver(targetA, sourceA, 0, "Scalar", ["value"]),
     ]);
@@ -398,11 +387,11 @@ export async function sharedWorldAssetSources(
     const sampledA = await a.seekPaused(controllerA, 0.4375);
     const sampledB = await b.seekPaused(controllerB, 0.4375);
     check(
-      a.value(sampledA, targetA, "Scalar", "value") === 6,
+      Math.abs(a.value(sampledA, targetA, "Scalar", "value") - 9) < 1e-4,
       "Left source was replaced",
     );
     check(
-      b.value(sampledB, targetB, "Scalar", "value") === 106,
+      Math.abs(b.value(sampledB, targetB, "Scalar", "value") - 60) < 1e-4,
       "Right source aliased another client",
     );
     check(
@@ -414,11 +403,12 @@ export async function sharedWorldAssetSources(
       "Client sources share a runtime identity",
     );
     await leftHost.close();
-    const bytes = await rightHost.saveWorld();
-    await rightHost.detachWorld();
-    const restored = await rightHost.loadWorld(bytes, {
+    const bytes = await rightHost.saveWorld(right.session);
+    await right.close();
+    const restoredWorld = await rightHost.loadWorld(bytes, {
       symbolicId: "shared-assets-copy",
     });
+    const restored = await rightHost.openWorld(restoredWorld.root);
     const state = await restored.inspect();
     check(state.entities.length === 2, "Shared authored entities were lost");
     check(state.controllers?.length === 2, "Controller descriptions were lost");

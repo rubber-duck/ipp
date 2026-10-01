@@ -177,7 +177,7 @@ def native_host(directory: Path, features: list[str], *, release: bool = False) 
         "export_contract",
         "--no-default-features",
         "--features",
-        ",".join(["schema-export", *(f for f in features if f != "diagnostics")]),
+        ",".join(["schema-export", *features]),
         *flags,
         output=directory / "contract.bin",
     )
@@ -205,7 +205,7 @@ def gles_host(directory: Path, features: list[str]) -> None:
         "export_contract",
         "--no-default-features",
         "--features",
-        ",".join(["schema-export", *features]),
+        ",".join(["schema-export", "diagnostics", *features]),
         output=directory / "contract.bin",
     )
     compile_client(directory, directory / "contract.bin")
@@ -220,17 +220,19 @@ def baseline_native() -> None:
         shutil.copy2(native / "contract.bin", artifacts / "native.contract")
 
 
-def world_hosts(release: bool = False) -> None:
-    with product(
-        ROOT / ("target/scaling-host-build" if release else "target/world-host-build")
-    ) as output:
+def world_hosts(release: bool = False, diagnostics: bool = False) -> None:
+    destination = "target/scaling-host-build" if release else "target/world-host-build"
+    if diagnostics:
+        destination = "target/lifecycle-diagnostics-build"
+    features = ["builtin-assets", *(["diagnostics"] if diagnostics else [])]
+    with product(ROOT / destination) as output:
         for name in ["native"] if release else ["native", "wasm"]:
             directory = output / name
             directory.mkdir()
             if name == "native":
-                native_host(directory, ["builtin-assets"], release=release)
+                native_host(directory, features, release=release)
             else:
-                wasm(["builtin-assets"], False, "debug", directory)
+                wasm(features, False, "debug", directory)
             compile_client(directory, directory / "contract.bin")
             target("world", directory, name)
 
@@ -320,13 +322,15 @@ def build(name: str) -> None:
         browser(name.removeprefix("browser:"))
     elif name == "native":
         baseline_native()
+    elif name == "headless-client":
+        node_product("tools/build_headless_client.mjs", "target/headless-client")
     elif name == "surface-host":
         with product(ROOT / "target/surface-host") as directory:
             native_host(directory, ["surfaces"])
             compile_client(directory, directory / "contract.bin")
     elif name == "gui-host":
         with product(ROOT / "target/gui-host") as directory:
-            native_host(directory, ["surfaces", "gui"])
+            native_host(directory, ["surfaces", "gui", "diagnostics"])
             compile_client(directory, directory / "contract.bin")
     elif name == "gles-hosts":
         # The analytic and retained builds of the native retained GUI check.
@@ -373,10 +377,14 @@ def build(name: str) -> None:
         gallery_platformer_assets()
     elif name in ("world-hosts", "scaling-host"):
         world_hosts(name == "scaling-host")
+    elif name == "lifecycle-diagnostics-hosts":
+        world_hosts(diagnostics=True)
     elif name == "builtin-exporter":
         builtin_exporter()
     elif name == "skinning-fixtures":
         skinning()
+    elif name == "render-fixtures":
+        node_product("tools/build_render_fixtures.mjs", "target/render-fixtures")
     elif name == "client":
         with product(ROOT / "packages/ipp-client/dist") as directory:
             run(
@@ -389,20 +397,57 @@ def build(name: str) -> None:
                     str(directory),
                 ]
             )
-    elif name == "typescript":
-        with product(ROOT / "dist") as directory:
+    elif name == "gui-motion-fixtures":
+        node_product("tests/integration/gui-motion/build.mjs", "target/gui-motion")
+    elif name == "transport-fixtures":
+        run(
+            [
+                node(),
+                "node_modules/typescript/bin/tsc",
+                "--project",
+                "tests/integration/tsconfig.transports.json",
+            ]
+        )
+        node_product("tools/build_transports.mjs", "target/multiplex-tests")
+    elif name == "composed-query-fixtures":
+        node_product("tools/build_composed_queries.mjs", "target/composed-queries")
+    elif name in (
+        "typescript",
+        "asset-rejection-tests",
+        "asset-rejection-worker-tests",
+    ):
+        configuration, destination = {
+            "typescript": ("tsconfig.json", "dist"),
+            "asset-rejection-tests": (
+                "tests/integration/tsconfig.asset-rejection.json",
+                "target/asset-rejection-tests",
+            ),
+            "asset-rejection-worker-tests": (
+                "tests/browser/tsconfig.asset-rejection.json",
+                "target/asset-rejection-worker-tests",
+            ),
+        }[name]
+        with product(ROOT / destination) as directory:
             run(
                 [
                     node(),
                     "node_modules/typescript/bin/tsc",
                     "--project",
-                    "tsconfig.json",
+                    configuration,
                     "--outDir",
                     str(directory),
                 ]
             )
     elif name == "react":
         node_product("packages/ipp-react/tools/build.mjs", "packages/ipp-react/dist")
+    elif name == "react-attached":
+        node_product("tests/react/build-attached-world.mjs", "target/react-attached")
+    elif name == "react-gui-authoring":
+        node_product(
+            "tests/react/build-gui-authoring.mjs", "target/react-gui-authoring"
+        )
+    elif name == "gui-stress-fixtures":
+        node_product("tools/build_gui_stress.mjs", "target/gui-stress")
     elif name == "blender-addon":
         from .processes import python_tool
 
@@ -414,11 +459,7 @@ def build(name: str) -> None:
             "target/browser-build/lifecycle-probes.js",
         )
     elif name == "blender-fixtures":
-        target(
-            "bundle",
-            "tests/render/blender-fixture.tsx",
-            "target/blender-test/blender-fixture.js",
-        )
+        node_product("tools/build_blender_fixtures.mjs", "target/blender-test")
     elif name == "gallery-site":
         node_product("tools/build_gallery.mjs", "target/gallery-site", "site")
     elif name in ("gallery", "gallery-fixtures"):
@@ -434,8 +475,10 @@ def build(name: str) -> None:
             "textures": "textures",
             "shapes": "shapes",
             "surface-fixtures": "surfaces",
+            "surface-gui-fixtures": "surface_gui",
             "mesh-pose-fixtures": "mesh_poses",
             "blender-viewer": "blender_viewer",
+            "blender-headless-fixtures": "blender_headless",
         }
         if name not in scripts:
             raise ValueError(f"Unknown build operation: {name}")
@@ -445,8 +488,10 @@ def build(name: str) -> None:
             "textures": "texture-build",
             "shapes": "shapes-build",
             "surface-fixtures": "surface-build",
+            "surface-gui-fixtures": "surface-gui-build",
             "mesh-pose-fixtures": "mesh-pose-build",
             "blender-viewer": "blender-viewer",
+            "blender-headless-fixtures": "blender-headless",
         }
         node_product(f"tools/build_{scripts[name]}.mjs", f"target/{destinations[name]}")
 
@@ -469,6 +514,7 @@ def verify_browser_identities() -> None:
                         "particles",
                         "surfaces",
                         "gui",
+                        "diagnostics",
                     )
                 ],
             ]
@@ -476,7 +522,7 @@ def verify_browser_identities() -> None:
         value = report["schemaHash"]
         if key in hashes and hashes[key] != value:
             raise ValueError(
-                f"GPU/diagnostics selection changed authored schema: {name}"
+                f"GPU-only selection changed the compiled contract: {name}"
             )
         hashes[key] = value
     if len(set(hashes.values())) != len(hashes):

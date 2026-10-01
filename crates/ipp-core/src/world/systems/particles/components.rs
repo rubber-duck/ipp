@@ -1,11 +1,12 @@
 use super::ParticleRuntimeState;
 use crate::{
     ErrorReason,
-    components::schema::ComponentLifecycle,
+    components::schema::{ComponentLifecycle, same_text},
     services::asset_management::service::{AssetDemandSelection, validate_source},
 };
 use ipp_schema_derive::SchemaComponent;
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 /// ParticleEmitter authored settings.
 #[repr(C)]
@@ -32,7 +33,7 @@ pub struct ParticleEmitter {
     /// Point=0, box=1, sphere volume=2, static mesh faces=3.
     pub shape: u32,
     /// Immutable emission mesh for shape 3.
-    pub source: String,
+    pub source: Arc<str>,
     /// Emission mesh variant.
     pub variant: u32,
     /// Box half extent or sphere radius along X.
@@ -85,7 +86,7 @@ impl Default for ParticleEmitter {
             burst: 0,
             space: 0,
             shape: 0,
-            source: String::new(),
+            source: Arc::default(),
             variant: 0,
             extent_x: 1.0,
             extent_y: 1.0,
@@ -194,7 +195,7 @@ impl ComponentLifecycle for ParticleEmitter {
 #[derive(Clone, Debug, PartialEq, SchemaComponent)]
 pub struct ParticlePlayback {
     /// Immutable IPPC particle cache.
-    pub source: String,
+    pub source: Arc<str>,
     /// Cache variant.
     pub variant: u32,
     /// Animatable absolute cache sample time in seconds.
@@ -207,7 +208,7 @@ pub struct ParticlePlayback {
 impl Default for ParticlePlayback {
     fn default() -> Self {
         Self {
-            source: String::new(),
+            source: Arc::default(),
             variant: 0,
             time: 0.0,
             runtime: Default::default(),
@@ -238,7 +239,7 @@ impl ComponentLifecycle for ParticlePlayback {
     }
 
     fn preserve_runtime(&mut self, previous: &mut Self) {
-        if self.source == previous.source && self.variant == previous.variant {
+        if same_text(&self.source, &previous.source) && self.variant == previous.variant {
             self.runtime = std::mem::take(&mut previous.runtime);
         }
     }
@@ -275,7 +276,7 @@ impl ComponentLifecycle for ParticlePlayback {
 #[derive(Clone, Debug, PartialEq, SchemaComponent)]
 pub struct ParticleSprite {
     /// Optional RGB sprite texture; radial opacity is procedural.
-    pub source: String,
+    pub source: Arc<str>,
     /// Texture variant.
     pub variant: u32,
     /// Linear red tint.
@@ -299,7 +300,7 @@ pub struct ParticleSprite {
 impl Default for ParticleSprite {
     fn default() -> Self {
         Self {
-            source: String::new(),
+            source: Arc::default(),
             variant: 0,
             r: 1.0,
             g: 1.0,
@@ -369,7 +370,7 @@ impl ComponentLifecycle for ParticleSprite {
 #[derive(Clone, Debug, PartialEq, SchemaComponent, Default)]
 pub struct ParticleMesh {
     /// Immutable particle mesh; materials are sibling components.
-    pub source: String,
+    pub source: Arc<str>,
     /// Mesh variant.
     pub variant: u32,
 }

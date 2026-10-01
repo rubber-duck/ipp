@@ -1,26 +1,27 @@
 import type {
-  ComponentDescriptor,
-  EntitySnapshot,
-  FrameCapture,
+  AnimationControllerSnapshot,
+  AnimationPlaybackControl,
+  Command,
   AnimationWorldClient,
-  GuiSemanticAction,
-  GuiSemanticNode,
-  GuiSemanticRole,
-  GuiSemanticTree,
-  DynamicValue,
-  GuiBasePart,
-  GuiPartState,
-  GuiPartVariant,
+  ComponentSnapshot,
+  EntitySnapshot,
+  EntityTreeNode,
+  GuiAction,
+  GuiFocusRecord,
+  GuiInputRoutingOutcome,
+  GuiPhysicalInput,
+  GuiPointerRecord,
+  GuiTarget,
   GuiWorldClient,
+  Inspection,
   PickingWorldClient,
-  StateOverlayRef,
-  SurfaceWorldClient,
+  PresentedCapture,
+  PresentedFrame,
+  RenderStatisticsSnapshot,
   SystemQuery,
+  WorldReference,
 } from "@ipp/client";
-import { GUI_BASE_PARTS, GUI_PART_QUALIFIERS, guiPartIndex } from "@ipp/client";
-
-/** Theme part rows per theme slot. */
-const GUI_PART_COUNT = GUI_BASE_PARTS.length * GUI_PART_QUALIFIERS;
+import { sameOutputReference } from "../../packages/ipp-client/src/references.js";
 import type { IppCanvasHandle } from "@ipp/react/web";
 import {
   compareImages,
@@ -33,14 +34,59 @@ import {
   observeViewer as observeCanvas,
   type ViewerObservation,
 } from "./viewer-observation.js";
+import { guiAction } from "../integration/gui-actions.js";
 
 interface ViewerWindow extends Window {
   ippWorldCanvas?: IppCanvasHandle;
 }
 
+/**
+ * One completed draw of the canvas's selected output: top-left RGBA8 pixels
+ * of the exact presented viewport, the evaluated tick of the root output in
+ * that draw, and renderer diagnostics read after it. Diagnostics describe
+ * the latest completed draw at observation; they are evidence, not a fence.
+ */
+export interface ViewerFrame {
+  readonly width: number;
+  readonly height: number;
+  readonly devicePixelRatio: number;
+  readonly sequence: bigint;
+  readonly tick: bigint;
+  readonly drawCalls: number;
+  readonly triangles: number;
+  readonly failedDrawCalls: number;
+  readonly statistics: RenderStatisticsSnapshot | undefined;
+  readonly pixels: ArrayBuffer;
+}
+
+/** Summarize a completed draw with its root output tick and diagnostics. */
+function viewerFrame(
+  capture: PresentedCapture,
+  tick: bigint,
+  statistics: RenderStatisticsSnapshot | undefined,
+): ViewerFrame {
+  const { width, height, devicePixelRatio } = capture.view.binding.viewport;
+  if (capture.pixels.byteLength !== width * height * 4)
+    throw new Error(
+      `Captured ${capture.pixels.byteLength} bytes for a ${width}x${height} viewport`,
+    );
+  return {
+    width,
+    height,
+    devicePixelRatio,
+    sequence: capture.sequence,
+    tick,
+    drawCalls: capture.drawCalls,
+    triangles: capture.triangles,
+    failedDrawCalls: capture.failedDrawCalls,
+    statistics,
+    pixels: capture.pixels,
+  };
+}
+
 export interface ViewerBrowserCapture extends ViewerObservation {
   readonly label: string;
-  readonly frame: Omit<FrameCapture, "pixels">;
+  readonly frame: Omit<ViewerFrame, "pixels">;
   readonly summary: ImageSummary;
   readonly dataUrl: string;
 }
@@ -56,28 +102,11 @@ export interface PlaneUvProbeEvidence extends PlaneUvProbe {
   readonly neighborhood: readonly (readonly [number, number, number, number])[];
 }
 
-const captures = new Map<string, FrameCapture>();
+const captures = new Map<string, ViewerFrame>();
 
-export interface GalleryGuiSelector {
-  readonly role: GuiSemanticRole;
-  readonly name?: string;
-}
-
-function selectGuiNode(
-  tree: GuiSemanticTree,
-  selector: GalleryGuiSelector,
-): GuiSemanticNode {
-  const matches = tree.nodes.filter(
-    (node) =>
-      node.role === selector.role &&
-      (selector.name === undefined || node.name === selector.name),
-  );
-  if (matches.length !== 1)
-    throw new Error(
-      `Expected one ${selector.role} '${selector.name ?? ""}', found ${matches.length}`,
-    );
-  return matches[0]!;
-}
+/** Symbolic IDs the GUI demo names; the tests restate them independently. */
+const GUI_PANEL_ENTITY = "gui-demo";
+const GUI_EVENT_LOG_ENTITY = "gui-event-log";
 
 /** Entity IDs of named gallery objects per client, verified on each targeted read. */
 const galleryEntityIds = new WeakMap<object, Map<string, bigint>>();
@@ -138,15 +167,6 @@ async function galleryEntities(
   return symbols.map((symbol) => found.get(symbol));
 }
 
-/** The named entity's cached ID, unverified; discovered when unknown. */
-async function cachedGalleryEntityId(
-  symbol: string,
-): Promise<bigint | undefined> {
-  const known = knownGalleryEntities().get(symbol);
-  if (known !== undefined) return known;
-  return (await discoverGalleryEntities()).get(symbol)?.id;
-}
-
 /** The named entity's current ID through a targeted read; undefined when absent. */
 export async function galleryEntityId(
   symbol: string,
@@ -154,239 +174,643 @@ export async function galleryEntityId(
   return (await galleryEntities([symbol]))[0]?.id;
 }
 
-/** The connected contract's GuiRoot descriptor, which owns the row layouts. */
-export function galleryGuiRootDescriptor(): ComponentDescriptor {
-  const descriptor = requireCanvas().client.components.GuiRoot;
-  if (!descriptor) throw new Error("The gallery contract has no GuiRoot");
-  return descriptor;
+function componentFields(
+  client: { readonly components: Readonly<Record<string, { id: number }>> },
+  entity: EntitySnapshot,
+  name: string,
+): ComponentSnapshot["fields"] | undefined {
+  const id = client.components[name]?.id;
+  return entity.components.find(({ component }) => component === id)?.fields;
 }
 
-/** The GUI demo entity and its effective Surface through a targeted read. */
-async function galleryGuiEntity() {
-  const client = requireCanvas().client as SurfaceWorldClient;
-  const [entity] = await galleryEntities(["gui-demo"]);
+function worldReference(value: unknown): WorldReference {
+  const world = (
+    value && typeof value === "object" && "value" in value
+      ? (value as { value: unknown }).value
+      : value
+  ) as WorldReference | null | undefined;
+  if (
+    !world ||
+    typeof world.id !== "bigint" ||
+    typeof world.incarnation !== "bigint"
+  )
+    throw new Error("The GUI demo Surface presents no attached World");
+  return world;
+}
+
+type PanelClient = GuiWorldClient & AnimationWorldClient;
+
+interface PanelSession {
+  readonly world: WorldReference;
+  readonly client: PanelClient;
+  density?: number;
+}
+
+/** This helper's own observation session on the panel World. */
+let panelSession: PanelSession | undefined;
+
+/**
+ * The World the GUI demo's Surface presents, read from the ordinary Surface
+ * attachment of the parent panel entity, with an observation session of this
+ * helper. A replaced panel World closes the previous session first.
+ */
+async function galleryPanel(): Promise<PanelSession> {
+  const handle = requireCanvas();
+  const [entity] = await galleryEntities([GUI_PANEL_ENTITY]);
   if (!entity) throw new Error("Missing gallery GUI demo");
-  return { entity, surface: guiDemoSurface(client, entity) };
+  const attachment = componentFields(handle.client, entity, "WorldAttachment");
+  if (!attachment) throw new Error("The GUI demo has no World attachment");
+  const world = worldReference(attachment.child);
+  const current = panelSession;
+  if (
+    current &&
+    current.world.id === world.id &&
+    current.world.incarnation === world.incarnation &&
+    !current.client.closure
+  )
+    return current;
+  panelSession = undefined;
+  await current?.client.close().catch(() => {});
+  const client = (await handle.host.openWorld(world)) as PanelClient;
+  const session: PanelSession = { world, client };
+  panelSession = session;
+  return session;
 }
 
-function guiDemoSurface(client: SurfaceWorldClient, entity: EntitySnapshot) {
-  const surface = entity.effective.find(
-    ({ component }) => component === client.components.Surface!.id,
+/** Close this helper's panel observation session. */
+export async function closeGalleryPanel(): Promise<void> {
+  const session = panelSession;
+  panelSession = undefined;
+  await session?.client.close();
+}
+
+/** Canvas units per Surface metre of the presented panel. */
+async function galleryGuiDensity(): Promise<number> {
+  const panel = await galleryPanel();
+  if (panel.density !== undefined) return panel.density;
+  const canvas = (await panel.client.inspectPage({ collection: "canvas" }))
+    .canvas;
+  const density = canvas?.state.unitsPerMetre ?? Number.NaN;
+  if (!(density > 0)) throw new Error("The GUI demo canvas has no density");
+  panel.density = density;
+  return density;
+}
+
+/** The panel World's inspection with plain rows tables. */
+export async function inspectGalleryPanel(flush = true): Promise<Inspection> {
+  if (flush) await requireCanvas().flush();
+  const panel = await galleryPanel();
+  return plainRowsTables(await panel.client.inspect());
+}
+
+/** The control components the gallery panel authors, by component name. */
+const GALLERY_CONTROL_KINDS = {
+  GuiButton: "button",
+  GuiCheckbox: "checkbox",
+  GuiSlider: "slider",
+  GuiTextInput: "text",
+  GuiScrollView: "scrollView",
+  GuiVirtualList: "virtualList",
+} as const;
+
+export type GalleryGuiKind =
+  (typeof GALLERY_CONTROL_KINDS)[keyof typeof GALLERY_CONTROL_KINDS];
+
+export interface GalleryGuiSelector {
+  readonly role: GalleryGuiKind;
+  readonly name?: string;
+}
+
+/** A control's value as its value fields hold it. */
+export type GalleryGuiValue =
+  | { readonly kind: "none" }
+  | { readonly kind: "bool"; readonly value: boolean }
+  | { readonly kind: "scalar"; readonly value: number }
+  | { readonly kind: "text"; readonly value: string }
+  | {
+      readonly kind: "scroll";
+      readonly offset: readonly [number, number];
+      readonly anchorIndex: number;
+      readonly anchorOffset: number;
+    };
+
+/**
+ * One control of the panel World, named by its entity's symbolic ID and read
+ * through public surfaces: its control, GuiBehavior and CanvasBounds fields,
+ * the GUI focus and pointer queries, its core ancestry and its component
+ * incarnation from a lifecycle baseline.
+ */
+export interface GalleryGuiControl {
+  readonly symbol: string | undefined;
+  readonly target: GuiTarget;
+  readonly kind: GalleryGuiKind;
+  readonly value: GalleryGuiValue;
+  readonly label: string;
+  /** Core ancestors, parent first. */
+  readonly ancestry: readonly bigint[];
+  /** GuiBehavior's evaluated eligibility. */
+  readonly enabled: boolean;
+  readonly visible: boolean;
+  readonly available: boolean;
+  readonly focused: boolean;
+  /** Aggregated over the live pointers on this control. */
+  readonly interaction: {
+    readonly hovered: boolean;
+    readonly pressed: boolean;
+    readonly captured: boolean;
+  };
+  /** Scroll geometry and, for a VirtualList, the item range; null otherwise. */
+  readonly scroll: {
+    readonly viewport: readonly [number, number];
+    readonly content: readonly [number, number];
+    readonly capacity: readonly [number, number];
+    readonly itemCount: number | null;
+    readonly first: number;
+    readonly last: number;
+  } | null;
+  /** CanvasBounds' evaluated `[x, y, width, height]`. */
+  readonly bounds: readonly [number, number, number, number];
+}
+
+export interface GalleryGuiState {
+  /** The panel World and the depth-first order of its entity tree. */
+  readonly world: WorldReference;
+  readonly rows: number;
+  readonly controls: readonly GalleryGuiControl[];
+  /** Canvas text leaves by symbolic ID, in tree order. */
+  readonly texts: readonly {
+    readonly symbol: string | undefined;
+    readonly text: string;
+  }[];
+  readonly drawings: readonly string[];
+  /** Canvas boxes with their style alpha and opacity. */
+  readonly boxes: readonly {
+    readonly symbol: string | undefined;
+    readonly alpha: number;
+    readonly opacity: number;
+  }[];
+  /** The event log's authored VirtualList fields and its declared items in
+   * index order. */
+  readonly eventLog: {
+    readonly itemCount: number;
+    readonly itemExtent: number;
+    readonly overscan: number;
+    readonly items: readonly {
+      readonly index: number;
+      readonly text: string;
+    }[];
+  };
+  /** Components of the parent panel entity. */
+  readonly panelComponents: readonly (string | undefined)[];
+}
+
+function componentName(
+  client: { readonly components: Readonly<Record<string, { id: number }>> },
+  id: number,
+) {
+  return Object.entries(client.components).find(
+    ([, descriptor]) => descriptor.id === id,
+  )?.[0];
+}
+
+/** Every record of one paged GUI System query of the panel World. */
+async function panelGuiQuery<Collection extends "guiFocus" | "guiPointers">(
+  client: PanelClient,
+  collection: Collection,
+): Promise<
+  Collection extends "guiFocus" ? GuiFocusRecord[] : GuiPointerRecord[]
+> {
+  const records: (GuiFocusRecord | GuiPointerRecord)[] = [];
+  let after = 0n;
+  do {
+    const page = await client.inspectPage({ collection, after });
+    records.push(...(page[collection] ?? []));
+    after = page.next;
+  } while (after !== 0n);
+  return records as Collection extends "guiFocus"
+    ? GuiFocusRecord[]
+    : GuiPointerRecord[];
+}
+
+/** Exact component incarnations from one lifecycle add page's baselines. */
+async function componentIncarnations(
+  client: PanelClient,
+  components: readonly {
+    readonly entity: bigint;
+    readonly component: number;
+  }[],
+): Promise<Map<string, bigint>> {
+  const incarnations = new Map<string, bigint>();
+  if (components.length === 0) return incarnations;
+  const watch = await client.watchLifecycle(
+    components.map(({ entity, component }) => ({
+      target: { kind: "component", entity, component },
+      kinds: 8,
+    })),
+    () => {},
   );
-  if (!surface) throw new Error("Missing effective GUI demo Surface");
-  return surface;
+  try {
+    for (const { target, lifetime } of watch.baselines)
+      if (
+        target.kind === "component" &&
+        lifetime.kind === "component" &&
+        lifetime.incarnation !== null
+      )
+        incarnations.set(
+          `${target.entity}:${target.component}`,
+          lifetime.incarnation,
+        );
+  } finally {
+    await watch.remove();
+  }
+  return incarnations;
+}
+
+/** The controls among `nodes`, in tree order. */
+async function panelControls(
+  panel: PanelSession,
+  entities: ReadonlyMap<bigint, EntitySnapshot>,
+  nodes: readonly EntityTreeNode[],
+): Promise<GalleryGuiControl[]> {
+  const client = panel.client;
+  const found = nodes.flatMap(({ id }) => {
+    const entity = entities.get(id);
+    if (!entity) return [];
+    for (const [name, kind] of Object.entries(GALLERY_CONTROL_KINDS)) {
+      const fields = componentFields(client, entity, name);
+      if (fields)
+        return [
+          { entity, kind, component: client.components[name]!.id, fields },
+        ];
+    }
+    return [];
+  });
+  const [incarnations, focus, pointers] = await Promise.all([
+    componentIncarnations(
+      client,
+      found.map(({ entity, component }) => ({ entity: entity.id, component })),
+    ),
+    panelGuiQuery(client, "guiFocus"),
+    panelGuiQuery(client, "guiPointers"),
+  ]);
+  return found.flatMap(({ entity, kind, component, fields }) => {
+    const incarnation = incarnations.get(`${entity.id}:${component}`);
+    if (incarnation === undefined) return [];
+    const mine = (target: GuiTarget) =>
+      target.entity === entity.id && target.component === component;
+    const number = (field: string, from = fields) => Number(from[field] ?? 0);
+    const pair = (field: string) =>
+      [number(`${field}_x`), number(`${field}_y`)] as const;
+    const value: GalleryGuiValue =
+      kind === "checkbox"
+        ? { kind: "bool", value: fields.checked === true }
+        : kind === "slider"
+          ? { kind: "scalar", value: number("value") }
+          : kind === "text"
+            ? { kind: "text", value: String(fields.text ?? "") }
+            : kind === "scrollView" || kind === "virtualList"
+              ? {
+                  kind: "scroll",
+                  offset: pair("offset"),
+                  anchorIndex: number("anchor_index"),
+                  anchorOffset: number("anchor_offset"),
+                }
+              : { kind: "none" };
+    const behavior = componentFields(client, entity, "GuiBehavior") ?? {};
+    const bounds = componentFields(client, entity, "CanvasBounds") ?? {};
+    const ancestry: bigint[] = [];
+    for (
+      let parent = entity.link.parent;
+      parent !== null;
+      parent = entities.get(parent)?.link.parent ?? null
+    )
+      ancestry.push(parent);
+    const interaction = { hovered: false, pressed: false, captured: false };
+    for (const record of pointers)
+      if (mine(record.target)) {
+        interaction.hovered ||= record.state.hovered;
+        interaction.pressed ||= record.state.pressed;
+        interaction.captured ||= record.state.captured;
+      }
+    const list = kind === "virtualList";
+    return [
+      {
+        symbol: entity.metadata.symbolicId ?? undefined,
+        target: {
+          world: panel.world,
+          entity: entity.id,
+          component,
+          incarnation,
+        },
+        kind,
+        value,
+        // A non-empty semantic label names the control; otherwise its own
+        // visible label does.
+        label:
+          typeof behavior.semantic_label === "string" &&
+          behavior.semantic_label !== ""
+            ? behavior.semantic_label
+            : typeof fields.label === "string"
+              ? fields.label
+              : "",
+        ancestry,
+        enabled: behavior.effective_enabled !== false,
+        visible: behavior.effective_visible !== false,
+        available: behavior.available !== false,
+        focused: focus.some((record) => mine(record.target)),
+        interaction,
+        scroll:
+          value.kind === "scroll"
+            ? {
+                viewport: pair("viewport"),
+                content: pair("content"),
+                capacity: pair("capacity"),
+                itemCount: list ? number("item_count") : null,
+                first: list ? number("range_first") : 0,
+                last: list ? number("range_last") : 0,
+              }
+            : null,
+        bounds: [
+          number("x", bounds),
+          number("y", bounds),
+          number("width", bounds),
+          number("height", bounds),
+        ],
+      },
+    ];
+  });
 }
 
 /**
- * Semantic and detailed GUI snapshots of the demo. They name the GuiRoot
- * entity by its cached ID without reading the entity itself; a stale ID from
- * a replaced World is rediscovered once.
+ * The panel World's controls and the ordinary Canvas entities around them,
+ * plus proof that no legacy GUI producer remains. Every value comes from
+ * public inspection, entity tree pages, the GUI focus and pointer queries
+ * and lifecycle baselines.
  */
-async function galleryGuiContext(flush = true, completeInspection = false) {
+export async function galleryGuiState(flush = true): Promise<GalleryGuiState> {
   const handle = requireCanvas();
   if (flush) await handle.flush();
-  const client = handle.client as GuiWorldClient & SurfaceWorldClient;
-  const snapshots = async (entity: bigint) =>
-    Promise.all([
-      client.semanticSnapshot({ entity, maxDepth: 32, limit: 256 }),
-      client.inspectGui({ entity, maxDepth: 32, limit: 256 }),
-    ]);
-  let entity = await cachedGalleryEntityId("gui-demo");
-  if (entity === undefined) throw new Error("Missing gallery GUI demo");
-  let result: Awaited<ReturnType<typeof snapshots>> | undefined;
-  let failure: unknown;
-  try {
-    result = await snapshots(entity);
-  } catch (error) {
-    failure = error;
-  }
-  if (!result || result[0].nodes.length === 0) {
-    // Failed or empty: confirm the cached ID still names the demo.
-    const current = await galleryEntityId("gui-demo");
-    if (current === undefined) throw new Error("Missing gallery GUI demo");
-    if (current !== entity) {
-      entity = current;
-      result = await snapshots(entity);
-    }
-  }
-  if (!result) throw failure;
-  const [semantic, detailed] = result;
-  if (completeInspection) {
-    // Decorative strips can exceed one inspection page. Fetch incomplete
-    // subtrees through the public bounded query, retaining every icon and shape.
-    const nodes = new Map(detailed.nodes.map((node) => [node.id, node]));
-    const queried = new Set<number>();
-    for (let page = 0; ; page++) {
-      const incomplete = [...nodes.values()].find((node) =>
-        node.children.some((id) => !nodes.has(id)),
-      );
-      if (!incomplete) break;
-      if (page >= 16) throw new Error("GUI inspection did not converge");
-      const nodeId = queried.has(incomplete.id)
-        ? incomplete.children.find((id) => !nodes.has(id))!
-        : incomplete.id;
-      queried.add(nodeId);
-      const subtree = await client.inspectGui({
-        entity,
-        nodeId,
-        maxDepth: 32,
-        limit: 256,
-      });
-      if (subtree.rootIncarnation !== detailed.rootIncarnation)
-        throw new Error("GUI root changed during inspection");
-      for (const node of subtree.nodes) nodes.set(node.id, node);
-    }
-    detailed.nodes = [...nodes.values()];
-  }
-  return { handle, client, semantic, detailed };
-}
-
-/** Public GUI observations plus proof that GuiRoot is the sole Surface producer. */
-export async function galleryGuiState(flush = true) {
-  const { client, semantic, detailed } = await galleryGuiContext(flush, true);
-  const { entity, surface } = await galleryGuiEntity();
-  const bytes = surface.fields.items;
-  if (!(bytes instanceof Uint8Array))
-    throw new Error("GUI demo Surface items are not encoded bytes");
+  const panel = await galleryPanel();
+  const [inspection, parentEntity] = await Promise.all([
+    panel.client.inspect(),
+    galleryEntities([GUI_PANEL_ENTITY]).then(([entity]) => entity),
+  ]);
+  if (!parentEntity) throw new Error("Missing gallery GUI demo");
+  const nodes: EntityTreeNode[] = [];
+  let after: bigint | undefined;
+  do {
+    const page = await panel.client.inspectTreePage({
+      ...(after === undefined ? {} : { after }),
+      limit: 256,
+      maxDepth: 64,
+    });
+    nodes.push(...page.nodes);
+    after = page.next === 0n ? undefined : page.next;
+  } while (after !== undefined);
+  const entities = new Map(
+    inspection.entities.map((entity) => [entity.id, entity]),
+  );
+  const symbol = (id: bigint) =>
+    entities.get(id)?.metadata.symbolicId ?? undefined;
+  const field = (entity: EntitySnapshot | undefined, name: string) =>
+    entity ? componentFields(panel.client, entity, name) : undefined;
+  const ordered = nodes.map(({ id }) => entities.get(id));
+  const list = field(
+    inspection.entities.find(
+      ({ metadata }) => metadata.symbolicId === GUI_EVENT_LOG_ENTITY,
+    ),
+    "GuiVirtualList",
+  );
+  const eventLog = {
+    itemCount: Number(list?.item_count ?? Number.NaN),
+    itemExtent: Number(list?.item_extent ?? Number.NaN),
+    overscan: Number(list?.overscan ?? Number.NaN),
+    items: inspection.entities
+      .filter(
+        (entity) =>
+          entity.link.parent !== null &&
+          symbol(entity.link.parent) === GUI_EVENT_LOG_ENTITY &&
+          field(entity, "GuiVirtualItem"),
+      )
+      .map((item) => {
+        // Each declared item holds its entry Text as its one child.
+        const entries = inspection.entities.filter(
+          (entity) => entity.link.parent === item.id,
+        );
+        return {
+          index: Number(field(item, "GuiVirtualItem")!.index),
+          text: entries
+            .map((entry) => field(entry, "CanvasText")?.text)
+            .filter((text): text is string => typeof text === "string")
+            .join("\n"),
+        };
+      })
+      .sort((left, right) => left.index - right.index),
+  };
   return {
-    semantic,
-    detailed,
-    surfaceItems: client.decodeSurfaceItems(bytes).items.length,
-    entityComponents: entity.effective.map(
-      ({ component }) =>
-        Object.entries(client.components).find(
-          ([, descriptor]) => descriptor.id === component,
-        )?.[0],
+    world: panel.world,
+    rows: nodes.length,
+    controls: await panelControls(panel, entities, nodes),
+    texts: ordered.flatMap((entity) => {
+      const text = field(entity, "CanvasText")?.text;
+      return typeof text === "string"
+        ? [{ symbol: entity!.metadata.symbolicId ?? undefined, text }]
+        : [];
+    }),
+    drawings: ordered.flatMap((entity) => {
+      const source = field(entity, "CanvasDrawing")?.source;
+      return typeof source === "string" ? [source] : [];
+    }),
+    boxes: ordered.flatMap((entity) => {
+      if (!field(entity, "CanvasBox")) return [];
+      const style = field(entity, "CanvasStyle");
+      return [
+        {
+          symbol: entity!.metadata.symbolicId ?? undefined,
+          alpha: Number(style?.alpha ?? 1),
+          opacity: Number(style?.opacity ?? 1),
+        },
+      ];
+    }),
+    eventLog,
+    panelComponents: parentEntity.components.map(({ component }) =>
+      componentName(handle.client, component),
     ),
   };
 }
 
-async function pointsForNode(
-  node: GuiSemanticNode,
-  fractions: readonly (readonly [number, number])[],
-) {
-  await requireCanvas().flush();
-  const { entity, camera, surface } = await galleryGuiPlacement();
-  const width = Number(surface.fields.width);
-  const height = Number(surface.fields.height);
-  // Semantic bounds are logical units; the root density maps them to metres.
-  const units = Number(
-    entity.effective.find(
-      ({ component }) =>
-        component === requireCanvas().client.components.GuiRoot?.id,
-    )?.fields.units_per_metre ?? 1,
-  );
-  const [x, y, nodeWidth, nodeHeight] = node.bounds;
-  const points = projectSnapshotPoints(
-    entity,
-    camera,
-    fractions.map(([fractionX, fractionY]) => {
-      const contentX = (x + nodeWidth * fractionX) / units;
-      const contentY = (y + nodeHeight * fractionY) / units;
-      return [contentX - width / 2, height / 2 - contentY, 0];
-    }),
-  );
-  return points.map((point) => ({ ...point, node }));
-}
-
-async function pointForNode(
-  node: GuiSemanticNode,
-  fractionX: number,
-  fractionY: number,
-) {
-  const [point] = await pointsForNode(node, [[fractionX, fractionY]]);
-  if (!point) throw new Error("GUI demo GUI point did not project");
-  return point;
-}
-
-/** Project an acknowledged semantic control bound through the actual camera. */
-export async function galleryGuiPoint(
+function selectControl(
+  state: GalleryGuiState,
   selector: GalleryGuiSelector,
-  fractionX = 0.5,
-  fractionY = 0.5,
-) {
-  const { semantic } = await galleryGuiContext();
-  return pointForNode(selectGuiNode(semantic, selector), fractionX, fractionY);
+): GalleryGuiControl {
+  const matches = state.controls.filter(
+    (control) =>
+      control.kind === selector.role &&
+      (selector.name === undefined || control.label === selector.name),
+  );
+  if (matches.length !== 1)
+    throw new Error(
+      `Expected one ${selector.role} '${selector.name ?? ""}', found ${matches.length}`,
+    );
+  return matches[0]!;
 }
+
+/** Paint part keys of the connected runtime contract, loaded like the
+ * gallery loads its generated module. */
+interface GalleryPaintKeys {
+  guiPaintPartIndex(key: {
+    readonly part: string;
+    readonly state?: string;
+    readonly variant?: string;
+  }): number;
+}
+
+const GALLERY_GENERATED_MODULE =
+  "/target/browser-build/render-expanded/generated.js";
 
 /**
- * Read one GUI part value for a semantic node: `background` reads the node's
- * live background channels, which skin transitions animate, and a qualified
- * part such as `background_disabled` reads the authored row of the node's
- * theme.
+ * One authored row of the theme a control's skin references, selected by
+ * its generated paint key, as the panel World inspection decodes it.
  */
-export async function galleryGuiPartValue(
-  entityId: bigint,
-  nodeId: number,
-  part: string,
-  property: "color" | "opacity" | "scale",
-) {
-  // Timed hover probes read one entity, without traversing unrelated resources
-  // or decorative nodes after the input burst has already begun.
-  const client = requireCanvas().client;
-  const inspection = await client.inspectPage({
-    collection: "entities",
-    target: entityId,
-    limit: 1,
-  });
-  const root = inspection.entities[0]?.effective.find(
-    ({ component }) => component === client.components.GuiRoot!.id,
+export async function galleryGuiThemeRow(
+  selector: GalleryGuiSelector,
+  key: {
+    readonly part: string;
+    readonly state?: string;
+    readonly variant?: string;
+  },
+): Promise<Readonly<Record<string, unknown>>> {
+  const control = selectControl(await galleryGuiState(), selector);
+  const panel = await galleryPanel();
+  const module = GALLERY_GENERATED_MODULE;
+  const contract = (await import(module)) as GalleryPaintKeys;
+  const inspection = await panel.client.inspect();
+  const entity = inspection.entities.find(
+    ({ id }) => id === control.target.entity,
   );
-  if (!root) throw new Error("Missing effective GUI demo GuiRoot");
-  type Row = Readonly<Record<string, unknown>>;
-  const table = (field: string) =>
-    (root.fields[field] as { rows: ReadonlyMap<number, Row> } | undefined)
-      ?.rows ?? new Map<number, Row>();
-  let value: unknown;
-  if (part === "background") {
-    // Inspection keys rows by their layout property names.
-    const live = `live_${property}`;
-    const row = [...table("part_state").values()].find(
-      (candidate) => candidate.node === nodeId && candidate.part === 0,
+  const reference: unknown =
+    entity && componentFields(panel.client, entity, "GuiSkin")?.theme;
+  const theme =
+    reference && typeof reference === "object" && "value" in reference
+      ? reference.value
+      : reference;
+  const themeEntity = inspection.entities.find(({ id }) => id === theme);
+  const table = themeEntity
+    ? (componentFields(panel.client, themeEntity, "GuiTheme")?.parts as
+        | { rows?: ReadonlyMap<number, Readonly<Record<string, unknown>>> }
+        | undefined)
+    : undefined;
+  const part = contract.guiPaintPartIndex(key);
+  const row = [...(table?.rows?.values() ?? [])].find(
+    (candidate) => candidate.part === part,
+  );
+  if (!row)
+    throw new Error(
+      `${selector.role} '${selector.name ?? ""}' theme has no ${JSON.stringify(key)} row`,
     );
-    value = row?.[live];
-  } else {
-    const [base, state, variant] = part.split("_") as [
-      GuiBasePart,
-      GuiPartState | undefined,
-      GuiPartVariant | undefined,
-    ];
-    const theme = table("node_style").get(nodeId)?.theme;
-    const rows = [...table("theme_parts")];
-    const first = rows.find(([, row]) => row.theme === theme)?.[0];
-    if (first !== undefined) {
-      const slot =
-        Math.floor(first / GUI_PART_COUNT) * GUI_PART_COUNT +
-        guiPartIndex({ part: base, state, variant });
-      value = table("theme_parts").get(slot)?.[property];
-    }
-  }
-  if (value === undefined)
-    throw new Error(`Missing ${nodeId}:${part}:${property} GUI part value`);
-  return {
-    kind:
-      typeof value === "number"
-        ? "f32"
-        : (value as readonly number[]).length === 4
-          ? "vec4"
-          : "vec2",
-    value,
-  } as DynamicValue;
+  return row;
 }
 
-/** Project a semantic control rectangle into normalized completed-frame bounds. */
-export async function galleryGuiRegion(
+/** Symbolic IDs of the Host's current Worlds. */
+export async function galleryWorlds(): Promise<string[]> {
+  const worlds = await requireCanvas().host.listWorlds();
+  return worlds.map(({ symbolicId }) => symbolicId).sort();
+}
+
+/** Dispatch one identity-checked semantic action for machine-access testing. */
+export async function galleryGuiAction(
   selector: GalleryGuiSelector,
-  insetX = 0.05,
-  insetY = 0.1,
+  action: GuiAction,
+): Promise<GalleryGuiState> {
+  const handle = requireCanvas();
+  const control = selectControl(await galleryGuiState(), selector);
+  const panel = await galleryPanel();
+  const outcome = await guiAction(panel.client, control.target, action);
+  if (!outcome.ok)
+    throw new Error(
+      `Semantic ${action.kind} on ${selector.role} '${selector.name ?? ""}' was ${JSON.stringify(outcome, (_key, value) => (typeof value === "bigint" ? String(value) : value))}`,
+    );
+  await handle.flush();
+  return galleryGuiState();
+}
+
+/** Scan and pulse trace state: the effective Canvas style translation and
+ * opacity of each trace entity, and the controller that drives it. */
+export interface GalleryWaveformTrace {
+  readonly entity: bigint;
+  readonly x: number;
+  readonly opacity: number;
+  readonly controller: AnimationControllerSnapshot | undefined;
+}
+
+export interface GalleryWaveform {
+  readonly scan: GalleryWaveformTrace;
+  readonly pulse: GalleryWaveformTrace;
+  /** Every controller of the panel World. */
+  readonly controllers: readonly AnimationControllerSnapshot[];
+}
+
+/** Read both waveform traces from one panel World inspection. */
+export async function galleryWaveform(flush = true): Promise<GalleryWaveform> {
+  if (flush) await requireCanvas().flush();
+  const panel = await galleryPanel();
+  const inspection = await panel.client.inspect();
+  const trace = (symbol: string): GalleryWaveformTrace => {
+    const entity = inspection.entities.find(
+      ({ metadata }) => metadata.symbolicId === symbol,
+    );
+    if (!entity) throw new Error(`Missing waveform trace ${symbol}`);
+    const style = componentFields(panel.client, entity, "CanvasStyle");
+    return {
+      entity: entity.id,
+      x: Number(style?.x ?? Number.NaN),
+      opacity: Number(style?.opacity ?? Number.NaN),
+      controller: inspection.controllers?.find(({ description }) =>
+        description.drivers.some(({ target }) => target === entity.id),
+      ),
+    };
+  };
+  return {
+    scan: trace("gui-waveform-signal"),
+    pulse: trace("gui-waveform-pulse"),
+    controllers: inspection.controllers ?? [],
+  };
+}
+
+/** Project Surface content points, in Canvas units from its top-left
+ * corner, through the actual panel Surface and camera transforms. */
+export async function projectGalleryGuiContent(
+  points: readonly (readonly [number, number])[],
+) {
+  await requireCanvas().flush();
+  const [{ entity, camera, surface }, density] = await Promise.all([
+    galleryGuiPlacement(),
+    galleryGuiDensity(),
+  ]);
+  const width = Number(surface.width);
+  const height = Number(surface.height);
+  return projectSnapshotPoints(
+    entity,
+    camera,
+    points.map(([x, y]) => [
+      x / density - width / 2,
+      height / 2 - y / density,
+      0,
+    ]),
+  );
+}
+
+/** Project a content rectangle `[minX, minY, maxX, maxY]` into normalized
+ * completed-frame bounds. */
+export async function galleryGuiContentRegion(
+  rect: readonly [number, number, number, number],
 ): Promise<readonly [number, number, number, number]> {
-  const { semantic } = await galleryGuiContext();
-  const node = selectGuiNode(semantic, selector);
-  const corners = await pointsForNode(node, [
-    [insetX, insetY],
-    [1 - insetX, insetY],
-    [insetX, 1 - insetY],
-    [1 - insetX, 1 - insetY],
+  const [minX, minY, maxX, maxY] = rect;
+  const corners = await projectGalleryGuiContent([
+    [minX, minY],
+    [maxX, minY],
+    [minX, maxY],
+    [maxX, maxY],
   ]);
   return [
     Math.min(...corners.map(({ x }) => x)),
@@ -401,15 +825,7 @@ export async function sampleGalleryGuiCapture(
   label: string,
   logicalPoints: readonly (readonly [number, number])[],
 ) {
-  await requireCanvas().flush();
-  const { entity, camera, surface } = await galleryGuiPlacement();
-  const width = Number(surface.fields.width);
-  const height = Number(surface.fields.height);
-  const projected = projectSnapshotPoints(
-    entity,
-    camera,
-    logicalPoints.map(([x, y]) => [x - width / 2, height / 2 - y, 0]),
-  );
+  const projected = await projectGalleryGuiContent(logicalPoints);
   const frame = requireCapture(label);
   return projected.map(({ x, y }) =>
     sample(
@@ -503,16 +919,11 @@ export async function galleryGuiInkBounds(
 /** Project named logical GUI rectangles into completed-frame pixel quads,
  * corners ordered min/min, max/min, max/max, min/max. */
 async function projectGalleryGuiRects(
-  frame: FrameCapture,
+  frame: ViewerFrame,
   rects: Readonly<Record<string, readonly [number, number, number, number]>>,
 ): Promise<Record<string, readonly (readonly [number, number])[]>> {
-  const { entity, camera, surface } = await galleryGuiPlacement();
-  const width = Number(surface.fields.width);
-  const height = Number(surface.fields.height);
   const names = Object.keys(rects);
-  const projected = projectSnapshotPoints(
-    entity,
-    camera,
+  const projected = await projectGalleryGuiContent(
     names.flatMap((name) => {
       const [minX, minY, maxX, maxY] = rects[name]!;
       return [
@@ -520,7 +931,7 @@ async function projectGalleryGuiRects(
         [maxX, minY],
         [maxX, maxY],
         [minX, maxY],
-      ].map(([x, y]) => [x! - width / 2, height / 2 - y!, 0]);
+      ] as const;
     }),
   );
   return Object.fromEntries(
@@ -535,7 +946,7 @@ async function projectGalleryGuiRects(
 
 /** Frame pixels whose centres fall inside a convex quad. */
 function quadPixels(
-  frame: FrameCapture,
+  frame: ViewerFrame,
   quad: readonly (readonly [number, number])[],
 ): (readonly [number, number])[] {
   const inside = (px: number, py: number) => {
@@ -565,7 +976,7 @@ function quadPixels(
 
 /** Channel statistics over pixels whose centres fall inside a convex quad. */
 function quadStats(
-  frame: FrameCapture,
+  frame: ViewerFrame,
   quad: readonly (readonly [number, number])[],
   name: string,
 ): GalleryGuiRegionStats {
@@ -606,72 +1017,79 @@ export function sampleViewerCapture(
   );
 }
 
-let galleryGuiTransformOwner: StateOverlayRef | undefined;
+/**
+ * The panel's Transform fields as they were before the first override. The
+ * component store holds one value, so this helper keeps the authored
+ * placement itself to write it back on release.
+ */
+let galleryGuiTransformOriginal: Readonly<Record<string, number>> | undefined;
+
+/** Write the panel's Transform fields in one batch through its symbolic ID. */
+async function writeGalleryGuiTransform(
+  fields: Readonly<Record<string, number>>,
+  label: string,
+): Promise<void> {
+  const handle = requireCanvas();
+  const component = handle.client.components.Transform!;
+  const result = await handle.client.batch(
+    Object.entries(fields).map(([name, value]) => ({
+      kind: "setField" as const,
+      entity: { kind: "symbol" as const, symbol: GUI_PANEL_ENTITY },
+      component: component.id,
+      field: {
+        offset: component.fields[name]!.offset,
+        value: { kind: "f32" as const, value },
+      },
+    })),
+  );
+  if (!result.ok)
+    throw new Error(`GUI placement ${label} failed: ${result.error.reason}`);
+  await handle.flush();
+}
 
 /**
- * Temporarily override the panel's Transform fields with a StateOverlay
- * attached above the application's own. Later attachments win, and
- * releasing the owner reveals the authored placement again. `replace`
- * releases an attached override in the same batch, so no frame presents the
- * authored placement between the two overrides.
+ * Temporarily override the panel's Transform fields with plain field writes,
+ * keeping the authored placement to write back on release. `replace` writes
+ * a new override over an applied one in the same batch, restoring the
+ * authored value of every field the new override leaves out, so no frame
+ * presents the authored placement between the two overrides.
  */
 export async function overrideGalleryGuiTransform(
   fields: Readonly<Record<string, number>>,
   replace = false,
 ): Promise<void> {
-  const previous = galleryGuiTransformOwner;
-  if (previous && !replace)
-    throw new Error("A GUI placement override is already attached");
+  const original = galleryGuiTransformOriginal;
+  if (original && !replace)
+    throw new Error("A GUI placement override is already applied");
   const handle = requireCanvas();
   await handle.flush();
-  const client = handle.client;
-  const component = client.components.Transform!;
-  const owner = { kind: "alias", alias: 1 } as const;
-  galleryGuiTransformOwner = undefined;
-  const result = await client.batch([
-    ...(previous
-      ? [{ kind: "releaseStateOverlayOwner" as const, owner: previous }]
-      : []),
-    { kind: "createStateOverlayOwner", alias: 1 },
-    {
-      kind: "attachEntityOverlayBinding",
-      owner,
-      alias: 2,
-      symbolicId: "gui-demo",
-      mode: "bound",
-    },
-    {
-      kind: "attachComponentStateOverlay",
-      owner,
-      binding: { kind: "alias", alias: 2 },
-      alias: 3,
-      component: component.id,
-      mode: "bound",
-      fields: Object.entries(fields).map(([name, value]) => ({
-        offset: component.fields[name]!.offset,
-        value: { kind: "f32" as const, value },
-      })),
-    },
-  ]);
-  const created = result.stateOverlays.find(({ alias }) => alias === 1);
-  if (created) galleryGuiTransformOwner = { kind: "handle", id: created.id };
-  if (!result.ok)
-    throw new Error(`GUI placement override failed: ${result.error.reason}`);
-  await handle.flush();
+  const kept =
+    original ??
+    (await (async () => {
+      const [entity] = await galleryEntities([GUI_PANEL_ENTITY]);
+      const current = entity
+        ? componentFields(handle.client, entity, "Transform")
+        : undefined;
+      if (!current) throw new Error("The GUI demo has no Transform");
+      return Object.fromEntries(
+        Object.entries(current).flatMap(([name, value]) =>
+          typeof value === "number" ? [[name, value]] : [],
+        ),
+      );
+    })());
+  galleryGuiTransformOriginal = kept;
+  await writeGalleryGuiTransform(
+    original ? { ...original, ...fields } : fields,
+    "override",
+  );
 }
 
-/** Release the placement override, revealing the authored panel placement. */
+/** Write the kept authored panel placement back. */
 export async function releaseGalleryGuiTransform(): Promise<void> {
-  const owner = galleryGuiTransformOwner;
-  if (!owner) throw new Error("No GUI placement override is attached");
-  galleryGuiTransformOwner = undefined;
-  const handle = requireCanvas();
-  const result = await handle.client.batch([
-    { kind: "releaseStateOverlayOwner", owner },
-  ]);
-  if (!result.ok)
-    throw new Error(`GUI placement release failed: ${result.error.reason}`);
-  await handle.flush();
+  const original = galleryGuiTransformOriginal;
+  if (!original) throw new Error("No GUI placement override is applied");
+  galleryGuiTransformOriginal = undefined;
+  await writeGalleryGuiTransform(original, "release");
 }
 
 /**
@@ -691,7 +1109,7 @@ export async function faceGalleryGuiToCamera(
   const client = handle.client;
   const { entity, camera, surface } = await galleryGuiPlacement();
   const fields = (owner: typeof camera, name: string) =>
-    owner.effective.find(
+    owner.components.find(
       ({ component }) => component === client.components[name]!.id,
     )!.fields;
   const view = fields(camera, "Transform");
@@ -701,10 +1119,11 @@ export async function faceGalleryGuiToCamera(
   const panel = fields(entity, "Transform");
   const rotation = ["qx", "qy", "qz", "qw"].map((key) => Number(view[key]));
   const forward = rotateByQuaternion([0, 0, -1], rotation);
+  const viewport = requireViewport();
   const tanY = Math.tan(Number(projection.fov_y) / 2);
-  const tanX = (tanY * handle.viewport.width) / handle.viewport.height;
-  const width = Number(surface.fields.width) * Number(panel.sx);
-  const height = Number(surface.fields.height) * Number(panel.sy);
+  const tanX = (tanY * viewport.width) / viewport.height;
+  const width = Number(surface.width) * Number(panel.sx);
+  const height = Number(surface.height) * Number(panel.sy);
   const along =
     distance ?? Math.max(width / (2 * tanX * fill), height / (2 * tanY * fill));
   // The panel's +Z front faces the camera when it shares the camera rotation.
@@ -722,13 +1141,17 @@ export async function faceGalleryGuiToCamera(
   );
 }
 
-/** Drive an acknowledged controller through the production animation protocol. */
+/** Drive an acknowledged controller through the production animation
+ * protocol, in the gallery World or, with `panel`, in the GUI panel World. */
 export async function controlGalleryAnimation(
   id: bigint | readonly bigint[],
-  control: import("@ipp/client").AnimationPlaybackControl,
+  control: AnimationPlaybackControl,
+  panel = false,
 ) {
   const handle = requireCanvas();
-  const client = handle.client as import("@ipp/client").AnimationWorldClient;
+  const client = panel
+    ? (await galleryPanel()).client
+    : (handle.client as AnimationWorldClient);
   await Promise.all(
     (typeof id === "bigint" ? [id] : id).map((controller) =>
       client.controlAnimationController(controller, control),
@@ -737,49 +1160,71 @@ export async function controlGalleryAnimation(
   await handle.flush();
 }
 
-/** Dispatch one revision-fenced semantic action for machine-access testing. */
-export async function galleryGuiAction(
-  selector: GalleryGuiSelector,
-  action: GuiSemanticAction,
-) {
-  const { handle, client, semantic } = await galleryGuiContext();
-  const node = selectGuiNode(semantic, selector);
-  await client.semanticAction({
-    entity: semantic.entity,
-    rootIncarnation: semantic.rootIncarnation,
-    node: node.id,
-    expectedRevision: node.revision,
-    action,
-  });
-  await handle.flush();
-  return client.semanticSnapshot({
-    entity: semantic.entity,
-    maxDepth: 32,
-    limit: 256,
-  });
+interface ObservedPhysicalContext {
+  send(input: GuiPhysicalInput): Promise<GuiInputRoutingOutcome>;
+}
+
+/**
+ * The canvas's open physical input context. The Host input connection keeps
+ * its contexts privately; this observation reads that map without changing
+ * which context the canvas selected.
+ */
+function physicalContext(): ObservedPhysicalContext {
+  const input = requireCanvas().host.input as unknown as {
+    readonly contexts: ReadonlyMap<bigint, ObservedPhysicalContext>;
+  };
+  const contexts = [...input.contexts.values()];
+  if (contexts.length !== 1)
+    throw new Error(
+      `Expected one physical input context, found ${contexts.length}`,
+    );
+  return contexts[0]!;
 }
 
 /** Observe the production input path during sustained DOM input, without gating it. */
 export function observeGalleryGuiInput() {
   if (finishGuiInputObservation)
     throw new Error("GUI input observation is already installed");
-  const client = requireCanvas().client as GuiWorldClient;
-  const submit = client.submitGuiInput;
+  const context = physicalContext();
+  const send = context.send;
   const pending = new Set<Promise<unknown>>();
   const observation = {
     sent: 0,
     completed: 0,
     peakPending: 0,
     errors: [] as string[],
+    /** Routing outcomes of presses, releases and wheel samples, and of any
+     * input that rejected or cancelled an action. */
+    outcomes: [] as {
+      input: string;
+      disposition: string;
+      applied: number;
+      rejected: number;
+      cancelled: number;
+    }[],
   };
-  client.submitGuiInput = function (input) {
+  context.send = function (input) {
     observation.sent++;
-    const result = submit.call(this, input);
+    const result = send.call(this, input);
     pending.add(result);
     observation.peakPending = Math.max(observation.peakPending, pending.size);
     void result.then(
-      () => {
+      (outcome) => {
         observation.completed++;
+        if (outcome.error !== undefined) observation.errors.push(outcome.error);
+        if (
+          (outcome.rejected ||
+            outcome.cancelled ||
+            input.kind !== "pointerMove") &&
+          observation.outcomes.length < 64
+        )
+          observation.outcomes.push({
+            input: input.kind,
+            disposition: outcome.disposition,
+            applied: outcome.applied,
+            rejected: outcome.rejected,
+            cancelled: outcome.cancelled,
+          });
         pending.delete(result);
       },
       (error: unknown) => {
@@ -794,7 +1239,7 @@ export function observeGalleryGuiInput() {
   finishGuiInputObservation = async (timeoutMs) => {
     // Restore the production path before waiting, so a stuck submission
     // cannot leave the spy installed.
-    client.submitGuiInput = submit;
+    context.send = send;
     finishGuiInputObservation = undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const settled = await Promise.race([
@@ -818,6 +1263,13 @@ let finishGuiInputObservation:
       completed: number;
       peakPending: number;
       errors: string[];
+      outcomes: {
+        input: string;
+        disposition: string;
+        applied: number;
+        rejected: number;
+        cancelled: number;
+      }[];
     }>)
   | undefined;
 
@@ -827,9 +1279,22 @@ export async function finishGalleryGuiInputObservation(timeoutMs = 10_000) {
   return finishGuiInputObservation(timeoutMs);
 }
 
-/** Execute the gallery's actual generated camera query path for geometry assertions. */
-export function cameraQuery(input: SystemQuery) {
-  return (requireCanvas().client as PickingWorldClient).query(input);
+/** The canvas's selected root binding, the view every camera query names. */
+function selectedView() {
+  const binding = requireCanvas().view?.binding;
+  if (!binding) throw new Error("The gallery presents no root output");
+  return { kind: "bound" as const, binding };
+}
+
+/** Execute the gallery's actual generated camera query path for geometry
+ * assertions, against the selected root binding. */
+export function cameraQuery(
+  input: { readonly type: SystemQuery["type"] } & Record<string, unknown>,
+) {
+  return (requireCanvas().client as PickingWorldClient).query({
+    ...input,
+    view: selectedView(),
+  } as unknown as SystemQuery);
 }
 
 /** Independent projection oracle, then a real query to find an unobscured target. */
@@ -850,17 +1315,17 @@ export async function locateGalleryObject(symbol: string) {
             [0, -0.4, 0],
           ];
   for (const point of await projectGalleryPoints(symbol, offsets)) {
-    const { x, y, viewport } = point;
+    const { x, y } = point;
     if (x < 0 || x > 1 || y < 0 || y > 1) continue;
     const result = await (requireCanvas().client as PickingWorldClient).query({
       type: "GeometryPickQuery",
+      view: selectedView(),
       x,
       y,
-      ...viewport,
       includeViewPlane: true,
     });
     if (result.ok && result.hit?.entity === point.entity)
-      return { ...point, hit: result.hit, camera: result.camera };
+      return { ...point, hit: result.hit, view: result.view };
   }
   throw new Error(`No visible pick point for ${symbol}`);
 }
@@ -878,30 +1343,39 @@ export async function projectGalleryPoints(
 
 /** The GUI demo, its Surface and the gallery camera, read together. */
 async function galleryGuiPlacement() {
-  const client = requireCanvas().client as SurfaceWorldClient;
+  const client = requireCanvas().client;
   const [entity, camera] = await galleryEntities([
-    "gui-demo",
+    GUI_PANEL_ENTITY,
     "gallery-camera",
   ]);
   if (!entity) throw new Error("Missing gallery GUI demo");
   if (!camera) throw new Error("Missing gallery camera");
-  return { entity, camera, surface: guiDemoSurface(client, entity) };
+  const surface = componentFields(client, entity, "Surface");
+  if (!surface) throw new Error("Missing effective GUI demo Surface");
+  return { entity, camera, surface };
+}
+
+function requireViewport() {
+  const viewport = requireCanvas().view?.binding.viewport;
+  if (!viewport) throw new Error("The gallery presents no root output");
+  return viewport;
 }
 
 /** Project object-space offsets through inspected entity and camera fields. */
 function projectSnapshotPoints(
   entity: EntitySnapshot,
   camera: EntitySnapshot,
-  offsets: number[][],
+  offsets: readonly (readonly number[])[],
 ) {
   const handle = requireCanvas();
   const fields = (entity: typeof camera, name: string) =>
-    entity.effective.find(
+    entity.components.find(
       (entry) => entry.component === handle.client.components[name]!.id,
     )!.fields;
   const object = fields(entity, "Transform");
   const view = fields(camera, "Transform");
   const projection = fields(camera, "Camera");
+  const viewport = requireViewport();
   const bounds = document
     .querySelector<HTMLCanvasElement>("#ipp-world-canvas")!
     .getBoundingClientRect();
@@ -928,8 +1402,7 @@ function projectSnapshotPoints(
         : -cameraPoint[2]! * Math.tan(Number(projection.fov_y) / 2);
     const x =
       0.5 +
-      cameraPoint[0]! /
-        ((2 * halfHeight * handle.viewport.width) / handle.viewport.height);
+      cameraPoint[0]! / ((2 * halfHeight * viewport.width) / viewport.height);
     const y = 0.5 - cameraPoint[1]! / (2 * halfHeight);
     return {
       entity: entity.id,
@@ -937,12 +1410,15 @@ function projectSnapshotPoints(
       y,
       clientX: bounds.left + x * bounds.width,
       clientY: bounds.top + y * bounds.height,
-      viewport: handle.viewport,
+      viewport: {
+        width: viewport.width,
+        height: viewport.height,
+        devicePixelRatio: viewport.devicePixelRatio,
+      },
     };
   });
 }
 
-/** Wait for browser input batching, then use real inspection as an ingress barrier. */
 /**
  * Replace decoded schema rows tables' `Map` rows with plain records keyed by
  * slot, so inspections cross the page boundary intact.
@@ -951,13 +1427,9 @@ function plainRowsTables<T>(inspection: T): T {
   const entities = (inspection as { entities?: readonly unknown[] }).entities;
   for (const entity of entities ?? []) {
     const record = entity as {
-      base?: readonly { fields: Record<string, unknown> }[];
-      effective?: readonly { fields: Record<string, unknown> }[];
+      components?: readonly { fields: Record<string, unknown> }[];
     };
-    for (const component of [
-      ...(record.base ?? []),
-      ...(record.effective ?? []),
-    ])
+    for (const component of record.components ?? [])
       for (const [name, value] of Object.entries(component.fields)) {
         const table = value as { nextSlot?: unknown; rows?: unknown };
         if (table?.rows instanceof Map)
@@ -970,6 +1442,7 @@ function plainRowsTables<T>(inspection: T): T {
   return inspection;
 }
 
+/** Wait for browser input batching, then use real inspection as an ingress barrier. */
 export async function settleGalleryInput() {
   await awaitGalleryIngress();
   return plainRowsTables(await requireCanvas().client.inspect());
@@ -985,7 +1458,7 @@ export async function awaitGalleryIngress(): Promise<void> {
 let heldReply:
   | { release(): void; arrived: boolean; outcome?: unknown }
   | undefined;
-let heldPresentationCapture:
+let heldPresentedFrame:
   | { release(): void; arrived: boolean; outcome?: unknown }
   | undefined;
 
@@ -1039,7 +1512,7 @@ export function delayNextComponentBatch(name: string) {
     outcome: undefined as unknown,
   };
   heldReply = state;
-  client.batch = async (operations, batchId) => {
+  client.batch = async (operations) => {
     if (
       !operations.some(
         (operation) =>
@@ -1047,13 +1520,58 @@ export function delayNextComponentBatch(name: string) {
           operation.component === component,
       )
     )
-      return batch.call(client, operations, batchId);
+      return batch.call(client, operations);
     client.batch = batch;
-    const outcome = await batch.call(client, operations, batchId);
+    const outcome = await batch.call(client, operations);
     state.outcome = outcome;
     state.arrived = true;
     await gate;
     return outcome;
+  };
+}
+
+/**
+ * Hold the next gallery World batch containing an operation of `kind`, on
+ * the named component when given, before it reaches the Host, such as the
+ * field writes a React render submits. `queryReplyHeld` reports the held
+ * request; releasing it submits the unchanged batch in order.
+ */
+export function delayNextBatchSubmission(
+  kind: Command["kind"],
+  componentName?: string,
+) {
+  if (heldReply) throw new Error("A reply is already delayed");
+  const client = requireCanvas().client;
+  const batch = client.batch;
+  const component =
+    componentName === undefined
+      ? undefined
+      : client.components[componentName]!.id;
+  const matches = (operation: Command) =>
+    operation.kind === kind &&
+    (component === undefined ||
+      ("component" in operation && operation.component === component));
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const state = {
+    release: () => {
+      client.batch = batch;
+      release();
+      heldReply = undefined;
+    },
+    arrived: false,
+    outcome: undefined as unknown,
+  };
+  heldReply = state;
+  client.batch = async (operations) => {
+    if (!operations.some(matches)) return batch.call(client, operations);
+    client.batch = batch;
+    state.outcome = { operations: operations.length };
+    state.arrived = true;
+    await gate;
+    return batch.call(client, operations);
   };
 }
 
@@ -1076,9 +1594,9 @@ export function delayNextBatch() {
     outcome: undefined as unknown,
   };
   heldReply = state;
-  client.batch = async (operations, batchId) => {
+  client.batch = async (operations) => {
     client.batch = batch;
-    const outcome = await batch.call(client, operations, batchId);
+    const outcome = await batch.call(client, operations);
     state.outcome = outcome;
     state.arrived = true;
     await gate;
@@ -1086,68 +1604,38 @@ export function delayNextBatch() {
   };
 }
 
-/** Hold the next real GUI edit acknowledgement after the Host commits it. */
-export function delayNextGuiBatch() {
-  if (heldReply) throw new Error("A reply is already delayed");
-  const client = requireCanvas().client as GuiWorldClient;
-  const editGuiBatch = client.editGuiBatch;
+/** Delay the canvas's next completed-frame observation after the Host
+ * presents it, so startup readiness cannot precede it. */
+export function delayNextPresentedFrame() {
+  if (heldPresentedFrame)
+    throw new Error("A presented frame is already delayed");
+  const handle = requireCanvas();
+  const frame = handle.frame;
   let release!: () => void;
   const gate = new Promise<void>((resolve) => {
     release = resolve;
   });
   const state = {
     release: () => {
-      client.editGuiBatch = editGuiBatch;
+      handle.frame = frame;
       release();
-      heldReply = undefined;
+      heldPresentedFrame = undefined;
     },
     arrived: false,
     outcome: undefined as unknown,
   };
-  heldReply = state;
-  client.editGuiBatch = async (edits) => {
-    client.editGuiBatch = editGuiBatch;
-    const outcome = await editGuiBatch.call(client, edits);
-    state.outcome = outcome;
-    state.arrived = true;
-    await gate;
-    return outcome;
-  };
-}
-
-/** Delay a completed renderer capture so startup readiness cannot precede it. */
-export function delayNextPresentationCapture() {
-  if (heldPresentationCapture)
-    throw new Error("A presentation capture is already delayed");
-  const presentation = requireCanvas().client.presentation;
-  if (!presentation) throw new Error("The gallery renderer is unavailable");
-  const capture = presentation.capture;
-  let release!: () => void;
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const state = {
-    release: () => {
-      presentation.capture = capture;
-      release();
-      heldPresentationCapture = undefined;
-    },
-    arrived: false,
-    outcome: undefined as unknown,
-  };
-  heldPresentationCapture = state;
-  presentation.capture = async (afterTick) => {
-    presentation.capture = capture;
-    const frame = await capture.call(presentation, afterTick);
+  heldPresentedFrame = state;
+  handle.frame = async (options) => {
+    handle.frame = frame;
+    const presented: PresentedFrame = await frame.call(handle, options);
     state.outcome = {
-      session: frame.session,
-      tick: frame.tick,
-      width: frame.width,
-      height: frame.height,
+      sequence: presented.sequence,
+      drawCalls: presented.drawCalls,
+      failedDrawCalls: presented.failedDrawCalls,
     };
     state.arrived = true;
     await gate;
-    return frame;
+    return presented;
   };
 }
 
@@ -1223,12 +1711,12 @@ export function releaseQuery() {
   heldReply?.release();
 }
 
-export function presentationCaptureHeld() {
-  return heldPresentationCapture?.arrived === true;
+export function presentedFrameHeld() {
+  return heldPresentedFrame?.arrived === true;
 }
 
-export function releasePresentationCapture() {
-  heldPresentationCapture?.release();
+export function releasePresentedFrame() {
+  heldPresentedFrame?.release();
 }
 
 export function countViewerColors(
@@ -1282,15 +1770,18 @@ export async function captureViewer(
   waitForResources = true,
 ): Promise<ViewerBrowserCapture> {
   if (!label) throw new Error("Capture label must be nonempty");
-  const { frame, ...captured } = await captureCanvas(requireCanvas(), {
-    waitForResources,
-  });
+  const {
+    frame: presented,
+    tick,
+    statistics,
+    ...captured
+  } = await captureCanvas(requireCanvas(), { waitForResources });
+  const frame = viewerFrame(presented, tick, statistics);
   const observation = {
     ...captured,
     inspection: plainRowsTables(captured.inspection),
   };
-  const stored = { ...frame, pixels: frame.pixels.slice(0) };
-  captures.set(label, stored);
+  captures.set(label, { ...frame, pixels: frame.pixels.slice(0) });
   const { pixels: _pixels, ...metadata } = frame;
   return {
     ...observation,
@@ -1301,15 +1792,25 @@ export async function captureViewer(
   };
 }
 
-/** Capture committed presentation state without waiting for React reconciliation. */
+/** Capture presented state without waiting for React reconciliation: the
+ * completed draw includes content already admitted when it is requested. */
 export async function captureUnflushedViewer(label: string) {
   if (!label) throw new Error("Capture label must be nonempty");
   const handle = requireCanvas();
-  const presentation = handle.client.presentation;
-  if (!presentation) throw new Error("The gallery renderer is unavailable");
-  // The World summary names the current tick without inspecting every entity.
-  const { tick } = await handle.client.inspectPage();
-  const frame = await presentation.capture(tick);
+  const view = handle.view;
+  if (!view) throw new Error("The gallery presents no root output");
+  const captured = await handle.host.presentation.capture(view, {
+    afterOutputs: [view.binding.output],
+  });
+  const source = captured.sources.find(({ output }) =>
+    sameOutputReference(output, view.binding.output),
+  );
+  if (!source) throw new Error("Completed draw omitted the selected output");
+  const frame = viewerFrame(
+    captured,
+    source.tick,
+    await handle.host.renderDiagnostics?.statistics(),
+  );
   captures.set(label, { ...frame, pixels: frame.pixels.slice(0) });
   const { pixels: _pixels, ...metadata } = frame;
   return { label, frame: metadata, summary: summarizeImage(frame) };
@@ -1525,14 +2026,14 @@ function requireCanvas(): IppCanvasHandle {
   return handle;
 }
 
-function requireCapture(label: string): FrameCapture {
+function requireCapture(label: string): ViewerFrame {
   const frame = captures.get(label);
   if (!frame) throw new Error(`Missing viewer capture '${label}'`);
   return frame;
 }
 
 function projectPlanePoint(
-  frame: FrameCapture,
+  frame: ViewerFrame,
   x: number,
   y: number,
 ): readonly [number, number] {
@@ -1579,7 +2080,7 @@ function dot(a: readonly number[], b: readonly number[]): number {
 }
 
 function sample(
-  frame: FrameCapture,
+  frame: ViewerFrame,
   x: number,
   y: number,
 ): [number, number, number, number] {
@@ -1593,7 +2094,7 @@ function sample(
   ];
 }
 
-async function frameDataUrl(frame: FrameCapture): Promise<string> {
+async function frameDataUrl(frame: ViewerFrame): Promise<string> {
   const canvas = document.createElement("canvas");
   canvas.width = frame.width;
   canvas.height = frame.height;

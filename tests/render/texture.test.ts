@@ -31,7 +31,7 @@ import { requireVisible } from "./image-assertions.js";
 
 const workspace = resolve(process.cwd());
 const render = browserBuild("render");
-const overlays = browserBuild("headless");
+const headless = browserBuild("headless");
 
 for (const variant of ["development", "production"] as const) {
   test(`${variant}: textured React scenes preserve exact sampling and retained recovery`, {
@@ -44,7 +44,7 @@ for (const variant of ["development", "production"] as const) {
       {
         workspace,
         build: render,
-        mismatchBuild: overlays,
+        mismatchBuild: headless,
         operationTimeoutMs: 12_000,
         closeTimeoutMs: 5_000,
         evidenceParent: resolve(
@@ -614,7 +614,6 @@ for (const variant of ["development", "production"] as const) {
           );
 
           return {
-            session: sampler.session,
             firstTick: checker.tick,
             finalTick: recovery.after.tick,
             captures: [...captured],
@@ -638,7 +637,6 @@ for (const variant of ["development", "production"] as const) {
         }
       },
     );
-    assert.ok(result.value.session > 0n);
     assert.ok(result.value.finalTick > result.value.firstTick);
     assert.equal(result.value.captures.length, 12);
     assert.equal(result.value.resourceCount, 5);
@@ -659,7 +657,7 @@ test("changed HTTP content cannot refresh an unloaded resource", {
     {
       workspace,
       build: render,
-      mismatchBuild: overlays,
+      mismatchBuild: headless,
       operationTimeoutMs: 12_000,
       evidenceParent: resolve(
         workspace,
@@ -1024,7 +1022,7 @@ interface QuadSetupReport {
 }
 
 interface RecoveryReport {
-  readonly beforeGeneration: number;
+  readonly beforeGeneration: bigint;
   readonly after: CaptureReport;
   readonly resourceCountBefore: number;
   readonly resourceCountAfter: number;

@@ -3,30 +3,37 @@
 mod codec;
 
 pub mod asset_source;
+pub mod attachment_receipts;
 pub mod host;
+#[cfg(feature = "diagnostics")]
+pub mod lifecycle_diagnostics;
+pub mod lifecycle_watch;
+pub mod presentation;
+/// Owned, untrusted transport reference tokens and exact Host resolution.
+pub mod references;
+pub mod views;
 
 #[cfg(feature = "schema-export")]
 mod fixture;
 
 #[cfg(feature = "gui")]
-mod observations;
+pub mod gui;
+#[cfg(feature = "gui")]
+pub mod gui_input;
 mod wire;
 pub use codec::{
-    ProtocolError, decode_request, decode_request_with_buffer, encode_response,
-    encode_response_into,
+    ProtocolError, RejectedBatchPage, RequestDecodeError, decode_request,
+    decode_request_with_buffer, decode_world_request, encode_response, encode_response_into,
+    encoded_response_size, is_batch_page,
 };
 #[cfg(feature = "schema-export")]
 pub use fixture::{check as check_layout_fixture, export as export_layout_fixture};
-#[cfg(feature = "gui")]
-pub use observations::{
-    GUI_OBSERVATION_TEXT_BYTES, GUI_OBSERVATIONS_PER_MESSAGE, gui_observation_bodies,
-};
 
+use ipp_core::EntitySnapshot;
 /// Runtime trait path used by target fixture derives.
 #[cfg(feature = "schema-export")]
 pub use ipp_core::components::schema;
 use ipp_core::components::schema::{ContractHash, ContractSink};
-use ipp_core::{Batch, BatchOutcome, EntitySnapshot};
 
 /// Fixed schema-independent bootstrap marker.
 pub const MAGIC: [u8; 4] = *b"IPPB";
@@ -36,6 +43,131 @@ pub const VERSION: u32 = 2;
 
 /// Maximum complete application message, before decoding or allocation.
 pub const MAX_MESSAGE_BYTES: usize = 1_048_576;
+
+/// Most lifecycle publications in one response; a session's drained observations span as
+/// many responses as they need.
+pub const MAX_LIFECYCLE_PUBLICATIONS: usize = 128;
+
+/// Maximum commands in one batch page; larger batches span several pages.
+///
+/// 1024 commands carry about 78 thirteen-command GUI rows, so ordinary edits
+/// travel as one page. A full page's command slots (1024 × at most
+/// [`ipp_core::MAX_COMMAND_INLINE_BYTES`] = 128 KiB) fit one recycled World
+/// command buffer, which the Host decodes pages into.
+pub const COMMAND_PAGE_COMMANDS: usize = 1024;
+
+const _: () = assert!(COMMAND_PAGE_COMMANDS <= ipp_core::RECYCLED_COMMAND_BUFFER_COMMANDS);
+
+/// Maximum encoded bytes of one batch page message.
+///
+/// Measured commands encode to 41 bytes on average for GUI rows and 89 for
+/// Blender scenes, but URL-bearing mesh instances take about 150 bytes, so
+/// 1024 of them would exceed 128 KiB. 256 KiB lets pages of commands up to
+/// about 250 bytes reach [`COMMAND_PAGE_COMMANDS`], so the command limit rather
+/// than the byte limit decides page size, while staying a quarter of
+/// [`MAX_MESSAGE_BYTES`].
+pub const COMMAND_PAGE_BYTES: usize = 256 * 1024;
+
+/// Most entity aliases and symbol reports one batch outcome carries for one
+/// logical batch.
+///
+/// A batch is answered once, on its final page, with every alias it defined and
+/// every symbol and handle its symbolic references resolved to, so this bounds
+/// the whole batch; the Host rejects a batch that defines more aliases or can
+/// report more symbols before it applies. Symbol text counts against the reply's
+/// message size at the same admission. Each alias report encodes to 12 bytes,
+/// so a full alias list takes 384 KiB, within [`MAX_MESSAGE_BYTES`]; it is
+/// about three times the entities of the maintained 40,064-command Blender
+/// stress import, which the Host answers in one reply. Commands that define
+/// no alias add only their symbol reports and applied effects to the reply.
+pub const BATCH_OUTCOME_ALIASES: usize = 32_768;
+
+const _: () = assert!(COMMAND_PAGE_COMMANDS <= BATCH_OUTCOME_ALIASES);
+
+/// Most applied effects one batch outcome carries: as many of the smallest, an
+/// adoption report of [`attachment_receipts::ADOPTED_EFFECT_BYTES`], as one
+/// message holds.
+///
+/// The Host reserves each effect's encoded size in the batch's reply before the
+/// effect can apply (adoption reports with the batch, attachment effects per
+/// operation), so the message size rather than this count decides how many
+/// effects one outcome reports.
+pub const BATCH_OUTCOME_EFFECTS: usize =
+    MAX_MESSAGE_BYTES / attachment_receipts::ADOPTED_EFFECT_BYTES;
+
+/// Largest ordinary text or byte field: names, symbolic identities, sources, reasons,
+/// dynamic property values and transfer chunks.
+///
+/// Protocol framing limit. 64 KiB keeps any single field a small share of
+/// [`MAX_MESSAGE_BYTES`], so one message still carries several; encoding a longer field
+/// fails and decoding one reports a limit error.
+pub const MAX_FIELD_BYTES: usize = 65_536;
+
+/// Classes one entity's metadata carries on the wire.
+///
+/// Classes are short authoring labels; 256 is far beyond any maintained scene while keeping
+/// metadata a bounded share of a command page. Longer lists fail to encode or decode.
+pub const MAX_METADATA_CLASSES: usize = 256;
+
+/// Field values one `InsertComponent` command writes.
+///
+/// Matches the widest compiled component, whose field count stays well under 256; a
+/// longer list fails to encode or decode.
+pub const MAX_INSERT_FIELDS: usize = 256;
+
+/// Records of one kind in one inspection or entity-tree page, and the largest page a
+/// query may request.
+///
+/// Inspection pages; a query continues from the returned cursor. 256 records of the
+/// largest kind stay within [`MAX_MESSAGE_BYTES`]; a larger requested page is malformed.
+pub const INSPECTION_PAGE_RECORDS: usize = 256;
+
+/// Components one inspected entity reports in a page.
+///
+/// Bounded by the compiled component registry, well under 256; a longer list fails to
+/// encode or decode.
+pub const MAX_INSPECTED_COMPONENTS: usize = 256;
+
+/// Fields one inspected component reports: at most one per 16-bit schema offset.
+pub const MAX_INSPECTED_FIELDS: usize = 65_536;
+
+/// Deepest descendant level an entity-tree query may request below its root.
+///
+/// A query page never descends further; deeper descendants are reached by querying from
+/// a deeper root. Larger requests are malformed.
+pub const MAX_ENTITY_TREE_DEPTH: u16 = 64;
+
+/// Resources one resource event reports; the Host splits larger sets across events.
+pub const MAX_RESOURCE_EVENT_RECORDS: usize = 128;
+
+/// Playback events one response reports; the Host splits larger sets across responses.
+pub const MAX_PLAYBACK_EVENTS: usize = 1024;
+
+/// UTF-8 bytes of a batch-abort or runtime-failure message; longer diagnostics are
+/// truncated by their producer and refused by the codec.
+pub const MAX_FAILURE_MESSAGE_BYTES: usize = 2048;
+
+/// Property offsets or joint indices one animation target names.
+///
+/// 4096 covers every field of the widest component and every joint of a skeleton many
+/// times over; a longer list fails to encode or decode.
+pub const MAX_ANIMATION_TARGET_INDICES: usize = 4096;
+
+/// One page of a logical batch under a client-assigned identity.
+///
+/// The client keeps `batch_id` unique among its connection's open batches. Pages
+/// append in arrival order; the page with `last` set completes the batch, which
+/// the Host then applies as one ordered batch. Only the final page carries a
+/// correlated request identity and receives a reply.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BatchPage {
+    /// Client-assigned identity, unique among the connection's open batches.
+    pub batch_id: u32,
+    /// Whether this page completes the batch.
+    pub last: bool,
+    /// Commands of this page, in order.
+    pub operations: Vec<ipp_core::Command>,
+}
 
 /// A request already fenced to the host's current session.
 #[derive(Clone, Debug, PartialEq)]
@@ -51,34 +183,23 @@ pub struct Request {
 /// Implemented request surface. Other tags reject explicitly.
 #[derive(Clone, Debug, PartialEq)]
 pub enum RequestBody {
-    /// Correlated incremental edit of a Surface's ordered items.
-    #[cfg(feature = "surfaces")]
-    SurfaceCommand(ipp_core::systems::surface::SurfaceCommand),
-    /// Correlated ordered GUI edits. A logical batch identity retains the
-    /// Host's World gate across byte-bounded buffers until explicit finish.
-    #[cfg(feature = "gui")]
-    GuiCommands {
-        /// Host-issued logical batch identity for a non-final buffer.
-        batch_id: Option<u64>,
-        /// Edits in this bounded buffer; execution stops at the first failure.
-        commands: Vec<ipp_core::systems::gui::GuiCommand>,
+    /// Observe or explicitly release a receipt in this exact session.
+    AttachmentReceipt {
+        /// Session-owned receipt handle.
+        receipt: u64,
+        /// Drop this handle instead of observing its retirement.
+        release: bool,
     },
-    /// Bounded inspection query of an authoritative GUI tree.
+    /// Ordered independent applied-effect observation registration.
     #[cfg(feature = "gui")]
-    GuiInspect(ipp_core::systems::gui::GuiInspectQuery),
-    /// Correlated routing of one ordered pointer/keyboard/text input; boxed
-    /// because text and blocker lists carry owned payloads.
-    #[cfg(feature = "gui")]
-    GuiInput(Box<ipp_core::GuiInputCommand>),
-    /// Correlated bounded semantic snapshot query for one panel.
-    #[cfg(feature = "gui")]
-    GuiSemanticSnapshot(ipp_core::GuiSemanticSnapshotQuery),
-    /// Correlated semantic action dispatched through the validated
-    /// control policy; boxed because set-text carries an owned payload.
-    #[cfg(feature = "gui")]
-    GuiSemanticAction(Box<ipp_core::GuiSemanticActionRequest>),
+    GuiObservation(gui::GuiObservationRequest),
     /// Ordered World/session lifecycle subscription control.
     LifecycleSubscription(ipp_core::systems::lifecycle_publisher::LifecyclePublisherCommand),
+    /// Ordered exact-target memberships with a sole owned typed acknowledgement.
+    LifecycleWatch(lifecycle_watch::LifecycleWatchRequest),
+    /// Diagnostic-only read fenced to one already acknowledged endpoint.
+    #[cfg(feature = "diagnostics")]
+    LifecycleDiagnostics(lifecycle_diagnostics::LifecycleDiagnosticQuery),
     /// Control a World-owned animation controller without a reply.
     AnimationPlaybackCommand {
         /// World-local controller.
@@ -88,27 +209,21 @@ pub enum RequestBody {
     },
     /// Correlated controller creation, editing, deletion or playback.
     AnimationController(ipp_core::systems::animation::AnimationControllerCommand),
-    /// Allocate a unique logical batch identity for this World session.
-    BeginBatch,
-    /// Explicitly terminate a logical batch, independently of buffer size.
-    EndBatch(u64),
-    /// Apply a bounded buffer without completing the logical batch.
-    BatchChunk(Batch),
-    /// Queue this indivisible command sequence through the core.
-    Batch(Batch),
-    /// Select a valid scene camera at the ordered mutation boundary.
-    CameraActivateCommand {
-        /// Permanent entity identity in this session.
-        entity: ipp_core::EntityId,
-    },
-    /// Navigate the active camera through ordinary component base updates.
-    CameraNavigateCommand(ipp_core::CameraMotion),
+    /// One page of a client-identified logical batch. The Host applies the
+    /// whole batch once, when its final page arrives, and answers only that page.
+    SubmitBatch(BatchPage),
     /// Query final evaluated interaction geometry without advancing host time.
-    GeometryPickQuery(ipp_core::GeometryPickQuery),
+    GeometryPickQuery(views::GeometryPickQuery),
     /// Project a viewport ray onto a world-space plane without scene mutation.
-    CameraProjectQuery(ipp_core::CameraProjectQuery),
+    CameraProjectQuery(views::CameraProjectQuery),
+    /// View-fenced Camera producer navigation with an ordered correlated outcome.
+    CameraNavigate(views::CameraNavigateRequest),
     /// Patch session render settings at the ordered mutation boundary.
     RenderStateUpdateCommand(ipp_core::RenderStatePatch),
+    /// Sparse Canvas System state update at the ordered mutation boundary;
+    /// uncorrelated, and a rejected update is reported only as a diagnostic.
+    #[cfg(feature = "surfaces")]
+    CanvasStateUpdateCommand(ipp_core::CanvasStateUpdate),
     /// Read committed world state at the next host frame.
     Inspect(InspectionQuery),
 }
@@ -116,7 +231,11 @@ pub enum RequestBody {
 /// Bounded read of one inspection collection. Zero target selects a page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct InspectionQuery {
-    /// Summary=0, entities=1, resources=2, controllers=3, render diagnostics=4.
+    /// Summary=0, entities=1, resources=2, controllers=3, render diagnostics=4,
+    /// tree=5; in GUI builds also the GUI System queries GuiFocus=6 and
+    /// GuiPointers=7, whose identity cursor and target are entity identities;
+    /// in Surface builds also the Canvas System query Canvas=8, one record
+    /// without cursor or target.
     pub collection: u8,
     /// Exclusive identity cursor, zero for the first page.
     pub after: u64,
@@ -124,6 +243,8 @@ pub struct InspectionQuery {
     pub target: u64,
     /// Maximum records, in 1..=256.
     pub limit: u16,
+    /// Maximum descendant depth for tree reads, in 0..=64.
+    pub max_depth: u16,
 }
 
 impl Default for InspectionQuery {
@@ -133,6 +254,7 @@ impl Default for InspectionQuery {
             after: 0,
             target: 0,
             limit: 256,
+            max_depth: 0,
         }
     }
 }
@@ -144,7 +266,7 @@ pub struct Response {
     pub session: u64,
     /// Original nonzero request identity, or zero for an unsolicited event.
     pub request_id: u64,
-    /// Observed core frame.
+    /// Observed core frame; GUI terminals carry their effect tick or zero for no effect.
     pub tick: u64,
     /// Owned result.
     pub body: ResponseBody,
@@ -167,52 +289,14 @@ pub enum RuntimeFailureScope {
 /// Host results preserve semantic errors separately from codec errors.
 #[derive(Clone, Debug)]
 pub enum ResponseBody {
-    /// Successful correlated Surface edit.
-    #[cfg(feature = "surfaces")]
-    SurfaceCommand,
-    /// Correlated GUI edit group, including a successful prefix on failure.
+    /// Camera navigation committed at the reported World mutation tick.
+    CameraNavigated,
+    /// Constant-size diagnostic sample, not a completed frame or applied effect.
+    #[cfg(feature = "diagnostics")]
+    LifecycleDiagnostics(lifecycle_diagnostics::LifecycleDiagnosticSample),
+    /// Ordered registration marker or immutable applied observation; outer tick is zero.
     #[cfg(feature = "gui")]
-    GuiCommands {
-        /// Commands that completed successfully before the first failure.
-        applied: u32,
-        /// Runtime rejection of the next command; absent on full success.
-        error: Option<ipp_core::ErrorReason>,
-    },
-    /// Bounded inspection response for a GUI root or subtree.
-    #[cfg(feature = "gui")]
-    GuiInspect(ipp_core::systems::gui::GuiInspectResponse),
-    /// Authoritative routing disposition for one correlated GUI input.
-    #[cfg(feature = "gui")]
-    GuiInput {
-        /// Source tick whose current layout and camera routed the input.
-        tick: u64,
-        /// Why no GUI target accepted the input; absent when GUI handled it.
-        unhandled: Option<ipp_core::GuiUnhandledReason>,
-    },
-    /// Correlated bounded semantic snapshot of one panel.
-    #[cfg(feature = "gui")]
-    GuiSemanticSnapshot(ipp_core::GuiSemanticTree),
-    /// Unsolicited committed GUI observations, chunked like Resources.
-    /// Committed control effects with their conflicts and cancellations;
-    /// broadcast committed state to every session on the World.
-    #[cfg(feature = "gui")]
-    GuiObservations {
-        /// Committed button presses and control values with ticks and paths.
-        effects: Vec<ipp_core::GuiInputEffect>,
-        /// Arbitration and admission conflicts, reported separately.
-        conflicts: Vec<ipp_core::GuiInputConflict>,
-        /// Routed inputs cancelled before application, never mixed with effects.
-        cancellations: Vec<ipp_core::GuiInputCancellation>,
-        /// Supplier-private authoritative native text bridge update.
-        text_focus_updates: Vec<ipp_core::GuiTextFocusUpdate>,
-    },
-    /// Unsolicited unhandled GUI inputs for scene fallback, chunked like
-    /// Resources. Supplier session only; raw input stays private.
-    #[cfg(feature = "gui")]
-    GuiUnhandledInputs {
-        /// Well-formed inputs that reached no GUI target, with reasons.
-        inputs: Vec<ipp_core::GuiUnhandledInput>,
-    },
+    GuiObservation(ipp_core::systems::gui::observations::GuiObservationRecord),
     /// Recoverable execution diagnostic, independent of command outcomes.
     RuntimeFailure {
         /// Boundary affected by the failure.
@@ -224,31 +308,34 @@ pub enum ResponseBody {
     },
     /// Successful correlated lifecycle subscription change.
     LifecycleSubscription,
-    /// Applied lifecycle observations or terminal queue overflow.
+    /// Applied lifecycle observations, at most [`MAX_LIFECYCLE_PUBLICATIONS`] per response.
     LifecycleEvents(ipp_core::systems::lifecycle_publisher::LifecyclePublisherOutput),
     /// Successful controller mutation; creation returns its fresh identity.
     AnimationController(Option<ipp_core::systems::animation::AnimationControllerId>),
     /// Ordered controller transitions, published at the completed frame.
     PlaybackEvents(Vec<ipp_core::systems::animation::AnimationPlaybackEvent>),
-    /// Fresh Host-issued logical batch identity.
-    BatchStarted(u64),
-    /// Logical batch terminated; the World may resume evaluation.
-    BatchFinished(u64),
-    /// Unsolicited terminal failure of a logical batch. Applied effects remain.
+    /// Unsolicited failure of an incomplete batch whose next page did not arrive
+    /// within the Host's progress deadline. Nothing of the batch was applied; its
+    /// final page, if it still arrives, is rejected with the same failure.
     BatchAborted {
-        /// Identity that can no longer accept buffers.
+        /// Client-assigned identity of the failed batch.
         batch_id: u64,
         /// Bounded failure detail.
         message: String,
     },
     /// Applied command-buffer outcome from the actual World.
-    Batch(BatchOutcome),
-    /// Sparse committed camera-system state change.
-    CameraStateChangedEvent(ipp_core::CameraStateChange),
+    Batch(attachment_receipts::ReceiptBatchOutcome),
+    /// Receipt release acknowledgement, or its current retirement observation.
+    AttachmentReceipt {
+        /// Correlated session-owned handle.
+        receipt: u64,
+        /// None acknowledges release; false is pending, true is terminal retirement.
+        retired: Option<bool>,
+    },
     /// Terminal correlated geometry result, including evaluated camera identity.
-    GeometryPickResultEvent(ipp_core::GeometryPickOutcome),
+    GeometryPickResultEvent(views::GeometryPickOutcome),
     /// Terminal correlated camera/plane projection result.
-    CameraProjectResultEvent(ipp_core::CameraProjectOutcome),
+    CameraProjectResultEvent(views::CameraProjectOutcome),
     /// Sparse committed render-system settings change.
     RenderStateUpdatedEvent(ipp_core::RenderStateChange),
     /// Unsolicited notification after a completed host-owned frame.
@@ -261,7 +348,7 @@ pub enum ResponseBody {
         /// At most 128 ordered lifecycle observations; one resource may report several transitions.
         resources: Vec<ipp_core::AssetResourceSnapshot>,
     },
-    /// Read-only authored/effective state.
+    /// Read-only entity state.
     Inspect {
         /// Exclusive continuation cursor; zero marks completion.
         next: u64,
@@ -275,11 +362,24 @@ pub enum ResponseBody {
         resources: Vec<ipp_core::AssetResourceSnapshot>,
         /// Per-entity render compatibility failures.
         render_diagnostics: Vec<ipp_core::RenderDiagnostic>,
+        /// GUI System query: logical focus.
+        #[cfg(feature = "gui")]
+        gui_focus: Vec<ipp_core::systems::gui::local::GuiFocusRecord>,
+        /// GUI System query: live pointer feedback, by target entity then pointer.
+        #[cfg(feature = "gui")]
+        gui_pointers: Vec<ipp_core::systems::gui::local::GuiPointerRecord>,
+        /// Canvas System query: the World canvas's state and last evaluated extent.
+        #[cfg(feature = "surfaces")]
+        canvas: Option<ipp_core::CanvasStateRecord>,
     },
-    /// Scoped strict-lifecycle losses after a completed mutation boundary.
-    Lifecycle {
-        /// Invalidations in deterministic operation order.
-        diagnostics: Vec<ipp_core::StateOverlayLifecycleDiagnostic>,
+    /// Bounded hierarchy in depth-first sibling order.
+    EntityTree {
+        /// Exclusive continuation identity, zero when complete.
+        next: u64,
+        /// Total supplied simulation time.
+        time: f64,
+        /// Ordered nodes in the requested root or forest.
+        nodes: Vec<EntityTreeNode>,
     },
     /// Explicit host rejection.
     Error {
@@ -288,6 +388,19 @@ pub enum ResponseBody {
         /// Human-readable diagnostic.
         message: String,
     },
+}
+
+/// One hierarchy node and its depth relative to the requested root.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EntityTreeNode {
+    /// Entity identity.
+    pub id: ipp_core::EntityId,
+    /// Parent, if any.
+    pub parent: Option<ipp_core::EntityId>,
+    /// Full sibling order label.
+    pub order: u128,
+    /// Depth relative to the requested root or forest.
+    pub depth: u16,
 }
 
 fn write_contract(sink: &mut impl ContractSink) {

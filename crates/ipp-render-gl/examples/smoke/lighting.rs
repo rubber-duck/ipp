@@ -165,7 +165,7 @@ pub fn run<D: RenderDevice>(
         assert!(changed(&shadowed, &moved) > 500);
         let world_id = world.id();
         drop(world);
-        renderer.unload_host(&mut world_host);
+        renderer.unload_host(&mut world_host)?;
         world_host.flush_resource_lifecycle();
         world = world_host.world_mut(world_id).unwrap();
         deliver!(renderer, world_host, world, fixture, None)?;
@@ -290,6 +290,7 @@ pub fn run<D: RenderDevice>(
         changed(&restored, &baseline) < 5,
         "zero-contribution lights leave selections immediately"
     );
+    renderer.prepare(&mut world_host, None)?;
     Ok(())
 }
 
@@ -302,6 +303,7 @@ fn add(
         Command::Create {
             alias: 99,
             metadata: Default::default(),
+            adopt: false,
         },
         Command::insert_value(EntityRef::Alias(99), ComponentValue::Transform(transform)),
     ];
@@ -455,7 +457,7 @@ pub fn normals<D: RenderDevice>(
         save(output, &format!("normals-{label}"), &pixels)?;
         let world_id = world.id();
         drop(world);
-        renderer.unload_host(&mut world_host);
+        renderer.unload_host(&mut world_host)?;
         world_host.flush_resource_lifecycle();
         world = world_host.world_mut(world_id).unwrap();
         deliver!(renderer, world_host, world, &bytes, None)?;
@@ -466,6 +468,7 @@ pub fn normals<D: RenderDevice>(
         );
         drop(world);
         frames.push(pixels);
+        renderer.prepare(&mut world_host, None)?;
     }
     let facets = changed(&frames[0], &frames[1]);
     let transformed = changed(&frames[2], &frames[3]);
@@ -565,7 +568,7 @@ pub fn textures<D: RenderDevice>(
             ..light
         }),
     )?;
-    super::world::render_frame(renderer, &mut world, WIDTH, HEIGHT)?;
+    super::world::present_world!(renderer, host, world, WIDTH, HEIGHT)?;
     let dark = capture()?;
     save(output, "pbr-texture-dark", &dark)?;
     assert!(
@@ -577,7 +580,7 @@ pub fn textures<D: RenderDevice>(
         ..Default::default()
     };
     world.enqueue_render_state_update(ambient)?;
-    super::world::render_frame(renderer, &mut world, WIDTH, HEIGHT)?;
+    super::world::present_world!(renderer, host, world, WIDTH, HEIGHT)?;
     let filled = capture()?;
     save(output, "pbr-ambient", &filled)?;
     assert!(
@@ -588,12 +591,12 @@ pub fn textures<D: RenderDevice>(
         ambient_light: Some([0.0; 3]),
         ..Default::default()
     })?;
-    super::world::render_frame(renderer, &mut world, WIDTH, HEIGHT)?;
+    super::world::present_world!(renderer, host, world, WIDTH, HEIGHT)?;
     assert_eq!(dark, capture()?, "Zero ambient must restore the dark frame");
     replace(&mut world, sun, ComponentValue::Light(light))?;
     let id = world.id();
     drop(world);
-    renderer.unload_host(&mut host);
+    renderer.unload_host(&mut host)?;
     host.flush_resource_lifecycle();
     let mut world = host.world_mut(id).unwrap();
     deliver!(renderer, host, world, mesh, Some(texture))?;
@@ -617,7 +620,7 @@ pub fn textures<D: RenderDevice>(
                 ..light
             }),
         )?;
-        let stats = super::world::render_frame(renderer, &mut world, WIDTH, HEIGHT)?;
+        let stats = super::world::present_world!(renderer, host, world, WIDTH, HEIGHT)?;
         assert_eq!(stats.shadow_draw_calls, 1);
         assert_eq!(stats.failed_draw_calls, 0);
         let spotlight = capture()?;
@@ -628,6 +631,7 @@ pub fn textures<D: RenderDevice>(
         );
     }
     drop(world);
+    renderer.prepare(&mut host, None)?;
     Ok(())
 }
 
@@ -779,5 +783,6 @@ pub fn run_custom<D: RenderDevice>(
         darkened(&cutout, &full) > 100,
         "custom opaque caster must produce a visible shadow"
     );
+    renderer.prepare(&mut host, None)?;
     Ok(())
 }

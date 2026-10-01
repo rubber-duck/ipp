@@ -3,6 +3,7 @@
 use ipp_core::EntityId;
 use ipp_core::components::rows::Rows;
 use ipp_core::components::schema::{ContractSink, FieldValue, SchemaComponent};
+use std::sync::Arc;
 
 #[repr(C)]
 #[derive(ipp_core::components::schema::SchemaComponent)]
@@ -11,7 +12,7 @@ struct LayoutFixture {
     #[schema(ignore)]
     internal: usize,
     value: f32,
-    label: String,
+    label: Arc<str>,
     bytes: Vec<u8>,
     source: EntityId,
     visible: bool,
@@ -36,21 +37,89 @@ impl Default for LayoutFixture {
 #[derive(ipp_core::components::schema::SchemaComponent)]
 #[schema(no_create)]
 struct BoundFixture {
-    label: String,
+    label: Arc<str>,
     #[schema(ignore)]
     internal: usize,
 }
 
 /// Row properties cover a required scalar, a hinted optional Vec4, an asset and
 /// bounded text.
-#[derive(Default, ipp_core::components::rows::SchemaRow)]
+#[derive(Debug, Default, PartialEq, ipp_core::components::rows::SchemaRow)]
 struct FixtureRow {
     weight: f32,
     #[schema(rotation)]
     rotation: Option<[f32; 4]>,
     source: Option<ipp_core::services::asset_management::AssetSource>,
     #[schema(text = 8)]
-    label: Option<String>,
+    label: Option<Arc<str>>,
+    flag: Option<bool>,
+    count: Option<u32>,
+    signed: Option<i32>,
+    pair: Option<[f32; 2]>,
+    triple: Option<[f32; 3]>,
+}
+
+fn rows_example() -> Rows<FixtureRow> {
+    let mut rows = RowsFixture::default().rows;
+    rows.insert(
+        4,
+        FixtureRow {
+            weight: -2.5,
+            rotation: Some([0.0, 0.0, 0.0, 1.0]),
+            source: Some(ipp_core::services::asset_management::AssetSource {
+                kind: ipp_core::TEXTURE_TYPE,
+                uri: "memory:✓".into(),
+                variant: 7,
+            }),
+            label: Some("é🙂".into()),
+            flag: Some(true),
+            count: Some(u32::MAX),
+            signed: Some(i32::MIN),
+            pair: Some([-0.0, 2.0]),
+            triple: Some([1.0, 2.0, 3.0]),
+        },
+    )
+    .unwrap();
+    rows.insert(7, FixtureRow::default()).unwrap();
+    rows.remove(7);
+    let decoded = Rows::<FixtureRow>::decode(&rows.encode()).unwrap();
+    assert_eq!(decoded.next_slot(), 8);
+    assert_eq!(decoded.get(4), rows.get(4));
+    rows
+}
+
+#[cfg(feature = "gui")]
+fn paint_example() -> Vec<u8> {
+    use ipp_core::systems::gui::presentation::{GuiPaintPart, GuiTheme};
+    use ipp_core::systems::gui::{GuiPartId, GuiPartVariant, GuiPrimitivePart, GuiSkinState};
+
+    let mut theme = GuiTheme::default();
+    let mut base = GuiPaintPart::keyed(GuiPartId::base(GuiPrimitivePart::Background)).unwrap();
+    base.color = Some([0.25, 0.5, 0.75, 1.0]);
+    theme.parts.insert(2, base).unwrap();
+    let mut checked = GuiPaintPart::keyed(GuiPartId::variant(
+        GuiPrimitivePart::Fill,
+        GuiSkinState::Pressed,
+        GuiPartVariant::Checked,
+    ))
+    .unwrap();
+    checked.opacity = Some(0.5);
+    theme.parts.insert(5, checked).unwrap();
+    let bytes = theme.parts.encode();
+    let mut restored = ipp_core::ComponentValue::GuiTheme(GuiTheme::default());
+    ipp_core::components::registry::write(
+        &mut restored,
+        &ipp_core::FieldWrite {
+            offset: std::mem::offset_of!(GuiTheme, parts) as u32,
+            value: ipp_core::FieldValue::Rows(bytes.clone()),
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        restored.field(std::mem::offset_of!(GuiTheme, parts) as u32),
+        Ok(FieldValue::Rows(bytes.clone()))
+    );
+    bytes
 }
 
 // The ignored pointer moves the table's real offset between targets; the region
@@ -150,7 +219,7 @@ pub fn check() -> bool {
         || bound
             .set_field(bound_label, FieldValue::String("bound".into()))
             .is_err()
-        || bound.label != "bound"
+        || &*bound.label != "bound"
         || bound.internal != 7
     {
         return false;
@@ -175,7 +244,7 @@ pub fn check() -> bool {
     {
         return false;
     }
-    let owned = String::from("owned ✓");
+    let owned = Arc::<str>::from("owned ✓");
     if fixture.set_field(label, FieldValue::String(owned)).is_err()
         || fixture
             .set_field(bytes, FieldValue::Bytes(vec![9, 8]))
@@ -184,7 +253,7 @@ pub fn check() -> bool {
     {
         return false;
     }
-    fixture.label == "owned ✓"
+    &*fixture.label == "owned ✓"
         && fixture.bytes == [9, 8]
         && fixture.value == -2.5
         && fixture.internal == 0
@@ -200,6 +269,15 @@ pub fn export() -> Vec<u8> {
     LayoutFixture::write_contract(&mut bytes);
     BoundFixture::write_contract(&mut bytes);
     RowsFixture::write_contract(&mut bytes);
+    let rows = rows_example().encode();
+    bytes.write(&(rows.len() as u32).to_le_bytes());
+    bytes.write(&rows);
+    #[cfg(feature = "gui")]
+    let paint = paint_example();
+    #[cfg(not(feature = "gui"))]
+    let paint: Vec<u8> = Vec::new();
+    bytes.write(&(paint.len() as u32).to_le_bytes());
+    bytes.write(&paint);
     bytes
 }
 

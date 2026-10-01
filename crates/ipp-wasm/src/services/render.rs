@@ -1,22 +1,28 @@
-//! The WASM host integrates stage 7 before publishing stage 8 outcomes/events.
-//! GPU state belongs to the context; the world's retained assets survive detach.
-//!
-//! Every build exports the frame summary and the device viewport limits.
-//! `diagnostics` builds also export one packed statistics record (see
-//! [`super::render_statistics`]), Surface cache records built when read, and
-//! the renderer's testing overrides.
+//! One worker graphics context, selected by the shared Host presentation coordinator.
+//! Draw completion and synchronous top-left readback use the common protocol; no
+//! session, World tick or JavaScript frame queue authorizes presentation.
+//! `ipp_presentation` imports resize the exact surface and copy pixels without
+//! reentering WASM. Diagnostics exports remain separate observations.
 
-use ipp_render_gl::{RenderError, RenderFrameSummary, RenderService, WebGlRenderDevice};
+use ipp_core::{HostRuntime, OutputRef, WorldPublicationId, WorldViewport};
+use ipp_host_session::{HostPresentationFailure, PresentationDrawSummary};
+use ipp_protocol::presentation::{PresentationError, PresentationSurface};
+use ipp_render_gl::{RenderError, RenderService, WebGlRenderDevice};
 
 use crate::BOUNDARY;
+
+#[link(wasm_import_module = "ipp_presentation")]
+unsafe extern "C" {
+    fn resize(width: u32, height: u32) -> u32;
+    fn capture(pointer: *mut u8, length: usize) -> u32;
+}
 
 pub(crate) struct RenderSurfaceService {
     renderer: RenderService<WebGlRenderDevice>,
     active: bool,
     width: u32,
     height: u32,
-    tick: u64,
-    summary: RenderFrameSummary,
+    context: u64,
     /// Packed record export and the totals it accumulates across renders.
     #[cfg(feature = "diagnostics")]
     statistics: super::render_statistics::RenderStatisticsRecord,
@@ -38,6 +44,15 @@ pub(crate) struct RenderSurfaceService {
 const SURFACE_CACHE_RECORD_WORDS: usize = 10;
 
 impl RenderSurfaceService {
+    #[cfg(all(feature = "gui", feature = "diagnostics"))]
+    pub(crate) fn record_frame(
+        &mut self,
+        host: &mut HostRuntime,
+        frame: &ipp_core::HostFrameReport,
+    ) {
+        self.statistics.record_frame(host, frame);
+    }
+
     pub(crate) fn new(world: &mut ipp_core::HostRuntime) -> Self {
         let renderer = RenderService::new(WebGlRenderDevice::new()).expect("empty renderer");
         renderer.set_asset_context_active(false);
@@ -49,8 +64,7 @@ impl RenderSurfaceService {
             active: false,
             width: 1,
             height: 1,
-            tick: 0,
-            summary: RenderFrameSummary::default(),
+            context: 0,
             #[cfg(feature = "diagnostics")]
             statistics: super::render_statistics::RenderStatisticsRecord::new(),
             #[cfg(all(feature = "surfaces", feature = "diagnostics"))]
@@ -74,25 +88,40 @@ impl RenderSurfaceService {
         self.active.then_some((self.width, self.height))
     }
 
-    /// Accept a drawing-buffer size the device supports. Without a device that
-    /// can report its limits, such as a lost context, only zero is rejected;
-    /// the next attach validates again.
-    fn resize(&mut self, width: u32, height: u32) -> Result<(), String> {
-        if width == 0 || height == 0 {
-            return Err("viewport dimensions must be positive".to_owned());
+    pub(crate) fn surface(&self) -> Result<PresentationSurface, PresentationError> {
+        if !self.active {
+            return Err(PresentationError::Unavailable);
         }
+        let limits = self
+            .renderer
+            .viewport_limits()
+            .ok_or(PresentationError::Unavailable)?;
+        Ok(PresentationSurface {
+            id: 1,
+            context: self.context,
+            max_width: limits.max_width,
+            max_height: limits.max_height,
+        })
+    }
 
-        if let Some(limits) = self.renderer.viewport_limits()
-            && (width > limits.max_width || height > limits.max_height)
+    pub(crate) fn configure(&mut self, viewport: WorldViewport) -> Result<(), PresentationError> {
+        let surface = self.surface()?;
+        if viewport.width == 0
+            || viewport.height == 0
+            || viewport.width > surface.max_width
+            || viewport.height > surface.max_height
+            || !viewport.device_pixel_ratio.is_finite()
+            || viewport.device_pixel_ratio <= 0.0
         {
-            return Err(format!(
-                "viewport {width}x{height} exceeds the device limits {}x{}",
-                limits.max_width, limits.max_height
-            ));
+            return Err(PresentationError::InvalidViewport);
         }
-
-        self.width = width;
-        self.height = height;
+        // SAFETY: The synchronous platform import takes only scalars, never reenters
+        // the runtime, and reports the exact drawing-buffer dimensions it accepted.
+        if unsafe { resize(viewport.width, viewport.height) } != 1 {
+            return Err(PresentationError::InvalidViewport);
+        }
+        self.width = viewport.width;
+        self.height = viewport.height;
         Ok(())
     }
 
@@ -102,40 +131,40 @@ impl RenderSurfaceService {
         width: u32,
         height: u32,
     ) -> Result<(), String> {
-        self.detach_host(host);
-        self.resize(width, height)?;
+        self.detach_host(host)?;
+        self.context = self
+            .context
+            .checked_add(1)
+            .ok_or("presentation context identity exhausted")?;
         self.renderer.set_asset_context_active(true);
         self.active = true;
+        if let Err(error) = self.configure(WorldViewport {
+            width,
+            height,
+            device_pixel_ratio: 1.0,
+        }) {
+            self.active = false;
+            self.renderer.set_asset_context_active(false);
+            return Err(format!("presentation attach failed: {error:?}"));
+        }
         Ok(())
     }
 
-    fn detach_host(&mut self, host: &mut ipp_core::HostRuntime) {
+    fn detach_host(&mut self, host: &mut ipp_core::HostRuntime) -> Result<(), String> {
+        self.renderer
+            .prepare(host, None)
+            .map_err(|error| error.to_string())?;
+        self.renderer
+            .unload_host(host)
+            .map_err(|error| error.to_string())?;
         self.renderer.set_asset_context_active(false);
-        self.renderer.unload_host(host);
         host.flush_resource_lifecycle();
         self.active = false;
-        self.reset_world();
-    }
-
-    pub(crate) fn forget_world(&mut self, world: ipp_core::WorldId) {
-        self.renderer.forget_world(world);
-        self.reset_world();
-    }
-
-    pub(crate) fn reset_world(&mut self) {
-        self.tick = 0;
-        self.summary = RenderFrameSummary::default();
         #[cfg(all(feature = "surfaces", feature = "diagnostics"))]
         {
             self.rendered_world = None;
         }
-    }
-
-    fn detach(&mut self, world: &mut ipp_core::WorldContext<'_>) {
-        self.renderer.set_asset_context_active(false);
-        self.renderer.unload(world);
-        self.active = false;
-        self.reset_world();
+        Ok(())
     }
 
     /// Build the records export for the World of the last completed render.
@@ -176,54 +205,87 @@ impl RenderSurfaceService {
         &self.surface_cache_records
     }
 
-    pub(crate) fn render(
+    pub(crate) fn prepare(
         &mut self,
-        world: &mut ipp_core::WorldContext<'_>,
-    ) -> Result<(), ipp_host_session::HostPresentationFailure> {
+        host: &mut HostRuntime,
+        selected: Option<(OutputRef, WorldPublicationId)>,
+    ) -> Result<(), HostPresentationFailure> {
+        self.renderer
+            .prepare(host, selected)
+            .map_err(presentation_failure)
+    }
+
+    pub(crate) fn present(
+        &mut self,
+        host: &HostRuntime,
+        output: OutputRef,
+        publication: WorldPublicationId,
+        viewport: WorldViewport,
+        presentation_time: f64,
+        completion: ipp_host_session::PresentationCompletion<'_>,
+    ) -> Result<PresentationDrawSummary, HostPresentationFailure> {
+        let ipp_host_session::PresentationCompletion {
+            capture: pixels,
+            outputs,
+        } = completion;
         if !self.active {
-            return Ok(());
+            return Err(presentation_failure(RenderError::ContextLost));
         }
-
-        match self.renderer.render(world, self.width, self.height) {
-            Ok(summary) => {
-                self.summary = summary;
-                self.tick = world.tick();
-
-                #[cfg(feature = "diagnostics")]
-                self.statistics.accumulate(self.renderer.statistics());
-
-                #[cfg(all(feature = "gui", feature = "diagnostics"))]
-                self.statistics.record_layout(
-                    world
-                        .system::<ipp_core::GuiLayoutSystem>(ipp_core::GuiLayoutSystem::ID)
-                        .map(ipp_core::GuiLayoutSystem::statistics)
-                        .unwrap_or_default(),
-                );
-
-                #[cfg(all(feature = "surfaces", feature = "diagnostics"))]
-                {
-                    self.rendered_world = Some(world.id());
-                }
-
-                Ok(())
-            }
-            Err(error) => {
-                let scope = match error {
-                    RenderError::ContextLost => {
-                        self.detach(world);
-                        ipp_protocol::RuntimeFailureScope::Context
-                    }
-                    RenderError::MissingMesh | RenderError::MissingTexture => {
-                        ipp_protocol::RuntimeFailureScope::Resource
-                    }
-                    _ => ipp_protocol::RuntimeFailureScope::Draw,
-                };
-                Err(ipp_host_session::HostPresentationFailure {
-                    scope,
-                    message: error.to_string(),
-                })
+        if (self.width, self.height) != (viewport.width, viewport.height) {
+            return Err(presentation_failure(RenderError::InvalidViewport));
+        }
+        let summary = self
+            .renderer
+            .draw_observed(
+                host,
+                output,
+                publication,
+                viewport,
+                presentation_time,
+                outputs,
+            )
+            .map_err(presentation_failure)?;
+        if summary.invalid_camera {
+            return Err(HostPresentationFailure {
+                scope: ipp_protocol::RuntimeFailureScope::Draw,
+                message: "selected camera is invalid".into(),
+            });
+        }
+        #[cfg(feature = "diagnostics")]
+        self.statistics.accumulate(self.renderer.statistics());
+        #[cfg(all(feature = "surfaces", feature = "diagnostics"))]
+        {
+            self.rendered_world = Some(output.world().id());
+        }
+        if let Some(pixels) = pixels {
+            // SAFETY: The exclusive slice stays live for this synchronous import.
+            // The worker copies exactly length bytes, retains no pointer and must
+            // not reenter WASM while the Host and this capture are borrowed.
+            if unsafe { capture(pixels.as_mut_ptr(), pixels.len()) } != 1 {
+                return Err(HostPresentationFailure {
+                    scope: ipp_protocol::RuntimeFailureScope::Context,
+                    message: "selected frame readback failed".into(),
+                });
             }
         }
+        Ok(PresentationDrawSummary {
+            draw_calls: summary.draw_calls,
+            triangles: summary.triangles,
+            failed_draw_calls: summary.failed_draw_calls,
+        })
+    }
+}
+
+fn presentation_failure(error: RenderError) -> HostPresentationFailure {
+    HostPresentationFailure {
+        scope: match error {
+            RenderError::ContextLost => ipp_protocol::RuntimeFailureScope::Context,
+            RenderError::MissingMesh | RenderError::MissingTexture => {
+                ipp_protocol::RuntimeFailureScope::Resource
+            }
+            _ => ipp_protocol::RuntimeFailureScope::Draw,
+        },
+        message: error.to_string(),
     }
 }
 
@@ -254,15 +316,6 @@ pub extern "C" fn ipp_render_attach(width: u32, height: u32) -> u32 {
     update(|presentation, world| presentation.attach(world, width, height))
 }
 
-/// Resize the host-owned viewport without changing world state or advancing
-/// time. Sizes beyond [`ipp_render_max_viewport_width`] and
-/// [`ipp_render_max_viewport_height`] fail.
-// SAFETY: Unique symbol; scalar arguments and exclusive access to owned renderer state.
-#[unsafe(no_mangle)]
-pub extern "C" fn ipp_render_resize(width: u32, height: u32) -> u32 {
-    update(|presentation, _world| presentation.resize(width, height))
-}
-
 /// Largest drawing-buffer width the device accepts, or zero while it cannot report.
 // SAFETY: Unique symbol; returns an owned scalar under exclusive Host access.
 #[unsafe(no_mangle)]
@@ -290,47 +343,8 @@ pub extern "C" fn ipp_render_max_viewport_height() -> u32 {
 /// Discard context-scoped state before loss/replacement; retain the logical world.
 // SAFETY: Unique symbol; resource invalidation and destruction are exclusive and retain no aliases.
 #[unsafe(no_mangle)]
-pub extern "C" fn ipp_render_detach() {
-    BOUNDARY.with_borrow_mut(|boundary| {
-        if let Some((presentation, host)) = boundary.presentation_host() {
-            presentation.detach_host(host);
-        }
-    });
-}
-
-/// Last world tick submitted to this context; zero after detach or before drawing.
-// SAFETY: Unique symbol; returns an owned scalar, no reference or pointer escapes.
-#[unsafe(no_mangle)]
-pub extern "C" fn ipp_render_tick() -> u64 {
-    read(|presentation| presentation.tick)
-}
-
-/// Draw submissions of the last completed frame.
-// SAFETY: Unique symbol; read-only scalar snapshot under exclusive host access.
-#[unsafe(no_mangle)]
-pub extern "C" fn ipp_render_draw_calls() -> u32 {
-    read(|presentation| presentation.summary.draw_calls)
-}
-
-/// Submitted triangles of the last completed frame.
-// SAFETY: Unique symbol; read-only scalar snapshot under exclusive host access.
-#[unsafe(no_mangle)]
-pub extern "C" fn ipp_render_triangles() -> u32 {
-    read(|presentation| presentation.summary.triangles)
-}
-
-/// Instances skipped after a mesh upload failure in the last completed frame.
-// SAFETY: Unique symbol; returns an owned scalar under exclusive host access.
-#[unsafe(no_mangle)]
-pub extern "C" fn ipp_render_failed_draw_calls() -> u32 {
-    read(|presentation| presentation.summary.failed_draw_calls)
-}
-
-/// Whether the last completed frame cleared because its camera was unusable.
-// SAFETY: Unique symbol; returns an owned scalar under exclusive host access.
-#[unsafe(no_mangle)]
-pub extern "C" fn ipp_render_invalid_camera() -> u32 {
-    read(|presentation| u32::from(presentation.summary.invalid_camera))
+pub extern "C" fn ipp_render_detach() -> u32 {
+    update(|presentation, host| presentation.detach_host(host))
 }
 
 /// Shadow submissions for the opt-in benchmark, separate from main-pass draws.
@@ -376,6 +390,29 @@ pub extern "C" fn ipp_render_statistics_len() -> u32 {
     super::render_statistics::RECORD_WORDS as u32
 }
 
+/// Whole-Host ordinary-layout membership JSON, copied synchronously by the worker.
+// SAFETY: Unique diagnostic symbol. Exclusive boundary access fills owned storage;
+// the returned bytes remain valid until the next call or Host destruction, without Rust aliases.
+#[cfg(all(feature = "gui", feature = "diagnostics"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn ipp_render_gui_layout_ptr() -> *const u8 {
+    BOUNDARY.with_borrow_mut(|boundary| {
+        boundary
+            .presentation()
+            .map_or(std::ptr::null(), |presentation| {
+                presentation.statistics.layout_json().as_ptr()
+            })
+    })
+}
+
+/// Bytes at the last pointer returned by `ipp_render_gui_layout_ptr`.
+// SAFETY: Unique diagnostic symbol. Exclusive boundary access returns only an owned scalar.
+#[cfg(all(feature = "gui", feature = "diagnostics"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn ipp_render_gui_layout_len() -> u32 {
+    read(|presentation| presentation.statistics.layout_json_len() as u32)
+}
+
 /// Build the Surface cache records of the last completed frame and return
 /// them, or null when there are none. Each record has
 /// `SURFACE_CACHE_RECORD_WORDS` little-endian `u32` words;
@@ -410,21 +447,18 @@ pub extern "C" fn ipp_render_surface_cache_records_len() -> u32 {
 }
 
 /// Testing override of this context's renderer-owned glyph atlas bounds: its
-/// resident page budget and the demand publications a page without demand stays
+/// resident page budget and the Host frames a page without demand stays
 /// resident. Limits survive context loss.
 // SAFETY: Unique symbol; scalar arguments and exclusive access to owned renderer state.
 #[cfg(all(feature = "gui", feature = "diagnostics"))]
 #[unsafe(no_mangle)]
-pub extern "C" fn ipp_render_set_glyph_atlas_limits(
-    max_pages: u32,
-    idle_page_publications: u32,
-) -> u32 {
+pub extern "C" fn ipp_render_set_glyph_atlas_limits(max_pages: u32, idle_page_frames: u32) -> u32 {
     update(|presentation, _host| {
         presentation
             .renderer
             .set_glyph_atlas_limits(ipp_render_gl::GlyphAtlasLimits {
                 max_pages: max_pages as usize,
-                idle_page_publications: u64::from(idle_page_publications),
+                idle_page_frames: u64::from(idle_page_frames),
             });
         Ok(())
     })

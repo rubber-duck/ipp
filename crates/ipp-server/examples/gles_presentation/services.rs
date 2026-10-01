@@ -1,24 +1,17 @@
-//! Host services that present the attached World through a GLES `RenderService`.
+//! One GLES surface selected by the Host presentation coordinator, independent of sessions.
 
-use std::collections::BTreeMap;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::time::Instant;
 
-use ipp_core::{HostRuntime, WorldContext, WorldId};
-use ipp_host_session::{HostPresentationFailure, HostServices};
-use ipp_render_gl::{GlesRenderDevice, RenderError, RenderFrameSummary, RenderService};
+use ipp_core::{HostRuntime, OutputRef, WorldPublicationId, WorldViewport};
+use ipp_host_session::{HostPresentationFailure, HostServices, PresentationDrawSummary};
+use ipp_protocol::presentation::{PresentationError, PresentationSurface};
+use ipp_render_gl::{GlesRenderDevice, RenderError, RenderService};
 use ipp_server::services::NativeHostServices;
 
 use super::channel::{PresentationControl, PresentationOutput};
-use super::statistics::{FrameHeader, StatisticsTotals};
+use super::statistics::StatisticsTotals;
 use crate::egl::Context;
-
-/// A pending frame request of the presentation client.
-struct FrameRequest {
-    session: u64,
-    after_tick: u64,
-    readback: bool,
-}
 
 /// Native Host services plus one GLES presentation of the attached World.
 pub(crate) struct GlesHostServices {
@@ -28,25 +21,32 @@ pub(crate) struct GlesHostServices {
     context: Context,
     control: Receiver<PresentationControl>,
     output: Sender<PresentationOutput>,
-    /// The single presented World, as a worker presents its connection's World.
-    world: Option<WorldId>,
+    rendered_output: Option<OutputRef>,
     /// Whether the renderer is attached; false while a simulated loss lasts.
     active: bool,
     /// Attachments so far; a restore after a simulated loss increments it.
-    generation: u32,
-    requested: (u32, u32),
+    generation: u64,
     viewport: (u32, u32),
     limits: (u32, u32),
-    requests: BTreeMap<u32, FrameRequest>,
-    /// World tick and summary of the last completed render; zero before it.
-    tick: u64,
-    summary: RenderFrameSummary,
     totals: StatisticsTotals,
     device: [String; 3],
+    readback_ms: f64,
 }
 
 impl HostServices for GlesHostServices {
     const NAME: &'static str = "gles";
+
+    #[cfg(all(feature = "gui", feature = "diagnostics"))]
+    fn record_frame(&mut self, host: &mut HostRuntime, frame: &ipp_core::HostFrameReport) {
+        self.totals.record_frame(host, frame);
+    }
+
+    #[cfg(feature = "gui")]
+    fn gui_input(
+        &mut self,
+    ) -> Option<&mut ipp_host_session::services::gui_input::GuiHostInputService> {
+        self.native.gui_input()
+    }
 
     fn initialize(host: &mut HostRuntime) -> Result<Self, String> {
         let native = NativeHostServices::initialize(host)?;
@@ -78,17 +78,14 @@ impl HostServices for GlesHostServices {
             context,
             control: setup.control,
             output: setup.output,
-            world: None,
+            rendered_output: None,
             active: true,
             generation: 1,
-            requested: (320, 240),
             viewport: (320, 240),
             limits: (0, 0),
-            requests: BTreeMap::new(),
-            tick: 0,
-            summary: RenderFrameSummary::default(),
             totals: StatisticsTotals::default(),
             device: [0, 1, 2].map(|index| device.get(index).cloned().unwrap_or_default()),
+            readback_ms: 0.0,
         };
         services.refresh_limits();
         Ok(services)
@@ -98,56 +95,101 @@ impl HostServices for GlesHostServices {
         self.active.then_some(self.viewport)
     }
 
-    fn attach_world(&mut self, world: WorldId) -> Result<(), String> {
-        if let Some(previous) = self.world.replace(world)
-            && previous != world
-        {
-            self.renderer.forget_world(previous);
+    fn presentation_surface(&self) -> Result<PresentationSurface, PresentationError> {
+        if !self.active {
+            return Err(PresentationError::Unavailable);
         }
-        self.tick = 0;
+        Ok(PresentationSurface {
+            id: 1,
+            context: self.generation,
+            max_width: self.limits.0,
+            max_height: self.limits.1,
+        })
+    }
+
+    fn configure_presentation(&mut self, viewport: WorldViewport) -> Result<(), PresentationError> {
+        self.presentation_surface()?;
+        if viewport.width == 0
+            || viewport.height == 0
+            || viewport.width > self.limits.0
+            || viewport.height > self.limits.1
+            || !viewport.device_pixel_ratio.is_finite()
+            || viewport.device_pixel_ratio <= 0.0
+        {
+            return Err(PresentationError::InvalidViewport);
+        }
+        self.viewport = (viewport.width, viewport.height);
         Ok(())
     }
 
-    fn detach_world(&mut self, world: WorldId) {
-        if self.world == Some(world) {
-            self.world = None;
-            self.renderer.forget_world(world);
-            self.tick = 0;
-        }
+    fn prepare_presentation(
+        &mut self,
+        host: &mut HostRuntime,
+        selected: Option<(OutputRef, WorldPublicationId)>,
+    ) -> Result<(), HostPresentationFailure> {
+        self.renderer
+            .prepare(host, selected)
+            .map_err(presentation_failure)
     }
 
-    fn present(&mut self, world: &mut WorldContext<'_>) -> Result<(), HostPresentationFailure> {
-        if !self.active || self.world != Some(world.id()) {
-            return Ok(());
+    fn present(
+        &mut self,
+        host: &HostRuntime,
+        output: OutputRef,
+        publication: WorldPublicationId,
+        viewport: WorldViewport,
+        presentation_time: f64,
+        completion: ipp_host_session::PresentationCompletion<'_>,
+    ) -> Result<PresentationDrawSummary, HostPresentationFailure> {
+        let ipp_host_session::PresentationCompletion {
+            capture,
+            outputs,
+        } = completion;
+        if !self.active {
+            return Err(presentation_failure(RenderError::ContextLost));
         }
-
-        let (width, height) = self.viewport;
-        match self.renderer.render(world, width, height) {
-            Ok(summary) => {
-                self.summary = summary;
-                self.tick = world.tick();
-                self.totals.accumulate(self.renderer.statistics());
-                #[cfg(feature = "gui")]
-                self.totals.record_layout(
-                    world
-                        .system::<ipp_core::GuiLayoutSystem>(ipp_core::GuiLayoutSystem::ID)
-                        .map(ipp_core::GuiLayoutSystem::statistics)
-                        .unwrap_or_default(),
-                );
-                self.answer_requests(world.id());
-                Ok(())
+        if self.viewport != (viewport.width, viewport.height) {
+            return Err(presentation_failure(RenderError::InvalidViewport));
+        }
+        let summary = self
+            .renderer
+            .draw_observed(
+                host,
+                output,
+                publication,
+                viewport,
+                presentation_time,
+                outputs,
+            )
+            .map_err(presentation_failure)?;
+        if summary.invalid_camera {
+            return Err(HostPresentationFailure {
+                scope: ipp_protocol::RuntimeFailureScope::Draw,
+                message: "selected camera is invalid".into(),
+            });
+        }
+        self.totals.accumulate(self.renderer.statistics());
+        self.rendered_output = Some(output);
+        if let Some(capture) = capture {
+            let started = Instant::now();
+            let pixels = self
+                .context
+                .capture_region(viewport.width, viewport.height)
+                .map_err(|error| HostPresentationFailure {
+                    scope: ipp_protocol::RuntimeFailureScope::Context,
+                    message: error.to_string(),
+                })?;
+            if pixels.len() != capture.len() {
+                return Err(presentation_failure(RenderError::InvalidViewport));
             }
-            Err(error) => Err(HostPresentationFailure {
-                scope: match error {
-                    RenderError::ContextLost => ipp_protocol::RuntimeFailureScope::Context,
-                    RenderError::MissingMesh | RenderError::MissingTexture => {
-                        ipp_protocol::RuntimeFailureScope::Resource
-                    }
-                    _ => ipp_protocol::RuntimeFailureScope::Draw,
-                },
-                message: error.to_string(),
-            }),
+            capture.copy_from_slice(&pixels);
+            self.readback_ms = started.elapsed().as_secs_f64() * 1000.0;
         }
+        Ok(PresentationDrawSummary {
+            draw_calls: summary.draw_calls,
+            triangles: summary.triangles,
+            failed_draw_calls: summary.failed_draw_calls,
+        })
     }
 
     fn service_resources(&mut self, host: &mut HostRuntime) -> Result<(), String> {
@@ -188,58 +230,36 @@ impl GlesHostServices {
         host: &mut HostRuntime,
     ) -> Result<(), String> {
         match control {
-            PresentationControl::Frame {
-                id,
-                session,
-                after_tick,
-                readback,
-            } => {
-                if self.requests.len() >= 4 || self.requests.contains_key(&id) {
-                    let _ = self.output.send(PresentationOutput::FrameError {
-                        id,
-                        message: "Frame request queue is full".into(),
-                    });
-                } else {
-                    self.requests.insert(
-                        id,
-                        FrameRequest {
-                            session,
-                            after_tick,
-                            readback,
-                        },
-                    );
-                }
-            }
-            PresentationControl::Cancel {
+            PresentationControl::Statistics {
                 id,
             } => {
-                self.requests.remove(&id);
-            }
-            PresentationControl::Disconnected => self.requests.clear(),
-            PresentationControl::Resize {
-                width,
-                height,
-            } => {
-                if width == 0 || height == 0 {
-                    return Err("Viewport dimensions must be positive integers".into());
-                }
-                self.requested = (width, height);
-                self.viewport = self.bounded(self.requested);
+                let output = self.rendered_output.ok_or("no completed presentation")?;
+                let statistics = super::statistics::snapshot(
+                    &mut self.renderer,
+                    output.world().id(),
+                    &self.totals,
+                    self.readback_ms,
+                    &self.device,
+                );
+                let _ = self.output.send(PresentationOutput::Statistics {
+                    id,
+                    snapshot: statistics,
+                });
             }
             PresentationControl::GlyphAtlasLimits {
                 max_pages,
-                idle_page_publications,
+                idle_page_frames,
             } => {
                 #[cfg(feature = "gui")]
                 self.renderer
                     .set_glyph_atlas_limits(ipp_render_gl::GlyphAtlasLimits {
                         max_pages: max_pages as usize,
-                        idle_page_publications: u64::from(idle_page_publications),
+                        idle_page_frames: u64::from(idle_page_frames),
                     });
 
                 #[cfg(not(feature = "gui"))]
                 {
-                    let _ = (max_pages, idle_page_publications);
+                    let _ = (max_pages, idle_page_frames);
                     return Err(
                         "The glyph atlas limits testing override requires a GUI build".into(),
                     );
@@ -259,18 +279,26 @@ impl GlesHostServices {
                 if self.active {
                     // The same recovery path as the WASM detach export: context
                     // state goes, the Host and its Worlds keep their logical assets.
+                    self.renderer
+                        .prepare(host, None)
+                        .map_err(|error| error.to_string())?;
+                    self.renderer
+                        .unload_host(host)
+                        .map_err(|error| error.to_string())?;
                     self.renderer.set_asset_context_active(false);
-                    self.renderer.unload_host(host);
                     host.flush_resource_lifecycle();
                     self.active = false;
-                    self.tick = 0;
+                    self.rendered_output = None;
                 }
             }
             PresentationControl::ContextRestore => {
                 if !self.active {
+                    self.generation = self
+                        .generation
+                        .checked_add(1)
+                        .ok_or("presentation context identity exhausted")?;
                     self.renderer.set_asset_context_active(true);
                     self.active = true;
-                    self.generation += 1;
                     self.refresh_limits();
                 }
             }
@@ -297,86 +325,18 @@ impl GlesHostServices {
                 max_height: limits.1,
             });
         }
-        self.viewport = self.bounded(self.requested);
     }
+}
 
-    /// The worker's `boundViewport`: scale uniformly into the limits, keeping the aspect.
-    fn bounded(&self, (width, height): (u32, u32)) -> (u32, u32) {
-        let (max_width, max_height) = self.limits;
-        let scale = (f64::from(max_width) / f64::from(width))
-            .min(f64::from(max_height) / f64::from(height))
-            .min(1.0);
-        if scale >= 1.0 {
-            return (width, height);
-        }
-
-        (
-            ((f64::from(width) * scale).floor() as u32).clamp(1, max_width),
-            ((f64::from(height) * scale).floor() as u32).clamp(1, max_height),
-        )
-    }
-
-    /// Answer every request the frame just rendered satisfies, in request order.
-    fn answer_requests(&mut self, world: WorldId) {
-        if self.requests.is_empty() {
-            return;
-        }
-
-        let ready: Vec<u32> = self
-            .requests
-            .iter()
-            .filter(|(_, request)| self.tick >= request.after_tick)
-            .map(|(&id, _)| id)
-            .collect();
-        for id in ready {
-            let request = self.requests.remove(&id).expect("ready request");
-            let message = match self.frame(world, &request) {
-                Ok((header, pixels)) => PresentationOutput::Frame {
-                    id,
-                    header,
-                    pixels,
-                },
-                Err(message) => PresentationOutput::FrameError {
-                    id,
-                    message,
-                },
-            };
-            let _ = self.output.send(message);
-        }
-    }
-
-    fn frame(
-        &mut self,
-        world: WorldId,
-        request: &FrameRequest,
-    ) -> Result<(String, Option<Vec<u8>>), String> {
-        let (width, height) = self.viewport;
-        let mut header = FrameHeader {
-            session: request.session,
-            tick: self.tick,
-            width,
-            height,
-            summary: self.summary,
-            context_generation: self.generation,
-            statistics: None,
-        };
-        if !request.readback {
-            return Ok((header.to_json(), None));
-        }
-
-        let started = Instant::now();
-        let pixels = self
-            .context
-            .capture_region(width, height)
-            .map_err(|error| error.to_string())?;
-        let readback_ms = started.elapsed().as_secs_f64() * 1_000.0;
-        header.statistics = Some(super::statistics::snapshot(
-            &mut self.renderer,
-            world,
-            &self.totals,
-            readback_ms,
-            &self.device,
-        ));
-        Ok((header.to_json(), Some(pixels)))
+fn presentation_failure(error: RenderError) -> HostPresentationFailure {
+    HostPresentationFailure {
+        scope: match error {
+            RenderError::ContextLost => ipp_protocol::RuntimeFailureScope::Context,
+            RenderError::MissingMesh | RenderError::MissingTexture => {
+                ipp_protocol::RuntimeFailureScope::Resource
+            }
+            _ => ipp_protocol::RuntimeFailureScope::Draw,
+        },
+        message: error.to_string(),
     }
 }

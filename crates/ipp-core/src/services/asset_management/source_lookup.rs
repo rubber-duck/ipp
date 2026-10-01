@@ -150,7 +150,7 @@ impl super::service::AssetDemandSelection {
     pub(crate) fn mark_selected(
         selections: &mut std::collections::BTreeMap<Self, bool>,
         kind: AssetTypeId,
-        source: &str,
+        source: &std::sync::Arc<str>,
         variant: u32,
     ) -> bool {
         let query = AssetSourceLookup {

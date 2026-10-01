@@ -2,19 +2,13 @@ mod animation;
 
 mod lifecycle;
 
-#[cfg(feature = "surfaces")]
-mod surface;
-
-#[cfg(feature = "gui")]
-mod gui;
-
-#[cfg(feature = "gui")]
-mod semantics;
+#[cfg(test)]
+mod reference_tests;
 
 use crate::{MAX_MESSAGE_BYTES, Request, RequestBody, Response, ResponseBody, wire::*};
 use ipp_core::components::schema::FieldValue as ResolvedValue;
 use ipp_core::{
-    Batch, BatchOutcome, Command, ComponentValue, EntityId, EntityMetadata, EntityRef, FieldValue,
+    BatchOutcome, Command, ComponentValue, EntityId, EntityMetadata, EntityRef, FieldValue,
     FieldWrite,
 };
 
@@ -27,6 +21,8 @@ pub enum ProtocolError {
     SchemaMismatch,
     /// Request belongs to another connection.
     SessionMismatch,
+    /// A transported World or output token no longer names its exact live lifetime.
+    InvalidReference,
     /// Incomplete, invalid, or trailing data.
     Malformed(&'static str),
     /// Tag identifies no implemented operation.
@@ -48,7 +44,32 @@ pub(crate) struct Reader<'a> {
     pub(crate) at: usize,
 }
 
-pub(crate) struct Writer(pub(crate) Vec<u8>);
+pub(crate) struct Writer(pub(crate) Vec<u8>, Option<usize>);
+
+impl Writer {
+    pub(crate) fn new(bytes: Vec<u8>) -> Self {
+        Self(bytes, None)
+    }
+
+    pub(crate) fn measuring() -> Self {
+        Self(Vec::new(), Some(0))
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.1.unwrap_or(self.0.len())
+    }
+
+    #[cfg(feature = "gui")]
+    pub(crate) fn framed(
+        &mut self,
+        write: impl Fn(&mut Self) -> Result<(), ProtocolError>,
+    ) -> Result<(), ProtocolError> {
+        let mut measurement = Self::measuring();
+        write(&mut measurement)?;
+        self.count(measurement.len(), MAX_MESSAGE_BYTES)?;
+        write(self)
+    }
+}
 
 #[cfg(test)]
 mod manifest_tests;
@@ -57,7 +78,10 @@ mod manifest_tests;
 mod codec_tests;
 
 mod decode;
-pub use decode::{decode_request, decode_request_with_buffer};
+pub use decode::{
+    RejectedBatchPage, RequestDecodeError, decode_request, decode_request_with_buffer,
+    decode_world_request, is_batch_page,
+};
 
 mod encode;
-pub use encode::{encode_response, encode_response_into};
+pub use encode::{encode_response, encode_response_into, encoded_response_size};

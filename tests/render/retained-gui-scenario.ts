@@ -84,13 +84,24 @@ export const RETAINED_COUNTERS = [
 ] as const;
 
 /**
+ * Ordinary layout counters exist only while some World selects GUI layout (or
+ * one has retired); the Host's membership evidence then carries a total.
+ */
+const LAYOUT_COUNTERS: ReadonlySet<string> = new Set([
+  "guiLayoutReflows",
+  "guiTextMeasurements",
+  "totalGuiLayoutReflows",
+  "totalGuiTextMeasurements",
+]);
+
+/**
  * Glyph atlas bounds for the atlas phase and the rest of the run. One unseen
  * window fits in two 512x512 pages, so three pages hold it while the sliding
  * windows exceed the budget. Idle expiry never elapses and some World always
  * demands glyphs, so every page retired after the first window is pressure
  * eviction.
  */
-const ATLAS_LIMITS = { maxPages: 3, idlePagePublications: 0xffff_ffff };
+const ATLAS_LIMITS = { maxPages: 3, idlePageFrames: 0xffff_ffff };
 
 /** Terminal text pixels, as classified by the fixture's coverage count. */
 const isText = (r: number, g: number, b: number) =>
@@ -176,10 +187,15 @@ export async function exerciseRetainedGui(
   const checkFrame = (label: string, frame: WorkloadFrame) => {
     assert.equal(frame.failedDrawCalls, 0, label);
     // Missing statistics are unavailable, never a report of zero work.
+    const layout = frame.statistics?.guiLayout;
+    if (retained) assert.ok(layout, `${label}: GUI layout membership`);
+    const laidOut = layout?.total != null;
     for (const key of RETAINED_COUNTERS)
       assert.equal(
         typeof counters(frame)[key],
-        retained ? "number" : "undefined",
+        retained && (laidOut || !LAYOUT_COUNTERS.has(key))
+          ? "number"
+          : "undefined",
         `${label}: ${key}`,
       );
   };
@@ -246,7 +262,12 @@ export async function exerciseRetainedGui(
     "glyphSets",
   );
 
-  // Cold: every printable glyph misses once and populates exactly once.
+  // Cold: every printable glyph misses once and populates exactly once. The
+  // initial terminal scene is withdrawn at its own viewport first: resizing
+  // the presented view completes before the workload replaces the content, so
+  // frames in between would otherwise redraw its text at the cold viewport's
+  // glyph band.
+  await call("clearWorkload");
   const { frame: initial } = await settle("initial");
   const cold = (await measure("cold", "workload", terminal)).frame;
   assert.ok(cold.textPixels > 100, "cold: visible glyph coverage");
@@ -620,9 +641,9 @@ async function exerciseRetainedControls(
     angle = 0,
     text?: { text?: string; color?: readonly number[] },
   ) => {
-    const { pixelsPerMetre, guiEdits } = await call<{
+    const { pixelsPerMetre, canvasEdits } = await call<{
       pixelsPerMetre: number;
-      guiEdits: { requests: number; edits: number };
+      canvasEdits: { requests: number; edits: number; components: number };
     }>("guiPanel", [
       { variant, shape: GUI_SHAPE, angle, ...(text ? { label: text } : {}) },
     ]);
@@ -631,7 +652,12 @@ async function exerciseRetainedControls(
       Number(frame.statistics!.gui!.guiBatches) > 0,
       `${label}: retained GUI batches`,
     );
-    return { frame, pixelsPerMetre, guiEdits, pixels: driver.pixels(label) };
+    return {
+      frame,
+      pixelsPerMetre,
+      canvasEdits,
+      pixels: driver.pixels(label),
+    };
   };
 
   // Mixed content: gradient shape with glow, atlas glyphs and a curve drawing.
@@ -653,22 +679,31 @@ async function exerciseRetainedControls(
       `mixed GUI content lacks ${name}: ${pixels} pixels`,
     );
   }
-  // Density maps logical units to Surface metres: authored lengths stay
-  // logical, so a write keeps the root's logical bounds and paints the whole
-  // panel (shape, border, radii, glow, glyphs and curve) at half size about
-  // the Surface's top-left corner.
-  const denseBounds = await call<number[]>("guiPanelDensity", [2]);
+  // Canvas density maps logical units to Surface metres: authored lengths
+  // stay logical, so a Canvas state density update keeps the stored logical
+  // extent and paints the whole panel (shape, border, radii, glow, glyphs and
+  // curve) at half size about the Surface's top-left corner.
+  type DensityState = { unitsPerMetre: number; extent: number[] };
+  const dense = await call<DensityState>("guiPanelDensity", [2]);
   assert.deepEqual(
-    denseBounds.map((value) => Math.round(value * 1000) / 1000),
-    [0, 0, 3.8, 2.4],
-    `density 2 root bounds: ${JSON.stringify(denseBounds)}`,
+    dense,
+    { unitsPerMetre: 2, extent: [3.8, 2.4].map(Math.fround) },
+    `density 2 Canvas state: ${JSON.stringify(dense)}`,
   );
   const { frame: denseFrame } = await settle("gui-mixed-density");
   assert.ok(
     Number(denseFrame.statistics!.gui!.guiBatches) > 0,
     "gui-mixed-density: retained GUI batches",
   );
-  const dense = driver.pixels("gui-mixed-density");
+  // The evaluated CanvasBounds stay logical: the shape control keeps
+  // its padded slot at density 2.
+  const denseBounds = await call<number[] | null>("guiShapeBounds", []);
+  assert.deepEqual(
+    denseBounds?.map((value) => Math.round(value * 1000) / 1000),
+    [0.3, 0.6, GUI_SHAPE.width, GUI_SHAPE.height],
+    `density 2 shape bounds: ${JSON.stringify(denseBounds)}`,
+  );
+  const densePixels = driver.pixels("gui-mixed-density");
   // The 3.8 x 2.4 m Surface is centred in the orthographic view.
   const origin = [
     mixed.frame.width / 2 - 1.9 * mixed.pixelsPerMetre,
@@ -677,14 +712,14 @@ async function exerciseRetainedControls(
   const density: Record<string, unknown> = {};
   for (const [name, select] of Object.entries(classes)) {
     const full = mask(mixed.pixels, select);
-    const half = mask(dense, select);
+    const half = mask(densePixels, select);
     const ratio = count(half) / count(full);
     assert.ok(
       ratio > 0.15 && ratio < 0.35,
       `density 2 must quarter the ${name} area: ${count(half)} of ${count(full)} pixels`,
     );
     const before = maskBounds(full, mixed.frame.width)!;
-    const after = maskBounds(half, dense.width);
+    const after = maskBounds(half, densePixels.width);
     assert.ok(after, `density 2 lost the ${name} content`);
     density[name] = { ratio, before, after };
     after.forEach((lane, index) => {
@@ -696,12 +731,10 @@ async function exerciseRetainedControls(
       );
     });
   }
-  assert.deepEqual(
-    (await call<number[]>("guiPanelDensity", [1])).map(
-      (value) => Math.round(value * 1000) / 1000,
-    ),
-    [0, 0, 3.8, 2.4],
-  );
+  assert.deepEqual(await call<DensityState>("guiPanelDensity", [1]), {
+    unitsPerMetre: 1,
+    extent: [3.8, 2.4].map(Math.fround),
+  });
   const { frame: restoredFrame } = await settle("gui-mixed-density-restored");
   assert.ok(
     Number(restoredFrame.statistics!.gui!.guiBatches) > 0,
@@ -823,11 +856,12 @@ async function exerciseRetainedControls(
 }
 
 /**
- * GUI work counters over the real worker transport: an unchanged frame does
- * no layout work, a paint-only edit commits one node edit and measures no
- * text, and a local text edit commits one node edit that remeasures only
- * that leaf. Layout totals follow the rendered World, so differences between
- * two captures of the panel's World measure the work between them.
+ * GUI work counters over the real transport: an unchanged frame does no layout
+ * work, a paint-only edit commits one component edit in one batch to the
+ * panel's Canvas World and measures no text, and a local text edit commits one
+ * component edit that remeasures only that leaf. Layout totals are whole-Host
+ * ordinary-layout work, so differences between two captures measure the work
+ * between them.
  */
 async function exerciseLayoutWork(
   driver: RetainedGuiDriver,
@@ -838,7 +872,7 @@ async function exerciseLayoutWork(
     text?: { text?: string; color?: readonly number[] },
   ) => Promise<{
     frame: WorkloadFrame;
-    guiEdits: { requests: number; edits: number };
+    canvasEdits: { requests: number; edits: number; components: number };
     pixels: RgbaFrame;
   }>,
   settled: WorkloadFrame,
@@ -873,17 +907,19 @@ async function exerciseLayoutWork(
     color: [1, 0.1, 0.9, 1],
   });
   const paint = {
-    edits: painted.guiEdits,
+    edits: painted.canvasEdits,
     since: since(painted.frame, unchanged),
     greenGlyphs: count(mask(painted.pixels, classes.glyphs!)),
   };
+  // React writes one field per changed channel: red, green and blue.
   assert.ok(
     paint.edits.requests === 1 &&
-      paint.edits.edits === 1 &&
+      paint.edits.components === 1 &&
+      paint.edits.edits === 3 &&
       paint.since.measurements === 0 &&
       paint.since.reflows === 0 &&
       paint.greenGlyphs === 0,
-    `a paint-only edit must commit one node edit without layout or text work: ${JSON.stringify(paint)}`,
+    `a paint-only edit must commit one component edit without layout or text work: ${JSON.stringify(paint)}`,
   );
 
   const edited = await panel("mixed", "gui-work-text", 0, {
@@ -891,15 +927,16 @@ async function exerciseLayoutWork(
     color: [1, 0.1, 0.9, 1],
   });
   const text = {
-    edits: edited.guiEdits,
+    edits: edited.canvasEdits,
     since: since(edited.frame, painted.frame),
   };
   assert.ok(
     text.edits.requests === 1 &&
+      text.edits.components === 1 &&
       text.edits.edits === 1 &&
       text.since.reflows >= 1 &&
       text.since.measurements === 1,
-    `a local text edit must commit one node edit that remeasures one leaf: ${JSON.stringify(text)}`,
+    `a local text edit must commit one component edit that remeasures one leaf: ${JSON.stringify(text)}`,
   );
   return { idle, paint, text };
 }
@@ -938,9 +975,9 @@ async function exercisePresentedWorldSwitch(
     `World A must hold shape and glyph batches: ${JSON.stringify({ alone, first })}`,
   );
 
-  // Pages without demand now retire at the next publication; World A's text
+  // Pages without demand now retire at the next frame; World A's text
   // keeps its pages resident while it is presented.
-  await call("glyphAtlasLimits", [{ maxPages: 3, idlePagePublications: 1 }]);
+  await call("glyphAtlasLimits", [{ maxPages: 3, idlePageFrames: 1 }]);
   for (let frame = 0; frame < 3; frame++)
     await driver.capture("world-a-held", true);
   const held = stats(await driver.capture("world-a-held", true));

@@ -80,7 +80,14 @@ pub(crate) fn run(context: &super::egl::Context, evidence: &std::path::Path) -> 
         )
     };
     let composite = |device: &mut GlesRenderDevice| {
-        device.draw_surface_cache(&compositor, &target, &CONTENT, &[2.0, 1.0])
+        device.draw_surface_cache(
+            &compositor,
+            &target,
+            &CONTENT,
+            &[2.0, 1.0],
+            &[0.0, 0.0, 2.0, 1.0],
+            1.0,
+        )
     };
     let mut report = String::new();
 

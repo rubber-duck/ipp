@@ -4,7 +4,7 @@ This gallery world loads a Blender-authored KayKit track, character and presenta
 
 The source mannequin uses one gray material and no image textures; its panel and bolt details are modeled geometry.
 
-Walk, Run and Crawl use phase-matched transitions. A cold destination prepares before the transition, so the current gait and route keep advancing while bytes arrive.
+Walk, Run and Crawl use phase-matched transitions. A cold destination prepares before the transition, so the current gait and route keep advancing while bytes arrive. The Host keeps unused clips in its default asset cache, so returning to a gait reuses its clip.
 
 The route blends authored headings around corners. Reverse changes the signed route clock while the gait continues forward and a separate Host transition turns the rig, leaving the following camera, light and orb attached to the route root. See [session.tsx](session.tsx) for playback composition and [scene-file.ts](scene-file.ts) for saved-World initialization.
 

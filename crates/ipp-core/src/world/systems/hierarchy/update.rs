@@ -1,38 +1,5 @@
 use super::*;
 
-pub(in crate::world) fn local_affine(
-    world: &WorldSimulationState,
-    entity: EntityId,
-    aimed: bool,
-) -> Result<GeometryShapeTransform, ErrorReason> {
-    if !world.state.entities.contains_key(&entity) {
-        return Err(ErrorReason::InvalidEntity);
-    }
-    let index = entity.index() as usize;
-    let mut transform = world
-        .components
-        .transform(index)
-        .copied()
-        .unwrap_or_default();
-    if aimed
-        && world
-            .components
-            .look_at(index)
-            .is_some_and(|value| value.runtime.invalid)
-    {
-        return Err(ErrorReason::UnsupportedDependency);
-    }
-    if aimed
-        && let Some(rotation) = world
-            .components
-            .look_at(index)
-            .and_then(|v| v.runtime.rotation)
-    {
-        [transform.qx, transform.qy, transform.qz, transform.qw] = rotation;
-    }
-    affine(&transform)
-}
-
 pub(crate) fn affine(transform: &Transform) -> Result<GeometryShapeTransform, ErrorReason> {
     let affine = CameraAffineTransform::new(transform)?;
     Ok(GeometryShapeTransform::from_inverse_pair(
@@ -45,19 +12,20 @@ pub(crate) fn affine(transform: &Transform) -> Result<GeometryShapeTransform, Er
 /// Joint matrices are copied from component-owned pose data; no binding survives a call.
 pub(in crate::world) fn parent_affine(
     world: &WorldSimulationState,
-    entity: EntityId,
+    _entity: EntityId,
     parent: EntityId,
 ) -> Result<GeometryShapeTransform, ErrorReason> {
     let object = evaluated_affine(world, parent)?;
+    #[cfg(feature = "skeletal-animation")]
     let bone = world
         .components
-        .hierarchy(entity.index() as usize)
-        .map_or(u32::MAX, |value| value.parent_bone);
-    if bone == u32::MAX {
-        return Ok(object);
-    }
+        .parent_joint(_entity.index() as usize)
+        .map_or(u32::MAX, |value| value.ordinal);
     #[cfg(feature = "skeletal-animation")]
     {
+        if bone == u32::MAX {
+            return Ok(object);
+        }
         let pose = world
             .components
             .skeleton(parent.index() as usize)
@@ -71,10 +39,10 @@ pub(in crate::world) fn parent_affine(
         GeometryShapeTransform::from_matrix(*joint)?.then(&object)
     }
     #[cfg(not(feature = "skeletal-animation"))]
-    Err(ErrorReason::UnsupportedDependency)
+    Ok(object)
 }
 
-/// Read the component-owned final result; roots without a relationship need no cache.
+/// Read the entity's final result from stable, lazily prepared spatial storage.
 pub(in crate::world) fn evaluated_affine(
     world: &WorldSimulationState,
     entity: EntityId,
@@ -82,14 +50,12 @@ pub(in crate::world) fn evaluated_affine(
     if !world.state.entities.contains_key(&entity) {
         return Err(ErrorReason::InvalidEntity);
     }
-    if let Some(hierarchy) = world.components.hierarchy(entity.index() as usize) {
-        hierarchy.runtime.world.ok_or(ErrorReason::InvalidValue)
-    } else {
-        // SAFETY: This binding is phase-local and cannot escape the shared World
-        // borrow; none of the selected component incarnations can end during it.
-        unsafe { ObjectTransformBinding::bind(&world.components, entity) }
-            .evaluate(&world.components)
-    }
+    world
+        .state
+        .links
+        .transform(entity)
+        .and_then(|runtime| runtime.value())
+        .ok_or(ErrorReason::InvalidValue)
 }
 
 impl crate::WorldContext<'_> {

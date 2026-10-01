@@ -15,8 +15,13 @@ interface TextInputPaint {
   readonly pixels: readonly number[];
 }
 
-/** Rows inside the mounted text input, clear of its focus ring. */
+/** Rows and columns inside the mounted text input, clear of its focus ring. */
 const TEXT_ROWS = { top: 3, bottom: 71 } as const;
+const TEXT_COLUMNS = { left: 4, right: 235 } as const;
+
+/** Bright rows a column needs to hold the caret bar: the caret spans the
+ * text line, taller than any label or provisional glyph stroke. */
+const CARET_ROWS = 26;
 
 function rgb(
   paint: TextInputPaint,
@@ -38,7 +43,8 @@ function columns(
   matches: (x: number, y: number) => boolean,
 ): number[] {
   const found: number[] = [];
-  for (let x = 0; x < paint.width; x += 1) {
+  const right = Math.min(TEXT_COLUMNS.right, paint.width - 1);
+  for (let x = TEXT_COLUMNS.left; x <= right; x += 1) {
     let count = 0;
     for (let y = TEXT_ROWS.top; y <= TEXT_ROWS.bottom; y += 1)
       if (matches(x, y)) count += 1;
@@ -47,12 +53,11 @@ function columns(
   return found;
 }
 
-/** Columns of the near-black caret bar over the blue control background. */
+/** Columns of the default white caret bar over the blue control background. */
 function caretColumns(paint: TextInputPaint): number[] {
-  return columns(paint, 4, (x, y) => {
-    const [r, g, b] = rgb(paint, x, y);
-    return r < 100 && g < 100 && b < 120;
-  });
+  return columns(paint, CARET_ROWS, (x, y) =>
+    rgb(paint, x, y).every((channel) => channel > 200),
+  );
 }
 
 /** Pixels `next` tints toward the translucent selection blue over `base`. */
@@ -76,8 +81,8 @@ function newGlyphColumns(base: TextInputPaint, next: TextInputPaint): number[] {
 }
 
 /** Failure context: the paint as a coarse character map, every second
- * column and row: `#` bright glyph coverage, `o` dark caret, `+` lighter
- * than the control background, `-` darker, `.` background. */
+ * column and row: `#` bright glyph or caret coverage, `o` near-black, `+`
+ * lighter than the control background, `-` darker, `.` background. */
 function describe(value: unknown): string {
   const paint = value as Partial<TextInputPaint>;
   if (paint.pixels === undefined || paint.width === undefined)
@@ -266,8 +271,8 @@ test("GUI roots, node identity and committed values cross a real worker connecti
             `${urls.origin}/dist/tests/integration/scenarios/gui-lifecycle.js`
           );
           const canvas = document.createElement("canvas");
-          canvas.width = 240;
-          canvas.height = 180;
+          canvas.width = 256;
+          canvas.height = 192;
           const host = await contract.IppHostClient.connectWorker(
             urls.workerScript,
             urls.wasm,
@@ -293,8 +298,8 @@ test("GUI roots, node identity and committed values cross a real worker connecti
             `${urls.origin}/dist/tests/integration/scenarios/gui-lifecycle.js`
           );
           const canvas = document.createElement("canvas");
-          canvas.width = 240;
-          canvas.height = 180;
+          canvas.width = 256;
+          canvas.height = 192;
           const font = await (
             await fetch(
               `${urls.origin}/target/font-assets/shure-tech-mono.ippf`,
@@ -306,23 +311,7 @@ test("GUI roots, node identity and committed values cross a real worker connecti
             { canvas: canvas.transferControlToOffscreen() },
           );
           try {
-            return await exerciseGuiTransientRestore(
-              host,
-              font,
-              async (client: {
-                presentation: {
-                  capture(): Promise<{
-                    width: number;
-                    height: number;
-                    pixels: ArrayBuffer;
-                  }>;
-                };
-              }) => {
-                const { width, height, pixels } =
-                  await client.presentation.capture();
-                return { width, height, pixels };
-              },
-            );
+            return await exerciseGuiTransientRestore(host, contract, font);
           } finally {
             await host.close();
           }
@@ -367,30 +356,15 @@ test("a 100000-item VirtualList scrolls, clips and restores through a real worke
             `${urls.origin}/dist/tests/integration/scenarios/gui-virtual-list.js`
           );
           const canvas = document.createElement("canvas");
-          canvas.width = 240;
-          canvas.height = 180;
+          canvas.width = 256;
+          canvas.height = 192;
           const host = await contract.IppHostClient.connectWorker(
             urls.workerScript,
             urls.wasm,
             { canvas: canvas.transferControlToOffscreen() },
           );
           try {
-            return await exerciseGuiVirtualList(
-              host,
-              async (client: {
-                presentation: {
-                  capture(): Promise<{
-                    width: number;
-                    height: number;
-                    pixels: ArrayBuffer;
-                  }>;
-                };
-              }) => {
-                const { width, height, pixels } =
-                  await client.presentation.capture();
-                return { width, height, pixels };
-              },
-            );
+            return await exerciseGuiVirtualList(host);
           } finally {
             await host.close();
           }
@@ -436,8 +410,8 @@ test("GUI pointer, keyboard and text input routes through a real worker connecti
             `${urls.origin}/dist/tests/integration/scenarios/gui-input.js`
           );
           const canvas = document.createElement("canvas");
-          canvas.width = 240;
-          canvas.height = 180;
+          canvas.width = 256;
+          canvas.height = 192;
           const font = await (
             await fetch(
               `${urls.origin}/target/font-assets/shure-tech-mono.ippf`,
@@ -665,8 +639,9 @@ test("mounted IppCanvas owns trusted text, IME, selection and clipboard lifecycl
         `equivalent rerender changed DOM selection: ${JSON.stringify(afterRerender)}`,
       );
       // Editing the named control theme while the text input is being edited
-      // updates only the root theme: the completed frame repaints the button,
-      // node rows and theme handles stay as they were, and editing continues.
+      // updates only the theme entity's part rows: the completed frame
+      // repaints the button, the controls' skins and the theme's identity and
+      // row slots stay as they were, and editing continues.
       const themeEvidence = () =>
         env.page.evaluate(
           async (url) => (await import(url)).themeEditEvidence(),
@@ -693,8 +668,16 @@ test("mounted IppCanvas owns trusted text, IME, selection and clipboard lifecycl
         before: beforeTheme.button,
         after: afterTheme.button,
       });
-      assert.equal(afterTheme.nodeStyles, beforeTheme.nodeStyles);
-      assert.deepEqual(afterTheme.themes, beforeTheme.themes);
+      assert.equal(afterTheme.skins, beforeTheme.skins);
+      assert.equal(afterTheme.theme, beforeTheme.theme);
+      const toneOne = [0.62, 0.14, 0.08, 1];
+      assert.ok(
+        afterTheme.background.every(
+          (value: number, index: number) =>
+            Math.abs(value - toneOne[index]!) < 1e-6,
+        ),
+        `named theme background row did not take the new tone: ${afterTheme.background}`,
+      );
       const afterThemeEdit = await readObservation();
       assert.deepEqual(afterThemeEdit.focusSelection, [12, 12]);
       assert.equal(afterThemeEdit.text, "aX世-clip-b");
@@ -711,25 +694,26 @@ test("mounted IppCanvas owns trusted text, IME, selection and clipboard lifecycl
       assert.equal(edited.sameEditor, true);
       assert.equal(edited.editorCount, 1);
       assert.equal(edited.activeEditor, true);
-      assert.deepEqual(edited.callbackValues, [
-        "aXb",
-        "aX世b",
-        "aX世-clip-b",
-        "aX世-clip-b!",
-      ]);
-      assert.equal(
-        edited.callbackValues.filter((value: string) => value === "aX世b")
-          .length,
-        1,
+      // onTextCommit reports the current value when registered, then each
+      // changed value at the end of its frame. The awaited values each
+      // arrive once, in order; the unawaited "aXb" may share a frame with
+      // the composition that follows it, so it appears at most once and
+      // only before "aX世b".
+      assert.equal(edited.callbackValues[0], "a😀b");
+      assert.deepEqual(
+        edited.callbackValues.filter((value: string) => value !== "aXb"),
+        ["a😀b", "aX世b", "aX世-clip-b", "aX世-clip-b!"],
+      );
+      assert.ok(
+        edited.callbackValues.filter((value: string) => value === "aXb")
+          .length <= 1 &&
+          (!edited.callbackValues.includes("aXb") ||
+            edited.callbackValues.indexOf("aXb") <
+              edited.callbackValues.indexOf("aX世b")),
+        `unexpected intermediate text values: ${edited.callbackValues}`,
       );
       assert.equal(edited.callbackRenders.at(-1), 1);
       assert.deepEqual(edited.errors, []);
-      assert.deepEqual(edited.callbackSources, [
-        "user",
-        "user",
-        "user",
-        "user",
-      ]);
 
       // Enter in the native editor submits the committed text once.
       await env.page.keyboard.press("Enter");
@@ -740,18 +724,16 @@ test("mounted IppCanvas owns trusted text, IME, selection and clipboard lifecycl
         "Enter did not submit the focused text",
       );
 
-      // An external replacement of the focused text reaches React marked
-      // external and refreshes the native editor without further input;
-      // typing then continues on the replaced text.
+      // An external compare-and-set replacement of the focused text reaches
+      // React's value callback and refreshes the native editor without
+      // further input; typing then continues on the replaced text.
       await env.page.evaluate(
         async (url) => (await import(url)).replaceText("ext"),
         fixture,
       );
       await waitForObservation(
         (value) =>
-          value.editorValue === "ext" &&
-          value.callbackValues.at(-1) === "ext" &&
-          value.callbackSources.at(-1) === "external",
+          value.editorValue === "ext" && value.callbackValues.at(-1) === "ext",
         "external replacement did not refresh the editor",
       );
       await env.page.keyboard.insertText("!");
@@ -776,7 +758,10 @@ test("mounted IppCanvas owns trusted text, IME, selection and clipboard lifecycl
       );
       assert.equal(afterButton.text, "ext!");
       assert.equal(afterButton.presses, 1);
-      assert.equal(afterButton.callbackValues.length, 6);
+      assert.deepEqual(
+        afterButton.callbackValues.slice(edited.callbackValues.length),
+        ["ext", "ext!"],
+      );
 
       const controlBefore = await readControlPaint();
       assert.equal(controlBefore.checked, false);
@@ -1149,9 +1134,9 @@ test("mounted nested ScrollViews drag, wheel and clip in completed WebGL frames"
       const page = (x: number, y: number) =>
         [bounds.x + x, bounds.y + y] as const;
 
-      // Canvas pixels sampled per frame, 60 px per GUI logical unit:
-      // `right` sits at logical (3, 0.5), `middle` at (3, 1.5), `narrow` at
-      // (1, 2.5) and `low` at (3, 2.5).
+      // Canvas pixels sampled per frame, one per Canvas logical unit and 60
+      // per Surface metre ("unit" below): `right` sits at (3, 0.5) units,
+      // `middle` at (3, 1.5), `narrow` at (1, 2.5) and `low` at (3, 2.5).
       const points = {
         right: [180, 30],
         middle: [180, 90],
@@ -1275,11 +1260,11 @@ test("mounted nested ScrollViews drag, wheel and clip in completed WebGL frames"
         low: "gray",
       });
 
-      // One 100 px wheel notch over the moved inner viewport scrolls the
-      // inner view by the default 0.25-unit wheel step, an eighth of its
-      // 2-unit viewport: the green block's top rises to logical y 0.75
-      // (45 px). Pixel rows 50..56 turn green only past 0.17 units and rows
-      // 34..40 stay red below 0.33 units, bounding the notch.
+      // One wheel notch (100 px) over the moved inner viewport scrolls the
+      // inner view by the fixture's step of a quarter unit, an eighth of its
+      // 2-unit viewport: the green block's top rises to y 0.75 units (45 px).
+      // Pixel rows 50..56 turn green only past 0.17 units and rows 34..40
+      // stay red below 0.33 units, bounding it.
       await env.page.mouse.move(...page(180, 30));
       await env.page.mouse.wheel(0, 100);
       const notch = { above: [180, 37], below: [180, 53] } as const;
@@ -1325,6 +1310,9 @@ test("mounted nested ScrollViews drag, wheel and clip in completed WebGL frames"
       // 3.85..4 track: the thumb rows are the magenta (or pressed white)
       // run, whose extent follows the committed offset over the capacity.
       const rows = Array.from({ length: 30 }, (_, row) => 3 + row * 6);
+      // Rows averaging across a thumb end blend both colours; every other row
+      // is track or thumb. Input reaches a completed frame asynchronously, so
+      // the first capture after an event may still show the previous skin.
       const thumbRows = async (label: string, thumb: string) => {
         const frame = await env.page.evaluate(
           async ({ url, points }) => (await import(url)).scrollFrame(points),
@@ -1338,20 +1326,19 @@ test("mounted nested ScrollViews drag, wheel and clip in completed WebGL frames"
             "base64",
           ),
         );
-        const hues = frame.samples.map((rgb: Rgb) => hue(rgb));
+        const hues: string[] = frame.samples.map((rgb: Rgb) => hue(rgb));
         env.evidence.record(label, hues);
-        // Rows averaging across a thumb end blend both colours; every other
-        // row is track or thumb.
         const blended = hues.filter(
-          (colour: string) => colour !== thumb && colour !== "cyan",
-        );
-        assert.ok(
-          blended.length <= 2 &&
-            blended.every((colour: string) => colour.startsWith("other")),
-          `${label}: bar column is not only track and thumb: ${hues.join(",")}`,
+          (colour) => colour !== thumb && colour !== "cyan",
         );
         const covered = rows.filter((_, index) => hues[index] === thumb);
-        return [covered[0], covered.at(-1)] as const;
+        return {
+          hues,
+          span: [covered[0], covered.at(-1)] as const,
+          clean:
+            blended.length <= 2 &&
+            blended.every((colour) => colour.startsWith("other")),
+        };
       };
       // Expect the thumb run to cover [start, end) in pixels: rows sample
       // every 6 px and average 7 px, so run ends land within 10 px.
@@ -1362,7 +1349,6 @@ test("mounted nested ScrollViews drag, wheel and clip in completed WebGL frames"
         thumb = "magenta",
       ) => {
         const deadline = performance.now() + 5_000;
-        let span = await thumbRows(label, thumb);
         const near = ([first, last]: readonly [
           number | undefined,
           number | undefined,
@@ -1371,13 +1357,24 @@ test("mounted nested ScrollViews drag, wheel and clip in completed WebGL frames"
           last !== undefined &&
           Math.abs(first - start) <= 10 &&
           Math.abs(last - end) <= 10;
-        while (!near(span) && performance.now() < deadline) {
+        let rowsOf = await thumbRows(label, thumb);
+        while (
+          !(rowsOf.clean && near(rowsOf.span)) &&
+          performance.now() < deadline
+        ) {
           await new Promise<void>((resolve) => setTimeout(resolve, 50));
-          span = await thumbRows(label, thumb);
+          rowsOf = await thumbRows(label, thumb);
         }
         assert.ok(
-          near(span),
-          `${label}: thumb rows ${span} not ${start}..${end}`,
+          rowsOf.clean,
+          `${label}: bar column is not only track and thumb: ${rowsOf.hues.join(",")}; ${await env.page.evaluate(
+            async (url) => (await import(url)).scrollDiagnostics(),
+            fixture,
+          )}`,
+        );
+        assert.ok(
+          near(rowsOf.span),
+          `${label}: thumb rows ${rowsOf.span} not ${start}..${end}`,
         );
       };
 
@@ -1528,8 +1525,8 @@ test("a mounted React VirtualList declares its wanted range and scrolls in compl
         [2.5, "yellow"],
       ]);
 
-      // Two 100 px wheel notches scroll half a unit: item 1 now starts at
-      // the top and item 4 fills the bottom.
+      // Two wheel notches scroll half a unit: item 1 now starts at the top
+      // and item 4 fills the bottom.
       await env.page.mouse.move(...page(60, 90));
       await env.page.mouse.wheel(0, 200);
       await expectItems("virtual-wheeled", async () => [
@@ -1557,7 +1554,10 @@ test("a mounted React VirtualList declares its wanted range and scrolls in compl
         covered.length > 0 &&
           Math.abs(covered[0]! - 81) <= 10 &&
           Math.abs(covered.at(-1)! - 99) <= 10,
-        `virtual-thumb: thumb rows ${covered} not 81..99`,
+        `virtual-thumb: thumb rows ${covered} not 81..99; ${await env.page.evaluate(
+          async (url) => (await import(url)).scrollDiagnostics(),
+          fixture,
+        )}`,
       );
       const semantics = async () =>
         env.page.evaluate(
@@ -1566,9 +1566,9 @@ test("a mounted React VirtualList declares its wanted range and scrolls in compl
         );
       await expectItems("virtual-middle", async () => {
         const node = await semantics();
-        const { anchorIndex, anchorOffset } = node.virtualList!;
+        const { anchorIndex, anchorOffset } = node;
         const wanted: [number, string][] = [];
-        let top = -anchorOffset;
+        let top = -anchorOffset / 60;
         for (let index = anchorIndex; top < 3; index += 1) {
           const height = index % 2 === 0 ? 0.5 : 1;
           const centre = top + height / 2;
@@ -1585,15 +1585,18 @@ test("a mounted React VirtualList declares its wanted range and scrolls in compl
       );
       env.evidence.record("virtual-ranges", { ranges, node });
       assert.ok(
-        node.virtualList!.anchorIndex > 40_000 &&
-          node.virtualList!.anchorIndex < 60_000 &&
-          node.virtualList!.loadedLast - node.virtualList!.loadedFirst <= 8,
-        `virtual-middle: ${JSON.stringify(node.virtualList)}`,
+        node.anchorIndex > 40_000 &&
+          node.anchorIndex < 60_000 &&
+          node.last - node.first <= 8,
+        `virtual-middle: ${JSON.stringify(node)}`,
       );
       assert.ok(
-        ranges.at(-1)!.first <= node.virtualList!.anchorIndex &&
-          ranges.at(-1)!.last > node.virtualList!.anchorIndex,
-        `virtual-middle: last range ${JSON.stringify(ranges.at(-1))}`,
+        ranges.at(-1)!.first <= node.anchorIndex &&
+          ranges.at(-1)!.last > node.anchorIndex,
+        `virtual-middle: last range ${JSON.stringify(
+          ranges.at(-1),
+          (_, value) => (typeof value === "bigint" ? value.toString() : value),
+        )}`,
       );
 
       const canvasCount = await env.page.evaluate(

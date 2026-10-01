@@ -1,10 +1,11 @@
 use crate::{
     ErrorReason,
-    components::schema::ComponentLifecycle,
+    components::schema::{ComponentLifecycle, same_text},
     services::asset_management::service::{AssetDemandSelection, validate_source},
 };
 use ipp_schema_derive::SchemaComponent;
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 /// A mesh instance bound to one live skeleton instance and immutable inverse binds.
 #[repr(C)]
@@ -13,7 +14,7 @@ pub struct Skin {
     /// Skeleton entity; zero leaves this binding inactive.
     pub skeleton: crate::EntityId,
     /// Immutable skin binding URI; empty leaves this binding inactive.
-    pub source: String,
+    pub source: Arc<str>,
     /// Binding variant.
     pub variant: u32,
     /// Component-owned evaluated palette, excluded from authored copies and wire access.
@@ -42,7 +43,7 @@ impl Clone for Skin {
 impl PartialEq for Skin {
     fn eq(&self, other: &Self) -> bool {
         self.skeleton == other.skeleton
-            && self.source == other.source
+            && same_text(&self.source, &other.source)
             && self.variant == other.variant
     }
 }
@@ -50,7 +51,7 @@ impl PartialEq for Skin {
 impl ComponentLifecycle for Skin {
     fn preserve_runtime(&mut self, previous: &mut Self) {
         if self.skeleton == previous.skeleton
-            && self.source == previous.source
+            && same_text(&self.source, &previous.source)
             && self.variant == previous.variant
         {
             self.runtime = std::mem::take(&mut previous.runtime);

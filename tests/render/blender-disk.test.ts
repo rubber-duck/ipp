@@ -75,11 +75,13 @@ test("standard Blender disk export imports a reusable action library and renders
       );
       await environment.page.exposeFunction(
         "recordDisk",
-        async (label: string, url: string) =>
-          writeDataUrl(
+        async (label: string, url: string, frame: unknown) => {
+          await writeDataUrl(
             resolve(environment.evidence.directory, label + ".png"),
             url,
-          ),
+          );
+          await environment.evidence.writeJson(`${label}-frame.json`, frame);
+        },
       );
       const bundleUrl = new URL(
         relative(workspace, bundled) + "/",
@@ -87,7 +89,8 @@ test("standard Blender disk export imports a reusable action library and renders
       ).href;
       const result = await invoke<Awaited<ReturnType<typeof run>>>(
         environment.page,
-        environment.urls.origin + "/dist/tests/render/blender-disk-fixture.js",
+        environment.urls.origin +
+          "/target/blender-test/blender-disk-fixture.js",
         "run",
         [environment.urls, bundleUrl],
       );

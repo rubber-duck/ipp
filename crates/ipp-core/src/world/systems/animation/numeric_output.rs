@@ -17,10 +17,6 @@ pub(super) enum AnimationNumericOutput {
     Light(ComponentBinding<Light>),
     Camera(ComponentBinding<Camera>),
     CustomMaterial(ComponentBinding<CustomMaterial>),
-    #[cfg(feature = "surfaces")]
-    Surface(ComponentBinding<crate::components::Surface>),
-    #[cfg(feature = "gui")]
-    GuiRoot(ComponentBinding<crate::systems::gui::GuiRoot>),
     LinearDriver(ComponentBinding<LinearDriver>),
     BoundingGeometry(ComponentBinding<BoundingGeometry>),
     PickingGeometry(ComponentBinding<PickingGeometry>),
@@ -41,10 +37,6 @@ impl AnimationNumericOutput {
             | ComponentValue::LINEAR_DRIVER
             | ComponentValue::BOUNDING_GEOMETRY
             | ComponentValue::PICKING_GEOMETRY => true,
-            #[cfg(feature = "surfaces")]
-            ComponentValue::SURFACE => true,
-            #[cfg(feature = "gui")]
-            ComponentValue::GUI_ROOT => true,
             #[cfg(feature = "mesh-poses")]
             ComponentValue::MESH_POSE => true,
             #[cfg(feature = "particles")]
@@ -85,14 +77,6 @@ impl AnimationNumericOutput {
                 }
                 ComponentValue::CUSTOM_MATERIAL => {
                     Self::CustomMaterial(ComponentBinding::new(storage.custom_material_ptr(index)?))
-                }
-                #[cfg(feature = "surfaces")]
-                ComponentValue::SURFACE => {
-                    Self::Surface(ComponentBinding::new(storage.surface_ptr(index)?))
-                }
-                #[cfg(feature = "gui")]
-                ComponentValue::GUI_ROOT => {
-                    Self::GuiRoot(ComponentBinding::new(storage.gui_root_ptr(index)?))
                 }
                 ComponentValue::LINEAR_DRIVER => {
                     Self::LinearDriver(ComponentBinding::new(storage.linear_driver_ptr(index)?))
@@ -204,32 +188,6 @@ impl AnimationNumericOutput {
                             .set_field(*offset, value.clone())
                             .map_err(|_| ErrorReason::InvalidField)?;
                     }
-                }
-            }
-            #[cfg(feature = "surfaces")]
-            Self::Surface(binding) => {
-                let component = binding.get_mut(storage);
-                for ((_, offset), value) in fields() {
-                    component
-                        .properties
-                        .set_field(*offset, value.clone())
-                        .map_err(|_| ErrorReason::InvalidField)?;
-                }
-            }
-            #[cfg(feature = "gui")]
-            Self::GuiRoot(binding) => {
-                // Every GUI property is a row property: guard every written
-                // one (animatable, present, in range) before publishing any,
-                // then write through the derived field path, which resolves
-                // the row at write time.
-                let component = binding.get_mut(storage);
-                for ((_, offset), value) in fields() {
-                    component.validate_numeric_properties(&[(*offset, value.clone())])?;
-                }
-                for ((_, offset), value) in fields() {
-                    component
-                        .set_field(*offset, value.clone())
-                        .map_err(|_| ErrorReason::InvalidField)?;
                 }
             }
             _ => unreachable!("bound patch output"),

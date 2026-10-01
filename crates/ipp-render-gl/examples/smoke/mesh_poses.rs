@@ -22,6 +22,7 @@ fn insert(alias: u32, component: u16, fields: Vec<FieldWrite>) -> Command {
         entity: EntityRef::Alias(alias),
         component,
         fields,
+        adopt: false,
     }
 }
 
@@ -63,7 +64,7 @@ pub fn run<D: RenderDevice>(
 ) -> Result<()> {
     let mut host = HostRuntime::new();
     renderer.install(&mut host)?;
-    let world_id = host.create_world(Default::default())?;
+    let world_id = host.create_world(Default::default(), &super::selection::scene())?;
     let mut world = host.world_mut(world_id).unwrap();
     for (asset, name) in [
         (1, "base"),
@@ -85,6 +86,7 @@ pub fn run<D: RenderDevice>(
         Command::Create {
             alias: 0,
             metadata: Default::default(),
+            adopt: false,
         },
         insert(
             0,
@@ -108,6 +110,7 @@ pub fn run<D: RenderDevice>(
             Command::Create {
                 alias,
                 metadata: Default::default(),
+                adopt: false,
             },
             insert(
                 alias,
@@ -138,6 +141,7 @@ pub fn run<D: RenderDevice>(
             Command::Create {
                 alias: 3,
                 metadata: Default::default(),
+                adopt: false,
             },
             insert(
                 3,
@@ -175,6 +179,21 @@ pub fn run<D: RenderDevice>(
     let a = aliases.iter().find(|(alias, _)| *alias == 1).unwrap().1;
     world.enqueue_camera_activate(camera)?;
     world.step(0.0)?;
+    drop(world);
+    let selection = host.bind_output(
+        host.world_ref(world_id).unwrap(),
+        camera,
+        OutputKind::Camera,
+    )?;
+    host.set_root_output(
+        selection,
+        WorldViewport {
+            width: WIDTH,
+            height: HEIGHT,
+            device_pixel_ratio: 1.0,
+        },
+    )?;
+    world = host.world_mut(world_id).unwrap();
     let mut endpoints = Vec::new();
     for (weight, baked) in [
         (0.0, "asset://1/1"),
@@ -193,7 +212,12 @@ pub fn run<D: RenderDevice>(
                 ),
             ],
         )?;
-        let stats = ready(renderer, &mut world)?;
+        let stats = {
+            drop(world);
+            let result = ready(renderer, &mut host, world_id);
+            world = host.world_mut(world_id).unwrap();
+            result
+        }?;
         if stats.draw_calls != 2 {
             return Err(format!("incomplete native pose scene: {stats:?}").into());
         }
@@ -206,7 +230,12 @@ pub fn run<D: RenderDevice>(
                 set(a, ComponentValue::MESH_INSTANCE, source(baked)),
             ],
         )?;
-        ready(renderer, &mut world)?;
+        {
+            drop(world);
+            let result = ready(renderer, &mut host, world_id);
+            world = host.world_mut(world_id).unwrap();
+            result
+        }?;
         compare(output, &format!("pose-{weight}"), &posed, &capture()?)?;
     }
     if endpoints[0] == endpoints[2] {
@@ -236,7 +265,12 @@ pub fn run<D: RenderDevice>(
             ),
         ],
     )?;
-    ready(renderer, &mut world)?;
+    {
+        drop(world);
+        let result = ready(renderer, &mut host, world_id);
+        world = host.world_mut(world_id).unwrap();
+        result
+    }?;
     let transformed = capture()?;
     apply(
         &mut world,
@@ -246,7 +280,12 @@ pub fn run<D: RenderDevice>(
             set(a, ComponentValue::MESH_INSTANCE, source("asset://1/4")),
         ],
     )?;
-    ready(renderer, &mut world)?;
+    {
+        drop(world);
+        let result = ready(renderer, &mut host, world_id);
+        world = host.world_mut(world_id).unwrap();
+        result
+    }?;
     compare(output, "affine-object", &transformed, &capture()?)?;
     apply(
         &mut world,
@@ -257,6 +296,7 @@ pub fn run<D: RenderDevice>(
                     symbolic_id: Some("affine-parent".into()),
                     ..Default::default()
                 },
+                adopt: false,
             },
             Command::insert_value(EntityRef::Alias(50), ComponentValue::Transform(affine)),
             Command::Create {
@@ -265,6 +305,7 @@ pub fn run<D: RenderDevice>(
                     symbolic_id: Some("aim-target".into()),
                     ..Default::default()
                 },
+                adopt: false,
             },
             Command::insert_value(
                 EntityRef::Alias(51),
@@ -282,18 +323,23 @@ pub fn run<D: RenderDevice>(
     apply(
         &mut world,
         vec![
-            authored(
-                a,
-                ComponentValue::Hierarchy(components::Hierarchy {
-                    parent,
-                    ..Default::default()
-                }),
-            ),
+            Command::PlaceEntity {
+                entity: EntityRef::Handle(a),
+                placement: EntityPlacementRef {
+                    parent: Some(EntityRef::Handle(parent)),
+                    before: None,
+                },
+            },
             set(a, ComponentValue::MESH_INSTANCE, source("asset://1/1")),
             set(a, ComponentValue::MESH_POSE, source("asset://1/2")),
         ],
     )?;
-    ready(renderer, &mut world)?;
+    {
+        drop(world);
+        let result = ready(renderer, &mut host, world_id);
+        world = host.world_mut(world_id).unwrap();
+        result
+    }?;
     compare(output, "affine-hierarchy", &capture()?, &transformed)?;
     apply(
         &mut world,
@@ -305,14 +351,19 @@ pub fn run<D: RenderDevice>(
             }),
         )],
     )?;
-    ready(renderer, &mut world)?;
+    {
+        drop(world);
+        let result = ready(renderer, &mut host, world_id);
+        world = host.world_mut(world_id).unwrap();
+        result
+    }?;
     let aimed = capture()?;
     apply(
         &mut world,
         vec![
-            Command::RemoveComponent {
+            Command::PlaceEntity {
                 entity: EntityRef::Handle(a),
-                component: ComponentValue::HIERARCHY,
+                placement: ipp_core::EntityPlacementRef::default(),
             },
             Command::RemoveComponent {
                 entity: EntityRef::Handle(a),
@@ -322,7 +373,12 @@ pub fn run<D: RenderDevice>(
             set(a, ComponentValue::MESH_INSTANCE, source("asset://1/5")),
         ],
     )?;
-    ready(renderer, &mut world)?;
+    {
+        drop(world);
+        let result = ready(renderer, &mut host, world_id);
+        world = host.world_mut(world_id).unwrap();
+        result
+    }?;
     compare(output, "affine-look-at", &aimed, &capture()?)?;
     apply(
         &mut world,
@@ -336,22 +392,28 @@ pub fn run<D: RenderDevice>(
             ),
         ],
     )?;
-    ready(renderer, &mut world)?;
+    {
+        drop(world);
+        let result = ready(renderer, &mut host, world_id);
+        world = host.world_mut(world_id).unwrap();
+        result
+    }?;
     let before = capture()?;
     drop(world);
     renderer.replace_device(&mut host, replacement()?)?;
-    world = host.world_mut(world_id).unwrap();
-    ready(renderer, &mut world)?;
+    ready(renderer, &mut host, world_id)?;
     compare(output, "recovered", &capture()?, &before)?;
+    renderer.prepare(&mut host, None)?;
     Ok(())
 }
 
 fn ready<D: RenderDevice>(
     renderer: &mut RenderService<D>,
-    world: &mut WorldContext<'_>,
+    host: &mut HostRuntime,
+    world: WorldId,
 ) -> Result<crate::smoke::frame_stats::FrameStats> {
     for _ in 0..512 {
-        let stats = super::world::render_frame(renderer, world, WIDTH, HEIGHT)?;
+        let stats = super::world::render_host_frame(renderer, host, world, WIDTH, HEIGHT)?;
         if stats.draw_calls == 2 {
             return Ok(stats);
         }

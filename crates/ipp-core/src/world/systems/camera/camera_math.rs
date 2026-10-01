@@ -44,11 +44,23 @@ pub fn prepare_affine(
     width: u32,
     height: u32,
 ) -> Result<PreparedCamera, ErrorReason> {
+    prepare_affine_for_extent(
+        entity,
+        camera,
+        affine,
+        [f64::from(width), f64::from(height)],
+    )
+}
+
+/// Projection extent is independent of raster resolution; nested views use physical Surface size.
+pub fn prepare_affine_for_extent(
+    entity: EntityId,
+    camera: &Camera,
+    affine: &crate::systems::geometry::GeometryShapeTransform,
+    extent: [f64; 2],
+) -> Result<PreparedCamera, ErrorReason> {
     camera.validate()?;
-    if width == 0 || height == 0 {
-        return Err(ErrorReason::InvalidValue);
-    }
-    let aspect = f64::from(width) / f64::from(height);
+    let aspect = projection_aspect(extent)?;
     let near = f64::from(camera.near);
     let far = f64::from(camera.far);
     let mut projection = [0.0; 16];
@@ -82,6 +94,18 @@ pub fn prepare_affine(
         entity,
         view_projection,
     })
+}
+
+pub(super) fn projection_aspect(extent: [f64; 2]) -> Result<f64, ErrorReason> {
+    let aspect = extent[0] / extent[1];
+    if extent.iter().all(|value| value.is_finite() && *value > 0.0)
+        && aspect.is_finite()
+        && aspect > 0.0
+    {
+        Ok(aspect)
+    } else {
+        Err(ErrorReason::InvalidViewport)
+    }
 }
 
 // Finite f32 coefficients alone do not establish a usable projection: extreme

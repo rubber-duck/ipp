@@ -8,6 +8,10 @@
       "features": [],
       "builtins": true
     },
+    "headless-surfaces": {
+      "features": ["surfaces"],
+      "builtins": false
+    },
     "render-baseline": {
       "features": [
         "render",
@@ -75,12 +79,26 @@
       ],
       "builtins": true
     },
+    "semantic-gui": {
+      "features": ["surfaces", "gui"],
+      "builtins": false
+    },
     "headless-gui": {
       "features": [
         "render",
         "diagnostics",
         "surfaces",
         "gui"
+      ],
+      "builtins": false
+    },
+    "gui-stress-profile": {
+      "features": [
+        "render",
+        "diagnostics",
+        "surfaces",
+        "gui",
+        "profiling"
       ],
       "builtins": false
     }

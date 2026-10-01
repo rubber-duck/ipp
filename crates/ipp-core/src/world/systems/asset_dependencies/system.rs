@@ -52,6 +52,8 @@ impl System for AssetDependencySystem {
                 | crate::ComponentValue::MESH_INSTANCE => true,
                 #[cfg(feature = "mesh-poses")]
                 crate::ComponentValue::MESH_POSE => true,
+                #[cfg(feature = "particles")]
+                crate::ComponentValue::PARTICLE_MESH => true,
                 _ => false,
             })
         {
@@ -117,10 +119,8 @@ impl AssetDependencySystem {
         ecs: crate::systems::SystemEcsAccess<'_>,
         assets: &mut crate::services::asset_management::AssetManagementService,
         animation: &crate::systems::animation::AnimationSystem,
-        overlay: &crate::systems::state_overlay::StateOverlaySystem,
         _dt: f64,
     ) {
-        let _ = overlay;
         if self.state.animation_demand_revision != Some(animation.state.demand_revision) {
             self.state.animation_demand_revision = Some(animation.state.demand_revision);
             let animation_sources: std::collections::BTreeSet<_> =

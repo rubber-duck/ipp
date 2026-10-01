@@ -2,8 +2,8 @@
 
 use super::ConstraintSystemState;
 use crate::systems::{
-    System, SystemDependency, SystemFactory, SystemId, SystemInitContext, SystemInitError,
-    SystemTeardownContext, SystemUpdateContext,
+    System, SystemFactory, SystemId, SystemInitContext, SystemInitError, SystemTeardownContext,
+    SystemUpdateContext,
 };
 
 /// Fresh runtime state owned by one World.
@@ -26,11 +26,16 @@ impl SystemFactory for ConstraintSystemFactory {
         ConstraintSystem::ID
     }
 
-    fn dependencies(&self) -> &[SystemDependency] {
-        &[
-            SystemDependency::After(SystemId("ipp.animation")),
-            SystemDependency::After(SystemId("ipp.state-overlay")),
-        ]
+    // The Scalar values that drivers read and write are admitted with them;
+    // no other System owns the Scalar component.
+    fn capabilities(&self) -> crate::systems::SystemCapabilities {
+        crate::systems::SystemCapabilities::new(
+            [
+                crate::ComponentValue::SCALAR,
+                crate::ComponentValue::LINEAR_DRIVER,
+            ],
+            [crate::systems::WorldOperation::Constraints],
+        )
     }
 
     fn create(
@@ -42,29 +47,11 @@ impl SystemFactory for ConstraintSystemFactory {
 }
 
 impl System for ConstraintSystem {
-    fn restore_component_input(
-        &self,
-        entity: crate::EntityId,
-        incarnation: u64,
-        value: &mut crate::ComponentValue,
-    ) {
-        if let crate::ComponentValue::Scalar(value) = value
-            && self.state.restores_active
-            && let Some(original) = self
-                .state
-                .restores
-                .get(&entity)
-                .filter(|original| original.incarnation == incarnation)
-        {
-            *value = original.base;
-        }
-    }
-
     fn after_operation(
         &mut self,
         context: &mut crate::systems::SystemOperationContext<'_>,
     ) -> Result<(), crate::ErrorReason> {
-        self.reconcile(&context.world_data.components, context.staged)
+        self.reconcile(context.world_data, context.staged)
     }
 
     fn before_commit(&mut self, context: &mut crate::systems::SystemCommitContext<'_>) {
@@ -75,28 +62,10 @@ impl System for ConstraintSystem {
             )
         }) {
             self.state.numeric.clear();
+            self.state.targets.clear();
             self.state.numeric_dirty = true;
         }
-        let _ = self.reconcile(&context.world_data.components, context.staged);
-        self.state.restores.retain(|entity, original| {
-            if !self.state.bindings.contains_key(entity) || self.state.invalid.contains(entity) {
-                return false;
-            }
-            if !context.is_evaluated()
-                && context
-                    .staged
-                    .changed
-                    .contains_key(&(*entity, crate::ComponentValue::SCALAR))
-            {
-                return false;
-            }
-            context
-                .staged
-                .entities
-                .get(entity)
-                .and_then(|record| record.input(crate::ComponentValue::SCALAR))
-                .is_some_and(|input| input.incarnation == original.incarnation)
-        });
+        let _ = self.reconcile(context.world_data, context.staged);
     }
 
     fn after_commit(&mut self, context: &mut crate::systems::SystemCommitContext<'_>) {
@@ -105,18 +74,18 @@ impl System for ConstraintSystem {
         }
     }
 
-    fn prepare_mutation(&mut self, context: &mut SystemUpdateContext<'_, '_>) {
-        self.restore_inputs(context.world.world);
-    }
-
     fn teardown(&mut self, _context: &mut SystemTeardownContext<'_>) {
-        self.state.restores.clear();
+        self.state.numeric.clear();
+        self.state.targets.clear();
         self.state.bindings.clear();
         self.state.invalid.clear();
         self.state.declarations.clear();
     }
 
     fn update(&mut self, context: &mut SystemUpdateContext<'_, '_>) {
+        // Targets take absolute values; contributions others keep to them
+        // apply again on top.
+        context.world.before_absolute_writes(&self.state.targets);
         self.evaluate(context.world.world);
     }
 }

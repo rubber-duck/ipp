@@ -1,3 +1,7 @@
+import {
+  WorkerConnections,
+  type WorkerConnectionExports,
+} from "./worker-connections.js";
 import { resourceUrlMappings } from "./resource-urls.js";
 import type { RenderWorkerService } from "./render-worker.js";
 import type { IngressStatistics } from "./presentation.js";
@@ -13,26 +17,21 @@ import {
 } from "./logging.js";
 
 /** Dedicated worker owns ingress, the frame clock, and optional presentation. */
-const MAX_IN_FLIGHT_MESSAGES = 64;
 const FRAME_INTERVAL_MS = 1_000 / 60;
 const MAX_FRAME_DELTA_SECONDS = 0.25;
 const MAX_ASSET_CACHE_BYTES = 0xffff_ffff;
 
-interface WasmHostExports {
+interface WasmHostExports extends WorkerConnectionExports {
   memory: WebAssembly.Memory;
   ipp_schema_hash(): bigint;
-  ipp_session_open(session: bigint): number;
+  ipp_host_open(epoch: bigint): number;
   ipp_host_set_identity_namespace(namespace: bigint): number;
   ipp_host_set_asset_cache_bytes(bytes: number): number;
-  ipp_session_close(): void;
-  ipp_input_reserve(length: number): number;
-  ipp_receive(length: number): number;
+  ipp_host_close(): void;
   ipp_tick(dt: number): number;
   ipp_host_time(seconds: number): number;
   ipp_progress_resources(): number;
   ipp_service_resources(): number;
-  ipp_accepts_input(): number;
-  ipp_poll(): number;
   ipp_output_ptr(): number;
   ipp_output_len(): number;
 }
@@ -44,10 +43,10 @@ function runtimeExports(instance: WebAssembly.Instance): WasmHostExports {
   }
   for (const name of [
     "ipp_schema_hash",
-    "ipp_session_open",
+    "ipp_host_open",
     "ipp_host_set_identity_namespace",
     "ipp_host_set_asset_cache_bytes",
-    "ipp_session_close",
+    "ipp_host_close",
     "ipp_input_reserve",
     "ipp_receive",
     "ipp_tick",
@@ -55,7 +54,18 @@ function runtimeExports(instance: WebAssembly.Instance): WasmHostExports {
     "ipp_progress_resources",
     "ipp_service_resources",
     "ipp_accepts_input",
-    "ipp_poll",
+    "ipp_connection_limit",
+    "ipp_delivery_limit",
+    "ipp_request_window",
+    "ipp_connection_open",
+    "ipp_connection_close",
+    "ipp_connection_dispose",
+    "ipp_connection_pending",
+    "ipp_connection_failed",
+    "ipp_connection_poll",
+    "ipp_output_delivery_id",
+    "ipp_output_copied",
+    "ipp_delivery_complete",
     "ipp_output_ptr",
     "ipp_output_len",
   ]) {
@@ -102,8 +112,50 @@ globalThis.onmessage = (event: MessageEvent<unknown>) => {
   let nextMaintenanceFrame = lastFrame + FRAME_INTERVAL_MS;
   let frameRequest: number | undefined;
   let frameTimer: ReturnType<typeof setTimeout> | undefined;
-  let inFlight = 0;
+  let connections: WorkerConnections | undefined;
+  const pendingPorts = new Map<bigint, MessagePort>();
   const loading = new AbortController();
+
+  const disposePending = (connection: bigint) => {
+    const pending = pendingPorts.get(connection);
+    if (!pending) return;
+    pendingPorts.delete(connection);
+    pending.onmessage = pending.onmessageerror = null;
+    pending.close();
+  };
+
+  const holdPending = (connection: bigint, pending: MessagePort) => {
+    pendingPorts.set(connection, pending);
+    const finishPending = (error?: string) => {
+      if (pendingPorts.get(connection) !== pending) return;
+      try {
+        pending.postMessage(
+          error
+            ? { type: "error", connection, message: error }
+            : { type: "closed", connection },
+        );
+      } catch {
+      } finally {
+        disposePending(connection);
+      }
+    };
+    pending.onmessageerror = () =>
+      finishPending("Worker message decode failed");
+    pending.onmessage = (event: MessageEvent<unknown>) => {
+      const data = event.data;
+      finishPending(
+        typeof data === "object" &&
+          data !== null &&
+          "type" in data &&
+          data.type === "close" &&
+          "connection" in data &&
+          data.connection === connection
+          ? undefined
+          : "Invalid pending worker connection envelope",
+      );
+    };
+    pending.start();
+  };
 
   const cancelFrame = () => {
     if (frameRequest !== undefined) cancelAnimationFrame(frameRequest);
@@ -112,24 +164,39 @@ globalThis.onmessage = (event: MessageEvent<unknown>) => {
     frameTimer = undefined;
   };
 
-  const finish = (error?: Error) => {
-    if (closed) return;
-    closed = true;
-    cancelFrame();
-    loading.abort();
-    resources?.close();
-    presentation?.close();
-    runtime?.ipp_session_close();
-    logger.log(
-      error ? "error" : "info",
-      error ? "worker.failed" : "worker.stopped",
-      () => ({ reason: error?.message }),
-    );
-    port.postMessage(
-      error ? { type: "error", message: error.message } : { type: "closed" },
-    );
+  const finalize = () => {
+    if ((connections?.size ?? 0) !== 0 || pendingPorts.size !== 0) return;
+    runtime?.ipp_host_close();
+    port.postMessage({ type: "closed" });
     port.close();
     globalThis.close();
+  };
+
+  const finish = (error?: Error) => {
+    if (!closed) {
+      closed = true;
+      cancelFrame();
+      loading.abort();
+      resources?.close();
+      presentation?.close();
+      if (error) connections?.failAll(error);
+      for (const [connection, pending] of pendingPorts) {
+        pending.postMessage({
+          type: "error",
+          connection,
+          message: error?.message ?? "Host closed",
+        });
+        disposePending(connection);
+      }
+      pendingPorts.clear();
+      logger.log(
+        error ? "error" : "info",
+        error ? "worker.failed" : "worker.stopped",
+        () => ({ reason: error?.message }),
+      );
+      if (error) port.postMessage({ type: "error", message: error.message });
+    }
+    finalize();
   };
 
   const output = (): Uint8Array<ArrayBuffer> => {
@@ -139,7 +206,7 @@ globalThis.onmessage = (event: MessageEvent<unknown>) => {
     const length = runtime.ipp_output_len() >>> 0;
     if (length > maxMessageBytes)
       throw new Error("WASM response exceeds bounds");
-    return new Uint8Array(runtime.memory.buffer, pointer, length).slice();
+    return new Uint8Array(runtime.memory.buffer, pointer, length);
   };
 
   const checkResult = (ok: number) => {
@@ -149,55 +216,15 @@ globalThis.onmessage = (event: MessageEvent<unknown>) => {
       );
   };
 
-  let lastDelivery = performance.now();
-  const pendingInputs: { parts: ArrayBuffer[]; multipart: boolean }[] = [];
-  const pumpInputs = () => {
-    while (pendingInputs.length && runtime?.ipp_accepts_input() === 1) {
-      const { parts, multipart } = pendingInputs.shift()!;
-      const length = parts.reduce((sum, part) => sum + part.byteLength, 0);
-      const pointer = runtime.ipp_input_reserve(length) >>> 0;
-      if (pointer === 0) throw new Error("WASM input reservation failed");
-      const destination = new Uint8Array(
-        runtime.memory.buffer,
-        pointer,
-        length,
-      );
-      let offset = 0;
-      for (const part of parts) {
-        destination.set(new Uint8Array(part), offset);
-        offset += part.byteLength;
-      }
-      if (ingress) {
-        ingress.messages++;
-        ingress.wasmCopyBytes += length;
-        if (multipart) {
-          ingress.partsMessages++;
-          ingress.transferredAssetBytes += parts[1]?.byteLength ?? 0;
-        }
-      }
-      checkResult(runtime.ipp_receive(length));
-    }
-  };
-
-  const publish = () => {
-    // Delivery acknowledgements bound the browser queue as well as Rust's outbox.
-    // A stalled receiver leaves output in Rust, where saturation fails explicitly.
-    // Each poll invalidates the previous WASM view; transfer an exclusive copy.
-    while (inFlight < MAX_IN_FLIGHT_MESSAGES && runtime?.ipp_poll() === 1) {
-      const bytes = output();
-      port.postMessage({ type: "data", bytes: bytes.buffer }, [bytes.buffer]);
-      if (inFlight === 0) lastDelivery = performance.now();
-      inFlight++;
-    }
-  };
+  const pumpInputs = () => connections?.pumpInputs();
+  const publish = () => connections?.publish();
 
   const evaluateFrame = (dt: number) => checkResult(runtime!.ipp_tick(dt));
   const runFrame = (dt: number) => {
-    presentation?.beforeTick();
+    presentation?.beforeFrame();
     evaluate(dt);
     pumpInputs();
     resources?.pumpAfterFrame();
-    presentation?.afterFrame();
     publish();
   };
   // Profiling builds replace both with timed steps; see profile-worker.ts.
@@ -211,10 +238,7 @@ globalThis.onmessage = (event: MessageEvent<unknown>) => {
     try {
       const now = performance.now();
       checkResult(runtime.ipp_host_time(now / 1_000));
-      if (inFlight > 0 && now - lastDelivery >= 30_000)
-        throw new Error(
-          "connection congestion: no delivery progress for 30 seconds",
-        );
+      connections?.maintain(now);
       pumpInputs();
       const dt = paused
         ? 0
@@ -254,17 +278,45 @@ globalThis.onmessage = (event: MessageEvent<unknown>) => {
       if (typeof data !== "object" || data === null || !("type" in data)) {
         throw new Error("Invalid worker envelope");
       }
-      if (data.type === "close") {
+      if (data.type === "shutdown") {
+        if ((connections?.size ?? 0) !== 0 || pendingPorts.size !== 0)
+          throw new Error(
+            "Dispose connection endpoints before closing the Host",
+          );
         finish();
         return;
       }
-      if (data.type === "ack") {
-        if (inFlight === 0)
-          throw new Error("Unexpected delivery acknowledgement");
-        inFlight--;
-        lastDelivery = performance.now();
-        pumpInputs();
-        publish();
+      if (
+        data.type === "dispose" &&
+        "connection" in data &&
+        typeof data.connection === "bigint"
+      ) {
+        disposePending(data.connection);
+        connections?.dispose(data.connection);
+        if (closed) finalize();
+        return;
+      }
+      if (
+        data.type === "connect" &&
+        "connection" in data &&
+        typeof data.connection === "bigint" &&
+        "port" in data &&
+        data.port instanceof MessagePort
+      ) {
+        // Capacity is the runtime's; ports that arrive before it loads wait
+        // and are admitted or refused against it once it does.
+        if (closed || pendingPorts.has(data.connection)) {
+          data.port.postMessage({
+            type: "error",
+            connection: data.connection,
+            message: "Host closed or connection capacity exhausted",
+          });
+          data.port.close();
+        } else if (connections) {
+          connections.open(data.connection, data.port);
+        } else {
+          holdPending(data.connection, data.port);
+        }
         return;
       }
       if (
@@ -283,33 +335,7 @@ globalThis.onmessage = (event: MessageEvent<unknown>) => {
         return;
       }
       if (presentation?.receive(data as Record<string, unknown>)) return;
-      if (!runtime || (data.type !== "data" && data.type !== "data-parts")) {
-        throw new Error("Expected binary data after worker readiness");
-      }
-      const parts: ArrayBuffer[] =
-        data.type === "data" &&
-        "bytes" in data &&
-        data.bytes instanceof ArrayBuffer
-          ? [data.bytes]
-          : data.type === "data-parts" &&
-              "parts" in data &&
-              Array.isArray(data.parts) &&
-              data.parts.length > 0 &&
-              data.parts.length <= 2 &&
-              data.parts.every((part: unknown) => part instanceof ArrayBuffer)
-            ? data.parts
-            : [];
-      const length = parts.reduce((total, part) => total + part.byteLength, 0);
-      if (length === 0 || length > maxMessageBytes) {
-        throw new Error("Message exceeds WASM ingress bounds");
-      }
-      if (pendingInputs.length >= 128)
-        throw new Error(
-          "connection congestion: worker ingress capacity exhausted",
-        );
-      pendingInputs.push({ parts, multipart: data.type === "data-parts" });
-      pumpInputs();
-      publish();
+      throw new Error("Unexpected worker Host control");
     } catch (error) {
       finish(error instanceof Error ? error : new Error(String(error)));
     }
@@ -416,7 +442,7 @@ globalThis.onmessage = (event: MessageEvent<unknown>) => {
         throw new Error("WASM diagnostic level configuration failed");
       }
       const session = freshSession();
-      checkResult(runtime.ipp_session_open(session));
+      checkResult(runtime.ipp_host_open(session));
       if (assetCacheBytes !== undefined)
         checkResult(runtime.ipp_host_set_asset_cache_bytes(assetCacheBytes));
       const identity = crypto.getRandomValues(new BigUint64Array(1))[0] || 1n;
@@ -444,6 +470,13 @@ globalThis.onmessage = (event: MessageEvent<unknown>) => {
         );
       }
       presentation?.initialize(runtime, session, ingress);
+      connections = new WorkerConnections(runtime, maxMessageBytes, ingress);
+      for (const [connection, endpoint] of pendingPorts) {
+        pendingPorts.delete(connection);
+        endpoint.onmessage = endpoint.onmessageerror = null;
+        connections.open(connection, endpoint);
+      }
+      pendingPorts.clear();
       lastFrame = performance.now();
       nextMaintenanceFrame = lastFrame + FRAME_INTERVAL_MS;
       initialized = true;

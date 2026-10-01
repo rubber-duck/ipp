@@ -12,7 +12,6 @@ use std::{
     },
 };
 
-use super::frame_stats::RenderFrameStats;
 use ipp_core::{
     Command, ComponentValue, EntityId, EntityRef, ErrorReason, HostRuntime, WorldId,
     components::{MeshInstance, Transform, UnlitMaterial},
@@ -226,11 +225,9 @@ impl System for RemovalSystem {
 }
 
 fn assert_mesh<'a>(values: impl Iterator<Item = &'a ComponentValue>) {
-    assert!(
-        values.into_iter().any(
-            |value| matches!(value, ComponentValue::MeshInstance(mesh) if mesh.source == SOURCE)
-        )
-    );
+    assert!(values.into_iter().any(
+        |value| matches!(value, ComponentValue::MeshInstance(mesh) if &*mesh.source == SOURCE)
+    ));
 }
 
 /// Keep the trace even if an assertion aborts the scenario before its last capture.
@@ -276,22 +273,14 @@ pub fn run<D: RenderDevice>(
         let (peer, _) = scene(&mut host)?;
         load(&mut host, [world, peer], fixture)?;
         assert_eq!(
-            super::world::render_frame(
-                renderer,
-                &mut host.world_mut(world).unwrap(),
-                WIDTH,
-                HEIGHT
-            )?
-            .draw_calls,
+            super::world::render_host_frame(renderer, &mut host, world, WIDTH, HEIGHT)?.draw_calls,
             1
         );
         let visible = capture()?;
         save(output, &format!("deferred-{name}-visible"), &visible)?;
         assert!(coverage(&visible).0 > 1000);
         assert_eq!(
-            renderer
-                .render_stats(&mut host.world_mut(peer).unwrap(), WIDTH, HEIGHT)?
-                .draw_calls,
+            super::world::render_host_frame(renderer, &mut host, peer, WIDTH, HEIGHT)?.draw_calls,
             1
         );
         let peer_before = capture()?;
@@ -351,19 +340,16 @@ pub fn run<D: RenderDevice>(
         )?;
         let events = outputs
             .into_iter()
-            .flat_map(|output| match output {
-                LifecyclePublisherOutput::Events(events) => events,
-                LifecyclePublisherOutput::Overflow {
-                    ..
-                } => panic!("bounded fixture must not overflow"),
-            })
+            .flat_map(|LifecyclePublisherOutput(events)| events)
             .collect::<Vec<_>>();
+        // Deleting the entity removes its four components; removing MeshInstance
+        // leaves its required BoundingGeometry in place.
         assert_eq!(
             events.len(),
             if removal == Removal::Entity {
                 5
             } else {
-                2
+                1
             }
         );
         let tick = host.world_mut(world).unwrap().tick();
@@ -373,8 +359,21 @@ pub fn run<D: RenderDevice>(
                 .all(|event| event.tick == tick && event.subscription == 1)
         );
         assert_eq!(events.iter().filter(|event| matches!(event.observation, LifecycleObservation::Component { entity, component: ComponentValue::MESH_INSTANCE, kind: ComponentLifecycleKind::Removed, previous_incarnation: Some(_), incarnation: None } if entity == target)).count(), 1);
-        assert_eq!(events.iter().filter(|event| matches!(event.observation, LifecycleObservation::Component { entity, component: ComponentValue::BOUNDING_GEOMETRY, kind: ComponentLifecycleKind::Removed, previous_incarnation: Some(_), incarnation: None } if entity == target)).count(), 1);
+        assert_eq!(events.iter().filter(|event| matches!(event.observation, LifecycleObservation::Component { entity, component: ComponentValue::BOUNDING_GEOMETRY, kind: ComponentLifecycleKind::Removed, previous_incarnation: Some(_), incarnation: None } if entity == target)).count(), usize::from(removal == Removal::Entity));
         assert_eq!(events.iter().filter(|event| matches!(event.observation, LifecycleObservation::Entity { entity, kind: EntityLifecycleKind::Deleted } if entity == target)).count(), usize::from(removal == Removal::Entity));
+
+        let remaining = host.world_mut(world).unwrap().inspect(target);
+        let bounds_remain = remaining.is_some_and(|snapshot| {
+            snapshot
+                .components
+                .iter()
+                .any(|value| matches!(value, ComponentValue::BoundingGeometry(_)))
+        });
+        assert_eq!(
+            bounds_remain,
+            removal == Removal::Mesh,
+            "required BoundingGeometry stays after its MeshInstance dependent is removed"
+        );
         assert!(
             events
                 .windows(2)
@@ -386,9 +385,7 @@ pub fn run<D: RenderDevice>(
             "prepared rows must be rebuilt after deferred cleanup"
         );
         assert_eq!(
-            renderer
-                .render_stats(&mut host.world_mut(world).unwrap(), WIDTH, HEIGHT)?
-                .draw_calls,
+            super::world::render_host_frame(renderer, &mut host, world, WIDTH, HEIGHT)?.draw_calls,
             0
         );
         let removed = capture()?;
@@ -399,9 +396,7 @@ pub fn run<D: RenderDevice>(
             "the very next presentation must show the removal"
         );
         assert_eq!(
-            renderer
-                .render_stats(&mut host.world_mut(peer).unwrap(), WIDTH, HEIGHT)?
-                .draw_calls,
+            super::world::render_host_frame(renderer, &mut host, peer, WIDTH, HEIGHT)?.draw_calls,
             1
         );
         let peer_after = capture()?;
@@ -413,18 +408,24 @@ pub fn run<D: RenderDevice>(
         assert!(host.destroy_world(world));
         assert!(host.destroy_world(peer));
         host.flush_resource_lifecycle();
+        renderer.prepare(&mut host, None)?;
     }
     Ok(())
 }
 
 fn scene(host: &mut HostRuntime) -> Result<(WorldId, EntityId)> {
-    let mut world = super::world::fixture_world(host)?;
+    // The lifecycle publisher observes the removal the fixture Systems apply.
+    let mut world = super::world::fixture_world_selecting(
+        host,
+        &[LifecyclePublisherSystem::ID, REMOVER, OBSERVER],
+    )?;
     super::world::apply(
         &mut world,
         vec![
             Command::Create {
                 alias: 1,
                 metadata: Default::default(),
+                adopt: false,
             },
             Command::insert_value(
                 EntityRef::Alias(1),
@@ -448,7 +449,7 @@ fn scene(host: &mut HostRuntime) -> Result<(WorldId, EntityId)> {
         .into_iter()
         .find(|entity| {
             entity
-                .effective
+                .components
                 .iter()
                 .any(|value| matches!(value, ComponentValue::MeshInstance(_)))
         })

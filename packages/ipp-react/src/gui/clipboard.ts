@@ -16,8 +16,9 @@ import type { GuiInputSink } from "./input.js";
  * unfocused `text` command that core routes to its focused `TextInput`;
  * with no eligible focus core reports it `unhandled`, which is the
  * correct outcome rather than focus stealing. A copy takes the committed
- * text the caller read from the semantic snapshot or inspect response for
- * the focused node; the DOM is never treated as the value source.
+ * text the caller read from the control's `text` field or native text state
+ * for the focused ordinary control; the DOM is never treated as the value
+ * source.
  *
  * Permissions are honored before touching the clipboard: an explicit
  * `denied` state short-circuits without calling `readText`/`writeText`
@@ -44,7 +45,8 @@ export type ClipboardPermissionState =
   | "prompt"
   | "unknown";
 
-/** Wire string bound of the GUI input ingress; core may cap text further. */
+/** Wire string bound of the GUI input ingress (`ipp_protocol::MAX_FIELD_BYTES`,
+ * checked by `tools/check_repo.py`); core may cap text further. */
 export const CLIPBOARD_TEXT_MAX_BYTES = 65536;
 
 function globalNavigator(): unknown {
@@ -211,9 +213,9 @@ export interface ClipboardSinkOptions {
   readonly maxBytes?: number | undefined;
   readonly onError?: (error: Error) => void;
   /**
-   * Stable focus identity for the paste target (focused node id, handle
-   * string or generation counter). Captured before the clipboard read and
-   * re-checked after it resolves: a focus move, node replacement or
+   * Stable focus identity for the paste target (exact control identity and
+   * edit generation). Captured before the clipboard read and
+   * re-checked after it resolves: a focus move, component replacement or
    * session change while the read waited cancels the paste explicitly
    * instead of writing into the new target. Omitted means unfenced.
    */
@@ -224,7 +226,7 @@ export interface ClipboardSinkOptions {
  *
  * On success sends one ordered `{ kind: "text" }` command carrying the
  * clipboard string (insert at caret / replace selection happens in core
- * under its revision gate). Returns `true` only when a command was
+ * under its target and generation fence). Returns `true` only when a command was
  * sent. Empty clipboard text sends nothing (returns `false`); a focus
  * change across the read wait cancels explicitly without sending; any
  * other failure sends nothing, reports through `onError`, and returns
@@ -263,8 +265,8 @@ export async function pasteClipboardToFocusedInput(
 
 /** Copy focused committed text out to the clipboard.
  *
- * The `text` argument must be the core-committed value (semantic
- * snapshot / inspect response), never DOM content. Returns `true` on a
+ * The `text` argument must be the core-committed value (the control's
+ * `text` field or native text state), never DOM content. Returns `true` on a
  * completed write; any failure reports through `onError` and returns
  * `false` without sending input commands.
  */

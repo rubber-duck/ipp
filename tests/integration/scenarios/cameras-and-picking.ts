@@ -1,13 +1,24 @@
+import {
+  outputProducer,
+  sameOutputReference,
+} from "../../../packages/ipp-client/src/references.js";
 import { clientAssetSource } from "../../../packages/ipp-client/src/asset-sources.js";
 import type {
-  GeometryEncoder,
-  CameraNavigateCommand,
-  CameraStateChangedEvent,
+  CameraProjectResultEvent,
+  CameraViewMotion,
+  Client,
   Command,
+  GeometryEncoder,
+  GeometryPickHit,
   GeometryPickResultEvent,
+  HostClientBase,
+  OutputReference,
   PickingWorldClient,
-  StateOverlayRef,
+  RootBinding,
+  ViewQueryTarget,
+  ViewViewport,
   WorldPlane,
+  WorldReference,
 } from "@ipp/client";
 import type { DriverConnectOptions } from "../driver.js";
 import {
@@ -26,17 +37,25 @@ type Values = Readonly<
   Record<string, number | string | boolean | Uint8Array<ArrayBuffer> | bigint>
 >;
 
-/** Small SDK driver shared by native WebSocket and browser worker scenarios. */
+/**
+ * Small SDK driver shared by native WebSocket and browser worker scenarios.
+ * Camera selection is the Host's explicit root output binding; queries and
+ * navigation name that exact view instead of a session's active camera.
+ */
 export class CameraFixture {
   readonly events: GeometryPickResultEvent[] = [];
-  readonly changes: CameraStateChangedEvent[] = [];
+  readonly world: WorldReference;
+  binding: RootBinding | undefined;
 
   constructor(
     readonly client: PickingWorldClient,
+    readonly host: HostClientBase<Client>,
     readonly record: DriverConnectOptions["record"],
     readonly encodeGeometry: GeometryEncoder,
   ) {
-    client.onCameraStateChanged((event) => this.changes.push(event));
+    const world = client.worldReference;
+    check(world !== undefined, "Camera scenarios require a World reference");
+    this.world = world;
   }
 
   async batch(commands: Command[]) {
@@ -103,45 +122,78 @@ export class CameraFixture {
     }));
   }
 
-  async activate(
+  /** Bind the current Camera incarnation without selecting it for presentation. */
+  output(entity: bigint): Promise<OutputReference> {
+    return this.host.bindOutput(this.world, entity, "camera");
+  }
+
+  /** Explicitly select a Camera as the World's root view. */
+  async select(
     entity: bigint,
-    viewport: { width: number; height: number } = CAMERA_VIEWPORT,
-  ) {
-    this.select(entity);
-    // Selection is observed through a real query, never a command reply.
+    viewport: ViewViewport = CAMERA_VIEWPORT,
+  ): Promise<RootBinding> {
+    const binding = await this.host.setRootOutput(
+      await this.output(entity),
+      viewport,
+    );
+    await this.record("camera_root_binding", binding);
+    check(
+      outputProducer(binding.output)?.entity === entity &&
+        binding.viewport.width === viewport.width &&
+        binding.viewport.height === viewport.height,
+      "Root binding acknowledges the requested Camera and viewport",
+    );
+    this.binding = binding;
+    return binding;
+  }
+
+  async activate(entity: bigint, viewport: ViewViewport = CAMERA_VIEWPORT) {
+    await this.select(entity, viewport);
+    // Selection is observed through a real query, never a Host reply alone.
     return this.pick(0.5, 0.5, viewport);
   }
 
-  select(entity: bigint) {
-    const result = this.client.sendCommand({
-      type: "CameraActivateCommand",
-      entity,
-    });
-    check(result === undefined, "Camera commands must return no reply waiter");
+  rootBinding() {
+    return this.host.getRootOutputBinding(this.world);
   }
 
-  navigate(motion: CameraNavigateCommand["motion"]) {
-    const result = this.client.sendCommand({
-      type: "CameraNavigateCommand",
-      motion,
-    });
-    check(result === undefined, "Navigation must return no reply waiter");
+  /** Navigate the selected root view, or an explicitly supplied binding. */
+  async navigate(motion: CameraViewMotion, binding = this.selected()) {
+    await this.client.navigateCamera({ binding, motion });
   }
 
-  async pick(
+  selected(): RootBinding {
+    check(this.binding !== undefined, "No Camera is selected as root view");
+    return this.binding;
+  }
+
+  /** Pick through the current root view, which must still select `output`. */
+  pick(
     x = 0.5,
     y = 0.5,
-    viewport: {
-      readonly width: number;
-      readonly height: number;
-    } = CAMERA_VIEWPORT,
+    viewport: ViewViewport = CAMERA_VIEWPORT,
+    includeViewPlane?: boolean,
+    output: OutputReference = this.selected().output,
+  ) {
+    return this.pickView(
+      { kind: "root", output, expectedViewport: viewport },
+      x,
+      y,
+      includeViewPlane,
+    );
+  }
+
+  async pickView(
+    view: ViewQueryTarget,
+    x = 0.5,
+    y = 0.5,
     includeViewPlane?: boolean,
   ) {
     const result = await this.client.query({
       type: "GeometryPickQuery",
+      view,
       x,
       y,
-      ...viewport,
       ...(includeViewPlane === undefined ? {} : { includeViewPlane }),
     });
     if (result.ok && result.hit) {
@@ -164,6 +216,13 @@ export class CameraFixture {
     } else {
       check(!Object.hasOwn(result, "viewPlane"), "Misses/errors have no plane");
     }
+    if (result.ok) {
+      const expected = "binding" in view ? view.binding.output : view.output;
+      check(
+        sameOutputReference(result.view.output, expected),
+        "A query never redirects to another output",
+      );
+    }
     await this.observeEvent(result);
     return result;
   }
@@ -178,14 +237,18 @@ export class CameraFixture {
     x: number,
     y: number,
     plane: WorldPlane,
-    viewport = CAMERA_VIEWPORT,
-  ) {
+    viewport: ViewViewport = CAMERA_VIEWPORT,
+  ): Promise<CameraProjectResultEvent> {
     const result = await this.client.query({
       type: "CameraProjectQuery",
+      view: {
+        kind: "root",
+        output: this.selected().output,
+        expectedViewport: viewport,
+      },
       x,
       y,
       plane,
-      ...viewport,
     });
     await this.record("camera_projection", result);
     check(
@@ -197,7 +260,7 @@ export class CameraFixture {
     return result;
   }
 
-  async partialCameraEdit(command: Command, name: string) {
+  async partialCameraEdit(command: Command, name: string, usable = false) {
     const outcome = await this.batch([
       createEntity(99, `partial-${name}`),
       command,
@@ -206,7 +269,7 @@ export class CameraFixture {
     check(!outcome.ok, `${name} batch must fail`);
     check(
       outcome.error.operation === 1 || outcome.error.operation === 2,
-      "Losing the active camera is accepted, so only an invalid camera edit or the final invalid handle fails",
+      "Losing the selected root Camera is accepted, so only an invalid camera edit or the final invalid handle fails",
     );
     const created = outcome.aliases.find((entry) => entry.alias === 99);
     check(
@@ -219,9 +282,18 @@ export class CameraFixture {
       ),
       "Creation before camera failure remains applied",
     );
-    check(!(await this.pick()).ok, "The partially edited camera is unusable");
-    // Cleanup also applies while the active camera remains unusable.
+    // Losing the entity or its Camera leaves the selected root view unusable
+    // until another Camera is selected. A missing Transform contributes an
+    // identity pose, and a rejected Camera write has no effect.
+    check(
+      (await this.pick()).ok === usable,
+      usable
+        ? "The partially edited camera remains usable"
+        : "The partially edited camera is unusable",
+    );
+    // Cleanup also applies while the selected root Camera remains unusable.
     await this.batch([this.delete(created.id)]);
+    return outcome.error;
   }
 
   async rejectGeometry(entity: bigint) {
@@ -341,11 +413,6 @@ export const cameraCases = [
 ] as const;
 
 async function viewPlanes(fixture: CameraFixture) {
-  const missing = await fixture.pick(0.5, 0.5, CAMERA_VIEWPORT, true);
-  check(
-    !missing.ok && missing.error === "NoActiveCamera",
-    "Plane requests require a camera",
-  );
   const target = await fixture.target("view-plane-target", {
     sx: 4,
     sy: 4,
@@ -357,13 +424,30 @@ async function viewPlanes(fixture: CameraFixture) {
       { z: 6 },
       { projection },
     );
+    if (projection === 0) {
+      const missing = await fixture.pick(
+        0.5,
+        0.5,
+        CAMERA_VIEWPORT,
+        true,
+        await fixture.output(camera),
+      );
+      check(
+        !missing.ok && missing.error === "InvalidEntity",
+        "Plane requests require an explicitly selected root view",
+      );
+    }
     await fixture.activate(camera);
     const ordinary = picked(await fixture.pick(0.55, 0.45), target);
     const disabled = picked(
       await fixture.pick(0.55, 0.45, CAMERA_VIEWPORT, false),
       target,
     );
-    equal(disabled, ordinary, "Explicit false preserves default results");
+    equal(
+      hitGeometry(disabled),
+      hitGeometry(ordinary),
+      "Explicit false preserves default results",
+    );
     const included = picked(
       await fixture.pick(0.55, 0.45, CAMERA_VIEWPORT, true),
       target,
@@ -382,7 +466,7 @@ async function viewPlanes(fixture: CameraFixture) {
     check(
       projected.ok &&
         projected.position !== null &&
-        projected.camera === camera,
+        outputProducer(projected.view.output)?.entity === camera,
       "Projection uses the picked camera",
     );
     projected.position.forEach((value, index) =>
@@ -465,89 +549,151 @@ async function viewPlanes(fixture: CameraFixture) {
       ),
     );
   }
-  const invalid = await fixture.pick(0.5, 0.5, { width: 0, height: 240 }, true);
+  const invalid = await fixture.pick(
+    0.5,
+    0.5,
+    { width: 0, height: 240, devicePixelRatio: 1 },
+    true,
+  );
   check(
     !invalid.ok && invalid.error === "InvalidViewport",
-    "Invalid viewport remains an error",
+    "A viewport other than the bound view remains an error",
+  );
+  await rejects(
+    fixture.host.setRootOutput(fixture.selected().output, {
+      width: 0,
+      height: 240,
+      devicePixelRatio: 1,
+    }),
+    "InvalidValue",
+    "An empty root viewport cannot be bound",
   );
 }
 
 async function cameraLifetime(fixture: CameraFixture) {
-  const missing = await fixture.pick();
-  check(
-    !missing.ok &&
-      missing.error === "NoActiveCamera" &&
-      missing.camera === null,
-    "New sessions must have no implicit camera",
-  );
   const first = await fixture.camera("camera-a");
   const second = await fixture.camera("camera-b", { x: 3, z: 6 });
+  check(
+    (await fixture.rootBinding()) === null,
+    "New Worlds must have no implicit root view",
+  );
+  const missing = await fixture.pick(
+    0.5,
+    0.5,
+    CAMERA_VIEWPORT,
+    undefined,
+    await fixture.output(first),
+  );
+  check(
+    !missing.ok && missing.error === "InvalidEntity",
+    "Queries must not fall back to an unselected camera",
+  );
   const incomplete = await fixture.create("incomplete-camera", {
     Transform: {},
   });
-  check(
-    !(await fixture.activate(incomplete)).ok,
+  await rejects(
+    fixture.select(incomplete),
+    "MissingComponent",
     "A camera needs both effective components",
   );
-  check(
-    !(await fixture.activate(0xffffffffffffffffn)).ok,
+  await rejects(
+    fixture.select(0xffffffffffffffffn),
+    "MissingComponent",
     "Stale camera handles must fail",
   );
+  check(
+    (await fixture.rootBinding()) === null,
+    "Rejected selections must not bind a root view",
+  );
   activated(await fixture.activate(first), first);
+  const repeated = fixture.selected();
   activated(await fixture.activate(first), first);
+  check(
+    sameOutputReference(fixture.selected().output, repeated.output) &&
+      fixture.selected().generation.serial > repeated.generation.serial,
+    "An equal explicit rebind receives a fresh root generation",
+  );
+  const replaced = await fixture.pickView({
+    kind: "bound",
+    binding: repeated,
+  });
+  check(
+    !replaced.ok && replaced.error === "InvalidEntity",
+    "A replaced binding generation cannot address the current view",
+  );
+  activated(
+    await fixture.pickView({ kind: "bound", binding: fixture.selected() }),
+    first,
+  );
 
-  check(fixture.changes.length === 1, "Repeated selection must emit no change");
-  selectionChanged(fixture.changes[0]!, first, fixture.client.session);
-
-  // Commands queue synchronously. Every changed selection retains its own effect.
-  fixture.select(second);
-  fixture.select(first);
-  fixture.select(second);
+  // Host requests are pipelined in order. Every selection retains its own generation.
+  const ordered = await Promise.all([
+    fixture.select(second),
+    fixture.select(first),
+    fixture.select(second),
+  ]);
+  fixture.binding = ordered[2];
   activated(await fixture.pick(), second);
   equal(
-    fixture.changes.slice(1).map((event) => event.changes.activeCamera),
+    ordered.map((binding) => outputProducer(binding.output)?.entity),
     [second, first, second],
-    "Ordered selections must each publish their committed camera",
+    "Ordered selections must each bind their requested camera",
   );
-  fixture.changes.forEach((event) =>
-    selectionChanged(
-      event,
-      event.changes.activeCamera!,
-      fixture.client.session,
+  ordered.forEach((binding, index) =>
+    check(
+      index === 0 ||
+        binding.generation.serial > ordered[index - 1]!.generation.serial,
+      "Ordered selections must acknowledge increasing generations",
     ),
   );
-  const seen = fixture.changes.length;
-  const beforeActivation = fixture.pick();
-  fixture.select(first);
-  const betweenActivations = fixture.pick();
-  fixture.select(second);
-  await fixture.inspect();
-  const transitions = fixture.changes.slice(seen);
   equal(
-    transitions.map((event) => event.changes.activeCamera),
-    [first, second],
-    "Interleaved queries must not suppress selection notifications",
+    await fixture.rootBinding(),
+    ordered[2],
+    "The last explicit selection is the root binding",
   );
-  for (const query of await Promise.all([
-    beforeActivation,
-    betweenActivations,
-  ])) {
-    const expected = transitions.reduce(
-      (camera, event) =>
-        event.tick <= query.tick ? event.changes.activeCamera! : camera,
-      second,
-    );
+  const firstOutput = await fixture.output(first);
+  const secondOutput = await fixture.output(second);
+  const beforeActivation = fixture.pick(
+    0.5,
+    0.5,
+    CAMERA_VIEWPORT,
+    undefined,
+    secondOutput,
+  );
+  const firstSelection = fixture.select(first);
+  const betweenActivations = fixture.pick(
+    0.5,
+    0.5,
+    CAMERA_VIEWPORT,
+    undefined,
+    firstOutput,
+  );
+  const secondSelection = fixture.select(second);
+  await Promise.all([firstSelection, secondSelection]);
+  fixture.binding = await secondSelection;
+  for (const [query, camera] of [
+    [await beforeActivation, second],
+    [await betweenActivations, first],
+  ] as const) {
     check(
-      query.camera === expected,
-      "Queued queries must use the final camera selected for their evaluated frame",
+      query.ok
+        ? outputProducer(query.view.output)?.entity === camera
+        : query.error === "InvalidEntity",
+      "Interleaved queries use their named root output or fail, never a replacement",
     );
   }
-  const beforeRejected = fixture.changes.length;
-  activated(await fixture.activate(incomplete), second);
-  check(
-    fixture.changes.length === beforeRejected,
-    "Invalid activation must preserve selection without a notification",
+  const retained = await fixture.rootBinding();
+  await rejects(
+    fixture.select(incomplete),
+    "MissingComponent",
+    "Invalid selection must fail explicitly",
   );
+  equal(
+    await fixture.rootBinding(),
+    retained,
+    "Invalid selection must preserve the root binding",
+  );
+  activated(await fixture.pick(), second);
 
   for (const name of ["entity", "Camera", "Transform"]) {
     const camera = await fixture.camera(`partial-camera-${name}`);
@@ -555,6 +701,7 @@ async function cameraLifetime(fixture: CameraFixture) {
     await fixture.partialCameraEdit(
       name === "entity" ? fixture.delete(camera) : fixture.remove(camera, name),
       name,
+      name === "Transform",
     );
     const remaining = (await fixture.inspect()).entities.find(
       (entity) => entity.id === camera,
@@ -562,7 +709,7 @@ async function cameraLifetime(fixture: CameraFixture) {
     check(
       name === "entity"
         ? remaining === undefined
-        : !remaining!.effective.some(
+        : !remaining!.components.some(
             (value) => value.component === fixture.client.components[name]!.id,
           ),
       "Camera deletion or component removal remains applied",
@@ -571,122 +718,57 @@ async function cameraLifetime(fixture: CameraFixture) {
     if (remaining)
       successfulBatch(await fixture.batch([fixture.delete(camera)]));
   }
-  await fixture.partialCameraEdit(
+  const projection = (await cameraFields(fixture, first)).camera;
+  const rejected = await fixture.partialCameraEdit(
     fixture.set(first, "Camera", { near: 200 })[0]!,
     "projection",
+    true,
   );
+  check(
+    rejected.operation === 1 && rejected.reason === "InvalidValue",
+    "An out-of-range Camera write is rejected at its operation",
+  );
+  equal(
+    (await cameraFields(fixture, first)).camera,
+    projection,
+    "A rejected Camera write leaves the component unchanged",
+  );
+  activated(await fixture.pick(), first);
+  const corrected = { ...ORTHOGRAPHIC_CAMERA, near: 0.2 };
   successfulBatch(
     await fixture.batch([
       insertComponent(
         fixture.client,
         "Camera",
         { kind: "handle", id: first },
-        ORTHOGRAPHIC_CAMERA,
+        corrected,
       ),
     ]),
   );
-  activated(await fixture.pick(), first);
+  close(
+    (await cameraFields(fixture, first)).camera.near!,
+    corrected.near,
+    "The explicit Camera replacement applies",
+  );
+  const superseded = await fixture.pick();
+  check(
+    !superseded.ok && superseded.error === "InvalidEntity",
+    "A replaced Camera component leaves its former output selection unavailable",
+  );
+  activated(await fixture.activate(first), first);
 
-  for (const release of ["binding", "owner", 12, 13] as const) {
-    const ownerAlias: StateOverlayRef = { kind: "alias", alias: 10 };
-    const bindingAlias: StateOverlayRef = { kind: "alias", alias: 11 };
-    const owned = successfulBatch(
-      await fixture.batch([
-        { kind: "createStateOverlayOwner", alias: 10 },
-        {
-          kind: "attachEntityOverlayBinding",
-          owner: ownerAlias,
-          alias: 11,
-          symbolicId: "owned-camera",
-          mode: "owned",
-        },
-        ...["Transform", "Camera"].map(
-          (name, index): Command => ({
-            kind: "attachComponentStateOverlay",
-            owner: ownerAlias,
-            binding: bindingAlias,
-            alias: 12 + index,
-            component: fixture.client.components[name]!.id,
-            mode: "owned",
-            fields: componentFields(
-              fixture.client,
-              name,
-              name === "Transform" ? { z: 6 } : ORTHOGRAPHIC_CAMERA,
-            ),
-          }),
-        ),
-      ]),
-    );
-    const resource = (alias: number): StateOverlayRef => {
-      const entry = owned.stateOverlays.find((item) => item.alias === alias);
-      check(entry !== undefined, `Missing owned camera resource ${alias}`);
-      return { kind: "handle", id: entry.id };
-    };
-    const owner = resource(10);
-    const binding = resource(11);
-    const ownedEntity = (await fixture.inspect()).entities.find(
-      (entity) => entity.metadata.symbolicId === "owned-camera",
-    );
-    check(ownedEntity !== undefined, "Owned camera must be observable");
-    activated(await fixture.activate(ownedEntity.id), ownedEntity.id);
-    await fixture.partialCameraEdit(
-      release === "binding"
-        ? { kind: "releaseEntityOverlayBinding", owner, binding }
-        : release === "owner"
-          ? { kind: "releaseStateOverlayOwner", owner }
-          : {
-              kind: "releaseComponentStateOverlay",
-              owner,
-              overlay: resource(release),
-            },
-      `owned-${release}`,
-    );
-    activated(await fixture.activate(first), first);
-    if (release !== "owner")
-      successfulBatch(
-        await fixture.batch([{ kind: "releaseStateOverlayOwner", owner }]),
-      );
-    check(
-      !(await fixture.inspect()).entities.some(
-        (entity) => entity.id === ownedEntity.id,
-      ),
-      "Partial ownership cleanup never restores released resources",
-    );
-  }
   activated(await fixture.activate(second), second);
   successfulBatch(await fixture.batch([fixture.delete(first)]));
   const after = await fixture.inspect();
   check(
     !after.entities.some((entity) => entity.id === first),
-    "Switching cameras must permit old-camera deletion and owned cleanup",
+    "Switching cameras must permit old-camera deletion",
   );
-  check(
-    (await fixture.pick()).camera === second,
-    "Cleanup must retain the replacement camera",
-  );
+  activated(await fixture.pick(), second);
   return { session: fixture.client.session, events: fixture.events };
 }
 
 async function cameraNavigation(fixture: CameraFixture) {
-  const initial = await fixture.inspect();
-  fixture.navigate({ kind: "rotate", yaw: 0.2, pitch: -0.1 });
-  fixture.navigate({ kind: "pan", x: 0.1, y: 0.1, ...CAMERA_VIEWPORT });
-  fixture.navigate({ kind: "zoom", amount: Math.log(2) });
-  equal(
-    (await fixture.inspect()).entities,
-    initial.entities,
-    "Navigation without an active camera must preserve the scene",
-  );
-  check(
-    fixture.changes.length === 0,
-    "Rejected navigation emits no camera state",
-  );
-  const missing = await fixture.pick();
-  check(
-    !missing.ok && missing.error === "NoActiveCamera",
-    "Navigation must not invent a camera",
-  );
-
   const defaults = await fixture.create("navigation-defaults", {
     Transform: { z: 6 },
     Camera: {},
@@ -695,6 +777,39 @@ async function cameraNavigation(fixture: CameraFixture) {
     (await cameraFields(fixture, defaults)).camera.focus_distance!,
     6,
     "Generated camera creation uses the default focus distance",
+  );
+  const cleared = await fixture.select(defaults);
+  await fixture.host.clearRootOutput(cleared);
+  check(
+    (await fixture.rootBinding()) === null,
+    "Clearing the exact binding withdraws the root view",
+  );
+  const initial = await fixture.inspect();
+  for (const motion of [
+    { kind: "rotate", yaw: 0.2, pitch: -0.1 },
+    { kind: "pan", x: 0.1, y: 0.1 },
+    { kind: "zoom", amount: Math.log(2) },
+  ] as const)
+    await rejects(
+      fixture.navigate(motion, cleared),
+      "InvalidEntity",
+      "Navigation requires a current root binding",
+    );
+  equal(
+    (await fixture.inspect()).entities,
+    initial.entities,
+    "Navigation without a selected root view must preserve the scene",
+  );
+  const missing = await fixture.pick(
+    0.5,
+    0.5,
+    CAMERA_VIEWPORT,
+    undefined,
+    cleared.output,
+  );
+  check(
+    !missing.ok && missing.error === "InvalidEntity",
+    "Navigation must not invent a root view",
   );
 
   const target = await fixture.target(
@@ -711,8 +826,11 @@ async function cameraNavigation(fixture: CameraFixture) {
       { projection },
     );
     activated(await fixture.activate(camera), camera);
-    const events: number = fixture.changes.length;
-    fixture.navigate({ kind: "rotate", yaw: Math.PI / 4, pitch: -Math.PI / 8 });
+    await fixture.navigate({
+      kind: "rotate",
+      yaw: Math.PI / 4,
+      pitch: -Math.PI / 8,
+    });
     picked(await fixture.pick(), target);
     const rotated = await cameraFields(fixture, camera);
     const forward = rotateVector(rotated.transform, [0, 0, -1]);
@@ -730,7 +848,7 @@ async function cameraNavigation(fixture: CameraFixture) {
       "Rotation preserves focus distance",
     );
 
-    fixture.navigate({ kind: "pan", x: 0.15, y: -0.1, ...CAMERA_VIEWPORT });
+    await fixture.navigate({ kind: "pan", x: 0.15, y: -0.1 });
     picked(await fixture.pick(0.65, 0.4), target);
     const panned = await cameraFields(fixture, camera);
     const height = projection === 0 ? 12 * Math.tan(Math.PI / 8) : 4;
@@ -745,7 +863,7 @@ async function cameraNavigation(fixture: CameraFixture) {
       ),
     );
 
-    fixture.navigate({ kind: "zoom", amount: Math.log(2) });
+    await fixture.navigate({ kind: "zoom", amount: Math.log(2) });
     picked(await fixture.pick(0.575, 0.45), target);
     const zoomed = await cameraFields(fixture, camera);
     if (projection === 0) {
@@ -784,23 +902,25 @@ async function cameraNavigation(fixture: CameraFixture) {
       );
     }
 
-    fixture.navigate({ kind: "zoom", amount: 100 });
+    await rejects(
+      fixture.navigate({ kind: "zoom", amount: 100 }),
+      "InvalidValue",
+      "Unrepresentable navigation is rejected",
+    );
     equal(
       await cameraFields(fixture, camera),
       zoomed,
       "Unrepresentable navigation preserves every component",
     );
-    fixture.navigate({ kind: "rotate", yaw: 0, pitch: 0 });
-    fixture.navigate({ kind: "pan", x: 0, y: 0, ...CAMERA_VIEWPORT });
-    fixture.navigate({ kind: "zoom", amount: 0 });
+    await Promise.all([
+      fixture.navigate({ kind: "rotate", yaw: 0, pitch: 0 }),
+      fixture.navigate({ kind: "pan", x: 0, y: 0 }),
+      fixture.navigate({ kind: "zoom", amount: 0 }),
+    ]);
     equal(
       await cameraFields(fixture, camera),
       zoomed,
       "Zero navigation deltas preserve state",
-    );
-    check(
-      fixture.changes.length === events,
-      "Entity pose and projection changes emit no camera-system event",
     );
 
     successfulBatch(
@@ -820,8 +940,11 @@ async function cameraNavigation(fixture: CameraFixture) {
         }),
       ]),
     );
-    fixture.navigate({ kind: "zoom", amount: Math.log(2) });
-    fixture.navigate({ kind: "pan", x: 0.1, y: 0, ...CAMERA_VIEWPORT });
+    // Both requests are queued before either completes, in submission order.
+    await Promise.all([
+      fixture.navigate({ kind: "zoom", amount: Math.log(2) }),
+      fixture.navigate({ kind: "pan", x: 0.1, y: 0 }),
+    ]);
     const ordered = await cameraFields(fixture, camera);
     close(
       ordered.transform.x!,
@@ -835,8 +958,14 @@ async function cameraNavigation(fixture: CameraFixture) {
       { x: 3, z: 6 },
       { projection },
     );
+    const replaced = fixture.selected();
     activated(await fixture.activate(other), other);
-    fixture.navigate({ kind: "pan", x: 0.1, y: 0, ...CAMERA_VIEWPORT });
+    await rejects(
+      fixture.navigate({ kind: "pan", x: 0.1, y: 0 }, replaced),
+      "InvalidEntity",
+      "A replaced root binding cannot navigate its former camera",
+    );
+    await fixture.navigate({ kind: "pan", x: 0.1, y: 0 });
     equal(
       await cameraFields(fixture, camera),
       ordered,
@@ -849,61 +978,20 @@ async function cameraNavigation(fixture: CameraFixture) {
       "New selection receives subsequent navigation",
     );
 
-    const overlay = successfulBatch(
-      await fixture.batch([
-        { kind: "createStateOverlayOwner", alias: 40 },
-        {
-          kind: "attachEntityOverlayBinding",
-          owner: { kind: "alias", alias: 40 },
-          alias: 41,
-          symbolicId: `other-${projection}`,
-          mode: "bound",
-        },
-        {
-          kind: "attachComponentStateOverlay",
-          owner: { kind: "alias", alias: 40 },
-          binding: { kind: "alias", alias: 41 },
-          alias: 42,
-          component: fixture.client.components.Transform!.id,
-          mode: "bound",
-          fields: componentFields(fixture.client, "Transform", { x: 10 }),
-        },
-      ]),
-    );
-    fixture.navigate({ kind: "pan", x: 0.1, y: 0, ...CAMERA_VIEWPORT });
-    const base = await cameraFields(fixture, other);
-    close(
-      base.transform.x!,
-      moved.transform.x! - height * (320 / 240) * 0.1,
-      "Navigation updates producer base without feeding overlay values back",
-    );
-    const entity = (await fixture.inspect()).entities.find(
-      (entity) => entity.id === other,
-    )!;
-    const effective = entity.effective.find(
-      (value) => value.component === fixture.client.components.Transform!.id,
-    )!;
-    check(
-      effective.fields.x === 10,
-      "The retained transform overlay keeps precedence after navigation",
-    );
-    const owner = overlay.stateOverlays.find(
-      (resource) => resource.alias === 40,
-    )!;
+    // Navigation works on the one stored Transform: a client write is the
+    // value the next pan starts from.
     successfulBatch(
-      await fixture.batch([
-        {
-          kind: "releaseStateOverlayOwner",
-          owner: { kind: "handle", id: owner.id },
-        },
-      ]),
+      await fixture.batch(fixture.set(other, "Transform", { x: 10 })),
+    );
+    await fixture.navigate({ kind: "pan", x: 0.1, y: 0 });
+    const written = await cameraFields(fixture, other);
+    close(
+      written.transform.x!,
+      10 - height * (320 / 240) * 0.1,
+      "Navigation must pan from the last written Transform",
     );
   }
-  return {
-    session: fixture.client.session,
-    events: fixture.events,
-    changes: fixture.changes,
-  };
+  return { session: fixture.client.session, events: fixture.events };
 }
 
 async function cameraFields(fixture: CameraFixture, id: bigint) {
@@ -911,10 +999,10 @@ async function cameraFields(fixture: CameraFixture, id: bigint) {
   const entity = inspection.entities.find((entity) => entity.id === id);
   check(entity !== undefined, "Navigation camera must remain live");
   const fields = (name: "Transform" | "Camera") => {
-    const component = entity.base.find(
+    const component = entity.components.find(
       (value) => value.component === fixture.client.components[name]!.id,
     );
-    check(component !== undefined, `Navigation must preserve base ${name}`);
+    check(component !== undefined, `Navigation must preserve ${name}`);
     const result: Record<string, number> = {};
     for (const [field, value] of Object.entries(component.fields)) {
       check(
@@ -984,13 +1072,13 @@ async function boxPicking(fixture: CameraFixture) {
     0.5 + 1.5 / ((4 * CAMERA_VIEWPORT.width) / CAMERA_VIEWPORT.height);
   const screenY = 0.5 - 0.75 / 4;
   picked(await fixture.pick(screenX, screenY), offset);
+  const wide = { width: 640, height: 240, devicePixelRatio: 1 };
+  await fixture.select(camera, wide);
   picked(
-    await fixture.pick(0.5 + 1.5 / ((4 * 640) / 240), screenY, {
-      width: 640,
-      height: 240,
-    }),
+    await fixture.pick(0.5 + 1.5 / ((4 * 640) / 240), screenY, wide),
     offset,
   );
+  await fixture.select(camera);
   const flipped = await fixture.pick(screenX, 1 - screenY);
   check(
     flipped.ok && flipped.hit === null,
@@ -1086,31 +1174,31 @@ export async function compoundPicking(fixture: CameraFixture) {
 
 function activated(result: GeometryPickResultEvent, camera: bigint) {
   check(
-    result.camera === camera,
+    result.ok && outputProducer(result.view.output)?.entity === camera,
     `Query must observe selected camera ${camera}`,
   );
 }
 
-function selectionChanged(
-  event: CameraStateChangedEvent,
-  camera: bigint,
-  session: bigint,
+/** Hit identity and geometry, independent of the publication each query read. */
+function hitGeometry(hit: GeometryPickHit) {
+  const { publication: _publication, ...geometry } = hit;
+  return geometry;
+}
+
+/** Host replies carry the core reason; World-session rejections prefix their code. */
+async function rejects(
+  operation: Promise<unknown>,
+  reason: string,
+  message: string,
 ) {
-  check(event.type === "CameraStateChangedEvent", "Camera notification type");
-  check(
-    typeof event.changes.activeCamera === "bigint",
-    "Selection changes identify their camera",
-  );
-  check(event.requestId === 0n, "Selection notifications have no correlation");
-  check(event.session === session && event.tick > 0n, "Selection session/tick");
-  equal(
-    event.changes,
-    { activeCamera: camera },
-    "Only changed system state is emitted",
+  const error = await operation.then(
+    () => undefined,
+    (error: unknown) => error,
   );
   check(
-    !("ok" in event) && !("error" in event),
-    "Notifications are not command outcomes",
+    error instanceof Error &&
+      (error.message === reason || error.message.endsWith(`: ${reason}`)),
+    `${message}: expected ${reason}, got ${String(error)}`,
   );
 }
 

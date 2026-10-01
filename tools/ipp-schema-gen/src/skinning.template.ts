@@ -27,7 +27,7 @@ export interface SkinnedMesh {
 /** IPPM v3 with separate joint streams. Weights are normalized by the runtime. */
 export function encodeSkinnedMesh(mesh: SkinnedMesh): Uint8Array<ArrayBuffer> {
   const count = mesh.positions.length;
-  uint(count, 65536);
+  uint(count, MAX_MESH_VERTICES);
   if (
     !count ||
     mesh.joints.length !== count ||

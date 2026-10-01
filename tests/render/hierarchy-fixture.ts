@@ -3,8 +3,9 @@ import type {
   AnimationWorldClient,
   PickingWorldClient,
   WorldPersistenceHostClient,
-  FrameCapture,
+  PresentedCapture,
   Command,
+  WorldReference,
 } from "@ipp/client";
 import { AnimationFixture, check } from "../integration/animation-fixtures.js";
 import { hierarchyLifecycle } from "../integration/scenarios/hierarchy.js";
@@ -18,11 +19,23 @@ import {
   aimedPoseVector,
   poseMesh,
 } from "./mesh-pose-assets.js";
-import { compareImages, summarizeImage } from "./image-assertions.js";
+import {
+  compareImages,
+  summarizeImage,
+  type FramePixels,
+} from "./image-assertions.js";
+import { RootPresentation, capturedImage } from "./root-presentation.js";
+import {
+  CONSTRAINTS,
+  LIFECYCLE,
+  SKINNING,
+  SCENE,
+  selectSystems,
+} from "../integration/system-selections.js";
 
 type Client = AnimationWorldClient & PickingWorldClient;
 
-function png(frame: FrameCapture) {
+function png(frame: FramePixels) {
   const canvas = document.createElement("canvas");
   canvas.width = frame.width;
   canvas.height = frame.height;
@@ -56,7 +69,17 @@ export async function run(configuration: {
       configuration.wasm,
       { canvas: canvas.transferControlToOffscreen(), timeoutMs: 15000 },
     );
-  let client = await host.createWorld({ symbolicId: "hierarchy-render" });
+  const viewport = { width: canvas.width, height: canvas.height };
+  const created = await host.createWorld({
+    // Skeletons and skins only exist in builds with skeletal animation.
+    selectedSystems: contract.CAPABILITIES.skeletalAnimation
+      ? selectSystems(SCENE, SKINNING, CONSTRAINTS, LIFECYCLE)
+      : selectSystems(SCENE, CONSTRAINTS, LIFECYCLE),
+    symbolicId: "hierarchy-render",
+  });
+  const worlds: WorldReference[] = [created.reference];
+  let client = await host.openWorld(created.reference);
+  let presentation: RootPresentation | undefined;
   const record = async (kind: string, value: unknown) => {
     await (
       globalThis as unknown as {
@@ -74,23 +97,37 @@ export async function run(configuration: {
   let fixture = new AnimationFixture(client, contract, record);
   const batch = async (operations: Command[]) =>
     successfulBatch(await client.batch(operations));
-  const frames = new Map<string, FrameCapture>();
+  const place = (entity: bigint, parent: bigint | null): Command => ({
+    kind: "placeEntity",
+    entity: { kind: "handle", id: entity },
+    placement: {
+      parent: parent === null ? null : { kind: "handle", id: parent },
+      before: null,
+    },
+  });
+  const frames = new Map<string, FramePixels>();
   const capture = async (label: string) => {
+    check(presentation, "Camera presentation is not selected");
     const start = await client.inspect();
     const deadline = performance.now() + 15000;
-    let frame: FrameCapture;
+    let frame: PresentedCapture;
     do {
-      frame = await client.presentation!.capture(start.tick);
+      frame = await presentation.capture();
+      check(
+        presentation.sourceTick(frame) >= start.tick,
+        `${label}: capture does not include the inspected state`,
+      );
       check(
         performance.now() < deadline,
         `${label}: scene did not reach two draws`,
       );
     } while (frame.drawCalls !== 2);
-    frames.set(label, frame);
+    const image = capturedImage(frame);
+    frames.set(label, image);
     await record("capture", {
       label,
-      dataUrl: png(frame),
-      summary: summarizeImage(frame),
+      dataUrl: png(image),
+      summary: summarizeImage(image),
     });
     return frame;
   };
@@ -129,7 +166,12 @@ export async function run(configuration: {
       Transform: { z: 6 },
       Camera: { projection: 1, ortho_height: 4, focus_distance: 6 },
     });
-    client.sendCommand({ type: "CameraActivateCommand", entity: camera });
+    presentation = await RootPresentation.camera(
+      host,
+      created.reference,
+      camera,
+      viewport,
+    );
     const parent = await fixture.create("hierarchy-render-parent", {
       Transform: affinePoseTransform,
     });
@@ -139,7 +181,6 @@ export async function run(configuration: {
     });
     const tracker = await fixture.create("hierarchy-render-tracker", {
       Transform: {},
-      Hierarchy: { parent },
       LookAt: { target, enabled: false },
       MeshInstance: {
         source: clientAssetSource(client.session, 1, 601n).source,
@@ -148,7 +189,6 @@ export async function run(configuration: {
     });
     const tip = await fixture.create("hierarchy-render-tip", {
       Transform: { z: -1, sx: 0.12, sy: 0.12, sz: 0.12 },
-      Hierarchy: { parent: tracker },
       MeshInstance: { source: "ipp://mesh/cube?width=1&height=1&length=1" },
       UnlitMaterial: { r: 1, g: 0.3, b: 0.02 },
       PickingGeometry: {
@@ -159,26 +199,27 @@ export async function run(configuration: {
         }),
       },
     });
+    await batch([place(tracker, parent), place(tip, tracker)]);
     const plainTip = affinePosePosition([0, 0, -1]);
     await capture("hierarchy-affine");
     // Compare with independently baked positions and a flat child placement.
     await batch([
-      ...fixture.set(tracker, "Hierarchy", { parent: 0n }),
+      place(tracker, null),
       ...fixture.set(tracker, "MeshInstance", {
         source: clientAssetSource(client.session, 1, 602n).source,
       }),
-      ...fixture.set(tip, "Hierarchy", { parent: parent }),
+      place(tip, parent),
       ...fixture.set(tip, "Transform", { z: -1 }),
     ]);
     await capture("hierarchy-baked");
     await same("hierarchy-affine", "hierarchy-baked");
     await batch([
-      ...fixture.set(tracker, "Hierarchy", { parent }),
+      place(tracker, parent),
       ...fixture.set(tracker, "MeshInstance", {
         source: clientAssetSource(client.session, 1, 601n).source,
       }),
       ...fixture.set(tracker, "LookAt", { enabled: true }),
-      ...fixture.set(tip, "Hierarchy", { parent: tracker }),
+      place(tip, tracker),
     ]);
     await capture("aimed-affine");
     const tipPoint = affinePosePosition(aimedPoseVector([0, 0, -1]));
@@ -186,15 +227,15 @@ export async function run(configuration: {
     const tipQ = { qy: -Math.sin(Math.PI / 8), qw: Math.cos(Math.PI / 8) };
     const tipParent = await fixture.create("hierarchy-tip-reference", {
       Transform: tipQ,
-      Hierarchy: { parent },
     });
     await batch([
+      place(tipParent, parent),
       ...fixture.set(tracker, "LookAt", { enabled: false }),
-      ...fixture.set(tracker, "Hierarchy", { parent: 0n }),
+      place(tracker, null),
       ...fixture.set(tracker, "MeshInstance", {
         source: clientAssetSource(client.session, 1, 603n).source,
       }),
-      ...fixture.set(tip, "Hierarchy", { parent: tipParent }),
+      place(tip, tipParent),
     ]);
     await capture("aimed-baked");
     await same("aimed-affine", "aimed-baked");
@@ -206,18 +247,17 @@ export async function run(configuration: {
       "tracking must visibly change the surface and attachment",
     );
     await batch([
-      ...fixture.set(tracker, "Hierarchy", { parent }),
+      place(tracker, parent),
       ...fixture.set(tracker, "MeshInstance", {
         source: clientAssetSource(client.session, 1, 601n).source,
       }),
       ...fixture.set(tracker, "LookAt", { enabled: true }),
-      ...fixture.set(tip, "Hierarchy", { parent: tracker }),
+      place(tip, tracker),
     ]);
     const query = {
+      view: { kind: "bound" as const, binding: presentation.binding },
       x: 0.5 + tipPoint[0]! / ((4 * 4) / 3),
       y: 0.5 - tipPoint[1]! / 4,
-      width: 400,
-      height: 300,
     };
     const hit = await client.query({
       type: "GeometryPickQuery",
@@ -242,27 +282,14 @@ export async function run(configuration: {
       "camera projection and evaluated child disagree",
     );
     // Camera parenting changes projection/query origins in the same affine space.
-    await batch([
-      insertComponent(
-        client,
-        "Hierarchy",
-        { kind: "handle", id: camera },
-        { parent },
-      ),
-    ]);
+    await batch([place(camera, parent)]);
     await capture("parented-camera");
     check(
       compareImages(frames.get("aimed-affine")!, frames.get("parented-camera")!)
         .changedFraction > 0.01,
       "camera ignored parent",
     );
-    await batch([
-      {
-        kind: "removeComponent",
-        entity: { kind: "handle", id: camera },
-        component: client.components.Hierarchy!.id,
-      },
-    ]);
+    await batch([place(camera, null)]);
     if (contract.CAPABILITIES.skeletalAnimation) {
       await batch([...fixture.set(tracker, "Transform", { y: 0.35 })]);
       await batch([
@@ -275,8 +302,16 @@ export async function run(configuration: {
       ]);
       const reference = await fixture.create("joint-reference", {
         Transform: { y: 1 },
-        Hierarchy: { parent },
       });
+      await batch([
+        place(reference, parent),
+        insertComponent(
+          client,
+          "ParentJoint",
+          { kind: "handle", id: tracker },
+          { ordinal: 0xffff_ffff },
+        ),
+      ]);
       const source = await fixture.upload(
         {
           duration: 1,
@@ -324,7 +359,8 @@ export async function run(configuration: {
       for (const time of [0, 0.5, 1.5, 2.5]) {
         await fixture.seekPaused(controller, time);
         await batch([
-          ...fixture.set(tracker, "Hierarchy", { parent, parent_bone: 1 }),
+          place(tracker, parent),
+          ...fixture.set(tracker, "ParentJoint", { ordinal: 1 }),
           ...fixture.set(reference, "Transform", {
             qz: Math.sin(((time % 1) * Math.PI) / 4),
             qw: Math.cos(((time % 1) * Math.PI) / 4),
@@ -332,10 +368,8 @@ export async function run(configuration: {
         ]);
         await capture(`bone-${time}`);
         await batch([
-          ...fixture.set(tracker, "Hierarchy", {
-            parent: reference,
-            parent_bone: 0xffff_ffff,
-          }),
+          ...fixture.set(tracker, "ParentJoint", { ordinal: 0xffff_ffff }),
+          place(tracker, reference),
         ]);
         await capture(`bone-reference-${time}`);
         await same(`bone-${time}`, `bone-reference-${time}`);
@@ -346,7 +380,8 @@ export async function run(configuration: {
         "joint animation must move the attached geometry",
       );
       await batch([
-        ...fixture.set(tracker, "Hierarchy", { parent, parent_bone: 1 }),
+        place(tracker, parent),
+        ...fixture.set(tracker, "ParentJoint", { ordinal: 1 }),
       ]);
       // Persist a bone attachment with a reusable selected pose, independent of temporary uploads.
       await client.deleteAnimationController(controller);
@@ -357,21 +392,38 @@ export async function run(configuration: {
       ]);
     }
     await capture("before-save");
-    const saved = await host.saveWorld();
+    const saved = await host.saveWorld(client.session);
+    await presentation.close();
+    presentation = undefined;
     await client.close();
-    client = await host.loadWorld(saved, { symbolicId: "hierarchy-restored" });
+    const graph = await host.loadWorld(saved, {
+      symbolicId: "hierarchy-restored",
+    });
+    worlds.push(...graph.created.values());
+    client = await host.openWorld(graph.root);
     fixture = new AnimationFixture(client, contract, record);
     await uploads();
     const restored = await client.inspect();
     camera = restored.entities.find(
       (v) => v.metadata.symbolicId === "hierarchy-camera",
     )!.id;
-    client.sendCommand({ type: "CameraActivateCommand", entity: camera });
+    presentation = await RootPresentation.camera(
+      host,
+      graph.root,
+      camera,
+      viewport,
+    );
     await capture("restored");
     await same("restored", "before-save");
     await hierarchyLifecycle(client, contract, record);
     return { comparisons: 3, picking: true, persistence: true, plainTip };
   } finally {
-    await host.close();
+    try {
+      await presentation?.close();
+      for (const session of host.sessions.values()) await session.close();
+      for (const world of worlds) await host.destroyWorld(world);
+    } finally {
+      await host.close();
+    }
   }
 }

@@ -10,7 +10,7 @@ pub(super) fn read_wire_contract(
     components: &[Component],
     target_features: &[TargetFeature],
 ) -> Result<WireContract, String> {
-    if r.u16()? != 1 {
+    if r.u16()? != 2 {
         return Err("wire contract format".into());
     }
 
@@ -39,7 +39,6 @@ pub(super) fn read_wire_contract(
             return Err("baseline wire capability is disabled".into());
         }
         match (id, name.as_str()) {
-            (1, "state-overlays") => capabilities.state_overlays = enabled,
             (2, "spatial") => capabilities.spatial = enabled,
             (3, "textures") => capabilities.textures = enabled,
             (4, "builtin-assets") => capabilities.builtin_assets = enabled,
@@ -50,7 +49,7 @@ pub(super) fn read_wire_contract(
             _ => return Err("unknown wire capability".into()),
         }
     }
-    if capability_ids != std::collections::BTreeSet::from([1, 2, 3, 4, 5, 6, 7, 8])
+    if capability_ids != std::collections::BTreeSet::from([2, 3, 4, 5, 6, 7, 8])
         || capabilities.assets != (capabilities.spatial || capabilities.animation)
         || capabilities.debug_geometry && !capabilities.spatial
         || capabilities.builtin_assets && !capabilities.textures
@@ -69,6 +68,17 @@ pub(super) fn read_wire_contract(
             return Err("invalid wire convention".into());
         }
         conventions.push((name, value));
+    }
+
+    let mut limits = Vec::new();
+    let mut limit_names = std::collections::BTreeSet::new();
+    for _ in 0..r.u16()? {
+        let name = r.string()?;
+        let value = r.u32()?;
+        if name.is_empty() || value == 0 || !limit_names.insert(name.clone()) {
+            return Err("invalid wire limit".into());
+        }
+        limits.push((name, value));
     }
 
     let mut layouts = Vec::new();
@@ -114,10 +124,11 @@ pub(super) fn read_wire_contract(
                     field.target == "bool" || layout_names.contains(&field.target)
                 }
                 WireEncoding::Named => layout_names.contains(&field.target),
-                WireEncoding::List => {
+                WireEncoding::List | WireEncoding::U8CountedList => {
                     layout_names.contains(&field.target)
                         || is_tag_space_name(&field.target)
-                        || ["u32", "utf8-65536", "empty"].contains(&field.target.as_str())
+                        || ["u8", "u16", "u32", "u64", "utf8-65536", "empty"]
+                            .contains(&field.target.as_str())
                 }
                 WireEncoding::Option => {
                     ["bool", "u16", "u32", "u64", "utf8-65536"].contains(&field.target.as_str())
@@ -226,6 +237,7 @@ pub(super) fn read_wire_contract(
     Ok(WireContract {
         capabilities,
         conventions,
+        limits,
         layouts,
         tags,
         asset_formats,
@@ -235,7 +247,6 @@ pub(super) fn read_wire_contract(
 fn validate_capability(id: u8, capabilities: Capabilities) -> Result<(), String> {
     let enabled = match id {
         0 => true,
-        1 => capabilities.state_overlays,
         2 => capabilities.spatial,
         3 => capabilities.textures,
         4 => capabilities.builtin_assets,
@@ -255,7 +266,6 @@ fn validate_capability(id: u8, capabilities: Capabilities) -> Result<(), String>
 pub(super) fn capability_name(id: u8) -> Result<&'static str, String> {
     match id {
         0 => Ok("base"),
-        1 => Ok("state-overlays"),
         2 => Ok("spatial"),
         3 => Ok("textures"),
         4 => Ok("builtin-assets"),
@@ -276,14 +286,9 @@ fn tag_space_name(id: u8) -> Result<&'static str, String> {
         5 => Ok("response"),
         6 => Ok("outcome"),
         8 => Ok("option"),
-        9 => Ok("entity-overlay-mode"),
-        10 => Ok("component-overlay-mode"),
-        11 => Ok("state-overlay-handle-kind"),
-        12 => Ok("state-overlay-lifecycle-reason"),
         13 => Ok("resource-status"),
         15 => Ok("snapshot-value"),
         16 => Ok("snapshot-reference"),
-        17 => Ok("camera-motion"),
         18 => Ok("geometry-pick-outcome"),
         19 => Ok("lifecycle-observation"),
         20 => Ok("batch-error-scope"),
@@ -298,12 +303,35 @@ fn tag_space_name(id: u8) -> Result<&'static str, String> {
         29 => Ok("playback-event-kind"),
         30 => Ok("animation-transition-easing"),
         31 => Ok("animation-transition-start-time"),
+        32 => Ok("output-kind"),
+        33 => Ok("view-target"),
+        34 => Ok("operation-effect"),
+        35 => Ok("attachment-receipt-state"),
+        36 => Ok("presentation-request"),
+        37 => Ok("presentation-response"),
+        38 => Ok("presentation-error"),
+        39 => Ok("lifecycle-watch-change"),
+        40 => Ok("lifecycle-watch-target"),
+        41 => Ok("lifecycle-watch-record"),
+        42 => Ok("lifecycle-membership-result"),
+        43 => Ok("lifecycle-target-lifetime"),
+        44 => Ok("lifecycle-membership-rejection"),
+        45 => Ok("lifecycle-watch-kinds"),
+        46 => Ok("gui-physical-request"),
+        47 => Ok("gui-physical-event"),
+        48 => Ok("gui-physical-response"),
+        49 => Ok("gui-physical-button"),
+        50 => Ok("gui-physical-key"),
+        51 => Ok("gui-native-edit"),
+        52 => Ok("gui-physical-disposition"),
+        53 => Ok("gui-action"),
+        54 => Ok("output-target"),
         _ => Err("unknown wire tag space".into()),
     }
 }
 
 fn is_tag_space_name(name: &str) -> bool {
-    (1..=31).any(|id| tag_space_name(id).is_ok_and(|candidate| candidate == name))
+    (1..=54).any(|id| tag_space_name(id).is_ok_and(|candidate| candidate == name))
 }
 
 impl WireEncoding {
@@ -323,6 +351,7 @@ impl WireEncoding {
             13 => Self::Union,
             14 => Self::Bool,
             15 => Self::Masked,
+            16 => Self::U8CountedList,
             _ => return Err("unknown wire field encoding".into()),
         })
     }
@@ -343,6 +372,7 @@ impl WireEncoding {
             Self::Union => "union",
             Self::Bool => "bool",
             Self::Masked => "masked",
+            Self::U8CountedList => "u8-counted-list",
         }
     }
 
@@ -350,6 +380,7 @@ impl WireEncoding {
         match self {
             Self::Utf8 | Self::Bytes => limit != 0,
             Self::List => true,
+            Self::U8CountedList => limit <= u8::MAX as u32,
             Self::Masked => limit.is_power_of_two() && limit <= 0x8000,
             _ => limit == 0,
         }
@@ -358,7 +389,13 @@ impl WireEncoding {
     const fn has_target(self) -> bool {
         matches!(
             self,
-            Self::Named | Self::List | Self::Option | Self::Variant | Self::Union | Self::Masked
+            Self::Named
+                | Self::List
+                | Self::U8CountedList
+                | Self::Option
+                | Self::Variant
+                | Self::Union
+                | Self::Masked
         )
     }
 }
@@ -377,7 +414,30 @@ mod tests {
         assert!(is_tag_space_name("animation-transition-easing"));
         assert!(is_tag_space_name("animation-transition-start-time"));
         assert!(tag_space_name(7).is_err());
-        assert!(tag_space_name(32).is_err());
+        assert_eq!(tag_space_name(32).unwrap(), "output-kind");
+        assert_eq!(tag_space_name(33).unwrap(), "view-target");
+        assert!(is_tag_space_name("view-target"));
+        assert_eq!(tag_space_name(36).unwrap(), "presentation-request");
+        assert_eq!(tag_space_name(37).unwrap(), "presentation-response");
+        assert_eq!(tag_space_name(38).unwrap(), "presentation-error");
+        for (tag, name) in [
+            (39, "lifecycle-watch-change"),
+            (40, "lifecycle-watch-target"),
+            (41, "lifecycle-watch-record"),
+            (42, "lifecycle-membership-result"),
+            (43, "lifecycle-target-lifetime"),
+            (44, "lifecycle-membership-rejection"),
+            (45, "lifecycle-watch-kinds"),
+        ] {
+            assert_eq!(tag_space_name(tag).unwrap(), name);
+            assert!(is_tag_space_name(name));
+        }
+
+        assert_eq!(tag_space_name(53).unwrap(), "gui-action");
+        assert_eq!(tag_space_name(54).unwrap(), "output-target");
+        assert!(is_tag_space_name("output-target"));
+        assert!(tag_space_name(55).is_err());
         assert!(!is_tag_space_name("animation-transition-unknown"));
+        assert!(!is_tag_space_name("lifecycle-watch-unknown"));
     }
 }

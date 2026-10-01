@@ -2,8 +2,9 @@
 
 use std::collections::BTreeMap;
 
+use super::scene::SceneDebug as DebugRenderItem;
 use crate::{RenderDevice, RenderError, services::render::assets::SharedRenderDevice};
-use ipp_core::{DebugRenderItem, systems::geometry::GeometryPrimitiveVisual};
+use ipp_core::systems::geometry::GeometryPrimitiveVisual;
 
 type DebugGeometryRenderKey = [u32; 6];
 

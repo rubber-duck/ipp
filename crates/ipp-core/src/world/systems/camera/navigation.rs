@@ -2,12 +2,13 @@ use super::Camera;
 use super::{CameraAffineTransform, CameraMotion};
 use crate::{EntityId, ErrorReason, components::Transform};
 
-/// Calculate from producer inputs only; the caller resolves state_overlays on the staged result.
-pub(crate) fn navigate(
+/// Calculate from the stored camera and transform; the caller writes the result.
+pub(super) fn navigate_in_view(
     entity: EntityId,
     camera: Camera,
     transform: Transform,
     motion: CameraMotion,
+    view_extent: Option<[f64; 2]>,
 ) -> Result<(Camera, Transform), ErrorReason> {
     super::prepare(entity, &camera, &transform, 1, 1)?;
 
@@ -55,18 +56,16 @@ pub(crate) fn navigate(
             if !x.is_finite() || !y.is_finite() || width == 0 || height == 0 {
                 return Err(ErrorReason::InvalidValue);
             }
-            super::prepare(entity, &camera, &transform, width, height)?;
+            let aspect = super::camera_math::projection_aspect(
+                view_extent.unwrap_or([f64::from(width), f64::from(height)]),
+            )?;
 
             let extent = if camera.projection == 0 {
                 2.0 * f64::from(camera.focus_distance) * (f64::from(camera.fov_y) * 0.5).tan()
             } else {
                 f64::from(camera.ortho_height)
             };
-            let local = [
-                -f64::from(x) * f64::from(width) / f64::from(height) * extent,
-                f64::from(y) * extent,
-                0.0,
-            ];
+            let local = [-f64::from(x) * aspect * extent, f64::from(y) * extent, 0.0];
             set_position(&mut next_transform, affine.point(local))?;
             super::prepare(entity, &next_camera, &next_transform, width, height)?;
         }

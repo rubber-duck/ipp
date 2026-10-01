@@ -68,7 +68,7 @@ export async function namedAssets(configuration: ReactRuntimeConfiguration) {
       geometry(weight),
     );
   const selection = async () =>
-    findEntity(await client.inspect(), "asset-target")!.effective.find(
+    findEntity(await client.inspect(), "asset-target")!.components.find(
       (value) => value.component === client.components.MeshInstance!.id,
     )!.fields.source;
   let controller: bigint | undefined;
@@ -97,7 +97,7 @@ export async function namedAssets(configuration: ReactRuntimeConfiguration) {
           )
           .every(
             (entity) =>
-              entity.effective.find(
+              entity.components.find(
                 (component) =>
                   component.component === client.components.MeshInstance!.id,
               )?.fields.source === first,
@@ -210,9 +210,10 @@ export async function namedAssets(configuration: ReactRuntimeConfiguration) {
     const value = findEntity(
       await client.inspect(),
       "asset-target",
-    )!.effective.find((value) => value.component === scalar.id)!.fields.value;
+    )!.components.find((value) => value.component === scalar.id)!.fields.value;
+    // The controller adds the clip's change from its first key (2 → 4).
     check(
-      value === 4,
+      value === 2,
       "AnimationAsset feeds the real controller through the generated client",
     );
     await animation.deleteAnimationController(controller);
@@ -243,8 +244,8 @@ export async function namedAssets(configuration: ReactRuntimeConfiguration) {
     await root.unmount();
     gate.release();
     check(
-      !findEntity(await client.inspect(), "asset-target"),
-      "unmount releases declarations and producer ownership",
+      !!findEntity(await client.inspect(), "asset-target"),
+      "unmount during a pending asset load deletes nothing",
     );
     return checks;
   } finally {

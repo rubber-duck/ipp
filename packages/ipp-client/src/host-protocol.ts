@@ -1,4 +1,5 @@
 /** Host control wire primitives. World authoring keeps its target-generated codec. */
+import type { CanvasState, WorldReference } from "./types.js";
 export interface WorldCapacityHints {
   entities: number;
   systems: Record<string, Record<string, number>>;
@@ -17,12 +18,53 @@ export interface WorldDescriptor {
 }
 
 export type WorldSelector = bigint | string;
+export interface CreatedWorld extends WorldDescriptor {
+  readonly reference: WorldReference;
+}
 
 export interface WorldCreateOptions {
   symbolicId?: string;
   capacityHints?: WorldCapacityHintsPatch;
+  /** Registered System names the World instantiates, exactly. Required:
+   * there is no default selection. Empty selects no Systems. */
+  selectedSystems: readonly string[];
+  /** Initial canvas extent and density. Accepted only when the selection
+   * includes `ipp.canvas`; omitted selects the defaults. */
+  canvas?: CanvasState;
   /** Destroy on the creating Host connection's close. Defaults to retained. */
   temporary?: boolean;
+}
+
+/** World creation named no System selection. Refused before sending, so the
+ * Host connection stays usable; the Host refuses an absent selection too. */
+export class WorldSelectionRequiredError extends TypeError {
+  readonly code = "IPP_WORLD_SELECTION_REQUIRED";
+
+  constructor() {
+    super(
+      "World creation requires a System selection: name the Systems the World uses",
+    );
+    this.name = "WorldSelectionRequiredError";
+  }
+}
+
+export interface WorldManifest {
+  systems: readonly string[];
+  components: readonly number[];
+  operations: readonly (
+    | "entityLinks"
+    | "animation"
+    | "jointAnimation"
+    | "constraints"
+    | "lookAt"
+    | "geometry"
+    | "rendering"
+    | "camera"
+    | "surface"
+    | "gui"
+    | "particles"
+    | "canvas"
+  )[];
 }
 
 const encoder = new TextEncoder();
@@ -32,7 +74,8 @@ const decoder = new TextDecoder("utf-8", { fatal: true });
  * it in `ipp-protocol` (`host.rs` bounds Host requests and responses by
  * `MAX_MESSAGE_BYTES`) rather than in a target contract; World save and
  * load chunks stay within it. World messages use the generated codec's
- * contract-derived budget. */
+ * contract-derived budget. `tools/check_repo.py` compares this and the Host
+ * field bound below with their `ipp-protocol` constants. */
 const HOST_MESSAGE_BYTES = 1_048_576;
 
 export class HostWireWriter {
@@ -63,6 +106,22 @@ export class HostWireWriter {
       throw new RangeError("Expected unsigned 64-bit value");
     const bytes = new Uint8Array(8);
     new DataView(bytes.buffer).setBigUint64(0, value, true);
+    this.raw(bytes);
+  }
+
+  f32(value: number): void {
+    if (!Number.isFinite(value) || !Number.isFinite(Math.fround(value)))
+      throw new RangeError("Expected finite f32 value");
+    const bytes = new Uint8Array(4);
+    new DataView(bytes.buffer).setFloat32(0, value, true);
+    this.raw(bytes);
+  }
+
+  f64(value: number): void {
+    if (!Number.isFinite(value) || value < 0)
+      throw new RangeError("Expected nonnegative finite value");
+    const bytes = new Uint8Array(8);
+    new DataView(bytes.buffer).setFloat64(0, value, true);
     this.raw(bytes);
   }
 
@@ -136,9 +195,41 @@ export class HostWireReader {
     return this.raw(1)[0]!;
   }
 
+  boolean(): boolean {
+    const value = this.u8();
+    if (value > 1) throw new Error("Invalid Host boolean");
+    return value === 1;
+  }
+
   u32(): number {
     const bytes = this.raw(4);
     return new DataView(bytes.buffer, bytes.byteOffset, 4).getUint32(0, true);
+  }
+
+  u16(): number {
+    const bytes = this.raw(2);
+    return new DataView(bytes.buffer, bytes.byteOffset, 2).getUint16(0, true);
+  }
+
+  f32(): number {
+    const bytes = this.raw(4);
+    const value = new DataView(bytes.buffer, bytes.byteOffset, 4).getFloat32(
+      0,
+      true,
+    );
+    if (!Number.isFinite(value)) throw new Error("Invalid Host f32 value");
+    return value;
+  }
+
+  f64(): number {
+    const bytes = this.raw(8);
+    const value = new DataView(bytes.buffer, bytes.byteOffset, 8).getFloat64(
+      0,
+      true,
+    );
+    if (!Number.isFinite(value) || value < 0)
+      throw new Error("Invalid Host floating point value");
+    return value;
   }
 
   u64(): bigint {
@@ -161,6 +252,46 @@ export class HostWireReader {
 
   string(): string {
     return decoder.decode(this.bytes());
+  }
+
+  manifest(): WorldManifest {
+    const systems = Array.from({ length: this.count(1024) }, () =>
+      this.string(),
+    );
+    const components = Array.from({ length: this.count(1024) }, () =>
+      this.u16(),
+    );
+    // Wire numbers are stable; 1 is a retired operation and is never reused.
+    const names = [
+      "entityLinks",
+      undefined,
+      "animation",
+      "jointAnimation",
+      "constraints",
+      "lookAt",
+      "geometry",
+      "rendering",
+      "camera",
+      "surface",
+      "gui",
+      "particles",
+      "canvas",
+    ] as const;
+    const operations = Array.from(
+      { length: this.count(32) },
+      () =>
+        names[this.u8()] ??
+        (() => {
+          throw new Error("Unknown World operation");
+        })(),
+    );
+    if (
+      new Set(systems).size !== systems.length ||
+      new Set(components).size !== components.length ||
+      new Set(operations).size !== operations.length
+    )
+      throw new Error("Duplicate World manifest entry");
+    return { systems, components, operations };
   }
 
   world(): WorldDescriptor {

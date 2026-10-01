@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import test from "node:test";
 import type { AssetWorldClient } from "@ipp/client";
 import { runNativeEnvironment } from "./environment.js";
+import { RENDER, selectSystems } from "./system-selections.js";
 
 for (const enabled of [false, true])
   test(`native filesystem reads are ${enabled ? "explicitly configured" : "disabled by default"}`, {
@@ -48,6 +49,7 @@ for (const enabled of [false, true])
             async () => {
               const client = await environment.track<AssetWorldClient>(
                 contract.IppClient.connectWebSocket(environment.url, {
+                  selectedSystems: selectSystems(RENDER),
                   signal: environment.signal,
                 }),
               );

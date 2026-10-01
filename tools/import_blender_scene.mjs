@@ -17,7 +17,6 @@ const { positionals, values } = parseArgs({
     namespace: { type: "string", default: "scene" },
     world: { type: "string", default: "world.ipp" },
     "clips-only": { type: "boolean", default: false },
-    "defer-presentation": { type: "boolean", default: false },
   },
 });
 if (
@@ -46,6 +45,12 @@ const entry = resolve(workspace, "target/blender-import/import.js");
 await bundleBrowser(
   resolve(workspace, "integrations/blender/client/disk-import.ts"),
   entry,
+  "production",
+  {
+    alias: {
+      "@ipp/client": resolve(workspace, "packages/ipp-client/src/index.ts"),
+    },
+  },
 );
 const runtime = resolve(
   workspace,
@@ -117,7 +122,7 @@ try {
   });
   await page.goto(`http://127.0.0.1:${server.address().port}/`);
   const result = await page.evaluate(
-    async ({ source, namespace, clipsOnly, deferPresentation }) => {
+    async ({ source, namespace, clipsOnly }) => {
       const contract = await import("/runtime/generated.js");
       const { importBlenderScene } = await import("/import.js");
       const prefix = `https://${namespace}.ipp.invalid/`;
@@ -138,22 +143,6 @@ try {
         },
       );
       console.info("Import Host ready");
-      const createWorld = host.createWorld.bind(host);
-      host.createWorld = async (options) => {
-        const client = await createWorld(options),
-          batch = client.batch.bind(client);
-        let total = 0;
-        client.batch = async (operations) => {
-          const start = performance.now();
-          const result = await batch(operations);
-          total += operations.length;
-          console.info(
-            `Import batch acknowledged: ${operations.length} operations, ${total} total, ${(performance.now() - start).toFixed(1)} ms, ok=${result.ok}`,
-          );
-          return result;
-        };
-        return client;
-      };
       const assetName = (source) => {
         const match = /^\/assets\/([A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*)$/.exec(
           source,
@@ -180,7 +169,7 @@ try {
               return prefix + (await response.text());
             },
           },
-          { symbolicId: namespace, clipsOnly, deferPresentation },
+          { symbolicId: namespace, clipsOnly },
         );
         console.info("World saved");
         return { ...result, bytes: Array.from(result.bytes) };
@@ -201,7 +190,6 @@ try {
       source,
       namespace: values.namespace,
       clipsOnly: values["clips-only"],
-      deferPresentation: values["defer-presentation"],
     },
   );
   await writeFile(resolve(output, values.world), Buffer.from(result.bytes));

@@ -78,7 +78,7 @@ fn inserts_and_removals_keep_first_fit_layout_and_values() {
         } else {
             let retyped = properties
                 .descriptors()
-                .get(&name)
+                .get(name.as_str())
                 .is_none_or(|descriptor| descriptor.kind != value.kind());
             let previous_key = properties.key(&name);
             let reference = if retyped {
@@ -93,7 +93,7 @@ fn inserts_and_removals_keep_first_fit_layout_and_values() {
 
             if let Some(reference) = reference {
                 assert_eq!(
-                    properties.descriptors()[&name].offset as usize,
+                    properties.descriptors()[name.as_str()].offset as usize,
                     reference,
                     "step {step} placed {name} away from the first fit"
                 );

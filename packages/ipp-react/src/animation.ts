@@ -14,6 +14,7 @@ import type {
   AnimationPlaybackEvent,
 } from "@ipp/client";
 import type { AssetReference } from "./assets.js";
+import type { ReactEntityReference } from "./entity_references.js";
 
 export const ANIMATION_HOST_TYPE = "ipp-animation";
 export interface AnimationHandle {
@@ -25,11 +26,15 @@ export interface AnimationHandle {
   seek(time: number): Promise<void>;
 }
 export interface AnimationBinding
-  extends Omit<AnimationDriverDescription, "source" | "target" | "property"> {
+  extends Omit<
+    AnimationDriverDescription,
+    "source" | "target" | "property" | "entityBindings"
+  > {
   source?: string | AssetReference;
   /** Scene Entity id/bindTo, an existing runtime handle, or the enclosing Entity. */
   target?: string | bigint;
   property?: AnimationDriverTarget;
+  entityBindings?: readonly (string | bigint)[];
 }
 export interface AnimationProps {
   ref?: Ref<AnimationHandle>;
@@ -104,11 +109,12 @@ export interface AnimationDescription {
   mailbox: AnimationMailbox;
   bindings: readonly (Omit<
     AnimationBinding,
-    "target" | "source" | "property"
+    "target" | "source" | "property" | "entityBindings"
   > & {
     source: string | AssetReference;
     target: { entity: number } | bigint;
     property: AnimationDriverTarget;
+    entityBindings?: readonly ReactEntityReference[];
   })[];
   speed: number;
   looping: boolean;

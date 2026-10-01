@@ -1,5 +1,3 @@
-/** Portable initial rig limit, matching the compiled skeleton implementation. */
-export const MAX_JOINTS = 32;
 export interface JointTransform {
   translation?: readonly [number, number, number];
   rotation?: readonly [number, number, number, number];

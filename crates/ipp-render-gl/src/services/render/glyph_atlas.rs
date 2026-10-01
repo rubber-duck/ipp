@@ -7,11 +7,13 @@
 //! the Service populates the missing entries of a frame before its main pass.
 //!
 //! Pages without demand stay resident. They retire after a renderer-owned number of idle
-//! demand publications, when allocation pressure needs their space, or all at once when
-//! no World demands any glyph. Pressure reclaims a partially live page only when no idle
+//! Host frames, when allocation pressure needs their space, or all at once when no World
+//! demands any glyph. Pressure reclaims a partially live page only when no idle
 //! page remains. Retained batches check the pages they sample, so retiring one page
 //! rebuilds only the runs that reference it. A glyph whose population fails backs off
-//! before retrying; its text keeps the analytic path meanwhile.
+//! for a number of Host frames before retrying; its text keeps the analytic path
+//! meanwhile. Both clocks advance once per Host frame the renderer draws, however many
+//! Worlds publish demand in it, so presenting many Canvases does not shorten them.
 //!
 //! Context loss releases page textures and retained batches but keeps the atlas layout,
 //! demand and run bands. Recovery repopulates demanded entries into their original
@@ -23,9 +25,7 @@ use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 use ipp_core::services::asset_management::AssetKey;
-use ipp_core::systems::surface::{
-    SurfaceClipRect, SurfaceGlyph, SurfacePrimitiveIdentity, SurfacePrimitiveStyle,
-};
+use ipp_core::systems::canvas::{CanvasClip, CanvasGlyph, CanvasPrimitiveId, CanvasPrimitiveStyle};
 
 use super::gui_batch::{GUI_FILL_GLYPH, GuiVertex};
 use super::gui_storage::{GuiPiece, GuiPieceKey, GuiPieceSource};
@@ -60,8 +60,8 @@ const ESTIMATED_POPULATE_MS_PER_GLYPH: f64 = 0.005;
 #[cfg(target_arch = "wasm32")]
 const ESTIMATED_POPULATE_MS_PER_GLYPH: f64 = 0.02;
 
-/// Demand publications a glyph waits after its first failed population.
-pub const POPULATE_RETRY_TICKS: u64 = 4;
+/// Host frames a glyph waits after its first failed population.
+pub const POPULATE_RETRY_FRAMES: u64 = 4;
 
 /// Each further failure doubles the wait, at most this many times.
 pub const MAX_POPULATE_RETRY_DOUBLINGS: u32 = 8;
@@ -92,17 +92,17 @@ const MAX_BATCH_GLYPHS: usize = 256;
 pub struct GlyphAtlasLimits {
     /// Resident page budget, at least one. Allocation beyond it reclaims idle pages first.
     pub max_pages: usize,
-    /// Demand publications a page without demand stays resident before it retires.
-    /// Every World render that publishes glyph demand counts once.
-    pub idle_page_publications: u64,
+    /// Host frames a page without demand stays resident before it retires, however
+    /// many Worlds publish glyph demand in each frame.
+    pub idle_page_frames: u64,
 }
 
 impl GlyphAtlasLimits {
     /// Four pages (1 MiB of coverage); an idle page retires after about ten seconds of
-    /// one World at 60 Hz.
+    /// Host frames at 60 Hz.
     pub const DEFAULT: Self = Self {
         max_pages: 4,
-        idle_page_publications: 600,
+        idle_page_frames: 600,
     };
 }
 
@@ -183,11 +183,11 @@ pub fn projected_glyph_height(
 
 /// Test glyph paint against the effective clip before preparing any geometry.
 pub fn glyph_intersects_clip(
-    style: &SurfacePrimitiveStyle,
-    glyph: &SurfaceGlyph,
+    style: &CanvasPrimitiveStyle,
+    glyph: &CanvasGlyph,
     bounds: [f32; 4],
     unit: f32,
-    clip: SurfaceClipRect,
+    clip: CanvasClip,
 ) -> bool {
     let x = style.position[0] + glyph.position[0] * style.scale[0];
     let y = style.position[1] + glyph.position[1] * style.scale[1];
@@ -205,7 +205,7 @@ pub fn glyph_intersects_clip(
 /// Delay before a glyph whose population failed may be attempted again.
 #[derive(Clone, Copy, Debug, Default)]
 struct GlyphPopulationBackoff {
-    retry_tick: u64,
+    retry_frame: u64,
     failures: u32,
 }
 
@@ -245,12 +245,12 @@ struct AtlasPage<D: RenderDevice> {
     entries: usize,
     /// Entries on this page that at least one text run demands.
     demanded: usize,
-    /// Demand publication at which the page last had no demanded entry.
+    /// Host frame at which the page last had no demanded entry.
     idle_since: u64,
 }
 
 impl<D: RenderDevice> AtlasPage<D> {
-    fn new(handle: D::GlyphAtlasPage, tick: u64) -> Self {
+    fn new(handle: D::GlyphAtlasPage, frame: u64) -> Self {
         Self {
             handle: Some(handle),
             current_x: 0,
@@ -258,7 +258,7 @@ impl<D: RenderDevice> AtlasPage<D> {
             row_height: 0,
             entries: 0,
             demanded: 0,
-            idle_since: tick,
+            idle_since: frame,
         }
     }
 
@@ -307,7 +307,8 @@ pub struct GlyphAtlas<D: RenderDevice> {
     entries: BTreeMap<GlyphKey, AtlasSlot>,
     /// Text runs demanding each entry, across every World.
     demand: BTreeMap<GlyphKey, u32>,
-    demand_tick: u64,
+    /// Host frames begun, the clock of idle retirement and population back-off.
+    frame: u64,
     /// Advances whenever resident entries are removed, invalidating residency checks.
     residency_generation: u64,
     needs_reclaim: bool,
@@ -329,7 +330,7 @@ impl<D: RenderDevice> GlyphAtlas<D> {
             next_page: 0,
             entries: BTreeMap::new(),
             demand: BTreeMap::new(),
-            demand_tick: 0,
+            frame: 0,
             residency_generation: 0,
             needs_reclaim: false,
             #[cfg(any(test, feature = "diagnostics"))]
@@ -425,32 +426,37 @@ impl<D: RenderDevice> GlyphAtlas<D> {
             {
                 page.demanded -= 1;
                 if page.demanded == 0 {
-                    page.idle_since = self.demand_tick;
+                    page.idle_since = self.frame;
                 }
             }
         }
     }
 
-    /// Start one World's demand publication before its runs check residency.
+    /// Start one Host frame before any World publishes demand in it.
     ///
-    /// Advances the back-off and idle clocks, retires expired idle pages, answers
-    /// pressure recorded by a failed allocation and applies a lowered page budget.
-    pub fn begin_publication(&mut self) {
-        self.demand_tick += 1;
+    /// Advances the back-off and idle clocks once, however many Worlds publish in the
+    /// frame, and retires pages idle for the configured number of frames.
+    pub fn begin_frame(&mut self) {
+        self.frame += 1;
 
         let expired: Vec<usize> = self
             .pages
             .iter()
             .filter(|(_, page)| {
-                page.demanded == 0
-                    && self.demand_tick - page.idle_since >= self.limits.idle_page_publications
+                page.demanded == 0 && self.frame - page.idle_since >= self.limits.idle_page_frames
             })
             .map(|(&id, _)| id)
             .collect();
         for id in expired {
             self.retire_page(id);
         }
+    }
 
+    /// Start one World's demand publication before its runs check residency.
+    ///
+    /// Answers pressure recorded by a failed allocation and applies a lowered page
+    /// budget. The clocks advance only in [`Self::begin_frame`].
+    pub fn begin_publication(&mut self) {
         if std::mem::take(&mut self.needs_reclaim)
             && let Some(id) = self.idle_page().or_else(|| self.most_stale_page())
         {
@@ -576,7 +582,7 @@ impl<D: RenderDevice> GlyphAtlas<D> {
         let backoff = self.population_backoff.entry(key).or_default();
         backoff.failures = backoff.failures.saturating_add(1);
         let doublings = (backoff.failures - 1).min(MAX_POPULATE_RETRY_DOUBLINGS);
-        backoff.retry_tick = self.demand_tick + (POPULATE_RETRY_TICKS << doublings);
+        backoff.retry_frame = self.frame + (POPULATE_RETRY_FRAMES << doublings);
     }
 
     /// Discard an entry whose coverage was never written, without delaying a retry.
@@ -590,7 +596,7 @@ impl<D: RenderDevice> GlyphAtlas<D> {
             if self.demand.contains_key(&key) {
                 page.demanded -= 1;
                 if page.demanded == 0 {
-                    page.idle_since = self.demand_tick;
+                    page.idle_since = self.frame;
                 }
             }
         }
@@ -600,7 +606,7 @@ impl<D: RenderDevice> GlyphAtlas<D> {
     pub fn population_deferred(&self, key: &GlyphKey) -> bool {
         self.population_backoff
             .get(key)
-            .is_some_and(|backoff| backoff.retry_tick > self.demand_tick)
+            .is_some_and(|backoff| backoff.retry_frame > self.frame)
     }
 
     /// Borrow the underlying color texture of an atlas page for sampling.
@@ -678,7 +684,7 @@ impl<D: RenderDevice> GlyphAtlas<D> {
                 let page = self
                     .pages
                     .entry(index)
-                    .or_insert(AtlasPage::new(handle, self.demand_tick));
+                    .or_insert(AtlasPage::new(handle, self.frame));
                 let slot = page.allocate(slot_w, slot_h).ok_or_else(|| {
                     RenderError::RenderDevice("glyph exceeds atlas page size".into())
                 })?;
@@ -871,12 +877,12 @@ impl GlyphFrameWork {
 /// Evaluated inputs of one text run, shared by demand publication and drawing.
 #[derive(Clone, Copy, Debug)]
 pub struct TextRun<'a> {
-    /// Live entity owning the Surface component.
+    /// Retained Surface key; a Canvas output uses [`CANVAS_SURFACE`](super::retained_surfaces::CANVAS_SURFACE).
     pub entity: ipp_core::EntityId,
     /// Evaluated style carrying the stable primitive identity.
-    pub style: &'a SurfacePrimitiveStyle,
+    pub style: &'a CanvasPrimitiveStyle,
     /// Effective clip rectangle in Surface metres.
-    pub clip: SurfaceClipRect,
+    pub clip: CanvasClip,
     /// Ready font asset incarnation.
     pub font_key: AssetKey,
     /// Metres per em.
@@ -884,7 +890,7 @@ pub struct TextRun<'a> {
     /// Font units per em of the ready font.
     pub units_per_em: u32,
     /// Positioned glyphs in painter order.
-    pub glyphs: &'a [SurfaceGlyph],
+    pub glyphs: &'a [CanvasGlyph],
 }
 
 impl TextRun<'_> {
@@ -959,7 +965,7 @@ struct RetainedGlyphRun {
 
 /// Text runs of one Surface.
 struct RetainedGlyphSurface {
-    runs: BTreeMap<SurfacePrimitiveIdentity, RetainedGlyphRun>,
+    runs: BTreeMap<CanvasPrimitiveId, RetainedGlyphRun>,
     /// Publication that last showed or kept this Surface.
     seen: u64,
     /// Runs shown by publication `seen`; `None` keeps every run of a culled Surface.
@@ -1243,7 +1249,7 @@ impl GlyphBatchRenderCache {
     pub(crate) fn run_pieces(
         &self,
         entity: ipp_core::EntityId,
-        identity: SurfacePrimitiveIdentity,
+        identity: CanvasPrimitiveId,
     ) -> impl Iterator<Item = GuiPiece> + '_ {
         self.run(entity, identity)
             .into_iter()
@@ -1261,7 +1267,7 @@ impl GlyphBatchRenderCache {
     pub fn batch_vertices(
         &self,
         entity: ipp_core::EntityId,
-        identity: SurfacePrimitiveIdentity,
+        identity: CanvasPrimitiveId,
         index: u32,
     ) -> &[GuiVertex] {
         self.run(entity, identity)
@@ -1272,7 +1278,7 @@ impl GlyphBatchRenderCache {
     fn run(
         &self,
         entity: ipp_core::EntityId,
-        identity: SurfacePrimitiveIdentity,
+        identity: CanvasPrimitiveId,
     ) -> Option<&RetainedGlyphRun> {
         self.surfaces.get(&entity)?.runs.get(&identity)
     }
@@ -1320,7 +1326,7 @@ fn rebuild_batches<D: RenderDevice>(
     let uniform = run
         .glyphs
         .iter()
-        .all(|glyph| glyph.color.is_none_or(|color| color == style.color));
+        .all(|glyph| style.glyph_tint(glyph) == style.color);
     let mut buckets: Vec<PageBucket> = Vec::new();
 
     for glyph in run.glyphs {
@@ -1338,7 +1344,7 @@ fn rebuild_batches<D: RenderDevice>(
             continue; // Omit empty/whitespace glyphs
         }
 
-        let tint = glyph.color.unwrap_or(style.color);
+        let tint = style.glyph_tint(glyph);
         let color = [tint[0], tint[1], tint[2], tint[3] * style.opacity];
         if color[3] <= 0.0 {
             continue;

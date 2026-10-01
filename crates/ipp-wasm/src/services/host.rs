@@ -5,46 +5,12 @@ use super::render;
 
 use std::collections::VecDeque;
 
-use ipp_core::{HostRuntime, WorldContext};
+use ipp_core::HostRuntime;
 use ipp_host_session::HostServices;
 
-/// The single World a browser Host presents through its graphics context.
-///
-/// Presenting another World ends the previous World's presentation. This Host never
-/// draws a World it does not present, so the previous World's renderer caches are
-/// released rather than holding retained batches and glyph atlas demand until unload.
-#[cfg(any(test, all(feature = "render", target_arch = "wasm32")))]
-#[derive(Default)]
-struct WasmPresentationTarget {
-    world: Option<ipp_core::WorldId>,
-}
-
-#[cfg(any(test, all(feature = "render", target_arch = "wasm32")))]
-impl WasmPresentationTarget {
-    /// Present `world`, returning a different previously presented World to forget.
-    fn attach(&mut self, world: ipp_core::WorldId) -> Option<ipp_core::WorldId> {
-        self.world
-            .replace(world)
-            .filter(|previous| *previous != world)
-    }
-
-    /// Stop presenting `world`; returns whether it was the presented World.
-    fn detach(&mut self, world: ipp_core::WorldId) -> bool {
-        let presented = self.presents(world);
-        if presented {
-            self.world = None;
-        }
-        presented
-    }
-
-    fn presents(&self, world: ipp_core::WorldId) -> bool {
-        self.world == Some(world)
-    }
-}
-
 pub(crate) struct WasmHostServices {
-    #[cfg(all(feature = "render", target_arch = "wasm32"))]
-    presentation_world: WasmPresentationTarget,
+    #[cfg(feature = "gui")]
+    input: ipp_host_session::services::gui_input::GuiHostInputService,
     pending: VecDeque<ipp_core::AssetAcquisitionRequest>,
     outbox: VecDeque<Vec<u8>>,
     #[cfg(all(feature = "render", target_arch = "wasm32"))]
@@ -71,6 +37,16 @@ impl WasmHostServices {
 impl HostServices for WasmHostServices {
     const NAME: &'static str = "wasm";
 
+    #[cfg(all(
+        feature = "gui",
+        feature = "diagnostics",
+        feature = "render",
+        target_arch = "wasm32"
+    ))]
+    fn record_frame(&mut self, host: &mut HostRuntime, frame: &ipp_core::HostFrameReport) {
+        self.presentation.record_frame(host, frame);
+    }
+
     fn initialize(_host: &mut HostRuntime) -> Result<Self, String> {
         for scheme in ["http", "https"] {
             _host
@@ -82,8 +58,8 @@ impl HostServices for WasmHostServices {
             .register_stream_resource_provider("ipp")
             .map_err(|error| error.to_string())?;
         Ok(Self {
-            #[cfg(all(feature = "render", target_arch = "wasm32"))]
-            presentation_world: WasmPresentationTarget::default(),
+            #[cfg(feature = "gui")]
+            input: Default::default(),
             pending: VecDeque::new(),
             outbox: VecDeque::new(),
             #[cfg(all(feature = "render", target_arch = "wasm32"))]
@@ -91,38 +67,64 @@ impl HostServices for WasmHostServices {
         })
     }
 
+    #[cfg(feature = "gui")]
+    fn gui_input(
+        &mut self,
+    ) -> Option<&mut ipp_host_session::services::gui_input::GuiHostInputService> {
+        Some(&mut self.input)
+    }
+
     #[cfg(all(feature = "render", target_arch = "wasm32"))]
     fn render_viewport(&self) -> Option<(u32, u32)> {
         self.presentation.viewport()
     }
 
-    fn attach_world(&mut self, _world: ipp_core::WorldId) -> Result<(), String> {
-        #[cfg(all(feature = "render", target_arch = "wasm32"))]
-        {
-            if let Some(previous) = self.presentation_world.attach(_world) {
-                self.presentation.forget_world(previous);
-            }
-            self.presentation.reset_world();
-        }
-        Ok(())
+    #[cfg(all(feature = "render", target_arch = "wasm32"))]
+    fn prepare_presentation(
+        &mut self,
+        host: &mut HostRuntime,
+        selected: Option<(ipp_core::OutputRef, ipp_core::WorldPublicationId)>,
+    ) -> Result<(), ipp_host_session::HostPresentationFailure> {
+        self.presentation.prepare(host, selected)
     }
 
-    fn detach_world(&mut self, _world: ipp_core::WorldId) {
-        #[cfg(all(feature = "render", target_arch = "wasm32"))]
-        if self.presentation_world.detach(_world) {
-            self.presentation.forget_world(_world);
-        }
+    #[cfg(all(feature = "render", target_arch = "wasm32"))]
+    fn presentation_surface(
+        &self,
+    ) -> Result<
+        ipp_protocol::presentation::PresentationSurface,
+        ipp_protocol::presentation::PresentationError,
+    > {
+        self.presentation.surface()
     }
 
+    #[cfg(all(feature = "render", target_arch = "wasm32"))]
+    fn configure_presentation(
+        &mut self,
+        viewport: ipp_core::WorldViewport,
+    ) -> Result<(), ipp_protocol::presentation::PresentationError> {
+        self.presentation.configure(viewport)
+    }
+
+    #[cfg(all(feature = "render", target_arch = "wasm32"))]
     fn present(
         &mut self,
-        _world: &mut WorldContext<'_>,
-    ) -> Result<(), ipp_host_session::HostPresentationFailure> {
-        #[cfg(all(feature = "render", target_arch = "wasm32"))]
-        if self.presentation_world.presents(_world.id()) {
-            self.presentation.render(_world)?;
-        }
-        Ok(())
+        host: &HostRuntime,
+        output: ipp_core::OutputRef,
+        publication: ipp_core::WorldPublicationId,
+        viewport: ipp_core::WorldViewport,
+        presentation_time: f64,
+        completion: ipp_host_session::PresentationCompletion<'_>,
+    ) -> Result<ipp_host_session::PresentationDrawSummary, ipp_host_session::HostPresentationFailure>
+    {
+        self.presentation.present(
+            host,
+            output,
+            publication,
+            viewport,
+            presentation_time,
+            completion,
+        )
     }
 
     #[cfg(all(feature = "render", target_arch = "wasm32"))]
@@ -188,7 +190,20 @@ mod tests {
     fn browser_host_exposes_http_but_not_file_provider_requests() {
         let mut host = HostRuntime::new();
         let mut platform = WasmHostServices::initialize(&mut host).unwrap();
-        let id = host.create_world(Default::default()).unwrap();
+        let id = host
+            .create_world(
+                Default::default(),
+                &[
+                    ipp_core::systems::animation::AnimationSystem::ID,
+                    ipp_core::systems::asset_dependencies::AssetDependencySystem::ID,
+                    ipp_core::systems::hierarchy::HierarchySystem::ID,
+                    ipp_core::systems::look_at::LookAtSystem::ID,
+                    ipp_core::systems::hierarchy::FinalPropagationSystem::ID,
+                    ipp_core::systems::geometry::GeometrySystem::ID,
+                    ipp_core::systems::render::RenderSystem::ID,
+                ],
+            )
+            .unwrap();
         let mut world = host.world_mut(id).unwrap();
         let http = "https://example.test/mesh.ippm";
         let file = "file:///tmp/mesh.ippm";
@@ -204,6 +219,7 @@ mod tests {
                             Command::Create {
                                 alias,
                                 metadata: Default::default(),
+                                adopt: false,
                             },
                             Command::InsertComponent {
                                 entity: EntityRef::Alias(alias),
@@ -212,6 +228,7 @@ mod tests {
                                     offset: offset_of!(MeshInstance, source) as u32,
                                     value: FieldValue::String(source.into()),
                                 }],
+                                adopt: false,
                             },
                         ]
                     })
@@ -233,39 +250,10 @@ mod tests {
             &world
                 .resource_snapshots()
                 .into_iter()
-                .find(|resource| resource.source == file)
+                .find(|resource| *resource.source == *file)
                 .unwrap()
                 .status,
             AssetResourceStatus::Failed(error) if error.contains("file")
         ));
-    }
-
-    #[test]
-    fn presenting_another_world_forgets_only_the_previous_presentation() {
-        let [first, second] = [ipp_core::WorldId(1), ipp_core::WorldId(2)];
-        let mut target = WasmPresentationTarget::default();
-
-        assert_eq!(target.attach(first), None);
-        assert_eq!(
-            target.attach(first),
-            None,
-            "another session on the presented World keeps its caches"
-        );
-        assert_eq!(target.attach(second), Some(first));
-        assert!(target.presents(second) && !target.presents(first));
-        assert!(
-            !target.detach(first),
-            "the replaced World was already forgotten when it lost presentation"
-        );
-
-        assert_eq!(
-            target.attach(first),
-            Some(second),
-            "re-attaching presents the first World again from released caches"
-        );
-        assert!(target.detach(first));
-        assert!(!target.presents(first));
-        assert!(!target.detach(first));
-        assert_eq!(target.attach(second), None);
     }
 }

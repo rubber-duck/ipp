@@ -6,7 +6,7 @@ Declarations choose inline geometry or an immutable geometry resource; leaving b
 
 Culling requires trustworthy bounds. Missing, pending or unproven enclosures preserve visibility. The current explicit-enclosure proof requires one convex part to contain the generated bounds, so some valid compound enclosures remain uncullable. Skeletal mapping retains source/incarnation identity; replacing it requires an explicit rebind rather than silently reusing joint ordinals.
 
-Presentation components retain a shared default BoundingGeometry through core component requirements; authored bounds take precedence. Geometry compiles resource/transform access, retains world enclosures, and publishes separate bounding/picking spatial domains. [Batch frustum queries](spatial/query.rs) share reusable caller storage across the flat and BVH implementations; unknown bounds remain candidates. Rigid placements update retained shapes and bounds without rebuilding unchanged geometry.
+Presentation components require BoundingGeometry; core inserts a missing one with defaults, and clients may write its fields like any other component. Geometry compiles resource/transform access, retains world enclosures, and publishes separate bounding/picking spatial domains. [Batch frustum queries](spatial/query.rs) share reusable caller storage across the flat and BVH implementations; unknown bounds remain candidates. Rigid placements update retained shapes and bounds without rebuilding unchanged geometry.
 
 Visualization is optional presentation of these same evaluated shapes. It does not enable picking or alter culling, and its private renderer assets require no client registration. CPU triangle picking is unsupported.
 

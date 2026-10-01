@@ -62,7 +62,7 @@ pub enum DynamicValue {
     /// A step-sampled owned typed asset reference.
     Asset(AssetSource),
     /// Row-only UTF-8 text, checked against its row property's byte bound.
-    Text(String),
+    Text(std::sync::Arc<str>),
 }
 
 impl DynamicPropertyKind {
@@ -134,15 +134,24 @@ impl DynamicValue {
     /// Reject nonfinite values and invalid asset source references. Text is
     /// valid UTF-8 by construction; its row property checks the byte bound.
     pub fn validate(&self) -> Result<(), FieldError> {
+        self.validate_representation()?;
+        if let Self::Asset(asset) = self {
+            asset.validate().map_err(|_| FieldError::WrongType)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn validate_representation(&self) -> Result<(), FieldError> {
         if self
             .floats()
             .is_some_and(|values| values.iter().any(|v| !v.is_finite()))
         {
             return Err(FieldError::NonFinite);
         }
-        if let Self::Asset(asset) = self {
-            crate::services::asset_management::service::validate_source(&asset.uri)
-                .map_err(|_| FieldError::WrongType)?;
+        if let Self::Asset(asset) = self
+            && u32::try_from(asset.uri.len()).is_err()
+        {
+            return Err(FieldError::WrongType);
         }
         Ok(())
     }
@@ -270,7 +279,34 @@ impl DynamicValue {
             }
             DynamicPropertyKind::Text => return Err(FieldError::WrongType),
         };
-        value.validate()?;
+        value.validate_representation()?;
         Ok(value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn asset_decoding_checks_representation_not_reference_admission() {
+        let value = DynamicValue::Asset(AssetSource {
+            kind: AssetTypeId(2),
+            uri: "producer://7/2/not-an-id".into(),
+            variant: 0,
+        });
+        let encoded = value.encode();
+        assert_eq!(DynamicValue::decode(&encoded), Ok(value.clone()));
+        assert_eq!(value.validate(), Err(FieldError::WrongType));
+        assert_eq!(
+            DynamicValue::decode(&encoded[..6]),
+            Err(FieldError::WrongType)
+        );
+        let mut invalid_utf8 = encoded;
+        *invalid_utf8.last_mut().unwrap() = 0xff;
+        assert_eq!(
+            DynamicValue::decode(&invalid_utf8),
+            Err(FieldError::WrongType)
+        );
     }
 }

@@ -10,6 +10,7 @@ import subprocess
 import sys
 from urllib.parse import unquote, urlsplit
 
+from mirrored_limits import mirrored_limit_errors
 from repository_structure import structure_errors
 
 
@@ -114,6 +115,7 @@ def main():
         "git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"
     ).split("\0")
     errors.extend(structure_errors(ROOT, names))
+    errors.extend(mirrored_limit_errors(ROOT, names))
     paths = sorted(
         {
             ROOT / name

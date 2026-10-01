@@ -2,7 +2,6 @@
 
 use std::path::Path;
 
-use super::frame_stats::RenderFrameStats;
 use ipp_core::{
     Command, ComponentValue, EntityRef, RenderStatePatch, WorldContext,
     components::{BoundingGeometry, Transform},
@@ -34,7 +33,11 @@ pub fn run<D: RenderDevice>(
                     ..unit_geometry()
                 },
             )?;
-            ready(renderer, &mut world)?;
+            {
+                let id = world.id();
+                drop(world);
+                ready(renderer, &mut world_host, id)
+            }?;
             let pixels = capture()?;
             save(output, &format!("debug-{shape}-{outline}"), &pixels)?;
             let visible = coverage(&pixels).0;
@@ -43,6 +46,7 @@ pub fn run<D: RenderDevice>(
                 count(&pixels, [255, 231, 0, 255]) > visible * 98 / 100,
                 "debug color must be uniform, including grey plane vertices"
             );
+            renderer.prepare(&mut world_host, None)?;
         }
     }
 
@@ -84,7 +88,13 @@ pub fn run<D: RenderDevice>(
             ..unit_geometry()
         },
     )?;
-    ready(renderer, &mut world)?;
+    {
+        let id = world.id();
+        drop(world);
+        let result = ready(renderer, &mut world_host, id);
+        world = world_host.world_mut(id).unwrap();
+        result
+    }?;
     let selected = capture()?;
     save(output, "debug-selected", &selected)?;
     assert!(count(&selected, [0, 0, 255, 255]) > 100);
@@ -100,7 +110,7 @@ pub fn run<D: RenderDevice>(
         },
     )?;
     assert_eq!(
-        super::world::render_frame(renderer, &mut world, WIDTH, HEIGHT)?.draw_calls,
+        super::world::present_world!(renderer, world_host, world, WIDTH, HEIGHT)?.draw_calls,
         2
     );
     let all = capture()?;
@@ -117,7 +127,7 @@ pub fn run<D: RenderDevice>(
             ..RenderStatePatch::default()
         },
     )?;
-    super::world::render_frame(renderer, &mut world, WIDTH, HEIGHT)?;
+    super::world::present_world!(renderer, world_host, world, WIDTH, HEIGHT)?;
     let red = capture()?;
     save(output, "debug-global-red", &red)?;
     assert!(count(&red, [255, 0, 0, 255]) > 500);
@@ -133,7 +143,7 @@ pub fn run<D: RenderDevice>(
             ..RenderStatePatch::default()
         },
     )?;
-    super::world::render_frame(renderer, &mut world, WIDTH, HEIGHT)?;
+    super::world::present_world!(renderer, world_host, world, WIDTH, HEIGHT)?;
     assert_eq!(
         capture()?,
         selected,
@@ -141,6 +151,8 @@ pub fn run<D: RenderDevice>(
     );
     assert_eq!(world.entities(), components);
     assert_eq!(world.resource_snapshots(), resources);
+    drop(world);
+    renderer.prepare(&mut world_host, None)?;
 
     // Draw the farther plane last: depth testing must preserve the nearer cube.
     let mut depth_world_host = ipp_core::HostRuntime::new();
@@ -171,7 +183,13 @@ pub fn run<D: RenderDevice>(
             ..unit_geometry()
         },
     )?;
-    ready(renderer, &mut depth_world)?;
+    {
+        let id = depth_world.id();
+        drop(depth_world);
+        let result = ready(renderer, &mut depth_world_host, id);
+        depth_world = depth_world_host.world_mut(id).unwrap();
+        result
+    }?;
     let depth = capture()?;
     save(output, "debug-depth", &depth)?;
     assert!(count(&depth, [0, 0, 255, 255]) > 3000);
@@ -192,14 +210,18 @@ pub fn run<D: RenderDevice>(
             ..unit_geometry()
         },
     )?;
-    let failed = super::world::render_frame(renderer, &mut depth_world, WIDTH, HEIGHT)?;
+    let failed =
+        super::world::present_world!(renderer, depth_world_host, depth_world, WIDTH, HEIGHT)?;
     assert_eq!(failed.draw_calls, 2);
     assert_eq!(failed.failed_draw_calls, 1);
     assert_eq!(capture()?, depth);
-    let repeated = super::world::render_frame(renderer, &mut depth_world, WIDTH, HEIGHT)?;
+    let repeated =
+        super::world::present_world!(renderer, depth_world_host, depth_world, WIDTH, HEIGHT)?;
     assert_eq!(repeated.failed_draw_calls, 1);
     assert_eq!(repeated.uploaded_bytes, 0);
     assert!(depth_world.resource_snapshots().is_empty());
+    drop(depth_world);
+    renderer.prepare(&mut depth_world_host, None)?;
 
     // Identical recipes share private GPU storage; removing demand releases it.
     let mut sharing_host = ipp_core::HostRuntime::new();
@@ -213,7 +235,7 @@ pub fn run<D: RenderDevice>(
             ..unit_geometry()
         },
     )?;
-    super::world::render_frame(renderer, &mut sharing, WIDTH, HEIGHT)?;
+    super::world::present_world!(renderer, sharing_host, sharing, WIDTH, HEIGHT)?;
     add(
         &mut sharing,
         0,
@@ -226,20 +248,19 @@ pub fn run<D: RenderDevice>(
             ..unit_geometry()
         },
     )?;
-    let shared = super::world::render_frame(renderer, &mut sharing, WIDTH, HEIGHT)?;
+    let shared = super::world::present_world!(renderer, sharing_host, sharing, WIDTH, HEIGHT)?;
     assert_eq!(shared.draw_calls, 2);
     assert_eq!(shared.uploaded_bytes, 0);
-    // A frame without debug demand releases the private mesh; the next demand
-    // uploads it again.
-    super::world::render_frame(
-        renderer,
-        &mut super::world::empty_world(&mut ipp_core::HostRuntime::new()),
-        WIDTH,
-        HEIGHT,
-    )?;
-    let reloaded = super::world::render_frame(renderer, &mut sharing, WIDTH, HEIGHT)?;
+    let id = sharing.id();
+    drop(sharing);
+    renderer.unload_host(&mut sharing_host)?;
+    sharing_host.flush_resource_lifecycle();
+    sharing = sharing_host.world_mut(id).unwrap();
+    let reloaded =
+        super::world::present_world!(finish; renderer, sharing_host, sharing, WIDTH, HEIGHT)?;
     assert_eq!(reloaded.draw_calls, 2);
     assert!(reloaded.uploaded_bytes > 0);
+    renderer.prepare(&mut sharing_host, None)?;
     let mut bounded_host = ipp_core::HostRuntime::new();
     let mut bounded = self::world(&mut bounded_host, renderer)?;
     for index in 0..129 {
@@ -254,12 +275,14 @@ pub fn run<D: RenderDevice>(
             },
         )?;
     }
-    let capacity = super::world::render_frame(renderer, &mut bounded, WIDTH, HEIGHT)?;
+    let capacity = super::world::present_world!(renderer, bounded_host, bounded, WIDTH, HEIGHT)?;
     assert_eq!((capacity.draw_calls, capacity.failed_draw_calls), (129, 0));
     assert!(capacity.uploaded_bytes > 0);
-    let repeat = super::world::render_frame(renderer, &mut bounded, WIDTH, HEIGHT)?;
+    let repeat =
+        super::world::present_world!(finish; renderer, bounded_host, bounded, WIDTH, HEIGHT)?;
     assert_eq!((repeat.draw_calls, repeat.failed_draw_calls), (129, 0));
     assert_eq!(repeat.uploaded_bytes, 0);
+    renderer.prepare(&mut bounded_host, None)?;
     // Deleting one declaration releases its private mesh while another remains usable.
     let mut recovering_host = ipp_core::HostRuntime::new();
     let mut recovering = self::world(&mut recovering_host, renderer)?;
@@ -308,15 +331,15 @@ pub fn run<D: RenderDevice>(
     )?;
     let second = recovering.debug_render_items()[1].entity;
     let declaration = recovering.inspect(second).unwrap();
-    let waiting = super::world::render_frame(renderer, &mut recovering, WIDTH, HEIGHT)?;
+    let waiting =
+        super::world::present_world!(renderer, recovering_host, recovering, WIDTH, HEIGHT)?;
     assert_eq!((waiting.draw_calls, waiting.failed_draw_calls), (2, 0));
     let before = capture()?;
     save(output, "debug-shared-residency", &before)?;
     assert!(count(&before, [0, 0, 255, 255]) > 100);
     assert!(count(&before, [255, 0, 0, 255]) > 100);
     assert_eq!(
-        renderer
-            .render_stats(&mut recovering, WIDTH, HEIGHT)?
+        super::world::present_world!(renderer, recovering_host, recovering, WIDTH, HEIGHT)?
             .uploaded_bytes,
         0
     );
@@ -326,24 +349,27 @@ pub fn run<D: RenderDevice>(
             entity: EntityRef::Handle(first),
         }],
     )?;
-    let resumed = super::world::render_frame(renderer, &mut recovering, WIDTH, HEIGHT)?;
+    let resumed =
+        super::world::present_world!(renderer, recovering_host, recovering, WIDTH, HEIGHT)?;
     assert_eq!((resumed.draw_calls, resumed.failed_draw_calls), (1, 0));
     assert_eq!(resumed.uploaded_bytes, 0);
     // Only the remaining declaration's mesh stays demanded: after a release it is
     // the whole upload.
-    super::world::render_frame(
-        renderer,
-        &mut super::world::empty_world(&mut ipp_core::HostRuntime::new()),
-        WIDTH,
-        HEIGHT,
-    )?;
-    let remaining = super::world::render_frame(renderer, &mut recovering, WIDTH, HEIGHT)?;
+    let id = recovering.id();
+    drop(recovering);
+    renderer.unload_host(&mut recovering_host)?;
+    recovering_host.flush_resource_lifecycle();
+    recovering = recovering_host.world_mut(id).unwrap();
+    let remaining =
+        super::world::present_world!(renderer, recovering_host, recovering, WIDTH, HEIGHT)?;
     assert_eq!(remaining.uploaded_bytes as usize, outline_bytes);
     assert_eq!(recovering.inspect(second).unwrap(), declaration);
     let after = capture()?;
     save(output, "debug-release-preserved", &after)?;
     assert!(count(&after, [255, 0, 0, 255]) > 100);
     assert_eq!(count(&after, [0, 0, 255, 255]), 0);
+    drop(recovering);
+    renderer.prepare(&mut recovering_host, None)?;
     Ok(())
 }
 
@@ -409,6 +435,7 @@ fn add(
             Command::Create {
                 alias,
                 metadata: Default::default(),
+                adopt: false,
             },
             Command::insert_value(
                 EntityRef::Alias(alias),
@@ -425,7 +452,7 @@ fn add(
 fn update(world: &mut WorldContext<'_>, patch: RenderStatePatch) -> Result<()> {
     world.enqueue_render_state_update(patch)?;
     world.step(0.0)?;
-    let state = world.render_state();
+    let state = world.render_state()?;
     if let Some(visible) = patch.show_all_debug_geometries {
         assert_eq!(state.show_all_debug_geometries, visible);
     }
@@ -437,9 +464,11 @@ fn update(world: &mut WorldContext<'_>, patch: RenderStatePatch) -> Result<()> {
 
 fn ready<D: RenderDevice>(
     renderer: &mut RenderService<D>,
-    world: &mut WorldContext<'_>,
+    host: &mut ipp_core::HostRuntime,
+    id: ipp_core::WorldId,
 ) -> Result<()> {
-    super::world::render_frame(renderer, world, WIDTH, HEIGHT)?;
+    super::world::render_host_frame(renderer, host, id, WIDTH, HEIGHT)?;
+    let mut world = host.world_mut(id).unwrap();
     assert!(world.take_resource_requests().is_empty());
     assert!(world.resource_snapshots().is_empty());
     Ok(())

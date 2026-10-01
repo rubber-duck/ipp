@@ -170,7 +170,6 @@ def parser() -> argparse.ArgumentParser:
     importing.add_argument("--namespace", default="scene")
     importing.add_argument("--world", default="world.ipp")
     importing.add_argument("--clips-only", action="store_true")
-    importing.add_argument("--defer-presentation", action="store_true")
     benchmarking = commands.add_parser(
         "benchmark", help="run opt-in scene performance experiments outside regression"
     )
@@ -179,7 +178,7 @@ def parser() -> argparse.ArgumentParser:
     # Stress defaults are applied by the planner so other scenes can reject them.
     benchmarking.add_argument("--preset", choices=("smoke", "full"))
     benchmarking.add_argument(
-        "--scene", choices=("stress", "retained-gui"), default="stress"
+        "--scene", choices=("stress", "retained-gui", "gui-stress"), default="stress"
     )
     benchmarking.add_argument(
         "--frames",
@@ -188,6 +187,18 @@ def parser() -> argparse.ArgumentParser:
         help="stress frames, or streaming updates for --scene retained-gui",
     )
     benchmarking.add_argument("--group", type=int)
+    benchmarking.add_argument(
+        "--repetitions",
+        type=int,
+        default=3,
+        help="complete deterministic sweeps per --scene gui-stress",
+    )
+    benchmarking.add_argument(
+        "--samples",
+        type=int,
+        default=6,
+        help="timed action cycles per sweep and repetition for --scene gui-stress",
+    )
     benchmarking.add_argument("--output")
     benchmarking.add_argument("--scene-dir")
     benchmarking.add_argument("--bundle-dir")
@@ -340,7 +351,7 @@ def make_plan(args: argparse.Namespace) -> Plan:
         dependencies = {
             "gallery": ("build:gallery",),
             "blender-viewer": ("build:blender-viewer",),
-            "headless-client": ("build:typescript",),
+            "headless-client": ("build:headless-client",),
             "blender": ("build:blender-addon",),
         }[args.name]
         if args.build:
@@ -361,7 +372,7 @@ def make_plan(args: argparse.Namespace) -> Plan:
             elif args.name == "headless-client":
                 command = (
                     node(),
-                    "dist/examples/headless-client/main.js",
+                    "target/headless-client/main.js",
                     *([args.url] if args.url else []),
                 )
             else:
@@ -400,7 +411,6 @@ def make_plan(args: argparse.Namespace) -> Plan:
                 "--world",
                 args.world,
                 *(["--clips-only"] if args.clips_only else []),
-                *(["--defer-presentation"] if args.defer_presentation else []),
             ),
             ("build:browser:render-expanded",),
             ("node", "npm", "browser"),

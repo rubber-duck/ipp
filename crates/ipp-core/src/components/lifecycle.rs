@@ -76,8 +76,8 @@ pub(crate) trait ComponentLifecycle: Clone {
     fn after_field_write(&mut self, _offset: u32) {}
 
     /// Validate field-local semantics after `offset` was written, independently
-    /// of other fields. Ingress and overlay contributions apply it to every
-    /// field write, so it must accept any other valid field combination.
+    /// of other fields. Ingress applies it to every field write, so it must
+    /// accept any other valid field combination.
     fn validate_field(&self, _offset: u32) -> Result<(), crate::ErrorReason> {
         Ok(())
     }

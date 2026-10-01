@@ -1,8 +1,8 @@
 //! Synchronous browser worker host with bounded, Rust-owned linear-memory I/O.
 //!
 //! One WASM instance belongs to one dedicated worker thread. Calls must not be
-//! concurrent or reentrant. The host opens a strictly increasing nonzero session
-//! ID, then reserves input, reacquires `memory.buffer`, writes only the reserved
+//! concurrent or reentrant. The Host and each physical connection use distinct
+//! strictly increasing nonzero identities. Reserve input, reacquire `memory.buffer`, write only the reserved
 //! bytes, and calls receive with exactly that length. The first message is the
 //! production bootstrap; later messages use the negotiated binary contract.
 //!
@@ -14,13 +14,14 @@
 //! Rust reference survives an export, and every allocation retains a Rust owner.
 //!
 //! Receive only queues ingress. The worker owns an autonomous clock and calls
-//! `ipp_tick(dt)` once per frame, then drains `ipp_poll()` until it returns zero.
+//! `ipp_tick(dt)` once per frame, then fairly drains `ipp_connection_poll(id)`.
 //! Drain after receive as well because bootstrap replies are immediately queued.
-//! Invalid ingress or frame/output failure closes the session and exposes a
-//! bounded UTF-8 diagnostic.
+//! Invalid connection ingress/output revokes only that connection and exposes a
+//! bounded UTF-8 diagnostic. An invalid Host frame faults the Host itself.
 //! Core semantic rejections and oversized observations use protocol responses.
-//! Closing drops the world and both buffers, retaining only an ID high-water mark
-//! so delayed messages cannot target a later world under a recycled session ID.
+//! Connection revocation retains copied-output credit until exact delivery ACK or
+//! confirmed endpoint disposal. Host close requires disposal of its endpoints.
+//! Identity high-water marks survive close. See the crate README for ownership.
 
 #[cfg(feature = "diagnostics")]
 macro_rules! diagnostic {
@@ -38,6 +39,7 @@ pub mod diagnostics;
 use std::cell::RefCell;
 
 mod boundary;
+mod connection_output;
 mod host;
 
 mod services;
@@ -52,19 +54,79 @@ thread_local! {
     };
 }
 
-/// Start a fresh worker Host connection; IDs must strictly increase per instance.
+/// Start a fresh worker Host; IDs must strictly increase per instance.
 /// Returns one on success, zero with a UTF-8 diagnostic on failure.
 // SAFETY: Unique symbol; all state is owned and accessed on the calling worker.
 #[unsafe(no_mangle)]
-pub extern "C" fn ipp_session_open(id: u64) -> u32 {
+pub extern "C" fn ipp_host_open(id: u64) -> u32 {
     BOUNDARY.with_borrow_mut(|boundary| u32::from(boundary.open(id)))
 }
 
 /// Drop the world and I/O allocations. Previously issued pointers are invalid.
 // SAFETY: Unique symbol; no host pointers are dereferenced or Rust borrows retained.
 #[unsafe(no_mangle)]
-pub extern "C" fn ipp_session_close() {
+pub extern "C" fn ipp_host_close() {
     BOUNDARY.with_borrow_mut(boundary::WasmHostBoundary::close);
+}
+
+/// Physical connections this worker Host serves at once. The worker reads it here
+/// instead of repeating it; opening one more connection fails.
+// SAFETY: Unique symbol; returns a constant and touches no worker state.
+#[unsafe(no_mangle)]
+pub extern "C" fn ipp_connection_limit() -> u32 {
+    connection_output::MAX_CONNECTIONS as u32
+}
+
+/// Uncompleted output deliveries one connection may hold; the worker stops copying
+/// output for that connection until it completes one.
+// SAFETY: Unique symbol; returns a constant and touches no worker state.
+#[unsafe(no_mangle)]
+pub extern "C" fn ipp_delivery_limit() -> u32 {
+    connection_output::MAX_DELIVERIES as u32
+}
+
+/// Requests the Host admits per connection before refusing more ingress
+/// ([`ipp_host_session::MAX_PENDING`]); the worker sizes its ingress credit from it.
+// SAFETY: Unique symbol; returns a constant and touches no worker state.
+#[unsafe(no_mangle)]
+pub extern "C" fn ipp_request_window() -> u32 {
+    ipp_host_session::MAX_PENDING as u32
+}
+
+/// Open an independently fenced physical connection without creating a World.
+// SAFETY: Unique symbol; connection records are exclusively owned by this worker.
+#[unsafe(no_mangle)]
+pub extern "C" fn ipp_connection_open(id: u64) -> u32 {
+    BOUNDARY.with_borrow_mut(|boundary| u32::from(boundary.connection_open(id)))
+}
+
+/// Revoke ingress and sessions while retaining outstanding delivery credit.
+// SAFETY: Unique symbol; no borrowed reference escapes the worker boundary.
+#[unsafe(no_mangle)]
+pub extern "C" fn ipp_connection_close(id: u64) -> u32 {
+    BOUNDARY.with_borrow_mut(|boundary| u32::from(boundary.connection_close(id)))
+}
+
+/// Confirm receiver-endpoint disposal, or removal after every delivery ACK.
+/// The platform owner must not call this merely because a timeout elapsed.
+// SAFETY: Unique symbol; all Rust allocations remain owned until this operation.
+#[unsafe(no_mangle)]
+pub extern "C" fn ipp_connection_dispose(id: u64) -> u32 {
+    BOUNDARY.with_borrow_mut(|boundary| u32::from(boundary.connection_dispose(id)))
+}
+
+/// Number of retained copy deliveries, including after connection revocation.
+// SAFETY: Unique symbol; returns a scalar without invalidating borrowed bytes.
+#[unsafe(no_mangle)]
+pub extern "C" fn ipp_connection_pending(id: u64) -> usize {
+    BOUNDARY.with_borrow(|boundary| boundary.connection_pending(id))
+}
+
+/// Expose the bounded failure diagnostic, returning zero when not failed.
+// SAFETY: Unique symbol; diagnostic bytes stay owned by the boundary.
+#[unsafe(no_mangle)]
+pub extern "C" fn ipp_connection_failed(id: u64) -> u32 {
+    BOUNDARY.with_borrow_mut(|boundary| u32::from(boundary.connection_failure(id)))
 }
 
 /// Reserve exactly 1..=1MiB zeroed bytes; returns null and closes on failure.
@@ -79,8 +141,8 @@ pub extern "C" fn ipp_input_reserve(len: usize) -> *mut u8 {
 /// zero means UTF-8 error output and a closed session. Reservations are single-use.
 // SAFETY: Unique symbol; receive accesses only Rust-owned storage, never caller pointers.
 #[unsafe(no_mangle)]
-pub extern "C" fn ipp_receive(len: usize) -> u32 {
-    BOUNDARY.with_borrow_mut(|boundary| u32::from(boundary.receive(len)))
+pub extern "C" fn ipp_receive(connection: u64, len: usize) -> u32 {
+    BOUNDARY.with_borrow_mut(|boundary| u32::from(boundary.receive(connection, len)))
 }
 
 /// Run one host-clock frame. One means success; zero means a closed session with
@@ -106,16 +168,37 @@ pub extern "C" fn ipp_service_resources() -> u32 {
     BOUNDARY.with_borrow_mut(|boundary| u32::from(boundary.service_resources()))
 }
 
-/// Invalidate prior output and dequeue one response. One means output is ready;
-/// zero means no output. Copy each response before calling poll again.
+/// Reserve simultaneous Rust/JS copy capacity before exposing one response.
+/// One means ready, zero means empty/window-full, minus one means connection failure.
 // SAFETY: Unique symbol; output retains a Rust owner and no Rust borrow escapes.
 #[unsafe(no_mangle)]
-pub extern "C" fn ipp_poll() -> u32 {
-    BOUNDARY.with_borrow_mut(|boundary| u32::from(boundary.poll()))
+pub extern "C" fn ipp_connection_poll(connection: u64) -> i32 {
+    BOUNDARY.with_borrow_mut(|boundary| boundary.poll(connection))
+}
+
+/// Exact outstanding copy identity; zero means no client output is borrowed.
+// SAFETY: Unique symbol; scalar observation without a borrowed reference escaping.
+#[unsafe(no_mangle)]
+pub extern "C" fn ipp_output_delivery_id() -> u64 {
+    BOUNDARY.with_borrow(boundary::WasmHostBoundary::output_delivery_id)
+}
+
+/// Invalidate the Rust source after copying, retaining the JS-delivery lease.
+// SAFETY: Unique symbol; drops only owned source bytes, with no retained Rust alias.
+#[unsafe(no_mangle)]
+pub extern "C" fn ipp_output_copied(connection: u64, delivery: u64) -> u32 {
+    BOUNDARY.with_borrow_mut(|boundary| u32::from(boundary.output_copied(connection, delivery)))
+}
+
+/// Complete the exact oldest physical delivery; duplicate/stale ACKs fail that connection.
+// SAFETY: Unique symbol; completion leases remain exclusively on this worker thread.
+#[unsafe(no_mangle)]
+pub extern "C" fn ipp_delivery_complete(connection: u64, delivery: u64) -> u32 {
+    BOUNDARY.with_borrow_mut(|boundary| u32::from(boundary.delivery_complete(connection, delivery)))
 }
 
 /// Host-only resource request/cancellation queue, separate from client messages.
-/// Uses the same single-owner output buffer and invalidation rules as ipp_poll.
+/// Shares borrowed-buffer invalidation, never client delivery completion.
 // SAFETY: Unique symbol; output is Rust-owned and no reference escapes the call.
 #[unsafe(no_mangle)]
 pub extern "C" fn ipp_resource_poll() -> u32 {
@@ -269,8 +352,8 @@ pub extern "C" fn ipp_host_time(seconds: f64) -> u32 {
 
 /// Host transport admission; callers retain bounded input while throttled.
 #[unsafe(no_mangle)]
-pub extern "C" fn ipp_accepts_input() -> u32 {
-    BOUNDARY.with_borrow_mut(|boundary| u32::from(boundary.accepts_input()))
+pub extern "C" fn ipp_accepts_input(connection: u64) -> u32 {
+    BOUNDARY.with_borrow_mut(|boundary| u32::from(boundary.accepts_input(connection)))
 }
 
 #[cfg(feature = "profiling")]

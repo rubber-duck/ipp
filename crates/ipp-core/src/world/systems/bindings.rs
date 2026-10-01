@@ -16,11 +16,8 @@ impl SystemEcsAccess<'_> {
         self.world.id
     }
 
-    /// Observe effective components under evaluation order, without authored base reconstruction.
-    pub fn inspect_effective(
-        &self,
-        entity: crate::EntityId,
-    ) -> Option<super::SystemEffectiveEntitySnapshot> {
+    /// Observe current stored components under evaluation order.
+    pub fn inspect_effective(&self, entity: crate::EntityId) -> Option<crate::EntitySnapshot> {
         super::contexts::SystemWorldView {
             world: self.world,
             authored: &self.world.state,
@@ -307,5 +304,4 @@ crate::system_parameter!(crate::systems::skeleton::SkeletonSystem);
 #[cfg(feature = "skeletal-animation")]
 crate::system_parameter!(crate::systems::skinning::SkinningSystem);
 crate::system_parameter!(crate::systems::animation::AnimationSystem);
-crate::system_parameter!(crate::systems::state_overlay::StateOverlaySystem);
 crate::system_parameter!(crate::systems::camera::CameraSystem);

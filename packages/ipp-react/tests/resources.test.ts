@@ -5,18 +5,18 @@ import { BoundingGeometry } from "../src/components.js";
 import { ReactWorldTree } from "../src/tree.js";
 import { ReactWorldCommits } from "../src/commits.js";
 import type { ReactWorldClient } from "../src/contract.js";
-import type { Command, StateOverlayAlias } from "@ipp/client";
+import type { BatchOutcome, Command, EntityRef, FieldValue } from "@ipp/client";
 
-test("resource strings retain target offsets, compare by value, update and clear", async () => {
+/** MeshInstance fields as the native contract lays them out. */
+const meshFields = {
+  source: { offset: 0, kind: 5 },
+  variant: { offset: 16, kind: 3 },
+} as const;
+
+test("resource strings write their contract offsets, compare by value and keep removed values", async () => {
   const { client, calls } = recordingClient({
     Scalar: { id: 1, fields: { value: { offset: 0, kind: 1 } } },
-    MeshInstance: {
-      id: 5,
-      fields: {
-        source: { offset: 24, kind: 5 },
-        variant: { offset: 48, kind: 3 },
-      },
-    },
+    MeshInstance: { id: 5, fields: meshFields },
   });
   const tree = new ReactWorldTree(client);
   const entity = tree.instance("ipp-entity", {
@@ -29,15 +29,24 @@ test("resource strings retain target offsets, compare by value, update and clear
   tree.children.push(entity);
   const commits = new ReactWorldCommits(client, {});
   await commits.capture(tree.describe());
-  const attach = calls[0]?.find(
-    (operation) => operation.kind === "attachComponentStateOverlay",
-  );
-  assert.ok(attach);
-  assert.equal(attach.kind, "attachComponentStateOverlay");
-  assert.deepEqual(attach.fields, [
+  assert.deepEqual(calls[0], [
     {
-      offset: 24,
-      value: { kind: "string", value: "https://example.test/é.ippm" },
+      kind: "create",
+      alias: 1,
+      metadata: { symbolicId: "subject", classes: [] },
+      adopt: true,
+    },
+    {
+      kind: "insertComponent",
+      entity: { kind: "alias", alias: 1 },
+      component: 5,
+      fields: [
+        {
+          offset: meshFields.source.offset,
+          value: { kind: "string", value: "https://example.test/é.ippm" },
+        },
+      ],
+      adopt: true,
     },
   ]);
   mesh.props = {
@@ -45,35 +54,30 @@ test("resource strings retain target offsets, compare by value, update and clear
     source: ["https://example.test/", "é.ippm"].join(""),
   };
   await commits.capture(tree.describe());
-  assert.equal(
-    calls.length,
-    1,
-    "equal source strings do not emit a new overlay",
-  );
+  assert.equal(calls.length, 1, "equal source strings do not write again");
+  const handle: EntityRef = { kind: "handle", id: 101n };
+  const written = (source: string): Command[] => [
+    {
+      kind: "setField",
+      entity: handle,
+      component: 5,
+      field: {
+        offset: meshFields.source.offset,
+        value: { kind: "string", value: source },
+      },
+    },
+  ];
   for (const source of ["ipp://mesh/cube?width=1&height=1&length=1", ""]) {
     mesh.props = { ...mesh.props, source };
     await commits.capture(tree.describe());
-    assert.deepEqual(calls.at(-1), [
-      {
-        kind: "updateComponentStateOverlay",
-        owner: { kind: "handle", id: 1n },
-        overlay: { kind: "handle", id: 3n },
-        fields: [{ offset: 24, value: { kind: "string", value: source } }],
-        clear: [],
-      },
-    ]);
+    assert.deepEqual(calls.at(-1), written(source));
   }
   mesh.props = {};
   await commits.capture(tree.describe());
-  assert.deepEqual(calls.at(-1), [
-    {
-      kind: "updateComponentStateOverlay",
-      owner: { kind: "handle", id: 1n },
-      overlay: { kind: "handle", id: 3n },
-      fields: [],
-      clear: [24],
-    },
-  ]);
+  assert.equal(calls.length, 3, "a removed prop leaves its last value");
+  mesh.props = { source: "" };
+  await commits.capture(tree.describe());
+  assert.deepEqual(calls.at(-1), written(""), "declaring it again writes it");
   assert.throws(
     () => tree.validate("ipp-mesh-instance", { source: 9n }),
     /must be a string/,
@@ -82,16 +86,26 @@ test("resource strings retain target offsets, compare by value, update and clear
     () => tree.validate("ipp-mesh-instance", { asset: 9n }),
     /Unsupported.*asset/,
   );
+  const beforeUnmount = calls.length;
   await commits.dispose();
+  assert.equal(calls.length, beforeUnmount, "unmount deletes nothing");
 });
 
-function recordingClient(components: ReactWorldClient["components"]) {
+/**
+ * Records batches and answers them like a World: creations get handles
+ * 100 + alias, each symbol resolves to its entry in `symbols`, and an adopting
+ * insertion reports adoption when `existing` holds `symbol:component`.
+ */
+function recordingClient(
+  components: ReactWorldClient["components"],
+  symbols: Readonly<Record<string, bigint>> = {},
+  existing: ReadonlySet<string> = new Set(),
+) {
   const calls: Command[][] = [];
   const client: ReactWorldClient = {
     session: 1n,
     schemaHash: 1n,
     capabilities: {
-      stateOverlays: true,
       spatial: true,
       textures: true,
       builtinAssets: false,
@@ -103,139 +117,130 @@ function recordingClient(components: ReactWorldClient["components"]) {
       meshPoses: false,
     },
     components,
-    onDiagnostic: () => () => {},
     async batch(operations) {
       calls.push(operations);
-      const stateOverlays: StateOverlayAlias[] = [];
-      for (const operation of operations) {
-        if (
-          operation.kind === "createStateOverlayOwner" ||
-          operation.kind === "attachEntityOverlayBinding" ||
-          operation.kind === "attachComponentStateOverlay"
-        )
-          stateOverlays.push({
-            alias: operation.alias,
-            id: BigInt(operation.alias),
-            kind:
-              operation.kind === "createStateOverlayOwner"
-                ? "owner"
-                : operation.kind === "attachEntityOverlayBinding"
-                  ? "entityOverlayBinding"
-                  : "componentStateOverlay",
-            entity: operation.kind === "createStateOverlayOwner" ? null : 100n,
-          });
-      }
-      return {
+      const outcome: BatchOutcome = {
         ok: true,
         batchId: BigInt(calls.length),
         tick: BigInt(calls.length),
         aliases: [],
-        stateOverlays,
+        symbols: [],
+        effects: [],
       };
+      const resolve = (reference: EntityRef) => {
+        if (reference.kind !== "symbol") return;
+        const id = symbols[reference.symbol];
+        if (id === undefined) throw new Error(`No ${reference.symbol}`);
+        if (!outcome.symbols.some((entry) => entry.symbol === reference.symbol))
+          outcome.symbols.push({ symbol: reference.symbol, id });
+      };
+      operations.forEach((operation, index) => {
+        if (operation.kind === "create")
+          outcome.aliases.push({
+            alias: operation.alias,
+            id: 100n + BigInt(operation.alias),
+          });
+        if ("entity" in operation) resolve(operation.entity);
+        if (
+          operation.kind === "insertComponent" &&
+          operation.adopt &&
+          operation.entity.kind === "symbol" &&
+          existing.has(`${operation.entity.symbol}:${operation.component}`)
+        )
+          outcome.effects.push({ operation: index, kind: "adopted" });
+      });
+      return outcome;
     },
   };
   return { client, calls };
 }
 
-test("bound debug declarations preserve omitted producer shape and color and clear removed overrides", async () => {
-  const fields = {
-    geometry: { offset: 0, kind: 6 },
-    is_rendered: { offset: 8, kind: 7 },
-    has_color_override: { offset: 16, kind: 7 },
-    r: { offset: 20, kind: 1 },
-    g: { offset: 24, kind: 1 },
-    b: { offset: 28, kind: 1 },
-  } as const;
-  const { client, calls } = recordingClient({
-    BoundingGeometry: { id: 9, fields },
-  });
+const debugFields = {
+  geometry: { offset: 0, kind: 6 },
+  is_rendered: { offset: 8, kind: 7 },
+  has_color_override: { offset: 16, kind: 7 },
+  r: { offset: 20, kind: 1 },
+  g: { offset: 24, kind: 1 },
+  b: { offset: 28, kind: 1 },
+} as const;
+
+test("bound debug declarations write only declared fields and never clear removed ones", async () => {
+  const fields = debugFields;
+  const sphere: EntityRef = { kind: "symbol", symbol: "producer-debug-sphere" };
+  const { client, calls } = recordingClient(
+    { BoundingGeometry: { id: 9, fields } },
+    { "producer-debug-sphere": 40n },
+    new Set(["producer-debug-sphere:9"]),
+  );
   const tree = new ReactWorldTree(client);
   const entity = tree.instance("ipp-entity", {
     bindTo: "producer-debug-sphere",
   });
   const debug = tree.instance(
     "ipp-bounding-geometry",
-    BoundingGeometry({ bound: true, is_rendered: true }).props,
+    BoundingGeometry({ is_rendered: true }).props,
   );
   entity.children.push(debug);
   tree.children.push(entity);
   const commits = new ReactWorldCommits(client, {});
+  const setField = (offset: number, value: FieldValue): Command => ({
+    kind: "setField",
+    entity: sphere,
+    component: 9,
+    field: { offset, value },
+  });
   try {
     await commits.capture(tree.describe());
-    const binding = calls[0]?.find(
-      (operation) => operation.kind === "attachEntityOverlayBinding",
-    );
-    assert.equal(binding?.mode, "bound");
-    const attached = calls[0]?.find(
-      (operation) => operation.kind === "attachComponentStateOverlay",
-    );
-    assert.equal(attached?.mode, "bound");
     assert.deepEqual(
-      attached?.fields,
+      calls[0],
       [
         {
-          offset: fields.is_rendered.offset,
-          value: { kind: "bool", value: true },
+          kind: "insertComponent",
+          entity: sphere,
+          component: 9,
+          fields: [
+            {
+              offset: fields.is_rendered.offset,
+              value: { kind: "bool", value: true },
+            },
+          ],
+          adopt: true,
         },
       ],
-      "omitted shape and color must leave producer fields unshadowed",
+      "omitted shape and color leave the producer's fields unwritten",
     );
 
     debug.props = BoundingGeometry({
-      bound: true,
       is_rendered: true,
       geometry: new Uint8Array([1, 2, 3]),
       color: [1, 0, 0],
     }).props;
     await commits.capture(tree.describe());
-    const overridden = calls
-      .at(-1)
-      ?.find((operation) => operation.kind === "updateComponentStateOverlay");
-    assert.ok(overridden);
-    assert.deepEqual(overridden.fields, [
-      {
-        offset: fields.geometry.offset,
-        value: { kind: "bytes", value: new Uint8Array([1, 2, 3]) },
-      },
-      {
-        offset: fields.has_color_override.offset,
-        value: { kind: "bool", value: true },
-      },
-      { offset: fields.r.offset, value: { kind: "f32", value: 1 } },
-      { offset: fields.g.offset, value: { kind: "f32", value: 0 } },
-      { offset: fields.b.offset, value: { kind: "f32", value: 0 } },
+    assert.deepEqual(calls.at(-1), [
+      setField(fields.geometry.offset, {
+        kind: "bytes",
+        value: new Uint8Array([1, 2, 3]),
+      }),
+      setField(fields.has_color_override.offset, { kind: "bool", value: true }),
+      setField(fields.r.offset, { kind: "f32", value: 1 }),
+      setField(fields.g.offset, { kind: "f32", value: 0 }),
+      setField(fields.b.offset, { kind: "f32", value: 0 }),
     ]);
 
-    debug.props = BoundingGeometry({ bound: true, is_rendered: false }).props;
+    debug.props = BoundingGeometry({ is_rendered: false }).props;
     await commits.capture(tree.describe());
-    const restored = calls
-      .at(-1)
-      ?.find((operation) => operation.kind === "updateComponentStateOverlay");
-    assert.ok(restored);
-    assert.deepEqual(restored.fields, [
-      {
-        offset: fields.is_rendered.offset,
-        value: { kind: "bool", value: false },
-      },
-    ]);
     assert.deepEqual(
-      restored.clear,
-      [
-        fields.geometry.offset,
-        fields.has_color_override.offset,
-        fields.r.offset,
-        fields.g.offset,
-        fields.b.offset,
-      ],
-      "omission releases previous overlay fields to reveal producer values",
+      calls.at(-1),
+      [setField(fields.is_rendered.offset, { kind: "bool", value: false })],
+      "omission leaves the written shape and color in place",
     );
     const submitted = calls.length;
-    debug.props = BoundingGeometry({ bound: true, is_rendered: false }).props;
+    debug.props = BoundingGeometry({ is_rendered: false }).props;
     await commits.capture(tree.describe());
     assert.equal(
       calls.length,
       submitted,
-      "an unchanged false boolean must not emit another update",
+      "an unchanged false boolean must not emit another write",
     );
     assert.throws(
       () => tree.validate("ipp-bounding-geometry", { is_rendered: 1 }),
@@ -244,6 +249,72 @@ test("bound debug declarations preserve omitted producer shape and color and cle
   } finally {
     await commits.dispose();
   }
+  assert.equal(
+    calls.at(-1)?.[0]?.kind,
+    "setField",
+    "an adopted component on a bound entity stays after unmount",
+  );
+});
+
+test("removed declarations delete their entities and components, adopted or not; unmount deletes nothing", async () => {
+  const { client, calls } = recordingClient(
+    { BoundingGeometry: { id: 9, fields: debugFields } },
+    { adopted: 40n, inserted: 41n },
+    new Set(["adopted:9"]),
+  );
+  const tree = new ReactWorldTree(client);
+  for (const props of [
+    { bindTo: "adopted" },
+    { bindTo: "inserted" },
+    { id: "declared" },
+  ]) {
+    const entity = tree.instance("ipp-entity", props);
+    entity.children.push(
+      tree.instance(
+        "ipp-bounding-geometry",
+        BoundingGeometry({ is_rendered: true }).props,
+      ),
+    );
+    tree.children.push(entity);
+  }
+  const commits = new ReactWorldCommits(client, {});
+  await commits.capture(tree.describe());
+  assert.deepEqual(
+    calls[0]!.map((command) =>
+      command.kind === "insertComponent"
+        ? [command.kind, command.entity, command.adopt]
+        : [command.kind],
+    ),
+    [
+      ["create"],
+      ["insertComponent", { kind: "symbol", symbol: "adopted" }, true],
+      ["insertComponent", { kind: "symbol", symbol: "inserted" }, true],
+      ["insertComponent", { kind: "alias", alias: 1 }, true],
+    ],
+  );
+  const mounted = calls.length;
+  await commits.dispose();
+  assert.equal(calls.length, mounted, "unmount deletes nothing");
+
+  const remounted = new ReactWorldCommits(client, {});
+  await remounted.capture(tree.describe());
+  tree.children.length = 0;
+  await remounted.capture(tree.describe());
+  // A removed bound Entity deletes nothing, but its removed component
+  // declarations remove their components, including an adopted one.
+  assert.deepEqual(calls.at(-1), [
+    {
+      kind: "removeComponent",
+      entity: { kind: "symbol", symbol: "adopted" },
+      component: 9,
+    },
+    {
+      kind: "removeComponent",
+      entity: { kind: "symbol", symbol: "inserted" },
+      component: 9,
+    },
+    { kind: "delete", entity: { kind: "handle", id: 101n } },
+  ]);
 });
 
 test("immutable asset inputs encode only after data or encoder identity changes", () => {

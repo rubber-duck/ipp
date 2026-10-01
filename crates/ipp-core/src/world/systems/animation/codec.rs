@@ -45,7 +45,6 @@ pub(super) fn encode(
                     writer.u64(value.target.to_bits())?;
                     encode_target(writer, &value.property)?;
                     encode_value(writer, &value.value)?;
-                    encode_value(writer, &value.baseline)?;
                 }
             }
         }
@@ -54,100 +53,156 @@ pub(super) fn encode(
     for id in &state.directional_starts {
         writer.u64(id.to_bits())?;
     }
+    writer.count(state.contributions.len())?;
+    for contribution in &state.contributions {
+        writer.u64(contribution.controller.to_bits())?;
+        writer.u64(contribution.target.to_bits())?;
+        encode_target(writer, &contribution.property)?;
+        encode_contribution_value(writer, &contribution.value)?;
+    }
     Ok(())
-}
-
-pub(crate) fn decode_legacy(
-    reader: &mut WorldBinaryReader<'_>,
-) -> Result<AnimationPersistentState, String> {
-    decode(reader, 1)
 }
 
 pub(super) fn decode(
     reader: &mut WorldBinaryReader<'_>,
-    version: u32,
 ) -> Result<AnimationPersistentState, String> {
     let next_id = reader.u64()?;
     let count = bounded_count(reader, 26, 16384)?;
     reader.claim(count.saturating_mul(std::mem::size_of::<AnimationControllerSnapshot>()))?;
     let mut controllers = Vec::with_capacity(count);
     for _ in 0..count {
-        controllers.push(decode_controller(reader, version)?);
+        controllers.push(decode_controller(reader)?);
     }
-    let mut transitions = Vec::new();
-    if version >= 4 {
-        let count = bounded_count(reader, 10, 16384)?;
-        reader.claim(count.saturating_mul(std::mem::size_of::<AnimationPersistentTransition>()))?;
-        transitions.reserve(count);
-        for _ in 0..count {
-            let id = AnimationControllerId::from_bits(reader.u64()?);
-            let start_time = match reader.u8()? {
-                0 => AnimationTransitionStartTime::Restart,
-                1 => AnimationTransitionStartTime::Preserve,
-                2 => AnimationTransitionStartTime::MatchPhase,
-                3 => AnimationTransitionStartTime::Seek(f64::from_bits(reader.u64()?)),
-                _ => return Err("Invalid saved transition start time".into()),
-            };
-            let source = match reader.u8()? {
-                0 => {
-                    let source = decode_controller(reader, 4)?;
-                    if source.transition.is_some() {
-                        return Err("Invalid saved live transition source".into());
-                    }
-                    AnimationPersistentTransitionSource::Live(source)
+    let count = bounded_count(reader, 10, 16384)?;
+    let mut transitions = Vec::with_capacity(count);
+    reader.claim(count.saturating_mul(std::mem::size_of::<AnimationPersistentTransition>()))?;
+    for _ in 0..count {
+        let id = AnimationControllerId::from_bits(reader.u64()?);
+        let start_time = match reader.u8()? {
+            0 => AnimationTransitionStartTime::Restart,
+            1 => AnimationTransitionStartTime::Preserve,
+            2 => AnimationTransitionStartTime::MatchPhase,
+            3 => AnimationTransitionStartTime::Seek(f64::from_bits(reader.u64()?)),
+            _ => return Err("Invalid saved transition start time".into()),
+        };
+        let source = match reader.u8()? {
+            0 => {
+                let source = decode_controller(reader)?;
+                if source.transition.is_some() {
+                    return Err("Invalid saved live transition source".into());
                 }
-                1 => {
-                    let reference_time = f64::from_bits(reader.u64()?);
-                    let reference_duration = f64::from_bits(reader.u64()?);
-                    let bindings = decode_controller(reader, 4)?;
-                    if bindings.transition.is_some() {
-                        return Err("Invalid saved frozen transition bindings".into());
-                    }
-                    let count = bounded_count(reader, 29, 65536)?;
-                    reader.claim(
-                        count.saturating_mul(std::mem::size_of::<AnimationFrozenTransitionValue>()),
-                    )?;
-                    let mut values = Vec::with_capacity(count);
-                    for _ in 0..count {
-                        values.push(AnimationFrozenTransitionValue {
-                            target: EntityId::from_bits(reader.u64()?),
-                            property: decode_target(reader)?,
-                            value: decode_value(reader)?,
-                            baseline: decode_value(reader)?,
-                        });
-                    }
-                    AnimationPersistentTransitionSource::Frozen {
-                        values,
-                        bindings,
-                        reference_time,
-                        reference_duration,
-                    }
+                AnimationPersistentTransitionSource::Live(source)
+            }
+            1 => {
+                let reference_time = f64::from_bits(reader.u64()?);
+                let reference_duration = f64::from_bits(reader.u64()?);
+                let bindings = decode_controller(reader)?;
+                if bindings.transition.is_some() {
+                    return Err("Invalid saved frozen transition bindings".into());
                 }
-                _ => return Err("Invalid saved transition source".into()),
-            };
-            transitions.push(AnimationPersistentTransition {
-                id,
-                source,
-                start_time,
-            });
-        }
+                let count = bounded_count(reader, 14, 65536)?;
+                reader.claim(
+                    count.saturating_mul(std::mem::size_of::<AnimationFrozenTransitionValue>()),
+                )?;
+                let mut values = Vec::with_capacity(count);
+                for _ in 0..count {
+                    values.push(AnimationFrozenTransitionValue {
+                        target: EntityId::from_bits(reader.u64()?),
+                        property: decode_target(reader)?,
+                        value: decode_value(reader)?,
+                    });
+                }
+                AnimationPersistentTransitionSource::Frozen {
+                    values,
+                    bindings,
+                    reference_time,
+                    reference_duration,
+                }
+            }
+            _ => return Err("Invalid saved transition source".into()),
+        };
+        transitions.push(AnimationPersistentTransition {
+            id,
+            source,
+            start_time,
+        });
     }
-    let directional_starts = if version >= 5 {
-        let count = reader.count(8)?;
-        let mut ids = Vec::with_capacity(count);
-        for _ in 0..count {
-            ids.push(AnimationControllerId::from_bits(reader.u64()?));
-        }
-        ids
-    } else {
-        Vec::new()
-    };
+    let count = reader.count(8)?;
+    let mut directional_starts = Vec::with_capacity(count);
+    for _ in 0..count {
+        directional_starts.push(AnimationControllerId::from_bits(reader.u64()?));
+    }
+    let count = bounded_count(reader, 22, 1 << 20)?;
+    reader.claim(count.saturating_mul(std::mem::size_of::<AnimationPersistentContribution>()))?;
+    let mut contributions = Vec::with_capacity(count);
+    for _ in 0..count {
+        contributions.push(AnimationPersistentContribution {
+            controller: AnimationControllerId::from_bits(reader.u64()?),
+            target: EntityId::from_bits(reader.u64()?),
+            property: decode_target(reader)?,
+            value: decode_contribution_value(reader)?,
+        });
+    }
     Ok(AnimationPersistentState {
         next_id,
         controllers,
         transitions,
         directional_starts,
+        contributions,
     })
+}
+
+/// Tag zero is a rotation; other tags are the field kind of a float contribution.
+fn encode_contribution_value(
+    writer: &mut WorldBinaryWriter,
+    value: &AnimationValue,
+) -> Result<(), String> {
+    use crate::components::schema::FieldValue;
+
+    match value {
+        AnimationValue::Rotation(value) => {
+            writer.u8(0)?;
+            for value in value {
+                writer.u32(value.to_bits())?;
+            }
+        }
+        AnimationValue::Field(field) => {
+            writer.u8(field.kind() as u8)?;
+            match field {
+                FieldValue::F32(value) => writer.u32(value.to_bits())?,
+                FieldValue::Dynamic(value) => writer.blob(&value.encode())?,
+                _ => return Err("Unsupported animation contribution".into()),
+            }
+        }
+        _ => return Err("Unsupported animation contribution".into()),
+    }
+    Ok(())
+}
+
+fn decode_contribution_value(reader: &mut WorldBinaryReader<'_>) -> Result<AnimationValue, String> {
+    use crate::components::schema::{FieldKind, FieldValue};
+
+    let tag = reader.u8()?;
+    if tag == 0 {
+        return Ok(AnimationValue::Rotation([
+            read_f32(reader)?,
+            read_f32(reader)?,
+            read_f32(reader)?,
+            read_f32(reader)?,
+        ]));
+    }
+    Ok(AnimationValue::Field(match tag {
+        tag if tag == FieldKind::F32 as u8 => FieldValue::F32(read_f32(reader)?),
+        tag if tag == FieldKind::Dynamic as u8 => {
+            let bytes = reader.blob()?;
+            reader.claim(bytes.len())?;
+            FieldValue::Dynamic(
+                crate::DynamicValue::decode(bytes)
+                    .map_err(|_| "Invalid saved animation contribution")?,
+            )
+        }
+        _ => return Err("Invalid saved animation contribution".into()),
+    }))
 }
 
 fn encode_controller(
@@ -173,6 +228,10 @@ fn encode_controller(
         writer.u32(driver.track)?;
         writer.u64(driver.target.to_bits())?;
         encode_target(writer, &driver.property)?;
+        writer.count(driver.entity_bindings.len())?;
+        for entity in &driver.entity_bindings {
+            writer.u64(entity.to_bits())?;
+        }
         writer.u32(driver.weight.to_bits())?;
         writer.u8(u8::from(driver.additive))?;
         writer.u32(driver.reference_time.to_bits())?;
@@ -183,7 +242,6 @@ fn encode_controller(
 
 fn decode_controller(
     reader: &mut WorldBinaryReader<'_>,
-    version: u32,
 ) -> Result<AnimationControllerSnapshot, String> {
     let id = AnimationControllerId::from_bits(reader.u64()?);
     let state = match reader.u8()? {
@@ -196,7 +254,7 @@ fn decode_controller(
     let time = f64::from_bits(reader.u64()?);
     let speed = f32::from_bits(reader.u32()?);
     let looping = boolean(reader)?;
-    let transition = if version >= 4 && boolean(reader)? {
+    let transition = if boolean(reader)? {
         Some(AnimationControllerTransitionState {
             duration: f64::from_bits(reader.u64()?),
             elapsed: f64::from_bits(reader.u64()?),
@@ -214,25 +272,27 @@ fn decode_controller(
     reader.claim(count.saturating_mul(std::mem::size_of::<AnimationDriverDescription>()))?;
     let mut drivers = Vec::with_capacity(count);
     for _ in 0..count {
-        let source = reader.string()?;
+        let source = reader.text()?;
         let variant = reader.u32()?;
         let track = reader.u32()?;
         let target = EntityId::from_bits(reader.u64()?);
         let property = decode_target(reader)?;
+        let count = reader.count(8)?;
+        reader.claim(count.saturating_mul(std::mem::size_of::<EntityId>()))?;
+        let entity_bindings = (0..count)
+            .map(|_| reader.u64().map(EntityId::from_bits))
+            .collect::<Result<Vec<_>, _>>()?;
         drivers.push(AnimationDriverDescription {
             source,
             variant,
             track,
             target,
             property,
+            entity_bindings,
             weight: f32::from_bits(reader.u32()?),
             additive: boolean(reader)?,
             reference_time: f32::from_bits(reader.u32()?),
-            repeat: if version >= 3 {
-                boolean(reader)?
-            } else {
-                false
-            },
+            repeat: boolean(reader)?,
         });
     }
     Ok(AnimationControllerSnapshot {
@@ -261,6 +321,11 @@ fn encode_target(
     target: &AnimationTrackTarget,
 ) -> Result<(), String> {
     match target {
+        AnimationTrackTarget::EntityLink => {
+            writer.u8(3)?;
+            writer.u16(0)?;
+            writer.count(0)?;
+        }
         AnimationTrackTarget::AnimationProperty(property) => {
             writer.u8(0)?;
             writer.u16(property.component)?;
@@ -300,6 +365,7 @@ fn decode_target(reader: &mut WorldBinaryReader<'_>) -> Result<AnimationTrackTar
         .map(|_| reader.u32())
         .collect::<Result<Vec<_>, _>>()?;
     Ok(match kind {
+        3 if component == 0 && indices.is_empty() => AnimationTrackTarget::EntityLink,
         0 => AnimationTrackTarget::AnimationProperty(AnimationProperty {
             component,
             offsets: indices,
@@ -513,6 +579,14 @@ pub(super) fn validate_values(state: &AnimationPersistentState) -> Result<(), St
         match &transition.source {
             AnimationPersistentTransitionSource::Live(source) => {
                 validate_controller(source, false, id)?;
+                if source
+                    .description
+                    .drivers
+                    .iter()
+                    .any(|driver| matches!(driver.property, AnimationTrackTarget::EntityLink))
+                {
+                    return Err("Structural tracks cannot be transition sources".into());
+                }
             }
             AnimationPersistentTransitionSource::Frozen {
                 values,
@@ -521,6 +595,14 @@ pub(super) fn validate_values(state: &AnimationPersistentState) -> Result<(), St
                 reference_duration,
             } => {
                 validate_controller(bindings, false, id)?;
+                if bindings
+                    .description
+                    .drivers
+                    .iter()
+                    .any(|driver| matches!(driver.property, AnimationTrackTarget::EntityLink))
+                {
+                    return Err("Structural tracks cannot be transition sources".into());
+                }
                 if values.len() > 65536
                     || !reference_duration.is_finite()
                     || *reference_duration < 0.0
@@ -546,6 +628,38 @@ pub(super) fn validate_values(state: &AnimationPersistentState) -> Result<(), St
         .any(|(id, controller)| controller.transition.is_some() != transition_ids.contains(id))
     {
         return Err("Saved transition summary and sidecar mismatch".into());
+    }
+
+    let mut contributions = BTreeSet::new();
+    for contribution in &state.contributions {
+        validate_target(&contribution.property, false)?;
+        if !controllers.contains_key(&contribution.controller.to_bits()) {
+            return Err("Saved animation contribution references a missing controller".into());
+        }
+        if !contributions.insert((
+            contribution.controller.to_bits(),
+            contribution.target.to_bits(),
+            target_key(&contribution.property),
+        )) {
+            return Err("Duplicate saved animation contribution".into());
+        }
+        let valid = matches!(
+            contribution.property,
+            AnimationTrackTarget::AnimationProperty(_)
+        ) && super::contribution::contributes(&contribution.value)
+            && match &contribution.value {
+                AnimationValue::Field(crate::components::schema::FieldValue::F32(value)) => {
+                    value.is_finite()
+                }
+                AnimationValue::Field(crate::components::schema::FieldValue::Dynamic(value)) => {
+                    dynamic_finite(value)
+                }
+                AnimationValue::Rotation(value) => value.iter().all(|value| value.is_finite()),
+                _ => false,
+            };
+        if !valid {
+            return Err("Invalid saved animation contribution".into());
+        }
     }
     Ok(())
 }
@@ -575,6 +689,19 @@ fn validate_controller(
     }
     for driver in &controller.description.drivers {
         validate_target(&driver.property, false)?;
+        if matches!(driver.property, AnimationTrackTarget::EntityLink)
+            && (driver.weight != 1.0
+                || driver.additive
+                || driver.reference_time != 0.0
+                || controller.transition.is_some())
+        {
+            return Err("Invalid saved structural animation driver".into());
+        }
+        if !matches!(driver.property, AnimationTrackTarget::EntityLink)
+            && !driver.entity_bindings.is_empty()
+        {
+            return Err("Invalid saved animation binding table".into());
+        }
         if driver.source.is_empty()
             || driver.source.len() > 2048
             || driver.track >= 256
@@ -590,6 +717,13 @@ fn validate_controller(
 }
 
 fn validate_target(target: &AnimationTrackTarget, _frozen: bool) -> Result<(), String> {
+    if matches!(target, AnimationTrackTarget::EntityLink) {
+        return if !_frozen {
+            Ok(())
+        } else {
+            Err("Invalid saved structural target".into())
+        };
+    }
     if target.indices().len() > 4096
         || (target.indices().is_empty()
             && !matches!(target, AnimationTrackTarget::DynamicProperty { .. }))
@@ -619,6 +753,7 @@ fn validate_target(target: &AnimationTrackTarget, _frozen: bool) -> Result<(), S
 
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 enum TargetKey<'a> {
+    EntityLink,
     Property(u16, &'a [u32]),
     #[cfg(feature = "skeletal-animation")]
     Joints(&'a [u32]),
@@ -627,6 +762,7 @@ enum TargetKey<'a> {
 
 fn target_key(target: &AnimationTrackTarget) -> TargetKey<'_> {
     match target {
+        AnimationTrackTarget::EntityLink => TargetKey::EntityLink,
         AnimationTrackTarget::AnimationProperty(property) => {
             TargetKey::Property(property.component, &property.offsets)
         }
@@ -643,23 +779,16 @@ fn validate_frozen_value(value: &AnimationFrozenTransitionValue) -> Result<(), S
     validate_target(&value.property, true)?;
     let valid = super::driver::frozen_transition_target_supported(&value.property, &value.value)
         && value_matches_target(&value.property, &value.value)
-        && value_matches_target(&value.property, &value.baseline)
-        && match (&value.value, &value.baseline) {
-            (
-                AnimationValue::Field(crate::components::schema::FieldValue::F32(a)),
-                AnimationValue::Field(crate::components::schema::FieldValue::F32(b)),
-            ) => a.is_finite() && b.is_finite(),
-            (AnimationValue::Rotation(a), AnimationValue::Rotation(b)) => {
-                a.iter().chain(b).all(|component| component.is_finite())
+        && match &value.value {
+            AnimationValue::Field(crate::components::schema::FieldValue::F32(value)) => {
+                value.is_finite()
             }
-            (
-                AnimationValue::Field(crate::components::schema::FieldValue::Dynamic(a)),
-                AnimationValue::Field(crate::components::schema::FieldValue::Dynamic(b)),
-            ) => dynamic_kind(a) == dynamic_kind(b) && dynamic_finite(a) && dynamic_finite(b),
+            AnimationValue::Rotation(value) => value.iter().all(|component| component.is_finite()),
+            AnimationValue::Field(crate::components::schema::FieldValue::Dynamic(value)) => {
+                dynamic_finite(value)
+            }
             #[cfg(feature = "skeletal-animation")]
-            (AnimationValue::Pose(a), AnimationValue::Pose(b)) => {
-                a.len() == 1 && b.len() == 1 && transform_finite(&a[0]) && transform_finite(&b[0])
-            }
+            AnimationValue::Pose(values) => values.len() == 1 && transform_finite(&values[0]),
             _ => false,
         };
     if valid {
@@ -671,6 +800,7 @@ fn validate_frozen_value(value: &AnimationFrozenTransitionValue) -> Result<(), S
 
 fn value_matches_target(target: &AnimationTrackTarget, value: &AnimationValue) -> bool {
     match target {
+        AnimationTrackTarget::EntityLink => false,
         AnimationTrackTarget::AnimationProperty(_) => matches!(
             value,
             AnimationValue::Field(crate::components::schema::FieldValue::F32(_))
@@ -684,24 +814,6 @@ fn value_matches_target(target: &AnimationTrackTarget, value: &AnimationValue) -
             value,
             AnimationValue::Field(crate::components::schema::FieldValue::Dynamic(_))
         ),
-    }
-}
-
-fn dynamic_kind(value: &crate::DynamicValue) -> u8 {
-    use crate::DynamicValue::*;
-    match value {
-        F32(_) => 0,
-        I32(_) => 1,
-        U32(_) => 2,
-        Bool(_) => 3,
-        Asset(_) => 4,
-        Vec2(_) => 5,
-        Vec3(_) => 6,
-        Vec4(_) => 7,
-        Mat2(_) => 8,
-        Mat3(_) => 9,
-        Mat4(_) => 10,
-        Text(_) => 11,
     }
 }
 

@@ -1,7 +1,7 @@
 //! Render membership and resource compatibility compiled outside frame evaluation.
 
 use super::*;
-use crate::{components::registry::ComponentStorage, world::component_binding::ComponentBinding};
+use crate::world::component_binding::ComponentBinding;
 
 pub(super) struct DebugGeometryEntry {
     pub(super) entity: EntityId,
@@ -18,15 +18,16 @@ pub(super) struct LightEntry {
 impl LightEntry {
     pub(super) fn sample(
         &self,
-        storage: &ComponentStorage,
+        world: &WorldSimulationState,
     ) -> Option<(EntityId, [f32; 16], Light)> {
+        let storage = &world.components;
         let light = *self.light.get(storage);
         if light.intensity <= 0.0 {
             return None;
         }
         Some((
             self.entity,
-            self.model.borrow(storage)?.ok()?.render_matrix().ok()?,
+            self.model.borrow(world)?.ok()?.render_matrix().ok()?,
             light,
         ))
     }
@@ -87,7 +88,7 @@ impl RenderReadAccess<'_> {
                         entity,
                         light: ComponentBinding::new(light),
                         model: crate::systems::hierarchy::ObjectTransformBinding::bind(
-                            storage, entity,
+                            self.world, entity,
                         ),
                     });
                 }
@@ -132,7 +133,9 @@ impl RenderReadAccess<'_> {
                 RenderEntry {
                     item,
                     transform: ComponentBinding::new(storage.transform_ptr(index).unwrap()),
-                    model: crate::systems::hierarchy::ObjectTransformBinding::bind(storage, entity),
+                    model: crate::systems::hierarchy::ObjectTransformBinding::bind(
+                        self.world, entity,
+                    ),
                     material,
                     #[cfg(feature = "mesh-poses")]
                     pose: item
@@ -153,7 +156,8 @@ impl RenderReadAccess<'_> {
 }
 
 impl RenderEntry {
-    fn sample(&self, storage: &ComponentStorage, item: &mut RenderItem) -> Option<()> {
+    fn sample(&self, world: &WorldSimulationState, item: &mut RenderItem) -> Option<()> {
+        let storage = &world.components;
         #[cfg(feature = "skeletal-animation")]
         if self.skin.is_some_and(|s| {
             let s = s.get(storage);
@@ -162,7 +166,7 @@ impl RenderEntry {
             return None;
         }
         item.transform = *self.transform.get(storage);
-        let model = self.model.borrow(storage)?.ok()?;
+        let model = self.model.borrow(world)?.ok()?;
         let matrix = model.render_matrix().ok()?;
         if item.model != matrix {
             item.model = matrix;
@@ -208,7 +212,7 @@ impl RenderEntry {
         #[cfg(feature = "particles")]
         if self.particles {
             let mut item = self.item;
-            if self.sample(&world.components, &mut item).is_some() {
+            if self.sample(world, &mut item).is_some() {
                 crate::systems::particles::prepare_particles(world, item, items, written);
             }
             return;
@@ -220,7 +224,7 @@ impl RenderEntry {
         if item.entity != self.item.entity {
             *item = self.item;
         }
-        if self.sample(&world.components, item).is_some() {
+        if self.sample(world, item).is_some() {
             *written += 1;
         }
     }

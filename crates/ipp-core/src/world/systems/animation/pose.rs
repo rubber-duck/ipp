@@ -1,4 +1,6 @@
-//! SkeletonJoint-local TRS follows the same interpolation and additive rules as properties.
+//! SkeletonJoint-local TRS follows the same interpolation and contribution rules
+//! as properties. The Skeleton rebuilds its local pose every frame before
+//! animation, so joint contributions apply in full each frame and are not kept.
 
 use super::{AnimationValue, math};
 use crate::{ErrorReason, components::Transform};
@@ -82,6 +84,7 @@ fn additive_joint(
     })
 }
 
+/// Compose each joint's contribution at `time` onto `current`, into `output`.
 pub(super) fn sample_transition_joints(
     driver: &dyn super::driver::AnimationDriverBinding,
     track: &super::AnimationTrack<Vec<Transform>>,
@@ -93,32 +96,51 @@ pub(super) fn sample_transition_joints(
     if current.len() != output.len() {
         return Err(ErrorReason::InvalidField);
     }
+    let (sample, reference, weight) = segments(driver, track, duration, time);
+    for (index, (current, output)) in current.iter().zip(output).enumerate() {
+        let contribution =
+            joint_contribution(&sample.joint(index), &reference.joint(index), weight)?;
+        *output = super::contribution::compose_joint(current, &contribution);
+    }
+    Ok(())
+}
+
+fn segments<'a>(
+    driver: &dyn super::driver::AnimationDriverBinding,
+    track: &'a super::AnimationTrack<Vec<Transform>>,
+    duration: f64,
+    time: f64,
+) -> (JointSegment<'a>, JointSegment<'a>, f64) {
     let description = driver.description();
     let time = if description.repeat {
         time.rem_euclid(duration)
     } else {
         time
     };
-    let sample = JointSegment::new(track, time);
-    let reference = description
-        .additive
-        .then(|| JointSegment::new(track, f64::from(description.reference_time)));
-    for (index, (current, output)) in current.iter().zip(output).enumerate() {
-        let sampled = sample.joint(index);
-        *output = if let Some(reference) = &reference {
-            additive_joint(
-                current,
-                &sampled,
-                &reference.joint(index),
-                f64::from(description.weight),
-            )?
-        } else if description.weight == 1.0 {
-            sampled
-        } else {
-            mix_joint(current, &sampled, f64::from(description.weight))
-        };
-    }
-    Ok(())
+    let reference = if description.additive {
+        f64::from(description.reference_time)
+    } else {
+        0.0
+    };
+    (
+        JointSegment::new(track, time),
+        JointSegment::new(track, reference),
+        f64::from(description.weight),
+    )
+}
+
+/// The weighted change of one joint from its reference sample.
+fn joint_contribution(
+    sample: &Transform,
+    reference: &Transform,
+    weight: f64,
+) -> Result<Transform, ErrorReason> {
+    additive_joint(
+        &super::contribution::IDENTITY_JOINT,
+        sample,
+        reference,
+        weight,
+    )
 }
 
 /// Borrow a segment once; sampling each joint then uses only stack values.
@@ -187,6 +209,7 @@ impl<'a> JointSegment<'a> {
     }
 }
 
+/// Apply a joint driver's contribution onto the Skeleton's pose for this frame.
 pub(super) fn sample_joints(
     driver: &dyn super::driver::AnimationDriverBinding,
     track: &super::AnimationTrack<Vec<Transform>>,
@@ -202,18 +225,9 @@ pub(super) fn sample_joints(
     else {
         return Err(ErrorReason::InvalidField);
     };
-    let description = driver.description();
-    let time = if description.repeat {
-        time.rem_euclid(duration)
-    } else {
-        time
-    };
-    let sample = JointSegment::new(track, time);
-    let reference = description
-        .additive
-        .then(|| JointSegment::new(track, f64::from(description.reference_time)));
+    let (sample, reference, weight) = segments(driver, track, duration, time);
     let pose = storage
-        .skeleton_mut(description.target.index() as usize)
+        .skeleton_mut(driver.description().target.index() as usize)
         .and_then(|value| value.runtime.pose.as_mut())
         .filter(|pose| pose.valid && pose.source == *source)
         .ok_or(ErrorReason::MissingComponent)?;
@@ -222,19 +236,9 @@ pub(super) fn sample_joints(
             .local
             .get(joint as usize)
             .ok_or(ErrorReason::InvalidField)?;
-        let sample = sample.joint(index);
-        let result = if let Some(reference) = &reference {
-            additive_joint(
-                current,
-                &sample,
-                &reference.joint(index),
-                f64::from(description.weight),
-            )?
-        } else if description.weight == 1.0 {
-            sample
-        } else {
-            mix_joint(current, &sample, f64::from(description.weight))
-        };
+        let contribution =
+            joint_contribution(&sample.joint(index), &reference.joint(index), weight)?;
+        let result = super::contribution::compose_joint(current, &contribution);
         result.validate()?;
         pose.evaluation[index] = result;
     }
@@ -244,64 +248,6 @@ pub(super) fn sample_joints(
         pose.sampled[joint as usize] = true;
     }
     Ok(())
-}
-
-impl super::AnimationReadAccess<'_> {
-    pub(super) fn refresh_joint_original(
-        &self,
-        driver: &mut dyn super::driver::AnimationDriverBinding,
-    ) -> Result<(), ErrorReason> {
-        let super::driver::AnimationRuntimeTarget::JointLocal {
-            source,
-            ..
-        } = driver.runtime_target()
-        else {
-            return Err(ErrorReason::InvalidField);
-        };
-        let skeleton = self
-            .state
-            .input_skeleton(&self.world.components, driver.identity().entity)
-            .ok_or(ErrorReason::MissingComponent)?;
-        let asset = self
-            .bound_skeleton_data(*source, &skeleton)
-            .ok_or(ErrorReason::InvalidAsset)?;
-        let pose = if skeleton.pose_source.is_empty() {
-            None
-        } else {
-            let (_, pose) = self
-                .source_data::<crate::PoseAsset>(
-                    crate::POSE_TYPE,
-                    &skeleton.pose_source,
-                    skeleton.pose_variant,
-                )
-                .ok_or(ErrorReason::InvalidAsset)?;
-            if pose.joints().len() != asset.joints().len() {
-                return Err(ErrorReason::InvalidAsset);
-            }
-            Some(pose)
-        };
-        // The immutable bound target and mutable original are disjoint driver fields.
-        let (joints, original) = driver
-            .joint_original_mut()
-            .ok_or(ErrorReason::InvalidField)?;
-        if joints
-            .last()
-            .is_some_and(|&joint| joint as usize >= asset.joints().len())
-        {
-            return Err(ErrorReason::InvalidField);
-        }
-        if !skeleton.joint_overrides_fit(asset.joints().len()) {
-            return Err(ErrorReason::InvalidValue);
-        }
-        original.resize(joints.len(), Transform::default());
-        for (value, &joint) in original.iter_mut().zip(joints) {
-            *value = pose.map_or_else(
-                || asset.joints()[joint as usize].rest,
-                |pose| pose.joints()[joint as usize],
-            );
-        }
-        skeleton.apply_selected_joint_overrides(asset.joints().len(), joints, original)
-    }
 }
 
 #[cfg(test)]

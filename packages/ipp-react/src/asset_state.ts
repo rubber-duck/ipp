@@ -185,9 +185,15 @@ export class ReactAssetRegistry {
     this.listeners.clear();
   }
 
-  async dispose(): Promise<void> {
+  /**
+   * Stop serving declarations. Unmount keeps loaded assets, which the
+   * World's components may still reference; `remove` releases them, as
+   * removing their declarations does.
+   */
+  async dispose(remove = false): Promise<void> {
     this.close();
     this.entries.clear();
-    if (this.client.session === this.session) await this.releaseUnused();
+    if (remove && this.client.session === this.session)
+      await this.releaseUnused();
   }
 }

@@ -55,12 +55,8 @@ export function resourcePressureDriver(
         resources: state.resources,
         declarations: state.entities.map((entity) => ({
           entity: String(entity.id),
-          baseSource:
-            entity.base.find(
-              (component) => component.component === contract.UnlitTexture.id,
-            )?.fields.source ?? null,
-          effectiveSource:
-            entity.effective.find(
+          source:
+            entity.components.find(
               (component) => component.component === contract.UnlitTexture.id,
             )?.fields.source ?? null,
         })),

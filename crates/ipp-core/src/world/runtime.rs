@@ -1,8 +1,30 @@
 use super::*;
 
 impl WorldContext<'_> {
+    /// Selected authoring support without allocating or cloning it.
+    pub fn manifest(&self) -> &systems::WorldManifest {
+        &self.world.manifest
+    }
+
     /// Queue a complete batch, or explicitly reject it without changing the world.
     pub fn enqueue(&mut self, batch: Batch) -> Result<(), ErrorReason> {
+        self.enqueue_admitted(batch, None)
+    }
+
+    /// Queue ingress with operation-time receipt validation and reliable delivery admission.
+    pub fn enqueue_with_effect_sink(
+        &mut self,
+        batch: Batch,
+        effect_sink: Box<dyn crate::OperationEffectSink>,
+    ) -> Result<(), ErrorReason> {
+        self.enqueue_admitted(batch, Some(effect_sink))
+    }
+
+    fn enqueue_admitted(
+        &mut self,
+        batch: Batch,
+        effect_sink: Option<Box<dyn crate::OperationEffectSink>>,
+    ) -> Result<(), ErrorReason> {
         if let Some(reason) = self.world.fault {
             return Err(reason);
         }
@@ -25,16 +47,66 @@ impl WorldContext<'_> {
             }
             return Err(ErrorReason::Capacity);
         }
-        self.world.queue.push_back(Ingress::Batch(batch));
+        self.world.queue.push_back(Ingress::Batch {
+            batch,
+            effect_sink,
+        });
         Ok(())
     }
 }
 
 impl World {
+    pub(crate) fn queued_reference_worlds(
+        &self,
+    ) -> crate::host::reference_resolution::WorldReferenceRequests {
+        let mut references = crate::host::reference_resolution::referenced_worlds(
+            self.data.queue.iter().flat_map(|ingress| match ingress {
+                Ingress::Batch {
+                    batch,
+                    ..
+                } => batch.operations.as_slice(),
+                _ => &[],
+            }),
+        );
+        for ingress in &self.data.queue {
+            let (system, commands) = match ingress {
+                Ingress::System {
+                    system,
+                    command,
+                    ..
+                } => (*system, std::slice::from_ref(command)),
+                Ingress::SystemBatch {
+                    system,
+                    commands,
+                    ..
+                } => (*system, commands.as_slice()),
+                Ingress::Batch {
+                    ..
+                } => continue,
+            };
+            if let Some(instance) = self
+                .schedule
+                .instances
+                .iter()
+                .find(|instance| instance.id == system)
+            {
+                for command in commands {
+                    instance
+                        .system
+                        .command_world_references(command.as_ref(), &mut |world| {
+                            references.include(world)
+                        });
+                }
+            }
+        }
+        references
+    }
+
     pub(crate) fn context<'a>(
         &'a mut self,
         assets: &'a mut crate::services::asset_management::service::AssetManagementService,
         data_sources: &'a mut crate::services::data_source::DataSourceManagementService,
+        topology: &'a mut crate::host::topology::HostTopology,
     ) -> WorldContext<'a> {
         WorldContext {
             world: &mut self.data,
@@ -45,6 +117,10 @@ impl World {
             },
             asset_acquisition: assets,
             data_sources,
+            topology,
+            frame_context: None,
+            reference_worlds: None,
+            publications: None,
             owns_update: false,
         }
     }
@@ -57,10 +133,10 @@ impl World {
         assets: &mut crate::services::asset_management::service::AssetManagementService,
         data_sources: &mut crate::services::data_source::DataSourceManagementService,
     ) -> Result<Self, WorldConstructionError> {
-        systems::validate_authoring_factories(factories)
-            .map_err(WorldConstructionError::Systems)?;
         let mut data = Self::simulation_state(limits).map_err(WorldConstructionError::Limits)?;
         data.id = id;
+        data.manifest =
+            systems::WorldManifest::resolve(factories).map_err(WorldConstructionError::Systems)?;
         let defaults = WorldCapacityHints {
             systems: factories
                 .ordered
@@ -80,9 +156,6 @@ impl World {
         data.state
             .allocator
             .reserve(data.capacity_hints.entities)
-            .map_err(WorldConstructionError::Limits)?;
-        data.components
-            .try_reserve(data.capacity_hints.entities)
             .map_err(WorldConstructionError::Limits)?;
         let mut instances = Vec::with_capacity(factories.ordered.len());
         for registration in &factories.ordered {
@@ -112,6 +185,8 @@ impl World {
                 Ok(system) => instances.push(systems::scheduler::SystemInstance {
                     id: registration.id,
                     system,
+                    #[cfg(feature = "profiling")]
+                    profile_slot: None,
                 }),
                 Err(error) => {
                     teardown_instances(&data, &mut instances, assets, data_sources);
@@ -133,6 +208,13 @@ impl World {
                 error,
             });
         }
+        #[cfg(feature = "profiling")]
+        for instance in &mut instances {
+            instance.profile_slot = Some(crate::profiling::register_system(
+                instance.id.0,
+                data.manifest.composition_id(),
+            ));
+        }
         Ok(Self {
             data,
             schedule: systems::SystemSchedule {
@@ -144,6 +226,11 @@ impl World {
     /// Stored execution order for this world's entire lifetime.
     pub fn system_ids(&self) -> impl ExactSizeIterator<Item = systems::SystemId> + '_ {
         self.schedule.ids()
+    }
+
+    /// Selected authoring support, fixed for this World's lifetime.
+    pub fn manifest(&self) -> &systems::WorldManifest {
+        &self.data.manifest
     }
 
     pub(crate) fn teardown(
@@ -166,11 +253,7 @@ impl World {
         Ok(WorldSimulationState {
             updating: false,
             prepared_frame: false,
-            mutation_prepared: false,
-            admitting_ingress: false,
-            command_stream: None,
             accepting_removals: false,
-            forced_cleanup: false,
             restoring: false,
             fault: None,
             deferred_removals: Vec::new(),
@@ -180,9 +263,10 @@ impl World {
             metadata: WorldMetadata::default(),
             limits,
             capacity_hints: WorldCapacityHints::default(),
+            manifest: systems::WorldManifest::default(),
             state: WorldEntityState::default(),
             components: registry::ComponentStorage::default(),
-            queue: VecDeque::with_capacity(64),
+            queue: VecDeque::new(),
             command_buffers: Vec::new(),
             lifecycle_cleanup: Vec::new(),
             tick: 0,
@@ -191,97 +275,14 @@ impl World {
     }
 }
 
-pub(super) fn metadata_bytes(metadata: &EntityMetadata) -> Option<usize> {
-    let mut bytes = metadata
-        .classes
-        .capacity()
-        .checked_mul(std::mem::size_of::<String>() + 128)?;
-    if let Some(symbol) = &metadata.symbolic_id {
-        bytes = bytes.checked_add(symbol.capacity())?;
-    }
-    for class in &metadata.classes {
-        bytes = bytes.checked_add(class.capacity())?;
-    }
-    Some(bytes)
-}
-
 pub(super) fn batch_bytes(batch: &Batch) -> Option<usize> {
-    let mut bytes = batch
-        .operations
-        .capacity()
-        .checked_mul(std::mem::size_of::<Command>())?;
-    for operation in &batch.operations {
-        let extra = match operation {
-            Command::Create {
-                metadata,
-                ..
-            }
-            | Command::SetMetadata {
-                metadata,
-                ..
-            } => metadata_bytes(metadata)?,
-            Command::InsertComponentValue {
-                value,
-                ..
-            } => {
-                std::mem::size_of::<crate::ComponentValue>().checked_add(value.retained_bytes()?)?
-            }
-            Command::InsertComponent {
-                fields,
-                ..
-            } => fields
-                .capacity()
-                .checked_mul(std::mem::size_of::<FieldWrite>())?,
-            Command::AttachEntityOverlayBinding {
-                symbolic_id,
-                ..
-            } => symbolic_id.capacity(),
-            Command::AttachComponentStateOverlay {
-                fields,
-                ..
-            } => fields
-                .capacity()
-                .checked_mul(std::mem::size_of::<FieldWrite>())?,
-            Command::UpdateComponentStateOverlay {
-                fields,
-                clear,
-                ..
-            } => fields
-                .capacity()
-                .checked_mul(std::mem::size_of::<FieldWrite>())?
-                .checked_add(clear.capacity().checked_mul(std::mem::size_of::<u32>())?)?,
-            _ => 0,
-        };
-        bytes = bytes.checked_add(extra)?;
-        let fields: &[FieldWrite] = match operation {
-            Command::InsertComponent {
-                fields,
-                ..
-            } => fields,
-            Command::SetField {
-                field,
-                ..
-            } => std::slice::from_ref(field),
-            Command::AttachComponentStateOverlay {
-                fields,
-                ..
-            }
-            | Command::UpdateComponentStateOverlay {
-                fields,
-                ..
-            } => fields,
-            _ => &[],
-        };
-        for field in fields {
-            let owned = match &field.value {
-                FieldValue::String(value) => value.capacity(),
-                FieldValue::Bytes(value) => value.capacity(),
-                _ => 0,
-            };
-            bytes = bytes.checked_add(owned)?;
-        }
-    }
-    Some(bytes)
+    batch.operations.iter().try_fold(
+        batch
+            .operations
+            .capacity()
+            .checked_mul(std::mem::size_of::<Command>())?,
+        |bytes, operation| bytes.checked_add(operation.retained_heap_bytes()?),
+    )
 }
 
 fn next_system_world_identity() -> Result<usize, ErrorReason> {
@@ -323,5 +324,20 @@ fn teardown_instances(
 impl World {
     pub(crate) fn has_prepared_update(&self) -> bool {
         self.data.prepared_frame
+    }
+
+    /// Exclusive access to one selected implementation, outside any evaluation.
+    #[cfg_attr(not(feature = "surfaces"), allow(dead_code))]
+    pub(crate) fn system_mut<T: systems::System>(
+        &mut self,
+        id: systems::SystemId,
+    ) -> Option<&mut T> {
+        let instance = self
+            .schedule
+            .instances
+            .iter_mut()
+            .find(|instance| instance.id == id)?;
+        let any: &mut dyn std::any::Any = instance.system.as_mut();
+        any.downcast_mut()
     }
 }

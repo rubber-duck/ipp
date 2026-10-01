@@ -4,6 +4,7 @@ mod binary_reader;
 mod codec_limits;
 mod export_reader;
 mod model;
+mod paint_keys;
 mod typescript;
 mod typescript_names;
 mod wire_contract;
@@ -107,6 +108,14 @@ mod tests {
         );
     }
 
+    /// Row bounds of the current core registry, as its export declares them.
+    const ROW_LIMITS: crate::model::RowLimits = crate::model::RowLimits {
+        region_span: 0x1000_0000,
+        fields: 7,
+        properties: 256,
+        text_bytes: 65_536,
+    };
+
     #[test]
     fn rows_layouts_require_their_region_and_supported_unique_properties() {
         use super::export_reader::read_rows_layout;
@@ -128,6 +137,7 @@ mod tests {
                     at: 0,
                 },
                 ordinal,
+                &ROW_LIMITS,
             )
         };
 
@@ -187,6 +197,7 @@ mod tests {
                     at: 0,
                 },
                 1,
+                &ROW_LIMITS,
             )
         };
 

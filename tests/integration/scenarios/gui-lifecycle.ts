@@ -1,1067 +1,1919 @@
-/** GUI root and node lifecycle through a generated client, independent of process launch and wire layout. */
+/** Ordinary GUI entity lifecycle through a generated client, independent of
+ * process launch and wire layout.
+ *
+ * GUI is authored as ordinary entities and components in Worlds that select
+ * the Canvas System: top-level layout roots, GuiLayout containers and control
+ * components placed through core links. Observations read component fields, the GUI focus and pointer
+ * queries and lifecycle baselines, and effects; presented
+ * scenarios attach the GUI World to a parent root output and drive it with
+ * the physical input context of that presentation.
+ */
 import type {
   AssetWorldClient,
-  GuiInspectResponse,
-  GuiTextFocusState,
+  Client,
+  Command,
+  ComponentFieldValue,
+  EntitySnapshot,
+  GuiInputCancellation,
+  GuiInputRoutingOutcome,
+  GuiPhysicalContext,
+  GuiPhysicalInput,
+  GuiTarget,
+  BatchOutcome,
   GuiWorldClient,
-  SurfaceWorldClient,
+  PresentationView,
+  RowsInput,
   WorldPersistenceHostClient,
+  WorldReference,
 } from "@ipp/client";
+import { canvasOutput } from "../../../packages/ipp-client/src/references.js";
+import { guiAction } from "../gui-actions.js";
 import {
   aliasId,
-  cameraClient,
   componentFields,
   createEntity,
   insertComponent,
-  ORTHOGRAPHIC_CAMERA,
   successfulBatch,
 } from "../camera-fixtures.js";
+import {
+  ATTACHMENTS,
+  LIFECYCLE,
+  SURFACE,
+  CANVAS,
+  GUI,
+  selectSystems,
+} from "../system-selections.js";
 
-export type GuiTestClient = GuiWorldClient &
-  SurfaceWorldClient &
-  AssetWorldClient;
+export type GuiHost = WorldPersistenceHostClient<Client>;
+export type GuiTestClient = GuiWorldClient & AssetWorldClient;
 
-/** Property addressing exported by the generated contract under test. */
-export interface GuiContractNames {
-  /** Generated GuiRoot row helpers: node style and tree properties by offset. */
-  GuiRoot: {
-    node_styleOffset(slot: number, property: "opacity"): number;
-    node_treeOffset(slot: number, property: "parent"): number;
-  };
-  /** Generated child order of decoded `node_tree` rows. */
-  guiTreeChildren(
-    rows: ReadonlyMap<
-      number,
-      { readonly parent: number; readonly order: number }
-    >,
-  ): Map<number, number[]>;
+/** Row encoders exported by the generated contract under test. */
+export interface GuiContract {
+  GuiTheme: { encodeParts(input: RowsInput): Uint8Array<ArrayBuffer> };
+  GuiSkin: { encodeParts(input: RowsInput): Uint8Array<ArrayBuffer> };
+  guiPaintPartIndex(input: {
+    part: "background";
+    state?: "hovered" | "pressed";
+  }): number;
 }
 
-/** One decoded `GuiRoot.node_tree` row as inspection reports it. */
-interface NodeTreeRow {
-  readonly parent: number;
-  readonly order: number;
-  readonly kind: number;
-}
-
-/** One decoded `GuiRoot.node_style` row as inspection reports it. */
-type NodeStyleRow = Readonly<Record<string, unknown>>;
-
-function expect(value: unknown, message: string): asserts value {
+export function check(value: unknown, message: string): asserts value {
   if (!value) throw new Error(message);
 }
 
-async function rejects(operation: Promise<unknown>, message: string) {
-  try {
-    await operation;
-  } catch {
-    return;
-  }
-  throw new Error(message);
-}
-
-function ids(response: GuiInspectResponse) {
-  return response.nodes.map((node) => node.id).join();
-}
-
-async function guiProperties(client: GuiTestClient, entity: bigint) {
-  const snapshot = (await client.inspect()).entities.find(
-    (item) => item.id === entity,
+/** JSON with bigint values, for failure messages and evidence. */
+export function encoded(value: unknown): string {
+  return JSON.stringify(value, (_key, entry: unknown) =>
+    typeof entry === "bigint" ? `${entry}n` : entry,
   );
-  expect(snapshot, "GUI entity disappeared");
-  const component = snapshot.effective.find(
-    (item) => item.component === client.components.GuiRoot!.id,
-  );
-  expect(component, "GuiRoot disappeared");
-  return { fields: component.fields, properties: component.properties ?? {} };
 }
 
-/** Decoded node style rows of one GuiRoot, keyed by node identity. */
-async function guiStyleRows(
-  client: GuiTestClient,
+export const alias = (value: number) =>
+  ({ kind: "alias", alias: value }) as const;
+export const handle = (id: bigint) => ({ kind: "handle", id }) as const;
+
+/** Append `entity` to `parent`'s ordered children. */
+export function place(
+  entity: ReturnType<typeof alias> | ReturnType<typeof handle>,
+  parent: ReturnType<typeof alias> | ReturnType<typeof handle>,
+  before: ReturnType<typeof alias> | ReturnType<typeof handle> | null = null,
+): Command {
+  return { kind: "placeEntity", entity, placement: { parent, before } };
+}
+
+/** GuiLayout operations (see the component documentation). */
+export const LAYOUT = {
+  leaf: 0,
+  row: 1,
+  column: 2,
+  stack: 3,
+  padding: 4,
+  align: 5,
+  sizedBox: 6,
+} as const;
+
+export async function openGui(
+  host: GuiHost,
+  world: WorldReference,
+): Promise<GuiTestClient> {
+  const client = await host.openWorld(world);
+  check(
+    "subscribeGuiEffects" in client && "createAsset" in client,
+    "Target lacks ordinary GUI or asset authoring",
+  );
+  return client as GuiTestClient;
+}
+
+/** An action batch that applied, or a descriptive failure. */
+export function applied(outcome: BatchOutcome) {
+  check(outcome.ok, `GUI action did not apply: ${encoded(outcome)}`);
+  return outcome;
+}
+
+/** Whether the action batch stopped at its operation for exactly `reason`. */
+export function rejectedFor(outcome: BatchOutcome, reason: string): boolean {
+  return (
+    !outcome.ok &&
+    outcome.error.scope === "operation" &&
+    outcome.error.reason === reason
+  );
+}
+
+/** The control components, by component name. */
+const CONTROL_KINDS = {
+  GuiButton: "button",
+  GuiCheckbox: "checkbox",
+  GuiSlider: "slider",
+  GuiTextInput: "text",
+  GuiScrollView: "scrollView",
+  GuiVirtualList: "virtualList",
+} as const;
+
+/** A control's value as its value fields hold it. */
+export type GuiControlValue =
+  | { kind: "none" }
+  | { kind: "bool"; value: boolean }
+  | { kind: "scalar"; value: number }
+  | { kind: "text"; value: string }
+  | {
+      kind: "scroll";
+      offset: readonly [number, number];
+      anchorIndex: number;
+      anchorOffset: number;
+    };
+
+/**
+ * One control's state read through the public surfaces: its component and
+ * GuiBehavior/CanvasBounds fields, the GUI focus and pointer queries, and its
+ * incarnation from a lifecycle baseline.
+ */
+export interface GuiControlState {
+  readonly target: GuiTarget;
+  readonly kind: (typeof CONTROL_KINDS)[keyof typeof CONTROL_KINDS];
+  /** The control component's fields by name. */
+  readonly fields: Readonly<Record<string, ComponentFieldValue>>;
+  readonly value: GuiControlValue;
+  readonly label: string;
+  /** GuiBehavior's evaluated eligibility. */
+  readonly enabled: boolean;
+  readonly visible: boolean;
+  readonly available: boolean;
+  readonly focused: boolean;
+  /** Aggregated over the live pointers on this control. */
+  readonly interaction: {
+    hovered: boolean;
+    pressed: boolean;
+    captured: boolean;
+  };
+  /** Scroll geometry and, for a VirtualList, the item range; null otherwise. */
+  readonly scroll: {
+    readonly viewport: readonly [number, number];
+    readonly content: readonly [number, number];
+    readonly capacity: readonly [number, number];
+    readonly itemCount: number | null;
+    readonly first: number;
+    readonly last: number;
+  } | null;
+  /** CanvasBounds' evaluated `[x, y, width, height]`. */
+  readonly bounds: readonly [number, number, number, number];
+}
+
+/** The exact target of `component` on `entity`, from a lifecycle baseline. */
+export async function controlTarget(
+  client: GuiWorldClient,
   entity: bigint,
-): Promise<ReadonlyMap<number, NodeStyleRow>> {
-  const table = (await guiProperties(client, entity)).fields.node_style as
-    | { rows: ReadonlyMap<number, NodeStyleRow> }
-    | undefined;
-  expect(table?.rows instanceof Map, "GuiRoot inspection omitted node_style");
-  return table.rows;
+  component: number,
+): Promise<GuiTarget | undefined> {
+  const watch = await client.watchLifecycle(
+    [{ target: { kind: "component", entity, component }, kinds: 8 }],
+    () => {},
+  );
+  try {
+    const lifetime = watch.baselines[0]?.lifetime;
+    if (lifetime?.kind !== "component" || lifetime.incarnation === null)
+      return undefined;
+    check(client.worldReference, "GUI client has no exact World");
+    return {
+      world: client.worldReference,
+      entity,
+      component,
+      incarnation: lifetime.incarnation,
+    };
+  } finally {
+    await watch.remove();
+  }
+}
+
+/** The control on `entity`, or undefined when it holds none. */
+export async function controlState(
+  client: GuiWorldClient,
+  entity: bigint,
+): Promise<GuiControlState | undefined> {
+  const page = await client.inspectPage({
+    collection: "entities",
+    target: entity,
+    limit: 1,
+  });
+  const snapshot = page.entities.find((item) => item.id === entity);
+  if (!snapshot) return undefined;
+  const fieldsNamed = (name: string) =>
+    snapshot.components.find(
+      (component) => component.component === client.components[name]?.id,
+    )?.fields;
+  const name = (
+    Object.keys(CONTROL_KINDS) as (keyof typeof CONTROL_KINDS)[]
+  ).find((candidate) => fieldsNamed(candidate) !== undefined);
+  if (!name) return undefined;
+  const fields = fieldsNamed(name)!;
+  const target = await controlTarget(
+    client,
+    entity,
+    client.components[name]!.id,
+  );
+  if (!target) return undefined;
+  const number = (field: string, from = fields) => Number(from[field] ?? 0);
+  const pair = (field: string) =>
+    [number(`${field}_x`), number(`${field}_y`)] as const;
+  const kind = CONTROL_KINDS[name];
+  const value: GuiControlValue =
+    kind === "checkbox"
+      ? { kind: "bool", value: fields.checked === true }
+      : kind === "slider"
+        ? { kind: "scalar", value: number("value") }
+        : kind === "text"
+          ? { kind: "text", value: String(fields.text ?? "") }
+          : kind === "scrollView" || kind === "virtualList"
+            ? {
+                kind: "scroll",
+                offset: pair("offset"),
+                anchorIndex: number("anchor_index"),
+                anchorOffset: number("anchor_offset"),
+              }
+            : { kind: "none" };
+  const behavior = fieldsNamed("GuiBehavior") ?? {};
+  const bounds = fieldsNamed("CanvasBounds") ?? {};
+  const focus = await client.inspectPage({
+    collection: "guiFocus",
+    target: entity,
+  });
+  const pointers = await client.inspectPage({
+    collection: "guiPointers",
+    target: entity,
+  });
+  const mine = (candidate: GuiTarget) =>
+    candidate.entity === entity && candidate.component === target.component;
+  const interaction = { hovered: false, pressed: false, captured: false };
+  for (const record of pointers.guiPointers ?? [])
+    if (mine(record.target)) {
+      interaction.hovered ||= record.state.hovered;
+      interaction.pressed ||= record.state.pressed;
+      interaction.captured ||= record.state.captured;
+    }
+  const list = kind === "virtualList";
+  return {
+    target,
+    kind,
+    fields,
+    value,
+    label: typeof fields.label === "string" ? fields.label : "",
+    enabled: behavior.effective_enabled !== false,
+    visible: behavior.effective_visible !== false,
+    available: behavior.available !== false,
+    focused: (focus.guiFocus ?? []).some((record) => mine(record.target)),
+    interaction,
+    scroll:
+      value.kind === "scroll"
+        ? {
+            viewport: pair("viewport"),
+            content: pair("content"),
+            capacity: pair("capacity"),
+            itemCount: list ? number("item_count") : null,
+            first: list ? number("range_first") : 0,
+            last: list ? number("range_last") : 0,
+          }
+        : null,
+    bounds: [
+      number("x", bounds),
+      number("y", bounds),
+      number("width", bounds),
+      number("height", bounds),
+    ],
+  };
+}
+
+export async function control(
+  client: GuiWorldClient,
+  entity: bigint,
+): Promise<GuiControlState> {
+  const state = await controlState(client, entity);
+  check(state, `Entity ${entity} holds no control`);
+  return state;
+}
+
+/** Every entity row of one World, keyed by symbolic identity. */
+export async function entitiesByName(
+  client: Client,
+): Promise<Map<string, EntitySnapshot>> {
+  const rows = new Map<string, EntitySnapshot>();
+  let after = 0n;
+  do {
+    const page = await client.inspectPage({
+      collection: "entities",
+      after,
+      limit: 64,
+    });
+    for (const entity of page.entities)
+      if (entity.metadata.symbolicId)
+        rows.set(entity.metadata.symbolicId, entity);
+    check(page.next === 0n || page.next > after, "Inspection did not advance");
+    after = page.next;
+  } while (after !== 0n);
+  return rows;
+}
+
+export function named(
+  rows: ReadonlyMap<string, EntitySnapshot>,
+  name: string,
+): EntitySnapshot {
+  const row = rows.get(name);
+  check(row, `Missing ordinary entity ${name}`);
+  return row;
+}
+
+/** Typed fields of one component in an inspected component list. */
+export function fieldsOf(
+  client: Client,
+  components: EntitySnapshot["components"],
+  name: string,
+): Record<string, unknown> | undefined {
+  return components.find(
+    (component) => component.component === client.components[name]?.id,
+  )?.fields;
+}
+
+/** The deepest relative depth one tree page may cover: a whole GUI subtree. */
+export const TREE_PAGE_MAX_DEPTH = 64;
+
+/** Every entity under `root`, in core tree order, with its control if any. */
+export async function treeRows(client: GuiWorldClient, root: bigint) {
+  const rows: {
+    entity: bigint;
+    parent: bigint | null;
+    depth: number;
+    control: GuiControlState | null;
+  }[] = [];
+  let after: bigint | undefined;
+  for (;;) {
+    const page = await client.inspectTreePage({
+      root,
+      ...(after === undefined ? {} : { after }),
+      limit: 16,
+      maxDepth: TREE_PAGE_MAX_DEPTH,
+    });
+    for (const node of page.nodes)
+      rows.push({
+        entity: node.id,
+        parent: node.parent,
+        depth: node.depth,
+        control: (await controlState(client, node.id)) ?? null,
+      });
+    if (page.next === 0n) return rows;
+    check(page.next !== after, "GUI tree cursor did not advance");
+    after = page.next;
+  }
+}
+
+/** Write component fields through ordinary setField commands. */
+export function setFields(
+  client: Client,
+  entity: bigint,
+  name: string,
+  values: Parameters<typeof componentFields>[2],
+): Command[] {
+  const component = client.components[name];
+  check(component, `Target does not expose ${name}`);
+  return componentFields(client, name, values).map((field) => ({
+    kind: "setField",
+    entity: handle(entity),
+    component: component.id,
+    field,
+  }));
 }
 
 /**
- * Exercise root identity, pipelined edits, revision-gated values, ownership
- * rejection, property invalidation and persistence against a live World.
+ * Compare-and-set one field: write `next` to `field` of component `name` only
+ * while it holds `expected`.
+ */
+export function compareAndSet(
+  client: Client,
+  entity: bigint,
+  name: string,
+  field: string,
+  expected: Parameters<typeof componentFields>[2][string],
+  next: Parameters<typeof componentFields>[2][string],
+): Promise<import("@ipp/client").BatchOutcome> {
+  const component = client.components[name];
+  check(component, `Target does not expose ${name}`);
+  const [write] = componentFields(client, name, { [field]: next });
+  const [old] = componentFields(client, name, { [field]: expected });
+  check(write && old, `Compare-and-set needs ${name}.${field}`);
+  return client.batch([
+    {
+      kind: "setFieldIf",
+      entity: handle(entity),
+      component: component.id,
+      field: write,
+      expected: old.value,
+    },
+  ]);
+}
+
+/** The unknown entity handle that makes an operation fail without effects. */
+const UNKNOWN_ENTITY = 0xffff_ffff_ffff_ffffn;
+
+/** A command that fails validation without touching any live entity. */
+export function failingCommand(): Command {
+  return { kind: "delete", entity: handle(UNKNOWN_ENTITY) };
+}
+
+/** Button label as its component field holds it. */
+async function label(client: GuiWorldClient, entity: bigint): Promise<string> {
+  return (await control(client, entity)).label;
+}
+
+/** Nodes declared by the 50-entity batch: the column root and 49 buttons. */
+const BATCH_ENTITIES = 50;
+
+/**
+ * Exercise ordinary GUI declarations against a live World: one-request
+ * declaration of 50 entities, prefix-preserving failure, paged batches with
+ * FIFO order, explicit held batches, pipelined declarations and reads,
+ * one typed store per value, stable identity across reordering,
+ * compare-and-set, control incarnations, entity removal and
+ * persistence of structure and committed values with fresh targets.
+ *
+ * Headless: no presentation is selected, so it runs on any Host with GUI.
+ * Returned counts keep the batch acknowledgements comparable across drivers.
  */
 export async function exerciseGuiLifecycle(
-  host: WorldPersistenceHostClient<GuiTestClient>,
-  { GuiRoot, guiTreeChildren }: GuiContractNames,
+  host: GuiHost,
+  contract: GuiContract,
 ) {
-  const client = await host.createWorld({ symbolicId: "gui-lifecycle" });
-  const batchRef = { kind: "alias", alias: 80 } as const;
-  const batchEntity = aliasId(
-    await client.batch([
-      createEntity(80, "gui-batch-panel"),
-      insertComponent(client, "Surface", batchRef, { width: 4, height: 3 }),
-      insertComponent(client, "GuiRoot", batchRef),
-    ]),
-    80,
-  );
-  const batchRoot = await client.inspectGui({ entity: batchEntity });
-  const batchEdits = Array.from({ length: 50 }, (_, index) =>
-    index === 0
-      ? {
-          action: "insert" as const,
-          entity: batchEntity,
-          rootIncarnation: batchRoot.rootIncarnation,
-          id: 1,
-          index: 0,
-          data: {
-            kind: "container" as const,
-            containerKind: "column" as const,
-          },
-        }
-      : {
-          action: "insert" as const,
-          entity: batchEntity,
-          rootIncarnation: batchRoot.rootIncarnation,
-          id: index + 1,
-          parent: 1,
-          index: index - 1,
-          data: { kind: "text" as const, text: `node ${index}` },
-        },
-  );
-  const batchOutcome = await client.editGuiBatch(batchEdits);
-  expect(batchOutcome.ok, "A valid 50-node GUI batch was rejected");
-  expect(
-    batchOutcome.applied === 50,
-    "The GUI batch acknowledged a short prefix",
-  );
-  await client.waitForFrame();
-  let batchedTree = await client.inspectGui({ entity: batchEntity });
-  expect(
-    batchedTree.nodes.length === 50,
-    "The completed GUI batch frame omitted nodes",
-  );
-  const batchHandle = (id: number) =>
-    client.createGuiNodeHandle(batchEntity, batchRoot.rootIncarnation, id);
-  const failedBatch = await client.editGuiBatch([
-    {
-      action: "update",
-      handle: batchHandle(2),
-      patch: { data: { kind: "text", text: "prefix applied" } },
-    },
-    {
-      action: "insert",
-      entity: batchEntity,
-      rootIncarnation: batchRoot.rootIncarnation,
-      id: 2,
-      parent: 1,
-      index: 0,
-      data: { kind: "text", text: "must fail" },
-    },
-    {
-      action: "update",
-      handle: batchHandle(3),
-      patch: { data: { kind: "text", text: "suffix must not apply" } },
-    },
-  ]);
-  expect(!failedBatch.ok, "The invalid middle GUI edit was accepted");
-  expect(
-    failedBatch.applied === 1,
-    "The failed GUI batch reported the wrong prefix",
-  );
-  batchedTree = await client.inspectGui({ entity: batchEntity });
-  const prefixNode = batchedTree.nodes.find((node) => node.id === 2);
-  const suffixNode = batchedTree.nodes.find((node) => node.id === 3);
-  expect(
-    prefixNode?.data.kind === "text" &&
-      prefixNode.data.text === "prefix applied",
-    "The acknowledged GUI prefix was lost",
-  );
-  expect(
-    suffixNode?.data.kind === "text" && suffixNode.data.text === "node 2",
-    "A GUI edit after the failed operation was applied",
-  );
-  const recoveredBatch = await client.editGuiBatch([
-    {
-      action: "update",
-      handle: batchHandle(3),
-      patch: { data: { kind: "text", text: "recovered" } },
-    },
-  ]);
-  expect(
-    recoveredBatch.ok && recoveredBatch.applied === 1,
-    "A correction after a failed GUI batch did not recover",
-  );
-
-  // Repeated large patches keep the final tree small while exceeding one
-  // message, so the client pages them as one logical batch. Page counts
-  // belong to the protocol client tests; this asserts visibility and order.
-  const largeUpdates = (character: string) =>
-    Array.from({ length: 18 }, (_, index) => ({
-      action: "update" as const,
-      handle: batchHandle(2),
-      patch: {
-        data: {
-          kind: "text" as const,
-          text: `${character.repeat(60_000)}${index}`,
-        },
-      },
-    }));
-  const largePromise = client.editGuiBatch(largeUpdates("x"));
-  const queuedDirectPromise = client.editGuiBatch([
-    {
-      action: "update",
-      handle: batchHandle(3),
-      patch: { data: { kind: "text", text: "queued after multi-page" } },
-    },
-  ]);
-  const queuedInspectionPromise = client.inspectGui({ entity: batchEntity });
-  const largeOutcome = await largePromise;
-  expect(
-    largeOutcome.ok && largeOutcome.applied === 18,
-    "A multi-page GUI edit did not apply every edit",
-  );
-  const queuedDirect = await queuedDirectPromise;
-  expect(
-    queuedDirect.ok && queuedDirect.applied === 1,
-    "A direct GUI edit queued behind a multi-page edit did not complete",
-  );
-  batchedTree = await queuedInspectionPromise;
-  const largeNode = batchedTree.nodes.find((node) => node.id === 2);
-  const queuedNode = batchedTree.nodes.find((node) => node.id === 3);
-  expect(
-    largeNode?.data.kind === "text" && largeNode.data.text.endsWith("17"),
-    "The completed multi-page GUI edit lost its final value",
-  );
-  expect(
-    queuedNode?.data.kind === "text" &&
-      queuedNode.data.text === "queued after multi-page",
-    "An ordinary request overtook a queued direct GUI edit",
-  );
-
-  const failedLargePromise = client.editGuiBatch([
-    ...largeUpdates("y"),
-    {
-      action: "insert" as const,
-      entity: batchEntity,
-      rootIncarnation: batchRoot.rootIncarnation,
-      id: 2,
-      parent: 1,
-      index: 0,
-      data: { kind: "text" as const, text: "must fail" },
-    },
-    {
-      action: "update" as const,
-      handle: batchHandle(4),
-      patch: {
-        data: {
-          kind: "text" as const,
-          text: "multi-page suffix must not apply",
-        },
-      },
-    },
-  ]);
-  const recoveredLargePromise = client.editGuiBatch([
-    {
-      action: "update",
-      handle: batchHandle(3),
-      patch: {
-        data: { kind: "text", text: "multi-page recovered" },
-      },
-    },
-  ]);
-  const failedInspectionPromise = client.inspectGui({ entity: batchEntity });
-  const failedLargeOutcome = await failedLargePromise;
-  expect(
-    !failedLargeOutcome.ok && failedLargeOutcome.applied === 18,
-    "A failed second GUI page lost its global acknowledged prefix",
-  );
-  const recoveredLargeOutcome = await recoveredLargePromise;
-  expect(
-    recoveredLargeOutcome.ok && recoveredLargeOutcome.applied === 1,
-    "Queued recovery after a failed multi-page GUI edit did not complete",
-  );
-  batchedTree = await failedInspectionPromise;
-  const failedLargePrefix = batchedTree.nodes.find((node) => node.id === 2);
-  const failedLargeRecovery = batchedTree.nodes.find((node) => node.id === 3);
-  const failedLargeSuffix = batchedTree.nodes.find((node) => node.id === 4);
-  expect(
-    failedLargePrefix?.data.kind === "text" &&
-      failedLargePrefix.data.text.endsWith("17"),
-    "The successful prefix on the failed second GUI page was lost",
-  );
-  expect(
-    failedLargeSuffix?.data.kind === "text" &&
-      failedLargeSuffix.data.text === "node 3",
-    "A suffix after a failed second GUI page was applied",
-  );
-  expect(
-    failedLargeRecovery?.data.kind === "text" &&
-      failedLargeRecovery.data.text === "multi-page recovered",
-    "An ordinary request overtook queued recovery after batch failure",
-  );
-  const reusedGateOutcome = await client.editGuiBatch([
-    {
-      action: "update",
-      handle: batchHandle(3),
-      patch: {
-        data: { kind: "text", text: "automatic gate reused" },
-      },
-    },
-  ]);
-  expect(
-    reusedGateOutcome.ok && reusedGateOutcome.applied === 1,
-    "The automatic GUI gate could not be reused after queued recovery",
-  );
-
-  // Observe the real Host between explicit GUI buffers. The held World's
-  // frame and inspection cannot complete, while a separate World progresses.
-  const streamId = await client.beginBatch();
-  const firstStreamPage = await client.editGuiBatchChunk(streamId, [
-    {
-      action: "update",
-      handle: batchHandle(4),
-      patch: { data: { kind: "text", text: "stream page one" } },
-    },
-  ]);
-  expect(firstStreamPage.ok, "The first explicit GUI buffer failed");
-  let heldFrameCompleted = false;
-  let heldInspectionCompleted = false;
-  const heldFrame = client.waitForFrame().then(() => {
-    heldFrameCompleted = true;
-  });
-  const heldInspection = client
-    .inspectGui({ entity: batchEntity })
-    .then((inspection) => {
-      heldInspectionCompleted = true;
-      return inspection;
-    });
-  await new Promise((resolve) => setTimeout(resolve, 50));
-  expect(
-    !heldFrameCompleted && !heldInspectionCompleted,
-    "The held GUI World evaluated or served unrelated work between buffers",
-  );
-  const secondStreamPage = await client.editGuiBatchChunk(streamId, [
-    {
-      action: "update",
-      handle: batchHandle(5),
-      patch: { data: { kind: "text", text: "stream page two" } },
-    },
-  ]);
-  expect(secondStreamPage.ok, "The second explicit GUI buffer failed");
-  expect(
-    !heldFrameCompleted && !heldInspectionCompleted,
-    "The held GUI World advanced before explicit termination",
-  );
-  await client.endBatch(streamId);
-  await heldFrame;
-  const streamedTree = await heldInspection;
-  const streamedFirst = streamedTree.nodes.find((node) => node.id === 4);
-  const streamedSecond = streamedTree.nodes.find((node) => node.id === 5);
-  expect(
-    streamedFirst?.data.kind === "text" &&
-      streamedFirst.data.text === "stream page one" &&
-      streamedSecond?.data.kind === "text" &&
-      streamedSecond.data.text === "stream page two",
-    "Explicit GUI buffers did not become visible together",
-  );
-  successfulBatch(
-    await client.batch([
-      {
-        kind: "removeComponent",
-        entity: { kind: "handle", id: batchEntity },
-        component: client.components.GuiRoot!.id,
-      },
-      { kind: "delete", entity: { kind: "handle", id: batchEntity } },
-    ]),
-  );
-  const ref = { kind: "alias", alias: 1 } as const;
-  const entity = aliasId(
-    await client.batch([
-      createEntity(1, "gui-panel"),
-      insertComponent(client, "Transform", ref),
-      insertComponent(client, "Surface", ref, { width: 4, height: 3 }),
-      insertComponent(client, "GuiRoot", ref),
-    ]),
-    1,
-  );
-  const empty = await client.inspectGui({ entity });
-  expect(empty.nodes.length === 0, "A new GuiRoot must start empty");
-  const rootIncarnation = empty.rootIncarnation;
-  const handle = (id: number) =>
-    client.createGuiNodeHandle(entity, rootIncarnation, id);
-
-  // Edits and inspection pipelined in one ingress drain observe every edit.
-  const [, , , pipelined] = await Promise.all([
-    client.editGui({
-      action: "insert",
-      entity,
-      rootIncarnation,
-      id: 1,
-      index: 0,
-      data: { kind: "container", containerKind: "column" },
-    }),
-    client.editGui({
-      action: "insert",
-      entity,
-      rootIncarnation,
-      id: 2,
-      parent: 1,
-      index: 0,
-      data: { kind: "checkbox" },
-      values: { checked: false },
-      style: { color: [0.2, 0.4, 0.6, 1], fontSize: 0.2 },
-    }),
-    client.editGui({
-      action: "insert",
-      entity,
-      rootIncarnation,
-      id: 3,
-      parent: 1,
-      index: 1,
-      data: { kind: "slider" },
-      values: { value: 0.25, min: 0, max: 1, step: 0 },
-    }),
-    client.inspectGui({ entity }),
-  ]);
-  expect(ids(pipelined) === "1,2,3", `Pipelined inspection ${ids(pipelined)}`);
-
-  // A styled panel keeps every node's style in one row table: inspection
-  // decodes all rows through the generated client, not named properties.
-  const denseStyle = {
-    enabled: true,
-    width: 1,
-    height: 1,
-    minWidth: 0.25,
-    minHeight: 0.25,
-    maxWidth: 2,
-    maxHeight: 2,
-    padding: [0.01, 0.02, 0.03, 0.04],
-    margin: [0.04, 0.03, 0.02, 0.01],
-    flex: 1,
-    alignX: 0,
-    alignY: 0,
-    color: [0.2, 0.4, 0.6, 1],
-    backgroundColor: [0.1, 0.2, 0.3, 1],
-    opacity: 0.75,
-    fontSize: 0.1,
-  } as const;
-  for (let id = 4; id <= 19; id++) {
-    await client.editGui({
-      action: "insert",
-      entity,
-      rootIncarnation,
-      id,
-      parent: 1,
-      index: id - 2,
-      data: { kind: "text", text: `dense ${id}` },
-      style: denseStyle,
-    });
-  }
-  const denseRows = await guiStyleRows(client, entity);
-  expect(
-    denseRows.size === 19,
-    `Dense GuiRoot exposed ${denseRows.size} node style rows`,
-  );
-  const lastBackground = denseRows.get(19)?.background_color;
-  expect(
-    Array.isArray(lastBackground) && lastBackground.length === 4,
-    "Dense GuiRoot inspection omitted the last node's style",
-  );
-  expect(
-    Object.keys((await guiProperties(client, entity)).properties).length === 0,
-    "Node style was also stored as named properties",
-  );
-  for (let id = 19; id >= 4; id--) {
-    await client.editGui({ action: "remove", handle: handle(id) });
-  }
-
-  // Long extension property names make one panel's descriptor table exceed
-  // the former 64 KiB byte bound. Beyond the message budget, inspection fails
-  // explicitly without truncating state, and the same connection remains
-  // usable.
-  const denseRef = { kind: "alias", alias: 81 } as const;
-  const denseEntity = aliasId(
-    await client.batch([
-      createEntity(81, "gui-dense-panel"),
-      insertComponent(client, "Surface", denseRef, { width: 4, height: 3 }),
-      insertComponent(client, "GuiRoot", denseRef),
-    ]),
-    81,
-  );
-  await client.editGui({
-    action: "insert",
-    entity: denseEntity,
-    rootIncarnation: (await client.inspectGui({ entity: denseEntity }))
-      .rootIncarnation,
-    id: 1,
-    index: 0,
-    data: { kind: "container", containerKind: "column" },
-  });
-  const densePart = (index: number) => `dense_${index}_${"x".repeat(4000)}`;
-  const setDenseProperties = async (from: number, to: number) => {
-    for (let start = from; start < to; start += 50)
-      successfulBatch(
-        await client.batch(
-          Array.from({ length: Math.min(50, to - start) }, (_, offset) => ({
-            kind: "setDynamicProperty" as const,
-            entity: { kind: "handle" as const, id: denseEntity },
-            component: client.components.GuiRoot!.id,
-            name: densePart(start + offset),
-            value: { kind: "vec4" as const, value: [0.1, 0.2, 0.3, 1] },
-          })),
-        ),
-      );
-  };
-  const denseProperties = async () => {
-    const snapshot = (await client.inspect()).entities.find(
-      (item) => item.id === denseEntity,
-    );
-    expect(snapshot, "Dense GUI entity disappeared");
-    return [snapshot.base, snapshot.effective].map((components) =>
-      Object.keys(
-        components.find(
-          (item) => item.component === client.components.GuiRoot!.id,
-        )?.properties ?? {},
-      ).filter((name) => name.startsWith("dense_")),
-    );
-  };
-  await setDenseProperties(0, 20);
-  const encoder = new TextEncoder();
-  const [denseBase, denseEffective] = await denseProperties();
-  // UTF-8 property names alone bound the descriptor table from below.
-  const denseNameBytes = denseEffective!.reduce(
-    (total, name) => total + encoder.encode(name).length,
-    0,
-  );
-  expect(
-    denseNameBytes > 65536 &&
-      denseBase!.length === 20 &&
-      denseEffective!.length === 20 &&
-      denseEffective!.includes(densePart(19)),
-    `Dense inspection decoded ${denseBase!.length}/${denseEffective!.length} properties and ${denseNameBytes} name bytes`,
-  );
-  await setDenseProperties(20, 300);
-  let oversized: unknown;
+  const worlds: WorldReference[] = [];
+  const sessions: Client[] = [];
+  let completed = false;
   try {
-    await client.inspect();
-  } catch (error) {
-    oversized = error;
-  }
-  expect(
-    oversized instanceof Error &&
-      /Inspection record cannot be encoded/.test(oversized.message),
-    `An oversized inspection record was not rejected explicitly: ${String(oversized)}`,
-  );
-  // The same connection serves targeted reads and edits; state was not truncated.
-  expect(
-    (await client.inspectGui({ entity: denseEntity })).nodes.length === 1,
-    "Oversized inspection changed the GUI tree",
-  );
-  for (let start = 20; start < 300; start += 50)
+    const created = await host.createWorld({
+      selectedSystems: selectSystems(GUI, LIFECYCLE),
+      symbolicId: "gui-lifecycle",
+      canvas: { extent: [4, 3], unitsPerMetre: 1 },
+    });
+    worlds.push(created.reference);
+    const client = await openGui(host, created.reference);
+    sessions.push(client);
+    const peerWorld = await host.createWorld({
+      symbolicId: "gui-lifecycle-peer",
+      selectedSystems: [],
+    });
+    worlds.push(peerWorld.reference);
+    const peer = await host.openWorld(peerWorld.reference);
+    sessions.push(peer);
+
+    // One request declares a 50-entity GUI: a column layout root and 49
+    // buttons, each placed under the root in declaration order.
+    const declaration: Command[] = [
+      createEntity(1, "gui-batch-panel"),
+      insertComponent(client, "GuiLayout", alias(1), {
+        kind: LAYOUT.column,
+        width: 4,
+        height: 3,
+      }),
+    ];
+    for (let index = 1; index < BATCH_ENTITIES; index++)
+      declaration.push(
+        createEntity(index + 1, `gui-batch-${index}`),
+        insertComponent(client, "GuiButton", alias(index + 1), {
+          label: `node ${index}`,
+        }),
+        place(alias(index + 1), alias(1)),
+      );
+    const batchOutcome = successfulBatch(await client.batch(declaration));
+    check(
+      batchOutcome.aliases.length === BATCH_ENTITIES,
+      `The GUI declaration acknowledged ${batchOutcome.aliases.length} entities`,
+    );
+    const batchRoot = aliasId(batchOutcome, 1);
+    const node = (index: number) => aliasId(batchOutcome, index + 1);
+    await client.waitForFrame();
+    const declared = await treeRows(client, batchRoot);
+    check(
+      declared.length === BATCH_ENTITIES &&
+        declared.every(
+          (row, index) =>
+            row.entity === aliasId(batchOutcome, index + 1) &&
+            row.depth === (index === 0 ? 0 : 1) &&
+            (index === 0) === (row.control === null) &&
+            (index === 0 || row.control?.label === `node ${index}`),
+        ),
+      `The completed GUI declaration frame omitted or reordered entities: ${encoded(declared.map((row) => [row.entity, row.depth, row.control?.label]))}`,
+    );
+
+    // A failing operation keeps the acknowledged prefix and skips the suffix.
+    const failedBatch = await client.batch([
+      ...setFields(client, node(1), "GuiButton", { label: "prefix applied" }),
+      failingCommand(),
+      ...setFields(client, node(2), "GuiButton", {
+        label: "suffix must not apply",
+      }),
+    ]);
+    check(!failedBatch.ok, "The invalid middle GUI operation was accepted");
+    const failedBatchApplied = failedBatch.error.operation;
+    check(
+      failedBatchApplied === 1,
+      `The failed GUI batch reported the wrong prefix: ${encoded(failedBatch.error)}`,
+    );
+    check(
+      (await label(client, node(1))) === "prefix applied",
+      "The acknowledged GUI prefix was lost",
+    );
+    check(
+      (await label(client, node(2))) === "node 2",
+      "A GUI write after the failed operation was applied",
+    );
     successfulBatch(
       await client.batch(
-        Array.from({ length: Math.min(50, 300 - start) }, (_, offset) => ({
-          kind: "removeDynamicProperty" as const,
-          entity: { kind: "handle" as const, id: denseEntity },
-          component: client.components.GuiRoot!.id,
-          name: densePart(start + offset),
+        setFields(client, node(2), "GuiButton", { label: "recovered" }),
+      ),
+    );
+    check(
+      (await label(client, node(2))) === "recovered",
+      "A correction after a failed GUI batch did not recover",
+    );
+
+    // Repeated large labels exceed one message, so the client pages them as
+    // one logical batch. Page counts belong to the protocol client tests;
+    // this asserts visibility and FIFO order behind the paged batch.
+    const largeLabels = (character: string) =>
+      Array.from({ length: 18 }, (_, index) =>
+        setFields(client, node(1), "GuiButton", {
+          label: `${character.repeat(60_000)}${index}`,
+        }),
+      ).flat();
+    const largePromise = client.batch(largeLabels("x"));
+    const queuedDirectPromise = client.batch(
+      setFields(client, node(2), "GuiButton", {
+        label: "queued after multi-page",
+      }),
+    );
+    const labelsOf = (entities: readonly bigint[]) =>
+      Promise.all(
+        entities.map(async (entity) => {
+          const page = await client.inspectPage({
+            collection: "entities",
+            target: entity,
+            limit: 1,
+          });
+          const row = page.entities.find((item) => item.id === entity);
+          return String(
+            fieldsOf(client, row?.components ?? [], "GuiButton")?.label ?? "",
+          );
+        }),
+      );
+    // Both reads are enqueued now, behind the multi-page batch.
+    const queuedInspectionPromise = labelsOf([node(1), node(2)]);
+    const largeOutcome = successfulBatch(await largePromise);
+    const largeBatchApplied = largeLabels("x").length;
+    successfulBatch(await queuedDirectPromise);
+    const queued = await queuedInspectionPromise;
+    check(
+      queued[0] === `${"x".repeat(60_000)}17` &&
+        queued[1] === "queued after multi-page",
+      `An ordinary request overtook a queued multi-page GUI batch: ${encoded(queued.map((label) => label.slice(-24)))}`,
+    );
+    check(largeOutcome.tick > 0n, "The multi-page batch has no tick");
+
+    const failedLargePromise = client.batch([
+      ...largeLabels("y"),
+      failingCommand(),
+      ...setFields(client, node(3), "GuiButton", {
+        label: "multi-page suffix must not apply",
+      }),
+    ]);
+    const recoveredLargePromise = client.batch(
+      setFields(client, node(2), "GuiButton", {
+        label: "multi-page recovered",
+      }),
+    );
+    const failedInspectionPromise = labelsOf([node(1), node(2), node(3)]);
+    const failedLargeOutcome = await failedLargePromise;
+    check(!failedLargeOutcome.ok, "A failing multi-page batch was accepted");
+    const failedLargeBatchApplied = failedLargeOutcome.error.operation;
+    check(
+      failedLargeBatchApplied === 18,
+      `A failed later GUI page lost its global acknowledged prefix: ${encoded(failedLargeOutcome.error)}`,
+    );
+    successfulBatch(await recoveredLargePromise);
+    const failedRows = await failedInspectionPromise;
+    check(
+      failedRows[0] === `${"y".repeat(60_000)}17`,
+      "The successful prefix on the failed later GUI page was lost",
+    );
+    check(
+      failedRows[2] === "node 3",
+      "A suffix after a failed later GUI page was applied",
+    );
+    check(
+      failedRows[1] === "multi-page recovered",
+      "An ordinary request overtook queued recovery after batch failure",
+    );
+    successfulBatch(
+      await client.batch(
+        setFields(client, node(2), "GuiButton", {
+          label: "automatic gate reused",
+        }),
+      ),
+    );
+    check(
+      (await label(client, node(2))) === "automatic gate reused",
+      "The automatic batch gate could not be reused after queued recovery",
+    );
+
+    successfulBatch(
+      await client.batch(
+        declared.map((row) => ({ kind: "delete", entity: handle(row.entity) })),
+      ),
+    );
+
+    // The main panel: a column layout root with a styled checkbox and a
+    // slider, declared by batches pipelined with a snapshot of the tree.
+    const panel = aliasId(
+      successfulBatch(
+        await client.batch([
+          createEntity(1, "gui-panel"),
+          insertComponent(client, "GuiLayout", alias(1), {
+            kind: LAYOUT.column,
+            width: 4,
+            height: 3,
+          }),
+        ]),
+      ),
+      1,
+    );
+    const style = {
+      red: 0.2,
+      green: 0.4,
+      blue: 0.6,
+      alpha: 1,
+      opacity: 1,
+    } as const;
+    const [checkboxOutcome, sliderOutcome, pipelined] = await Promise.all([
+      client.batch([
+        createEntity(1, "gui-checkbox"),
+        insertComponent(client, "GuiCheckbox", alias(1), {
+          checked: false,
+          label: "checkbox",
+        }),
+        insertComponent(client, "GuiLayout", alias(1), { width: 4, height: 1 }),
+        insertComponent(client, "CanvasStyle", alias(1), style),
+        place(alias(1), handle(panel)),
+      ]),
+      client.batch([
+        createEntity(1, "gui-slider"),
+        insertComponent(client, "GuiSlider", alias(1), {
+          value: 0.25,
+          min: 0,
+          max: 1,
+          step: 0,
+        }),
+        insertComponent(client, "GuiLayout", alias(1), { width: 4, height: 1 }),
+        place(alias(1), handle(panel)),
+      ]),
+      client.inspectTreePage({ root: panel, maxDepth: TREE_PAGE_MAX_DEPTH }),
+    ]);
+    const checkbox = aliasId(successfulBatch(checkboxOutcome), 1);
+    const sliderEntity = aliasId(successfulBatch(sliderOutcome), 1);
+    check(
+      encoded(pipelined.nodes.map((row) => row.id)) ===
+        encoded([panel, checkbox, sliderEntity]),
+      `A tree read pipelined behind declarations missed them: ${encoded(pipelined.nodes.map((row) => row.id))}`,
+    );
+
+    // Every value has one typed store: 16 fully styled entities expose their
+    // exact layout and style fields, with no second property representation.
+    const denseLayout = {
+      kind: LAYOUT.leaf,
+      width: 1,
+      height: 1,
+      min_width: 0.25,
+      min_height: 0.25,
+      max_width: 2,
+      max_height: 2,
+      flex: 1,
+      align_x: 0,
+      align_y: 0,
+      padding_top: 0.01,
+      padding_right: 0.02,
+      padding_bottom: 0.03,
+      padding_left: 0.04,
+      margin_top: 0.04,
+      margin_right: 0.03,
+      margin_bottom: 0.02,
+      margin_left: 0.01,
+      clip: false,
+    } as const;
+    const denseStyle = {
+      x: 0,
+      y: 0,
+      scale_x: 1,
+      scale_y: 1,
+      red: 0.1,
+      green: 0.2,
+      blue: 0.3,
+      alpha: 1,
+      opacity: 0.75,
+      clipped: false,
+      clip_min_x: 0,
+      clip_min_y: 0,
+      clip_max_x: 0,
+      clip_max_y: 0,
+    } as const;
+    const denseOutcome = successfulBatch(
+      await client.batch(
+        Array.from({ length: 16 }, (_, index): Command[] => [
+          createEntity(index + 1, `gui-dense-${index}`),
+          insertComponent(client, "CanvasText", alias(index + 1), {
+            text: `dense ${index}`,
+          }),
+          insertComponent(client, "GuiLayout", alias(index + 1), denseLayout),
+          insertComponent(client, "CanvasStyle", alias(index + 1), denseStyle),
+          place(alias(index + 1), handle(panel)),
+        ]).flat(),
+      ),
+    );
+    const exact = (values: Readonly<Record<string, number | boolean>>) =>
+      Object.fromEntries(
+        Object.entries(values).map(([name, value]) => [
+          name,
+          typeof value === "number" ? Math.fround(value) : value,
+        ]),
+      );
+    const dense = await entitiesByName(client);
+    for (let index = 0; index < 16; index++) {
+      const entity = named(dense, `gui-dense-${index}`);
+      for (const components of [entity.components]) {
+        check(
+          encoded(fieldsOf(client, components, "GuiLayout")) ===
+            encoded(exact(denseLayout)) &&
+            encoded(fieldsOf(client, components, "CanvasStyle")) ===
+              encoded(exact(denseStyle)) &&
+            components.every(
+              (component) =>
+                Object.keys(component.properties ?? {}).length === 0,
+            ),
+          `Dense entity ${index} did not keep one typed store: ${encoded(components)}`,
+        );
+      }
+    }
+    successfulBatch(
+      await client.batch(
+        denseOutcome.aliases.map(({ id }) => ({
+          kind: "delete",
+          entity: handle(id),
         })),
       ),
     );
-  const [restoredBase] = await denseProperties();
-  expect(
-    restoredBase!.length === 20 && restoredBase!.includes(densePart(19)),
-    "Inspection after the oversized record lost or truncated named properties",
-  );
-  successfulBatch(
-    await client.batch([
-      { kind: "delete", entity: { kind: "handle", id: denseEntity } },
-    ]),
-  );
 
-  await client.editGui({
-    action: "move",
-    handle: handle(3),
-    parent: 1,
-    index: 0,
-  });
-  const moved = await client.inspectGui({ entity });
-  expect(
-    moved.nodes[0]!.children.join() === "3,2",
-    "Reordering must retain node identities",
-  );
+    // Reordering retains entity and control identity.
+    let slider = await control(client, sliderEntity);
+    const firstCheckbox = await control(client, checkbox);
+    successfulBatch(
+      await client.batch([
+        place(handle(sliderEntity), handle(panel), handle(checkbox)),
+      ]),
+    );
+    const reordered = await treeRows(client, panel);
+    check(
+      encoded(reordered.map((row) => row.entity)) ===
+        encoded([panel, sliderEntity, checkbox]) &&
+        encoded(reordered[1]?.control?.target) === encoded(slider.target) &&
+        encoded(reordered[2]?.control?.target) ===
+          encoded(firstCheckbox.target),
+      "Reordering must retain entity and control identities",
+    );
 
-  // Revision-gated committed values reject stale writers.
-  await client.editGui({
-    action: "setControlValue",
-    handle: handle(3),
-    expectedRevision: 1,
-    value: { kind: "scalar", value: 0.75 },
-  });
-  await rejects(
-    client.editGui({
-      action: "setControlValue",
-      handle: handle(3),
-      expectedRevision: 1,
-      value: { kind: "scalar", value: 0.1 },
-    }),
-    "A stale control revision was accepted",
-  );
-  const slider = (await client.inspectGui({ entity, nodeId: 3, maxDepth: 1 }))
-    .nodes[0]!;
-  expect(
-    slider.controlValue.kind === "scalar" &&
-      slider.controlValue.value === 0.75 &&
-      slider.controlRevision === 2,
-    `Committed slider ${JSON.stringify(slider.controlValue)}@${slider.controlRevision}`,
-  );
+    // Compare-and-set rejects a writer that expected an older value.
+    successfulBatch(
+      await compareAndSet(
+        client,
+        sliderEntity,
+        "GuiSlider",
+        "value",
+        0.25,
+        0.75,
+      ),
+    );
+    const stale = await compareAndSet(
+      client,
+      sliderEntity,
+      "GuiSlider",
+      "value",
+      0.25,
+      0.1,
+    );
+    check(
+      !stale.ok && stale.error.reason === "ValueMismatch",
+      `A stale compare-and-set was accepted: ${encoded(stale)}`,
+    );
+    slider = await control(client, sliderEntity);
+    check(
+      slider.value.kind === "scalar" && slider.value.value === 0.75,
+      `Compared slider ${encoded(slider)}`,
+    );
 
-  // A write delayed across control -> non-control -> control transitions of the
-  // same node is still fenced by one monotonic revision.
-  const [, , delayed] = await Promise.allSettled([
-    client.editGui({
-      action: "update",
-      handle: handle(3),
-      patch: { data: { kind: "text", text: "paused" } },
-    }),
-    client.editGui({
-      action: "update",
-      handle: handle(3),
-      patch: {
-        data: { kind: "slider" },
-        values: { value: 0.25, min: 0, max: 1, step: 0 },
-      },
-    }),
-    client.editGui({
-      action: "setControlValue",
-      handle: handle(3),
-      expectedRevision: 2,
-      value: { kind: "scalar", value: 0.1 },
-    }),
-  ]);
-  expect(
-    delayed.status === "rejected",
-    "A stale write applied to a re-created control",
-  );
-  await client.editGui({
-    action: "setControlValue",
-    handle: handle(3),
-    expectedRevision: 4,
-    value: { kind: "scalar", value: 0.75 },
-  });
+    // A write delayed across control -> non-control -> control transitions
+    // of the same entity is fenced by the control incarnation.
+    const sliderType = client.components.GuiSlider!.id;
+    const [, , delayed] = await Promise.all([
+      client.batch([
+        {
+          kind: "removeComponent",
+          entity: handle(sliderEntity),
+          component: sliderType,
+        },
+      ]),
+      client.batch([
+        insertComponent(client, "GuiSlider", handle(sliderEntity), {
+          value: 0.25,
+          min: 0,
+          max: 1,
+          step: 0,
+        }),
+      ]),
+      guiAction(client, slider.target, { kind: "scalar", value: 0.1 }),
+    ]);
+    check(
+      rejectedFor(delayed, "StaleTarget"),
+      `A stale write applied to a re-created control: ${encoded(delayed)}`,
+    );
+    const recreated = await control(client, sliderEntity);
+    check(
+      recreated.target.incarnation !== slider.target.incarnation &&
+        recreated.value.kind === "scalar" &&
+        recreated.value.value === 0.25,
+      `The re-created slider reused its incarnation or lost initialization: ${encoded(recreated)}`,
+    );
+    applied(
+      await guiAction(client, recreated.target, {
+        kind: "scalar",
+        value: 0.75,
+      }),
+    );
 
-  // A partial style patch preserves omitted properties.
-  await client.editGui({
-    action: "update",
-    handle: handle(2),
-    patch: { style: { opacity: 0.5 } },
-  });
-  const checkbox = (await client.inspectGui({ entity, nodeId: 2, maxDepth: 1 }))
-    .nodes[0]!;
-  expect(
-    checkbox.style.opacity === 0.5 &&
-      Math.abs(checkbox.style.fontSize! - 0.2) < 1e-6 &&
-      Math.abs(checkbox.style.color![1] - 0.4) < 1e-6,
-    `Style patch replaced omitted properties: ${JSON.stringify(checkbox.style)}`,
-  );
+    // A partial style write preserves omitted fields.
+    successfulBatch(
+      await client.batch(
+        setFields(client, checkbox, "CanvasStyle", { opacity: 0.5 }),
+      ),
+    );
+    const patched = fieldsOf(
+      client,
+      named(await entitiesByName(client), "gui-checkbox").components,
+      "CanvasStyle",
+    );
+    check(
+      patched?.opacity === 0.5 &&
+        patched.red === Math.fround(style.red) &&
+        patched.green === Math.fround(style.green) &&
+        patched.blue === Math.fround(style.blue),
+      `Style write replaced omitted fields: ${encoded(patched)}`,
+    );
 
-  // The tree is a rows table whose derived child order matches inspection;
-  // reparenting through a generic write or adding raw Surface items is
-  // rejected.
-  const tree = (await guiProperties(client, entity)).fields.node_tree as
-    | { rows: ReadonlyMap<number, NodeTreeRow> }
-    | undefined;
-  expect(tree?.rows instanceof Map, "GuiRoot inspection omitted node_tree");
-  expect(tree.rows.size === 3, "Inspected GuiRoot tree rows do not decode");
-  const derived = guiTreeChildren(tree.rows);
-  expect(
-    [1, ...(derived.get(1) ?? [])].join(",") ===
-      ids(await client.inspectGui({ entity })),
-    `Tree rows derive child order ${JSON.stringify([...derived])}`,
-  );
-  const structural = await client.batch([
+    // Skin override rows live on their entity and die with it; the removed
+    // control's target cannot be retargeted and identities are not reused.
+    const background = contract.guiPaintPartIndex({ part: "background" });
+    successfulBatch(
+      await client.batch([
+        {
+          kind: "insertComponent",
+          entity: handle(checkbox),
+          component: client.components.GuiSkin!.id,
+          fields: [
+            {
+              offset: client.components.GuiSkin!.fields.parts!.offset,
+              value: {
+                kind: "rows",
+                value: contract.GuiSkin.encodeParts({
+                  nextSlot: 1,
+                  rows: new Map([
+                    [0, { part: background, color: [1, 0, 0, 1] }],
+                  ]),
+                }),
+              },
+            },
+          ],
+        },
+      ]),
+    );
+    const skinned = named(await entitiesByName(client), "gui-checkbox");
+    check(
+      fieldsOf(client, skinned.components, "GuiSkin") !== undefined,
+      "A skin override did not attach to its control",
+    );
+    const removedCheckbox = await control(client, checkbox);
+    successfulBatch(
+      await client.batch([{ kind: "delete", entity: handle(checkbox) }]),
+    );
+    const afterRemoval = await entitiesByName(client);
+    check(
+      !afterRemoval.has("gui-checkbox") &&
+        encoded((await treeRows(client, panel)).map((row) => row.entity)) ===
+          encoded([panel, sliderEntity]),
+      "The removed control entity or its skin rows survived",
+    );
+    const removedAction = await guiAction(client, removedCheckbox.target, {
+      kind: "toggle",
+    });
+    check(
+      rejectedFor(removedAction, "StaleTarget"),
+      `A removed control target was accepted: ${encoded(removedAction)}`,
+    );
+    check(
+      !(
+        await client.batch(
+          setFields(client, checkbox, "CanvasStyle", { opacity: 1 }),
+        )
+      ).ok,
+      "A removed entity handle was accepted",
+    );
+    const reused = aliasId(
+      successfulBatch(
+        await client.batch([
+          createEntity(1, "gui-reused"),
+          insertComponent(client, "GuiCheckbox", alias(1)),
+          place(alias(1), handle(panel)),
+        ]),
+      ),
+      1,
+    );
+    check(reused !== checkbox, "A removed entity identity was reused");
+
+    // An invalid GUI value is rejected at the write with no effect.
+    const invalidWrite = await client.batch(
+      setFields(client, sliderEntity, "GuiLayout", { align_x: 5 }),
+    );
+    check(
+      !invalidWrite.ok &&
+        invalidWrite.error.operation === 0 &&
+        invalidWrite.error.reason === "InvalidValue",
+      `An out-of-range GUI value was accepted: ${encoded(invalidWrite)}`,
+    );
+    const rejectedLayout = fieldsOf(
+      client,
+      named(await entitiesByName(client), "gui-slider").components,
+      "GuiLayout",
+    );
+    check(
+      rejectedLayout?.align_x === 2 && rejectedLayout.width === 4,
+      `A rejected write changed the layout: ${encoded(rejectedLayout)}`,
+    );
+
+    // Persistence keeps structure, configuration and committed values; the
+    // restored World takes only its own fresh targets.
+    const before = await treeRows(client, panel);
+    const beforeSlider = await control(client, sliderEntity);
+    const bytes = await host.saveWorld(client.session);
+    const loaded = await host.loadWorld(bytes, { symbolicId: "gui-restored" });
+    worlds.push(...loaded.created.values());
+    const restored = await openGui(host, loaded.root);
+    sessions.push(restored);
+    const restoredRows = await entitiesByName(restored);
+    const names = new Map(
+      [...(await entitiesByName(client))].map(([name, row]) => [row.id, name]),
+    );
+    const restoredNames = new Map(
+      [...restoredRows].map(([name, row]) => [row.id, name]),
+    );
+    const restoredPanel = named(restoredRows, "gui-panel").id;
+    const after = await treeRows(restored, restoredPanel);
+    check(
+      encoded(after.map((row) => restoredNames.get(row.entity))) ===
+        encoded(before.map((row) => names.get(row.entity))),
+      `Restored tree ${encoded(after.map((row) => restoredNames.get(row.entity)))}`,
+    );
+    const restoredSlider = await control(
+      restored,
+      named(restoredRows, "gui-slider").id,
+    );
+    check(
+      encoded(restoredSlider.value) === encoded(beforeSlider.value) &&
+        restoredSlider.target.world.id === loaded.root.id,
+      `Restored World lost the committed slider value: ${encoded(restoredSlider)}`,
+    );
+    // Restore keeps entity and component identities, and a command's target
+    // is World-local: the World a batch is submitted to decides which control
+    // it names, so an action there never reaches the saved World.
+    applied(
+      await guiAction(restored, restoredSlider.target, {
+        kind: "scalar",
+        value: 0.5,
+      }),
+    );
+    check(
+      encoded((await control(client, sliderEntity)).value) ===
+        encoded(beforeSlider.value),
+      "A restored-World action mutated the saved World",
+    );
+    completed = true;
+    return {
+      batchApplied: batchOutcome.aliases.length,
+      failedBatchApplied,
+      largeBatchApplied,
+      failedLargeBatchApplied,
+      sliderIncarnations: [
+        String(slider.target.incarnation),
+        String(recreated.target.incarnation),
+      ],
+      restoredWorld: encoded(loaded.root),
+      restoredTree: after.map((row) => restoredNames.get(row.entity)),
+      restoredSlider: { value: restoredSlider.value },
+    };
+  } finally {
+    await cleanup(host, sessions, worlds, completed);
+  }
+}
+
+/** "notSent" when the SDK refuses a request before transmission. */
+/** A layout root whose root-filling ScrollView reports the World canvas's
+ * evaluated logical extent, with a themed 1 x 0.5 button at its content
+ * origin. */
+function densityCanvas(
+  client: Client,
+  first: number,
+  name: string,
+  theme: ReturnType<typeof alias>,
+): Command[] {
+  const root = alias(first);
+  const viewport = alias(first + 1);
+  const button = alias(first + 2);
+  return [
+    createEntity(first, name),
+    insertComponent(client, "GuiLayout", root, { kind: LAYOUT.column }),
+    createEntity(first + 1, `${name}-viewport`),
+    insertComponent(client, "GuiScrollView", viewport, { axis: 1 }),
+    insertComponent(client, "GuiLayout", viewport, { kind: LAYOUT.column }),
+    place(viewport, root),
+    createEntity(first + 2, `${name}-button`),
+    insertComponent(client, "GuiButton", button, { label: "" }),
+    insertComponent(client, "GuiLayout", button, { width: 1, height: 0.5 }),
     {
-      kind: "setField",
-      entity: { kind: "handle", id: entity },
-      component: client.components.GuiRoot!.id,
-      field: {
-        offset: GuiRoot.node_treeOffset(2, "parent"),
-        value: { kind: "dynamic", value: { kind: "u32", value: 3 } },
-      },
+      kind: "insertComponent",
+      entity: button,
+      component: client.components.GuiSkin!.id,
+      fields: [
+        {
+          offset: client.components.GuiSkin!.fields.theme!.offset,
+          value: { kind: "entity", value: theme },
+        },
+      ],
     },
-  ]);
-  expect(!structural.ok, "A live GUI tree accepted a generic field write");
-  await rejects(
-    client.editSurface({
-      action: "insert",
-      entity,
-      id: 1,
-      index: 0,
-      content: { kind: "label", text: "raw" },
-      style: {},
-    }),
-    "Raw Surface items were accepted on a GUI-owned Surface",
-  );
-  expect(
-    ids(await client.inspectGui({ entity })) === "1,3,2",
-    "Rejected writes changed the tree",
-  );
+    place(button, viewport),
+  ];
+}
 
-  // Part rows die with their node; stale handles cannot retarget.
-  await client.editGui({
-    action: "updatePart",
-    handle: handle(2),
-    part: "background",
-    patch: { color: [1, 0, 0, 1] },
-  });
-  const partNodes = async () => {
-    const table = (await guiProperties(client, entity)).fields.part_state as
-      | { rows: ReadonlyMap<number, Readonly<Record<string, unknown>>> }
-      | undefined;
-    expect(table?.rows instanceof Map, "GuiRoot inspection omitted part_state");
-    return [...table.rows.values()].map((row) => row.node);
-  };
-  expect(
-    (await partNodes()).includes(2),
-    "A part override did not create the node's part row",
-  );
-  await client.editGui({ action: "remove", handle: handle(2) });
-  const remaining = await guiStyleRows(client, entity);
-  const parts = await partNodes();
-  expect(
-    !parts.includes(2) && !remaining.has(2),
-    `Removed node rows survived: parts ${parts.join()}`,
-  );
-  await rejects(
-    client.editGui({
-      action: "update",
-      handle: handle(2),
-      patch: { style: { opacity: 1 } },
-    }),
-    "A removed node handle was accepted",
-  );
-  await rejects(
-    client.editGui({
-      action: "insert",
-      entity,
-      rootIncarnation,
-      id: 2,
-      parent: 1,
-      index: 0,
-      data: { kind: "text", text: "reused" },
-    }),
-    "A removed node identity was reused",
-  );
+/** Opaque red button background, independent of hover or press. */
+function redTheme(
+  client: Client,
+  contract: GuiContract,
+  at: number,
+): Command[] {
+  const background = (state?: "hovered" | "pressed") =>
+    contract.guiPaintPartIndex({
+      part: "background",
+      ...(state ? { state } : {}),
+    });
+  return [
+    createEntity(at, "gui-red-theme"),
+    {
+      kind: "insertComponent",
+      entity: alias(at),
+      component: client.components.GuiTheme!.id,
+      fields: [
+        {
+          offset: client.components.GuiTheme!.fields.parts!.offset,
+          value: {
+            kind: "rows",
+            value: contract.GuiTheme.encodeParts({
+              nextSlot: 3,
+              rows: new Map([
+                [
+                  0,
+                  {
+                    part: background(),
+                    color: [1, 0, 0, 1],
+                    corner_radius: [0, 0],
+                    border_width: 0,
+                  },
+                ],
+                [1, { part: background("hovered"), color: [1, 0, 0, 1] }],
+                [2, { part: background("pressed"), color: [1, 0, 0, 1] }],
+              ]),
+            }),
+          },
+        },
+      ],
+    },
+  ];
+}
 
-  // Overlays cannot write out-of-range GUI properties, and raw items hidden by an
-  // overlay keep GUI ownership from being acquired until they are gone.
-  const gui = client.components.GuiRoot!.id;
-  const overlay = (
-    symbolicId: string,
-    component: number,
-    fields: ReturnType<typeof componentFields>,
-  ) =>
-    [
-      { kind: "createStateOverlayOwner", alias: 1 },
-      {
-        kind: "attachEntityOverlayBinding",
-        owner: { kind: "alias", alias: 1 },
-        alias: 2,
-        symbolicId,
-        mode: "bound",
-      },
-      {
-        kind: "attachComponentStateOverlay",
-        owner: { kind: "alias", alias: 1 },
-        binding: { kind: "alias", alias: 2 },
-        alias: 3,
-        component,
-        mode: "bound",
-        fields,
-      },
-    ] as const;
-  const invalid = await client.batch([
-    ...overlay("gui-panel", gui, [
-      {
-        offset: GuiRoot.node_styleOffset(3, "opacity"),
-        value: { kind: "dynamic", value: { kind: "f32", value: 2 } },
-      },
-    ]),
-  ]);
-  expect(!invalid.ok, "An out-of-range GUI overlay value was accepted");
-  const opacity = (await guiStyleRows(client, entity)).get(3)?.opacity;
-  expect(
-    opacity === 1,
-    `Rejected overlay changed opacity: ${JSON.stringify(opacity)}`,
-  );
+/** Whether a pixel is the opaque red of {@link redTheme}. */
+function red([r, g, b]: readonly number[]): boolean {
+  return r! > 200 && g! < 60 && b! < 60;
+}
 
-  const hidden = aliasId(
-    await client.batch([
-      createEntity(1, "gui-hidden"),
-      insertComponent(client, "Surface", ref, { width: 2, height: 1 }),
-    ]),
-    1,
-  );
-  await client.editSurface({
-    action: "insert",
-    entity: hidden,
-    id: 1,
-    index: 0,
-    content: { kind: "drawing" },
-    style: {},
-  });
-  const hiding = successfulBatch(
-    await client.batch([
-      ...overlay(
-        "gui-hidden",
-        client.components.Surface!.id,
-        componentFields(client, "Surface", {
-          items: client.encodeSurfaceItems({ nextId: 1, items: [] }),
+/** One presented density root, in its own World. */
+interface DensitySide {
+  readonly name: string;
+  readonly world: WorldReference;
+  readonly client: GuiTestClient;
+  readonly viewport: bigint;
+  readonly button: bigint;
+  readonly x: number;
+}
+
+/**
+ * Each World canvas owns its density: two canvas Worlds presented side by
+ * side evaluate their logical extents from their own units per metre, while
+ * authored logical sizes stay fixed. Canvas state updates reflow only their
+ * own World, writing the authored value back restores it, invalid values have
+ * no effect, and restored Worlds evaluate their persisted densities.
+ * Observed through semantic ScrollView viewports, physical hit testing and
+ * completed frames. A Surface attachment presents exactly one child World,
+ * so each root lives in its own World.
+ */
+export async function exerciseGuiDensity(host: GuiHost, contract: GuiContract) {
+  const worlds: WorldReference[] = [];
+  const sessions: Client[] = [];
+  let presentation: PresentedGui | undefined;
+  let completed = false;
+  try {
+    const sides: DensitySide[] = [];
+    for (const [index, { name, units }] of [
+      { name: "gui-density-plain", units: 1 / 32 },
+      { name: "gui-density-dense", units: 1 / 16 },
+    ].entries()) {
+      const created = await host.createWorld({
+        selectedSystems: selectSystems(GUI, LIFECYCLE),
+        symbolicId: name,
+        canvas: { extent: [4, 3], unitsPerMetre: units },
+      });
+      worlds.push(created.reference);
+      const client = await openGui(host, created.reference);
+      sessions.push(client);
+      const outcome = successfulBatch(
+        await client.batch([
+          ...redTheme(client, contract, 9),
+          ...densityCanvas(client, 1, name, alias(9)),
+        ]),
+      );
+      sides.push({
+        name,
+        world: created.reference,
+        client,
+        viewport: aliasId(outcome, 2),
+        button: aliasId(outcome, 3),
+        x: index * 128,
+      });
+    }
+    const [plain, dense] = sides as [DensitySide, DensitySide];
+    const anchor = (world: WorldReference, x: number): GuiAnchor => ({
+      child: world,
+      x,
+      width: 128,
+      height: 192,
+    });
+    presentation = await presentGui(
+      host,
+      sides.map((side) => anchor(side.world, side.x)),
+    );
+    const p = presentation;
+    const effects: GuiObservedEffectLike[] = [];
+    const subscriptions = await Promise.all(
+      sides.map((side) =>
+        side.client.subscribeGuiEffects((effect) => effects.push(effect), {
+          classes: "all",
         }),
       ),
-    ]),
-  );
-  const attach = await client.batch([
-    insertComponent(client, "GuiRoot", { kind: "handle", id: hidden }),
-  ]);
-  expect(!attach.ok, "GUI ownership was acquired over hidden raw items");
-  successfulBatch(
-    await client.batch([
-      {
-        kind: "releaseStateOverlayOwner",
-        owner: { kind: "handle", id: hiding.stateOverlays[0]!.id },
-      },
-    ]),
-  );
-  const restoredItems = (await client.inspect()).entities
-    .find((item) => item.id === hidden)!
-    .effective.find((item) => item.component === client.components.Surface!.id)!
-    .fields.items;
-  expect(
-    restoredItems instanceof Uint8Array &&
-      client.decodeSurfaceItems(restoredItems).items.length === 1,
-    "Releasing the overlay did not restore the raw items",
-  );
-  expect(
-    !(await client.inspect()).entities
-      .find((item) => item.id === hidden)!
-      .effective.some((item) => item.component === gui),
-    "A GuiRoot coexists with raw Surface items",
-  );
+    );
+    const extents = async (
+      observed: readonly { client: GuiWorldClient; viewport: bigint }[],
+      expected: readonly (readonly [number, number])[],
+    ) => {
+      const deadline = Date.now() + 10_000;
+      for (;;) {
+        await p.frame();
+        const actual = await Promise.all(
+          observed.map(
+            async ({ client, viewport }) =>
+              (await control(client, viewport)).scroll?.viewport,
+          ),
+        );
+        if (
+          actual.every(
+            (extent, index) =>
+              extent !== undefined &&
+              Math.abs(extent[0] - expected[index]![0]) < 1e-3 &&
+              Math.abs(extent[1] - expected[index]![1]) < 1e-3,
+          )
+        )
+          return actual;
+        check(
+          Date.now() < deadline,
+          `Canvas extents ${encoded(actual)} never reached ${encoded(expected)}`,
+        );
+      }
+    };
+    const pressCount = (side: DensitySide) =>
+      effects.filter(
+        (effect) =>
+          effect.target.world.id === side.world.id &&
+          effect.target.entity === side.button &&
+          effect.effect.kind === "pressed",
+      ).length;
+    const tap = async (point: [number, number], pointer: bigint) => {
+      await p.send({ kind: "pointerDown", pointer, point });
+      return await p.send({ kind: "pointerUp", pointer, point });
+    };
 
-  // Each root owns its density. Authored lanes are logical units, so the
-  // 1 x 0.5 box keeps its logical bounds while the root filling the 4 x 3 m
-  // Surface spans (4U, 3U); writes, insertion values and overlays all reflow
-  // only their own root, and invalid values are rejected.
-  const densityRoot = async (alias: number, units?: number) => {
-    const densityRef = { kind: "alias", alias } as const;
-    const densityEntity = aliasId(
+    // Plain spans 128 x 192 m at 1/32 unit per metre: 4 x 6 units; dense
+    // spans the same Surface at 1/16: 8 x 12 units. The 1 x 0.5 button is
+    // 32 x 16 px on plain and 16 x 8 px on dense.
+    await extents(sides, [
+      [4, 6],
+      [8, 12],
+    ]);
+    let frame = await p.settled();
+    const pixels = (x: number) => red(pixel(frame, [x / 256, 4 / 192]));
+    check(
+      pixels(24) && !pixels(40) && pixels(128 + 12) && !pixels(128 + 20),
+      `Per-World densities did not scale the painted button independently: ${encoded([0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 128, 132, 136, 140, 144].map((x) => [x, pixel(frame, [x / 256, 4 / 192])]))}`,
+    );
+    await tap(p.point(0, [0.9, 0.25], 1 / 32), 1n);
+    await tap(p.point(0, [1.1, 0.25], 1 / 32), 2n);
+    await tap(p.point(1, [0.9, 0.25], 1 / 16), 3n);
+    await tap(p.point(1, [1.1, 0.25], 1 / 16), 4n);
+    const deadline = Date.now() + 10_000;
+    while (pressCount(plain) + pressCount(dense) < 2) {
+      check(Date.now() < deadline, "Density hit tests published no press");
+      await p.frame();
+    }
+    check(
+      pressCount(plain) === 1 && pressCount(dense) === 1,
+      `Hit testing ignored per-World density: ${encoded(effects.map((effect) => [effect.target.world.id, effect.target.entity, effect.effect.kind]))}`,
+    );
+
+    // A density update reflows only its own World canvas.
+    const setDensity = (side: DensitySide, unitsPerMetre: number) =>
+      side.client.sendCommand({
+        type: "CanvasStateUpdateCommand",
+        unitsPerMetre,
+      });
+    setDensity(plain, 1 / 64);
+    await extents(sides, [
+      [2, 3],
+      [8, 12],
+    ]);
+    frame = await p.settled();
+    check(
+      pixels(48) && !pixels(72) && pixels(128 + 12) && !pixels(128 + 20),
+      "A density update did not reflow only its own World canvas",
+    );
+
+    // A density update over the dense canvas reflows it; writing the
+    // authored density back restores its layout.
+    const density = async () => (await canvasState(dense.client)).unitsPerMetre;
+    setDensity(dense, 1 / 8);
+    await extents(sides, [
+      [2, 3],
+      [16, 24],
+    ]);
+    check(
+      (await density()) === 1 / 8,
+      `A density write was not stored: ${encoded(await density())}`,
+    );
+    setDensity(dense, 1 / 16);
+    await extents(sides, [
+      [2, 3],
+      [8, 12],
+    ]);
+    check(
+      (await density()) === 1 / 16,
+      "Writing the authored density back did not restore it",
+    );
+    await Promise.all(
+      subscriptions.map((subscription) => subscription.unsubscribe()),
+    );
+
+    // Invalid densities have no effect: both canvases keep their stored
+    // densities and keep evaluating. A later valid extent update in the same
+    // session order shows the invalid updates were applied first.
+    const invalidWrites = [0, -1];
+    for (const units of invalidWrites) setDensity(plain, units);
+    plain.client.sendCommand({
+      type: "CanvasStateUpdateCommand",
+      extent: [5, 3],
+    });
+    const invalidState = {
+      units: (
+        await awaitCanvasState(plain.client, (state) => state.extent[0] === 5)
+      ).unitsPerMetre,
+    };
+    check(
+      invalidState.units === 1 / 64,
+      `An invalid density changed the stored value: ${encoded(invalidState)}`,
+    );
+    await extents(sides, [
+      [2, 3],
+      [8, 12],
+    ]);
+
+    // Restored Worlds evaluate their persisted densities.
+    const restored = [];
+    for (const [index, side] of sides.entries()) {
+      const bytes = await host.saveWorld(side.client.session);
+      const loaded = await host.loadWorld(bytes, {
+        symbolicId: `${side.name}-restored`,
+      });
+      worlds.push(...loaded.created.values());
+      const client = await openGui(host, loaded.root);
+      sessions.push(client);
+      const rows = await entitiesByName(client);
+      await p.retarget(index, anchor(loaded.root, side.x));
+      restored.push({
+        client,
+        viewport: named(rows, `${side.name}-viewport`).id,
+        units: (await canvasState(client)).unitsPerMetre,
+      });
+    }
+    const restoredExtents = await extents(restored, [
+      [2, 3],
+      [8, 12],
+    ]);
+    check(
+      encoded(restored.map((side) => side.units)) === encoded([1 / 64, 1 / 16]),
+      `Restored densities ${encoded(restored.map((side) => side.units))}`,
+    );
+    completed = true;
+    return {
+      presses: [pressCount(plain), pressCount(dense)],
+      invalidWrites,
+      invalidState,
+      restoredUnits: restored.map((side) => side.units),
+      restoredExtents,
+    };
+  } finally {
+    await presentation?.close().catch(() => {});
+    await cleanup(host, sessions, worlds, completed);
+  }
+}
+
+type GuiObservedEffectLike = Parameters<
+  Parameters<GuiWorldClient["subscribeGuiEffects"]>[0]
+>[0];
+
+/**
+ * Save a World while a TextInput holds focus, a selection and an open
+ * composition and a checkbox holds a pointer press, then restore it: the
+ * restored World keeps the structure, committed values and skin overrides,
+ * holds no focus, capture, selection or composition, and takes only fresh
+ * targets. Its completed frame matches the frame of the same committed state
+ * before any interaction, while the interacting frame differs from both.
+ *
+ * The 4 x 3 panel stacks a checkbox, a TextInput and a slider, one unit each.
+ */
+export async function exerciseGuiTransientRestore(
+  host: GuiHost,
+  contract: GuiContract,
+  fontBytes: ArrayBuffer,
+) {
+  const worlds: WorldReference[] = [];
+  const sessions: Client[] = [];
+  let presentation: PresentedGui | undefined;
+  let completed = false;
+  try {
+    const created = await host.createWorld({
+      selectedSystems: selectSystems(GUI, LIFECYCLE),
+      symbolicId: "gui-transient",
+      canvas: PANEL_CANVAS,
+    });
+    worlds.push(created.reference);
+    const client = await openGui(host, created.reference);
+    sessions.push(client);
+    const font = await client.createAsset(17, fontBytes);
+    const row = { width: 4, height: 1 } as const;
+    const outcome = successfulBatch(
       await client.batch([
-        createEntity(alias, `gui-density-${alias}`),
-        insertComponent(client, "Surface", densityRef, {
+        createEntity(1, "gui-transient-panel"),
+        insertComponent(client, "GuiLayout", alias(1), {
+          kind: LAYOUT.column,
           width: 4,
           height: 3,
         }),
-        insertComponent(
-          client,
-          "GuiRoot",
-          densityRef,
-          units === undefined ? {} : { units_per_metre: units },
-        ),
+        insertComponent(client, "GuiFont", alias(1), {
+          source: font.source,
+          font_size: 0.6,
+        }),
+        createEntity(2, "gui-transient-checkbox"),
+        insertComponent(client, "GuiCheckbox", alias(2), {
+          checked: true,
+        }),
+        insertComponent(client, "GuiLayout", alias(2), row),
+        {
+          kind: "insertComponent",
+          entity: alias(2),
+          component: client.components.GuiSkin!.id,
+          fields: [
+            {
+              offset: client.components.GuiSkin!.fields.parts!.offset,
+              value: {
+                kind: "rows",
+                value: contract.GuiSkin.encodeParts({
+                  nextSlot: 1,
+                  rows: new Map([
+                    [
+                      0,
+                      {
+                        part: contract.guiPaintPartIndex({
+                          part: "background",
+                        }),
+                        color: [0.9, 0.2, 0.1, 1],
+                      },
+                    ],
+                  ]),
+                }),
+              },
+            },
+          ],
+        },
+        place(alias(2), alias(1)),
+        createEntity(3, "gui-transient-text"),
+        insertComponent(client, "GuiTextInput", alias(3), {
+          text: "ab",
+        }),
+        insertComponent(client, "GuiLayout", alias(3), row),
+        place(alias(3), alias(1)),
+        createEntity(4, "gui-transient-slider"),
+        insertComponent(client, "GuiSlider", alias(4), {
+          value: 0.75,
+          min: 0,
+          max: 1,
+          step: 0,
+        }),
+        insertComponent(client, "GuiLayout", alias(4), row),
+        place(alias(4), alias(1)),
       ]),
-      alias,
     );
-    const incarnation = (await client.inspectGui({ entity: densityEntity }))
-      .rootIncarnation;
-    await client.editGuiBatch([
-      {
-        action: "insert",
-        entity: densityEntity,
-        rootIncarnation: incarnation,
-        id: 1,
-        index: 0,
-        data: { kind: "container", containerKind: "column" },
-      },
-      {
-        action: "insert",
-        entity: densityEntity,
-        rootIncarnation: incarnation,
-        id: 2,
-        parent: 1,
-        index: 0,
-        data: { kind: "container", containerKind: "sizedBox" },
-        style: { width: 1, height: 0.5 },
-      },
-    ]);
-    return densityEntity;
-  };
-  const boxBounds = async (densityEntity: bigint) => {
+    const controls = [2, 3, 4].map((index) => aliasId(outcome, index));
+    presentation = await presentGui(host, [{ child: created.reference }]);
+    const p = presentation;
+    // Caret and focus fences need evaluated layout with a ready font.
+    await loadedFont(client);
     await client.waitForFrame();
-    const tree = await client.semanticSnapshot({ entity: densityEntity });
-    const root = tree.nodes.find((node) => node.id === 1);
-    const box = tree.nodes.find((node) => node.id === 2);
-    expect(root && box, "Density panel omitted its root or box");
-    return `${root.bounds.join()}|${box.bounds.join()}`;
-  };
-  const densityValue = async (densityEntity: bigint) => {
-    const snapshot = (await client.inspect()).entities.find(
-      (item) => item.id === densityEntity,
-    );
-    expect(snapshot, "Density panel disappeared");
-    const read = (components: typeof snapshot.effective) =>
-      components.find(
-        (item) => item.component === client.components.GuiRoot!.id,
-      )?.fields.units_per_metre;
-    return [read(snapshot.base), read(snapshot.effective)].join();
-  };
-  const densityWrite = (densityEntity: bigint, units: number) => ({
-    kind: "setField" as const,
-    entity: { kind: "handle" as const, id: densityEntity },
-    component: client.components.GuiRoot!.id,
-    field: componentFields(client, "GuiRoot", { units_per_metre: units })[0]!,
-  });
-  const plainDensity = await densityRoot(90);
-  const denseDensity = await densityRoot(91, 2);
-  expect(
-    (await boxBounds(plainDensity)) === "0,0,4,3|0,0,1,0.5" &&
-      (await boxBounds(denseDensity)) === "0,0,8,6|0,0,1,0.5",
-    "Per-root densities did not scale evaluated bounds independently",
-  );
-  successfulBatch(await client.batch([densityWrite(plainDensity, 0.5)]));
-  expect(
-    (await boxBounds(plainDensity)) === "0,0,2,1.5|0,0,1,0.5" &&
-      (await boxBounds(denseDensity)) === "0,0,8,6|0,0,1,0.5",
-    "A density write did not reflow only its own root",
-  );
-  for (const units of [0, -1]) {
-    expect(
-      !(await client.batch([densityWrite(plainDensity, units)])).ok,
-      `An invalid density ${units} was accepted`,
-    );
-  }
-  const densityOverlay = successfulBatch(
-    await client.batch([
-      ...overlay(
-        "gui-density-91",
-        gui,
-        componentFields(client, "GuiRoot", { units_per_metre: 4 }),
-      ),
-    ]),
-  );
-  expect(
-    (await boxBounds(denseDensity)) === "0,0,16,12|0,0,1,0.5" &&
-      (await densityValue(denseDensity)) === "2,4",
-    "A density overlay did not reflow the root over its authored value",
-  );
-  successfulBatch(
-    await client.batch([
-      {
-        kind: "releaseStateOverlayOwner",
-        owner: { kind: "handle", id: densityOverlay.stateOverlays[0]!.id },
-      },
-    ]),
-  );
-  expect(
-    (await boxBounds(denseDensity)) === "0,0,8,6|0,0,1,0.5" &&
-      (await densityValue(denseDensity)) === "2,2",
-    "Releasing a density overlay did not restore the authored value",
-  );
+    const committed = await p.settled();
+    const checkboxPoint = p.point(0, [2, 0.5]);
 
-  // Persistence keeps structure and committed values; old handles stay fenced.
-  const before = await client.inspectGui({ entity });
-  const bytes = await host.saveWorld();
-  await host.detachWorld();
-  const restored = await host.loadWorld(bytes, { symbolicId: "gui-restored" });
-  const panel = (await restored.inspect()).entities.find(
-    (item) => item.metadata.symbolicId === "gui-panel",
-  );
-  expect(panel, "Restored World omitted the GUI panel");
-  const after = await restored.inspectGui({ entity: panel.id });
-  expect(ids(after) === ids(before), `Restored tree ${ids(after)}`);
-  const restoredDensity = (await restored.inspect()).entities.find(
-    (item) => item.metadata.symbolicId === "gui-density-90",
-  );
-  expect(restoredDensity, "Restored World omitted the density panel");
-  const restoredUnits = restoredDensity.effective.find(
-    (item) => item.component === restored.components.GuiRoot!.id,
-  )?.fields.units_per_metre;
-  await restored.waitForFrame();
-  const restoredRoot = (
-    await restored.semanticSnapshot({ entity: restoredDensity.id })
-  ).nodes.find((node) => node.id === 1);
-  expect(
-    restoredUnits === 0.5 && restoredRoot?.bounds.join() === "0,0,2,1.5",
-    `Restored density ${String(restoredUnits)} evaluated ${String(restoredRoot?.bounds)}`,
-  );
-  const restoredSlider = after.nodes.find((node) => node.id === 3)!;
-  expect(
-    restoredSlider.controlValue.kind === "scalar" &&
-      restoredSlider.controlValue.value === 0.75 &&
-      restoredSlider.controlRevision === 5,
-    "Restored World lost the committed slider value",
-  );
-  await rejects(
-    restored.editGui({
-      action: "remove",
-      handle: handle(3),
-    }),
-    "A handle from the replaced session was accepted",
-  );
-  await restored.editGui({
-    action: "setControlValue",
-    handle: restored.createGuiNodeHandle(panel.id, after.rootIncarnation, 3),
-    expectedRevision: 5,
-    value: { kind: "scalar", value: 0.5 },
-  });
-  return {
-    batchApplied: batchOutcome.applied,
-    failedBatchApplied: failedBatch.applied,
-    largeBatchApplied: largeOutcome.applied,
-    failedLargeBatchApplied: failedLargeOutcome.applied,
-    rootIncarnation: String(rootIncarnation),
-    restoredIncarnation: String(after.rootIncarnation),
-    nodes: ids(after),
-    denseStyleRows: denseRows.size,
-    denseNameBytes,
-  };
+    // Interaction state: a held press capturing pointer 1 on the checkbox,
+    // then keyboard focus, a selection and a composition on the TextInput.
+    const press = await p.send({
+      kind: "pointerDown",
+      pointer: 1n,
+      point: checkboxPoint,
+    });
+    // The press may focus the checkbox; traversal continues to the input.
+    const traversal: GuiInputRoutingOutcome[] = [];
+    while (
+      !(await control(client, controls[1]!)).focused &&
+      traversal.length < 3
+    )
+      traversal.push(await p.send({ kind: "key", key: "tab" }));
+    check(
+      routed(press) && traversal.every(routed),
+      `Interaction before save was not routed: ${encoded([press, traversal])}`,
+    );
+    const text = await nativeText(p, (state) => state?.text === "ab");
+    await p.input.editText(text!.fence, {
+      kind: "selection",
+      start: 0,
+      end: 1,
+    });
+    await p.input.editText(p.input.nativeText!.fence, {
+      kind: "composition",
+      text: "zz",
+      caretStart: 2,
+      caretEnd: 2,
+    });
+    const composing = await nativeText(
+      p,
+      (state) => state?.composition?.text === "zz",
+    );
+    const interacting = await p.settled();
+    const before = await Promise.all(
+      controls.map((entity) => control(client, entity)),
+    );
+    check(
+      before[0]!.interaction.pressed && before[1]!.focused,
+      `The saved World held no press or focus: ${encoded(before)}`,
+    );
+
+    const bytes = await host.saveWorld(client.session);
+    const loaded = await host.loadWorld(bytes, {
+      symbolicId: "gui-transient-restored",
+    });
+    worlds.push(...loaded.created.values());
+    const restored = await openGui(host, loaded.root);
+    sessions.push(restored);
+    const rows = await entitiesByName(restored);
+    const names = [
+      "gui-transient-checkbox",
+      "gui-transient-text",
+      "gui-transient-slider",
+    ];
+    const after = await Promise.all(
+      names.map((name) => control(restored, named(rows, name).id)),
+    );
+    const committedValues = (states: readonly GuiControlState[]) =>
+      encoded(states.map((state) => state.value));
+    check(
+      committedValues(after) === committedValues(before),
+      `Restored committed values ${committedValues(after)} differ from ${committedValues(before)}`,
+    );
+    check(
+      after.every(
+        (state) =>
+          !state.focused &&
+          !state.interaction.hovered &&
+          !state.interaction.pressed &&
+          !state.interaction.captured,
+      ),
+      `Restored World kept interaction state: ${encoded(after)}`,
+    );
+    check(
+      fieldsOf(
+        restored,
+        named(rows, "gui-transient-checkbox").components,
+        "GuiSkin",
+      ) !== undefined,
+      "Restored World lost the checkbox skin override",
+    );
+
+    // Present the restored World in place of the saved one: the old focus
+    // and composition end, the held press completes nothing, and stale
+    // fences and targets are refused.
+    await p.retarget(0, { child: loaded.root });
+    await nativeText(p, (state) => state === null);
+    const release = await p.send({
+      kind: "pointerUp",
+      pointer: 1n,
+      point: checkboxPoint,
+    });
+    const commit = await p.input
+      .editText(composing!.fence, { kind: "commitComposition" })
+      .catch((error: unknown) => ({ error: String(error) }));
+    await restored.waitForFrame();
+    const unchanged = await Promise.all(
+      names.map((name) => control(restored, named(rows, name).id)),
+    );
+    const sourceCheckbox = await control(client, controls[0]!);
+    check(
+      committedValues(unchanged) === committedValues(before) &&
+        encoded(sourceCheckbox.value) === encoded(before[0]!.value) &&
+        (!("applied" in commit) || commit.applied === 0),
+      `The held press or composition completed after restore: ${encoded({ release, commit, unchanged, sourceCheckbox })}`,
+    );
+    // A fresh tap focuses the restored TextInput with a collapsed selection
+    // and no composition.
+    const textPoint = p.point(0, [2, 1.5]);
+    await p.send({ kind: "pointerDown", pointer: 2n, point: textPoint });
+    await p.send({ kind: "pointerUp", pointer: 2n, point: textPoint });
+    const refocused = await nativeText(
+      p,
+      (state) => state?.fence.target.world.id === loaded.root.id,
+    );
+    check(
+      refocused!.text === "ab" &&
+        refocused!.composition === undefined &&
+        refocused!.selectionStart === refocused!.selectionEnd,
+      `Refocused restored TextInput kept transient text state: ${encoded(refocused)}`,
+    );
+
+    // The restored frame shows the committed values and skin exactly as
+    // before any interaction; the interacting frame differs from both.
+    await p.send({ kind: "key", key: "escape" });
+    await nativeText(p, (state) => state === null);
+    await restored.waitForFrame();
+    const restoredFrame = await p.settled();
+    const interactionPixels = changedPixels(committed, interacting);
+    const restoredPixels = changedPixels(committed, restoredFrame);
+    const panelPixels = contentPixels(restoredFrame);
+    check(
+      panelPixels > 1000 && interactionPixels > 50 && restoredPixels === 0,
+      `Restored frame does not match the committed frame: ${encoded({ panelPixels, interactionPixels, restoredPixels })}`,
+    );
+    completed = true;
+    return {
+      values: committedValues(after),
+      restoredWorld: encoded(loaded.root),
+      release: release.disposition,
+      frames: { panelPixels, interactionPixels, restoredPixels },
+    };
+  } finally {
+    await presentation?.close().catch(() => {});
+    await cleanup(host, sessions, worlds, completed);
+  }
 }
 
-/** Wait until the World's only asset, a TextInput font, has loaded: text
- * inputs take focus only against a ready font. */
-export async function loadedFont(client: GuiTestClient): Promise<void> {
+/** Wait, presenting frames, until the context's native text satisfies
+ * `accept`; native state is published asynchronously after routing. */
+export async function nativeText(
+  presentation: PresentedGui,
+  accept: (state: GuiPhysicalContext["nativeText"]) => boolean,
+  context: () => Promise<unknown> = async () => undefined,
+): Promise<GuiPhysicalContext["nativeText"]> {
+  const deadline = Date.now() + 10_000;
+  for (;;) {
+    const state = presentation.input.nativeText;
+    if (accept(state)) return state;
+    if (Date.now() >= deadline)
+      throw new Error(
+        `Native text never reached the expected state: ${encoded({ state, context: await context() })}`,
+      );
+    await presentation.frame();
+  }
+}
+
+/** Close sessions and destroy Worlds; failures only matter after success. */
+export async function cleanup(
+  host: GuiHost,
+  sessions: readonly Client[],
+  worlds: readonly WorldReference[],
+  strict: boolean,
+): Promise<void> {
+  const closed = await Promise.allSettled(
+    sessions.map((session) => session.close()),
+  );
+  const destroyed = await Promise.allSettled(
+    worlds.map((world) => host.destroyWorld(world)),
+  );
+  if (strict)
+    check(
+      [...closed, ...destroyed].every(
+        (result) => result.status === "fulfilled",
+      ),
+      `GUI fixture cleanup failed: ${encoded([...closed, ...destroyed].filter((result) => result.status === "rejected").map((result) => String((result as PromiseRejectedResult).reason)))}`,
+    );
+}
+
+/** Wait until the World's asset resources have loaded, so text layout has
+ * font metrics before focus and caret placement. */
+export async function loadedFont(client: Client): Promise<void> {
   for (let attempt = 0; ; attempt += 1) {
-    const resources = (await client.inspect()).resources;
-    if (resources.some((item) => item.status === "loaded")) return;
-    expect(attempt < 200, "The TextInput font never loaded");
+    const page = await client.inspectPage({ collection: "resources" });
+    if (
+      page.resources.length > 0 &&
+      page.resources.every((item) => item.status === "loaded")
+    )
+      return;
+    check(attempt < 400, "The GUI font never loaded");
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
 }
 
-/** Completed RGBA frame of the environment's presentation, top row first. */
+/** Physical root viewport of every presented scenario, in CSS pixels. */
+export const VIEWPORT = {
+  width: 256,
+  height: 192,
+  devicePixelRatio: 1,
+} as const;
+
+/** Units per parent metre that give a full-viewport panel a 4 x 3 logical
+ * extent. The parent World's root canvas maps one CSS pixel to one metre. */
+export const PANEL_DENSITY = 1 / 64;
+
+/** Canvas state of a 4 x 3 panel World presented over the full viewport. */
+export const PANEL_CANVAS = {
+  extent: [4, 3],
+  unitsPerMetre: PANEL_DENSITY,
+} as const;
+
+/** The Canvas System state of a canvas World. */
+export async function canvasState(client: Client) {
+  const record = (await client.inspectPage({ collection: "canvas" })).canvas;
+  check(record, "The World reported no Canvas System state");
+  return record.state;
+}
+
+/** Wait until a canvas World's state satisfies `ready`: Canvas state
+ * updates carry no reply and apply in session order. */
+export async function awaitCanvasState(
+  client: Client,
+  ready: (state: Awaited<ReturnType<typeof canvasState>>) => boolean,
+) {
+  const deadline = Date.now() + 10_000;
+  for (;;) {
+    const state = await canvasState(client);
+    if (ready(state)) return state;
+    check(
+      Date.now() < deadline,
+      `Canvas state ${encoded(state)} never became ready`,
+    );
+    await client.waitForFrame();
+  }
+}
+
+/** Completed RGBA frame of a presentation, top row first. */
 export interface GuiFrame {
   readonly width: number;
   readonly height: number;
-  readonly pixels: ArrayBuffer;
+  readonly pixels: Uint8Array;
 }
 
-/** Capture the next completed frame of a World with an attached canvas. */
-export type GuiFrameCapture = (client: GuiTestClient) => Promise<GuiFrame>;
+/** One Surface anchor on the parent World's canvas, in parent metres; it
+ * presents the child World's canvas. */
+export interface GuiAnchor {
+  readonly child: WorldReference;
+  readonly x?: number;
+  readonly y?: number;
+  readonly width?: number;
+  readonly height?: number;
+}
 
-/** Pixels whose channels differ by more than `tolerance` between frames. */
+/** A parent root output presenting GUI Worlds through Surface attachments,
+ * with the physical input context of that presentation. */
+export interface PresentedGui {
+  readonly parent: GuiTestClient;
+  readonly anchors: readonly bigint[];
+  readonly view: PresentationView;
+  readonly input: GuiPhysicalContext;
+  /** Native cancellations the Host published for this context. */
+  readonly cancellations: GuiInputCancellation[];
+  /** Normalized root point of a child-logical point on anchor `index`. */
+  point(
+    index: number,
+    logical: readonly [number, number],
+    density?: number,
+  ): [number, number];
+  send(input: GuiPhysicalInput): Promise<GuiInputRoutingOutcome>;
+  frame(): Promise<void>;
+  capture(): Promise<GuiFrame>;
+  /** Capture until two consecutive completed frames agree. */
+  settled(): Promise<GuiFrame>;
+  /** Present another child World on anchor `index`. */
+  retarget(index: number, anchor: GuiAnchor): Promise<void>;
+  close(): Promise<void>;
+}
+
+function attachmentFields(client: Client, anchor: GuiAnchor) {
+  const attachment = client.components.WorldAttachment!;
+  return [
+    {
+      offset: attachment.fields.child!.offset,
+      value: { kind: "world", value: anchor.child },
+    },
+    {
+      offset: attachment.fields.mode!.offset,
+      value: { kind: "u32", value: 1 },
+    },
+  ] as const;
+}
+
+/** Present `anchors` on a new parent canvas World selected as root output. */
+export async function presentGui(
+  host: GuiHost,
+  presented: readonly GuiAnchor[],
+): Promise<PresentedGui> {
+  const anchors = [...presented];
+  // The root viewport sizes the parent canvas in CSS pixels.
+  const world = await host.createWorld({
+    selectedSystems: selectSystems(ATTACHMENTS, CANVAS, SURFACE, LIFECYCLE),
+    symbolicId: "gui-presentation",
+  });
+  const parent = await openGui(host, world.reference);
+  const rects = anchors.map((anchor) => ({
+    x: anchor.x ?? 0,
+    y: anchor.y ?? 0,
+    width: anchor.width ?? VIEWPORT.width,
+    height: anchor.height ?? VIEWPORT.height,
+  }));
+  const commands: Command[] = [];
+  anchors.forEach((anchor, index) => {
+    const ref = alias(index + 2);
+    const rect = rects[index]!;
+    commands.push(
+      createEntity(index + 2, `gui-presentation-anchor-${index}`),
+      insertComponent(parent, "Surface", ref, {
+        width: rect.width,
+        height: rect.height,
+      }),
+      insertComponent(parent, "CanvasStyle", ref, { x: rect.x, y: rect.y }),
+      {
+        kind: "insertComponent",
+        entity: ref,
+        component: parent.components.WorldAttachment!.id,
+        fields: [...attachmentFields(parent, anchor)],
+      },
+    );
+  });
+  const outcome = successfulBatch(await parent.batch(commands));
+  const binding = await host.setRootOutput(
+    canvasOutput(world.reference),
+    VIEWPORT,
+  );
+  const view = await host.presentation.select(
+    await host.presentation.surface(),
+    binding,
+  );
+  await host.presentation.frame(view);
+  const input = await host.input.open(view);
+  const cancellations: GuiInputCancellation[] = [];
+  input.onCancel((event) => cancellations.push(event));
+  const capture = async (): Promise<GuiFrame> => {
+    const frame = await host.presentation.capture(view);
+    return {
+      width: VIEWPORT.width,
+      height: VIEWPORT.height,
+      pixels: new Uint8Array(frame.pixels),
+    };
+  };
+  const densities = anchors.map(() => PANEL_DENSITY);
+  return {
+    parent,
+    anchors: anchors.map((_, index) => aliasId(outcome, index + 2)),
+    view,
+    input,
+    cancellations,
+    point(index, [x, y], density = densities[index]!) {
+      const rect = rects[index]!;
+      return [
+        (rect.x + x / density) / VIEWPORT.width,
+        (rect.y + y / density) / VIEWPORT.height,
+      ];
+    },
+    send: (event) =>
+      input.send(event).catch((error: unknown) => {
+        throw new Error(`Physical input ${encoded(event)} failed`, {
+          cause: error,
+        });
+      }),
+    async frame() {
+      await host.presentation.frame(view);
+    },
+    capture,
+    async settled() {
+      let previous = await capture();
+      for (let attempt = 0; attempt < 60; attempt += 1) {
+        const next = await capture();
+        if (changedPixels(previous, next, 0) === 0) return next;
+        previous = next;
+      }
+      throw new Error("GUI presentation did not settle");
+    },
+    async retarget(index, anchor) {
+      const attachment = parent.components.WorldAttachment!;
+      const entity = handle(aliasId(outcome, index + 2));
+      // Another child World replaces the attachment component.
+      successfulBatch(
+        await parent.batch([
+          {
+            kind: "insertComponent",
+            entity,
+            component: attachment.id,
+            fields: [...attachmentFields(parent, anchor)],
+          },
+        ]),
+      );
+      anchors[index] = anchor;
+      await host.presentation.frame(view);
+    },
+    async close() {
+      await input.close().catch(() => {});
+      await host.presentation.clear(view).catch(() => {});
+      await parent.close().catch(() => {});
+      await host.destroyWorld(world.reference);
+    },
+  };
+}
+
+/** Pixels whose colour channels differ by more than `tolerance`. */
 export function changedPixels(a: GuiFrame, b: GuiFrame, tolerance = 2): number {
-  expect(
+  check(
     a.width === b.width && a.height === b.height,
     "Compared frames differ in size",
   );
-  const left = new Uint8Array(a.pixels);
-  const right = new Uint8Array(b.pixels);
   let changed = 0;
-  for (let offset = 0; offset < left.length; offset += 4)
+  for (let offset = 0; offset < a.pixels.length; offset += 4)
     for (let channel = 0; channel < 3; channel += 1)
       if (
-        Math.abs(left[offset + channel]! - right[offset + channel]!) > tolerance
+        Math.abs(a.pixels[offset + channel]! - b.pixels[offset + channel]!) >
+        tolerance
       ) {
         changed += 1;
         break;
@@ -1070,327 +1922,47 @@ export function changedPixels(a: GuiFrame, b: GuiFrame, tolerance = 2): number {
 }
 
 /** Pixels that differ from the frame's top-left background pixel. */
-function contentPixels(frame: GuiFrame): number {
-  const pixels = new Uint8Array(frame.pixels);
+export function contentPixels(frame: GuiFrame): number {
   let content = 0;
-  for (let offset = 0; offset < pixels.length; offset += 4)
+  for (let offset = 0; offset < frame.pixels.length; offset += 4)
     for (let channel = 0; channel < 3; channel += 1)
-      if (Math.abs(pixels[offset + channel]! - pixels[channel]!) > 2) {
+      if (
+        Math.abs(frame.pixels[offset + channel]! - frame.pixels[channel]!) > 2
+      ) {
         content += 1;
         break;
       }
   return content;
 }
 
-/** Capture until two consecutive completed frames agree, so glyph and
- * atlas work from earlier frames has settled. */
-export async function settledFrame(
-  client: GuiTestClient,
-  capture: GuiFrameCapture,
-): Promise<GuiFrame> {
-  let previous = await capture(client);
-  for (let attempt = 0; attempt < 60; attempt += 1) {
-    const next = await capture(client);
-    if (changedPixels(previous, next, 0) === 0) return next;
-    previous = next;
-  }
-  throw new Error("GUI presentation did not settle");
-}
-
-/** Camera of {@link activatePanelCamera}: distance and vertical field of view. */
-const PANEL_CAMERA = { distance: 5, fovY: ORTHOGRAPHIC_CAMERA.fov_y } as const;
-
-/** Normalized top-left viewport point of a logical point on the centred
- * 4x3 panel, seen by the panel camera in a frame of this aspect (one
- * logical unit per metre). */
-export function panelViewportPoint(
+/** RGBA of the pixel under a normalized root point. */
+export function pixel(
   frame: GuiFrame,
-  [x, y]: [number, number],
-): [number, number] {
-  const halfHeight = PANEL_CAMERA.distance * Math.tan(PANEL_CAMERA.fovY / 2);
-  const halfWidth = (halfHeight * frame.width) / frame.height;
-  return [0.5 * (1 + (x - 2) / halfWidth), 0.5 * (1 - (1.5 - y) / halfHeight)];
+  [x, y]: readonly [number, number],
+): [number, number, number, number] {
+  const column = Math.min(frame.width - 1, Math.floor(x * frame.width));
+  const row = Math.min(frame.height - 1, Math.floor(y * frame.height));
+  const offset = (row * frame.width + column) * 4;
+  return [
+    frame.pixels[offset]!,
+    frame.pixels[offset + 1]!,
+    frame.pixels[offset + 2]!,
+    frame.pixels[offset + 3]!,
+  ];
 }
 
-/** Author a perspective camera facing the Surface front from 5 m on +Z. */
-export async function activatePanelCamera(client: GuiTestClient) {
-  const camera = { kind: "alias", alias: 70 } as const;
-  const id = aliasId(
-    await client.batch([
-      createEntity(70, "gui-restore-camera"),
-      insertComponent(client, "Transform", camera, {
-        z: PANEL_CAMERA.distance,
-      }),
-      insertComponent(client, "Camera", camera, {
-        ...ORTHOGRAPHIC_CAMERA,
-        projection: 0,
-      }),
-    ]),
-    70,
-  );
-  cameraClient(client).sendCommand({
-    type: "CameraActivateCommand",
-    entity: id,
-  });
+/** Whether a physical routing outcome applied at least one GUI action. */
+export function routed(outcome: GuiInputRoutingOutcome): boolean {
+  return outcome.disposition === "routed" && outcome.error === undefined;
 }
 
-/**
- * Save a World while a TextInput holds focus, a selection and an open
- * composition and a checkbox holds a pointer press, then restore it: the
- * restored World keeps the structure, committed values and part overrides,
- * holds no focus, capture, selection or composition, and takes only fresh
- * handles. With `capture`, the restored panel's completed frame matches the
- * frame of the same committed state before any interaction, while the
- * interacting frame differs from both.
- *
- * The 4x3 panel stacks a checkbox, a TextInput and a slider, one unit each.
- */
-export async function exerciseGuiTransientRestore(
-  host: WorldPersistenceHostClient<GuiTestClient>,
-  fontBytes: ArrayBuffer,
-  capture?: GuiFrameCapture,
-) {
-  const client = await host.createWorld({ symbolicId: "gui-transient" });
-  const font = await client.createAsset(17, fontBytes);
-  const ref = { kind: "alias", alias: 1 } as const;
-  const entity = aliasId(
-    await client.batch([
-      createEntity(1, "gui-transient-panel"),
-      insertComponent(client, "Transform", ref),
-      insertComponent(client, "Surface", ref, { width: 4, height: 3 }),
-      insertComponent(client, "GuiRoot", ref),
-    ]),
-    1,
+/** Target identity key for effect filtering. */
+export function sameTarget(a: GuiTarget, b: GuiTarget): boolean {
+  return (
+    a.world.id === b.world.id &&
+    a.world.incarnation === b.world.incarnation &&
+    a.entity === b.entity &&
+    a.component === b.component &&
+    a.incarnation === b.incarnation
   );
-  const { rootIncarnation } = await client.inspectGui({ entity });
-  const row = { width: 4, height: 1 } as const;
-  await client.editGuiBatch([
-    {
-      action: "insert",
-      entity,
-      rootIncarnation,
-      id: 1,
-      index: 0,
-      data: { kind: "container", containerKind: "column" },
-      style: { width: 4, height: 3 },
-    },
-    {
-      action: "insert",
-      entity,
-      rootIncarnation,
-      id: 2,
-      parent: 1,
-      index: 0,
-      data: { kind: "checkbox" },
-      values: { checked: true },
-      style: row,
-    },
-    {
-      action: "insert",
-      entity,
-      rootIncarnation,
-      id: 3,
-      parent: 1,
-      index: 1,
-      data: { kind: "textInput", text: "ab", placeholder: "" },
-      style: { ...row, fontSize: 0.6, asset: font },
-    },
-    {
-      action: "insert",
-      entity,
-      rootIncarnation,
-      id: 4,
-      parent: 1,
-      index: 2,
-      data: { kind: "slider" },
-      values: { value: 0.75, min: 0, max: 1, step: 0 },
-      style: row,
-    },
-    {
-      action: "updatePart",
-      handle: client.createGuiNodeHandle(entity, rootIncarnation, 2),
-      part: "background",
-      patch: { color: [0.9, 0.2, 0.1, 1] },
-    },
-  ]);
-  if (capture) await activatePanelCamera(client);
-  // Programmatic focus is fenced against evaluated layout with a ready font.
-  await loadedFont(client);
-  await client.waitForFrame();
-  const committed = capture ? await settledFrame(client, capture) : undefined;
-  // Without a camera, pointers address panel logical units; through the
-  // active camera they are normalized viewport points projected onto the
-  // panel.
-  const checkboxPoint = committed
-    ? panelViewportPoint(committed, [2, 0.5])
-    : ([2, 0.5] as [number, number]);
-
-  // Interaction state: a held press capturing pointer 1 on the checkbox,
-  // then focus, selection and composition on the TextInput.
-  const handle = (id: number) =>
-    client.createGuiNodeHandle(entity, rootIncarnation, id);
-  const states: (GuiTextFocusState | null)[] = [];
-  const stop = client.subscribeGuiObservations((batch) => {
-    if (batch.textFocus !== undefined) states.push(batch.textFocus);
-  });
-  // A press focuses its control, so the checkbox press comes first and
-  // keeps capturing pointer 1 while focus moves to the TextInput.
-  const press = await client.submitGuiInput({
-    kind: "pointerDown",
-    pointer: 1,
-    position: checkboxPoint,
-    button: "primary",
-  });
-  const focus = await client.submitGuiInput({
-    kind: "focus",
-    handle: handle(3),
-  });
-  await client.submitGuiInput({ kind: "setTextSelection", start: 0, end: 1 });
-  await client.submitGuiInput({
-    kind: "composition",
-    text: "zz",
-    caretStart: 2,
-    caretEnd: 2,
-  });
-  expect(
-    focus.unhandled === undefined && press.unhandled === undefined,
-    `Interaction before save was not routed: ${JSON.stringify([focus.unhandled, press.unhandled])}`,
-  );
-  const deadline = Date.now() + 10000;
-  while (states.at(-1)?.composition?.text !== "zz") {
-    expect(Date.now() < deadline, "The TextInput published no composition");
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
-  stop();
-  const interacting = capture ? await settledFrame(client, capture) : undefined;
-  const before = await client.inspectGui({ entity });
-
-  const bytes = await host.saveWorld();
-  await host.detachWorld();
-  const restored = await host.loadWorld(bytes, {
-    symbolicId: "gui-transient-restored",
-  });
-  const panel = (await restored.inspect()).entities.find(
-    (item) => item.metadata.symbolicId === "gui-transient-panel",
-  );
-  expect(panel, "Restored World omitted the transient panel");
-  const after = await restored.inspectGui({ entity: panel.id });
-  const values = (response: GuiInspectResponse) =>
-    JSON.stringify(response.nodes.map((node) => [node.id, node.controlValue]));
-  expect(
-    values(after) === values(before),
-    `Restored committed values ${values(after)} differ from ${values(before)}`,
-  );
-  const partOverride = (
-    (await guiProperties(restored, panel.id)).fields.part_state as
-      | { rows: ReadonlyMap<number, Readonly<Record<string, unknown>>> }
-      | undefined
-  )?.rows;
-  expect(
-    [...(partOverride?.values() ?? [])].some((row) => row.node === 2),
-    "Restored World lost the checkbox part override",
-  );
-
-  // No focus, capture, selection or composition survived the save.
-  const restoredStates: (GuiTextFocusState | null)[] = [];
-  const restoredStop = restored.subscribeGuiObservations((batch) => {
-    if (batch.textFocus !== undefined) restoredStates.push(batch.textFocus);
-  });
-  await restored.waitForFrame();
-  const snapshot = await restored.semanticSnapshot({ entity: panel.id });
-  const release = await restored.submitGuiInput({
-    kind: "pointerUp",
-    pointer: 1,
-    position: checkboxPoint,
-    button: "primary",
-  });
-  const commit = await restored.submitGuiInput({ kind: "commitComposition" });
-  const typed = await restored.submitGuiInput({ kind: "text", text: "x" });
-  const unchanged = await restored.inspectGui({ entity: panel.id });
-  expect(
-    snapshot.focused === undefined &&
-      release.unhandled?.kind === "noCapture" &&
-      commit.unhandled?.kind === "noFocus" &&
-      typed.unhandled?.kind === "noFocus" &&
-      values(unchanged) === values(before),
-    `Restored World kept interaction state: ${JSON.stringify({ focused: snapshot.focused, release: release.unhandled, commit: commit.unhandled, typed: typed.unhandled, values: values(unchanged) })}`,
-  );
-
-  // Handles from the saved session are rejected; fresh handles work, and
-  // focusing the restored TextInput starts with a collapsed selection and
-  // no composition.
-  const staleFocus = await restored
-    .submitGuiInput({ kind: "focus", handle: handle(3) })
-    .then(
-      (reply) => reply.unhandled?.kind ?? "handled",
-      () => "rejected",
-    );
-  expect(
-    staleFocus !== "handled",
-    "A handle from the saved session focused the restored TextInput",
-  );
-  await rejects(
-    restored.editGui({
-      action: "update",
-      handle: handle(2),
-      patch: { style: { opacity: 0.5 } },
-    }),
-    "A handle from the saved session edited the restored World",
-  );
-  const fresh = await restored.submitGuiInput({
-    kind: "focus",
-    handle: restored.createGuiNodeHandle(panel.id, after.rootIncarnation, 3),
-  });
-  expect(fresh.unhandled === undefined, "A fresh handle did not focus");
-  const restoredDeadline = Date.now() + 10000;
-  while (restoredStates.at(-1)?.node !== 3) {
-    expect(
-      Date.now() < restoredDeadline,
-      "The restored TextInput published no text focus",
-    );
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
-  restoredStop();
-  const refocused = restoredStates.at(-1)!;
-  expect(
-    refocused.text === "ab" &&
-      refocused.composition === undefined &&
-      refocused.selectionStart === refocused.selectionEnd,
-    `Refocused restored TextInput kept transient text state: ${JSON.stringify(refocused, (_, value) => (typeof value === "bigint" ? `${value}` : value))}`,
-  );
-
-  // The restored frame shows the committed values and part override exactly
-  // as before any interaction; the interacting frame differs from both.
-  let frames: Record<string, number> | undefined;
-  if (capture) {
-    await restored.submitGuiInput({ kind: "blur" });
-    const camera = (await restored.inspect()).entities.find(
-      (item) => item.metadata.symbolicId === "gui-restore-camera",
-    );
-    expect(camera, "Restored World omitted the camera");
-    cameraClient(restored).sendCommand({
-      type: "CameraActivateCommand",
-      entity: camera.id,
-    });
-    await restored.waitForFrame();
-    const restoredFrame = await settledFrame(restored, capture);
-    const interactionPixels = changedPixels(committed!, interacting!);
-    const restoredPixels = changedPixels(committed!, restoredFrame);
-    const panelPixels = contentPixels(restoredFrame);
-    expect(
-      panelPixels > 1000 && interactionPixels > 50 && restoredPixels === 0,
-      `Restored frame does not match the committed frame: ${JSON.stringify({ panelPixels, interactionPixels, restoredPixels })}`,
-    );
-    frames = { panelPixels, interactionPixels, restoredPixels };
-  }
-  await host.detachWorld();
-  return {
-    nodes: ids(after),
-    values: values(after),
-    restoredIncarnation: String(after.rootIncarnation),
-    release: release.unhandled?.kind,
-    commit: commit.unhandled?.kind,
-    staleFocus,
-    frames: frames ?? "no presentation in this environment",
-  };
 }

@@ -6,14 +6,21 @@ import test from "node:test";
 import type { WorldPersistenceHostClient } from "@ipp/client";
 import { runNativeEnvironment } from "./environment.js";
 import {
+  canvasSnapshot,
   exerciseSurfaceLifecycle,
   SURFACE_CACHE_POLICY,
   surfaceCachePolicy,
-  surfaceSnapshot,
   type SurfaceTestClient,
 } from "./surface-scenario.js";
+import {
+  ATTACHMENTS,
+  LIFECYCLE,
+  SURFACE,
+  CANVAS,
+  selectSystems,
+} from "./system-selections.js";
 
-test("Surface edits, overlays, animation and snapshots cross a real native connection", {
+test("Surface Canvas entities, field writes, animation and graph snapshots cross a real native connection", {
   timeout: 60000,
 }, async (context) => {
   const workspace = process.cwd();
@@ -21,34 +28,6 @@ test("Surface edits, overlays, animation and snapshots cross a real native conne
   const contract = await import(
     pathToFileURL(resolve(profile, "generated.js")).href
   );
-  assert.throws(
-    () =>
-      contract.encodeSurfaceItems({
-        nextId: 2,
-        items: [{ id: 1, content: { kind: "bitmap", size: [0, 1] } }],
-      }),
-    /bitmap size/,
-  );
-  for (const patch of [{ scale: [-1, 1] }, { opacity: 1.1 }, { fontSize: 0 }]) {
-    assert.throws(() =>
-      contract.encodeSurfaceEdit({
-        action: "update",
-        entity: 1n,
-        id: 1,
-        patch,
-      }),
-    );
-    assert.throws(() =>
-      contract.encodeSurfaceEdit({
-        action: "insert",
-        entity: 1n,
-        id: 1,
-        index: 0,
-        content: { kind: "label", text: "A" },
-        style: patch,
-      }),
-    );
-  }
   await runNativeEnvironment(
     "surfaces",
     {
@@ -73,9 +52,11 @@ test("Surface edits, overlays, animation and snapshots cross a real native conne
           signal: env.signal,
         }),
       );
-      const client = await host.createWorld({
+      const created = await host.createWorld({
+        selectedSystems: selectSystems(ATTACHMENTS, SURFACE, CANVAS, LIFECYCLE),
         symbolicId: "surface-lifecycle",
       });
+      const client = await host.openWorld(created.reference);
       const upload = async (kind: number, path: string) => {
         const bytes = new Uint8Array(await readFile(resolve(workspace, path)));
         return client.createAsset(kind, bytes.buffer);
@@ -92,29 +73,61 @@ test("Surface edits, overlays, animation and snapshots cross a real native conne
           "utf8",
         ),
       );
-      const result = await env.execute("item lifecycle", {}, () =>
+      const result = await env.execute("Canvas entity lifecycle", {}, () =>
         exerciseSurfaceLifecycle(
+          host,
           client,
           { font, panel, icon, bitmap },
           glyphs.A,
+          { encodeRowsTable: contract.encodeRowsTable },
         ),
       );
-      const bytes = await host.saveWorld();
-      const before = await surfaceSnapshot(client, result.entity);
-      await host.detachWorld();
-      const restored = await host.loadWorld(bytes, {
+      const bytes = await host.saveWorld(client.session);
+      const before = await canvasSnapshot(
+        result.canvasClient,
+        result.canvasEntity,
+      );
+      const graph = await host.inspectWorldGraph(bytes);
+      const canvasNode = graph.nodes.find(
+        (node) => node.symbolicId === "surface-api-canvas",
+      );
+      assert.ok(canvasNode, "World graph omitted the attached Canvas World");
+      const loaded = await host.loadWorld(bytes, {
         symbolicId: "surface-restored",
+        worldNames: new Map([[canvasNode.id, "surface-api-canvas-restored"]]),
       });
-      const entity = (await restored.inspect()).entities.find(
+      const canvasWorld = loaded.created.get(canvasNode.id);
+      assert.ok(canvasWorld, "World graph did not restore the Canvas World");
+      const restored = await host.openWorld(loaded.root);
+      const restoredCanvas = await host.openWorld(canvasWorld);
+      const restoredAnchor = (await restored.inspect()).entities.find(
         (entity) => entity.metadata.symbolicId === "surface-api",
-      )!;
-      const after = await surfaceSnapshot(restored, entity.id);
-      assert.deepEqual(after.collection, before.collection);
-      assert.equal(after.collection.nextId, 6);
-      assert.equal(after.properties.item_5_asset?.kind, "asset");
-      // Only the authored cache policy persists; cache state is derived.
+      );
+      assert.ok(restoredAnchor, "Restored Surface anchor disappeared");
+      const restoredSurface = restoredAnchor.components.find(
+        (item) => item.component === restored.components.Surface!.id,
+      );
+      assert.ok(restoredSurface, "Restored Surface lost its dimensions");
+      assert.equal(restoredSurface.fields.width, 4);
+      assert.equal(restoredSurface.fields.height, 3);
+      const restoredCanvasEntity = (
+        await restoredCanvas.inspect()
+      ).entities.find((entity) => entity.metadata.symbolicId === "canvas");
+      assert.ok(restoredCanvasEntity, "Restored Canvas entity disappeared");
       assert.deepEqual(
-        await surfaceCachePolicy(restored, entity.id),
+        await canvasSnapshot(restoredCanvas, restoredCanvasEntity.id),
+        before,
+      );
+      const attachment = restoredAnchor.components.find(
+        (item) => item.component === restored.components.WorldAttachment!.id,
+      );
+      assert.ok(attachment, "Restored Surface lost its WorldAttachment");
+      assert.equal(attachment.fields.mode, 1);
+      // A SurfaceCanvas attachment presents the child World's canvas and
+      // names no output of its own.
+      assert.equal(attachment.fields.output, null);
+      assert.deepEqual(
+        await surfaceCachePolicy(restored, restoredAnchor.id),
         SURFACE_CACHE_POLICY,
       );
     },

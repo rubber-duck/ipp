@@ -5,10 +5,15 @@ import type {
   EntitySnapshot,
   FieldValue,
   Inspection,
+  PresentedCapture,
 } from "@ipp/client";
 import type { CanvasRuntimeConfiguration } from "@ipp/react/web";
 
 const OPERATION_TIMEOUT_MS = 10_000;
+
+export function capturedPixels(frame: PresentedCapture) {
+  return { ...frame.view.binding.viewport, pixels: frame.pixels };
+}
 
 export interface CanvasRuntimeInput {
   readonly assetCacheBytes?: number;
@@ -109,11 +114,10 @@ export function entity(
 
 export function numericField(
   entitySnapshot: EntitySnapshot | undefined,
-  layer: "base" | "effective",
   component: number,
   field: string,
 ): number | null {
-  const value = entitySnapshot?.[layer].find(
+  const value = entitySnapshot?.components.find(
     (snapshot) => snapshot.component === component,
   )?.fields[field];
   return value === undefined ? null : Number(value);

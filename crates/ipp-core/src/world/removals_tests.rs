@@ -2,6 +2,17 @@ use super::*;
 use crate::{components::CustomMaterial, systems::*};
 use std::sync::{Arc, Mutex};
 
+/// Rendered meshes and materials with the evaluators they require.
+const RENDER_SYSTEMS: &[crate::systems::SystemId] = &[
+    crate::systems::animation::AnimationSystem::ID,
+    crate::systems::asset_dependencies::AssetDependencySystem::ID,
+    crate::systems::hierarchy::HierarchySystem::ID,
+    crate::systems::look_at::LookAtSystem::ID,
+    crate::systems::hierarchy::FinalPropagationSystem::ID,
+    crate::systems::geometry::GeometrySystem::ID,
+    crate::systems::render::RenderSystem::ID,
+];
+
 /// A heap-owning authored field: storage retains it until the removal barrier.
 const SOURCE: &str = "file:///materials/removal.shader";
 
@@ -82,6 +93,12 @@ impl System for Probe {
                 .effective_component(entity, ComponentValue::CUSTOM_MATERIAL)
                 .is_some()
         );
+        assert!(
+            context
+                .world()
+                .component_incarnation(entity, ComponentValue::CUSTOM_MATERIAL)
+                .is_none()
+        );
         // Cleanup cannot enqueue another update-originated cascade.
         assert_eq!(
             context.world_data.defer_remove_entity(entity),
@@ -120,7 +137,16 @@ fn queued_entity_storage_lives_through_every_update_and_invalidation_handler() {
         }));
     }
     let mut host = crate::HostRuntime::with_system_factories(factories).unwrap();
-    let id = host.create_world(Default::default()).unwrap();
+    let id = host
+        .create_world(
+            Default::default(),
+            &[
+                RENDER_SYSTEMS,
+                &[SystemId("test.remove"), SystemId("test.later")],
+            ]
+            .concat(),
+        )
+        .unwrap();
     let mut world = host.world_mut(id).unwrap();
     world
         .enqueue(Batch {
@@ -129,6 +155,7 @@ fn queued_entity_storage_lives_through_every_update_and_invalidation_handler() {
                 Command::Create {
                     alias: 0,
                     metadata: Default::default(),
+                    adopt: false,
                 },
                 Command::insert_value(
                     EntityRef::Alias(0),
@@ -165,7 +192,12 @@ fn queued_entity_storage_lives_through_every_update_and_invalidation_handler() {
 #[test]
 fn deferred_component_identity_and_generation_cannot_remove_replacements() {
     let mut host = crate::HostRuntime::new();
-    let id = host.create_world(Default::default()).unwrap();
+    let id = host
+        .create_world(
+            Default::default(),
+            &[crate::systems::constraints::ConstraintSystem::ID],
+        )
+        .unwrap();
     let mut world = host.world_mut(id).unwrap();
     world
         .enqueue(Batch {
@@ -174,11 +206,13 @@ fn deferred_component_identity_and_generation_cannot_remove_replacements() {
                 Command::Create {
                     alias: 0,
                     metadata: Default::default(),
+                    adopt: false,
                 },
                 Command::InsertComponent {
                     entity: EntityRef::Alias(0),
                     component: ComponentValue::SCALAR,
                     fields: Vec::new(),
+                    adopt: false,
                 },
             ],
         })
@@ -206,6 +240,7 @@ fn deferred_component_identity_and_generation_cannot_remove_replacements() {
                 entity: EntityRef::Handle(entity),
                 component: ComponentValue::SCALAR,
                 fields: Vec::new(),
+                adopt: false,
             }],
         })
         .unwrap();
@@ -214,7 +249,7 @@ fn deferred_component_identity_and_generation_cannot_remove_replacements() {
         world
             .inspect(entity)
             .unwrap()
-            .effective
+            .components
             .iter()
             .any(|value| value.type_id() == ComponentValue::SCALAR)
     );
@@ -232,6 +267,7 @@ fn deferred_component_identity_and_generation_cannot_remove_replacements() {
                 Command::Create {
                     alias: 0,
                     metadata: Default::default(),
+                    adopt: false,
                 },
             ],
         })

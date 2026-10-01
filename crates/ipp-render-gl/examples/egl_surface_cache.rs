@@ -3,13 +3,15 @@
 //! The device section runs the shared cache-target oracle: creation bounds,
 //! resizing, nesting rules, premultiplied composition front and mirrored, and
 //! atlas population nested inside a repaint. The service section drives a real
-//! Host, World and `RenderService` with owned font, drawing and bitmap assets
-//! and an opted-in GUI Surface over an opaque background Surface. An
-//! orthographic camera keeps the projected panel size fixed while its distance
-//! selects the cache band, so cached and direct captures compare pixel for
-//! pixel: 80 screen pixels per metre, a 4 x 2 metre panel over rows 40..200.
-//! The panel opts in through its `SurfaceCache` component; the World's own
-//! prepared policy, revisions and interaction priority drive every decision.
+//! Host and `RenderService` with owned font, drawing and bitmap assets. A camera
+//! World places an opted-in panel Surface over an opaque backdrop Surface; each
+//! presents the Canvas output of its own attached child World, authored as
+//! ordinary layout, Canvas leaf and control entities. An orthographic camera
+//! keeps the projected panel size fixed while its distance selects the cache
+//! band, so cached and direct captures compare pixel for pixel: 80 screen pixels
+//! per metre, a 4 x 2 metre panel over rows 40..200. The panel anchor opts in
+//! through its `SurfaceCache` component; the Worlds' own prepared policy,
+//! revisions and interaction priority drive every decision.
 
 #[cfg(target_os = "linux")]
 #[allow(dead_code)]
@@ -21,29 +23,46 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 #[cfg(target_os = "linux")]
 mod scenario {
     use super::{Result, smoke};
-    use ipp_core::components::{Camera, Transform};
+    use ipp_core::components::rows::Rows;
+    use ipp_core::components::{
+        Camera, CanvasBitmap, CanvasBox, CanvasDrawing, CanvasStyle, CanvasText, GuiButton,
+        GuiFont, GuiLayout, GuiSkin, Transform,
+    };
     use ipp_core::services::asset_management::{
         AssetSource, drawing::DRAWING_TYPE, font::FONT_TYPE,
     };
-    use ipp_core::systems::gui::{GuiPartPatch, GuiPartProperty};
-    use ipp_core::systems::surface::GuiPrimitivePart;
+    use ipp_core::services::gui_input::router::{
+        GuiInputRouter, GuiPhysicalInput, GuiRoutingContext, GuiRoutingDelivery,
+    };
+    use ipp_core::services::gui_input::{
+        GuiDeliveryError, GuiDeliveryPermit, GuiDeliveryTerminal, GuiInputError,
+    };
+    use ipp_core::systems::canvas::CanvasPublication;
+    use ipp_core::systems::gui::GuiPartId;
+    use ipp_core::systems::gui::GuiPrimitivePart;
+    use ipp_core::systems::gui::local::{GuiEntityTarget, GuiLocalAction, GuiLocalEffect};
+    use ipp_core::systems::gui::presentation::GuiPaintPart;
     use ipp_core::{
-        Batch, Command, ComponentValue, DynamicValue, EntityId, EntityRef, FieldValue, FieldWrite,
-        GuiCommand, GuiContainerKind, GuiInputCommand, GuiNodeData, GuiNodeDataRow, GuiNodeHandle,
-        GuiNodeId, GuiNodeStyle, GuiRoot, HostRuntime, Surface, SurfaceCache, TEXTURE_TYPE,
-        WorldId,
+        Batch, Command, ComponentValue, EntityId, EntityPlacementRef, EntityRef, FieldValue,
+        FieldWrite, HostRuntime, OutputKind, OutputRef, Surface, SurfaceCache, TEXTURE_TYPE,
+        ViewQueryTarget, WorldAttachment, WorldId, WorldViewport,
     };
     use ipp_render_gl::{
         GlesRenderDevice, RenderService, SurfaceCacheDiagnostic, SurfaceCachePresentation,
     };
     use smoke::frame_stats::{FrameStats, RenderFrameStats};
+    use std::cell::RefCell;
     use std::collections::BTreeMap;
     use std::mem::offset_of;
     use std::path::Path;
+    use std::rc::Rc;
+    use std::sync::Arc;
 
     const WIDTH: u32 = smoke::world::WIDTH;
     const HEIGHT: u32 = smoke::world::HEIGHT;
-    const SESSION: u64 = 1;
+
+    /// Queue owners of the physical router and of programmatic focus requests.
+    const ROUTED_OWNER: u64 = 77;
 
     /// Host frame interval; the cache refresh clock is accumulated World time.
     const DT: f64 = 1.0 / 60.0;
@@ -73,9 +92,9 @@ mod scenario {
     const MATCHED_MEAN: f64 = 2.0;
     const MATCHED_MAX: u8 = 24;
 
-    /// Pixels per region allowed beyond `MATCHED_MAX`: scroll-clip corners in
-    /// the cache image round coverage differently from the screen by up to 36
-    /// levels on a few pixels (observed three), which bilinear sampling keeps.
+    /// Pixels per region allowed beyond `MATCHED_MAX`: clip corners in the cache
+    /// image round coverage differently from the screen by up to 36 levels on a
+    /// few pixels (observed three), which bilinear sampling keeps.
     const MATCHED_OUTLIERS: u32 = 8;
 
     /// Band 2 halves the density: a loose bound on resampled edges only.
@@ -84,23 +103,57 @@ mod scenario {
     /// Recovered glyph atlas slots may round coverage by one level at glyph edges.
     const RECOVERY_MAX: u8 = 2;
 
+    /// Adapter delivery for routed and programmatic GUI input: every reserved
+    /// request records its single terminal.
+    struct Permit(Rc<RefCell<Vec<GuiDeliveryTerminal>>>);
+
+    impl GuiDeliveryPermit for Permit {
+        fn prepare(
+            &mut self,
+            _: Option<&GuiLocalEffect>,
+        ) -> std::result::Result<(), GuiDeliveryError> {
+            Ok(())
+        }
+
+        fn settle(self: Box<Self>, terminal: GuiDeliveryTerminal) {
+            self.0.borrow_mut().push(terminal);
+        }
+    }
+
+    struct Delivery(Rc<RefCell<Vec<GuiDeliveryTerminal>>>);
+
+    impl GuiRoutingDelivery for Delivery {
+        fn command(&mut self) -> std::result::Result<Box<dyn GuiDeliveryPermit>, GuiInputError> {
+            Ok(Box::new(Permit(self.0.clone())))
+        }
+    }
+
     pub(super) struct Scene<'a> {
         renderer: &'a mut RenderService<GlesRenderDevice>,
         context: &'a smoke::egl::Context,
         host: HostRuntime,
         world: WorldId,
+        root: OutputRef,
         camera: EntityId,
         panel: EntityId,
-        incarnation: u64,
+        canvas: OutputRef,
+        label: EntityId,
+        drawing: EntityId,
+        button: EntityId,
+        router: GuiInputRouter,
+        routing: Option<GuiRoutingContext>,
+        /// Batch identity of the latest programmatic `GuiAction` command.
+        actions: u64,
+        terminals: Rc<RefCell<Vec<GuiDeliveryTerminal>>>,
         evidence: &'a Path,
-        payloads: BTreeMap<String, Vec<u8>>,
+        payloads: BTreeMap<Arc<str>, Vec<u8>>,
         report: String,
     }
 
     fn source(kind: ipp_core::services::asset_management::AssetTypeId, name: &str) -> AssetSource {
         AssetSource {
             kind,
-            uri: format!("fixture:///{name}"),
+            uri: format!("fixture:///{name}").into(),
             variant: 0,
         }
     }
@@ -113,6 +166,127 @@ mod scenario {
                 offset: offset as u32,
                 value: FieldValue::F32(value),
             },
+        }
+    }
+
+    /// Queue one ordered authoring batch and apply it in a Host frame.
+    fn apply(
+        host: &mut HostRuntime,
+        world: WorldId,
+        operations: Vec<Command>,
+    ) -> Result<Vec<(u32, EntityId)>> {
+        host.world_mut(world)
+            .ok_or_else(|| format!("unknown World {world:?}"))?
+            .enqueue(Batch {
+                id: 1,
+                operations,
+            })?;
+
+        let update = host
+            .frame(0.0)?
+            .worlds
+            .remove(&world)
+            .ok_or_else(|| format!("World {world:?} was not updated"))?
+            .map_err(|reason| format!("World {world:?} update: {reason:?}"))?;
+        let outcome = update
+            .outcomes
+            .into_iter()
+            .next()
+            .ok_or_else(|| format!("World {world:?} reported no batch outcome"))?;
+
+        Ok(outcome
+            .result
+            .map_err(|error| format!("cache scene batch failed: {error:?}"))?)
+    }
+
+    /// Create one entity with `values`, optionally as the last child of `parent`.
+    fn create(
+        host: &mut HostRuntime,
+        world: WorldId,
+        parent: Option<EntityId>,
+        values: Vec<ComponentValue>,
+    ) -> Result<EntityId> {
+        let mut operations = vec![Command::Create {
+            alias: 0,
+            metadata: Default::default(),
+            adopt: false,
+        }];
+        operations.extend(
+            values
+                .into_iter()
+                .map(|value| Command::insert_value(EntityRef::Alias(0), value)),
+        );
+        if let Some(parent) = parent {
+            operations.push(Command::PlaceEntity {
+                entity: EntityRef::Alias(0),
+                placement: EntityPlacementRef {
+                    parent: Some(EntityRef::Handle(parent)),
+                    before: None,
+                },
+            });
+        }
+
+        Ok(apply(host, world, operations)?[0].1)
+    }
+
+    /// An attached child World's canvas with one logical unit per metre.
+    fn canvas_output(host: &mut HostRuntime, extent: [f32; 2]) -> Result<OutputRef> {
+        let mut options = ipp_core::WorldCreateOptions::new(smoke::selection::panel());
+        options.canvas = Some(ipp_core::CanvasState {
+            extent,
+            units_per_metre: 1.0,
+        });
+        let world = host.create_world_with_options(Default::default(), options)?;
+        Ok(OutputRef::canvas(host.world_ref(world).unwrap()))
+    }
+
+    /// A Surface anchor at depth `z` presenting `canvas` at its extent.
+    fn anchor(
+        host: &mut HostRuntime,
+        world: WorldId,
+        z: f32,
+        canvas: OutputRef,
+        extent: [f32; 2],
+    ) -> Result<EntityId> {
+        let surface = Surface {
+            width: extent[0],
+            height: extent[1],
+        };
+        create(
+            host,
+            world,
+            None,
+            vec![
+                ComponentValue::Transform(Transform {
+                    z,
+                    ..Default::default()
+                }),
+                ComponentValue::Surface(surface),
+                ComponentValue::WorldAttachment(WorldAttachment::surface(canvas)),
+            ],
+        )
+    }
+
+    /// Layout placement inside the panel stack: `[top, left]` margins and an
+    /// explicit size, or -1 for intrinsic sizing.
+    fn placed(kind: u32, size: [f32; 2], margin: [f32; 2]) -> ComponentValue {
+        ComponentValue::GuiLayout(GuiLayout {
+            kind,
+            width: size[0],
+            height: size[1],
+            margin_top: margin[0],
+            margin_left: margin[1],
+            ..Default::default()
+        })
+    }
+
+    fn tint(color: [f32; 4]) -> CanvasStyle {
+        CanvasStyle {
+            red: color[0],
+            green: color[1],
+            blue: color[2],
+            alpha: color[3],
+            ..Default::default()
         }
     }
 
@@ -164,88 +338,44 @@ mod scenario {
             let mut host = HostRuntime::new();
             renderer.install(&mut host)?;
             host.data_sources_mut().register_stream("fixture://")?;
-            let world = host.create_world(Default::default())?;
-            let mut panel_surface = Surface::default();
-            panel_surface.width = PANEL[0];
-            panel_surface.height = PANEL[1];
-            let mut backdrop = Surface::default();
-            backdrop.width = 4.0;
-            backdrop.height = 3.0;
-            let (camera, panel, background) = {
-                let mut world_context = host.world_mut(world).unwrap();
-                world_context.enqueue(Batch {
-                    id: 1,
-                    operations: vec![
-                        Command::Create {
-                            alias: 1,
-                            metadata: Default::default(),
-                        },
-                        Command::insert_value(
-                            EntityRef::Alias(1),
-                            ComponentValue::Transform(Transform {
-                                z: NEAR,
-                                ..Default::default()
-                            }),
-                        ),
-                        Command::insert_value(
-                            EntityRef::Alias(1),
-                            ComponentValue::Camera(Camera {
-                                projection: 1,
-                                ortho_height: 3.0,
-                                ..Default::default()
-                            }),
-                        ),
-                        Command::Create {
-                            alias: 2,
-                            metadata: Default::default(),
-                        },
-                        Command::insert_value(
-                            EntityRef::Alias(2),
-                            ComponentValue::Transform(Transform::default()),
-                        ),
-                        Command::insert_value(
-                            EntityRef::Alias(2),
-                            ComponentValue::Surface(panel_surface),
-                        ),
-                        Command::insert_value(
-                            EntityRef::Alias(2),
-                            ComponentValue::GuiRoot(GuiRoot::default()),
-                        ),
-                        Command::Create {
-                            alias: 3,
-                            metadata: Default::default(),
-                        },
-                        Command::insert_value(
-                            EntityRef::Alias(3),
-                            ComponentValue::Transform(Transform {
-                                z: -1.0,
-                                ..Default::default()
-                            }),
-                        ),
-                        Command::insert_value(
-                            EntityRef::Alias(3),
-                            ComponentValue::Surface(backdrop),
-                        ),
-                        Command::insert_value(
-                            EntityRef::Alias(3),
-                            ComponentValue::GuiRoot(GuiRoot::default()),
-                        ),
-                    ],
-                })?;
-                let report = world_context.step(0.0)?;
-                let created = report.outcomes[0]
-                    .result
-                    .as_ref()
-                    .map_err(|error| format!("cache scene batch failed: {error:?}"))?;
-                (created[0].1, created[1].1, created[2].1)
-            };
+            let world = host.create_world(Default::default(), &smoke::selection::scene())?;
+            let canvas = canvas_output(&mut host, PANEL)?;
+            let backdrop = canvas_output(&mut host, [4.0, 3.0])?;
+            let camera = create(
+                &mut host,
+                world,
+                None,
+                vec![
+                    ComponentValue::Transform(Transform {
+                        z: NEAR,
+                        ..Default::default()
+                    }),
+                    ComponentValue::Camera(Camera {
+                        projection: 1,
+                        ortho_height: 3.0,
+                        ..Default::default()
+                    }),
+                ],
+            )?;
+            let panel = anchor(&mut host, world, 0.0, canvas, PANEL)?;
+            anchor(&mut host, world, -1.0, backdrop, [4.0, 3.0])?;
             host.world_mut(world)
                 .unwrap()
                 .enqueue_camera_activate(camera)?;
-            host.world_mut(world).unwrap().step(0.0)?;
+            host.frame(0.0)?;
+            let root =
+                host.bind_output(host.world_ref(world).unwrap(), camera, OutputKind::Camera)?;
+            host.set_root_output(
+                root,
+                WorldViewport {
+                    width: WIDTH,
+                    height: HEIGHT,
+                    device_pixel_ratio: 1.0,
+                },
+            )?;
 
             let font = source(FONT_TYPE, "shure-tech-mono.ippf");
-            let drawing = source(DRAWING_TYPE, "panel.ippd");
+            let drawing_source = source(DRAWING_TYPE, "panel.ippd");
             let bitmap = source(TEXTURE_TYPE, "badge.ippt");
             let payloads = BTreeMap::from([
                 (
@@ -253,7 +383,7 @@ mod scenario {
                     std::fs::read(fonts.join("shure-tech-mono.ippf"))?,
                 ),
                 (
-                    drawing.uri.clone(),
+                    drawing_source.uri.clone(),
                     std::fs::read(assets.join("panel.ippd"))?,
                 ),
                 // The same drawing under a second identity for resource replacement.
@@ -266,271 +396,214 @@ mod scenario {
                     std::fs::read(assets.join("badge.ippt"))?,
                 ),
             ]);
-            let incarnation = |host: &mut HostRuntime, entity| -> Result<u64> {
-                Ok(host
-                    .world_mut(world)
-                    .unwrap()
-                    .inspect_gui(entity, None, 1, 1)?
-                    .root_incarnation)
+
+            // Opaque backdrop behind the panel, never opted in.
+            let box_leaf = |host: &mut HostRuntime,
+                            output: OutputRef,
+                            position: [f32; 2],
+                            size: [f32; 2],
+                            color: [f32; 4]|
+             -> Result<EntityId> {
+                create(
+                    host,
+                    output.world().id(),
+                    None,
+                    vec![
+                        ComponentValue::CanvasBox(CanvasBox {
+                            width: size[0],
+                            height: size[1],
+                            ..Default::default()
+                        }),
+                        ComponentValue::CanvasStyle(CanvasStyle {
+                            x: position[0],
+                            y: position[1],
+                            ..tint(color)
+                        }),
+                    ],
+                )
             };
-            let background_incarnation = incarnation(&mut host, background)?;
-            let panel_incarnation = incarnation(&mut host, panel)?;
+            box_leaf(
+                &mut host,
+                backdrop,
+                [0.0, 0.0],
+                [4.0, 3.0],
+                [0.05, 0.12, 0.3, 1.0],
+            )?;
+            box_leaf(
+                &mut host,
+                backdrop,
+                [1.5, 0.0],
+                [1.0, 3.0],
+                [0.9, 0.9, 0.9, 1.0],
+            )?;
+
+            // The panel stack is transparent: the backdrop shows through its gaps.
+            let gui = canvas.world().id();
+            let stack = create(&mut host, gui, None, vec![placed(3, PANEL, [0.0, 0.0])])?;
+            let append = |host: &mut HostRuntime, values| create(host, gui, Some(stack), values);
+
+            // Gradient, border and glow: the control's Background part override.
+            let mut parts = Rows::new();
+            parts
+                .push(GuiPaintPart {
+                    color: Some([1.0, 1.0, 1.0, 1.0]),
+                    fill_mode: Some(1.0),
+                    gradient_start: Some([0.0, 0.0]),
+                    gradient_end: Some([0.0, 1.0]),
+                    gradient_color0: Some([1.0, 0.08, 0.04, 1.0]),
+                    gradient_color1: Some([1.0, 0.8, 0.08, 1.0]),
+                    corner_radius: Some([0.12, 0.12]),
+                    border_width: Some(0.05),
+                    border_color: Some([1.0, 1.0, 1.0, 1.0]),
+                    glow_color: Some([1.0, 0.35, 0.05, 1.0]),
+                    glow_intensity: Some(0.8),
+                    glow_radius: Some(0.15),
+                    glow_falloff: Some(2.0),
+                    ..GuiPaintPart::keyed(GuiPartId::base(GuiPrimitivePart::Background))?
+                })
+                .unwrap();
+            append(
+                &mut host,
+                vec![
+                    ComponentValue::GuiButton(GuiButton::default()),
+                    placed(0, [1.4, 1.0], [0.3, 0.25]),
+                    ComponentValue::GuiSkin(GuiSkin {
+                        parts,
+                        ..Default::default()
+                    }),
+                ],
+            )?;
+
+            // Overlapping translucent boxes over the backdrop.
+            for (size, margin, color) in [
+                ([0.8, 0.8], [0.2, 1.9], [1.0, 0.1, 0.1, 0.5]),
+                ([0.8, 0.8], [0.6, 2.3], [0.1, 1.0, 0.2, 0.5]),
+            ] {
+                append(
+                    &mut host,
+                    vec![
+                        ComponentValue::CanvasBox(CanvasBox::default()),
+                        placed(6, size, margin),
+                        ComponentValue::CanvasStyle(tint(color)),
+                    ],
+                )?;
+            }
+
+            // Clipped content: a viewport clip smaller than its laid-out child.
+            let viewport = append(
+                &mut host,
+                vec![
+                    placed(3, [-1.0, -1.0], [1.45, 3.2]),
+                    ComponentValue::CanvasStyle(CanvasStyle {
+                        clipped: true,
+                        clip_max_x: 0.6,
+                        clip_max_y: 0.4,
+                        ..Default::default()
+                    }),
+                ],
+            )?;
+            create(
+                &mut host,
+                gui,
+                Some(viewport),
+                vec![
+                    ComponentValue::CanvasBox(CanvasBox::default()),
+                    placed(6, [1.5, 1.5], [0.0, 0.0]),
+                    ComponentValue::CanvasStyle(tint([1.0, 0.0, 1.0, 1.0])),
+                ],
+            )?;
+
+            let label = append(
+                &mut host,
+                vec![
+                    ComponentValue::CanvasText(CanvasText {
+                        text: "Cache".into(),
+                        source: font.uri.clone(),
+                        variant: font.variant,
+                        font_size: 0.3,
+                    }),
+                    placed(0, [-1.0, -1.0], [1.45, 0.3]),
+                    ComponentValue::CanvasStyle(tint([1.0, 0.85, 0.2, 1.0])),
+                ],
+            )?;
+
+            // The unit-square drawing is centred in and scaled to its layout box.
+            let drawing = append(
+                &mut host,
+                vec![
+                    ComponentValue::CanvasDrawing(CanvasDrawing {
+                        source: drawing_source.uri.clone(),
+                        variant: drawing_source.variant,
+                    }),
+                    placed(0, [0.6, 0.45], [0.3, 3.2]),
+                    ComponentValue::CanvasStyle(CanvasStyle {
+                        x: 0.3,
+                        y: 0.225,
+                        scale_x: 0.6,
+                        scale_y: 0.45,
+                        ..tint([0.2, 0.6, 1.0, 1.0])
+                    }),
+                ],
+            )?;
+            append(
+                &mut host,
+                vec![
+                    ComponentValue::CanvasBitmap(CanvasBitmap {
+                        source: bitmap.uri.clone(),
+                        variant: bitmap.variant,
+                        width: 0.35,
+                        height: 0.35,
+                    }),
+                    placed(0, [-1.0, -1.0], [0.95, 3.3]),
+                    ComponentValue::CanvasStyle(CanvasStyle::default()),
+                ],
+            )?;
+            let button = append(
+                &mut host,
+                vec![
+                    ComponentValue::GuiButton(GuiButton {
+                        label: "Go".into(),
+                    }),
+                    ComponentValue::GuiFont(GuiFont {
+                        source: font.uri.clone(),
+                        variant: font.variant,
+                        font_size: 0.2,
+                    }),
+                    placed(0, [0.7, 0.35], [1.5, 2.1]),
+                ],
+            )?;
+
             let mut scene = Self {
                 renderer,
                 context,
                 host,
                 world,
+                root,
                 camera,
                 panel,
-                incarnation: panel_incarnation,
+                canvas,
+                label,
+                drawing,
+                button,
+                router: GuiInputRouter::default(),
+                routing: None,
+                actions: 0,
+                terminals: Rc::default(),
                 evidence,
                 payloads,
                 report: String::new(),
             };
-
-            // Opaque backdrop behind the panel, never opted in.
-            scene.insert(
-                background,
-                background_incarnation,
-                1,
-                None,
-                0,
-                GuiNodeData::Container(GuiContainerKind::Stack),
-                GuiNodeDataRow::default(),
-                GuiNodeStyle {
-                    width: Some(4.0),
-                    height: Some(3.0),
-                    background_color: Some([0.05, 0.12, 0.3, 1.0]),
-                    ..Default::default()
-                },
-            )?;
-            scene.insert(
-                background,
-                background_incarnation,
-                2,
-                Some(1),
-                0,
-                GuiNodeData::Container(GuiContainerKind::SizedBox),
-                GuiNodeDataRow::default(),
-                GuiNodeStyle {
-                    width: Some(1.0),
-                    height: Some(3.0),
-                    margin: Some([0.0, 0.0, 0.0, 1.5]),
-                    background_color: Some([0.9, 0.9, 0.9, 1.0]),
-                    ..Default::default()
-                },
-            )?;
-
-            // The panel root is transparent: the backdrop shows through its gaps.
-            let panel_nodes: [(u32, Option<u32>, GuiNodeData, GuiNodeDataRow, GuiNodeStyle); 10] = [
-                (
-                    1,
-                    None,
-                    GuiNodeData::Container(GuiContainerKind::Stack),
-                    GuiNodeDataRow::default(),
-                    GuiNodeStyle {
-                        width: Some(PANEL[0]),
-                        height: Some(PANEL[1]),
-                        ..Default::default()
-                    },
-                ),
-                // Gradient, border and glow; its skin lanes are set below.
-                (
-                    2,
-                    Some(1),
-                    GuiNodeData::Container(GuiContainerKind::SizedBox),
-                    GuiNodeDataRow::default(),
-                    GuiNodeStyle {
-                        width: Some(1.4),
-                        height: Some(1.0),
-                        margin: Some([0.3, 0.0, 0.0, 0.25]),
-                        background_color: Some([1.0, 1.0, 1.0, 1.0]),
-                        ..Default::default()
-                    },
-                ),
-                // Overlapping translucent boxes over the backdrop.
-                (
-                    3,
-                    Some(1),
-                    GuiNodeData::Container(GuiContainerKind::SizedBox),
-                    GuiNodeDataRow::default(),
-                    GuiNodeStyle {
-                        width: Some(0.8),
-                        height: Some(0.8),
-                        margin: Some([0.2, 0.0, 0.0, 1.9]),
-                        background_color: Some([1.0, 0.1, 0.1, 0.5]),
-                        ..Default::default()
-                    },
-                ),
-                (
-                    4,
-                    Some(1),
-                    GuiNodeData::Container(GuiContainerKind::SizedBox),
-                    GuiNodeDataRow::default(),
-                    GuiNodeStyle {
-                        width: Some(0.8),
-                        height: Some(0.8),
-                        margin: Some([0.6, 0.0, 0.0, 2.3]),
-                        background_color: Some([0.1, 1.0, 0.2, 0.5]),
-                        ..Default::default()
-                    },
-                ),
-                // Clipped content: a scroll viewport smaller than its child.
-                (
-                    5,
-                    Some(1),
-                    GuiNodeData::Container(GuiContainerKind::ScrollView),
-                    GuiNodeDataRow::default(),
-                    GuiNodeStyle {
-                        width: Some(0.6),
-                        height: Some(0.4),
-                        margin: Some([1.45, 0.0, 0.0, 3.2]),
-                        ..Default::default()
-                    },
-                ),
-                (
-                    6,
-                    Some(5),
-                    GuiNodeData::Container(GuiContainerKind::SizedBox),
-                    GuiNodeDataRow::default(),
-                    GuiNodeStyle {
-                        width: Some(1.5),
-                        height: Some(1.5),
-                        background_color: Some([1.0, 0.0, 1.0, 1.0]),
-                        ..Default::default()
-                    },
-                ),
-                (
-                    7,
-                    Some(1),
-                    GuiNodeData::Text("Cache".into()),
-                    GuiNodeDataRow::default(),
-                    GuiNodeStyle {
-                        font_size: 0.3,
-                        margin: Some([1.45, 0.0, 0.0, 0.3]),
-                        color: [1.0, 0.85, 0.2, 1.0],
-                        asset: Some(font.clone()),
-                        ..Default::default()
-                    },
-                ),
-                (
-                    8,
-                    Some(1),
-                    GuiNodeData::Drawing,
-                    GuiNodeDataRow::default(),
-                    GuiNodeStyle {
-                        width: Some(0.6),
-                        height: Some(0.45),
-                        margin: Some([0.3, 0.0, 0.0, 3.2]),
-                        color: [0.2, 0.6, 1.0, 1.0],
-                        asset: Some(drawing.clone()),
-                        ..Default::default()
-                    },
-                ),
-                (
-                    9,
-                    Some(1),
-                    GuiNodeData::Image,
-                    GuiNodeDataRow::image([0.35, 0.35]),
-                    GuiNodeStyle {
-                        margin: Some([0.95, 0.0, 0.0, 3.3]),
-                        asset: Some(bitmap.clone()),
-                        ..Default::default()
-                    },
-                ),
-                (
-                    10,
-                    Some(1),
-                    GuiNodeData::Button {
-                        label: "Go".into(),
-                    },
-                    GuiNodeDataRow::default(),
-                    GuiNodeStyle {
-                        width: Some(0.7),
-                        height: Some(0.35),
-                        margin: Some([1.5, 0.0, 0.0, 2.1]),
-                        font_size: 0.2,
-                        asset: Some(font.clone()),
-                        ..Default::default()
-                    },
-                ),
-            ];
-            let mut children = BTreeMap::<Option<u32>, u32>::new();
-            for (id, parent, data, values, style) in panel_nodes {
-                let index = children.entry(parent).or_default();
-                scene.insert(
-                    panel,
-                    panel_incarnation,
-                    id,
-                    parent,
-                    *index,
-                    data,
-                    values,
-                    style,
-                )?;
-                *index += 1;
-            }
-            use GuiPartProperty as P;
-            let background = [
-                (P::FillMode, DynamicValue::F32(1.0)),
-                (P::GradientStart, DynamicValue::Vec2([0.0, 0.0])),
-                (P::GradientEnd, DynamicValue::Vec2([0.0, 1.0])),
-                (
-                    P::GradientColor0,
-                    DynamicValue::Vec4([1.0, 0.08, 0.04, 1.0]),
-                ),
-                (P::GradientColor1, DynamicValue::Vec4([1.0, 0.8, 0.08, 1.0])),
-                (P::CornerRadius, DynamicValue::Vec2([0.12, 0.12])),
-                (P::BorderWidth, DynamicValue::F32(0.05)),
-                (P::BorderColor, DynamicValue::Vec4([1.0, 1.0, 1.0, 1.0])),
-                (P::GlowColor, DynamicValue::Vec4([1.0, 0.35, 0.05, 1.0])),
-                (P::GlowIntensity, DynamicValue::F32(0.8)),
-                (P::GlowRadius, DynamicValue::F32(0.15)),
-                (P::GlowFalloff, DynamicValue::F32(2.0)),
-            ]
-            .into_iter()
-            .fold(GuiPartPatch::default(), |patch, (property, value)| {
-                patch.set(property, value)
-            });
-            scene.part(2, GuiPrimitivePart::Background, background)?;
-            scene.settle(&[font, drawing, bitmap])?;
+            scene.settle(&[font, drawing_source, bitmap])?;
             Ok(scene)
         }
 
-        #[allow(clippy::too_many_arguments)]
-        fn insert(
-            &mut self,
-            entity: EntityId,
-            root_incarnation: u64,
-            id: u32,
-            parent: Option<u32>,
-            index: u32,
-            data: GuiNodeData,
-            values: GuiNodeDataRow,
-            style: GuiNodeStyle,
-        ) -> Result<()> {
-            self.host
-                .world_mut(self.world)
-                .unwrap()
-                .enqueue_gui_command(
-                    SESSION,
-                    GuiCommand::InsertNode {
-                        entity,
-                        root_incarnation,
-                        id: GuiNodeId(id),
-                        parent: parent.map(GuiNodeId),
-                        index,
-                        data,
-                        values,
-                        style,
-                    },
-                )?;
-            self.host.world_mut(self.world).unwrap().step(0.0)?;
-            Ok(())
+        fn batch(&mut self, operations: Vec<Command>) -> Result<()> {
+            self.enqueue(self.world, operations)
         }
 
-        fn batch(&mut self, operations: Vec<Command>) -> Result<()> {
-            let mut world = self.host.world_mut(self.world).unwrap();
+        /// Queue ordered writes for `world`'s next Host frame boundary.
+        fn enqueue(&mut self, world: WorldId, operations: Vec<Command>) -> Result<()> {
+            let mut world = self.host.world_mut(world).unwrap();
             world.enqueue(Batch {
                 id: world.tick() + 1,
                 operations,
@@ -538,30 +611,18 @@ mod scenario {
             Ok(())
         }
 
-        /// Patch one node's part overrides, which take precedence over any
-        /// theme for every state and variant.
-        fn part(&mut self, node: u32, part: GuiPrimitivePart, patch: GuiPartPatch) -> Result<()> {
-            let handle = self.node(node);
-            self.host
-                .world_mut(self.world)
-                .unwrap()
-                .enqueue_gui_command(
-                    SESSION,
-                    GuiCommand::UpdatePart {
-                        handle,
-                        part,
-                        patch,
-                    },
-                )?;
-            Ok(())
-        }
-
+        /// Recolour the text leaf through its ordinary CanvasStyle tint fields.
         fn text_color(&mut self, color: [f32; 4]) -> Result<()> {
-            self.part(
-                7,
-                GuiPrimitivePart::Label,
-                GuiPartPatch::default().set(GuiPartProperty::Color, DynamicValue::Vec4(color)),
-            )
+            let label = self.label;
+            let operations = [
+                (offset_of!(CanvasStyle, red), color[0]),
+                (offset_of!(CanvasStyle, green), color[1]),
+                (offset_of!(CanvasStyle, blue), color[2]),
+                (offset_of!(CanvasStyle, alpha), color[3]),
+            ]
+            .map(|(offset, value)| field(label, ComponentValue::CANVAS_STYLE, offset, value))
+            .to_vec();
+            self.enqueue(self.canvas.world().id(), operations)
         }
 
         fn camera_distance(&mut self, distance: f32) -> Result<()> {
@@ -618,16 +679,80 @@ mod scenario {
             }])
         }
 
-        fn input(&mut self, command: GuiInputCommand) -> Result<()> {
-            self.host
-                .world_mut(self.world)
-                .unwrap()
-                .enqueue_gui_input_command(SESSION, command)?;
+        /// Route one physical event against the current completed root view.
+        fn route(&mut self, input: GuiPhysicalInput) -> Result<()> {
+            if self.routing.is_none() {
+                let (context, _) =
+                    self.router
+                        .bind(&self.host, self.root.world(), ROUTED_OWNER, Vec::new())?;
+                self.routing = Some(context);
+            }
+            let view = self.host.resolve_view(ViewQueryTarget::RootView {
+                output: self.root,
+                expected_viewport: WorldViewport {
+                    width: WIDTH,
+                    height: HEIGHT,
+                    device_pixel_ratio: 1.0,
+                },
+            })?;
+            self.router.route(
+                &mut self.host,
+                self.routing.as_mut().unwrap(),
+                view,
+                input,
+                &mut Delivery(self.terminals.clone()),
+            )?;
             Ok(())
         }
 
-        fn node(&self, id: u32) -> GuiNodeHandle {
-            GuiNodeHandle::new(SESSION, self.panel, self.incarnation, GuiNodeId(id))
+        /// Programmatic focus or blur of the "Go" button.
+        fn focus(&mut self, action: GuiLocalAction) -> Result<()> {
+            let gui = self.canvas.world().id();
+            let hit = self
+                .host
+                .output(
+                    self.host.latest_publication(gui).ok_or("no publication")?,
+                    self.canvas,
+                )
+                .and_then(|output| output.data::<CanvasPublication>())
+                .and_then(|publication| {
+                    publication
+                        .hits
+                        .iter()
+                        .find(|hit| hit.target.entity == self.button)
+                        .cloned()
+                })
+                .ok_or("the button has no Canvas hit")?;
+            let target = GuiEntityTarget::from_canvas(self.canvas.world(), hit.target);
+            self.actions += 1;
+            self.host.world_mut(gui).unwrap().enqueue(Batch {
+                id: 5000 + self.actions,
+                operations: vec![Command::GuiAction {
+                    target: ipp_core::GuiActionTarget {
+                        entity: EntityRef::Handle(target.entity),
+                        component: target.component,
+                        incarnation: target.incarnation,
+                    },
+                    action,
+                }],
+            })?;
+            Ok(())
+        }
+
+        /// Every routed request settled with an applied effect.
+        fn release_input(&mut self) -> Result<()> {
+            if let Some(context) = self.routing.take() {
+                self.router.release(&mut self.host, context);
+            }
+            let terminals = self.terminals.borrow();
+            if terminals.is_empty()
+                || !terminals
+                    .iter()
+                    .all(|terminal| matches!(terminal, GuiDeliveryTerminal::Applied(_)))
+            {
+                return Err(format!("GUI input did not apply: {terminals:?}").into());
+            }
+            Ok(())
         }
 
         /// One Host frame: deliver requested bytes, advance World time by `dt`
@@ -642,10 +767,6 @@ mod scenario {
 
         /// One frame that may still skip draws while resources are re-uploaded.
         fn present(&mut self, dt: f64) -> Result<FrameStats> {
-            self.host
-                .world_mut(self.world)
-                .unwrap()
-                .prepare_update(dt)?;
             self.host.progress_assets();
             for request in self.host.take_resource_requests() {
                 let bytes = self
@@ -654,15 +775,27 @@ mod scenario {
                     .ok_or_else(|| format!("unexpected cache request {}", request.source))?;
                 self.host.complete_resource(request.id, Ok(bytes.clone()))?;
             }
-            let mut world = self.host.world_mut(self.world).unwrap();
-            let report = world.step(dt)?;
-            for outcome in &report.outcomes {
-                outcome
-                    .result
-                    .as_ref()
-                    .map_err(|error| format!("cache scene batch failed: {error:?}"))?;
+            let frame = self.host.frame(dt)?;
+            if !frame.publication_errors.is_empty() {
+                return Err(format!("publication failures: {:?}", frame.publication_errors).into());
             }
-            Ok(self.renderer.render_stats(&mut world, WIDTH, HEIGHT)?)
+            for report in frame.worlds.values() {
+                for outcome in &report.as_ref().map_err(|error| error.to_string())?.outcomes {
+                    outcome
+                        .result
+                        .as_ref()
+                        .map_err(|error| format!("cache scene batch failed: {error:?}"))?;
+                }
+            }
+            let selected = self
+                .host
+                .root_output(self.world)
+                .map(|(output, _, publication)| (output, publication));
+            self.renderer.prepare(&mut self.host, selected)?;
+            self.host.progress_assets();
+            Ok(self
+                .renderer
+                .draw_stats(&self.host, self.world, WIDTH, HEIGHT)?)
         }
 
         /// Present until the panel's presentation satisfies `done`: routed GUI
@@ -684,26 +817,25 @@ mod scenario {
             Err(format!("{label}: presentation never changed: {:?}", self.record()?).into())
         }
 
-        /// The panel's prepared paint and resource revisions.
-        fn revisions(&mut self) -> Option<(u64, u64)> {
-            let panel = self.panel;
-            self.host
-                .world_mut(self.world)
-                .unwrap()
-                .surface_render_items()
-                .iter()
-                .find(|item| item.entity == panel)
-                .map(|item| (item.paint_revision, item.resource_revision))
+        /// The panel Canvas output's completed paint and resource revisions.
+        fn revisions(&self) -> Option<(u64, u64)> {
+            let publication = self
+                .host
+                .output(
+                    self.host.latest_publication(self.canvas.world().id())?,
+                    self.canvas,
+                )?
+                .data::<CanvasPublication>()?;
+            Some((publication.paint_revision, publication.resource_revision))
         }
 
         /// Whether every source has its data and GPU data resident.
-        fn resident(&mut self, sources: &[AssetSource]) -> bool {
-            let world = self.host.world_mut(self.world).unwrap();
+        fn resident(&self, sources: &[AssetSource]) -> bool {
+            let resources = self.host.asset_resources();
             sources.iter().all(|source| {
-                world
-                    .asset_resources()
+                resources
                     .find(source)
-                    .and_then(|key| world.asset_resources().get(key))
+                    .and_then(|key| resources.get(key))
                     .is_some_and(|resource| {
                         resource.data().is_some() && resource.graphics_ready() == Some(true)
                     })
@@ -1045,20 +1177,24 @@ mod scenario {
             // Resource replacement bypasses the cadence: the frame that sees the
             // new resource identity repaints or presents directly.
             let replacement = source(DRAWING_TYPE, "panel-replacement.ippd");
-            self.part(
-                8,
-                GuiPrimitivePart::Icon,
-                GuiPartPatch::default().set(
-                    GuiPartProperty::Asset,
-                    DynamicValue::Asset(replacement.clone()),
-                ),
+            let drawing = self.drawing;
+            self.enqueue(
+                self.canvas.world().id(),
+                vec![Command::SetField {
+                    entity: EntityRef::Handle(drawing),
+                    component: ComponentValue::CANVAS_DRAWING,
+                    field: FieldWrite {
+                        offset: offset_of!(CanvasDrawing, source) as u32,
+                        value: FieldValue::String(replacement.uri.clone()),
+                    },
+                }],
             )?;
-            let revision = |scene: &mut Self| scene.revisions().map(|(_, resource)| resource);
-            let before = revision(&mut self);
+            let revision = |scene: &Self| scene.revisions().map(|(_, resource)| resource);
+            let before = revision(&self);
             let mut observed = false;
             for _ in 0..64 {
                 let stats = self.frame(DT)?;
-                if revision(&mut self) != before {
+                if revision(&self) != before {
                     let record = self.record()?;
                     if record.presentation == SurfaceCachePresentation::Reused {
                         return Err(format!(
@@ -1116,36 +1252,17 @@ mod scenario {
 
             // Interaction: hover and focus present current content directly and
             // never leave a stale image behind on release.
-            for (label, press, release) in [
-                (
-                    "hover",
-                    // The "Go" button (node 10) spans panel metres x 2.1..2.8,
-                    // y 1.5..1.85; its centre in normalized viewport coordinates.
-                    GuiInputCommand::PointerMove {
+            for label in ["hover", "focus"] {
+                if label == "hover" {
+                    // The "Go" button spans panel metres x 2.1..2.8, y 1.5..1.85;
+                    // its centre in normalized viewport coordinates.
+                    self.route(GuiPhysicalInput::PointerMove {
                         pointer: 1,
-                        panel: None,
-                        position: [2.45 / 4.0, (0.5 + 1.675) / 3.0],
-                        blockers: Vec::new(),
-                        panel_distance: None,
-                    },
-                    // Leaving every panel ends hover; cancelling only ends a press.
-                    GuiInputCommand::PointerMove {
-                        pointer: 1,
-                        panel: None,
-                        position: [0.02, 0.02],
-                        blockers: Vec::new(),
-                        panel_distance: None,
-                    },
-                ),
-                (
-                    "focus",
-                    GuiInputCommand::Focus {
-                        handle: self.node(10),
-                    },
-                    GuiInputCommand::Blur,
-                ),
-            ] {
-                self.input(press)?;
+                        point: [2.45 / 4.0, (0.5 + 1.675) / 3.0],
+                    })?;
+                } else {
+                    self.focus(GuiLocalAction::Focus)?;
+                }
                 let stats = self.frame_until(label, |presentation| {
                     presentation == SurfaceCachePresentation::Interaction
                 })?;
@@ -1155,7 +1272,15 @@ mod scenario {
                 if max_difference(&reference, &promoted) != 0 {
                     return Err(format!("{label} promotion differs from direct").into());
                 }
-                self.input(release)?;
+                if label == "hover" {
+                    // Leaving every panel ends hover.
+                    self.route(GuiPhysicalInput::PointerMove {
+                        pointer: 1,
+                        point: [0.02, 0.02],
+                    })?;
+                } else {
+                    self.focus(GuiLocalAction::Blur)?;
+                }
                 let stats = self.frame_until(label, |presentation| {
                     presentation != SurfaceCachePresentation::Interaction
                 })?;
@@ -1180,6 +1305,7 @@ mod scenario {
                     true,
                 )?;
             }
+            self.release_input()?;
 
             // Mirrored rear view through the cache equals the direct rear view.
             self.turn_panel(true)?;
@@ -1267,7 +1393,7 @@ mod scenario {
                 .into());
             }
             if self.revisions() != revisions {
-                return Err("device replacement changed the prepared revisions".into());
+                return Err("device replacement changed the published revisions".into());
             }
             if stats.surface_cache_entries != 1 {
                 return Err(

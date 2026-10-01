@@ -75,15 +75,9 @@ impl<'a> RenderReadAccess<'a> {
         &self.render.items
     }
 
-    /// Evaluated debug shape inputs for the completed world frame.
+    /// All evaluated debug parts, including individually hidden declarations.
     pub fn debug_render_items(&self) -> &'a [DebugRenderItem] {
         &self.render.debug_items
-    }
-
-    /// Evaluated Surface inputs retained independently of mesh submissions.
-    #[cfg(feature = "surfaces")]
-    pub fn surface_render_items(&self) -> &'a [crate::SurfaceRenderItem] {
-        &self.render.surface_items
     }
 
     /// Data compatibility diagnostics from the completed render preparation pass.
@@ -139,12 +133,12 @@ impl<'a> RenderReadAccess<'a> {
         self.world
             .components
             .base_color_texture(index)
-            .map(|texture| (texture.source.as_str(), texture.variant))
+            .map(|texture| (&*texture.source, texture.variant))
             .or_else(|| {
                 self.world
                     .components
                     .unlit_texture(index)
-                    .map(|texture| (texture.source.as_str(), texture.variant))
+                    .map(|texture| (&*texture.source, texture.variant))
             })
     }
 
@@ -185,12 +179,12 @@ impl<'a> RenderReadAccess<'a> {
             None
         } else {
             particle_mesh
-                .map(|mesh| (mesh.source.as_str(), mesh.variant))
+                .map(|mesh| (&*mesh.source, mesh.variant))
                 .or_else(|| {
                     self.world
                         .components
                         .mesh_instance(index)
-                        .map(|mesh| (mesh.source.as_str(), mesh.variant))
+                        .map(|mesh| (&*mesh.source, mesh.variant))
                 })
         };
         #[cfg(not(feature = "particles"))]
@@ -198,7 +192,7 @@ impl<'a> RenderReadAccess<'a> {
             .world
             .components
             .mesh_instance(index)
-            .map(|mesh| (mesh.source.as_str(), mesh.variant));
+            .map(|mesh| (&*mesh.source, mesh.variant));
         if let Some((source, variant)) = mesh_selection
             && !source.is_empty()
             && self.unresolved_loading_asset(crate::MESH_TYPE, source, variant)
@@ -214,7 +208,7 @@ impl<'a> RenderReadAccess<'a> {
         }
         #[cfg(feature = "particles")]
         let texture_selection = if let Some(sprite) = sprite {
-            (!sprite.source.is_empty()).then_some((sprite.source.as_str(), sprite.variant))
+            (!sprite.source.is_empty()).then_some((&*sprite.source, sprite.variant))
         } else {
             self.base_color_texture(index)
         };
@@ -350,9 +344,8 @@ impl<'a> RenderReadAccess<'a> {
             .and_then(|resource| resource.data()?.decoded().downcast_ref())
     }
 
-    /// Read only complete renderables from final effective components.
-    /// Visible debug declarations, independent of client-managed asset resources.
-    /// Renderers without private debug assets simply do not consume these items.
+    /// Retain every valid derived debug part and its individual presentation policy.
+    /// Containing-camera visibility and default color are resolved only by presentation.
     pub(in crate::world) fn prepare_debug_render_items(
         &self,
         mut items: Vec<DebugRenderItem>,
@@ -365,7 +358,6 @@ impl<'a> RenderReadAccess<'a> {
                     if let Some(value) = entry
                         .$component
                         .map(|binding| binding.get(&self.world.components))
-                        && (value.is_rendered || self.render.render_state.show_all_debug_geometries)
                         && let Some(state) = &value.runtime.evaluation
                         && let Ok(shape) = &state.evaluated
                     {
@@ -381,11 +373,10 @@ impl<'a> RenderReadAccess<'a> {
                                     entity,
                                     model,
                                     geometry,
-                                    color: if value.has_color_override {
-                                        [value.r, value.g, value.b]
-                                    } else {
-                                        self.render.render_state.debug_geometry_color
-                                    },
+                                    is_rendered: value.is_rendered,
+                                    color_override: value
+                                        .has_color_override
+                                        .then_some([value.r, value.g, value.b]),
                                 });
                             }
                         }
@@ -400,11 +391,11 @@ impl<'a> RenderReadAccess<'a> {
 
     /// Active direct lights in stable entity order, copied from effective storage.
     pub fn light_items(&self) -> impl Iterator<Item = (EntityId, [f32; 16], Light)> + use<'a> {
-        let storage = &self.world.components;
+        let world = self.world;
         self.render
             .light_entries
             .iter()
-            .filter_map(move |entry| entry.sample(storage))
+            .filter_map(move |entry| entry.sample(world))
     }
 
     pub(in crate::world) fn compile_render_item(
@@ -429,20 +420,18 @@ impl<'a> RenderReadAccess<'a> {
             return None;
         }
         #[cfg(feature = "particles")]
-        let selection = particle_mesh
-            .map(|m| (m.source.as_str(), m.variant))
-            .or_else(|| {
-                self.world
-                    .components
-                    .mesh_instance(index)
-                    .map(|m| (m.source.as_str(), m.variant))
-            });
+        let selection = particle_mesh.map(|m| (&*m.source, m.variant)).or_else(|| {
+            self.world
+                .components
+                .mesh_instance(index)
+                .map(|m| (&*m.source, m.variant))
+        });
         #[cfg(not(feature = "particles"))]
         let selection = self
             .world
             .components
             .mesh_instance(index)
-            .map(|m| (m.source.as_str(), m.variant));
+            .map(|m| (&*m.source, m.variant));
         #[cfg(feature = "particles")]
         let mesh = if sprite.is_some() {
             MeshKey {
@@ -492,7 +481,7 @@ impl<'a> RenderReadAccess<'a> {
         let texture_selection = self.base_color_texture(index);
         #[cfg(feature = "particles")]
         let texture_selection = if let Some(s) = sprite {
-            (!s.source.is_empty()).then_some((s.source.as_str(), s.variant))
+            (!s.source.is_empty()).then_some((&*s.source, s.variant))
         } else {
             texture_selection
         };
@@ -552,36 +541,30 @@ impl<'a> RenderReadAccess<'a> {
 }
 
 impl crate::WorldContext<'_> {
-    pub(in crate::world) fn render_read(&self) -> RenderReadAccess<'_> {
-        RenderReadAccess::new(
+    pub(in crate::world) fn render_read(&self) -> Option<RenderReadAccess<'_>> {
+        Some(RenderReadAccess::new(
             self.world,
             self.asset_acquisition,
-            &self
-                .system::<RenderSystem>(RenderSystem::ID)
-                .expect("World requires RenderSystem")
-                .state,
-        )
+            &self.system::<RenderSystem>(RenderSystem::ID)?.state,
+        ))
     }
 
     /// Evaluated draw inputs retained by RenderSystem for the completed world frame.
     pub fn render_items(&self) -> &[RenderItem] {
-        self.render_read().render_items()
+        self.render_read()
+            .map_or(&[], |access| access.render_items())
     }
 
-    /// Evaluated debug shape inputs for the completed world frame.
+    /// All evaluated debug parts, not a count or list of currently visible draws.
     pub fn debug_render_items(&self) -> &[DebugRenderItem] {
-        self.render_read().debug_render_items()
-    }
-
-    /// Evaluated Surface inputs retained independently of mesh submissions.
-    #[cfg(feature = "surfaces")]
-    pub fn surface_render_items(&self) -> &[crate::SurfaceRenderItem] {
-        self.render_read().surface_render_items()
+        self.render_read()
+            .map_or(&[], |access| access.debug_render_items())
     }
 
     /// Data compatibility diagnostics from the completed render preparation pass.
     pub fn render_diagnostics(&self) -> Vec<RenderDiagnostic> {
-        self.render_read().render_diagnostics()
+        self.render_read()
+            .map_or_else(Vec::new, |access| access.render_diagnostics())
     }
 
     /// Read compact geometry and topology independently of bulk mesh streams.
@@ -589,7 +572,7 @@ impl crate::WorldContext<'_> {
         &self,
         key: MeshKey,
     ) -> Option<&crate::services::asset_management::mesh_metadata::MeshMetadata> {
-        self.render_read().mesh_metadata(key)
+        self.render_read()?.mesh_metadata(key)
     }
 
     /// Clone only requested diagnostic records for a completed-frame page.
@@ -599,7 +582,10 @@ impl crate::WorldContext<'_> {
         target: u64,
         limit: usize,
     ) -> Vec<RenderDiagnostic> {
-        self.render_read()
+        let Some(access) = self.render_read() else {
+            return Vec::new();
+        };
+        access
             .render
             .diagnostics
             .iter()
@@ -613,16 +599,18 @@ impl crate::WorldContext<'_> {
 
     /// Full CPU mesh when retained by the selected provider.
     pub fn mesh(&self, key: MeshKey) -> Option<&MeshAsset> {
-        self.render_read().mesh(key)
+        self.render_read()?.mesh(key)
     }
 
     /// CPU pixels, when retained by the selected concrete resource implementation.
     pub fn texture(&self, key: TextureKey) -> Option<&TextureAsset> {
-        self.render_read().texture(key)
+        self.render_read()?.texture(key)
     }
 
     /// Active direct lights in stable entity order, copied from effective storage.
     pub fn light_items(&self) -> impl Iterator<Item = (EntityId, [f32; 16], Light)> + '_ {
-        self.render_read().light_items()
+        self.render_read()
+            .into_iter()
+            .flat_map(|access| access.light_items())
     }
 }

@@ -1,6 +1,7 @@
 //! Per-entity mesh, material and texture declarations.
 
 use ipp_schema_derive::SchemaComponent;
+use std::sync::Arc;
 
 /// Opaque, single-sided linear-light RGB factor.
 #[repr(C)]
@@ -42,7 +43,7 @@ impl crate::components::schema::ComponentLifecycle for UnlitMaterial {
 #[derive(Clone, Debug, Default, PartialEq, SchemaComponent)]
 pub struct MeshInstance {
     /// Owned source URI; empty means no selection.
-    pub source: String,
+    pub source: Arc<str>,
     /// Per-entity mesh variant.
     pub variant: u32,
 }
@@ -95,7 +96,7 @@ impl crate::components::schema::ComponentLifecycle for MeshInstance {
 #[derive(Clone, Debug, Default, PartialEq, SchemaComponent)]
 pub struct UnlitTexture {
     /// Owned source URI; empty means no selection.
-    pub source: String,
+    pub source: Arc<str>,
     /// Per-entity texture variant.
     pub variant: u32,
 }
@@ -143,7 +144,7 @@ impl crate::components::schema::ComponentLifecycle for UnlitTexture {
 #[derive(Clone, Debug, Default, PartialEq, SchemaComponent)]
 pub struct BaseColorTexture {
     /// Owned source URI; empty means no selection.
-    pub source: String,
+    pub source: Arc<str>,
     /// Per-entity texture variant.
     pub variant: u32,
 }

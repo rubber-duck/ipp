@@ -139,7 +139,7 @@ export async function runRetainedGui(
       env: BrowserEnvironmentContext,
       connection: Record<string, unknown>,
     ) => {
-      const module = `${env.urls.origin}/target/surface-build/fixture.js`;
+      const module = `${env.urls.origin}/target/${retained ? "surface-gui-build" : "surface-build"}/fixture.js`;
       const call = <T>(name: string, args: readonly unknown[] = []) =>
         env.execute(name, args, () => invoke<T>(env.page, module, name, args));
       try {

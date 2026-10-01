@@ -82,12 +82,13 @@ test("direct lights and spotlight depth maps follow authored state and recover i
           await call<Awaited<ReturnType<typeof Fixture.automaticBounds>>>(
             "automaticBounds",
           );
+        // Meshes require bounds: the runtime inserts them as ordinary
+        // components, an explicit insert replaces one, and removing it
+        // while the mesh remains inserts the defaults again.
         assert.equal(bounds.before.length, 3);
+        assert.ok(bounds.before.every((entity) => entity.present));
         assert.ok(
-          bounds.before.every((entity) => entity.effective && !entity.authored),
-        );
-        assert.ok(
-          bounds.authored.find((entity) => entity.name === "cube")?.authored,
+          bounds.authored.find((entity) => entity.name === "cube")?.present,
         );
         assert.deepEqual(bounds.restored, bounds.before);
         await capture("bounds-restored");
@@ -217,8 +218,7 @@ test("direct lights and spotlight depth maps follow authored state and recover i
         );
         await call("recoverContext");
         const recovered = await capture("context-restored");
-        assert.ok(recovered.contextGeneration > initial.contextGeneration);
-        assert.equal(recovered.session, initial.session);
+        assert.ok(recovered.context > initial.context);
         assert.ok(
           (await difference("caster-moved-shadowed", "context-restored"))
             .changedFraction < 0.0001,
@@ -277,8 +277,7 @@ test("direct lights and spotlight depth maps follow authored state and recover i
         assert.ok(transformed.meanAbsoluteChannelDifference < 0.02);
         await call("recoverContext");
         const restoredNormals = await capture("normals-restored");
-        assert.ok(restoredNormals.contextGeneration > baked.contextGeneration);
-        assert.equal(restoredNormals.session, baked.session);
+        assert.ok(restoredNormals.context > baked.context);
         assert.equal(
           (await difference("normals-baked", "normals-restored")).changedPixels,
           0,
@@ -334,9 +333,7 @@ test("direct lights and spotlight depth maps follow authored state and recover i
         await update("fill", "Light", { intensity: 0.25 });
         await call("recoverContext");
         const restoredTexture = await capture("textured-pbr-restored");
-        assert.ok(
-          restoredTexture.contextGeneration > textured.contextGeneration,
-        );
+        assert.ok(restoredTexture.context > textured.context);
         assert.equal(
           (await difference("textured-pbr", "textured-pbr-restored"))
             .changedPixels,
@@ -579,7 +576,7 @@ test("example lighting inspector edits shadows, materials and synchronized light
       );
       assert.equal(shadowed.frame.drawCalls, unshadowed.frame.drawCalls);
       assert.equal(
-        entity(unshadowed.inspection, "lighting-spot").effective.find(
+        entity(unshadowed.inspection, "lighting-spot").components.find(
           (entry) => "intensity" in entry.fields,
         )!.fields.cast_shadows,
         false,
@@ -590,9 +587,11 @@ test("example lighting inspector edits shadows, materials and synchronized light
       assert.ok(fillOnly.summary.foregroundPixels > 1000);
       for (const id of ["lighting-spot", "lighting-fill", "lighting-point"]) {
         const value = entity(fillOnly.inspection, id);
-        assert.ok(value.effective.some((entry) => "intensity" in entry.fields));
         assert.ok(
-          value.effective.some((entry) =>
+          value.components.some((entry) => "intensity" in entry.fields),
+        );
+        assert.ok(
+          value.components.some((entry) =>
             String(entry.fields.source).includes("mesh"),
           ),
         );
@@ -604,7 +603,7 @@ test("example lighting inspector edits shadows, materials and synchronized light
       await g.capture("rough");
       assert.ok((await g.difference("glossy", "rough")).changedPixels > 100);
       assert.equal(
-        entity(await g.inspect(), "lighting-cube").effective.find(
+        entity(await g.inspect(), "lighting-cube").components.find(
           (entry) => "roughness" in entry.fields,
         )!.fields.roughness! === Math.fround(0.38),
         true,

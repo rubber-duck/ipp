@@ -12,11 +12,10 @@
 //! counter over every completed render of this presentation service and
 //! saturate; readers compare two captures to measure work between them.
 //!
-//! The GUI layout words come from the rendered World rather than the
-//! renderer: `GUI_LAYOUT_REFLOWS` and `GUI_TEXT_MEASUREMENTS` count the work
-//! of that World's latest layout pass, and their `TOTAL_*` words are the
-//! World's own saturating totals, so comparing two captures of one World
-//! measures the layout work between them.
+//! GUI layout words describe actual ordinary-layout work across the Host,
+//! including non-presented Worlds. FLAG_LAYOUT distinguishes available samples
+//! from zero-filled storage. The separate membership record retains World
+//! lifetimes, evaluation/gate status and retired work independently of draws.
 
 use ipp_render_gl::RenderStatistics;
 
@@ -167,6 +166,8 @@ pub(crate) const RECORD_WORDS: usize = 40;
 pub(crate) const FLAG_SHADOWS: u32 = 1;
 pub(crate) const FLAG_GUI: u32 = 2;
 pub(crate) const FLAG_SURFACES: u32 = 4;
+#[cfg(feature = "gui")]
+pub(crate) const FLAG_LAYOUT: u32 = 8;
 
 /// Capability groups compiled into this runtime.
 const FLAGS_VALUE: u32 = {
@@ -207,12 +208,16 @@ const ACCUMULATED: [(usize, usize); 12] = [
 pub(crate) struct RenderStatisticsRecord {
     words: [u32; RECORD_WORDS],
     totals: [u32; RECORD_WORDS],
-    /// Layout words of the World of the last completed render.
+    /// Whole-Host layout words of the last evaluation boundary.
     #[cfg_attr(
         not(feature = "gui"),
         allow(dead_code, reason = "zero words of a compiled-out capability")
     )]
-    layout: [u32; 4],
+    layout: Option<[u32; 4]>,
+    #[cfg(feature = "gui")]
+    host_layout: ipp_host_session::services::gui_layout_statistics::HostGuiLayoutStatistics,
+    #[cfg(feature = "gui")]
+    layout_json: String,
 }
 
 impl RenderStatisticsRecord {
@@ -220,20 +225,35 @@ impl RenderStatisticsRecord {
         Self {
             words: [0; RECORD_WORDS],
             totals: [0; RECORD_WORDS],
-            layout: [0; 4],
+            layout: None,
+            #[cfg(feature = "gui")]
+            host_layout: Default::default(),
+            #[cfg(feature = "gui")]
+            layout_json: String::new(),
         }
     }
 
-    /// Keep the GUI layout counters of the World a completed render drew.
+    /// Sample every exact World once at the Host evaluation boundary.
     #[cfg(feature = "gui")]
-    pub(crate) fn record_layout(&mut self, statistics: ipp_core::GuiLayoutStatistics) {
-        let word = |value: u64| u32::try_from(value).unwrap_or(u32::MAX);
-        self.layout = [
-            word(statistics.latest.reflows),
-            word(statistics.latest.text_measurements),
-            word(statistics.total.reflows),
-            word(statistics.total.text_measurements),
-        ];
+    pub(crate) fn record_frame(
+        &mut self,
+        host: &mut ipp_core::HostRuntime,
+        frame: &ipp_core::HostFrameReport,
+    ) {
+        self.host_layout.record(host, frame);
+        self.layout = self.host_layout.words();
+    }
+
+    #[cfg(feature = "gui")]
+    pub(crate) fn layout_json(&mut self) -> &str {
+        self.layout_json.clear();
+        self.host_layout.write_json(&mut self.layout_json);
+        &self.layout_json
+    }
+
+    #[cfg(feature = "gui")]
+    pub(crate) fn layout_json_len(&self) -> usize {
+        self.layout_json.len()
     }
 
     /// Add one completed render to the totals: a few additions per frame, only
@@ -256,13 +276,14 @@ impl RenderStatisticsRecord {
         }
 
         #[cfg(feature = "gui")]
-        {
+        if let Some(layout) = self.layout {
+            self.words[FLAGS] |= FLAG_LAYOUT;
             [
                 self.words[GUI_LAYOUT_REFLOWS],
                 self.words[GUI_TEXT_MEASUREMENTS],
                 self.words[TOTAL_GUI_LAYOUT_REFLOWS],
                 self.words[TOTAL_GUI_TEXT_MEASUREMENTS],
-            ] = self.layout;
+            ] = layout;
         }
 
         &self.words

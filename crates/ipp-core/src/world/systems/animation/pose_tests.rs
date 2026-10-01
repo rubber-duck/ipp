@@ -76,6 +76,7 @@ fn borrowed_pose_sampling_matches_owned_sampling_for_all_interpolations_and_laye
                     AnimationDriverDescription {
                         target: entity,
                         property: target.clone(),
+                        entity_bindings: Vec::new(),
                         source: "asset://10/1".into(),
                         variant: 0,
                         track: 0,
@@ -121,13 +122,22 @@ fn borrowed_pose_sampling_matches_owned_sampling_for_all_interpolations_and_laye
                     .local
                     .as_ptr();
                 for time in [-0.1, 0.0, 0.001, 0.2, 0.999, 1.5, 1.999, 2.0, 2.2] {
-                    driver
-                        .runtime_target()
-                        .write_joint_slice(&mut storage, entity, &original)
+                    // The Skeleton rebuilds its pose each frame; the driver
+                    // adds its contribution onto that rebuilt pose.
+                    let pose = storage
+                        .skeleton_mut(0)
+                        .unwrap()
+                        .runtime
+                        .pose
+                        .as_mut()
                         .unwrap();
-                    let expected = driver
-                        .sample_bound(time, AnimationValue::Pose(original.clone()))
-                        .unwrap();
+                    pose.local[0] = original[0];
+                    pose.local[2] = original[1];
+                    let expected = crate::world::systems::animation::contribution::compose(
+                        &AnimationValue::Pose(original.clone()),
+                        &driver.contribution(time).unwrap(),
+                    )
+                    .unwrap();
                     sample_joints(
                         driver.as_ref(),
                         clip.typed_track::<Vec<Transform>>(0).unwrap(),

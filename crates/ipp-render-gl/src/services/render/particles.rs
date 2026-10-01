@@ -90,15 +90,18 @@ pub(super) fn instance(item: &ipp_core::RenderItem, camera: [f32; 16]) -> [f32; 
 }
 
 pub(super) fn visible(
-    world: &ipp_core::WorldContext<'_>,
-    item: &ipp_core::RenderItem,
+    world: &super::scene::RenderScene<'_>,
+    item: &super::scene::SceneItem<'_>,
     instances: &[[f32; 20]],
     planes: &[ipp_core::systems::geometry::GeometryPlane; 6],
 ) -> bool {
-    let Some(shape) = world.particle_bounding_geometry(item.entity) else {
+    let Some(geometry) = world.geometry.get(&(item.entity.world, item.entity.entity)) else {
         return true;
     };
-    if shape.intersects_frustum(planes) {
+    let Some(shape) = geometry.value.culling.as_ref() else {
+        return true;
+    };
+    if shape.intersects_frustum(&planes.map(|plane| geometry.placement.local_plane(&plane))) {
         return true;
     }
     #[cfg(feature = "mesh-poses")]
@@ -127,13 +130,16 @@ pub(super) fn visible(
                     max[i]
                 })
             });
-            for i in 0..3 {
-                let value = f64::from(model[i]) * local[0]
-                    + f64::from(model[i + 4]) * local[1]
-                    + f64::from(model[i + 8]) * local[2]
-                    + f64::from(model[i + 12]);
-                bounds[0][i] = bounds[0][i].min(value);
-                bounds[1][i] = bounds[1][i].max(value);
+            let point = std::array::from_fn(|axis| {
+                f64::from(model[axis]) * local[0]
+                    + f64::from(model[axis + 4]) * local[1]
+                    + f64::from(model[axis + 8]) * local[2]
+                    + f64::from(model[axis + 12])
+            });
+            let point = geometry.placement.inverse_point(point);
+            for axis in 0..3 {
+                bounds[0][axis] = bounds[0][axis].min(point[axis]);
+                bounds[1][axis] = bounds[1][axis].max(point[axis]);
             }
         }
     }

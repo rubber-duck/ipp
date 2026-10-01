@@ -10,7 +10,7 @@ import {
   Transform,
   UnlitMaterial,
 } from "@ipp/react";
-import { World, useIppCanvas } from "@ipp/react/web";
+import { useIppCanvas } from "@ipp/react/web";
 import { hexToLinear } from "../../shared/colors.js";
 import { ReadyGeometry } from "../../shared/ready-geometry.js";
 import { GALLERY_RUNTIME } from "../../shared/runtime.js";
@@ -38,7 +38,7 @@ export function LightingWorld({
   selected: ObjectId | undefined;
 }) {
   return (
-    <World>
+    <>
       <Entity id="lighting-floor">
         <Transform y={-0.12} />
         <MeshInstance source="ipp://mesh/cube?width=8&height=0.24&length=7" />
@@ -88,7 +88,7 @@ export function LightingWorld({
         value={objects["lighting-skinning"]}
         selected={selected === "lighting-skinning"}
       />
-    </World>
+    </>
   );
 }
 

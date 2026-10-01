@@ -1,17 +1,22 @@
 import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { browserRuntime } from "@ipp/client";
+import { browserRuntime, type OutputReference } from "@ipp/client";
 import { IppCanvas, type IppCanvasHandle } from "@ipp/react/web";
 import {
+  BLENDER_SYSTEMS,
   BlenderAdapter,
   type AppliedRevision,
   type BlenderClient,
   type BlenderContract,
 } from "../../integrations/blender/client/adapter.js";
+import { createViewingCamera, requireBlenderClient } from "./camera.js";
 
 export interface BlenderViewerHandle {
   canvas: IppCanvasHandle;
+  client: BlenderClient;
   adapter: BlenderAdapter;
+  output: OutputReference | null;
+  presentation: Promise<void>;
   latest?: AppliedRevision;
   error?: string;
 }
@@ -28,6 +33,7 @@ const connection = new URLSearchParams(location.hash.slice(1));
 function App() {
   const [generation, setGeneration] = useState(0);
   const [status, setStatus] = useState("Waiting for Blender");
+  const [output, setOutput] = useState<OutputReference | null>(null);
   const [diagnostics, setDiagnostics] = useState<
     AppliedRevision["diagnostics"]
   >([]);
@@ -43,8 +49,7 @@ function App() {
     [],
   );
 
-  async function ready(canvas: IppCanvasHandle) {
-    const request = ++startup.current;
+  async function ready(canvas: IppCanvasHandle, request: number) {
     live.current?.adapter.close();
     const endpoint = connection.get("endpoint");
     const token = connection.get("token");
@@ -54,8 +59,25 @@ function App() {
     }
     const contract: BlenderContract = await import(runtime.generatedModuleUrl);
     if (startup.current !== request) return;
+    const client = canvas.client;
+    requireBlenderClient(client);
+    const world = client.worldReference;
+    if (!world) throw new Error("Blender viewer requires an explicit World");
+    const fallback = await createViewingCamera(client);
+    if (startup.current !== request) return;
+    const select = async (camera: bigint, latest?: AppliedRevision) => {
+      const selected = await canvas.host.bindOutput(world, camera, "camera");
+      if (
+        startup.current !== request ||
+        live.current !== current ||
+        (latest && current.latest !== latest)
+      )
+        return;
+      current.output = selected;
+      setOutput(selected);
+    };
     const adapter = new BlenderAdapter(
-      canvas.client as BlenderClient,
+      client,
       contract,
       new URL(endpoint),
       token,
@@ -65,6 +87,15 @@ function App() {
         delete live.current.error;
         setStatus(`Connected · revision ${latest.revision}`);
         setDiagnostics(latest.diagnostics);
+        current.presentation = select(
+          latest.selectedCamera ?? fallback,
+          latest,
+        );
+        void current.presentation.catch((error: unknown) => {
+          if (live.current !== current || current.latest !== latest) return;
+          current.error = String(error);
+          setStatus(String(error));
+        });
       },
       (error) => {
         if (live.current?.adapter !== adapter) return;
@@ -72,8 +103,18 @@ function App() {
         setStatus(error.message);
       },
     );
-    live.current = { canvas, adapter };
-    window.ippBlender = live.current;
+    const current: BlenderViewerHandle = {
+      canvas,
+      client,
+      adapter,
+      output: null,
+      presentation: Promise.resolve(),
+    };
+    live.current = current;
+    window.ippBlender = current;
+    current.presentation = select(fallback);
+    await current.presentation;
+    if (startup.current !== request) return;
     setStatus("Connecting to Blender…");
     adapter.connect({
       streamBatchSize: Number(connection.get("stream") ?? 0),
@@ -81,11 +122,18 @@ function App() {
     });
   }
 
-  function reconnect() {
-    startup.current++;
-    live.current?.adapter.close();
+  async function reconnect() {
+    const request = ++startup.current;
+    try {
+      await live.current?.adapter.dispose();
+    } catch (error) {
+      if (startup.current === request) setStatus(String(error));
+      return;
+    }
+    if (startup.current !== request) return;
     live.current = undefined;
     delete window.ippBlender;
+    setOutput(null);
     setStatus("Connecting to Blender…");
     setGeneration((value) => value + 1);
   }
@@ -115,13 +163,21 @@ function App() {
       <IppCanvas
         key={generation}
         runtime={runtime}
+        world={{
+          create: {
+            symbolicId: "blender-viewer",
+            selectedSystems: BLENDER_SYSTEMS,
+          },
+        }}
+        output={output}
         width={960}
         height={640}
         canvasProps={{ "aria-label": "Blender scene" }}
         onReady={(canvas) => {
-          void ready(canvas).catch((error: unknown) =>
-            setStatus(String(error)),
-          );
+          const request = ++startup.current;
+          void ready(canvas, request).catch((error: unknown) => {
+            if (startup.current === request) setStatus(String(error));
+          });
         }}
         onError={(error) => setStatus(error.message)}
       />

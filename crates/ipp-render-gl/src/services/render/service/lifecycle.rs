@@ -2,7 +2,6 @@
 
 use super::{RenderError, RenderService};
 use crate::RenderDevice;
-use ipp_core::WorldContext;
 use std::{
     cell::{Cell, RefCell},
     collections::BTreeMap,
@@ -14,6 +13,7 @@ impl<D: RenderDevice> RenderService<D> {
     pub fn new(device: D) -> Result<Self, RenderError> {
         let device = Rc::new(RefCell::new(device));
         Ok(Self {
+            inclusions: Default::default(),
             debug: crate::services::render::debug_geometry::DebugGeometryRenderCache::new(
                 device.clone(),
             ),
@@ -28,39 +28,40 @@ impl<D: RenderDevice> RenderService<D> {
             #[cfg(feature = "surfaces")]
             surface_cache: Default::default(),
             #[cfg(feature = "surfaces")]
-            surface_cache_inputs: Vec::new(),
+            canvas_caches: Default::default(),
+            #[cfg(feature = "surfaces")]
+            canvas_cache_frame: Default::default(),
             #[cfg(feature = "surfaces")]
             surface_missing: Vec::new(),
-            #[cfg(feature = "gui")]
+            #[cfg(feature = "surfaces")]
             surface_analytic_text: false,
-            #[cfg(feature = "gui")]
+            #[cfg(feature = "surfaces")]
             surface_gui_unretained: false,
-            #[cfg(feature = "gui")]
+            #[cfg(feature = "surfaces")]
             surface_gui_program: None,
-            #[cfg(feature = "gui")]
+            #[cfg(feature = "surfaces")]
             gui_batch_cache: BTreeMap::new(),
-            #[cfg(feature = "gui")]
+            #[cfg(feature = "surfaces")]
             surface_ops: Vec::new(),
-            #[cfg(feature = "gui")]
+            #[cfg(feature = "surfaces")]
             glyph_atlas: super::super::glyph_atlas::GlyphAtlas::new(device.clone()),
-            #[cfg(feature = "gui")]
+            #[cfg(feature = "surfaces")]
             glyph_batch_cache: BTreeMap::new(),
-            #[cfg(feature = "gui")]
+            #[cfg(feature = "surfaces")]
             glyph_frame: Default::default(),
-            #[cfg(feature = "gui")]
+            #[cfg(feature = "surfaces")]
             glyph_population: Default::default(),
             #[cfg(feature = "surfaces")]
             surface_paint: BTreeMap::new(),
             #[cfg(feature = "surfaces")]
             analytic_glyphs: BTreeMap::new(),
-            #[cfg(feature = "surfaces")]
-            submitted_surfaces: None,
             device,
             asset_context_active: Rc::new(Cell::new(true)),
             #[cfg(feature = "particles")]
             particle_quad: None,
             recipe_scratch: Vec::new(),
-            program_keys: Vec::new(),
+            program_demand: None,
+            prepared_output: None,
             program_lookup: vec![None; super::super::shader::PROGRAM_RECIPE_COUNT],
             custom_materials: BTreeMap::new(),
             #[cfg(any(test, feature = "diagnostics"))]
@@ -68,12 +69,12 @@ impl<D: RenderDevice> RenderService<D> {
             uploads: Default::default(),
             #[cfg(any(test, feature = "diagnostics"))]
             statistics: Default::default(),
-            #[cfg(all(feature = "surfaces", any(test, feature = "diagnostics")))]
-            retained_surface_residency: Default::default(),
             frame_scratch: Default::default(),
-            #[cfg(feature = "particles")]
-            particle_quad_metadata: None,
             light_selections: Default::default(),
+            #[cfg(feature = "surfaces")]
+            camera_targets: Default::default(),
+            #[cfg(feature = "surfaces")]
+            camera_completed: Default::default(),
             #[cfg(feature = "shadows")]
             shadow_capacity_limit: usize::MAX,
             #[cfg(feature = "shadows")]
@@ -82,6 +83,7 @@ impl<D: RenderDevice> RenderService<D> {
             shadow_map_size: 0,
         })
     }
+
     /// Bind renderer-owned resources before this world acquires asset data.
     pub fn install(&self, world: &mut ipp_core::HostRuntime) -> Result<(), RenderError> {
         {
@@ -169,15 +171,12 @@ impl<D: RenderDevice> RenderService<D> {
         self.asset_context_active.set(active);
     }
 
-    /// Request GPU payload release; the owning Host completes the lifecycle barrier.
-    pub fn unload(&mut self, world: &mut WorldContext<'_>) {
-        self.unload_resources(world.asset_resources_mut());
-    }
-
     /// Request release of this context's GPU payloads, including with no attached World.
     /// The Host must finish its lifecycle barrier before the graphics device is replaced.
-    pub fn unload_host(&mut self, host: &mut ipp_core::HostRuntime) {
+    pub fn unload_host(&mut self, host: &mut ipp_core::HostRuntime) -> Result<(), RenderError> {
+        self.validate_catalog(host)?;
         self.unload_resources(host.asset_resources_mut());
+        Ok(())
     }
 
     fn unload_resources(
@@ -206,19 +205,15 @@ impl<D: RenderDevice> RenderService<D> {
         for cache in self.analytic_glyphs.values_mut() {
             cache.clear();
         }
-        #[cfg(feature = "gui")]
+        #[cfg(feature = "surfaces")]
         if let Some(program) = self.surface_gui_program.take() {
             self.device.borrow_mut().delete_program(program);
         }
-        #[cfg(feature = "gui")]
+        #[cfg(feature = "surfaces")]
         self.gui_batch_cache.clear();
-        #[cfg(all(feature = "surfaces", any(test, feature = "diagnostics")))]
-        {
-            self.retained_surface_residency = Default::default();
-        }
         // Glyph atlas layout, demand and run bands survive, so recovered text
         // repopulates its original slots.
-        #[cfg(feature = "gui")]
+        #[cfg(feature = "surfaces")]
         {
             for cache in self.glyph_batch_cache.values_mut() {
                 cache.release_context();
@@ -258,6 +253,13 @@ impl<D: RenderDevice> RenderService<D> {
         #[cfg(any(test, feature = "diagnostics"))]
         self.custom_fallbacks.clear();
         self.light_selections.clear();
+        #[cfg(feature = "surfaces")]
+        {
+            for (_, (target, _)) in std::mem::take(&mut self.camera_targets) {
+                self.device.borrow_mut().delete_surface_cache_target(target);
+            }
+            self.camera_completed.clear();
+        }
         #[cfg(feature = "shadows")]
         {
             self.shadow_capacity_limit = usize::MAX;
@@ -272,12 +274,7 @@ impl<D: RenderDevice> RenderService<D> {
         host: &mut ipp_core::HostRuntime,
         device: D,
     ) -> Result<(), RenderError> {
-        if host.has_pending_world_updates() {
-            return Err(RenderError::RenderDevice(
-                "Device replacement requires completed World updates".into(),
-            ));
-        }
-        self.unload_host(host);
+        self.unload_host(host)?;
         host.flush_resource_lifecycle();
         *self.device.borrow_mut() = device;
         Ok(())
@@ -296,27 +293,114 @@ impl<D: RenderDevice> RenderService<D> {
     /// The World's glyph demand leaves the shared atlas; pages other Worlds still use
     /// stay resident. Its Surface cache images are released.
     pub fn forget_world(&mut self, world: ipp_core::WorldId) {
-        #[cfg(all(feature = "surfaces", any(test, feature = "diagnostics")))]
-        let before = self.retained_surface_residency(world);
-        self.light_selections.remove(&world);
+        self.light_selections
+            .retain(|selection, _| selection.world().id() != world);
         #[cfg(feature = "surfaces")]
         self.forget_surface_caches(world);
         #[cfg(feature = "surfaces")]
         {
-            self.surface_paint.remove(&world);
-            self.analytic_glyphs.remove(&world);
-        }
-        #[cfg(feature = "gui")]
-        {
-            self.gui_batch_cache.remove(&world);
-            if let Some(mut cache) = self.glyph_batch_cache.remove(&world) {
-                cache.release_demand(&mut self.glyph_atlas);
+            self.surface_paint
+                .retain(|output, _| output.world().id() != world);
+            self.analytic_glyphs
+                .retain(|output, _| output.world().id() != world);
+            let retired: Vec<_> = self
+                .camera_targets
+                .keys()
+                .filter(|selection| selection.world().id() == world)
+                .copied()
+                .collect();
+            for selection in retired {
+                if let Some((target, _)) = self.camera_targets.remove(&selection) {
+                    self.device.borrow_mut().delete_surface_cache_target(target);
+                }
             }
+            self.camera_completed
+                .retain(|selection| selection.world().id() != world);
+        }
+        #[cfg(feature = "surfaces")]
+        {
+            self.gui_batch_cache
+                .retain(|output, _| output.world().id() != world);
+            self.glyph_batch_cache.retain(|output, cache| {
+                if output.world().id() == world {
+                    cache.release_demand(&mut self.glyph_atlas);
+                    false
+                } else {
+                    true
+                }
+            });
             self.glyph_atlas.release_if_unused();
         }
+    }
 
-        #[cfg(all(feature = "surfaces", any(test, feature = "diagnostics")))]
-        self.track_retained_surface_residency(world, before);
+    #[cfg(feature = "surfaces")]
+    pub(in crate::services::render) fn retain_canvas_outputs(
+        &mut self,
+        outputs: &std::collections::BTreeSet<ipp_core::OutputRef>,
+    ) {
+        self.retain_canvas_cache_outputs(outputs);
+        self.surface_paint
+            .retain(|selection, _| outputs.contains(selection));
+        self.analytic_glyphs
+            .retain(|selection, _| outputs.contains(selection));
+        self.gui_batch_cache
+            .retain(|selection, _| outputs.contains(selection));
+        self.glyph_batch_cache.retain(|selection, cache| {
+            let live = outputs.contains(selection);
+            if !live {
+                cache.release_demand(&mut self.glyph_atlas);
+            }
+            live
+        });
+        self.glyph_atlas.release_if_unused();
+    }
+
+    pub(in crate::services::render) fn retain_prepared_outputs(
+        &mut self,
+        selection: Option<ipp_core::OutputRef>,
+        outputs: &std::collections::BTreeSet<ipp_core::OutputRef>,
+    ) {
+        if selection.is_none() {
+            self.frame_scratch.clear();
+            #[cfg(feature = "shadows")]
+            self.clear_shadows();
+            #[cfg(feature = "particles")]
+            {
+                self.particle_quad = None;
+            }
+            #[cfg(feature = "surfaces")]
+            {
+                self.canvas_cache_frame = Default::default();
+                self.glyph_frame.clear();
+                self.surface_missing.clear();
+                self.surface_ops.clear();
+            }
+        }
+        if selection.is_none() || self.prepared_output != selection {
+            self.debug.clear();
+            self.custom_materials.clear();
+            #[cfg(any(test, feature = "diagnostics"))]
+            self.custom_fallbacks.clear();
+        }
+        self.prepared_output = selection;
+        #[cfg(feature = "surfaces")]
+        {
+            let retired: Vec<_> = self
+                .camera_targets
+                .keys()
+                .filter(|selection| !outputs.contains(selection))
+                .copied()
+                .collect();
+            self.retain_canvas_outputs(outputs);
+            for selection in retired {
+                if let Some((target, _)) = self.camera_targets.remove(&selection) {
+                    self.device.borrow_mut().delete_surface_cache_target(target);
+                }
+                self.camera_completed.remove(&selection);
+            }
+        }
+        self.light_selections
+            .retain(|selection, _| outputs.contains(selection));
     }
 
     /// Testing override of the renderer-owned glyph atlas bounds of this context: its
@@ -325,7 +409,7 @@ impl<D: RenderDevice> RenderService<D> {
     ///
     /// A lowered budget retires pages at the next publication; zero pages is treated
     /// as one.
-    #[cfg(all(feature = "gui", any(test, feature = "diagnostics")))]
+    #[cfg(all(feature = "surfaces", any(test, feature = "diagnostics")))]
     pub fn set_glyph_atlas_limits(&mut self, limits: super::super::glyph_atlas::GlyphAtlasLimits) {
         self.glyph_atlas.set_limits(limits);
     }
@@ -337,7 +421,7 @@ impl<D: RenderDevice> RenderService<D> {
     /// [`super::super::glyph_atlas::DEFAULT_POPULATE_BUDGET_MS`]. Zero populates only
     /// that floor per frame; an infinite budget populates up to
     /// [`super::super::glyph_atlas::MAX_POPULATES_PER_FRAME`].
-    #[cfg(all(feature = "gui", any(test, feature = "diagnostics")))]
+    #[cfg(all(feature = "surfaces", any(test, feature = "diagnostics")))]
     pub fn set_glyph_population_budget_ms(&mut self, budget_ms: f64) {
         self.glyph_population.set_budget_ms(budget_ms);
     }
@@ -362,8 +446,11 @@ impl<D: RenderDevice> Drop for RenderService<D> {
             let mut device = self.device.borrow_mut();
             self.surface_cache
                 .clear(&mut super::surface_cache::DeviceCacheTargets(&mut *device));
+            for (_, (target, _)) in std::mem::take(&mut self.camera_targets) {
+                device.delete_surface_cache_target(target);
+            }
         }
-        #[cfg(feature = "gui")]
+        #[cfg(feature = "surfaces")]
         self.gui_batch_cache.clear();
         #[cfg(feature = "surfaces")]
         self.analytic_glyphs.clear();

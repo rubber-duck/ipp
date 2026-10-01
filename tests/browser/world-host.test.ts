@@ -36,7 +36,10 @@ for (const scenario of worldHostCases) {
           environment.page.evaluate(
             async ({ urls, name }) => {
               const contract = await import(urls.generated);
-              const { worldHostCases: cases } = await import(
+              const {
+                worldHostCases: cases,
+                WORLD_HOST_SYSTEMS: selectedSystems,
+              } = await import(
                 `${urls.origin}/dist/tests/integration/world-host-cases.js`
               );
               const scenario = cases.find(
@@ -47,6 +50,7 @@ for (const scenario of worldHostCases) {
               const client = await contract.IppClient.connectWorker(
                 urls.workerScript,
                 urls.wasm,
+                { selectedSystems },
               );
               try {
                 const record = (
@@ -71,6 +75,7 @@ for (const scenario of worldHostCases) {
                         ),
                       ),
                     ),
+                  client.host,
                 );
               } finally {
                 await client.close();

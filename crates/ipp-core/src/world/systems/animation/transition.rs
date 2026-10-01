@@ -1,4 +1,10 @@
 //! Prepared, allocation-free crossfade evaluation over sparse numeric and joint targets.
+//!
+//! A controller crossfade blends contributions: each side evaluates what its
+//! drivers add, the blend moves every field by the change of the blended total,
+//! and the destination controller remembers what it applied. A frozen side is a
+//! captured contribution that fades out. GUI skin motion uses the same program
+//! with absolute channels that fade from a captured value to the clip's value.
 
 #![cfg_attr(
     not(feature = "skeletal-animation"),
@@ -9,7 +15,10 @@
     )
 )]
 
-use super::{driver::AnimationDriverBinding, *};
+use super::{
+    contribution::AnimationContributions, driver::AnimationDriverBinding,
+    system_state::AnimationRuntimeFrozenTransitionValue, *,
+};
 #[cfg(feature = "skeletal-animation")]
 use crate::ComponentValue;
 #[cfg(feature = "skeletal-animation")]
@@ -37,7 +46,7 @@ enum TransitionOutput {
     Joint(EntityId, u32),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 enum TransitionChannelValue {
     Property(AnimationValue),
     #[cfg(feature = "skeletal-animation")]
@@ -47,6 +56,7 @@ enum TransitionChannelValue {
 #[derive(Debug)]
 struct TransitionChannel {
     key: TransitionChannelKey,
+    /// Where each side starts: the empty contribution, or GUI motion's value.
     baseline: TransitionChannelValue,
     source: TransitionChannelValue,
     destination: TransitionChannelValue,
@@ -58,6 +68,11 @@ enum TransitionOperation {
     Property {
         driver: usize,
         channel: usize,
+    },
+    #[cfg(feature = "gui")]
+    Constant {
+        channel: usize,
+        value: AnimationValue,
     },
     #[cfg(feature = "skeletal-animation")]
     Pose {
@@ -76,126 +91,74 @@ pub(super) struct AnimationTransitionProgram {
     destination_operations: Vec<TransitionOperation>,
     numeric_targets: Vec<(EntityId, u16)>,
     frozen_source: bool,
+    /// Channels carry contributions rather than absolute values.
+    contributions: bool,
+    /// Per-channel values staged by one evaluation before any is written, with
+    /// the value a contributed field held before.
+    staged: Vec<(TransitionChannelValue, Option<AnimationValue>)>,
 }
 
 impl AnimationTransitionProgram {
-    pub(super) fn bind_source(
-        source: &mut AnimationController,
-        storage: &ComponentStorage,
-    ) -> Result<Self, ErrorReason> {
-        validate_drivers(&source.drivers)?;
-        for driver in &mut source.drivers {
-            driver.bind_transition_output(storage);
-        }
-        let mut keys = BTreeMap::new();
-        collect_channels(&source.drivers, &mut keys)?;
-        let key_indices: BTreeMap<_, _> = keys
-            .keys()
-            .cloned()
-            .enumerate()
-            .map(|(index, key)| (key, index))
-            .collect();
-        let channels = keys
-            .into_iter()
-            .map(|(key, (baseline, output))| TransitionChannel {
-                key,
-                source: baseline.clone(),
-                destination: baseline.clone(),
-                baseline,
-                output,
-            })
-            .collect();
-        let source_operations = operations(&source.drivers, &key_indices);
-        let mut numeric_targets: Vec<_> = key_indices
-            .keys()
-            .filter_map(|key| match key {
-                TransitionChannelKey::Property(identity) => {
-                    Some((identity.entity, identity.property.component()))
-                }
-                #[cfg(feature = "skeletal-animation")]
-                TransitionChannelKey::Joint {
-                    ..
-                } => None,
-            })
-            .collect();
-        numeric_targets.sort_unstable();
-        numeric_targets.dedup();
-        Ok(Self {
-            channels,
-            source_operations,
-            destination_operations: Vec::new(),
-            numeric_targets,
-            frozen_source: false,
-        })
+    #[cfg(feature = "gui")]
+    pub(super) fn set_constant_destination(
+        &mut self,
+        entity: EntityId,
+        incarnation: u64,
+        property: AnimationTrackTarget,
+        value: AnimationValue,
+    ) -> Result<(), ErrorReason> {
+        let key = TransitionChannelKey::Property(super::driver::AnimationTargetIdentity {
+            entity,
+            incarnation,
+            property,
+        });
+        let index = self
+            .channels
+            .iter()
+            .position(|channel| channel.key == key)
+            .ok_or(ErrorReason::InvalidField)?;
+        let TransitionOutput::Value(output) = &self.channels[index].output else {
+            return Err(ErrorReason::InvalidField);
+        };
+        output.validate(&value)?;
+
+        let operation = self.destination_operations.iter_mut().find(|operation| {
+            matches!(operation, TransitionOperation::Property { channel, .. } if *channel == index)
+        }).ok_or(ErrorReason::InvalidField)?;
+        *operation = TransitionOperation::Constant {
+            channel: index,
+            value,
+        };
+
+        Ok(())
     }
 
-    pub(super) fn bind_frozen_source(
-        values: &[super::system_state::AnimationRuntimeFrozenTransitionValue],
-        storage: &ComponentStorage,
-    ) -> Result<Self, ErrorReason> {
-        let mut channels = Vec::with_capacity(values.len());
-        for value in values {
-            let key = frozen_key(value)?;
-            let output = match &key {
-                TransitionChannelKey::Property(identity) => TransitionOutput::Value(
-                    super::driver::bind_frozen_transition_output(
-                        identity.clone(),
-                        &value.value,
-                        storage,
-                    )
-                    .ok_or(ErrorReason::InvalidField)?,
-                ),
-                #[cfg(feature = "skeletal-animation")]
-                TransitionChannelKey::Joint {
-                    entity,
-                    joint,
-                    ..
-                } => TransitionOutput::Joint(*entity, *joint),
-            };
-            channels.push(TransitionChannel {
-                key,
-                source: channel_value(&value.value)?,
-                destination: channel_value(&value.value)?,
-                baseline: channel_value(&value.baseline)?,
-                output,
-            });
-        }
-        channels.sort_by(|a, b| a.key.cmp(&b.key));
-        let mut numeric_targets = frozen_numeric_targets(values);
-        numeric_targets.sort_unstable();
-        Ok(Self {
-            channels,
-            source_operations: Vec::new(),
-            destination_operations: Vec::new(),
-            numeric_targets,
-            frozen_source: true,
-        })
-    }
-
+    /// Crossfade between two controllers' contributions.
     pub(super) fn bind(
-        mut source: Option<&mut AnimationController>,
+        source: Option<&mut AnimationController>,
         destination: &mut AnimationController,
         storage: &ComponentStorage,
+    ) -> Result<Self, ErrorReason> {
+        Self::bind_sides(source, destination, storage, true)
+    }
+
+    fn bind_sides(
+        source: Option<&mut AnimationController>,
+        destination: &mut AnimationController,
+        storage: &ComponentStorage,
+        contributions: bool,
     ) -> Result<Self, ErrorReason> {
         if let Some(source) = source.as_ref() {
             validate_drivers(&source.drivers)?;
         }
         validate_drivers(&destination.drivers)?;
-        if let Some(source) = source.as_deref_mut() {
-            for driver in &mut source.drivers {
-                driver.bind_transition_output(storage);
-            }
-        }
-        for driver in &mut destination.drivers {
-            driver.bind_transition_output(storage);
-        }
 
         let mut keys =
             BTreeMap::<TransitionChannelKey, (TransitionChannelValue, TransitionOutput)>::new();
         if let Some(source) = source.as_deref() {
-            collect_channels(&source.drivers, &mut keys)?;
+            collect_channels(&source.drivers, storage, contributions, &mut keys)?;
         }
-        collect_channels(&destination.drivers, &mut keys)?;
+        collect_channels(&destination.drivers, storage, contributions, &mut keys)?;
         let key_indices: BTreeMap<_, _> = keys
             .keys()
             .cloned()
@@ -216,54 +179,42 @@ impl AnimationTransitionProgram {
             .as_deref()
             .map_or_else(Vec::new, |source| operations(&source.drivers, &key_indices));
         let destination_operations = operations(&destination.drivers, &key_indices);
-        let mut numeric_targets: Vec<_> = key_indices
-            .keys()
-            .filter_map(|key| match key {
-                TransitionChannelKey::Property(identity) => {
-                    Some((identity.entity, identity.property.component()))
-                }
-                #[cfg(feature = "skeletal-animation")]
-                TransitionChannelKey::Joint {
-                    ..
-                } => None,
-            })
-            .collect();
-        numeric_targets.sort_unstable();
-        numeric_targets.dedup();
-        Ok(Self {
+        let mut program = Self {
             channels,
             source_operations,
             destination_operations,
-            numeric_targets,
+            numeric_targets: Vec::new(),
             frozen_source: false,
-        })
+            contributions,
+            staged: Vec::new(),
+        };
+        program.refresh_numeric_targets();
+        Ok(program)
     }
 
+    /// Fade a captured contribution out while the destination fades in.
     pub(super) fn bind_frozen(
         _bindings: &mut AnimationController,
         destination: &mut AnimationController,
-        frozen: &[super::system_state::AnimationRuntimeFrozenTransitionValue],
+        frozen: &[AnimationRuntimeFrozenTransitionValue],
         storage: &ComponentStorage,
     ) -> Result<Self, ErrorReason> {
-        let mut program = Self::bind(None, destination, storage)?;
+        Self::bind_frozen_values(destination, frozen, storage, true)
+    }
+
+    /// Fade from frozen values to the destination. With `contributions`, the
+    /// values are contributions; otherwise they are absolute (GUI motion).
+    pub(super) fn bind_frozen_values(
+        destination: &mut AnimationController,
+        frozen: &[AnimationRuntimeFrozenTransitionValue],
+        storage: &ComponentStorage,
+        contributions: bool,
+    ) -> Result<Self, ErrorReason> {
+        let mut program = Self::bind_sides(None, destination, storage, contributions)?;
         program.source_operations.clear();
         program.frozen_source = true;
         for value in frozen {
-            let key = match &value.property {
-                #[cfg(feature = "skeletal-animation")]
-                AnimationTrackTarget::Joints(joints) if joints.len() == 1 => {
-                    TransitionChannelKey::Joint {
-                        entity: value.target,
-                        incarnation: value.incarnation,
-                        joint: joints[0],
-                    }
-                }
-                _ => TransitionChannelKey::Property(super::driver::AnimationTargetIdentity {
-                    entity: value.target,
-                    incarnation: value.incarnation,
-                    property: value.property.clone(),
-                }),
-            };
+            let key = frozen_key(value)?;
             if !program.channels.iter().any(|channel| channel.key == key) {
                 let output = match &key {
                     TransitionChannelKey::Property(identity) => TransitionOutput::Value(
@@ -305,36 +256,24 @@ impl AnimationTransitionProgram {
             .map(|(index, channel)| (channel.key.clone(), index))
             .collect();
         program.destination_operations = operations(&destination.drivers, &key_indices);
-        program.numeric_targets = program
-            .channels
-            .iter()
-            .filter_map(|channel| match &channel.key {
-                TransitionChannelKey::Property(identity) => {
-                    Some((identity.entity, identity.property.component()))
-                }
-                #[cfg(feature = "skeletal-animation")]
-                TransitionChannelKey::Joint {
-                    ..
-                } => None,
-            })
-            .collect();
-        program.numeric_targets.sort_unstable();
-        program.numeric_targets.dedup();
+        program.refresh_numeric_targets();
         Ok(program)
     }
 
     pub(super) fn retarget_frozen(
         mut self,
         destination: &mut AnimationController,
-        frozen: &[super::system_state::AnimationRuntimeFrozenTransitionValue],
+        frozen: &[AnimationRuntimeFrozenTransitionValue],
         storage: &ComponentStorage,
     ) -> Result<Self, ErrorReason> {
-        for driver in &mut destination.drivers {
-            driver.bind_transition_output(storage);
-        }
         validate_drivers(&destination.drivers)?;
         let mut additions = BTreeMap::new();
-        collect_channels(&destination.drivers, &mut additions)?;
+        collect_channels(
+            &destination.drivers,
+            storage,
+            self.contributions,
+            &mut additions,
+        )?;
         for (key, (baseline, output)) in additions {
             if let Some(channel) = self.channels.iter_mut().find(|channel| channel.key == key) {
                 channel.destination = baseline;
@@ -369,12 +308,17 @@ impl AnimationTransitionProgram {
             channel.baseline = channel_value(&value.baseline)?;
             channel.source = channel_value(&value.value)?;
         }
+        self.refresh_numeric_targets();
+        Ok(self)
+    }
+
+    fn refresh_numeric_targets(&mut self) {
         self.numeric_targets = self
             .channels
             .iter()
             .filter_map(|channel| match &channel.key {
                 TransitionChannelKey::Property(identity) => {
-                    Some((identity.entity, identity.property.component()))
+                    Some((identity.entity, identity.property.component_target()))
                 }
                 #[cfg(feature = "skeletal-animation")]
                 TransitionChannelKey::Joint {
@@ -384,81 +328,61 @@ impl AnimationTransitionProgram {
             .collect();
         self.numeric_targets.sort_unstable();
         self.numeric_targets.dedup();
-        Ok(self)
     }
 
+    /// Capture what the crossfade has in its fields, for an interrupting one to
+    /// fade out. A controller crossfade's property channels hold what its
+    /// destination applied; other channels hold their last blended value.
     pub(super) fn freeze(
         &self,
-    ) -> Result<Vec<super::system_state::AnimationRuntimeFrozenTransitionValue>, ErrorReason> {
+        applied: Option<&AnimationContributions>,
+    ) -> Result<Vec<AnimationRuntimeFrozenTransitionValue>, ErrorReason> {
         self.channels
             .iter()
             .map(|channel| {
-                let (target, incarnation, property) = match &channel.key {
-                    TransitionChannelKey::Property(identity) => (
-                        identity.entity,
-                        identity.incarnation,
-                        identity.property.clone(),
-                    ),
-                    #[cfg(feature = "skeletal-animation")]
-                    TransitionChannelKey::Joint {
-                        entity,
-                        incarnation,
-                        joint,
-                    } => (
-                        *entity,
-                        *incarnation,
-                        AnimationTrackTarget::Joints(vec![*joint]),
-                    ),
+                let value = match (&channel.key, applied) {
+                    (TransitionChannelKey::Property(identity), Some(applied))
+                        if self.contributions =>
+                    {
+                        applied
+                            .get(identity)
+                            .map(super::contribution::AnimationApplied::value)
+                            .unwrap_or_else(|| channel_animation_value(&channel.baseline))
+                    }
+                    _ => channel_animation_value(&channel.destination),
                 };
-                Ok(super::system_state::AnimationRuntimeFrozenTransitionValue {
-                    target,
-                    incarnation,
-                    property,
-                    value: channel_animation_value(&channel.destination),
-                    baseline: channel_animation_value(&channel.baseline),
-                })
+                Ok(frozen_value(
+                    channel,
+                    value,
+                    channel_animation_value(&channel.baseline),
+                ))
             })
             .collect()
     }
 
-    pub(super) fn persistent_frozen_values(
-        &self,
-    ) -> Vec<super::system_state::AnimationRuntimeFrozenTransitionValue> {
+    /// The captured outgoing values of a frozen crossfade.
+    pub(super) fn persistent_frozen_values(&self) -> Vec<AnimationRuntimeFrozenTransitionValue> {
         self.channels
             .iter()
             .map(|channel| {
-                let (target, incarnation, property) = match &channel.key {
-                    TransitionChannelKey::Property(identity) => (
-                        identity.entity,
-                        identity.incarnation,
-                        identity.property.clone(),
-                    ),
-                    #[cfg(feature = "skeletal-animation")]
-                    TransitionChannelKey::Joint {
-                        entity,
-                        incarnation,
-                        joint,
-                    } => (
-                        *entity,
-                        *incarnation,
-                        AnimationTrackTarget::Joints(vec![*joint]),
-                    ),
-                };
-                super::system_state::AnimationRuntimeFrozenTransitionValue {
-                    target,
-                    incarnation,
-                    property,
-                    value: channel_animation_value(&channel.source),
-                    baseline: channel_animation_value(&channel.baseline),
-                }
+                frozen_value(
+                    channel,
+                    channel_animation_value(&channel.source),
+                    channel_animation_value(&channel.baseline),
+                )
             })
             .collect()
     }
 
+    /// Blend both sides at `progress` and write the result. Every channel is
+    /// validated before any is written. For a controller crossfade, fields move
+    /// by the change of the blended contribution and `applied` records it.
     pub(super) fn evaluate(
         &mut self,
         source_controller: Option<&AnimationController>,
-        destination: &AnimationController,
+        destination_drivers: &[Box<dyn AnimationDriverBinding>],
+        destination_time: f64,
+        applied: &mut AnimationContributions,
         progress: f64,
         storage: &mut ComponentStorage,
     ) -> Result<(), ErrorReason> {
@@ -475,25 +399,25 @@ impl AnimationTransitionProgram {
                 &source.drivers,
                 source.snapshot.time,
                 true,
+                self.contributions,
             )?;
         }
         evaluate_operations(
             &mut self.destination_operations,
             &mut self.channels,
-            &destination.drivers,
-            destination.snapshot.time,
+            destination_drivers,
+            destination_time,
             false,
+            self.contributions,
         )?;
         for channel in &mut self.channels {
             channel.destination = match (&channel.source, &channel.destination) {
                 (
                     TransitionChannelValue::Property(source_value),
                     TransitionChannelValue::Property(destination_value),
-                ) => TransitionChannelValue::Property(source_mix(
-                    source_value,
-                    destination_value,
-                    progress,
-                )),
+                ) => {
+                    TransitionChannelValue::Property(mix(source_value, destination_value, progress))
+                }
                 #[cfg(feature = "skeletal-animation")]
                 (
                     TransitionChannelValue::Joint(source_value),
@@ -505,136 +429,68 @@ impl AnimationTransitionProgram {
                 )),
                 _ => return Err(ErrorReason::InvalidField),
             };
-            match (&channel.destination, &channel.output) {
-                (TransitionChannelValue::Property(value), TransitionOutput::Value(output)) => {
-                    output.validate(value)?;
-                }
-                #[cfg(feature = "skeletal-animation")]
-                (TransitionChannelValue::Joint(value), TransitionOutput::Joint(_, _)) => {
-                    value.validate()?;
-                }
-                _ => return Err(ErrorReason::InvalidField),
-            }
         }
+
+        // Stage every written value, then publish only when all validate.
+        self.staged.clear();
         for channel in &self.channels {
-            match (&channel.destination, &channel.output) {
+            let staged = match (&channel.destination, &channel.output) {
                 (TransitionChannelValue::Property(value), TransitionOutput::Value(output)) => {
-                    output.write(storage, value.clone())?
+                    if self.contributions {
+                        let TransitionChannelKey::Property(identity) = &channel.key else {
+                            return Err(ErrorReason::InvalidField);
+                        };
+                        let current = output.read(storage)?;
+                        let next = match applied.get(identity) {
+                            Some(previous) => previous.moved(&current, value)?,
+                            None => super::contribution::AnimationApplied::new(
+                                channel_animation_value(&channel.baseline),
+                            )
+                            .moved(&current, value)?,
+                        };
+                        output.validate(&next)?;
+                        (TransitionChannelValue::Property(next), Some(current))
+                    } else {
+                        output.validate(value)?;
+                        (TransitionChannelValue::Property(value.clone()), None)
+                    }
                 }
                 #[cfg(feature = "skeletal-animation")]
                 (TransitionChannelValue::Joint(value), TransitionOutput::Joint(entity, joint)) => {
-                    let pose = storage
-                        .skeleton_mut(entity.index() as usize)
-                        .and_then(|skeleton| skeleton.runtime.pose.as_mut())
-                        .filter(|pose| pose.valid)
-                        .ok_or(ErrorReason::MissingComponent)?;
-                    *pose
-                        .local
-                        .get_mut(*joint as usize)
-                        .ok_or(ErrorReason::InvalidField)? = *value;
-                }
-                _ => return Err(ErrorReason::InvalidField),
-            }
-        }
-        Ok(())
-    }
-
-    pub(super) fn prepare_source_hold(
-        &mut self,
-        source: &AnimationController,
-    ) -> Result<(), ErrorReason> {
-        for channel in &mut self.channels {
-            channel.source = channel.baseline.clone();
-        }
-        evaluate_operations(
-            &mut self.source_operations,
-            &mut self.channels,
-            &source.drivers,
-            source.snapshot.time,
-            true,
-        )?;
-        Ok(())
-    }
-
-    /// Check that every held source channel can be published to its output.
-    pub(super) fn validate_source_hold(&self) -> Result<(), ErrorReason> {
-        for channel in &self.channels {
-            match (&channel.source, &channel.output) {
-                (TransitionChannelValue::Property(value), TransitionOutput::Value(output)) => {
-                    output.validate(value)?;
-                }
-                #[cfg(feature = "skeletal-animation")]
-                (TransitionChannelValue::Joint(value), TransitionOutput::Joint(_, _)) => {
+                    let value = if self.contributions {
+                        super::contribution::compose_joint(
+                            joint_local(storage, *entity, *joint)?,
+                            value,
+                        )
+                    } else {
+                        *value
+                    };
                     value.validate()?;
+                    (TransitionChannelValue::Joint(value), None)
                 }
                 _ => return Err(ErrorReason::InvalidField),
-            }
+            };
+            self.staged.push(staged);
         }
-        Ok(())
-    }
-
-    pub(super) fn write_source_hold(
-        &self,
-        storage: &mut ComponentStorage,
-    ) -> Result<(), ErrorReason> {
-        self.validate_source_hold()?;
-        for channel in &self.channels {
-            match (&channel.source, &channel.output) {
+        for (channel, (staged, before)) in self.channels.iter().zip(&self.staged) {
+            match (staged, &channel.output) {
                 (TransitionChannelValue::Property(value), TransitionOutput::Value(output)) => {
                     output.write(storage, value.clone())?;
                 }
                 #[cfg(feature = "skeletal-animation")]
                 (TransitionChannelValue::Joint(value), TransitionOutput::Joint(entity, joint)) => {
-                    let pose = storage
-                        .skeleton_mut(entity.index() as usize)
-                        .and_then(|skeleton| skeleton.runtime.pose.as_mut())
-                        .filter(|pose| pose.valid)
-                        .ok_or(ErrorReason::MissingComponent)?;
-                    *pose
-                        .local
-                        .get_mut(*joint as usize)
-                        .ok_or(ErrorReason::InvalidField)? = *value;
+                    *joint_local_mut(storage, *entity, *joint)? = *value;
                 }
                 _ => return Err(ErrorReason::InvalidField),
             }
-        }
-        Ok(())
-    }
-
-    pub(super) fn write_composite_hold(
-        &self,
-        storage: &mut ComponentStorage,
-    ) -> Result<(), ErrorReason> {
-        for channel in &self.channels {
-            match (&channel.destination, &channel.output) {
-                (TransitionChannelValue::Property(value), TransitionOutput::Value(output)) => {
-                    output.validate(value)?;
-                }
-                #[cfg(feature = "skeletal-animation")]
-                (TransitionChannelValue::Joint(value), TransitionOutput::Joint(_, _)) => {
-                    value.validate()?;
-                }
-                _ => return Err(ErrorReason::InvalidField),
-            }
-        }
-        for channel in &self.channels {
-            match (&channel.destination, &channel.output) {
-                (TransitionChannelValue::Property(value), TransitionOutput::Value(output)) => {
-                    output.write(storage, value.clone())?;
-                }
-                #[cfg(feature = "skeletal-animation")]
-                (TransitionChannelValue::Joint(value), TransitionOutput::Joint(entity, joint)) => {
-                    let pose = storage
-                        .skeleton_mut(entity.index() as usize)
-                        .and_then(|skeleton| skeleton.runtime.pose.as_mut())
-                        .filter(|pose| pose.valid)
-                        .ok_or(ErrorReason::MissingComponent)?;
-                    *pose
-                        .local
-                        .get_mut(*joint as usize)
-                        .ok_or(ErrorReason::InvalidField)? = *value;
-                }
-                _ => return Err(ErrorReason::InvalidField),
+            if let (
+                TransitionChannelKey::Property(identity),
+                TransitionChannelValue::Property(total),
+                TransitionChannelValue::Property(after),
+                Some(before),
+            ) = (&channel.key, &channel.destination, staged, before)
+            {
+                applied.landed(identity, before, after, total);
             }
         }
         Ok(())
@@ -647,7 +503,7 @@ impl AnimationTransitionProgram {
     pub(super) fn target_keys(&self) -> impl Iterator<Item = (EntityId, u16)> + '_ {
         self.channels.iter().map(|channel| match &channel.key {
             TransitionChannelKey::Property(identity) => {
-                (identity.entity, identity.property.component())
+                (identity.entity, identity.property.component_target())
             }
             #[cfg(feature = "skeletal-animation")]
             TransitionChannelKey::Joint {
@@ -680,7 +536,7 @@ impl AnimationTransitionProgram {
             };
             let key = match &channel.key {
                 TransitionChannelKey::Property(identity) => {
-                    (identity.entity, identity.property.component())
+                    (identity.entity, identity.property.component_target())
                 }
                 #[cfg(feature = "skeletal-animation")]
                 TransitionChannelKey::Joint {
@@ -691,87 +547,102 @@ impl AnimationTransitionProgram {
             staged.changed.contains_key(&key) && !alive
         })
     }
+}
 
-    pub(super) fn restore(
-        &self,
-        storage: &mut ComponentStorage,
-        state: &crate::world::WorldEntityState,
-    ) -> Result<(), ErrorReason> {
-        for channel in &self.channels {
-            let alive = match &channel.key {
-                TransitionChannelKey::Property(identity) => {
-                    transition_property_alive(identity, state, storage)
-                }
-                #[cfg(feature = "skeletal-animation")]
-                TransitionChannelKey::Joint {
-                    entity,
-                    incarnation,
-                    ..
-                } => state
+/// Whether a change departs the field of a captured value a pending crossfade
+/// still has to fade out.
+pub(super) fn frozen_values_invalidated(
+    values: &[AnimationRuntimeFrozenTransitionValue],
+    staged: &crate::world::WorldMutationState,
+    storage: &ComponentStorage,
+) -> bool {
+    values.iter().any(|value| {
+        let Ok(key) = frozen_key(value) else {
+            return true;
+        };
+        let (component, alive) = match &key {
+            TransitionChannelKey::Property(identity) => (
+                identity.property.component_target(),
+                transition_property_alive(identity, staged, storage),
+            ),
+            #[cfg(feature = "skeletal-animation")]
+            TransitionChannelKey::Joint {
+                entity,
+                incarnation,
+                ..
+            } => (
+                ComponentValue::SKELETON,
+                staged
                     .entities
                     .get(entity)
-                    .and_then(|record| record.input(crate::ComponentValue::SKELETON))
+                    .and_then(|record| record.input(ComponentValue::SKELETON))
                     .is_some_and(|input| input.incarnation == *incarnation),
-            };
-            if !alive {
-                continue;
-            }
-            match (&channel.baseline, &channel.output) {
-                (TransitionChannelValue::Property(value), TransitionOutput::Value(output)) => {
-                    output.write(storage, value.clone())?;
-                }
-                #[cfg(feature = "skeletal-animation")]
-                (TransitionChannelValue::Joint(value), TransitionOutput::Joint(entity, joint)) => {
-                    let pose = storage
-                        .skeleton_mut(entity.index() as usize)
-                        .and_then(|skeleton| skeleton.runtime.pose.as_mut())
-                        .filter(|pose| pose.valid)
-                        .ok_or(ErrorReason::MissingComponent)?;
-                    *pose
-                        .local
-                        .get_mut(*joint as usize)
-                        .ok_or(ErrorReason::InvalidField)? = *value;
-                }
-                _ => return Err(ErrorReason::InvalidField),
-            }
-        }
-        Ok(())
-    }
+            ),
+        };
+        staged.changed.contains_key(&(value.target, component)) && !alive
+    })
+}
 
-    pub(super) fn refresh_baselines(
-        &mut self,
-        source: Option<&AnimationController>,
-        destination: &AnimationController,
-    ) {
-        let mut originals = BTreeMap::new();
-        if let Some(source) = source {
-            collect_originals(&source.drivers, &mut originals);
-        }
-        collect_originals(&destination.drivers, &mut originals);
-        for channel in &mut self.channels {
-            if let Some(value) = originals.get(&channel.key) {
-                channel.baseline = value.clone();
-            }
-        }
-    }
+#[cfg(feature = "skeletal-animation")]
+fn joint_local(
+    storage: &ComponentStorage,
+    entity: EntityId,
+    joint: u32,
+) -> Result<&Transform, ErrorReason> {
+    storage
+        .skeleton(entity.index() as usize)
+        .and_then(|skeleton| skeleton.runtime.pose.as_ref())
+        .filter(|pose| pose.valid)
+        .ok_or(ErrorReason::MissingComponent)?
+        .local
+        .get(joint as usize)
+        .ok_or(ErrorReason::InvalidField)
+}
 
-    pub(super) fn refresh_frozen_baselines(
-        &mut self,
-        values: &[super::system_state::AnimationRuntimeFrozenTransitionValue],
-    ) {
-        let baselines: BTreeMap<_, _> = values
-            .iter()
-            .filter_map(|value| {
-                frozen_key(value)
-                    .and_then(|key| Ok((key, channel_value(&value.baseline)?)))
-                    .ok()
-            })
-            .collect();
-        for channel in &mut self.channels {
-            if let Some(value) = baselines.get(&channel.key) {
-                channel.baseline = value.clone();
-            }
-        }
+#[cfg(feature = "skeletal-animation")]
+fn joint_local_mut(
+    storage: &mut ComponentStorage,
+    entity: EntityId,
+    joint: u32,
+) -> Result<&mut Transform, ErrorReason> {
+    storage
+        .skeleton_mut(entity.index() as usize)
+        .and_then(|skeleton| skeleton.runtime.pose.as_mut())
+        .filter(|pose| pose.valid)
+        .ok_or(ErrorReason::MissingComponent)?
+        .local
+        .get_mut(joint as usize)
+        .ok_or(ErrorReason::InvalidField)
+}
+
+fn frozen_value(
+    channel: &TransitionChannel,
+    value: AnimationValue,
+    baseline: AnimationValue,
+) -> AnimationRuntimeFrozenTransitionValue {
+    let (target, incarnation, property) = match &channel.key {
+        TransitionChannelKey::Property(identity) => (
+            identity.entity,
+            identity.incarnation,
+            identity.property.clone(),
+        ),
+        #[cfg(feature = "skeletal-animation")]
+        TransitionChannelKey::Joint {
+            entity,
+            incarnation,
+            joint,
+        } => (
+            *entity,
+            *incarnation,
+            AnimationTrackTarget::Joints(vec![*joint]),
+        ),
+    };
+    AnimationRuntimeFrozenTransitionValue {
+        target,
+        incarnation,
+        property,
+        value,
+        baseline,
     }
 }
 
@@ -783,109 +654,17 @@ fn transition_property_alive(
     state
         .entities
         .get(&identity.entity)
-        .and_then(|record| record.input(identity.property.component()))
+        .and_then(|record| record.input(identity.property.component_target()))
         .is_some_and(|input| input.incarnation == identity.incarnation)
         && identity.property.indices().iter().all(|offset| {
             !super::binding::removable_field(*offset)
                 || super::binding::present_field(state.input_field(
                     storage,
                     identity.entity,
-                    identity.property.component(),
+                    identity.property.component_target(),
                     *offset,
                 ))
         })
-}
-
-pub(super) fn restore_frozen_values(
-    values: &[super::system_state::AnimationRuntimeFrozenTransitionValue],
-    storage: &mut ComponentStorage,
-    state: &crate::world::WorldEntityState,
-) -> Result<(), ErrorReason> {
-    for value in values {
-        if !state
-            .entities
-            .get(&value.target)
-            .and_then(|record| record.input(value.property.component()))
-            .is_some_and(|input| input.incarnation == value.incarnation)
-        {
-            continue;
-        }
-        #[cfg(feature = "skeletal-animation")]
-        if let AnimationTrackTarget::Joints(joints) = &value.property {
-            let AnimationValue::Pose(baseline) = &value.baseline else {
-                return Err(ErrorReason::InvalidField);
-            };
-            let (&joint, baseline) = joints
-                .first()
-                .zip(baseline.first())
-                .ok_or(ErrorReason::InvalidField)?;
-            let pose = storage
-                .skeleton_mut(value.target.index() as usize)
-                .and_then(|skeleton| skeleton.runtime.pose.as_mut())
-                .filter(|pose| pose.valid)
-                .ok_or(ErrorReason::MissingComponent)?;
-            *pose
-                .local
-                .get_mut(joint as usize)
-                .ok_or(ErrorReason::InvalidField)? = *baseline;
-            continue;
-        }
-        let identity = super::driver::AnimationTargetIdentity {
-            entity: value.target,
-            incarnation: value.incarnation,
-            property: value.property.clone(),
-        };
-        let output =
-            super::driver::bind_frozen_transition_output(identity, &value.baseline, storage)
-                .ok_or(ErrorReason::InvalidField)?;
-        output.validate(&value.baseline)?;
-        output.write(storage, value.baseline.clone())?;
-    }
-    Ok(())
-}
-
-pub(super) fn frozen_numeric_targets(
-    values: &[super::system_state::AnimationRuntimeFrozenTransitionValue],
-) -> Vec<(EntityId, u16)> {
-    let mut targets: Vec<_> = values
-        .iter()
-        .filter_map(|value| {
-            #[cfg(feature = "skeletal-animation")]
-            if matches!(value.property, AnimationTrackTarget::Joints(_)) {
-                return None;
-            }
-            Some((value.target, value.property.component()))
-        })
-        .collect();
-    targets.sort_unstable();
-    targets.dedup();
-    targets
-}
-
-fn collect_originals(
-    drivers: &[Box<dyn AnimationDriverBinding>],
-    originals: &mut BTreeMap<TransitionChannelKey, TransitionChannelValue>,
-) {
-    for driver in drivers {
-        #[cfg(feature = "skeletal-animation")]
-        if let AnimationTrackTarget::Joints(joints) = &driver.identity().property
-            && let AnimationValue::Pose(values) = driver.original()
-        {
-            for (&joint, value) in joints.iter().zip(values) {
-                originals
-                    .entry(TransitionChannelKey::Joint {
-                        entity: driver.identity().entity,
-                        incarnation: driver.identity().incarnation,
-                        joint,
-                    })
-                    .or_insert(TransitionChannelValue::Joint(value));
-            }
-            continue;
-        }
-        originals
-            .entry(TransitionChannelKey::Property(driver.identity().clone()))
-            .or_insert_with(|| TransitionChannelValue::Property(driver.original()));
-    }
 }
 
 fn channel_value(value: &AnimationValue) -> Result<TransitionChannelValue, ErrorReason> {
@@ -900,7 +679,7 @@ fn channel_value(value: &AnimationValue) -> Result<TransitionChannelValue, Error
 }
 
 fn frozen_key(
-    value: &super::system_state::AnimationRuntimeFrozenTransitionValue,
+    value: &AnimationRuntimeFrozenTransitionValue,
 ) -> Result<TransitionChannelKey, ErrorReason> {
     #[cfg(feature = "skeletal-animation")]
     if let AnimationTrackTarget::Joints(joints) = &value.property {
@@ -930,43 +709,31 @@ fn channel_animation_value(value: &TransitionChannelValue) -> AnimationValue {
     }
 }
 
-fn source_mix(
-    source: &AnimationValue,
-    destination: &AnimationValue,
-    progress: f64,
-) -> AnimationValue {
-    mix(source, destination, progress)
-}
-
 fn validate_drivers(drivers: &[Box<dyn AnimationDriverBinding>]) -> Result<(), ErrorReason> {
-    for driver in drivers {
-        match driver.original() {
-            AnimationValue::Field(crate::components::schema::FieldValue::F32(_))
-            | AnimationValue::Rotation(_) => {}
-            AnimationValue::Field(crate::components::schema::FieldValue::Dynamic(value))
-                if !matches!(
-                    value,
-                    crate::DynamicValue::Bool(_) | crate::DynamicValue::Asset(_)
-                ) => {}
-            #[cfg(feature = "skeletal-animation")]
-            AnimationValue::Pose(_) => {}
-            _ => return Err(ErrorReason::InvalidField),
-        }
+    if drivers.iter().all(|driver| driver.contributes()) {
+        Ok(())
+    } else {
+        Err(ErrorReason::InvalidField)
     }
-    Ok(())
 }
 
+/// One channel per driven property or joint, starting from the empty
+/// contribution, or from the driver's template value for absolute channels.
 fn collect_channels(
     drivers: &[Box<dyn AnimationDriverBinding>],
+    storage: &ComponentStorage,
+    contributions: bool,
     channels: &mut BTreeMap<TransitionChannelKey, (TransitionChannelValue, TransitionOutput)>,
 ) -> Result<(), ErrorReason> {
     for driver in drivers {
+        let baseline = if contributions {
+            super::contribution::identity_value(driver.template())
+        } else {
+            driver.template().clone()
+        };
         #[cfg(feature = "skeletal-animation")]
         if let AnimationTrackTarget::Joints(joints) = &driver.identity().property {
-            let AnimationValue::Pose(values) = driver.original() else {
-                return Err(ErrorReason::InvalidField);
-            };
-            for (&joint, value) in joints.iter().zip(values) {
+            for &joint in joints {
                 channels
                     .entry(TransitionChannelKey::Joint {
                         entity: driver.identity().entity,
@@ -974,19 +741,19 @@ fn collect_channels(
                         joint,
                     })
                     .or_insert((
-                        TransitionChannelValue::Joint(value),
+                        TransitionChannelValue::Joint(super::contribution::IDENTITY_JOINT),
                         TransitionOutput::Joint(driver.identity().entity, joint),
                     ));
             }
             continue;
         }
         let output = driver
-            .transition_output()
+            .transition_output(storage)
             .ok_or(ErrorReason::InvalidField)?;
         channels
             .entry(TransitionChannelKey::Property(driver.identity().clone()))
             .or_insert((
-                TransitionChannelValue::Property(driver.original()),
+                TransitionChannelValue::Property(baseline),
                 TransitionOutput::Value(output),
             ));
     }
@@ -1034,9 +801,17 @@ fn evaluate_operations(
     drivers: &[Box<dyn AnimationDriverBinding>],
     time: f64,
     source_side: bool,
+    contributions: bool,
 ) -> Result<(), ErrorReason> {
     for operation in operations {
         match operation {
+            #[cfg(feature = "gui")]
+            TransitionOperation::Constant {
+                channel,
+                value,
+            } => {
+                channels[*channel].destination = TransitionChannelValue::Property(value.clone());
+            }
             TransitionOperation::Property {
                 driver,
                 channel,
@@ -1049,9 +824,12 @@ fn evaluate_operations(
                 let TransitionChannelValue::Property(current) = current else {
                     return Err(ErrorReason::InvalidField);
                 };
-                let value = TransitionChannelValue::Property(
-                    drivers[*driver].sample_bound(time, current.clone())?,
-                );
+                let driver = &drivers[*driver];
+                let value = TransitionChannelValue::Property(if contributions {
+                    super::contribution::compose(current, &driver.contribution(time)?)?
+                } else {
+                    driver.sample(time)
+                });
                 if source_side {
                     channels[*channel].source = value;
                 } else {

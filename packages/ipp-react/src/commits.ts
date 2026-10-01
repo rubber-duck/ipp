@@ -1,29 +1,39 @@
+import { ReactControlRefs } from "./control_refs.js";
+import { ReactGuiCallbacks } from "./gui_callbacks.js";
+import { fieldIdentity, type DeclarationFieldValue } from "./field_values.js";
 import { ReactAnimationRegistry } from "./animation_state.js";
 import { ReactAssetRegistry } from "./asset_state.js";
-import { GuiAdoptionRefusedError, GuiCommits } from "./gui/commits.js";
-import type { FieldWrite, StateOverlayAlias } from "@ipp/client";
+import type { ReactCompositionHost } from "./attached-world.js";
+import {
+  orderEntityLinks,
+  siblingChains,
+  siblingsInPlace,
+  type ResolvedEntityLink,
+} from "./entity_links.js";
+import type { ReactEntityReference } from "./entity_references.js";
 import type {
-  StateOverlayLifecycleDiagnostic,
-  StateOverlayCommand,
-  StateOverlayOutcome,
-  ReactWorldClient,
-  StateOverlayRef,
-} from "./contract.js";
+  BatchOutcome,
+  Command,
+  ComponentDescriptor,
+  DynamicValue,
+  EntityRef,
+  FieldWrite,
+} from "@ipp/client";
+import type { ReactWorldClient } from "./contract.js";
 import type {
+  ReactComponentDescription,
+  ReactEntityDescription,
   ReactWorldDescription,
-  EntityOverlayBindingDescription,
-  ComponentStateOverlayDescription,
-  StateOverlayFieldValue,
   ReactWorldFieldValue,
 } from "./tree.js";
 
 export interface ReactWorldRootOptions {
+  host?: ReactCompositionHost;
   onError?: (error: Error) => void;
-  onDiagnostic?: (diagnostic: StateOverlayLifecycleDiagnostic) => void;
 }
 
 export class ReactWorldBatchRejectedError extends Error {
-  constructor(readonly outcome: Extract<StateOverlayOutcome, { ok: false }>) {
+  constructor(readonly outcome: Extract<BatchOutcome, { ok: false }>) {
     super(
       `React commit rejected at ${outcome.error.scope}${outcome.error.operation === null ? "" : ` ${outcome.error.operation}`}: ${outcome.error.reason}`,
     );
@@ -31,116 +41,202 @@ export class ReactWorldBatchRejectedError extends Error {
   }
 }
 
-export class EntityOverlayBindingLostError extends Error {
-  constructor() {
-    super(
-      "The entity binding was lost; explicitly remount or change its target/mode",
-    );
-    this.name = "EntityOverlayBindingLostError";
+/**
+ * An entity this root reaches through an Entity declaration. A declared
+ * entity (`<Entity id>`) is created or adopted by the root and deleted when
+ * its declaration disappears; a bound entity (`<Entity bindTo>`) is only
+ * referred to by its symbolic id and never deleted.
+ */
+interface EntityRecord {
+  description: ReactEntityDescription;
+  /** The handle; a bound entity's is learned when a command resolves it. */
+  entity: bigint | undefined;
+}
+
+/**
+ * A component declaration whose component the root inserted or adopted; the
+ * component is removed when its declaration disappears.
+ */
+interface ComponentRecord {
+  description: ReactComponentDescription;
+  readonly entity: EntityRecord;
+  /** Changes when the root inserts or adopts the component again. */
+  readonly serial: number;
+  /** Acknowledged declared values, with batch aliases replaced by handles. */
+  readonly fields: Map<number, DeclarationFieldValue>;
+  readonly properties: Record<string, DynamicValue>;
+  /** The resolved field map whose every value is acknowledged. */
+  declared: ReadonlyMap<number, ReactWorldFieldValue> | undefined;
+}
+
+/** The placement the root last applied for a link declaration. */
+interface LinkRecord {
+  description: ResolvedEntityLink;
+  readonly entity: EntityRecord;
+}
+
+/** One command and the acknowledged state it establishes once applied. */
+interface PlannedCommand {
+  readonly command: Command;
+  readonly applied?: (batch: AppliedBatch, operation: number) => void;
+}
+
+/** What one batch outcome reported about aliases and symbols. */
+class AppliedBatch {
+  private readonly aliases = new Map<number, bigint>();
+  readonly symbols = new Map<string, bigint>();
+
+  constructor(outcome: BatchOutcome) {
+    for (const { alias, id } of outcome.aliases) this.aliases.set(alias, id);
+    for (const { symbol, id } of outcome.symbols) this.symbols.set(symbol, id);
+  }
+
+  /** The entity a same-batch alias named. */
+  entity(alias: number): bigint {
+    const entity = this.aliases.get(alias);
+    if (entity === undefined)
+      throw new Error(`Missing entity of alias ${alias}`);
+    return entity;
   }
 }
 
-type AcknowledgedStateOverlay<T> = {
-  description: T;
-  handle: bigint;
-  lost: boolean;
-};
-type PendingStateOverlay<T> = {
-  description: T;
-  ref: StateOverlayRef;
-  lost: boolean;
-};
-
-function handle(id: bigint): StateOverlayRef {
-  return { kind: "handle", id };
+/**
+ * How many leading commands of `count` an outcome applied, or `undefined`
+ * when the outcome does not say. Batches apply in order and stop at the
+ * failing operation; a commit failure follows every operation, except a
+ * faulted World, which applies nothing.
+ */
+function appliedCommands(
+  outcome: BatchOutcome,
+  count: number,
+): number | undefined {
+  if (outcome.ok) return count;
+  const { scope, operation, reason } = outcome.error;
+  if (scope === "operation")
+    return operation !== null &&
+      Number.isInteger(operation) &&
+      operation >= 0 &&
+      operation < count
+      ? operation
+      : undefined;
+  return reason === "NonConvergentCommit" ? undefined : count;
 }
 
-type AcknowledgedEntity =
-  AcknowledgedStateOverlay<EntityOverlayBindingDescription> & {
-    entity: bigint;
-  };
+/** Rejections of a removal whose target is already gone. */
+const alreadyRemoved = new Set([
+  "InvalidEntity",
+  "MissingComponent",
+  "MissingSymbolicId",
+]);
+
+/** Whether a failed removal only found its target already gone. */
+function removedAlready(command: Command, outcome: BatchOutcome): boolean {
+  return (
+    !outcome.ok &&
+    outcome.error.scope === "operation" &&
+    (command.kind === "delete" || command.kind === "removeComponent") &&
+    alreadyRemoved.has(outcome.error.reason)
+  );
+}
 
 function equalField(
-  a: ReactWorldFieldValue | undefined,
-  b: StateOverlayFieldValue,
+  left: DeclarationFieldValue | undefined,
+  right: DeclarationFieldValue,
 ): boolean {
-  if (a?.kind !== b.kind) return false;
-  if (a.kind === "entity" && b.kind === "entity")
-    return (
-      a.value.kind === "handle" &&
-      b.value.kind === "handle" &&
-      a.value.id === b.value.id
-    );
-  if (a.kind === "bytes" && b.kind === "bytes") {
-    if (a.value === b.value) return true;
-    if (a.value.byteLength !== b.value.byteLength) return false;
-    return a.value.every((value, index) => value === b.value[index]);
-  }
-  return Object.is(a.value, b.value);
+  return left !== undefined && fieldIdentity(left) === fieldIdentity(right);
 }
 
 function writes(
-  fields: ReadonlyMap<number, StateOverlayFieldValue>,
+  fields: ReadonlyMap<number, DeclarationFieldValue>,
 ): FieldWrite[] {
-  return [...fields].map(([offset, value]) => ({
-    offset,
-    value,
-  }));
+  return [...fields].map(([offset, value]) => ({ offset, value }));
+}
+
+/** A value with a same-batch entity alias replaced by the entity it named. */
+function acknowledgedValue(
+  value: DeclarationFieldValue,
+  batch: AppliedBatch,
+): DeclarationFieldValue {
+  return value.kind === "entity" && value.value.kind === "alias"
+    ? {
+        kind: "entity",
+        value: { kind: "handle", id: batch.entity(value.value.alias) },
+      }
+    : value;
 }
 
 export class ReactWorldCommits {
-  private owner: bigint | undefined;
-  private entities = new Map<number, AcknowledgedEntity>();
-  private overlays = new Map<
-    number,
-    AcknowledgedStateOverlay<ComponentStateOverlayDescription>
-  >();
+  private unknownOutcome: unknown;
+  private readonly entities = new Map<number, EntityRecord>();
+  /** Records whose declaration disappeared and whose cleanup is pending. */
+  private readonly orphans = new Set<EntityRecord>();
+  /**
+   * Symbolic ids of entities a batch of unknown applied extent may have
+   * created. They have no record, so cleanup deletes them by symbol.
+   */
+  private readonly uncertain = new Set<string>();
+  private readonly components = new Map<number, ComponentRecord>();
+  /**
+   * Component declarations whose acknowledgement changed since controls were
+   * last published, so publication rechecks only these.
+   */
+  private readonly reacknowledged = new Set<number>();
+  private readonly links = new Map<number, LinkRecord>();
+  /** Per resolved parent, each link's position in the last fully applied
+   * sibling chain; a partially applied placement forgets its group. */
+  private linkOrders = new Map<bigint | null, ReadonlyMap<number, number>>();
+  private nextSerial = 1;
+  private componentsById: Map<number, ComponentDescriptor> | undefined;
   private readonly session: bigint;
-  private readonly unsubscribe: () => void;
   private tail: Promise<void> = Promise.resolve();
   private latest: Promise<void> = Promise.resolve();
   private pendingRender:
     | { description: ReactWorldDescription; result: Promise<void> }
     | undefined;
   private signature: string | undefined;
-  private inFlight = false;
-  private diagnostics: StateOverlayLifecycleDiagnostic[] = [];
   private fatal: Error | undefined;
   private needsReset = false;
   readonly assets: ReactAssetRegistry;
   readonly animations: ReactAnimationRegistry;
-  readonly gui: GuiCommits;
+  private readonly controls: ReactControlRefs;
+  private readonly callbacks: ReactGuiCallbacks;
   private desired: ReactWorldDescription | undefined;
   private assetCommitQueued = false;
+  private controlRefreshQueued = false;
   private localFailureGeneration = 0;
   private closing = false;
-  /** Acknowledged identities at the outermost attempt start. The
-   * entity-handle path re-enters apply after its first commit; only the
-   * outermost frame snapshots, so a refusal cleans the whole attempt. */
-  private attemptBase:
-    | {
-        owner: bigint | undefined;
-        entities: Set<number>;
-        overlays: Set<number>;
-      }
-    | undefined;
-  /** Adoption-cleanup interrupted by a rejected batch. Core releases are
-   * idempotent, so the next render retries exactly these handles; an owner
-   * released elsewhere supersedes the record. */
-  private pendingCleanup:
-    | {
-        owner: bigint;
-        bindings: bigint[];
-        overlays: bigint[];
-        ownerCreated: boolean;
-      }
-    | undefined;
 
   constructor(
     private readonly client: ReactWorldClient,
     private readonly options: ReactWorldRootOptions,
   ) {
     this.session = client.session;
+    this.controls = new ReactControlRefs(
+      client,
+      (error) => this.report(error),
+      () => {
+        if (this.closing || client.closure || this.controlRefreshQueued) return;
+        this.controlRefreshQueued = true;
+        void this.enqueue(async () => {
+          this.controlRefreshQueued = false;
+          if (!this.closing && this.desired) await this.publishControls();
+        }).catch(() => {});
+      },
+    );
+    this.callbacks = new ReactGuiCallbacks(
+      client,
+      this.controls,
+      (work) => this.scheduleCallback(work),
+      (error) => this.report(error),
+    );
+    void client.closed?.then(({ reason }) => {
+      this.fatal = reason;
+      this.closing = true;
+      this.assets.close();
+      this.animations.close();
+      this.controls.close();
+      this.callbacks.fence();
+    });
     this.animations = new ReactAnimationRegistry(
       client,
       (work) => this.enqueue(work),
@@ -149,7 +245,7 @@ export class ReactWorldCommits {
     this.assets = new ReactAssetRegistry(
       client,
       () => {
-        if (this.closing || this.assetCommitQueued) return;
+        if (this.closing || client.closure || this.assetCommitQueued) return;
         this.assetCommitQueued = true;
         const generation = this.localFailureGeneration;
         void this.enqueue(async () => {
@@ -164,16 +260,6 @@ export class ReactWorldCommits {
       },
       (error) => this.report(error),
     );
-    this.unsubscribe = client.onDiagnostic((diagnostic) => {
-      if (client.session !== this.session) return;
-      if (this.owner !== undefined && diagnostic.owner !== this.owner) return;
-      if (this.inFlight) this.diagnostics.push(diagnostic);
-      else this.observe(diagnostic);
-    });
-    this.gui = new GuiCommits(client, {
-      checkSession: () => this.checkSession(),
-      report: (error) => this.report(error),
-    });
   }
 
   report(error: unknown): Error {
@@ -187,25 +273,57 @@ export class ReactWorldCommits {
     return result;
   }
 
-  private observe(diagnostic: StateOverlayLifecycleDiagnostic): void {
-    if (this.owner === undefined || diagnostic.owner !== this.owner) return;
-    for (const entity of this.entities.values()) {
-      if (entity.handle === diagnostic.stateOverlay) {
-        entity.lost = true;
-        for (const overlay of this.overlays.values()) {
-          if (overlay.description.entity === entity.description.identity)
-            overlay.lost = true;
-        }
-      }
-    }
-    for (const overlay of this.overlays.values()) {
-      if (overlay.handle === diagnostic.stateOverlay) overlay.lost = true;
-    }
-    try {
-      this.options.onDiagnostic?.(diagnostic);
-    } catch (error) {
-      this.report(error);
-    }
+  /** Forget a record and every component and link declared on it. */
+  private forgetEntity(record: EntityRecord): void {
+    this.orphans.delete(record);
+    for (const [identity, entity] of this.entities)
+      if (entity === record) this.entities.delete(identity);
+    for (const [identity, component] of this.components)
+      if (component.entity === record) this.forgetComponent(identity);
+    for (const [identity, link] of this.links)
+      if (link.entity === record) this.links.delete(identity);
+  }
+
+  /** Forget one component record; its control is acknowledged anew. */
+  private forgetComponent(identity: number): void {
+    this.components.delete(identity);
+    this.reacknowledged.add(identity);
+  }
+
+  /** Forget bound records whose declared components are all removed. */
+  private pruneOrphans(): void {
+    for (const record of this.orphans)
+      if (
+        record.description.kind === "bound" &&
+        ![...this.components.values()].some(
+          (component) => component.entity === record,
+        )
+      )
+        this.orphans.delete(record);
+  }
+
+  /** Forget every record after its World state was deleted. */
+  private forgetRecords(): void {
+    this.entities.clear();
+    this.orphans.clear();
+    this.components.clear();
+    this.links.clear();
+    this.linkOrders.clear();
+    this.publishEntities();
+  }
+
+  private publishEntities(): void {
+    const acknowledged: {
+      description: ReactEntityDescription;
+      entity: bigint;
+    }[] = [];
+    for (const record of this.entities.values())
+      if (record.entity !== undefined)
+        acknowledged.push({
+          description: record.description,
+          entity: record.entity,
+        });
+    this.callbacks.acknowledge(acknowledged);
   }
 
   private enqueue(work: () => Promise<void>): Promise<void> {
@@ -219,19 +337,41 @@ export class ReactWorldCommits {
     return result;
   }
 
+  private scheduleCallback(work: () => Promise<void>): Promise<void> {
+    const result = this.tail.then(work);
+    this.tail = result.catch((error: unknown) => {
+      this.report(error);
+    });
+    return result;
+  }
+
   capture(description: ReactWorldDescription): Promise<void> {
+    // Unmount fences before React clears the tree: the empty tree is never
+    // committed, so unmount deletes nothing.
+    if (this.closing) return this.latest;
+    if (this.client.closure) return this.failed(this.client.closure.reason);
     this.desired = description;
     this.assets.setDesired(description.assets);
     this.animations.setDesired(description.animations);
-    this.gui.reconcileLocal(description.gui);
-    if (description.signature === this.signature) return this.latest;
+    this.callbacks.setDesired(description);
+    this.controls.setDesired(description);
+    if (description.signature === this.signature) {
+      if (
+        !this.controls.needsPublication() &&
+        !this.callbacks.needsPreparation()
+      )
+        return this.latest;
+      const acknowledged = this.latest;
+      return this.enqueue(async () => {
+        await acknowledged;
+        await this.publishControls();
+      });
+    }
     this.signature = description.signature;
     // A rejected commit keeps its signature: an identical retry dedups to the
     // cached rejection without transport ("an unchanged rejected tree does
     // not retry"), while a corrected tree carries a new signature and
-    // re-enters apply. Forgetting the signature here would re-enter apply
-    // with needsReset set and submit an owner release the caller never
-    // settles, hanging the retry.
+    // re-enters apply against the acknowledged and partially applied state.
     if (this.pendingRender) {
       this.pendingRender.description = description;
       this.latest = this.pendingRender.result;
@@ -248,17 +388,19 @@ export class ReactWorldCommits {
   }
 
   failed(error: unknown): Promise<void> {
+    if (this.closing) return this.latest;
     // Snapshot validation has no transport effects. React error boundaries
     // still determine local tree recovery after errors thrown during rendering.
     // Stop resource notifications from reapplying the last valid description
     // while React's committed host tree is invalid. Queue the reset marker so
     // an older apply cannot observe and consume it before acknowledging the
-    // ownership that the corrected render must release.
+    // records that the corrected render must delete.
     this.signature = undefined;
     this.desired = undefined;
     this.localFailureGeneration++;
     return this.enqueue(async () => {
       this.needsReset = true;
+      this.controls.reset();
       throw error;
     });
   }
@@ -267,34 +409,61 @@ export class ReactWorldCommits {
     return this.latest;
   }
 
-  dispose(): Promise<void> {
+  checkpoint(): Promise<void> {
+    this.pendingRender = undefined;
+    return this.latest;
+  }
+
+  /**
+   * Stop authoring: later descriptions are not committed, and refs,
+   * callbacks, assets and animations are fenced.
+   */
+  fence(): void {
     this.closing = true;
     this.assets.close();
     this.animations.close();
+    this.controls.close();
+    this.callbacks.fence();
+  }
+
+  /**
+   * Fence and release this root's subscriptions after earlier commits
+   * settle. Unmount deletes nothing: entities, components, animation
+   * controllers and assets stay in the World. `remove` first deletes what the
+   * records hold, for an attached-World boundary whose declaration was
+   * removed.
+   */
+  dispose(remove = false): Promise<void> {
+    this.fence();
     return this.enqueue(async () => {
+      const errors: unknown[] = [];
       try {
-        await this.animations.dispose();
-        await this.gui.dispose();
-        await this.retryPendingCleanup();
-        if (this.owner !== undefined) {
-          await this.submitCleanup([
-            { kind: "releaseStateOverlayOwner", owner: handle(this.owner) },
-          ]);
-          this.owner = undefined;
-          this.entities.clear();
-          this.overlays.clear();
+        for (const cleanup of [
+          () => this.animations.dispose(remove),
+          () => this.controls.dispose(),
+          () => this.callbacks.dispose(),
+          ...(remove ? [() => this.deleteRecords()] : []),
+        ]) {
+          try {
+            await cleanup();
+          } catch (error) {
+            errors.push(error);
+          }
         }
+        if (remove && this.unknownOutcome) errors.push(this.unknownOutcome);
+        if (errors.length)
+          throw new AggregateError(
+            errors,
+            "React declaration cleanup is incomplete",
+          );
       } finally {
-        try {
-          await this.assets.dispose();
-        } finally {
-          this.unsubscribe();
-        }
+        await this.assets.dispose(remove);
       }
     });
   }
 
   private checkSession(): void {
+    if (this.client.closure) throw this.client.closure.reason;
     if (this.fatal) throw this.fatal;
     if (this.client.session !== this.session) {
       this.fatal = new Error("Session replacement requires a new React root");
@@ -302,13 +471,11 @@ export class ReactWorldCommits {
     }
   }
 
-  private async submit(
-    operations: StateOverlayCommand[],
-  ): Promise<Extract<StateOverlayOutcome, { ok: true }>> {
+  /** Send one batch; an outcome, successful or not, returns normally. */
+  private async send(operations: Command[]): Promise<BatchOutcome> {
     this.checkSession();
-    let outcome: StateOverlayOutcome;
     try {
-      outcome = await this.client.batch(operations);
+      return await this.client.batch(operations);
     } catch (error) {
       if (
         error instanceof Error &&
@@ -320,60 +487,141 @@ export class ReactWorldCommits {
         // the structural code, not its constructor. Corrected commits can retry.
         throw error;
       }
-      // Without an outcome we cannot know whether an attachment committed.
-      // Never guess ownership or replay an ambiguously completed batch.
+      // Without an outcome we cannot know what applied. Never guess records
+      // or replay an ambiguously completed batch.
       this.fatal = error instanceof Error ? error : new Error(String(error));
+      this.unknownOutcome = this.fatal;
       throw this.fatal;
     }
-    if (!outcome.ok) {
-      // The core retained partial work. Keep its owner for unmount cleanup and
-      // rebuild this root only when the caller supplies a corrected render.
-      this.owner ??= outcome.stateOverlays.find(
-        (alias) => alias.kind === "owner",
-      )?.id;
-      this.needsReset = true;
-      throw new ReactWorldBatchRejectedError(outcome);
+  }
+
+  /** The record of the one entity a symbolic reference names. */
+  private namedEntity(reference: string): EntityRecord {
+    let match: EntityRecord | undefined;
+    for (const record of this.entities.values()) {
+      if (
+        record.description.symbolicId !== reference ||
+        record.entity === undefined
+      )
+        continue;
+      if (match && match.entity !== record.entity)
+        throw new Error(
+          `Reference must identify one acknowledged Entity: ${reference}`,
+        );
+      match = record;
     }
-    return outcome;
+    if (!match)
+      throw new Error(
+        `Reference must identify one acknowledged Entity: ${reference}`,
+      );
+    return match;
+  }
+
+  resolveEntity(reference: string | bigint): bigint {
+    this.checkSession();
+    if (typeof reference === "bigint") return reference;
+    return this.namedEntity(reference).entity!;
+  }
+
+  /**
+   * A token that stays equal while the acknowledged Camera declaration of
+   * `reference` is unchanged: the same entity and the same inserted or
+   * adopted Camera component. Undefined when this root does not declare that
+   * component, so callers must bind the output again.
+   */
+  outputWitness(reference: string | bigint): string | undefined {
+    if (typeof reference === "bigint") return undefined;
+    let record: EntityRecord;
+    try {
+      record = this.namedEntity(reference);
+    } catch {
+      return undefined;
+    }
+    const component = this.client.components.Camera?.id;
+    for (const declared of this.components.values())
+      if (
+        declared.entity === record &&
+        declared.description.component === component
+      )
+        return `${record.entity}:${declared.serial}`;
+    return undefined;
   }
 
   private async apply(description: ReactWorldDescription): Promise<void> {
     this.checkSession();
-    if (this.attemptBase !== undefined) return this.applyAttempt(description);
-    if (this.needsReset) {
-      await this.animations.removeExcept(new Set());
-      await this.gui.reset();
-      if (this.owner !== undefined)
-        await this.submit([
-          { kind: "releaseStateOverlayOwner", owner: handle(this.owner) },
-        ]);
-      this.owner = undefined;
-      this.entities.clear();
-      this.overlays.clear();
-      this.needsReset = false;
-    }
-    await this.retryPendingCleanup();
-    this.attemptBase = {
-      owner: this.owner,
-      entities: new Set(this.entities.keys()),
-      overlays: new Set(this.overlays.keys()),
-    };
+    if (this.needsReset) this.controls.reset(true);
+    const failures: unknown[] = [];
     try {
+      await this.controls.releasePending();
+    } catch (error) {
+      failures.push(error);
+    }
+    try {
+      if (this.needsReset) {
+        await this.animations.removeExcept(new Set());
+        // The recommit adopts the components on bound entities again,
+        // so the reset keeps them, with their last written values.
+        await this.deleteRecords(false);
+        this.needsReset = false;
+      }
       await this.applyAttempt(description);
     } catch (error) {
-      // Overlay and binding additions commit before GUI adoption. An adopt
-      // refusal skips the remaining work, so release what this attempt
-      // acquired; previously acknowledged declarations and foreign trees
-      // are never removed. A failed cleanup retains its handles for the
-      // next render, and unmount still releases the owner.
-      if (error instanceof GuiAdoptionRefusedError)
-        await this.cleanupAttemptDelta();
-      throw error;
-    } finally {
-      this.attemptBase = undefined;
+      failures.push(error);
     }
+    // Callbacks follow the acknowledged tree: a failed commit publishes no
+    // registration until a later commit succeeds.
+    if (failures.length) this.callbacks.suspend();
+    else this.callbacks.resume();
+    if (failures.length === 1) throw failures[0];
+    if (failures.length)
+      throw new AggregateError(failures, "React declaration commit incomplete");
   }
 
+  private component(id: number): ComponentDescriptor | undefined {
+    this.componentsById ??= new Map(
+      Object.values(this.client.components).map((component) => [
+        component.id,
+        component,
+      ]),
+    );
+    return this.componentsById.get(id);
+  }
+
+  /** Replace asset references with the prepared asset each names. */
+  private resolveAssets(
+    declared: ReactComponentDescription,
+  ): ReadonlyMap<number, ReactWorldFieldValue> {
+    let fields: Map<number, ReactWorldFieldValue> | undefined;
+    for (const [offset, value] of declared.fields) {
+      if (value.kind !== "row-asset" && value.kind !== "asset") continue;
+      fields ??= new Map(declared.fields);
+      const current = this.assets.get(value.value)?.current;
+      if (value.kind === "row-asset") {
+        fields.set(
+          offset,
+          current
+            ? { kind: "dynamic", value: { kind: "asset", value: current } }
+            : { kind: "unset" },
+        );
+        continue;
+      }
+      fields.set(offset, { kind: "string", value: current?.source ?? "" });
+      const variant = this.component(declared.component)?.fields.variant;
+      if (variant)
+        fields.set(variant.offset, {
+          kind: "u32",
+          value: current?.variant ?? 0,
+        });
+    }
+    return fields ?? declared.fields;
+  }
+
+  /**
+   * Plan and submit one render: remove components whose declarations
+   * disappeared, create or adopt new declared entities, place links, insert
+   * or adopt new components and write changed fields, then delete entities
+   * whose declarations disappeared.
+   */
   private async applyAttempt(
     description: ReactWorldDescription,
   ): Promise<void> {
@@ -383,561 +631,684 @@ export class ReactWorldCommits {
     );
     await this.assets.prepare(description.assets);
     this.checkSession();
-    description = {
-      ...description,
-      overlays: description.overlays.map((overlay) => {
-        const fields = new Map(overlay.fields);
-        for (const [offset, value] of fields)
-          if (value.kind === "asset") {
-            const current = this.assets.get(value.value)?.current;
-            fields.set(offset, {
-              kind: "string",
-              value: current?.source ?? "",
-            });
-            const component = Object.values(this.client.components).find(
-              (component) => component.id === overlay.component,
-            );
-            const variant = component?.fields.variant;
-            if (variant)
-              fields.set(variant.offset, {
-                kind: "u32",
-                value: current?.variant ?? 0,
-              });
-          }
-        return { ...overlay, fields };
-      }),
-    };
-    const operations: StateOverlayCommand[] = [];
-    const deferredReleases = new Set<StateOverlayCommand>();
+    const plan: PlannedCommand[] = [];
     let nextAlias = 1;
-    const alias = (): StateOverlayRef => ({
-      kind: "alias",
-      alias: nextAlias++,
-    });
-    let owner: StateOverlayRef;
-    if (this.owner === undefined) {
-      if (description.entities.length === 0) {
-        await this.animations.apply(
-          description.animations,
-          this.assets,
-          () => undefined,
-        );
-        await this.assets.releaseUnused();
-        return;
-      }
-      const ownerAlias = alias();
-      owner = ownerAlias;
-      operations.push({
-        kind: "createStateOverlayOwner",
-        alias: nextAlias - 1,
-      });
-    } else owner = handle(this.owner);
 
-    const entities = new Map<
-      number,
-      PendingStateOverlay<EntityOverlayBindingDescription>
-    >();
-    const overlays = new Map<
-      number,
-      PendingStateOverlay<ComponentStateOverlayDescription>
-    >();
+    // Entity records: keep a declaration's record while its symbolic id is
+    // unchanged. An id that moved to another node (a keyed remount or a moved
+    // declaration) takes over the record whose declaration disappeared, so
+    // its entity is not deleted. A description has at most one `<Entity id>`
+    // declaration per symbolic id.
     const desiredEntities = new Map(
       description.entities.map((entity) => [entity.identity, entity]),
     );
-    const desiredOverlays = new Map(
-      description.overlays.map((overlay) => [overlay.identity, overlay]),
-    );
-
-    // Release declarations before bindings and before all new attachments.
-    // Retained declarations preserve their successful attachment precedence.
-    for (const [identity, entity] of this.entities) {
+    for (const [identity, record] of this.entities) {
       const next = desiredEntities.get(identity);
-      if (
-        next &&
-        next.symbolicId === entity.description.symbolicId &&
-        next.mode === entity.description.mode
-      ) {
-        entities.set(identity, {
-          description: next,
-          ref: handle(entity.handle),
-          lost: entity.lost,
-        });
+      if (next?.symbolicId === record.description.symbolicId)
+        record.description = next;
+      else {
+        this.entities.delete(identity);
+        this.orphans.add(record);
       }
     }
-    for (const [identity, overlay] of this.overlays) {
-      const next = desiredOverlays.get(identity);
-      if (
-        next &&
-        entities.has(next.entity) &&
-        next.entity === overlay.description.entity &&
-        next.mode === overlay.description.mode &&
-        next.component === overlay.description.component
-      ) {
-        overlays.set(identity, {
-          description: overlay.description,
-          ref: handle(overlay.handle),
-          lost: overlay.lost,
-        });
-      } else {
-        const release: StateOverlayCommand = {
-          kind: "releaseComponentStateOverlay",
-          owner,
-          overlay: handle(overlay.handle),
-        };
-        operations.push(release);
-        const entity = this.entities.get(overlay.description.entity);
-        if (
-          overlay.description.component ===
-            this.client.components.Surface?.id &&
-          (description.gui.some(
-            (root) => root.entity === overlay.description.entity,
-          ) ||
-            (entity !== undefined &&
-              this.gui.hasAcknowledgedRoot(entity.entity)))
-        )
-          deferredReleases.add(release);
-      }
-    }
-    for (const [identity, entity] of this.entities) {
-      if (!entities.has(identity)) {
-        const release: StateOverlayCommand = {
-          kind: "releaseEntityOverlayBinding",
-          owner,
-          binding: handle(entity.handle),
-        };
-        operations.push(release);
-        deferredReleases.add(release);
-      }
-    }
+    const created = new Map<number, number>();
     for (const entity of description.entities) {
-      if (entities.has(entity.identity)) continue;
-      const ref = alias();
-      operations.push({
-        kind: "attachEntityOverlayBinding",
-        owner,
-        alias: nextAlias - 1,
-        symbolicId: entity.symbolicId,
-        mode: entity.mode,
-      });
-      entities.set(entity.identity, { description: entity, ref, lost: false });
-    }
-    // Entity binding aliases and EntityRef aliases occupy different protocol domains.
-    // A new parent must be acknowledged before its handle can be written into Hierarchy.
-    const hasChildren = description.overlays.some(
-      (overlay) => overlay.identity < 0,
-    );
-    const needsEntityHandles =
-      (hasChildren &&
-        [...entities.values()].some((entity) => entity.ref.kind === "alias")) ||
-      description.overlays.some((overlay) =>
-        [...overlay.fields.values()].some(
-          (value) =>
-            value.kind === "binding" &&
-            entities.get(value.value)?.ref.kind === "alias",
-        ),
+      if (this.entities.has(entity.identity)) continue;
+      const orphan = [...this.orphans].find(
+        (record) => record.description.symbolicId === entity.symbolicId,
       );
-    if (needsEntityHandles) {
-      await this.commit(operations, owner, entities, overlays);
-      await this.apply(description);
-      return;
-    }
-
-    if (hasChildren) {
-      const parents = new Map<bigint, number>();
-      for (const declaration of description.overlays) {
-        if (declaration.component !== this.client.components.Hierarchy?.id)
-          continue;
-        const target = this.entities.get(declaration.entity);
-        if (!target || target.lost) continue;
-        const previous = parents.get(target.entity);
-        if (
-          previous !== undefined &&
-          (previous < 0 || declaration.identity < 0)
-        )
-          throw new Error(
-            "Children conflicts with another parenting declaration for the same bound entity",
-          );
-        parents.set(target.entity, declaration.identity);
-      }
-    }
-
-    for (const declaration of description.overlays) {
-      const overlay = {
-        ...declaration,
-        fields: new Map(
-          [...declaration.fields].map(
-            ([offset, value]): [number, StateOverlayFieldValue] => {
-              if (value.kind === "asset")
-                throw new Error("Unresolved asset reference");
-              if (value.kind !== "binding") return [offset, value];
-              const parent = this.entities.get(value.value);
-              if (!parent)
-                throw new Error("Missing acknowledged parent entity");
-              // Lost bindings retain their generation. Core owns invalidation; a surviving
-              // declaration must never silently follow a replacement with the same name.
-              return [offset, { kind: "entity", value: handle(parent.entity) }];
-            },
-          ),
-        ),
-      };
-      const retained = overlays.get(overlay.identity);
-      const entity = entities.get(overlay.entity);
-      if (!entity) throw new Error("Missing declaration entity");
-      if (retained) {
-        // A strict loss is terminal for this attachment. Core diagnostics are
-        // observational; changing ordinary fields must never reacquire it.
-        if (retained.lost || entity.lost) continue;
-        const previous = this.overlays.get(overlay.identity);
-        if (!previous) throw new Error("Missing acknowledged overlay");
-        const changed = new Map(
-          [...overlay.fields].filter(([offset, value]) => {
-            const old = previous.description.fields.get(offset);
-            return !equalField(old, value);
-          }),
+      if (orphan) {
+        this.orphans.delete(orphan);
+        orphan.description = entity;
+        this.entities.set(entity.identity, orphan);
+      } else if (entity.kind === "bound") {
+        const known = [...this.entities.values()].find(
+          (record) =>
+            record.description.symbolicId === entity.symbolicId &&
+            record.entity !== undefined,
         );
-        retained.description = overlay;
-        const clear = [...previous.description.fields.keys()].filter(
-          (offset) => !overlay.fields.has(offset),
-        );
-        if (changed.size || clear.length)
-          operations.push({
-            kind: "updateComponentStateOverlay",
-            owner,
-            overlay: retained.ref,
-            fields: writes(changed),
-            clear,
-          });
-        const oldProperties = previous.description.properties ?? {};
-        const properties = Object.fromEntries(
-          Object.entries(overlay.properties ?? {}).filter(
-            ([name, value]) =>
-              JSON.stringify(value) !== JSON.stringify(oldProperties[name]),
-          ),
-        );
-        const clearProperties = Object.keys(oldProperties).filter(
-          (name) => !Object.hasOwn(overlay.properties ?? {}, name),
-        );
-        if (Object.keys(properties).length || clearProperties.length)
-          operations.push({
-            kind: "updateDynamicComponentStateOverlay",
-            owner,
-            overlay: retained.ref,
-            properties,
-            clear: clearProperties,
-          });
-      } else {
-        if (entity.lost) throw new EntityOverlayBindingLostError();
-        const ref = alias();
-        operations.push({
-          kind: "attachComponentStateOverlay",
-          owner,
-          binding: entity.ref,
-          alias: nextAlias - 1,
-          component: overlay.component,
-          mode: overlay.mode,
-          fields: writes(overlay.fields),
+        this.entities.set(entity.identity, {
+          description: entity,
+          entity: known?.entity,
         });
-        if (overlay.properties && Object.keys(overlay.properties).length)
-          operations.push({
-            kind: "updateDynamicComponentStateOverlay",
-            owner,
-            overlay: ref,
-            properties: { ...overlay.properties },
-            clear: [],
-          });
-        overlays.set(overlay.identity, {
-          description: overlay,
-          ref,
-          lost: false,
-        });
-      }
+      } else created.set(entity.identity, nextAlias++);
     }
-    // GUI nodes and reconciler-created producers must be removed while their
-    // entity and related overlays still exist. Keep those releases after GUI
-    // cleanup. Other component replacements retain their original ordered
-    // release-before-attach batch so core validates the desired declaration.
-    const releases =
-      owner.kind === "handle"
-        ? operations.filter((operation) => deferredReleases.has(operation))
-        : [];
-    const additions =
-      releases.length > 0
-        ? operations.filter((operation) => !deferredReleases.has(operation))
-        : operations;
-    if (additions.length)
-      await this.commit(additions, owner, entities, overlays);
-    // GUI node edits run after overlay acknowledgement so entity identities
-    // and the GuiRoot incarnation are known. They never replay control values.
-    await this.gui.apply(
-      description.gui,
-      (identity) => this.entities.get(identity)?.entity,
+    this.pruneOrphans();
+
+    // Links compare entities by handle, so two bound declarations that name
+    // one entity by different symbolic ids conflict. Resolve the bound
+    // entities links name before planning, so such a conflict rejects the
+    // render before any placement. A bound declaration of an entity this
+    // render creates has no handle yet; its symbol resolves at the Host once
+    // the creation applies.
+    const creating = new Set(
+      [...created.keys()].map(
+        (identity) => desiredEntities.get(identity)!.symbolicId,
+      ),
     );
+    const linked = (reference: ReactEntityReference | null) => {
+      if (reference === null || typeof reference === "bigint") return false;
+      const record = this.entities.get(reference.entity);
+      return (
+        record?.entity === undefined &&
+        record?.description.kind === "bound" &&
+        !creating.has(record.description.symbolicId)
+      );
+    };
+    if (
+      description.links.some(
+        (link) =>
+          linked({ entity: link.entity }) ||
+          linked(link.parent) ||
+          linked(link.before),
+      )
+    )
+      await this.resolveBoundEntities(creating);
+
+    const recordRef = (record: EntityRecord): EntityRef =>
+      record.description.kind === "bound" || record.entity === undefined
+        ? { kind: "symbol", symbol: record.description.symbolicId }
+        : { kind: "handle", id: record.entity };
+    const entityRef = (identity: number): EntityRef => {
+      const alias = created.get(identity);
+      if (alias !== undefined) return { kind: "alias", alias };
+      const record = this.entities.get(identity);
+      if (!record) throw new Error("Missing declaration entity");
+      return recordRef(record);
+    };
+
+    // Component declarations that disappeared or moved. Another declaration
+    // of the same component on the same entity takes over its component;
+    // entity deletion removes the components of declared entities.
+    const desiredComponents = new Map(
+      description.components.map((component) => [
+        component.identity,
+        component,
+      ]),
+    );
+    const retained = new Map<number, ComponentRecord>();
+    for (const [identity, record] of this.components) {
+      const next = desiredComponents.get(identity);
+      const entity = record.entity;
+      const component = record.description.component;
+      if (
+        next &&
+        next.component === component &&
+        this.entities.get(next.entity) === entity
+      ) {
+        retained.set(identity, record);
+        continue;
+      }
+      // Another declaration of the component on the same entity keeps it,
+      // including one under a `bindTo` reference to its symbolic id.
+      const covered = description.components.some(
+        (other) =>
+          other.identity !== identity &&
+          other.component === component &&
+          desiredEntities.get(other.entity)?.symbolicId ===
+            entity.description.symbolicId,
+      );
+      const deleted =
+        entity.description.kind === "declared" && this.orphans.has(entity);
+      if (covered || deleted) {
+        this.forgetComponent(identity);
+        continue;
+      }
+      plan.push({
+        command: {
+          kind: "removeComponent",
+          entity: recordRef(entity),
+          component,
+        },
+        applied: () => {
+          if (this.components.get(identity) === record)
+            this.forgetComponent(identity);
+        },
+      });
+    }
+    this.pruneOrphans();
+
+    for (const entity of description.entities) {
+      const alias = created.get(entity.identity);
+      if (alias === undefined) continue;
+      plan.push({
+        command: {
+          kind: "create",
+          alias,
+          metadata: { symbolicId: entity.symbolicId, classes: [] },
+          adopt: true,
+        },
+        applied: (batch) => {
+          this.entities.set(entity.identity, {
+            description: entity,
+            entity: batch.entity(alias),
+          });
+        },
+      });
+    }
+
+    // Link ordering compares entities by handle; an entity whose handle this
+    // batch reveals has a negative placeholder key until it applies.
+    const placeholders = new Map<bigint, number>();
+    let nextPlaceholder = -1n;
+    const keyOf = (identity: number): bigint => {
+      const record = created.has(identity)
+        ? undefined
+        : this.entities.get(identity);
+      if (record?.entity !== undefined) return record.entity;
+      const key = nextPlaceholder--;
+      placeholders.set(key, identity);
+      return key;
+    };
+    const entityKeys = new Map<number, bigint>();
+    const resolveKey = (
+      reference: ReactEntityReference | null,
+    ): bigint | null => {
+      if (reference === null || typeof reference === "bigint") return reference;
+      let key = entityKeys.get(reference.entity);
+      if (key === undefined) {
+        if (!desiredEntities.has(reference.entity))
+          throw new Error("Missing link declaration entity");
+        key = keyOf(reference.entity);
+        entityKeys.set(reference.entity, key);
+      }
+      return key;
+    };
+    const keyRef = (key: bigint): EntityRef =>
+      key < 0n
+        ? entityRef(placeholders.get(key)!)
+        : { kind: "handle", id: key };
+    /** The handle a placeholder key stands for, once a batch revealed it. */
+    const acknowledgedKey = (
+      key: bigint | null,
+      batch: AppliedBatch | undefined,
+    ): bigint | null | undefined => {
+      if (key === null || key >= 0n) return key;
+      const identity = placeholders.get(key)!;
+      const alias = created.get(identity);
+      if (alias !== undefined) return batch?.entity(alias);
+      return batch?.symbols.get(desiredEntities.get(identity)!.symbolicId);
+    };
+    const acknowledgedLink = (
+      link: ResolvedEntityLink,
+      batch: AppliedBatch | undefined,
+    ): ResolvedEntityLink => {
+      const target = acknowledgedKey(link.target, batch);
+      const parent = acknowledgedKey(link.parent, batch);
+      const before = acknowledgedKey(link.before, batch);
+      if (target == null || parent === undefined || before === undefined)
+        throw new Error("Missing entity of an applied placement");
+      return { ...link, target, parent, before };
+    };
+
+    const desiredLinks = new Map(
+      description.links.map((link) => [link.identity, link]),
+    );
+    const keptLinks = new Map<number, LinkRecord>();
+    for (const [identity, link] of this.links) {
+      const next = desiredLinks.get(identity);
+      if (
+        next &&
+        next.entity === link.description.entity &&
+        !created.has(next.entity) &&
+        this.entities.get(next.entity) === link.entity
+      )
+        keptLinks.set(identity, link);
+      // A removed link leaves its entity where it was.
+      else this.links.delete(identity);
+    }
+    const resolvedLinks = orderEntityLinks(
+      description.links.map((link) => ({
+        ...link,
+        target: resolveKey({ entity: link.entity })!,
+        parent: resolveKey(link.parent),
+        before: resolveKey(link.before),
+      })),
+    );
+    // Placement labels are fixed when a link is placed, so a sibling keeps
+    // its label until moved. Within one sibling chain, keep the largest set of
+    // retained links whose previous order already agrees and place every
+    // other link before its successor, last sibling first. Groups that are
+    // not one chain re-place any link whose declaration or anchor moved.
+    const chains = siblingChains(resolvedLinks);
+    const chained = new Set<number>();
+    const inPlace = new Set<number>();
+    for (const [parent, order] of chains) {
+      if (!order) continue;
+      for (const identity of order) chained.add(identity);
+      const previous = this.linkOrders.get(parent);
+      if (!previous) continue;
+      const candidates = order.filter(
+        (identity) => keptLinks.get(identity)?.description.parent === parent,
+      );
+      for (const identity of siblingsInPlace(candidates, previous))
+        inPlace.add(identity);
+    }
+    const placedGroups = new Set<bigint | null>();
+    const unplaced: { record: LinkRecord; link: ResolvedEntityLink }[] = [];
+    const movedLinks = new Set<bigint>();
+    for (const link of resolvedLinks) {
+      const kept = keptLinks.get(link.identity);
+      if (kept) {
+        const moves = chained.has(link.identity)
+          ? !inPlace.has(link.identity)
+          : kept.description.parent !== link.parent ||
+            kept.description.before !== link.before ||
+            (link.before !== null && movedLinks.has(link.before));
+        if (!moves) {
+          unplaced.push({ record: kept, link });
+          continue;
+        }
+      }
+      placedGroups.add(link.parent);
+      movedLinks.add(link.target);
+      plan.push({
+        command: {
+          kind: "placeEntity",
+          entity: keyRef(link.target),
+          placement: {
+            parent: link.parent === null ? null : keyRef(link.parent),
+            before: link.before === null ? null : keyRef(link.before),
+          },
+        },
+        applied: (batch) => {
+          const entity = this.entities.get(link.entity);
+          if (entity)
+            this.links.set(link.identity, {
+              description: acknowledgedLink(link, batch),
+              entity,
+            });
+        },
+      });
+    }
+
+    for (const declared of description.components) {
+      const record = retained.get(declared.identity);
+      const resolved = this.resolveAssets(declared);
+      const fields = new Map<number, DeclarationFieldValue>();
+      for (const [offset, value] of resolved) {
+        if (value.kind === "asset" || value.kind === "row-asset")
+          throw new Error("Unresolved asset reference");
+        if (value.kind !== "entity-reference") {
+          fields.set(offset, value);
+          continue;
+        }
+        if (typeof value.value === "string")
+          throw new Error("Unresolved entity reference");
+        fields.set(offset, {
+          kind: "entity",
+          value:
+            typeof value.value === "bigint"
+              ? { kind: "handle", id: value.value }
+              : entityRef(value.value.entity),
+        });
+      }
+      const properties = declared.properties ?? {};
+      if (record) {
+        record.description = declared;
+        // An unchanged field map needs no comparison unless it names
+        // entities, whose handles may have changed.
+        if (
+          resolved === record.declared &&
+          declared.properties === undefined &&
+          ![...resolved.values()].some(
+            (value) => value.kind === "entity-reference",
+          )
+        )
+          continue;
+        // A removed prop leaves its last value in place; declaring it again
+        // writes it again.
+        for (const offset of record.fields.keys())
+          if (!fields.has(offset)) record.fields.delete(offset);
+        const commands: PlannedCommand[] = [];
+        for (const [offset, value] of fields) {
+          if (equalField(record.fields.get(offset), value)) continue;
+          commands.push({
+            command: {
+              kind: "setField",
+              entity: entityRef(declared.entity),
+              component: declared.component,
+              field: { offset, value },
+            },
+            applied: (batch) =>
+              record.fields.set(offset, acknowledgedValue(value, batch)),
+          });
+        }
+        for (const [name, value] of Object.entries(properties)) {
+          if (
+            Object.hasOwn(record.properties, name) &&
+            JSON.stringify(record.properties[name]) === JSON.stringify(value)
+          )
+            continue;
+          commands.push({
+            command: {
+              kind: "setDynamicProperty",
+              entity: entityRef(declared.entity),
+              component: declared.component,
+              name,
+              value,
+            },
+            applied: () => {
+              record.properties[name] = value;
+            },
+          });
+        }
+        const last = commands.at(-1);
+        if (!last) record.declared = resolved;
+        else
+          commands[commands.length - 1] = {
+            command: last.command,
+            applied: (batch, operation) => {
+              last.applied!(batch, operation);
+              record.declared = resolved;
+            },
+          };
+        plan.push(...commands);
+        continue;
+      }
+      let inserted: ComponentRecord | undefined;
+      plan.push({
+        command: {
+          kind: "insertComponent",
+          entity: entityRef(declared.entity),
+          component: declared.component,
+          fields: writes(fields),
+          adopt: true,
+        },
+        applied: (batch) => {
+          const entity = this.entities.get(declared.entity);
+          if (!entity) throw new Error("Missing declaration entity");
+          inserted = {
+            description: declared,
+            entity,
+            serial: this.nextSerial++,
+            fields: new Map(
+              [...fields].map(([offset, value]) => [
+                offset,
+                acknowledgedValue(value, batch),
+              ]),
+            ),
+            properties: {},
+            declared: Object.keys(properties).length ? undefined : resolved,
+          };
+          this.components.set(declared.identity, inserted);
+          this.reacknowledged.add(declared.identity);
+        },
+      });
+      const names = Object.keys(properties);
+      names.forEach((name, index) =>
+        plan.push({
+          command: {
+            kind: "setDynamicProperty",
+            entity: entityRef(declared.entity),
+            component: declared.component,
+            name,
+            value: properties[name]!,
+          },
+          applied: () => {
+            if (!inserted) return;
+            inserted.properties[name] = properties[name]!;
+            if (index === names.length - 1) inserted.declared = resolved;
+          },
+        }),
+      );
+    }
+
+    // Entities whose declarations disappeared are deleted last, after the
+    // commands that may still refer to them.
+    const deletions: PlannedCommand[] = [];
+    for (const record of this.orphans)
+      if (record.description.kind === "declared")
+        deletions.push({
+          command: { kind: "delete", entity: recordRef(record) },
+          applied: () => this.forgetEntity(record),
+        });
+
+    // Once every placement applied, retained links that kept their labels
+    // adopt their declared anchors and each sibling chain becomes the order
+    // later commits compare against.
+    const placed = (batch: AppliedBatch | undefined) => {
+      for (const { record, link } of unplaced)
+        if (this.links.get(link.identity) === record)
+          record.description = acknowledgedLink(link, batch);
+      const orders = new Map<bigint | null, ReadonlyMap<number, number>>();
+      for (const [parent, order] of chains) {
+        const key = acknowledgedKey(parent, batch);
+        if (!order || key === undefined) continue;
+        orders.set(
+          key,
+          new Map(order.map((identity, index) => [identity, index])),
+        );
+      }
+      this.linkOrders = orders;
+    };
+    // Deleting an entity invalidates animations that target it, so deletions
+    // wait for a separate batch while animations may still retarget away
+    // from those entities to newly acknowledged ones.
+    const separateDeletions =
+      deletions.length > 0 && description.animations.length > 0;
+    const batch = separateDeletions ? plan : [...plan, ...deletions];
+    let retry = false;
+    if (batch.length)
+      retry = await this.commit(batch, placed, (applied) => {
+        for (const command of applied)
+          if (command.kind === "placeEntity")
+            for (const parent of placedGroups) this.forgetOrder(parent);
+      });
+    else placed(undefined);
+    if (retry) return this.applyAttempt(description);
+    await this.resolveBoundEntities();
     await this.animations.apply(
       description.animations,
       this.assets,
-      (identity) => {
-        const entity = this.entities.get(identity);
-        return entity?.lost ? undefined : entity?.entity;
-      },
+      (identity) => this.entities.get(identity)?.entity,
     );
-    if (releases.length) await this.commit(releases, owner, entities, overlays);
+    if (separateDeletions && (await this.commit(deletions)))
+      return this.applyAttempt(description);
     await this.assets.releaseUnused();
+    await this.publishControls();
   }
 
-  /** Retry an adoption cleanup interrupted by a rejected batch. Releases
-   * are idempotent, so re-sending converges even after partial
-   * application; an owner released elsewhere supersedes the record. */
-  private async retryPendingCleanup(): Promise<void> {
-    const pending = this.pendingCleanup;
-    if (!pending) return;
-    const operations: StateOverlayCommand[] = [];
-    for (const overlay of pending.overlays)
-      operations.push({
-        kind: "releaseComponentStateOverlay",
-        owner: handle(pending.owner),
-        overlay: handle(overlay),
+  /** Forget a sibling order whose placement a rejected batch interrupted. */
+  private forgetOrder(parent: bigint | null): void {
+    if (parent === null || parent >= 0n) this.linkOrders.delete(parent);
+  }
+
+  /**
+   * Find the handles of bound entities that no command has resolved yet,
+   * from the World's entity records, except those whose symbolic id is in
+   * `pending`. Without an inspection client their handles stay unknown until
+   * a command refers to them.
+   */
+  private async resolveBoundEntities(
+    pending: ReadonlySet<string> = new Set(),
+  ): Promise<void> {
+    const unresolved = new Map<string, EntityRecord[]>();
+    for (const record of this.entities.values())
+      if (
+        record.entity === undefined &&
+        !pending.has(record.description.symbolicId)
+      ) {
+        const symbol = record.description.symbolicId;
+        unresolved.set(symbol, [...(unresolved.get(symbol) ?? []), record]);
+      }
+    if (!unresolved.size || !this.client.inspectPage) return;
+    let after = 0n;
+    do {
+      this.checkSession();
+      const page = await this.client.inspectPage({
+        collection: "entities",
+        after,
       });
-    for (const binding of pending.bindings)
-      operations.push({
-        kind: "releaseEntityOverlayBinding",
-        owner: handle(pending.owner),
-        binding: handle(binding),
-      });
-    if (pending.ownerCreated)
-      operations.push({
-        kind: "releaseStateOverlayOwner",
-        owner: handle(pending.owner),
-      });
-    await this.submitCleanup(operations);
-    this.pendingCleanup = undefined;
-    const releasedOverlays = new Set(pending.overlays);
-    for (const [identity, overlay] of [...this.overlays])
-      if (releasedOverlays.has(overlay.handle)) this.overlays.delete(identity);
-    const releasedBindings = new Set(pending.bindings);
-    for (const [identity, entity] of [...this.entities])
-      if (releasedBindings.has(entity.handle)) this.entities.delete(identity);
-    if (pending.ownerCreated && this.owner === pending.owner)
-      this.owner = undefined;
+      for (const entity of page.entities) {
+        const symbol = entity.metadata.symbolicId;
+        if (symbol === null) continue;
+        for (const record of unresolved.get(symbol) ?? [])
+          record.entity = entity.id;
+        unresolved.delete(symbol);
+      }
+      after = page.next;
+    } while (after !== 0n && unresolved.size);
+    this.publishEntities();
+    if (unresolved.size)
+      throw new Error(
+        `Bound entities are missing: ${[...unresolved.keys()].join(", ")}`,
+      );
+  }
+
+  private async publishControls(): Promise<void> {
+    const reacknowledged = [...this.reacknowledged];
+    this.reacknowledged.clear();
+    await this.controls.publish((identity) => {
+      const record = this.components.get(identity);
+      const entity = record?.entity;
+      const handle = entity?.entity;
+      if (!record || !entity || handle === undefined) return;
+      return {
+        entity: handle,
+        component: record.description.component,
+        valid: () =>
+          this.components.get(identity) === record &&
+          entity.entity === handle &&
+          !this.orphans.has(entity),
+      };
+    }, reacknowledged);
+    await this.callbacks.prepare();
+  }
+
+  /**
+   * Delete what the records hold: the entities of declared records, the
+   * components declared on bound entities (unless `boundComponents` is
+   * false) and the entities an unknown-extent batch may have created.
+   * Removals that find their target already gone count as done.
+   */
+  private async deleteRecords(boundComponents = true): Promise<void> {
+    const operations: Command[] = [];
+    const bound = (record: EntityRecord) => record.description.kind === "bound";
+    for (const component of this.components.values())
+      if (boundComponents && bound(component.entity))
+        operations.push({
+          kind: "removeComponent",
+          entity: {
+            kind: "symbol",
+            symbol: component.entity.description.symbolicId,
+          },
+          component: component.description.component,
+        });
+    const deleted = new Set<bigint>();
+    const symbols = new Set<string>();
+    for (const record of [...this.entities.values(), ...this.orphans])
+      if (
+        !bound(record) &&
+        record.entity !== undefined &&
+        !deleted.has(record.entity)
+      ) {
+        deleted.add(record.entity);
+        symbols.add(record.description.symbolicId);
+        operations.push({
+          kind: "delete",
+          entity: { kind: "handle", id: record.entity },
+        });
+      }
+    for (const symbol of this.uncertain)
+      if (!symbols.has(symbol))
+        operations.push({ kind: "delete", entity: { kind: "symbol", symbol } });
+    if (operations.length) await this.submitCleanup(operations);
+    this.uncertain.clear();
+    this.forgetRecords();
   }
 
   /** Cleanup must remain possible after an unrelated fatal commit error. The
-   * original session fence still applies, while idempotent release commands
-   * retain their exact owner/resource handles across rejected attempts. */
-  private async submitCleanup(
-    operations: StateOverlayCommand[],
-  ): Promise<void> {
-    if (this.client.session !== this.session)
-      throw new Error("Session replacement prevented React root cleanup");
-    const outcome = await this.client.batch(operations);
-    if (!outcome.ok) throw new ReactWorldBatchRejectedError(outcome);
-  }
-
-  private rememberCleanup(
-    owner: bigint,
-    bindings: readonly bigint[],
-    overlays: readonly bigint[],
-    ownerCreated: boolean,
-  ): void {
-    const current = this.pendingCleanup;
-    if (current && current.owner !== owner)
-      throw new Error("Cannot retain cleanup for multiple overlay owners");
-    this.pendingCleanup = {
-      owner,
-      bindings: [...new Set([...(current?.bindings ?? []), ...bindings])],
-      overlays: [...new Set([...(current?.overlays ?? []), ...overlays])],
-      ownerCreated: (current?.ownerCreated ?? false) || ownerCreated,
-    };
-  }
-
-  /** Release resources this attempt acquired after a GUI adoption refusal.
-   * Only identities absent from the attempt snapshot are released, in
-   * reverse creation order (overlays, bindings, then an owner this attempt
-   * created). A rejected cleanup reports and retains its handles for the
-   * next render; ambiguous transport failures stay fatal instead of
-   * guessing ownership. */
-  private async cleanupAttemptDelta(): Promise<void> {
-    const base = this.attemptBase;
-    if (!base) return;
-    this.checkSession();
-    const overlays: bigint[] = [];
-    for (const [identity, overlay] of this.overlays)
-      if (!base.overlays.has(identity)) overlays.push(overlay.handle);
-    const bindings: bigint[] = [];
-    for (const [identity, entity] of this.entities)
-      if (!base.entities.has(identity)) bindings.push(entity.handle);
-    const ownerCreated = this.owner !== undefined && this.owner !== base.owner;
-    if (!overlays.length && !bindings.length && !ownerCreated) return;
-    const owner = this.owner;
-    if (owner === undefined) return;
-    this.rememberCleanup(owner, bindings, overlays, ownerCreated);
-    try {
-      await this.retryPendingCleanup();
-    } catch (error) {
-      this.report(error);
-      return;
+   * original session fence still applies; a removal whose target is already
+   * gone is skipped and the rest resubmitted. */
+  private async submitCleanup(operations: Command[]): Promise<void> {
+    while (operations.length) {
+      if (this.client.session !== this.session)
+        throw new Error("Session replacement prevented React root cleanup");
+      const outcome = await this.client.batch(operations);
+      if (outcome.ok) return;
+      const count = appliedCommands(outcome, operations.length);
+      if (count === undefined || !removedAlready(operations[count]!, outcome))
+        throw new ReactWorldBatchRejectedError(outcome);
+      operations = operations.slice(count + 1);
     }
-    for (const identity of [...this.overlays.keys()])
-      if (!base.overlays.has(identity)) this.overlays.delete(identity);
-    for (const identity of [...this.entities.keys()])
-      if (!base.entities.has(identity)) this.entities.delete(identity);
-    if (ownerCreated && this.owner === owner) this.owner = undefined;
   }
 
+  /**
+   * Submit planned commands and acknowledge exactly the commands the outcome
+   * reports applied, so a corrected render continues from actual state. A
+   * fully applied batch also runs `completed`; a partially applied one tells
+   * `interrupted` which commands applied. Returns true when the batch stopped
+   * at a removal whose target was already gone: that removal counts as done
+   * and the caller plans again.
+   */
   private async commit(
-    operations: StateOverlayCommand[],
-    owner: StateOverlayRef,
-    entities: ReadonlyMap<
-      number,
-      PendingStateOverlay<EntityOverlayBindingDescription>
-    >,
-    overlays: ReadonlyMap<
-      number,
-      PendingStateOverlay<ComponentStateOverlayDescription>
-    >,
-  ): Promise<void> {
-    this.inFlight = true;
+    plan: readonly PlannedCommand[],
+    completed?: (batch: AppliedBatch) => void,
+    interrupted?: (applied: readonly Command[]) => void,
+  ): Promise<boolean> {
     try {
-      const outcome = await this.submit(operations);
-      const resolve = (
-        ref: StateOverlayRef,
-        kind: StateOverlayAlias["kind"],
-      ): bigint => {
-        if (ref.kind === "handle") return ref.id;
-        const resource = outcome.stateOverlays.find(
-          (resource) => resource.alias === ref.alias && resource.kind === kind,
-        );
-        if (!resource) {
-          this.fatal = new Error(
-            `Successful batch omitted ${kind} resource alias ${ref.alias}`,
-          );
-          throw this.fatal;
-        }
-        return resource.id;
-      };
-      // One apply may commit additions and releases as separate batches so
-      // GUI teardown runs while entities still exist. Aliases attached by a
-      // sibling commit are never re-resolved here: their records carry over
-      // from acknowledged state instead.
-      const claimed = new Set<number>();
-      for (const operation of operations) {
-        if (
-          operation.kind === "createStateOverlayOwner" ||
-          operation.kind === "attachEntityOverlayBinding" ||
-          operation.kind === "attachComponentStateOverlay"
-        )
-          claimed.add(operation.alias);
+      const commands = plan.map((planned) => planned.command);
+      const outcome = await this.send(commands);
+      const batch = new AppliedBatch(outcome);
+      this.learnSymbols(batch);
+      const count = appliedCommands(outcome, commands.length);
+      const rejected = outcome.ok
+        ? undefined
+        : new ReactWorldBatchRejectedError(outcome);
+      if (count === undefined) {
+        this.resetUncertain(commands);
+        throw rejected;
       }
-      const nextOwner =
-        owner.kind === "handle" || claimed.has(owner.alias)
-          ? resolve(owner, "owner")
-          : this.owner;
-      if (nextOwner === undefined)
-        throw new Error("Missing acknowledged owner for unclaimed reference");
-      const nextEntities = new Map<number, AcknowledgedEntity>();
-      const acceptedBindings: bigint[] = [];
-      const missingBindingEntities: number[] = [];
-      for (const [identity, record] of entities) {
-        const ref = record.ref;
-        if (ref.kind === "handle" || !claimed.has(ref.alias)) {
-          const acknowledged = this.entities.get(identity);
-          if (!acknowledged)
-            throw new Error(
-              "Missing acknowledged entity for unclaimed reference",
-            );
-          nextEntities.set(identity, {
-            description: record.description,
-            handle: acknowledged.handle,
-            entity: acknowledged.entity,
-            lost: record.lost,
-          });
-          continue;
+      try {
+        for (let index = 0; index < count; index++)
+          plan[index]!.applied?.(batch, index);
+      } catch (error) {
+        if (rejected) {
+          this.resetUncertain(commands);
+          throw rejected;
         }
-        const binding = resolve(ref, "entityOverlayBinding");
-        acceptedBindings.push(binding);
-        const entity = outcome.stateOverlays.find(
-          (resource) =>
-            resource.alias === ref.alias &&
-            resource.kind === "entityOverlayBinding",
-        )?.entity;
-        if (entity == null) {
-          missingBindingEntities.push(identity);
-          continue;
-        }
-        nextEntities.set(identity, {
-          description: record.description,
-          handle: binding,
-          entity,
-          lost: record.lost,
-        });
+        this.fatal = error instanceof Error ? error : new Error(String(error));
+        throw this.fatal;
       }
-      const nextOverlays = new Map<
-        number,
-        AcknowledgedStateOverlay<ComponentStateOverlayDescription>
-      >();
-      const acceptedOverlays: bigint[] = [];
-      for (const [identity, record] of overlays) {
-        const ref = record.ref;
-        if (ref.kind === "handle" || !claimed.has(ref.alias)) {
-          const acknowledged = this.overlays.get(identity);
-          if (!acknowledged)
-            throw new Error(
-              "Missing acknowledged overlay for unclaimed reference",
-            );
-          nextOverlays.set(identity, {
-            description: record.description,
-            handle: acknowledged.handle,
-            lost: record.lost,
-          });
-          continue;
-        }
-        const overlay = resolve(ref, "componentStateOverlay");
-        acceptedOverlays.push(overlay);
-        nextOverlays.set(identity, {
-          description: record.description,
-          handle: overlay,
-          lost: record.lost,
-        });
+      if (count === commands.length) completed?.(batch);
+      else interrupted?.(commands.slice(0, count));
+      if (rejected && removedAlready(commands[count]!, outcome)) {
+        plan[count]!.applied?.(batch, count);
+        return true;
       }
-      this.owner = nextOwner;
-      if (missingBindingEntities.length > 0) {
-        const ownerCreated = owner.kind === "alias" && claimed.has(owner.alias);
-        this.rememberCleanup(
-          nextOwner,
-          acceptedBindings,
-          acceptedOverlays,
-          ownerCreated,
-        );
-        throw new Error(
-          `Successful binding attachment omitted entity identity for declaration ${missingBindingEntities.join(", ")}`,
-        );
-      }
-      this.entities = new Map([...this.entities, ...nextEntities]);
-      this.overlays = new Map([...this.overlays, ...nextOverlays]);
-      for (const operation of operations) {
-        if (operation.kind === "releaseEntityOverlayBinding") {
-          for (const [identity, acknowledged] of this.entities) {
-            if (
-              operation.binding.kind === "handle" &&
-              acknowledged.handle === operation.binding.id
-            )
-              this.entities.delete(identity);
-          }
-        }
-        if (operation.kind === "releaseComponentStateOverlay") {
-          for (const [identity, acknowledged] of this.overlays) {
-            if (
-              operation.overlay.kind === "handle" &&
-              acknowledged.handle === operation.overlay.id
-            )
-              this.overlays.delete(identity);
-          }
-        }
-      }
+      if (rejected) throw rejected;
+      return false;
     } finally {
-      this.inFlight = false;
-      const diagnostics = this.diagnostics;
-      this.diagnostics = [];
-      for (const diagnostic of diagnostics) this.observe(diagnostic);
+      this.pruneOrphans();
+      this.publishEntities();
+    }
+  }
+
+  /**
+   * A rejected batch whose applied extent is unknown: the next commit deletes
+   * what the records hold and every entity the batch may have created, by
+   * symbol, then commits again.
+   */
+  private resetUncertain(commands: readonly Command[]): void {
+    for (const command of commands)
+      if (command.kind === "create" && command.metadata.symbolicId !== null)
+        this.uncertain.add(command.metadata.symbolicId);
+    this.needsReset = true;
+    this.controls.reset();
+  }
+
+  /** Record the handles an outcome reports for bound entities' symbols. */
+  private learnSymbols(batch: AppliedBatch): void {
+    for (const record of [...this.entities.values(), ...this.orphans]) {
+      if (record.description.kind !== "bound") continue;
+      const entity = batch.symbols.get(record.description.symbolicId);
+      if (entity === undefined || entity === record.entity) continue;
+      // Controls acknowledged on the previous handle are rechecked.
+      if (record.entity !== undefined)
+        for (const [identity, component] of this.components)
+          if (component.entity === record) this.reacknowledged.add(identity);
+      record.entity = entity;
     }
   }
 }

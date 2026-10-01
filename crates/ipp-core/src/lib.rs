@@ -27,6 +27,9 @@ extern crate self as ipp_core;
 
 pub mod commands;
 
+mod batch_symbol_reports;
+pub use batch_symbol_reports::BatchSymbolReports;
+
 pub mod components;
 pub use components::{
     ComponentValue, DynamicProperties, DynamicPropertyDescriptor, DynamicPropertyKind, DynamicValue,
@@ -43,63 +46,30 @@ pub use world::systems;
 pub use commands::*;
 pub use identity::EntityId;
 pub use world::{
-    EntityPersistentId, EntitySnapshot, World, WorldCapacityHints, WorldCapacityHintsPatch,
-    WorldConstructionError, WorldContext, WorldCreateOptions, WorldDescriptor, WorldLimits,
-    WorldMetadata, WorldPersistentId, WorldSelector, WorldSystemCapacityHints, WorldUpdateReport,
+    EntityLink, EntityOrder, EntityPersistentId, EntityPlacement, EntityPlacementRef,
+    EntitySnapshot, RECYCLED_COMMAND_BUFFER_COMMANDS, World, WorldCapacityHints,
+    WorldCapacityHintsPatch, WorldConstructionError, WorldContext, WorldCreateOptions,
+    WorldDescriptor, WorldLimits, WorldMetadata, WorldPersistentId, WorldSelector,
+    WorldSystemCapacityHints, WorldUpdateReport,
 };
 
-pub use systems::state_overlay::{
-    ComponentOverlayMode, EntityOverlayMode, MAX_STATE_OVERLAY_DIAGNOSTICS, StateOverlayAlias,
-    StateOverlayHandleKind, StateOverlayLifecycleDiagnostic, StateOverlayLifecycleReason,
-    StateOverlayRef,
+pub use systems::canvas::canvas_state::{
+    CanvasEvaluatedExtent, CanvasState, CanvasStateRecord, CanvasStateUpdate,
 };
-
 pub use systems::render::render_state::{RenderState, RenderStateChange, RenderStatePatch};
 
 #[cfg(feature = "surfaces")]
 pub use systems::surface::{
-    PositionedGlyph, SEGMENTATION_SCOPE, Surface, SurfaceCache, SurfaceCachePolicy,
-    SurfaceClipRect, SurfaceCommand, SurfaceGlyph, SurfaceItem, SurfaceItemContent, SurfaceItemId,
-    SurfaceItemPatch, SurfaceItemStyle, SurfacePrimitiveIdentity, SurfacePrimitiveStyle,
-    SurfaceRenderItem, SurfaceRenderPrimitive, SurfaceRenderResource, TextCacheKey, TextCaret,
+    SEGMENTATION_SCOPE, Surface, SurfaceCache, SurfaceCachePolicy, TextCacheKey, TextCaret,
     TextFont, TextGlyph, TextLayout, TextLine, TextLinePolicy, TextMaxWidth, TextMeasureRequest,
     TextOutcome, TextRequestError, TextUnits, UNICODE_VERSION, grapheme_boundaries,
-    intersect_surface_clips, is_grapheme_boundary, measure_text, primitive_effective_clip,
-    surface_clip_is_empty, surface_content_clip, surface_primitive_visible, utf8_to_utf16_offset,
-    utf16_to_utf8_offset,
-};
-
-#[cfg(feature = "gui")]
-pub use systems::surface::{
-    GuiPrimitiveId, GuiPrimitivePart, GuiShapeFill, GuiShapeGlow, gui_logical_to_surface_content,
-    surface_content_to_gui_logical,
+    is_grapheme_boundary, measure_text, utf8_to_utf16_offset, utf16_to_utf8_offset,
 };
 
 #[cfg(feature = "gui")]
 pub use systems::gui::{
-    DEFAULT_UNITS_PER_METRE, GuiBlockerHit, GuiCommand, GuiCommitSource, GuiContainerKind,
-    GuiControlState, GuiControlValue, GuiEvaluatedContent, GuiEvaluatedNode, GuiEvaluatedView,
-    GuiFontResolution, GuiHit, GuiInputCancelReason, GuiInputCancellation, GuiInputCommand,
-    GuiInputConflict, GuiInputConflictReason, GuiInputEffect, GuiInputEffectKind, GuiInputFocus,
-    GuiInputSystem, GuiInputSystemFactory, GuiInputTarget, GuiInspectQuery, GuiInspectResponse,
-    GuiInspectedNode, GuiKey, GuiLayoutCache, GuiLayoutRequest, GuiLayoutSystem,
-    GuiLayoutSystemFactory, GuiNode, GuiNodeData, GuiNodeDataProperty, GuiNodeDataRow,
-    GuiNodeHandle, GuiNodeId, GuiNodePatch, GuiNodePropertyRef, GuiNodeRowProperty, GuiNodeStyle,
-    GuiNodeStyleProperty, GuiNodeStyleRow, GuiNodes, GuiPanelResolution, GuiPointerButton,
-    GuiResourceResolver, GuiRoot, GuiSystem, GuiSystemFactory, GuiTextCompositionState,
-    GuiTextFence, GuiTextFocusState, GuiTextFocusUpdate, GuiUnhandledInput, GuiUnhandledReason,
-    MAX_GUI_NODE_ID, MAX_GUI_TEXT_BYTES, MAX_LAYOUT_DEPTH, MAX_VIRTUAL_ITEMS, resolve_panel_hit,
-};
-
-#[cfg(all(feature = "gui", feature = "diagnostics"))]
-pub use systems::gui::{GuiLayoutStatistics, GuiLayoutWork};
-
-#[cfg(feature = "gui")]
-pub use systems::gui::semantics::{
-    GuiSemanticAction, GuiSemanticActionCommand, GuiSemanticActionError, GuiSemanticActionKind,
-    GuiSemanticActionRequest, GuiSemanticFocus, GuiSemanticNode, GuiSemanticRole,
-    GuiSemanticScroll, GuiSemanticSnapshotQuery, GuiSemanticTree, GuiSemanticVirtualList,
-    action_command,
+    GuiLayoutSystem, GuiLayoutSystemFactory, GuiPrimitivePart, GuiSystem, GuiSystemFactory,
+    MAX_GUI_TEXT_BYTES, MAX_LAYOUT_DEPTH,
 };
 
 pub use systems::camera::{CameraMotion, CameraStateChange, CameraStatePatch, PreparedCamera};
@@ -109,7 +79,9 @@ pub use systems::geometry::queries::{
     GeometryPickQuery, WorldPlane,
 };
 
-pub use services::asset_management::mesh::{MESH_TYPE, MeshAsset, MeshKey, MeshUpload};
+pub use services::asset_management::mesh::{
+    MAX_MESH_VERTICES, MESH_TYPE, MeshAsset, MeshKey, MeshUpload,
+};
 
 pub use world::{DebugRenderItem, RenderDiagnostic, RenderItem};
 
@@ -130,7 +102,19 @@ pub use services::asset_management::skeleton::{
 pub use services::asset_management::skin_binding::{SKIN_TYPE, SkinAsset};
 
 mod host;
-pub use host::{HostRuntime, WorldId};
+pub use host::{
+    AttachmentPlacement, HostRuntime, OutputKind, OutputRef, OutputTarget, WorldAttachment,
+    WorldAttachmentMode, WorldFrameContext, WorldId, WorldRef, WorldViewport,
+};
+pub use host::{
+    HostFrameReport, OutputPublicationObservation, PublishedWorldAttachment, WorldDerivedChunk,
+    WorldOutputBuilder, WorldPublication, WorldPublicationId,
+};
+pub use host::{HostIngressView, RootBindingGeneration, RootOutputBinding};
+pub use host::{OutputReferenceToken, WorldReferenceToken};
+pub use host::{PublishedSceneContribution, PublishedSceneHit};
+pub use host::{ViewDescriptor, ViewPickHit, ViewQueryTarget};
+pub use host::{WorldAttachmentEffect, WorldAttachmentRetirement, WorldAttachmentToken};
 
 /// Opt-in stage timing and allocation counters; never enabled by default.
 #[cfg(feature = "profiling")]

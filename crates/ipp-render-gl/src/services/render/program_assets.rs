@@ -3,14 +3,43 @@
 use super::{assets::SharedRenderDevice, shader::RenderShaderConfig};
 use crate::{RenderDevice, RenderError, RenderService};
 use ipp_core::{
-    WorldContext,
+    HostRuntime, OutputKind, OutputRef, WorldPublicationId, WorldRef,
     services::asset_management::{
-        Asset, AssetLoader, AssetSource, AssetTypeId, BufferedAssetLoader,
+        Asset, AssetKey, AssetLoader, AssetSource, AssetTypeId, BufferedAssetLoader,
     },
 };
 use std::any::Any;
 
 pub(super) const PROGRAM_TYPE: AssetTypeId = AssetTypeId(14);
+
+pub(super) struct ProgramDemand {
+    host: u64,
+    world: Option<WorldRef>,
+    programs: Vec<(AssetKey, AssetSource)>,
+}
+
+impl ProgramDemand {
+    fn release(&mut self, host: &mut HostRuntime, keep: Option<&Self>) {
+        let world = self.world.take();
+        let programs = std::mem::take(&mut self.programs);
+        let Some(world) = world.filter(|world| {
+            host.identity() == self.host && host.world_ref(world.id()) == Some(*world)
+        }) else {
+            return;
+        };
+        for (key, source) in programs {
+            if keep.is_some_and(|keep| {
+                keep.world == Some(world) && keep.programs.iter().any(|entry| entry.0 == key)
+            }) {
+                continue;
+            }
+            if host.asset_resources().find(&source) == Some(key) {
+                host.asset_resources_mut()
+                    .release_client_source(world.id(), &source);
+            }
+        }
+    }
+}
 
 pub(super) struct GlProgramData<D: RenderDevice> {
     pub program: Option<D::Program>,
@@ -87,178 +116,157 @@ fn source(config: RenderShaderConfig, shadow: bool) -> AssetSource {
     let bits = config.recipe_bits() | (u32::from(shadow) << 9);
     AssetSource {
         kind: PROGRAM_TYPE,
-        uri: format!("ipp-render://program/{bits}"),
+        uri: format!("ipp-render://program/{bits}").into(),
         variant: 0,
     }
 }
 
-struct ProgramSourceName {
-    bytes: [u8; 40],
-    length: usize,
-}
-
-impl ProgramSourceName {
-    fn new(config: RenderShaderConfig, shadow: bool) -> Self {
-        let mut bits = config.recipe_bits() | (u32::from(shadow) << 9);
-        let mut digits = [0u8; 10];
-        let mut start = digits.len();
-        loop {
-            start -= 1;
-            digits[start] = b'0' + (bits % 10) as u8;
-            bits /= 10;
-            if bits == 0 {
-                break;
-            }
-        }
-        let prefix = b"ipp-render://program/";
-        let length = prefix.len() + digits.len() - start;
-        let mut bytes = [0u8; 40];
-        bytes[..prefix.len()].copy_from_slice(prefix);
-        bytes[prefix.len()..length].copy_from_slice(&digits[start..]);
-        Self {
-            bytes,
-            length,
-        }
-    }
-
-    fn as_str(&self) -> &str {
-        std::str::from_utf8(&self.bytes[..self.length]).expect("program ASCII")
-    }
-}
-
 impl<D: RenderDevice> RenderService<D> {
-    /// Collect demand only. Host asset progression performs compilation on a later phase.
-    pub(super) fn prepare_programs(
+    /// Prepare only the current authorized root and its completed nested outputs.
+    /// None or failed selection withdraws this renderer's selected demand and caches.
+    /// Explicit None on the owning Host releases the catalog binding, even with no
+    /// Worlds left. Until then, another Host is rejected without changing either catalog.
+    pub fn prepare(
         &mut self,
-        world: &mut WorldContext<'_>,
+        host: &mut HostRuntime,
+        selected: Option<(OutputRef, WorldPublicationId)>,
     ) -> Result<(), RenderError> {
-        #[cfg(feature = "profiling")]
-        let _allocation_scope = ipp_core::profiling::AllocationScope::new(227, "gl.program-demand");
+        self.validate_catalog(host)?;
+        let result = self.prepare_selected(host, selected);
+        if result.is_err() || selected.is_none() {
+            if let Some(demand) = &mut self.program_demand {
+                demand.release(host, None);
+            }
+            if selected.is_none() {
+                self.program_demand = None;
+            }
+            self.program_lookup.fill(None);
+            self.retain_prepared_outputs(None, &Default::default());
+        }
+        result
+    }
 
-        self.program_lookup.fill(None);
-        let items = world.render_items();
-        let mut recipe_scratch = std::mem::take(&mut self.recipe_scratch);
-        recipe_scratch.clear();
-        let mut insert_recipe = |recipe| recipe_scratch.push(recipe);
-        let shadows = if world.active_camera().is_some()
-            && items.iter().any(|item| {
-                item.pbr.is_some()
-                    || world
-                        .custom_material(item.entity)
-                        .is_some_and(|material| material.receives_light || material.casts_shadows)
-            }) {
-            cfg!(feature = "shadows") && world.light_items().any(|(_, _, light)| light.cast_shadows)
-        } else {
-            false
+    pub(super) fn validate_catalog(&self, host: &HostRuntime) -> Result<(), RenderError> {
+        if self
+            .program_demand
+            .as_ref()
+            .is_some_and(|demand| demand.host != host.identity())
+        {
+            return Err(RenderError::HostCatalogMismatch);
+        }
+        Ok(())
+    }
+
+    fn prepare_selected(
+        &mut self,
+        host: &mut HostRuntime,
+        selected: Option<(OutputRef, WorldPublicationId)>,
+    ) -> Result<(), RenderError> {
+        let Some((selection, publication)) = selected else {
+            return Ok(());
         };
-        let mut previous_entity = None;
-        for item in items {
-            // Core render inputs are grouped in deterministic entity order.
-            if previous_entity == Some(item.entity) {
-                continue;
-            }
-            previous_entity = Some(item.entity);
-            #[cfg(feature = "particles")]
-            let quad = item.particle.filter(|p| p.sprite).map(|_| {
-                &*self.particle_quad_metadata.get_or_insert_with(|| {
-                    ipp_core::services::asset_management::mesh_metadata::MeshMetadata::from_owned_mesh(super::particles::quad_asset())
-                })
-            });
-            #[cfg(not(feature = "particles"))]
-            let mesh = world.mesh_metadata(item.mesh);
-            #[cfg(feature = "particles")]
-            // Sprite quads are private renderer assets, with no World mesh key.
-            let mesh = quad.or_else(|| world.mesh_metadata(item.mesh));
-            let Some(mesh) = mesh else {
-                continue;
-            };
-            let normals = mesh.has_normals();
-            #[cfg(feature = "mesh-poses")]
-            let normals = normals
-                && item.pose.is_none_or(|(key, _)| {
-                    world
-                        .mesh_metadata(key)
-                        .is_some_and(|mesh| mesh.has_normals())
-                });
-            let config =
-                RenderShaderConfig::new(item.texture.is_some(), mesh.has_texture_weights())
-                    .with_solid_fallback(item.solid_fallback);
-            let config = if item.pbr.is_some() {
-                config.with_lighting(shadows, normals)
-            } else {
-                config
-            };
-            #[cfg(feature = "skeletal-animation")]
-            let config = config.with_skinning(item.skinned);
-            #[cfg(feature = "mesh-poses")]
-            let config = config.with_mesh_pose(item.pose.is_some());
-            #[cfg(feature = "particles")]
-            let config = config.with_particles(
-                item.particle.is_some(),
-                item.particle.is_some_and(|p| p.sprite),
-            );
-            insert_recipe((config, false));
-            if shadows && item.pbr.is_some() {
-                insert_recipe((config.with_lighting(false, normals), false));
-            }
-            #[cfg(feature = "shadows")]
-            if shadows && item.pbr.is_some_and(|material| material.cast_shadows) {
-                let config = RenderShaderConfig::default();
-                #[cfg(feature = "skeletal-animation")]
-                let config = config.with_skinning(item.skinned);
-                #[cfg(feature = "mesh-poses")]
-                let config = config.with_mesh_pose(item.pose.is_some());
-                #[cfg(feature = "particles")]
-                let config = config.with_particles(item.particle.is_some(), false);
-                insert_recipe((config, true));
-            }
+        if selection.kind() == OutputKind::Canvas && !cfg!(feature = "surfaces") {
+            return Err(RenderError::UnavailableOutput);
         }
-        if !world.debug_render_items().is_empty() {
-            insert_recipe((
-                RenderShaderConfig::default().with_debug_geometry(true),
-                false,
-            ));
+        if !host
+            .root_output(selection.world().id())
+            .is_some_and(|(current, _, completed)| current == selection && completed == publication)
+        {
+            return Err(RenderError::UnavailableOutput);
         }
-        recipe_scratch.sort_unstable();
-        recipe_scratch.dedup();
-        let mut keys = std::mem::take(&mut self.program_keys);
-        keys.clear();
-        let world_id = world.id();
-        let result = (|| {
-            for &(config, shadow) in &recipe_scratch {
-                let name = ProgramSourceName::new(config, shadow);
-                let key = match world.asset_source_key(PROGRAM_TYPE, name.as_str(), 0) {
-                    Some(key) => key,
-                    None => {
-                        let bits = config.recipe_bits() | (u32::from(shadow) << 9);
-                        world.asset_resources_mut().prepare_internal_source(
-                            world_id,
-                            source(config, shadow),
-                            bits.to_le_bytes().to_vec(),
-                        )?
+        #[cfg(feature = "surfaces")]
+        let presentations = super::canvas_scene::output_order(host, selection, publication)?;
+        #[cfg(not(feature = "surfaces"))]
+        let presentations = vec![(selection, publication)];
+        let mut recipes = std::mem::take(&mut self.recipe_scratch);
+        recipes.clear();
+        let mut outputs = std::collections::BTreeSet::new();
+        let collected = (|| {
+            for (selection, publication) in presentations {
+                outputs.insert(selection);
+                if selection.kind() == OutputKind::Camera {
+                    let scene = super::scene::RenderScene::new(host, selection, publication)?;
+                    let shadows = cfg!(feature = "shadows")
+                        && scene.lights.iter().any(|light| light.2.cast_shadows);
+                    for item in &scene.items {
+                        let config = super::draw_order::builtin_config(item, shadows);
+                        recipes.push((config, false));
+                        if shadows && item.pbr.is_some() {
+                            recipes.push((config.with_lighting(false, item.normals), false));
+                        }
+                        #[cfg(feature = "shadows")]
+                        if shadows && item.pbr.is_some_and(|material| material.cast_shadows) {
+                            let config = RenderShaderConfig::default();
+                            #[cfg(feature = "skeletal-animation")]
+                            let config = config.with_skinning(item.skinned);
+                            #[cfg(feature = "mesh-poses")]
+                            let config = config.with_mesh_pose(item.pose.is_some());
+                            #[cfg(feature = "particles")]
+                            let config = config.with_particles(item.particle.is_some(), false);
+                            recipes.push((config, true));
+                        }
                     }
-                };
-                self.program_lookup[(config.recipe_bits() | (u32::from(shadow) << 9)) as usize] =
-                    Some(key);
-                keys.push(key);
+                    if !scene.debug.is_empty() {
+                        recipes.push((
+                            RenderShaderConfig::default().with_debug_geometry(true),
+                            false,
+                        ));
+                    }
+                }
             }
-            world
-                .asset_resources_mut()
-                .retain_internal_sources(world_id, &keys)
+            Ok(())
         })();
-        self.recipe_scratch = recipe_scratch;
-        self.program_keys = keys;
-        result.map_err(RenderError::RenderDevice)
+        if let Err(error) = collected {
+            self.recipe_scratch = recipes;
+            return Err(error);
+        }
+        recipes.sort_unstable();
+        recipes.dedup();
+        self.program_lookup.fill(None);
+        let mut demand = ProgramDemand {
+            host: host.identity(),
+            world: Some(selection.world()),
+            programs: Vec::with_capacity(recipes.len()),
+        };
+        let prepared = (|| {
+            for &(config, shadow) in &recipes {
+                let bits = config.recipe_bits() | (u32::from(shadow) << 9);
+                let source = source(config, shadow);
+                let key = host
+                    .asset_resources_mut()
+                    .prepare_internal_source(
+                        selection.world().id(),
+                        source.clone(),
+                        bits.to_le_bytes().to_vec(),
+                    )
+                    .map_err(RenderError::RenderDevice)?;
+                self.program_lookup[bits as usize] = Some(key);
+                demand.programs.push((key, source));
+            }
+            Ok(())
+        })();
+        self.recipe_scratch = recipes;
+        if let Err(error) = prepared {
+            demand.release(host, None);
+            return Err(error);
+        }
+        if let Some(mut previous) = self.program_demand.take() {
+            previous.release(host, Some(&demand));
+        }
+        self.program_demand = Some(demand);
+        self.retain_prepared_outputs(Some(selection), &outputs);
+        Ok(())
     }
 
     pub(super) fn builtin_program<'a>(
         &self,
-        world: &'a WorldContext<'_>,
+        scene: &'a super::scene::RenderScene<'_>,
         config: RenderShaderConfig,
         shadow: bool,
     ) -> Option<&'a D::Program> {
         let key = self.program_lookup[(config.recipe_bits() | (u32::from(shadow) << 9)) as usize]?;
-        world
+        scene
+            .host
             .asset_resources()
             .get(key)?
             .data()?

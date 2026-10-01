@@ -65,17 +65,17 @@ for (const path of process.argv.slice(2)) {
           const phases = [
             "check",
             "accept",
-            "restore",
             "prepare",
             "evaluate",
             "finish",
+            "observe",
           ];
           return phases
             .map((phase, offset) => ({
               name,
               phase,
               milliseconds:
-                allocation.stages[(index * 6 + offset) * 4 + 1] /
+                allocation.stages[(index * phases.length + offset) * 4 + 1] /
                 1e6 /
                 allocation.frames.length,
             }))

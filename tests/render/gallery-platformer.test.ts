@@ -87,11 +87,52 @@ const IDS = [
   "platformer-orb",
 ] as const;
 
-const CLIP_NAMES = {
-  walk: "dd030573edc3333396a7846cbc01a7dd19c38ad64e1e34ab8ca573d0c0fe2239",
-  run: "ae3f72e4775534450e22029267ff0391c5ec1b93e75a811d7461ecfa55cda0c0",
-  crawl: "5764911b0b9f202230861f9f6cec2c3186e76cbe70741e56fded177d4a9891c7",
-} as const;
+type PlatformerGait = "walk" | "run" | "crawl";
+
+/**
+ * The published file of each gait clip, resolved as the gallery does: the
+ * route names each gait's exported action and the manifest gives that
+ * action's content-addressed source on the platformer rig.
+ */
+async function platformerClipNames(
+  page: Page,
+): Promise<Record<PlatformerGait, string>> {
+  const base = "/target/gallery-platformer-assets/";
+  const { route, manifest } = await page.evaluate(async (base) => {
+    const [routeResponse, manifestResponse] = await Promise.all([
+      fetch(`${base}route.json`),
+      fetch(`${base}manifest.json`),
+    ]);
+    if (!routeResponse.ok)
+      throw new Error(`route.json: HTTP ${routeResponse.status}`);
+    if (!manifestResponse.ok)
+      throw new Error(`manifest.json: HTTP ${manifestResponse.status}`);
+    return {
+      route: (await routeResponse.json()) as {
+        modes: Record<string, { clip: string }>;
+      },
+      manifest: (await manifestResponse.json()) as {
+        clips: Array<{
+          name: string;
+          target: string;
+          clip: { source: string };
+        }>;
+      },
+    };
+  }, base);
+  const name = (gait: PlatformerGait) => {
+    const matches = manifest.clips.filter(
+      (entry) =>
+        entry.name === route.modes[gait]?.clip &&
+        entry.target === "platformer-rig",
+    );
+    assert.equal(matches.length, 1, `one exported ${gait} clip`);
+    const file = matches[0]!.clip.source.split("/").pop();
+    assert.ok(file, `${gait} clip source has a file name`);
+    return file;
+  };
+  return { walk: name("walk"), run: name("run"), crawl: name("crawl") };
+}
 const WALK_DURATION = 16 / 15;
 
 function controllerFor(state: Inspection, target: bigint) {
@@ -135,9 +176,7 @@ function facingControllerFor(state: Inspection, target: bigint) {
 }
 
 function parentOf(state: Inspection, id: string) {
-  return entity(state, id).base.find(
-    (component) => "parent" in component.fields,
-  )?.fields.parent;
+  return entity(state, id).link.parent;
 }
 
 function distance(a: number[], b: number[]) {
@@ -161,18 +200,11 @@ async function continueCanceledRoute(route: { continue(): Promise<void> }) {
   }
 }
 
-function basePosition(state: Inspection, id: string) {
-  const fields = entity(state, id).base.find(
-    (component) => "qx" in component.fields,
-  )!.fields;
-  return [Number(fields.x), Number(fields.y), Number(fields.z)];
-}
-
-function effectiveRotation(
+function rotation(
   state: Inspection,
   id: string,
 ): [number, number, number, number] {
-  const fields = entity(state, id).effective.find(
+  const fields = entity(state, id).components.find(
     (component) => "qx" in component.fields,
   )!.fields;
   return [
@@ -192,12 +224,7 @@ test("platformer keeps moving while a new gait loads and reuses cached clips", {
     context.signal,
     async (scenario) => {
       const g = await openGallery(scenario);
-      const clipNames = {
-        walk: "dd030573edc3333396a7846cbc01a7dd19c38ad64e1e34ab8ca573d0c0fe2239",
-        run: "ae3f72e4775534450e22029267ff0391c5ec1b93e75a811d7461ecfa55cda0c0",
-        crawl:
-          "5764911b0b9f202230861f9f6cec2c3186e76cbe70741e56fded177d4a9891c7",
-      } as const;
+      const clipNames = await platformerClipNames(g.page);
       const requests: Record<keyof typeof clipNames, number> = {
         walk: 0,
         run: 0,
@@ -357,11 +384,15 @@ test("platformer keeps moving while a new gait loads and reuses cached clips", {
         await g.page.locator("#platformer-pause").click();
 
         releaseRun();
+        // Return to Walk only after the crossfade from it ends, when the Walk
+        // clip has no consumer left: reselecting it must reuse the Host's
+        // cached clip rather than the one the outgoing side still holds.
         const running = await g.waitFor((state) => {
           const gaits = gaitControllersFor(state, rig);
           return (
             gaits.length === 1 &&
-            gaits[0]!.description.drivers[0]!.source.endsWith(clipNames.run)
+            gaits[0]!.description.drivers[0]!.source.endsWith(clipNames.run) &&
+            gaits[0]!.transition === undefined
           );
         });
         assert.ok(gaitControllerFor(running, rig).time > 0);
@@ -405,7 +436,8 @@ test("a newer gait request cancels a pending clip and commits only the latest mo
       const requested = new Promise<void>((resolve) => {
         reportRun = resolve;
       });
-      const pattern = `**/target/gallery-platformer-assets/${CLIP_NAMES.run}`;
+      const clipNames = await platformerClipNames(g.page);
+      const pattern = `**/target/gallery-platformer-assets/${clipNames.run}`;
       await g.page.route(pattern, async (route) => {
         reportRun();
         await held;
@@ -425,7 +457,7 @@ test("a newer gait request cancels a pending clip and commits only the latest mo
             gaitControllerFor(
               state,
               rig,
-            ).description.drivers[0]!.source.endsWith(CLIP_NAMES.crawl),
+            ).description.drivers[0]!.source.endsWith(clipNames.crawl),
         );
         assert.equal(gaitControllerFor(crawled, rig).state, "playing");
         await g.page.waitForFunction(
@@ -466,7 +498,8 @@ test("navigation closes platformer promptly while a gait request is pending", {
       const requested = new Promise<void>((resolve) => {
         reportRun = resolve;
       });
-      const pattern = `**/target/gallery-platformer-assets/${CLIP_NAMES.run}`;
+      const clipNames = await platformerClipNames(g.page);
+      const pattern = `**/target/gallery-platformer-assets/${clipNames.run}`;
       await g.page.route(pattern, async (route) => {
         reportRun();
         await held;
@@ -574,7 +607,7 @@ test("platformer changes gait without resetting, reverses its loop and keeps the
             state.entities.some((value) => value.metadata.symbolicId === id),
           ) &&
           state.resources.every((resource) => resource.status === "loaded") &&
-          entity(state, "platformer-camera").effective.some(
+          entity(state, "platformer-camera").components.some(
             (component) => "target" in component.fields,
           ),
       );
@@ -607,26 +640,26 @@ test("platformer changes gait without resetting, reverses its loop and keeps the
           `${id} follows the route root`,
         );
       assert.ok(
-        distance(basePosition(initial, "platformer-camera"), [14, 6, 0]) <
-          0.001,
+        distance(position(initial, "platformer-camera"), [14, 6, 0]) < 0.001,
         "The camera retains its authored side-follow offset",
       );
-      const lookAt = entity(initial, "platformer-camera").effective.find(
+      const lookAt = entity(initial, "platformer-camera").components.find(
         (component) => "target" in component.fields,
       );
       assert.ok(lookAt);
       assert.equal(lookAt.fields.target, cameraTarget);
       assert.equal(lookAt.fields.enabled, true);
-      const light = entity(initial, "platformer-overhead-light").effective.find(
-        (component) => "intensity" in component.fields,
-      );
+      const light = entity(
+        initial,
+        "platformer-overhead-light",
+      ).components.find((component) => "intensity" in component.fields);
       assert.equal(
         light?.fields.kind,
         1,
         "The attached overhead light is a point light",
       );
       assert.ok(
-        entity(initial, "platformer-orb").effective.some(
+        entity(initial, "platformer-orb").components.some(
           (component) => component.properties && "time" in component.properties,
         ),
         "The orb exposes its shader time property",
@@ -739,13 +772,22 @@ test("platformer changes gait without resetting, reverses its loop and keeps the
         "Imported Walk and Crawl clips produce different visible character poses",
       );
 
+      // Inspection pages are answered in successive frames, so a controllers
+      // page can show a finished crossfade while the entities page read before
+      // it still holds a blended pose. Read a finished pose from a later
+      // inspection, whose entities page follows the observed completion.
+      const completed = async (predicate: (state: Inspection) => boolean) => {
+        await g.waitFor(predicate);
+        return g.inspect();
+      };
+
       const routeTime = metadata.route.firstLegDuration * 0.72;
       const previousTime = metadata.route.firstLegDuration * 0.52;
       const previous = await seek(rootController, previousTime);
       const previousPosition = position(previous, "platformer-root");
       const routePaused = await seek(rootController, routeTime);
       const routePosition = position(routePaused, "platformer-root");
-      const forwardFacing = effectiveRotation(routePaused, "platformer-rig");
+      const forwardFacing = rotation(routePaused, "platformer-rig");
       assert.ok(distance(routePosition, previousPosition) > 0.2);
       await g.page.locator("#platformer-reverse").click();
       await g.page.locator("#platformer-pause").click();
@@ -755,8 +797,7 @@ test("platformer changes gait without resetting, reverses its loop and keeps the
           facing.state === "playing" &&
           facing.transition?.easing === "smoothstep" &&
           (facing.transition?.duration ?? 0) > 0 &&
-          distance(effectiveRotation(state, "platformer-rig"), forwardFacing) >
-            0.02
+          distance(rotation(state, "platformer-rig"), forwardFacing) > 0.02
         );
       });
       assert.ok(
@@ -764,8 +805,7 @@ test("platformer changes gait without resetting, reverses its loop and keeps the
         "Reverse keeps the selected gait playing forward",
       );
       assert.ok(
-        distance(effectiveRotation(turning, "platformer-rig"), forwardFacing) >
-          0.02,
+        distance(rotation(turning, "platformer-rig"), forwardFacing) > 0.02,
         "Reverse begins a visible local-space turnaround",
       );
       await g.capture("platformer-smooth-turn");
@@ -788,10 +828,10 @@ test("platformer changes gait without resetting, reverses its loop and keeps the
         await g.page.locator("#platformer-direction").textContent(),
         "reverse",
       );
-      const turnedAround = await g.waitFor(
+      const turnedAround = await completed(
         (state) => facingControllerFor(state, rig).transition === undefined,
       );
-      const [turnedQx, turnedQy, turnedQz, turnedQw] = effectiveRotation(
+      const [turnedQx, turnedQy, turnedQz, turnedQw] = rotation(
         turnedAround,
         "platformer-rig",
       );
@@ -824,22 +864,17 @@ test("platformer changes gait without resetting, reverses its loop and keeps the
         "forward",
       );
       assert.ok(
-        distance(
-          effectiveRotation(resetting, "platformer-rig"),
-          forwardFacing,
-        ) > 0.02,
+        distance(rotation(resetting, "platformer-rig"), forwardFacing) > 0.02,
         "Reset starts from the reversed facing pose",
       );
       await g.page.locator("#platformer-pause").click();
-      const resetForward = await g.waitFor((state) => {
+      const resetForward = await completed((state) => {
         const facing = facingControllerFor(state, rig);
         return facing.state === "playing" && facing.transition === undefined;
       });
       assert.ok(
-        distance(
-          effectiveRotation(resetForward, "platformer-rig"),
-          forwardFacing,
-        ) < 0.01,
+        distance(rotation(resetForward, "platformer-rig"), forwardFacing) <
+          0.01,
         "Reset completes the smooth return to forward facing",
       );
       await g.page.locator("#platformer-pause").click();

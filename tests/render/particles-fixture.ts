@@ -2,22 +2,34 @@
 import { presentationTesting } from "../../packages/ipp-client/src/testing.js";
 import type {
   RenderWorldClient,
-  FrameCapture,
   WorldPersistenceHostClient,
 } from "@ipp/client";
 import {
-  activateFixtureCamera,
   aliasId,
   componentFields,
   createEntity,
+  createFixtureCamera,
   insertComponent,
   successfulBatch,
 } from "../integration/camera-fixtures.js";
+import type { FramePixels } from "./image-assertions.js";
+import {
+  RootPresentation,
+  capturedImage,
+  recoverRestoredContext,
+} from "./root-presentation.js";
+import {
+  PARTICLES,
+  SCENE,
+  selectSystems,
+} from "../integration/system-selections.js";
 let host: WorldPersistenceHostClient<RenderWorldClient>;
 let client: RenderWorldClient;
+let presentation: RootPresentation;
 let contract: any;
 let effect: bigint;
-const frames = new Map<string, FrameCapture>();
+const frames = new Map<string, FramePixels>();
+const VIEWPORT = { width: 320, height: 240 };
 
 async function upload(kind: number, bytes: Uint8Array<ArrayBuffer>) {
   return (await client.createAsset(kind, bytes.buffer)).source;
@@ -30,8 +42,8 @@ export async function initialize(config: {
 }) {
   const canvas = document.createElement("canvas");
   canvas.id = "particles-canvas";
-  canvas.width = 320;
-  canvas.height = 240;
+  canvas.width = VIEWPORT.width;
+  canvas.height = VIEWPORT.height;
   document.body.replaceChildren(canvas);
   contract = await import(config.generatedModuleUrl);
   host = await contract.IppHostClient.connectWorker(
@@ -39,8 +51,12 @@ export async function initialize(config: {
     config.wasmUrl,
     { canvas: canvas.transferControlToOffscreen(), timeoutMs: 10000 },
   );
-  client = await host.createWorld({ symbolicId: "particles" });
-  const camera = await activateFixtureCamera(client);
+  const created = await host.createWorld({
+    selectedSystems: selectSystems(SCENE, PARTICLES),
+    symbolicId: "particles",
+  });
+  client = await host.openWorld(created.reference);
+  const camera = await createFixtureCamera(client);
   successfulBatch(
     await client.batch(
       componentFields(client, "Transform", {
@@ -85,6 +101,12 @@ export async function initialize(config: {
     ]),
   );
   effect = aliasId(result, 1);
+  presentation = await RootPresentation.camera(
+    host,
+    created.reference,
+    camera,
+    VIEWPORT,
+  );
 }
 
 export async function update(
@@ -107,10 +129,13 @@ export async function capture(label: string, draws = 1) {
   const state = await client.inspect();
   const deadline = performance.now() + 10000;
   for (;;) {
-    const frame = await client.presentation!.capture(state.tick);
+    const frame = await presentation.capture();
+    if (presentation.sourceTick(frame) < state.tick)
+      throw new Error("Particle capture preceded the inspected scene");
     if (frame.drawCalls === draws) {
-      frames.set(label, frame);
-      const pixels = new Uint8Array(frame.pixels);
+      const image = capturedImage(frame);
+      frames.set(label, image);
+      const pixels = new Uint8Array(image.pixels);
       let green = 0,
         red = 0,
         blue = 0;
@@ -126,8 +151,8 @@ export async function capture(label: string, draws = 1) {
         draws: frame.drawCalls,
         center: [
           ...pixels.subarray(
-            (120 * frame.width + 160) * 4,
-            (120 * frame.width + 160) * 4 + 3,
+            (120 * image.width + 160) * 4,
+            (120 * image.width + 160) * 4 + 3,
           ),
         ],
       };
@@ -159,11 +184,12 @@ export function equal(a: string, b: string) {
 }
 
 export async function recover() {
-  presentationTesting(client.presentation!).loseContext();
+  presentationTesting(presentation.diagnostics).loseContext();
   await new Promise<void>((resolve) =>
     requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
   );
-  presentationTesting(client.presentation!).restoreContext();
+  presentationTesting(presentation.diagnostics).restoreContext();
+  await recoverRestoredContext(presentation);
 }
 
 export async function mesh(customVertex = false) {
@@ -250,15 +276,24 @@ export async function close() {
 
 export async function restoreLive() {
   await update("ParticleEmitter", { enabled: false });
-  const bytes = await host.saveWorld();
-  await host.detachWorld();
-  client = await host.loadWorld(bytes, { symbolicId: "restored-particles" });
+  const bytes = await host.saveWorld(client.session);
+  await presentation.close();
+  await host.detachWorld(client.session);
+  const graph = await host.loadWorld(bytes, {
+    symbolicId: "restored-particles",
+  });
+  client = await host.openWorld(graph.root);
   const state = await client.inspect();
   effect = state.entities.find((e) => e.metadata.symbolicId === "effect")!.id;
   const camera = state.entities.find((e) =>
-    e.effective.some((c) => c.component === client.components.Camera!.id),
+    e.components.some((c) => c.component === client.components.Camera!.id),
   )!.id;
-  client.sendCommand({ type: "CameraActivateCommand", entity: camera });
+  presentation = await RootPresentation.camera(
+    host,
+    graph.root,
+    camera,
+    VIEWPORT,
+  );
   return capture("loaded-empty", 0);
 }
 

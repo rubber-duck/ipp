@@ -3,27 +3,43 @@ import { presentationTesting } from "../../packages/ipp-client/src/testing.js";
 import type {
   RenderWorldClient,
   AnimationWorldClient,
-  FrameCapture,
+  PresentedCapture,
   DynamicValue,
+  RenderStatisticsSnapshot,
   WorldPersistenceHostClient,
   ShaderDefinition,
 } from "@ipp/client";
 import {
-  activateFixtureCamera,
   aliasId,
   componentFields,
   createEntity,
+  createFixtureCamera,
   insertComponent,
   successfulBatch,
 } from "../integration/camera-fixtures.js";
 import { poseMesh } from "./mesh-pose-assets.js";
 import { compareImages } from "./image-assertions.js";
+import {
+  RootPresentation,
+  captureSummary,
+  capturedImage,
+  recoverRestoredContext,
+} from "./root-presentation.js";
+import {
+  SKINNING,
+  SCENE,
+  selectSystems,
+} from "../integration/system-selections.js";
 
 let client: RenderWorldClient & AnimationWorldClient;
 let contract: any;
 let host: WorldPersistenceHostClient<RenderWorldClient & AnimationWorldClient>;
+let presentation: RootPresentation | undefined;
 const entities = new Map<string, bigint>();
-const captures = new Map<string, FrameCapture>();
+const captures = new Map<
+  string,
+  { frame: PresentedCapture; statistics: RenderStatisticsSnapshot }
+>();
 let editor:
   | Awaited<
       ReturnType<typeof import("../react/fixture.js").createShaderPreview>
@@ -70,8 +86,15 @@ export async function initialize(configuration: {
     configuration.wasmUrl,
     { canvas: canvas.transferControlToOffscreen(), timeoutMs: 10000 },
   );
-  client = await host.createWorld({ symbolicId: "custom-materials" });
-  const camera = await activateFixtureCamera(client);
+  const created = await host.createWorld({
+    // Skeletons and skins only exist in builds with skeletal animation.
+    selectedSystems: contract.CAPABILITIES.skeletalAnimation
+      ? selectSystems(SCENE, SKINNING)
+      : selectSystems(SCENE),
+    symbolicId: "custom-materials",
+  });
+  client = await host.openWorld(created.reference);
+  const camera = await createFixtureCamera(client);
   entities.set("camera", camera);
   await update("camera", "Transform", {
     x: 0,
@@ -121,6 +144,17 @@ export async function initialize(configuration: {
     );
     entities.set(name, aliasId(result, 1));
   }
+  presentation = await RootPresentation.camera(
+    host,
+    created.reference,
+    camera,
+    { width: canvas.width, height: canvas.height },
+  );
+}
+
+function presented(): RootPresentation {
+  if (!presentation) throw new Error("Custom material camera is not presented");
+  return presentation;
 }
 
 async function upload(kind: number, bytes: Uint8Array<ArrayBuffer>) {
@@ -186,18 +220,22 @@ export async function remove(name: string, component: string) {
   );
 }
 export async function capture(label: string, draws = 2) {
+  const view = presented();
   const state = await client.inspect();
   const deadline = performance.now() + 10000;
   for (;;) {
-    const frame = await client.presentation!.capture(state.tick);
+    const frame = await view.capture();
+    if (view.sourceTick(frame) < state.tick)
+      throw new Error("Custom material capture preceded the inspected scene");
     if (frame.drawCalls === draws) {
-      captures.set(label, frame);
-      const pixels = new Uint8Array(frame.pixels);
+      captures.set(label, {
+        frame,
+        statistics: await view.diagnostics.statistics(),
+      });
+      const { width, pixels: buffer } = capturedImage(frame);
+      const pixels = new Uint8Array(buffer);
       const sample = (x: number, y: number) => [
-        ...pixels.subarray(
-          (y * frame.width + x) * 4,
-          (y * frame.width + x) * 4 + 4,
-        ),
+        ...pixels.subarray((y * width + x) * 4, (y * width + x) * 4 + 4),
       ];
       return {
         ...captureMetadata(label),
@@ -211,19 +249,22 @@ export async function capture(label: string, draws = 2) {
   }
 }
 export function darkRamp(label: string) {
-  const frame = captures.get(label)!;
+  const frame = image(label);
   const pixels = new Uint8Array(frame.pixels);
   return Array.from(
     { length: 34 },
     (_, i) => pixels[(120 * frame.width + 90 + i) * 4]!,
   );
 }
+function image(label: string) {
+  return capturedImage(captures.get(label)!.frame);
+}
 export function captureMetadata(label: string) {
-  const { pixels: _, ...metadata } = captures.get(label)!;
-  return metadata;
+  const { frame, statistics } = captures.get(label)!;
+  return { ...captureSummary(frame), statistics };
 }
 export function captureDataUrl(label: string) {
-  const frame = captures.get(label)!;
+  const frame = image(label);
   const canvas = document.createElement("canvas");
   canvas.width = frame.width;
   canvas.height = frame.height;
@@ -241,55 +282,16 @@ export function captureDataUrl(label: string) {
   return canvas.toDataURL("image/png");
 }
 export function difference(a: string, b: string) {
-  return compareImages(captures.get(a)!, captures.get(b)!);
+  return compareImages(image(a), image(b));
 }
 export async function recoverContext() {
-  presentationTesting(client.presentation!).loseContext();
+  const view = presented();
+  presentationTesting(view.diagnostics).loseContext();
   await new Promise<void>((resolve) =>
     requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
   );
-  presentationTesting(client.presentation!).restoreContext();
-}
-export async function overlays() {
-  const result = successfulBatch(
-    await client.batch([
-      { kind: "createStateOverlayOwner", alias: 1 },
-      {
-        kind: "attachEntityOverlayBinding",
-        owner: { kind: "alias", alias: 1 },
-        alias: 2,
-        symbolicId: "left",
-        mode: "bound",
-      },
-      {
-        kind: "attachComponentStateOverlay",
-        owner: { kind: "alias", alias: 1 },
-        binding: { kind: "alias", alias: 2 },
-        alias: 3,
-        component: client.components.CustomMaterial!.id,
-        mode: "bound",
-        fields: [],
-      },
-      {
-        kind: "updateDynamicComponentStateOverlay",
-        owner: { kind: "alias", alias: 1 },
-        overlay: { kind: "alias", alias: 3 },
-        properties: { tint: { kind: "vec4", value: [0, 0, 1, 1] } },
-        clear: [],
-      },
-    ]),
-  );
-  return result.stateOverlays[0]!.id.toString();
-}
-export async function releaseOverlay(owner: string) {
-  successfulBatch(
-    await client.batch([
-      {
-        kind: "releaseStateOverlayOwner",
-        owner: { kind: "handle", id: BigInt(owner) },
-      },
-    ]),
-  );
+  presentationTesting(view.diagnostics).restoreContext();
+  await recoverRestoredContext(view);
 }
 export async function inspect() {
   const state = await client.inspect();
@@ -302,6 +304,7 @@ export async function inspect() {
 export async function close() {
   await closeShaderEditor();
   await host?.close();
+  presentation = undefined;
   entities.clear();
   captures.clear();
   document.querySelector("#custom-materials-canvas")?.remove();
@@ -376,10 +379,10 @@ export async function assetBinding(
   const inspected = (await client.inspect()).entities.find(
     (e) => e.id === entities.get("left"),
   )!;
-  const material = inspected.effective.find(
+  const material = inspected.components.find(
     (c) => c.component === client.components.CustomMaterial!.id,
   )!;
-  const mesh = inspected.effective.find(
+  const mesh = inspected.components.find(
     (c) => c.component === client.components.MeshInstance!.id,
   )!;
   const reference: DynamicValue =
@@ -405,12 +408,13 @@ export async function assetBinding(
   }
   const observed = (await client.inspect()).entities
     .find((e) => e.id === entities.get("left"))!
-    .effective.find(
+    .components.find(
       (c) => c.component === client.components.CustomMaterial!.id,
     )!.properties!.input!;
   return { reference, observed };
 }
 
+/** Pause a tint animation halfway: it adds half its red decrease to the tint. */
 export async function animate() {
   const component = client.components.CustomMaterial!.id;
   const bytes = contract.encodeAnimationClip({
@@ -431,7 +435,7 @@ export async function animate() {
             time: 2,
             value: {
               kind: "dynamic",
-              value: { kind: "vec4", value: [0, 1, 0, 1] },
+              value: { kind: "vec4", value: [-1, 0, 0, 1] },
             },
             interpolation: { kind: "step" },
           },
@@ -641,7 +645,7 @@ export async function textureAnimation() {
   const snapshot = (await client.inspect()).entities.find(
     (e) => e.id === entities.get("left"),
   )!;
-  const properties = snapshot.effective.find(
+  const properties = snapshot.components.find(
     (c) => c.component === client.components.CustomMaterial!.id,
   )!.properties!;
   const component = client.components.CustomMaterial!.id;
@@ -738,7 +742,7 @@ export async function seekAnimation(id: string, time: number) {
   const snapshot = (await client.inspect()).entities.find(
     (e) => e.id === entities.get("left"),
   )!;
-  return snapshot.effective.find(
+  return snapshot.components.find(
     (c) => c.component === client.components.Transform!.id,
   )!.fields.sx;
 }
@@ -747,7 +751,7 @@ export async function deviceLimit() {
   const state = (await client.inspect()).entities.find(
     (e) => e.id === entities.get("left"),
   )!;
-  const texture = state.effective.find(
+  const texture = state.components.find(
     (c) => c.component === client.components.CustomMaterial!.id,
   )!.properties!.first!;
   const parameters: Record<string, "texture2D"> = {};
@@ -772,7 +776,7 @@ export async function saveWithoutShader() {
   });
   const inputs = (await client.inspect()).entities
     .find((e) => e.id === entities.get("left"))!
-    .effective.find(
+    .components.find(
       (c) => c.component === client.components.CustomMaterial!.id,
     )!.properties!;
   for (const [name, value] of Object.entries(inputs)) {
@@ -792,7 +796,7 @@ export async function saveWithoutShader() {
   const before = (await client.inspect()).entities.find(
     (e) => e.id === entities.get("left"),
   )!;
-  const expected = before.effective.find(
+  const expected = before.components.find(
     (c) => c.component === client.components.CustomMaterial!.id,
   )!.properties!;
   const module = "/target/react-build/fixture.js";
@@ -802,17 +806,20 @@ export async function saveWithoutShader() {
   const oldAsset = await createPendingAsset(client);
   const oldSession = client.session;
   await oldAsset.close();
-  const bytes = await host.saveWorld();
-  await host.detachWorld();
-  client = await host.loadWorld(bytes, {
+  const bytes = await host.saveWorld(client.session);
+  await presented().close();
+  presentation = undefined;
+  await host.detachWorld(client.session);
+  const graph = await host.loadWorld(bytes, {
     symbolicId: "restored-custom-materials",
   });
+  client = await host.openWorld(graph.root);
   const state = await client.inspect();
   const entity = state.entities.find(
     (e) => e.metadata.symbolicId === "left",
   )!.id;
   const after = (await client.inspect()).entities.find((e) => e.id === entity)!;
-  const restored = after.effective.find(
+  const restored = after.components.find(
     (c) => c.component === client.components.CustomMaterial!.id,
   )!.properties!;
   const nextAsset = await createPendingAsset(client);
@@ -938,8 +945,8 @@ export function sampleEvidence(actual: number[], expected: number[]) {
 }
 
 export function differenceDataUrl(a: string, b: string) {
-  const first = captures.get(a)!,
-    second = captures.get(b)!;
+  const first = image(a),
+    second = image(b);
   const bytes = new Uint8ClampedArray(first.pixels.slice(0)),
     reference = new Uint8Array(second.pixels);
   for (let i = 0; i < bytes.length; i++)
@@ -954,8 +961,8 @@ export function differenceDataUrl(a: string, b: string) {
 }
 
 export function shadowPixels(lit: string, shadowed: string) {
-  const a = new Uint8Array(captures.get(lit)!.pixels),
-    b = new Uint8Array(captures.get(shadowed)!.pixels);
+  const a = new Uint8Array(image(lit).pixels),
+    b = new Uint8Array(image(shadowed).pixels);
   let count = 0;
   for (let i = 0; i < a.length; i += 4)
     if ([0, 1, 2].every((c) => a[i + c]! > b[i + c]! + 8)) count++;

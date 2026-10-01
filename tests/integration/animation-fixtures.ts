@@ -76,6 +76,11 @@ export class AnimationFixture {
           break;
         case 8:
           throw new Error(`schema rows field ${name} is written per property`);
+        case 12:
+        case 13:
+          throw new Error(
+            `runtime reference field ${name} is not an animation value`,
+          );
       }
       return { offset: field.offset, value: typed };
     });
@@ -210,12 +215,11 @@ export class AnimationFixture {
     entity: bigint,
     component: string,
     field: string,
-    layer: "base" | "effective" = "effective",
   ) {
     const definition = this.client.components[component]!;
     const value = inspection.entities
       .find((e) => e.id === entity)
-      ?.[layer].find((c) => c.component === definition.id)?.fields[field];
+      ?.components.find((c) => c.component === definition.id)?.fields[field];
     check(typeof value === "number", "numeric observation missing");
     return value;
   }
@@ -261,21 +265,19 @@ export async function propertyAnimationScenario(
     fixture.driver(b, source, 0, "Scalar", ["value"]),
   ]);
   let inspection = await fixture.seekPaused(pa, 0.4375);
-  // Bézier u=.5: absolute x=.4375 and y=6 despite equal endpoint values.
+  // Bézier u=.5: absolute x=.4375 and y=6 despite equal endpoint values; the
+  // controller adds that change from the clip's start to the base 99.
   check(
-    Math.abs(fixture.value(inspection, a, "Scalar", "value") - 6) < 1e-5,
+    Math.abs(fixture.value(inspection, a, "Scalar", "value") - 105) < 1e-5,
     "Bézier time/value curve was not evaluated",
   );
-  check(
-    fixture.value(inspection, a, "Scalar", "value", "base") === 99,
-    "animation overwrote producer base",
-  );
+  // The clip ends where it starts, so b holds its base at the end.
   await fixture.seekPaused(pb, 2);
   for (let i = 0; i < 3; i++) await client.waitForFrame();
   inspection = await fixture.inspect();
   check(fixture.state(inspection, pa).time === 0.4375, "paused clock advanced");
   check(
-    fixture.value(inspection, b, "Scalar", "value") === 0,
+    fixture.value(inspection, b, "Scalar", "value") === 88,
     "shared asset did not sample independently",
   );
   await client.updateAnimationController(pa, {
@@ -318,7 +320,7 @@ export async function propertyAnimationScenario(
   check(
     !inspection.entities
       .find((entity) => entity.id === a)!
-      .effective.some(
+      .components.some(
         (value) => value.component === client.components.Scalar!.id,
       ),
     "Failed batches keep the earlier component removal",
@@ -352,30 +354,34 @@ export async function propertyAnimationScenario(
   inspection = await fixture.inspect();
   check(
     fixture.value(inspection, b, "Scalar", "value") === 88,
-    "stop did not expose current authored value",
+    "stop did not subtract the contribution",
   );
-  // A new binding created while another controller contributes must inherit
-  // that driver's original, not the currently sampled value.
+  // Contributions of two controllers on one field sum; deleting one subtracts
+  // only its own.
   await fixture.seekPaused(pb, 0.4375);
-  const inherited = await fixture.controller([
+  const second = await fixture.controller([
     fixture.driver(b, source, 0, "Scalar", ["value"]),
   ]);
-  await fixture.seekPaused(inherited, 2);
+  inspection = await fixture.seekPaused(second, 0.4375);
+  check(
+    Math.abs(fixture.value(inspection, b, "Scalar", "value") - 100) < 1e-4,
+    "two controllers on one field did not sum",
+  );
   await client.deleteAnimationController(pb);
   inspection = await fixture.inspect();
   check(
-    fixture.value(inspection, b, "Scalar", "value") === 0,
+    Math.abs(fixture.value(inspection, b, "Scalar", "value") - 94) < 1e-4,
     "deleting one controller withdrew the surviving paused contribution",
   );
-  await client.deleteAnimationController(inherited);
+  await client.deleteAnimationController(second);
   inspection = await fixture.inspect();
   check(
     fixture.value(inspection, b, "Scalar", "value") === 88,
-    "new binding retained animated output instead of the inherited original",
+    "deleting the last controller did not return the base",
   );
   check(
     !inspection.controllers?.some(
-      (controller) => controller.id === pb || controller.id === inherited,
+      (controller) => controller.id === pb || controller.id === second,
     ),
     "deleted controllers remain visible",
   );
@@ -387,9 +393,14 @@ export async function propertyAnimationScenario(
     fixture.driver(d, source, 0, "Scalar", ["value"]),
   ]);
   inspection = await fixture.seekPaused(synchronized, 0.4375);
-  for (const target of [c, d]) {
+  for (const [target, base] of [
+    [c, 21],
+    [d, 34],
+  ] as const) {
     check(
-      Math.abs(fixture.value(inspection, target, "Scalar", "value") - 6) < 1e-5,
+      Math.abs(
+        fixture.value(inspection, target, "Scalar", "value") - base - 6,
+      ) < 1e-4,
       "shared controller did not sample both entities at one time",
     );
   }
@@ -397,17 +408,14 @@ export async function propertyAnimationScenario(
     fixture.state(inspection, synchronized).description.drivers.length === 2,
     "controller lost a target binding",
   );
+  // A client write replaces a driven field, contribution included; the paused
+  // controller adds nothing more, and deletion subtracts its contribution.
   successfulBatch(await client.batch(fixture.set(c, "Scalar", { value: 55 })));
-  inspection = await fixture.inspect();
-  check(
-    fixture.value(inspection, c, "Scalar", "value", "base") === 55,
-    "paused controller hid the latest producer input from inspection",
-  );
   await client.deleteAnimationController(synchronized);
   inspection = await fixture.inspect();
   check(
-    fixture.value(inspection, c, "Scalar", "value") === 55,
-    "controller deletion lost latest producer input",
+    Math.abs(fixture.value(inspection, c, "Scalar", "value") - 49) < 1e-4,
+    "controller deletion did not subtract its contribution from the write",
   );
   check(
     fixture.value(inspection, d, "Scalar", "value") === 34,
@@ -458,7 +466,7 @@ export async function propertyAnimationScenario(
     "negative playback did not complete at the start endpoint",
   );
   check(
-    fixture.value(inspection, reverseTarget, "Scalar", "value") === 0,
+    fixture.value(inspection, reverseTarget, "Scalar", "value") === 42,
     "negative playback did not hold the start sample",
   );
   await client.controlAnimationController(reverse, {
@@ -569,7 +577,7 @@ export async function propertyAnimationScenario(
   return {
     independentControllers: 2,
     synchronizedTargets: 2,
-    inheritedOriginal: 88,
+    withdrawnBase: 88,
     bezierMidpoint: 6,
     signedPlayback: true,
     events: fixture.events.length,

@@ -7,11 +7,19 @@ use crate::systems::lifecycle_publisher::{
     LifecyclePublisherOutput, LifecyclePublisherSystem,
 };
 use crate::world::*;
-use crate::{
-    ComponentOverlayMode, DynamicProperties, DynamicValue, EntityOverlayMode, HostRuntime,
-    StateOverlayRef, WorldId,
-};
+use crate::{DynamicProperties, DynamicValue, HostRuntime, WorldId};
 use std::mem::offset_of;
+
+/// Rendered meshes and materials with the evaluators they require.
+const RENDER_SYSTEMS: &[crate::systems::SystemId] = &[
+    crate::systems::animation::AnimationSystem::ID,
+    crate::systems::asset_dependencies::AssetDependencySystem::ID,
+    crate::systems::hierarchy::HierarchySystem::ID,
+    crate::systems::look_at::LookAtSystem::ID,
+    crate::systems::hierarchy::FinalPropagationSystem::ID,
+    crate::systems::geometry::GeometrySystem::ID,
+    crate::systems::render::RenderSystem::ID,
+];
 
 const SESSION: u64 = 7;
 
@@ -57,7 +65,16 @@ fn alpha_cutoff(entity: EntityId, value: FieldValue) -> Command {
 /// A World holding one committed material with a `seed` property.
 fn material_world() -> (HostRuntime, WorldId, EntityId) {
     let mut host = HostRuntime::new();
-    let world = host.create_world(WorldLimits::default()).unwrap();
+    let world = host
+        .create_world(
+            WorldLimits::default(),
+            &[
+                RENDER_SYSTEMS,
+                &[crate::systems::lifecycle_publisher::LifecyclePublisherSystem::ID],
+            ]
+            .concat(),
+        )
+        .unwrap();
     let outcome = run(
         &mut host,
         world,
@@ -68,11 +85,13 @@ fn material_world() -> (HostRuntime, WorldId, EntityId) {
                     symbolic_id: Some("material".into()),
                     classes: vec![],
                 },
+                adopt: false,
             },
             Command::InsertComponent {
                 entity: EntityRef::Alias(1),
                 component: ComponentValue::CUSTOM_MATERIAL,
                 fields: vec![],
+                adopt: false,
             },
         ],
     );
@@ -85,57 +104,35 @@ fn material_world() -> (HostRuntime, WorldId, EntityId) {
     (host, world, entity)
 }
 
-fn properties(
-    host: &mut HostRuntime,
-    world: WorldId,
-    entity: EntityId,
-    base: bool,
-) -> DynamicProperties {
-    let snapshot = host.world_mut(world).unwrap().inspect(entity).unwrap();
-    let values = if base {
-        snapshot.base
-    } else {
-        snapshot.effective
-    };
-    values
+fn material(host: &mut HostRuntime, world: WorldId, entity: EntityId) -> CustomMaterial {
+    host.world_mut(world)
+        .unwrap()
+        .inspect(entity)
+        .unwrap()
+        .components
         .into_iter()
         .find_map(|value| match value {
-            ComponentValue::CustomMaterial(value) => Some(value.properties),
+            ComponentValue::CustomMaterial(value) => Some(value),
             _ => None,
         })
         .unwrap()
 }
 
-/// Attach a Bound overlay to the material; returns (owner, overlay) aliases.
-fn attach_overlay() -> Vec<Command> {
-    vec![
-        Command::CreateStateOverlayOwner {
-            alias: 1,
-        },
-        Command::AttachEntityOverlayBinding {
-            owner: StateOverlayRef::Alias(1),
-            alias: 2,
-            symbolic_id: "material".into(),
-            mode: EntityOverlayMode::Bound,
-        },
-        Command::AttachComponentStateOverlay {
-            owner: StateOverlayRef::Alias(1),
-            binding: StateOverlayRef::Alias(2),
-            alias: 3,
-            component: ComponentValue::CUSTOM_MATERIAL,
-            mode: ComponentOverlayMode::Bound,
-            fields: vec![],
-        },
-    ]
+fn properties(host: &mut HostRuntime, world: WorldId, entity: EntityId) -> DynamicProperties {
+    material(host, world, entity).properties
 }
 
-fn override_property(name: &str, value: f32) -> Command {
-    Command::UpdateDynamicComponentStateOverlay {
-        owner: StateOverlayRef::Alias(1),
-        overlay: StateOverlayRef::Alias(3),
-        properties: vec![(name.into(), DynamicValue::F32(value))],
-        clear: vec![],
-    }
+/// Write `alpha_cutoff` only if it still holds `expected`.
+fn alpha_cutoff_if(entity: EntityId, expected: f32, value: f32) -> Command {
+    Command::set_field_if(
+        EntityRef::Handle(entity),
+        ComponentValue::CUSTOM_MATERIAL,
+        FieldWrite {
+            offset: offset_of!(CustomMaterial, alpha_cutoff) as u32,
+            value: FieldValue::F32(value),
+        },
+        FieldValue::F32(expected),
+    )
 }
 
 #[test]
@@ -150,10 +147,10 @@ fn batched_property_writes_copy_the_component_independently_of_their_count() {
         assert!(run(&mut host, world, writes).result.is_ok());
         copies.push(clone_count::take());
 
-        let effective = properties(&mut host, world, entity, false);
-        assert_eq!(effective.descriptors().len(), count + 1);
+        let stored = properties(&mut host, world, entity);
+        assert_eq!(stored.descriptors().len(), count + 1);
         assert_eq!(
-            effective.get(&format!("lane_{}", count - 1)),
+            stored.get(&format!("lane_{}", count - 1)),
             Some(DynamicValue::F32((count - 1) as f32))
         );
     }
@@ -164,118 +161,23 @@ fn batched_property_writes_copy_the_component_independently_of_their_count() {
 }
 
 #[test]
-fn overlay_layering_in_one_batch_matches_separate_batches() {
-    let operations = || {
-        let mut operations = attach_overlay();
-        operations.push(override_property("seed", 5.0));
-        operations.push(set(EntityId::from_bits(0), "seed", 2.0));
-        operations.push(set(EntityId::from_bits(0), "other", 3.0));
-        operations
-    };
-    let bind = |entity: EntityId, command: Command| match command {
-        Command::SetDynamicProperty {
-            component,
-            name,
-            value,
-            ..
-        } => Command::SetDynamicProperty {
-            entity: EntityRef::Handle(entity),
-            component,
-            name,
-            value,
-        },
-        command => command,
-    };
-
-    let (mut joined, joined_world, joined_entity) = material_world();
-    let outcome = run(
-        &mut joined,
-        joined_world,
-        operations()
-            .into_iter()
-            .map(|command| bind(joined_entity, command))
-            .collect(),
-    );
-    assert!(outcome.result.is_ok(), "{outcome:?}");
-    let owner = StateOverlayRef::Handle(outcome.state_overlays[0].id);
-
-    let (mut split, split_world, split_entity) = material_world();
-    let mut aliases = Vec::new();
-    let all = operations();
-    let (attachment, writes) = all.split_at(4);
-    aliases.extend(
-        run(
-            &mut split,
-            split_world,
-            attachment
-                .iter()
-                .cloned()
-                .map(|command| bind(split_entity, command))
-                .collect(),
-        )
-        .state_overlays,
-    );
-    for command in writes {
-        assert!(
-            run(
-                &mut split,
-                split_world,
-                vec![bind(split_entity, command.clone())]
-            )
-            .result
-            .is_ok()
-        );
-    }
-
-    for base in [false, true] {
-        assert_eq!(
-            properties(&mut joined, joined_world, joined_entity, base),
-            properties(&mut split, split_world, split_entity, base)
-        );
-    }
-    let effective = properties(&mut joined, joined_world, joined_entity, false);
-    assert_eq!(effective.get("seed"), Some(DynamicValue::F32(5.0)));
-    assert_eq!(effective.get("other"), Some(DynamicValue::F32(3.0)));
-    let base = properties(&mut joined, joined_world, joined_entity, true);
-    assert_eq!(base.get("seed"), Some(DynamicValue::F32(2.0)));
-
-    assert!(
-        run(
-            &mut joined,
-            joined_world,
-            vec![Command::ReleaseStateOverlayOwner {
-                owner,
-            }],
-        )
-        .result
-        .is_ok()
-    );
-    let released = properties(&mut joined, joined_world, joined_entity, false);
-    assert_eq!(released.get("seed"), Some(DynamicValue::F32(2.0)));
-    assert_eq!(
-        released,
-        properties(&mut joined, joined_world, joined_entity, true)
-    );
-}
-
-#[test]
 fn later_operations_read_the_staged_writes_of_earlier_ones() {
     let (mut host, world, entity) = material_world();
-    let mut operations = attach_overlay();
-    // A Bound overlay may only override an existing property, so the update
-    // succeeds only if it observes the producer write staged just before it.
-    operations.push(set(entity, "fresh", 1.0));
-    operations.push(override_property("fresh", 7.0));
-    let outcome = run(&mut host, world, operations);
+    // A compare-and-set succeeds only if it observes the write staged just
+    // before it in the same batch.
+    let outcome = run(
+        &mut host,
+        world,
+        vec![
+            set(entity, "fresh", 1.0),
+            alpha_cutoff(entity, FieldValue::F32(0.25)),
+            alpha_cutoff_if(entity, 0.25, 0.75),
+        ],
+    );
     assert!(outcome.result.is_ok(), "{outcome:?}");
-    assert_eq!(
-        properties(&mut host, world, entity, false).get("fresh"),
-        Some(DynamicValue::F32(7.0))
-    );
-    assert_eq!(
-        properties(&mut host, world, entity, true).get("fresh"),
-        Some(DynamicValue::F32(1.0))
-    );
+    let stored = material(&mut host, world, entity);
+    assert_eq!(stored.alpha_cutoff, 0.75);
+    assert_eq!(stored.properties.get("fresh"), Some(DynamicValue::F32(1.0)));
 }
 
 #[test]
@@ -294,27 +196,16 @@ fn a_failed_operation_stops_the_batch_and_keeps_applied_writes() {
     );
     let error = outcome.result.unwrap_err();
     assert_eq!(error.operation, Some(3));
-    for base in [false, true] {
-        let values = properties(&mut host, world, entity, base);
-        assert_eq!(values.get("a"), Some(DynamicValue::F32(1.0)));
-        assert_eq!(values.get("b"), Some(DynamicValue::F32(2.0)));
-        assert_eq!(
-            values.get("c"),
-            None,
-            "operations after the failure do not apply"
-        );
-    }
-    let snapshot = host.world_mut(world).unwrap().inspect(entity).unwrap();
-    let cutoff = snapshot
-        .effective
-        .iter()
-        .find_map(|value| match value {
-            ComponentValue::CustomMaterial(value) => Some(value.alpha_cutoff),
-            _ => None,
-        })
-        .unwrap();
+    let stored = material(&mut host, world, entity);
+    assert_eq!(stored.properties.get("a"), Some(DynamicValue::F32(1.0)));
+    assert_eq!(stored.properties.get("b"), Some(DynamicValue::F32(2.0)));
     assert_eq!(
-        cutoff, 0.25,
+        stored.properties.get("c"),
+        None,
+        "operations after the failure do not apply"
+    );
+    assert_eq!(
+        stored.alpha_cutoff, 0.25,
         "the rejected field write leaves the earlier value"
     );
 
@@ -325,7 +216,7 @@ fn a_failed_operation_stops_the_batch_and_keeps_applied_writes() {
             .is_ok()
     );
     assert_eq!(
-        properties(&mut host, world, entity, false).get("c"),
+        properties(&mut host, world, entity).get("c"),
         Some(DynamicValue::F32(3.0))
     );
 }
@@ -351,15 +242,7 @@ fn ordered_writes_publish_one_update_per_operation_that_changes_the_value() {
         )
         .unwrap();
     host.world_mut(world).unwrap().step(0.0).unwrap();
-    let snapshot = host.world_mut(world).unwrap().inspect(entity).unwrap();
-    let unchanged_cutoff = snapshot
-        .effective
-        .iter()
-        .find_map(|value| match value {
-            ComponentValue::CustomMaterial(value) => Some(value.alpha_cutoff),
-            _ => None,
-        })
-        .unwrap();
+    let unchanged_cutoff = material(&mut host, world, entity).alpha_cutoff;
 
     let mut operations = vec![
         set(entity, "a", 1.0),
@@ -372,14 +255,13 @@ fn ordered_writes_publish_one_update_per_operation_that_changes_the_value() {
         set(entity, "a", -0.0),
         set(entity, "a", 0.0),
     ];
-    // Overlay operations compare whole values against the value observed after
-    // the in-place writes above; an unchanged attachment publishes nothing.
-    operations.extend(attach_overlay());
-    operations.push(override_property("a", 9.0));
+    // A compare-and-set that writes the value already stored publishes nothing.
+    operations.push(alpha_cutoff_if(entity, 0.125, 0.125));
+    operations.push(alpha_cutoff_if(entity, 0.125, 0.5));
     operations.push(set(entity, "c", 3.0));
     let expected = [true, false, true, false, true, false, true, true, true]
         .into_iter()
-        .chain([false, false, false, true, true])
+        .chain([false, true, true])
         .filter(|changed| *changed)
         .count();
     assert!(run(&mut host, world, operations).result.is_ok());
@@ -389,12 +271,7 @@ fn ordered_writes_publish_one_update_per_operation_that_changes_the_value() {
         .unwrap()
         .drain_system_events::<LifecyclePublisherOutput>(LifecyclePublisherSystem::ID, SESSION)
         .into_iter()
-        .flat_map(|output| match output {
-            LifecyclePublisherOutput::Events(events) => events,
-            LifecyclePublisherOutput::Overflow {
-                ..
-            } => panic!("bounded fixture overflowed"),
-        })
+        .flat_map(|LifecyclePublisherOutput(events)| events)
         .map(|event| event.observation)
         .collect();
     let updates = events
@@ -465,7 +342,12 @@ mod rows {
                 .unwrap();
         }
         let mut host = HostRuntime::new();
-        let world = host.create_world(WorldLimits::default()).unwrap();
+        let world = host
+            .create_world(
+                WorldLimits::default(),
+                &[crate::systems::lifecycle_publisher::LifecyclePublisherSystem::ID],
+            )
+            .unwrap();
         let outcome = run(
             &mut host,
             world,
@@ -476,6 +358,7 @@ mod rows {
                         symbolic_id: Some("rows".into()),
                         classes: vec![],
                     },
+                    adopt: false,
                 },
                 Command::insert_value(EntityRef::Alias(1), ComponentValue::RowsFixture(fixture)),
             ],
@@ -484,19 +367,12 @@ mod rows {
         (host, world, entity)
     }
 
-    fn fixture(
-        host: &mut HostRuntime,
-        world: WorldId,
-        entity: EntityId,
-        base: bool,
-    ) -> RowsFixture {
-        let snapshot = host.world_mut(world).unwrap().inspect(entity).unwrap();
-        let values = if base {
-            snapshot.base
-        } else {
-            snapshot.effective
-        };
-        values
+    fn fixture(host: &mut HostRuntime, world: WorldId, entity: EntityId) -> RowsFixture {
+        host.world_mut(world)
+            .unwrap()
+            .inspect(entity)
+            .unwrap()
+            .components
             .into_iter()
             .find_map(|value| match value {
                 ComponentValue::RowsFixture(value) => Some(value),
@@ -505,17 +381,10 @@ mod rows {
             .unwrap()
     }
 
-    fn field(
-        host: &mut HostRuntime,
-        world: WorldId,
-        entity: EntityId,
-        offset: u32,
-    ) -> [SchemaValue; 2] {
-        [true, false].map(|base| {
-            ComponentValue::RowsFixture(fixture(host, world, entity, base))
-                .field(offset)
-                .unwrap()
-        })
+    fn field(host: &mut HostRuntime, world: WorldId, entity: EntityId, offset: u32) -> SchemaValue {
+        ComponentValue::RowsFixture(fixture(host, world, entity))
+            .field(offset)
+            .unwrap()
     }
 
     #[test]
@@ -530,104 +399,15 @@ mod rows {
             assert!(run(&mut host, world, writes).result.is_ok());
             copies.push(RowsFixture::take_clone_count());
 
-            let effective = fixture(&mut host, world, entity, false);
+            let stored = fixture(&mut host, world, entity);
             assert_eq!(
-                effective.items.get(count - 1).unwrap().weight,
+                stored.items.get(count - 1).unwrap().weight,
                 (count - 1) as f32
             );
         }
         assert_eq!(
             copies[0], copies[1],
             "a batch copies its staged component a fixed number of times, not once per row write"
-        );
-    }
-
-    #[test]
-    fn overlay_layering_over_rows_in_one_batch_matches_separate_batches() {
-        let overlay = |slot, value: f32| Command::UpdateComponentStateOverlay {
-            owner: StateOverlayRef::Alias(1),
-            overlay: StateOverlayRef::Alias(3),
-            fields: vec![FieldWrite {
-                offset: offset(slot, WEIGHT),
-                value: FieldValue::Dynamic(DynamicValue::F32(value)),
-            }],
-            clear: vec![],
-        };
-        let operations = |entity| {
-            let mut operations = attach_overlay();
-            let Command::AttachEntityOverlayBinding {
-                symbolic_id,
-                ..
-            } = &mut operations[1]
-            else {
-                unreachable!()
-            };
-            *symbolic_id = "rows".into();
-            let Command::AttachComponentStateOverlay {
-                component,
-                ..
-            } = &mut operations[2]
-            else {
-                unreachable!()
-            };
-            *component = ComponentValue::ROWS_FIXTURE;
-            operations.push(overlay(1, 5.0));
-            operations.push(weight(entity, 1, 2.0));
-            operations.push(weight(entity, 2, 3.0));
-            operations.push(write(entity, offset(2, MARK), FieldValue::Unset));
-            operations
-        };
-
-        let (mut joined, joined_world, joined_entity) = rows_world(4);
-        let outcome = run(&mut joined, joined_world, operations(joined_entity));
-        assert!(outcome.result.is_ok(), "{outcome:?}");
-        let owner = StateOverlayRef::Handle(outcome.state_overlays[0].id);
-
-        let (mut split, split_world, split_entity) = rows_world(4);
-        let all = operations(split_entity);
-        let (attachment, writes) = all.split_at(4);
-        assert!(
-            run(&mut split, split_world, attachment.to_vec())
-                .result
-                .is_ok()
-        );
-        for command in writes {
-            assert!(
-                run(&mut split, split_world, vec![command.clone()])
-                    .result
-                    .is_ok()
-            );
-        }
-
-        for base in [false, true] {
-            assert_eq!(
-                fixture(&mut joined, joined_world, joined_entity, base),
-                fixture(&mut split, split_world, split_entity, base)
-            );
-        }
-        let effective = fixture(&mut joined, joined_world, joined_entity, false);
-        assert_eq!(effective.items.get(1).unwrap().weight, 5.0);
-        assert_eq!(effective.items.get(2).unwrap().weight, 3.0);
-        assert_eq!(effective.items.get(2).unwrap().mark, None);
-        let base = fixture(&mut joined, joined_world, joined_entity, true);
-        assert_eq!(base.items.get(1).unwrap().weight, 2.0);
-
-        assert!(
-            run(
-                &mut joined,
-                joined_world,
-                vec![Command::ReleaseStateOverlayOwner {
-                    owner,
-                }],
-            )
-            .result
-            .is_ok()
-        );
-        let released = fixture(&mut joined, joined_world, joined_entity, false);
-        assert_eq!(released.items.get(1).unwrap().weight, 2.0);
-        assert_eq!(
-            released,
-            fixture(&mut joined, joined_world, joined_entity, true)
         );
     }
 
@@ -666,22 +446,14 @@ mod rows {
             .filter(|changed| *changed)
             .count();
         assert!(run(&mut host, world, operations).result.is_ok());
-        assert_eq!(
-            field(&mut host, world, entity, mark),
-            [SchemaValue::Unset, SchemaValue::Unset]
-        );
+        assert_eq!(field(&mut host, world, entity, mark), SchemaValue::Unset);
 
         let updates = host
             .world_mut(world)
             .unwrap()
             .drain_system_events::<LifecyclePublisherOutput>(LifecyclePublisherSystem::ID, SESSION)
             .into_iter()
-            .flat_map(|output| match output {
-                LifecyclePublisherOutput::Events(events) => events,
-                LifecyclePublisherOutput::Overflow {
-                    ..
-                } => panic!("bounded fixture overflowed"),
-            })
+            .flat_map(|LifecyclePublisherOutput(events)| events)
             .filter(|event| {
                 matches!(
                     event.observation,
@@ -705,10 +477,7 @@ mod rows {
             ],
         );
         assert_eq!(outcome.result.unwrap_err().operation, Some(1));
-        assert_eq!(
-            field(&mut host, world, entity, mark),
-            [present.clone(), present]
-        );
+        assert_eq!(field(&mut host, world, entity, mark), present);
         for value in [
             FieldValue::Unset,
             FieldValue::Dynamic(DynamicValue::F32(1.0)),

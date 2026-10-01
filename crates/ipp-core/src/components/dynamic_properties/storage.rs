@@ -4,6 +4,7 @@ use crate::{
     services::asset_management::{AssetSource, AssetTypeId},
 };
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 /// Internal field identity for durable descriptors, distinct from Rust offsets.
 pub const DYNAMIC_METADATA: u32 = 0x8000_0000;
@@ -27,7 +28,7 @@ pub struct DynamicPropertyDescriptor {
 /// The sole effective values of a component's named properties.
 #[derive(Debug, PartialEq)]
 pub struct DynamicProperties {
-    descriptors: BTreeMap<String, DynamicPropertyDescriptor>,
+    descriptors: BTreeMap<Arc<str>, DynamicPropertyDescriptor>,
     /// Prepared identity lookup. This mirrors descriptors, never values, and is
     /// rebuilt from durable metadata with the component incarnation.
     descriptors_by_key: BTreeMap<u32, DynamicPropertyDescriptor>,
@@ -90,7 +91,7 @@ impl Default for DynamicProperties {
 
 impl DynamicProperties {
     /// Names, stable identities, types and local numeric byte offsets.
-    pub fn descriptors(&self) -> &BTreeMap<String, DynamicPropertyDescriptor> {
+    pub fn descriptors(&self) -> &BTreeMap<Arc<str>, DynamicPropertyDescriptor> {
         &self.descriptors
     }
 
@@ -199,6 +200,13 @@ impl DynamicProperties {
             .checked_add(1)
             .filter(|v| *v != u32::MAX)
             .ok_or(FieldError::UnknownField)?;
+        // Removal only shrinks the buffer, so an allocation that fits at the
+        // current end still fits afterwards: a refused write changes nothing.
+        self.buffer
+            .len()
+            .checked_add(value.kind().byte_len())
+            .filter(|end| *end <= u32::MAX as usize)
+            .ok_or(FieldError::UnknownField)?;
         self.remove(name);
         let offset = self.allocate(value.kind().byte_len())?;
         let descriptor = DynamicPropertyDescriptor {
@@ -217,6 +225,11 @@ impl DynamicProperties {
     /// Update an existing identity without allowing a type change.
     pub fn set_key(&mut self, key: u32, value: DynamicValue) -> Result<(), FieldError> {
         value.validate()?;
+        self.assign_key(key, value)
+    }
+
+    fn assign_key(&mut self, key: u32, value: DynamicValue) -> Result<(), FieldError> {
+        value.validate_representation()?;
         let descriptor = self
             .descriptors_by_key
             .get(&key)
@@ -342,7 +355,7 @@ impl DynamicProperties {
                 *self = Self::from_metadata(&bytes)?;
                 Ok(())
             }
-            (_, FieldValue::Dynamic(value)) => self.set_key(key, value),
+            (_, FieldValue::Dynamic(value)) => self.assign_key(key, value),
             _ => Err(FieldError::WrongType),
         }
     }
@@ -353,13 +366,9 @@ impl DynamicProperties {
             + self
                 .descriptors
                 .keys()
-                .map(|name| name.capacity() + std::mem::size_of::<DynamicPropertyDescriptor>())
+                .map(|name| name.len() + std::mem::size_of::<DynamicPropertyDescriptor>())
                 .sum::<usize>()
-            + self
-                .assets
-                .values()
-                .map(|t| t.uri.capacity())
-                .sum::<usize>()
+            + self.assets.values().map(|t| t.uri.len()).sum::<usize>()
     }
 
     pub(crate) fn resource_demand(
@@ -430,7 +439,7 @@ impl DynamicProperties {
                     key,
                     AssetSource {
                         kind: AssetTypeId(0),
-                        uri: String::new(),
+                        uri: Default::default(),
                         variant: 0,
                     },
                 );

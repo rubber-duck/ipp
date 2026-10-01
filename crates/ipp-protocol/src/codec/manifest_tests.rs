@@ -1,6 +1,217 @@
 use super::*;
 use std::collections::{BTreeMap, BTreeSet};
 
+#[path = "view_manifest_tests.rs"]
+mod view_tests;
+
+#[path = "attachment_manifest_tests.rs"]
+mod attachment_tests;
+
+#[path = "lifecycle_watch_manifest_tests.rs"]
+mod lifecycle_watch_tests;
+
+#[cfg(feature = "diagnostics")]
+#[path = "lifecycle_diagnostics_tests.rs"]
+mod lifecycle_diagnostics_tests;
+
+fn test_link() -> ipp_core::EntityLink {
+    ipp_core::EntityLink {
+        parent: None,
+        order: ipp_core::EntityOrder::from_value(1).unwrap(),
+    }
+}
+
+fn navigation_binding_fixture() -> ManifestValue {
+    manifest_layout(
+        "root-binding",
+        [
+            (
+                "output",
+                manifest_layout(
+                    "output-reference",
+                    [
+                        (
+                            "world",
+                            manifest_layout(
+                                "world-reference",
+                                [
+                                    ("id", ManifestValue::U64(11)),
+                                    ("incarnation", ManifestValue::U64(12)),
+                                ],
+                            ),
+                        ),
+                        (
+                            "target",
+                            manifest_layout(
+                                "output-target-camera",
+                                [
+                                    ("tag", ManifestValue::Tag("OUTPUT_TARGET_CAMERA")),
+                                    ("entity", ManifestValue::U64(13)),
+                                    ("incarnation", ManifestValue::U64(14)),
+                                ],
+                            ),
+                        ),
+                    ],
+                ),
+            ),
+            ("width", ManifestValue::U32(640)),
+            ("height", ManifestValue::U32(480)),
+            ("device_pixel_ratio", ManifestValue::F64(1.25)),
+            (
+                "generation",
+                manifest_layout(
+                    "presentation-identity",
+                    [
+                        ("host", ManifestValue::U64(15)),
+                        ("serial", ManifestValue::U64(16)),
+                    ],
+                ),
+            ),
+        ],
+    )
+}
+
+fn navigation_request_fixtures(covered: &mut BTreeSet<&'static str>) {
+    use ipp_core::systems::camera::CameraViewMotion;
+    let binding = crate::presentation::RootBinding {
+        output: crate::references::OutputReference {
+            world: crate::references::WorldReference {
+                id: 11,
+                incarnation: 12,
+            },
+            target: crate::references::OutputTarget::Camera {
+                entity: 13,
+                incarnation: 14,
+            },
+        },
+        viewport: ipp_core::WorldViewport {
+            width: 640,
+            height: 480,
+            device_pixel_ratio: 1.25,
+        },
+        generation: crate::presentation::PresentationIdentity {
+            host: 15,
+            serial: 16,
+        },
+    };
+    for historical in [false, true] {
+        let publication = historical.then_some(crate::presentation::PresentationIdentity {
+            host: 15,
+            serial: 17,
+        });
+        let source = || {
+            if historical {
+                ManifestValue::Some(Box::new(manifest_layout(
+                    "publication-reference",
+                    [
+                        ("host", ManifestValue::U64(15)),
+                        ("revision", ManifestValue::U64(17)),
+                    ],
+                )))
+            } else {
+                ManifestValue::None
+            }
+        };
+        for (kind, first, second, motion) in [
+            (
+                0,
+                0.25,
+                -0.5,
+                CameraViewMotion::Rotate {
+                    yaw: 0.25,
+                    pitch: -0.5,
+                },
+            ),
+            (
+                1,
+                -0.25,
+                0.5,
+                CameraViewMotion::Pan {
+                    x: -0.25,
+                    y: 0.5,
+                },
+            ),
+            (
+                2,
+                0.75,
+                0.0,
+                CameraViewMotion::Zoom {
+                    amount: 0.75,
+                },
+            ),
+        ] {
+            let fixture = ManifestFixture::new(
+                "request-camera-navigate",
+                [
+                    ("session", ManifestValue::U64(7)),
+                    ("request_id", ManifestValue::U64(37)),
+                    ("tag", ManifestValue::Tag("REQUEST_CAMERA_NAVIGATE")),
+                    ("binding", navigation_binding_fixture()),
+                    ("publication", source()),
+                    ("kind", ManifestValue::U32(kind)),
+                    ("first", ManifestValue::F32(first)),
+                    ("second", ManifestValue::F32(second)),
+                ],
+            );
+            let bytes = encode_manifest_fixture(&fixture, covered);
+            let decoded = decode_request(&bytes, 7).unwrap();
+            assert_eq!((decoded.session, decoded.request_id), (7, 37));
+            assert_eq!(
+                decoded.body,
+                RequestBody::CameraNavigate(crate::views::CameraNavigateRequest {
+                    binding,
+                    publication,
+                    motion
+                })
+            );
+            let mut malformed = bytes.clone();
+            let kind_offset = malformed.len() - 12;
+            malformed[kind_offset..kind_offset + 4].copy_from_slice(&3_u32.to_le_bytes());
+            assert!(matches!(
+                decode_request(&malformed, 7),
+                Err(ProtocolError::Malformed("camera motion"))
+            ));
+            assert!(decode_request(&bytes[..bytes.len() - 1], 7).is_err());
+        }
+        let fixture = ManifestFixture::new(
+            "request-geometry-pick",
+            [
+                ("session", ManifestValue::U64(7)),
+                ("request_id", ManifestValue::U64(38)),
+                ("tag", ManifestValue::Tag("REQUEST_GEOMETRY_PICK")),
+                (
+                    "view",
+                    manifest_layout(
+                        "view-bound",
+                        [
+                            ("tag", ManifestValue::Tag("VIEW_BOUND")),
+                            ("binding", navigation_binding_fixture()),
+                            ("publication", source()),
+                        ],
+                    ),
+                ),
+                ("x", ManifestValue::F32(0.25)),
+                ("y", ManifestValue::F32(0.75)),
+                ("include_view_plane", ManifestValue::Bool(true)),
+            ],
+        );
+        assert_eq!(
+            decode_request(&encode_manifest_fixture(&fixture, covered), 7)
+                .unwrap()
+                .body,
+            RequestBody::GeometryPickQuery(crate::views::GeometryPickQuery {
+                view: crate::views::ViewQueryTarget::BoundView {
+                    binding,
+                    publication
+                },
+                x: 0.25,
+                y: 0.75,
+                include_view_plane: true,
+            })
+        );
+    }
+}
+
 #[derive(Debug)]
 enum ManifestValue {
     Bool(bool),
@@ -70,6 +281,7 @@ fn manifest_tag_space(space: TagSpace) -> &'static str {
         TagSpace::HostRequest => "host-request",
         TagSpace::HostResponse => "host-response",
         TagSpace::WorldSelector => "world-selector",
+        TagSpace::OutputKind => "output-kind",
         TagSpace::AnimationTarget => "animation-target",
         TagSpace::PlaybackControl => "playback-control",
         TagSpace::PlaybackState => "playback-state",
@@ -78,16 +290,33 @@ fn manifest_tag_space(space: TagSpace) -> &'static str {
         TagSpace::AnimationTransitionStartTime => "animation-transition-start-time",
 
         TagSpace::Option => "option",
-        TagSpace::EntityOverlayMode => "entity-overlay-mode",
-        TagSpace::ComponentOverlayMode => "component-overlay-mode",
-        TagSpace::StateOverlayHandleKind => "state-overlay-handle-kind",
-        TagSpace::StateOverlayLifecycleReason => "state-overlay-lifecycle-reason",
         TagSpace::AssetResourceStatus => "resource-status",
         TagSpace::SnapshotValue => "snapshot-value",
         TagSpace::SnapshotReference => "snapshot-reference",
-        TagSpace::CameraMotion => "camera-motion",
+        TagSpace::ViewTarget => "view-target",
+        TagSpace::OperationEffect => "operation-effect",
+        TagSpace::AttachmentReceiptState => "attachment-receipt-state",
+        TagSpace::PresentationRequest => "presentation-request",
+        TagSpace::PresentationResponse => "presentation-response",
+        TagSpace::PresentationError => "presentation-error",
         TagSpace::GeometryPickOutcome => "geometry-pick-outcome",
         TagSpace::LifecycleObservation => "lifecycle-observation",
+        TagSpace::LifecycleWatchChange => "lifecycle-watch-change",
+        TagSpace::LifecycleWatchTarget => "lifecycle-watch-target",
+        TagSpace::LifecycleWatchRecord => "lifecycle-watch-record",
+        TagSpace::LifecycleMembershipResult => "lifecycle-membership-result",
+        TagSpace::LifecycleTargetLifetime => "lifecycle-target-lifetime",
+        TagSpace::LifecycleMembershipRejection => "lifecycle-membership-rejection",
+        TagSpace::LifecycleWatchKinds => "lifecycle-watch-kinds",
+        TagSpace::GuiPhysicalRequest => "gui-physical-request",
+        TagSpace::GuiPhysicalEvent => "gui-physical-event",
+        TagSpace::GuiPhysicalResponse => "gui-physical-response",
+        TagSpace::GuiPhysicalButton => "gui-physical-button",
+        TagSpace::GuiPhysicalKey => "gui-physical-key",
+        TagSpace::GuiNativeEdit => "gui-native-edit",
+        TagSpace::GuiPhysicalDisposition => "gui-physical-disposition",
+        TagSpace::GuiAction => "gui-action",
+        TagSpace::OutputTarget => "output-target",
     }
 }
 
@@ -178,9 +407,13 @@ fn encode_manifest_value(
             assert_eq!(nested.layout, target);
             bytes.extend_from_slice(&encode_manifest_fixture(nested, covered));
         }
-        (FieldEncoding::List, ManifestValue::List(values)) => {
+        (FieldEncoding::List | FieldEncoding::U8CountedList, ManifestValue::List(values)) => {
             assert!(values.len() <= limit as usize);
-            bytes.extend_from_slice(&(values.len() as u32).to_le_bytes());
+            if encoding == FieldEncoding::U8CountedList {
+                bytes.push(u8::try_from(values.len()).unwrap());
+            } else {
+                bytes.extend_from_slice(&(values.len() as u32).to_le_bytes());
+            }
             for value in values {
                 encode_manifest_nested(bytes, value, target, covered);
             }
@@ -258,6 +491,16 @@ fn manifest_reference_alias(alias: u32) -> ManifestValue {
     )
 }
 
+fn manifest_reference_symbol(symbol: &str) -> ManifestValue {
+    manifest_layout(
+        "reference-symbol",
+        [
+            ("tag", ManifestValue::Tag("REF_SYMBOL")),
+            ("symbol", ManifestValue::String(symbol.into())),
+        ],
+    )
+}
+
 fn manifest_reference_handle(handle: u64) -> ManifestValue {
     manifest_layout(
         "reference-handle",
@@ -265,6 +508,24 @@ fn manifest_reference_handle(handle: u64) -> ManifestValue {
             ("tag", ManifestValue::Tag("REF_HANDLE")),
             ("handle", ManifestValue::U64(handle)),
         ],
+    )
+}
+
+fn manifest_placement(
+    parent: Option<ManifestValue>,
+    before: Option<ManifestValue>,
+) -> ManifestValue {
+    let wrap = |reference: Option<ManifestValue>| {
+        reference.map_or(ManifestValue::None, |reference| {
+            ManifestValue::Some(Box::new(manifest_layout(
+                "reference-value",
+                [("value", reference)],
+            )))
+        })
+    };
+    manifest_layout(
+        "entity-placement",
+        [("parent", wrap(parent)), ("before", wrap(before))],
     )
 }
 
@@ -334,6 +595,14 @@ fn rust_request_decoder_conforms_to_every_enabled_manifest_branch() {
     };
     let writes = vec![
         FieldWrite {
+            offset: 101,
+            value: FieldValue::World(None),
+        },
+        FieldWrite {
+            offset: 102,
+            value: FieldValue::Output(None),
+        },
+        FieldWrite {
             offset: 88,
             value: FieldValue::Dynamic(ipp_core::DynamicValue::I32(-3)),
         },
@@ -375,6 +644,14 @@ fn rust_request_decoder_conforms_to_every_enabled_manifest_branch() {
         },
     ];
     let encoded_writes = vec![
+        manifest_field(
+            101,
+            manifest_typed_value("value-world", "VALUE_WORLD", ManifestValue::None),
+        ),
+        manifest_field(
+            102,
+            manifest_typed_value("value-output", "VALUE_OUTPUT", ManifestValue::None),
+        ),
         manifest_field(
             88,
             manifest_typed_value(
@@ -452,6 +729,7 @@ fn rust_request_decoder_conforms_to_every_enabled_manifest_branch() {
                     "metadata",
                     manifest_metadata(Some("oracle"), &["first", "second"]),
                 ),
+                ("adopt", ManifestValue::Bool(false)),
             ],
         ),
         manifest_command(
@@ -474,6 +752,7 @@ fn rust_request_decoder_conforms_to_every_enabled_manifest_branch() {
                 ("entity", manifest_reference_alias(31)),
                 ("component", ManifestValue::U16(321)),
                 ("fields", ManifestValue::List(encoded_writes)),
+                ("adopt", ManifestValue::Bool(false)),
             ],
         ),
         manifest_command(
@@ -503,12 +782,32 @@ fn rust_request_decoder_conforms_to_every_enabled_manifest_branch() {
                 ("component", ManifestValue::U16(323)),
             ],
         ),
+        manifest_command(
+            "command-place-entity",
+            "COMMAND_PLACE_ENTITY",
+            [
+                ("entity", manifest_reference_alias(31)),
+                (
+                    "placement",
+                    manifest_placement(
+                        Some(manifest_reference_handle(handle_bits)),
+                        Some(manifest_reference_symbol("sibling")),
+                    ),
+                ),
+            ],
+        ),
+        manifest_command(
+            "command-delete-subtree",
+            "COMMAND_DELETE_SUBTREE",
+            [("root", manifest_reference_alias(31))],
+        ),
     ];
     #[allow(unused_mut)]
     let mut operations = vec![
         Command::Create {
             alias: 1,
             metadata: metadata.clone(),
+            adopt: false,
         },
         Command::Delete {
             entity: EntityRef::Handle(handle),
@@ -521,6 +820,7 @@ fn rust_request_decoder_conforms_to_every_enabled_manifest_branch() {
             entity: EntityRef::Alias(31),
             component: 321,
             fields: writes,
+            adopt: false,
         },
         Command::SetField {
             entity: EntityRef::Handle(handle),
@@ -534,150 +834,100 @@ fn rust_request_decoder_conforms_to_every_enabled_manifest_branch() {
             entity: EntityRef::Alias(31),
             component: 323,
         },
+        Command::PlaceEntity {
+            entity: EntityRef::Alias(31),
+            placement: ipp_core::EntityPlacementRef {
+                parent: Some(EntityRef::Handle(handle)),
+                before: Some(EntityRef::Symbol("sibling".into())),
+            },
+        },
+        Command::DeleteSubtree {
+            root: EntityRef::Alias(31),
+        },
     ];
 
-    {
-        encoded_operations.extend([
-            manifest_command(
-                "command-create-state-overlay-owner",
-                "COMMAND_CREATE_STATE_OVERLAY_OWNER",
-                [("alias", ManifestValue::U32(2))],
-            ),
-            manifest_command(
-                "command-release-state-overlay-owner",
-                "COMMAND_RELEASE_STATE_OVERLAY_OWNER",
-                [("owner", manifest_reference_handle(51))],
-            ),
-            manifest_command(
-                "command-attach-entity-overlay-binding",
-                "COMMAND_ATTACH_ENTITY_OVERLAY_BINDING",
-                [
-                    ("owner", manifest_reference_alias(32)),
-                    ("alias", ManifestValue::U32(3)),
-                    ("symbolic_id", ManifestValue::String("owned".into())),
-                    ("mode", ManifestValue::Tag("ENTITY_OVERLAY_MODE_OWNED")),
-                ],
-            ),
-            manifest_command(
-                "command-attach-entity-overlay-binding",
-                "COMMAND_ATTACH_ENTITY_OVERLAY_BINDING",
-                [
-                    ("owner", manifest_reference_handle(52)),
-                    ("alias", ManifestValue::U32(4)),
-                    ("symbolic_id", ManifestValue::String("bound".into())),
-                    ("mode", ManifestValue::Tag("ENTITY_OVERLAY_MODE_BOUND")),
-                ],
-            ),
-            manifest_command(
-                "command-release-entity-overlay-binding",
-                "COMMAND_RELEASE_ENTITY_OVERLAY_BINDING",
-                [
-                    ("owner", manifest_reference_alias(33)),
-                    ("binding", manifest_reference_handle(53)),
-                ],
-            ),
-        ]);
-        for (mode_name, alias, mode) in [
-            (
-                "COMPONENT_OVERLAY_MODE_AUTO",
-                10,
-                ipp_core::ComponentOverlayMode::Auto,
-            ),
-            (
-                "COMPONENT_OVERLAY_MODE_BOUND",
-                11,
-                ipp_core::ComponentOverlayMode::Bound,
-            ),
-            (
-                "COMPONENT_OVERLAY_MODE_OWNED",
-                12,
-                ipp_core::ComponentOverlayMode::Owned,
-            ),
-        ] {
-            encoded_operations.push(manifest_command(
-                "command-attach-component-state-overlay",
-                "COMMAND_ATTACH_COMPONENT_STATE_OVERLAY",
-                [
-                    ("owner", manifest_reference_alias(34)),
-                    ("binding", manifest_reference_handle(54)),
-                    ("alias", ManifestValue::U32(alias)),
-                    ("component", ManifestValue::U16(330 + alias as u16)),
-                    ("mode", ManifestValue::Tag(mode_name)),
-                    ("fields", ManifestValue::List(Vec::new())),
-                ],
-            ));
-            operations.push(Command::AttachComponentStateOverlay {
-                owner: ipp_core::StateOverlayRef::Alias(34),
-                binding: ipp_core::StateOverlayRef::Handle(54),
-                alias,
-                component: 330 + alias as u16,
-                mode,
-                fields: Vec::new(),
-            });
-        }
-        encoded_operations.extend([
-            manifest_command(
-                "command-update-component-state-overlay",
-                "COMMAND_UPDATE_COMPONENT_STATE_OVERLAY",
-                [
-                    ("owner", manifest_reference_handle(55)),
-                    ("overlay", manifest_reference_alias(35)),
-                    ("fields", ManifestValue::List(Vec::new())),
-                    (
-                        "clear",
-                        ManifestValue::List(vec![ManifestValue::U32(71), ManifestValue::U32(72)]),
-                    ),
-                ],
-            ),
-            manifest_command(
-                "command-release-component-state-overlay",
-                "COMMAND_RELEASE_COMPONENT_STATE_OVERLAY",
-                [
-                    ("owner", manifest_reference_alias(36)),
-                    ("overlay", manifest_reference_handle(56)),
-                ],
-            ),
-        ]);
-        operations.splice(
-            6..6,
+    // Adoption, symbolic references and compare-and-set.
+    encoded_operations.extend([
+        manifest_command(
+            "command-create",
+            "COMMAND_CREATE",
             [
-                Command::CreateStateOverlayOwner {
-                    alias: 2,
-                },
-                Command::ReleaseStateOverlayOwner {
-                    owner: ipp_core::StateOverlayRef::Handle(51),
-                },
-                Command::AttachEntityOverlayBinding {
-                    owner: ipp_core::StateOverlayRef::Alias(32),
-                    alias: 3,
-                    symbolic_id: "owned".into(),
-                    mode: ipp_core::EntityOverlayMode::Owned,
-                },
-                Command::AttachEntityOverlayBinding {
-                    owner: ipp_core::StateOverlayRef::Handle(52),
-                    alias: 4,
-                    symbolic_id: "bound".into(),
-                    mode: ipp_core::EntityOverlayMode::Bound,
-                },
-                Command::ReleaseEntityOverlayBinding {
-                    owner: ipp_core::StateOverlayRef::Alias(33),
-                    binding: ipp_core::StateOverlayRef::Handle(53),
-                },
+                ("alias", ManifestValue::U32(2)),
+                ("metadata", manifest_metadata(Some("adopted"), &[])),
+                ("adopt", ManifestValue::Bool(true)),
             ],
-        );
-        operations.extend([
-            Command::UpdateComponentStateOverlay {
-                owner: ipp_core::StateOverlayRef::Handle(55),
-                overlay: ipp_core::StateOverlayRef::Alias(35),
-                fields: Vec::new(),
-                clear: vec![71, 72],
+        ),
+        manifest_command(
+            "command-insert",
+            "COMMAND_INSERT",
+            [
+                ("entity", manifest_reference_symbol("adopted")),
+                ("component", ManifestValue::U16(324)),
+                ("fields", ManifestValue::List(Vec::new())),
+                ("adopt", ManifestValue::Bool(true)),
+            ],
+        ),
+        manifest_command(
+            "command-set-field-if",
+            "COMMAND_SET_FIELD_IF",
+            [
+                ("entity", manifest_reference_symbol("adopted")),
+                ("component", ManifestValue::U16(325)),
+                (
+                    "field",
+                    manifest_field(
+                        12,
+                        manifest_typed_value(
+                            "value-string",
+                            "VALUE_STRING",
+                            ManifestValue::String("next".into()),
+                        ),
+                    ),
+                ),
+                (
+                    "expected",
+                    manifest_typed_value(
+                        "value-string",
+                        "VALUE_STRING",
+                        ManifestValue::String("current".into()),
+                    ),
+                ),
+            ],
+        ),
+        manifest_command(
+            "command-delete",
+            "COMMAND_DELETE",
+            [("entity", manifest_reference_symbol("retired"))],
+        ),
+    ]);
+    operations.extend([
+        Command::Create {
+            alias: 2,
+            metadata: EntityMetadata {
+                symbolic_id: Some("adopted".into()),
+                classes: Vec::new(),
             },
-            Command::ReleaseComponentStateOverlay {
-                owner: ipp_core::StateOverlayRef::Alias(36),
-                overlay: ipp_core::StateOverlayRef::Handle(56),
+            adopt: true,
+        },
+        Command::InsertComponent {
+            entity: EntityRef::Symbol("adopted".into()),
+            component: 324,
+            fields: Vec::new(),
+            adopt: true,
+        },
+        Command::set_field_if(
+            EntityRef::Symbol("adopted".into()),
+            325,
+            FieldWrite {
+                offset: 12,
+                value: FieldValue::String("next".into()),
             },
-        ]);
-    }
+            FieldValue::String("current".into()),
+        ),
+        Command::Delete {
+            entity: EntityRef::Symbol("retired".into()),
+        },
+    ]);
 
     encoded_operations.push(manifest_command(
         "command-set-dynamic-property",
@@ -733,50 +983,118 @@ fn rust_request_decoder_conforms_to_every_enabled_manifest_branch() {
         component: 20,
         name: "old".into(),
     });
+    #[cfg(feature = "gui")]
     {
-        encoded_operations.push(manifest_command(
-            "command-update-dynamic-component-state-overlay",
-            "COMMAND_UPDATE_DYNAMIC_COMPONENT_STATE_OVERLAY",
-            [
-                ("owner", manifest_reference_handle(51)),
-                ("overlay", manifest_reference_handle(55)),
-                (
-                    "properties",
-                    ManifestValue::List(vec![manifest_layout(
-                        "dynamic-property-write",
-                        [
-                            ("name", ManifestValue::String("amount".into())),
-                            (
-                                "value",
-                                ManifestValue::Bytes(ipp_core::DynamicValue::F32(0.5).encode()),
-                            ),
-                        ],
-                    )]),
-                ),
-                (
-                    "clear",
-                    ManifestValue::List(vec![manifest_layout(
-                        "dynamic-property-name",
-                        [("name", ManifestValue::String("old".into()))],
-                    )]),
-                ),
-            ],
-        ));
-        operations.push(Command::UpdateDynamicComponentStateOverlay {
-            owner: ipp_core::StateOverlayRef::Handle(51),
-            overlay: ipp_core::StateOverlayRef::Handle(55),
-            properties: vec![("amount".into(), ipp_core::DynamicValue::F32(0.5))],
-            clear: vec!["old".into()],
-        });
-    }
+        use ipp_core::systems::gui::local::GuiLocalAction;
 
+        let vector = |x: f32, y: f32| {
+            manifest_layout(
+                "gui-input-vector",
+                [("x", ManifestValue::F32(x)), ("y", ManifestValue::F32(y))],
+            )
+        };
+        for (layout, tag, values, action) in [
+            (
+                "gui-action-press",
+                "GUI_ACTION_PRESS",
+                vec![],
+                GuiLocalAction::Press,
+            ),
+            (
+                "gui-action-toggle",
+                "GUI_ACTION_TOGGLE",
+                vec![],
+                GuiLocalAction::Toggle,
+            ),
+            (
+                "gui-action-set-scalar",
+                "GUI_ACTION_SET_SCALAR",
+                vec![("value", ManifestValue::F32(0.5))],
+                GuiLocalAction::SetScalar(0.5),
+            ),
+            (
+                "gui-action-set-text",
+                "GUI_ACTION_SET_TEXT",
+                vec![("text", ManifestValue::String("typed".into()))],
+                GuiLocalAction::SetText("typed".into()),
+            ),
+            (
+                "gui-action-focus",
+                "GUI_ACTION_FOCUS",
+                vec![],
+                GuiLocalAction::Focus,
+            ),
+            (
+                "gui-action-blur",
+                "GUI_ACTION_BLUR",
+                vec![],
+                GuiLocalAction::Blur,
+            ),
+            (
+                "gui-action-submit",
+                "GUI_ACTION_SUBMIT",
+                vec![],
+                GuiLocalAction::Submit,
+            ),
+            (
+                "gui-action-scroll-to",
+                "GUI_ACTION_SCROLL_TO",
+                vec![("offset", vector(12.0, 34.0))],
+                GuiLocalAction::ScrollTo([12.0, 34.0]),
+            ),
+            (
+                "gui-action-scroll-by",
+                "GUI_ACTION_SCROLL_BY",
+                vec![("delta", vector(-12.0, 34.0))],
+                GuiLocalAction::ScrollBy([-12.0, 34.0]),
+            ),
+            (
+                "gui-action-scroll-to-index",
+                "GUI_ACTION_SCROLL_TO_INDEX",
+                vec![
+                    ("index", ManifestValue::U32(40)),
+                    ("offset", ManifestValue::F32(2.0)),
+                ],
+                GuiLocalAction::ScrollToIndex {
+                    index: 40,
+                    offset: 2.0,
+                },
+            ),
+        ] {
+            encoded_operations.push(manifest_command(
+                "command-gui-action",
+                "COMMAND_GUI_ACTION",
+                [
+                    ("entity", manifest_reference_handle(handle_bits)),
+                    ("component", ManifestValue::U16(38)),
+                    ("incarnation", ManifestValue::U64(9)),
+                    (
+                        "action",
+                        manifest_layout(
+                            layout,
+                            std::iter::once(("tag", ManifestValue::Tag(tag))).chain(values),
+                        ),
+                    ),
+                ],
+            ));
+            operations.push(Command::GuiAction {
+                target: ipp_core::GuiActionTarget {
+                    entity: EntityRef::Handle(EntityId::from_bits(handle_bits)),
+                    component: 38,
+                    incarnation: 9,
+                },
+                action,
+            });
+        }
+    }
     let fixture = ManifestFixture::new(
-        "request-batch",
+        "request-submit-batch",
         [
             ("session", ManifestValue::U64(7)),
             ("request_id", ManifestValue::U64(17)),
-            ("tag", ManifestValue::Tag("REQUEST_BATCH")),
-            ("batch_id", ManifestValue::U64(27)),
+            ("tag", ManifestValue::Tag("REQUEST_SUBMIT_BATCH")),
+            ("batch_id", ManifestValue::U32(27)),
+            ("last", ManifestValue::Bool(true)),
             ("operations", ManifestValue::List(encoded_operations)),
         ],
     );
@@ -787,49 +1105,35 @@ fn rust_request_decoder_conforms_to_every_enabled_manifest_branch() {
         Request {
             session: 7,
             request_id: 17,
-            body: RequestBody::Batch(Batch {
-                id: 27,
+            body: RequestBody::SubmitBatch(crate::BatchPage {
+                batch_id: 27,
+                last: true,
                 operations
             }),
         }
     );
 
-    for (layout, tag, body, extra) in [
-        (
-            "request-begin-batch",
-            "REQUEST_BEGIN_BATCH",
-            RequestBody::BeginBatch,
-            vec![],
-        ),
-        (
-            "request-end-batch",
-            "REQUEST_END_BATCH",
-            RequestBody::EndBatch(27),
-            vec![("batch_id", ManifestValue::U64(27))],
-        ),
-        (
-            "request-batch",
-            "REQUEST_BATCH_CHUNK",
-            RequestBody::BatchChunk(Batch {
-                id: 27,
-                operations: vec![],
-            }),
-            vec![
-                ("batch_id", ManifestValue::U64(27)),
-                ("operations", ManifestValue::List(vec![])),
-            ],
-        ),
-    ] {
-        let values = [
+    let page = ManifestFixture::new(
+        "request-submit-batch",
+        [
             ("session", ManifestValue::U64(7)),
-            ("request_id", ManifestValue::U64(17)),
-            ("tag", ManifestValue::Tag(tag)),
-        ]
-        .into_iter()
-        .chain(extra);
-        let bytes = encode_manifest_fixture(&ManifestFixture::new(layout, values), &mut covered);
-        assert_eq!(decode_request(&bytes, 7).unwrap().body, body);
-    }
+            ("request_id", ManifestValue::U64(0)),
+            ("tag", ManifestValue::Tag("REQUEST_SUBMIT_BATCH")),
+            ("batch_id", ManifestValue::U32(u32::MAX)),
+            ("last", ManifestValue::Bool(false)),
+            ("operations", ManifestValue::List(vec![])),
+        ],
+    );
+    assert_eq!(
+        decode_request(&encode_manifest_fixture(&page, &mut covered), 7)
+            .unwrap()
+            .body,
+        RequestBody::SubmitBatch(crate::BatchPage {
+            batch_id: u32::MAX,
+            last: false,
+            operations: vec![],
+        })
+    );
 
     for (collection, tag) in [
         (0, "INSPECT_SUMMARY"),
@@ -837,6 +1141,13 @@ fn rust_request_decoder_conforms_to_every_enabled_manifest_branch() {
         (2, "INSPECT_RESOURCES"),
         (3, "INSPECT_CONTROLLERS"),
         (4, "INSPECT_RENDER_DIAGNOSTICS"),
+        (5, "INSPECT_ENTITY_TREE"),
+        #[cfg(feature = "gui")]
+        (6, "INSPECT_GUI_FOCUS"),
+        #[cfg(feature = "gui")]
+        (7, "INSPECT_GUI_POINTERS"),
+        #[cfg(feature = "surfaces")]
+        (8, "INSPECT_CANVAS"),
     ] {
         let inspect = ManifestFixture::new(
             "request-inspect",
@@ -848,6 +1159,7 @@ fn rust_request_decoder_conforms_to_every_enabled_manifest_branch() {
                 ("after", ManifestValue::U64(0)),
                 ("target", ManifestValue::U64(0)),
                 ("limit", ManifestValue::U16(256)),
+                ("max_depth", ManifestValue::U16(0)),
             ],
         );
         assert_eq!(
@@ -860,6 +1172,32 @@ fn rust_request_decoder_conforms_to_every_enabled_manifest_branch() {
             })
         );
     }
+
+    let tree = ManifestFixture::new(
+        "request-inspect",
+        [
+            ("session", ManifestValue::U64(7)),
+            ("request_id", ManifestValue::U64(19)),
+            ("tag", ManifestValue::Tag("REQUEST_INSPECT")),
+            ("collection", ManifestValue::Tag("INSPECT_ENTITY_TREE")),
+            ("after", ManifestValue::U64(42)),
+            ("target", ManifestValue::U64(41)),
+            ("limit", ManifestValue::U16(1)),
+            ("max_depth", ManifestValue::U16(2)),
+        ],
+    );
+    assert_eq!(
+        decode_request(&encode_manifest_fixture(&tree, &mut covered), 7)
+            .unwrap()
+            .body,
+        RequestBody::Inspect(crate::InspectionQuery {
+            collection: 5,
+            after: 42,
+            target: 41,
+            limit: 1,
+            max_depth: 2,
+        })
+    );
 
     {
         use ipp_core::systems::animation::*;
@@ -1010,108 +1348,8 @@ fn rust_request_decoder_conforms_to_every_enabled_manifest_branch() {
             }
         );
     }
-    {
-        let request = ManifestFixture::new(
-            "request-camera-activate",
-            [
-                ("session", ManifestValue::U64(7)),
-                ("request_id", ManifestValue::U64(0)),
-                ("tag", ManifestValue::Tag("REQUEST_CAMERA_ACTIVATE")),
-                ("entity", ManifestValue::U64(handle_bits)),
-            ],
-        );
-        assert_eq!(
-            decode_request(&encode_manifest_fixture(&request, &mut covered), 7)
-                .unwrap()
-                .body,
-            RequestBody::CameraActivateCommand {
-                entity: handle
-            },
-        );
-    }
-    for (motion, name, fields) in [
-        (
-            ipp_core::CameraMotion::Rotate {
-                yaw: 0.25,
-                pitch: -0.5,
-            },
-            "camera-motion-rotate",
-            vec![
-                ("tag", ManifestValue::Tag("CAMERA_MOTION_ROTATE")),
-                ("yaw", ManifestValue::F32(0.25)),
-                ("pitch", ManifestValue::F32(-0.5)),
-            ],
-        ),
-        (
-            ipp_core::CameraMotion::Pan {
-                x: 0.25,
-                y: -0.5,
-                width: 640,
-                height: 480,
-            },
-            "camera-motion-pan",
-            vec![
-                ("tag", ManifestValue::Tag("CAMERA_MOTION_PAN")),
-                ("x", ManifestValue::F32(0.25)),
-                ("y", ManifestValue::F32(-0.5)),
-                ("width", ManifestValue::U32(640)),
-                ("height", ManifestValue::U32(480)),
-            ],
-        ),
-        (
-            ipp_core::CameraMotion::Zoom {
-                amount: 0.25,
-            },
-            "camera-motion-zoom",
-            vec![
-                ("tag", ManifestValue::Tag("CAMERA_MOTION_ZOOM")),
-                ("amount", ManifestValue::F32(0.25)),
-            ],
-        ),
-    ] {
-        let request = ManifestFixture::new(
-            "request-camera-navigate",
-            [
-                ("session", ManifestValue::U64(7)),
-                ("request_id", ManifestValue::U64(0)),
-                ("tag", ManifestValue::Tag("REQUEST_CAMERA_NAVIGATE")),
-                ("motion", manifest_layout(name, fields)),
-            ],
-        );
-        assert_eq!(
-            decode_request(&encode_manifest_fixture(&request, &mut covered), 7)
-                .unwrap()
-                .body,
-            RequestBody::CameraNavigateCommand(motion)
-        );
-    }
-    {
-        let request = ManifestFixture::new(
-            "request-geometry-pick",
-            [
-                ("session", ManifestValue::U64(7)),
-                ("request_id", ManifestValue::U64(21)),
-                ("tag", ManifestValue::Tag("REQUEST_GEOMETRY_PICK")),
-                ("x", ManifestValue::F32(0.25)),
-                ("y", ManifestValue::F32(0.75)),
-                ("width", ManifestValue::U32(640)),
-                ("height", ManifestValue::U32(480)),
-                ("include_view_plane", ManifestValue::Bool(false)),
-            ],
-        );
-        assert_eq!(
-            decode_request(&encode_manifest_fixture(&request, &mut covered), 7)
-                .unwrap()
-                .body,
-            RequestBody::GeometryPickQuery(ipp_core::GeometryPickQuery {
-                x: 0.25,
-                y: 0.75,
-                width: 640,
-                height: 480,
-                include_view_plane: false,
-            }),
-        );
-    }
+    view_tests::requests(&mut covered);
+    navigation_request_fixtures(&mut covered);
 
     for patch in render_state_patches() {
         let request = ManifestFixture::new(
@@ -1131,220 +1369,115 @@ fn rust_request_decoder_conforms_to_every_enabled_manifest_branch() {
         );
     }
 
-    {
-        let plane = ipp_core::WorldPlane {
-            point: [1.0, 2.0, 3.0],
-            normal: [0.0, 0.0, -1.0],
-        };
+    #[cfg(feature = "surfaces")]
+    for (mask, extent, units_per_metre) in [
+        (1, Some([640.0, 360.0]), None),
+        (2, None, Some(400.0)),
+        (3, Some([320.0, 180.0]), Some(200.0)),
+    ] {
+        let update = [
+            ("mask", ManifestValue::U16(mask)),
+            (
+                "extent",
+                extent.map_or(ManifestValue::None, |[width, height]| {
+                    ManifestValue::Some(Box::new(manifest_layout(
+                        "canvas-extent",
+                        [
+                            ("width", ManifestValue::F32(width)),
+                            ("height", ManifestValue::F32(height)),
+                        ],
+                    )))
+                }),
+            ),
+            (
+                "density",
+                units_per_metre.map_or(ManifestValue::None, |density| {
+                    ManifestValue::Some(Box::new(manifest_layout(
+                        "canvas-density",
+                        [("units_per_metre", ManifestValue::F32(density))],
+                    )))
+                }),
+            ),
+        ];
         let request = ManifestFixture::new(
-            "request-camera-project",
+            "request-canvas-state-update",
             [
                 ("session", ManifestValue::U64(7)),
-                ("request_id", ManifestValue::U64(22)),
-                ("tag", ManifestValue::Tag("REQUEST_CAMERA_PROJECT")),
-                ("x", ManifestValue::F32(1.25)),
-                ("y", ManifestValue::F32(-0.5)),
-                ("width", ManifestValue::U32(640)),
-                ("height", ManifestValue::U32(480)),
-                ("plane", manifest_plane(plane)),
+                ("request_id", ManifestValue::U64(0)),
+                ("tag", ManifestValue::Tag("REQUEST_CANVAS_STATE_UPDATE")),
+                ("update", manifest_layout("canvas-state-update", update)),
             ],
         );
         assert_eq!(
             decode_request(&encode_manifest_fixture(&request, &mut covered), 7)
                 .unwrap()
                 .body,
-            RequestBody::CameraProjectQuery(ipp_core::CameraProjectQuery {
-                x: 1.25,
-                y: -0.5,
-                width: 640,
-                height: 480,
-                plane
+            RequestBody::CanvasStateUpdateCommand(ipp_core::CanvasStateUpdate {
+                extent,
+                units_per_metre,
             })
         );
     }
 
     lifecycle_request_fixtures(&mut covered);
-
-    #[cfg(feature = "surfaces")]
-    {
-        let mut edit = vec![1, 3];
-        edit.extend(42u64.to_le_bytes());
-        edit.extend(9u32.to_le_bytes());
-        let request = ManifestFixture::new(
-            "request-surface",
-            [
-                ("session", ManifestValue::U64(7)),
-                ("request_id", ManifestValue::U64(1)),
-                ("tag", ManifestValue::Tag("REQUEST_SURFACE")),
-                ("edit", ManifestValue::Bytes(edit)),
-            ],
-        );
-        assert_eq!(
-            decode_request(&encode_manifest_fixture(&request, &mut covered), 7)
-                .unwrap()
-                .body,
-            RequestBody::SurfaceCommand(ipp_core::systems::surface::SurfaceCommand::Remove {
-                entity: EntityId::from_bits(42),
-                id: ipp_core::systems::surface::SurfaceItemId(9),
-            }),
-        );
-    }
+    lifecycle_watch_tests::requests(&mut covered);
+    attachment_tests::requests(&mut covered);
 
     #[cfg(feature = "gui")]
     {
-        let mut edit = vec![5];
-        edit.extend(1u32.to_le_bytes());
-        edit.push(4);
-        edit.extend(7u64.to_le_bytes());
-        edit.extend(42u64.to_le_bytes());
-        edit.extend(3u64.to_le_bytes());
-        edit.extend(9u32.to_le_bytes());
-        let request = ManifestFixture::new(
-            "request-gui",
-            [
-                ("session", ManifestValue::U64(7)),
-                ("request_id", ManifestValue::U64(1)),
-                ("tag", ManifestValue::Tag("REQUEST_GUI")),
-                (
-                    "batch_id",
-                    ManifestValue::Some(Box::new(ManifestValue::U64(99))),
-                ),
-                ("edits", ManifestValue::Bytes(edit)),
-            ],
-        );
-        assert_eq!(
-            decode_request(&encode_manifest_fixture(&request, &mut covered), 7)
-                .unwrap()
-                .body,
-            RequestBody::GuiCommands {
-                batch_id: Some(99),
-                commands: vec![ipp_core::systems::gui::GuiCommand::RemoveNode {
-                    handle: ipp_core::systems::gui::GuiNodeHandle::new(
-                        7,
-                        EntityId::from_bits(42),
-                        3,
-                        ipp_core::systems::gui::GuiNodeId(9),
-                    ),
-                }],
-            },
-        );
-
-        let mut query = vec![1];
-        query.extend(42u64.to_le_bytes());
-        query.push(1);
-        query.extend(9u32.to_le_bytes());
-        query.extend(10u32.to_le_bytes());
-        query.extend(50u32.to_le_bytes());
-        let request = ManifestFixture::new(
-            "request-gui-inspect",
-            [
-                ("session", ManifestValue::U64(7)),
-                ("request_id", ManifestValue::U64(1)),
-                ("tag", ManifestValue::Tag("REQUEST_GUI_INSPECT")),
-                ("query", ManifestValue::Bytes(query)),
-            ],
-        );
-        assert_eq!(
-            decode_request(&encode_manifest_fixture(&request, &mut covered), 7)
-                .unwrap()
-                .body,
-            RequestBody::GuiInspect(ipp_core::systems::gui::GuiInspectQuery {
-                entity: EntityId::from_bits(42),
-                node_id: Some(ipp_core::systems::gui::GuiNodeId(9)),
-                max_depth: 10,
-                limit: 50,
-            }),
-        );
-
-        let mut input = vec![1, 1];
-        input.extend(5u32.to_le_bytes());
-        input.push(1);
-        input.extend(42u64.to_le_bytes());
-        input.extend(1.5f32.to_le_bytes());
-        input.extend(2.5f32.to_le_bytes());
-        input.push(0);
-        input.extend(1u32.to_le_bytes());
-        input.extend(43u64.to_le_bytes());
-        input.extend(0.5f32.to_le_bytes());
-        input.push(0);
-        let request = ManifestFixture::new(
-            "request-gui-input",
-            [
-                ("session", ManifestValue::U64(7)),
-                ("request_id", ManifestValue::U64(1)),
-                ("tag", ManifestValue::Tag("REQUEST_GUI_INPUT")),
-                ("input", ManifestValue::Bytes(input)),
-            ],
-        );
-        assert_eq!(
-            decode_request(&encode_manifest_fixture(&request, &mut covered), 7)
-                .unwrap()
-                .body,
-            RequestBody::GuiInput(Box::new(ipp_core::GuiInputCommand::PointerDown {
-                pointer: 5,
-                panel: Some(EntityId::from_bits(42)),
-                position: [1.5, 2.5],
-                button: ipp_core::GuiPointerButton::Primary,
-                blockers: vec![ipp_core::GuiBlockerHit {
-                    entity: EntityId::from_bits(43),
-                    distance: 0.5,
-                }],
-                panel_distance: None,
-            })),
-        );
-
-        let mut snapshot_query = vec![1];
-        snapshot_query.extend(42u64.to_le_bytes());
-        snapshot_query.extend(10u32.to_le_bytes());
-        snapshot_query.extend(50u32.to_le_bytes());
-        let request = ManifestFixture::new(
-            "request-gui-semantic-snapshot",
-            [
-                ("session", ManifestValue::U64(7)),
-                ("request_id", ManifestValue::U64(1)),
-                ("tag", ManifestValue::Tag("REQUEST_GUI_SEMANTIC_SNAPSHOT")),
-                ("query", ManifestValue::Bytes(snapshot_query)),
-            ],
-        );
-        assert_eq!(
-            decode_request(&encode_manifest_fixture(&request, &mut covered), 7)
-                .unwrap()
-                .body,
-            RequestBody::GuiSemanticSnapshot(ipp_core::GuiSemanticSnapshotQuery {
-                entity: EntityId::from_bits(42),
-                max_depth: 10,
-                limit: 50,
-            }),
-        );
-
-        let mut semantic_action = vec![2];
-        semantic_action.extend(42u64.to_le_bytes());
-        semantic_action.extend(3u64.to_le_bytes());
-        semantic_action.extend(9u32.to_le_bytes());
-        semantic_action.extend(2u32.to_le_bytes());
-        semantic_action.push(1);
-        let request = ManifestFixture::new(
-            "request-gui-semantic-action",
-            [
-                ("session", ManifestValue::U64(7)),
-                ("request_id", ManifestValue::U64(1)),
-                ("tag", ManifestValue::Tag("REQUEST_GUI_SEMANTIC_ACTION")),
-                ("action", ManifestValue::Bytes(semantic_action)),
-            ],
-        );
-        assert_eq!(
-            decode_request(&encode_manifest_fixture(&request, &mut covered), 7)
-                .unwrap()
-                .body,
-            RequestBody::GuiSemanticAction(Box::new(ipp_core::GuiSemanticActionRequest {
-                entity: EntityId::from_bits(42),
-                root_incarnation: 3,
-                node: ipp_core::GuiNodeId(9),
-                expected_revision: 2,
-                action: ipp_core::GuiSemanticAction::Toggle,
-            })),
-        );
+        let world = crate::references::WorldReference {
+            id: 1,
+            incarnation: 2,
+        };
+        let mut subscribe = vec![0];
+        subscribe.extend(1u64.to_le_bytes());
+        subscribe.extend(2u64.to_le_bytes());
+        subscribe.push(2);
+        let mut unsubscribe = vec![1];
+        unsubscribe.extend(1u64.to_le_bytes());
+        unsubscribe.extend(2u64.to_le_bytes());
+        unsubscribe.extend(3u64.to_le_bytes());
+        unsubscribe.extend(4u64.to_le_bytes());
+        for (control, expected) in [
+            (
+                subscribe,
+                crate::gui::GuiObservationRequest::Subscribe {
+                    world,
+                    classes: ipp_core::systems::gui::observations::GuiObservationClasses::All,
+                },
+            ),
+            (
+                unsubscribe,
+                crate::gui::GuiObservationRequest::Unsubscribe {
+                    world,
+                    subscription:
+                        ipp_core::systems::gui::observations::GuiObservationSubscriptionId {
+                            output: 3,
+                            generation: 4,
+                        },
+                },
+            ),
+        ] {
+            let fixture = ManifestFixture::new(
+                "request-gui-observation",
+                [
+                    ("session", ManifestValue::U64(7)),
+                    ("request_id", ManifestValue::U64(1)),
+                    ("tag", ManifestValue::Tag("REQUEST_GUI_OBSERVATION")),
+                    ("control", ManifestValue::Bytes(control)),
+                ],
+            );
+            assert_eq!(
+                decode_request(&encode_manifest_fixture(&fixture, &mut covered), 7)
+                    .unwrap()
+                    .body,
+                RequestBody::GuiObservation(expected)
+            );
+        }
     }
+
+    #[cfg(feature = "diagnostics")]
+    lifecycle_diagnostics_tests::requests(&mut covered);
 
     let expected = TAGS
         .iter()
@@ -1356,10 +1489,13 @@ fn rust_request_decoder_conforms_to_every_enabled_manifest_branch() {
                     | TagSpace::Command
                     | TagSpace::Reference
                     | TagSpace::Option
-                    | TagSpace::EntityOverlayMode
-                    | TagSpace::ComponentOverlayMode
-                    | TagSpace::CameraMotion
+                    | TagSpace::ViewTarget
+                    | TagSpace::OutputTarget
                     | TagSpace::InspectionCollection
+                    | TagSpace::LifecycleWatchChange
+                    | TagSpace::LifecycleWatchTarget
+                    | TagSpace::LifecycleWatchKinds
+                    | TagSpace::GuiAction
             )
         })
         .map(|tag| tag.name)
@@ -1383,52 +1519,29 @@ fn assert_manifest_response(
 #[test]
 fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
     let mut covered = BTreeSet::new();
-    for (layout, tag, body, request_id, extra) in [
-        (
-            "response-batch-identity",
-            "RESPONSE_BATCH_STARTED",
-            ResponseBody::BatchStarted(27),
-            17,
-            vec![],
-        ),
-        (
-            "response-batch-identity",
-            "RESPONSE_BATCH_FINISHED",
-            ResponseBody::BatchFinished(27),
-            18,
-            vec![],
-        ),
-        (
-            "response-batch-aborted",
-            "RESPONSE_BATCH_ABORTED",
-            ResponseBody::BatchAborted {
+    assert_manifest_response(
+        Response {
+            session: 7,
+            request_id: 0,
+            tick: 1,
+            body: ResponseBody::BatchAborted {
                 batch_id: 27,
                 message: "deadline".into(),
             },
-            0,
-            vec![("message", ManifestValue::String("deadline".into()))],
+        },
+        ManifestFixture::new(
+            "response-batch-aborted",
+            [
+                ("session", ManifestValue::U64(7)),
+                ("request_id", ManifestValue::U64(0)),
+                ("tick", ManifestValue::U64(1)),
+                ("tag", ManifestValue::Tag("RESPONSE_BATCH_ABORTED")),
+                ("batch_id", ManifestValue::U64(27)),
+                ("message", ManifestValue::String("deadline".into())),
+            ],
         ),
-    ] {
-        let values = [
-            ("session", ManifestValue::U64(7)),
-            ("request_id", ManifestValue::U64(request_id)),
-            ("tick", ManifestValue::U64(1)),
-            ("tag", ManifestValue::Tag(tag)),
-            ("batch_id", ManifestValue::U64(27)),
-        ]
-        .into_iter()
-        .chain(extra);
-        assert_manifest_response(
-            Response {
-                session: 7,
-                request_id,
-                tick: 1,
-                body,
-            },
-            ManifestFixture::new(layout, values),
-            &mut covered,
-        );
-    }
+        &mut covered,
+    );
 
     let entity = EntityId::from_bits(0x0000_0001_0000_0029);
 
@@ -1526,8 +1639,27 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
             ),
         ),
     ];
-    for (offset, value, expected) in resolved_values {
-        let mut writer = Writer(Vec::new());
+    for (offset, value, expected) in resolved_values.into_iter().chain([
+        (
+            101,
+            ResolvedValue::World(None),
+            manifest_typed_value(
+                "snapshot-value-world",
+                "SNAPSHOT_VALUE_WORLD",
+                ManifestValue::None,
+            ),
+        ),
+        (
+            102,
+            ResolvedValue::Output(None),
+            manifest_typed_value(
+                "snapshot-value-output",
+                "SNAPSHOT_VALUE_OUTPUT",
+                ManifestValue::None,
+            ),
+        ),
+    ]) {
+        let mut writer = Writer::new(Vec::new());
         writer.resolved_field(offset, value).unwrap();
         let ManifestValue::Layout(fixture) = manifest_snapshot_field(offset, expected) else {
             unreachable!()
@@ -1556,42 +1688,20 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
         ),
     ];
     success_values.push((
-        "stateOverlays",
+        "symbols",
         ManifestValue::List(vec![
             manifest_layout(
-                "state-overlay-alias",
+                "symbol-handle",
                 [
-                    ("alias", ManifestValue::U32(2)),
-                    ("id", ManifestValue::U64(51)),
-                    ("kind", ManifestValue::Tag("STATE_OVERLAY_KIND_OWNER")),
-                    ("entity", ManifestValue::None),
+                    ("symbol", ManifestValue::String("oracle".into())),
+                    ("handle", ManifestValue::U64(entity.to_bits())),
                 ],
             ),
             manifest_layout(
-                "state-overlay-alias",
+                "symbol-handle",
                 [
-                    ("alias", ManifestValue::U32(3)),
-                    ("id", ManifestValue::U64(52)),
-                    (
-                        "kind",
-                        ManifestValue::Tag("STATE_OVERLAY_KIND_ENTITY_BINDING"),
-                    ),
-                    (
-                        "entity",
-                        ManifestValue::Some(Box::new(ManifestValue::U64(entity.to_bits()))),
-                    ),
-                ],
-            ),
-            manifest_layout(
-                "state-overlay-alias",
-                [
-                    ("alias", ManifestValue::U32(4)),
-                    ("id", ManifestValue::U64(53)),
-                    ("kind", ManifestValue::Tag("STATE_OVERLAY_KIND_COMPONENT")),
-                    (
-                        "entity",
-                        ManifestValue::Some(Box::new(ManifestValue::U64(entity.to_bits()))),
-                    ),
+                    ("symbol", ManifestValue::String("peer".into())),
+                    ("handle", ManifestValue::U64(17)),
                 ],
             ),
         ]),
@@ -1605,6 +1715,7 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
             ("tick", ManifestValue::U64(37)),
             ("tag", ManifestValue::Tag("RESPONSE_BATCH")),
             ("outcome", success),
+            ("effects", ManifestValue::List(vec![])),
         ],
     );
     assert_manifest_response(
@@ -1612,30 +1723,18 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
             session: 7,
             request_id: 17,
             tick: 37,
-            body: ResponseBody::Batch(BatchOutcome {
-                batch_id: 27,
-                tick: 37,
-                result: Ok(vec![(1, entity)]),
-                state_overlays: vec![
-                    ipp_core::StateOverlayAlias {
-                        alias: 2,
-                        id: 51,
-                        kind: ipp_core::StateOverlayHandleKind::Owner,
-                        entity: None,
-                    },
-                    ipp_core::StateOverlayAlias {
-                        alias: 3,
-                        id: 52,
-                        kind: ipp_core::StateOverlayHandleKind::EntityOverlayBinding,
-                        entity: Some(entity),
-                    },
-                    ipp_core::StateOverlayAlias {
-                        alias: 4,
-                        id: 53,
-                        kind: ipp_core::StateOverlayHandleKind::ComponentStateOverlay,
-                        entity: Some(entity),
-                    },
-                ],
+            body: ResponseBody::Batch(crate::attachment_receipts::ReceiptBatchOutcome {
+                outcome: BatchOutcome {
+                    batch_id: 27,
+                    tick: 37,
+                    result: Ok(vec![(1, entity)]),
+                    effects: vec![],
+                    symbols: vec![
+                        ("oracle".into(), entity),
+                        ("peer".into(), EntityId::from_bits(17)),
+                    ],
+                },
+                effects: vec![],
             }),
         },
         success_fixture,
@@ -1697,7 +1796,16 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
                     ],
                 )]),
             ),
-            ("stateOverlays", ManifestValue::List(Vec::new())),
+            (
+                "symbols",
+                ManifestValue::List(vec![manifest_layout(
+                    "symbol-handle",
+                    [
+                        ("symbol", ManifestValue::String("failed".into())),
+                        ("handle", ManifestValue::U64(18)),
+                    ],
+                )]),
+            ),
         ],
     );
     assert_manifest_response(
@@ -1705,16 +1813,20 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
             session: 7,
             request_id: 18,
             tick: 38,
-            body: ResponseBody::Batch(BatchOutcome {
-                batch_id: 28,
-                tick: 38,
-                result: Err(ipp_core::BatchError {
-                    scope: ipp_core::BatchErrorScope::Operation,
-                    operation: Some(0x1234_5678),
-                    reason: ipp_core::ErrorReason::InvalidField,
-                    aliases: vec![(9, EntityId::from_bits(17))],
-                }),
-                state_overlays: Vec::new(),
+            body: ResponseBody::Batch(crate::attachment_receipts::ReceiptBatchOutcome {
+                outcome: BatchOutcome {
+                    batch_id: 28,
+                    tick: 38,
+                    result: Err(ipp_core::BatchError {
+                        scope: ipp_core::BatchErrorScope::Operation,
+                        operation: Some(0x1234_5678),
+                        reason: ipp_core::ErrorReason::InvalidField,
+                        aliases: vec![(9, EntityId::from_bits(17))],
+                    }),
+                    symbols: vec![("failed".into(), EntityId::from_bits(18))],
+                    effects: Vec::new(),
+                },
+                effects: vec![],
             }),
         },
         ManifestFixture::new(
@@ -1725,6 +1837,7 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
                 ("tick", ManifestValue::U64(38)),
                 ("tag", ManifestValue::Tag("RESPONSE_BATCH")),
                 ("outcome", failure),
+                ("effects", ManifestValue::List(vec![])),
             ],
         ),
         &mut covered,
@@ -1778,8 +1891,10 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
         [
             ("id", ManifestValue::U64(entity.to_bits())),
             ("metadata", manifest_metadata(None, &["inspected"])),
-            ("base", ManifestValue::List(vec![component])),
-            ("effective", ManifestValue::List(Vec::new())),
+            ("parent", ManifestValue::U64(0)),
+            ("order_low", ManifestValue::U64(1)),
+            ("order_high", ManifestValue::U64(0)),
+            ("components", ManifestValue::List(vec![component])),
         ],
     );
     {
@@ -1925,7 +2040,149 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
             ],
         )]),
     ));
+    // In GUI builds the GUI System query collections follow the controllers.
+    #[cfg(feature = "gui")]
+    let (gui_focus, gui_pointers) = {
+        use ipp_core::systems::gui::local::{
+            GuiEntityTarget, GuiFocusRecord, GuiInteractionFlags, GuiPointerRecord,
+        };
+        let mut host = ipp_core::HostRuntime::new();
+        let world = host.create_world(Default::default(), &[]).unwrap();
+        let world = host.world_ref(world).unwrap();
+        let target = GuiEntityTarget {
+            world,
+            entity,
+            component: ComponentValue::GUI_BUTTON,
+            incarnation: 9,
+        };
+        let manifest_target = || {
+            manifest_layout(
+                "gui-target",
+                [
+                    (
+                        "world",
+                        manifest_layout(
+                            "world-reference",
+                            [
+                                ("id", ManifestValue::U64(world.id().0)),
+                                ("incarnation", ManifestValue::U64(world.incarnation())),
+                            ],
+                        ),
+                    ),
+                    ("entity", ManifestValue::U64(entity.to_bits())),
+                    ("component", ManifestValue::U16(ComponentValue::GUI_BUTTON)),
+                    ("incarnation", ManifestValue::U64(9)),
+                ],
+            )
+        };
+        inspect_values.push((
+            "gui_focus",
+            ManifestValue::List(vec![manifest_layout(
+                "gui-focus",
+                [
+                    ("target", manifest_target()),
+                    ("visible", ManifestValue::Bool(true)),
+                ],
+            )]),
+        ));
+        inspect_values.push((
+            "gui_pointers",
+            ManifestValue::List(
+                [(3, true, false, true), (4, false, true, false)]
+                    .into_iter()
+                    .map(|(pointer, hovered, pressed, captured)| {
+                        manifest_layout(
+                            "gui-pointer",
+                            [
+                                ("target", manifest_target()),
+                                ("pointer", ManifestValue::U64(pointer)),
+                                ("hovered", ManifestValue::Bool(hovered)),
+                                ("pressed", ManifestValue::Bool(pressed)),
+                                ("captured", ManifestValue::Bool(captured)),
+                            ],
+                        )
+                    })
+                    .collect(),
+            ),
+        ));
+        (
+            vec![GuiFocusRecord {
+                target,
+                visible: true,
+            }],
+            [(3, true, false, true), (4, false, true, false)]
+                .into_iter()
+                .map(|(pointer, hovered, pressed, captured)| GuiPointerRecord {
+                    target,
+                    pointer,
+                    state: GuiInteractionFlags {
+                        hovered,
+                        pressed,
+                        captured,
+                    },
+                })
+                .collect::<Vec<_>>(),
+        )
+    };
+    // In Surface builds the Canvas System query record follows.
+    #[cfg(feature = "surfaces")]
+    let canvas = {
+        let extent = |width, height| {
+            manifest_layout(
+                "canvas-extent",
+                [
+                    ("width", ManifestValue::F32(width)),
+                    ("height", ManifestValue::F32(height)),
+                ],
+            )
+        };
+        inspect_values.push((
+            "canvas",
+            ManifestValue::Some(Box::new(manifest_layout(
+                "canvas-state-record",
+                [
+                    (
+                        "state",
+                        manifest_layout(
+                            "canvas-state",
+                            [
+                                ("extent", extent(640.0, 360.0)),
+                                (
+                                    "density",
+                                    manifest_layout(
+                                        "canvas-density",
+                                        [("units_per_metre", ManifestValue::F32(400.0))],
+                                    ),
+                                ),
+                            ],
+                        ),
+                    ),
+                    (
+                        "evaluated",
+                        ManifestValue::Some(Box::new(manifest_layout(
+                            "canvas-evaluated-extent",
+                            [
+                                ("extent", extent(320.0, 180.0)),
+                                ("tick", ManifestValue::U64(39)),
+                            ],
+                        ))),
+                    ),
+                ],
+            ))),
+        ));
+        Some(ipp_core::CanvasStateRecord {
+            state: ipp_core::CanvasState {
+                extent: [640.0, 360.0],
+                units_per_metre: 400.0,
+            },
+            evaluated: Some(ipp_core::CanvasEvaluatedExtent {
+                extent: [320.0, 180.0],
+                tick: 39,
+            }),
+        })
+    };
     inspect_values.shrink_to_fit();
+
     assert_manifest_response(
         Response {
             session: 7,
@@ -1941,44 +2198,78 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
                         symbolic_id: None,
                         classes: vec!["inspected".into()],
                     },
-                    base: vec![scalar],
-                    effective: Vec::new(),
+                    link: test_link(),
+                    components: vec![scalar],
                 }],
                 resources: Vec::new(),
                 render_diagnostics: Vec::new(),
+                #[cfg(feature = "gui")]
+                gui_focus,
+                #[cfg(feature = "gui")]
+                gui_pointers,
+                #[cfg(feature = "surfaces")]
+                canvas,
             },
         },
         ManifestFixture::new("response-inspect", inspect_values),
         &mut covered,
     );
 
-    // Base and effective snapshots of one dynamic component share its descriptor table.
+    assert_manifest_response(
+        Response {
+            session: 7,
+            request_id: 22,
+            tick: 40,
+            body: ResponseBody::EntityTree {
+                next: 41,
+                time: 2.25,
+                nodes: vec![crate::EntityTreeNode {
+                    id: ipp_core::EntityId::from_bits(41),
+                    parent: Some(ipp_core::EntityId::from_bits(40)),
+                    order: (1u128 << 80) | 17,
+                    depth: 1,
+                }],
+            },
+        },
+        ManifestFixture::new(
+            "response-entity-tree",
+            [
+                ("session", ManifestValue::U64(7)),
+                ("request_id", ManifestValue::U64(22)),
+                ("tick", ManifestValue::U64(40)),
+                ("tag", ManifestValue::Tag("RESPONSE_ENTITY_TREE")),
+                ("time", ManifestValue::F64(2.25)),
+                ("next", ManifestValue::U64(41)),
+                (
+                    "nodes",
+                    ManifestValue::List(vec![manifest_layout(
+                        "entity-tree-node",
+                        [
+                            ("id", ManifestValue::U64(41)),
+                            ("parent", ManifestValue::U64(40)),
+                            ("order_low", ManifestValue::U64(17)),
+                            ("order_high", ManifestValue::U64(1 << 16)),
+                            ("depth", ManifestValue::U16(1)),
+                        ],
+                    )]),
+                ),
+            ],
+        ),
+        &mut covered,
+    );
+
+    // A dynamic component carries its own named-property descriptor table.
     let mut material = ipp_core::components::CustomMaterial::default();
     material
         .properties
         .set("tint", ipp_core::DynamicValue::F32(0.5))
         .unwrap();
-    let mut animated = material.clone();
-    animated
-        .properties
-        .set("tint", ipp_core::DynamicValue::F32(0.75))
-        .unwrap();
-    let material_fixture = |component: &ipp_core::components::CustomMaterial, shared: bool| {
+    let material_fixture = |component: &ipp_core::components::CustomMaterial| {
         let fields = ComponentValue::CustomMaterial(component.clone())
             .fields()
             .into_iter()
             .map(|(offset, value)| {
                 let value = match value {
-                    ResolvedValue::Bytes(_)
-                        if shared
-                            && offset
-                                == ipp_core::components::dynamic_properties::DYNAMIC_METADATA =>
-                    {
-                        manifest_layout(
-                            "snapshot-value-base-descriptors",
-                            [("tag", ManifestValue::Tag("SNAPSHOT_VALUE_BASE_DESCRIPTORS"))],
-                        )
-                    }
                     ResolvedValue::Bytes(bytes) => manifest_typed_value(
                         "snapshot-value-bytes",
                         "SNAPSHOT_VALUE_BYTES",
@@ -2002,7 +2293,7 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
                     ResolvedValue::String(value) => manifest_typed_value(
                         "snapshot-value-string",
                         "SNAPSHOT_VALUE_STRING",
-                        ManifestValue::String(value),
+                        ManifestValue::String(value.to_string()),
                     ),
                     ResolvedValue::Bool(value) => manifest_typed_value(
                         "snapshot-value-bool",
@@ -2037,11 +2328,17 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
                 entities: vec![ipp_core::EntitySnapshot {
                     id: entity,
                     metadata: EntityMetadata::default(),
-                    base: vec![ComponentValue::CustomMaterial(material.clone())],
-                    effective: vec![ComponentValue::CustomMaterial(animated.clone())],
+                    link: test_link(),
+                    components: vec![ComponentValue::CustomMaterial(material.clone())],
                 }],
                 resources: Vec::new(),
                 render_diagnostics: Vec::new(),
+                #[cfg(feature = "gui")]
+                gui_focus: Vec::new(),
+                #[cfg(feature = "gui")]
+                gui_pointers: Vec::new(),
+                #[cfg(feature = "surfaces")]
+                canvas: None,
             },
         },
         ManifestFixture::new(
@@ -2060,13 +2357,12 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
                         [
                             ("id", ManifestValue::U64(entity.to_bits())),
                             ("metadata", manifest_metadata(None, &[])),
+                            ("parent", ManifestValue::U64(0)),
+                            ("order_low", ManifestValue::U64(1)),
+                            ("order_high", ManifestValue::U64(0)),
                             (
-                                "base",
-                                ManifestValue::List(vec![material_fixture(&material, false)]),
-                            ),
-                            (
-                                "effective",
-                                ManifestValue::List(vec![material_fixture(&animated, true)]),
+                                "components",
+                                ManifestValue::List(vec![material_fixture(&material)]),
                             ),
                         ],
                     )]),
@@ -2074,104 +2370,16 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
                 ("resources", ManifestValue::List(Vec::new())),
                 ("render_diagnostics", ManifestValue::List(Vec::new())),
                 ("controllers", ManifestValue::List(Vec::new())),
+                #[cfg(feature = "gui")]
+                ("gui_focus", ManifestValue::List(Vec::new())),
+                #[cfg(feature = "gui")]
+                ("gui_pointers", ManifestValue::List(Vec::new())),
+                #[cfg(feature = "surfaces")]
+                ("canvas", ManifestValue::None),
             ],
         ),
         &mut covered,
     );
-
-    {
-        let diagnostics = vec![
-            ipp_core::StateOverlayLifecycleDiagnostic {
-                owner: 71,
-                state_overlay: 81,
-                entity,
-                component: None,
-                reason: ipp_core::StateOverlayLifecycleReason::EntityDeleted,
-            },
-            ipp_core::StateOverlayLifecycleDiagnostic {
-                owner: 72,
-                state_overlay: 82,
-                entity,
-                component: Some(321),
-                reason: ipp_core::StateOverlayLifecycleReason::ComponentReplaced,
-            },
-            ipp_core::StateOverlayLifecycleDiagnostic {
-                owner: 73,
-                state_overlay: 83,
-                entity,
-                component: Some(322),
-                reason: ipp_core::StateOverlayLifecycleReason::ComponentRemoved,
-            },
-        ];
-        let encoded = vec![
-            manifest_layout(
-                "state-overlay-lifecycle-diagnostic",
-                [
-                    ("owner", ManifestValue::U64(71)),
-                    ("stateOverlay", ManifestValue::U64(81)),
-                    ("entity", ManifestValue::U64(entity.to_bits())),
-                    ("component", ManifestValue::None),
-                    ("reason", ManifestValue::Tag("STATE_OVERLAY_ENTITY_DELETED")),
-                ],
-            ),
-            manifest_layout(
-                "state-overlay-lifecycle-diagnostic",
-                [
-                    ("owner", ManifestValue::U64(72)),
-                    ("stateOverlay", ManifestValue::U64(82)),
-                    ("entity", ManifestValue::U64(entity.to_bits())),
-                    (
-                        "component",
-                        ManifestValue::Some(Box::new(ManifestValue::U16(321))),
-                    ),
-                    (
-                        "reason",
-                        ManifestValue::Tag("STATE_OVERLAY_COMPONENT_REPLACED"),
-                    ),
-                ],
-            ),
-            manifest_layout(
-                "state-overlay-lifecycle-diagnostic",
-                [
-                    ("owner", ManifestValue::U64(73)),
-                    ("stateOverlay", ManifestValue::U64(83)),
-                    ("entity", ManifestValue::U64(entity.to_bits())),
-                    (
-                        "component",
-                        ManifestValue::Some(Box::new(ManifestValue::U16(322))),
-                    ),
-                    (
-                        "reason",
-                        ManifestValue::Tag("STATE_OVERLAY_COMPONENT_REMOVED"),
-                    ),
-                ],
-            ),
-        ];
-        assert_manifest_response(
-            Response {
-                session: 7,
-                request_id: 0,
-                tick: 41,
-                body: ResponseBody::Lifecycle {
-                    diagnostics,
-                },
-            },
-            ManifestFixture::new(
-                "response-state-overlay-lifecycle",
-                [
-                    ("session", ManifestValue::U64(7)),
-                    ("request_id", ManifestValue::U64(0)),
-                    ("tick", ManifestValue::U64(41)),
-                    (
-                        "tag",
-                        ManifestValue::Tag("RESPONSE_STATE_OVERLAY_LIFECYCLE"),
-                    ),
-                    ("diagnostics", ManifestValue::List(encoded)),
-                ],
-            ),
-            &mut covered,
-        );
-    }
 
     {
         use ipp_core::{AssetResourceSnapshot, AssetResourceStatus};
@@ -2225,7 +2433,7 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
                 representation: Default::default(),
                 id: 61 + index as u64,
                 kind: ipp_core::services::asset_management::AssetTypeId(321),
-                source: format!("https://example.test/{}", 61 + index),
+                source: format!("https://example.test/{}", 61 + index).into(),
                 variant: 71 + index as u32,
                 status,
             })
@@ -2297,198 +2505,25 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
         &mut covered,
     );
 
+    view_tests::responses(&mut covered);
     assert_manifest_response(
         Response {
             session: 7,
-            request_id: 0,
-            tick: 45,
-            body: ResponseBody::CameraStateChangedEvent(ipp_core::CameraStateChange {
-                tick: 45,
-                changes: ipp_core::CameraStatePatch {
-                    active_camera: Some(entity),
-                },
-            }),
+            request_id: 37,
+            tick: 19,
+            body: ResponseBody::CameraNavigated,
         },
         ManifestFixture::new(
-            "response-camera-state-changed",
+            "response-camera-navigated",
             [
                 ("session", ManifestValue::U64(7)),
-                ("request_id", ManifestValue::U64(0)),
-                ("tick", ManifestValue::U64(45)),
-                ("tag", ManifestValue::Tag("RESPONSE_CAMERA_STATE_CHANGED")),
-                (
-                    "changes",
-                    manifest_layout(
-                        "camera-state-patch",
-                        [
-                            ("mask", ManifestValue::U16(1)),
-                            (
-                                "activeCamera",
-                                ManifestValue::Some(Box::new(manifest_layout(
-                                    "camera-entity",
-                                    [("id", ManifestValue::U64(entity.to_bits()))],
-                                ))),
-                            ),
-                        ],
-                    ),
-                ),
+                ("request_id", ManifestValue::U64(37)),
+                ("tick", ManifestValue::U64(19)),
+                ("tag", ManifestValue::Tag("RESPONSE_CAMERA_NAVIGATED")),
             ],
         ),
         &mut covered,
     );
-    for (camera, result) in [
-        (Some(entity), Ok(None)),
-        (
-            Some(entity),
-            Ok(Some(ipp_core::GeometryPickHit {
-                entity,
-                position: [1.0, 2.0, 3.0],
-                distance: 4.0,
-                part: 0,
-                view_plane: None,
-            })),
-        ),
-        (
-            Some(entity),
-            Ok(Some(ipp_core::GeometryPickHit {
-                entity,
-                position: [1.0, 2.0, 3.0],
-                distance: 4.0,
-                part: 8,
-                view_plane: Some(ipp_core::WorldPlane {
-                    point: [1.0, 2.0, 3.0],
-                    normal: [0.0, 0.0, -1.0],
-                }),
-            })),
-        ),
-        (None, Err(ipp_core::ErrorReason::NoActiveCamera)),
-    ] {
-        let encoded = match &result {
-            Ok(None) => manifest_layout(
-                "pick-result-miss",
-                vec![("tag", ManifestValue::Tag("PICK_OUTCOME_MISS"))],
-            ),
-            Ok(Some(hit)) => {
-                let mut fields = vec![
-                    ("tag", ManifestValue::Tag("PICK_OUTCOME_HIT")),
-                    ("entity", ManifestValue::U64(entity.to_bits())),
-                    ("position_x", ManifestValue::F32(1.0)),
-                    ("position_y", ManifestValue::F32(2.0)),
-                    ("position_z", ManifestValue::F32(3.0)),
-                    ("distance", ManifestValue::F32(4.0)),
-                ];
-                fields.push(("part", ManifestValue::U32(hit.part)));
-                fields.push((
-                    "view_plane",
-                    match hit.view_plane {
-                        None => ManifestValue::None,
-                        Some(plane) => ManifestValue::Some(Box::new(manifest_layout(
-                            "pick-view-plane",
-                            [
-                                ("point_x", ManifestValue::F32(plane.point[0])),
-                                ("point_y", ManifestValue::F32(plane.point[1])),
-                                ("point_z", ManifestValue::F32(plane.point[2])),
-                                ("normal_x", ManifestValue::F32(plane.normal[0])),
-                                ("normal_y", ManifestValue::F32(plane.normal[1])),
-                                ("normal_z", ManifestValue::F32(plane.normal[2])),
-                            ],
-                        ))),
-                    },
-                ));
-                manifest_layout("pick-result-hit", fields)
-            }
-            Err(_) => manifest_layout(
-                "pick-result-failure",
-                vec![
-                    ("tag", ManifestValue::Tag("PICK_OUTCOME_FAILURE")),
-                    ("reason", ManifestValue::String("NoActiveCamera".into())),
-                ],
-            ),
-        };
-        assert_manifest_response(
-            Response {
-                session: 7,
-                request_id: 26,
-                tick: 46,
-                body: ResponseBody::GeometryPickResultEvent(ipp_core::GeometryPickOutcome {
-                    request_id: 26,
-                    tick: 46,
-                    camera,
-                    result,
-                }),
-            },
-            ManifestFixture::new(
-                "response-geometry-pick",
-                [
-                    ("session", ManifestValue::U64(7)),
-                    ("request_id", ManifestValue::U64(26)),
-                    ("tick", ManifestValue::U64(46)),
-                    ("tag", ManifestValue::Tag("RESPONSE_GEOMETRY_PICK")),
-                    (
-                        "camera",
-                        camera.map_or(ManifestValue::None, |camera| {
-                            ManifestValue::Some(Box::new(ManifestValue::U64(camera.to_bits())))
-                        }),
-                    ),
-                    ("result", encoded),
-                ],
-            ),
-            &mut covered,
-        );
-    }
-
-    for result in [
-        Ok(Some([1.0, 2.0, 3.0])),
-        Ok(None),
-        Err(ipp_core::ErrorReason::InvalidViewport),
-    ] {
-        let position = match result {
-            Ok(Some([x, y, z])) => ManifestValue::Some(Box::new(manifest_layout(
-                "world-point",
-                [
-                    ("x", ManifestValue::F32(x)),
-                    ("y", ManifestValue::F32(y)),
-                    ("z", ManifestValue::F32(z)),
-                ],
-            ))),
-            _ => ManifestValue::None,
-        };
-        let error = if result.is_err() {
-            ManifestValue::Some(Box::new(ManifestValue::String("InvalidViewport".into())))
-        } else {
-            ManifestValue::None
-        };
-        assert_manifest_response(
-            Response {
-                session: 7,
-                request_id: 23,
-                tick: 48,
-                body: ResponseBody::CameraProjectResultEvent(ipp_core::CameraProjectOutcome {
-                    request_id: 23,
-                    tick: 48,
-                    camera: Some(entity),
-                    result,
-                }),
-            },
-            ManifestFixture::new(
-                "response-camera-project",
-                [
-                    ("session", ManifestValue::U64(7)),
-                    ("request_id", ManifestValue::U64(23)),
-                    ("tick", ManifestValue::U64(48)),
-                    ("tag", ManifestValue::Tag("RESPONSE_CAMERA_PROJECT")),
-                    (
-                        "camera",
-                        ManifestValue::Some(Box::new(ManifestValue::U64(entity.to_bits()))),
-                    ),
-                    ("ok", ManifestValue::Bool(result.is_ok())),
-                    ("position", position),
-                    ("error", error),
-                ],
-            ),
-            &mut covered,
-        );
-    }
 
     for changes in render_state_patches()
         .into_iter()
@@ -2519,316 +2554,14 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
     }
 
     lifecycle_response_fixtures(&mut covered);
-
-    #[cfg(feature = "surfaces")]
-    assert_manifest_response(
-        Response {
-            session: 7,
-            request_id: 1,
-            tick: 47,
-            body: ResponseBody::SurfaceCommand,
-        },
-        ManifestFixture::new(
-            "response-surface",
-            [
-                ("session", ManifestValue::U64(7)),
-                ("request_id", ManifestValue::U64(1)),
-                ("tick", ManifestValue::U64(47)),
-                ("tag", ManifestValue::Tag("RESPONSE_SURFACE")),
-            ],
-        ),
-        &mut covered,
-    );
+    lifecycle_watch_tests::responses(&mut covered);
+    #[cfg(feature = "diagnostics")]
+    lifecycle_diagnostics_tests::responses(&mut covered);
+    attachment_tests::responses(&mut covered);
 
     #[cfg(feature = "gui")]
     {
-        assert_manifest_response(
-            Response {
-                session: 7,
-                request_id: 1,
-                tick: 47,
-                body: ResponseBody::GuiCommands {
-                    applied: 1,
-                    error: None,
-                },
-            },
-            ManifestFixture::new(
-                "response-gui",
-                [
-                    ("session", ManifestValue::U64(7)),
-                    ("request_id", ManifestValue::U64(1)),
-                    ("tick", ManifestValue::U64(47)),
-                    ("tag", ManifestValue::Tag("RESPONSE_GUI")),
-                    ("applied", ManifestValue::U32(1)),
-                    ("error", ManifestValue::None),
-                ],
-            ),
-            &mut covered,
-        );
-
-        assert_manifest_response(
-            Response {
-                session: 7,
-                request_id: 2,
-                tick: 47,
-                body: ResponseBody::GuiInput {
-                    tick: 47,
-                    unhandled: None,
-                },
-            },
-            ManifestFixture::new(
-                "response-gui-input",
-                [
-                    ("session", ManifestValue::U64(7)),
-                    ("request_id", ManifestValue::U64(2)),
-                    ("tick", ManifestValue::U64(47)),
-                    ("tag", ManifestValue::Tag("RESPONSE_GUI_INPUT")),
-                    (
-                        "routing",
-                        manifest_layout(
-                            "gui-input-routing",
-                            [
-                                ("tick", ManifestValue::U64(47)),
-                                ("reason", ManifestValue::U16(0)),
-                                ("blocker", ManifestValue::None),
-                            ],
-                        ),
-                    ),
-                ],
-            ),
-            &mut covered,
-        );
-
-        let mut payload = vec![2u8];
-        payload.extend(42u64.to_le_bytes());
-        payload.extend(3u64.to_le_bytes());
-        payload.extend(0u32.to_le_bytes());
-        assert_manifest_response(
-            Response {
-                session: 7,
-                request_id: 1,
-                tick: 47,
-                body: ResponseBody::GuiInspect(ipp_core::systems::gui::GuiInspectResponse {
-                    root_entity: EntityId::from_bits(42),
-                    root_incarnation: 3,
-                    nodes: Vec::new(),
-                }),
-            },
-            ManifestFixture::new(
-                "response-gui-inspect",
-                [
-                    ("session", ManifestValue::U64(7)),
-                    ("request_id", ManifestValue::U64(1)),
-                    ("tick", ManifestValue::U64(47)),
-                    ("tag", ManifestValue::Tag("RESPONSE_GUI_INSPECT")),
-                    ("payload", ManifestValue::Bytes(payload)),
-                ],
-            ),
-            &mut covered,
-        );
-
-        // One committed button press: version, effect count, kind, head
-        // (session, ticks, entity, node, empty path), then empty
-        // conflict and cancellation counts.
-        let mut observations = vec![4u8];
-        observations.extend(1u32.to_le_bytes());
-        observations.push(0);
-        observations.extend(7u64.to_le_bytes());
-        observations.extend(11u64.to_le_bytes());
-        observations.extend(12u64.to_le_bytes());
-        observations.extend(EntityId::from_bits(100).to_bits().to_le_bytes());
-        observations.extend(3u64.to_le_bytes());
-        observations.extend(30u32.to_le_bytes());
-        observations.extend(0u32.to_le_bytes());
-        observations.extend(0u32.to_le_bytes());
-        observations.extend(0u32.to_le_bytes());
-        observations.extend(0u32.to_le_bytes());
-        assert_manifest_response(
-            Response {
-                session: 7,
-                request_id: 0,
-                tick: 47,
-                body: ResponseBody::GuiObservations {
-                    effects: vec![ipp_core::GuiInputEffect {
-                        session: 7,
-                        source_tick: 11,
-                        effect_tick: 12,
-                        kind: ipp_core::GuiInputEffectKind::ButtonPressed {
-                            entity: EntityId::from_bits(100),
-                            root_incarnation: 3,
-                            node: ipp_core::GuiNodeId(30),
-                            path: Vec::new(),
-                        },
-                    }],
-                    text_focus_updates: Vec::new(),
-                    conflicts: Vec::new(),
-                    cancellations: Vec::new(),
-                },
-            },
-            ManifestFixture::new(
-                "response-gui-observations",
-                [
-                    ("session", ManifestValue::U64(7)),
-                    ("request_id", ManifestValue::U64(0)),
-                    ("tick", ManifestValue::U64(47)),
-                    ("tag", ManifestValue::Tag("RESPONSE_GUI_OBSERVATIONS")),
-                    ("observations", ManifestValue::Bytes(observations)),
-                ],
-            ),
-            &mut covered,
-        );
-
-        // One semantic snapshot: version, panel identity, two nodes (a
-        // VirtualList focus scope with its scroll and items), then the
-        // observed focus. Names and values are whole bounded strings;
-        // oversize values reject instead of publishing a misleading prefix.
-        let mut snapshot = vec![3u8];
-        snapshot.extend(42u64.to_le_bytes());
-        snapshot.extend(3u64.to_le_bytes());
-        snapshot.extend(12u64.to_le_bytes());
-        snapshot.extend(2u32.to_le_bytes());
-        snapshot.extend(1u32.to_le_bytes());
-        snapshot.extend(0u32.to_le_bytes());
-        snapshot.push(9);
-        snapshot.push(0);
-        snapshot.push(0);
-        snapshot.extend(0u32.to_le_bytes());
-        for bound in [0.0f32, 0.0, 10.0, 10.0] {
-            snapshot.extend(bound.to_le_bytes());
-        }
-        snapshot.extend([1, 1, 1, 1, 0]);
-        snapshot.push(1);
-        for lane in [0.0f32, 2.0, 0.0, 4.0] {
-            snapshot.extend(lane.to_le_bytes());
-        }
-        snapshot.push(1);
-        for value in [100u32, 2, 5, 3] {
-            snapshot.extend(value.to_le_bytes());
-        }
-        snapshot.extend(0.5f32.to_le_bytes());
-        snapshot.extend(2u32.to_le_bytes());
-        snapshot.extend(1u32.to_le_bytes());
-        snapshot.push(4);
-        snapshot.push(1);
-        snapshot.extend(2u32.to_le_bytes());
-        snapshot.extend("Go".as_bytes());
-        snapshot.push(0);
-        snapshot.extend(0u32.to_le_bytes());
-        for bound in [1.0f32, 1.0, 2.0, 1.0] {
-            snapshot.extend(bound.to_le_bytes());
-        }
-        snapshot.extend([1, 1, 1, 0]);
-        snapshot.push(1);
-        snapshot.push(0);
-        snapshot.push(0);
-        snapshot.push(0);
-        snapshot.push(1);
-        snapshot.extend(2u32.to_le_bytes());
-        assert_manifest_response(
-            Response {
-                session: 7,
-                request_id: 1,
-                tick: 47,
-                body: ResponseBody::GuiSemanticSnapshot(ipp_core::GuiSemanticTree {
-                    entity: EntityId::from_bits(42),
-                    root_incarnation: 3,
-                    evaluation_tick: 12,
-                    nodes: vec![
-                        ipp_core::GuiSemanticNode {
-                            id: ipp_core::GuiNodeId(1),
-                            parent: None,
-                            role: ipp_core::GuiSemanticRole::VirtualList,
-                            name: None,
-                            value: ipp_core::GuiControlValue::None,
-                            revision: 0,
-                            bounds: [0.0, 0.0, 10.0, 10.0],
-                            enabled: true,
-                            visible: true,
-                            available: true,
-                            focus_scope: true,
-                            actions: Vec::new(),
-                            scroll: Some(ipp_core::GuiSemanticScroll {
-                                offset: [0.0, 2.0],
-                                max_offset: [0.0, 4.0],
-                            }),
-                            virtual_list: Some(ipp_core::GuiSemanticVirtualList {
-                                item_count: 100,
-                                loaded_first: 2,
-                                loaded_last: 5,
-                                anchor_index: 3,
-                                anchor_offset: 0.5,
-                            }),
-                        },
-                        ipp_core::GuiSemanticNode {
-                            id: ipp_core::GuiNodeId(2),
-                            parent: Some(ipp_core::GuiNodeId(1)),
-                            role: ipp_core::GuiSemanticRole::Button,
-                            name: Some("Go".into()),
-                            value: ipp_core::GuiControlValue::None,
-                            revision: 0,
-                            bounds: [1.0, 1.0, 2.0, 1.0],
-                            enabled: true,
-                            visible: true,
-                            available: true,
-                            focus_scope: false,
-                            actions: vec![ipp_core::GuiSemanticActionKind::Press],
-                            scroll: None,
-                            virtual_list: None,
-                        },
-                    ],
-                    focused: Some(ipp_core::GuiSemanticFocus {
-                        id: ipp_core::GuiNodeId(2),
-                    }),
-                }),
-            },
-            ManifestFixture::new(
-                "response-gui-semantic-snapshot",
-                [
-                    ("session", ManifestValue::U64(7)),
-                    ("request_id", ManifestValue::U64(1)),
-                    ("tick", ManifestValue::U64(47)),
-                    ("tag", ManifestValue::Tag("RESPONSE_GUI_SEMANTIC_SNAPSHOT")),
-                    ("snapshot", ManifestValue::Bytes(snapshot)),
-                ],
-            ),
-            &mut covered,
-        );
-
-        // One supplier-private unhandled Blur: version, input count,
-        // session, tick, versioned input tag, NoFocus reason.
-        let mut unhandled = vec![1u8];
-        unhandled.extend(1u32.to_le_bytes());
-        unhandled.extend(7u64.to_le_bytes());
-        unhandled.extend(11u64.to_le_bytes());
-        unhandled.extend([1, 9]);
-        unhandled.push(3);
-        assert_manifest_response(
-            Response {
-                session: 7,
-                request_id: 0,
-                tick: 47,
-                body: ResponseBody::GuiUnhandledInputs {
-                    inputs: vec![ipp_core::GuiUnhandledInput {
-                        session: 7,
-                        source_request_id: 0,
-                        tick: 11,
-                        input: ipp_core::GuiInputCommand::Blur,
-                        reason: ipp_core::GuiUnhandledReason::NoFocus,
-                    }],
-                },
-            },
-            ManifestFixture::new(
-                "response-gui-unhandled",
-                [
-                    ("session", ManifestValue::U64(7)),
-                    ("request_id", ManifestValue::U64(0)),
-                    ("tick", ManifestValue::U64(47)),
-                    ("tag", ManifestValue::Tag("RESPONSE_GUI_UNHANDLED")),
-                    ("unhandled", ManifestValue::Bytes(unhandled)),
-                ],
-            ),
-            &mut covered,
-        );
+        gui_observation_response_fixtures(&mut covered);
     }
 
     for tag in TAGS.iter().filter(|tag| {
@@ -2836,13 +2569,13 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
             tag.space,
             TagSpace::Response
                 | TagSpace::Outcome
-                | TagSpace::StateOverlayHandleKind
-                | TagSpace::StateOverlayLifecycleReason
                 | TagSpace::AssetResourceStatus
                 | TagSpace::SnapshotValue
                 | TagSpace::SnapshotReference
                 | TagSpace::GeometryPickOutcome
                 | TagSpace::LifecycleObservation
+                | TagSpace::OperationEffect
+                | TagSpace::AttachmentReceiptState
         )
     }) {
         assert!(
@@ -3019,20 +2752,6 @@ fn lifecycle_response_fixtures(covered: &mut BTreeSet<&'static str>) {
         ),
         covered,
     );
-    let mut fields = envelope("RESPONSE_LIFECYCLE_OVERFLOW");
-    fields.push(("dropped", ManifestValue::U64(129)));
-    assert_manifest_response(
-        Response {
-            session: 7,
-            request_id: 0,
-            tick: 3,
-            body: ResponseBody::LifecycleEvents(LifecyclePublisherOutput::Overflow {
-                dropped: 129,
-            }),
-        },
-        ManifestFixture::new("response-lifecycle-overflow", fields),
-        covered,
-    );
     let entity = EntityId::from_bits(42);
     let mut observations = Vec::new();
     let mut encoded = Vec::new();
@@ -3187,9 +2906,121 @@ fn lifecycle_response_fixtures(covered: &mut BTreeSet<&'static str>) {
             session: 7,
             request_id: 0,
             tick: 3,
-            body: ResponseBody::LifecycleEvents(LifecyclePublisherOutput::Events(events)),
+            body: ResponseBody::LifecycleEvents(LifecyclePublisherOutput(events)),
         },
         ManifestFixture::new("response-lifecycle-events", fields),
+        covered,
+    );
+}
+
+/// Registration results and applied effects of the GUI observation stream.
+#[cfg(feature = "gui")]
+fn gui_observation_response_fixtures(covered: &mut BTreeSet<&'static str>) {
+    use ipp_core::systems::gui::local::{
+        GuiEntityTarget, GuiLocalEffect, GuiLocalEffectKind, GuiLocalEffectSource,
+    };
+    use ipp_core::systems::gui::observations::{
+        GuiEffectId, GuiObservationControlResult, GuiObservationRecord,
+        GuiObservationSubscriptionId,
+    };
+
+    let mut host = ipp_core::HostRuntime::new();
+    let world = host.create_world(Default::default(), &[]).unwrap();
+    let world = host.world_ref(world).unwrap();
+    let world_bytes = || {
+        let mut bytes = world.id().0.to_le_bytes().to_vec();
+        bytes.extend(world.incarnation().to_le_bytes());
+        bytes
+    };
+    let subscription = GuiObservationSubscriptionId {
+        output: 5,
+        generation: 6,
+    };
+    let mut control = 5u64.to_le_bytes().to_vec();
+    control.extend(6u64.to_le_bytes());
+    control.push(0);
+    control.extend(world_bytes());
+    control.push(0);
+    assert_manifest_response(
+        Response {
+            session: 7,
+            request_id: 3,
+            tick: 0,
+            body: ResponseBody::GuiObservation(GuiObservationRecord::Control {
+                world,
+                subscription,
+                request: 3,
+                result: GuiObservationControlResult::Subscribed,
+            }),
+        },
+        ManifestFixture::new(
+            "response-gui-observation",
+            [
+                ("session", ManifestValue::U64(7)),
+                ("request_id", ManifestValue::U64(3)),
+                ("tick", ManifestValue::U64(0)),
+                ("tag", ManifestValue::Tag("RESPONSE_GUI_OBSERVATION")),
+                ("record", ManifestValue::Bytes(control)),
+            ],
+        ),
+        covered,
+    );
+
+    let entity = EntityId::from_bits(0x0000_0001_0000_0029);
+    let effect = GuiLocalEffect {
+        id: Some(GuiEffectId {
+            world,
+            ordinal: 8,
+        }),
+        target: GuiEntityTarget {
+            world,
+            entity,
+            component: ComponentValue::GUI_TEXT_INPUT,
+            incarnation: 9,
+        },
+        source: GuiLocalEffectSource::Semantic,
+        tick: 10,
+        ancestry: vec![EntityId::from_bits(11), entity].into(),
+        kind: GuiLocalEffectKind::Submitted("sent".into()),
+    };
+    let mut record = 5u64.to_le_bytes().to_vec();
+    record.extend(6u64.to_le_bytes());
+    record.push(1);
+    record.push(1);
+    record.extend(world_bytes());
+    record.extend(8u64.to_le_bytes());
+    record.extend(world_bytes());
+    record.extend(entity.to_bits().to_le_bytes());
+    record.extend(ComponentValue::GUI_TEXT_INPUT.to_le_bytes());
+    record.extend(9u64.to_le_bytes());
+    record.push(0);
+    record.extend(10u64.to_le_bytes());
+    record.extend(2u32.to_le_bytes());
+    record.extend(11u64.to_le_bytes());
+    record.extend(entity.to_bits().to_le_bytes());
+    record.push(4);
+    record.extend(4u32.to_le_bytes());
+    record.extend(b"sent");
+    assert_manifest_response(
+        Response {
+            session: 7,
+            request_id: 0,
+            tick: 0,
+            body: ResponseBody::GuiObservation(GuiObservationRecord::Effect {
+                subscription,
+                effect: std::sync::Arc::new(effect),
+            }),
+        },
+        ManifestFixture::new(
+            "response-gui-observation",
+            [
+                ("session", ManifestValue::U64(7)),
+                ("request_id", ManifestValue::U64(0)),
+                ("tick", ManifestValue::U64(0)),
+                ("tag", ManifestValue::Tag("RESPONSE_GUI_OBSERVATION")),
+                ("record", ManifestValue::Bytes(record)),
+            ],
+        ),
         covered,
     );
 }

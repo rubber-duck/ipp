@@ -1,12 +1,14 @@
 //! Explicit object relationships and affine propagation. See README.md for contracts.
 
+#[cfg(feature = "skeletal-animation")]
 mod component;
-pub use component::{Hierarchy, HierarchyRuntimeState};
+#[cfg(feature = "skeletal-animation")]
+pub use component::ParentJoint;
 
 use crate::systems::{self, camera::CameraAffineTransform, geometry::GeometryShapeTransform};
 use crate::world::{WorldEntityState, WorldSimulationState};
-use crate::{ComponentValue, EntityId, ErrorReason, components::Transform};
-use std::collections::{BTreeMap, BTreeSet};
+use crate::{EntityId, ErrorReason, components::Transform};
+use std::collections::BTreeSet;
 
 mod system;
 pub use system::{
@@ -18,7 +20,7 @@ pub(crate) use system_state::HierarchyGraph;
 
 mod update;
 pub(crate) use update::affine;
-pub(in crate::world) use update::{evaluated_affine, local_affine, parent_affine};
+pub(in crate::world) use update::{evaluated_affine, parent_affine};
 
 #[cfg(test)]
 mod scaling_tests;

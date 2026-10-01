@@ -1,10 +1,11 @@
 //! Renderer-private, stable bounded light selection and frame-wide shadow assignment.
+use super::scene::{RenderEntity as EntityId, RenderScene, SceneItem as RenderItem};
 use super::{
     custom_material::PreparedCustomMaterial,
     lighting::{MAX_LIGHTS, PreparedLight, RenderLightingFrame},
 };
 use crate::RenderError;
-use ipp_core::{EntityId, RenderItem, WorldContext, components::Light};
+use ipp_core::components::Light;
 use std::collections::BTreeMap;
 
 type Candidate = (EntityId, [f32; 16], Light);
@@ -20,14 +21,13 @@ pub(super) struct LightSelectionState {
     shadow_scores: Vec<f64>,
     prepared: PreparedLighting,
     frustums: Vec<[ipp_core::systems::geometry::GeometryPlane; 6]>,
-    query_scratch: ipp_core::systems::geometry::GeometryQueryScratch,
 }
 
 pub(super) struct PreparedLighting {
     pub draws: super::draw_lighting::DrawLightingTable,
     pub shadows: Vec<(EntityId, RenderLightingFrame)>,
     pub requested_shadows: usize,
-    pub visibility: ipp_core::systems::geometry::GeometryQueryResults,
+    pub visibility: super::scene::SceneVisibility,
     pub shadow_queries: Vec<(EntityId, usize)>,
     pub batched: bool,
     pub unlit: RenderLightingFrame,
@@ -50,13 +50,13 @@ impl Default for PreparedLighting {
 pub(super) struct PreparedDrawLighting {
     pub frame: RenderLightingFrame,
     pub visible: bool,
-    selected: [EntityId; MAX_LIGHTS],
+    selected: Vec<EntityId>,
     pub(super) selected_count: usize,
 }
 
 struct LightGroup {
     origin: [f64; 3],
-    enclosure: Option<ipp_core::systems::geometry::GeometryEnclosure>,
+    enclosure: Option<[[f64; 3]; 2]>,
     visible: bool,
 }
 
@@ -92,7 +92,6 @@ struct ObjectInfluence {
 }
 
 impl ObjectInfluence {
-    #[cfg(test)]
     fn new(origin: [f64; 3], bounds: Option<[[f64; 3]; 2]>) -> Self {
         Self {
             center: bounds.map_or(origin, |b| {
@@ -294,8 +293,8 @@ fn select_prepared_object(
 impl LightSelectionState {
     pub(super) fn prepare(
         &mut self,
-        world: &WorldContext<'_>,
-        items: &[RenderItem],
+        world: &RenderScene<'_>,
+        items: &[RenderItem<'_>],
         customs: &BTreeMap<EntityId, PreparedCustomMaterial>,
         frustum: &[ipp_core::systems::geometry::GeometryPlane; 6],
         shadow_capacity: usize,
@@ -305,7 +304,7 @@ impl LightSelectionState {
 
         let mut candidates = std::mem::take(&mut self.candidates);
         candidates.clear();
-        candidates.extend(world.light_items());
+        candidates.extend(world.lights.iter().copied());
         let result =
             self.prepare_candidates(world, items, customs, frustum, shadow_capacity, &candidates);
         self.candidates = candidates;
@@ -314,8 +313,8 @@ impl LightSelectionState {
 
     fn prepare_candidates(
         &mut self,
-        world: &WorldContext<'_>,
-        items: &[RenderItem],
+        world: &RenderScene<'_>,
+        items: &[RenderItem<'_>],
         customs: &BTreeMap<EntityId, PreparedCustomMaterial>,
         frustum: &[ipp_core::systems::geometry::GeometryPlane; 6],
         shadow_capacity: usize,
@@ -339,7 +338,7 @@ impl LightSelectionState {
         for (index, &(entity, model, light)) in candidates.iter().enumerate() {
             if cfg!(feature = "shadows") && light.cast_shadows {
                 let packed = self.packed[index]
-                    .get_or_insert_with(|| PreparedLight::prepare(entity, model, light));
+                    .get_or_insert_with(|| PreparedLight::prepare(entity.entity, model, light));
                 // Preparation errors are observed only if a receiver selects this light.
                 if let Ok(packed) = packed {
                     let query = self.frustums.len();
@@ -351,12 +350,9 @@ impl LightSelectionState {
                 }
             }
         }
-        let geometry = world.geometry_spatial_index();
-        geometry.query_frustums(
-            &self.frustums,
-            &mut self.prepared.visibility,
-            &mut self.query_scratch,
-        );
+        self.prepared
+            .visibility
+            .prepare(world, items, &self.frustums);
         self.prepared.batched = true;
         self.groups.clear();
         for item in items {
@@ -385,19 +381,13 @@ impl LightSelectionState {
                     enclosure: if unbounded {
                         None
                     } else {
-                        geometry.get(item.entity).and_then(|row| row.visual)
+                        world.visual_bounds(item.entity)
                     },
                     visible: unbounded || self.prepared.visibility.matches(item.entity, 0),
                 },
             ));
         }
-        self.prepared.draws.begin(
-            items
-                .iter()
-                .map(|item| item.entity.index() as usize + 1)
-                .max()
-                .unwrap_or(0),
-        );
+        self.prepared.draws.begin();
         self.shadow_scores.resize(candidates.len(), 0.0);
         self.shadow_scores.fill(0.0);
         let rank_shadows = self.prepared.shadow_queries.len() > shadow_capacity;
@@ -408,14 +398,10 @@ impl LightSelectionState {
                 .get_or_insert(*entity, || PreparedDrawLighting {
                     frame: RenderLightingFrame::empty(camera.camera, camera.ambient),
                     visible: group.visible,
-                    selected: [EntityId::from_bits(0); MAX_LIGHTS],
+                    selected: Vec::with_capacity(MAX_LIGHTS),
                     selected_count: 0,
                 });
-            let object = ObjectInfluence {
-                center: group.enclosure.map_or(group.origin, |b| b.center),
-                radius: group.enclosure.map_or(0.0, |b| b.radius),
-                bounded: group.enclosure.is_some(),
-            };
+            let object = ObjectInfluence::new(group.origin, group.enclosure);
             select_prepared_object(
                 &self.influences,
                 &object,
@@ -423,9 +409,9 @@ impl LightSelectionState {
                 &mut self.selected,
             );
             draw.selected_count = self.selected.len();
-            for (slot, light) in draw.selected.iter_mut().zip(&self.selected) {
-                *slot = light.entity;
-            }
+            draw.selected.clear();
+            draw.selected
+                .extend(self.selected.iter().map(|light| light.entity));
             if group.visible {
                 for light in &self.selected {
                     if candidates[light.index].2.cast_shadows {
@@ -448,7 +434,7 @@ impl LightSelectionState {
             for (index, selected) in self.selected.iter().enumerate() {
                 let &(entity, model, light) = &candidates[selected.index];
                 let packed = self.packed[selected.index]
-                    .get_or_insert_with(|| PreparedLight::prepare(entity, model, light))
+                    .get_or_insert_with(|| PreparedLight::prepare(entity.entity, model, light))
                     .as_ref()
                     .map_err(Clone::clone)?;
                 if draw.visible {

@@ -2,7 +2,8 @@
 import type {
   AnimationDriverDescription,
   Command,
-  FrameCapture,
+  PresentedCapture,
+  WorldGraphLoadResult,
   WorldPersistenceHostClient,
 } from "@ipp/client";
 import type { BlenderClient } from "../../integrations/blender/client/adapter.js";
@@ -15,9 +16,14 @@ import {
   type StressFixture,
 } from "./features.js";
 import { checkStressFeatures } from "./feature-checks.js";
+import { RootPresentation } from "../render/root-presentation.js";
+
+const VIEWPORT = { width: 800, height: 600 };
 
 let host: WorldPersistenceHostClient<BlenderClient>;
+let graph: WorldGraphLoadResult;
 let client: BlenderClient;
+let presentation: RootPresentation;
 let manifest: BlenderDiskManifest;
 let controllers: bigint[] = [];
 let entities = new Map<string, bigint>();
@@ -27,7 +33,7 @@ let restart = 0;
 let bundle: string;
 let contract: FeatureContract;
 let fixture: StressFixture;
-const captures = new Map<string, FrameCapture>();
+const captures = new Map<string, PresentedCapture>();
 
 export async function open(
   urls: { generated: string; workerScript: string; wasm: string },
@@ -37,8 +43,8 @@ export async function open(
   const module = await import(urls.generated);
   contract = module;
   const canvas = document.createElement("canvas");
-  canvas.width = 800;
-  canvas.height = 600;
+  canvas.width = VIEWPORT.width;
+  canvas.height = VIEWPORT.height;
   document.body.replaceChildren(canvas);
   host = await module.IppHostClient.connectWorker(
     urls.workerScript,
@@ -79,18 +85,19 @@ export async function load(
     await (await fetch(bundle + "benchmark.ipp")).arrayBuffer(),
   );
   mark("fetch");
-  client = await host.loadWorld(bytes);
+  graph = await host.loadWorld(bytes);
+  client = await host.openWorld(graph.root);
   mark("loadWorld");
   let savedBytes: number | undefined;
   if (persistence) {
-    const saved = await host.saveWorld();
+    const saved = await host.saveWorld(client.session);
     savedBytes = saved.length;
     mark("saveWorld");
-    const world = client.world!.id;
-    await host.detachWorld();
-    await host.destroyWorld(world);
+    await host.detachWorld(client.session);
+    for (const world of graph.created.values()) await host.destroyWorld(world);
     mark("detachAndDestroy");
-    client = await host.loadWorld(saved);
+    graph = await host.loadWorld(saved);
+    client = await host.openWorld(graph.root);
     mark("reloadWorld");
   }
   check(
@@ -109,12 +116,13 @@ export async function load(
   mark("addFeatures");
   const state = await client.inspect();
   mark("inspectFeatures");
+  // Meshes hold their required bounds as ordinary components from import;
+  // the culling comparison rewrites them as explicit mesh-derived bounds.
   cullingTargets = state.entities
     .filter((entity) => {
-      const components = entity.base.map((value) => value.component);
+      const components = entity.components.map((value) => value.component);
       return (
         components.includes(client.components.MeshInstance!.id) &&
-        !components.includes(client.components.BoundingGeometry!.id) &&
         !components.includes(client.components.ParticleEmitter!.id) &&
         !components.includes(client.components.ParticlePlayback!.id)
       );
@@ -127,7 +135,7 @@ export async function load(
   );
   nativeEmitters = state.entities
     .filter((entity) =>
-      entity.base.some(
+      entity.components.some(
         (value) => value.component === client.components.ParticleEmitter!.id,
       ),
     )
@@ -195,7 +203,12 @@ export async function load(
   );
   await seek(0.5);
   console.info("Benchmark assets ready; activating camera");
-  client.sendCommand({ type: "CameraActivateCommand", entity: camera });
+  presentation = await RootPresentation.camera(
+    host,
+    graph.root,
+    camera,
+    VIEWPORT,
+  );
   mark("playPauseSeek");
   return {
     fileBytes: bytes.length,
@@ -216,6 +229,10 @@ export async function verifyFeatures() {
     client,
     fixture,
     seek,
+    async (camera, viewport) => {
+      await presentation.select(camera, viewport);
+      return presentation.binding;
+    },
     entities.get(manifest.camera!)!,
   );
 }
@@ -229,7 +246,7 @@ export async function poseCloseup(name: string) {
     collection: "entities",
     target: entities.get(anchor)!,
   });
-  const transform = page.entities[0]!.effective.find(
+  const transform = page.entities[0]!.components.find(
     (c) => c.component === client.components.Transform!.id,
   )!.fields;
   const camera = await createDetailCamera(
@@ -312,7 +329,7 @@ export async function particleView() {
     collection: "entities",
     target: entities.get("particles-native")!,
   });
-  const transform = page.entities[0]!.effective.find(
+  const transform = page.entities[0]!.components.find(
     (c) => "qx" in c.fields,
   )!.fields;
   return createDetailCamera(
@@ -367,7 +384,7 @@ async function createDetailCamera(
   const outcome = await client.batch(commands);
   check(outcome.ok, "closeup camera creation failed");
   const id = outcome.aliases[0]!.id;
-  client.sendCommand({ type: "CameraActivateCommand", entity: id });
+  await presentation.select(id);
   return id;
 }
 
@@ -379,7 +396,7 @@ export async function rigCloseup() {
     collection: "entities",
     target: rig,
   });
-  const transform = page.entities[0]!.effective.find(
+  const transform = page.entities[0]!.components.find(
     (c) => "qx" in c.fields,
   )!.fields;
   const id = await createDetailCamera(
@@ -415,10 +432,7 @@ export async function closeRigView(controller: bigint, camera: bigint) {
 }
 
 export async function closeDetailView(camera: bigint) {
-  client.sendCommand({
-    type: "CameraActivateCommand",
-    entity: entities.get(manifest.camera!)!,
-  });
+  await presentation.select(entities.get(manifest.camera!)!);
   const outcome = await client.batch([
     { kind: "delete", entity: { kind: "handle", id: camera } },
   ]);
@@ -444,20 +458,17 @@ export async function probes(names: string[]) {
 }
 
 export async function capture(label: string) {
-  const state = await summary();
-  const frame = await client.presentation!.capture(state.tick);
+  const frame = await presentation.capture();
+  const statistics = await presentation.diagnostics.statistics();
   captures.set(label, frame);
+  const { width, height } = frame.view.binding.viewport;
   const canvas = document.createElement("canvas");
-  canvas.width = frame.width;
-  canvas.height = frame.height;
+  canvas.width = width;
+  canvas.height = height;
   canvas
     .getContext("2d")!
     .putImageData(
-      new ImageData(
-        new Uint8ClampedArray(frame.pixels),
-        frame.width,
-        frame.height,
-      ),
+      new ImageData(new Uint8ClampedArray(frame.pixels), width, height),
       0,
       0,
     );
@@ -478,7 +489,7 @@ export async function capture(label: string) {
     png: canvas.toDataURL(),
     draws: frame.drawCalls,
     triangles: frame.triangles,
-    device: frame.statistics?.device ?? null,
+    device: statistics.device,
     foreground,
   };
 }
@@ -501,5 +512,11 @@ export function difference(first: string, second: string) {
 }
 
 export async function close() {
-  await host.close();
+  try {
+    await presentation.close();
+    for (const session of host.sessions.values()) await session.close();
+    for (const world of graph.created.values()) await host.destroyWorld(world);
+  } finally {
+    await host.close();
+  }
 }

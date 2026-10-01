@@ -26,21 +26,12 @@ impl WorldSystemCapacityHints {
 }
 
 /// World-owned reservation configuration. Omitted system entries use factory defaults.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct WorldCapacityHints {
-    /// Initial entity identities and stable component slots, never a live-count ceiling.
+    /// Initial entity identity reservation, never a live-count ceiling.
     pub entities: usize,
     /// System ID to the owning module's named reservations.
     pub systems: BTreeMap<String, WorldSystemCapacityHints>,
-}
-
-impl Default for WorldCapacityHints {
-    fn default() -> Self {
-        Self {
-            entities: 256,
-            systems: BTreeMap::new(),
-        }
-    }
 }
 
 impl WorldCapacityHints {
@@ -81,7 +72,6 @@ impl crate::WorldContext<'_> {
         }
         let resolved = hints.resolve(&self.world.capacity_hints)?;
         self.world.state.allocator.reserve(resolved.entities)?;
-        self.world.components.try_reserve(resolved.entities)?;
         for instance in self
             .instances
             .before

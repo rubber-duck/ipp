@@ -21,6 +21,9 @@ pub struct HostRuntime {
     system_factories: SystemFactories,
     data_sources: crate::services::data_source::DataSourceManagementService,
     assets: crate::services::asset_management::service::AssetManagementService,
+    topology: topology::HostTopology,
+    publications: publication::HostPublications,
+    frame: u64,
 }
 
 impl Default for HostRuntime {
@@ -37,6 +40,39 @@ impl Drop for HostRuntime {
     }
 }
 
+mod graph_capture;
+mod graph_restore;
 mod persistence;
 
 mod runtime;
+
+pub(crate) mod attachment;
+mod attachment_tokens;
+mod reference_fields;
+pub(crate) mod reference_resolution;
+pub use crate::systems::world_attachment::WorldAttachment;
+pub use attachment::{
+    AttachmentPlacement, OutputKind, OutputRef, OutputTarget, WorldAttachmentMode,
+    WorldFrameContext, WorldRef, WorldViewport,
+};
+pub use attachment_tokens::{
+    WorldAttachmentEffect, WorldAttachmentRetirement, WorldAttachmentToken,
+};
+pub use reference_resolution::{OutputReferenceToken, WorldReferenceToken};
+
+pub(crate) mod publication;
+pub(crate) mod topology;
+pub use publication::{
+    OutputPublicationObservation, PublishedWorldAttachment, WorldDerivedChunk, WorldOutputBuilder,
+    WorldPublication, WorldPublicationId,
+};
+mod frame;
+pub use frame::HostFrameReport;
+mod root_binding;
+pub use root_binding::{RootBindingGeneration, RootOutputBinding};
+pub(crate) mod ingress;
+pub use ingress::HostIngressView;
+mod scene;
+pub use scene::{PublishedSceneContribution, PublishedSceneHit};
+mod view_queries;
+pub use view_queries::{ViewDescriptor, ViewPickHit, ViewQueryTarget};

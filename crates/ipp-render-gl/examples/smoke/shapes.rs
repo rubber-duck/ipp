@@ -20,19 +20,18 @@ pub fn run<D: RenderDevice>(
     mut capture: impl FnMut() -> Result<Vec<u8>>,
     output: &Path,
 ) -> Result<()> {
-    super::world::render_frame(
-        renderer,
-        &mut super::world::empty_world(&mut ipp_core::HostRuntime::new()),
-        WIDTH,
-        HEIGHT,
-    )?;
+    renderer.clear(ipp_core::WorldViewport {
+        width: WIDTH,
+        height: HEIGHT,
+        device_pixel_ratio: 1.0,
+    })?;
 
     let mut evidence =
         String::from("shape,solid_pixels,outline_pixels,contour_pixels,curve_samples\n");
     for name in ["cube", "sphere", "pill"] {
         let mut solid_host = ipp_core::HostRuntime::new();
         let mut solid = load(&mut solid_host, renderer, fixtures, name)?;
-        let stats = super::world::render_frame(renderer, &mut solid, WIDTH, HEIGHT)?;
+        let stats = super::world::present_world!(renderer, solid_host, solid, WIDTH, HEIGHT)?;
         assert_eq!(stats.draw_calls, 1);
         let pixels = capture()?;
         save(output, &format!("shape-{name}"), &pixels)?;
@@ -46,17 +45,18 @@ pub fn run<D: RenderDevice>(
         apply(
             &mut solid,
             vec![Command::InsertComponent {
-                entity,
+                entity: entity.clone(),
                 component: ComponentValue::UNLIT_TEXTURE,
                 fields: vec![FieldWrite {
                     offset: std::mem::offset_of!(UnlitTexture, source) as u32,
                     value: FieldValue::String("fixture:///fixture.texture".into()),
                 }],
+                adopt: false,
             }],
         )?;
         assert!(solid.render_items().is_empty());
         deliver!(renderer, solid_host, solid, &[], Some(&texture))?;
-        super::world::render_frame(renderer, &mut solid, WIDTH, HEIGHT)?;
+        super::world::present_world!(finish; renderer, solid_host, solid, WIDTH, HEIGHT)?;
         let textured = capture()?;
         save(output, &format!("shape-{name}-checker"), &textured)?;
         for rgb in [[255, 0, 0], [0, 255, 0], [0, 0, 255], [0, 0, 0]] {
@@ -73,12 +73,12 @@ pub fn run<D: RenderDevice>(
         }
 
         // Discard GPU cache from the previous world before reusing its key.
-        super::world::render_frame(
-            renderer,
-            &mut super::world::empty_world(&mut ipp_core::HostRuntime::new()),
-            WIDTH,
-            HEIGHT,
-        )?;
+        renderer.prepare(&mut solid_host, None)?;
+        renderer.clear(ipp_core::WorldViewport {
+            width: WIDTH,
+            height: HEIGHT,
+            device_pixel_ratio: 1.0,
+        })?;
         let mut outline_host = ipp_core::HostRuntime::new();
         let mut outline = load(
             &mut outline_host,
@@ -86,7 +86,7 @@ pub fn run<D: RenderDevice>(
             fixtures,
             &format!("{name}-outline"),
         )?;
-        super::world::render_frame(renderer, &mut outline, WIDTH, HEIGHT)?;
+        super::world::present_world!(renderer, outline_host, outline, WIDTH, HEIGHT)?;
         let pixels = capture()?;
         save(output, &format!("shape-{name}-outline"), &pixels)?;
         let wire = coverage(&pixels).0;
@@ -100,16 +100,17 @@ pub fn run<D: RenderDevice>(
 
         // Ordinary immutable assets remain cached, then disappear with the world.
         assert_eq!(
-            super::world::render_frame(renderer, &mut outline, WIDTH, HEIGHT)?.uploaded_bytes,
+            super::world::present_world!(finish; renderer, outline_host, outline, WIDTH, HEIGHT)?
+                .uploaded_bytes,
             0
         );
-        super::world::render_frame(
-            renderer,
-            &mut super::world::empty_world(&mut ipp_core::HostRuntime::new()),
-            WIDTH,
-            HEIGHT,
-        )?;
+        renderer.clear(ipp_core::WorldViewport {
+            width: WIDTH,
+            height: HEIGHT,
+            device_pixel_ratio: 1.0,
+        })?;
         assert_eq!(coverage(&capture()?).0, 0);
+        renderer.prepare(&mut outline_host, None)?;
     }
 
     std::fs::write(output.join("shape-samples.csv"), evidence)?;
@@ -125,7 +126,7 @@ fn planes<D: RenderDevice>(
 ) -> Result<()> {
     let mut world_host = ipp_core::HostRuntime::new();
     let mut world = load(&mut world_host, renderer, fixtures, "plane")?;
-    super::world::render_frame(renderer, &mut world, WIDTH, HEIGHT)?;
+    super::world::present_world!(renderer, world_host, world, WIDTH, HEIGHT)?;
     let filled = capture()?;
     save(output, "plane", &filled)?;
     let color_count = |pixels: &[u8], color| {
@@ -173,29 +174,32 @@ fn planes<D: RenderDevice>(
             apply(
                 &mut world,
                 vec![Command::InsertComponent {
-                    entity,
+                    entity: entity.clone(),
                     component: texture_type,
                     fields: vec![FieldWrite {
                         offset: std::mem::offset_of!(UnlitTexture, source) as u32,
                         value: FieldValue::String("fixture:///fixture.texture".into()),
                     }],
+                    adopt: false,
                 }],
             )?;
         } else {
             apply(
                 &mut world,
                 vec![Command::SetField {
-                    entity,
+                    entity: entity.clone(),
                     component: texture_type,
                     field: FieldWrite {
                         offset: std::mem::offset_of!(UnlitTexture, source) as u32,
-                        value: FieldValue::String(format!("fixture:///fixture-{asset_id}.texture")),
+                        value: FieldValue::String(
+                            format!("fixture:///fixture-{asset_id}.texture").into(),
+                        ),
                     },
                 }],
             )?;
         }
         deliver!(renderer, world_host, world, &[], Some(&bytes))?;
-        super::world::render_frame(renderer, &mut world, WIDTH, HEIGHT)?;
+        super::world::present_world!(renderer, world_host, world, WIDTH, HEIGHT)?;
         let textured = capture()?;
         save(output, &format!("plane-texture-{asset_id}"), &textured)?;
         assert!(
@@ -244,7 +248,7 @@ fn planes<D: RenderDevice>(
             .into_iter()
             .zip(tint)
             .map(|(offset, value)| Command::SetField {
-                entity,
+                entity: entity.clone(),
                 component: material_type,
                 field: super::world::float(offset, value),
             })
@@ -256,12 +260,12 @@ fn planes<D: RenderDevice>(
             apply(
                 &mut world,
                 vec![Command::RemoveComponent {
-                    entity,
+                    entity: entity.clone(),
                     component: texture_type,
                 }],
             )?;
         }
-        super::world::render_frame(renderer, &mut world, WIDTH, HEIGHT)?;
+        super::world::present_world!(renderer, world_host, world, WIDTH, HEIGHT)?;
         let pixels = capture()?;
         save(
             output,
@@ -284,7 +288,7 @@ fn planes<D: RenderDevice>(
         material_offsets
             .into_iter()
             .map(|offset| Command::SetField {
-                entity,
+                entity: entity.clone(),
                 component: material_type,
                 field: super::world::float(offset, 1.0),
             })
@@ -299,18 +303,18 @@ fn planes<D: RenderDevice>(
         &mut world,
         vec![
             Command::SetField {
-                entity,
+                entity: entity.clone(),
                 component: transform,
                 field: super::world::float(std::mem::offset_of!(Transform, qy), 1.0),
             },
             Command::SetField {
-                entity,
+                entity: entity.clone(),
                 component: transform,
                 field: super::world::float(std::mem::offset_of!(Transform, qw), 0.0),
             },
         ],
     )?;
-    super::world::render_frame(renderer, &mut world, WIDTH, HEIGHT)?;
+    super::world::present_world!(finish; renderer, world_host, world, WIDTH, HEIGHT)?;
     let rotated = capture()?;
     save(output, "plane-rotated", &rotated)?;
     assert_eq!(
@@ -320,15 +324,15 @@ fn planes<D: RenderDevice>(
     );
     assert_arrow(&rotated, true);
 
-    super::world::render_frame(
-        renderer,
-        &mut super::world::empty_world(&mut ipp_core::HostRuntime::new()),
-        WIDTH,
-        HEIGHT,
-    )?;
+    renderer.prepare(&mut world_host, None)?;
+    renderer.clear(ipp_core::WorldViewport {
+        width: WIDTH,
+        height: HEIGHT,
+        device_pixel_ratio: 1.0,
+    })?;
     let mut outline_host = ipp_core::HostRuntime::new();
-    let mut outline = load(&mut outline_host, renderer, fixtures, "plane-outline")?;
-    super::world::render_frame(renderer, &mut outline, WIDTH, HEIGHT)?;
+    let outline = load(&mut outline_host, renderer, fixtures, "plane-outline")?;
+    super::world::present_world!(finish; renderer, outline_host, outline, WIDTH, HEIGHT)?;
     let pixels = capture()?;
     save(output, "plane-outline", &pixels)?;
     assert!(
@@ -376,13 +380,13 @@ fn planes<D: RenderDevice>(
             "contour_pixels={pixels_on_paths}\ncurve_samples={samples}\npositive_normal_and_rotated_normal=passed\n"
         ),
     )?;
-    super::world::render_frame(
-        renderer,
-        &mut super::world::empty_world(&mut ipp_core::HostRuntime::new()),
-        WIDTH,
-        HEIGHT,
-    )?;
+    renderer.clear(ipp_core::WorldViewport {
+        width: WIDTH,
+        height: HEIGHT,
+        device_pixel_ratio: 1.0,
+    })?;
     assert_eq!(coverage(&capture()?).0, 0);
+    renderer.prepare(&mut outline_host, None)?;
     Ok(())
 }
 
@@ -432,24 +436,28 @@ fn load<'a, D: RenderDevice>(
             Command::Create {
                 alias: 1,
                 metadata: Default::default(),
+                adopt: false,
             },
             Command::InsertComponent {
                 entity: EntityRef::Alias(1),
                 component: ComponentValue::TRANSFORM,
                 fields: vec![],
+                adopt: false,
             },
             Command::InsertComponent {
                 entity: EntityRef::Alias(1),
                 component: ComponentValue::UNLIT_MATERIAL,
                 fields: vec![],
+                adopt: false,
             },
             Command::InsertComponent {
                 entity: EntityRef::Alias(1),
                 component: ComponentValue::MESH_INSTANCE,
                 fields: vec![FieldWrite {
                     offset: std::mem::offset_of!(MeshInstance, source) as u32,
-                    value: FieldValue::String(format!("fixture:///{name}.mesh")),
+                    value: FieldValue::String(format!("fixture:///{name}.mesh").into()),
                 }],
+                adopt: false,
             },
         ],
     )?;

@@ -6,7 +6,7 @@ use crate::{
     components::schema::{FieldKind, FieldValue},
     services::asset_management::*,
 };
-use std::{any::Any, collections::BTreeSet, fmt::Debug};
+use std::{any::Any, collections::BTreeSet, fmt::Debug, sync::Arc};
 
 /// Compiled immutable animation format identity.
 pub const ANIMATION_TYPE: AssetTypeId = AssetTypeId(10);
@@ -18,9 +18,20 @@ pub enum AnimationValue {
     Field(FieldValue),
     /// Complete quaternion, normalized during sampling.
     Rotation([f32; 4]),
+    /// Clip-local structural placement; slots resolve per controller.
+    EntityPlacement(AnimationEntityPlacementKey),
     /// SkeletonJoint-local TRS samples in the pose track's joint order.
     #[cfg(feature = "skeletal-animation")]
     Pose(Vec<crate::components::Transform>),
+}
+
+/// Immutable structural key, independent of World runtime handles.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AnimationEntityPlacementKey {
+    /// Parent slot; absence places the target at the World root.
+    pub parent: Option<u32>,
+    /// Sibling slot before which to insert; absence appends once per key change.
+    pub before: Option<u32>,
 }
 
 /// Outgoing interpolation from this key to the next.
@@ -66,6 +77,8 @@ pub struct AnimationProperty {
 /// Stable target within the player's target entity.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AnimationTrackTarget {
+    /// Core relationship; key references resolve through the driver's binding table.
+    EntityLink,
     /// Named dynamic component property, resolved to its identity when bound.
     DynamicProperty {
         /// Compiled component identity with dynamic-property capability.
@@ -82,20 +95,26 @@ pub enum AnimationTrackTarget {
 
 impl AnimationTrackTarget {
     /// Target component identity, independent of any World binding.
-    pub fn component(&self) -> u16 {
+    pub fn component(&self) -> Option<u16> {
         match self {
+            Self::EntityLink => None,
             Self::DynamicProperty {
                 component,
                 ..
-            } => *component,
-            Self::AnimationProperty(property) => property.component,
+            } => Some(*component),
+            Self::AnimationProperty(property) => Some(property.component),
             #[cfg(feature = "skeletal-animation")]
-            Self::Joints(_) => ComponentValue::SKELETON,
+            Self::Joints(_) => Some(ComponentValue::SKELETON),
         }
+    }
+
+    pub(crate) fn component_target(&self) -> u16 {
+        self.component().expect("component animation target")
     }
 
     pub(crate) fn property(&self) -> Option<&AnimationProperty> {
         match self {
+            Self::EntityLink => None,
             Self::DynamicProperty {
                 ..
             } => None,
@@ -108,6 +127,7 @@ impl AnimationTrackTarget {
     /// Exact field offsets or ordered joint ordinals.
     pub fn indices(&self) -> &[u32] {
         match self {
+            Self::EntityLink => &[],
             Self::DynamicProperty {
                 ..
             } => &[],
@@ -119,6 +139,7 @@ impl AnimationTrackTarget {
 
     pub(crate) fn owned_bytes(&self) -> usize {
         match self {
+            Self::EntityLink => 0,
             Self::DynamicProperty {
                 name,
                 ..
@@ -131,6 +152,7 @@ impl AnimationTrackTarget {
 
     fn is_pose(&self) -> bool {
         match self {
+            Self::EntityLink => false,
             Self::DynamicProperty {
                 ..
             }
@@ -239,8 +261,21 @@ field_sample!(u32, U32);
 field_sample!(u64, U64);
 field_sample!(bool, Bool);
 field_sample!(EntityId, Entity);
-field_sample!(String, String, |value: &String| value.capacity());
+field_sample!(Arc<str>, String, |value: &Arc<str>| value.len());
 field_sample!(Vec<u8>, Bytes, |value: &Vec<u8>| value.capacity());
+
+impl AnimationSample for AnimationEntityPlacementKey {
+    fn from_value(value: AnimationValue) -> Result<Self, ErrorReason> {
+        match value {
+            AnimationValue::EntityPlacement(value) => Ok(value),
+            _ => Err(ErrorReason::InvalidField),
+        }
+    }
+
+    fn into_value(self) -> AnimationValue {
+        AnimationValue::EntityPlacement(self)
+    }
+}
 
 impl AnimationSample for [f32; 4] {
     fn from_value(value: AnimationValue) -> Result<Self, ErrorReason> {
@@ -596,10 +631,11 @@ impl IntoAnimationTrack for AnimationTrack {
             2 => self.typed::<EntityId>(),
             3 => self.typed::<u32>(),
             4 => self.typed::<u64>(),
-            5 => self.typed::<String>(),
+            5 => self.typed::<Arc<str>>(),
             6 => self.typed::<Vec<u8>>(),
             7 => self.typed::<bool>(),
             8 => self.typed::<[f32; 4]>(),
+            10 => self.typed::<AnimationEntityPlacementKey>(),
             #[cfg(feature = "skeletal-animation")]
             9 => self.typed::<Vec<crate::components::Transform>>(),
             _ => Err(ErrorReason::InvalidAsset),
@@ -641,11 +677,6 @@ impl AnimationClip {
         {
             return Err(ErrorReason::InvalidAsset);
         }
-        let pose_tracks = tracks.iter().any(|track| {
-            track.target.is_pose()
-                || track.keys.iter().any(|key| key.value.kind() == 11)
-                || matches!(track.target, AnimationTrackTarget::DynamicProperty { .. })
-        });
         let mut bytes = 20usize;
         for track in &tracks {
             if u32::try_from(track.keys.len()).is_err() || track.keys.is_empty() {
@@ -653,6 +684,11 @@ impl AnimationClip {
             }
             let kind = track.keys[0].value.kind();
             match &track.target {
+                AnimationTrackTarget::EntityLink => {
+                    if kind != 10 {
+                        return Err(ErrorReason::InvalidAsset);
+                    }
+                }
                 AnimationTrackTarget::DynamicProperty {
                     component,
                     name,
@@ -678,7 +714,7 @@ impl AnimationClip {
                 AnimationTrackTarget::AnimationProperty(property) => {
                     if !matches!(property.offsets.len(), 1 | 4)
                         || (kind == 8) != (property.offsets.len() == 4)
-                        || kind == 9
+                        || matches!(kind, 9 | 10)
                     {
                         return Err(ErrorReason::InvalidAsset);
                     }
@@ -712,18 +748,34 @@ impl AnimationClip {
                     return Err(ErrorReason::InvalidAsset);
                 }
             }
-            bytes += if let AnimationTrackTarget::DynamicProperty {
-                name,
-                ..
-            } = &track.target
-            {
-                10 + name.len()
-            } else if track.target.is_pose() {
-                8
-            } else {
-                7
-            } + 4 * track.target.indices().len()
-                + usize::from(pose_tracks);
+            let target_bytes = match &track.target {
+                AnimationTrackTarget::EntityLink => 5,
+                AnimationTrackTarget::DynamicProperty {
+                    name,
+                    ..
+                } => {
+                    u32::try_from(name.len()).map_err(|_| ErrorReason::Capacity)?;
+                    11usize
+                        .checked_add(name.len())
+                        .ok_or(ErrorReason::Capacity)?
+                }
+                AnimationTrackTarget::AnimationProperty(property) => 8usize
+                    .checked_add(
+                        property
+                            .offsets
+                            .len()
+                            .checked_mul(4)
+                            .ok_or(ErrorReason::Capacity)?,
+                    )
+                    .ok_or(ErrorReason::Capacity)?,
+                #[cfg(feature = "skeletal-animation")]
+                AnimationTrackTarget::Joints(joints) => 9usize
+                    .checked_add(joints.len().checked_mul(4).ok_or(ErrorReason::Capacity)?)
+                    .ok_or(ErrorReason::Capacity)?,
+            };
+            bytes = bytes
+                .checked_add(target_bytes)
+                .ok_or(ErrorReason::Capacity)?;
             for (index, key) in track.keys.iter().enumerate() {
                 if !key.time.is_finite()
                     || !(0.0..=duration).contains(&key.time)
@@ -805,35 +857,26 @@ impl AnimationClip {
         self.tracks[track].sample_value(time)
     }
 
-    /// Encode IPPA v1 property clips or v2 joint/pose clips.
+    /// Encode the canonical IPPA v4 typed clip format.
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(self.bytes);
-        let version = if self.tracks().iter().any(|track| {
-            matches!(track.target(), AnimationTrackTarget::DynamicProperty { .. })
-                || track.value_kind() == 11
-        }) {
-            3u32
-        } else if self.tracks().iter().any(|track| track.target().is_pose()) {
-            2u32
-        } else {
-            1
-        };
         out.extend_from_slice(b"IPPA");
-        out.extend_from_slice(&version.to_le_bytes());
+        out.extend_from_slice(&4u32.to_le_bytes());
         out.extend_from_slice(&self.duration().to_le_bytes());
         out.extend_from_slice(&(self.tracks().len() as u32).to_le_bytes());
         for track in self.tracks() {
             let track = track.interchange();
-            if version >= 2 {
-                out.push(
-                    if matches!(track.target, AnimationTrackTarget::DynamicProperty { .. }) {
-                        2
-                    } else {
-                        u8::from(track.target.is_pose())
-                    },
-                );
-            }
+            out.push(
+                if matches!(track.target, AnimationTrackTarget::EntityLink) {
+                    3
+                } else if matches!(track.target, AnimationTrackTarget::DynamicProperty { .. }) {
+                    2
+                } else {
+                    u8::from(track.target.is_pose())
+                },
+            );
             match &track.target {
+                AnimationTrackTarget::EntityLink => {}
                 AnimationTrackTarget::DynamicProperty {
                     component,
                     name,
@@ -889,20 +932,17 @@ impl AnimationClip {
             return Err(ErrorReason::InvalidAsset);
         }
         let version = r.u32()?;
-        if version != 1 && version != 3 && !(cfg!(feature = "skeletal-animation") && version == 2) {
+        if version != 4 {
             return Err(ErrorReason::InvalidAsset);
         }
         let duration = r.f64()?;
         let count = r.u32()? as usize;
         let mut tracks = Vec::new();
         for _ in 0..count {
-            let tag = if version == 1 {
-                0
-            } else {
-                r.byte()?
-            };
+            let tag = r.byte()?;
             let target = match tag {
-                2 if version >= 3 => {
+                3 => AnimationTrackTarget::EntityLink,
+                2 => {
                     let component = u16::from_le_bytes(r.array()?);
                     let length = r.u32()? as usize;
                     let name = std::str::from_utf8(r.take(length)?)
@@ -990,6 +1030,7 @@ impl AnimationValue {
         match self {
             Self::Field(v) => v.kind() as u8,
             Self::Rotation(_) => 8,
+            Self::EntityPlacement(_) => 10,
             #[cfg(feature = "skeletal-animation")]
             Self::Pose(_) => 9,
         }
@@ -1009,7 +1050,12 @@ impl AnimationValue {
         match self {
             // Row tables and absence are never animation keys; their kind tags
             // would also collide with the rotation and pose value tags.
-            Self::Field(FieldValue::Rows(_) | FieldValue::Unset) => Err(ErrorReason::InvalidAsset),
+            Self::Field(
+                FieldValue::Rows(_)
+                | FieldValue::Unset
+                | FieldValue::World(_)
+                | FieldValue::Output(_),
+            ) => Err(ErrorReason::InvalidAsset),
             // Row text is never animated.
             Self::Field(FieldValue::Dynamic(crate::DynamicValue::Text(_))) => {
                 Err(ErrorReason::InvalidAsset)
@@ -1026,6 +1072,13 @@ impl AnimationValue {
             Self::Field(FieldValue::F32(v)) if !v.is_finite() => Err(ErrorReason::InvalidAsset),
             Self::Rotation(q)
                 if q.iter().any(|v| !v.is_finite()) || q.iter().all(|v| *v == 0.0) =>
+            {
+                Err(ErrorReason::InvalidAsset)
+            }
+            Self::EntityPlacement(key)
+                if key.parent == Some(u32::MAX)
+                    || key.before == Some(u32::MAX)
+                    || (key.parent.is_some() && key.parent == key.before) =>
             {
                 Err(ErrorReason::InvalidAsset)
             }
@@ -1063,6 +1116,7 @@ impl AnimationValue {
                 })
         };
         match self {
+            Self::EntityPlacement(_) => return Err(ErrorReason::InvalidField),
             Self::Field(value) => {
                 if let Some(&offset) = property.offsets.first() {
                     write(offset, value.clone())?;
@@ -1097,7 +1151,15 @@ impl AnimationValue {
             // An absent optional row property and a whole row table are not
             // animatable values; their kinds would also collide with pose tags.
             return field(*offset)
-                .filter(|value| !matches!(value, FieldValue::Rows(_) | FieldValue::Unset))
+                .filter(|value| {
+                    !matches!(
+                        value,
+                        FieldValue::Rows(_)
+                            | FieldValue::Unset
+                            | FieldValue::World(_)
+                            | FieldValue::Output(_)
+                    )
+                })
                 .map(Self::Field)
                 .ok_or(ErrorReason::InvalidField);
         }
@@ -1132,10 +1194,16 @@ impl AnimationValue {
             Self::Field(FieldValue::Bool(_)) => 1,
             Self::Field(FieldValue::String(v)) => 4 + v.len(),
             Self::Field(FieldValue::Bytes(v)) => 4 + v.len(),
-            Self::Field(FieldValue::Rows(_) | FieldValue::Unset) => {
+            Self::Field(
+                FieldValue::Rows(_)
+                | FieldValue::Unset
+                | FieldValue::World(_)
+                | FieldValue::Output(_),
+            ) => {
                 unreachable!("clip validation rejects row tables and absence")
             }
             Self::Rotation(_) => 16,
+            Self::EntityPlacement(_) => 8,
             #[cfg(feature = "skeletal-animation")]
             Self::Pose(pose) => 4 + pose.len() * 40,
         }
@@ -1144,6 +1212,10 @@ impl AnimationValue {
     fn encode(&self, out: &mut Vec<u8>) {
         out.push(self.kind());
         match self {
+            Self::EntityPlacement(key) => {
+                out.extend_from_slice(&key.parent.unwrap_or(u32::MAX).to_le_bytes());
+                out.extend_from_slice(&key.before.unwrap_or(u32::MAX).to_le_bytes());
+            }
             Self::Field(FieldValue::Dynamic(value)) => {
                 let bytes = value.encode();
                 out.extend((bytes.len() as u32).to_le_bytes());
@@ -1162,7 +1234,12 @@ impl AnimationValue {
                 out.extend_from_slice(&(v.len() as u32).to_le_bytes());
                 out.extend_from_slice(v);
             }
-            Self::Field(FieldValue::Rows(_) | FieldValue::Unset) => {
+            Self::Field(
+                FieldValue::Rows(_)
+                | FieldValue::Unset
+                | FieldValue::World(_)
+                | FieldValue::Output(_),
+            ) => {
                 unreachable!("clip validation rejects row tables and absence")
             }
             #[cfg(feature = "skeletal-animation")]
@@ -1237,7 +1314,7 @@ impl<'a> AnimationClipReader<'a> {
                     FieldValue::String(
                         std::str::from_utf8(bytes)
                             .map_err(|_| ErrorReason::InvalidAsset)?
-                            .to_owned(),
+                            .into(),
                     )
                 } else {
                     FieldValue::Bytes(bytes.to_vec())
@@ -1255,6 +1332,16 @@ impl<'a> AnimationClipReader<'a> {
                     f32::from_le_bytes(self.array()?),
                     f32::from_le_bytes(self.array()?),
                 ]));
+            }
+            10 => {
+                let parent = self.u32()?;
+                let before = self.u32()?;
+                return Ok(AnimationValue::EntityPlacement(
+                    AnimationEntityPlacementKey {
+                        parent: (parent != u32::MAX).then_some(parent),
+                        before: (before != u32::MAX).then_some(before),
+                    },
+                ));
             }
             #[cfg(feature = "skeletal-animation")]
             9 => {
@@ -1314,3 +1401,7 @@ impl crate::services::asset_management::writer::AssetEncoder for AnimationClip {
 #[cfg(test)]
 #[path = "clip_sampling_tests.rs"]
 mod sampling_tests;
+
+#[cfg(test)]
+#[path = "clip_format_tests.rs"]
+mod format_tests;

@@ -1,6 +1,10 @@
 //! Resource release invalidates only draw rows that reference the released identity.
 #![cfg(feature = "builtin-assets")]
 
+mod support;
+
+use support::selection::RENDER;
+
 use ipp_core::{components::MeshInstance, services::asset_management::AssetKey, *};
 
 fn host_with_meshes() -> HostRuntime {
@@ -27,6 +31,7 @@ fn add_cube(host: &mut HostRuntime, world: WorldId, width: u32) -> EntityId {
     let mut operations = vec![Command::Create {
         alias: 0,
         metadata: Default::default(),
+        adopt: false,
     }];
     for component in [
         ComponentValue::TRANSFORM,
@@ -37,6 +42,7 @@ fn add_cube(host: &mut HostRuntime, world: WorldId, width: u32) -> EntityId {
             entity: EntityRef::Alias(0),
             component,
             fields: Vec::new(),
+            adopt: false,
         });
     }
     operations.push(Command::InsertComponent {
@@ -44,8 +50,9 @@ fn add_cube(host: &mut HostRuntime, world: WorldId, width: u32) -> EntityId {
         component: ComponentValue::MESH_INSTANCE,
         fields: vec![FieldWrite {
             offset: std::mem::offset_of!(MeshInstance, source) as u32,
-            value: FieldValue::String(format!("fixture:cube{width}")),
+            value: FieldValue::String(std::sync::Arc::<str>::from(format!("fixture:cube{width}"))),
         }],
+        adopt: false,
     });
     host.world_mut(world)
         .unwrap()
@@ -75,8 +82,10 @@ fn update_worlds(host: &mut HostRuntime, worlds: &[WorldId]) {
 #[test]
 fn releasing_one_worlds_last_mesh_keeps_peer_prepared_output() {
     let mut host = host_with_meshes();
-    let first = host.create_world(Default::default()).unwrap();
-    let peer = host.create_world(Default::default()).unwrap();
+    // This test proves eviction at final demand, so the Host keeps no idle cache.
+    host.asset_resources_mut().set_idle_resident_bytes_target(0);
+    let first = host.create_world(Default::default(), RENDER).unwrap();
+    let peer = host.create_world(Default::default(), RENDER).unwrap();
     let entity = add_cube(&mut host, first, 1);
     add_cube(&mut host, peer, 2);
     for _ in 0..8 {
@@ -121,7 +130,7 @@ fn releasing_one_worlds_last_mesh_keeps_peer_prepared_output() {
 #[test]
 fn payload_unload_withdraws_only_draws_using_that_resource() {
     let mut host = host_with_meshes();
-    let world = host.create_world(Default::default()).unwrap();
+    let world = host.create_world(Default::default(), RENDER).unwrap();
     let first = add_cube(&mut host, world, 1);
     let second = add_cube(&mut host, world, 2);
     for _ in 0..8 {

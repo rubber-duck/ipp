@@ -17,7 +17,7 @@ const build = {
   contractArtifact: resolve(profile, "contract.bin"),
 };
 
-test("Blender exports synchronize real resources, animation and overlays through HTTPS/WSS and WebGL", {
+test("Blender exports synchronize real resources, animation and React bindings through HTTPS/WSS and WebGL", {
   timeout: 180_000,
 }, async (context) => {
   await runBrowserEnvironment(
@@ -163,15 +163,12 @@ test("Blender exports synchronize real resources, animation and overlays through
           "content hashes must remain independent of asset names",
         );
 
+        // A React root bound to the exported cube writes its x over the
+        // failed revision's value; -0.25 is the authored x.
         await call("overrideTransform", ["fixture-cube", -0.25]);
-        const override = await capture("overlay");
+        const override = await capture("react-override");
         assert.equal(
-          field(
-            entity(override.inspection, "fixture-cube"),
-            "x",
-            "Transform",
-            true,
-          ),
+          field(entity(override.inspection, "fixture-cube"), "x", "Transform"),
           -0.25,
         );
         const renameRevision = await blender.command({
@@ -180,6 +177,7 @@ test("Blender exports synchronize real resources, animation and overlays through
         });
         const renamed = await capture("object-renamed", renameRevision);
         const renamedCube = entity(renamed.inspection, "Hero Mesh");
+        // The revision after a failed one rewrites every exported field.
         assert.equal(field(renamedCube, "x", "Transform"), initialTransform);
         assert.equal(
           renamed.inspection.entities.some(
@@ -198,11 +196,6 @@ test("Blender exports synchronize real resources, animation and overlays through
           originalSource,
         );
         assert.equal(
-          field(renamedCube, "x", "Transform", true),
-          -0.25,
-          "an existing overlay survives a name change",
-        );
-        assert.equal(
           renamed.inspection.entities.some(
             (value) => value.metadata.symbolicId === "fixture-cube",
           ),
@@ -211,7 +204,7 @@ test("Blender exports synchronize real resources, animation and overlays through
         assert.equal(
           (
             await call<ReturnType<typeof Fixture.compare>>("compare", [
-              "overlay",
+              "react-override",
               "object-renamed",
             ])
           ).changedPixels,
@@ -230,7 +223,7 @@ test("Blender exports synchronize real resources, animation and overlays through
         const restoreSwap = await blender.command({ action: "swap_names" });
         await capture("object-names-restored", restoreSwap);
         const movedRevision = await blender.command({ action: "transform" });
-        const moved = await capture("base-moved-under-overlay", movedRevision);
+        const moved = await capture("export-moved", movedRevision);
         const movedCube = entity(moved.inspection, "fixture-cube");
         assert.equal(
           movedCube.id,
@@ -241,30 +234,25 @@ test("Blender exports synchronize real resources, animation and overlays through
           field(movedCube, "source", "MeshInstance"),
           originalSource,
         );
+        // The export's transform write replaces React's x: last write wins.
         assert.notEqual(field(movedCube, "x", "Transform"), initialTransform);
+        // The root only bound the cube and wrote an existing Transform, so
+        // unmounting it leaves the component with the exported values.
+        await call("unmountTransformOverride");
+        const unmounted = await capture("react-unmounted");
         assert.equal(
-          field(movedCube, "x", "Transform", true),
-          -0.25,
-          "React override remains effective over updated base",
-        );
-        await call("releaseComponentStateOverlay");
-        const revealed = await capture("latest-base-revealed");
-        assert.equal(
-          field(
-            entity(revealed.inspection, "fixture-cube"),
-            "x",
-            "Transform",
-            true,
-          ),
+          field(entity(unmounted.inspection, "fixture-cube"), "x", "Transform"),
           field(movedCube, "x", "Transform"),
         );
-        const revealDifference = await call<ReturnType<typeof Fixture.compare>>(
-          "compare",
-          ["base-moved-under-overlay", "latest-base-revealed"],
-        );
-        assert.ok(
-          revealDifference.changedPixels > 100,
-          "removing overlay must reveal changed rendered position",
+        assert.equal(
+          (
+            await call<ReturnType<typeof Fixture.compare>>("compare", [
+              "export-moved",
+              "react-unmounted",
+            ])
+          ).changedPixels,
+          0,
+          "unmounting a binding root must leave the exported placement",
         );
 
         const meshRevision = await blender.command({ action: "mesh" });
@@ -423,7 +411,7 @@ test("Blender exports synchronize real resources, animation and overlays through
           await blender.command({ action: "textured_pbr" }),
         );
         assert.ok(
-          entity(litPanel.inspection, "fixture-panel").effective.some(
+          entity(litPanel.inspection, "fixture-panel").components.some(
             (entry) => "roughness" in entry.fields,
           ),
         );
@@ -601,7 +589,7 @@ test("Packed Fox combines vertex and skeletal animation with its original UV tex
         );
         await call("seek", ["fox-fox", 1]);
         const combined = await capture("fox-skeleton-and-mesh");
-        const poseFields = entity(combined.inspection, "fox").effective.find(
+        const poseFields = entity(combined.inspection, "fox").components.find(
           (value) => "source" in value.fields && "weight" in value.fields,
         )!.fields;
         assert.equal(poseFields.weight, 1);
@@ -751,10 +739,9 @@ test("Blender hierarchy and shape keyframes preserve poses through live edits an
         (await call<ReturnType<typeof Fixture.compare>>("compare", [a, b]))
           .changedPixels;
       const parentOf = (state: Inspection, name: string) =>
-        entity(state, name).base.find((value) => "parent" in value.fields)
-          ?.fields.parent;
+        entity(state, name).link.parent;
       const meshPose = (state: Inspection) =>
-        entity(state, "fixture-panel").effective.find(
+        entity(state, "fixture-panel").components.find(
           (value) => "weight" in value.fields && "source" in value.fields,
         )!.fields;
       try {
@@ -863,7 +850,7 @@ test("Blender hierarchy and shape keyframes preserve poses through live edits an
           0,
         );
         assert.equal(
-          entity(baked.inspection, "fixture-panel").base.some(
+          entity(baked.inspection, "fixture-panel").components.some(
             (value) => "weight" in value.fields,
           ),
           false,
@@ -887,12 +874,12 @@ test("Blender hierarchy and shape keyframes preserve poses through live edits an
           await blender.command({ action: "reverse_parent" }),
         );
         assert.equal(parentOf(reversed.inspection, "fixture-parent"), panel);
-        assert.equal(parentOf(reversed.inspection, "fixture-panel"), undefined);
+        assert.equal(parentOf(reversed.inspection, "fixture-panel"), null);
         const removed = await capture(
           "parent-deleted",
           await blender.command({ action: "remove_parent" }),
         );
-        assert.equal(parentOf(removed.inspection, "fixture-cube"), undefined);
+        assert.equal(parentOf(removed.inspection, "fixture-cube"), null);
         assert.equal(entity(removed.inspection, "fixture-cube").id, cube);
         assert.equal(
           removed.inspection.entities.some((value) => value.id === parent),
@@ -918,16 +905,9 @@ function entity(inspection: Inspection, id: string): EntitySnapshot {
   return entity;
 }
 
-function field(
-  entity: EntitySnapshot,
-  name: string,
-  component: string,
-  effective = false,
-) {
+function field(entity: EntitySnapshot, name: string, component: string) {
   // Field shapes distinguish the small relevant components without hard-coded target IDs.
-  const fields = (effective ? entity.effective : entity.base).map(
-    (value) => value.fields,
-  );
+  const fields = entity.components.map((value) => value.fields);
   const selected = fields.find((value) =>
     component === "Transform"
       ? "qx" in value

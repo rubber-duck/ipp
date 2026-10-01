@@ -16,21 +16,21 @@ impl AnimationAccess<'_, '_> {
                 id,
                 description,
             } => self
-                .update_ordinary_animation_controller(id, description)
+                .update_animation_controller(id, description)
                 .map(|()| None),
             AnimationControllerCommand::Transition {
                 id,
                 transition,
             } => self
-                .transition_ordinary_animation_controller(id, transition)
+                .transition_animation_controller(id, transition)
                 .map(|()| None),
             AnimationControllerCommand::Delete {
                 id,
-            } => self.remove_ordinary_animation_controller(id).map(|()| None),
+            } => self.remove_animation_controller(id).map(|()| None),
             AnimationControllerCommand::Control {
                 id,
                 control,
-            } => self.control_ordinary_playback(id, control).map(|()| None),
+            } => self.control_playback(id, control).map(|()| None),
         };
         let status = result.as_ref().map(|_| ()).map_err(|reason| *reason);
         self.system
@@ -41,41 +41,6 @@ impl AnimationAccess<'_, '_> {
                 result,
             });
         status
-    }
-
-    pub(in crate::world) fn update_ordinary_animation_controller(
-        &mut self,
-        id: AnimationControllerId,
-        description: AnimationControllerDescription,
-    ) -> Result<(), ErrorReason> {
-        self.system.ensure_ordinary_controller(id)?;
-        self.update_animation_controller(id, description)
-    }
-
-    pub(in crate::world) fn transition_ordinary_animation_controller(
-        &mut self,
-        id: AnimationControllerId,
-        transition: AnimationControllerTransition,
-    ) -> Result<(), ErrorReason> {
-        self.system.ensure_ordinary_controller(id)?;
-        self.transition_animation_controller(id, transition)
-    }
-
-    pub(in crate::world) fn remove_ordinary_animation_controller(
-        &mut self,
-        id: AnimationControllerId,
-    ) -> Result<(), ErrorReason> {
-        self.system.ensure_ordinary_controller(id)?;
-        self.remove_animation_controller(id)
-    }
-
-    pub(in crate::world) fn control_ordinary_playback(
-        &mut self,
-        id: AnimationControllerId,
-        control: AnimationPlaybackControl,
-    ) -> Result<(), ErrorReason> {
-        self.system.ensure_ordinary_controller(id)?;
-        self.control_playback(id, control)
     }
 
     pub(super) fn event(
@@ -128,18 +93,19 @@ impl AnimationAccess<'_, '_> {
                     transition: None,
                 },
                 drivers: Vec::new(),
+                structural_drivers: Vec::new(),
                 driver_targets: BTreeMap::new(),
                 incarnations,
                 sought: false,
                 directional_start_pending: false,
                 duration: 0.0,
                 ready: false,
-                retain_numeric: false,
                 numeric_targets: Vec::new(),
                 discrete_drivers: Vec::new(),
                 numeric_outputs: Vec::new(),
                 failure: None,
                 transition: None,
+                contributions: Default::default(),
             },
         );
         self.system.state.index_controller(id);
@@ -174,7 +140,17 @@ impl AnimationAccess<'_, '_> {
             self.system.state.animation_sources = demand;
             return Ok(());
         }
-        self.restore_controller(id);
+        self.withdraw_controller(id);
+        let structural = std::mem::take(
+            &mut self
+                .system
+                .state
+                .controllers
+                .get_mut(&id)
+                .unwrap()
+                .structural_drivers,
+        );
+        self.release_structural_drivers(structural);
         let controller = self.system.state.controllers.get_mut(&id).unwrap();
         controller.snapshot.description = description;
         controller.clear_drivers();
@@ -218,7 +194,7 @@ impl AnimationAccess<'_, '_> {
             .transition
             .as_ref()
             .and_then(|runtime| runtime.program.as_ref())
-            .map(super::transition::AnimationTransitionProgram::freeze)
+            .map(|program| program.freeze(Some(&old.contributions)))
             .transpose()?;
         let mut demand = self
             .read()
@@ -228,63 +204,12 @@ impl AnimationAccess<'_, '_> {
             AnimationTransitionStartTime::Preserve => old.snapshot.time,
             AnimationTransitionStartTime::Restart | AnimationTransitionStartTime::MatchPhase => 0.0,
         };
-        let hold_program = {
-            let source = self.system.state.controllers.get_mut(&id).unwrap();
-            if let Some(previous) = source.transition.as_deref_mut() {
-                if previous.program.is_some() {
-                    Some(
-                        super::transition::AnimationTransitionProgram::bind_frozen_source(
-                            interrupted_values.as_deref().unwrap(),
-                            &self.context.world.components,
-                        )?,
-                    )
-                } else {
-                    match &mut previous.source {
-                        super::system_state::AnimationTransitionSource::Live(source)
-                            if source.ready
-                                && source.snapshot.state != AnimationPlaybackStatus::Stopped =>
-                        {
-                            let mut program =
-                                super::transition::AnimationTransitionProgram::bind_source(
-                                    source,
-                                    &self.context.world.components,
-                                )?;
-                            program.prepare_source_hold(source)?;
-                            Some(program)
-                        }
-                        super::system_state::AnimationTransitionSource::Frozen {
-                            values,
-                            ..
-                        } => Some(
-                            super::transition::AnimationTransitionProgram::bind_frozen_source(
-                                values,
-                                &self.context.world.components,
-                            )?,
-                        ),
-                        _ => None,
-                    }
-                }
-            } else if source.ready && source.snapshot.state != AnimationPlaybackStatus::Stopped {
-                let mut program = super::transition::AnimationTransitionProgram::bind_source(
-                    source,
-                    &self.context.world.components,
-                )?;
-                program.prepare_source_hold(source)?;
-                Some(program)
-            } else {
-                None
-            }
-        };
-        // Ingress keeps restored inputs in storage so later commands at this
-        // boundary stage authored values; evaluation publishes the pending hold.
-        if let Some(program) = hold_program.as_ref() {
-            program.validate_source_hold()?;
-        }
         self.system.state.unindex_controller(id);
         let mut source = self.system.state.controllers.remove(&id).unwrap();
+        // The destination takes over what the outgoing side has in its fields.
+        let contributions = source.contributions.take();
         let source_state = source.snapshot.state;
         let source_ready = source.ready;
-        let source_retain_numeric = source.retain_numeric;
         source.snapshot.transition = None;
         let transition_source = if let Some(previous) = source.transition.take() {
             let reference_time = source.snapshot.time;
@@ -340,7 +265,7 @@ impl AnimationAccess<'_, '_> {
             easing: transition.easing,
             pending: true,
         };
-        let controller = AnimationController {
+        let mut controller = AnimationController {
             snapshot: AnimationControllerSnapshot {
                 id,
                 description: transition.description,
@@ -349,13 +274,13 @@ impl AnimationAccess<'_, '_> {
                 transition: Some(summary),
             },
             drivers: Vec::new(),
+            structural_drivers: Vec::new(),
             driver_targets: BTreeMap::new(),
             incarnations,
             sought: true,
             directional_start_pending: false,
             duration: 0.0,
             ready: source_ready,
-            retain_numeric: source_retain_numeric,
             numeric_targets: Vec::new(),
             discrete_drivers: Vec::new(),
             numeric_outputs: Vec::new(),
@@ -363,10 +288,11 @@ impl AnimationAccess<'_, '_> {
             transition: Some(Box::new(super::system_state::AnimationTransitionRuntime {
                 source: transition_source,
                 start_time: transition.start_time,
-                hold_program,
                 program: None,
             })),
+            contributions: Default::default(),
         };
+        controller.contributions.replace(contributions);
         self.system.state.controllers.insert(id, controller);
         self.system.state.index_controller(id);
         self.system.state.demand_revision = self.system.state.demand_revision.wrapping_add(1);
@@ -380,6 +306,9 @@ impl AnimationAccess<'_, '_> {
         incarnations: &[(u64, AnimationTrackTarget)],
     ) -> Result<(), ErrorReason> {
         for (driver, (_, property)) in description.drivers.iter().zip(incarnations) {
+            if matches!(property, AnimationTrackTarget::EntityLink) {
+                return Err(ErrorReason::InvalidField);
+            }
             let component = self
                 .context
                 .world
@@ -387,7 +316,7 @@ impl AnimationAccess<'_, '_> {
                 .input_value(
                     &self.context.world.components,
                     driver.target,
-                    property.component(),
+                    property.component_target(),
                 )
                 .ok_or(ErrorReason::MissingComponent)?;
             let value = self.read().read_animation_target(property, &component)?;
@@ -415,7 +344,17 @@ impl AnimationAccess<'_, '_> {
         if !self.system.state.controllers.contains_key(&id) {
             return Err(ErrorReason::InvalidValue);
         }
-        self.restore_controller(id);
+        self.withdraw_controller(id);
+        let structural = std::mem::take(
+            &mut self
+                .system
+                .state
+                .controllers
+                .get_mut(&id)
+                .unwrap()
+                .structural_drivers,
+        );
+        self.release_structural_drivers(structural);
         self.system.state.controllers.remove(&id);
         self.system.state.unindex_controller(id);
         self.system.state.demand_revision = self.system.state.demand_revision.wrapping_add(1);
@@ -442,6 +381,7 @@ impl AnimationAccess<'_, '_> {
                 | AnimationPlaybackControl::PlayAtSpeed(_)
                 | AnimationPlaybackControl::Restart
         ) && controller.drivers.is_empty()
+            && controller.structural_drivers.is_empty()
         {
             incarnations = Some(self.read().validate_controller_description(
                 &controller.snapshot.description,
@@ -479,7 +419,17 @@ impl AnimationAccess<'_, '_> {
                 }
             });
         if control == AnimationPlaybackControl::Stop {
-            self.restore_controller(id);
+            self.withdraw_controller(id);
+            let structural = std::mem::take(
+                &mut self
+                    .system
+                    .state
+                    .controllers
+                    .get_mut(&id)
+                    .unwrap()
+                    .structural_drivers,
+            );
+            self.release_structural_drivers(structural);
         }
         let mut controller = self.system.state.take_controller(id).unwrap();
         let old = controller.snapshot.state;
@@ -541,28 +491,10 @@ impl AnimationAccess<'_, '_> {
         Ok(())
     }
 
-    pub(super) fn restore_controller(&mut self, id: AnimationControllerId) {
-        self.restore_controller_inputs(id, false);
-    }
-
-    pub(super) fn restore_controller_inputs(
-        &mut self,
-        id: AnimationControllerId,
-        retain_outputs: bool,
-    ) {
-        if retain_outputs
-            && self
-                .system
-                .state
-                .controllers
-                .get(&id)
-                .is_some_and(|controller| {
-                    controller.ready && controller.failure.is_none() && controller.retain_numeric
-                })
-        {
-            return;
-        }
-
+    /// Subtract everything a controller has applied from its still-live fields:
+    /// on stop, removal, description change and invalidation. A subtraction the
+    /// field rejects leaves the field as it is.
+    pub(super) fn withdraw_controller(&mut self, id: AnimationControllerId) {
         #[cfg(feature = "profiling")]
         let measurement =
             crate::profiling::Stage::fixed(crate::profiling::FixedStage::AnimationRestoreAndStage);
@@ -570,102 +502,30 @@ impl AnimationAccess<'_, '_> {
         let Some(mut controller) = self.system.state.take_controller(id) else {
             return;
         };
-        let mut restored_transition_union = false;
-        if let Some(transition) = controller.transition.take() {
-            if let Some(program) = transition.program.as_ref() {
-                self.context
-                    .before_numeric_update(program.numeric_targets());
-                let _ = program.restore(
-                    &mut self.context.world.components,
-                    &self.context.world.state,
-                );
-                restored_transition_union = true;
-            } else if let super::system_state::AnimationTransitionSource::Frozen {
-                values,
-                ..
-            } = &transition.source
-            {
-                self.context
-                    .before_numeric_update(&super::transition::frozen_numeric_targets(values));
-                let _ = super::transition::restore_frozen_values(
-                    values,
-                    &mut self.context.world.components,
-                    &self.context.world.state,
-                );
-                restored_transition_union = true;
-            }
-            controller.transition = Some(transition);
-        }
+        let contributions = controller.contributions.take();
         let mut values = super::component_values::AnimationComponentValues::new(
             std::mem::take(&mut self.system.state.component_scratch),
             std::mem::take(&mut self.system.state.property_scratch),
         );
         self.context
             .before_numeric_update(&controller.numeric_targets);
-        for driver in controller
-            .restoration_drivers()
-            .filter(|_| !restored_transition_union)
-        {
-            if driver.restore_numeric(&mut self.context.world.components) {
-                continue;
-            }
-            if driver.discrete() {
-                let identity = driver.identity();
-                let key = (identity.entity, identity.property.component());
-                if retain_outputs
-                    && controller.ready
-                    && controller.failure.is_none()
-                    && driver.retain_discrete()
-                {
-                    continue;
-                }
-                driver.reset_discrete();
-                if let Some(property) = identity.property.property()
-                    && let [offset] = property.offsets.as_slice()
-                    && let AnimationValue::Field(original) = driver.original()
-                {
-                    let _ = values.set_numeric(key, *offset, original);
-                    continue;
-                }
-            }
-            let identity = driver.identity();
-            #[cfg(feature = "skeletal-animation")]
-            if matches!(
-                driver.runtime_target(),
-                super::driver::AnimationRuntimeTarget::JointLocal { .. }
-            ) {
-                if let Some(original) = driver.joint_original() {
-                    let _ = driver.runtime_target().write_joint_slice(
-                        &mut self.context.world.components,
-                        identity.entity,
-                        original,
-                    );
-                }
-                continue;
-            }
-            let key = (identity.entity, identity.property.component());
-            if let Some(property) = identity.property.property()
-                && let [offset] = property.offsets.as_slice()
-                && values
-                    .numeric_current(key, *offset, &self.context.world.components)
-                    .is_some()
-                && let AnimationValue::Field(original) = driver.original()
+        for (identity, applied) in &contributions {
+            if applied.is_empty()
+                || !self
+                    .read()
+                    .animation_target_alive(identity, &self.context.world.state)
             {
-                let _ = values.set_numeric(key, *offset, original);
                 continue;
             }
-            if let Ok(value) = values.get_or_insert(key, || {
-                self.context
-                    .world
-                    .components
-                    .get(key.1, key.0.index() as usize)
-                    .ok_or(ErrorReason::MissingComponent)
-            }) {
-                let _ = driver.restore(value);
-            }
+            let _ = withdraw(
+                &mut values,
+                &self.context.world.components,
+                identity,
+                applied,
+            );
         }
         // Every bound driver must be visible to synchronous lifecycle callbacks
-        // before restoration can replace another component's internal storage.
+        // before the writes can replace another component's internal storage.
         #[cfg(feature = "profiling")]
         drop(measurement);
 
@@ -681,59 +541,24 @@ impl AnimationAccess<'_, '_> {
         ) = values.into_scratch();
     }
 
-    /// Restore inputs required by mutation or composition; eligible replacement
-    /// output can survive an empty mutation boundary until its next sample.
-    pub(in crate::world) fn restore_animation_inputs(&mut self, retain_outputs: bool) {
-        let restorations = std::mem::take(&mut self.system.state.pending_restorations);
-        let mut values = BTreeMap::new();
-        for (identity, original) in restorations {
-            if !self
-                .read()
-                .animation_target_alive(&identity, &self.context.world.state)
-            {
-                continue;
-            }
-            let Some(property) = identity.property.property() else {
-                continue;
-            };
-            let key = (identity.entity, identity.property.component());
-            if let std::collections::btree_map::Entry::Vacant(entry) = values.entry(key)
-                && let Some(value) = self
-                    .context
-                    .world
-                    .components
-                    .get(key.1, key.0.index() as usize)
-            {
-                entry.insert(value);
-            }
-            if let Some(value) = values.get_mut(&key) {
-                let _ = original.write(property, value);
-            }
-        }
-        for ((entity, _), value) in values {
-            let _ = self.apply_sampled_value(entity, value);
-        }
-        let mut ids = std::mem::take(&mut self.system.state.controller_ids);
-        ids.clear();
-        ids.extend(self.system.state.controllers.keys().copied());
-        let retain_outputs = retain_outputs
-            && self.context.world.queue.is_empty()
-            && !self.context.world.admitting_ingress;
-        for &id in &ids {
-            self.restore_controller_inputs(id, retain_outputs);
-        }
-        self.system.state.controller_ids = ids;
-    }
-
     /// Install persistent descriptions and frozen clocks, rebuilding runtime bindings on readiness.
     pub fn restore_animation_controllers(
         &mut self,
         persistent: AnimationPersistentState,
     ) -> Result<(), ErrorReason> {
+        if !self
+            .context
+            .world
+            .manifest
+            .supports_operation(crate::systems::WorldOperation::Animation)
+        {
+            return Err(ErrorReason::UnsupportedDependency);
+        }
         if persistent.next_id == 0 {
             return Err(ErrorReason::InvalidValue);
         }
         let transitions = persistent.transitions;
+        let contributions = persistent.contributions;
         let directional_count = persistent.directional_starts.len();
         let directional_starts: BTreeSet<_> = persistent.directional_starts.into_iter().collect();
         if directional_starts.len() != directional_count {
@@ -766,18 +591,19 @@ impl AnimationAccess<'_, '_> {
                 AnimationController {
                     snapshot,
                     drivers: Vec::new(),
+                    structural_drivers: Vec::new(),
                     driver_targets: BTreeMap::new(),
                     incarnations,
                     sought: true,
                     directional_start_pending,
                     duration: 0.0,
                     ready: false,
-                    retain_numeric: false,
                     numeric_targets: Vec::new(),
                     discrete_drivers: Vec::new(),
                     numeric_outputs: Vec::new(),
                     failure: None,
                     transition: None,
+                    contributions: Default::default(),
                 },
             );
         }
@@ -817,21 +643,29 @@ impl AnimationAccess<'_, '_> {
                     let values = values
                         .into_iter()
                         .map(|value| {
+                            super::binding::validate_target_support(
+                                &self.context.world.manifest,
+                                &value.property,
+                            )?;
+                            let component = value
+                                .property
+                                .component()
+                                .ok_or(ErrorReason::InvalidField)?;
                             let incarnation = self
                                 .context
                                 .world
                                 .state
                                 .entities
                                 .get(&value.target)
-                                .and_then(|record| record.input(value.property.component()))
+                                .and_then(|record| record.input(component))
                                 .map(|input| input.incarnation)
                                 .ok_or(ErrorReason::MissingComponent)?;
                             Ok(super::system_state::AnimationRuntimeFrozenTransitionValue {
                                 target: value.target,
                                 incarnation,
                                 property: value.property,
+                                baseline: super::contribution::identity_value(&value.value),
                                 value: value.value,
-                                baseline: value.baseline,
                             })
                         })
                         .collect::<Result<Vec<_>, _>>()?;
@@ -848,7 +682,6 @@ impl AnimationAccess<'_, '_> {
                 Some(Box::new(super::system_state::AnimationTransitionRuntime {
                     source,
                     start_time: transition.start_time,
-                    hold_program: None,
                     program: None,
                 }));
             destination.snapshot.transition.as_mut().unwrap().pending = true;
@@ -858,15 +691,76 @@ impl AnimationAccess<'_, '_> {
             add_description_demand(&controller.snapshot.description, &mut demand);
         }
         self.read().validate_animation_demand(&demand)?;
-        self.restore_animation_inputs(false);
-        #[cfg(feature = "gui")]
-        self.system.invalidate_skin_controller_associations();
+        // Fields hold what was saved, contributions included; each controller
+        // resumes knowing what it applied.
+        for contribution in contributions {
+            let controller = controllers
+                .get_mut(&contribution.controller)
+                .ok_or(ErrorReason::InvalidValue)?;
+            let identity = self.saved_contribution_target(&contribution)?;
+            if controller.contributions.get(&identity).is_some() {
+                return Err(ErrorReason::InvalidValue);
+            }
+            controller.contributions.set(&identity, contribution.value);
+        }
+        // Replaced controllers leave their fields as they are: restoring pairs the
+        // saved contributions with the fields they were saved with.
+        let mut structural = Vec::new();
+        for controller in self.system.state.controllers.values_mut() {
+            structural.append(&mut controller.structural_drivers);
+        }
+        self.release_structural_drivers(structural);
         self.system.state.controllers = controllers;
         self.system.state.rebuild_target_index();
         self.system.state.next_id = persistent.next_id;
         self.system.state.demand_revision = self.system.state.demand_revision.wrapping_add(1);
         self.system.state.animation_sources = demand;
         Ok(())
+    }
+
+    /// Resolve a saved contribution's field and check that it can hold it.
+    fn saved_contribution_target(
+        &self,
+        contribution: &AnimationPersistentContribution,
+    ) -> Result<super::driver::AnimationTargetIdentity, ErrorReason> {
+        super::binding::validate_target_support(
+            &self.context.world.manifest,
+            &contribution.property,
+        )?;
+        let property = contribution
+            .property
+            .property()
+            .ok_or(ErrorReason::InvalidField)?;
+        let incarnation = self
+            .context
+            .world
+            .state
+            .entities
+            .get(&contribution.target)
+            .and_then(|record| record.input(property.component))
+            .map(|input| input.incarnation)
+            .ok_or(ErrorReason::MissingComponent)?;
+        let value = self
+            .context
+            .world
+            .state
+            .input_value(
+                &self.context.world.components,
+                contribution.target,
+                property.component,
+            )
+            .ok_or(ErrorReason::MissingComponent)?;
+        let current = self
+            .read()
+            .read_animation_target(&contribution.property, &value)?;
+        if !super::contribution::contributes(&current) || !current.same_type(&contribution.value) {
+            return Err(ErrorReason::InvalidField);
+        }
+        Ok(super::driver::AnimationTargetIdentity {
+            entity: contribution.target,
+            incarnation,
+            property: contribution.property.clone(),
+        })
     }
 
     fn restored_transition_controller(
@@ -887,18 +781,19 @@ impl AnimationAccess<'_, '_> {
         Ok(AnimationController {
             snapshot,
             drivers: Vec::new(),
+            structural_drivers: Vec::new(),
             driver_targets: BTreeMap::new(),
             incarnations,
             sought: true,
             directional_start_pending: false,
             duration: 0.0,
             ready: false,
-            retain_numeric: false,
             numeric_targets: Vec::new(),
             discrete_drivers: Vec::new(),
             numeric_outputs: Vec::new(),
             failure: None,
             transition: None,
+            contributions: Default::default(),
         })
     }
 
@@ -970,8 +865,14 @@ pub(super) fn description_bytes(description: &AnimationControllerDescription) ->
             bytes.saturating_add(
                 driver
                     .source
-                    .capacity()
+                    .len()
                     .saturating_add(driver.property.owned_bytes())
+                    .saturating_add(
+                        driver
+                            .entity_bindings
+                            .capacity()
+                            .saturating_mul(std::mem::size_of::<EntityId>()),
+                    )
                     .saturating_mul(2),
             )
         },
@@ -985,4 +886,34 @@ pub(super) fn add_description_demand(
     for driver in &description.drivers {
         AssetDemandSelection::insert_into(demand, ANIMATION_TYPE, &driver.source, driver.variant);
     }
+}
+
+/// Stage the subtraction of `applied` from its field.
+fn withdraw(
+    values: &mut super::component_values::AnimationComponentValues,
+    storage: &crate::components::registry::ComponentStorage,
+    identity: &super::driver::AnimationTargetIdentity,
+    applied: &super::contribution::AnimationApplied,
+) -> Result<(), ErrorReason> {
+    let property = identity
+        .property
+        .property()
+        .ok_or(ErrorReason::InvalidField)?;
+    let key = (identity.entity, property.component);
+    if let [offset] = property.offsets.as_slice()
+        && let Some(current) = values.numeric_current(key, *offset, storage)
+    {
+        let AnimationValue::Field(next) = applied.withdrawn(&AnimationValue::Field(current))?
+        else {
+            return Err(ErrorReason::InvalidField);
+        };
+        return values.set_numeric(key, *offset, next);
+    }
+    let value = values.get_or_insert(key, || {
+        storage
+            .get(key.1, key.0.index() as usize)
+            .ok_or(ErrorReason::MissingComponent)
+    })?;
+    let current = AnimationValue::read(property, value)?;
+    applied.withdrawn(&current)?.write(property, value)
 }

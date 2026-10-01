@@ -8,9 +8,9 @@ pub type SystemPersistentState = Vec<u8>;
 
 /// Shared identity mapping and bounded capture accounting.
 pub struct SystemSaveContext<'a> {
-    /// Live producer identities selected for this capture.
+    /// Live entity identities selected for this capture.
     pub ids: &'a BTreeMap<crate::EntityId, crate::EntityPersistentId>,
-    /// Captured producer components, with durable references.
+    /// Captured stored components, with durable references.
     pub entities: &'a [crate::services::world_serialization::WorldSerializedEntity],
     /// Bytes already retained by this capture, updated before allocating a contribution.
     pub bytes: &'a mut usize,

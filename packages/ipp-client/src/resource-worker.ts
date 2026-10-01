@@ -404,6 +404,7 @@ export class AssetWorkerService {
 
   private output(): Uint8Array<ArrayBuffer> {
     const length = this.runtime.ipp_output_len() >>> 0;
+    // `ipp_protocol::MAX_MESSAGE_BYTES`, checked by `tools/check_repo.py`.
     if (length > 1_048_576) throw new Error("Resource output exceeds bounds");
     return new Uint8Array(
       this.runtime.memory.buffer,

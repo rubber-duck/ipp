@@ -1,6 +1,11 @@
-import type { ResourceUrlMapping } from "@ipp/client";
+import type {
+  Client,
+  LogLevel,
+  OutputReference,
+  PresentationView,
+  ResourceUrlMapping,
+} from "@ipp/client";
 import {
-  createContext,
   useCallback,
   useContext,
   useEffect,
@@ -11,30 +16,36 @@ import {
   type HTMLAttributes,
   type ReactNode,
 } from "react";
-import type { Client, GuiWorldClient, LogLevel } from "@ipp/client";
+import type { ReactWorldRoot } from "./index.js";
 import {
   CanvasWorldSession,
   asError,
   notify,
   type CanvasWorldBinding,
+  type IppCanvasHandle,
 } from "./canvas-world-session.js";
-import {
-  attachCanvasGuiInput,
-  canvasViewportPoint,
-  createGuiInputSink,
-  keyboardFocusHandoff,
-  type AttachCanvasGuiInputOptions,
-  type GuiViewportPoint,
-} from "./gui/input.js";
-import {
-  attachTextBridge,
-  createTextBridgeModel,
-  observeTextBridgeBatch,
-  viewportToBridgeOffset,
-} from "./gui/text-bridge.js";
-import type { IppCanvasHandle } from "./canvas-world-session.js";
+import { CanvasLifetime, type CanvasWorldSource } from "./canvas-lifetime.js";
+import type { CanvasHost, CanvasSize } from "./canvas-presentation.js";
+import { attachmentIdentity } from "./attachment-identity.js";
+import { CanvasGuiInput, type CanvasGuiInputOptions } from "./gui/input.js";
+import { CanvasContext } from "./canvas-context.js";
 
-export type { IppCanvasHandle } from "./canvas-world-session.js";
+export { CanvasWorldSession } from "./canvas-world-session.js";
+export { CanvasCleanupError } from "./canvas-lifetime.js";
+export type {
+  IppCanvasHandle,
+  CanvasSessionOptions,
+} from "./canvas-world-session.js";
+export type {
+  CanvasCleanupJournal,
+  CanvasCleanupRecovery,
+  CanvasWorldSource,
+} from "./canvas-lifetime.js";
+export type {
+  CanvasHost,
+  CanvasSize,
+  CanvasPresentationJournal,
+} from "./canvas-presentation.js";
 
 export interface CanvasRuntimeConfiguration {
   readonly generatedModuleUrl: string;
@@ -42,6 +53,7 @@ export interface CanvasRuntimeConfiguration {
   readonly wasmUrl: string;
   readonly timeoutMs?: number;
   readonly logLevel?: LogLevel;
+  /** Unused-asset cache target in bytes; omitted keeps the Host default (64 MiB), 0 evicts on release. */
   readonly assetCacheBytes?: number;
   readonly resourceUrls?: readonly ResourceUrlMapping[];
 }
@@ -54,81 +66,47 @@ type CanvasProps = Omit<
 export interface IppCanvasProps
   extends Omit<HTMLAttributes<HTMLDivElement>, "onError"> {
   readonly runtime: CanvasRuntimeConfiguration;
-  /** Opt-in browser input: attach the GUI relay to the canvas once connected.
-   *
-   * Pointer and wheel events originate on the canvas. Keyboard input has one
-   * owner at a time: by default a hidden native editor owns keyboard,
-   * `beforeinput`, IME and clipboard events while a text input has runtime
-   * focus, and the focusable canvas (or an explicit `keyboardTarget`) owns
-   * keys otherwise, so Tab/Shift+Tab traversal, Space/Enter activation and
-   * slider arrows reach non-text controls. Keyboard focus moves between the
-   * two as runtime text focus starts and ends; both forward through the
-   * session client's `submitGuiInput` in DOM order, and capture, focus
-   * scopes and gesture arbitration stay in core. While attached the canvas
-   * uses
-   * `touch-action: none` (opt out per attach with
-   * `enableTouchActionNone: false`), wheel input is always
-   * `preventDefault`ed and Tab/Shift+Tab are prevented. Disable `textBridge`
-   * to keep keyboard ownership on the canvas or an explicit `keyboardTarget`
-   * throughout.
-   * Requires a GUI-capable client, otherwise `onError` fires and no listeners
-   * attach.
+  readonly world: CanvasWorldSource;
+  /**
+   * Explicit root selection, independent of the authoring session: a Camera
+   * output or `canvasOutput(world)`. Null presents nothing. Omit it when a
+   * root-presented `CanvasWorld` supplies the root.
    */
-  readonly guiInput?: AttachCanvasGuiInputOptions;
-  /** Fetch and deserialize a saved World instead of creating an empty one. */
-  readonly worldUrl?: string;
-  /** Runs once per startup before World bindings and onReady; honor cancellation. */
+  readonly output?: OutputReference | null;
   readonly initialize?: (
     client: Client,
     signal: AbortSignal,
+    host: CanvasHost,
   ) => void | Promise<void>;
-  /** Default CSS dimensions; the drawing buffer follows layout and display density. */
   readonly width?: number;
   readonly height?: number;
   readonly canvasProps?: CanvasProps;
+  readonly guiInput?: Omit<CanvasGuiInputOptions, "onError">;
   readonly onReady?: (handle: IppCanvasHandle) => void;
+  readonly onViewChange?: (view: PresentationView | null) => void;
   readonly onError?: (error: Error) => void;
 }
 
 export interface WorldProps {
   readonly children?: ReactNode;
-  readonly onCommit?: () => void;
+  readonly onCommit?: (scope: ReactWorldRoot) => void;
   readonly onError?: (error: Error) => void;
 }
 
-interface CanvasConnectionOptions {
-  canvas: OffscreenCanvas;
-  timeoutMs: number;
-  signal: AbortSignal;
-  logLevel: LogLevel;
-  assetCacheBytes?: number;
-  resourceUrls?: readonly ResourceUrlMapping[];
-}
-
-interface GeneratedCanvasHost {
-  readonly capabilities: { readonly snapshot?: boolean };
-  loadWorld?(
-    bytes: Uint8Array,
-    options: { signal: AbortSignal },
-  ): Promise<Client>;
-  ownWorldConnection(): void;
-  close(): Promise<void>;
-}
-
-interface GeneratedWorldClientModule {
-  readonly IppHostClient?: {
+interface GeneratedCanvasModule {
+  readonly IppHostClient: {
     connectWorker(
       worker: string,
       wasm: string,
-      options: CanvasConnectionOptions,
-    ): Promise<GeneratedCanvasHost>;
-  };
-  readonly IppClient: {
-    connectWorker(
-      worker: string,
-      wasm: string,
-      options: CanvasConnectionOptions,
-    ): Promise<Client>;
+      options: {
+        canvas: OffscreenCanvas;
+        signal: AbortSignal;
+        timeoutMs: number;
+        logLevel: LogLevel;
+        assetCacheBytes?: number;
+        resourceUrls?: readonly ResourceUrlMapping[];
+      },
+    ): Promise<CanvasHost>;
   };
 }
 
@@ -138,45 +116,53 @@ interface CanvasRenderSurface {
   renew(): void;
 }
 
-const CanvasContext = createContext<CanvasWorldSession | null | undefined>(
-  undefined,
-);
 const transferred = new WeakSet<HTMLCanvasElement>();
+const configurationFunctions = new WeakMap<object, number>();
+let nextConfigurationFunction = 1;
 
-/** A normal DOM component. Only descendant World boundaries use the IPP renderer. */
+function sourceIdentity(source: CanvasWorldSource): string {
+  if (source.create) return attachmentIdentity(source);
+  const names = source.load.options?.worldNames;
+  let identity: unknown = names;
+  if (typeof names === "function") {
+    let id = configurationFunctions.get(names);
+    if (id === undefined) {
+      id = nextConfigurationFunction++;
+      configurationFunctions.set(names, id);
+    }
+    identity = { callback: id };
+  } else if (names)
+    identity = [...names.entries()].sort(([left], [right]) => left - right);
+  return attachmentIdentity({
+    load: {
+      ...source.load,
+      options: { ...source.load.options, worldNames: identity },
+    },
+  });
+}
+
+/** DOM ownership and explicit presentation; World boundaries remain same-World scopes. */
 export function IppCanvas({
   runtime,
-  guiInput,
-  worldUrl,
+  world,
+  output,
   initialize,
   width = 640,
   height = 480,
   canvasProps,
+  guiInput,
   onReady,
+  onViewChange,
   onError,
   children,
   ...domProps
 }: IppCanvasProps) {
-  if (![width, height].every((value) => Number.isFinite(value) && value > 0)) {
+  if (![width, height].every((value) => Number.isFinite(value) && value > 0))
     throw new RangeError("Canvas CSS dimensions must be positive and finite");
-  }
-  const {
-    generatedModuleUrl,
-    workerScriptUrl,
-    wasmUrl,
-    timeoutMs = 10_000,
-    logLevel = "info",
-  } = runtime;
-  const configuration = JSON.stringify([
-    generatedModuleUrl,
-    workerScriptUrl,
-    wasmUrl,
-    timeoutMs,
-    logLevel,
-    runtime.assetCacheBytes,
-    worldUrl,
-    runtime.resourceUrls,
-  ]);
+  const configuration = attachmentIdentity({
+    runtime,
+    source: sourceIdentity(world),
+  });
   const [surface, setSurface] = useState<CanvasRenderSurface>();
   const [ready, setReady] = useState<{
     surface: CanvasRenderSurface;
@@ -186,219 +172,154 @@ export function IppCanvas({
     surface: CanvasRenderSurface;
     error: Error;
   }>();
-  const callbacks = useRef({ onReady, onError, initialize });
-  const guiInputRef = useRef(guiInput);
-  const dimensions = useRef({ width: 1, height: 1 });
+  const callbacks = useRef({ initialize, onReady, onViewChange, onError });
+  const inputs = useRef({ runtime, world, output });
+  const dimensions = useRef<CanvasSize>({ width, height, devicePixelRatio: 1 });
   useLayoutEffect(() => {
-    callbacks.current = { onReady, onError, initialize };
-    guiInputRef.current = guiInput;
+    callbacks.current = { initialize, onReady, onViewChange, onError };
+    inputs.current = { runtime, world, output };
   });
 
   useEffect(() => {
     if (!surface || surface.configuration !== configuration) return;
     if (transferred.has(surface.canvas)) {
-      // A replay after transfer needs a new DOM canvas; an OffscreenCanvas
-      // cannot be transferred a second time. React owns the replacement node.
       surface.renew();
       return;
     }
     let disposed = false;
     const startup = new AbortController();
+    let lifetime: CanvasLifetime | undefined;
     let session: CanvasWorldSession | undefined;
-    let client: Client | undefined;
-    let host: GeneratedCanvasHost | undefined;
-    const close = (): Promise<void> => {
-      setReady((current) =>
-        current?.surface === surface ? undefined : current,
-      );
-      if (session) return session.close();
-      if (host) return host.close();
-      return client?.close() ?? Promise.resolve();
-    };
-    const originalErrorHandler = callbacks.current.onError;
+    let input: CanvasGuiInput | undefined;
+    const capturedError = callbacks.current.onError;
     const report = (failure: unknown): void => {
-      const error = asError(failure);
-      const fallback = (callbackError: Error): void => {
-        if (!disposed) setError({ surface, error: callbackError });
-        else console.error("IPP canvas lifecycle error", callbackError);
+      const value = asError(failure);
+      const fallback = (error: Error): void => {
+        if (!disposed) setError({ surface, error });
+        else console.error("Canvas lifecycle error", error);
       };
-      const observer = disposed
-        ? originalErrorHandler
-        : callbacks.current.onError;
-      if (observer) notify(() => observer(error), fallback);
-      else fallback(error);
+      const observer = disposed ? capturedError : callbacks.current.onError;
+      if (observer) notify(() => observer(value), fallback);
+      else fallback(value);
     };
-    void (async () => {
+    const close = async (): Promise<void> => {
+      try {
+        await input?.close();
+      } finally {
+        if (session) await session.close();
+        else await lifetime?.close();
+      }
+    };
+    const work = (async () => {
+      const { runtime: configuration, world: source } = inputs.current;
       try {
         const module = (await import(
-          generatedModuleUrl
-        )) as GeneratedWorldClientModule;
+          configuration.generatedModuleUrl
+        )) as GeneratedCanvasModule;
         if (disposed) return;
-        const size = dimensions.current;
-        surface.canvas.width = size.width;
-        surface.canvas.height = size.height;
-        const offscreen = surface.canvas.transferControlToOffscreen();
+        surface.canvas.width = Math.max(
+          1,
+          Math.round(dimensions.current.width),
+        );
+        surface.canvas.height = Math.max(
+          1,
+          Math.round(dimensions.current.height),
+        );
+        const canvas = surface.canvas.transferControlToOffscreen();
         transferred.add(surface.canvas);
-        const options = {
-          canvas: offscreen,
-          timeoutMs,
-          logLevel,
-          ...(runtime.assetCacheBytes !== undefined
-            ? { assetCacheBytes: runtime.assetCacheBytes }
-            : {}),
-          signal: startup.signal,
-          ...(runtime.resourceUrls
-            ? { resourceUrls: runtime.resourceUrls }
-            : {}),
-        };
-        if (worldUrl !== undefined) {
-          if (!module.IppHostClient?.connectWorker)
-            throw new Error(
-              "IppCanvas worldUrl requires generated Host snapshot support",
-            );
-          host = await module.IppHostClient.connectWorker(
-            workerScriptUrl,
-            wasmUrl,
-            options,
-          );
-          if (disposed) {
-            await close();
-            return;
-          }
-          if (!host.capabilities.snapshot || !host.loadWorld)
-            throw new Error("IppCanvas worldUrl requires snapshot support");
-          const response = await fetch(worldUrl, { signal: startup.signal });
-          if (!response.ok)
-            throw new Error(
-              `Unable to load IPP World: HTTP ${response.status}`,
-            );
-          const bytes = new Uint8Array(await response.arrayBuffer());
-          startup.signal.throwIfAborted();
-          // This correlated Host reply confirms reconstruction and publication.
-          // Resource readiness is independent of the deserialization boundary.
-          client = await host.loadWorld(bytes, { signal: startup.signal });
-          if (disposed) {
-            await close();
-            return;
-          }
-          host.ownWorldConnection();
-        } else {
-          client = await module.IppClient.connectWorker(
-            workerScriptUrl,
-            wasmUrl,
-            options,
-          );
-        }
-        if (disposed) {
-          await close();
-          return;
-        }
-        if (
-          !client.capabilities.spatial ||
-          !client.capabilities.stateOverlays ||
-          !client.presentation
-        ) {
-          throw new Error(
-            "IppCanvas requires spatial, state overlays, and browser presentation",
-          );
-        }
-        await callbacks.current.initialize?.(client, startup.signal);
-        if (disposed) {
-          await close();
-          return;
+        const host = await module.IppHostClient.connectWorker(
+          configuration.workerScriptUrl,
+          configuration.wasmUrl,
+          {
+            canvas,
+            signal: startup.signal,
+            timeoutMs: configuration.timeoutMs ?? 10_000,
+            logLevel: configuration.logLevel ?? "info",
+            ...(configuration.assetCacheBytes !== undefined
+              ? { assetCacheBytes: configuration.assetCacheBytes }
+              : {}),
+            ...(configuration.resourceUrls
+              ? { resourceUrls: configuration.resourceUrls }
+              : {}),
+          },
+        );
+        lifetime = new CanvasLifetime(host, true);
+        startup.signal.throwIfAborted();
+        const client = await lifetime.open(source, startup.signal);
+        if (client.capabilities.gui) {
+          input = new CanvasGuiInput(surface.canvas, host.input, {
+            ...guiInput,
+            onError: report,
+          });
         }
         session = new CanvasWorldSession(
-          client,
-          report,
-          () => dimensions.current,
+          {
+            host,
+            client,
+            onError: report,
+            onViewChange: (view) => {
+              if (!disposed) void input?.select(view).catch(report);
+              if (!disposed) callbacks.current.onViewChange?.(view);
+            },
+          },
+          lifetime,
         );
-        client.presentation.resize(
-          dimensions.current.width,
-          dimensions.current.height,
-        );
-        setReady({ surface, session });
-        const connected = session;
-        notify(() => callbacks.current.onReady?.(connected), report);
-      } catch (failure) {
-        if (!disposed)
-          setReady((current) =>
-            current?.surface === surface ? undefined : current,
+        await callbacks.current.initialize?.(client, startup.signal, host);
+        startup.signal.throwIfAborted();
+        if (session.isClosing)
+          throw new Error(
+            "Canvas authoring session closed during initialization",
           );
-        const errors = [failure];
+        setReady({ surface, session });
+        notify(() => {
+          if (!disposed) callbacks.current.onReady?.(session!);
+        }, report);
+      } catch (failure) {
         try {
           await close();
         } catch (cleanup) {
-          errors.push(cleanup);
+          if (!session) report(cleanup);
         }
-        if (!disposed)
-          report(
-            errors.length === 1
-              ? failure
-              : new AggregateError(errors, "IPP canvas startup failed"),
-          );
-        else if (errors.length > 1) report(errors[1]);
+        if (!disposed) report(failure);
       }
     })();
     return () => {
       disposed = true;
       startup.abort();
-      void close().catch(report);
+      void input?.close().catch(report);
+      if (session) void session.close().catch(() => {});
+      void work.then(close).catch((error) => {
+        if (!session) report(error);
+      });
     };
-  }, [
-    surface,
-    configuration,
-    generatedModuleUrl,
-    workerScriptUrl,
-    wasmUrl,
-    timeoutMs,
-    logLevel,
-    worldUrl,
-  ]);
+  }, [surface, configuration]);
 
   const session =
-    ready &&
-    ready.surface === surface &&
-    surface?.configuration === configuration
-      ? ready.session
+    ready?.surface === surface && surface?.configuration === configuration
+      ? ready?.session
       : undefined;
+  const outputIdentity = attachmentIdentity(output);
   useLayoutEffect(() => {
     if (!surface) return;
     const canvas = surface.canvas;
     let cssWidth = canvas.clientWidth;
     let cssHeight = canvas.clientHeight;
     let detached = false;
-    const presentation = session?.client.presentation;
     const resize = () => {
-      if (detached || session?.isClosing) return;
-      if (cssWidth <= 0 || cssHeight <= 0) return;
-      // The drawing buffer follows CSS size × display density, bounded by
-      // the device limits the worker reports once the renderer attaches.
-      // Until then the worker applies the same bound to this request.
-      const limits = presentation?.viewportLimits;
-      const ratio = Math.min(
-        window.devicePixelRatio,
-        limits ? limits.maxWidth / cssWidth : Number.POSITIVE_INFINITY,
-        limits ? limits.maxHeight / cssHeight : Number.POSITIVE_INFINITY,
-      );
-      const next = {
-        width: Math.min(
-          limits?.maxWidth ?? Number.POSITIVE_INFINITY,
-          Math.max(1, Math.round(cssWidth * ratio)),
-        ),
-        height: Math.min(
-          limits?.maxHeight ?? Number.POSITIVE_INFINITY,
-          Math.max(1, Math.round(cssHeight * ratio)),
-        ),
-      };
-      if (
-        next.width === dimensions.current.width &&
-        next.height === dimensions.current.height
-      )
+      if (detached || session?.isClosing || cssWidth <= 0 || cssHeight <= 0)
         return;
-      dimensions.current = next;
-      presentation?.resize(next.width, next.height);
+      dimensions.current = {
+        width: cssWidth,
+        height: cssHeight,
+        devicePixelRatio: window.devicePixelRatio,
+      };
+      if (session)
+        void session
+          .selectOutput(inputs.current.output, dimensions.current)
+          .catch((error) => {
+            if (!detached && !session.isClosing) session.report(asError(error));
+          });
     };
-    const unsubscribeLimits = presentation?.onViewportLimits(resize);
     const observer = new ResizeObserver(([entry]) => {
       if (!entry) return;
       cssWidth = entry.contentRect.width;
@@ -406,7 +327,6 @@ export function IppCanvas({
       resize();
     });
     observer.observe(canvas);
-
     let density = window.matchMedia(
       `(resolution: ${window.devicePixelRatio}dppx)`,
     );
@@ -426,223 +346,16 @@ export function IppCanvas({
       observer.disconnect();
       density.removeEventListener("change", densityChanged);
       window.removeEventListener("resize", resize);
-      unsubscribeLimits?.();
     };
     const unsubscribe = session?.onClosing(detach);
     return () => {
       unsubscribe?.();
       detach();
     };
-  }, [surface, session, width, height]);
+  }, [surface, session, width, height, outputIdentity]);
 
-  // Blockers attach by value: an inline array literal that names the same
-  // blockers must not detach live pointers and the text bridge on every render.
-  const blockersKey = guiInput?.blockers
-    ?.map((blocker) => `${blocker.entity}:${blocker.distance}`)
-    .join(",");
-  useEffect(() => {
-    const inputOptions = guiInputRef.current;
-    if (!surface || !session || !inputOptions || session.isClosing) return;
-    const target = session.client as GuiWorldClient;
-    if (typeof target.submitGuiInput !== "function") {
-      callbacks.current.onError?.(
-        new Error("IppCanvas guiInput requires a GUI-capable client"),
-      );
-      return;
-    }
-    const sink = createGuiInputSink(target, {
-      onError: (error) => callbacks.current.onError?.(error),
-      ...(inputOptions.unhandledInputGate === undefined
-        ? {}
-        : { unhandledInputGate: inputOptions.unhandledInputGate }),
-    });
-    // The native editable buffer gives the OS IME, soft keyboard and
-    // clipboard a focusable target; canvas routing keeps sole ownership of
-    // captures, focus and gesture decisions. The bridge model folds
-    // authoritative transient focus observations into the sync readers, so delayed
-    // paste reads and selection echoes cancel across focus moves,
-    // replacements and teardown instead of writing into a new target.
-    let detachTextBridge: (() => void) | undefined;
-    let blurOnKeyboardTarget = true;
-    if (inputOptions.textBridge !== false && surface.canvas.parentElement) {
-      const container = surface.canvas.parentElement;
-      const canvas = surface.canvas;
-      const model = createTextBridgeModel(target.session);
-      const reportBridge = (error: Error): void => {
-        callbacks.current.onError?.(error);
-      };
-      const bridge = attachTextBridge(container, sink, {
-        onError: reportBridge,
-        getFocusToken: () => model.token(),
-        readCommitted: () => model.committed(),
-        onLocalSelection: (selection) => {
-          model.noteLocalSelection(selection.start, selection.end);
-        },
-      });
-      // The canvas relay owns keys while no text input has runtime focus and
-      // the editor owns them while one does; each listens only on its own
-      // element, so a key reaches core once. Keyboard focus follows runtime
-      // text focus below. Blurring either element during that internal
-      // transfer must not clear the runtime focus that the key or pointer
-      // just selected; window blur remains authoritative.
-      blurOnKeyboardTarget = false;
-      const keyOwner: HTMLElement = inputOptions.keyboardTarget ?? canvas;
-      const toViewport: (point: GuiViewportPoint) => GuiViewportPoint = (
-        point,
-      ) => guiInputRef.current?.toViewport?.(point) ?? point;
-      let pendingActivation:
-        | { readonly x: number; readonly y: number; reported: boolean }
-        | undefined;
-      const unsubscribeObservations =
-        typeof target.subscribeGuiObservations === "function"
-          ? target.subscribeGuiObservations((batch) => {
-              try {
-                const editorFocused = document.activeElement === bridge.element;
-                if (observeTextBridgeBatch(model, batch)) bridge.syncFromCore();
-                // Keyboard traversal hands key ownership across: entering a
-                // text input focuses the editor and leaving one returns keys
-                // to the canvas. Pointer activations use the pending gesture
-                // below instead.
-                const handoff = keyboardFocusHandoff({
-                  textFocused:
-                    batch.textFocus === undefined
-                      ? undefined
-                      : batch.textFocus !== null,
-                  documentFocused: document.hasFocus(),
-                  editorFocused,
-                  ownerFocused: document.activeElement === keyOwner,
-                  pointerActivationPending: pendingActivation !== undefined,
-                });
-                if (handoff === "editor") {
-                  bridge.element.focus({ preventScroll: true });
-                } else if (handoff === "owner") {
-                  keyOwner.focus({ preventScroll: true });
-                }
-                if (pendingActivation && batch.textFocus !== undefined) {
-                  if (batch.textFocus === null) {
-                    pendingActivation = undefined;
-                  } else {
-                    const activation = (
-                      navigator as Navigator & {
-                        userActivation?: { readonly isActive: boolean };
-                      }
-                    ).userActivation;
-                    if (activation?.isActive === true) {
-                      bridge.placeAt(pendingActivation.x, pendingActivation.y);
-                      bridge.focusFromGesture({
-                        trigger: "pointerDown",
-                        isTrusted: true,
-                      });
-                      pendingActivation = undefined;
-                    } else if (!pendingActivation.reported) {
-                      pendingActivation.reported = true;
-                      reportBridge(
-                        new Error(
-                          "Native text activation expired before the authoritative GUI focus result; tap the text input again",
-                        ),
-                      );
-                    }
-                  }
-                }
-              } catch (error) {
-                reportBridge(asError(error));
-              }
-            })
-          : undefined;
-      // Keep the actual trusted gesture pending until core publishes an
-      // authoritative text-focus result. Non-text taps never focus or open the
-      // editor. Platforms that expire transient activation before the result
-      // report the failure and require a later valid gesture.
-      const onPointerDown = (event: PointerEvent): void => {
-        model.noteActivation();
-        if (!event.isTrusted) return;
-        const rect = canvas.getBoundingClientRect();
-        const raw = canvasViewportPoint(event.clientX, event.clientY, rect);
-        if (raw === null) return;
-        const offset = viewportToBridgeOffset(
-          toViewport(raw),
-          rect,
-          container.getBoundingClientRect(),
-        );
-        pendingActivation = { ...offset, reported: false };
-      };
-      const onKeyDown = (event: KeyboardEvent): void => {
-        if (!event.isTrusted) return;
-        if (event.key === "Tab" || event.key === "Escape") {
-          model.noteActivation();
-        }
-        // Keyboard traversal supersedes an earlier tap that never reached a
-        // text input; its text focus result focuses the editor directly.
-        if (event.key === "Tab") pendingActivation = undefined;
-      };
-      // Losing the window drops the buffer focus view; the relay already
-      // sends the core blur. Stale paste reads cancel on the cleared token.
-      const onWindowBlur = (): void => {
-        model.clear();
-        bridge.syncFromCore();
-      };
-      canvas.addEventListener("pointerdown", onPointerDown);
-      bridge.element.addEventListener("keydown", onKeyDown);
-      keyOwner.addEventListener("keydown", onKeyDown);
-      window.addEventListener("blur", onWindowBlur);
-      detachTextBridge = (): void => {
-        canvas.removeEventListener("pointerdown", onPointerDown);
-        bridge.element.removeEventListener("keydown", onKeyDown);
-        keyOwner.removeEventListener("keydown", onKeyDown);
-        window.removeEventListener("blur", onWindowBlur);
-        unsubscribeObservations?.();
-        pendingActivation = undefined;
-        model.clear();
-        bridge.dispose();
-      };
-    }
-    const detachRelay = attachCanvasGuiInput(surface.canvas, sink, {
-      ...inputOptions,
-      toViewport: (point) => guiInputRef.current?.toViewport?.(point) ?? point,
-      blurOnKeyboardTarget,
-      onError: (error) => {
-        guiInputRef.current?.onError?.(error);
-        callbacks.current.onError?.(error);
-      },
-    });
-    const detach = (): void => {
-      detachTextBridge?.();
-      detachTextBridge = undefined;
-      detachRelay();
-    };
-    const unsubscribe = session.onClosing(detach);
-    return () => {
-      unsubscribe();
-      detach();
-    };
-  }, [
-    surface,
-    session,
-    guiInput !== undefined,
-    guiInput?.keyboardTarget,
-    guiInput?.textBridge,
-    guiInput?.blurOnKeyboardTarget,
-    guiInput?.preventDefaultPointer,
-    guiInput?.enableTouchActionNone,
-    blockersKey,
-    guiInput?.panelDistance,
-    guiInput?.unhandledInputGate,
-    guiInput?.wheelStep,
-  ]);
-
-  if (
-    error &&
-    error.surface === surface &&
-    surface?.configuration === configuration
-  ) {
-    throw error.error;
-  }
-  // Canvas-only keyboard input needs a focusable canvas; the default never
-  // overrides an author-supplied tab index.
-  const inputCanvasProps =
-    guiInput && canvasProps?.tabIndex === undefined
-      ? { tabIndex: 0, ...canvasProps }
-      : canvasProps;
+  if (error?.surface === surface && surface?.configuration === configuration)
+    throw error!.error;
   return (
     <CanvasContext value={session ?? null}>
       <div {...domProps}>
@@ -651,7 +364,7 @@ export function IppCanvas({
           configuration={configuration}
           width={width}
           height={height}
-          canvasProps={inputCanvasProps}
+          canvasProps={canvasProps}
           onSurface={setSurface}
         />
         {children}
@@ -681,8 +394,6 @@ function CanvasSurface({
     },
     [configuration, onSurface, renew],
   );
-  // DOM width/height must not be mutated after OffscreenCanvas transfer.
-  // Subsequent drawing-buffer sizes travel through the presentation channel.
   return (
     <canvas
       {...canvasProps}
@@ -700,7 +411,6 @@ function CanvasSurface({
   );
 }
 
-/** Undefined while the nearest canvas is connecting; throws without a canvas. */
 export function useIppCanvas(): IppCanvasHandle | undefined {
   return useCanvasSession() ?? undefined;
 }
@@ -712,7 +422,6 @@ function useCanvasSession(): CanvasWorldSession | null {
   return session;
 }
 
-/** Render children into the nearest canvas, through any ordinary DOM wrappers. */
 export function World({ children, onCommit, onError }: WorldProps) {
   const session = useCanvasSession();
   const binding = useRef<CanvasWorldBinding | undefined>(undefined);
@@ -725,7 +434,7 @@ export function World({ children, onCommit, onError }: WorldProps) {
     callbacks.current = { onCommit, onError };
   });
   useLayoutEffect(() => {
-    if (!session) return;
+    if (!session || session.isClosing) return;
     let active = true;
     const fallback = (error: Error): void => {
       if (active) setError({ session, error });
@@ -733,29 +442,23 @@ export function World({ children, onCommit, onError }: WorldProps) {
     };
     const report = (error: Error): void => {
       if (!active) session.report(error);
-      else if (callbacks.current.onError) {
-        const observer = callbacks.current.onError;
-        notify(() => observer(error), fallback);
-      } else fallback(error);
+      else if (callbacks.current.onError)
+        notify(() => callbacks.current.onError!(error), fallback);
+      else fallback(error);
     };
     const world = session.attach(report);
     binding.current = world;
     return () => {
       active = false;
       binding.current = undefined;
-      void world.close().catch(() => {
-        // ReactWorldRoot failures already use report; canvas.closed also observes teardown.
-      });
+      void world.close().catch(() => {});
     };
   }, [session]);
   useLayoutEffect(() => {
     const world = binding.current;
     if (!session || !world) return;
-    world.render(
-      <CanvasContext value={session}>{children}</CanvasContext>,
-      callbacks.current.onCommit,
-    );
+    world.render(children, (scope) => callbacks.current.onCommit?.(scope));
   }, [children, session]);
-  if (error?.session === session) throw error.error;
+  if (error?.session === session) throw error!.error;
   return null;
 }

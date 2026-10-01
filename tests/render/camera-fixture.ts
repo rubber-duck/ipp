@@ -1,31 +1,40 @@
+import {
+  outputProducer,
+  sameOutputReference,
+} from "../../packages/ipp-client/src/references.js";
 import { presentationTesting } from "../../packages/ipp-client/src/testing.js";
 import { clientAssetSource } from "../../packages/ipp-client/src/asset-sources.js";
 import type {
-  CameraMotion,
-  FrameCapture,
+  CameraViewMotion,
   PickingWorldClient,
-  StateOverlayRef,
+  PresentationView,
+  PresentedCapture,
+  RootBinding,
 } from "@ipp/client";
 import {
   CAMERA_VIEWPORT,
   createPickingRing,
   PICKING_RING,
-  componentFields,
   successfulBatch,
+  type HostedWorldClient,
 } from "../integration/camera-fixtures.js";
 import {
   CameraFixture,
   compoundPicking,
 } from "../integration/scenarios/cameras-and-picking.js";
 import { compareImages, summarizeImage } from "./image-assertions.js";
+import { capturedImage, captureSummary } from "./root-presentation.js";
+import { SCENE, selectSystems } from "../integration/system-selections.js";
 
 interface State {
   readonly fixture: CameraFixture;
-  readonly captures: Map<string, FrameCapture>;
+  readonly captures: Map<string, PresentedCapture>;
+  view: PresentationView | undefined;
   front: bigint;
   shifted: bigint;
   target: bigint;
-  owner: StateOverlayRef | undefined;
+  /** The shifted camera's x before `moveCamera`, written back on restore. */
+  shiftedX: number | undefined;
 }
 
 let active: State | undefined;
@@ -42,13 +51,18 @@ export async function initialize(configuration: {
   canvas.height = CAMERA_VIEWPORT.height;
   document.body.replaceChildren(canvas);
   const contract = await import(configuration.generatedModuleUrl);
-  const client: PickingWorldClient = await contract.IppClient.connectWorker(
-    configuration.workerScriptUrl,
-    configuration.wasmUrl,
-    { canvas: canvas.transferControlToOffscreen(), timeoutMs: 10_000 },
-  );
+  const client: HostedWorldClient<PickingWorldClient> =
+    await contract.IppClient.connectWorker(
+      configuration.workerScriptUrl,
+      configuration.wasmUrl,
+      {
+        selectedSystems: selectSystems(SCENE),
+        canvas: canvas.transferControlToOffscreen(),
+        timeoutMs: 10_000,
+      },
+    );
   try {
-    if (!client.presentation || !client.capabilities.picking) {
+    if (!client.host.renderDiagnostics || !client.capabilities.picking) {
       throw new Error("Camera render fixture requires WebGL and picking");
     }
     const record = (
@@ -59,6 +73,7 @@ export async function initialize(configuration: {
     active = {
       fixture: new CameraFixture(
         client,
+        client.host,
         (kind, value) =>
           record(
             kind,
@@ -71,10 +86,11 @@ export async function initialize(configuration: {
         contract.encodeBoundingShape,
       ),
       captures: new Map(),
+      view: undefined,
       front: 0n,
       shifted: 0n,
       target: 0n,
-      owner: undefined,
+      shiftedX: undefined,
     };
     return { schemaHash: client.schemaHash, session: client.session };
   } catch (error) {
@@ -179,24 +195,29 @@ export async function observeGpuFailure() {
 export async function recoverGpuFailure() {
   const current = state();
   const before = frame("gpu-allocation-failed");
-  const presentation = current.fixture.client.presentation!;
-  presentationTesting(presentation).loseContext();
-  presentationTesting(presentation).restoreContext();
+  const diagnostics = current.fixture.host.renderDiagnostics!;
+  presentationTesting(diagnostics).loseContext();
+  presentationTesting(diagnostics).restoreContext();
   const deadline = performance.now() + 10_000;
   for (;;) {
-    const captured = await capture("gpu-recovered");
-    if (
-      captured.contextGeneration > before.contextGeneration &&
-      captured.drawCalls === 2
-    ) {
-      return observeGpuFailure();
+    const surface = await current.fixture.host.presentation
+      .surface()
+      .catch((error: unknown) => {
+        if (presentationFailure(error) === "unavailable") return undefined;
+        throw error;
+      });
+    if (surface && surface.context > before.view.surface.context) {
+      const captured = await capture("gpu-recovered", false);
+      if (captured.drawCalls === 2) return observeGpuFailure();
+      if (performance.now() >= deadline) {
+        throw new Error(
+          `GPU recovery did not restore both meshes: ${JSON.stringify({ drawCalls: captured.drawCalls, failedDrawCalls: captured.failedDrawCalls })}`,
+        );
+      }
+    } else if (performance.now() >= deadline) {
+      throw new Error("Graphics context was not restored");
     }
-    if (performance.now() >= deadline) {
-      throw new Error(
-        `GPU recovery did not restore both meshes: ${JSON.stringify({ drawCalls: captured.drawCalls, failedDrawCalls: captured.failedDrawCalls })}`,
-      );
-    }
-    await current.fixture.client.waitForFrame(captured.tick);
+    await current.fixture.client.waitForFrame();
   }
 }
 
@@ -220,7 +241,18 @@ export async function prepareVisibleScene() {
   await current.fixture.waitForMesh(
     "ipp://mesh/cube?width=2&height=2&length=2",
   );
-  return { target: current.target, noCamera: await current.fixture.pick() };
+  const unselected = await current.fixture.camera("unselected-camera");
+  return {
+    target: current.target,
+    rootBinding: await current.fixture.rootBinding(),
+    noCamera: await current.fixture.pick(
+      0.5,
+      0.5,
+      CAMERA_VIEWPORT,
+      undefined,
+      await current.fixture.output(unselected),
+    ),
+  };
 }
 
 export async function selectTinyCamera() {
@@ -236,15 +268,22 @@ export async function selectTinyCamera() {
   };
 }
 
+const TALL_VIEWPORT = Object.freeze({
+  width: 1,
+  height: 2048,
+  devicePixelRatio: 1,
+});
+
 export async function resizeTinyCamera() {
   const current = state();
-  current.fixture.client.presentation!.resize(1, 2048);
+  const selection = await current.fixture.activate(
+    current.front,
+    TALL_VIEWPORT,
+  );
   return {
-    selection: await current.fixture.activate(current.front, {
-      width: 1,
-      height: 2048,
-    }),
-    pick: await current.fixture.pick(0.5, 0.5, { width: 1, height: 2048 }),
+    selection,
+    binding: rootSummary(await current.fixture.rootBinding()),
+    pick: await current.fixture.pick(0.5, 0.5, TALL_VIEWPORT),
   };
 }
 
@@ -256,11 +295,9 @@ export async function repairTinyCamera() {
     ),
   );
   return {
-    selection: await current.fixture.activate(current.front, {
-      width: 1,
-      height: 2048,
-    }),
-    pick: await current.fixture.pick(0.5, 0.5, { width: 1, height: 2048 }),
+    selection: await current.fixture.activate(current.front, TALL_VIEWPORT),
+    binding: rootSummary(await current.fixture.rootBinding()),
+    pick: await current.fixture.pick(0.5, 0.5, TALL_VIEWPORT),
   };
 }
 
@@ -303,17 +340,10 @@ export async function prepareNavigation(projection: number) {
   return current.fixture.activate(current.front);
 }
 
-export async function navigate(motion: CameraMotion, x = 0.5, y = 0.5) {
+export async function navigate(motion: CameraViewMotion, x = 0.5, y = 0.5) {
   const current = state();
-  const seen = current.fixture.changes.length;
-  current.fixture.navigate(motion);
-  const result = await current.fixture.pick(x, y, CAMERA_VIEWPORT, true);
-  if (current.fixture.changes.length !== seen) {
-    throw new Error(
-      "Entity navigation must not emit camera-system state changes",
-    );
-  }
-  return result;
+  await current.fixture.navigate(motion);
+  return current.fixture.pick(x, y, CAMERA_VIEWPORT, true);
 }
 
 export async function selectShifted() {
@@ -328,49 +358,41 @@ export async function selectShifted() {
     deletion,
     center: await current.fixture.pick(),
     projected: await current.fixture.pick(0.5 - 1.5 / ((4 * 320) / 240), 0.5),
-    mismatch: await current.fixture.pick(0.5, 0.5, { width: 321, height: 240 }),
+    mismatch: await current.fixture.pick(0.5, 0.5, {
+      ...CAMERA_VIEWPORT,
+      width: 321,
+    }),
   };
 }
 
-export async function overlayCamera() {
+/** The shifted camera's current Transform x. */
+async function shiftedCameraX(): Promise<number> {
   const current = state();
   const client = current.fixture.client;
-  const owner = { kind: "alias", alias: 10 } as const;
-  const outcome = successfulBatch(
-    await current.fixture.batch([
-      { kind: "createStateOverlayOwner", alias: 10 },
-      {
-        kind: "attachEntityOverlayBinding",
-        owner,
-        alias: 11,
-        symbolicId: "shifted-camera",
-        mode: "bound",
-      },
-      {
-        kind: "attachComponentStateOverlay",
-        owner,
-        binding: { kind: "alias", alias: 11 },
-        alias: 12,
-        component: client.components.Transform!.id,
-        mode: "bound",
-        fields: componentFields(client, "Transform", { x: 0 }),
-      },
-    ]),
-  );
-  const owned = outcome.stateOverlays.find((resource) => resource.alias === 10);
-  if (!owned) throw new Error("Camera overlay omitted owner handle");
-  current.owner = { kind: "handle", id: owned.id };
   const inspection = await current.fixture.inspect();
-  const camera = inspection.entities.find(
-    (entity) => entity.id === current.shifted,
-  );
-  const transform = (layer: "base" | "effective") =>
-    camera?.[layer].find(
+  const x = inspection.entities
+    .find((entity) => entity.id === current.shifted)
+    ?.components.find(
       (component) => component.component === client.components.Transform!.id,
-    )?.fields;
+    )?.fields.x;
+  if (typeof x !== "number") throw new Error("Shifted camera has no x");
+  return x;
+}
+
+/** Move the shifted camera to x = 0 with a plain field write, keeping its
+ * previous x to write back on restore. */
+export async function moveCamera() {
+  const current = state();
+  const before = await shiftedCameraX();
+  current.shiftedX = before;
+  successfulBatch(
+    await current.fixture.batch(
+      current.fixture.set(current.shifted, "Transform", { x: 0 }),
+    ),
+  );
   return {
-    base: transform("base"),
-    effective: transform("effective"),
+    before,
+    after: await shiftedCameraX(),
     pick: await current.fixture.pick(),
   };
 }
@@ -385,48 +407,114 @@ export async function perspectiveCamera() {
   return current.fixture.pick();
 }
 
-export async function releaseCameraOverlay() {
+/** Write the kept x and the orthographic projection back in one batch. */
+export async function restoreCamera() {
   const current = state();
-  if (!current.owner) throw new Error("Camera overlay owner missing");
+  const x = current.shiftedX;
+  if (x === undefined) throw new Error("Camera was not moved");
   successfulBatch(
     await current.fixture.batch([
-      { kind: "releaseStateOverlayOwner", owner: current.owner },
+      ...current.fixture.set(current.shifted, "Transform", { x }),
       ...current.fixture.set(current.shifted, "Camera", { projection: 1 }),
     ]),
   );
-  current.owner = undefined;
+  current.shiftedX = undefined;
   return current.fixture.pick();
 }
 
-export async function capture(label: string) {
+/** Select the current root binding on the worker surface when it changed. */
+async function selectedView() {
+  const current = state();
+  const binding = current.fixture.selected();
+  if (
+    current.view?.binding.generation.host !== binding.generation.host ||
+    current.view.binding.generation.serial !== binding.generation.serial ||
+    current.view.surface.context !==
+      (await current.fixture.host.presentation.surface()).context
+  ) {
+    current.view = await current.fixture.host.presentation.select(
+      await current.fixture.host.presentation.surface(),
+      binding,
+    );
+  }
+  return current.view;
+}
+
+/**
+ * A completed draw after the observed scene. A draw that skips failed
+ * resources completes, but never witnesses inclusion of its output, so such
+ * scenes wait for a later draw sequence instead of the output's evaluation cut.
+ */
+async function completedCapture(included = true) {
   const current = state();
   const inspection = await current.fixture.inspect();
-  const frame = await current.fixture.client.presentation!.capture(
-    inspection.tick,
+  const output = current.fixture.selected().output;
+  const previous = [...current.captures.values()].at(-1);
+  const frame = await current.fixture.host.presentation.capture(
+    await selectedView(),
+    included
+      ? { afterOutputs: [output] }
+      : previous
+        ? { afterSequence: previous.sequence }
+        : {},
   );
-  if (
-    frame.session !== current.fixture.client.session ||
-    frame.tick <= inspection.tick
-  ) {
+  const source = frame.sources.find((source) =>
+    sameOutputReference(source.output, output),
+  );
+  if (included && (!source || source.tick <= inspection.tick)) {
     throw new Error(
       "Capture must identify a completed frame after the observed scene",
     );
   }
+  return frame;
+}
+
+export async function capture(label: string, included = true) {
+  const current = state();
+  const frame = await completedCapture(included);
   current.captures.set(label, frame);
-  return { ...captureMetadata(label), summary: summarizeImage(frame) };
+  return {
+    ...captureMetadata(label),
+    statistics: await current.fixture.host.renderDiagnostics!.statistics(),
+    summary: summarizeImage(capturedImage(frame)),
+  };
+}
+
+/** An invalid selected camera has no successful draw to capture. */
+export async function captureFailure() {
+  const failure = await completedCapture().then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  const reason = presentationFailure(failure);
+  if (reason === undefined)
+    throw new Error(`Expected a presentation failure, got ${String(failure)}`);
+  return { reason };
+}
+
+/** The generated client bundles its own PresentationError class. */
+function presentationFailure(error: unknown) {
+  return error instanceof Error &&
+    error.name === "PresentationError" &&
+    "reason" in error &&
+    typeof error.reason === "string"
+    ? error.reason
+    : undefined;
 }
 
 export function captureMetadata(label: string) {
-  const { pixels: _pixels, ...metadata } = frame(label);
-  return metadata;
+  return captureSummary(frame(label));
 }
 
 export function captureDataUrl(label: string) {
-  return dataUrl(frame(label));
+  return dataUrl(capturedImage(frame(label)));
 }
 
 export function difference(first: string, second: string) {
-  return compareImages(frame(first), frame(second));
+  return compareImages(
+    capturedImage(frame(first)),
+    capturedImage(frame(second)),
+  );
 }
 
 export function differenceDataUrl(first: string, second: string) {
@@ -444,7 +532,7 @@ export function differenceDataUrl(first: string, second: string) {
     }
     output[offset + 3] = 255;
   }
-  return dataUrl({ ...a, pixels: output.buffer });
+  return dataUrl({ ...capturedImage(a), pixels: output.buffer });
 }
 
 export async function close() {
@@ -468,7 +556,17 @@ function frame(label: string) {
   return capture;
 }
 
-function dataUrl(frame: Pick<FrameCapture, "width" | "height" | "pixels">) {
+function rootSummary(binding: RootBinding | null) {
+  return (
+    binding && {
+      entity: outputProducer(binding.output)?.entity,
+      width: binding.viewport.width,
+      height: binding.viewport.height,
+    }
+  );
+}
+
+function dataUrl(frame: ReturnType<typeof capturedImage>) {
   const canvas = document.createElement("canvas");
   canvas.width = frame.width;
   canvas.height = frame.height;

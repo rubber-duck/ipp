@@ -4,29 +4,33 @@
 
 ## Storage and generated access
 
-Extend stable typed storage, generational identities and metadata indexes together. Centralize invalidation before extending direct bindings; prove phase-scoped aliasing. Maintain dependency indexes from operation-local changes and reserve storage in its owning allocator. Private restoration installs typed values, row tables and references before selected Systems rebuild slot indexes and validate derived state.
+Extend stable typed storage, generational identities and metadata indexes with the [core ordered link store](../architecture/runtime.md#object-hierarchy). Keep one stored relationship value and derive adjacency and traversal indexes from changed links. Exercise edits, structural animation and its restore on stop, deleted-generation references, joint propagation and cycle correction through the same lifecycle. Private restoration installs typed values and references before selected Systems rebuild indexes and validate derived state.
 
-Use ordinary Rust types, derives and an explicit registry. Share validation and lifecycle handling across authored writes and structural animation; compile real-time numeric writes at binding boundaries under the runtime contract. Extend dynamic properties through the same paths, preserving property-level invalidation and sparse restoration. Add schema rows to the same derive, registry and field-offset space so row properties share validation, staging, overlays and animation with ordinary fields and slot liveness replaces name lookup; persist and inspect each table as one typed value. Move fixed-shape records such as skeleton joint overrides into rows rather than hand-packed buffers, and keep dynamic properties for open named sets. Measure mutation cost on representative Worlds before adding caches or alternate storage.
+Allocate component pages and substantial System reservations only for actual demand. Preflight required allocations before destructive mutation, preserve occupied addresses and notify prepared queries/bindings when missing storage becomes present. Compare many small selected-system Worlds with representative populated Worlds; a World selecting only Canvas systems must not pay for every compiled component type.
+
+Use ordinary Rust types, derives and an explicit registry. Share validation and lifecycle handling across authored writes and structural animation; compile real-time numeric writes at binding boundaries under the runtime contract. Retain dynamic properties and compact schema rows through the same property-level invalidation, staging and persistence paths. Rows remain appropriate for theme parts and joint overrides; ordinary GUI entities no longer require parallel node tables. Measure mutation cost on representative Worlds before adding caches or alternate storage.
+
+Implement compare-and-set as a generic field operation and field subscriptions as an extension of the lifecycle watch, sharing its membership, per-connection output accounting, Host drain and client code rather than adding a sibling facility. Compare observed fields after every System's finish pass so observations see final stored values, and keep unchanged fields free of allocation. Measure observer cost with thousands of watched controls.
 
 Component ownership lives in [`ipp_core::components`](../../crates/ipp-core/src/components/mod.rs): `schema`, `registry`, and `dynamic_properties` are the canonical paths, alongside lifecycle, primitives, and storage; crate-root re-exports cover value types only. World-side component-state behavior lives in [`world/component_state`](../../crates/ipp-core/src/world/component_state/mod.rs), split by phase (`access`, `staging`, `mutation`, `observations`), with `component_binding` and `component_query` as private world-root helpers.
 
 ## Target contracts and generation
 
-Extend [executed-target export](../../tools/ipp-schema-gen/README.md), keeping schema work outside evaluation. Verify repeatable generation and capability omission, then connect matching generated clients to real Hosts. Export row layouts with their components and generate typed row access and table decoding, so clients never compose row offsets or property names by hand. Compiler fixtures cover field access; executed targets prove layout, including agreement between native and WASM row layouts.
+Extend [executed-target export](../../tools/ipp-schema-gen/README.md) for core links, typed World/output references and selected-system manifests, keeping schema work outside evaluation. Distinguish the build's available schema from each World's admitted components and operations, and enforce both in core and protocol. Regenerate matching clients and fixtures directly, removing the GUI structural-command lane. Verify repeatable generation, capability omission and typed row access through real native and executed-WASM targets.
 
 ## World persistence
 
-Extend the [serialization service](../../crates/ipp-core/src/services/world_serialization) through per-system capture/restore hooks and shared identity mappings under the [snapshot contract](../architecture/protocol-and-schema.md#snapshots-and-world-replacement). Keep codecs and format details with implementation.
+Extend the [serialization service](../../crates/ipp-core/src/services/world_serialization) to a coherent Host-owned graph cut under the [snapshot contract](../architecture/protocol-and-schema.md#snapshots-and-world-replacement). Use graph-local World identity to distinguish copies with equal durable IDs, preserving durable metadata while remapping runtime handles and references. Capture authored attachments and nested OutputRefs; omit Host root presentation bindings. Keep codecs and format details with implementation.
 
-Exercise underlying-value recovery, excluded ownership, controller restoration and pending resources together. Restore identities before references and bindings; apply capacity hints before allocation. Use ordinary authored base state for durable React or Blender content.
+Exercise stored-value round trips, applied animation contributions, selected Systems, controller restoration and pending resources together. Restore all graph identities before references and bindings; restore/remap controller bindings for clip-local entity references without rewriting immutable asset key slots per World or load. Validate before publishing any World. Keep System selection separate from capacity hints. React and Blender content persists as ordinary stored state; test sibling copies sharing durable IDs without merging.
 
 Extend generic readers/writers and Host transfer state together. Test partial progress, cancellation and complete-only publication. Measure capture, encoding, restoration and transfer memory separately; synchronous work can pause the Host. Add compression, indexing or cooperative execution only for measured benefit and within accepted design. [Asset bundling](../architecture/assets.md#asset-output-and-durable-bundles) remains separate from ordinary reference-only saves.
 
 ## GUI state
 
-Store node style, per-node part state and root-owned theme parts in component-owned rows under the [GUI identity contract](../architecture/gui.md#identity-and-authoritative-state), addressing animation, overlays and staging by row offset with slot liveness rather than by name. Validate tree and row edits in proportion to the change; measure insertion, skin builds and inspection payloads on representative roots before and after. Share validation across incremental authoring, runtime control actions and generated value operations; fence stale root/node lifetimes before reusing storage. Generate native and executed-WASM contracts together, keeping computed geometry internal and GUI-disabled builds free of its registrations.
+Keep GUI structure, configuration, style, raw Canvas leaves and control state in ordinary entities and component fields under the [GUI identity contract](../architecture/gui.md#identity-and-authoritative-state). Retain compact theme/part tables and incremental layout/paint algorithms. Layout, measurement and Canvas read fields directly without building owned snapshots or walking ancestors; a value change should dirty only its control's paint, a text change only its remeasure and a scroll change only its scope. Validate local changes proportionally and preserve entity/component fences in both native and executed-WASM contracts.
 
-Use the existing per-System snapshot hooks to capture eligible structure, theme and part tables, asset references and committed values while excluding GUI interaction state and only its transient playback. Reconstruct layout and resolved skin state after restoration; preserve ordinary animation persistence. Extend real native/worker lifecycle, contract and snapshot scenarios with independent expected values, fresh-handle rejection and completed restored-frame captures. Include saving during provisional composition and queued input so durable output cannot accidentally capture transient edits. Keep fixtures and assertions independent of transport/process arrangement through the maintained drivers.
+Ordinary entity persistence saves control values with structure, configuration, themes and assets; GUI needs no persistence hook of its own. Reconstruct layout and skin output and preserve ordinary animation persistence. Extend real native/worker snapshots with provisional composition, queued input and adoption of restored controls by a reconnecting client. Keep independent expected values and completed restored-frame assertions through maintained drivers.
 
 ## Integration harness
 
@@ -34,9 +38,9 @@ Extend the maintained `snapshots`, `lifecycle`, `contracts` and `scaling` [suite
 
 | Evidence | Observable result |
 | --- | --- |
-| Round trip | Underlying state, durable identities and controller position survive; runtime handles are fresh |
-| Isolation | Excluded ownership stays excluded; rejected loads preserve published Worlds |
-| I/O | Save performs no asset reads; cancellation, unavailable sources and ordered transfers remain observable |
+| Round trip | Stored state, applied animation contributions, durable identities and controller position survive; runtime handles are fresh |
+| Isolation | Rejected graphs publish no Worlds; equal durable IDs do not merge copies |
+| I/O | One coherent graph cut; cancellation and unavailable sources remain observable; save performs no asset reads |
 | Rendering | Restored ready resources produce matching completed frames |
 | Scale | Maintained mutation/restoration fixtures retain operation counts and release timings, including synchronous pauses |
 

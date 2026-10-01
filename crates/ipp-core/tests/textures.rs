@@ -3,6 +3,7 @@
 
 mod support;
 use support::WorldTestDriver;
+use support::selection::RENDER;
 
 use ipp_core::{
     AssetResourceKind, AssetResourceStatus, Batch, Command, ComponentValue, EntityId,
@@ -11,34 +12,15 @@ use ipp_core::{
 };
 
 fn test_world(host: &mut ipp_core::HostRuntime) -> ipp_core::WorldContext<'_> {
-    let world_id = host.create_world(ipp_core::WorldLimits::default()).unwrap();
+    let world_id = host
+        .create_world(ipp_core::WorldLimits::default(), RENDER)
+        .unwrap();
     let mut world = host.world_mut(world_id).unwrap();
     world.register_stream_resource_provider("http").unwrap();
     world
 }
 
 use std::mem::offset_of;
-
-fn selection(world: &ipp_core::WorldContext<'_>, key: MeshKey) -> MeshKey {
-    let asset = world
-        .asset_resources()
-        .get(ipp_core::services::asset_management::AssetKey::from_u64(
-            key.asset,
-        ))
-        .unwrap();
-    let name = asset
-        .source()
-        .uri
-        .rsplit('/')
-        .next()
-        .unwrap()
-        .parse()
-        .unwrap();
-    MeshKey {
-        asset: name,
-        variant: key.variant,
-    }
-}
 
 fn texture_selection(world: &ipp_core::WorldContext<'_>, key: TextureKey) -> TextureKey {
     let asset = world
@@ -166,7 +148,10 @@ fn fields(key: TextureKey) -> Vec<FieldWrite> {
     vec![
         FieldWrite {
             offset: offset_of!(UnlitTexture, source) as u32,
-            value: FieldValue::String(format!("http://fixture/{}", key.asset)),
+            value: FieldValue::String(std::sync::Arc::<str>::from(format!(
+                "http://fixture/{}",
+                key.asset
+            ))),
         },
         FieldWrite {
             offset: offset_of!(UnlitTexture, variant) as u32,
@@ -180,6 +165,7 @@ fn insert(entity: EntityId, component: u16, fields: Vec<FieldWrite>) -> Command 
         entity: EntityRef::Handle(entity),
         component,
         fields,
+        adopt: false,
     }
 }
 
@@ -212,6 +198,7 @@ fn renderable(world: &mut ipp_core::WorldContext<'_>, uv: bool) -> EntityId {
                 symbolic_id: Some("cube".into()),
                 classes: vec![],
             },
+            adopt: false,
         }],
     );
     let id = report.outcomes[0].result.as_ref().unwrap()[0].1;
@@ -602,11 +589,12 @@ fn deleted_texture_slots_do_not_leak_into_reused_entities() {
         vec![Command::Create {
             alias: 0,
             metadata: EntityMetadata::default(),
+            adopt: false,
         }],
     );
     let next = report.outcomes[0].result.as_ref().unwrap()[0].1;
     assert_eq!(id.index(), next.index());
-    assert!(world.inspect(next).unwrap().effective.is_empty());
+    assert!(world.inspect(next).unwrap().components.is_empty());
     ok(
         &mut world,
         vec![
@@ -617,302 +605,6 @@ fn deleted_texture_slots_do_not_leak_into_reused_entities() {
     );
     assert_eq!(world.render_items()[0].texture, None);
     assert!(world.texture(key(1, 0)).is_some());
-}
-
-mod overlays {
-    use super::*;
-    use ipp_core::{
-        ComponentOverlayMode, EntityOverlayMode, StateOverlayLifecycleReason, StateOverlayRef,
-    };
-
-    #[derive(Clone, Copy)]
-    struct Declaration {
-        owner: u64,
-        overlay: u64,
-    }
-
-    impl Declaration {
-        fn edit(self, fields: Vec<FieldWrite>, clear: Vec<u32>) -> Command {
-            Command::UpdateComponentStateOverlay {
-                owner: StateOverlayRef::Handle(self.owner),
-                overlay: StateOverlayRef::Handle(self.overlay),
-                fields,
-                clear,
-            }
-        }
-
-        fn release(self) -> Command {
-            Command::ReleaseComponentStateOverlay {
-                owner: StateOverlayRef::Handle(self.owner),
-                overlay: StateOverlayRef::Handle(self.overlay),
-            }
-        }
-    }
-
-    fn declare(
-        world: &mut ipp_core::WorldContext<'_>,
-        component: u16,
-        mode: ComponentOverlayMode,
-        fields: Vec<FieldWrite>,
-    ) -> Declaration {
-        let report = ok(
-            world,
-            vec![
-                Command::CreateStateOverlayOwner {
-                    alias: 0,
-                },
-                Command::AttachEntityOverlayBinding {
-                    owner: StateOverlayRef::Alias(0),
-                    alias: 1,
-                    symbolic_id: "cube".into(),
-                    mode: EntityOverlayMode::Bound,
-                },
-                Command::AttachComponentStateOverlay {
-                    owner: StateOverlayRef::Alias(0),
-                    binding: StateOverlayRef::Alias(1),
-                    alias: 2,
-                    component,
-                    mode,
-                    fields,
-                },
-            ],
-        );
-        Declaration {
-            owner: report.outcomes[0].state_overlays[0].id,
-            overlay: report.outcomes[0].state_overlays[2].id,
-        }
-    }
-
-    #[test]
-    fn owned_and_bound_texture_incarnations_invalidate_without_deleting_replacements() {
-        let mut fixture_host = ipp_core::HostRuntime::new();
-        let mut world = test_world(&mut fixture_host);
-        let id = renderable(&mut world, true);
-        let owned = declare(
-            &mut world,
-            ComponentValue::UNLIT_TEXTURE,
-            ComponentOverlayMode::Owned,
-            fields(key(1, 0)),
-        );
-        let bound = declare(
-            &mut world,
-            ComponentValue::UNLIT_TEXTURE,
-            ComponentOverlayMode::Bound,
-            fields(key(2, 1)),
-        );
-        assert_eq!(
-            world.render_items()[0]
-                .texture
-                .map(|key| texture_selection(&world, key)),
-            Some(key(2, 1))
-        );
-        ok(&mut world, vec![bound.release()]);
-        assert_eq!(
-            world.render_items()[0]
-                .texture
-                .map(|key| texture_selection(&world, key)),
-            Some(key(1, 0))
-        );
-        let bound = declare(
-            &mut world,
-            ComponentValue::UNLIT_TEXTURE,
-            ComponentOverlayMode::Bound,
-            fields(key(2, 1)),
-        );
-        let report = ok(
-            &mut world,
-            vec![insert(id, ComponentValue::UNLIT_TEXTURE, fields(key(2, 1)))],
-        );
-        for declaration in [owned, bound] {
-            assert!(
-                report
-                    .diagnostics
-                    .iter()
-                    .any(|d| d.state_overlay == declaration.overlay
-                        && d.reason == StateOverlayLifecycleReason::ComponentReplaced)
-            );
-        }
-        ok(&mut world, vec![owned.release(), bound.release()]);
-        assert_eq!(
-            world.render_items()[0]
-                .texture
-                .map(|key| texture_selection(&world, key)),
-            Some(key(2, 1))
-        );
-        assert!(
-            world
-                .inspect(id)
-                .unwrap()
-                .base
-                .contains(&ComponentValue::UnlitTexture(UnlitTexture {
-                    source: "http://fixture/2".into(),
-                    variant: 1
-                }))
-        );
-    }
-
-    #[test]
-    fn owned_release_transitions_to_auto_fallback_and_final_release_removes_texture() {
-        let mut fixture_host = ipp_core::HostRuntime::new();
-        let mut world = test_world(&mut fixture_host);
-        let id = renderable(&mut world, true);
-        let owned = declare(
-            &mut world,
-            ComponentValue::UNLIT_TEXTURE,
-            ComponentOverlayMode::Owned,
-            fields(key(1, 0)),
-        );
-        let auto = declare(
-            &mut world,
-            ComponentValue::UNLIT_TEXTURE,
-            ComponentOverlayMode::Auto,
-            fields(key(2, 1)),
-        );
-        let bound = declare(
-            &mut world,
-            ComponentValue::UNLIT_TEXTURE,
-            ComponentOverlayMode::Bound,
-            vec![],
-        );
-
-        let report = ok(&mut world, vec![owned.release()]);
-        assert!(
-            report
-                .diagnostics
-                .iter()
-                .any(|d| d.state_overlay == bound.overlay
-                    && d.reason == StateOverlayLifecycleReason::ComponentReplaced)
-        );
-        assert_eq!(
-            world.render_items()[0]
-                .texture
-                .map(|key| texture_selection(&world, key)),
-            Some(key(2, 1))
-        );
-        assert!(
-            !world
-                .inspect(id)
-                .unwrap()
-                .base
-                .iter()
-                .any(|v| v.type_id() == 6)
-        );
-
-        ok(&mut world, vec![bound.release(), auto.release()]);
-        assert_eq!(world.render_items()[0].texture, None);
-        assert!(world.texture(key(1, 0)).is_some());
-    }
-
-    #[test]
-    fn auto_texture_reveals_pending_base_and_empty_fallback_without_rejecting_cleanup() {
-        let mut fixture_host = ipp_core::HostRuntime::new();
-        let mut world = test_world(&mut fixture_host);
-        let id = renderable(&mut world, true);
-        ok(
-            &mut world,
-            vec![insert(id, ComponentValue::UNLIT_TEXTURE, fields(key(1, 0)))],
-        );
-        let auto = declare(
-            &mut world,
-            ComponentValue::UNLIT_TEXTURE,
-            ComponentOverlayMode::Auto,
-            fields(key(2, 1)),
-        );
-        ok(
-            &mut world,
-            vec![insert(
-                id,
-                ComponentValue::UNLIT_TEXTURE,
-                fields(key(99, 0)),
-            )],
-        );
-        let report = run(
-            &mut world,
-            vec![auto.edit(vec![], vec![offset_of!(UnlitTexture, source) as u32])],
-        );
-        assert!(report.outcomes[0].result.is_ok());
-        assert!(world.render_items().is_empty());
-        let ticket = world.resource_requests_for_test()[0].id;
-        let report = run(&mut world, vec![auto.release()]);
-        assert!(report.outcomes[0].result.is_ok());
-        let world_id = world.id();
-        drop(world);
-        fixture_host.flush_resource_lifecycle();
-        let mut world = fixture_host.world_mut(world_id).unwrap();
-        assert_eq!(world.take_resource_cancellations(), vec![ticket]);
-        assert_eq!(
-            world.render_items().len(),
-            1,
-            "retained authored base is already loaded"
-        );
-        ok(
-            &mut world,
-            vec![insert(id, ComponentValue::UNLIT_TEXTURE, fields(key(1, 0)))],
-        );
-        let incomplete = declare(
-            &mut world,
-            ComponentValue::UNLIT_TEXTURE,
-            ComponentOverlayMode::Auto,
-            vec![],
-        );
-        ok(
-            &mut world,
-            vec![Command::RemoveComponent {
-                entity: EntityRef::Handle(id),
-                component: ComponentValue::UNLIT_TEXTURE,
-            }],
-        );
-        assert!(world.render_items().is_empty());
-        ok(&mut world, vec![incomplete.release()]);
-        assert_eq!(world.render_items()[0].texture, None);
-    }
-
-    #[test]
-    fn uvless_hidden_mesh_reveal_skips_rendering_and_releasing_texture_restores_it() {
-        let mut fixture_host = ipp_core::HostRuntime::new();
-        let mut world = test_world(&mut fixture_host);
-        let id = renderable(&mut world, true);
-        let mesh = declare(
-            &mut world,
-            ComponentValue::MESH_INSTANCE,
-            ComponentOverlayMode::Auto,
-            mesh_fields(true),
-        );
-        let texture = declare(
-            &mut world,
-            ComponentValue::UNLIT_TEXTURE,
-            ComponentOverlayMode::Auto,
-            fields(key(1, 0)),
-        );
-        ok(
-            &mut world,
-            vec![insert(
-                id,
-                ComponentValue::MESH_INSTANCE,
-                mesh_fields(false),
-            )],
-        );
-        ok(&mut world, vec![mesh.release()]);
-        assert!(world.render_items().is_empty());
-        assert_eq!(world.render_diagnostics()[0].entity, id);
-        ok(&mut world, vec![texture.release()]);
-        assert_eq!(
-            selection(&world, world.render_items()[0].mesh),
-            mesh_key(false)
-        );
-        for mode in [ComponentOverlayMode::Owned, ComponentOverlayMode::Auto] {
-            let texture = declare(
-                &mut world,
-                ComponentValue::UNLIT_TEXTURE,
-                mode,
-                fields(key(1, 0)),
-            );
-            assert!(world.render_items().is_empty());
-            assert_eq!(world.render_diagnostics().len(), 1);
-            ok(&mut world, vec![texture.release()]);
-            assert_eq!(world.render_items().len(), 1);
-        }
-    }
 }
 
 fn asset_report(world: &mut ipp_core::WorldContext<'_>) -> WorldUpdateReport {

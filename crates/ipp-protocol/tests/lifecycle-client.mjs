@@ -60,7 +60,7 @@ async function connect() {
       },
       async close() {},
     },
-    { logLevel: "off" },
+    { selectedSystems: [], logLevel: "off" },
   );
   return { client, sent, emit: (bytes) => handler.message(bytes) };
 }
@@ -154,12 +154,9 @@ test("lifecycle decoder preserves effect tick and incarnations and rejects inval
       7n,
     ),
   );
-  assert.throws(() =>
-    codec.decodeResponse(response("overflow", 0n, { dropped: 0n }), 7n),
-  );
 });
 
-test("subscription acknowledgements, release and overflow isolate local observers", async () => {
+test("subscription acknowledgements and release isolate local observers", async () => {
   const { client, sent, emit } = await connect();
   const events = [];
   try {
@@ -172,12 +169,14 @@ test("subscription acknowledgements, release and overflow isolate local observer
     assert.equal(events.length, 1);
     assert.equal(events[0].tick, 2n);
     assert.equal(events[0].kind, "change");
-    emit(response("overflow", 0n, { dropped: 129n }));
-    assert.equal(events[1].kind, "overflow");
-    assert.equal(events[1].dropped, 129n);
     emit(response("events", 0n, { events: [publication(subscription.id)] }));
     assert.equal(events.length, 2);
-    await subscription.unsubscribe();
+    assert.equal(events[1].kind, "change");
+    const first = subscription.unsubscribe();
+    emit(response("subscription", lastRequestId(sent)));
+    await first;
+    emit(response("events", 0n, { events: [publication(subscription.id)] }));
+    assert.equal(events.length, 2);
     const again = client.subscribeLifecycle({}, (event) => events.push(event));
     emit(response("subscription", lastRequestId(sent)));
     const next = await again;

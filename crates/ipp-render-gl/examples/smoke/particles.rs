@@ -1,5 +1,5 @@
 //! Controlled Host-time particle evidence on the real GLES renderer.
-use super::world::{HEIGHT, WIDTH, apply, coverage, fixture_world, render_frame, save};
+use super::world::{HEIGHT, WIDTH, apply, coverage, fixture_world, save};
 use ipp_core::{components::*, *};
 use ipp_render_gl::{RenderDevice, RenderService};
 use std::path::Path;
@@ -20,6 +20,7 @@ pub fn run<D: RenderDevice>(
             Command::Create {
                 alias: 1,
                 metadata: Default::default(),
+                adopt: false,
             },
             Command::insert_value(
                 EntityRef::Alias(1),
@@ -56,13 +57,13 @@ pub fn run<D: RenderDevice>(
         .entities()
         .iter()
         .find(|e| {
-            e.effective
+            e.components
                 .iter()
                 .any(|c| c.type_id() == ComponentValue::PARTICLE_EMITTER)
         })
         .unwrap()
         .id;
-    let stats = render_frame(renderer, &mut world, WIDTH, HEIGHT)?;
+    let stats = super::world::present_world!(renderer, host, world, WIDTH, HEIGHT)?;
     assert_eq!(world.particles(entity).unwrap().len(), 2000);
     assert_eq!(stats.draw_calls, 1);
     assert_eq!(stats.triangles, 4000);
@@ -70,8 +71,11 @@ pub fn run<D: RenderDevice>(
     save(output, "sprites", &initial)?;
     assert!(coverage(&initial).0 > 1000);
     let state = world.particles(entity).unwrap().to_vec();
-    renderer.unload(&mut world);
-    render_frame(renderer, &mut world, WIDTH, HEIGHT)?;
+    let world_id = world.id();
+    drop(world);
+    renderer.unload_host(&mut host)?;
+    let mut world = host.world_mut(world_id).unwrap();
+    super::world::present_world!(renderer, host, world, WIDTH, HEIGHT)?;
     assert_eq!(world.particles(entity).unwrap(), state);
     let restored = capture()?;
     save(output, "restored", &restored)?;
@@ -103,7 +107,7 @@ pub fn run<D: RenderDevice>(
         ],
     )?;
     assert_eq!(
-        render_frame(renderer, &mut world, WIDTH, HEIGHT)?.draw_calls,
+        super::world::present_world!(renderer, host, world, WIDTH, HEIGHT)?.draw_calls,
         0,
         "explicit effect bounds should cull the batch"
     );
@@ -114,11 +118,13 @@ pub fn run<D: RenderDevice>(
             component: ComponentValue::BOUNDING_GEOMETRY,
         }],
     )?;
+    assert!(world.bounding_geometry(entity).is_ok());
     assert_eq!(
-        render_frame(renderer, &mut world, WIDTH, HEIGHT)?.draw_calls,
-        1,
-        "missing bounds must keep the effect eligible"
+        super::world::present_world!(renderer, host, world, WIDTH, HEIGHT)?.draw_calls,
+        0,
+        "removing authored bounds restores the generated effect enclosure"
     );
+    assert_eq!(coverage(&capture()?).0, 0);
     apply(
         &mut world,
         vec![Command::insert_value(
@@ -126,9 +132,15 @@ pub fn run<D: RenderDevice>(
             ComponentValue::Transform(Transform::default()),
         )],
     )?;
+    let restored_bounds = super::world::present_world!(renderer, host, world, WIDTH, HEIGHT)?;
+    assert_eq!(restored_bounds.draw_calls, 1);
+    let restored = capture()?;
+    save(output, "generated-bound-restored", &restored)?;
+    assert_eq!(initial, restored);
+
     world.step(2.0)?;
     assert_eq!(
-        render_frame(renderer, &mut world, WIDTH, HEIGHT)?.draw_calls,
+        super::world::present_world!(renderer, host, world, WIDTH, HEIGHT)?.draw_calls,
         0
     );
     let drained = capture()?;
@@ -189,11 +201,11 @@ pub fn run<D: RenderDevice>(
         &mut world,
         vec![
             Command::RemoveComponent {
-                entity: target,
+                entity: target.clone(),
                 component: ComponentValue::PARTICLE_SPRITE,
             },
             Command::insert_value(
-                target,
+                target.clone(),
                 ComponentValue::ParticleEmitter(ParticleEmitter {
                     restart: 1,
                     burst: 1000,
@@ -206,7 +218,7 @@ pub fn run<D: RenderDevice>(
                 }),
             ),
             Command::insert_value(
-                target,
+                target.clone(),
                 ComponentValue::ParticleMesh(ParticleMesh {
                     source: "client://particles/mesh".into(),
                     variant: 0,
@@ -221,14 +233,23 @@ pub fn run<D: RenderDevice>(
             ),
         ],
     )?;
-    let stats = render_frame(renderer, &mut world, WIDTH, HEIGHT)?;
+    drop(world);
+    let mut ready = None;
+    for _ in 0..8 {
+        let stats = super::world::render_host_frame(renderer, &mut host, world_id, WIDTH, HEIGHT)?;
+        if renderer.custom_material_diagnostics().is_empty() {
+            ready = Some(stats);
+            break;
+        }
+    }
+    let stats = ready.ok_or_else(|| {
+        format!(
+            "custom particle material did not publish ready inputs: {:?}",
+            renderer.custom_material_diagnostics()
+        )
+    })?;
     assert_eq!(stats.draw_calls, 1);
     assert_eq!(stats.triangles, 1000);
-    assert!(
-        renderer.custom_material_diagnostics().is_empty(),
-        "{:?}",
-        renderer.custom_material_diagnostics()
-    );
     let blue = capture()?;
     save(output, "custom-mesh", &blue)?;
     assert!(
@@ -240,5 +261,6 @@ pub fn run<D: RenderDevice>(
             > 100
     );
 
+    renderer.prepare(&mut host, None)?;
     Ok(())
 }

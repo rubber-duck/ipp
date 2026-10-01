@@ -72,7 +72,7 @@ async function connect() {
       },
       async close() {},
     },
-    { logLevel: "off" },
+    { selectedSystems: [], logLevel: "off" },
   );
   return { client, sent, emit: (bytes) => handler.message(bytes) };
 }

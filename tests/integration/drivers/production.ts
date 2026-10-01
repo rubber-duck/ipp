@@ -28,6 +28,7 @@ import type {
   ProtocolRejection,
   SceneOperation,
 } from "../driver.js";
+import { CONSTRAINTS, selectSystems } from "../system-selections.js";
 
 type RecordEvidence = DriverConnectOptions["record"];
 
@@ -102,7 +103,7 @@ class ProductionSdkDriver implements HarnessDriver {
       batchId,
       operations: commands.length,
     });
-    const outcome = await this.#client.batch(commands, batchId);
+    const outcome = await this.#client.batch(commands);
     await this.#record("sdk_batch_response", outcome);
     return normalizeBatchOutcome(outcome, aliases);
   }
@@ -162,15 +163,12 @@ class ProductionSdkDriver implements HarnessDriver {
     for (const batchId of batchIds) {
       pending.push(
         this.#client
-          .batch(
-            [
-              Entity.create(1, {
-                symbolicId: `concurrent-${batchId}`,
-                classes: ["concurrent-rpc"],
-              }),
-            ],
-            batchId,
-          )
+          .batch([
+            Entity.create(1, {
+              symbolicId: `concurrent-${batchId}`,
+              classes: ["concurrent-rpc"],
+            }),
+          ])
           .then((outcome) => {
             if (!outcome.ok) {
               throw new Error(
@@ -256,6 +254,7 @@ export class ProductionDriverFactory implements HarnessDriverFactory {
     options: DriverConnectOptions,
   ): Promise<HarnessDriver> {
     const client = await IppClient.connectWebSocket(url, {
+      selectedSystems: selectSystems(CONSTRAINTS),
       timeoutMs: 5_000,
       signal: options.signal,
     });
@@ -303,13 +302,12 @@ export class ProductionDriverFactory implements HarnessDriverFactory {
         session: firstSession,
         requestId: 1n,
         body: {
-          kind: "batch",
-          batch: {
-            id: 1n,
-            operations: [
-              Entity.create(1, { symbolicId: "stale-must-not-apply" }),
-            ],
-          },
+          kind: "submitBatch",
+          batchId: 1,
+          last: true,
+          operations: [
+            Entity.create(1, { symbolicId: "stale-must-not-apply" }),
+          ],
         },
       });
       return await expectRejection(second, staleRequest, "request", options);
@@ -424,13 +422,10 @@ function normalizeBatchOutcome(
 }
 
 function normalizeObservation(snapshot: EntitySnapshot): EntityObservation {
-  const scalarBase = snapshot.base.find(
+  const scalar = snapshot.components.find(
     (component) => component.component === components.Scalar.id,
   );
-  const scalarEffective = snapshot.effective.find(
-    (component) => component.component === components.Scalar.id,
-  );
-  const driver = snapshot.base.find(
+  const driver = snapshot.components.find(
     (component) => component.component === components.LinearDriver.id,
   );
   return {
@@ -438,15 +433,9 @@ function normalizeObservation(snapshot: EntitySnapshot): EntityObservation {
     symbolicId: snapshot.metadata.symbolicId,
     classes: [...snapshot.metadata.classes],
     scalar:
-      scalarBase === undefined || scalarEffective === undefined
+      scalar === undefined
         ? null
-        : {
-            base: requiredNumber(scalarBase.fields.value, "Scalar base value"),
-            effective: requiredNumber(
-              scalarEffective.fields.value,
-              "Scalar effective value",
-            ),
-          },
+        : { value: requiredNumber(scalar.fields.value, "Scalar value") },
     linearDriver:
       driver === undefined
         ? null

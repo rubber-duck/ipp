@@ -24,6 +24,8 @@ Revisions apply serially. A semantic failure retains acknowledged partial effect
 
 Scene acknowledgement, resource readiness, playback and completed frames are distinct observations. The live viewer controls active exported actions; the reusable clip catalog is available independently for application-selected playback. Supported export categories do not imply equivalence to Blender's renderer.
 
+The Canvas owns an explicit World and authoring session. The viewer selects the exported camera through a Host OutputRef, or explicitly selects its own viewing camera when the export has no active camera. Opening a session never selects presentation. Reconnect awaits adapter disposal before replacing the Canvas-owned Host and World.
+
 ## Disk export and import
 
 Run the same exporter and adapter without a live addon connection:
@@ -41,6 +43,8 @@ The output includes content-addressed assets, `world.ipp` and `manifest.json` wi
 
 Runtime references use `https://NAME.ipp.invalid/`; configure the browser Host's `resourceUrls` mapping to the deployed asset directory before loading. World saving itself preserves references and does not bundle or relocate data. The [hierarchy gallery](../world-gallery/README.md#rebuilding-the-saved-scene) demonstrates this publication path.
 
+Loading returns a World graph: open its root for authoring, resolve the manifest camera in that World, then bind and select its camera output on the Host surface. The [disk fixture](../../tests/render/blender-disk-fixture.ts) demonstrates playback, fenced captures and cleanup of the selected view, binding, sessions and created Worlds.
+
 ## Validation
 
-`python tools/ipp.py test blender` exercises real Blender, trusted local TLS, the adapter, generated client, worker and completed WebGL frames. It uses generated fixtures and the checked-in [Fox fixture](../../tests/fixtures/blender/README.md), with state and image assertions for conversion, edits, lifecycle and recovery. Tests do not bypass certificate errors. The [suite registry](../../tools/pipeline/suites.json) owns exact cases; failure artifacts are retained under `target/integration-artifacts/blender`.
+`python tools/ipp.py regression --only test:blender:viewer --only test:blender:disk --only test:blender:stream` exercises real Blender, trusted local TLS, the adapter, generated client, worker and completed WebGL frames. The scoped strict build checks these callers without depending on unrelated examples. It uses generated fixtures and the checked-in [Fox fixture](../../tests/fixtures/blender/README.md), with state and image assertions for conversion, edits, lifecycle and recovery. Tests do not bypass certificate errors. The [suite registry](../../tools/pipeline/suites.json) owns exact cases; failure artifacts are retained under `target/integration-artifacts/blender` and `target/integration-artifacts/blender-disk`.

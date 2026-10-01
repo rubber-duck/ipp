@@ -10,6 +10,7 @@ pub mod rows;
 pub mod schema;
 pub(crate) mod storage;
 
+pub use crate::WorldAttachment;
 pub use dynamic_properties::{
     DynamicProperties, DynamicPropertyDescriptor, DynamicPropertyKind, DynamicValue,
 };
@@ -19,7 +20,8 @@ pub use registry::ComponentValue;
 pub use crate::systems::camera::Camera;
 pub use crate::systems::constraints::LinearDriver;
 pub use crate::systems::geometry::{BoundingGeometry, PickingGeometry};
-pub use crate::systems::hierarchy::{Hierarchy, HierarchyRuntimeState};
+#[cfg(feature = "skeletal-animation")]
+pub use crate::systems::hierarchy::ParentJoint;
 pub use crate::systems::look_at::{LookAt, LookAtRuntimeState};
 pub use crate::systems::render::{
     BaseColorTexture, CustomMaterial, Light, MeshInstance, PbrMaterial, UnlitMaterial, UnlitTexture,
@@ -28,8 +30,25 @@ pub use crate::systems::render::{
 #[cfg(feature = "surfaces")]
 pub use crate::systems::surface::{Surface, SurfaceCache};
 
+#[cfg(feature = "surfaces")]
+pub use crate::systems::canvas::{
+    CanvasBitmap, CanvasBox, CanvasDrawing, CanvasGlyphRun, CanvasStyle, CanvasText,
+};
+
 #[cfg(feature = "gui")]
-pub use crate::systems::gui::GuiRoot;
+pub use crate::systems::canvas::CanvasBounds;
+#[cfg(feature = "gui")]
+pub use crate::systems::gui::layout::GuiLayout;
+#[cfg(feature = "gui")]
+pub use crate::systems::gui::motion::GuiThemeMotion;
+#[cfg(feature = "gui")]
+pub use crate::systems::gui::presentation::{GuiFont, GuiSkin, GuiTheme};
+
+#[cfg(feature = "gui")]
+pub use crate::systems::gui::local::{
+    GuiBehavior, GuiButton, GuiCheckbox, GuiScrollView, GuiSlider, GuiTextInput, GuiVirtualItem,
+    GuiVirtualList,
+};
 
 #[cfg(feature = "skeletal-animation")]
 pub use crate::systems::skeleton::{JointOverrideRow, Skeleton, SkeletonRuntimeState};

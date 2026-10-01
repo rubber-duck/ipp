@@ -3,6 +3,7 @@
 
 mod support;
 use support::WorldTestDriver;
+use support::selection::{CONSTRAINTS, SKELETON, SPATIAL, select};
 
 use ipp_core::{
     components::{Scalar, Skeleton, Transform},
@@ -26,6 +27,7 @@ fn create(world: &mut ipp_core::WorldContext<'_>, values: Vec<ComponentValue>) -
     let mut operations = vec![Command::Create {
         alias: 0,
         metadata: Default::default(),
+        adopt: false,
     }];
     operations.extend(
         values
@@ -51,7 +53,12 @@ fn upload(world: &mut ipp_core::WorldContext<'_>, kind: AssetTypeId, id: u64, by
 }
 
 fn fixture(host: &mut ipp_core::HostRuntime) -> (ipp_core::WorldContext<'_>, EntityId, EntityId) {
-    let world_id = host.create_world(ipp_core::WorldLimits::default()).unwrap();
+    let world_id = host
+        .create_world(
+            ipp_core::WorldLimits::default(),
+            &select(&[CONSTRAINTS, SKELETON, SPATIAL]),
+        )
+        .unwrap();
     let mut world = host.world_mut(world_id).unwrap();
     let rig = builtin::rig(SKELETON_TYPE, "ipp://skeleton/rig-strip").unwrap();
     upload(&mut world, SKELETON_TYPE, 1, rig.clone());
@@ -155,10 +162,11 @@ fn player(
                 .enumerate()
                 .map(|(index, track)| AnimationDriverDescription {
                     target,
-                    source: format!("asset://10/{id}"),
+                    source: std::sync::Arc::<str>::from(format!("asset://10/{id}")),
                     variant: 0,
                     track: index as u32,
                     property: track.target().clone(),
+                    entity_bindings: Vec::new(),
                     weight: settings.weight,
                     additive: settings.additive,
                     reference_time: settings.reference_time,
@@ -210,7 +218,7 @@ fn pose_keys_blend_local_trs_shortest_arc_and_bezier_time() {
     end.qw = -end.qw * 2.0;
     let clip = AnimationClip::new(2.0, vec![track(vec![1], vec![joint(0.0)], vec![end])]).unwrap();
     let encoded = clip.encode();
-    assert_eq!(encoded[4], 2);
+    assert_eq!(encoded[4], 4);
     assert_eq!(AnimationClip::decode(&encoded).unwrap(), clip);
     let AnimationValue::Pose(mid) = clip.sample(0, 1.0) else {
         panic!()
@@ -260,7 +268,7 @@ fn independent_players_preserve_base_unkeyed_joints_and_pose_storage() {
     let (mut world, a, b) = fixture(&mut fixture_host);
     let p = player(&mut world, a, &bend(), 100, Default::default());
     let q = player(&mut world, b, &bend(), 101, Default::default());
-    let base = world.inspect(a).unwrap().base;
+    let base = world.inspect(a).unwrap().components;
     let address = world.skeleton_pose(a).unwrap().as_ptr();
     paused(&mut world, p, 1.0);
     paused(&mut world, q, 2.0);
@@ -274,17 +282,17 @@ fn independent_players_preserve_base_unkeyed_joints_and_pose_storage() {
     );
     assert_eq!(world.skeleton_pose(a).unwrap()[0], Transform::default());
     assert_eq!(world.skeleton_pose(a).unwrap().as_ptr(), address);
-    assert_eq!(world.inspect(a).unwrap().base, base);
+    assert_eq!(world.inspect(a).unwrap().components, base);
     // Typed joint animation writes private local buffers, so both exposed views
     // retain the producer's sparse joint declaration throughout playback.
     let observed = world.inspect(a).unwrap();
     let authored = observed
-        .base
+        .components
         .iter()
         .find(|value| matches!(value, ComponentValue::Skeleton(_)))
         .unwrap();
     let effective = observed
-        .effective
+        .components
         .iter()
         .find(|value| matches!(value, ComponentValue::Skeleton(_)))
         .unwrap();
@@ -442,7 +450,9 @@ fn changing_pose_source_suspends_prepared_joint_playback_until_the_new_pose_load
 
 #[test]
 fn discrete_pose_inputs_rebase_unkeyed_locals_and_preserve_ordered_joint_samples() {
-    for (pose_first, expected_x) in [(true, 7.0), (false, 4.5)] {
+    // The joint driver adds half of its 9 change at t=1: onto the new pose's
+    // 5 when the pose source is written first, onto the rest pose's 0 otherwise.
+    for (pose_first, expected_x) in [(true, 9.5), (false, 4.5)] {
         let mut fixture_host = ipp_core::HostRuntime::new();
         let (mut world, entity, _) = fixture(&mut fixture_host);
         let mut pose = builtin::rig(POSE_TYPE, "ipp://pose/rig-strip-bent").unwrap();
@@ -461,11 +471,11 @@ fn discrete_pose_inputs_rebase_unkeyed_locals_and_preserve_ordered_joint_samples
                 interpolation: AnimationInterpolation::Step,
             }],
         };
-        let target = Transform {
-            x: 9.0,
+        let target = |x| Transform {
+            x,
             ..Default::default()
         };
-        let joints = track(vec![0], vec![target], vec![target]);
+        let joints = track(vec![0], vec![target(0.0)], vec![target(18.0)]);
         let tracks = if pose_first {
             vec![source, joints]
         } else {
@@ -489,7 +499,7 @@ fn discrete_pose_inputs_rebase_unkeyed_locals_and_preserve_ordered_joint_samples
         close(local[0].x, expected_x);
         close(local[1].qz, std::f32::consts::FRAC_1_SQRT_2);
         assert_eq!(local.as_ptr(), address);
-        assert!(world.inspect(entity).unwrap().base.iter().any(|value| matches!(value, ComponentValue::Skeleton(value) if value.pose_source.is_empty() && value.joints.iter().all(|(_, row)| row.is_empty()))));
+        assert!(world.inspect(entity).unwrap().components.iter().any(|value| matches!(value, ComponentValue::Skeleton(value) if &*value.pose_source == "asset://4/4" && value.joints.iter().all(|(_, row)| row.is_empty()))));
     }
 }
 
@@ -500,11 +510,15 @@ fn joint_baseline_tracks_authored_pose_changes_without_accumulating_samples() {
     let mut pose = builtin::rig(POSE_TYPE, "ipp://pose/rig-strip-bent").unwrap();
     pose[12..16].copy_from_slice(&5.0f32.to_le_bytes());
     upload(&mut world, POSE_TYPE, 4, pose);
-    let target = Transform {
-        x: 9.0,
+    let target = |x| Transform {
+        x,
         ..Default::default()
     };
-    let clip = AnimationClip::new(2.0, vec![track(vec![0], vec![target], vec![target])]).unwrap();
+    let clip = AnimationClip::new(
+        2.0,
+        vec![track(vec![0], vec![target(0.0)], vec![target(18.0)])],
+    )
+    .unwrap();
     let controller = player(
         &mut world,
         entity,
@@ -535,7 +549,7 @@ fn joint_baseline_tracks_authored_pose_changes_without_accumulating_samples() {
     );
     for _ in 0..4 {
         world.update_for_test(0.0).unwrap();
-        close(world.skeleton_pose(entity).unwrap()[0].x, 7.0);
+        close(world.skeleton_pose(entity).unwrap()[0].x, 9.5);
     }
     world
         .enqueue_playback(controller, AnimationPlaybackControl::Stop)
@@ -586,8 +600,15 @@ fn source_replacement_in_failed_batch_invalidates_binding() {
     .result
     .unwrap();
     close(world.skeleton_pose(a).unwrap()[1].y, 3.0);
+    close(world.skeleton_pose(a).unwrap()[1].qz, 0.0);
+    // The rebound bend adds its rotation to the replacement rig's joint and
+    // leaves its translation.
     paused(&mut world, p, 1.0);
-    close(world.skeleton_pose(a).unwrap()[1].y, 1.0);
+    close(world.skeleton_pose(a).unwrap()[1].y, 3.0);
+    close(
+        world.skeleton_pose(a).unwrap()[1].qz,
+        (std::f32::consts::PI / 8.0).sin(),
+    );
     apply(
         &mut world,
         vec![
@@ -690,12 +711,7 @@ fn single_sampling_pass_reports_failures_without_rollback_or_retry() {
             },
         ],
     };
-    let mixed = AnimationClip::new(
-        2.0,
-        vec![bend().tracks()[0].interchange(), scalar(f32::MAX, f32::MAX)],
-    )
-    .unwrap();
-    let poses = player(&mut world, target, &mixed, 100, Default::default());
+    let poses = player(&mut world, target, &bend(), 100, Default::default());
     let source = AnimationClip::new(
         2.0,
         vec![AnimationTrack {
@@ -712,17 +728,15 @@ fn single_sampling_pass_reports_failures_without_rollback_or_retry() {
     )
     .unwrap();
     let replacement = player(&mut world, target, &source, 101, Default::default());
-    let additive = AnimationClip::new(2.0, vec![scalar(0.0, f32::MAX)]).unwrap();
-    let addition = player(
-        &mut world,
-        target,
-        &additive,
-        102,
-        PlaybackSettings {
-            additive: true,
-            ..Default::default()
-        },
-    );
+    // Two contributions of MAX to one field overflow.
+    let stacked =
+        AnimationClip::new(2.0, vec![scalar(0.0, f32::MAX), scalar(0.0, f32::MAX)]).unwrap();
+    let addition = player(&mut world, target, &stacked, 102, Default::default());
+    let mut description = world.animation_controller(addition).unwrap().description;
+    description.drivers[1].additive = true;
+    world
+        .update_animation_controller(addition, description)
+        .unwrap();
 
     for entity in [poses, replacement, addition] {
         world
@@ -746,23 +760,17 @@ fn single_sampling_pass_reports_failures_without_rollback_or_retry() {
             .iter()
             .any(|event| event.kind == AnimationPlaybackEventKind::Failed)
     );
+    // The successful replacement sample stays; nothing is rolled back.
     assert!(
         world
             .inspect(target)
             .unwrap()
-            .effective
-            .contains(&ComponentValue::Scalar(Scalar {
-                value: f32::MAX
-            }))
-    );
-    assert!(
-        world
-            .inspect(target)
-            .unwrap()
-            .base
-            .contains(&ComponentValue::Scalar(Scalar {
-                value: 7.0
-            }))
+            .components
+            .iter()
+            .any(|value| matches!(
+                value,
+                ComponentValue::Skeleton(skeleton) if &*skeleton.source == "asset://3/2"
+            ))
     );
     world
         .enqueue_playback(addition, AnimationPlaybackControl::Stop)
@@ -772,7 +780,7 @@ fn single_sampling_pass_reports_failures_without_rollback_or_retry() {
         world
             .inspect(target)
             .unwrap()
-            .effective
+            .components
             .contains(&ComponentValue::Scalar(Scalar {
                 value: 7.0
             }))
@@ -848,10 +856,11 @@ fn joint_override_properties_reject_numeric_and_discrete_tracks_at_bind() {
             world.create_animation_controller(AnimationControllerDescription {
                 drivers: vec![AnimationDriverDescription {
                     target: a,
-                    source: format!("asset://10/{id}"),
+                    source: std::sync::Arc::<str>::from(format!("asset://10/{id}")),
                     variant: 0,
                     track: 0,
                     property: target,
+                    entity_bindings: Vec::new(),
                     weight: 1.0,
                     additive: false,
                     reference_time: 0.0,

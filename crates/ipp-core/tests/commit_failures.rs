@@ -71,8 +71,18 @@ fn nonconvergent_commit_releases_deleted_entities_and_faults_only_its_world() {
         updates: updates.clone(),
     }));
     let mut host = HostRuntime::with_system_factories(factories).unwrap();
-    let id = host.create_world(Default::default()).unwrap();
-    let healthy = host.create_world(Default::default()).unwrap();
+    let id = host
+        .create_world(
+            Default::default(),
+            &[
+                ipp_core::systems::constraints::ConstraintSystem::ID,
+                SystemId("test.oscillating-commit"),
+            ],
+        )
+        .unwrap();
+    let healthy = host
+        .create_world(Default::default(), &[SystemId("test.oscillating-commit")])
+        .unwrap();
     let mut world = host.world_mut(id).unwrap();
     world
         .enqueue(Batch {
@@ -81,10 +91,12 @@ fn nonconvergent_commit_releases_deleted_entities_and_faults_only_its_world() {
                 Command::Create {
                     alias: 0,
                     metadata: EntityMetadata::default(),
+                    adopt: false,
                 },
                 Command::Create {
                     alias: 1,
                     metadata: EntityMetadata::default(),
+                    adopt: false,
                 },
                 Command::insert_value(
                     EntityRef::Alias(1),
@@ -119,6 +131,7 @@ fn nonconvergent_commit_releases_deleted_entities_and_faults_only_its_world() {
             operations: vec![Command::Create {
                 alias: 0,
                 metadata: EntityMetadata::default(),
+                adopt: false,
             }],
         })
         .unwrap();

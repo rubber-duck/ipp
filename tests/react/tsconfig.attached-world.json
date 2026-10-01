@@ -1,0 +1,5 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": { "noEmit": true },
+  "include": ["attached-world-case.ts", "canvas-world-case.ts", "attached-world.test.ts", "../../packages/ipp-react/tests/attachment-journal.test.ts"]
+}

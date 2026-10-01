@@ -32,37 +32,16 @@
       "browser"
     ]
   },
-  "dist/tests/render/blender.test.js": {
-    "builds": [
-      "typescript",
-      "blender-viewer",
-      "blender-addon",
-      "blender-fixtures"
-    ],
-    "requirements": [
-      "node",
-      "npm",
-      "browser",
-      "blender",
-      "certificates"
-    ]
-  },
-  "dist/tests/render/blender-disk.test.js": {
-    "builds": [
-      "typescript",
-      "blender-viewer",
-      "blender-addon",
-      "blender-fixtures"
-    ],
-    "requirements": [
-      "node",
-      "npm",
-      "browser",
-      "blender",
-      "certificates"
-    ]
-  },
   "dist/packages/ipp-client/tests/resource-worker.test.js": {
+    "builds": [
+      "typescript"
+    ],
+    "requirements": [
+      "node",
+      "npm"
+    ]
+  },
+  "dist/packages/ipp-client/tests/profile-worker.test.js": {
     "builds": [
       "typescript"
     ],
@@ -78,6 +57,14 @@
     "requirements": [
       "node",
       "npm"
+    ]
+  },
+  "crates/ipp-protocol/tests/host-client.mjs": {
+    "builds": [],
+    "requirements": [
+      "node",
+      "npm",
+      "rust"
     ]
   },
   "crates/ipp-protocol/tests/lifecycle-client.mjs": {
@@ -118,11 +105,13 @@
   },
   "crates/ipp-protocol/tests/manifest-client.mjs": {
     "builds": [
-      "typescript"
+      "client",
+      "presentation-wire-host"
     ],
     "requirements": [
       "node",
-      "npm"
+      "npm",
+      "rust"
     ]
   },
   "crates/ipp-protocol/tests/mesh-client.mjs": {
@@ -374,6 +363,10 @@
       "browser"
     ]
   },
+  "dist/tests/react/native.test.js": {
+    "builds": ["typescript", "react", "world-hosts"],
+    "requirements": ["node", "npm"]
+  },
   "dist/tests/react/react.test.js": {
     "builds": [
       "typescript",
@@ -414,43 +407,7 @@
       "npm"
     ]
   },
-  "dist/packages/ipp-react/tests/gui-commits.test.js": {
-    "builds": [
-      "typescript"
-    ],
-    "requirements": [
-      "node",
-      "npm"
-    ]
-  },
-  "dist/packages/ipp-react/tests/gui-controls.test.js": {
-    "builds": [
-      "typescript"
-    ],
-    "requirements": [
-      "node",
-      "npm"
-    ]
-  },
   "dist/packages/ipp-react/tests/gui-declaration.test.js": {
-    "builds": [
-      "typescript"
-    ],
-    "requirements": [
-      "node",
-      "npm"
-    ]
-  },
-  "dist/packages/ipp-react/tests/gui-diff.test.js": {
-    "builds": [
-      "typescript"
-    ],
-    "requirements": [
-      "node",
-      "npm"
-    ]
-  },
-  "dist/packages/ipp-react/tests/gui-effects.test.js": {
     "builds": [
       "typescript"
     ],
@@ -493,32 +450,6 @@
     "requirements": [
       "node",
       "npm"
-    ]
-  },
-  "dist/tests/render/canvas.test.js": {
-    "builds": [
-      "typescript",
-      "canvas-fixtures",
-      "browser:headless",
-      "browser:render"
-    ],
-    "requirements": [
-      "node",
-      "npm",
-      "browser"
-    ]
-  },
-  "dist/tests/render/dpi.test.js": {
-    "builds": [
-      "typescript",
-      "canvas-fixtures",
-      "browser:headless",
-      "browser:render"
-    ],
-    "requirements": [
-      "node",
-      "npm",
-      "browser"
     ]
   },
   "dist/tests/render/render.test.js": {
@@ -719,40 +650,7 @@
       "npm"
     ]
   },
-  "dist/tests/render/blender-stream.test.js": {
-    "builds": [
-      "typescript",
-      "blender-viewer",
-      "blender-addon",
-      "blender-fixtures"
-    ],
-    "requirements": [
-      "node",
-      "npm",
-      "browser",
-      "blender",
-      "certificates"
-    ]
-  },
   "dist/packages/ipp-client/tests/asset-sources.test.js": {
-    "builds": [
-      "typescript"
-    ],
-    "requirements": [
-      "node",
-      "npm"
-    ]
-  },
-  "dist/packages/ipp-client/tests/gui-input.test.js": {
-    "builds": [
-      "typescript"
-    ],
-    "requirements": [
-      "node",
-      "npm"
-    ]
-  },
-  "dist/packages/ipp-client/tests/gui-observations.test.js": {
     "builds": [
       "typescript"
     ],
@@ -770,65 +668,29 @@
       "npm"
     ]
   },
-  "crates/ipp-protocol/tests/gui-input-client.mjs": {
-    "builds": [
-      "typescript"
-    ],
-    "requirements": [
-      "node",
-      "npm"
-    ]
-  },
-  "crates/ipp-protocol/tests/gui-observations-client.mjs": {
-    "builds": [
-      "typescript"
-    ],
-    "requirements": [
-      "node",
-      "npm"
-    ]
-  },
   "crates/ipp-protocol/tests/gui-semantics-client.mjs": {
-    "builds": [
-      "typescript"
-    ],
-    "requirements": [
-      "node",
-      "npm"
-    ]
-  },
-  "dist/tests/integration/surface.test.js": {
-    "builds": [
-      "typescript",
-      "surface-host",
-      "surface-assets"
-    ],
-    "requirements": [
-      "node",
-      "npm"
-    ]
-  },
-  "dist/tests/render/surface.test.js": {
-    "builds": [
-      "typescript",
-      "surface-fixtures",
-      "browser:render-surfaces"
-    ],
+    "builds": ["gui-host"],
     "requirements": [
       "node",
       "npm",
-      "browser"
+      "rust"
     ]
+  },
+  "crates/ipp-protocol/tests/gui-semantics-wasm-client.mjs": {
+    "builds": ["browser:semantic-gui"],
+    "requirements": ["node", "npm", "rust", "wasm"]
   },
   "dist/tests/integration/gui.test.js": {
     "builds": [
       "typescript",
       "gui-host",
-      "surface-assets"
+      "gles-hosts",
+      "font-assets"
     ],
     "requirements": [
       "node",
-      "npm"
+      "npm",
+      "gles"
     ]
   },
   "dist/tests/integration/gui-react-root.test.js": {
@@ -846,32 +708,6 @@
       "typescript",
       "react-fixtures",
       "surface-assets",
-      "browser:headless-gui"
-    ],
-    "requirements": [
-      "node",
-      "npm",
-      "browser"
-    ]
-  },
-  "dist/tests/render/retained-gui.test.js": {
-    "builds": [
-      "typescript",
-      "surface-fixtures",
-      "browser:render-surfaces",
-      "browser:headless-gui"
-    ],
-    "requirements": [
-      "node",
-      "npm",
-      "browser"
-    ]
-  },
-  "dist/tests/render/surface-cache.test.js": {
-    "builds": [
-      "typescript",
-      "surface-fixtures",
-      "browser:render-surfaces",
       "browser:headless-gui"
     ],
     "requirements": [

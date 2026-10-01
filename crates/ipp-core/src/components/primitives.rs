@@ -3,11 +3,10 @@
 //!
 //! Component index: `Scalar` and `Transform` here; camera, geometry,
 //! hierarchy, look-at, render materials and debug shapes in their system
-//! modules; `Surface` in the surface system with `GuiRoot` panels in the
-//! GUI system; skeleton/skin, mesh poses and particles behind their
-//! capabilities. Each subsystem module owns its definitions: this module
-//! only re-exports them. GUI layout output, semantic snapshots and action
-//! translation belong to the GUI subsystem.
+//! modules; `Surface` in the surface system, Canvas content in the Canvas
+//! system and GUI controls in the GUI system; skeleton/skin, mesh poses and
+//! particles behind their capabilities. Each subsystem module owns its
+//! definitions: this module only re-exports them.
 
 use ipp_schema_derive::SchemaComponent;
 

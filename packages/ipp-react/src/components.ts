@@ -1,17 +1,20 @@
 /** Static world components; contract resolution belongs to the receiving root. */
 import { createElement } from "react";
 import type { DynamicPropertyInput } from "@ipp/client";
-import type { SurfaceContent, SurfaceStyle } from "@ipp/client";
-import type { AssetReference } from "./assets.js";
+import type { AssetReference, AssetFieldWrite } from "./assets.js";
 import type { ReactNode } from "react";
+import type { FieldWrite } from "@ipp/client";
+import { guiComponentContract } from "./gui/manifest.js";
 
 export const ENTITY_HOST_TYPE = "ipp-entity";
 export const CHILDREN_HOST_TYPE = "ipp-children";
+export const ENTITY_LINK_HOST_TYPE = "ipp-entity-link";
 /** One static authoring manifest drives prop types and host-to-contract lookup. */
 export const componentContract = {
+  ...guiComponentContract,
   Surface: {
     host: "ipp-surface",
-    fields: { width: "number", height: "number", items: "bytes" },
+    fields: { width: "number", height: "number" },
   },
   SurfaceCache: {
     host: "ipp-surface-cache",
@@ -78,9 +81,9 @@ export const componentContract = {
     fields: { source: "string", variant: "number" },
   },
 
-  Hierarchy: {
-    host: "ipp-hierarchy",
-    fields: { parent: "bigint", parent_bone: "number" },
+  ParentJoint: {
+    host: "ipp-parent-joint",
+    fields: { ordinal: "number" },
   },
   LookAt: {
     host: "ipp-look-at",
@@ -201,7 +204,7 @@ export const componentContract = {
   },
 } as const;
 
-type ComponentName = keyof typeof componentContract;
+export type ComponentName = keyof typeof componentContract;
 export type ReactWorldComponentType =
   (typeof componentContract)[ComponentName]["host"];
 export const componentNames = Object.fromEntries(
@@ -221,8 +224,10 @@ type Primitive<T> = T extends "number"
         ? string
         : T extends "bytes"
           ? Uint8Array<ArrayBuffer>
-          : never;
-type ComponentFields<Name extends ComponentName> = {
+          : T extends "entity"
+            ? string | bigint
+            : never;
+export type ComponentFields<Name extends ComponentName> = {
   [Field in keyof (typeof componentContract)[Name]["fields"]]?:
     | (Field extends "source"
         ? string | AssetReference
@@ -230,28 +235,17 @@ type ComponentFields<Name extends ComponentName> = {
     | undefined;
 };
 
-export type EntityProps = { children?: ReactNode } & (
-  | { id: string; bindTo?: never }
-  | { id?: never; bindTo: string }
-);
+export type EntityProps = {
+  children?: ReactNode;
+} & import("./gui/callbacks.js").GuiActionListeners &
+  ({ id: string; bindTo?: never } | { id?: never; bindTo: string });
 
 export interface ComponentProps {
   children?: ReactNode;
-  bound?: boolean | null | undefined;
+  fields?: readonly (FieldWrite | AssetFieldWrite)[] | undefined;
 }
 
-/** A key retains the same item identity through edits and painter-order changes. */
-export interface SurfaceItemProps extends SurfaceStyle {
-  key: string;
-  content: SurfaceContent;
-}
-
-export type SurfaceProps = ComponentProps &
-  Omit<ComponentFields<"Surface">, "items"> & {
-    /** Keyed collections require an owned component (`bound={false}`). */
-    items?: readonly SurfaceItemProps[] | Uint8Array<ArrayBuffer>;
-    [name: string]: unknown;
-  };
+export type SurfaceProps = ComponentProps & ComponentFields<"Surface">;
 
 export function Surface(props: SurfaceProps) {
   return createElement(componentContract.Surface.host, props);
@@ -262,7 +256,7 @@ export function Surface(props: SurfaceProps) {
  *
  * Without this component the Surface always presents directly. Cached
  * presentation is a renderer optimization for distant Surfaces: nearby
- * Surfaces and GUI roots with focus, hover, press or capture still present
+ * Surfaces and GUI content with focus, hover, press or capture still present
  * directly, and World, input and animation updates are never throttled.
  * Omitted props use the runtime defaults; the runtime rejects values outside
  * the documented ranges without changing other state. Only these authored
@@ -293,7 +287,12 @@ export interface ChildrenProps {
   children?: ReactNode;
 }
 
-export type HierarchyProps = ComponentProps & ComponentFields<"Hierarchy">;
+export interface EntityLinkProps {
+  parent: string | bigint | null;
+  before?: string | bigint | null;
+}
+
+export type ParentJointProps = ComponentProps & ComponentFields<"ParentJoint">;
 export type LookAtProps = ComponentProps & ComponentFields<"LookAt">;
 
 export type ScalarProps = ComponentProps & ComponentFields<"Scalar">;
@@ -327,13 +326,17 @@ export function Entity(props: EntityProps) {
   return createElement<EntityProps>(ENTITY_HOST_TYPE, props);
 }
 
-/** Mount entities with an Auto Hierarchy pointing to the enclosing Entity. */
+/** Declare ordered, non-owning links to the enclosing Entity. */
 export function Children(props: ChildrenProps) {
   return createElement(CHILDREN_HOST_TYPE, props);
 }
 
-export function Hierarchy(props: HierarchyProps) {
-  return createElement(componentContract.Hierarchy.host, props);
+export function EntityLink(props: EntityLinkProps) {
+  return createElement(ENTITY_LINK_HOST_TYPE, props);
+}
+
+export function ParentJoint(props: ParentJointProps) {
+  return createElement(componentContract.ParentJoint.host, props);
 }
 
 export function LookAt(props: LookAtProps) {
@@ -430,7 +433,7 @@ export function Light(props: LightProps) {
 export type CustomMaterialProps = ComponentProps &
   ComponentFields<"CustomMaterial"> & {
     children?: ReactNode;
-    /** Unknown props are named dynamic values; fixed fields and bound keep their normal meaning. */
+    /** Unknown props are named dynamic values; fixed fields keep their normal meaning. */
     [name: string]: DynamicPropertyInput | ReactNode | AssetReference;
   };
 

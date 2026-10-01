@@ -12,6 +12,7 @@ import {
   transferObservation,
   waitUntil,
   animationBarrier,
+  capturedPixels,
 } from "./canvas-fixture-helpers.js";
 export type {
   CanvasRuntimeInput,
@@ -19,7 +20,7 @@ export type {
 } from "./canvas-fixture-helpers.js";
 export { transferObservation } from "./canvas-fixture-helpers.js";
 
-import { activateFixtureCamera } from "../integration/camera-fixtures.js";
+import { createFixtureCamera } from "../integration/camera-fixtures.js";
 import {
   createContext,
   StrictMode,
@@ -29,13 +30,25 @@ import {
   type ReactNode,
 } from "react";
 import { createRoot, type Root as ReactDomRoot } from "react-dom/client";
-import type { FrameCapture, ViewportLimits } from "@ipp/client";
+import type {
+  PresentedCapture,
+  PresentationSurface,
+  OutputReference,
+} from "@ipp/client";
 import type { Command, EntitySnapshot } from "@ipp/client";
-import { Entity, Transform, UnlitMaterial } from "@ipp/react";
+import {
+  createRoot as createSceneRoot,
+  Children,
+  Entity,
+  Transform,
+  UnlitMaterial,
+} from "@ipp/react";
 import {
   IppCanvas,
   World,
   useIppCanvas,
+  CanvasCleanupError,
+  type CanvasCleanupRecovery,
   type CanvasRuntimeConfiguration,
   type IppCanvasHandle,
 } from "@ipp/react/web";
@@ -45,6 +58,11 @@ import {
   type ImageDifference,
   type ImageSummary,
 } from "./image-assertions.js";
+import {
+  LIFECYCLE,
+  SCENE,
+  selectSystems,
+} from "../integration/system-selections.js";
 
 const WIDTH = 320;
 const HEIGHT = 240;
@@ -82,7 +100,8 @@ interface FixtureController {
   readonly handles: Map<CanvasId, IppCanvasHandle>;
   readonly prepared: Map<CanvasId, IppCanvasHandle>;
   readonly preparing: Map<CanvasId, Promise<void>>;
-  readonly captures: Map<string, FrameCapture>;
+  readonly captures: Map<string, PresentedCapture>;
+  readonly outputs: Map<CanvasId, OutputReference>;
   readonly commits: Record<CanvasId, number>;
   readonly errors: Record<CanvasId, string[]>;
   readonly model: CanvasModel;
@@ -98,11 +117,11 @@ export interface CanvasObservation {
     readonly symbolicId: string;
     readonly id: bigint;
   }[];
+  /** The producer's Transform x and UnlitMaterial color: the application
+   * inserts them and React writes over them through its bound declaration. */
   readonly producer: {
-    readonly baseX: number | null;
-    readonly effectiveX: number | null;
-    readonly baseColor: readonly number[] | null;
-    readonly effectiveColor: readonly number[] | null;
+    readonly x: number | null;
+    readonly color: readonly number[] | null;
   };
   readonly ownedExists: boolean;
   readonly commitCount: number;
@@ -115,10 +134,11 @@ export interface CanvasCaptureReport {
   readonly label: string;
   readonly id: CanvasId;
   readonly session: bigint;
-  readonly tick: bigint;
+  readonly publication: bigint;
+  readonly sequence: bigint;
   readonly drawCalls: number;
   readonly triangles: number;
-  readonly contextGeneration: number;
+  readonly contextGeneration: bigint;
   readonly summary: ImageSummary;
   readonly observation: CanvasObservation;
 }
@@ -131,7 +151,7 @@ export interface CanvasLayoutObservation {
   readonly attributeHeight: number;
   readonly devicePixelRatio: number;
   /** Device limits the worker reported after attach, if any. */
-  readonly viewportLimits: ViewportLimits | null;
+  readonly viewportLimits: PresentationSurface | null;
   readonly transfers: TransferObservation;
 }
 
@@ -144,6 +164,56 @@ let active: FixtureController | undefined;
 let pendingRoot: ReactDomRoot | undefined;
 let pendingReadyCount = 0;
 let pendingErrors: string[] = [];
+let retainedCleanup: CanvasCleanupRecovery | undefined;
+
+export async function failCanvasTeardown() {
+  const controller = requireActive();
+  const left = requireHandle("left");
+  const right = requireHandle("right");
+  const original = left.host.clearRootOutput.bind(left.host);
+  let fail = true;
+  left.host.clearRootOutput = async (binding) => {
+    if (fail) {
+      fail = false;
+      throw Object.assign(new Error("Known-unsent Canvas clear"), {
+        code: "IPP_REQUEST_NOT_SENT",
+      });
+    }
+    await original(binding);
+  };
+  active = undefined;
+  controller.root.unmount();
+  const error = await left.closed.then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  await right.closed;
+  if (!(error instanceof CanvasCleanupError))
+    throw new Error("Canvas failed to expose its retained cleanup owner");
+  retainedCleanup = error.recovery;
+  const worlds = await left.host.listWorlds();
+  if (!worlds.some((world) => world.id === left.client.worldReference!.id))
+    throw new Error("Failed teardown destroyed its unconfirmed World");
+  if (!left.host.sessions.has(left.client.session))
+    throw new Error("Failed teardown closed the recovery connection/session");
+  return {
+    worlds: worlds.length,
+    bindings: error.recovery.journal.presentation!.bindings.length,
+  };
+}
+
+export async function recoverCanvasTeardown(abandon: boolean) {
+  if (!retainedCleanup) throw new Error("No retained Canvas cleanup owner");
+  const recovery = retainedCleanup;
+  const journal = abandon
+    ? await recovery.abandon()
+    : (await recovery.retry(), recovery.journal);
+  retainedCleanup = undefined;
+  releaseTransferObserver();
+  return {
+    bindings: journal.presentation!.bindings.length,
+  };
+}
 export async function mountCanvasApplication(
   configuration: CanvasRuntimeInput,
   strict: boolean,
@@ -162,6 +232,7 @@ export async function mountCanvasApplication(
     prepared: new Map(),
     preparing: new Map(),
     captures: new Map(),
+    outputs: new Map(),
     commits: { left: 0, right: 0 },
     errors: { left: [], right: [] },
     model: {
@@ -376,8 +447,8 @@ export async function resizeCanvas(
   if (!canvas) throw new Error(`${id} canvas is missing after resize`);
   return {
     session: handle.client.session,
-    frameWidth: frame.width,
-    frameHeight: frame.height,
+    frameWidth: frame.view.binding.viewport.width,
+    frameHeight: frame.view.binding.viewport.height,
     domWidth: canvas.clientWidth,
     domHeight: canvas.clientHeight,
   };
@@ -388,10 +459,24 @@ export async function setCanvasContextLost(
   id: CanvasId,
   lost: boolean,
 ): Promise<void> {
-  const client = requireHandle(id).client;
-  if (lost) presentationTesting(client.presentation!).loseContext();
-  else presentationTesting(client.presentation!).restoreContext();
-  await client.inspect();
+  const handle = requireHandle(id);
+  const previous = handle.view?.surface.context;
+  if (lost) presentationTesting(handle.host.renderDiagnostics!).loseContext();
+  else {
+    presentationTesting(handle.host.renderDiagnostics!).restoreContext();
+    const deadline = performance.now() + OPERATION_TIMEOUT_MS;
+    for (;;) {
+      try {
+        const surface = await handle.host.presentation.surface();
+        if (surface.context !== previous) break;
+      } catch {}
+      if (performance.now() > deadline)
+        throw new Error("Canvas context did not recover");
+      await animationBarrier();
+    }
+    await handle.recoverPresentation();
+  }
+  await handle.client.inspect();
 }
 
 export async function setCanvasCssSize(
@@ -418,8 +503,9 @@ export async function observeCanvasLayout(
     attributeWidth: canvas.width,
     attributeHeight: canvas.height,
     devicePixelRatio: window.devicePixelRatio,
-    viewportLimits:
-      requireHandle(id).client.presentation?.viewportLimits ?? null,
+    viewportLimits: await requireHandle(id)
+      .host.presentation.surface()
+      .catch(() => null),
     transfers: transferObservation(),
   };
 }
@@ -523,10 +609,8 @@ async function inspectCanvas(id: CanvasId): Promise<CanvasObservation> {
       )
       .sort((left, right) => left.symbolicId.localeCompare(right.symbolicId)),
     producer: {
-      baseX: numericField(producer, "base", transform.id, "x"),
-      effectiveX: numericField(producer, "effective", transform.id, "x"),
-      baseColor: colorFields(producer, "base", material.id),
-      effectiveColor: colorFields(producer, "effective", material.id),
+      x: numericField(producer, transform.id, "x"),
+      color: colorFields(producer, material.id),
     },
     ownedExists: owned !== undefined,
     commitCount: controller.commits[id],
@@ -546,8 +630,8 @@ export async function captureCanvas(
   const handle = requireHandle(id);
   const observation = await observeCanvas(id);
   const frame = await captureAtSize(handle, expectedWidth, expectedHeight);
-  if (frame.session !== handle.client.session) {
-    throw new Error(`${id} capture belongs to another session`);
+  if (frame.view.binding.output.world.id !== handle.client.worldReference!.id) {
+    throw new Error(`${id} capture belongs to another World`);
   }
   controller.captures.set(label, {
     ...frame,
@@ -556,12 +640,13 @@ export async function captureCanvas(
   return {
     label,
     id,
-    session: frame.session,
-    tick: frame.tick,
+    session: handle.client.session,
+    publication: frame.publication.revision,
+    sequence: frame.sequence,
     drawCalls: frame.drawCalls,
     triangles: frame.triangles,
-    contextGeneration: frame.contextGeneration,
-    summary: summarizeImage(frame),
+    contextGeneration: frame.view.surface.context,
+    summary: summarizeImage(capturedPixels(frame)),
     observation,
   };
 }
@@ -570,11 +655,53 @@ export function compareCanvasCaptures(
   first: string,
   second: string,
 ): ImageDifference {
-  return compareImages(requireCapture(first), requireCapture(second));
+  return compareImages(
+    capturedPixels(requireCapture(first)),
+    capturedPixels(requireCapture(second)),
+  );
+}
+
+export async function probeTransformedLinks(): Promise<{
+  frames: CanvasCaptureReport[];
+  restored: ImageDifference;
+}> {
+  const handle = requireHandle("left");
+  const scope = createSceneRoot(handle.client, { host: handle.host });
+  const frames = [await captureCanvas("left", "links-before")];
+  const scene = (offset: number) => (
+    <Entity id="link-transform-parent">
+      <Transform x={offset} />
+      <Children>
+        <Entity bindTo={producerId("left")} />
+      </Children>
+    </Entity>
+  );
+  try {
+    await scope.render(scene(0.6));
+    const state = await handle.client.inspect();
+    const parent = entity(state, "link-transform-parent");
+    const child = entity(state, producerId("left"));
+    if (!parent || child?.link.parent !== parent.id)
+      throw new Error(
+        "React link did not place the producer beneath the transformed parent",
+      );
+    frames.push(await captureCanvas("left", "links-translated"));
+    await scope.render(scene(1.0));
+    frames.push(await captureCanvas("left", "links-updated"));
+    // Unmount deletes nothing; removing the declaration withdraws the link.
+    await scope.render(null);
+  } finally {
+    await scope.unmount();
+  }
+  frames.push(await captureCanvas("left", "links-restored"));
+  return {
+    frames,
+    restored: compareCanvasCaptures("links-before", "links-restored"),
+  };
 }
 
 export async function canvasCaptureDataUrl(label: string): Promise<string> {
-  const frame = requireCapture(label);
+  const frame = capturedPixels(requireCapture(label));
   const image = new ImageData(
     new Uint8ClampedArray(frame.pixels.slice(0)),
     frame.width,
@@ -692,6 +819,8 @@ export async function mountPendingCanvas(
     <StrictMode>
       <IppCanvas
         runtime={{ ...configuration }}
+        world={{ create: { selectedSystems: selectSystems(SCENE, LIFECYCLE) } }}
+        output={null}
         width={WIDTH}
         height={HEIGHT}
         canvasProps={{ id: "pending-canvas" }}
@@ -767,6 +896,8 @@ function CanvasSlot({
     <IppCanvas
       data-canvas-owner={id}
       runtime={{ ...controller.configurations[id] }}
+      world={{ create: { selectedSystems: selectSystems(SCENE, LIFECYCLE) } }}
+      output={ready ? (controller.outputs.get(id) ?? null) : null}
       width={dimensions.width}
       height={dimensions.height}
       canvasProps={{
@@ -866,7 +997,7 @@ function DemoGeometry({ id }: { readonly id: CanvasId }): ReactNode {
         />
       </Entity>
       <Entity id={ownedId(id)}>
-        <Transform bound={false} x={100} />
+        <Transform x={100} />
       </Entity>
     </>
   );
@@ -900,16 +1031,15 @@ async function prepareProducer(
   handle: IppCanvasHandle,
 ): Promise<void> {
   const client = handle.client;
-  if (
-    !client.capabilities.spatial ||
-    !client.capabilities.stateOverlays ||
-    !client.capabilities.builtinAssets
-  ) {
-    throw new Error(
-      "canvas fixture requires scene, overlays, and built-in assets",
-    );
+  if (!client.capabilities.spatial || !client.capabilities.builtinAssets) {
+    throw new Error("canvas fixture requires scene and built-in assets");
   }
-  await activateFixtureCamera(client);
+  const camera = await createFixtureCamera(client);
+  const output = await handle.host.bindOutput(
+    client.worldReference!,
+    camera,
+    "camera",
+  );
   const transform = requireComponent(client, "Transform");
   const material = requireComponent(client, "UnlitMaterial");
   const mesh = requireComponent(client, "MeshInstance");
@@ -965,6 +1095,7 @@ async function prepareProducer(
     );
   }
   if (active !== controller || controller.handles.get(id) !== handle) return;
+  controller.outputs.set(id, output);
   controller.prepared.set(id, handle);
   renderApplication(controller);
 }
@@ -986,10 +1117,9 @@ function requireHandle(id: CanvasId): IppCanvasHandle {
 
 function colorFields(
   entitySnapshot: EntitySnapshot | undefined,
-  layer: "base" | "effective",
   component: number,
 ): readonly number[] | null {
-  const snapshot = entitySnapshot?.[layer].find(
+  const snapshot = entitySnapshot?.components.find(
     (candidate) => candidate.component === component,
   );
   if (!snapshot) return null;
@@ -1004,7 +1134,7 @@ function ownedId(id: CanvasId): string {
   return `canvas-owned-${id}`;
 }
 
-function requireCapture(label: string): FrameCapture {
+function requireCapture(label: string): PresentedCapture {
   const frame = requireActive().captures.get(label);
   if (!frame) throw new Error(`missing canvas capture '${label}'`);
   return frame;
@@ -1014,13 +1144,21 @@ async function captureAtSize(
   handle: IppCanvasHandle,
   width: number,
   height: number,
-): Promise<FrameCapture> {
+): Promise<PresentedCapture> {
   const deadline = performance.now() + OPERATION_TIMEOUT_MS;
+  await waitUntil(
+    () =>
+      handle.viewport?.width === width && handle.viewport?.height === height,
+    "Canvas viewport selection",
+  );
   let frame = await handle.capture();
-  while (frame.width !== width || frame.height !== height) {
+  while (
+    frame.view.binding.viewport.width !== width ||
+    frame.view.binding.viewport.height !== height
+  ) {
     if (performance.now() >= deadline) {
       throw new Error(
-        `Timed out waiting for ${width}x${height} canvas capture; latest was ${frame.width}x${frame.height}`,
+        `Timed out waiting for ${width}x${height} canvas capture`,
       );
     }
     await animationBarrier();

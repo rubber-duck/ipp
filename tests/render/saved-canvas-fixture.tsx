@@ -1,7 +1,7 @@
-import { activateFixtureCamera } from "../integration/camera-fixtures.js";
+import { createFixtureCamera } from "../integration/camera-fixtures.js";
 import { StrictMode } from "react";
 import { createRoot, type Root as ReactDomRoot } from "react-dom/client";
-import type { Client, FrameCapture } from "@ipp/client";
+import type { Client, PresentedCapture, OutputReference } from "@ipp/client";
 import { Entity, UnlitMaterial } from "@ipp/react";
 import {
   IppCanvas,
@@ -22,7 +22,13 @@ import {
   installTransferObserver,
   releaseTransferObserver,
   transferObservation,
+  capturedPixels,
 } from "./canvas-fixture-helpers.js";
+import {
+  ATTACHMENTS,
+  SCENE,
+  selectSystems,
+} from "../integration/system-selections.js";
 
 const WIDTH = 320;
 const HEIGHT = 240;
@@ -35,6 +41,7 @@ interface SavedCanvasFixture {
   strict: boolean;
   root: ReactDomRoot;
   handle?: IppCanvasHandle;
+  output?: OutputReference;
   initialized: number;
   finished: number;
   ready: number;
@@ -58,10 +65,16 @@ export async function makeSavedCanvasWorld(
     { canvas: new OffscreenCanvas(WIDTH, HEIGHT), timeoutMs: 10000 },
   );
   try {
-    const client: Client = await host.createWorld({
+    const created = await host.createWorld({
+      selectedSystems: selectSystems(SCENE, ATTACHMENTS),
       symbolicId: "canvas-saved-world",
     });
-    await activateFixtureCamera(client);
+    const client: Client = await host.openWorld(created.reference);
+    const child = await host.createWorld({
+      selectedSystems: selectSystems(SCENE),
+      symbolicId: "canvas-saved-child",
+    });
+    await createFixtureCamera(client);
     const transform = requireComponent(client, "Transform");
     const material = requireComponent(client, "UnlitMaterial");
     const mesh = requireComponent(client, "MeshInstance");
@@ -92,7 +105,25 @@ export async function makeSavedCanvasWorld(
       },
     ]);
     if (!outcome.ok) throw new Error(outcome.error.reason);
-    return Array.from(await host.saveWorld());
+    const attachment = requireComponent(client, "WorldAttachment");
+    const attached = await client.batch([
+      {
+        kind: "insertComponent",
+        entity: {
+          kind: "handle",
+          id: outcome.aliases.find((entry) => entry.alias === 1)!.id,
+        },
+        component: attachment.id,
+        fields: [
+          {
+            offset: attachment.fields.child!.offset,
+            value: { kind: "world", value: child.reference },
+          },
+        ],
+      },
+    ]);
+    if (!attached.ok) throw new Error(attached.error.reason);
+    return Array.from(await host.saveWorld(client.session));
   } finally {
     await host.close();
   }
@@ -131,11 +162,12 @@ function renderSavedCanvas(state: SavedCanvasFixture) {
   const content = (
     <IppCanvas
       runtime={state.configuration}
-      worldUrl={state.url}
+      world={{ load: { url: state.url } }}
+      output={state.output ?? null}
       width={WIDTH}
       height={HEIGHT}
       canvasProps={{ id: "saved-canvas" }}
-      initialize={async (client, signal) => {
+      initialize={async (client, signal, host) => {
         state.initialized++;
         delete state.release;
         signal.addEventListener(
@@ -151,7 +183,7 @@ function renderSavedCanvas(state: SavedCanvasFixture) {
         if (!cube || !camera)
           throw new Error("Initialization did not receive loaded entities");
         const material = requireComponent(client, "UnlitMaterial");
-        if (numericField(cube, "effective", material.id, "g")! > 0.3)
+        if (numericField(cube, material.id, "g")! > 0.3)
           throw new Error("React binding ran before initialization");
         if (state.mode === "gate")
           await new Promise<void>((resolve) => {
@@ -174,13 +206,14 @@ function renderSavedCanvas(state: SavedCanvasFixture) {
               ],
         );
         if (!outcome.ok) throw new Error(outcome.error.reason);
-        // Camera selection and other presentation state are initialized explicitly.
-        (client as import("@ipp/client").CameraWorldClient).sendCommand({
-          type: "CameraActivateCommand",
-          entity: camera.id,
-        });
+        state.output = await host.bindOutput(
+          client.worldReference!,
+          camera.id,
+          "camera",
+        );
         await client.inspect();
         state.finished++;
+        renderSavedCanvas(state);
       }}
       onReady={(handle) => {
         state.handle = handle;
@@ -257,12 +290,13 @@ export async function captureSavedCanvas(source = CUBE_RECIPE) {
   return {
     drawCalls: frame.drawCalls,
     triangles: frame.triangles,
-    summary: summarizeImage(frame),
+    summary: summarizeImage(capturedPixels(frame)),
     dataUrl: frameDataUrl(frame),
   };
 }
 
-function frameDataUrl(frame: FrameCapture) {
+function frameDataUrl(capture: PresentedCapture) {
+  const frame = capturedPixels(capture);
   const canvas = document.createElement("canvas");
   canvas.width = frame.width;
   canvas.height = frame.height;
@@ -284,6 +318,7 @@ export async function replaceSavedWorld(url: string) {
   const state = savedCanvas!;
   const previous = state.handle!;
   state.url = url;
+  delete state.output;
   delete state.handle;
   renderSavedCanvas(state);
   await previous.closed;

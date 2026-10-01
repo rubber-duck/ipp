@@ -1,50 +1,15 @@
-//! JSON frame summaries and the capture statistics of `RenderStatisticsSnapshot`.
+//! JSON renderer observations for `RenderStatisticsSnapshot`, separate from capture stamps.
 //!
 //! The groups and names follow `packages/ipp-client/src/presentation.ts`, which
 //! the worker fills from the packed WASM record: a group is absent when its
-//! capability is compiled out, per-frame counters describe the captured frame
+//! capability is compiled out, per-frame counters describe the latest completed draw
 //! and `total*` counters accumulate over every render of this presentation.
 //! Identities that JavaScript reads as `bigint` are decimal strings.
 
 use std::fmt::Write;
 
 use ipp_core::WorldId;
-use ipp_render_gl::{GlesRenderDevice, RenderFrameSummary, RenderService, RenderStatistics};
-
-/// Summary of a completed frame, with statistics only for a capture.
-pub(super) struct FrameHeader {
-    pub(super) session: u64,
-    pub(super) tick: u64,
-    pub(super) width: u32,
-    pub(super) height: u32,
-    pub(super) summary: RenderFrameSummary,
-    pub(super) context_generation: u32,
-    pub(super) statistics: Option<String>,
-}
-
-impl FrameHeader {
-    pub(super) fn to_json(&self) -> String {
-        let summary = &self.summary;
-        let mut json = format!(
-            "{{\"session\":\"{}\",\"tick\":\"{}\",\"width\":{},\"height\":{},\"drawCalls\":{},\"triangles\":{},\"failedDrawCalls\":{},\"invalidCamera\":{},\"contextGeneration\":{}",
-            self.session,
-            self.tick,
-            self.width,
-            self.height,
-            summary.draw_calls,
-            summary.triangles,
-            summary.failed_draw_calls,
-            summary.invalid_camera,
-            self.context_generation
-        );
-        if let Some(statistics) = &self.statistics {
-            write!(json, ",\"statistics\":{statistics}").expect("string write");
-        }
-
-        json.push('}');
-        json
-    }
-}
+use ipp_render_gl::{GlesRenderDevice, RenderService, RenderStatistics};
 
 /// Running totals of the per-frame counters, saturating like the WASM record.
 #[derive(Default)]
@@ -52,9 +17,8 @@ pub(super) struct StatisticsTotals {
     uploaded_bytes: u32,
     #[cfg(feature = "gui")]
     gui: [u32; 6],
-    /// Latest-pass and total layout counters of the last rendered World.
-    #[cfg(feature = "gui")]
-    layout: [u32; 4],
+    #[cfg(all(feature = "gui", feature = "diagnostics"))]
+    layout: ipp_host_session::services::gui_layout_statistics::HostGuiLayoutStatistics,
     surface_cache: [u32; 5],
 }
 
@@ -79,16 +43,13 @@ impl StatisticsTotals {
         }
     }
 
-    /// Keep the GUI layout counters of the World a completed render drew.
-    #[cfg(feature = "gui")]
-    pub(super) fn record_layout(&mut self, statistics: ipp_core::GuiLayoutStatistics) {
-        let word = |value: u64| u32::try_from(value).unwrap_or(u32::MAX);
-        self.layout = [
-            word(statistics.latest.reflows),
-            word(statistics.latest.text_measurements),
-            word(statistics.total.reflows),
-            word(statistics.total.text_measurements),
-        ];
+    #[cfg(all(feature = "gui", feature = "diagnostics"))]
+    pub(super) fn record_frame(
+        &mut self,
+        host: &mut ipp_core::HostRuntime,
+        frame: &ipp_core::HostFrameReport,
+    ) {
+        self.layout.record(host, frame);
     }
 }
 
@@ -146,10 +107,9 @@ pub(super) fn snapshot(
             total_failures,
             total_retirements,
         ] = totals.gui;
-        let [reflows, measurements, total_reflows, total_measurements] = totals.layout;
         write!(
             json,
-            ",\"gui\":{{\"guiBatches\":{},\"guiRebuilds\":{},\"guiAllocations\":{},\"guiResidentBytes\":{},\"glyphMisses\":{},\"glyphPopulates\":{},\"glyphPopulationFailures\":{},\"glyphPageRetirements\":{},\"glyphPages\":{},\"glyphResidentBytes\":{},\"totalGuiRebuilds\":{total_rebuilds},\"totalGuiAllocations\":{total_allocations},\"totalGlyphMisses\":{total_misses},\"totalGlyphPopulates\":{total_populates},\"totalGlyphPopulationFailures\":{total_failures},\"totalGlyphPageRetirements\":{total_retirements},\"guiLayoutReflows\":{reflows},\"guiTextMeasurements\":{measurements},\"totalGuiLayoutReflows\":{total_reflows},\"totalGuiTextMeasurements\":{total_measurements}}}",
+            ",\"gui\":{{\"guiBatches\":{},\"guiRebuilds\":{},\"guiAllocations\":{},\"guiResidentBytes\":{},\"glyphMisses\":{},\"glyphPopulates\":{},\"glyphPopulationFailures\":{},\"glyphPageRetirements\":{},\"glyphPages\":{},\"glyphResidentBytes\":{},\"totalGuiRebuilds\":{total_rebuilds},\"totalGuiAllocations\":{total_allocations},\"totalGlyphMisses\":{total_misses},\"totalGlyphPopulates\":{total_populates},\"totalGlyphPopulationFailures\":{total_failures},\"totalGlyphPageRetirements\":{total_retirements}",
             statistics.gui_batches,
             statistics.gui_rebuilds,
             statistics.gui_allocations,
@@ -162,6 +122,18 @@ pub(super) fn snapshot(
             u32::try_from(statistics.glyph_resident_bytes).unwrap_or(u32::MAX),
         )
         .expect("string write");
+        #[cfg(feature = "diagnostics")]
+        if let Some([reflows, measurements, total_reflows, total_measurements]) =
+            totals.layout.words()
+        {
+            write!(json, ",\"guiLayoutReflows\":{reflows},\"guiTextMeasurements\":{measurements},\"totalGuiLayoutReflows\":{total_reflows},\"totalGuiTextMeasurements\":{total_measurements}").expect("string write");
+        }
+        json.push('}');
+        #[cfg(feature = "diagnostics")]
+        {
+            json.push_str(",\"guiLayout\":");
+            totals.layout.write_json(&mut json);
+        }
     }
 
     let [

@@ -23,25 +23,19 @@ impl<T: System> Clone for SystemDependencyBinding<T> {
     }
 }
 
-/// Owned effective values observed at one System callback boundary.
-/// Authored producer reconstruction belongs to outer `WorldContext::inspect` and persistence.
-#[derive(Clone, Debug, PartialEq)]
-pub struct SystemEffectiveEntitySnapshot {
-    /// World-local generational identity.
-    pub id: crate::EntityId,
-    /// Current normalized entity metadata.
-    pub metadata: crate::EntityMetadata,
-    /// Current evaluated components in registry order, without authored base values.
-    pub components: Vec<crate::ComponentValue>,
-}
-
 /// Read-only ECS observation during construction and synchronous lifecycle callbacks.
+#[derive(Clone, Copy)]
 pub struct SystemWorldView<'a> {
     pub(in crate::world) world: &'a WorldSimulationState,
     pub(in crate::world) authored: &'a WorldEntityState,
 }
 
 impl SystemWorldView<'_> {
+    /// Immutable authoring admission for this World.
+    pub fn manifest(&self) -> &super::WorldManifest {
+        &self.world.manifest
+    }
+
     /// Frame receiving the next ordered mutation.
     pub fn next_tick(&self) -> u64 {
         self.world.tick.saturating_add(1)
@@ -52,25 +46,31 @@ impl SystemWorldView<'_> {
         self.world.id
     }
 
-    /// Observe current effective components without claiming authored producer values.
-    pub fn inspect_effective(
-        &self,
-        entity: crate::EntityId,
-    ) -> Option<SystemEffectiveEntitySnapshot> {
-        if !self.authored.allocator.contains(entity) {
-            return None;
+    /// Exact World lifetime supplying this read-only view.
+    pub fn reference(&self) -> crate::WorldRef {
+        crate::WorldRef {
+            id: self.world.id,
+            incarnation: self.world.identity,
         }
-        let record = self.authored.entities.get(&entity)?;
-        let mut components = Vec::new();
-        self.world
-            .components
-            .inspect(entity.index() as usize, &mut components);
-        components.sort_by_key(crate::ComponentValue::type_id);
-        Some(SystemEffectiveEntitySnapshot {
-            id: entity,
-            metadata: record.metadata.clone(),
-            components,
-        })
+    }
+
+    /// Read identity only, without copying metadata or component values.
+    pub fn entity_is_live(&self, entity: crate::EntityId) -> bool {
+        self.authored.entities.contains_key(&entity)
+    }
+
+    /// Current component identity at this mutation cut.
+    pub fn component_incarnation(&self, entity: crate::EntityId, component: u16) -> Option<u64> {
+        self.authored
+            .entities
+            .get(&entity)?
+            .input(component)
+            .map(|input| input.incarnation)
+    }
+
+    /// Observe current stored components, metadata and link of one live entity.
+    pub fn inspect_effective(&self, entity: crate::EntityId) -> Option<crate::EntitySnapshot> {
+        crate::world::queries::inspect_entity(self.world, self.authored, entity)
     }
 
     /// Read still-occupied effective storage, including a target staged for deletion.
@@ -89,7 +89,7 @@ impl SystemWorldView<'_> {
     }
 
     /// Stable entity order, with owned observations that do not retain storage.
-    pub fn entities_effective(&self) -> Vec<SystemEffectiveEntitySnapshot> {
+    pub fn entities_effective(&self) -> Vec<crate::EntitySnapshot> {
         self.authored
             .entities
             .keys()
@@ -241,7 +241,12 @@ impl SystemCommitContext<'_> {
         self.staged.changed.keys().copied()
     }
 
-    /// Whether an affected component preserves its exact effective incarnation.
+    /// Changed links, including entities awaiting release.
+    pub fn changed_entity_links(&self) -> impl Iterator<Item = crate::EntityId> + '_ {
+        self.staged.links.changed.iter().copied()
+    }
+
+    /// Whether an affected component preserves its exact incarnation.
     pub fn retains_component(&self, entity: crate::EntityId, component: u16) -> bool {
         let after = self
             .staged
@@ -359,6 +364,9 @@ impl SystemAssetContext<'_> {
 pub struct SystemCommandContext<'a> {
     /// Exclusive generic storage and service access; interpretation remains in the System.
     pub world: SystemRuntimeAccess<'a>,
+    pub(in crate::world) publications: Option<&'a crate::host::publication::HostPublications>,
+    pub(in crate::world) declared_worlds: std::collections::BTreeSet<crate::WorldRef>,
+    pub(in crate::world) local_outputs: crate::world::composition::WorldOutputs,
 }
 
 /// Applied lifecycle observation. It never borrows transport/session queues.
@@ -376,27 +384,24 @@ pub struct SystemRuntimeAccess<'a> {
         &'a mut crate::services::asset_management::AssetManagementService,
     pub(in crate::world) data_sources:
         &'a mut crate::services::data_source::DataSourceManagementService,
+    pub(in crate::world) topology: &'a mut crate::host::topology::HostTopology,
+    pub(in crate::world) frame_context: Option<&'a crate::WorldFrameContext>,
+    pub(in crate::world) reference_worlds:
+        Option<&'a crate::host::reference_resolution::ReferenceWorlds<'a>>,
 }
 
 impl SystemRuntimeAccess<'_> {
-    /// Queue private cross-system work for the next ordinary mutation boundary.
-    /// The receiving System remains the sole owner of its mutable state.
-    #[cfg(feature = "gui")]
-    pub(in crate::world) fn enqueue_internal_system_command<T: 'static>(
-        &mut self,
-        system: SystemId,
-        command: T,
-    ) -> Result<(), crate::ErrorReason> {
-        if self.world.queue.len() >= self.world.limits.max_queued_batches {
-            return Err(crate::ErrorReason::Capacity);
+    /// Borrow identity and effective-state access for this callback only.
+    pub(in crate::world) fn view(&self) -> SystemWorldView<'_> {
+        SystemWorldView {
+            world: self.world,
+            authored: &self.world.state,
         }
-        self.world.queue.push_back(crate::world::Ingress::System {
-            system,
-            session: 0,
-            request_id: 0,
-            command: Box::new(command),
-        });
-        Ok(())
+    }
+
+    /// Immutable authoring admission for this World.
+    pub fn manifest(&self) -> &super::WorldManifest {
+        &self.world.manifest
     }
 
     /// Borrow a declared predecessor during command, lifecycle or restoration work.
@@ -415,11 +420,8 @@ impl SystemRuntimeAccess<'_> {
         self.world.id
     }
 
-    /// Owned effective observation with no authored values or retained component reference.
-    pub fn inspect_effective(
-        &self,
-        entity: crate::EntityId,
-    ) -> Option<SystemEffectiveEntitySnapshot> {
+    /// Owned observation of one live entity with no retained component reference.
+    pub fn inspect_effective(&self, entity: crate::EntityId) -> Option<crate::EntitySnapshot> {
         SystemWorldView {
             world: self.world,
             authored: &self.world.state,
@@ -466,15 +468,23 @@ impl<'a> SystemDependencies<'a> {
 
 /// Ordered operation access; subsystem state remains in the receiving System.
 pub struct SystemOperationContext<'a> {
+    pub(in crate::world) effects: &'a mut Vec<crate::OperationEffect>,
     pub(in crate::world) world_data: &'a mut WorldSimulationState,
     pub(in crate::world) staged: &'a mut crate::world::WorldMutationState,
     pub(in crate::world) command: &'a crate::Command,
-    pub(in crate::world) aliases: &'a mut std::collections::BTreeMap<u32, crate::EntityId>,
+    pub(in crate::world) aliases: &'a mut crate::world::EntityAliases,
     pub(in crate::world) assets: &'a mut crate::services::asset_management::AssetManagementService,
     pub(in crate::world) dependencies: SystemDependencies<'a>,
+    pub(in crate::world) topology: &'a mut crate::host::topology::HostTopology,
+    pub(in crate::world) frame_context: Option<&'a crate::WorldFrameContext>,
 }
 
 impl SystemOperationContext<'_> {
+    /// Retain an applied effect for the enclosing command buffer, independently of later errors.
+    pub fn emit_effect(&mut self, effect: crate::OperationEffect) {
+        self.effects.push(effect);
+    }
+
     /// Private restoration defers derived indexes until persistent-state loading.
     pub fn is_restoring(&self) -> bool {
         self.world_data.restoring
@@ -483,6 +493,11 @@ impl SystemOperationContext<'_> {
     /// Components touched by this operation, independently of accumulated observations.
     pub fn changed_components(&self) -> impl Iterator<Item = (crate::EntityId, u16)> + '_ {
         self.staged.operation_components.iter().copied()
+    }
+
+    /// Links touched by this operation, independently of earlier batch operations.
+    pub fn changed_entity_links(&self) -> impl Iterator<Item = crate::EntityId> + '_ {
+        self.staged.links.operation_changed.iter().copied()
     }
 
     /// Entities created by this operation, including retained partial effects.
@@ -495,20 +510,16 @@ impl SystemOperationContext<'_> {
         self.staged.operation_deleted.iter().copied()
     }
 
-    /// Mandatory owner departure may deactivate invalid survivors without rollback.
-    pub fn is_forced_cleanup(&self) -> bool {
-        self.world_data.forced_cleanup
-    }
-
     /// The ordered operation currently being interpreted by subsystem handlers.
     pub fn command(&self) -> &crate::Command {
         self.command
     }
 
-    /// Resolve a handle or this batch's provisional alias against staged identities.
+    /// Resolve a handle, this batch's provisional alias or a symbolic identifier
+    /// against staged identities.
     pub fn resolve_entity(
         &self,
-        reference: crate::EntityRef,
+        reference: &crate::EntityRef,
     ) -> Result<crate::EntityId, crate::ErrorReason> {
         self.staged.resolve(reference, self.aliases)
     }

@@ -3,16 +3,16 @@
 //! Effect recording and per-operation component lifecycle classification.
 //! Ownership lives in [`super::super`]; this module only hosts observation.
 //!
-//! Each operation compares a component's effective value with the value observed
-//! after the previous operation. When an operation only wrote an unlayered
-//! producer in place, each write already reported whether it changed the value;
-//! the writes are logged and replayed onto the observed value only if a later
-//! operation of the same batch needs a whole-value comparison.
+//! Each operation compares a component's value with the value observed after
+//! the previous operation. When an operation only wrote the staged copy in
+//! place, each write already reported whether it changed the value; the writes
+//! are logged and replayed onto the observed value only if a later operation of
+//! the same batch needs a whole-value comparison.
 
 use super::super::*;
 
-/// One in-place producer write on a component whose staged producer is its
-/// effective input. Replays reproduce it on an identical observed value.
+/// One in-place write on a component's staged copy. Replays reproduce it on an
+/// identical observed value.
 pub(in crate::world) enum ComponentStagedWrite {
     Field(FieldWrite),
     SetProperty(String, crate::DynamicValue),
@@ -139,8 +139,8 @@ impl WorldMutationState {
         self.entities_state.operation_components = operation_components;
     }
 
-    /// Classify an operation that only wrote an unlayered producer in place from
-    /// the change each write reported, and log the writes for a later whole-value
+    /// Classify an operation that only wrote the staged copy in place from the
+    /// change each write reported, and log the writes for a later whole-value
     /// comparison. `None` selects whole-value comparison.
     fn observe_staged_writes(
         &mut self,
@@ -148,17 +148,14 @@ impl WorldMutationState {
         original_incarnation: Option<u64>,
     ) -> Option<(Option<u64>, bool)> {
         let state = &mut self.entities_state;
-        let layer = state.entities.get(&key.0)?.layers.get(&key.1)?;
-        let incarnation = layer.input().map(|input| input.incarnation);
+        let component = state.entities.get(&key.0)?.components.get(&key.1)?;
+        let incarnation = Some(component.instance.incarnation);
         let previous = state
             .observed_components
             .get(&key)
             .map_or(original_incarnation, |(incarnation, _)| *incarnation);
 
-        if incarnation.is_none()
-            || previous != incarnation
-            || !layer.inputs.stages_producer_directly()
-        {
+        if previous != incarnation || component.staged.is_none() {
             return None;
         }
 

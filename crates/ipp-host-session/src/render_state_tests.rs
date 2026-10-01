@@ -17,7 +17,9 @@ impl HostServices for HeadlessPlatform {
 
 fn ready(id: u64) -> Host<HeadlessPlatform> {
     let mut session = Host::new().unwrap();
-    session.open_session(id).unwrap();
+    session
+        .open_session(id, crate::host::TEST_RENDER_SYSTEMS)
+        .unwrap();
     session
         .test_session()
         .receive(&ipp_protocol::bootstrap())
@@ -85,7 +87,7 @@ fn sparse_updates_queue_in_order_and_invalid_patches_preserve_all_committed_sett
         session.test_session().receive(&patch(changes)).unwrap();
     }
     assert_eq!(
-        session.test_session().world().render_state(),
+        session.test_session().world().render_state().unwrap(),
         RenderState::default()
     );
     assert_eq!(session.test_session().world().tick(), 0);
@@ -93,15 +95,15 @@ fn sparse_updates_queue_in_order_and_invalid_patches_preserve_all_committed_sett
 
     session.tick(0.0).unwrap();
     assert_eq!(
-        session.test_session().take_response().unwrap(),
-        change(first)
+        &*session.test_session().take_response().unwrap(),
+        change(first).as_slice()
     );
     assert_eq!(
-        session.test_session().take_response().unwrap(),
-        change(color)
+        &*session.test_session().take_response().unwrap(),
+        change(color).as_slice()
     );
     assert_eq!(
-        session.test_session().world().render_state(),
+        session.test_session().world().render_state().unwrap(),
         RenderState {
             show_all_debug_geometries: true,
             debug_geometry_color: [0.25, 0.5, 1.0],
@@ -129,8 +131,8 @@ fn command_capacity_and_replacement_sessions_preserve_state_without_replies() {
     session.test_session().receive(&patch(changes)).unwrap();
     session.tick(0.0).unwrap();
     assert_eq!(
-        session.test_session().take_response().unwrap(),
-        change(changes)
+        &*session.test_session().take_response().unwrap(),
+        change(changes).as_slice()
     );
     assert_eq!(session.test_session().take_response().unwrap()[24], 4);
     assert!(session.test_session().take_response().is_none());
@@ -138,7 +140,7 @@ fn command_capacity_and_replacement_sessions_preserve_state_without_replies() {
     let mut replacement = ready(8);
     assert!(replacement.test_session().receive(&patch(changes)).is_err());
     assert_eq!(
-        replacement.test_session().world().render_state(),
+        replacement.test_session().world().render_state().unwrap(),
         RenderState::default()
     );
     assert_eq!(replacement.test_session().world().tick(), 0);
@@ -158,7 +160,7 @@ fn malformed_patch_masks_and_booleans_never_enter_the_world() {
     mask[17] = 8;
     assert!(session.test_session().receive(&mask).is_err());
     assert_eq!(
-        session.test_session().world().render_state(),
+        session.test_session().world().render_state().unwrap(),
         RenderState::default()
     );
     assert_eq!(session.test_session().world().tick(), 0);
@@ -184,18 +186,19 @@ fn runtime_originated_updates_keep_zero_identity_and_order_before_client_patches
     session.test_session().receive(&patch(client)).unwrap();
     session.tick(0.0).unwrap();
     assert_eq!(
-        session.test_session().take_response().unwrap(),
-        change(runtime)
+        &*session.test_session().take_response().unwrap(),
+        change(runtime).as_slice()
     );
     assert_eq!(
-        session.test_session().take_response().unwrap(),
-        change(client)
+        &*session.test_session().take_response().unwrap(),
+        change(client).as_slice()
     );
     assert!(
         !session
             .test_session()
             .world()
             .render_state()
+            .unwrap()
             .show_all_debug_geometries
     );
 }

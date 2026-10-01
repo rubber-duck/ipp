@@ -2,19 +2,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import "./resources.test.js";
-import "./surface_items.test.js";
 import "./transform.test.js";
+import "./entity-links.test.js";
+import "./attachment-journal.test.js";
 import "./gui-input.test.js";
 import "./gui-ime.test.js";
 import "./gui-clipboard.test.js";
 import "./gui-soft-keyboard.test.js";
 import "./gui-text-bridge.test.js";
-import "./gui-controls.test.js";
 import "./gui-declaration.test.js";
-import "./gui-diff.test.js";
-import "./gui-commits.test.js";
-import "./gui-effects.test.js";
-import "./gui-virtual-list.test.js";
+import "./control-refs.test.js";
+import "./canvas-world.test.js";
 import {
   createElement,
   Fragment,
@@ -32,14 +30,15 @@ import type {
   ClientAssetSource,
   Command,
   Client,
-  StateOverlayLifecycleDiagnostic,
-  StateOverlayAlias,
+  EntityRef,
 } from "@ipp/client";
 import { CanvasWorldSession } from "../src/canvas-world-session.js";
 import {
   ReactWorldBatchRejectedError,
+  ReactWorldDuplicateEntityError,
   Animation,
   Asset,
+  Children,
   createRoot,
   Entity,
   ParticleMesh,
@@ -124,11 +123,16 @@ test("animation transition seek policy is captured at the commit boundary", () =
   });
 });
 
+/**
+ * A World whose batch outcomes the test releases: it applies creations
+ * (adopting a live symbolic id), component inserts and removals and deletes,
+ * resolves aliases and symbols, and reports adoption like the core. The bound
+ * entity "producer" is live with handle 200.
+ */
 class DeliveryBoundary implements ReactWorldClient {
   session = 1n;
   schemaHash = 123n;
   capabilities = {
-    stateOverlays: true,
     spatial: false,
     textures: false,
     builtinAssets: false,
@@ -143,12 +147,15 @@ class DeliveryBoundary implements ReactWorldClient {
     Scalar: { id: 17, fields: { value: { offset: 12, kind: 1 } } },
   };
   calls: Command[][] = [];
-  listeners = new Set<(diagnostic: StateOverlayLifecycleDiagnostic) => void>();
   pending: {
     operations: Command[];
     resolve: (outcome: BatchOutcome) => void;
   }[] = [];
-  nextHandle = 100n;
+  nextEntity = 100n;
+  /** Live entities by symbolic id. */
+  symbols = new Map<string, bigint>([["producer", 200n]]);
+  /** Present components as `entity:component`. */
+  present = new Set<string>();
 
   batch(operations: Command[]): Promise<BatchOutcome> {
     this.calls.push(operations);
@@ -157,134 +164,130 @@ class DeliveryBoundary implements ReactWorldClient {
     });
   }
 
-  onDiagnostic(
-    listener: (diagnostic: StateOverlayLifecycleDiagnostic) => void,
-  ): () => void {
-    this.listeners.add(listener);
-    return () => {
-      this.listeners.delete(listener);
-    };
-  }
-
-  emit(diagnostic: StateOverlayLifecycleDiagnostic): void {
-    for (const listener of this.listeners) listener(diagnostic);
-  }
-
-  acknowledge(): StateOverlayAlias[] {
+  acknowledge(): BatchOutcome {
     const pending = this.pending.shift();
     assert.ok(pending);
-    const stateOverlays: StateOverlayAlias[] = [];
-    for (const operation of pending.operations) {
-      if (
-        operation.kind === "createStateOverlayOwner" ||
-        operation.kind === "attachEntityOverlayBinding" ||
-        operation.kind === "attachComponentStateOverlay"
-      ) {
-        stateOverlays.push({
-          alias: operation.alias,
-          id: this.nextHandle++,
-          kind:
-            operation.kind === "createStateOverlayOwner"
-              ? "owner"
-              : operation.kind === "attachEntityOverlayBinding"
-                ? "entityOverlayBinding"
-                : "componentStateOverlay",
-          entity: operation.kind === "createStateOverlayOwner" ? null : 200n,
-        });
+    const outcome = this.apply(pending.operations);
+    pending.resolve(outcome);
+    return outcome;
+  }
+
+  /** Refuse `operation` after applying the commands before it, like the core. */
+  rejectAt(operation: number, reason = "InvalidValue"): void {
+    const pending = this.pending.shift();
+    assert.ok(pending);
+    pending.resolve(this.apply(pending.operations, { operation, reason }));
+  }
+
+  /** Refuse the last command of the next batch. */
+  reject(): void {
+    const pending = this.pending[0];
+    assert.ok(pending);
+    this.rejectAt(pending.operations.length - 1);
+  }
+
+  /** The components present on `entity`. */
+  componentsOf(entity: bigint): Set<number> {
+    return new Set(
+      [...this.present].flatMap((key) => {
+        const [owner, component] = key.split(":");
+        return BigInt(owner!) === entity ? [Number(component)] : [];
+      }),
+    );
+  }
+
+  /** Why the World refuses `operation`, if it does. */
+  protected refusal(_operation: Command, _entity: bigint): string | undefined {
+    return undefined;
+  }
+
+  private apply(
+    operations: readonly Command[],
+    failure?: { operation: number; reason: string },
+  ): BatchOutcome {
+    const aliases = new Map<number, bigint>();
+    const outcome = {
+      batchId: BigInt(this.calls.length),
+      tick: BigInt(this.calls.length),
+      aliases: [] as { alias: number; id: bigint }[],
+      symbols: [] as { symbol: string; id: bigint }[],
+      effects: [] as BatchOutcome["effects"],
+    };
+    const entity = (reference: EntityRef): bigint => {
+      if (reference.kind === "handle") return reference.id;
+      if (reference.kind === "alias") return aliases.get(reference.alias)!;
+      const id = this.symbols.get(reference.symbol);
+      assert.ok(id !== undefined, `missing ${reference.symbol}`);
+      if (!outcome.symbols.some((entry) => entry.symbol === reference.symbol))
+        outcome.symbols.push({ symbol: reference.symbol, id });
+      return id;
+    };
+    const failed = (operation: number, reason: string): BatchOutcome => ({
+      ...outcome,
+      ok: false,
+      error: { scope: "operation", operation, reason },
+    });
+    for (const [index, operation] of operations.entries()) {
+      if (index === failure?.operation)
+        return failed(failure.operation, failure.reason);
+      switch (operation.kind) {
+        case "create": {
+          const symbolicId = operation.metadata.symbolicId;
+          const existing =
+            operation.adopt && symbolicId !== null
+              ? this.symbols.get(symbolicId)
+              : undefined;
+          const id = existing ?? this.nextEntity++;
+          if (symbolicId !== null) this.symbols.set(symbolicId, id);
+          aliases.set(operation.alias, id);
+          outcome.aliases.push({ alias: operation.alias, id });
+          if (existing !== undefined)
+            outcome.effects.push({ operation: index, kind: "adopted" });
+          break;
+        }
+        case "insertComponent": {
+          const id = entity(operation.entity);
+          const refusal = this.refusal(operation, id);
+          if (refusal) return failed(index, refusal);
+          const key = `${id}:${operation.component}`;
+          if (operation.adopt && this.present.has(key))
+            outcome.effects.push({ operation: index, kind: "adopted" });
+          this.present.add(key);
+          break;
+        }
+        case "removeComponent":
+          this.present.delete(
+            `${entity(operation.entity)}:${operation.component}`,
+          );
+          break;
+        case "delete": {
+          const id = entity(operation.entity);
+          for (const component of this.componentsOf(id))
+            this.present.delete(`${id}:${component}`);
+          for (const [symbolicId, live] of this.symbols)
+            if (live === id) this.symbols.delete(symbolicId);
+          break;
+        }
+        default:
+          if ("entity" in operation) entity(operation.entity);
       }
     }
-    pending.resolve({
-      ok: true,
-      batchId: BigInt(this.calls.length),
-      tick: BigInt(this.calls.length),
-      aliases: [],
-      stateOverlays,
-    });
-    return stateOverlays;
-  }
-
-  reject(): void {
-    const pending = this.pending.shift();
-    assert.ok(pending);
-    pending.resolve({
-      ok: false,
-      aliases: [],
-      stateOverlays: [],
-      batchId: BigInt(this.calls.length),
-      tick: BigInt(this.calls.length),
-      error: { scope: "operation", operation: 2, reason: "MissingComponent" },
-    });
+    return { ...outcome, ok: true };
   }
 }
 
+/** A World that refuses mutually exclusive particle presentations. */
 class ParticleInvariantBoundary extends DeliveryBoundary {
-  readonly activeComponents = new Map<bigint, number>();
-
-  override acknowledge(): StateOverlayAlias[] {
-    const pending = this.pending.shift();
-    assert.ok(pending);
-    const stateOverlays: StateOverlayAlias[] = [];
-    for (const [index, operation] of pending.operations.entries()) {
-      if (operation.kind === "releaseStateOverlayOwner") {
-        this.activeComponents.clear();
-        continue;
-      }
-      if (operation.kind === "releaseComponentStateOverlay") {
-        if (operation.overlay.kind === "handle")
-          this.activeComponents.delete(operation.overlay.id);
-        continue;
-      }
-      if (
-        operation.kind !== "createStateOverlayOwner" &&
-        operation.kind !== "attachEntityOverlayBinding" &&
-        operation.kind !== "attachComponentStateOverlay"
-      )
-        continue;
-      if (operation.kind === "attachComponentStateOverlay") {
-        const conflict = [...this.activeComponents.values()].some(
-          (component) =>
-            (component === 23 && operation.component === 24) ||
-            (component === 24 && operation.component === 23),
-        );
-        if (conflict) {
-          pending.resolve({
-            ok: false,
-            aliases: [],
-            stateOverlays,
-            batchId: BigInt(this.calls.length),
-            tick: BigInt(this.calls.length),
-            error: {
-              scope: "operation",
-              operation: index,
-              reason: "InvalidValue",
-            },
-          });
-          return stateOverlays;
-        }
-      }
-      const id = this.nextHandle++;
-      stateOverlays.push({
-        alias: operation.alias,
-        id,
-        kind:
-          operation.kind === "createStateOverlayOwner"
-            ? "owner"
-            : operation.kind === "attachEntityOverlayBinding"
-              ? "entityOverlayBinding"
-              : "componentStateOverlay",
-        entity: operation.kind === "createStateOverlayOwner" ? null : 200n,
-      });
-      if (operation.kind === "attachComponentStateOverlay")
-        this.activeComponents.set(id, operation.component);
-    }
-    pending.resolve({
-      ok: true,
-      batchId: BigInt(this.calls.length),
-      tick: BigInt(this.calls.length),
-      aliases: [],
-      stateOverlays,
-    });
-    return stateOverlays;
+  protected override refusal(
+    operation: Command,
+    entity: bigint,
+  ): string | undefined {
+    if (operation.kind !== "insertComponent") return undefined;
+    const present = this.componentsOf(entity);
+    return (operation.component === 23 && present.has(24)) ||
+      (operation.component === 24 && present.has(23))
+      ? "InvalidValue"
+      : undefined;
   }
 }
 
@@ -367,15 +370,32 @@ async function settle(
   await promise;
 }
 
-function world(value?: number, key = "scalar", bound?: boolean | null) {
+function world(value?: number, key = "scalar") {
   return createElement(
     Entity,
     { bindTo: "producer" },
-    createElement(Scalar, { value, key, bound }),
+    createElement(Scalar, { value, key }),
   );
 }
 
-test("the same JSX resolves against each receiving root's contract and owner", async () => {
+const producer: EntityRef = { kind: "symbol", symbol: "producer" };
+
+/** A SetField of the producer's Scalar value. */
+function scalarWrite(value: number, component = 17, offset = 12): Command {
+  return {
+    kind: "setField",
+    entity: producer,
+    component,
+    field: { offset, value: { kind: "f32", value } },
+  };
+}
+
+/** Commands of `kind` across every call. */
+function sent(client: DeliveryBoundary, kind: Command["kind"]): Command[] {
+  return client.calls.flat().filter((operation) => operation.kind === kind);
+}
+
+test("the same JSX resolves against each receiving root's contract and records", async () => {
   const first = new DeliveryBoundary();
   const second = new DeliveryBoundary();
   second.session = 2n;
@@ -394,22 +414,23 @@ test("the same JSX resolves against each receiving root's contract and owner", a
   for (const [client, component, offset] of [
     [first, 17, 12],
     [second, 29, 32],
-  ] as const) {
-    const attach = client.calls[0]?.find(
-      (operation) => operation.kind === "attachComponentStateOverlay",
-    );
-    assert.ok(attach);
-    assert.equal(attach.component, component);
-    assert.deepEqual(attach.fields, [
-      { offset, value: { kind: "f32", value: 7 } },
+  ] as const)
+    assert.deepEqual(client.calls[0], [
+      {
+        kind: "insertComponent",
+        entity: producer,
+        component,
+        fields: [{ offset, value: { kind: "f32", value: 7 } }],
+        adopt: true,
+      },
     ]);
-  }
 
   await settle(first, firstRoot.unmount());
+  assert.equal(first.calls.length, 1, "unmount removes nothing");
   assert.equal(
     second.calls.length,
     1,
-    "closing another root must not release this scope",
+    "closing another root must not write this root's component",
   );
   await secondRoot.render(shared);
   assert.equal(
@@ -418,13 +439,7 @@ test("the same JSX resolves against each receiving root's contract and owner", a
     "unchanged shared JSX retains its live declaration",
   );
   await settle(second, secondRoot.render(world(9)));
-  assert.deepEqual(second.calls[1]?.[0], {
-    kind: "updateComponentStateOverlay",
-    owner: { kind: "handle", id: 100n },
-    overlay: { kind: "handle", id: 102n },
-    fields: [{ offset: 32, value: { kind: "f32", value: 9 } }],
-    clear: [],
-  });
+  assert.deepEqual(second.calls[1], [scalarWrite(9, 29, 32)]);
   await settle(second, secondRoot.unmount());
 });
 
@@ -439,43 +454,39 @@ test("rapid React commits retain the submitted render and coalesce pending descr
   const third = root.render(world());
   await turn();
   assert.equal(client.calls.length, 1);
-  assert.equal(client.calls[0]?.length, 3);
-  const attach = client.calls[0]?.[2];
-  assert.equal(attach?.kind, "attachComponentStateOverlay");
-  if (attach?.kind !== "attachComponentStateOverlay")
-    throw new Error("missing attachment");
-  assert.equal(attach.component, 17);
-  assert.deepEqual(attach.fields, [
-    { offset: 12, value: { kind: "f32", value: 3 } },
+  assert.deepEqual(client.calls[0], [
+    {
+      kind: "insertComponent",
+      entity: producer,
+      component: 17,
+      fields: [{ offset: 12, value: { kind: "f32", value: 3 } }],
+      adopt: true,
+    },
   ]);
   client.acknowledge();
   await first;
   await turn();
-  assert.equal(client.calls.length, 2);
-  assert.deepEqual(client.calls[1], [
-    {
-      kind: "updateComponentStateOverlay",
-      owner: { kind: "handle", id: 100n },
-      overlay: { kind: "handle", id: 102n },
-      fields: [],
-      clear: [12],
-    },
-  ]);
-  client.acknowledge();
   await Promise.all(superseded);
   await third;
-  assert.equal(client.calls.length, 2);
+  // Only the newest description commits, and a removed prop leaves its value.
+  assert.equal(client.calls.length, 1);
   await settle(client, root.unmount());
-  assert.equal(client.listeners.size, 0);
+  assert.equal(client.calls.length, 1, "unmount removes nothing");
 });
 
 test("canvas render slots keep explicit queue boundaries and replace later pending work", async () => {
   const client = new DeliveryBoundary();
-  const session = new CanvasWorldSession(
-    client as unknown as Client,
-    () => {},
-    () => ({ width: 240, height: 180 }),
-  );
+  Object.assign(client, {
+    worldReference: { id: 1n, incarnation: 1n },
+    closed: new Promise(() => {}),
+  });
+  const session = new CanvasWorldSession({
+    client: client as unknown as Client,
+    host: {
+      sessions: new Map([[client.session, client]]),
+    } as unknown as import("../src/canvas-presentation.js").CanvasHost,
+    onError: () => {},
+  });
   const root = session.createRoot();
   const first = root.render(world(1));
   await turn();
@@ -501,15 +512,35 @@ test("canvas render slots keep explicit queue boundaries and replace later pendi
   assert.equal(barrierRan, true);
   await turn();
   assert.equal(client.calls.length, 3);
-  assert.deepEqual(client.calls[2]?.[0], {
-    kind: "updateComponentStateOverlay",
-    owner: { kind: "handle", id: 100n },
-    overlay: { kind: "handle", id: 102n },
-    fields: [{ offset: 12, value: { kind: "f32", value: 5 } }],
-    clear: [],
-  });
+  assert.deepEqual(client.calls[2], [scalarWrite(5)]);
   client.acknowledge();
   await latest;
+  await settle(client, root.unmount());
+});
+
+test("root flush seals a queued render slot before later producer coalescing", async () => {
+  const client = new DeliveryBoundary();
+  const root = createRoot(client);
+  await settle(client, root.render(world(0)));
+  const first = root.render(world(1));
+  await turn();
+  const included = root.render(world(2));
+  const cutoff = root.flush();
+  await turn();
+  const later = root.render(world(3));
+  assert.notEqual(included, later);
+  let laterDone = false;
+  void later.then(() => {
+    laterDone = true;
+  });
+  client.acknowledge();
+  await first;
+  await turn();
+  client.acknowledge();
+  await included;
+  await cutoff;
+  assert.equal(laterDone, false);
+  await settle(client, later);
   await settle(client, root.unmount());
 });
 
@@ -521,7 +552,7 @@ test("rejected commit permits a corrected queued tree to rebuild", async () => {
       errors.push(error);
     },
   });
-  const rejected = root.render(world(2, "scalar", true));
+  const rejected = root.render(world(2));
   const rejection = assert.rejects(rejected, ReactWorldBatchRejectedError);
   await turn();
   const corrected = root.render(world(4));
@@ -530,7 +561,8 @@ test("rejected commit permits a corrected queued tree to rebuild", async () => {
   await rejection;
   await turn();
   assert.equal(client.calls.length, 2);
-  assert.equal(client.calls[1]?.[0]?.kind, "createStateOverlayOwner");
+  // The refused insertion left no record, so the correction inserts anew.
+  assert.equal(client.calls[1]?.[0]?.kind, "insertComponent");
   client.acknowledge();
   await corrected;
   assert.equal(errors.length, 1);
@@ -541,7 +573,7 @@ test("rejected commit permits a corrected queued tree to rebuild", async () => {
   await settle(client, root.unmount());
 });
 
-test("pending unmount awaits attachment then owner cleanup exactly once", async () => {
+test("pending unmount awaits its commit and sends nothing", async () => {
   const client = new DeliveryBoundary();
   const root = createRoot(client);
   const mounted = root.render(world(7));
@@ -553,60 +585,7 @@ test("pending unmount awaits attachment then owner cleanup exactly once", async 
   client.acknowledge();
   await mounted;
   await settle(client, unmounted);
-  assert.equal(
-    client.calls
-      .flat()
-      .filter((operation) => operation.kind === "releaseStateOverlayOwner")
-      .length,
-    1,
-  );
-  assert.equal(client.listeners.size, 0);
-});
-
-test("diagnostics before promise continuation invalidate new handles without reacquiring", async () => {
-  const client = new DeliveryBoundary();
-  const diagnostics: StateOverlayLifecycleDiagnostic[] = [];
-  const root = createRoot(client, {
-    onDiagnostic: (diagnostic) => {
-      diagnostics.push(diagnostic);
-    },
-  });
-  const mounted = root.render(world(7, "scalar", true));
-  const queued = root.render(world(8, "scalar", true));
-  await turn();
-  const stateOverlays = client.acknowledge();
-  const owner = stateOverlays.find((resource) => resource.kind === "owner")?.id;
-  const overlay = stateOverlays.find(
-    (resource) => resource.kind === "componentStateOverlay",
-  )?.id;
-  assert.ok(owner !== undefined && overlay !== undefined);
-  // Deliberately synchronous after resolving the outcome, before await resumes.
-  client.emit({
-    owner,
-    stateOverlay: overlay,
-    entity: 200n,
-    component: 17,
-    reason: "ComponentReplaced",
-  });
-  client.emit({
-    owner: owner + 999n,
-    stateOverlay: overlay,
-    entity: 200n,
-    component: 17,
-    reason: "ComponentReplaced",
-  });
-  await mounted;
-  await queued;
-  assert.equal(diagnostics.length, 1);
-  assert.equal(client.calls.length, 1);
-  await root.render(world(9, "scalar", true));
-  assert.equal(client.calls.length, 1);
-  await settle(client, root.render(world(10, "replacement", true)));
-  assert.deepEqual(
-    client.calls[1]?.map((operation) => operation.kind),
-    ["releaseComponentStateOverlay", "attachComponentStateOverlay"],
-  );
-  await settle(client, root.unmount());
+  assert.equal(client.calls.length, 1, "unmount removes nothing");
 });
 
 test("hooks, effects and StrictMode produce real local commits", async () => {
@@ -629,19 +608,8 @@ test("hooks, effects and StrictMode produce real local commits", async () => {
   assert.ok(setValue);
   setValue(9);
   await settle(client, root.flush());
-  const updates = client.calls
-    .flat()
-    .filter((operation) => operation.kind === "updateComponentStateOverlay");
-  assert.deepEqual(updates.at(-1)?.fields, [
-    { offset: 12, value: { kind: "f32", value: 9 } },
-  ]);
-  assert.equal(
-    client.calls
-      .flat()
-      .filter((operation) => operation.kind === "createStateOverlayOwner")
-      .length,
-    1,
-  );
+  assert.deepEqual(sent(client, "setField").at(-1), scalarWrite(9));
+  assert.equal(sent(client, "insertComponent").length, 1);
   await settle(client, root.unmount());
 });
 
@@ -661,16 +629,245 @@ test("an unchanged rejected tree does not retry and a later field correction can
   );
   await assert.rejects(root.flush(), ReactWorldBatchRejectedError);
   assert.equal(client.calls.length, 2);
+  // The refused write left the acknowledged value, so the correction writes.
   await settle(client, root.render(world(3)));
-  assert.deepEqual(client.calls[2], [
-    { kind: "releaseStateOverlayOwner", owner: { kind: "handle", id: 100n } },
-  ]);
-  assert.equal(client.calls[3]?.[0]?.kind, "createStateOverlayOwner");
-  assert.equal(client.calls[3]?.[2]?.kind, "attachComponentStateOverlay");
+  assert.deepEqual(client.calls.slice(2), [[scalarWrite(3)]]);
   await settle(client, root.unmount());
 });
 
-test("unchanged keyed declarations preserve precedence when React reorders children", async () => {
+test("a corrected render reconciles from a rejected commit's applied prefix", async () => {
+  const client = new DeliveryBoundary();
+  const root = createRoot(client, { onError: () => {} });
+  const scalars = (first: number, second: number) =>
+    createElement(
+      Entity,
+      { bindTo: "producer" },
+      createElement(Scalar, { key: "scalar", value: first }),
+      createElement(Scalar, { key: "second", value: second }),
+    );
+  await settle(client, root.render(world(1)));
+  const rejected = assert.rejects(
+    root.render(scalars(2, 5)),
+    ReactWorldBatchRejectedError,
+  );
+  await turn();
+  assert.deepEqual(
+    client.calls[1]?.map((operation) => operation.kind),
+    ["setField", "insertComponent"],
+  );
+  // The write applied; the adopting insertion after it was refused.
+  client.rejectAt(1);
+  await rejected;
+  await settle(client, root.render(scalars(2, 6)));
+  assert.deepEqual(client.calls.slice(2), [
+    [
+      {
+        kind: "insertComponent",
+        entity: producer,
+        component: 17,
+        fields: [{ offset: 12, value: { kind: "f32", value: 6 } }],
+        adopt: true,
+      },
+    ],
+  ]);
+  // The remaining declaration covers the component; only its value changes.
+  await settle(client, root.render(world(3)));
+  assert.deepEqual(client.calls.slice(3), [[scalarWrite(3)]]);
+  await settle(client, root.unmount());
+  assert.equal(client.calls.length, 4, "unmount removes nothing");
+});
+
+test("mounting adopts existing declared entities and components, writes declared values and deletes them when removed", async () => {
+  const client = new DeliveryBoundary();
+  // A World that still holds this root's entity from an earlier session.
+  client.symbols.set("cube", 300n);
+  client.present.add("300:17");
+  const root = createRoot(client);
+  await settle(
+    client,
+    root.render(
+      createElement(
+        Entity,
+        { id: "cube" },
+        createElement(Scalar, { value: 4 }),
+      ),
+    ),
+  );
+  assert.deepEqual(client.calls[0], [
+    {
+      kind: "create",
+      alias: 1,
+      metadata: { symbolicId: "cube", classes: [] },
+      adopt: true,
+    },
+    {
+      kind: "insertComponent",
+      entity: { kind: "alias", alias: 1 },
+      component: 17,
+      fields: [{ offset: 12, value: { kind: "f32", value: 4 } }],
+      adopt: true,
+    },
+  ]);
+  assert.equal(client.nextEntity, 100n, "nothing new was created");
+  await settle(
+    client,
+    root.render(
+      createElement(
+        Entity,
+        { id: "cube" },
+        createElement(Scalar, { value: 5 }),
+      ),
+    ),
+  );
+  assert.deepEqual(client.calls[1], [
+    {
+      kind: "setField",
+      entity: { kind: "handle", id: 300n },
+      component: 17,
+      field: { offset: 12, value: { kind: "f32", value: 5 } },
+    },
+  ]);
+  // A removed declaration deletes its entity, adopted or created.
+  await settle(client, root.render(null));
+  assert.deepEqual(client.calls[2], [
+    { kind: "delete", entity: { kind: "handle", id: 300n } },
+  ]);
+  assert.equal(client.symbols.has("cube"), false);
+  await settle(client, root.unmount());
+  assert.equal(client.calls.length, 3, "unmount deletes nothing");
+});
+
+test("two Entity declarations of one symbolic id in a render reject it locally", async () => {
+  const client = new DeliveryBoundary();
+  const errors: Error[] = [];
+  const root = createRoot(client, { onError: (error) => errors.push(error) });
+  const cube = (key: string, value: number) =>
+    createElement(
+      Entity,
+      { key, id: "cube" },
+      createElement(Scalar, { value }),
+    );
+  await settle(client, root.render(cube("a", 1)));
+  const acknowledged = client.symbols.get("cube");
+  const calls = client.calls.length;
+  const duplicate = (error: unknown) =>
+    error instanceof ReactWorldDuplicateEntityError &&
+    error.symbolicId === "cube" &&
+    error.message === "Duplicate Entity id: cube";
+
+  await assert.rejects(
+    root.render(createElement(Fragment, null, cube("a", 2), cube("b", 3))),
+    duplicate,
+  );
+  // Siblings under Children would also conflict as links; the duplicate id
+  // is reported first.
+  await assert.rejects(
+    root.render(
+      createElement(
+        Entity,
+        { id: "list" },
+        createElement(Children, null, cube("a", 4), cube("b", 5)),
+      ),
+    ),
+    duplicate,
+  );
+  await turn();
+  assert.equal(client.calls.length, calls, "a rejected render sends nothing");
+  assert.equal(client.symbols.get("cube"), acknowledged);
+  assert.ok(client.present.has(`${acknowledged}:17`));
+  assert.equal(errors.filter(duplicate).length, 2);
+
+  // `bindTo` only refers to an entity, so it may name the declared one. A
+  // component the `<Entity id>` still declares stays when the reference's
+  // declaration of it goes.
+  const referenced = (reference: boolean) =>
+    createElement(
+      Fragment,
+      null,
+      cube("a", 6),
+      reference &&
+        createElement(
+          Entity,
+          { key: "reference", bindTo: "cube" },
+          createElement(Scalar, { value: 7 }),
+        ),
+    );
+  await settle(client, root.render(referenced(true)));
+  const recreated = client.symbols.get("cube");
+  assert.ok(recreated !== undefined);
+  const beforeRemoval = client.calls.length;
+  await settle(client, root.render(referenced(false)));
+  assert.equal(client.calls.length, beforeRemoval);
+  assert.ok(client.present.has(`${recreated}:17`));
+  await settle(client, root.unmount());
+});
+
+test("an Entity id that moves to another node across renders keeps its entity", async () => {
+  const client = new DeliveryBoundary();
+  const root = createRoot(client);
+  const pair = (first: string, second: string) =>
+    createElement(
+      Fragment,
+      null,
+      createElement(
+        Entity,
+        { key: "one", id: first },
+        createElement(Scalar, { value: 1 }),
+      ),
+      createElement(
+        Entity,
+        { key: "two", id: second },
+        createElement(Scalar, { value: 2 }),
+      ),
+    );
+  await settle(client, root.render(pair("left", "right")));
+  const left = client.symbols.get("left")!;
+  const right = client.symbols.get("right")!;
+  const calls = client.calls.length;
+
+  // Each id moves to the other node: the records are taken over, nothing is
+  // created or deleted, and each node's Scalar writes its entity in place.
+  await settle(client, root.render(pair("right", "left")));
+  assert.equal(client.calls.length, calls + 1);
+  assert.deepEqual(client.calls[calls], [
+    {
+      kind: "insertComponent",
+      entity: { kind: "handle", id: right },
+      component: 17,
+      fields: [{ offset: 12, value: { kind: "f32", value: 1 } }],
+      adopt: true,
+    },
+    {
+      kind: "insertComponent",
+      entity: { kind: "handle", id: left },
+      component: 17,
+      fields: [{ offset: 12, value: { kind: "f32", value: 2 } }],
+      adopt: true,
+    },
+  ]);
+
+  // A keyed remount replaces the node that declares the id.
+  await settle(
+    client,
+    root.render(
+      createElement(
+        Entity,
+        { key: "remounted", id: "left" },
+        createElement(Scalar, { value: 3 }),
+      ),
+    ),
+  );
+  assert.deepEqual(
+    client.calls.at(-1)?.map((operation) => operation.kind),
+    ["insertComponent", "delete"],
+  );
+  assert.equal(client.symbols.get("left"), left);
+  assert.equal(client.symbols.has("right"), false);
+  assert.ok(client.present.has(`${left}:17`));
+  await settle(client, root.unmount());
+});
+
+test("unchanged keyed declarations send nothing when React reorders children", async () => {
   const client = new DeliveryBoundary();
   const root = createRoot(client);
   const element = (reverse: boolean) =>
@@ -685,13 +882,16 @@ test("unchanged keyed declarations preserve precedence when React reorders child
       ),
     );
   await settle(client, root.render(element(false)));
-  assert.equal(client.calls[0]?.length, 4);
+  assert.deepEqual(
+    client.calls[0]?.map((operation) => operation.kind),
+    ["insertComponent", "insertComponent"],
+  );
   await root.render(element(true));
   assert.equal(client.calls.length, 1);
   await settle(client, root.unmount());
 });
 
-test("particle presentation replacement releases the mutually exclusive declaration first", async () => {
+test("particle presentation replacement removes the mutually exclusive component first", async () => {
   const client = new ParticleInvariantBoundary();
   client.components = {
     ...client.components,
@@ -715,30 +915,23 @@ test("particle presentation replacement releases the mutually exclusive declarat
     );
 
   await settle(client, root.render(scene("sprites")));
+  const emitter = client.symbols.get("particle-emitter")!;
   await settle(client, root.render(scene("meshes")));
   assert.deepEqual(
     client.calls[1]?.map((operation) => operation.kind),
-    [
-      "releaseComponentStateOverlay",
-      "attachComponentStateOverlay",
-      "attachComponentStateOverlay",
-    ],
+    ["removeComponent", "insertComponent", "insertComponent"],
   );
-  assert.deepEqual(new Set(client.activeComponents.values()), new Set([4, 24]));
+  assert.deepEqual(client.componentsOf(emitter), new Set([4, 24]));
   await settle(client, root.render(scene("sprites")));
   assert.deepEqual(
     client.calls[2]?.map((operation) => operation.kind),
-    [
-      "releaseComponentStateOverlay",
-      "releaseComponentStateOverlay",
-      "attachComponentStateOverlay",
-    ],
+    ["removeComponent", "removeComponent", "insertComponent"],
   );
-  assert.deepEqual(new Set(client.activeComponents.values()), new Set([23]));
+  assert.deepEqual(client.componentsOf(emitter), new Set([23]));
   await settle(client, root.unmount());
 });
 
-test("unmount following a rejected initial attachment creates no owner cleanup", async () => {
+test("unmount following a rejected initial insertion sends no cleanup", async () => {
   const client = new DeliveryBoundary();
   const root = createRoot(client, { onError: () => {} });
   const mounted = root.render(world(1));
@@ -750,7 +943,6 @@ test("unmount following a rejected initial attachment creates no owner cleanup",
   await rejected;
   await unmounted;
   assert.equal(client.calls.length, 1);
-  assert.equal(client.listeners.size, 0);
 });
 
 test("local malformed trees reject render promises and allow a corrected tree", async () => {
@@ -777,18 +969,15 @@ test("local malformed trees reject render promises and allow a corrected tree", 
     callsBeforeError,
     "local error must not delete acknowledged declarations",
   );
+  // Recovery deletes the declared entities the records hold and commits the
+  // tree anew; the bound entity's component is adopted again in place.
   await settle(client, root2.render(world(3)));
-  assert.deepEqual(client.calls[callsBeforeError], [
-    { kind: "releaseStateOverlayOwner", owner: { kind: "handle", id: 103n } },
-  ]);
-  assert.equal(
-    client.calls[callsBeforeError + 1]?.[0]?.kind,
-    "createStateOverlayOwner",
-  );
+  assert.equal(client.calls.length, callsBeforeError + 1);
+  assert.equal(client.calls[callsBeforeError]?.[0]?.kind, "insertComponent");
   await settle(client, root2.unmount());
 });
 
-test("local failure queues recovery after pending ownership acknowledgement", async () => {
+test("local failure queues recovery after the pending acknowledgement", async () => {
   const client = new DeliveryBoundary();
   const root = createRoot(client, { onError: () => {} });
   const initial = root.render(world(1));
@@ -802,21 +991,18 @@ test("local failure queues recovery after pending ownership acknowledgement", as
   assert.equal(
     client.calls.length,
     1,
-    "local rejection and correction wait for pending ownership",
+    "local rejection and correction wait for the pending commit",
   );
 
   client.acknowledge();
   await initial;
   await rejection;
   await turn();
-  assert.deepEqual(client.calls[1], [
-    { kind: "releaseStateOverlayOwner", owner: { kind: "handle", id: 100n } },
-  ]);
-  client.acknowledge();
-  await turn();
-  assert.equal(client.calls[2]?.[0]?.kind, "createStateOverlayOwner");
+  // The bound component is adopted again in place, not removed first.
+  assert.equal(client.calls[1]?.[0]?.kind, "insertComponent");
   client.acknowledge();
   await corrected;
+  assert.equal(client.calls.length, 2);
   await settle(client, root.unmount());
 });
 
@@ -874,26 +1060,17 @@ test("local failure fences an already queued named asset reapply", async () => {
   const rejection = assert.rejects(invalid, /inside an Entity/);
   const corrected = root.render(scene(3));
   await turn();
-  assert.deepEqual(
-    client.calls[callsBeforeFailure],
-    [
-      {
-        kind: "releaseStateOverlayOwner",
-        owner: { kind: "handle", id: 100n },
-      },
-    ],
-    "stale asset work must not update the old owner before recovery",
+  // Stale asset work must not write the old records before recovery: the
+  // first write is the corrected tree adopting the bound component again.
+  assert.equal(
+    client.calls[callsBeforeFailure]?.[0]?.kind,
+    "insertComponent",
+    "stale asset work must not write the old records before recovery",
   );
   await rejection;
-
-  client.acknowledge();
-  await turn();
-  assert.equal(
-    client.calls[callsBeforeFailure + 1]?.[0]?.kind,
-    "createStateOverlayOwner",
-  );
   client.acknowledge();
   await corrected;
+  assert.equal(client.calls.length, callsBeforeFailure + 1);
   await settle(client, root.unmount());
 });
 
@@ -918,11 +1095,11 @@ test("definitively unsent encoding failures allow a corrected commit", async () 
   await assert.rejects(root.render(world(Number.NaN)), /Non-finite f32/);
   assert.equal(client.calls.length, 1);
   await settle(client, root.render(world(2)));
-  assert.equal(client.calls[1]?.[0]?.kind, "updateComponentStateOverlay");
+  assert.deepEqual(client.calls[1], [scalarWrite(2)]);
   await settle(client, root.unmount());
 });
 
-test("world declarations retain typed target fields through acknowledgement, sparse update and clear", async () => {
+test("world declarations retain typed target fields through acknowledgement, sparse update and prop removal", async () => {
   const client = new DeliveryBoundary();
   client.capabilities.spatial = true;
   // Deliberately different IDs/offsets: the tree must use the connected contract.
@@ -949,24 +1126,26 @@ test("world declarations retain typed target fields through acknowledgement, spa
     createElement(
       Entity,
       { id: "cube" },
-      createElement(Transform, { x: 2, sx: 0.5, bound: null }),
+      createElement(Transform, { x: 2, sx: 0.5 }),
       createElement(UnlitMaterial, { r: 0.25, g: 0.75 }),
-      createElement(MeshInstance, { source, variant, bound: false }),
+      createElement(MeshInstance, { source, variant }),
     );
   const first = root.render(mesh("https://example.test/é.ippm", 3));
   await turn();
   const second = root.render(mesh("ipp://mesh/cube?width=1&height=1&length=1"));
   await turn();
   assert.equal(client.calls.length, 1);
-  const attachments = client.calls[0]!.filter(
-    (op) => op.kind === "attachComponentStateOverlay",
-  );
   assert.deepEqual(
-    attachments.map((op) => [op.component, op.mode, op.fields]),
+    client.calls[0]!.map((op) =>
+      op.kind === "insertComponent"
+        ? [op.component, op.adopt, op.fields]
+        : [op.kind],
+    ),
     [
+      ["create"],
       [
         23,
-        "auto",
+        true,
         [
           { offset: 20, value: { kind: "f32", value: 2 } },
           { offset: 32, value: { kind: "f32", value: 0.5 } },
@@ -974,7 +1153,7 @@ test("world declarations retain typed target fields through acknowledgement, spa
       ],
       [
         24,
-        "auto",
+        true,
         [
           { offset: 8, value: { kind: "f32", value: 0.25 } },
           { offset: 16, value: { kind: "f32", value: 0.75 } },
@@ -982,7 +1161,7 @@ test("world declarations retain typed target fields through acknowledgement, spa
       ],
       [
         25,
-        "owned",
+        true,
         [
           {
             offset: 16,
@@ -996,21 +1175,19 @@ test("world declarations retain typed target fields through acknowledgement, spa
   client.acknowledge();
   await first;
   await turn();
+  // The changed source is written; the removed variant keeps its value.
   assert.deepEqual(client.calls[1], [
     {
-      kind: "updateComponentStateOverlay",
-      owner: { kind: "handle", id: 100n },
-      overlay: { kind: "handle", id: 104n },
-      fields: [
-        {
-          offset: 16,
-          value: {
-            kind: "string",
-            value: "ipp://mesh/cube?width=1&height=1&length=1",
-          },
+      kind: "setField",
+      entity: { kind: "handle", id: 100n },
+      component: 25,
+      field: {
+        offset: 16,
+        value: {
+          kind: "string",
+          value: "ipp://mesh/cube?width=1&height=1&length=1",
         },
-      ],
-      clear: [28],
+      },
     },
   ]);
   client.acknowledge();
@@ -1045,7 +1222,7 @@ test("world components omitted from the target reject without sending declaratio
   await settle(client, root.unmount());
 });
 
-test("texture declaration preserves source and integer fields and removal releases only its overlay", async () => {
+test("texture declaration preserves source and integer fields and removal removes only its component", async () => {
   const client = new DeliveryBoundary();
   client.capabilities.textures = true;
   client.components = {
@@ -1073,10 +1250,10 @@ test("texture declaration preserves source and integer fields and removal releas
     );
   await settle(client, root.render(world(true)));
   const texture = client.calls[0]!.find(
-    (op) => op.kind === "attachComponentStateOverlay" && op.component === 6,
+    (op) => op.kind === "insertComponent" && op.component === 6,
   );
-  assert.ok(texture && texture.kind === "attachComponentStateOverlay");
-  assert.equal(texture.mode, "auto");
+  assert.ok(texture && texture.kind === "insertComponent");
+  assert.equal(texture.adopt, true);
   assert.deepEqual(texture.fields, [
     {
       offset: 0,
@@ -1085,8 +1262,13 @@ test("texture declaration preserves source and integer fields and removal releas
     { offset: 16, value: { kind: "u32", value: 2 } },
   ]);
   await settle(client, root.render(world(false)));
-  assert.equal(client.calls[1]!.length, 1);
-  assert.equal(client.calls[1]![0]!.kind, "releaseComponentStateOverlay");
+  assert.deepEqual(client.calls[1], [
+    {
+      kind: "removeComponent",
+      entity: { kind: "handle", id: 100n },
+      component: 6,
+    },
+  ]);
   await settle(client, root.unmount());
 });
 
@@ -1133,31 +1315,32 @@ test("SurfaceCache opts in through the connected contract and removal returns to
         ? createElement(SurfaceCache, {
             ...cache,
             texels_per_metre: 128,
-            bound: false,
           })
         : null,
     );
   await settle(client, root.render(world({ direct_distance: 2 })));
   const policy = client.calls[0]!.find(
-    (op) => op.kind === "attachComponentStateOverlay" && op.component === 27,
+    (op) => op.kind === "insertComponent" && op.component === 27,
   );
-  assert.ok(policy && policy.kind === "attachComponentStateOverlay");
-  assert.equal(policy.mode, "owned");
+  assert.ok(policy && policy.kind === "insertComponent");
   assert.deepEqual(policy.fields, [
     { offset: 0, value: { kind: "f32", value: 2 } },
     { offset: 4, value: { kind: "f32", value: 128 } },
   ]);
   await settle(client, root.render(world({ direct_distance: 0 })));
-  const [update] = client.calls[1]!;
-  assert.equal(client.calls[1]!.length, 1);
-  assert.ok(update && update.kind === "updateComponentStateOverlay");
-  assert.deepEqual(update.fields, [
-    { offset: 0, value: { kind: "f32", value: 0 } },
+  const panel = { kind: "handle" as const, id: 100n };
+  assert.deepEqual(client.calls[1], [
+    {
+      kind: "setField",
+      entity: panel,
+      component: 27,
+      field: { offset: 0, value: { kind: "f32", value: 0 } },
+    },
   ]);
-  assert.deepEqual(update.clear, []);
   await settle(client, root.render(world(null)));
-  assert.equal(client.calls[2]!.length, 1);
-  assert.equal(client.calls[2]![0]!.kind, "releaseComponentStateOverlay");
+  assert.deepEqual(client.calls[2], [
+    { kind: "removeComponent", entity: panel, component: 27 },
+  ]);
   await settle(client, root.unmount());
 
   // Targets compiled without Surfaces reject the element before sending.

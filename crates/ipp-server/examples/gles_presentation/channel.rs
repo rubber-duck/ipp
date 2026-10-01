@@ -1,10 +1,4 @@
-//! Loopback WebSocket side channel carrying the worker's presentation messages.
-//!
-//! One client connects at a time. Requests are small little-endian binary
-//! messages whose first byte selects the kind, mirroring
-//! `PresentationTestingMessage` and the frame/resize messages of
-//! `packages/ipp-client/src/presentation.ts`; `native-presentation.ts` owns the
-//! client half of the layout. The IPP WebSocket itself is unchanged.
+//! Diagnostics-only loopback channel. Frames and pixels use the common Host protocol.
 
 use std::io;
 use std::net::{TcpListener, TcpStream};
@@ -13,8 +7,8 @@ use std::time::Duration;
 
 use tungstenite::{Error, Message, WebSocket};
 
-/// Longest request: kind, id, session, tick and readback flag.
-const MAX_REQUEST_BYTES: usize = 22;
+/// Longest diagnostic request: kind and two u32 testing parameters.
+const MAX_REQUEST_BYTES: usize = 9;
 
 /// Idle wait between socket reads, which bounds output latency.
 const POLL_INTERVAL: Duration = Duration::from_millis(1);
@@ -22,22 +16,12 @@ const POLL_INTERVAL: Duration = Duration::from_millis(1);
 /// A decoded client request, applied by the Host at its next frame.
 #[derive(Debug, PartialEq)]
 pub(super) enum PresentationControl {
-    Frame {
+    Statistics {
         id: u32,
-        session: u64,
-        after_tick: u64,
-        readback: bool,
-    },
-    Cancel {
-        id: u32,
-    },
-    Resize {
-        width: u32,
-        height: u32,
     },
     GlyphAtlasLimits {
         max_pages: u32,
-        idle_page_publications: u32,
+        idle_page_frames: u32,
     },
     SurfaceCacheBudget {
         bytes: u32,
@@ -47,8 +31,6 @@ pub(super) enum PresentationControl {
     },
     ContextLoss,
     ContextRestore,
-    /// The client disconnected; its pending frame requests are void.
-    Disconnected,
 }
 
 /// A Host message for the connected client.
@@ -57,15 +39,9 @@ pub(super) enum PresentationOutput {
         max_width: u32,
         max_height: u32,
     },
-    FrameError {
+    Statistics {
         id: u32,
-        message: String,
-    },
-    /// A completed frame: its JSON summary, statistics and, for a capture, pixels.
-    Frame {
-        id: u32,
-        header: String,
-        pixels: Option<Vec<u8>>,
+        snapshot: String,
     },
     /// A request this build cannot honour; the client fails its connection.
     Failure(String),
@@ -78,45 +54,23 @@ pub(super) fn decode(bytes: &[u8]) -> Result<PresentationControl, String> {
             .map(|word| u32::from_le_bytes(word.try_into().expect("four bytes")))
             .ok_or_else(|| "truncated presentation request".to_owned())
     };
-    let u64_at = |offset: usize| -> Result<u64, String> {
-        bytes
-            .get(offset..offset + 8)
-            .map(|word| u64::from_le_bytes(word.try_into().expect("eight bytes")))
-            .ok_or_else(|| "truncated presentation request".to_owned())
-    };
     let flag_at = |offset: usize| match bytes.get(offset) {
         Some(0) => Ok(false),
         Some(1) => Ok(true),
-        _ => Err("invalid presentation request flag".to_owned()),
+        _ => Err("invalid diagnostics flag".to_owned()),
     };
 
     let (control, length) = match bytes.first() {
-        Some(1) => (
-            PresentationControl::Frame {
-                id: u32_at(1)?,
-                session: u64_at(5)?,
-                after_tick: u64_at(13)?,
-                readback: flag_at(21)?,
-            },
-            22,
-        ),
-        Some(2) => (
-            PresentationControl::Cancel {
+        Some(9) => (
+            PresentationControl::Statistics {
                 id: u32_at(1)?,
             },
             5,
         ),
-        Some(3) => (
-            PresentationControl::Resize {
-                width: u32_at(1)?,
-                height: u32_at(5)?,
-            },
-            9,
-        ),
         Some(4) => (
             PresentationControl::GlyphAtlasLimits {
                 max_pages: u32_at(1)?,
-                idle_page_publications: u32_at(5)?,
+                idle_page_frames: u32_at(5)?,
             },
             9,
         ),
@@ -154,27 +108,10 @@ pub(super) fn encode(output: PresentationOutput) -> Vec<u8> {
             &max_height.to_le_bytes(),
         ]
         .concat(),
-        PresentationOutput::FrameError {
+        PresentationOutput::Statistics {
             id,
-            message,
-        } => [&[2][..], &id.to_le_bytes(), message.as_bytes()].concat(),
-        PresentationOutput::Frame {
-            id,
-            header,
-            pixels,
-        } => {
-            let header_length = u32::try_from(header.len()).expect("bounded frame header");
-            let mut bytes =
-                Vec::with_capacity(9 + header.len() + pixels.as_ref().map_or(0, Vec::len));
-            bytes.push(3);
-            bytes.extend_from_slice(&id.to_le_bytes());
-            bytes.extend_from_slice(&header_length.to_le_bytes());
-            bytes.extend_from_slice(header.as_bytes());
-            if let Some(pixels) = pixels {
-                bytes.extend_from_slice(&pixels);
-            }
-            bytes
-        }
+            snapshot,
+        } => [&[5][..], &id.to_le_bytes(), snapshot.as_bytes()].concat(),
         PresentationOutput::Failure(message) => [&[4][..], message.as_bytes()].concat(),
     }
 }
@@ -204,9 +141,6 @@ fn serve(
             Ok((stream, _)) => {
                 if let Err(error) = client(stream, control, output, &mut limits) {
                     eprintln!("gles_host: presentation client failed: {error}");
-                }
-                if control.send(PresentationControl::Disconnected).is_err() {
-                    return;
                 }
             }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {

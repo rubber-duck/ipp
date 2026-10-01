@@ -13,6 +13,8 @@ pub(super) fn render(export: Export) -> Result<String, String> {
         pointer,
         features,
         components,
+        paint_keys,
+        row_limits,
         wire,
     } = export;
 
@@ -53,6 +55,7 @@ function freezeContract<T>(value: T): T {\n\
     }
     out.push_str("} as const);\n");
 
+    crate::paint_keys::render(&mut out, &paint_keys);
     out.push_str("export const components = freezeContract({\n");
 
     for c in &components {
@@ -124,18 +127,23 @@ function freezeContract<T>(value: T): T {\n\
     let gui = features
         .iter()
         .any(|feature| feature.name == "gui" && feature.enabled);
+    let lifecycle_diagnostics = wire
+        .tags
+        .iter()
+        .any(|tag| tag.name == "REQUEST_LIFECYCLE_DIAGNOSTICS");
     let particles = features
         .iter()
         .any(|feature| feature.name == "particles" && feature.enabled);
-    writeln!(out, "export const CAPABILITIES = freezeContract({{ snapshot: {snapshot}, animation: {}, assets: {}, stateOverlays: {}, spatial: {}, textures: {}, builtinAssets: {builtin_assets}, picking: {}, debugGeometry: {}, pbr: {}, shadows: {shadows}, skeletalAnimation: {skeletal_animation}, meshPoses: {mesh_poses}, particles: {particles}, surfaces: {surfaces}, gui: {gui} }} as const);", c.animation, c.assets, c.state_overlays, c.spatial, c.textures, c.picking, c.debug_geometry, c.spatial).unwrap();
+    writeln!(out, "export const CAPABILITIES = freezeContract({{ snapshot: {snapshot}, animation: {}, assets: {}, spatial: {}, textures: {}, builtinAssets: {builtin_assets}, picking: {}, debugGeometry: {}, pbr: {}, shadows: {shadows}, skeletalAnimation: {skeletal_animation}, meshPoses: {mesh_poses}, particles: {particles}, surfaces: {surfaces}, gui: {gui} }} as const);", c.animation, c.assets, c.spatial, c.textures, c.picking, c.debug_geometry, c.spatial).unwrap();
     // Baseline codecs are standard; only optional capability payloads are omitted.
     let capabilities = Capabilities {
+        lifecycle_diagnostics,
         skeletal_animation,
         surfaces,
         gui,
         ..wire.capabilities
     };
-    codec_limits::render(&mut out, &wire, gui)?;
+    codec_limits::render(&mut out, &wire, &row_limits, gui)?;
     out.push_str(&render_template(
         include_str!("codec.template.ts"),
         capabilities,
@@ -145,9 +153,6 @@ function freezeContract<T>(value: T): T {\n\
         capabilities,
     )?);
     out.push_str(include_str!("geometry.template.ts"));
-    if surfaces {
-        out.push_str(include_str!("surface.template.ts"));
-    }
     if gui {
         out.push_str(include_str!("gui.template.ts"));
     }
@@ -168,7 +173,7 @@ function freezeContract<T>(value: T): T {\n\
         // Only implemented command kinds receive mutation helpers.
         if c.fields
             .iter()
-            .any(|f| ![1, 2, 3, 4, 5, 6, 7, ROWS_KIND].contains(&f.kind))
+            .any(|f| ![1, 2, 3, 4, 5, 6, 7, ROWS_KIND, 12, 13].contains(&f.kind))
         {
             continue;
         }
@@ -227,6 +232,8 @@ function freezeContract<T>(value: T): T {\n\
                 out,
                 "  {field}Offset(slot: number, property: keyof {row}): number {{ return rowFieldOffset(components.{component}, {name}, slot, property); }},\n  \
                  patch{title}(entity: EntityRef, slot: number, patch: {row}Patch): Command[] {{ return rowPatchCommands(entity, components.{component}, {name}, slot, patch); }},\n  \
+                 patch{title}Fields(slot: number, patch: {row}Patch): FieldWrite[] {{ return rowPatchFields(components.{component}, {name}, slot, patch); }},\n  \
+                 encode{title}(table: RowsInput<{row}>): Uint8Array<ArrayBuffer> {{ return encodeRowsTable(components.{component}.fields.{field}.rows, table); }},\n  \
                  decode{title}(table: Uint8Array): RowsTable<{row}> {{ return decodeRowsTable<{row}>(components.{component}.fields.{field}.rows, table); }},",
                 name = js_string(field),
             )
@@ -251,6 +258,7 @@ pub(super) fn render_template(
             let enabled = match name {
                 "surfaces" => capabilities.surfaces,
                 "gui" => capabilities.gui,
+                "lifecycle-diagnostics" => capabilities.lifecycle_diagnostics,
                 "skeletal-animation" => capabilities.skeletal_animation,
                 "builtin-assets" => capabilities.builtin_assets,
                 _ => return Err(format!("unknown template capability: {name}")),
@@ -372,6 +380,8 @@ fn field_type(kind: u8) -> &'static str {
         5 => "string",
         6 => "Uint8Array<ArrayBuffer>",
         7 => "boolean",
+        12 => "WorldReference | null",
+        13 => "OutputReference | null",
         _ => unreachable!("mutation helpers require supported field kinds"),
     }
 }
@@ -385,6 +395,8 @@ fn field_kind(kind: u8) -> &'static str {
         5 => "string",
         6 => "bytes",
         7 => "bool",
+        12 => "world",
+        13 => "output",
         _ => unreachable!("mutation helpers require supported field kinds"),
     }
 }

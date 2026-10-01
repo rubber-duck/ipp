@@ -99,7 +99,6 @@ test("combined gallery picks every object, keeps one outline and edits independe
                 type: "GeometryPickQuery",
                 x,
                 y,
-                ...projected[0]!.viewport,
               },
             );
             assert.ok(result.ok);
@@ -118,7 +117,7 @@ test("combined gallery picks every object, keeps one outline and edits independe
       await g.page.locator("#object-color").fill("#ab4eff");
       await g.page.locator("#object-param-width").fill("1.8");
       const cube = await g.capture("cube-after-edit");
-      const mesh = entity(cube.inspection, "lighting-cube").effective.find(
+      const mesh = entity(cube.inspection, "lighting-cube").components.find(
         (entry) => String(entry.fields.source).startsWith("ipp://mesh/cube"),
       )!;
       assert.equal(
@@ -212,7 +211,6 @@ test("skinned gallery picking and its selected pills follow both bone segments",
           type: "GeometryPickQuery",
           x: point.x,
           y: point.y,
-          ...point.viewport,
         });
         await scenario.evidence.record("beam-probe", { local, part, result });
         assert.ok(result.ok);

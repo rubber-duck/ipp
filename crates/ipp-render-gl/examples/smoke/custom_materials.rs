@@ -40,6 +40,7 @@ pub fn run<D: RenderDevice>(
                     symbolic_id: Some("custom".into()),
                     classes: vec![],
                 },
+                adopt: false,
             },
             Command::insert_value(
                 EntityRef::Alias(1),
@@ -144,7 +145,12 @@ pub fn run<D: RenderDevice>(
     let fallback = capture()?;
     save(output, "custom-fallback-blue", &fallback)?;
     center(&fallback, [0, 0, 79]);
-    assert!(renderer.custom_material_diagnostics().contains_key(&entity));
+    assert!(
+        renderer
+            .custom_material_diagnostics()
+            .keys()
+            .any(|key| key.world.id() == world.id() && key.entity == entity)
+    );
     apply(
         &mut world,
         vec![Command::RemoveComponent {
@@ -198,6 +204,7 @@ pub fn run<D: RenderDevice>(
             Command::Create {
                 alias: 2,
                 metadata: Default::default(),
+                adopt: false,
             },
             Command::insert_value(
                 EntityRef::Alias(2),
@@ -258,7 +265,7 @@ pub fn run<D: RenderDevice>(
     }
     let definition = ShaderDefinition {
         parameters: packed.properties.descriptors().keys().map(|name| {
-            (name.clone(), ShaderParameterKind::from_value(&packed.properties.get(name).unwrap()).unwrap())
+            (name.to_string(), ShaderParameterKind::from_value(&packed.properties.get(name).unwrap()).unwrap())
         }).collect(),
         backends: BTreeMap::from([("glsl-es-300".into(), ShaderBackendSource {
             vertex: String::new(),
@@ -359,7 +366,7 @@ pub fn run<D: RenderDevice>(
             .keys()
             .map(|name| {
                 (
-                    name.clone(),
+                    name.to_string(),
                     ShaderParameterKind::from_value(&limited.properties.get(name).unwrap())
                         .unwrap(),
                 )
@@ -394,7 +401,12 @@ pub fn run<D: RenderDevice>(
         super::world::present_world!(renderer, host, world, WIDTH, HEIGHT)?;
     }
     assert!(
-        renderer.custom_material_diagnostics()[&entity]
+        renderer
+            .custom_material_diagnostics()
+            .iter()
+            .find(|(key, _)| key.world.id() == world.id() && key.entity == entity)
+            .expect("World-qualified material diagnostic")
+            .1
             .error
             .to_string()
             .contains("limits")
@@ -452,6 +464,8 @@ pub fn run<D: RenderDevice>(
         "dark gradient is banded: {ramp:?}"
     );
 
+    drop(world);
+    renderer.prepare(&mut host, None)?;
     Ok(())
 }
 

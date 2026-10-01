@@ -1,17 +1,17 @@
 use super::*;
-use ipp_core::components::dynamic_properties::DYNAMIC_METADATA;
 
 impl Writer {
     pub(crate) fn raw(&mut self, v: &[u8]) -> Result<(), ProtocolError> {
-        if self
-            .0
+        let length = self
             .len()
             .checked_add(v.len())
-            .is_none_or(|n| n > MAX_MESSAGE_BYTES)
-        {
-            return Err(ProtocolError::Limit("message"));
+            .filter(|length| *length <= MAX_MESSAGE_BYTES)
+            .ok_or(ProtocolError::Limit("message"))?;
+        if let Some(count) = &mut self.1 {
+            *count = length;
+        } else {
+            self.0.extend_from_slice(v);
         }
-        self.0.extend_from_slice(v);
         Ok(())
     }
 
@@ -45,7 +45,7 @@ impl Writer {
         self.raw(&v.to_le_bytes())
     }
 
-    pub(super) fn f64(&mut self, v: f64) -> Result<(), ProtocolError> {
+    pub(crate) fn f64(&mut self, v: f64) -> Result<(), ProtocolError> {
         if !v.is_finite() || v < 0.0 {
             return Err(ProtocolError::Malformed("invalid simulation time"));
         }
@@ -60,12 +60,12 @@ impl Writer {
     }
 
     pub(crate) fn string(&mut self, s: &str) -> Result<(), ProtocolError> {
-        self.count(s.len(), 65536)?;
+        self.count(s.len(), crate::MAX_FIELD_BYTES)?;
         self.raw(s.as_bytes())
     }
 
     pub(crate) fn bytes(&mut self, bytes: &[u8]) -> Result<(), ProtocolError> {
-        self.count(bytes.len(), 65536)?;
+        self.count(bytes.len(), crate::MAX_FIELD_BYTES)?;
         self.raw(bytes)
     }
 
@@ -77,7 +77,7 @@ impl Writer {
                 self.string(s)?;
             }
         }
-        self.count(m.classes.len(), 256)?;
+        self.count(m.classes.len(), crate::MAX_METADATA_CLASSES)?;
         for class in &m.classes {
             self.string(class)?;
         }
@@ -113,34 +113,15 @@ impl Writer {
                 &error.aliases
             }
         };
-        self.count(aliases.len(), 4096)?;
+        self.count(aliases.len(), crate::BATCH_OUTCOME_ALIASES)?;
         for (alias, id) in aliases {
             self.u32(*alias)?;
             self.u64(id.to_bits())?;
         }
-        {
-            self.count(outcome.state_overlays.len(), 4096)?;
-            for resource in &outcome.state_overlays {
-                self.u32(resource.alias)?;
-                self.u64(resource.id)?;
-                self.u8(match resource.kind {
-                    ipp_core::StateOverlayHandleKind::Owner => STATE_OVERLAY_KIND_OWNER,
-                    ipp_core::StateOverlayHandleKind::EntityOverlayBinding => {
-                        STATE_OVERLAY_KIND_ENTITY_BINDING
-                    }
-                    ipp_core::StateOverlayHandleKind::ComponentStateOverlay => {
-                        STATE_OVERLAY_KIND_COMPONENT
-                    }
-                })?;
-                self.u8(if resource.entity.is_some() {
-                    OPTION_SOME
-                } else {
-                    OPTION_NONE
-                })?;
-                if let Some(entity) = resource.entity {
-                    self.u64(entity.to_bits())?;
-                }
-            }
+        self.count(outcome.symbols.len(), crate::BATCH_OUTCOME_ALIASES)?;
+        for (symbol, id) in &outcome.symbols {
+            self.string(symbol)?;
+            self.u64(id.to_bits())?;
         }
         Ok(())
     }
@@ -200,37 +181,24 @@ impl Writer {
         Ok(())
     }
 
-    /// Encode one inspected component and return its named-property descriptor table.
-    ///
-    /// An effective component whose table equals its base counterpart's refers to that
-    /// table instead of repeating it, halving the budget a dense GUI panel consumes.
-    pub(super) fn component(
-        &mut self,
-        component: &ComponentValue,
-        base_descriptors: Option<&[u8]>,
-    ) -> Result<Option<Vec<u8>>, ProtocolError> {
+    /// Encode one inspected component with its own named-property descriptor table.
+    pub(super) fn component(&mut self, component: &ComponentValue) -> Result<(), ProtocolError> {
         self.u16(component.type_id())?;
         let fields = component.fields();
-        self.count(fields.len(), 65_536)?;
-        let mut descriptors = None;
+        self.count(fields.len(), crate::MAX_INSPECTED_FIELDS)?;
         for (offset, value) in fields {
-            match value {
-                ResolvedValue::Bytes(table) if offset == DYNAMIC_METADATA => {
-                    self.u32(offset)?;
-                    if base_descriptors == Some(table.as_slice()) {
-                        self.u8(SNAPSHOT_VALUE_BASE_DESCRIPTORS)?;
-                    } else {
-                        // The same bytes encoding as any inspected byte field.
-                        self.u8(SNAPSHOT_VALUE_BYTES)?;
-                        self.count(table.len(), MAX_MESSAGE_BYTES)?;
-                        self.raw(&table)?;
-                    }
-                    descriptors = Some(table);
-                }
-                value => self.resolved_field(offset, value)?,
-            }
+            self.resolved_field(offset, value)?;
         }
-        Ok(descriptors)
+        Ok(())
+    }
+
+    pub(crate) fn canvas_state(
+        &mut self,
+        state: &ipp_core::CanvasState,
+    ) -> Result<(), ProtocolError> {
+        self.f32(state.extent[0])?;
+        self.f32(state.extent[1])?;
+        self.f32(state.units_per_metre)
     }
 
     pub(super) fn render_state_patch(
@@ -264,7 +232,8 @@ impl Writer {
         Ok(())
     }
 
-    pub(super) fn resolved_field(
+    /// Encode one snapshot field: offset, value kind and value.
+    pub(crate) fn resolved_field(
         &mut self,
         offset: u32,
         value: ResolvedValue,
@@ -272,6 +241,18 @@ impl Writer {
         self.u32(offset)?;
         self.u8(value.kind() as u8)?;
         match value {
+            ResolvedValue::World(value) => {
+                self.u8(u8::from(value.is_some()))?;
+                if let Some(value) = value {
+                    self.world_reference(value.into())?;
+                }
+            }
+            ResolvedValue::Output(value) => {
+                self.u8(u8::from(value.is_some()))?;
+                if let Some(value) = value {
+                    self.output_reference(value.into())?;
+                }
+            }
             ResolvedValue::Dynamic(v) => self.bytes(&v.encode())?,
             ResolvedValue::Bool(v) => self.u8(u8::from(v))?,
             ResolvedValue::F32(v) => self.f32(v)?,
@@ -301,16 +282,23 @@ impl Writer {
 
 /// Encode owned results, rejecting oversized or unsupported response data.
 pub fn encode_response(response: &Response) -> Result<Vec<u8>, ProtocolError> {
-    let mut bytes = Vec::new();
+    let mut bytes = Vec::with_capacity(encoded_response_size(response)?);
     encode_response_into(response, &mut bytes)?;
     Ok(bytes)
+}
+
+/// Validate and measure the exact wire allocation without allocating a response.
+pub fn encoded_response_size(response: &Response) -> Result<usize, ProtocolError> {
+    let mut writer = Writer::measuring();
+    write_response(response, &mut writer)?;
+    Ok(writer.len())
 }
 
 /// Encode into exclusive caller-owned storage, retaining capacity even on failure.
 /// Failed encodes leave an empty buffer; no partial message can be published.
 pub fn encode_response_into(response: &Response, bytes: &mut Vec<u8>) -> Result<(), ProtocolError> {
     bytes.clear();
-    let mut writer = Writer(std::mem::take(bytes));
+    let mut writer = Writer::new(std::mem::take(bytes));
     let result = write_response(response, &mut writer);
     *bytes = writer.0;
     if result.is_err() {
@@ -330,23 +318,17 @@ fn write_response(response: &Response, w: &mut Writer) -> Result<(), ProtocolErr
             | ResponseBody::LifecycleEvents(_)
             | ResponseBody::PlaybackEvents(_)
             | ResponseBody::RenderStateUpdatedEvent(_)
-            | ResponseBody::CameraStateChangedEvent(_)
             | ResponseBody::Frame { .. }
-            | ResponseBody::Lifecycle { .. }
             | ResponseBody::Resources { .. }
-    ) || {
-        #[cfg(feature = "gui")]
-        {
-            matches!(
-                response.body,
-                ResponseBody::GuiObservations { .. } | ResponseBody::GuiUnhandledInputs { .. }
+    );
+    #[cfg(feature = "gui")]
+    let unsolicited = unsolicited
+        || matches!(
+            response.body,
+            ResponseBody::GuiObservation(
+                ipp_core::systems::gui::observations::GuiObservationRecord::Effect { .. }
             )
-        }
-        #[cfg(not(feature = "gui"))]
-        {
-            false
-        }
-    };
+        );
     if unsolicited != (response.request_id == 0) {
         return Err(ProtocolError::Malformed("reserved response identity"));
     }
@@ -355,88 +337,48 @@ fn write_response(response: &Response, w: &mut Writer) -> Result<(), ProtocolErr
     w.u64(response.request_id)?;
     w.u64(response.tick)?;
     match &response.body {
-        #[cfg(feature = "surfaces")]
-        ResponseBody::SurfaceCommand => w.u8(RESPONSE_SURFACE)?,
-        #[cfg(feature = "gui")]
-        ResponseBody::GuiCommands {
-            applied,
-            error,
-        } => {
-            w.u8(RESPONSE_GUI)?;
-            w.u32(*applied)?;
-            w.u8(u8::from(error.is_some()))?;
-            if let Some(error) = error {
-                w.string(error_name(*error))?;
+        #[cfg(feature = "diagnostics")]
+        ResponseBody::LifecycleDiagnostics(sample) => {
+            if response.tick != 0
+                || sample.endpoint.world.id == 0
+                || sample.endpoint.world.incarnation == 0
+                || sample.endpoint.output == 0
+            {
+                return Err(ProtocolError::Malformed("lifecycle diagnostic envelope"));
             }
+            w.u8(RESPONSE_LIFECYCLE_DIAGNOSTICS)?;
+            w.u64(sample.endpoint.world.id)?;
+            w.u64(sample.endpoint.world.incarnation)?;
+            w.u64(sample.endpoint.output)?;
+            w.u64(sample.work.lookups)?;
+            w.u64(sample.work.recipient_visits)?;
+            w.u8(u8::from(sample.work.saturated))?;
+            w.u64(sample.traffic.queued_events)?;
+            w.u64(sample.traffic.queued_bytes)?;
+            w.u8(u8::from(sample.traffic.saturated))?;
         }
         #[cfg(feature = "gui")]
-        ResponseBody::GuiInspect(response) => {
-            w.u8(RESPONSE_GUI_INSPECT)?;
-            w.gui_inspect_response(response)?;
-        }
-        #[cfg(feature = "gui")]
-        ResponseBody::GuiInput {
-            tick,
-            unhandled,
-        } => {
-            w.u8(RESPONSE_GUI_INPUT)?;
-            w.u64(*tick)?;
-            let (reason, blocker) = match unhandled {
-                None => (0, None),
-                Some(ipp_core::GuiUnhandledReason::NoPanelHit) => (1, None),
-                Some(ipp_core::GuiUnhandledReason::Blocked {
-                    entity,
-                }) => (2, Some(entity.to_bits())),
-                Some(ipp_core::GuiUnhandledReason::StaleTarget) => (3, None),
-                Some(ipp_core::GuiUnhandledReason::NoFocus) => (4, None),
-                Some(ipp_core::GuiUnhandledReason::NoCapture) => (5, None),
-                Some(ipp_core::GuiUnhandledReason::NotFocusable) => (6, None),
-                Some(ipp_core::GuiUnhandledReason::NotOwner) => (7, None),
-                Some(ipp_core::GuiUnhandledReason::ScrollUnconsumed) => (8, None),
-            };
-            w.u16(reason)?;
-            w.u8(u8::from(blocker.is_some()))?;
-            if let Some(entity) = blocker {
-                w.u64(entity)?;
+        ResponseBody::GuiObservation(record) => {
+            if response.tick != 0 {
+                return Err(ProtocolError::Malformed("GUI observation outer tick"));
             }
-        }
-        #[cfg(feature = "gui")]
-        ResponseBody::GuiObservations {
-            effects,
-            conflicts,
-            cancellations,
-            text_focus_updates,
-        } => {
-            w.u8(RESPONSE_GUI_OBSERVATIONS)?;
-            let inner = crate::observations::encode_gui_observations_inner(
-                effects,
-                conflicts,
-                cancellations,
-                text_focus_updates,
-            )?;
-            w.count(inner.len(), MAX_MESSAGE_BYTES)?;
-            w.raw(&inner)?;
-        }
-        #[cfg(feature = "gui")]
-        ResponseBody::GuiUnhandledInputs {
-            inputs,
-        } => {
-            w.u8(RESPONSE_GUI_UNHANDLED)?;
-            let inner = crate::observations::encode_gui_unhandled_inner(inputs)?;
-            w.count(inner.len(), MAX_MESSAGE_BYTES)?;
-            w.raw(&inner)?;
-        }
-        #[cfg(feature = "gui")]
-        ResponseBody::GuiSemanticSnapshot(tree) => {
-            w.u8(RESPONSE_GUI_SEMANTIC_SNAPSHOT)?;
-            w.gui_semantic_snapshot_response(tree)?;
+            if let ipp_core::systems::gui::observations::GuiObservationRecord::Control {
+                request,
+                ..
+            } = record
+                && *request != response.request_id
+            {
+                return Err(ProtocolError::Malformed("GUI observation correlation"));
+            }
+            w.u8(RESPONSE_GUI_OBSERVATION)?;
+            w.gui_observation(record)?;
         }
         ResponseBody::RuntimeFailure {
             scope,
             faulted,
             message,
         } => {
-            if message.len() > 2048 {
+            if message.len() > crate::MAX_FAILURE_MESSAGE_BYTES {
                 return Err(ProtocolError::Limit("runtime diagnostic"));
             }
             w.u8(RESPONSE_RUNTIME_FAILURE)?;
@@ -453,7 +395,7 @@ fn write_response(response: &Response, w: &mut Writer) -> Result<(), ProtocolErr
         }
         ResponseBody::PlaybackEvents(events) => {
             w.u8(RESPONSE_PLAYBACK)?;
-            w.count(events.len(), 1024)?;
+            w.count(events.len(), crate::MAX_PLAYBACK_EVENTS)?;
             for event in events {
                 w.controller_state(&event.controller)?;
                 w.u32(event.kind as u32)?;
@@ -470,14 +412,6 @@ fn write_response(response: &Response, w: &mut Writer) -> Result<(), ProtocolErr
             w.u8(RESPONSE_RENDER_STATE_UPDATED)?;
             w.render_state_patch(&change.changes)?;
         }
-        ResponseBody::BatchFinished(id) => {
-            w.u8(RESPONSE_BATCH_FINISHED)?;
-            w.u64(*id)?;
-        }
-        ResponseBody::BatchStarted(id) => {
-            w.u8(RESPONSE_BATCH_STARTED)?;
-            w.u64(*id)?;
-        }
         ResponseBody::BatchAborted {
             batch_id,
             message,
@@ -488,51 +422,84 @@ fn write_response(response: &Response, w: &mut Writer) -> Result<(), ProtocolErr
         }
         ResponseBody::Batch(outcome) => {
             w.u8(RESPONSE_BATCH)?;
-            w.outcome(outcome)?;
-        }
-        ResponseBody::CameraStateChangedEvent(change) => {
-            if change.tick != response.tick {
-                return Err(ProtocolError::Malformed("camera state change tick"));
+            w.outcome(&outcome.outcome)?;
+            if outcome.effects.len() != outcome.outcome.effects.len() {
+                return Err(ProtocolError::Malformed("unmapped attachment effects"));
             }
-            let camera = change
-                .changes
-                .active_camera
-                .ok_or(ProtocolError::Malformed("empty camera state change"))?;
-            w.u8(RESPONSE_CAMERA_STATE_CHANGED)?;
-            w.u16(1)?;
-            w.u64(camera.to_bits())?;
+            w.count(outcome.effects.len(), crate::BATCH_OUTCOME_EFFECTS)?;
+            for effect in &outcome.effects {
+                use crate::attachment_receipts::{AttachmentEffectKind, BatchOperationEffect};
+                let effect = match effect {
+                    BatchOperationEffect::Attachment(effect) => effect,
+                    BatchOperationEffect::Adopted {
+                        operation,
+                    } => {
+                        w.u32(*operation)?;
+                        w.u8(OPERATION_ADOPTED)?;
+                        continue;
+                    }
+                };
+                w.u32(effect.operation)?;
+                w.u8(match effect.kind {
+                    AttachmentEffectKind::Written => ATTACHMENT_WRITTEN,
+                    AttachmentEffectKind::Detached => ATTACHMENT_DETACHED,
+                    AttachmentEffectKind::Superseded => ATTACHMENT_SUPERSEDED,
+                })?;
+                let receipt = &effect.receipt;
+                w.u64(receipt.id)?;
+                w.world_reference(receipt.parent)?;
+                w.u64(receipt.anchor)?;
+                w.u64(receipt.incarnation)?;
+                w.u64(receipt.revision)?;
+                w.u8(u8::from(receipt.child.is_some()))?;
+                if let Some(child) = receipt.child {
+                    w.world_reference(child)?;
+                }
+            }
         }
+        ResponseBody::AttachmentReceipt {
+            receipt,
+            retired,
+        } => {
+            w.u8(RESPONSE_ATTACHMENT_RECEIPT)?;
+            w.u64(*receipt)?;
+            w.u8(match retired {
+                None => RECEIPT_RELEASED,
+                Some(false) => RECEIPT_PENDING,
+                Some(true) => RECEIPT_RETIRED,
+            })?;
+        }
+        ResponseBody::CameraNavigated => w.u8(RESPONSE_CAMERA_NAVIGATED)?,
         ResponseBody::GeometryPickResultEvent(outcome) => {
             if outcome.request_id != response.request_id || outcome.tick != response.tick {
                 return Err(ProtocolError::Malformed("geometry outcome correlation"));
             }
             w.u8(RESPONSE_GEOMETRY_PICK)?;
-            w.u8(if outcome.camera.is_some() {
-                OPTION_SOME
-            } else {
-                OPTION_NONE
-            })?;
-            if let Some(camera) = outcome.camera {
-                w.u64(camera.to_bits())?;
-            }
             match &outcome.result {
-                Ok(None) => {
-                    if outcome.camera.is_none() {
-                        return Err(ProtocolError::Malformed("geometry miss requires camera"));
-                    }
+                Ok((view, None)) => {
                     w.u8(PICK_OUTCOME_MISS)?;
+                    w.view_descriptor(view)?;
                 }
-                Ok(Some(hit)) => {
-                    if outcome.camera.is_none() || hit.distance < 0.0 {
+                Ok((view, Some(hit))) => {
+                    if hit.identity.hit.distance < 0.0 {
                         return Err(ProtocolError::Malformed("invalid geometry hit"));
                     }
                     w.u8(PICK_OUTCOME_HIT)?;
-                    w.u64(hit.entity.to_bits())?;
+                    w.view_descriptor(view)?;
+                    w.world_reference(hit.identity.world.into())?;
+                    w.publication_reference(hit.identity.publication)?;
+                    w.u64(hit.identity.entity.to_bits())?;
+                    w.u64(hit.identity.incarnation)?;
                     for coordinate in hit.position {
                         w.f32(coordinate)?;
                     }
-                    w.f32(hit.distance)?;
-                    w.u32(hit.part)?;
+                    w.f64(hit.identity.hit.distance)?;
+                    w.u32(hit.identity.hit.part)?;
+                    w.count(hit.identity.path.len(), MAX_MESSAGE_BYTES / 24)?;
+                    for (world, anchor) in &hit.identity.path {
+                        w.world_reference((*world).into())?;
+                        w.u64(anchor.to_bits())?;
+                    }
                     w.u8(if hit.view_plane.is_some() {
                         OPTION_SOME
                     } else {
@@ -554,22 +521,17 @@ fn write_response(response: &Response, w: &mut Writer) -> Result<(), ProtocolErr
             if outcome.request_id != response.request_id || outcome.tick != response.tick {
                 return Err(ProtocolError::Malformed("camera projection correlation"));
             }
-            if outcome.result.is_ok() && outcome.camera.is_none() {
-                return Err(ProtocolError::Malformed(
-                    "camera projection requires camera",
-                ));
-            }
             w.u8(RESPONSE_CAMERA_PROJECT)?;
-            w.u8(if outcome.camera.is_some() {
+            w.u8(if outcome.result.is_ok() {
                 OPTION_SOME
             } else {
                 OPTION_NONE
             })?;
-            if let Some(camera) = outcome.camera {
-                w.u64(camera.to_bits())?;
+            if let Ok((view, _)) = &outcome.result {
+                w.view_descriptor(view)?;
             }
             w.u8(u8::from(outcome.result.is_ok()))?;
-            if let Ok(Some(position)) = outcome.result {
+            if let Ok((_, Some(position))) = outcome.result {
                 w.u8(OPTION_SOME)?;
                 for coordinate in position {
                     w.f32(coordinate)?;
@@ -591,7 +553,7 @@ fn write_response(response: &Response, w: &mut Writer) -> Result<(), ProtocolErr
                 return Err(ProtocolError::Malformed("empty resource event"));
             }
             w.u8(RESPONSE_RESOURCES)?;
-            w.count(resources.len(), 128)?;
+            w.count(resources.len(), crate::MAX_RESOURCE_EVENT_RECORDS)?;
             for resource in resources {
                 if resource.id == 0 || resource.kind.0 == 0 || resource.source.is_empty() {
                     return Err(ProtocolError::Malformed("invalid resource event"));
@@ -605,34 +567,21 @@ fn write_response(response: &Response, w: &mut Writer) -> Result<(), ProtocolErr
             w.u8(RESPONSE_FRAME)?;
             w.f64(*time)?;
         }
-        ResponseBody::Lifecycle {
-            diagnostics,
+        ResponseBody::EntityTree {
+            next,
+            time,
+            nodes,
         } => {
-            w.u8(RESPONSE_STATE_OVERLAY_LIFECYCLE)?;
-            w.count(diagnostics.len(), 16384)?;
-            for diagnostic in diagnostics {
-                w.u64(diagnostic.owner)?;
-                w.u64(diagnostic.state_overlay)?;
-                w.u64(diagnostic.entity.to_bits())?;
-                w.u8(if diagnostic.component.is_some() {
-                    OPTION_SOME
-                } else {
-                    OPTION_NONE
-                })?;
-                if let Some(component) = diagnostic.component {
-                    w.u16(component)?;
-                }
-                w.u8(match diagnostic.reason {
-                    ipp_core::StateOverlayLifecycleReason::EntityDeleted => {
-                        STATE_OVERLAY_ENTITY_DELETED
-                    }
-                    ipp_core::StateOverlayLifecycleReason::ComponentReplaced => {
-                        STATE_OVERLAY_COMPONENT_REPLACED
-                    }
-                    ipp_core::StateOverlayLifecycleReason::ComponentRemoved => {
-                        STATE_OVERLAY_COMPONENT_REMOVED
-                    }
-                })?;
+            w.u8(RESPONSE_ENTITY_TREE)?;
+            w.f64(*time)?;
+            w.u64(*next)?;
+            w.count(nodes.len(), crate::INSPECTION_PAGE_RECORDS)?;
+            for node in nodes {
+                w.u64(node.id.to_bits())?;
+                w.u64(node.parent.map_or(0, ipp_core::EntityId::to_bits))?;
+                w.u64(node.order as u64)?;
+                w.u64((node.order >> 64) as u64)?;
+                w.u16(node.depth)?;
             }
         }
         ResponseBody::Inspect {
@@ -642,47 +591,69 @@ fn write_response(response: &Response, w: &mut Writer) -> Result<(), ProtocolErr
             entities,
             resources,
             render_diagnostics,
+            #[cfg(feature = "gui")]
+            gui_focus,
+            #[cfg(feature = "gui")]
+            gui_pointers,
+            #[cfg(feature = "surfaces")]
+            canvas,
         } => {
             w.u8(RESPONSE_INSPECT)?;
             w.f64(*time)?;
             w.u64(*next)?;
-            w.count(entities.len(), 256)?;
+            w.count(entities.len(), crate::INSPECTION_PAGE_RECORDS)?;
             for entity in entities {
                 w.u64(entity.id.to_bits())?;
                 w.metadata(&entity.metadata)?;
-                let mut base_descriptors = Vec::new();
-                w.count(entity.base.len(), 256)?;
-                for component in &entity.base {
-                    if let Some(table) = w.component(component, None)? {
-                        base_descriptors.push((component.type_id(), table));
-                    }
-                }
-                w.count(entity.effective.len(), 256)?;
-                for component in &entity.effective {
-                    let base = base_descriptors
-                        .iter()
-                        .find(|(id, _)| *id == component.type_id())
-                        .map(|(_, table)| table.as_slice());
-                    w.component(component, base)?;
+                w.u64(entity.link.parent.map_or(0, ipp_core::EntityId::to_bits))?;
+                w.u64(entity.link.order.value() as u64)?;
+                w.u64((entity.link.order.value() >> 64) as u64)?;
+                w.count(entity.components.len(), crate::MAX_INSPECTED_COMPONENTS)?;
+                for component in &entity.components {
+                    w.component(component)?;
                 }
             }
             {
-                w.count(resources.len(), 256)?;
+                w.count(resources.len(), crate::INSPECTION_PAGE_RECORDS)?;
                 for resource in resources {
                     w.resource(resource)?;
                 }
             }
             {
-                w.count(render_diagnostics.len(), 256)?;
+                w.count(render_diagnostics.len(), crate::INSPECTION_PAGE_RECORDS)?;
                 for diagnostic in render_diagnostics {
                     w.u64(diagnostic.entity.to_bits())?;
                     w.string(error_name(diagnostic.reason))?;
                 }
             }
             {
-                w.count(controllers.len(), 256)?;
+                w.count(controllers.len(), crate::INSPECTION_PAGE_RECORDS)?;
                 for controller in controllers {
                     w.controller(controller)?;
+                }
+            }
+            #[cfg(feature = "gui")]
+            {
+                w.count(gui_focus.len(), crate::INSPECTION_PAGE_RECORDS)?;
+                for record in gui_focus {
+                    w.gui_focus_record(record)?;
+                }
+                w.count(gui_pointers.len(), crate::INSPECTION_PAGE_RECORDS)?;
+                for record in gui_pointers {
+                    w.gui_pointer_record(record)?;
+                }
+            }
+            #[cfg(feature = "surfaces")]
+            {
+                w.u8(u8::from(canvas.is_some()))?;
+                if let Some(record) = canvas {
+                    w.canvas_state(&record.state)?;
+                    w.u8(u8::from(record.evaluated.is_some()))?;
+                    if let Some(evaluated) = record.evaluated {
+                        w.f32(evaluated.extent[0])?;
+                        w.f32(evaluated.extent[1])?;
+                        w.u64(evaluated.tick)?;
+                    }
                 }
             }
         }

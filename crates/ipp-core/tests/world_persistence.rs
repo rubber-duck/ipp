@@ -1,8 +1,12 @@
 //! Durable World metadata, authored capture and asynchronous output invariants.
 
+mod support;
+
+use support::selection::{ASSETS, CONSTRAINTS, RENDER, select};
+
 use ipp_core::services::data_source::{DataWriteJob, DataWriter, MemoryDataWriter};
 use ipp_core::services::world_serialization::{
-    WorldLoadOptions, WorldPersistenceLimits, WorldSnapshot,
+    WorldGraphSnapshot, WorldLoadOptions, WorldPersistenceLimits,
 };
 use ipp_core::{
     Batch, Command, ComponentValue, EntityMetadata, EntityRef, FieldValue, FieldWrite, HostRuntime,
@@ -21,6 +25,8 @@ fn populated() -> (HostRuntime, ipp_core::WorldId) {
                     entities: 1,
                     ..Default::default()
                 },
+                // Scalars, their drivers and animation controllers over them.
+                ..WorldCreateOptions::new(select(&[ASSETS, CONSTRAINTS]))
             },
         )
         .unwrap();
@@ -36,6 +42,7 @@ fn populated() -> (HostRuntime, ipp_core::WorldId) {
                             symbolic_id: Some(format!("scalar-{index}")),
                             classes: vec!["authored".into()],
                         },
+                        adopt: false,
                     },
                     Command::InsertComponent {
                         entity: EntityRef::Alias(0),
@@ -44,6 +51,7 @@ fn populated() -> (HostRuntime, ipp_core::WorldId) {
                             offset: 0,
                             value: FieldValue::F32(index as f32 + 0.5),
                         }],
+                        adopt: false,
                     },
                 ],
             })
@@ -60,15 +68,60 @@ fn save(host: &mut HostRuntime, id: ipp_core::WorldId) -> Vec<u8> {
 }
 
 #[test]
+fn selected_systems_round_trip_independently_of_capacity_hints() {
+    let mut host = HostRuntime::new();
+    let selection = vec![ipp_core::systems::constraints::ConstraintSystem::ID];
+    let id = host
+        .create_world_with_options(
+            WorldLimits::default(),
+            WorldCreateOptions {
+                symbolic_id: "minimal".into(),
+                ..WorldCreateOptions::new(selection.clone())
+            },
+        )
+        .unwrap();
+    let bytes = save(&mut host, id);
+    let mut snapshot =
+        WorldGraphSnapshot::decode(&bytes, 123, WorldPersistenceLimits::default()).unwrap();
+    assert_eq!(
+        snapshot.nodes[0].world.selected_systems,
+        vec![selection[0].0]
+    );
+    assert_eq!(snapshot.nodes[0].world.capacity_hints.systems.len(), 1);
+    snapshot.nodes[0].world.capacity_hints.systems.clear();
+    let bytes = snapshot
+        .encode(123, WorldPersistenceLimits::default())
+        .unwrap();
+    let restored = host
+        .load_world(
+            &bytes,
+            123,
+            WorldLoadOptions {
+                symbolic_id: Some("minimal-copy".into()),
+                ..Default::default()
+            },
+            WorldLimits::default(),
+            WorldPersistenceLimits::default(),
+        )
+        .unwrap()
+        .root
+        .id();
+    assert_eq!(
+        host.world_mut(restored).unwrap().manifest().systems(),
+        selection
+    );
+}
+
+#[test]
 fn hints_grow_and_named_worlds_round_trip_with_fresh_handles() {
     let (mut host, id) = populated();
     let persistent = host.world_mut(id).unwrap().metadata().persistent_id;
     let before = host.world_mut(id).unwrap().entities();
     let bytes = save(&mut host, id);
     let limits = WorldPersistenceLimits::default();
-    let snapshot = WorldSnapshot::decode(&bytes, 123, limits).unwrap();
-    assert_eq!(snapshot.capacity_hints.entities, 1);
-    assert_eq!(snapshot.entities.len(), 3);
+    let snapshot = WorldGraphSnapshot::decode(&bytes, 123, limits).unwrap();
+    assert_eq!(snapshot.nodes[0].world.capacity_hints.entities, 1);
+    assert_eq!(snapshot.nodes[0].world.entities.len(), 3);
     assert!(
         host.load_world(
             &bytes,
@@ -78,6 +131,7 @@ fn hints_grow_and_named_worlds_round_trip_with_fresh_handles() {
             limits
         )
         .unwrap_err()
+        .to_string()
         .contains("already exists")
     );
     assert_eq!(host.list_worlds().len(), 1);
@@ -92,7 +146,9 @@ fn hints_grow_and_named_worlds_round_trip_with_fresh_handles() {
             WorldLimits::default(),
             limits,
         )
-        .unwrap();
+        .unwrap()
+        .root
+        .id();
     assert_ne!(restored, id);
     assert_eq!(
         host.world_mut(restored).unwrap().metadata().persistent_id,
@@ -102,11 +158,11 @@ fn hints_grow_and_named_worlds_round_trip_with_fresh_handles() {
     assert_eq!(
         before
             .iter()
-            .map(|entity| (&entity.metadata, &entity.base))
+            .map(|entity| (&entity.metadata, &entity.components))
             .collect::<Vec<_>>(),
         after
             .iter()
-            .map(|entity| (&entity.metadata, &entity.base))
+            .map(|entity| (&entity.metadata, &entity.components))
             .collect::<Vec<_>>()
     );
     host.rename_world(restored, "renamed".into()).unwrap();
@@ -153,7 +209,7 @@ fn corruption_and_contract_mismatch_preserve_all_published_worlds() {
     }
     for length in 0..32 {
         assert!(
-            WorldSnapshot::decode(&bytes[..length], 123, WorldPersistenceLimits::default())
+            WorldGraphSnapshot::decode(&bytes[..length], 123, WorldPersistenceLimits::default())
                 .is_err()
         );
     }
@@ -164,8 +220,9 @@ fn capture_is_detached_from_later_authoring_and_world_destruction() {
     let (mut host, id) = populated();
     let bytes = save(&mut host, id);
     assert!(host.destroy_world(id));
-    let snapshot = WorldSnapshot::decode(&bytes, 123, WorldPersistenceLimits::default()).unwrap();
-    assert_eq!(snapshot.entities.len(), 3);
+    let snapshot =
+        WorldGraphSnapshot::decode(&bytes, 123, WorldPersistenceLimits::default()).unwrap();
+    assert_eq!(snapshot.nodes[0].world.entities.len(), 3);
     let id = host
         .load_world(
             &bytes,
@@ -174,7 +231,9 @@ fn capture_is_detached_from_later_authoring_and_world_destruction() {
             WorldLimits::default(),
             WorldPersistenceLimits::default(),
         )
-        .unwrap();
+        .unwrap()
+        .root
+        .id();
     assert_eq!(host.world_mut(id).unwrap().entities().len(), 3);
 }
 
@@ -236,7 +295,7 @@ fn async_writer_handles_partial_progress_and_publication() {
 #[test]
 fn world_save_preserves_unavailable_resource_references_without_fetching_assets() {
     let mut host = HostRuntime::new();
-    let id = host.create_world(Default::default()).unwrap();
+    let id = host.create_world(Default::default(), RENDER).unwrap();
     let mut world = host.world_mut(id).unwrap();
     let source = "https://unavailable.invalid/unchanged.mesh?variant=authored";
     world
@@ -246,6 +305,7 @@ fn world_save_preserves_unavailable_resource_references_without_fetching_assets(
                 Command::Create {
                     alias: 0,
                     metadata: Default::default(),
+                    adopt: false,
                 },
                 Command::InsertComponent {
                     entity: EntityRef::Alias(0),
@@ -255,6 +315,7 @@ fn world_save_preserves_unavailable_resource_references_without_fetching_assets(
                             as u32,
                         value: FieldValue::String(source.into()),
                     }],
+                    adopt: false,
                 },
             ],
         })
@@ -266,10 +327,10 @@ fn world_save_preserves_unavailable_resource_references_without_fetching_assets(
     let bytes = save(&mut host, id);
     assert!(String::from_utf8_lossy(&bytes).contains(source));
     assert!(!String::from_utf8_lossy(&bytes).contains("bundle://"));
-    let snapshot = WorldSnapshot::decode(&bytes, 123, Default::default()).unwrap();
-    let component = &snapshot.entities[0].components[0];
+    let snapshot = WorldGraphSnapshot::decode(&bytes, 123, Default::default()).unwrap();
+    let component = &snapshot.nodes[0].world.entities[0].components[0];
     assert!(component.fields().iter().any(|(_, value)| {
-        matches!(value, ipp_core::components::schema::FieldValue::String(value) if value == source)
+        matches!(value, ipp_core::components::schema::FieldValue::String(value) if **value == *source)
     }));
 
     assert!(host.destroy_world(id));
@@ -281,13 +342,15 @@ fn world_save_preserves_unavailable_resource_references_without_fetching_assets(
             Default::default(),
             Default::default(),
         )
-        .unwrap();
+        .unwrap()
+        .root
+        .id();
     let restored_snapshot = host
         .world_mut(restored)
         .unwrap()
         .capture_world(Default::default())
         .unwrap();
-    assert_eq!(restored_snapshot, snapshot);
+    assert_eq!(restored_snapshot, snapshot.nodes[0].world);
 }
 
 #[cfg(feature = "skeletal-animation")]
@@ -344,78 +407,6 @@ fn typed_rig_writers_preserve_source_payloads_and_reject_small_budgets() {
 }
 
 #[test]
-fn authored_capture_excludes_owned_components_and_auto_fallbacks() {
-    use ipp_core::{ComponentOverlayMode, EntityOverlayMode, StateOverlayRef};
-    let (mut host, id) = populated();
-    let mut world = host.world_mut(id).unwrap();
-    let entities = world.entities();
-    let mut operations = vec![Command::CreateStateOverlayOwner {
-        alias: 0,
-    }];
-    for (index, mode) in [ComponentOverlayMode::Owned, ComponentOverlayMode::Auto]
-        .into_iter()
-        .enumerate()
-    {
-        operations.push(Command::RemoveComponent {
-            entity: EntityRef::Handle(entities[index + 1].id),
-            component: ComponentValue::SCALAR,
-        });
-        operations.push(Command::AttachEntityOverlayBinding {
-            owner: StateOverlayRef::Alias(0),
-            alias: index as u32 * 2 + 1,
-            symbolic_id: format!("scalar-{}", index + 1),
-            mode: EntityOverlayMode::Bound,
-        });
-        operations.push(Command::AttachComponentStateOverlay {
-            owner: StateOverlayRef::Alias(0),
-            binding: StateOverlayRef::Alias(index as u32 * 2 + 1),
-            alias: index as u32 * 2 + 2,
-            component: ComponentValue::SCALAR,
-            mode,
-            fields: vec![FieldWrite {
-                offset: 0,
-                value: FieldValue::F32(99.0),
-            }],
-        });
-    }
-    world
-        .enqueue(Batch {
-            id: 10,
-            operations,
-        })
-        .unwrap();
-    assert!(world.step(0.0).unwrap().outcomes[0].result.is_ok());
-    let capture = world.capture_world(Default::default()).unwrap();
-    assert_eq!(capture.entities.len(), 3);
-    assert_eq!(capture.entities[0].components.len(), 1);
-    assert!(
-        capture.entities[1..]
-            .iter()
-            .all(|entity| entity.components.is_empty())
-    );
-    drop(world);
-    let bytes = save(&mut host, id);
-    let restored = host
-        .load_world(
-            &bytes,
-            123,
-            WorldLoadOptions {
-                symbolic_id: Some("without-ui".into()),
-                ..Default::default()
-            },
-            Default::default(),
-            Default::default(),
-        )
-        .unwrap();
-    let restored = host
-        .world_mut(restored)
-        .unwrap()
-        .capture_world(Default::default())
-        .unwrap();
-    assert_eq!(restored.entities, capture.entities);
-}
-
-#[test]
 fn references_and_durable_entity_ids_survive_allocator_reuse() {
     use ipp_core::components::LinearDriver;
     let (mut host, id) = populated();
@@ -453,8 +444,12 @@ fn references_and_durable_entity_ids_survive_allocator_reuse() {
             Default::default(),
             Default::default(),
         )
-        .unwrap();
+        .unwrap()
+        .root
+        .id();
     let mut restored = host.world_mut(restored_id).unwrap();
+    // The restored driver evaluates the saved value again in the first frame.
+    assert!(restored.step(0.0).unwrap().outcomes.is_empty());
     assert_eq!(
         restored.capture_world(Default::default()).unwrap().entities,
         captured.entities
@@ -467,6 +462,7 @@ fn references_and_durable_entity_ids_survive_allocator_reuse() {
             operations: vec![Command::Create {
                 alias: 0,
                 metadata: Default::default(),
+                adopt: false,
             }],
         })
         .unwrap();
@@ -497,6 +493,7 @@ fn controller_state_and_durable_bindings_round_trip_without_loaded_clips() {
                         component: ComponentValue::SCALAR,
                         offsets: vec![0],
                     }),
+                    entity_bindings: Vec::new(),
                     weight: 1.0,
                     additive: false,
                     reference_time: 0.0,
@@ -523,9 +520,9 @@ fn controller_state_and_durable_bindings_round_trip_without_loaded_clips() {
     }
     let bytes = save(&mut host, id);
     assert_eq!(bytes, save(&mut host, id));
-    let snapshot = WorldSnapshot::decode(&bytes, 123, limits).unwrap();
+    let snapshot = WorldGraphSnapshot::decode(&bytes, 123, limits).unwrap();
     let mut animation = AnimationPersistentState::decode(
-        &snapshot.systems[AnimationSystem::ID.0],
+        &snapshot.nodes[0].world.systems[AnimationSystem::ID.0],
         limits.max_bytes,
     )
     .unwrap();
@@ -540,7 +537,9 @@ fn controller_state_and_durable_bindings_round_trip_without_loaded_clips() {
             WorldLimits::default(),
             limits,
         )
-        .unwrap();
+        .unwrap()
+        .root
+        .id();
     let world = restored_host.world_mut(restored).unwrap();
     let state = world.animation_persistent_state();
     assert_eq!(state.next_id, next_id);
@@ -549,14 +548,20 @@ fn controller_state_and_durable_bindings_round_trip_without_loaded_clips() {
     assert_eq!(state.controllers[0].time, 0.75);
     for driver in &state.controllers[0].description.drivers {
         assert!(world.inspect(driver.target).is_some());
-        assert_eq!(driver.source, "unavailable:clip?unchanged=yes");
+        assert_eq!(
+            driver.source,
+            std::sync::Arc::<str>::from("unavailable:clip?unchanged=yes")
+        );
         assert_eq!(driver.variant, 7);
     }
-    assert_eq!(world.capture_world(limits).unwrap(), snapshot);
+    assert_eq!(
+        world.capture_world(limits).unwrap(),
+        snapshot.nodes[0].world
+    );
     let mut invalid = snapshot;
     animation.controllers[0].description.drivers[0].target =
         ipp_core::EntityId::from_bits(u64::MAX);
-    invalid.systems.insert(
+    invalid.nodes[0].world.systems.insert(
         AnimationSystem::ID.0.to_owned(),
         animation.encode(limits.max_bytes).unwrap(),
     );

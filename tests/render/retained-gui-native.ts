@@ -1,6 +1,6 @@
 /**
  * The retained GUI scenario on native GLES through the `gles_host` testing
- * host: `node dist/tests/render/retained-gui-native.js EGL_DIRECTORY`. The
+ * host: `node target/surface-gui-build/retained-gui-native.js EGL_DIRECTORY`. The
  * pipeline check `check:gles-retained-gui` supplies the directory.
  */
 import test from "node:test";

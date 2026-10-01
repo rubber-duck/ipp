@@ -24,6 +24,8 @@ test("baseline contracts expose property animation and omit skeletal codecs", ()
   assert.equal("playback" in lean.IppClient.prototype, true);
   assert.equal("registerAsset" in lean.IppClient.prototype, true);
   assert.equal("REQUEST_PLAYBACK" in lean.WIRE, true);
+  assert.equal("ANIMATION_TARGET_JOINTS" in lean.WIRE, false);
+  assert.equal("animation-target-joints" in manifest.WIRE_LAYOUTS, false);
 });
 
 test("every playback control agrees with the wire manifest and reserves identity zero", () => {
@@ -194,7 +196,7 @@ test("immutable clip encoding rejects invalid time/value curves and retains owne
     ],
   };
   const bytes = codec.encodeAnimationClip(clip);
-  assert.deepEqual([...bytes.slice(0, 8)], [73, 80, 80, 65, 1, 0, 0, 0]);
+  assert.deepEqual([...bytes.slice(0, 8)], [73, 80, 80, 65, 4, 0, 0, 0]);
   assert.equal(new DataView(bytes.buffer).getFloat64(8, true), 2);
   for (const invalid of [
     { ...clip, duration: 0 },
@@ -296,6 +298,7 @@ test("controller descriptions encode indexed multi-entity drivers and correlated
     track: 2,
     target: 41n,
     property,
+    entityBindings: [],
     weight: 0.5,
     additive: true,
     referenceTime: 0.25,
@@ -320,13 +323,15 @@ test("controller descriptions encode indexed multi-entity drivers and correlated
         track: entry.track,
         target: entry.target,
         property: layout("animation-property", {
-          name: "",
-          kind: 0,
-          component: property.component,
-          indices: property.offsets.map((value) =>
-            layout("animation-index", { value }),
-          ),
+          target: layout("animation-target-property", {
+            kind: manifestVariant(client, "ANIMATION_TARGET_PROPERTY"),
+            component: property.component,
+            indices: property.offsets.map((value) =>
+              layout("animation-index", { value }),
+            ),
+          }),
         }),
+        entity_bindings: entry.entityBindings,
         weight: entry.weight,
         additive: entry.additive,
         reference_time: entry.referenceTime,
@@ -536,4 +541,205 @@ test("controller descriptions encode indexed multi-entity drivers and correlated
     true,
   );
   assert.equal("REQUEST_CONTROLLER_CREATE" in lean.WIRE, true);
+});
+
+test("structural clip slots reserve the null sentinel and reject invalid numbers", () => {
+  const encodePlacement = (placement) =>
+    codec.encodeAnimationClip({
+      duration: 1,
+      tracks: [
+        {
+          property: { entityLink: true },
+          keys: [
+            { time: 0, value: { kind: "entityPlacement", value: placement } },
+          ],
+        },
+      ],
+    });
+  const root = encodePlacement({ parent: null, before: null });
+  assert.deepEqual([...root.slice(34, 42)], Array(8).fill(255));
+  const valid = encodePlacement({ parent: 0, before: 0xffff_fffe });
+  assert.deepEqual([...valid.slice(34, 42)], [0, 0, 0, 0, 254, 255, 255, 255]);
+  for (const field of ["parent", "before"]) {
+    for (const slot of [
+      0xffff_ffff,
+      0x1_0000_0000,
+      -1,
+      0.5,
+      NaN,
+      Infinity,
+      -Infinity,
+      Number.MAX_SAFE_INTEGER,
+      undefined,
+      "0",
+      true,
+      0n,
+    ]) {
+      assert.throws(
+        () => encodePlacement({ parent: null, before: null, [field]: slot }),
+        /integer out of range/,
+        `${field} slot ${String(slot)}`,
+      );
+    }
+  }
+});
+
+test("structural drivers preserve explicit empty and large clip-local binding tables", () => {
+  const rootClip = codec.encodeAnimationClip({
+    duration: 1,
+    tracks: [
+      {
+        property: { entityLink: true },
+        keys: [
+          {
+            time: 0,
+            value: {
+              kind: "entityPlacement",
+              value: { parent: null, before: null },
+            },
+            interpolation: { kind: "step" },
+          },
+          {
+            time: 1,
+            value: {
+              kind: "entityPlacement",
+              value: { parent: null, before: null },
+            },
+          },
+        ],
+      },
+    ],
+  });
+  assert.deepEqual([...rootClip.slice(0, 8)], [73, 80, 80, 65, 4, 0, 0, 0]);
+  const bindingLimit = manifest.WIRE_LAYOUTS["animation-driver"].fields.find(
+    (field) => field.name === "entity_bindings",
+  ).limit;
+  assert.equal(bindingLimit, codec.MAX_MESSAGE_BYTES / 8);
+
+  for (const entityBindings of [
+    [],
+    Array.from({ length: 4097 }, (_, index) => BigInt(index + 1)),
+  ]) {
+    const driver = {
+      source: "memory:structural-v4",
+      track: 0,
+      target: 41n,
+      property: { entityLink: true },
+      entityBindings,
+    };
+    const description = { speed: 1, looping: false, drivers: [driver] };
+    const encodedDriver = layout("animation-driver", {
+      source: driver.source,
+      variant: 0,
+      track: 0,
+      target: 41n,
+      property: layout("animation-property", {
+        target: layout("animation-target-entity-link", {
+          kind: manifestVariant(client, "ANIMATION_TARGET_ENTITY_LINK"),
+        }),
+      }),
+      entity_bindings: entityBindings,
+      weight: 1,
+      additive: false,
+      reference_time: 0,
+      repeat: false,
+    });
+    assert.deepEqual(
+      codec.encodeRequest({
+        session: 7n,
+        requestId: 3n,
+        body: {
+          kind: "animationController",
+          command: { action: "create", description },
+        },
+      }),
+      layout("request-controller-create", {
+        session: 7n,
+        request_id: 3n,
+        tag: manifestVariant(client, "REQUEST_CONTROLLER_CREATE"),
+        description: layout("controller-description", {
+          speed: 1,
+          looping: false,
+          drivers: [encodedDriver],
+        }),
+      }).bytes,
+    );
+    const response = layout("response-inspect", {
+      session: 7n,
+      request_id: 4n,
+      tick: 5n,
+      tag: manifestVariant(client, "RESPONSE_INSPECT"),
+      time: 0,
+      next: 0n,
+      entities: [],
+      resources: [],
+      render_diagnostics: [],
+      controllers: [
+        layout("animation-controller", {
+          state: layout("controller-state", { id: 19n, state: 2, time: 0 }),
+          description: layout("controller-description", {
+            speed: 1,
+            looping: false,
+            drivers: [encodedDriver],
+          }),
+          transition: null,
+        }),
+      ],
+    }).bytes;
+    assert.deepEqual(
+      codec.decodeResponse(response, 7n).body.controllers[0].description
+        .drivers[0].entityBindings,
+      entityBindings,
+    );
+    assert.throws(() => codec.decodeResponse(response.slice(0, -1), 7n));
+  }
+  assert.throws(
+    () =>
+      codec.encodeRequest({
+        session: 7n,
+        requestId: 5n,
+        body: {
+          kind: "animationController",
+          command: {
+            action: "create",
+            description: {
+              drivers: [
+                {
+                  source: "memory:structural-v4",
+                  track: 0,
+                  target: 41n,
+                  property: { entityLink: true },
+                },
+              ],
+            },
+          },
+        },
+      }),
+    /structural animation bindings required/,
+  );
+  assert.throws(
+    () =>
+      codec.encodeRequest({
+        session: 7n,
+        requestId: 6n,
+        body: {
+          kind: "animationController",
+          command: {
+            action: "create",
+            description: {
+              drivers: [
+                {
+                  source: "memory:structural-v4",
+                  track: 0,
+                  target: 41n,
+                  property: { entityLink: true },
+                  entityBindings: Array(bindingLimit).fill(1n),
+                },
+              ],
+            },
+          },
+        },
+      }),
+    /message limit/,
+  );
 });

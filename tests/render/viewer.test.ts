@@ -128,14 +128,10 @@ test("ReactDOM gallery controls drive the custom scene root and rendered pixels"
         "observeViewer",
       );
       const planeEntity = requireCompleteReactEntity(planeObservation, false);
-      assertEffectiveMesh(
-        planeObservation,
-        planeEntity,
-        VIEWER_MESH_SOURCES.plane,
-      );
+      assertMesh(planeObservation, planeEntity, VIEWER_MESH_SOURCES.plane);
       assertComponentAbsent(planeObservation, planeEntity, "UnlitTexture");
       const planeTransform = numericFields(
-        effectiveFields(planeObservation, planeEntity, "Transform"),
+        fieldsNamed(planeObservation, planeEntity, "Transform"),
       );
       const planeQx = Number(planeTransform.qx);
       const planeQw = Number(planeTransform.qw);
@@ -178,7 +174,7 @@ test("ReactDOM gallery controls drive the custom scene root and rendered pixels"
         checkerPlaneObservation,
         true,
       );
-      assertEffectiveMesh(
+      assertMesh(
         checkerPlaneObservation,
         checkerPlaneEntity,
         VIEWER_MESH_SOURCES.plane,
@@ -238,7 +234,7 @@ test("ReactDOM gallery controls drive the custom scene root and rendered pixels"
         planeOutlineObservation,
         false,
       );
-      assertEffectiveMesh(
+      assertMesh(
         planeOutlineObservation,
         planeOutlineEntity,
         VIEWER_MESH_SOURCES.planeOutline,
@@ -286,7 +282,7 @@ test("ReactDOM gallery controls drive the custom scene root and rendered pixels"
         outlineObservation,
         false,
       );
-      assertEffectiveMesh(
+      assertMesh(
         outlineObservation,
         outlineEntity,
         VIEWER_MESH_SOURCES.sphereOutline,
@@ -324,13 +320,9 @@ test("ReactDOM gallery controls drive the custom scene root and rendered pixels"
         checkerObservation,
         true,
       );
-      assertEffectiveMesh(
-        checkerObservation,
-        checkerEntity,
-        VIEWER_MESH_SOURCES.sphere,
-      );
+      assertMesh(checkerObservation, checkerEntity, VIEWER_MESH_SOURCES.sphere);
       assert.deepEqual(
-        effectiveFields(checkerObservation, checkerEntity, "UnlitTexture"),
+        fieldsNamed(checkerObservation, checkerEntity, "UnlitTexture"),
         { source: VIEWER_TEXTURE_SOURCE, variant: 0 },
       );
       const checker = await capture(
@@ -478,7 +470,7 @@ test("production declarative scene gallery owns controls and entity lifecycle", 
         true,
       );
       assert.deepEqual(
-        effectiveFields(initialObservation, initialEntity, "UnlitTexture"),
+        fieldsNamed(initialObservation, initialEntity, "UnlitTexture"),
         { source: VIEWER_TEXTURE_SOURCE, variant: 0 },
       );
 
@@ -527,7 +519,7 @@ test("production declarative scene gallery owns controls and entity lifecycle", 
         coloredObservation,
         false,
       );
-      const material = effectiveFields(
+      const material = fieldsNamed(
         coloredObservation,
         coloredEntity,
         "UnlitMaterial",
@@ -557,11 +549,7 @@ test("production declarative scene gallery owns controls and entity lifecycle", 
         "observeViewer",
       );
       const movedEntity = requireCompleteReactEntity(movedObservation, false);
-      const transform = effectiveFields(
-        movedObservation,
-        movedEntity,
-        "Transform",
-      );
+      const transform = fieldsNamed(movedObservation, movedEntity, "Transform");
       assert.equal(rounded(Number(transform.x)), 1.1);
       assert.equal(rounded(Number(transform.sx)), 0.5);
       assert.equal(rounded(Number(transform.sy)), 0.5);
@@ -586,7 +574,7 @@ test("production declarative scene gallery owns controls and entity lifecycle", 
       );
       assert.deepEqual(
         numericFields(
-          effectiveFields(defaultObservation, defaultEntity, "UnlitMaterial"),
+          fieldsNamed(defaultObservation, defaultEntity, "UnlitMaterial"),
         ),
         { r: 1, g: 1, b: 1 },
       );
@@ -615,7 +603,7 @@ test("production declarative scene gallery owns controls and entity lifecycle", 
         true,
       );
       assert.deepEqual(
-        effectiveFields(texturedObservation, texturedEntity, "UnlitTexture"),
+        fieldsNamed(texturedObservation, texturedEntity, "UnlitTexture"),
         { source: VIEWER_TEXTURE_SOURCE, variant: 0 },
       );
       await capture(
@@ -683,7 +671,7 @@ test("production declarative scene gallery owns controls and entity lifecycle", 
       );
       assert.notEqual(remountedEntity.id, initialEntity.id);
       assert.equal(remountedObservation.session, initialObservation.session);
-      assertEffectiveMesh(
+      assertMesh(
         remountedObservation,
         remountedEntity,
         VIEWER_MESH_SOURCES.cube,
@@ -693,7 +681,7 @@ test("production declarative scene gallery owns controls and entity lifecycle", 
         remountedEntity,
         "UnlitTexture",
       );
-      const remountedMaterial = effectiveFields(
+      const remountedMaterial = fieldsNamed(
         remountedObservation,
         remountedEntity,
         "UnlitMaterial",
@@ -704,7 +692,7 @@ test("production declarative scene gallery owns controls and entity lifecycle", 
       assert.ok(Number(remountedMaterial.g) < 0.25);
       assert.ok(Number(remountedMaterial.b) > 0.95);
       const remountedTransform = numericFields(
-        effectiveFields(remountedObservation, remountedEntity, "Transform"),
+        fieldsNamed(remountedObservation, remountedEntity, "Transform"),
       );
       assert.equal(rounded(remountedTransform.x ?? 0), -0.8);
       assert.equal(rounded(remountedTransform.sx ?? 0), 0.7);
@@ -895,7 +883,7 @@ test("geometry dropdown edits every recipe and preserves independent mesh settin
         );
         const entity = galleryWorldEntities(edited)[0]!;
         const source = String(
-          effectiveFields(edited, entity, "MeshInstance").source,
+          fieldsNamed(edited, entity, "MeshInstance").source,
         );
         const query = new URL(source).searchParams;
         for (const [name, value] of Object.entries(params))
@@ -931,11 +919,8 @@ test("geometry dropdown edits every recipe and preserves independent mesh settin
         "axis-colors",
       );
       const axisSource = String(
-        effectiveFields(
-          colored,
-          galleryWorldEntities(colored)[0]!,
-          "MeshInstance",
-        ).source,
+        fieldsNamed(colored, galleryWorldEntities(colored)[0]!, "MeshInstance")
+          .source,
       );
       const axisQuery = new URL(axisSource).searchParams;
       assert.equal(axisQuery.get("xColor"), "1,0.215861,0");
@@ -978,7 +963,7 @@ test("geometry dropdown edits every recipe and preserves independent mesh settin
       assert.equal(after.frame.drawCalls, 12);
       for (const entity of galleryWorldEntities(after)) {
         const mesh = entity.metadata.symbolicId!.slice("react-gallery-".length);
-        assertEffectiveMesh(after, entity, editedSources.get(mesh)!);
+        assertMesh(after, entity, editedSources.get(mesh)!);
       }
       assert.ok(
         (await compare(page, helper, "catalog-before", "catalog-after"))
@@ -1003,7 +988,7 @@ test("geometry dropdown edits every recipe and preserves independent mesh settin
         "geometry-remounted",
       );
       const source = String(
-        effectiveFields(
+        fieldsNamed(
           remounted,
           galleryWorldEntities(remounted)[0]!,
           "MeshInstance",
@@ -1067,9 +1052,9 @@ function assertGallery(observation: ViewerObservation): void {
       `Unexpected gallery entity ${entity.metadata.symbolicId}`,
     );
     assertReactEntityComponents(observation, entity, configuration.checker);
-    assertEffectiveMesh(observation, entity, configuration.source);
+    assertMesh(observation, entity, configuration.source);
     const material = numericFields(
-      effectiveFields(observation, entity, "UnlitMaterial"),
+      fieldsNamed(observation, entity, "UnlitMaterial"),
     );
     colors.add(`${material.r}:${material.g}:${material.b}`);
   }
@@ -1105,20 +1090,19 @@ function assertReactEntityComponents(
     observation.componentIds.BoundingGeometry,
     ...(checker ? [observation.componentIds.UnlitTexture] : []),
   ].sort((a, b) => a - b);
-  // Auto declarations and required bounds do not create producer base state.
-  assert.deepEqual(entity.base, []);
+  // Required bounds are ordinary components beside the declared ones.
   assert.deepEqual(
-    entity.effective.map(({ component }) => component).sort((a, b) => a - b),
+    entity.components.map(({ component }) => component).sort((a, b) => a - b),
     expected,
   );
 }
 
-function assertEffectiveMesh(
+function assertMesh(
   observation: ViewerObservation,
   entity: EntitySnapshot,
   source: string,
 ): void {
-  assert.deepEqual(effectiveFields(observation, entity, "MeshInstance"), {
+  assert.deepEqual(fieldsNamed(observation, entity, "MeshInstance"), {
     source,
     variant: 0,
   });
@@ -1131,39 +1115,35 @@ function assertComponentAbsent(
 ): void {
   const id = observation.componentIds[name];
   assert.equal(
-    entity.base.some(({ component }) => component === id),
-    false,
-  );
-  assert.equal(
-    entity.effective.some(({ component }) => component === id),
+    entity.components.some(({ component }) => component === id),
     false,
   );
 }
 
-function effectiveFields(
+function fieldsNamed(
   observation: ViewerObservation,
   entity: EntitySnapshot,
   name: keyof ViewerObservation["componentIds"],
-): EntitySnapshot["effective"][number]["fields"] {
+): EntitySnapshot["components"][number]["fields"] {
   return componentFields(
-    entity.effective,
+    entity.components,
     observation.componentIds[name],
     name,
   );
 }
 
 function componentFields(
-  components: EntitySnapshot["base"],
+  components: EntitySnapshot["components"],
   id: number,
   name: string,
-): EntitySnapshot["base"][number]["fields"] {
+): EntitySnapshot["components"][number]["fields"] {
   const component = components.find((entry) => entry.component === id);
   assert.ok(component, `Missing ${name} component ${id}`);
   return component.fields;
 }
 
 function numericFields(
-  fields: EntitySnapshot["base"][number]["fields"],
+  fields: EntitySnapshot["components"][number]["fields"],
 ): Readonly<Record<string, number>> {
   return Object.fromEntries(
     Object.entries(fields).map(([name, value]) => {

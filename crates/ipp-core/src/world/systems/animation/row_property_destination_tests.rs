@@ -1,153 +1,112 @@
-//! Animation of schema-row properties, with GuiRoot node style and node data
-//! rows as the real consumer: binding by offset, compiled sampling, per-driver
-//! invalidation, restoration, transitions and clip interchange.
+//! Animation of schema-row properties, with the test-only rows fixture as the
+//! consumer: binding by offset, compiled sampling, per-driver invalidation,
+//! write-back of kept originals, transitions and clip interchange.
 
 use crate::components::rows::Rows;
-use crate::components::schema::{FieldValue as SchemaValue, SchemaComponent};
+use crate::components::schema::FieldValue as SchemaValue;
+use crate::components::{RowsFixture, RowsFixtureItem, RowsFixtureTag};
 use crate::services::asset_management::{AssetUpload, AssetUploadIdentity};
 use crate::systems::animation::*;
-use crate::systems::gui::{
-    GuiCommand, GuiContainerKind, GuiNodeData, GuiNodeDataProperty, GuiNodeDataRow, GuiNodeId,
-    GuiNodeStyle, GuiNodeStyleProperty, GuiNodeStyleRow, GuiRoot,
-};
 use crate::{
     Batch, BatchOutcome, Command, ComponentValue, DynamicValue, EntityId, EntityRef, ErrorReason,
     FieldValue, FieldWrite, HostRuntime, WorldContext, WorldLimits, WorldUpdateReport,
 };
+use std::mem::offset_of;
 
-const OPACITY: GuiNodeStyleProperty = GuiNodeStyleProperty::Opacity;
+const WEIGHT: u32 = 0;
+const SIZE: u32 = 7;
+const MARK: u32 = RowsFixture::MARK;
 
-fn offset(node: u32, property: GuiNodeStyleProperty) -> u32 {
-    GuiRoot::node_style_offset(GuiNodeId(node), property).unwrap()
+/// Offset of one item row property.
+fn offset(slot: u32, property: u32) -> u32 {
+    Rows::<RowsFixtureItem>::offset(0, slot, property).unwrap()
 }
 
-/// Real offsets of the exposed rows fields: `node_style`, `node_data`,
-/// `theme_parts`, `part_state`, then `node_tree`.
-fn rows_fields() -> [u32; 5] {
-    let rows: Vec<u32> = GuiRoot::default()
-        .fields()
-        .into_iter()
-        .filter(|(_, value)| matches!(value, SchemaValue::Rows(_)))
-        .map(|(offset, _)| offset)
-        .collect();
-    rows.try_into().unwrap()
+/// Offset of the value of one tag row.
+fn tag(slot: u32) -> u32 {
+    Rows::<RowsFixtureTag>::offset(1, slot, 0).unwrap()
 }
 
-/// Node 3 has an explicit width; every other node keeps optional sizes absent.
-fn style(node: u32) -> GuiNodeStyle {
-    GuiNodeStyle {
-        width: (node == 3).then_some(1.0),
-        ..GuiNodeStyle::default()
-    }
-}
-
-/// Node style rows for `nodes`, as their GUI insertion produces them.
-fn style_table(nodes: &[u32]) -> Vec<u8> {
-    let mut table = Rows::<GuiNodeStyleRow>::new();
-    for &node in nodes {
-        table
-            .insert(node, GuiNodeStyleRow::from(&style(node)))
+/// Slots 1, 2 and 3 hold weight 1; only slot 3 has a `mark` of 1 and a
+/// `size` of `[1, 1]`. Tag slot 0 holds a value.
+fn items() -> Rows<RowsFixtureItem> {
+    let mut items = Rows::new();
+    for slot in 1..=3 {
+        items
+            .insert(
+                slot,
+                RowsFixtureItem {
+                    weight: 1.0,
+                    mark: (slot == 3).then_some(1.0),
+                    size: (slot == 3).then_some([1.0, 1.0]),
+                    ..RowsFixtureItem::default()
+                },
+            )
             .unwrap();
     }
-    table.encode()
+    items
 }
 
-fn contents() -> [(u32, Option<u32>, GuiNodeData, GuiNodeDataRow); 3] {
-    [
-        (
-            1,
-            None,
-            GuiNodeData::Container(GuiContainerKind::Column),
-            GuiNodeDataRow::default(),
-        ),
-        (
-            2,
-            Some(1),
-            GuiNodeData::Checkbox,
-            GuiNodeDataRow::checkbox(false),
-        ),
-        (
-            3,
-            Some(1),
-            GuiNodeData::Image,
-            GuiNodeDataRow::image([1.0, 2.0]),
-        ),
-    ]
-}
-
-/// A GUI root with a column (1), a checkbox (2) and an image (3), inserted
-/// through GUI commands, which also insert the node rows.
-fn gui_entity(world: &mut WorldContext<'_>) -> EntityId {
-    let entity = submit(
+fn rows_entity(world: &mut WorldContext<'_>) -> EntityId {
+    let mut tags = Rows::new();
+    tags.insert(
+        0,
+        RowsFixtureTag {
+            value: 4,
+        },
+    )
+    .unwrap();
+    submit(
         world,
         vec![
             Command::Create {
                 alias: 1,
                 metadata: Default::default(),
+                adopt: false,
             },
             Command::insert_value(
                 EntityRef::Alias(1),
-                ComponentValue::Surface(crate::components::Surface::default()),
-            ),
-            Command::insert_value(
-                EntityRef::Alias(1),
-                ComponentValue::GuiRoot(GuiRoot::default()),
+                ComponentValue::RowsFixture(RowsFixture {
+                    items: items(),
+                    tags,
+                    ..RowsFixture::default()
+                }),
             ),
         ],
     )
     .result
     .unwrap()[0]
-        .1;
-    let root_incarnation = world
-        .inspect_gui(entity, None, 1, 1)
-        .unwrap()
-        .root_incarnation;
-    for (id, parent, data, values) in contents() {
-        gui(
-            world,
-            GuiCommand::InsertNode {
-                entity,
-                root_incarnation,
-                id: GuiNodeId(id),
-                parent: parent.map(GuiNodeId),
-                index: u32::MAX,
-                data,
-                values,
-                style: style(id),
-            },
-        );
-    }
-
-    entity
+        .1
 }
 
-fn gui(world: &mut WorldContext<'_>, command: GuiCommand) {
-    world.enqueue_gui_command_with_reply(1, 1, command).unwrap();
-    let report = update(world, 0.0);
-    assert_eq!(report.system_command_outcomes[0].result, Ok(()));
-}
-
-/// Remove node 2 through its GUI command, which also removes its rows; returns
-/// the frame reports.
-fn remove_node_two(world: &mut WorldContext<'_>, entity: EntityId) -> Vec<WorldUpdateReport> {
-    let mut reports = Vec::new();
-    let root_incarnation = world
-        .inspect_gui(entity, None, 1, 1)
+/// Remove item slot 2 by writing the stored table without it.
+fn remove_slot_two(world: &mut WorldContext<'_>, entity: EntityId) -> WorldUpdateReport {
+    let Some(ComponentValue::RowsFixture(mut fixture)) = world
+        .inspect(entity)
         .unwrap()
-        .root_incarnation;
+        .components
+        .into_iter()
+        .find(|value| value.type_id() == ComponentValue::ROWS_FIXTURE)
+    else {
+        panic!("rows fixture");
+    };
+    fixture.items.remove(2);
     world
-        .enqueue_gui_command_with_reply(
-            1,
-            1,
-            GuiCommand::RemoveNode {
-                handle: crate::GuiNodeHandle::new(1, entity, root_incarnation, GuiNodeId(2)),
-            },
-        )
+        .enqueue(Batch {
+            id: world.tick() + 1,
+            operations: vec![Command::SetField {
+                entity: EntityRef::Handle(entity),
+                component: ComponentValue::ROWS_FIXTURE,
+                field: FieldWrite {
+                    offset: offset_of!(RowsFixture, items) as u32,
+                    value: FieldValue::Rows(fixture.items.encode()),
+                },
+            }],
+        })
         .unwrap();
     let report = update(world, 0.0);
-    assert_eq!(report.system_command_outcomes[0].result, Ok(()));
-    reports.push(report);
-    reports
+    assert!(report.outcomes[0].result.is_ok(), "{report:?}");
+    report
 }
 
 fn submit(world: &mut WorldContext<'_>, operations: Vec<Command>) -> BatchOutcome {
@@ -176,7 +135,7 @@ fn key(time: f64, value: DynamicValue) -> AnimationKeyframe {
 
 fn target(offset: u32) -> AnimationTrackTarget {
     AnimationTrackTarget::AnimationProperty(AnimationProperty {
-        component: ComponentValue::GUI_ROOT,
+        component: ComponentValue::ROWS_FIXTURE,
         offsets: vec![offset],
     })
 }
@@ -233,11 +192,12 @@ fn description(entity: EntityId, asset: u64, targets: &[u32]) -> AnimationContro
             .iter()
             .enumerate()
             .map(|(track, &offset)| AnimationDriverDescription {
-                source: format!("asset://10/{asset}"),
+                source: format!("asset://10/{asset}").into(),
                 variant: 0,
                 track: track as u32,
                 target: entity,
                 property: target(offset),
+                entity_bindings: Vec::new(),
                 weight: 1.0,
                 additive: false,
                 reference_time: 0.0,
@@ -259,18 +219,17 @@ fn seek(world: &mut WorldContext<'_>, id: AnimationControllerId, time: f64) -> W
     update(world, 0.0)
 }
 
-/// (base, effective) value of one row property.
-fn property(world: &WorldContext<'_>, entity: EntityId, offset: u32) -> (SchemaValue, SchemaValue) {
-    let snapshot = world.inspect(entity).unwrap();
-    let read = |values: &[ComponentValue]| {
-        values
-            .iter()
-            .find(|value| value.type_id() == ComponentValue::GUI_ROOT)
-            .unwrap()
-            .field(offset)
-            .unwrap()
-    };
-    (read(&snapshot.base), read(&snapshot.effective))
+/// Stored value of one row property.
+fn property(world: &WorldContext<'_>, entity: EntityId, offset: u32) -> SchemaValue {
+    world
+        .inspect(entity)
+        .unwrap()
+        .components
+        .iter()
+        .find(|value| value.type_id() == ComponentValue::ROWS_FIXTURE)
+        .unwrap()
+        .field(offset)
+        .unwrap()
 }
 
 fn f32_value(value: f32) -> SchemaValue {
@@ -279,7 +238,15 @@ fn f32_value(value: f32) -> SchemaValue {
 
 fn world() -> (HostRuntime, crate::WorldId) {
     let mut host = HostRuntime::new();
-    let id = host.create_world(WorldLimits::default()).unwrap();
+    let id = host
+        .create_world(
+            WorldLimits::default(),
+            &[
+                crate::systems::animation::AnimationSystem::ID,
+                crate::systems::asset_dependencies::AssetDependencySystem::ID,
+            ],
+        )
+        .unwrap();
     (host, id)
 }
 
@@ -290,18 +257,18 @@ fn invalidated(report: &WorldUpdateReport, id: AnimationControllerId) -> bool {
 }
 
 #[test]
-fn row_targets_bind_by_offset_and_sample_through_a_compiled_destination() {
+fn row_targets_bind_by_offset_and_receive_contributions() {
     let (mut host, id) = world();
     let mut world = host.world_mut(id).unwrap();
-    let entity = gui_entity(&mut world);
-    let opacity = offset(2, OPACITY);
-    let scale = offset(3, GuiNodeStyleProperty::Scale);
+    let entity = rows_entity(&mut world);
+    let weight = offset(2, WEIGHT);
+    let size = offset(3, SIZE);
     let clip = AnimationClip::new(
         2.0,
         vec![
-            track(opacity, DynamicValue::F32(0.0), DynamicValue::F32(1.0)),
+            track(weight, DynamicValue::F32(0.0), DynamicValue::F32(1.0)),
             track(
-                scale,
+                size,
                 DynamicValue::Vec2([1.0, 1.0]),
                 DynamicValue::Vec2([3.0, 5.0]),
             ),
@@ -310,44 +277,29 @@ fn row_targets_bind_by_offset_and_sample_through_a_compiled_destination() {
     .unwrap();
     upload(&mut world, 1, &clip);
     let controller = world
-        .create_animation_controller(description(entity, 1, &[opacity, scale]))
+        .create_animation_controller(description(entity, 1, &[weight, size]))
         .unwrap();
     seek(&mut world, controller, 1.0);
 
+    // Each row property holds its base plus the clip's change from its first key.
+    assert_eq!(property(&world, entity, weight), f32_value(1.5));
     assert_eq!(
-        property(&world, entity, opacity),
-        (f32_value(1.0), f32_value(0.5))
-    );
-    assert_eq!(
-        property(&world, entity, scale),
-        (
-            SchemaValue::Dynamic(DynamicValue::Vec2([1.0, 1.0])),
-            SchemaValue::Dynamic(DynamicValue::Vec2([2.0, 3.0]))
-        )
-    );
-
-    let system = world
-        .system::<AnimationSystem>(AnimationSystem::ID)
-        .unwrap();
-    let drivers = &system.state.controllers[&controller].drivers;
-    assert!(
-        drivers.iter().all(|driver| driver.has_numeric_binding()),
-        "numeric row properties write through the compiled row destination"
+        property(&world, entity, size),
+        SchemaValue::Dynamic(DynamicValue::Vec2([2.0, 3.0]))
     );
 }
 
 #[test]
-fn row_targets_reject_absent_command_owned_table_and_out_of_range_values() {
+fn row_targets_reject_absent_writer_owned_table_and_out_of_range_values() {
     let (mut host, id) = world();
     let mut world = host.world_mut(id).unwrap();
-    let entity = gui_entity(&mut world);
-    let width = offset(2, GuiNodeStyleProperty::Width);
-    let checked = GuiRoot::node_data_offset(GuiNodeId(2), GuiNodeDataProperty::Checked).unwrap();
-    let dead = offset(4, OPACITY);
-    let table = rows_fields()[0];
-    upload(&mut world, 1, &clip(&[width], 0.0, 1.0));
+    let entity = rows_entity(&mut world);
+    let absent = offset(2, MARK);
+    let dead = offset(4, WEIGHT);
+    let table = offset_of!(RowsFixture, items) as u32;
+    upload(&mut world, 1, &clip(&[absent], 0.0, 1.0));
 
-    for rejected in [width, dead, table] {
+    for rejected in [absent, dead, table] {
         assert_eq!(
             world.create_animation_controller(description(entity, 1, &[rejected])),
             Err(ErrorReason::InvalidField),
@@ -355,37 +307,35 @@ fn row_targets_reject_absent_command_owned_table_and_out_of_range_values() {
         );
     }
 
-    // Discrete tracks take the general path; binding still rejects committed
-    // control values and the other properties GuiRoot keeps from animation.
-    let enabled = offset(2, GuiNodeStyleProperty::Enabled);
-    for (asset, rejected) in [(2, checked), (4, enabled)] {
-        let toggle = AnimationClip::new(
-            1.0,
-            vec![AnimationTrack {
-                target: target(rejected),
-                keys: vec![AnimationKeyframe {
-                    time: 0.0,
-                    value: AnimationValue::Field(SchemaValue::Dynamic(DynamicValue::Bool(true))),
-                    interpolation: AnimationInterpolation::Step,
-                }],
+    // Discrete tracks take the general path; binding still rejects the table
+    // the component keeps from animation.
+    let owned = tag(0);
+    let toggle = AnimationClip::new(
+        1.0,
+        vec![AnimationTrack {
+            target: target(owned),
+            keys: vec![AnimationKeyframe {
+                time: 0.0,
+                value: AnimationValue::Field(SchemaValue::Dynamic(DynamicValue::U32(7))),
+                interpolation: AnimationInterpolation::Step,
             }],
-        )
-        .unwrap();
-        upload(&mut world, asset, &toggle);
-        assert_eq!(
-            world.create_animation_controller(description(entity, asset, &[rejected])),
-            Err(ErrorReason::InvalidField),
-            "offset {rejected:#x} is never an animation target"
-        );
-    }
+        }],
+    )
+    .unwrap();
+    upload(&mut world, 2, &toggle);
+    assert_eq!(
+        world.create_animation_controller(description(entity, 2, &[owned])),
+        Err(ErrorReason::InvalidField),
+        "offset {owned:#x} is never an animation target"
+    );
 
-    let opacity = offset(2, OPACITY);
-    upload(&mut world, 3, &clip(&[opacity], 0.0, 2.0));
+    let mark = offset(3, MARK);
+    upload(&mut world, 3, &clip(&[mark], 0.0, -2.0));
     let controller = world
-        .create_animation_controller(description(entity, 3, &[opacity]))
+        .create_animation_controller(description(entity, 3, &[mark]))
         .unwrap();
     seek(&mut world, controller, 0.5);
-    assert_eq!(property(&world, entity, opacity).1, f32_value(0.5));
+    assert_eq!(property(&world, entity, mark), f32_value(0.5));
     let report = seek(&mut world, controller, 1.5);
     assert!(
         report
@@ -395,41 +345,41 @@ fn row_targets_reject_absent_command_owned_table_and_out_of_range_values() {
         "{:?}",
         report.playback_events
     );
-    assert_ne!(property(&world, entity, opacity).1, f32_value(1.5));
+    assert_eq!(property(&world, entity, mark), f32_value(0.5));
 }
 
 #[test]
 fn removing_a_row_or_clearing_its_property_drops_only_its_drivers() {
     let (mut host, id) = world();
     let mut world = host.world_mut(id).unwrap();
-    let entity = gui_entity(&mut world);
-    let removed = offset(2, OPACITY);
-    let cleared = offset(3, GuiNodeStyleProperty::Width);
-    let survivor = offset(3, OPACITY);
+    let entity = rows_entity(&mut world);
+    let removed = offset(2, WEIGHT);
+    let cleared = offset(3, MARK);
+    let survivor = offset(3, WEIGHT);
     upload(
         &mut world,
         1,
-        &clip(&[removed, cleared, survivor], 0.0, 1.0),
+        &clip(&[removed, cleared, survivor], 0.0, -1.0),
     );
     let controller = world
         .create_animation_controller(description(entity, 1, &[removed, cleared, survivor]))
         .unwrap();
     seek(&mut world, controller, 1.0);
-    assert_eq!(property(&world, entity, cleared).1, f32_value(0.5));
+    assert_eq!(property(&world, entity, cleared), f32_value(0.5));
 
-    // Removing node 2 removes its rows; node 3's drivers survive.
-    let reports = remove_node_two(&mut world, entity);
-    assert!(reports.iter().any(|report| invalidated(report, controller)));
+    // Removing slot 2 drops its driver; slot 3's drivers survive.
+    let report = remove_slot_two(&mut world, entity);
+    assert!(invalidated(&report, controller));
     let snapshot = world.animation_controller(controller).unwrap();
     assert_eq!(snapshot.description.drivers.len(), 2);
 
-    // Clearing the optional width drops that driver; opacity keeps sampling.
+    // Clearing the optional mark drops that driver; weight keeps sampling.
     world
         .enqueue(Batch {
             id: world.tick() + 1,
             operations: vec![Command::SetField {
                 entity: EntityRef::Handle(entity),
-                component: ComponentValue::GUI_ROOT,
+                component: ComponentValue::ROWS_FIXTURE,
                 field: FieldWrite {
                     offset: cleared,
                     value: FieldValue::Unset,
@@ -445,93 +395,95 @@ fn removing_a_row_or_clearing_its_property_drops_only_its_drivers() {
     assert_eq!(snapshot.description.drivers[0].property, target(survivor));
 
     seek(&mut world, controller, 0.5);
-    assert_eq!(
-        property(&world, entity, cleared),
-        (SchemaValue::Unset, SchemaValue::Unset)
-    );
-    assert_eq!(property(&world, entity, survivor).1, f32_value(0.25));
+    assert_eq!(property(&world, entity, cleared), SchemaValue::Unset);
+    assert_eq!(property(&world, entity, survivor), f32_value(0.75));
 }
 
 #[test]
-fn removing_a_controller_restores_underlying_row_values() {
+fn removing_a_controller_subtracts_its_row_contributions() {
     let (mut host, id) = world();
     let mut world = host.world_mut(id).unwrap();
-    let entity = gui_entity(&mut world);
-    let opacity = offset(2, OPACITY);
-    let width = offset(3, GuiNodeStyleProperty::Width);
-    upload(&mut world, 1, &clip(&[opacity, width], 0.0, 0.5));
+    let entity = rows_entity(&mut world);
+    let weight = offset(2, WEIGHT);
+    let mark = offset(3, MARK);
+    upload(&mut world, 1, &clip(&[weight, mark], 0.0, -0.5));
     let controller = world
-        .create_animation_controller(description(entity, 1, &[opacity, width]))
+        .create_animation_controller(description(entity, 1, &[weight, mark]))
         .unwrap();
     seek(&mut world, controller, 2.0);
-    assert_eq!(property(&world, entity, opacity).1, f32_value(0.5));
-    assert_eq!(property(&world, entity, width).1, f32_value(0.5));
+    assert_eq!(property(&world, entity, weight), f32_value(0.5));
+    assert_eq!(property(&world, entity, mark), f32_value(0.5));
 
     world.remove_animation_controller(controller).unwrap();
     update(&mut world, 0.0);
-    assert_eq!(
-        property(&world, entity, opacity),
-        (f32_value(1.0), f32_value(1.0))
-    );
-    assert_eq!(
-        property(&world, entity, width),
-        (f32_value(1.0), f32_value(1.0))
-    );
+    assert_eq!(property(&world, entity, weight), f32_value(1.0));
+    assert_eq!(property(&world, entity, mark), f32_value(1.0));
 }
 
 #[test]
 fn transitions_blend_row_targets_and_reject_out_of_range_channels() {
     let (mut host, id) = world();
     let mut world = host.world_mut(id).unwrap();
-    let entity = gui_entity(&mut world);
-    let opacity = offset(2, OPACITY);
-    upload(&mut world, 1, &clip(&[opacity], 0.2, 0.2));
-    upload(&mut world, 2, &clip(&[opacity], 0.8, 0.8));
+    let entity = rows_entity(&mut world);
+    let mark = offset(3, MARK);
+    // Reach a constant contribution after one second and hold it to the end.
+    let hold = |change: f32| {
+        AnimationClip::new(
+            4.0,
+            vec![AnimationTrack {
+                target: target(mark),
+                keys: vec![
+                    key(0.0, DynamicValue::F32(0.0)),
+                    AnimationKeyframe {
+                        interpolation: AnimationInterpolation::Step,
+                        ..key(1.0, DynamicValue::F32(change))
+                    },
+                ],
+            }],
+        )
+        .unwrap()
+    };
+    upload(&mut world, 1, &hold(-0.8));
+    upload(&mut world, 2, &hold(-0.2));
     let controller = world
-        .create_animation_controller(description(entity, 1, &[opacity]))
+        .create_animation_controller(description(entity, 1, &[mark]))
         .unwrap();
-    seek(&mut world, controller, 0.0);
+    seek(&mut world, controller, 2.0);
     world
         .enqueue_playback(controller, AnimationPlaybackControl::Play)
         .unwrap();
     update(&mut world, 0.0);
-    assert_eq!(property(&world, entity, opacity).1, f32_value(0.2));
+    let SchemaValue::Dynamic(DynamicValue::F32(held)) = property(&world, entity, mark) else {
+        panic!("mark row property");
+    };
+    assert!((held - 0.2).abs() < 1.0e-5, "{held}");
 
+    let transition = |description| AnimationControllerTransition {
+        description,
+        duration: 1.0,
+        easing: AnimationTransitionEasing::Linear,
+        start_time: AnimationTransitionStartTime::Seek(2.0),
+    };
     world
-        .transition_animation_controller(
-            controller,
-            AnimationControllerTransition {
-                description: description(entity, 2, &[opacity]),
-                duration: 1.0,
-                easing: AnimationTransitionEasing::Linear,
-                start_time: AnimationTransitionStartTime::Restart,
-            },
-        )
+        .transition_animation_controller(controller, transition(description(entity, 2, &[mark])))
         .unwrap();
     update(&mut world, 0.0);
     update(&mut world, 0.5);
-    let SchemaValue::Dynamic(DynamicValue::F32(blended)) = property(&world, entity, opacity).1
-    else {
-        panic!("opacity row property");
+    let SchemaValue::Dynamic(DynamicValue::F32(blended)) = property(&world, entity, mark) else {
+        panic!("mark row property");
     };
     assert!((blended - 0.5).abs() < 1.0e-5, "{blended}");
     update(&mut world, 0.5);
-    assert_eq!(property(&world, entity, opacity).1, f32_value(0.8));
-    assert_eq!(property(&world, entity, opacity).0, f32_value(1.0));
+    let SchemaValue::Dynamic(DynamicValue::F32(settled)) = property(&world, entity, mark) else {
+        panic!("mark row property");
+    };
+    assert!((settled - 0.8).abs() < 1.0e-5, "{settled}");
 
     // A channel value outside the property's range fails the controller
     // before any output publishes.
-    upload(&mut world, 3, &clip(&[opacity], 1.5, 1.5));
+    upload(&mut world, 3, &hold(0.5));
     world
-        .transition_animation_controller(
-            controller,
-            AnimationControllerTransition {
-                description: description(entity, 3, &[opacity]),
-                duration: 1.0,
-                easing: AnimationTransitionEasing::Linear,
-                start_time: AnimationTransitionStartTime::Restart,
-            },
-        )
+        .transition_animation_controller(controller, transition(description(entity, 3, &[mark])))
         .unwrap();
     let mut failed = false;
     for _ in 0..4 {
@@ -540,9 +492,8 @@ fn transitions_blend_row_targets_and_reject_out_of_range_channels() {
             .playback_events
             .iter()
             .any(|event| event.kind == AnimationPlaybackEventKind::Failed);
-        let SchemaValue::Dynamic(DynamicValue::F32(value)) = property(&world, entity, opacity).1
-        else {
-            panic!("opacity row property");
+        let SchemaValue::Dynamic(DynamicValue::F32(value)) = property(&world, entity, mark) else {
+            panic!("mark row property");
         };
         assert!((0.0..=1.0).contains(&value), "{value}");
     }
@@ -551,14 +502,14 @@ fn transitions_blend_row_targets_and_reject_out_of_range_channels() {
 
 #[test]
 fn clip_and_controller_interchange_preserve_row_offset_targets() {
-    let opacity = offset(7, OPACITY);
-    let image = GuiRoot::node_data_offset(GuiNodeId(7), GuiNodeDataProperty::ImageSize).unwrap();
+    let weight = offset(7, WEIGHT);
+    let size = offset(7, SIZE);
     let clip = AnimationClip::new(
         2.0,
         vec![
-            track(opacity, DynamicValue::F32(0.0), DynamicValue::F32(1.0)),
+            track(weight, DynamicValue::F32(0.0), DynamicValue::F32(1.0)),
             track(
-                image,
+                size,
                 DynamicValue::Vec2([1.0, 2.0]),
                 DynamicValue::Vec2([3.0, 4.0]),
             ),
@@ -567,20 +518,20 @@ fn clip_and_controller_interchange_preserve_row_offset_targets() {
     .unwrap();
 
     let decoded = AnimationClip::decode(&clip.encode()).unwrap();
-    assert_eq!(decoded.tracks()[0].target(), &target(opacity));
-    assert_eq!(decoded.tracks()[1].target(), &target(image));
+    assert_eq!(decoded.tracks()[0].target(), &target(weight));
+    assert_eq!(decoded.tracks()[1].target(), &target(size));
     assert_eq!(
         decoded.sample(0, 1.0),
         AnimationValue::Field(SchemaValue::Dynamic(DynamicValue::F32(0.5)))
     );
 
     // Row absence and whole tables are never keys.
-    for value in [SchemaValue::Unset, SchemaValue::Rows(style_table(&[2]))] {
+    for value in [SchemaValue::Unset, SchemaValue::Rows(items().encode())] {
         assert!(
             AnimationClip::new(
                 1.0,
                 vec![AnimationTrack {
-                    target: target(opacity),
+                    target: target(weight),
                     keys: vec![AnimationKeyframe {
                         time: 0.0,
                         value: AnimationValue::Field(value),

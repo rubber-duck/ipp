@@ -104,7 +104,7 @@ fn point(id: u64, x: f32) -> Candidate {
     }
     matrix[12] = x;
     (
-        EntityId::from_bits(id),
+        super::super::scene::test_entity(id),
         matrix,
         Light {
             kind: 1,
@@ -168,7 +168,9 @@ fn selection_hysteresis_is_ten_percent_with_identity_ties_and_immediate_zero_rem
         .collect();
     assert_eq!(
         original,
-        (1..=8).map(EntityId::from_bits).collect::<Vec<_>>()
+        (1..=8)
+            .map(super::super::scene::test_entity)
+            .collect::<Vec<_>>()
     );
     candidates[8].2.intensity = 1.09;
     assert!(
@@ -302,7 +304,7 @@ fn fitting_light_sets_skip_scoring_and_overflow_preserves_hysteresis() {
         .collect();
     candidates[8].2.intensity = 1.09;
     let prepared: Vec<_> = candidates.iter().map(LightInfluence::new).collect();
-    let previous: Vec<_> = (1..=8).map(EntityId::from_bits).collect();
+    let previous: Vec<_> = (1..=8).map(super::super::scene::test_entity).collect();
     let mut selected = Vec::new();
     select_prepared_into(&prepared[..8], [0.0; 3], None, &previous, &mut selected);
     assert!(selected.iter().all(|light| light.score.is_nan()));

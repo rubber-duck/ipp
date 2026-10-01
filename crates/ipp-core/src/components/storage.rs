@@ -7,6 +7,16 @@ use std::{
 
 const PAGE_SIZE: usize = 64;
 
+#[cfg(test)]
+thread_local! {
+    static FAIL_NEXT_RESERVATION: Cell<bool> = const { Cell::new(false) };
+}
+
+#[cfg(test)]
+pub(crate) fn fail_next_reservation() {
+    FAIL_NEXT_RESERVATION.with(|fail| fail.set(true));
+}
+
 pub(crate) struct Paged<T, R = ()> {
     pages: Vec<Box<[Slot<T, R>]>>,
 }
@@ -36,6 +46,12 @@ impl<T, R> Default for Paged<T, R> {
 }
 
 impl<T, R: Default> Paged<T, R> {
+    #[cfg(test)]
+    pub(crate) fn page_count(&self) -> usize {
+        self.pages.len()
+    }
+
+    #[allow(dead_code)]
     pub(crate) fn reserve(&mut self, slots: usize) {
         self.try_reserve(slots)
             .expect("component storage allocation failed");
@@ -43,6 +59,10 @@ impl<T, R: Default> Paged<T, R> {
 
     pub(crate) fn try_reserve(&mut self, slots: usize) -> Result<(), crate::ErrorReason> {
         let count = slots.div_ceil(PAGE_SIZE);
+        #[cfg(test)]
+        if count > self.pages.len() && FAIL_NEXT_RESERVATION.with(|fail| fail.replace(false)) {
+            return Err(crate::ErrorReason::Capacity);
+        }
         self.pages
             .try_reserve(count.saturating_sub(self.pages.len()))
             .map_err(|_| crate::ErrorReason::Capacity)?;
@@ -89,6 +109,7 @@ impl<T, R: Default> Paged<T, R> {
         Some(unsafe { pointer.as_ref() })
     }
 
+    #[allow(dead_code)]
     pub(crate) fn runtime_mut(&mut self, index: usize) -> Option<&mut R> {
         let mut pointer = self.runtime_ptr(index)?;
         // SAFETY: Occupied runtime cells stay stable until removal. This exclusive
@@ -113,6 +134,9 @@ impl<T, R: Default> Paged<T, R> {
     }
 
     pub(crate) fn set(&mut self, index: usize, value: Option<T>) {
+        if value.is_none() && index / PAGE_SIZE >= self.pages.len() {
+            return;
+        }
         let slot = &self.pages[index / PAGE_SIZE][index % PAGE_SIZE];
         if slot.occupied.get() {
             slot.occupied.set(false);

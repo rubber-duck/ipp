@@ -17,6 +17,10 @@ pub struct WorldContext<'a> {
     pub(crate) asset_acquisition:
         &'a mut crate::services::asset_management::service::AssetManagementService,
     pub(crate) data_sources: &'a mut crate::services::data_source::DataSourceManagementService,
+    pub(crate) topology: &'a mut crate::host::topology::HostTopology,
+    pub(crate) frame_context: Option<&'a crate::WorldFrameContext>,
+    pub(crate) reference_worlds: Option<crate::host::reference_resolution::ReferenceWorlds<'a>>,
+    pub(crate) publications: Option<&'a crate::host::publication::HostPublications>,
     pub(in crate::world) owns_update: bool,
 }
 
@@ -48,8 +52,6 @@ impl WorldContext<'_> {
         WorldReadContext {
             world: self.world,
             state: &self.world.state,
-            before: self.instances.before,
-            after: self.instances.after,
         }
     }
 }
@@ -57,8 +59,6 @@ impl WorldContext<'_> {
 pub(in crate::world) struct WorldReadContext<'a> {
     pub world: &'a WorldSimulationState,
     pub state: &'a WorldEntityState,
-    pub before: &'a [systems::scheduler::SystemInstance],
-    pub after: &'a [systems::scheduler::SystemInstance],
 }
 
 impl WorldContext<'_> {
@@ -81,6 +81,9 @@ impl WorldContext<'_> {
                     },
                     asset_acquisition: self.asset_acquisition,
                     data_sources: self.data_sources,
+                    topology: self.topology,
+                    frame_context: self.frame_context,
+                    reference_worlds: self.reference_worlds.as_ref(),
                 },
                 tick,
             };
@@ -112,9 +115,10 @@ impl WorldContext<'_> {
         request_id: u64,
         command: T,
     ) -> Result<(), ErrorReason> {
-        if self.world.queue.len() >= self.world.limits.max_queued_batches
-            || !self.system_ids().any(|id| id == system)
-        {
+        if !self.system_ids().any(|id| id == system) {
+            return Err(ErrorReason::UnsupportedDependency);
+        }
+        if self.world.queue.len() >= self.world.limits.max_queued_batches {
             return Err(ErrorReason::Capacity);
         }
         self.world.queue.push_back(Ingress::System {
@@ -135,10 +139,10 @@ impl WorldContext<'_> {
         request_id: u64,
         commands: Vec<T>,
     ) -> Result<(), ErrorReason> {
-        if commands.is_empty()
-            || self.world.queue.len() >= self.world.limits.max_queued_batches
-            || !self.system_ids().any(|id| id == system)
-        {
+        if !self.system_ids().any(|id| id == system) {
+            return Err(ErrorReason::UnsupportedDependency);
+        }
+        if commands.is_empty() || self.world.queue.len() >= self.world.limits.max_queued_batches {
             return Err(ErrorReason::Capacity);
         }
         self.world.queue.push_back(Ingress::SystemBatch {
@@ -223,6 +227,9 @@ impl WorldContext<'_> {
                 },
                 asset_acquisition: self.asset_acquisition,
                 data_sources: self.data_sources,
+                topology: self.topology,
+                frame_context: self.frame_context,
+                reference_worlds: self.reference_worlds.as_ref(),
             },
         ))
     }
@@ -305,9 +312,24 @@ pub(in crate::world) fn commit_components(
         entities_state: std::mem::take(&mut world.state),
     };
     let mut cleanup = Vec::new();
-    // Copy-prepared inputs staged by the batch get their single effective copy
-    // before any commit observer reads prepared values.
+    // Staged copies of the batch move into the prepared values before any
+    // commit observer reads them.
     staged.prepare_deferred_components();
+    let reservation = staged
+        .prepared
+        .iter()
+        .try_for_each(|(&(entity, component), value)| {
+            if value.type_id() == component {
+                world
+                    .components
+                    .try_reserve_component(component, entity.index() as usize + 1)?;
+            }
+            Ok::<_, ErrorReason>(())
+        });
+    if let Err(error) = reservation {
+        world.state = staged.entities_state;
+        return Err(error);
+    }
     let mut validation = Ok(());
     #[cfg(feature = "profiling")]
     let measurement = crate::profiling::Stage::fixed(crate::profiling::FixedStage::CommitValidate);
@@ -327,7 +349,9 @@ pub(in crate::world) fn commit_components(
     #[cfg(feature = "profiling")]
     let measurement = crate::profiling::Stage::fixed(crate::profiling::FixedStage::CommitBefore);
 
-    for round in 0..64 {
+    let mut round = 0;
+    let mut accept_component_cleanup = true;
+    loop {
         instances.visit(current.as_deref_mut(), |system| {
             system.before_commit(&mut systems::SystemCommitContext {
                 world_data: world,
@@ -338,42 +362,36 @@ pub(in crate::world) fn commit_components(
             });
         });
         let mut changed = false;
-        for (entity, value) in std::mem::take(&mut cleanup) {
-            let component = value.type_id();
-            let Some(incarnation) = staged
-                .entities
-                .get(&entity)
-                .and_then(|record| record.input(component))
-                .map(|input| input.incarnation)
-            else {
-                continue;
-            };
-            if staged.prepared.get(&(entity, component)) != Some(&value) {
-                staged
-                    .changed
-                    .insert_if_absent((entity, component), Some(incarnation));
-                staged.prepared.insert((entity, component), value);
-                changed = true;
+        if accept_component_cleanup {
+            for (entity, value) in std::mem::take(&mut cleanup) {
+                let component = value.type_id();
+                let Some(incarnation) = staged
+                    .entities
+                    .get(&entity)
+                    .and_then(|record| record.input(component))
+                    .map(|input| input.incarnation)
+                else {
+                    continue;
+                };
+                if staged.prepared.get(&(entity, component)) != Some(&value) {
+                    staged
+                        .changed
+                        .insert_if_absent((entity, component), Some(incarnation));
+                    staged.prepared.insert((entity, component), value);
+                    changed = true;
+                }
             }
+        } else {
+            cleanup.clear();
         }
         if !changed {
             break;
         }
-        if round == 63 {
+        round += 1;
+        if round == 64 && accept_component_cleanup {
             world.fault = Some(ErrorReason::NonConvergentCommit);
             validation = Err(ErrorReason::NonConvergentCommit);
-            // Final invalidation observes the last prepared values. No new
-            // restoration is accepted once convergence has failed.
-            instances.visit(current.as_deref_mut(), |system| {
-                system.before_commit(&mut systems::SystemCommitContext {
-                    world_data: world,
-                    staged: &mut staged,
-                    assets,
-                    evaluated,
-                    cleanup: &mut cleanup,
-                });
-            });
-            cleanup.clear();
+            accept_component_cleanup = false;
         }
     }
     #[cfg(feature = "profiling")]
@@ -382,9 +400,9 @@ pub(in crate::world) fn commit_components(
     let measurement = crate::profiling::Stage::fixed(crate::profiling::FixedStage::CommitStorage);
 
     for entity in std::mem::take(&mut staged.retired_entities) {
+        staged.links.release_retired(entity);
         staged.allocator.release(entity);
     }
-    world.components.reserve(staged.allocator.slots());
     for (&(entity, component), &previous) in staged.changed.iter() {
         let next = staged
             .entities
@@ -412,35 +430,15 @@ pub(in crate::world) fn commit_components(
             debug_assert!(result.is_ok(), "validated numeric property patch");
             validation = validation.and(result);
         }
-        if let Some(layer) = staged
+        // The staged copy is dropped once its value is installed.
+        if let Some(state) = staged
             .entities_state
             .entities
             .get_mut(&entity)
-            .and_then(|record| record.layers.get_mut(&component))
+            .and_then(|record| record.components.get_mut(&component))
         {
-            layer.inputs.finish_commit();
+            state.staged = None;
         }
-    }
-    #[cfg(feature = "surfaces")]
-    for mutation in std::mem::take(&mut staged.deferred_mutations) {
-        let previous_incarnation = staged
-            .changed
-            .get(&(mutation.entity, mutation.component))
-            .copied()
-            .flatten();
-        let result = (mutation.apply)(&mut world.components);
-        if result.is_ok() {
-            staged.lifecycle_effects.push(
-                systems::lifecycle_publisher::LifecycleObservation::Component {
-                    entity: mutation.entity,
-                    component: mutation.component,
-                    kind: systems::lifecycle_publisher::ComponentLifecycleKind::Updated,
-                    previous_incarnation,
-                    incarnation: previous_incarnation,
-                },
-            );
-        }
-        validation = validation.and(result);
     }
     staged.evaluated_target = None;
     staged.evaluated_properties.clear();
@@ -476,6 +474,7 @@ pub(in crate::world) fn commit_components(
         });
     }
     staged.changed.clear();
+    staged.links.changed.clear();
     staged.observed_components.clear();
     staged.observed_writes.clear();
     world.state = staged.entities_state;
@@ -590,6 +589,17 @@ impl systems::SystemRuntimeAccess<'_> {
 }
 
 impl systems::SystemRuntimeAccess<'_> {
+    /// Tell the other Systems that the caller is about to overwrite these
+    /// fields with absolute values.
+    pub(in crate::world) fn before_absolute_writes(&mut self, fields: &[(EntityId, u16, u32)]) {
+        if fields.is_empty() {
+            return;
+        }
+        self.instances.visit(None, |system| {
+            system.before_absolute_writes(fields);
+        });
+    }
+
     pub(in crate::world) fn before_numeric_update(&mut self, changed: &[(EntityId, u16)]) {
         if changed.is_empty() {
             return;

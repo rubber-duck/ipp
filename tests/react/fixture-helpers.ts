@@ -1,4 +1,6 @@
 import type {
+  AttachmentEffect,
+  BatchOperationEffect,
   Client,
   MessageTransport,
   BatchOutcome,
@@ -8,18 +10,26 @@ import type {
   Inspection,
   Response,
 } from "@ipp/client";
+import { reactRootSystems } from "../integration/system-selections.js";
 
 export interface GeneratedModule {
   readonly MAX_MESSAGE_BYTES: number;
+  readonly CAPABILITIES: { readonly surfaces: boolean };
   readonly IppClient: {
     connectWorker(
       workerUrl: string | URL,
       wasmUrl: string | URL,
-      options?: { readonly timeoutMs?: number },
+      options: {
+        readonly timeoutMs?: number;
+        readonly selectedSystems: readonly string[];
+      },
     ): Promise<Client>;
     connectTransport(
       transport: MessageTransport,
-      options?: { readonly timeoutMs?: number },
+      options: {
+        readonly timeoutMs?: number;
+        readonly selectedSystems: readonly string[];
+      },
     ): Promise<Client>;
   };
   readonly Entity: {
@@ -45,10 +55,10 @@ export interface ReactRuntimeConfiguration {
   readonly timeoutMs: number;
 }
 
+/** The entity's Scalar value; null when the entity or its Scalar is absent. */
 export interface ScalarObservation {
   readonly entityExists: boolean;
-  readonly base: number | null;
-  readonly effective: number | null;
+  readonly value: number | null;
 }
 
 export async function connect(
@@ -61,12 +71,11 @@ export async function connect(
   const client = await contract.IppClient.connectWorker(
     configuration.workerScriptUrl,
     configuration.wasmUrl,
-    { timeoutMs: configuration.timeoutMs },
+    {
+      selectedSystems: reactRootSystems(contract.CAPABILITIES),
+      timeoutMs: configuration.timeoutMs,
+    },
   );
-  if (!client.capabilities.stateOverlays) {
-    await client.close();
-    throw new Error("React fixture requires the overlays capability");
-  }
   await client.waitForFrame();
   return { contract, client };
 }
@@ -92,6 +101,15 @@ export function removeScalar(
     entity: contract.Entity.handle(entity),
     component: contract.Scalar.id,
   };
+}
+
+/** The World attachment effects of a batch outcome, without adoption reports. */
+export function attachmentEffects(outcome: {
+  readonly effects: readonly BatchOperationEffect[];
+}): AttachmentEffect[] {
+  return outcome.effects.filter(
+    (effect): effect is AttachmentEffect => effect.kind !== "adopted",
+  );
 }
 
 export async function requireSuccess(
@@ -140,14 +158,8 @@ export function observeScalarInInspection(
   symbolicId: string,
 ): ScalarObservation {
   const entity = findEntity(inspection, symbolicId);
-  if (entity === undefined) {
-    return { entityExists: false, base: null, effective: null };
-  }
-  return {
-    entityExists: true,
-    base: scalarValue(entity, scalarId, "base"),
-    effective: scalarValue(entity, scalarId, "effective"),
-  };
+  if (entity === undefined) return { entityExists: false, value: null };
+  return { entityExists: true, value: scalarValue(entity, scalarId) };
 }
 
 export function findEntity(
@@ -162,15 +174,14 @@ export function findEntity(
 export function scalarValue(
   entity: EntitySnapshot,
   scalarId: number,
-  layer: "base" | "effective",
 ): number | null {
-  const component = entity[layer].find(
+  const component = entity.components.find(
     (candidate) => candidate.component === scalarId,
   );
   if (component === undefined) return null;
   const value = component.fields.value;
   if (typeof value !== "number") {
-    throw new Error(`Scalar ${layer} value is not numeric`);
+    throw new Error("Scalar value is not numeric");
   }
   return value;
 }

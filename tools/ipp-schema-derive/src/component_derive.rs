@@ -200,6 +200,26 @@ pub(super) fn derive_component(input: DeriveInput) -> syn::Result<proc_macro2::T
         }
     });
 
+    let row_field_assets = rows.iter().map(|(field, field_type)| {
+        quote! {
+            if offset == ::core::mem::offset_of!(Self, #field) as u32 {
+                <#field_type as #rows_path::SchemaRowsField>::visit_assets(&self.#field, visit);
+                return;
+            }
+        }
+    });
+    let visit_row_field_assets = (!rows.is_empty()).then(|| {
+        quote! {
+            fn visit_row_field_assets(
+                &self,
+                offset: u32,
+                visit: &mut dyn FnMut(&::ipp_core::services::asset_management::AssetSource),
+            ) {
+                #(#row_field_assets)*
+            }
+        }
+    });
+
     let writes = exposed.iter().map(|(f, t)| {
         let layout = row_index(f).map(|k| {
             quote! {
@@ -284,6 +304,8 @@ pub(super) fn derive_component(input: DeriveInput) -> syn::Result<proc_macro2::T
             }
 
             #visit_row_assets
+
+            #visit_row_field_assets
         }
     })
 }

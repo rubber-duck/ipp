@@ -1,31 +1,37 @@
-/** Mounted browser GUI fixture: React DOM -> IppCanvas -> generated worker client. */
+/** Mounted browser GUI fixture: React DOM -> IppCanvas -> generated worker
+ * client, with ordinary GUI entities in attached child Worlds. */
 import { useCallback, useState, type ReactElement } from "react";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import type {
-  CameraWorldClient,
-  GuiNodeHandle,
-  GuiObservationBatch,
-  GuiTextFocusState,
-  GuiWorldClient,
+  Client,
+  ClientAssetSource,
+  ComponentFieldValue,
+  GuiNativeTextState,
+  GuiPhysicalContext,
+  HostPhysicalInput,
+  OutputReference,
 } from "@ipp/client";
-import { GUI_BASE_PARTS, GUI_PART_QUALIFIERS } from "@ipp/client";
 import {
-  Camera,
+  CanvasWorld,
+  Children,
   Entity,
   Surface,
   Transform,
+  type CanvasWorldHandle,
 } from "../../packages/ipp-react/src/index.js";
 import {
   Button,
   Checkbox,
-  Column,
   Drawing,
-  GuiRoot,
-  Row,
+  Font,
+  Layout,
+  Skin,
   Slider,
+  Style,
   TextInput,
-  type GuiControlTheme,
+  Theme,
+  type GuiControlHandle,
 } from "../../packages/ipp-react/src/gui.js";
 import {
   IppCanvas,
@@ -33,28 +39,29 @@ import {
   type CanvasRuntimeConfiguration,
   type IppCanvasHandle,
 } from "../../packages/ipp-react/src/web.js";
+import {
+  HEIGHT,
+  PANEL_SYSTEMS,
+  UNITS_PER_METRE,
+  WIDTH,
+  assetsLoaded,
+  attachedSession,
+  averageRgb,
+  encodeTheme,
+  loadAsset,
+  presentCamera,
+  presentedFrame,
+  until,
+  type GuiPanelContract,
+} from "./gui-panel.js";
+import {
+  ATTACHMENTS,
+  LIFECYCLE,
+  CAMERA,
+  SURFACE,
+  selectSystems,
+} from "../integration/system-selections.js";
 
-const WIDTH = 240;
-const HEIGHT = 180;
-const controlTheme: GuiControlTheme = {
-  font: {
-    kind: 17,
-    source: new URL(
-      "/target/font-assets/shure-tech-mono.ippf",
-      globalThis.location.href,
-    ).href,
-  },
-  parts: {
-    background: {
-      base: { color: [0.08, 0.18, 0.42, 1], opacity: 1, scale: [1, 1] },
-      hovered: { color: [0.14, 0.32, 0.7, 1] },
-      pressed: { color: [0.04, 0.1, 0.28, 1] },
-    },
-    fill: { base: { color: [0.15, 0.9, 0.55, 1] } },
-    label: { base: { color: [0.96, 0.98, 1, 1] } },
-    focusRing: { base: { color: [1, 0.72, 0.08, 1], opacity: 1 } },
-  },
-};
 /** Background tones the named control theme switches between while text
  * editing continues. */
 const TONES = [
@@ -62,63 +69,41 @@ const TONES = [
   [0.62, 0.14, 0.08, 1],
 ] as const;
 
-/** The panel's named control theme at one background tone. Editing a named
- * theme updates its root theme rows in place; referencing nodes are not
- * rewritten. */
-function tonedTheme(tone: number): GuiControlTheme {
-  return {
-    ...controlTheme,
-    name: "mounted-controls",
-    parts: {
-      ...controlTheme.parts,
-      background: {
-        ...controlTheme.parts.background,
-        base: { color: TONES[tone]!, opacity: 1, scale: [1, 1] },
-      },
-    },
-  };
+interface FixtureAssets {
+  readonly font: ClientAssetSource;
+  readonly icon: ClientAssetSource;
 }
-const iconTheme: GuiControlTheme = {
-  parts: {
-    icon: { base: { color: [0.15, 0.9, 0.55, 1], opacity: 1, scale: [1, 1] } },
-  },
-};
-const textRef: { current: GuiNodeHandle | null } = {
-  current: null,
-};
-const buttonRef: { current: GuiNodeHandle | null } = {
-  current: null,
-};
-const checkboxRef: { current: GuiNodeHandle | null } = {
-  current: null,
-};
-/** Buttons of the optional keyboard-order panels. */
-const farButtonRef: { current: GuiNodeHandle | null } = {
-  current: null,
-};
-const backButtonRef: { current: GuiNodeHandle | null } = {
-  current: null,
-};
-const sliderRef: { current: GuiNodeHandle | null } = {
-  current: null,
-};
 
+type ControlRef = { current: GuiControlHandle | null };
+
+const textRef: ControlRef = { current: null };
+const buttonRef: ControlRef = { current: null };
+const checkboxRef: ControlRef = { current: null };
+const sliderRef: ControlRef = { current: null };
+/** Buttons of the optional keyboard-order panels. */
+const farButtonRef: ControlRef = { current: null };
+const backButtonRef: ControlRef = { current: null };
+
+let contract: GuiPanelContract | undefined;
+let assets: FixtureAssets | undefined;
+let output: OutputReference | undefined;
 let root: Root | undefined;
 let handle: IppCanvasHandle | undefined;
+let panelWorld: CanvasWorldHandle | undefined;
 let rerenderEquivalent: (() => void) | undefined;
-let unsubscribe: (() => void) | undefined;
 let editorIdentity: HTMLTextAreaElement | undefined;
-let latestTextFocus: GuiTextFocusState | null | undefined;
+let physical: GuiPhysicalContext | undefined;
+let releaseText: (() => void) | undefined;
 let commits = 0;
+/** Text values the onTextCommit callback observed: the current value first,
+ * then each changed value at the end of its frame. */
 let callbackValues: string[] = [];
-let callbackSources: string[] = [];
 let submissions: string[] = [];
 let callbackRenders: number[] = [];
 let presses = 0;
 let errors: string[] = [];
-let cameraReady = false;
 let keyboardPanels = false;
-let observationTrace: string[] = [];
+let textTrace: string[] = [];
 let renderedRevision = 0;
 let setCommitRevision: ((value: number) => void) | undefined;
 let setThemeTone: ((tone: number) => void) | undefined;
@@ -126,6 +111,16 @@ let releaseCommitReply: (() => void) | undefined;
 let heldCommitStarted: Promise<void> | undefined;
 let heldCommitBatches = 0;
 let restoreBatch: (() => void) | undefined;
+
+function fixtureContract(): GuiPanelContract {
+  if (!contract) throw new Error("GUI fixture contract is not loaded");
+  return contract;
+}
+
+function fixtureAssets(): FixtureAssets {
+  if (!assets) throw new Error("GUI fixture assets are not loaded");
+  return assets;
+}
 
 /** Hold one real, already-applied React batch reply while runtime input continues. */
 export function holdReactCommitReply(): void {
@@ -144,13 +139,9 @@ export function holdReactCommitReply(): void {
   heldCommitBatches = 0;
   let held = false;
   client.batch = async (...args) => {
-    const operations = args[0];
-    const relevant = operations.some(
-      (operation) => operation.kind === "updateComponentStateOverlay",
-    );
-    if (relevant) heldCommitBatches += 1;
+    heldCommitBatches += 1;
     const outcome = await original(...args);
-    if (relevant && !held) {
+    if (!held) {
       held = true;
       started();
       await released;
@@ -191,66 +182,121 @@ export async function releaseHeldReactCommit(): Promise<number> {
 export async function committedRevision(): Promise<unknown> {
   const current = handle;
   if (!current) throw new Error("GUI commit fixture is not mounted");
+  const transform = current.client.components.Transform!;
   const entity = (await current.client.inspect()).entities.find(
     (entry) => entry.metadata.symbolicId === "mounted-gui-commit-revision",
   );
-  return entity?.effective.find((entry) => "x" in entry.fields)?.fields.x;
+  return entity?.components.find((entry) => entry.component === transform.id)
+    ?.fields.x;
 }
 
-function iconSource() {
-  return {
-    kind: 18,
-    source: new URL(
-      "/target/surface-assets/icon.ippd",
-      globalThis.location.href,
-    ).href,
-  } as const;
+/** Encoded part tables by tone and indicator; unchanged props keep bytes. */
+const encodedThemes = new Map<string, Uint8Array<ArrayBuffer>>();
+
+/** Theme part rows at one background tone, optionally with a drawing-backed
+ * indicator icon. */
+function themeParts(tone: number, indicator?: ClientAssetSource) {
+  const key = `${tone}:${indicator?.source ?? ""}`;
+  const cached = encodedThemes.get(key);
+  if (cached) return cached;
+  const parts: [string, string | undefined, Record<string, unknown>][] = [
+    [
+      "background",
+      undefined,
+      { color: TONES[tone]!, opacity: 1, scale: [1, 1] },
+    ],
+    ["background", "hovered", { color: [0.14, 0.32, 0.7, 1] }],
+    ["background", "pressed", { color: [0.04, 0.1, 0.28, 1] }],
+    ["fill", undefined, { color: [0.15, 0.9, 0.55, 1] }],
+    ["label", undefined, { color: [0.96, 0.98, 1, 1] }],
+    ["focusRing", undefined, { color: [1, 0.72, 0.08, 1], opacity: 1 }],
+  ];
+  if (indicator)
+    parts.push([
+      "icon",
+      undefined,
+      {
+        asset: { kind: 18, source: indicator.source },
+        opacity: 1,
+        scale: [1, 1],
+      },
+    ]);
+  const encoded = encodeTheme(fixtureContract(), parts);
+  encodedThemes.set(key, encoded);
+  return encoded;
 }
 
-const drawingControlTheme: GuiControlTheme = {
-  ...controlTheme,
-  parts: {
-    ...controlTheme.parts,
-    icon: {
-      base: { asset: iconSource(), opacity: 1, scale: [1, 1] },
-    },
-  },
-};
+async function loadAssets(client: Client): Promise<FixtureAssets> {
+  const [font, icon] = await Promise.all([
+    loadAsset(client, 17, "/target/font-assets/shure-tech-mono.ippf"),
+    loadAsset(client, 18, "/target/surface-assets/icon.ippd"),
+  ]);
+  return { font, icon };
+}
 
-async function activateCamera(next: IppCanvasHandle): Promise<void> {
-  const client = next.client as CameraWorldClient;
-  const deadline = performance.now() + 10_000;
-  for (;;) {
-    const camera = (await client.inspect()).entities.find(
-      (entity) => entity.metadata.symbolicId === "mounted-gui-camera",
-    );
-    if (camera !== undefined) {
-      await new Promise<void>((resolve, reject) => {
-        let stop = (): void => {};
-        const timeout = setTimeout(() => {
-          stop();
-          reject(new Error("mounted GUI camera activation was not observed"));
-        }, 10_000);
-        stop = client.onCameraStateChanged((event) => {
-          if (event.changes.activeCamera !== camera.id) return;
-          clearTimeout(timeout);
-          stop();
-          resolve();
-        });
-        client.sendCommand({
-          type: "CameraActivateCommand",
-          entity: camera.id,
-        });
-      });
-      cameraReady = true;
-      return;
-    }
-    if (performance.now() >= deadline)
-      throw new Error("mounted GUI camera did not acknowledge");
-    await new Promise<void>((resolve) =>
-      requestAnimationFrame(() => resolve()),
-    );
-  }
+/** The Host-owned physical context IppCanvas opens for its presented view,
+ * observed read-only for runtime text focus and selection. */
+function observePhysicalInput(input: HostPhysicalInput): void {
+  const open = input.open.bind(input);
+  input.open = async (...args) => {
+    const context = await open(...args);
+    releaseText?.();
+    physical = context;
+    releaseText = context.onText((state: GuiNativeTextState | null) => {
+      textTrace.push(
+        state === null
+          ? "text:none"
+          : `text:${state.text}:${state.selectionStart}-${state.selectionEnd}${state.composition ? `:composing:${state.composition.text}` : ""}`,
+      );
+      if (textTrace.length > 60) textTrace.shift();
+    });
+    // Native edits and their settlements, kept as failure context.
+    const edit = context.editText.bind(context);
+    context.editText = async (...edited) => {
+      const [fence, command] = edited;
+      const label = `edit:${JSON.stringify(command, (key, value: unknown) =>
+        key === "fence"
+          ? undefined
+          : typeof value === "bigint"
+            ? `${value}`
+            : value,
+      )}@g${fence.generation}`;
+      try {
+        const outcome = await edit(...edited);
+        textTrace.push(
+          `${label}:${outcome.applied}/${outcome.rejected}/${outcome.cancelled}${outcome.error ? `:${outcome.error}` : ""}`,
+        );
+        return outcome;
+      } catch (error) {
+        textTrace.push(`${label}:threw:${String(error)}`);
+        throw error;
+      } finally {
+        if (textTrace.length > 60) textTrace.shift();
+      }
+    };
+    return context;
+  };
+}
+
+function PanelTheme({
+  tone,
+  indicator,
+}: {
+  readonly tone: number;
+  readonly indicator?: ClientAssetSource;
+}): ReactElement {
+  return (
+    <>
+      <Entity id="mounted-controls">
+        <Theme parts={themeParts(tone)} />
+      </Entity>
+      {indicator ? (
+        <Entity id="indicator-controls">
+          <Theme parts={themeParts(0, indicator)} />
+        </Entity>
+      ) : null}
+    </>
+  );
 }
 
 function Application({
@@ -261,40 +307,43 @@ function Application({
   const [renderRevision, setRenderRevision] = useState(0);
   const [commitRevision, updateCommitRevision] = useState(0);
   const [tone, setTone] = useState(0);
+  const [presented, setPresented] = useState<OutputReference | null>(null);
   setCommitRevision = updateCommitRevision;
   setThemeTone = setTone;
-  const namedTheme = tonedTheme(tone);
   renderedRevision = renderRevision;
   rerenderEquivalent = () => setRenderRevision((value) => value + 1);
+  const initialize = useCallback(
+    async (
+      client: Client,
+      _signal: AbortSignal,
+      host: IppCanvasHandle["host"],
+    ) => {
+      observePhysicalInput(host.input);
+      assets = await loadAssets(client);
+      output = await presentCamera(client, host, "mounted-gui-camera");
+    },
+    [],
+  );
   const ready = useCallback((next: IppCanvasHandle) => {
     handle = next;
-    unsubscribe?.();
-    unsubscribe = (next.client as GuiWorldClient).subscribeGuiObservations?.(
-      (batch: GuiObservationBatch) => {
-        observationTrace.push(
-          [
-            batch.textFocus === undefined
-              ? "focus:omitted"
-              : batch.textFocus === null
-                ? "focus:cleared"
-                : `focus:${batch.textFocus.node}:${batch.textFocus.selectionStart}-${batch.textFocus.selectionEnd}`,
-            `effects:${batch.effects.map((effect) => effect.kind).join(",")}`,
-            `unhandled:${(batch.unhandled ?? [])
-              .map((item) => item.reason.kind)
-              .join(",")}`,
-          ].join(" "),
-        );
-        if (observationTrace.length > 20) observationTrace.shift();
-        if (batch.textFocus !== undefined) latestTextFocus = batch.textFocus;
-      },
-    );
-    void activateCamera(next).catch((error: unknown) => {
-      errors.push(error instanceof Error ? error.message : String(error));
-    });
+    setPresented(output ?? null);
   }, []);
+  const current = assets;
   return (
     <IppCanvas
       runtime={runtime}
+      world={{
+        create: {
+          selectedSystems: selectSystems(
+            ATTACHMENTS,
+            CAMERA,
+            SURFACE,
+            LIFECYCLE,
+          ),
+        },
+      }}
+      output={presented}
+      initialize={initialize}
       width={WIDTH}
       height={HEIGHT}
       canvasProps={{ id: "mounted-gui-canvas" }}
@@ -304,140 +353,175 @@ function Application({
       onReady={ready}
       onError={(error) => errors.push(error.message)}
     >
-      <World
-        onCommit={() => {
-          commits += 1;
-        }}
-        onError={(error) => errors.push(error.message)}
-      >
-        <Entity id="mounted-gui-camera">
-          <Transform z={6} />
-          <Camera projection={1} ortho_height={3} />
-        </Entity>
-        <Entity id="mounted-gui-commit-revision">
-          <Transform x={commitRevision} />
-        </Entity>
-        {keyboardPanels ? <KeyboardOrderPanels theme={namedTheme} /> : null}
-        <Entity id="mounted-gui-panel">
-          <Transform />
-          <Surface width={4} height={3} />
-          <GuiRoot>
-            <Column width={4} height={3}>
-              <TextInput
-                nodeRef={textRef}
-                width={4}
-                height={1.25}
-                fontSize={0.5}
-                text="a😀b"
-                placeholder="Edit"
-                theme={namedTheme}
-                onTextCommit={(event) => {
-                  callbackValues.push(event.value);
-                  callbackSources.push(event.source ?? "unknown");
-                  callbackRenders.push(renderRevision);
-                }}
-                onSubmit={(event) => {
-                  submissions.push(event.value);
-                }}
-              />
-              <Row width={4} height={0.5}>
-                <Drawing
-                  width={1}
-                  height={0.5}
-                  asset={iconSource()}
-                  theme={iconTheme}
-                />
-                <Checkbox
-                  nodeRef={checkboxRef}
-                  width={0.75}
-                  height={0.5}
-                  checked={false}
-                  theme={drawingControlTheme}
-                />
-                <Slider
-                  nodeRef={sliderRef}
-                  width={2.25}
-                  height={0.5}
-                  value={0.2}
-                  min={0}
-                  max={1}
-                  theme={namedTheme}
-                />
-              </Row>
-              <Button
-                nodeRef={buttonRef}
-                width={4}
-                height={1.25}
-                label="Done"
-                theme={namedTheme}
-                onPress={() => {
-                  presses += 1;
-                }}
-              />
-            </Column>
-          </GuiRoot>
-        </Entity>
-      </World>
+      {current && presented ? (
+        <World
+          onCommit={() => {
+            commits += 1;
+          }}
+          onError={(error) => errors.push(error.message)}
+        >
+          <Entity id="mounted-gui-commit-revision">
+            <Transform x={commitRevision} />
+          </Entity>
+          {keyboardPanels ? <KeyboardOrderPanels tone={tone} /> : null}
+          <Entity id="mounted-gui-panel">
+            <Transform />
+            <Surface
+              width={WIDTH / UNITS_PER_METRE}
+              height={HEIGHT / UNITS_PER_METRE}
+            />
+          </Entity>
+          <CanvasWorld
+            presentation={{ anchor: "mounted-gui-panel" }}
+            create={{
+              symbolicId: "mounted-gui-panel-world",
+              selectedSystems: PANEL_SYSTEMS,
+            }}
+            extent={[WIDTH, HEIGHT]}
+            unitsPerMetre={UNITS_PER_METRE}
+            onReady={(attached) => {
+              panelWorld = attached;
+            }}
+            onError={(error) => errors.push(error.message)}
+          >
+            <PanelTheme tone={tone} indicator={current.icon} />
+            <Entity id="canvas">
+              <Font source={current.font.source} font_size={30} />
+              <Layout kind={2} width={WIDTH} height={HEIGHT} />
+              <Children>
+                <Entity id="text">
+                  <Layout width={240} height={75} />
+                  <Skin theme="mounted-controls" />
+                  <TextInput
+                    ref={textRef}
+                    text="a😀b"
+                    placeholder="Edit"
+                    onTextCommit={(event) => {
+                      callbackValues.push(event.value);
+                      callbackRenders.push(renderRevision);
+                    }}
+                    onSubmit={(event) => {
+                      submissions.push(event.value);
+                    }}
+                  />
+                </Entity>
+                <Entity id="row">
+                  <Layout kind={1} width={240} height={30} />
+                  <Children>
+                    <Entity id="icon">
+                      <Layout width={60} height={30} />
+                      <Style
+                        scale_x={1.25}
+                        scale_y={1.25}
+                        red={0.15}
+                        green={0.9}
+                        blue={0.55}
+                      />
+                      <Drawing source={current.icon.source} />
+                    </Entity>
+                    <Entity id="checkbox">
+                      <Layout width={45} height={30} />
+                      <Skin theme="indicator-controls" />
+                      <Checkbox ref={checkboxRef} checked={false} />
+                    </Entity>
+                    <Entity id="slider">
+                      <Layout width={135} height={30} />
+                      <Skin theme="mounted-controls" />
+                      <Slider ref={sliderRef} value={0.2} min={0} max={1} />
+                    </Entity>
+                  </Children>
+                </Entity>
+                <Entity id="button">
+                  <Layout width={240} height={75} />
+                  <Skin theme="mounted-controls" />
+                  <Button
+                    ref={buttonRef}
+                    label="Done"
+                    onPress={() => {
+                      presses += 1;
+                    }}
+                  />
+                </Entity>
+              </Children>
+            </Entity>
+          </CanvasWorld>
+        </World>
+      ) : null}
     </IppCanvas>
   );
 }
 
 /**
  * Panels that order keyboard traversal around the main panel without
- * appearing in its frame: created before it, off to the side of the
- * orthographic view, a front-facing panel 2 m deeper than the main panel and
- * a back-facing panel 3 m nearer the camera. Traversal must visit the main
- * panel, then the deeper panel, then the back-facing one.
+ * appearing in its frame: off to the side of the orthographic view, a
+ * front-facing panel 2 m deeper than the main panel and a back-facing panel
+ * 3 m nearer the camera. Traversal must visit the main panel, then the
+ * deeper panel, then the back-facing one.
  */
 function KeyboardOrderPanels({
-  theme,
+  tone,
 }: {
-  readonly theme: GuiControlTheme;
+  readonly tone: number;
 }): ReactElement {
+  const panel = (
+    name: string,
+    label: string,
+    ref: ControlRef,
+    placement: ReactElement,
+  ) => (
+    <>
+      <Entity id={`mounted-gui-${name}-panel`}>
+        {placement}
+        <Surface width={2} height={1} />
+      </Entity>
+      <CanvasWorld
+        presentation={{ anchor: `mounted-gui-${name}-panel` }}
+        create={{
+          symbolicId: `mounted-gui-${name}-world`,
+          selectedSystems: PANEL_SYSTEMS,
+        }}
+        extent={[120, 60]}
+        unitsPerMetre={UNITS_PER_METRE}
+        onError={(error) => errors.push(error.message)}
+      >
+        <PanelTheme tone={tone} />
+        <Entity id="canvas">
+          <Font source={fixtureAssets().font.source} font_size={30} />
+          <Layout kind={2} width={120} height={60} />
+          <Children>
+            <Entity id="button">
+              <Layout width={120} height={60} />
+              <Skin theme="mounted-controls" />
+              <Button ref={ref} label={label} />
+            </Entity>
+          </Children>
+        </Entity>
+      </CanvasWorld>
+    </>
+  );
   return (
     <>
-      <Entity id="mounted-gui-back-panel">
-        <Transform x={-12} z={3} qy={1} qw={0} />
-        <Surface width={2} height={1} />
-        <GuiRoot>
-          <Column width={2} height={1}>
-            <Button
-              nodeRef={backButtonRef}
-              width={2}
-              height={1}
-              label="Back"
-              theme={theme}
-            />
-          </Column>
-        </GuiRoot>
-      </Entity>
-      <Entity id="mounted-gui-far-panel">
-        <Transform x={12} z={-2} />
-        <Surface width={2} height={1} />
-        <GuiRoot>
-          <Column width={2} height={1}>
-            <Button
-              nodeRef={farButtonRef}
-              width={2}
-              height={1}
-              label="Far"
-              theme={theme}
-            />
-          </Column>
-        </GuiRoot>
-      </Entity>
+      {panel(
+        "back",
+        "Back",
+        backButtonRef,
+        <Transform x={-12} z={3} qy={1} qw={0} />,
+      )}
+      {panel("far", "Far", farButtonRef, <Transform x={12} z={-2} />)}
     </>
   );
 }
 
-async function until(predicate: () => boolean, message: string): Promise<void> {
-  const deadline = performance.now() + 10_000;
-  while (!predicate()) {
-    if (performance.now() >= deadline) throw new Error(message);
-    await new Promise<void>((resolve) =>
-      requestAnimationFrame(() => resolve()),
-    );
-  }
+function mounted(): IppCanvasHandle {
+  if (!handle) throw new Error("GUI fixture is not mounted");
+  return handle;
+}
+
+/** The attached main panel World's authoring session. */
+function panelClient() {
+  if (!handle || !panelWorld)
+    throw new Error("GUI panel World is not attached");
+  return attachedSession(handle, panelWorld.world);
 }
 
 export async function mountGuiCanvas(
@@ -445,18 +529,21 @@ export async function mountGuiCanvas(
   options: { readonly keyboardPanels?: boolean } = {},
 ): Promise<void> {
   await closeGuiCanvas();
+  contract = (await import(runtime.generatedModuleUrl)) as GuiPanelContract;
+  encodedThemes.clear();
   keyboardPanels = options.keyboardPanels ?? false;
   handle = undefined;
-  latestTextFocus = undefined;
+  panelWorld = undefined;
+  assets = undefined;
+  output = undefined;
+  physical = undefined;
   commits = 0;
   callbackValues = [];
-  callbackSources = [];
   submissions = [];
   callbackRenders = [];
   presses = 0;
   errors = [];
-  cameraReady = false;
-  observationTrace = [];
+  textTrace = [];
   renderedRevision = 0;
   textRef.current = null;
   buttonRef.current = null;
@@ -473,65 +560,87 @@ export async function mountGuiCanvas(
     () =>
       handle !== undefined &&
       commits > 0 &&
+      panelWorld !== undefined &&
       textRef.current !== null &&
+      buttonRef.current !== null &&
       checkboxRef.current !== null &&
       sliderRef.current !== null &&
       (!keyboardPanels ||
         (farButtonRef.current !== null && backButtonRef.current !== null)) &&
-      cameraReady,
-    "mounted IppCanvas GUI did not acknowledge",
+      physical !== undefined &&
+      document.querySelector("textarea[data-ipp-native-text]") !== null,
+    () => `mounted IppCanvas GUI did not acknowledge: ${errors.join("; ")}`,
   );
   await handle!.flush();
-  const expectedAssets = new Set([
-    iconSource().source,
-    controlTheme.font!.source,
-  ]);
-  const deadline = performance.now() + 10_000;
-  for (;;) {
-    const assets = (await handle!.client.inspect()).resources.filter(
-      (resource) => expectedAssets.has(resource.source),
-    );
-    const failed = assets.find((asset) => asset.status === "failed");
-    if (failed !== undefined)
-      throw new Error(
-        `mounted GUI asset failed (${failed.source}): ${failed.error ?? "unknown"}`,
-      );
-    if (
-      assets.length === expectedAssets.size &&
-      assets.every((asset) => asset.status === "loaded")
-    )
-      break;
-    if (performance.now() >= deadline)
-      throw new Error("mounted GUI theme assets did not load");
-    await new Promise<void>((resolve) =>
-      requestAnimationFrame(() => resolve()),
-    );
-  }
-  editorIdentity = document.querySelector("textarea") ?? undefined;
+  await assetsLoaded(
+    handle!.client,
+    Object.values(fixtureAssets()).map((asset) => asset.source),
+  );
+  await handle!.frame();
+  editorIdentity =
+    document.querySelector<HTMLTextAreaElement>(
+      "textarea[data-ipp-native-text]",
+    ) ?? undefined;
+  if (editorIdentity) traceEditor(editorIdentity);
 }
 
-function averageRgb(
-  pixels: Uint8Array,
-  width: number,
-  height: number,
-  x: number,
-  y: number,
-): readonly [number, number, number] {
-  const sum = [0, 0, 0];
-  let count = 0;
-  for (let py = Math.max(0, y - 3); py <= Math.min(height - 1, y + 3); py++)
-    for (let px = Math.max(0, x - 3); px <= Math.min(width - 1, x + 3); px++) {
-      const offset = (py * width + px) * 4;
-      sum[0] += pixels[offset]!;
-      sum[1] += pixels[offset + 1]!;
-      sum[2] += pixels[offset + 2]!;
-      count += 1;
-    }
-  return [
-    Math.round(sum[0]! / count),
-    Math.round(sum[1]! / count),
-    Math.round(sum[2]! / count),
-  ];
+/** Native buffer events after the adapter handled them, kept as failure
+ * context beside the runtime edits they produced. */
+function traceEditor(area: HTMLTextAreaElement): void {
+  const record = (event: Event) => {
+    const detail =
+      event instanceof KeyboardEvent
+        ? event.key
+        : event instanceof InputEvent
+          ? `${event.inputType}:${event.data ?? ""}`
+          : event instanceof CompositionEvent
+            ? event.data
+            : event instanceof ClipboardEvent
+              ? (event.clipboardData?.getData("text/plain") ?? "no-data")
+              : "";
+    textTrace.push(
+      `dom:${event.type}:${detail}${event.defaultPrevented ? ":prevented" : ""}|${area.value}|${area.selectionStart}-${area.selectionEnd}`,
+    );
+    if (textTrace.length > 60) textTrace.shift();
+  };
+  for (const type of [
+    "keydown",
+    "beforeinput",
+    "compositionstart",
+    "compositionupdate",
+    "compositionend",
+    "select",
+    "paste",
+    "copy",
+    "cut",
+  ])
+    area.addEventListener(type, record);
+}
+
+/** The control component's fields, read through its ref. */
+async function controlFields(
+  ref: ControlRef,
+): Promise<Readonly<Record<string, ComponentFieldValue>>> {
+  const control = ref.current;
+  if (!control) throw new Error("GUI control ref is not acknowledged");
+  return control.read();
+}
+
+/** Whether `ref`'s control holds its World's logical focus. */
+async function controlFocused(ref: ControlRef): Promise<boolean> {
+  const control = ref.current;
+  if (!control || !handle) return false;
+  const { target } = control;
+  const page = await attachedSession(handle, target.world).inspectPage({
+    collection: "guiFocus",
+    target: target.entity,
+  });
+  return (page.guiFocus ?? []).some(
+    (record) =>
+      record.target.entity === target.entity &&
+      record.target.component === target.component &&
+      record.target.incarnation === target.incarnation,
+  );
 }
 
 export async function controlPaintObservation(flush = true): Promise<{
@@ -546,53 +655,53 @@ export async function controlPaintObservation(flush = true): Promise<{
   readonly sliderFill: readonly [number, number, number];
 }> {
   const current = handle;
-  const checkbox = checkboxRef.current;
-  const slider = sliderRef.current;
-  if (current === undefined || checkbox === null || slider === null)
+  if (current === undefined)
     throw new Error("GUI control paint fixture is not ready");
   if (flush) await current.flush();
-  const [checkboxInspection, sliderInspection] = await Promise.all([
-    (current.client as GuiWorldClient).inspectGui({
-      entity: checkbox.entity,
-      nodeId: checkbox.nodeId,
-      maxDepth: 1,
-    }),
-    (current.client as GuiWorldClient).inspectGui({
-      entity: slider.entity,
-      nodeId: slider.nodeId,
-      maxDepth: 1,
-    }),
+  const [checkbox, slider] = await Promise.all([
+    controlFields(checkboxRef),
+    controlFields(sliderRef),
   ]);
-  const frame = flush
-    ? await current.capture()
-    : await current.client.presentation!.capture(
-        (await current.client.inspectPage()).tick,
-      );
-  const checked = checkboxInspection.nodes[0]?.controlValue;
-  const scalar = sliderInspection.nodes[0]?.controlValue;
-  if (checked?.kind !== "bool" || scalar?.kind !== "scalar")
+  const frame = await presentedFrame(current, flush);
+  if (typeof checkbox.checked !== "boolean" || typeof slider.value !== "number")
     throw new Error("GUI control paint values disappeared");
-  const pixels = new Uint8Array(frame.pixels);
-  const failedDrawCalls = frame.failedDrawCalls;
-  if (typeof failedDrawCalls !== "number")
-    throw new Error("GUI control paint capture omitted failed draw calls");
+  const { pixels, width, height } = frame;
   return {
-    checked: checked.value,
-    slider: scalar.value,
+    checked: checkbox.checked,
+    slider: slider.value,
     drawCalls: frame.drawCalls,
-    failedDrawCalls,
-    checkboxIndicator: averageRgb(pixels, frame.width, frame.height, 83, 90),
-    checkboxOutsideIndicator: averageRgb(
-      pixels,
-      frame.width,
-      frame.height,
-      98,
-      90,
-    ),
-    sliderInitialThumb: averageRgb(pixels, frame.width, frame.height, 139, 90),
-    sliderMovedThumb: averageRgb(pixels, frame.width, frame.height, 216, 90),
-    sliderFill: averageRgb(pixels, frame.width, frame.height, 184, 90),
+    failedDrawCalls: frame.failedDrawCalls,
+    checkboxIndicator: averageRgb(pixels, width, height, 83, 90),
+    checkboxOutsideIndicator: averageRgb(pixels, width, height, 98, 90),
+    sliderInitialThumb: averageRgb(pixels, width, height, 139, 90),
+    sliderMovedThumb: averageRgb(pixels, width, height, 216, 90),
+    sliderFill: averageRgb(pixels, width, height, 184, 90),
   };
+}
+
+type PartsTable = {
+  readonly nextSlot: number;
+  readonly rows: ReadonlyMap<number, Readonly<Record<string, unknown>>>;
+};
+
+/** Theme entities of the main panel World: their identities and part rows. */
+async function panelThemes(): Promise<
+  readonly {
+    readonly id: bigint;
+    readonly name: string;
+    readonly parts: PartsTable;
+  }[]
+> {
+  const client = panelClient();
+  const theme = client.components.GuiTheme!;
+  return (await client.inspect()).entities.flatMap((entity) => {
+    const parts = entity.components.find(
+      (component) => component.component === theme.id,
+    )?.fields.parts as PartsTable | undefined;
+    return parts
+      ? [{ id: entity.id, name: entity.metadata.symbolicId ?? "", parts }]
+      : [];
+  });
 }
 
 export async function captureThemeEvidence(): Promise<{
@@ -602,43 +711,23 @@ export async function captureThemeEvidence(): Promise<{
   readonly coloredPixels: number;
   readonly parts: readonly string[];
 }> {
-  const current = handle;
-  if (current === undefined) throw new Error("GUI fixture is not mounted");
-  const frame = await current.capture();
-  const pixels = new Uint8Array(frame.pixels);
+  const frame = await presentedFrame(mounted());
   let coloredPixels = 0;
-  for (let index = 0; index < pixels.length; index += 4)
+  for (let index = 0; index < frame.pixels.length; index += 4)
     if (
-      pixels[index] !== 0 ||
-      pixels[index + 1] !== 0 ||
-      pixels[index + 2] !== 0
+      frame.pixels[index] !== 0 ||
+      frame.pixels[index + 1] !== 0 ||
+      frame.pixels[index + 2] !== 0
     )
       coloredPixels += 1;
-  const inspection = await current.client.inspect();
-  const panel = inspection.entities.find(
-    (entity) => entity.metadata.symbolicId === "mounted-gui-panel",
-  );
-  const descriptor = current.client.components.GuiRoot;
-  const fields =
-    descriptor === undefined
-      ? undefined
-      : panel?.effective.find(
-          (component) => component.component === descriptor.id,
-        )?.fields;
-  // Base parts the root's themes author, from the theme part row slots.
-  const themeRows = (
-    fields?.theme_parts as { rows: ReadonlyMap<number, unknown> } | undefined
-  )?.rows;
+  // Base parts the panel's themes author, from their part rows.
+  const keys = fixtureContract().GUI_PAINT_PART_KEYS;
   const parts = new Set<string>();
-  for (const slot of themeRows?.keys() ?? [])
-    parts.add(
-      GUI_BASE_PARTS[
-        Math.floor(
-          (slot % (GUI_BASE_PARTS.length * GUI_PART_QUALIFIERS)) /
-            GUI_PART_QUALIFIERS,
-        )
-      ]!,
-    );
+  for (const theme of await panelThemes())
+    for (const row of theme.parts.rows.values()) {
+      const key = keys.find((entry) => entry.index === row.part);
+      if (key) parts.add(key.part);
+    }
   return {
     width: frame.width,
     height: frame.height,
@@ -648,7 +737,7 @@ export async function captureThemeEvidence(): Promise<{
   };
 }
 
-/** Canvas rows the text input occupies: the top 1.25 of the panel's 3 units. */
+/** Canvas rows the text input occupies: the top 75 of the panel's 180. */
 const TEXT_INPUT_ROWS = 75;
 
 /** Completed-frame RGBA pixels of the text input's rows, top row first. */
@@ -657,15 +746,13 @@ export async function textInputPaint(): Promise<{
   readonly height: number;
   readonly pixels: readonly number[];
 }> {
-  const current = handle;
-  if (current === undefined) throw new Error("GUI fixture is not mounted");
-  await current.flush();
-  const frame = await current.capture();
-  const pixels = new Uint8Array(frame.pixels);
+  const frame = await presentedFrame(mounted());
   return {
     width: frame.width,
     height: TEXT_INPUT_ROWS,
-    pixels: Array.from(pixels.subarray(0, frame.width * TEXT_INPUT_ROWS * 4)),
+    pixels: Array.from(
+      frame.pixels.subarray(0, frame.width * TEXT_INPUT_ROWS * 4),
+    ),
   };
 }
 
@@ -675,37 +762,46 @@ export function retoneTheme(tone: number): void {
   setThemeTone(tone);
 }
 
-/** Painted Done-button background beside its label, the panel's node style
- * rows and its theme handles, read from one completed frame and the
- * authoritative root. */
+/** Painted Done-button background beside its label, the controls' skin
+ * rows and the named theme's identity, read from one completed frame and
+ * the authoritative panel World. */
 export async function themeEditEvidence(): Promise<{
   readonly button: readonly [number, number, number];
-  readonly nodeStyles: string;
-  readonly themes: readonly number[];
+  readonly skins: string;
+  readonly theme: string;
+  readonly background: readonly number[];
 }> {
-  const current = handle;
-  if (current === undefined) throw new Error("GUI fixture is not mounted");
-  const frame = await current.capture();
-  const pixels = new Uint8Array(frame.pixels);
-  const inspection = await current.client.inspect();
-  const panel = inspection.entities.find(
-    (entity) => entity.metadata.symbolicId === "mounted-gui-panel",
+  const frame = await presentedFrame(mounted());
+  const client = panelClient();
+  const skin = client.components.GuiSkin!;
+  const skins = (await client.inspect()).entities
+    .flatMap((entity) => {
+      const fields = entity.components.find(
+        (component) => component.component === skin.id,
+      )?.fields;
+      return fields
+        ? [[entity.metadata.symbolicId, entity.id, fields] as const]
+        : [];
+    })
+    .sort(([left], [right]) => String(left).localeCompare(String(right)));
+  const named = (await panelThemes()).find(
+    (theme) => theme.name === "mounted-controls",
   );
-  const descriptor = current.client.components.GuiRoot;
-  const fields = panel?.effective.find(
-    (component) => component.component === descriptor?.id,
-  )?.fields;
-  type Table = { rows: ReadonlyMap<number, Readonly<Record<string, unknown>>> };
-  const styles = (fields?.node_style as Table | undefined)?.rows;
-  const themes = (fields?.theme_parts as Table | undefined)?.rows;
-  if (styles === undefined || themes === undefined)
-    throw new Error("GuiRoot inspection omitted its rows");
+  if (!named) throw new Error("Named control theme is missing");
+  const background = named.parts.rows.get(0)?.color;
+  if (!Array.isArray(background))
+    throw new Error("Named theme omitted its background row");
   return {
-    button: averageRgb(pixels, frame.width, frame.height, 200, 150),
-    nodeStyles: JSON.stringify([...styles]),
-    themes: [
-      ...new Set([...themes.values()].map((row) => row.theme as number)),
-    ].sort((a, b) => a - b),
+    button: averageRgb(frame.pixels, frame.width, frame.height, 200, 150),
+    skins: JSON.stringify(skins, (_, value: unknown) =>
+      typeof value === "bigint"
+        ? value.toString()
+        : value instanceof Map
+          ? [...value]
+          : value,
+    ),
+    theme: `${named.id}:${named.parts.nextSlot}:${[...named.parts.rows.keys()].join(",")}`,
+    background: background as number[],
   };
 }
 
@@ -715,33 +811,29 @@ export function equivalentRerender(): void {
   rerenderEquivalent();
 }
 
-/** Replace the mounted text input's committed value from outside, as a
- * controlled-value pattern or machine client would. */
+/** Replace the mounted text input's value from outside, as a
+ * controlled-value pattern or machine client would: compare-and-set on its
+ * text field against the value read just before. */
 export async function replaceText(value: string): Promise<void> {
-  const current = handle;
-  const textHandle = textRef.current;
-  if (current === undefined || textHandle === null)
-    throw new Error("GUI fixture is not ready");
-  const client = current.client as GuiWorldClient;
-  const inspected = await client.inspectGui({
-    entity: textHandle.entity,
-    nodeId: textHandle.nodeId,
-    maxDepth: 1,
-  });
-  await client.editGui({
-    action: "setControlValue",
-    handle: textHandle,
-    expectedRevision: inspected.nodes[0]!.controlRevision,
-    value: { kind: "text", value },
-  });
+  const control = textRef.current;
+  if (control === null) throw new Error("GUI fixture is not ready");
+  const current = (await control.read()).text;
+  if (typeof current !== "string")
+    throw new Error("mounted text input disappeared");
+  if (!(await control.compareAndSet("text", current, value)))
+    throw new Error("Text replacement lost a race with another write");
+}
+
+function nativeEditor(): HTMLTextAreaElement | null {
+  return document.querySelector<HTMLTextAreaElement>(
+    "textarea[data-ipp-native-text]",
+  );
 }
 
 export async function observation(): Promise<{
   readonly text: string;
-  readonly revision: number;
   readonly editorValue: string | null;
   readonly callbackValues: readonly string[];
-  readonly callbackSources: readonly string[];
   readonly submissions: readonly string[];
   readonly callbackRenders: readonly number[];
   readonly presses: number;
@@ -754,79 +846,37 @@ export async function observation(): Promise<{
   readonly selectionDirection: string | null;
   readonly domSelection: readonly [number, number] | null;
   readonly focusSelection: readonly [number, number] | null;
-  readonly observationTrace: readonly string[];
-  readonly scene: {
-    readonly cameraTransform?: Readonly<Record<string, unknown>>;
-    readonly camera?: Readonly<Record<string, unknown>>;
-    readonly panelTransform?: Readonly<Record<string, unknown>>;
-    readonly surface?: Readonly<Record<string, unknown>>;
-    readonly canvasRect?: readonly [number, number, number, number];
-  };
+  readonly textTrace: readonly string[];
 }> {
   const current = handle;
-  const textHandle = textRef.current;
-  if (current === undefined || textHandle === null)
+  const control = textRef.current;
+  if (current === undefined || control === null)
     throw new Error("GUI fixture is not ready");
   await current.flush();
-  const inspected = await (current.client as GuiWorldClient).inspectGui({
-    entity: textHandle.entity,
-    nodeId: textHandle.nodeId,
-    maxDepth: 1,
-  });
-  const node = inspected.nodes[0];
-  if (node?.controlValue.kind !== "text")
+  const text = (await control.read()).text;
+  if (typeof text !== "string")
     throw new Error("mounted text input disappeared");
-  const editor = document.querySelector("textarea");
-  const world = await current.client.inspect();
-  const cameraEntity = world.entities.find(
-    (entity) => entity.metadata.symbolicId === "mounted-gui-camera",
-  );
-  const panelEntity = world.entities.find(
-    (entity) => entity.metadata.symbolicId === "mounted-gui-panel",
-  );
-  const fields = (entity: typeof cameraEntity, component: string) => {
-    const descriptor = current.client.components[component];
-    return descriptor === undefined
-      ? undefined
-      : entity?.effective.find((value) => value.component === descriptor.id)
-          ?.fields;
-  };
-  const canvas = document.querySelector("#mounted-gui-canvas");
-  const rect = canvas?.getBoundingClientRect();
+  const editor = nativeEditor();
+  const focus = physical?.nativeText ?? null;
   return {
-    text: node.controlValue.value,
-    revision: node.controlRevision,
+    text,
     editorValue: editor?.value ?? null,
     callbackValues: [...callbackValues],
-    callbackSources: [...callbackSources],
     submissions: [...submissions],
     callbackRenders: [...callbackRenders],
     presses,
     commits,
     renderRevision: renderedRevision,
     errors: [...errors],
-    activeEditor: document.activeElement === editor,
-    sameEditor: editor === editorIdentity,
+    activeEditor: editor !== null && document.activeElement === editor,
+    sameEditor: editor !== null && editor === editorIdentity,
     editorCount: document.querySelectorAll("textarea").length,
     selectionDirection: editor?.selectionDirection ?? null,
     domSelection:
-      editor?.selectionStart === null || editor?.selectionEnd === null
-        ? null
-        : [editor.selectionStart, editor.selectionEnd],
+      editor === null ? null : [editor.selectionStart, editor.selectionEnd],
     focusSelection:
-      latestTextFocus && latestTextFocus !== null
-        ? [latestTextFocus.selectionStart, latestTextFocus.selectionEnd]
-        : null,
-    observationTrace: [...observationTrace],
-    scene: {
-      cameraTransform: fields(cameraEntity, "Transform"),
-      camera: fields(cameraEntity, "Camera"),
-      panelTransform: fields(panelEntity, "Transform"),
-      surface: fields(panelEntity, "Surface"),
-      ...(rect === undefined
-        ? {}
-        : { canvasRect: [rect.left, rect.top, rect.width, rect.height] }),
-    },
+      focus === null ? null : [focus.selectionStart, focus.selectionEnd],
+    textTrace: [...textTrace],
   };
 }
 
@@ -851,49 +901,32 @@ export async function keyboardObservation(): Promise<{
   if (current === undefined || controls.text === null)
     throw new Error("GUI keyboard fixture is not ready");
   await current.flush();
-  const client = current.client as GuiWorldClient;
-  const text = controls.text;
-  // Focus may sit on any panel; each panel's snapshot reports its own.
-  const panels = [
-    ...new Set(
-      Object.values(controls)
-        .filter((control) => control !== null)
-        .map((control) => control.entity),
+  // Focus may sit in any attached panel World; each World's focus query
+  // reports its own.
+  const focusedNames = await Promise.all(
+    Object.entries(controls).map(async ([name, control]) =>
+      control !== null && (await controlFocused({ current: control }))
+        ? name
+        : null,
     ),
-  ];
-  const [snapshots, inspected] = await Promise.all([
-    Promise.all(panels.map((entity) => client.semanticSnapshot({ entity }))),
-    client.inspectGui({
-      entity: text.entity,
-      nodeId: text.nodeId,
-      maxDepth: 1,
-    }),
-  ]);
-  const focusedAt = snapshots.findIndex(
-    (snapshot) => snapshot.focused !== undefined,
   );
-  const focusedEntity = panels[focusedAt];
-  const focusedId = snapshots[focusedAt]?.focused?.id;
-  const focused =
-    focusedId === undefined
-      ? null
-      : (Object.entries(controls).find(
-          ([, control]) =>
-            control?.entity === focusedEntity && control.nodeId === focusedId,
-        )?.[0] ?? `node-${focusedId}`);
+  const focused = focusedNames.filter((name) => name !== null);
+  if (focused.length > 1)
+    throw new Error(`Several controls report focus: ${focused}`);
+  const text = (await controls.text.read()).text;
+  if (typeof text !== "string")
+    throw new Error("mounted text input disappeared");
   const active = document.activeElement;
-  const value = inspected.nodes[0]?.controlValue;
-  if (value?.kind !== "text") throw new Error("mounted text input disappeared");
   return {
-    focused,
+    focused: focused[0] ?? null,
     keyOwner:
       active === document.querySelector("#mounted-gui-canvas")
         ? "canvas"
-        : active === document.querySelector("textarea")
+        : active !== null && active === nativeEditor()
           ? "editor"
           : "other",
     presses,
-    text: value.value,
+    text,
     errors: [...errors],
   };
 }
@@ -907,10 +940,12 @@ export async function closeGuiCanvas(): Promise<{
   releaseCommitReply = undefined;
   heldCommitStarted = undefined;
   setCommitRevision = undefined;
-  unsubscribe?.();
-  unsubscribe = undefined;
+  releaseText?.();
+  releaseText = undefined;
+  physical = undefined;
   const closing = handle;
   handle = undefined;
+  panelWorld = undefined;
   rerenderEquivalent = undefined;
   const activeRoot = root;
   root = undefined;

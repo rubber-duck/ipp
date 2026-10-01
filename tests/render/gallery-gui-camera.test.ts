@@ -2,28 +2,25 @@ import type { RenderStatisticsSnapshot } from "@ipp/client";
 import assert from "node:assert/strict";
 import { resolve } from "node:path";
 import test from "node:test";
-import type {
-  DynamicValue,
-  GuiSemanticRole,
-  GuiSemanticTree,
-  Inspection,
-  SurfaceCacheRecord,
-} from "@ipp/client";
+import type { Inspection, SurfaceCacheRecord } from "@ipp/client";
 import { runBrowserEnvironment } from "../browser/environment.js";
 import {
   galleryEnvironment,
   openGallery,
   transform,
 } from "./gallery-driver.js";
-
-interface ProjectedPoint {
-  readonly clientX: number;
-  readonly clientY: number;
-}
-
-interface GalleryGuiState {
-  readonly semantic: GuiSemanticTree;
-}
+import {
+  PANEL,
+  control,
+  controlPoint,
+  controlRegion,
+  projectContent,
+  type ProjectedPoint,
+} from "./gallery-gui-panel.js";
+import type {
+  GalleryGuiSelector,
+  GalleryGuiState,
+} from "./viewer-browser-helper.js";
 
 const environment = {
   ...galleryEnvironment,
@@ -80,8 +77,17 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
       await g.call("galleryGuiState");
       await g.page.locator("#ipp-world-canvas").scrollIntoViewIfNeeded();
 
-      const point = (role: GuiSemanticRole, name?: string, x = 0.5) =>
-        g.call<ProjectedPoint>("galleryGuiPoint", { role, name }, x, 0.5);
+      const point = (
+        role: GalleryGuiSelector["role"],
+        name?: string,
+        x = 0.5,
+      ) =>
+        controlPoint(
+          g,
+          { role, ...(name === undefined ? {} : { name }) },
+          x,
+          0.5,
+        );
       const panelEdge = async () => {
         const corners = await g.call<ProjectedPoint[]>(
           "projectGalleryPoints",
@@ -297,7 +303,11 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
           document.querySelector("#gui-autoscan")?.textContent === "enabled",
       );
 
-      const header = await point("text", "GUI DEMO");
+      const [titleX, titleY, titleWidth, titleHeight] = PANEL.title;
+      const [header] = await projectContent(g, [
+        [titleX + titleWidth / 2, titleY + titleHeight / 2],
+      ]);
+      assert.ok(header);
       edge = await panelEdge();
       await unchangedAfterDrag([header.clientX, header.clientY], edge.outside);
 
@@ -314,17 +324,23 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
       await g.call(
         "galleryGuiAction",
         { role: "slider" },
-        { kind: "setScalar", value: 0.1 },
+        { kind: "scalar", value: 0.1 },
       );
       const beforeStream = transform(await g.inspect());
       await g.capture("sustained-slider-before");
-      const sliderRegion = await g.call<
-        readonly [number, number, number, number]
-      >("galleryGuiRegion", { role: "slider" }, 0.02, 0.08);
+      const sliderRegion = await controlRegion(
+        g,
+        { role: "slider" },
+        0.02,
+        0.08,
+      );
       // Accumulated render work since the worker started, read at a frame.
       const renderTotals = async (label: string) => {
         const { frame } = await g.call<{
-          frame: { tick: bigint; statistics?: RenderStatisticsSnapshot };
+          frame: {
+            tick: bigint;
+            statistics: RenderStatisticsSnapshot | undefined;
+          };
         }>("captureUnflushedViewer", label);
         return {
           tick: Number(frame.tick),
@@ -430,9 +446,7 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
         () => document.querySelector("#gui-gain")?.textContent === "75%",
       );
       const streamed = await g.call<GalleryGuiState>("galleryGuiState");
-      const gain = streamed.semantic.nodes.find(
-        ({ role }) => role === "slider",
-      )!.value;
+      const gain = control(streamed, { role: "slider" }).value;
       assert.equal(gain.kind, "scalar");
       assert.ok(Math.abs(gain.value - 0.75) < 1e-6);
       assert.equal(
@@ -452,7 +466,7 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
         "streamed slider value did not reach the rendered thumb",
       );
 
-      const input = await point("textInput", "CALLSIGN");
+      const input = await point("text", "CALLSIGN");
       await unchangedAfterDrag(
         [input.clientX - 12, input.clientY],
         [input.clientX + 28, input.clientY],
@@ -495,18 +509,13 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
 
       const aurora = await point("button", "AURORA");
       const ember = await point("button", "EMBER");
-      const probeTree = (await g.call<GalleryGuiState>("galleryGuiState"))
-        .semantic;
-      const partScale = (name: string) =>
-        g.call<DynamicValue>(
-          "galleryGuiPartValue",
-          probeTree.entity,
-          probeTree.nodes.find(
-            (node) => node.role === "button" && node.name === name,
-          )!.id,
-          "background",
-          "scale",
-        );
+      // The semantic interaction state names the one hovered control; the
+      // skin paints that state, so a stale hover would also keep its look.
+      const hovered = async (name: string) =>
+        control(await g.call<GalleryGuiState>("galleryGuiState"), {
+          role: "button",
+          name,
+        }).interaction.hovered;
       const burstStarted = performance.now();
       await g.page.locator("#ipp-world-canvas").evaluate(
         (canvas, points) => {
@@ -541,32 +550,27 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
         ],
       );
       for (;;) {
-        const finalScale = await partScale("EMBER");
-        if (
-          finalScale.kind === "vec2" &&
-          Math.abs(finalScale.value[0] - 1.025) < 1e-4
-        )
-          break;
+        if (await hovered("EMBER")) break;
         assert.ok(
           performance.now() - burstStarted < 550,
           "rapid hover burst retained a stale control",
         );
         await new Promise((resolve) => setTimeout(resolve, 16));
       }
-      const priorScale = await partScale("AURORA");
-      assert.equal(priorScale.kind, "vec2");
-      assert.ok(Math.abs(priorScale.value[0] - 1) < 1e-4);
+      assert.equal(
+        await hovered("AURORA"),
+        false,
+        "rapid hover burst left the earlier control hovered",
+      );
 
       const assertGain = async (expected: number) => {
         const deadline = performance.now() + 10_000;
         for (;;) {
           const state = await g.call<GalleryGuiState>("galleryGuiState");
-          const slider = state.semantic.nodes.find(
-            ({ role }) => role === "slider",
-          );
+          const slider = control(state, { role: "slider" });
           const label = await g.page.locator("#gui-gain").textContent();
           if (
-            slider?.value.kind === "scalar" &&
+            slider.value.kind === "scalar" &&
             Math.abs(slider.value.value - expected) < 1e-6 &&
             label === `${Math.round(expected * 100)}%`
           )

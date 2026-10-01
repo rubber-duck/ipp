@@ -1,4 +1,4 @@
-//! Public compatibility adapters dispatch into the selected animation system.
+//! Typed animation operations dispatch into the selected animation system.
 
 use super::*;
 use crate::WorldContext;
@@ -13,64 +13,31 @@ pub(in crate::world) enum AnimationCommand {
         id: AnimationControllerId,
         control: AnimationPlaybackControl,
     },
-    #[cfg(feature = "gui")]
-    Internal(Vec<AnimationInternalCommand>),
-}
-
-/// Renderer-owned controller lifecycle applied through AnimationSystem at the
-/// next ordinary mutation boundary. These commands intentionally produce no
-/// client-correlated outcomes.
-#[cfg(feature = "gui")]
-#[derive(Clone)]
-pub(in crate::world) enum AnimationInternalCommand {
-    EnsureSkinTransition {
-        owner: GuiSkinAnimationOwner,
-        request: u64,
-        source: AnimationControllerDescription,
-        source_time: f64,
-        source_sample: GuiSkinAnimationSample,
-        transition: AnimationControllerTransition,
-        destination_sample: GuiSkinAnimationSample,
-    },
-    DeleteSkin(GuiSkinAnimationOwner),
-}
-
-/// Full GUI identity owned by one derived skin controller.
-#[cfg(feature = "gui")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(in crate::world) struct GuiSkinAnimationOwner {
-    pub entity: crate::EntityId,
-    pub primitive: crate::systems::surface::GuiPrimitiveId,
-}
-
-/// Authored numeric appearance expected at one skin motion sample.
-#[cfg(feature = "gui")]
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(in crate::world) struct GuiSkinAnimationSample {
-    pub color: [f32; 4],
-    pub opacity: f32,
-    pub scale: [f32; 2],
-    /// Present exactly when the motion also drives the `align_x` property.
-    pub align_x: Option<f32>,
 }
 
 impl WorldContext<'_> {
     fn with_animation<R>(
         &mut self,
-        operation: impl FnOnce(&mut AnimationAccess<'_, '_>) -> R,
-    ) -> R {
+        operation: impl FnOnce(&mut AnimationAccess<'_, '_>) -> Result<R, ErrorReason>,
+    ) -> Result<R, ErrorReason> {
+        if !self
+            .world
+            .manifest
+            .supports_operation(crate::systems::WorldOperation::Animation)
+        {
+            return Err(ErrorReason::UnsupportedDependency);
+        }
         self.with_system::<AnimationSystem, _>(AnimationSystem::ID, |system, context| {
             operation(&mut AnimationAccess {
                 system,
                 context,
             })
         })
-        .expect("validated animation system")
+        .ok_or(ErrorReason::UnsupportedDependency)?
     }
 
-    fn animation_system(&self) -> &AnimationSystem {
+    fn animation_system(&self) -> Option<&AnimationSystem> {
         self.system::<AnimationSystem>(AnimationSystem::ID)
-            .expect("validated animation system")
     }
 
     /// Queue a correlated controller command in world mutation order.
@@ -95,6 +62,11 @@ impl WorldContext<'_> {
             super::update::description_bytes(description) > self.world.limits.max_batch_bytes
         }) {
             return Err(ErrorReason::Capacity);
+        }
+        if let Some(description) = description {
+            for driver in &description.drivers {
+                super::binding::validate_target_support(&self.world.manifest, &driver.property)?;
+            }
         }
         self.enqueue_system_command(
             AnimationSystem::ID,
@@ -137,9 +109,7 @@ impl WorldContext<'_> {
         id: AnimationControllerId,
         description: AnimationControllerDescription,
     ) -> Result<(), ErrorReason> {
-        self.with_animation(|animation| {
-            animation.update_ordinary_animation_controller(id, description)
-        })
+        self.with_animation(|animation| animation.update_animation_controller(id, description))
     }
 
     /// Crossfade to a replacement controller description.
@@ -148,9 +118,7 @@ impl WorldContext<'_> {
         id: AnimationControllerId,
         transition: AnimationControllerTransition,
     ) -> Result<(), ErrorReason> {
-        self.with_animation(|animation| {
-            animation.transition_ordinary_animation_controller(id, transition)
-        })
+        self.with_animation(|animation| animation.transition_animation_controller(id, transition))
     }
 
     /// Restore a controller's targets and delete it.
@@ -158,7 +126,7 @@ impl WorldContext<'_> {
         &mut self,
         id: AnimationControllerId,
     ) -> Result<(), ErrorReason> {
-        self.with_animation(|animation| animation.remove_ordinary_animation_controller(id))
+        self.with_animation(|animation| animation.remove_animation_controller(id))
     }
 
     /// Apply a clock control directly at this exclusive mutation boundary.
@@ -167,7 +135,7 @@ impl WorldContext<'_> {
         id: AnimationControllerId,
         control: AnimationPlaybackControl,
     ) -> Result<(), ErrorReason> {
-        self.with_animation(|animation| animation.control_ordinary_playback(id, control))
+        self.with_animation(|animation| animation.control_playback(id, control))
     }
 
     /// Inspect every controller in identity order.
@@ -178,12 +146,15 @@ impl WorldContext<'_> {
         limit: usize,
     ) -> Vec<AnimationControllerSnapshot> {
         self.animation_system()
-            .ordinary_controller_page(after, target, limit)
+            .map(|system| system.ordinary_controller_page(after, target, limit))
+            .unwrap_or_default()
     }
 
     /// Inspect all controllers in identity order.
     pub fn animation_controllers(&self) -> Vec<AnimationControllerSnapshot> {
-        self.animation_system().ordinary_controllers()
+        self.animation_system()
+            .map(AnimationSystem::ordinary_controllers)
+            .unwrap_or_default()
     }
 
     /// Inspect one controller's descriptions and clock.
@@ -191,14 +162,14 @@ impl WorldContext<'_> {
         &self,
         id: AnimationControllerId,
     ) -> Option<AnimationControllerSnapshot> {
-        self.animation_system().ordinary_controller(id)
+        self.animation_system()?.ordinary_controller(id)
     }
 
     /// Snapshot controller identities and frozen clocks.
     pub fn animation_persistent_state(&self) -> AnimationPersistentState {
-        self.system::<AnimationSystem>(AnimationSystem::ID)
-            .expect("validated animation system")
-            .persistent_state()
+        self.animation_system()
+            .map(AnimationSystem::persistent_state)
+            .unwrap_or_default()
     }
 
     /// Rebuild persistent controller descriptions and bindings in this World.

@@ -42,41 +42,45 @@ impl Reader<'_> {
         let n = self.u32()?;
         let mut drivers = Vec::new();
         for _ in 0..n {
-            let source = self.string()?;
+            let source = self.text()?;
             let variant = self.u32()?;
             let track = self.u32()?;
             let target = EntityId::from_bits(self.u64()?);
-            let kind = u8::try_from(self.u32()?)
-                .map_err(|_| ProtocolError::Malformed("animation target kind"))?;
-            let component = self.u16()?;
-            let n = self.count(4096)?;
-            let indices = (0..n).map(|_| self.u32()).collect::<Result<Vec<_>, _>>()?;
-            let name = self.string()?;
+            let kind = self.u8()?;
             let property = match kind {
-                ANIMATION_TARGET_DYNAMIC if indices.is_empty() => {
-                    AnimationTrackTarget::DynamicProperty {
-                        component,
-                        name,
-                    }
-                }
-                ANIMATION_TARGET_PROPERTY if name.is_empty() => {
+                ANIMATION_TARGET_ENTITY_LINK => AnimationTrackTarget::EntityLink,
+                ANIMATION_TARGET_DYNAMIC => AnimationTrackTarget::DynamicProperty {
+                    component: self.u16()?,
+                    name: self.string()?,
+                },
+                ANIMATION_TARGET_PROPERTY => {
+                    let component = self.u16()?;
+                    let count = self.count(crate::MAX_ANIMATION_TARGET_INDICES)?;
+                    let offsets = (0..count).map(|_| self.u32()).collect::<Result<_, _>>()?;
                     AnimationTrackTarget::AnimationProperty(AnimationProperty {
                         component,
-                        offsets: indices,
+                        offsets,
                     })
                 }
                 #[cfg(feature = "skeletal-animation")]
-                ANIMATION_TARGET_JOINTS if component == 0 && name.is_empty() => {
+                ANIMATION_TARGET_JOINTS => {
+                    let count = self.count(crate::MAX_ANIMATION_TARGET_INDICES)?;
+                    let indices = (0..count).map(|_| self.u32()).collect::<Result<_, _>>()?;
                     AnimationTrackTarget::Joints(indices)
                 }
                 _ => return Err(ProtocolError::Malformed("animation target kind")),
             };
+            let binding_count = self.count(MAX_ANIMATION_ENTITY_BINDINGS as usize)?;
+            let entity_bindings = (0..binding_count)
+                .map(|_| Ok(EntityId::from_bits(self.u64()?)))
+                .collect::<Result<Vec<_>, ProtocolError>>()?;
             drivers.push(AnimationDriverDescription {
                 source,
                 variant,
                 track,
                 target,
                 property,
+                entity_bindings,
                 weight: self.f32()?,
                 additive: self.boolean()?,
                 reference_time: self.f32()?,
@@ -178,35 +182,38 @@ impl Writer {
             self.u32(driver.track)?;
             self.u64(driver.target.to_bits())?;
             match &driver.property {
+                AnimationTrackTarget::EntityLink => self.u8(ANIMATION_TARGET_ENTITY_LINK)?,
                 AnimationTrackTarget::DynamicProperty {
                     component,
-                    ..
+                    name,
                 } => {
-                    self.u32(ANIMATION_TARGET_DYNAMIC as u32)?;
+                    self.u8(ANIMATION_TARGET_DYNAMIC)?;
                     self.u16(*component)?;
+                    self.string(name)?;
                 }
                 AnimationTrackTarget::AnimationProperty(property) => {
-                    self.u32(ANIMATION_TARGET_PROPERTY as u32)?;
+                    self.u8(ANIMATION_TARGET_PROPERTY)?;
                     self.u16(property.component)?;
+                    self.count(property.offsets.len(), crate::MAX_ANIMATION_TARGET_INDICES)?;
+                    for index in &property.offsets {
+                        self.u32(*index)?;
+                    }
                 }
                 #[cfg(feature = "skeletal-animation")]
-                AnimationTrackTarget::Joints(_) => {
-                    self.u32(ANIMATION_TARGET_JOINTS as u32)?;
-                    self.u16(0)?;
+                AnimationTrackTarget::Joints(indices) => {
+                    self.u8(ANIMATION_TARGET_JOINTS)?;
+                    self.count(indices.len(), crate::MAX_ANIMATION_TARGET_INDICES)?;
+                    for index in indices {
+                        self.u32(*index)?;
+                    }
                 }
             }
-            self.count(driver.property.indices().len(), 4096)?;
-            for index in driver.property.indices() {
-                self.u32(*index)?;
-            }
-            if let AnimationTrackTarget::DynamicProperty {
-                name,
-                ..
-            } = &driver.property
-            {
-                self.string(name)?;
-            } else {
-                self.string("")?;
+            self.count(
+                driver.entity_bindings.len(),
+                MAX_ANIMATION_ENTITY_BINDINGS as usize,
+            )?;
+            for entity in &driver.entity_bindings {
+                self.u64(entity.to_bits())?;
             }
             self.f32(driver.weight)?;
             self.u8(u8::from(driver.additive))?;
@@ -234,6 +241,7 @@ mod tests {
                         component: 1,
                         offsets: vec![0],
                     }),
+                    entity_bindings: Vec::new(),
                     weight: 1.0,
                     additive: false,
                     reference_time: 0.0,
@@ -243,7 +251,7 @@ mod tests {
             speed: -1.0,
             looping: false,
         };
-        let mut writer = Writer(Vec::new());
+        let mut writer = Writer::new(Vec::new());
         writer.controller_description(&description).unwrap();
         let mut reader = Reader {
             bytes: &writer.0,
@@ -254,6 +262,91 @@ mod tests {
         assert_eq!(decoded.speed, -1.0);
         assert_eq!(decoded.drivers[299].track, 299);
         assert_eq!(reader.at, writer.0.len());
+    }
+
+    #[test]
+    fn structural_driver_keeps_world_bindings_outside_immutable_key_slots() {
+        let description = AnimationControllerDescription {
+            drivers: vec![AnimationDriverDescription {
+                source: "memory:structural-v4".into(),
+                variant: 2,
+                track: 3,
+                target: EntityId::from_bits(0x1_0000_0001),
+                property: AnimationTrackTarget::EntityLink,
+                entity_bindings: vec![
+                    EntityId::from_bits(0x1_0000_0002),
+                    EntityId::from_bits(0x1_0000_0003),
+                ],
+                weight: 1.0,
+                additive: false,
+                reference_time: 0.0,
+                repeat: true,
+            }],
+            speed: 1.0,
+            looping: true,
+        };
+        let mut writer = Writer::new(Vec::new());
+        writer.controller_description(&description).unwrap();
+        let mut reader = Reader {
+            bytes: &writer.0,
+            at: 0,
+        };
+        assert_eq!(reader.controller_description().unwrap(), description);
+        assert_eq!(reader.at, writer.0.len());
+    }
+
+    #[test]
+    fn structural_bindings_use_message_budget_not_a_retained_count_quota() {
+        let driver = AnimationDriverDescription {
+            source: "memory:structural-v4".into(),
+            variant: 0,
+            track: 0,
+            target: EntityId::from_bits(1),
+            property: AnimationTrackTarget::EntityLink,
+            entity_bindings: Vec::new(),
+            weight: 1.0,
+            additive: false,
+            reference_time: 0.0,
+            repeat: false,
+        };
+        let description = AnimationControllerDescription {
+            drivers: vec![driver.clone()],
+            speed: 1.0,
+            looping: false,
+        };
+        let mut writer = Writer::new(Vec::new());
+        writer.controller_description(&description).unwrap();
+        let mut reader = Reader {
+            bytes: &writer.0,
+            at: 0,
+        };
+        assert_eq!(reader.controller_description().unwrap(), description);
+
+        let mut many = description;
+        many.drivers[0].entity_bindings = (1..=4097).map(EntityId::from_bits).collect();
+        let mut writer = Writer::new(Vec::new());
+        writer.controller_description(&many).unwrap();
+        let mut reader = Reader {
+            bytes: &writer.0,
+            at: 0,
+        };
+        assert_eq!(reader.controller_description().unwrap(), many);
+        assert_eq!(reader.at, writer.0.len());
+
+        let truncated = &writer.0[..writer.0.len() - 1];
+        let mut reader = Reader {
+            bytes: truncated,
+            at: 0,
+        };
+        assert!(reader.controller_description().is_err());
+
+        many.drivers[0].entity_bindings =
+            vec![EntityId::from_bits(1); MAX_ANIMATION_ENTITY_BINDINGS as usize];
+        let mut writer = Writer::new(Vec::new());
+        assert!(matches!(
+            writer.controller_description(&many),
+            Err(ProtocolError::Limit("message"))
+        ));
     }
 
     #[test]
@@ -274,7 +367,7 @@ mod tests {
     #[test]
     fn controller_transition_rejects_invalid_duration_and_seek_time() {
         for (duration, seek_time) in [(f64::NAN, 0.0f64), (-1.0, 0.0), (1.0, -1.0)] {
-            let mut writer = Writer(Vec::new());
+            let mut writer = Writer::new(Vec::new());
             writer
                 .controller_description(&AnimationControllerDescription::default())
                 .unwrap();

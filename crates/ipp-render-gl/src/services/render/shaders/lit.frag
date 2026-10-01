@@ -9,7 +9,7 @@ uniform vec3 u_material;
 uniform vec4 u_camera;
 uniform vec3 u_surface;
 uniform vec3 u_ambient;
-uniform vec4 u_lights[32];
+uniform vec4 u_lights[IPP_MAX_LIGHTS * 4];
 uniform int u_light_count;
 {{#if shadow}}{{shadow_declarations}}{{/if}}
 out vec4 out_color;

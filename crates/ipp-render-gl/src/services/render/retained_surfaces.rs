@@ -11,20 +11,20 @@
 //!
 //! # Unchanged paint
 //!
-//! Core publishes a World-monotonic paint revision beside each Surface item that
-//! changes whenever its primitives or clip size paint differently; zero means the
-//! revision is unknown. Retained box, glyph and analytic text work keyed by primitive
-//! identity may reuse the input hashes it computed under the same revision, which
-//! skips re-hashing every primitive on unchanged frames.
-//!
-//! The revision ignores primitive identities, so identical paint can move between
-//! identities, for example when two identical controls swap places. Reuse therefore
-//! also requires the Surface's identity order to match its last successful draw.
+//! Each exact Canvas output owns a paint revision including primitive identities and
+//! painter order. Hash reuse additionally requires the same inherited clip as its
+//! last successful submission. A changed output incarnation owns fresh cache state.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
-use ipp_core::systems::surface::SurfacePrimitiveIdentity;
-use ipp_core::{EntityId, SurfaceRenderItem};
+use ipp_core::EntityId;
+
+/// Key of the one retained Surface in a Canvas output's caches.
+///
+/// Retained GUI, glyph and analytic text caches are held per exact output, and a
+/// World canvas names no producer entity, so every Canvas output keys its paint with
+/// this one value.
+pub(crate) const CANVAS_SURFACE: EntityId = EntityId::from_bits(0);
 
 /// Surface participation in one completed frame, deciding which retained work is stale.
 pub struct RetainedSurfaceSubmission<'a> {
@@ -42,10 +42,12 @@ impl RetainedSurfaceSubmission<'_> {
 }
 
 /// Paint identity of one Surface for the current frame.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SurfacePaint {
     /// Core paint revision; zero when unknown.
     pub revision: u64,
+    /// Incoming opacity from containing Canvas Worlds.
+    pub opacity: f32,
     /// The revision and identity order match the Surface's last successful draw, so
     /// hashes computed under `revision` still describe each primitive identity.
     pub reusable: bool,
@@ -53,8 +55,10 @@ pub struct SurfacePaint {
 
 impl SurfacePaint {
     /// Unknown paint: every input is hashed.
+    #[cfg(test)]
     pub const UNKNOWN: Self = Self {
         revision: 0,
+        opacity: 1.0,
         reusable: false,
     };
 
@@ -64,59 +68,33 @@ impl SurfacePaint {
     }
 }
 
-/// Last successfully drawn paint revision and identity order of each Surface of one
-/// World.
+/// Last successful immutable paint and inherited clip of one exact Canvas output.
 #[derive(Default)]
 pub struct SurfacePaintTracker {
-    surfaces: BTreeMap<EntityId, (u64, Vec<SurfacePrimitiveIdentity>)>,
+    last: Option<(u64, ipp_core::systems::canvas::CanvasClip, f32)>,
 }
 
 impl SurfacePaintTracker {
-    /// Paint identity of `item` for this frame.
-    pub fn paint(&self, item: &SurfaceRenderItem) -> SurfacePaint {
-        let reusable = item.paint_revision != 0
-            && self
-                .surfaces
-                .get(&item.entity)
-                .is_some_and(|(revision, identities)| {
-                    *revision == item.paint_revision
-                        && identities.len() == item.primitives.len()
-                        && identities
-                            .iter()
-                            .zip(&item.primitives)
-                            .all(|(identity, primitive)| *identity == primitive.style().identity)
-                });
-
+    pub fn paint(
+        &self,
+        revision: u64,
+        clip: ipp_core::systems::canvas::CanvasClip,
+        opacity: f32,
+    ) -> SurfacePaint {
         SurfacePaint {
-            revision: item.paint_revision,
-            reusable,
+            revision,
+            opacity,
+            reusable: revision != 0 && self.last == Some((revision, clip, opacity)),
         }
     }
 
-    /// Record a completed draw of `item`, so an unchanged next frame may reuse it.
-    pub fn drawn(&mut self, item: &SurfaceRenderItem, paint: SurfacePaint) {
-        if item.paint_revision == 0 {
-            self.surfaces.remove(&item.entity);
-            return;
-        }
-
-        if paint.reusable {
-            return;
-        }
-
-        let (revision, identities) = self.surfaces.entry(item.entity).or_default();
-        *revision = item.paint_revision;
-        identities.clear();
-        identities.extend(
-            item.primitives
-                .iter()
-                .map(|primitive| primitive.style().identity),
-        );
-    }
-
-    /// Forget Surfaces that are no longer live.
-    pub fn retain(&mut self, live: &BTreeSet<EntityId>) {
-        self.surfaces.retain(|entity, _| live.contains(entity));
+    pub fn drawn(
+        &mut self,
+        revision: u64,
+        clip: ipp_core::systems::canvas::CanvasClip,
+        opacity: f32,
+    ) {
+        self.last = (revision != 0).then_some((revision, clip, opacity));
     }
 }
 

@@ -47,7 +47,7 @@ impl GeometryEvaluationState {
     /// Reuse the rigid program's initialized shape and update its derived bounds
     /// without moving the compound through the general evaluator. Lifecycle
     /// invalidation clears the program, so preparation still owns all rebinding.
-    fn update_rigid(&mut self, storage: &crate::components::registry::ComponentStorage) -> bool {
+    fn update_rigid(&mut self, world: &WorldSimulationState) -> bool {
         #[cfg(feature = "skeletal-animation")]
         if self.invalidated {
             return false;
@@ -68,7 +68,7 @@ impl GeometryEvaluationState {
         let [part] = evaluated.parts.as_mut_slice() else {
             return false;
         };
-        let Some(Ok(model)) = model.borrow(storage) else {
+        let Some(Ok(model)) = model.borrow(world) else {
             return false;
         };
         let matrix = model.matrix_ref();
@@ -142,7 +142,7 @@ impl GeometrySystem {
                 for &(entity, binding) in self.state.$query.entries() {
                     let value = binding.get_mut(&mut runtime.world.components);
                     let mut state = value.runtime.evaluation.take().unwrap_or_default();
-                    if state.update_rigid(&runtime.world.components) {
+                    if state.update_rigid(runtime.world) {
                         if state.changed {
                             self.state.$index.publish(super::GeometryPreparedBounds {
                                 entity,
@@ -252,9 +252,8 @@ impl<'a> GeometryReadAccess<'a> {
         // SAFETY: GeometrySystem clears every compiled program before component
         // destruction/replacement, optional membership changes, and asset release.
         // Access is scoped to this World's storage during geometry evaluation.
-        let model = unsafe {
-            crate::systems::hierarchy::ObjectTransformBinding::bind(&self.world.components, entity)
-        };
+        let model =
+            unsafe { crate::systems::hierarchy::ObjectTransformBinding::bind(self.world, entity) };
         if input.geometry.is_empty() && input.source.is_empty() {
             let index = entity.index() as usize;
             #[cfg(feature = "particles")]
@@ -364,7 +363,7 @@ impl<'a> GeometryReadAccess<'a> {
             .program
             .as_ref()
             .unwrap()
-            .model(&self.world.components)
+            .model(self.world)
             .transpose()?;
         let matrix = model.as_ref().map(GeometryShapeTransform::matrix);
         if matrix.is_some() && matrix == state.last_model && !evaluated.parts.is_empty() {
@@ -752,7 +751,7 @@ pub(in crate::world) fn update_evaluation_mesh_demand(
 fn visit_evaluation_meshes(
     world: &WorldSimulationState,
     authored: &crate::world::WorldEntityState,
-    mut visit: impl FnMut(&str, u32),
+    mut visit: impl FnMut(&std::sync::Arc<str>, u32),
 ) {
     for &entity in authored.entities.keys() {
         let index = entity.index() as usize;
@@ -781,21 +780,23 @@ fn visit_evaluation_meshes(
 
 impl crate::WorldContext<'_> {
     /// Spatial queries of finalized bounding geometry, including explicit unknown candidates.
-    pub fn geometry_spatial_index(&self) -> &super::GeometrySpatialIndex {
-        &self
-            .system::<GeometrySystem>(GeometrySystem::ID)
-            .expect("World requires GeometrySystem")
-            .state
-            .spatial_bounds
+    pub fn geometry_spatial_index(&self) -> Option<&super::GeometrySpatialIndex> {
+        Some(
+            &self
+                .system::<GeometrySystem>(GeometrySystem::ID)?
+                .state
+                .spatial_bounds,
+        )
     }
 
     /// Independent interaction geometry; never substitute visual bounds for picking shapes.
-    pub fn picking_spatial_index(&self) -> &super::GeometrySpatialIndex {
-        &self
-            .system::<GeometrySystem>(GeometrySystem::ID)
-            .expect("World requires GeometrySystem")
-            .state
-            .spatial_picking
+    pub fn picking_spatial_index(&self) -> Option<&super::GeometrySpatialIndex> {
+        Some(
+            &self
+                .system::<GeometrySystem>(GeometrySystem::ID)?
+                .state
+                .spatial_picking,
+        )
     }
 
     /// Rebuild acceleration outside active queries without changing component identities.
@@ -808,15 +809,15 @@ impl crate::WorldContext<'_> {
         });
     }
 
-    pub(in crate::world) fn geometry_read(&self) -> GeometryReadAccess<'_> {
-        GeometryReadAccess::new(
+    pub(in crate::world) fn geometry_read(&self) -> Result<GeometryReadAccess<'_>, ErrorReason> {
+        Ok(GeometryReadAccess::new(
             self.world,
             self.asset_acquisition,
             &self
                 .system::<GeometrySystem>(GeometrySystem::ID)
-                .expect("World requires GeometrySystem")
+                .ok_or(ErrorReason::UnsupportedDependency)?
                 .state,
-        )
+        ))
     }
 
     /// Refresh geometry after finalized poses or newly completed asset loads.
@@ -828,7 +829,7 @@ impl crate::WorldContext<'_> {
 
     /// Asset-generated world-space enclosure without allocating an owned shape union.
     pub fn mesh_bounds(&self, entity: EntityId) -> Result<Option<[[f64; 3]; 2]>, ErrorReason> {
-        Ok(self.geometry_read().mesh_enclosure(entity)?.bounds())
+        Ok(self.geometry_read()?.mesh_enclosure(entity)?.bounds())
     }
 
     /// Borrow geometry for synchronous rendering after World evaluation. Generated
@@ -861,7 +862,7 @@ impl crate::WorldContext<'_> {
     /// Trustworthy evaluated culling geometry, borrowed until the next World mutation.
     /// None means unknown or unproven and must keep the object visible.
     pub fn culling_geometry(&self, entity: EntityId) -> Option<&CompoundGeometryShape> {
-        self.geometry_read().culling_geometry(entity)
+        self.geometry_read().ok()?.culling_geometry(entity)
     }
 
     /// Final evaluated enclosure, never substituted from the picking component.
@@ -869,7 +870,7 @@ impl crate::WorldContext<'_> {
         &self,
         entity: EntityId,
     ) -> Result<&CompoundGeometryShape, ErrorReason> {
-        self.geometry_read().bounding_geometry(entity)
+        self.geometry_read()?.bounding_geometry(entity)
     }
 
     /// Conservative rejection using this entity's explicit BoundingGeometry.
@@ -879,7 +880,8 @@ impl crate::WorldContext<'_> {
         entity: EntityId,
         planes: &[crate::systems::geometry::GeometryPlane; 6],
     ) -> bool {
-        self.geometry_read().geometry_visible(entity, planes)
+        self.geometry_read()
+            .is_ok_and(|access| access.geometry_visible(entity, planes))
     }
 
     /// Final evaluated picking union, using the same transforms as visualization.
@@ -887,7 +889,7 @@ impl crate::WorldContext<'_> {
         &self,
         entity: EntityId,
     ) -> Result<&CompoundGeometryShape, ErrorReason> {
-        self.geometry_read().picking_geometry(entity)
+        self.geometry_read()?.picking_geometry(entity)
     }
 }
 
@@ -911,7 +913,8 @@ impl GeometrySystem {
                     .input_value(&context.world_data.components, entity, component);
             let same_source = match (previous, after) {
                 (Some(previous), Some(ComponentValue::Skeleton(after))) => {
-                    previous.source == after.source && previous.variant == after.variant
+                    crate::components::schema::same_text(&previous.source, &after.source)
+                        && previous.variant == after.variant
                 }
                 _ => false,
             };

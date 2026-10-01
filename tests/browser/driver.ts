@@ -256,16 +256,15 @@ class BrowserHarnessDriver implements HarnessDriver {
       operations: operations.length,
     });
     const result = await this.#page.evaluate(
-      async ({ runtimeModuleUrl, connectionId, batchId, operations }) => {
+      async ({ runtimeModuleUrl, connectionId, operations }) => {
         const runtime = (await import(
           runtimeModuleUrl
         )) as typeof import("./browser-runtime.js");
-        return await runtime.submit(connectionId, batchId, operations);
+        return await runtime.submit(connectionId, operations);
       },
       {
         runtimeModuleUrl: this.#runtimeModuleUrl,
         connectionId: this.#connectionId,
-        batchId,
         operations,
       },
     );

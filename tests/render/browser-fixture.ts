@@ -1,6 +1,9 @@
 import type { RenderStatisticsSnapshot } from "@ipp/client";
 import { presentationTesting } from "../../packages/ipp-client/src/testing.js";
-import { activateFixtureCamera } from "../integration/camera-fixtures.js";
+import {
+  createFixtureCamera,
+  type HostedWorldClient,
+} from "../integration/camera-fixtures.js";
 import * as React from "react";
 import type { ReactNode } from "react";
 import type { Client } from "@ipp/client";
@@ -11,7 +14,7 @@ import type {
   Inspection,
   AssetResourceSnapshot,
 } from "@ipp/client";
-import type { ClientPresentation, FrameCapture } from "@ipp/client";
+import type { PresentedCapture } from "@ipp/client";
 import {
   createRoot,
   Entity as SceneEntity,
@@ -29,6 +32,13 @@ import {
   summarizeImage,
   VIEWPORT,
 } from "./image-assertions.js";
+import {
+  RootPresentation,
+  capturedImage,
+  recoverRestoredContext,
+  worldReference,
+} from "./root-presentation.js";
+import { SCENE, selectSystems } from "../integration/system-selections.js";
 
 export interface RenderRuntimeConfiguration {
   readonly generatedModuleUrl: string;
@@ -69,8 +79,9 @@ interface GeneratedModule {
         readonly timeoutMs: number;
         readonly canvas: OffscreenCanvas;
         readonly logLevel?: RenderRuntimeConfiguration["logLevel"];
+        readonly selectedSystems: readonly string[];
       },
-    ): Promise<Client>;
+    ): Promise<HostedWorldClient>;
   };
   readonly Entity: {
     create(
@@ -92,11 +103,11 @@ interface GeneratedModule {
 interface FixtureState {
   readonly contract: GeneratedModule;
   readonly client: Client;
-  readonly presentation: ClientPresentation;
-  readonly root: ReactWorldRoot;
+  readonly presentation: RootPresentation;
+  root: ReactWorldRoot;
   readonly entity: EntityRef;
   readonly meshSource: string;
-  readonly captures: Map<string, FrameCapture>;
+  readonly captures: Map<string, PresentedCapture>;
   readonly resourceEntities: EntityRef[];
   mutationBatches: number;
   ownedRoot: ReactWorldRoot | undefined;
@@ -107,14 +118,12 @@ interface FixtureState {
 
 export interface CaptureReport {
   readonly label: string;
-  readonly session: bigint;
   readonly tick: bigint;
   readonly drawCalls: number;
   readonly triangles: number;
-  readonly contextGeneration: number;
+  readonly contextGeneration: bigint;
   readonly failedDrawCalls: number;
-  readonly invalidCamera: boolean;
-  readonly statistics?: RenderStatisticsSnapshot | undefined;
+  readonly statistics: RenderStatisticsSnapshot;
   readonly summary: ImageSummary;
   readonly inspection: Inspection;
 }
@@ -156,7 +165,7 @@ export async function initializeCube(
   }
   const offscreen = canvas.transferControlToOffscreen();
   let contract: GeneratedModule;
-  let client: Client;
+  let client: HostedWorldClient;
   try {
     contract = (await import(
       configuration.generatedModuleUrl
@@ -165,6 +174,7 @@ export async function initializeCube(
       configuration.workerScriptUrl,
       configuration.wasmUrl,
       {
+        selectedSystems: selectSystems(SCENE),
         timeoutMs: configuration.timeoutMs,
         canvas: offscreen,
         ...(configuration.logLevel === undefined
@@ -178,15 +188,9 @@ export async function initializeCube(
   }
   let root: ReactWorldRoot | undefined;
   try {
-    if (!client.capabilities.spatial || !client.capabilities.stateOverlays) {
-      throw new Error("render fixture requires scene and overlay capabilities");
+    if (!client.capabilities.spatial) {
+      throw new Error("render fixture requires the scene capability");
     }
-    const presentation = client.presentation;
-    if (presentation === undefined) {
-      throw new Error("render worker did not expose presentation");
-    }
-    presentation.resize(VIEWPORT.width, VIEWPORT.height);
-
     const scenario = configuration.providerScenario;
     const selectedTransform = scenario
       ? { x: 0.55, sx: 0.46, sy: 0.46, sz: 0.46 }
@@ -260,7 +264,12 @@ export async function initializeCube(
       : undefined;
     if (id === undefined) throw new Error("cube create omitted alias 1");
 
-    await activateFixtureCamera(client);
+    const presentation = await RootPresentation.camera(
+      client.host,
+      worldReference(client),
+      await createFixtureCamera(client),
+      VIEWPORT,
+    );
     root = createRoot(client);
     const handles = [1, 2, 3]
       .map((alias) =>
@@ -325,15 +334,12 @@ export async function initializeCube(
 
 export async function createDiagnosticEntity(): Promise<bigint> {
   const state = requireActive();
-  const outcome = await state.client.batch(
-    [
-      state.contract.Entity.create(90, {
-        symbolicId: "diagnostic-probe",
-        classes: ["diagnostics"],
-      }),
-    ],
-    910n,
-  );
+  const outcome = await state.client.batch([
+    state.contract.Entity.create(90, {
+      symbolicId: "diagnostic-probe",
+      classes: ["diagnostics"],
+    }),
+  ]);
   requireBatchSuccess(outcome, "create diagnostic entity");
   const id = outcome.ok
     ? outcome.aliases.find(({ alias }) => alias === 90)?.id
@@ -347,18 +353,15 @@ export async function rejectDiagnosticEntityMutation(): Promise<BatchOutcome> {
   const state = requireActive();
   const entity = state.diagnosticEntity;
   if (entity === undefined) throw new Error("diagnostic entity is missing");
-  const outcome = await state.client.batch(
-    [
-      state.contract.Entity.create(91, {
-        symbolicId: "diagnostic-partial",
-      }),
-      state.contract.Entity.delete(entity),
-      state.contract.Entity.delete(
-        state.contract.Entity.handle(0xffff_ffff_ffff_ffffn),
-      ),
-    ],
-    911n,
-  );
+  const outcome = await state.client.batch([
+    state.contract.Entity.create(91, {
+      symbolicId: "diagnostic-partial",
+    }),
+    state.contract.Entity.delete(entity),
+    state.contract.Entity.delete(
+      state.contract.Entity.handle(0xffff_ffff_ffff_ffffn),
+    ),
+  ]);
   if (outcome.ok) throw new Error("invalid diagnostic batch completed");
   const inspection = await state.client.inspect();
   if (
@@ -395,10 +398,9 @@ export async function deleteDiagnosticEntity(): Promise<void> {
   const state = requireActive();
   const entity = state.diagnosticEntity;
   if (entity === undefined) throw new Error("diagnostic entity is missing");
-  const outcome = await state.client.batch(
-    [state.contract.Entity.delete(entity)],
-    912n,
-  );
+  const outcome = await state.client.batch([
+    state.contract.Entity.delete(entity),
+  ]);
   requireBatchSuccess(outcome, "delete diagnostic entity");
   state.diagnosticEntity = undefined;
 }
@@ -409,7 +411,7 @@ export async function showMaterialOverride(): Promise<void> {
   await renderState(state);
 }
 
-export async function updateHiddenProducerColor(): Promise<Inspection> {
+export async function updateProducerColor(): Promise<Inspection> {
   const state = requireActive();
   const { UnlitMaterial } = state.contract;
   if (!UnlitMaterial.setR || !UnlitMaterial.setG || !UnlitMaterial.setB) {
@@ -420,7 +422,7 @@ export async function updateHiddenProducerColor(): Promise<Inspection> {
     UnlitMaterial.setG(state.entity, 0.18),
     UnlitMaterial.setB(state.entity, 0.12),
   ]);
-  requireBatchSuccess(outcome, "update hidden producer material");
+  requireBatchSuccess(outcome, "update producer material");
   return await state.client.inspect();
 }
 
@@ -433,7 +435,7 @@ export async function removeProducerMaterial(): Promise<Inspection> {
       component: state.contract.UnlitMaterial.id,
     },
   ]);
-  requireBatchSuccess(outcome, "remove producer material under Auto overlay");
+  requireBatchSuccess(outcome, "remove producer material");
   return await state.client.inspect();
 }
 
@@ -446,7 +448,7 @@ export async function reinsertProducerMaterial(): Promise<Inspection> {
       b: 0.06,
     }),
   ]);
-  requireBatchSuccess(outcome, "reinsert producer material under Auto overlay");
+  requireBatchSuccess(outcome, "reinsert producer material");
   return await state.client.inspect();
 }
 
@@ -458,8 +460,11 @@ export async function clearMaterialOverride(): Promise<void> {
 
 export async function unmountReactScene(): Promise<void> {
   const state = requireActive();
-  await state.root.render(null);
-  await state.root.flush();
+  // Unmount deletes nothing: the bound cube keeps the components React
+  // declared on it and their last values. Later steps use a fresh root.
+  // Removing the declarations instead would remove those components.
+  await state.root.unmount();
+  state.root = createRoot(state.client);
   state.material = undefined;
   state.transform = undefined;
 }
@@ -576,15 +581,17 @@ export async function removePrimaryResourceEntity(): Promise<ResourceSceneObserv
 }
 
 export async function recoverContext(): Promise<{
-  readonly beforeGeneration: number;
-  readonly afterGeneration: number;
+  readonly beforeGeneration: bigint;
+  readonly afterGeneration: bigint;
 }> {
   const state = requireActive();
   const before = requireCapture(state, "before-context-loss");
-  presentationTesting(state.presentation).loseContext();
+  const testing = presentationTesting(state.presentation.diagnostics);
+  testing.loseContext();
   await compositorBarrier();
   const resources = (await state.client.inspect()).resources;
-  presentationTesting(state.presentation).restoreContext();
+  testing.restoreContext();
+  await recoverRestoredContext(state.presentation);
   for (const resource of resources) {
     await waitForResource(
       state.client,
@@ -594,11 +601,11 @@ export async function recoverContext(): Promise<{
     );
   }
   const after = await captureCube("after-context-restore");
-  if (after.contextGeneration <= before.contextGeneration) {
+  if (after.contextGeneration <= before.view.surface.context) {
     throw new Error("context generation did not advance after restoration");
   }
   return {
-    beforeGeneration: before.contextGeneration,
+    beforeGeneration: before.view.surface.context,
     afterGeneration: after.contextGeneration,
   };
 }
@@ -624,17 +631,15 @@ export async function mountReactOwnedCube(): Promise<void> {
     React.createElement(
       SceneEntity,
       { id: "react-owned-cube" },
-      React.createElement(SceneTransform, { key: "transform", bound: false }),
+      React.createElement(SceneTransform, { key: "transform" }),
       React.createElement(SceneUnlitMaterial, {
         key: "material",
-        bound: false,
         r: 0.72,
         g: 0.72,
         b: 0.72,
       }),
       React.createElement(SceneMeshInstance, {
         key: "mesh",
-        bound: false,
         source: state.meshSource,
       }),
     ),
@@ -650,6 +655,8 @@ export async function unmountReactOwnedCube(): Promise<{
   const root = state.ownedRoot;
   if (!root) throw new Error("React-owned cube is not mounted");
   state.ownedRoot = undefined;
+  // Unmount deletes nothing; removing the declaration deletes the cube.
+  await root.render(null);
   await root.unmount();
   const inspection = await state.client.inspect();
   return {
@@ -662,15 +669,15 @@ export async function unmountReactOwnedCube(): Promise<{
 export async function captureCube(label: string): Promise<CaptureReport> {
   const state = requireActive();
   const inspection = await state.client.inspect();
-  const frame = await state.presentation.capture(inspection.tick);
-  if (frame.session !== state.client.session) {
-    throw new Error("capture returned a different client session");
-  }
-  if (frame.tick < inspection.tick) {
+  const frame = await state.presentation.capture();
+  const statistics = await state.presentation.diagnostics.statistics();
+  const tick = state.presentation.sourceTick(frame);
+  if (tick < inspection.tick) {
     throw new Error("capture predates the inspected core tick");
   }
-  if (frame.width !== VIEWPORT.width || frame.height !== VIEWPORT.height) {
-    throw new Error(`unexpected capture size ${frame.width}x${frame.height}`);
+  const { width, height } = frame.view.binding.viewport;
+  if (width !== VIEWPORT.width || height !== VIEWPORT.height) {
+    throw new Error(`unexpected capture size ${width}x${height}`);
   }
   state.captures.set(label, {
     ...frame,
@@ -679,15 +686,13 @@ export async function captureCube(label: string): Promise<CaptureReport> {
   await compositorBarrier();
   return {
     label,
-    session: frame.session,
-    tick: frame.tick,
+    tick,
     drawCalls: frame.drawCalls,
     triangles: frame.triangles,
-    contextGeneration: frame.contextGeneration,
+    contextGeneration: frame.view.surface.context,
     failedDrawCalls: frame.failedDrawCalls,
-    invalidCamera: frame.invalidCamera,
-    statistics: frame.statistics,
-    summary: summarizeImage(frame),
+    statistics,
+    summary: summarizeImage(capturedImage(frame)),
     inspection,
   };
 }
@@ -698,8 +703,8 @@ export function compareCaptured(
 ): ImageDifference {
   const state = requireActive();
   return compareImages(
-    requireCapture(state, firstLabel),
-    requireCapture(state, secondLabel),
+    capturedImage(requireCapture(state, firstLabel)),
+    capturedImage(requireCapture(state, secondLabel)),
   );
 }
 
@@ -708,7 +713,7 @@ export function sampleCaptured(
   x: number,
   y: number,
 ): readonly [number, number, number, number] {
-  const frame = requireCapture(requireActive(), label);
+  const frame = capturedImage(requireCapture(requireActive(), label));
   if (
     !Number.isInteger(x) ||
     !Number.isInteger(y) ||
@@ -730,10 +735,14 @@ export function sampleCaptured(
 }
 
 export async function captureDataUrl(label: string): Promise<string> {
-  return await frameDataUrl(requireCapture(requireActive(), label));
+  return await frameDataUrl(
+    capturedImage(requireCapture(requireActive(), label)),
+  );
 }
 
-export function captureMetadata(label: string): Omit<FrameCapture, "pixels"> {
+export function captureMetadata(
+  label: string,
+): Omit<PresentedCapture, "pixels"> {
   const { pixels: _pixels, ...metadata } = requireCapture(
     requireActive(),
     label,
@@ -746,8 +755,8 @@ export async function differenceDataUrl(
   secondLabel: string,
 ): Promise<string> {
   const state = requireActive();
-  const first = requireCapture(state, firstLabel);
-  const second = requireCapture(state, secondLabel);
+  const first = capturedImage(requireCapture(state, firstLabel));
+  const second = capturedImage(requireCapture(state, secondLabel));
   const a = new Uint8Array(first.pixels);
   const b = new Uint8Array(second.pixels);
   const pixels = new Uint8ClampedArray(a.byteLength);
@@ -780,7 +789,7 @@ export async function backgroundDataUrl(): Promise<string> {
 export async function differenceFromBackgroundDataUrl(
   label: string,
 ): Promise<string> {
-  const frame = requireCapture(requireActive(), label);
+  const frame = capturedImage(requireCapture(requireActive(), label));
   const pixels = new Uint8ClampedArray(frame.width * frame.height * 4);
   const source = new Uint8Array(frame.pixels);
   for (let offset = 0; offset < pixels.length; offset += 4) {
@@ -859,7 +868,7 @@ function requireActive(): FixtureState {
   return active;
 }
 
-function requireCapture(state: FixtureState, label: string): FrameCapture {
+function requireCapture(state: FixtureState, label: string): PresentedCapture {
   const frame = state.captures.get(label);
   if (!frame) throw new Error(`missing captured frame '${label}'`);
   return frame;

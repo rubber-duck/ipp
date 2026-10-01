@@ -1,6 +1,9 @@
 import type { RenderStatisticsSnapshot } from "@ipp/client";
 import { presentationTesting } from "../../packages/ipp-client/src/testing.js";
-import { activateFixtureCamera } from "../integration/camera-fixtures.js";
+import {
+  createFixtureCamera,
+  type HostedWorldClient,
+} from "../integration/camera-fixtures.js";
 import type { AssetWorldClient as Client } from "@ipp/client";
 import type {
   ComponentFieldValue,
@@ -12,7 +15,7 @@ import {
   AssetSourceFixture,
   type SourceResult,
 } from "./asset-source-fixture.js";
-import type { ClientPresentation, FrameCapture } from "@ipp/client";
+import type { PresentedCapture } from "@ipp/client";
 import {
   createRoot,
   Entity,
@@ -31,6 +34,13 @@ import {
   summarizeImage,
   VIEWPORT,
 } from "./image-assertions.js";
+import {
+  RootPresentation,
+  capturedImage,
+  recoverRestoredContext,
+  worldReference,
+} from "./root-presentation.js";
+import { SCENE, selectSystems } from "../integration/system-selections.js";
 
 export const OPTIONAL_LAYOUTS = ["position", "color", "uv", "weight"] as const;
 
@@ -100,8 +110,11 @@ interface GeneratedModule {
   readonly IppClient: {
     connectTransport(
       transport: import("@ipp/client").MessageTransport,
-      options: { readonly timeoutMs: number },
-    ): Promise<Client>;
+      options: {
+        readonly timeoutMs: number;
+        readonly selectedSystems: readonly string[];
+      },
+    ): Promise<HostedWorldClient<Client>>;
   };
   acceptBootstrap(bytes: Uint8Array): bigint;
   decodeResponse(
@@ -114,7 +127,7 @@ interface GeneratedModule {
 interface FixtureState {
   readonly contract: GeneratedModule;
   readonly client: Client;
-  readonly presentation: ClientPresentation;
+  readonly presentation: RootPresentation;
   readonly root: ReactWorldRoot;
   readonly producer: AssetSourceFixture;
   readonly sources: {
@@ -124,7 +137,7 @@ interface FixtureState {
     readonly legacyV1: string;
     readonly optional: Readonly<Record<OptionalLayout, string>>;
   };
-  readonly captures: Map<string, FrameCapture>;
+  readonly captures: Map<string, PresentedCapture>;
   scene:
     | "cube-textured"
     | "cube-untextured"
@@ -145,7 +158,7 @@ export interface TextureRuntimeConfiguration {
 export interface TextureSetupReport {
   readonly resources: readonly AssetResourceSnapshot[];
   readonly componentId: number;
-  readonly startupStatistics?: RenderStatisticsSnapshot | undefined;
+  readonly startupStatistics: RenderStatisticsSnapshot;
   readonly inspection: WorldInspection;
 }
 
@@ -172,14 +185,12 @@ export interface OptionalLayoutSample {
 
 export interface CaptureReport {
   readonly label: string;
-  readonly session: bigint;
   readonly tick: bigint;
   readonly drawCalls: number;
   readonly triangles: number;
-  readonly contextGeneration: number;
+  readonly contextGeneration: bigint;
   readonly failedDrawCalls: number;
-  readonly invalidCamera: boolean;
-  readonly statistics?: RenderStatisticsSnapshot | undefined;
+  readonly statistics: RenderStatisticsSnapshot;
   readonly summary: ImageSummary;
   readonly inspection: Inspection;
   readonly resourceCount: number;
@@ -235,7 +246,7 @@ export async function initializeTextures(
     throw new Error("Chromium does not expose OffscreenCanvas transfer");
   }
 
-  let client: Client | undefined;
+  let client: HostedWorldClient<Client> | undefined;
   let root: ReactWorldRoot | undefined;
   try {
     const contract = (await import(
@@ -247,20 +258,23 @@ export async function initializeTextures(
       contract.MAX_MESSAGE_BYTES,
       {
         canvas: canvas.transferControlToOffscreen(),
+        // Context recovery accounting counts exactly the live scene's uploads;
+        // the default unused-asset cache would also restore released textures.
+        assetCacheBytes: 0,
       },
     );
     client = await contract.IppClient.connectTransport(transport, {
+      selectedSystems: selectSystems(SCENE),
       timeoutMs: configuration.timeoutMs,
     });
     const producer = new AssetSourceFixture(client);
     if (
       !client.capabilities.spatial ||
-      !client.capabilities.stateOverlays ||
       !client.capabilities.textures ||
       !client.capabilities.builtinAssets
     ) {
       throw new Error(
-        "texture fixture requires scene, overlays, textures, and builtin assets",
+        "texture fixture requires scene, textures, and builtin assets",
       );
     }
     if (contract.UnlitTexture.id !== 6) {
@@ -268,18 +282,18 @@ export async function initializeTextures(
         `generated UnlitTexture id is ${contract.UnlitTexture.id}; expected 6`,
       );
     }
-    const presentation = client.presentation;
-    if (!presentation)
-      throw new Error("texture worker did not expose presentation");
-    presentation.resize(VIEWPORT.width, VIEWPORT.height);
-
-    const startupInspection = await client.inspect();
-    const startupFrame = await presentation.capture(startupInspection.tick);
+    const presentation = await RootPresentation.camera(
+      client.host,
+      worldReference(client),
+      await createFixtureCamera(client),
+      VIEWPORT,
+    );
+    const startupFrame = await presentation.capture();
+    const startupStatistics = await presentation.diagnostics.statistics();
     if (startupFrame.drawCalls !== 0 || startupFrame.triangles !== 0) {
       throw new Error("texture renderer drew before a scene was declared");
     }
 
-    await activateFixtureCamera(client);
     root = createRoot(client);
     active = {
       contract,
@@ -307,7 +321,7 @@ export async function initializeTextures(
     return {
       resources,
       componentId: contract.UnlitTexture.id,
-      startupStatistics: startupFrame.statistics,
+      startupStatistics,
       inspection: await inspectScene(active, "texture-cube"),
     };
   } catch (error) {
@@ -518,23 +532,25 @@ export async function setPlaneTextureEnabled(
 }
 
 export async function recoverTextureContext(beforeLabel: string): Promise<{
-  readonly beforeGeneration: number;
+  readonly beforeGeneration: bigint;
   readonly after: CaptureReport;
   readonly resourceCountBefore: number;
   readonly resourceCountAfter: number;
 }> {
   const state = requireActive();
-  const before = requireCapture(state, beforeLabel);
+  const before = requireFrame(state, beforeLabel).view.surface.context;
   const resourceCountBefore = (await state.client.inspect()).resources.length;
-  presentationTesting(state.presentation).loseContext();
+  const testing = presentationTesting(state.presentation.diagnostics);
+  testing.loseContext();
   await compositorBarrier();
-  presentationTesting(state.presentation).restoreContext();
+  testing.restoreContext();
+  await recoverRestoredContext(state.presentation);
   const after = await captureTextureFrame("after-context-restore");
-  if (after.contextGeneration <= before.contextGeneration) {
+  if (after.contextGeneration <= before) {
     throw new Error("context generation did not advance after restoration");
   }
   return {
-    beforeGeneration: before.contextGeneration,
+    beforeGeneration: before,
     after,
     resourceCountBefore,
     resourceCountAfter: after.resourceCount,
@@ -549,12 +565,14 @@ export async function rejectedTextureRecovery(): Promise<{
 }> {
   const state = requireActive();
   const before = await waitForResource(state, state.sources.checker, "loaded");
-  presentationTesting(state.presentation).loseContext();
+  const testing = presentationTesting(state.presentation.diagnostics);
+  testing.loseContext();
   await compositorBarrier();
-  presentationTesting(state.presentation).restoreContext();
+  testing.restoreContext();
+  await recoverRestoredContext(state.presentation);
   const after = await waitForResource(state, state.sources.checker, "failed");
-  const inspection = await state.client.inspect();
-  const frame = await state.presentation.capture(inspection.tick);
+  // The failed texture's draw never witnesses output inclusion.
+  const frame = await state.presentation.captureDraw();
   state.captures.set("rejected-recovery", frame);
   return { before, after, drawCalls: frame.drawCalls };
 }
@@ -565,29 +583,27 @@ export async function captureTextureFrame(
   const state = requireActive();
   await waitForActiveResources(state);
   const inspection = await state.client.inspect();
-  const frame = await state.presentation.capture(inspection.tick);
-  if (frame.session !== state.client.session) {
-    throw new Error("capture returned a different client session");
-  }
-  if (frame.tick < inspection.tick) {
+  const frame = await state.presentation.capture();
+  const statistics = await state.presentation.diagnostics.statistics();
+  const tick = state.presentation.sourceTick(frame);
+  if (tick < inspection.tick) {
     throw new Error("capture predates the inspected core tick");
   }
-  if (frame.width !== VIEWPORT.width || frame.height !== VIEWPORT.height) {
-    throw new Error(`unexpected capture size ${frame.width}x${frame.height}`);
+  const { width, height } = frame.view.binding.viewport;
+  if (width !== VIEWPORT.width || height !== VIEWPORT.height) {
+    throw new Error(`unexpected capture size ${width}x${height}`);
   }
   state.captures.set(label, { ...frame, pixels: frame.pixels.slice(0) });
   await compositorBarrier();
   return {
     label,
-    session: frame.session,
-    tick: frame.tick,
+    tick,
     drawCalls: frame.drawCalls,
     triangles: frame.triangles,
-    contextGeneration: frame.contextGeneration,
+    contextGeneration: frame.view.surface.context,
     failedDrawCalls: frame.failedDrawCalls,
-    invalidCamera: frame.invalidCamera,
-    statistics: frame.statistics,
-    summary: summarizeImage(frame),
+    statistics,
+    summary: summarizeImage(capturedImage(frame)),
     inspection,
     resourceCount: inspection.resources.length,
   };
@@ -680,11 +696,10 @@ export async function captureDataUrl(label: string): Promise<string> {
   return await frameDataUrl(requireCapture(requireActive(), label));
 }
 
-export function captureMetadata(label: string): Omit<FrameCapture, "pixels"> {
-  const { pixels: _pixels, ...metadata } = requireCapture(
-    requireActive(),
-    label,
-  );
+export function captureMetadata(
+  label: string,
+): Omit<PresentedCapture, "pixels"> {
+  const { pixels: _pixels, ...metadata } = requireFrame(requireActive(), label);
   return metadata;
 }
 
@@ -1040,17 +1055,14 @@ async function renderCube(
 ): Promise<void> {
   await state.root.render(
     <Entity id="texture-cube">
-      <Transform bound={false} />
+      <Transform />
       <UnlitMaterial
-        bound={false}
         r={CUBE_MATERIAL[0]}
         g={CUBE_MATERIAL[1]}
         b={CUBE_MATERIAL[2]}
       />
-      <MeshInstance bound={false} source={CUBE_SOURCE} />
-      {textured ? (
-        <UnlitTexture bound={false} source={state.sources.checker} />
-      ) : null}
+      <MeshInstance source={CUBE_SOURCE} />
+      {textured ? <UnlitTexture source={state.sources.checker} /> : null}
     </Entity>,
   );
   await state.root.flush();
@@ -1064,15 +1076,10 @@ async function renderQuad(
 ): Promise<void> {
   await state.root.render(
     <Entity id="sampler-quad">
-      <Transform bound={false} />
-      <UnlitMaterial
-        bound={false}
-        r={material[0]}
-        g={material[1]}
-        b={material[2]}
-      />
-      <MeshInstance bound={false} source={state.sources.quad} />
-      <UnlitTexture bound={false} source={texture} />
+      <Transform />
+      <UnlitMaterial r={material[0]} g={material[1]} b={material[2]} />
+      <MeshInstance source={state.sources.quad} />
+      <UnlitTexture source={texture} />
     </Entity>,
   );
   await state.root.flush();
@@ -1087,11 +1094,11 @@ async function renderOptionalLayouts(
     // child order alone does not change the core's entity-ordered draw list.
     layouts.map((layout, index) => (
       <Entity id={`optional-slot-${index}`} key={index}>
-        <Transform bound={false} />
-        <UnlitMaterial bound={false} />
-        <MeshInstance bound={false} source={state.sources.optional[layout]} />
+        <Transform />
+        <UnlitMaterial />
+        <MeshInstance source={state.sources.optional[layout]} />
         {layout === "uv" || layout === "weight" ? (
-          <UnlitTexture bound={false} source={state.sources.asymmetric} />
+          <UnlitTexture source={state.sources.asymmetric} />
         ) : null}
       </Entity>
     )),
@@ -1107,9 +1114,9 @@ async function inspectOptionalLayoutOrder(
   return inspection.entities
     .filter(({ metadata }) => metadata.symbolicId?.startsWith("optional-slot-"))
     .map((entity) => {
-      const source = componentFields(entity.effective, 5)?.source;
+      const source = componentFields(entity.components, 5)?.source;
       if (typeof source !== "string") {
-        throw new Error("optional layout entity has no effective mesh");
+        throw new Error("optional layout entity has no mesh");
       }
       return {
         entity: entity.id,
@@ -1130,15 +1137,10 @@ async function renderSingleMesh(
 ): Promise<void> {
   await state.root.render(
     <Entity id={id}>
-      <Transform bound={false} />
-      <UnlitMaterial
-        bound={false}
-        r={material[0]}
-        g={material[1]}
-        b={material[2]}
-      />
-      <MeshInstance bound={false} source={mesh} />
-      {texture ? <UnlitTexture bound={false} source={texture} /> : null}
+      <Transform />
+      <UnlitMaterial r={material[0]} g={material[1]} b={material[2]} />
+      <MeshInstance source={mesh} />
+      {texture ? <UnlitTexture source={texture} /> : null}
     </Entity>,
   );
   await state.root.flush();
@@ -1149,10 +1151,14 @@ function requireActive(): FixtureState {
   return active;
 }
 
-function requireCapture(state: FixtureState, label: string): FrameCapture {
+function requireFrame(state: FixtureState, label: string): PresentedCapture {
   const frame = state.captures.get(label);
   if (!frame) throw new Error(`missing captured frame '${label}'`);
   return frame;
+}
+
+function requireCapture(state: FixtureState, label: string): FramePixels {
+  return capturedImage(requireFrame(state, label));
 }
 
 async function waitForActiveResources(
@@ -1163,7 +1169,7 @@ async function waitForActiveResources(
     const inspection = await state.client.inspect();
     const sources = new Set(
       inspection.entities.flatMap((entity) =>
-        entity.effective
+        entity.components
           .map((component) => component.fields.source)
           .filter((source): source is string => typeof source === "string"),
       ),
@@ -1219,15 +1225,15 @@ async function inspectScene(
   );
   return {
     entityExists: entity !== undefined,
-    texture: componentFields(entity?.effective, 6),
-    material: componentFields(entity?.effective, 4),
+    texture: componentFields(entity?.components, 6),
+    material: componentFields(entity?.components, 4),
   };
 }
 
 function componentFields(
-  components: Inspection["entities"][number]["effective"] | undefined,
+  components: Inspection["entities"][number]["components"] | undefined,
   id: number,
-): Inspection["entities"][number]["effective"][number]["fields"] | null {
+): Inspection["entities"][number]["components"][number]["fields"] | null {
   return components?.find(({ component }) => component === id)?.fields ?? null;
 }
 
@@ -1281,7 +1287,7 @@ function quadPixelBounds(): {
 }
 
 function sample(
-  frame: FrameCapture,
+  frame: FramePixels,
   x: number,
   y: number,
 ): readonly [number, number, number, number] {
@@ -1299,7 +1305,7 @@ function sample(
 }
 
 function samplerExpectedPixels(
-  frame: FrameCapture,
+  frame: FramePixels,
 ): Uint8ClampedArray<ArrayBuffer> {
   const actual = new Uint8Array(frame.pixels);
   const expected = new Uint8ClampedArray(actual.byteLength);

@@ -120,6 +120,6 @@ where
         .map_err(|_| ErrorReason::InvalidField)
 }
 
-#[cfg(all(test, feature = "gui"))]
+#[cfg(test)]
 #[path = "row_property_destination_tests.rs"]
 mod tests;

@@ -297,7 +297,7 @@ test("Blender stress benchmark covers deformation, materials, constraints, geome
             continue;
           const actual = probes
             .find((p) => p.name === expected.name)!
-            .entity.effective.find((c) => "qx" in c.fields)!.fields;
+            .entity.components.find((c) => "qx" in c.fields)!.fields;
           const [x, y, z] = expected.position_blender;
           for (const [key, value] of Object.entries({ x, y: z, z: -y! }))
             assert.ok(
@@ -325,7 +325,7 @@ test("Blender stress benchmark covers deformation, materials, constraints, geome
           (p) => p.name === "parented-light-00",
         )!.entity;
         assert.equal(
-          light.effective.find((c) => "parent" in c.fields)!.fields.parent,
+          light.link.parent,
           probes.find((p) => p.name === "drop-000-000")!.entity.id,
         );
         const baked = probes.find(
@@ -334,7 +334,7 @@ test("Blender stress benchmark covers deformation, materials, constraints, geome
         assert.ok(
           Math.abs(
             Number(
-              baked.effective.find((c) => "time" in c.fields)!.fields.time,
+              baked.components.find((c) => "time" in c.fields)!.fields.time,
             ) - time,
           ) < 1e-5,
         );

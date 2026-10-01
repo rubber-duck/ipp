@@ -4,7 +4,7 @@
 //! its authored item count and per-item extent estimate rather than from its
 //! children. Every item occupies the estimate along the main axis except a
 //! declared child, whose measured extent replaces the estimate while it is
-//! declared. A child's item index is its tree order key, so child order is
+//! declared. A child's item index is its declared item index, so child order is
 //! index order; children past the item count and later children repeating an
 //! index are not laid out and paint nothing.
 //!
@@ -15,24 +15,21 @@
 //! window, never by the item count.
 //!
 //! Positions and offsets are in the list's local logical units along its
-//! main axis, the space of its input-owned scroll offset. The persisted
+//! main axis, the space of its scroll offset. The persisted
 //! anchor (first visible item and offset into it) maps to a scroll offset
 //! through the current positions, so a measurement above the viewport moves
 //! the offset with the content it measured and visible content stays put.
-
-use super::super::tree::GuiNodeDataRow;
-use super::super::tree::nodes::GuiNodeId;
 
 /// Main axis of a list without a valid `axis` property: vertical.
 const DEFAULT_AXIS: usize = 1;
 
 /// One declared child laid out at its item index.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct GuiVirtualItem {
-    /// Item index; the child's tree order key.
+pub(crate) struct GuiVirtualItem<Identity> {
+    /// Item index of the declared child.
     pub(crate) index: u32,
-    /// Declared child node.
-    pub(crate) node: GuiNodeId,
+    /// Declared child identity.
+    pub(crate) node: Identity,
     /// Main-axis position of its leading edge.
     pub(crate) position: f32,
     /// Measured main-axis extent.
@@ -41,7 +38,7 @@ pub(crate) struct GuiVirtualItem {
 
 /// Evaluated item placement of one VirtualList, retained with its view.
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct GuiVirtualListLayout {
+pub(crate) struct GuiVirtualListLayout<Identity> {
     /// Authored item count.
     pub(crate) item_count: u32,
     /// Main-axis extent estimate per item, positive.
@@ -53,28 +50,32 @@ pub(crate) struct GuiVirtualListLayout {
     /// Main-axis viewport extent.
     pub(crate) viewport: f32,
     /// Declared children in ascending index order.
-    pub(crate) items: Vec<GuiVirtualItem>,
+    pub(crate) items: Vec<GuiVirtualItem<Identity>>,
 }
 
-impl GuiVirtualListLayout {
-    /// Empty placement from a list's data row for a viewport of `viewport`
-    /// local units. The item estimate is a logical length like every
-    /// authored length, so layout reads it unscaled.
-    pub(crate) fn new(values: &GuiNodeDataRow, viewport: [f32; 2]) -> Self {
-        let axis = match values.axis {
-            Some(0) => 0,
-            Some(1) => 1,
-            _ => DEFAULT_AXIS,
+impl<Identity: Copy> GuiVirtualListLayout<Identity> {
+    /// Construct retained placement independently of the author's storage format.
+    /// Item indices are supplied explicitly; identities never determine positions.
+    pub(crate) fn from_parameters(
+        item_count: u32,
+        item_extent: f32,
+        overscan: u32,
+        axis: usize,
+        viewport: [f32; 2],
+    ) -> Self {
+        let axis = if axis <= 1 {
+            axis
+        } else {
+            DEFAULT_AXIS
         };
-        let extent = values.item_extent.unwrap_or(1.0);
         Self {
-            item_count: values.item_count.unwrap_or(0),
-            item_extent: if extent.is_finite() && extent > 0.0 {
-                extent
+            item_count,
+            item_extent: if item_extent.is_finite() && item_extent > 0.0 {
+                item_extent
             } else {
                 1.0
             },
-            overscan: values.overscan.unwrap_or(0),
+            overscan,
             axis,
             viewport: viewport[axis],
             items: Vec::new(),
@@ -103,7 +104,7 @@ impl GuiVirtualListLayout {
 
     /// Record one declared child at `index` with its measured main extent,
     /// or the estimate when it could not measure.
-    pub(crate) fn push(&mut self, index: u32, node: GuiNodeId, size: [f32; 2], measured: bool) {
+    pub(crate) fn push(&mut self, index: u32, node: Identity, size: [f32; 2], measured: bool) {
         let extent = size[self.axis];
         let extent = if measured && extent.is_finite() && extent >= 0.0 {
             extent
@@ -125,11 +126,6 @@ impl GuiVirtualListLayout {
         let mut size = viewport;
         size[self.axis] = self.content_extent();
         size
-    }
-
-    /// Largest main-axis scroll offset: the content beyond the viewport.
-    pub(crate) fn capacity(&self) -> f32 {
-        (self.content_extent() - self.viewport).max(0.0)
     }
 
     /// Total main extent of every item.
@@ -230,14 +226,6 @@ impl GuiVirtualListLayout {
                 .saturating_add(self.overscan)
                 .min(self.item_count),
         )
-    }
-
-    /// Range of declared item indices `[first, last)`, empty without any.
-    pub(crate) fn loaded_range(&self) -> (u32, u32) {
-        match (self.items.first(), self.items.last()) {
-            (Some(first), Some(last)) => (first.index, last.index + 1),
-            _ => (0, 0),
-        }
     }
 }
 

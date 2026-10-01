@@ -1,93 +1,53 @@
 use super::*;
 
 impl<P: HostServices> WorldSessionContext<'_, P> {
-    /// Complete exactly one host-clock frame, including idle frames.
-    pub(super) fn prepare_frame(&mut self, dt: f64) -> Result<(), String> {
+    /// Admit one request in Host order without evaluating the World.
+    pub(super) fn prepare_request(&mut self, dt: f64) -> Result<(), String> {
         if let Some(error) = self.session.pending_errors.remove(&0) {
             return Err(error);
         }
-        if self.session.prepared || !self.session.ready {
+        if !self.session.ready {
             return Ok(());
-        }
-        if self.session.pending.len() + self.session.outbox.len() + EVENT_RESERVE > MAX_OUTBOX {
-            return Err("connection congestion: reliable output capacity exhausted".to_owned());
         }
         if !dt.is_finite() || dt < 0.0 || !(self.world.time() + dt).is_finite() {
             return Err("invalid host frame delta".to_owned());
         }
 
         let mut replies = std::mem::take(&mut self.session.replies);
-        replies.clear();
-        replies.reserve(self.session.pending.len());
-        while !self.session.pending.front().is_some_and(|request| {
-            matches!(
-                request.body,
-                RequestBody::BeginBatch | RequestBody::EndBatch(_)
-            ) || is_command_batch_continuation(&request.body)
-        }) {
+        replies.reserve(1);
+        'request: {
             let Some(request) = self.session.pending.pop_front() else {
-                break;
+                break 'request;
             };
+            // An assembled batch leaves the connection's buffered budget for the World queue.
+            self.session.batch_leases.remove(&request.request_id);
             if let Some(error) = self.session.pending_errors.remove(&request.request_id) {
                 replies.push((request.request_id, WorldSessionReply::Rejected(error)));
-                continue;
+                break 'request;
             }
             let reply = match request.body {
-                #[cfg(feature = "surfaces")]
-                RequestBody::SurfaceCommand(command) => {
-                    match self.world.enqueue_system_command_with_reply(
-                        ipp_core::systems::surface::SurfaceSystem::ID,
-                        self.session.id,
-                        request.request_id,
-                        command,
-                    ) {
-                        Ok(()) => WorldSessionReply::SurfaceCommand,
-                        Err(error) => WorldSessionReply::Rejected(error.to_string()),
+                #[cfg(feature = "gui")]
+                RequestBody::GuiObservation(control) => {
+                    match self.prepare_gui_observation(request.request_id, control) {
+                        Ok(()) => break 'request,
+                        Err(error) => WorldSessionReply::Rejected(error),
                     }
                 }
-                #[cfg(feature = "gui")]
-                RequestBody::GuiCommands {
-                    batch_id: None,
-                    commands,
-                } => {
-                    match self.world.enqueue_gui_commands_with_reply(
-                        self.session.id,
-                        request.request_id,
-                        commands,
-                    ) {
-                        Ok(()) => WorldSessionReply::GuiCommands,
-                        Err(error) => WorldSessionReply::Rejected(error.to_string()),
-                    }
-                }
-                #[cfg(feature = "gui")]
-                RequestBody::GuiInspect(query) => WorldSessionReply::GuiInspect(query),
-                #[cfg(feature = "gui")]
-                RequestBody::GuiInput(command) => {
-                    match self.world.enqueue_gui_input_command_with_reply(
-                        self.session.id,
-                        request.request_id,
-                        *command,
-                    ) {
-                        Ok(()) => WorldSessionReply::GuiInput,
-                        Err(error) => WorldSessionReply::Rejected(error.to_string()),
-                    }
-                }
-                #[cfg(feature = "gui")]
-                RequestBody::GuiSemanticSnapshot(query) => {
-                    WorldSessionReply::GuiSemanticSnapshot(query)
-                }
-                #[cfg(feature = "gui")]
-                RequestBody::GuiSemanticAction(action_request) => {
-                    self.resolve_semantic_action(request.request_id, &action_request)
-                }
-                RequestBody::BeginBatch | RequestBody::EndBatch(_) | RequestBody::BatchChunk(_) => {
-                    unreachable!("Host command batch boundary")
-                }
-                #[cfg(feature = "gui")]
-                RequestBody::GuiCommands {
-                    batch_id: Some(_),
+                RequestBody::AttachmentReceipt {
                     ..
-                } => unreachable!("Host command batch continuation"),
+                } => {
+                    unreachable!("Host receipt boundary")
+                }
+                RequestBody::LifecycleWatch(control) => {
+                    match self.prepare_lifecycle_watch(request.request_id, control) {
+                        Ok(()) => break 'request,
+                        Err(error) => WorldSessionReply::Rejected(error),
+                    }
+                }
+                #[cfg(feature = "diagnostics")]
+                RequestBody::LifecycleDiagnostics(query) => {
+                    WorldSessionReply::LifecycleDiagnostics(query)
+                }
                 RequestBody::LifecycleSubscription(command) => {
                     match self.world.enqueue_system_command_with_reply(
                         LifecyclePublisherSystem::ID,
@@ -109,7 +69,8 @@ impl<P: HostServices> WorldSessionContext<'_, P> {
                             "[IPP host] playback.enqueue.reject reason={_reason}"
                         );
                     }
-                    continue;
+                    self.session.request_origins.remove(&request.request_id);
+                    break 'request;
                 }
                 RequestBody::AnimationController(command) => {
                     match self
@@ -120,42 +81,101 @@ impl<P: HostServices> WorldSessionContext<'_, P> {
                         Err(error) => WorldSessionReply::Rejected(error.to_string()),
                     }
                 }
-                RequestBody::Batch(batch) => {
+                RequestBody::SubmitBatch(page) => {
+                    let mut batch = ipp_core::Batch {
+                        id: request.request_id,
+                        operations: page.operations,
+                    };
+                    // Unconditional: `diagnostic!` expands whenever `ipp-core`
+                    // diagnostics is enabled, which feature unification can do
+                    // without this crate's own `diagnostics` feature.
+                    let (_batch_id, _operations) = (page.batch_id, batch.operations.len());
                     #[cfg(feature = "diagnostics")]
-                    let (batch_id, operations) = (batch.id, batch.operations.len());
-                    #[cfg(feature = "diagnostics")]
-                    if operations != 0 {
+                    if _operations != 0 {
                         ipp_core::diagnostic!(
                             Debug,
-                            "[IPP {}] buffer.processing session={} request={} batch={} operations={}",
+                            "[IPP {}] buffer.processing session={} request={} batch={} operations={} client_batch={}",
                             P::NAME,
                             self.session.id,
                             request.request_id,
-                            batch_id,
-                            operations
+                            request.request_id,
+                            _operations,
+                            _batch_id
                         );
                     }
-                    match self.world.enqueue(batch) {
+                    // Bound the outcome's symbol reports like its aliases, before
+                    // anything applies: too many is refused here, and their text
+                    // joins the reply admission of the receipt sink with the
+                    // aliases the batch defines and the adoptions it can report.
+                    let mut symbols = ipp_core::BatchSymbolReports::default();
+                    let (mut aliases, mut adoptions) = (0, 0);
+                    for command in &mut batch.operations {
+                        symbols.add(command);
+                        aliases += usize::from(attachment_receipts::defines_alias(command));
+                        adoptions += usize::from(attachment_receipts::may_adopt(command));
+                    }
+                    let result = if symbols.reports() > ipp_protocol::BATCH_OUTCOME_ALIASES {
+                        Err(format!(
+                            "Batch names more than {} distinct symbolic references, which one batch outcome cannot report",
+                            ipp_protocol::BATCH_OUTCOME_ALIASES
+                        ))
+                    } else {
+                        attachment_receipts::ReceiptSink::new(
+                            self.session.receipts.clone(),
+                            self.session.reply_reservations[&request.request_id].clone(),
+                            aliases,
+                            adoptions,
+                            &symbols,
+                        )
+                        .and_then(|(sink, reservation)| {
+                            self.session
+                                .reply_reservations
+                                .insert(request.request_id, reservation);
+                            self.world.enqueue_with_effect_sink(batch, Box::new(sink))
+                        })
+                        .map_err(|error| error.to_string())
+                    };
+                    match result {
                         Ok(()) => WorldSessionReply::Batch {
                             #[cfg(feature = "diagnostics")]
-                            operations,
+                            operations: _operations,
                         },
                         Err(error) => {
                             ipp_core::diagnostic!(
                                 Warn,
-                                "[IPP {}] buffer.reject session={} request={} batch={} operations={} reason={}",
+                                "[IPP {}] buffer.reject session={} request={} batch={} operations={} client_batch={} reason={}",
                                 P::NAME,
                                 self.session.id,
                                 request.request_id,
-                                batch_id,
-                                operations,
+                                request.request_id,
+                                _operations,
+                                _batch_id,
                                 error
                             );
-                            WorldSessionReply::Rejected(error.to_string())
+                            WorldSessionReply::Rejected(error)
                         }
                     }
                 }
-                RequestBody::Inspect(query) => WorldSessionReply::Inspect(query),
+                RequestBody::Inspect(query) => {
+                    let required = match query.collection {
+                        3 => Some(ipp_core::systems::WorldOperation::Animation),
+                        4 => Some(ipp_core::systems::WorldOperation::Rendering),
+                        #[cfg(feature = "gui")]
+                        6 | 7 => Some(ipp_core::systems::WorldOperation::Gui),
+                        #[cfg(feature = "surfaces")]
+                        8 => Some(ipp_core::systems::WorldOperation::Canvas),
+                        _ => None,
+                    };
+                    if required.is_some_and(|operation| {
+                        !self.world.manifest().supports_operation(operation)
+                    }) {
+                        WorldSessionReply::Rejected(
+                            "Unsupported inspection collection for this World".to_owned(),
+                        )
+                    } else {
+                        WorldSessionReply::Inspect(query)
+                    }
+                }
                 RequestBody::RenderStateUpdateCommand(patch) => {
                     if let Err(_reason) = self.world.enqueue_render_state_update(patch) {
                         ipp_core::diagnostic!(
@@ -166,12 +186,12 @@ impl<P: HostServices> WorldSessionContext<'_, P> {
                             _reason
                         );
                     }
-                    continue;
+                    self.session.request_origins.remove(&request.request_id);
+                    break 'request;
                 }
-                RequestBody::CameraActivateCommand {
-                    entity,
-                } => {
-                    if let Err(_reason) = self.world.enqueue_camera_activate(entity) {
+                #[cfg(feature = "surfaces")]
+                RequestBody::CanvasStateUpdateCommand(update) => {
+                    if let Err(_reason) = self.world.enqueue_canvas_state_update(update) {
                         ipp_core::diagnostic!(
                             Warn,
                             "[IPP {}] command.reject session={} reason={}",
@@ -180,26 +200,40 @@ impl<P: HostServices> WorldSessionContext<'_, P> {
                             _reason
                         );
                     }
-                    continue;
+                    self.session.request_origins.remove(&request.request_id);
+                    break 'request;
                 }
-                RequestBody::CameraNavigateCommand(motion) => {
-                    if let Err(_reason) = self.world.enqueue_camera_navigate(motion) {
-                        ipp_core::diagnostic!(
-                            Warn,
-                            "[IPP {}] command.reject session={} reason={}",
-                            P::NAME,
-                            self.session.id,
-                            _reason
-                        );
+                RequestBody::GeometryPickQuery(query) => {
+                    if !self
+                        .world
+                        .manifest()
+                        .supports_operation(ipp_core::systems::WorldOperation::Camera)
+                        || !self
+                            .world
+                            .manifest()
+                            .supports_operation(ipp_core::systems::WorldOperation::Geometry)
+                    {
+                        WorldSessionReply::Rejected(
+                            "Unsupported camera/geometry query for this World".to_owned(),
+                        )
+                    } else {
+                        WorldSessionReply::GeometryPick(query)
                     }
-                    continue;
                 }
-                RequestBody::GeometryPickQuery(query) => WorldSessionReply::GeometryPick(
-                    self.world.enqueue_geometry_pick(request.request_id, query),
-                ),
-                RequestBody::CameraProjectQuery(query) => WorldSessionReply::CameraProject(
-                    self.world.enqueue_camera_project(request.request_id, query),
-                ),
+                RequestBody::CameraProjectQuery(query) => {
+                    if !self
+                        .world
+                        .manifest()
+                        .supports_operation(ipp_core::systems::WorldOperation::Camera)
+                    {
+                        WorldSessionReply::Rejected(
+                            "Unsupported camera projection for this World".to_owned(),
+                        )
+                    } else {
+                        WorldSessionReply::CameraProject(query)
+                    }
+                }
+                RequestBody::CameraNavigate(_) => unreachable!("Host camera admission boundary"),
             };
             replies.push((request.request_id, reply));
         }
@@ -207,41 +241,5 @@ impl<P: HostServices> WorldSessionContext<'_, P> {
         self.session.replies = replies;
         self.session.prepared = true;
         Ok(())
-    }
-
-    /// Evaluate and publish a prepared session frame after shared service progress.
-    pub fn tick(&mut self, dt: f64) -> Result<(), String> {
-        self.prepare_frame(dt)?;
-        if !self.session.ready {
-            return Ok(());
-        }
-        self.world
-            .prepare_update(dt)
-            .map_err(|error| error.to_string())?;
-
-        self.world
-            .set_render_viewport(self.services.render_viewport());
-
-        #[allow(unused_mut)]
-        let mut report = self.world.step(dt).map_err(|error| error.to_string())?;
-        if let Some(reason) = self.world.fault() {
-            self.record_runtime_failure(
-                ipp_protocol::RuntimeFailureScope::World,
-                true,
-                reason.to_string(),
-            )?;
-        } else if let Err(error) = self.services.present(&mut self.world) {
-            self.record_runtime_failure(error.scope, false, error.message)?;
-        } else {
-            self.session.last_failure = None;
-        }
-        {
-            report
-                .resource_changes
-                .extend(self.world.take_asset_events()?);
-        }
-
-        report.assets.extend(self.world.take_asset_outcomes());
-        self.publish_report(&report)
     }
 }

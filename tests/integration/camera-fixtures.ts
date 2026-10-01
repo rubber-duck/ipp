@@ -3,11 +3,22 @@ import type {
   CameraWorldClient,
   Client,
   Command,
+  CommandPageLimits,
   EntityRef,
   FieldWrite,
+  HostClientBase,
 } from "@ipp/client";
 
-export const CAMERA_VIEWPORT = Object.freeze({ width: 320, height: 240 });
+/** A generated World client opened through a connect convenience keeps its Host. */
+export type HostedWorldClient<T extends Client = Client> = T & {
+  readonly host: HostClientBase<Client>;
+};
+
+export const CAMERA_VIEWPORT = Object.freeze({
+  width: 320,
+  height: 240,
+  devicePixelRatio: 1,
+});
 export const ORTHOGRAPHIC_CAMERA = Object.freeze({
   projection: 1,
   fov_y: Math.PI / 4,
@@ -70,6 +81,17 @@ export function createEntity(alias: number, symbolicId: string): Command {
   return { kind: "create", alias, metadata: { symbolicId, classes: [] } };
 }
 
+/** Batch page bounds of the connected target's generated client. */
+export function pageLimits(client: Client): CommandPageLimits {
+  return (client as unknown as { commandPageLimits: CommandPageLimits })
+    .commandPageLimits;
+}
+
+/** Commands in one full batch page of the connected target. */
+export function pageCommands(client: Client): number {
+  return pageLimits(client).commands;
+}
+
 export function successfulBatch(
   outcome: BatchOutcome,
 ): Extract<BatchOutcome, { ok: true }> {
@@ -97,7 +119,7 @@ export function cameraClient(client: Client): CameraWorldClient {
 }
 
 /** Explicitly author the former fixture view: eye (3,2,5), looking at the origin. */
-export async function activateFixtureCamera(client: Client): Promise<bigint> {
+export async function createFixtureCamera(client: Client): Promise<bigint> {
   const yaw = Math.atan2(3, 5);
   const pitch = -Math.atan2(2, Math.hypot(3, 5));
   const sy = Math.sin(yaw / 2);
@@ -128,13 +150,7 @@ export async function activateFixtureCamera(client: Client): Promise<bigint> {
       projection: 0,
     }),
   ]);
-  const id = aliasId(outcome, entity.alias);
-  cameraClient(client).sendCommand({
-    type: "CameraActivateCommand",
-    entity: id,
-  });
-  await client.inspect();
-  return id;
+  return aliasId(outcome, entity.alias);
 }
 
 /** Four quads surround a square hole; its box contains points with no triangles. */

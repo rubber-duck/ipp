@@ -2,6 +2,7 @@
 
 mod support;
 use support::WorldTestDriver;
+use support::selection::RENDER;
 
 use ipp_core::{
     Batch, Command, ComponentValue, EntityRef,
@@ -12,7 +13,7 @@ use ipp_core::{
 fn invalid_light_batch_keeps_prior_components_and_light_order_is_stable() {
     let mut world_host = ipp_core::HostRuntime::new();
     let world_id = world_host
-        .create_world(ipp_core::WorldLimits::default())
+        .create_world(ipp_core::WorldLimits::default(), RENDER)
         .unwrap();
     let mut world = world_host.world_mut(world_id).unwrap();
     let operations = |light: Light| {
@@ -20,6 +21,7 @@ fn invalid_light_batch_keeps_prior_components_and_light_order_is_stable() {
             Command::Create {
                 alias: 0,
                 metadata: Default::default(),
+                adopt: false,
             },
             Command::insert_value(
                 EntityRef::Alias(0),

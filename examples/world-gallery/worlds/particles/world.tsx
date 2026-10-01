@@ -7,7 +7,6 @@ import {
   ParticleSprite,
   ParticleMesh,
 } from "@ipp/react";
-import { World } from "@ipp/react/web";
 import { hexToLinear } from "../../shared/colors.js";
 import type { ParticleSettings } from "./controls.js";
 
@@ -15,7 +14,7 @@ import type { ParticleSettings } from "./controls.js";
 export function ParticlesWorld({ settings }: { settings: ParticleSettings }) {
   const color = hexToLinear(settings.color);
   return (
-    <World>
+    <>
       <Entity id="particle-plinth">
         <Transform y={-1.9} />
         <MeshInstance source="ipp://mesh/cube?width=2.4&height=0.16&length=2.4" />
@@ -60,6 +59,6 @@ export function ParticlesWorld({ settings }: { settings: ParticleSettings }) {
           </>
         )}
       </Entity>
-    </World>
+    </>
   );
 }

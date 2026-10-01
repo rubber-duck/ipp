@@ -1,4 +1,4 @@
-/** Assemble public React entries plus the browser-only native text harness. */
+/** Assemble public React entries. */
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { build } from "esbuild";
@@ -46,17 +46,6 @@ const result = await build({
   ],
   define: { "process.env.NODE_ENV": JSON.stringify("production") },
 });
-await build({
-  absWorkingDir: workspace,
-  entryPoints: [resolve(directory, "src/gui/text-bridge.ts")],
-  outfile: resolve(output, "native-text-bridge.js"),
-  bundle: true,
-  format: "esm",
-  platform: "browser",
-  target: "es2023",
-  minify: true,
-  legalComments: "none",
-});
 if (
   Object.keys(result.metafile.inputs).some((path) =>
     path.includes("node_modules/react-dom/"),
@@ -68,10 +57,9 @@ const artifacts = await Promise.all(
     ...Object.keys(result.metafile.outputs).map((path) =>
       resolve(workspace, path),
     ),
-    resolve(output, "native-text-bridge.js"),
   ].map((path) => artifact(path)),
 );
 await writeFile(
   resolve(output, "build-report.json"),
-  `${JSON.stringify({ scope: "Public React entries with shared reconciler and standalone native text bridge harness; React and IPP client external from public entries", artifacts }, null, 2)}\n`,
+  `${JSON.stringify({ scope: "Public React entries with shared reconciler; React and IPP client external from public entries", artifacts }, null, 2)}\n`,
 );

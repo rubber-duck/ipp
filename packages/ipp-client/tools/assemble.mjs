@@ -8,13 +8,19 @@ export const CLIENT_SUPPORT_MODULES = [
   "client.ts",
   "command-pages.ts",
   "dynamic-properties.ts",
-  "surface-types.ts",
   "gui-types.ts",
+  "gui-observations.ts",
+  "lifecycle-types.ts",
+  "lifecycle-watches.ts",
+  "lifecycle-diagnostics.ts",
   "host-client.ts",
   "host-protocol.ts",
+  "host-presentation.ts",
+  "host-input.ts",
   "asset-sources.ts",
   "logging.ts",
   "presentation.ts",
+  "references.ts",
   "resource-urls.ts",
   "transport.ts",
   "types.ts",
@@ -62,6 +68,7 @@ export async function assembleBrowserHost(
   else await rm(surfaceNotice, { force: true });
   const modules = [
     "wasm-worker.ts",
+    "worker-connections.ts",
     "logging.ts",
     "resource-worker.ts",
     // Loaded only when a profiling runtime exports its benchmark hooks.

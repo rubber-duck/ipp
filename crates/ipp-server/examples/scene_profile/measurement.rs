@@ -46,11 +46,7 @@ pub(super) fn frame(
     let update = started.elapsed().as_secs_f64() * 1000.0;
     let submitted = Instant::now();
     let stats = if render {
-        let summary = renderer.render(
-            &mut scene.host.world_mut(scene.world).unwrap(),
-            WIDTH,
-            HEIGHT,
-        )?;
+        let summary = scene.render(renderer)?;
         FrameStats::read(renderer, summary)
     } else {
         FrameStats::default()
@@ -124,20 +120,20 @@ pub(super) fn measure(
         let mut stages = std::fs::File::create(output.join(format!("{label}-stages.csv")))?;
         writeln!(
             stages,
-            "system,phase,calls,ms_per_frame,allocations,requested_bytes"
+            "composition,system,phase,calls,ms_per_frame,allocations,requested_bytes"
         )?;
-        for system in 0..32 {
+        for system in 0..profile::system_count() {
             let name = profile::system_name(system);
             if name.is_empty() {
                 continue;
             }
             for (phase, label) in [
-                "check", "accept", "restore", "prepare", "evaluate", "finish",
+                "check", "accept", "prepare", "evaluate", "finish", "observe",
             ]
             .iter()
             .enumerate()
             {
-                let offset = (system * 6 + phase) * 4;
+                let offset = (system * profile::SYSTEM_PHASES + phase) * 4;
                 if profile::counter(offset) == 0 {
                     continue;
                 }
@@ -148,7 +144,8 @@ pub(super) fn measure(
                 };
                 writeln!(
                     stages,
-                    "{name},{label},{},{},{},{}",
+                    "{},{name},{label},{},{},{},{}",
+                    profile::system_composition(system),
                     profile::counter(offset),
                     profile::counter(offset + 1) as f64 / 5e6,
                     profile::counter(offset + 2),

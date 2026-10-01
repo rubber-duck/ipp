@@ -36,7 +36,10 @@ for (const scenario of lifecycleHostCases) {
           environment.page.evaluate(
             async ({ urls, name }) => {
               const contract = await import(urls.generated);
-              const { lifecycleHostCases: cases } = await import(
+              const {
+                lifecycleHostCases: cases,
+                LIFECYCLE_SUBSCRIPTION_SYSTEMS: selectedSystems,
+              } = await import(
                 `${urls.origin}/dist/tests/integration/lifecycle-subscriptions-cases.js`
               );
               const scenario = cases.find(
@@ -47,6 +50,12 @@ for (const scenario of lifecycleHostCases) {
               const client = await contract.IppClient.connectWorker(
                 urls.workerScript,
                 urls.wasm,
+                {
+                  selectedSystems,
+                  ...(scenario.assetCacheBytes === undefined
+                    ? {}
+                    : { assetCacheBytes: scenario.assetCacheBytes }),
+                },
               );
               try {
                 const record = (

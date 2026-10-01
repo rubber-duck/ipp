@@ -1,11 +1,8 @@
 import type {
   AssetWorldClient,
   AnimationWorldClient,
-  BatchOutcome,
   Client,
   GuiWorldClient,
-  SurfaceWorldClient,
-  Command,
 } from "@ipp/client";
 
 /** Public metadata and asynchronous operations used by the renderer. */
@@ -15,9 +12,15 @@ export type ReactWorldClient = Pick<
   | "schemaHash"
   | "capabilities"
   | "components"
+  | "manifest"
   | "batch"
-  | "onDiagnostic"
 > &
+  Partial<
+    Pick<
+      Client,
+      "worldReference" | "closure" | "closed" | "watchLifecycle" | "inspectPage"
+    >
+  > &
   Partial<
     Pick<
       AssetWorldClient,
@@ -36,33 +39,4 @@ export type ReactWorldClient = Pick<
       | "onPlaybackEvent"
     >
   > &
-  Partial<Pick<SurfaceWorldClient, "encodeSurfaceItems">> &
-  Partial<
-    Pick<
-      GuiWorldClient,
-      "editGui" | "editGuiBatch" | "inspectGui" | "createGuiNodeHandle"
-    >
-  >;
-
-export type {
-  ComponentOverlayMode,
-  EntityOverlayMode,
-  StateOverlayLifecycleDiagnostic,
-  StateOverlayRef,
-} from "@ipp/client";
-
-export type StateOverlayOutcome = BatchOutcome;
-export type StateOverlayCommand = Extract<
-  Command,
-  {
-    kind:
-      | "createStateOverlayOwner"
-      | "releaseStateOverlayOwner"
-      | "attachEntityOverlayBinding"
-      | "releaseEntityOverlayBinding"
-      | "attachComponentStateOverlay"
-      | "updateComponentStateOverlay"
-      | "updateDynamicComponentStateOverlay"
-      | "releaseComponentStateOverlay";
-  }
->;
+  Partial<Pick<GuiWorldClient, "subscribeGuiEffects">>;

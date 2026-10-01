@@ -53,7 +53,14 @@ pub(crate) fn run(
         return Err("nested Surface cache targets were accepted".into());
     }
     if device
-        .draw_surface_cache(&program, &target, &content, &size)
+        .draw_surface_cache(
+            &program,
+            &target,
+            &content,
+            &size,
+            &[0.0, 0.0, size[0], size[1]],
+            1.0,
+        )
         .is_ok()
     {
         return Err("the bound Surface cache target was sampled".into());
@@ -95,7 +102,14 @@ pub(crate) fn run(
     for mvp in [&front, &mirrored] {
         device.begin_frame(WIDTH, HEIGHT, &[0.0, 0.0, 1.0, 1.0])?;
         device.set_surface_double_sided(true)?;
-        device.draw_surface_cache(&program, &target, mvp, &size)?;
+        device.draw_surface_cache(
+            &program,
+            &target,
+            mvp,
+            &size,
+            &[0.0, 0.0, size[0], size[1]],
+            1.0,
+        )?;
         device.set_surface_double_sided(false)?;
         device.end_frame()?;
         captures.push(context.capture()?);

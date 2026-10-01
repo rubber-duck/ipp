@@ -1,17 +1,20 @@
 import type { DynamicValue } from "./dynamic-properties.js";
-import type { SurfaceEdit } from "./surface-types.js";
+import type { RootBinding } from "./host-presentation.js";
 import type {
-  GuiEdit,
-  GuiEditBatchOutcome,
-  GuiInputCommand,
-  GuiInputRoutingOutcome,
-  GuiInspectQuery,
-  GuiInspectResponse,
-  GuiObservationBatch,
-  GuiSemanticActionRequest,
-  GuiSemanticSnapshotQuery,
-  GuiSemanticTree,
-  GuiUnhandledObservation,
+  LifecycleDiagnosticQuery,
+  LifecycleDiagnosticSample,
+} from "./lifecycle-diagnostics.js";
+import type {
+  LifecycleWatchRequest,
+  LifecycleWatchRecord,
+} from "./lifecycle-types.js";
+export type * from "./lifecycle-types.js";
+import type {
+  GuiAction,
+  GuiFocusRecord,
+  GuiPointerRecord,
+  GuiObservationRequest,
+  GuiObservationRecord,
 } from "./gui-types.js";
 export type {
   DynamicValue,
@@ -55,22 +58,51 @@ export interface LifecyclePublication {
   tick: bigint;
   observation: LifecycleObservation;
 }
-export type LifecycleNotification = EventEnvelope &
-  (
-    | ({ kind: "change" } & LifecyclePublication)
-    | { kind: "overflow"; subscription: bigint; dropped: bigint }
-  );
+export type LifecycleNotification = EventEnvelope & {
+  kind: "change";
+} & LifecyclePublication;
 export interface LifecycleSubscription {
   readonly id: bigint;
   /** Releases queued and future observations at an ordered World boundary. */
   unsubscribe(): Promise<void>;
 }
 
-/** Target-independent public values shared by generated clients and session handling. */
+/**
+ * Target-independent public values shared by generated clients and session handling.
+ *
+ * An entity reference is a concrete handle, a name defined by an earlier
+ * command of the same logical batch, or a symbolic identifier: `alias` names an
+ * entity created by `create`. Names resolve in command order and behave
+ * exactly like the handle they name. `symbol` names the
+ * live entity whose metadata carries that symbolic identifier when the command
+ * applies, and rejects with `MissingSymbolicId` when none does; the batch
+ * outcome's `symbols` reports the handle it resolved to.
+ */
 export type EntityRef =
   | { kind: "handle"; id: bigint }
-  | { kind: "alias"; alias: number };
+  | { kind: "alias"; alias: number }
+  | { kind: "symbol"; symbol: string };
+export interface WorldReference {
+  readonly id: bigint;
+  readonly incarnation: bigint;
+}
+/** The World-level canvas of a World that selects the Canvas System; it lives
+ * as long as that World. Build it with `canvasOutput(world)`. */
+export interface CanvasOutputReference {
+  readonly world: WorldReference;
+  readonly kind: "canvas";
+}
+/** A Camera entity's view, fenced by its Camera component lifetime. */
+export interface CameraOutputReference {
+  readonly world: WorldReference;
+  readonly kind: "camera";
+  readonly entity: bigint;
+  readonly incarnation: bigint;
+}
+export type OutputReference = CanvasOutputReference | CameraOutputReference;
 export type FieldValue =
+  | { kind: "world"; value: WorldReference | null }
+  | { kind: "output"; value: OutputReference | null }
   | { kind: "dynamic"; value: DynamicValue }
   | { kind: "bool"; value: boolean }
   | { kind: "f32"; value: number }
@@ -91,24 +123,9 @@ export interface EntityMetadata {
   symbolicId: string | null;
   classes: string[];
 }
-/** Generational core resources; aliases refer only to this batch's earlier operations. */
-export type StateOverlayRef =
-  | { kind: "handle"; id: bigint }
-  | { kind: "alias"; alias: number };
-export type EntityOverlayMode = "owned" | "bound";
-export type ComponentOverlayMode = "auto" | "bound" | "owned";
-export interface StateOverlayAlias {
-  alias: number;
-  id: bigint;
-  kind: "owner" | "entityOverlayBinding" | "componentStateOverlay";
-  entity: bigint | null;
-}
-export interface StateOverlayLifecycleDiagnostic {
-  owner: bigint;
-  stateOverlay: bigint;
-  entity: bigint;
-  component: number | null;
-  reason: "EntityDeleted" | "ComponentReplaced" | "ComponentRemoved";
+export interface EntityPlacement {
+  parent: EntityRef | null;
+  before: EntityRef | null;
 }
 export const FieldKind = {
   F32: 1,
@@ -119,6 +136,8 @@ export const FieldKind = {
   Bytes: 6,
   Bool: 7,
   Rows: 8,
+  World: 12,
+  Output: 13,
 } as const;
 export type FieldKind = (typeof FieldKind)[keyof typeof FieldKind];
 /** Schema row property types: the dynamic property kinds without matrices. */
@@ -160,6 +179,12 @@ export type RowPropertyValue =
   | readonly number[]
   | RowAssetValue;
 /** A decoded schema rows table: live rows by never-reused slot, absent properties omitted. */
+/** A complete table with caller-owned, monotonically allocated slot identities. */
+export interface RowsInput<Row = Record<string, RowPropertyValue>> {
+  readonly nextSlot: number;
+  readonly rows: ReadonlyMap<number, Readonly<Row>>;
+}
+
 export interface RowsTable<Row = Record<string, RowPropertyValue>> {
   /** Lowest unallocated slot; lower slots without a row are dead. */
   nextSlot: number;
@@ -193,20 +218,24 @@ export type Command =
       name: string;
     }
   | {
-      kind: "updateDynamicComponentStateOverlay";
-      owner: StateOverlayRef;
-      overlay: StateOverlayRef;
-      properties: Record<string, DynamicValue>;
-      clear: string[];
+      kind: "create";
+      alias: number;
+      metadata: EntityMetadata;
+      /** Bind a live entity with the same symbolic id instead of failing. */
+      adopt?: boolean;
     }
-  | { kind: "create"; alias: number; metadata: EntityMetadata }
   | { kind: "delete"; entity: EntityRef }
+  | { kind: "placeEntity"; entity: EntityRef; placement: EntityPlacement }
+  | { kind: "deleteSubtree"; root: EntityRef }
+  | { kind: "detachWorldAttachment"; receipt: bigint }
   | { kind: "setMetadata"; entity: EntityRef; metadata: EntityMetadata }
   | {
       kind: "insertComponent";
       entity: EntityRef;
       component: number;
       fields: FieldWrite[];
+      /** Write only these fields of an existing component, keeping its incarnation. */
+      adopt?: boolean;
     }
   | {
       kind: "setField";
@@ -214,64 +243,63 @@ export type Command =
       component: number;
       field: FieldWrite;
     }
-  | { kind: "removeComponent"; entity: EntityRef; component: number }
-  | { kind: "createStateOverlayOwner"; alias: number }
-  | { kind: "releaseStateOverlayOwner"; owner: StateOverlayRef }
+  /**
+   * Compare-and-set: write `field` only while it holds `expected`, a value of
+   * the field's own type; otherwise the batch stops with `ValueMismatch`.
+   */
   | {
-      kind: "attachEntityOverlayBinding";
-      owner: StateOverlayRef;
-      alias: number;
-      symbolicId: string;
-      mode: EntityOverlayMode;
-    }
-  | {
-      kind: "releaseEntityOverlayBinding";
-      owner: StateOverlayRef;
-      binding: StateOverlayRef;
-    }
-  | {
-      kind: "attachComponentStateOverlay";
-      owner: StateOverlayRef;
-      binding: StateOverlayRef;
-      alias: number;
+      kind: "setFieldIf";
+      entity: EntityRef;
       component: number;
-      mode: ComponentOverlayMode;
-      fields: FieldWrite[];
+      field: FieldWrite;
+      expected: FieldValue;
     }
+  | { kind: "removeComponent"; entity: EntityRef; component: number }
+  /**
+   * Apply a semantic action to the control component at `incarnation`. The
+   * batch stops without effect with `StaleTarget`, `Unavailable`,
+   * `UnsupportedAction` or `InvalidValue`; values change as component fields
+   * and press, submit and focus changes are observed as GUI effects.
+   */
   | {
-      kind: "updateComponentStateOverlay";
-      owner: StateOverlayRef;
-      overlay: StateOverlayRef;
-      fields: FieldWrite[];
-      clear: number[];
-    }
-  | {
-      kind: "releaseComponentStateOverlay";
-      owner: StateOverlayRef;
-      overlay: StateOverlayRef;
+      kind: "guiAction";
+      entity: EntityRef;
+      component: number;
+      incarnation: bigint;
+      action: GuiAction;
     };
 
-/** Select a live Camera entity at the ordered mutation boundary. */
-export interface CameraActivateCommand {
-  type: "CameraActivateCommand";
-  entity: bigint;
+export interface PublicationReference {
+  host: bigint;
+  revision: bigint;
 }
-/** Camera-local rotation radians, normalized viewport pan, or logarithmic zoom out. */
-export type CameraMotion =
-  | { kind: "rotate"; yaw: number; pitch: number }
-  | { kind: "pan"; x: number; y: number; width: number; height: number }
-  | { kind: "zoom"; amount: number };
-export interface CameraNavigateCommand {
-  type: "CameraNavigateCommand";
-  motion: CameraMotion;
-}
-/** Read current geometry through normalized top-left viewport coordinates. */
-export interface GeometryPickQuery {
-  type: "GeometryPickQuery";
-  x: number;
-  y: number;
+export interface ViewViewport {
   width: number;
   height: number;
+  devicePixelRatio: number;
+}
+/** Historical CPU access never authorizes presentation or input. */
+export type ViewQueryTarget =
+  | { kind: "bound"; binding: RootBinding; publication?: PublicationReference }
+  | { kind: "root"; output: OutputReference; expectedViewport: ViewViewport }
+  | {
+      kind: "publication";
+      output: OutputReference;
+      publication: PublicationReference;
+      viewport: ViewViewport;
+    };
+/** Exact completed inputs used for a successful query, not a presentation fence. */
+export interface ViewDescriptor {
+  output: OutputReference;
+  publication: PublicationReference;
+  viewport: ViewViewport;
+}
+/** Read completed geometry through normalized top-left viewport coordinates. */
+export interface GeometryPickQuery {
+  type: "GeometryPickQuery";
+  view: ViewQueryTarget;
+  x: number;
+  y: number;
   /** Include a camera-facing world plane through the hit; defaults to false. */
   includeViewPlane?: boolean;
 }
@@ -283,17 +311,33 @@ export interface WorldPlane {
 /** Project onto a plane, including viewport positions outside the canvas. */
 export interface CameraProjectQuery {
   type: "CameraProjectQuery";
+  view: ViewQueryTarget;
   x: number;
   y: number;
-  width: number;
-  height: number;
   plane: WorldPlane;
+}
+
+/** Deltas in the exact view domain; pixel rounding never supplies projection aspect. */
+export type CameraViewMotion =
+  | { kind: "rotate"; yaw: number; pitch: number }
+  | { kind: "pan"; x: number; y: number }
+  | { kind: "zoom"; amount: number };
+
+/** Correlated root Camera mutation, fenced by binding generation and available source. */
+export interface CameraNavigateRequest {
+  binding: RootBinding;
+  /** Omit for current completed state; an explicit source never falls back to latest. */
+  publication?: PublicationReference;
+  motion: CameraViewMotion;
 }
 export type CameraProjectResultPayload = {
   type: "CameraProjectResultEvent";
-  camera: bigint | null;
 } & (
-  | { ok: true; position: [number, number, number] | null }
+  | {
+      ok: true;
+      view: ViewDescriptor;
+      position: [number, number, number] | null;
+    }
   | { ok: false; error: string }
 );
 export type CameraProjectResultEvent = EventEnvelope &
@@ -318,26 +362,40 @@ export interface RenderStateUpdatedPayload {
   changes: RenderStatePatch;
 }
 export type RenderStateUpdatedEvent = EventEnvelope & RenderStateUpdatedPayload;
+/** Logical extent and units-per-metre density of a World's canvas; every value
+ * finite and positive. Defaults are a 1 x 1 extent and density 1. */
+export interface CanvasState {
+  extent: readonly [number, number];
+  unitsPerMetre: number;
+}
+/** Sparse Canvas System update (Surface builds). Omitted values keep their
+ * current values; an invalid update has no effect and no reply. */
+export interface CanvasStateUpdateCommand {
+  type: "CanvasStateUpdateCommand";
+  extent?: readonly [number, number];
+  unitsPerMetre?: number;
+}
+/** The Canvas inspection collection's one record. */
+export interface CanvasStateRecord {
+  state: CanvasState;
+  /** Last evaluated logical extent and its tick; null before the first evaluation. */
+  evaluated: { extent: readonly [number, number]; tick: bigint } | null;
+}
 export type SystemCommand =
   | AnimationPlaybackCommand
-  | CameraActivateCommand
-  | CameraNavigateCommand
-  | RenderStateUpdateCommand;
+  | RenderStateUpdateCommand
+  | CanvasStateUpdateCommand;
 export interface EventEnvelope {
   session: bigint;
   requestId: bigint;
   tick: bigint;
 }
-export interface CameraStatePatch {
-  activeCamera?: bigint;
-}
-export interface CameraStateChangedPayload {
-  type: "CameraStateChangedEvent";
-  changes: CameraStatePatch;
-}
-export type CameraStateChangedEvent = EventEnvelope & CameraStateChangedPayload;
 export type GeometryPickHit = {
+  world: WorldReference;
+  publication: PublicationReference;
   entity: bigint;
+  incarnation: bigint;
+  path: { world: WorldReference; anchor: bigint }[];
   position: [number, number, number];
   distance: number;
   /** Present only when requested; normal is camera forward, not a surface normal. */
@@ -347,8 +405,10 @@ export type GeometryPickHit = {
 };
 export type GeometryPickResultPayload = {
   type: "GeometryPickResultEvent";
-  camera: bigint | null;
-} & ({ ok: true; hit: GeometryPickHit | null } | { ok: false; error: string });
+} & (
+  | { ok: true; view: ViewDescriptor; hit: GeometryPickHit | null }
+  | { ok: false; error: string }
+);
 export type GeometryPickResultEvent = EventEnvelope & GeometryPickResultPayload;
 export interface ClientAssetSource {
   kind: number;
@@ -357,12 +417,10 @@ export interface ClientAssetSource {
 }
 
 export type RequestBody =
-  | { kind: "surface"; edit: SurfaceEdit }
-  | { kind: "gui"; batchId?: bigint; edits: readonly GuiEdit[] }
-  | { kind: "guiInspect"; query: GuiInspectQuery }
-  | { kind: "guiInput"; input: GuiInputCommand }
-  | { kind: "guiSemanticSnapshot"; query: GuiSemanticSnapshotQuery }
-  | { kind: "guiSemanticAction"; action: GuiSemanticActionRequest }
+  | { kind: "cameraNavigate"; request: CameraNavigateRequest }
+  | { kind: "lifecycleWatch"; control: LifecycleWatchRequest }
+  | { kind: "lifecycleDiagnostics"; query: LifecycleDiagnosticQuery }
+  | { kind: "guiObservation"; control: GuiObservationRequest }
   | {
       kind: "subscribeLifecycle";
       subscription: bigint;
@@ -371,11 +429,26 @@ export type RequestBody =
   | { kind: "unsubscribeLifecycle"; subscription: bigint }
   | { kind: "command"; command: SystemCommand }
   | { kind: "query"; query: SystemQuery }
-  | { kind: "beginBatch" }
-  | { kind: "batchChunk"; batch: { id: bigint; operations: Command[] } }
-  | { kind: "endBatch"; batchId: bigint }
-  | { kind: "batch"; batch: { id: bigint; operations: Command[] } }
+  | { kind: "attachmentReceipt"; receipt: bigint; release: boolean }
+  | {
+      /**
+       * One page of a batch under a client-assigned identity that is unique
+       * among the connection's open batches. Only the final page carries a
+       * request identity and is answered, with the whole batch's outcome.
+       */
+      kind: "submitBatch";
+      batchId: number;
+      last: boolean;
+      operations: Command[];
+    }
   | { kind: "animationController"; command: AnimationControllerCommand }
+  | {
+      kind: "inspectTree";
+      root?: bigint;
+      after?: bigint;
+      limit?: number;
+      maxDepth?: number;
+    }
   | ({ kind: "inspect" } & InspectionQuery);
 export interface Request {
   session: bigint;
@@ -387,7 +460,10 @@ export type BatchOutcome = {
   batchId: bigint;
   tick: bigint;
   aliases: { alias: number; id: bigint }[];
-  stateOverlays: StateOverlayAlias[];
+  /** Handles symbolic references resolved to, once per distinct symbol and handle. */
+  symbols: { symbol: string; id: bigint }[];
+  /** Applied per-operation effects in operation order. */
+  effects: BatchOperationEffect[];
 } & (
   | { ok: true }
   | {
@@ -399,7 +475,33 @@ export type BatchOutcome = {
       };
     }
 );
+export interface AttachmentReceipt {
+  readonly id: bigint;
+  readonly parent: WorldReference;
+  readonly anchor: bigint;
+  readonly incarnation: bigint;
+  readonly revision: bigint;
+  readonly child: WorldReference | null;
+}
+export interface AttachmentEffect {
+  readonly operation: number;
+  readonly kind: "written" | "detached" | "superseded";
+  readonly receipt: AttachmentReceipt;
+}
+/**
+ * An adopting `create` bound an existing entity, or an adopting
+ * `insertComponent` wrote an existing component in place. An adopting operation
+ * that created or inserted reports no effect.
+ */
+export interface AdoptionEffect {
+  readonly operation: number;
+  readonly kind: "adopted";
+}
+export type BatchOperationEffect = AttachmentEffect | AdoptionEffect;
 export type ComponentFieldValue =
+  | WorldReference
+  | OutputReference
+  | null
   | boolean
   | number
   | bigint
@@ -411,11 +513,12 @@ export interface ComponentSnapshot {
   properties?: Record<string, DynamicValue>;
   fields: Record<string, ComponentFieldValue>;
 }
+/** One entity's stored state: its link and its components in registry order. */
 export interface EntitySnapshot {
   id: bigint;
   metadata: EntityMetadata;
-  base: ComponentSnapshot[];
-  effective: ComponentSnapshot[];
+  link: { parent: bigint | null; order: bigint };
+  components: ComponentSnapshot[];
 }
 /** Current typed source demand, independent of world batch acknowledgement. */
 export interface AssetRepresentationStatus {
@@ -442,18 +545,42 @@ export interface RenderDiagnostic {
   reason: string;
 }
 export interface InspectionQuery {
+  /** `guiFocus` and `guiPointers` are GUI System queries, present in GUI
+   * builds; `canvas` is the Canvas System query, present in Surface builds. */
   collection:
     | "summary"
     | "entities"
     | "resources"
     | "controllers"
-    | "renderDiagnostics";
+    | "renderDiagnostics"
+    | "guiFocus"
+    | "guiPointers"
+    | "canvas";
   after?: bigint;
   target?: bigint;
   limit?: number;
 }
 export interface InspectionPage extends Inspection {
   next: bigint;
+}
+
+export interface EntityTreeNode {
+  id: bigint;
+  parent: bigint | null;
+  order: bigint;
+  depth: number;
+}
+export interface EntityTreePage {
+  tick: bigint;
+  time: number;
+  next: bigint;
+  nodes: readonly EntityTreeNode[];
+}
+export interface EntityTreeQuery {
+  root?: bigint;
+  after?: bigint;
+  limit?: number;
+  maxDepth?: number;
 }
 
 export interface Inspection {
@@ -463,6 +590,12 @@ export interface Inspection {
   resources: readonly AssetResourceSnapshot[];
   renderDiagnostics: readonly RenderDiagnostic[];
   controllers?: readonly AnimationControllerSnapshot[];
+  /** GUI builds: logical focus. */
+  guiFocus?: readonly GuiFocusRecord[];
+  /** GUI builds: live pointer feedback. */
+  guiPointers?: readonly GuiPointerRecord[];
+  /** Surface builds: the World canvas's state, when the query read it. */
+  canvas?: CanvasStateRecord | null;
 }
 export interface RuntimeFailure {
   scope: "draw" | "resource" | "context" | "world";
@@ -471,34 +604,31 @@ export interface RuntimeFailure {
 }
 
 export type ResponseBody =
-  | { kind: "surface" }
-  | { kind: "gui"; outcome: GuiEditBatchOutcome }
-  | { kind: "guiInspect"; response: GuiInspectResponse }
-  | { kind: "guiInput"; outcome: GuiInputRoutingOutcome }
-  | { kind: "guiSemanticSnapshot"; snapshot: GuiSemanticTree }
-  | { kind: "guiObservations"; observations: GuiObservationBatch }
-  | { kind: "guiUnhandledInputs"; inputs: GuiUnhandledObservation[] }
+  | { kind: "cameraNavigated" }
+  | { kind: "lifecycleWatch"; record: LifecycleWatchRecord }
+  | { kind: "lifecycleDiagnostics"; sample: LifecycleDiagnosticSample }
+  | { kind: "guiObservation"; record: GuiObservationRecord }
   | ({ kind: "runtimeFailure" } & RuntimeFailure)
   | { kind: "lifecycleSubscription" }
   | { kind: "lifecycleEvents"; events: LifecyclePublication[] }
-  | { kind: "lifecycleOverflow"; dropped: bigint }
   | { kind: "animationController"; id: bigint | null }
   | { kind: "playback"; events: readonly AnimationPlaybackEventPayload[] }
   | {
       kind: "event";
       event:
-        | CameraStateChangedPayload
         | GeometryPickResultPayload
         | CameraProjectResultPayload
         | RenderStateUpdatedPayload;
     }
-  | { kind: "batchStarted"; batchId: bigint }
   | { kind: "batch"; outcome: BatchOutcome }
-  | { kind: "batchFinished"; batchId: bigint }
+  | {
+      kind: "attachmentReceipt";
+      receipt: bigint;
+      state: "pending" | "retired" | "released";
+    }
   | { kind: "batchAborted"; batchId: bigint; message: string }
   | { kind: "frame"; time: number }
   | { kind: "resources"; resources: readonly AssetResourceSnapshot[] }
-  | { kind: "lifecycle"; diagnostics: StateOverlayLifecycleDiagnostic[] }
   | {
       kind: "inspect";
       next: bigint;
@@ -507,6 +637,15 @@ export type ResponseBody =
       resources: readonly AssetResourceSnapshot[];
       renderDiagnostics: readonly RenderDiagnostic[];
       controllers?: readonly AnimationControllerSnapshot[];
+      guiFocus?: readonly GuiFocusRecord[];
+      guiPointers?: readonly GuiPointerRecord[];
+      canvas?: CanvasStateRecord | null;
+    }
+  | {
+      kind: "entityTree";
+      next: bigint;
+      time: number;
+      nodes: readonly EntityTreeNode[];
     }
   | { kind: "error"; code: number; message: string };
 export interface Response {
@@ -517,9 +656,7 @@ export interface Response {
 }
 
 export type {
-  FrameSummary,
-  FrameCapture,
-  ClientPresentation,
+  RenderDiagnostics,
   ViewportLimits,
   RenderStatisticsSnapshot,
   FrameRenderStatistics,
@@ -539,18 +676,33 @@ export interface AnimationControllerState {
   time: number;
 }
 export type AnimationDriverTarget =
-  | { component: number; name: string; offsets?: never; joints?: never }
+  | {
+      entityLink: true;
+      component?: never;
+      name?: never;
+      offsets?: never;
+      joints?: never;
+    }
+  | {
+      component: number;
+      name: string;
+      offsets?: never;
+      joints?: never;
+      entityLink?: never;
+    }
   | {
       component: number;
       offsets: readonly number[];
       name?: never;
       joints?: never;
+      entityLink?: never;
     }
   | {
       joints: readonly number[];
       component?: never;
       offsets?: never;
       name?: never;
+      entityLink?: never;
     };
 export interface AnimationDriverDescription {
   source: string;
@@ -558,6 +710,7 @@ export interface AnimationDriverDescription {
   track: number;
   target: bigint;
   property: AnimationDriverTarget;
+  entityBindings?: readonly bigint[];
   weight?: number;
   additive?: boolean;
   referenceTime?: number;
@@ -630,6 +783,10 @@ export type AnimationValue =
   | Exclude<FieldValue, { kind: "entity" }>
   | { kind: "entity"; value: bigint }
   | { kind: "rotation"; value: readonly [number, number, number, number] }
+  | {
+      kind: "entityPlacement";
+      value: { parent: number | null; before: number | null };
+    }
   | { kind: "pose"; value: readonly AnimationJointTransform[] };
 export interface AnimationJointTransform {
   translation?: readonly [number, number, number];
@@ -655,11 +812,31 @@ export type AnimationTrack = {
 } & (
   | {
       property:
-        | { component: number; offsets: readonly number[]; name?: never }
-        | { component: number; name: string; offsets?: never };
+        | {
+            component: number;
+            offsets: readonly number[];
+            name?: never;
+            entityLink?: never;
+          }
+        | {
+            component: number;
+            name: string;
+            offsets?: never;
+            entityLink?: never;
+          };
+      joints?: never;
+      entityLink?: never;
+    }
+  | { joints: readonly number[]; property?: never; entityLink?: never }
+  | {
+      property: {
+        entityLink: true;
+        name?: never;
+        component?: never;
+        offsets?: never;
+      };
       joints?: never;
     }
-  | { joints: readonly number[]; property?: never }
 );
 export interface AnimationClipSource {
   duration: number;

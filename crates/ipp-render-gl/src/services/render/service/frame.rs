@@ -3,152 +3,149 @@
 use super::super::assets::{GlMeshData, GlTextureData};
 use super::super::frame_scratch::{RenderDrawItem as Item, RenderFrameScratch};
 use super::super::frame_statistics::{RenderFrameSummary, RenderFrameWork};
+use super::super::scene::{RenderScene, SceneDebug, SceneItem};
 use super::super::shader::RenderShaderConfig;
 use super::{BACKGROUND, RenderError, RenderService, prepared_model, prepared_normal};
 use crate::RenderDevice;
+use ipp_core::services::asset_management::AssetKey;
 use ipp_core::systems::camera;
-use ipp_core::{WorldContext, services::asset_management::AssetKey};
 
 impl<D: RenderDevice> RenderService<D> {
-    /// Draw final effective world components using the world's active camera.
-    ///
-    /// Returns the completed frame's summary. In `diagnostics` builds the rest of
-    /// its work is available from [`Self::statistics`] afterwards.
-    pub fn render(
+    /// Observe only requested exact outputs in an otherwise ordinary selected draw.
+    pub fn draw_observed(
         &mut self,
-        world: &mut WorldContext<'_>,
-        width: u32,
-        height: u32,
+        host: &ipp_core::HostRuntime,
+        selection: ipp_core::OutputRef,
+        publication: ipp_core::WorldPublicationId,
+        viewport: ipp_core::WorldViewport,
+        presentation_time: f64,
+        outputs: &mut [ipp_core::OutputPublicationObservation],
     ) -> Result<RenderFrameSummary, RenderError> {
-        #[cfg(feature = "profiling")]
-        let _allocation_scope = ipp_core::profiling::AllocationScope::new(209, "gl.render");
+        self.inclusions.begin(outputs);
+        let result = self.draw(host, selection, publication, viewport, presentation_time);
+        let completed = result
+            .as_ref()
+            .is_ok_and(|summary| !summary.invalid_camera && summary.failed_draw_calls == 0);
+        self.inclusions.finish(outputs, completed);
+        result
+    }
+
+    /// Clear a root whose selected output is unavailable, without any World access.
+    pub fn clear(
+        &mut self,
+        viewport: ipp_core::WorldViewport,
+    ) -> Result<RenderFrameSummary, RenderError> {
+        if viewport.width == 0
+            || viewport.height == 0
+            || viewport.width > i32::MAX as u32
+            || viewport.height > i32::MAX as u32
+        {
+            return Err(RenderError::InvalidViewport);
+        }
 
         #[cfg(any(test, feature = "diagnostics"))]
         {
             self.statistics = Default::default();
         }
+        self.device
+            .borrow_mut()
+            .begin_frame(viewport.width, viewport.height, &BACKGROUND)?;
+        self.device.borrow_mut().end_frame()?;
+        Ok(RenderFrameSummary::default())
+    }
 
-        if width == 0 || height == 0 || width > i32::MAX as u32 || height > i32::MAX as u32 {
+    /// Present the Host's current explicit root output publication and viewport.
+    /// Mismatched viewports fail before GPU work; nested outputs use attachment authority.
+    pub fn draw(
+        &mut self,
+        host: &ipp_core::HostRuntime,
+        selection: ipp_core::OutputRef,
+        publication: ipp_core::WorldPublicationId,
+        viewport: ipp_core::WorldViewport,
+        presentation_time: f64,
+    ) -> Result<RenderFrameSummary, RenderError> {
+        let (width, height) = (viewport.width, viewport.height);
+        self.inclusions.reset_frame();
+        if width == 0
+            || height == 0
+            || width > i32::MAX as u32
+            || height > i32::MAX as u32
+            || !presentation_time.is_finite()
+        {
             return Err(RenderError::InvalidViewport);
         }
 
-        #[cfg(all(feature = "surfaces", any(test, feature = "diagnostics")))]
-        let residency = self.retained_surface_residency(world.id());
-
-        world.set_render_viewport(Some((width, height)));
-        self.prepare_programs(world)?;
-        // Program demand needs mutable asset access; completed inputs are borrowed
-        // only after that phase, through the synchronous draw submission.
-        let items = world.render_items();
-        #[cfg(feature = "surfaces")]
-        let surface_items = world.surface_render_items();
-        self.debug.retain(world.debug_render_items());
-
-        // One preparation serves glyph demand and drawing: `None` without a selected
-        // camera, an error when it cannot represent this viewport.
-        let camera = world.active_camera().map(|_| {
-            world
-                .prepare_camera(width, height)
-                .map(|camera| camera.view_projection)
-        });
-
-        // Surface cache presentation is planned before glyph demand, which follows it.
-        #[cfg(feature = "surfaces")]
-        let planned = match camera {
-            Some(Ok(view_projection)) => {
-                self.plan_surface_caches(world, surface_items, view_projection)
-            }
-            _ => Ok(()),
-        };
-        #[cfg(not(feature = "surfaces"))]
-        let planned: Result<(), RenderError> = Ok(());
-
-        #[cfg(feature = "gui")]
-        {
-            self.glyph_frame.clear();
-            // Without a usable camera no Surface is submitted, so the previous demand stays.
-            if planned.is_ok()
-                && let Some(Ok(view_projection)) = camera
-            {
-                self.prepare_glyph_demand(world, surface_items, view_projection, (width, height));
-            }
+        self.validate_catalog(host)?;
+        let root = host
+            .root_output(selection.world().id())
+            .filter(|(current, _, completed)| *current == selection && *completed == publication);
+        if root.is_some_and(|(_, current_viewport, _)| current_viewport != viewport) {
+            return Err(RenderError::InvalidViewport);
         }
 
-        // Frames that repaint cache images populate atlas misses outside the
-        // repaints and repaint before `begin_frame`, so the main pass stays whole.
-        #[cfg(feature = "surfaces")]
-        let early = self.surface_repaints_planned(world.id());
-        #[cfg(feature = "surfaces")]
-        let prepass = planned.and_then(|()| {
-            if !early {
-                return Ok(RenderFrameWork::default());
-            }
-
-            #[cfg(feature = "gui")]
-            self.populate_glyph_misses(world)?;
-            let mut instances = std::mem::take(&mut self.frame_scratch.surface_instances);
-            let repainted = self.repaint_surface_caches(world, surface_items, &mut instances);
-            self.frame_scratch.surface_instances = instances;
-            repainted
+        #[cfg(any(test, feature = "diagnostics"))]
+        {
+            self.statistics = Default::default();
+        }
+        let available = root.ok_or(RenderError::UnavailableOutput).and_then(|_| {
+            host.output(publication, selection)
+                .ok_or(RenderError::UnavailableOutput)
         });
+        #[cfg(feature = "surfaces")]
+        let prepass = {
+            self.camera_completed.clear();
+            self.glyph_frame.clear();
+            // One Host frame ages the shared atlas once, before every Canvas it presents
+            // publishes demand.
+            self.glyph_atlas.begin_frame();
+            if available.is_ok() {
+                self.prepare_camera_children(
+                    host,
+                    selection,
+                    publication,
+                    viewport,
+                    presentation_time,
+                )?
+            } else {
+                RenderFrameWork::default()
+            }
+        };
         #[cfg(not(feature = "surfaces"))]
-        let prepass = planned.map(|()| RenderFrameWork::default());
-
-        let begun = prepass.and_then(|stats| {
-            self.device
-                .borrow_mut()
-                .begin_frame(width, height, &BACKGROUND)
-                .map(|()| stats)
-        });
-        let prepass = match begun {
-            Ok(stats) => stats,
-            Err(error) => {
-                #[cfg(feature = "surfaces")]
-                self.finish_retained_surfaces(world.id(), surface_items, false);
-                #[cfg(feature = "surfaces")]
-                self.finish_surface_caches(world, false);
-                #[cfg(all(feature = "surfaces", any(test, feature = "diagnostics")))]
-                self.track_retained_surface_residency(world.id(), residency);
-                return Err(error);
+        let prepass = RenderFrameWork::default();
+        self.device
+            .borrow_mut()
+            .begin_frame(width, height, &BACKGROUND)?;
+        let result = available.and_then(|_| {
+            #[cfg(feature = "surfaces")]
+            if selection.kind() == ipp_core::OutputKind::Canvas {
+                let scene =
+                    super::super::canvas_scene::CanvasScene::new(host, selection, publication)?;
+                let [width, height] = scene.canvas.logical_extent;
+                let mvp = super::canvas_composition::plane_matrix(
+                    [-1.0, 1.0],
+                    [2.0 / f64::from(width), -2.0 / f64::from(height)],
+                )?;
+                let mut work = prepass;
+                self.draw_canvas(&scene, mvp, scene.root_clip(), 1.0, viewport, &mut work)?;
+                return Ok(work);
             }
-        };
-
-        // Populate atlas misses before the main pass, binding each page once.
-        #[cfg(feature = "gui")]
-        let populated = if early {
-            Ok(())
-        } else {
-            self.populate_glyph_misses(world)
-        };
-        #[cfg(not(feature = "gui"))]
-        let populated = Ok(());
-        // Always release draw bindings, including when upload/draw fails.
-        let result = populated.and_then(|()| {
-            self.draw_items(
-                world,
-                items,
-                #[cfg(feature = "surfaces")]
-                surface_items,
-                camera,
-                prepass,
-            )
+            let scene = RenderScene::new(host, selection, publication)?;
+            self.debug.retain(&scene.debug);
+            let camera = Some(
+                scene
+                    .camera
+                    .prepare(width, height)
+                    .map(|camera| camera.view_projection),
+            );
+            self.draw_items(&scene, &scene.items, camera, prepass, viewport)
         });
         let finish = self.device.borrow_mut().end_frame();
-        // Submission completion, not statistics, drives retained release and eviction.
         #[cfg(feature = "surfaces")]
-        let completed = result.is_ok();
-        #[cfg(feature = "surfaces")]
-        self.finish_retained_surfaces(world.id(), surface_items, completed);
-        #[cfg(feature = "surfaces")]
-        #[cfg_attr(not(any(test, feature = "diagnostics")), allow(unused_variables))]
-        let cache_planned = self.finish_surface_caches(world, completed);
-        #[cfg(all(feature = "surfaces", any(test, feature = "diagnostics")))]
-        self.track_retained_surface_residency(world.id(), residency);
-
+        self.finish_canvas_caches(result.is_ok() && finish.is_ok());
         #[cfg_attr(not(any(test, feature = "diagnostics")), allow(unused_mut))]
         let mut work = result?;
         finish?;
-
+        self.inclusions.record(selection, publication);
         #[cfg(any(test, feature = "diagnostics"))]
         {
             work.statistics.uploaded_bytes = work
@@ -156,54 +153,42 @@ impl<D: RenderDevice> RenderService<D> {
                 .uploaded_bytes
                 .saturating_add(self.uploads.take());
             #[cfg(feature = "surfaces")]
-            {
-                self.publish_surface_cache_statistics(cache_planned, &mut work.statistics);
-                self.publish_retained_surface_statistics(&mut work.statistics);
-            }
+            self.publish_retained_surface_statistics(&mut work.statistics);
             self.statistics = work.statistics;
         }
-
         Ok(work.summary)
     }
 
     #[cfg(feature = "mesh-poses")]
     pub(super) fn pose_data<'a>(
         &self,
-        world: &'a WorldContext<'_>,
-        item: &ipp_core::RenderItem,
+        world: &'a RenderScene<'_>,
+        item: &SceneItem<'_>,
     ) -> Result<Option<&'a GlMeshData<D>>, RenderError> {
         item.pose
             .map(|(key, _)| {
                 world
-                    .asset_resources()
-                    .get(AssetKey::from_u64(key.asset))
+                    .resource(AssetKey::from_u64(key.asset))
                     .and_then(|resource| resource.data()?.as_any().downcast_ref::<GlMeshData<D>>())
                     .ok_or(RenderError::MissingMesh)
             })
             .transpose()
     }
 
-    fn draw_items(
+    pub(super) fn draw_items(
         &mut self,
-        world: &WorldContext<'_>,
-        items: &[ipp_core::RenderItem],
-        #[cfg(feature = "surfaces")] surfaces: &[ipp_core::SurfaceRenderItem],
+        world: &RenderScene<'_>,
+        items: &[SceneItem<'_>],
         camera: Option<Result<[f32; 16], ipp_core::ErrorReason>>,
         prepass: RenderFrameWork,
+        viewport: ipp_core::WorldViewport,
     ) -> Result<RenderFrameWork, RenderError> {
         #[cfg(feature = "profiling")]
         let _allocation_scope = ipp_core::profiling::AllocationScope::new(210, "gl.draw");
 
         let mut scratch = std::mem::take(&mut self.frame_scratch);
-        let result = self.draw_prepared_items(
-            world,
-            items,
-            #[cfg(feature = "surfaces")]
-            surfaces,
-            camera,
-            prepass,
-            &mut scratch,
-        );
+        let result =
+            self.draw_prepared_items(world, items, camera, prepass, viewport, &mut scratch);
         // Return capacity even after device errors; no borrowed data is retained.
         scratch.clear();
         self.frame_scratch = scratch;
@@ -212,14 +197,15 @@ impl<D: RenderDevice> RenderService<D> {
 
     fn draw_prepared_items(
         &mut self,
-        world: &WorldContext<'_>,
-        items: &[ipp_core::RenderItem],
-        #[cfg(feature = "surfaces")] surfaces: &[ipp_core::SurfaceRenderItem],
+        world: &RenderScene<'_>,
+        items: &[SceneItem<'_>],
         camera: Option<Result<[f32; 16], ipp_core::ErrorReason>>,
         prepass: RenderFrameWork,
+        viewport: ipp_core::WorldViewport,
         scratch: &mut RenderFrameScratch,
     ) -> Result<RenderFrameWork, RenderError> {
-        // `render` publishes retained GUI residency after every completed frame.
+        #[cfg(not(feature = "surfaces"))]
+        let _ = viewport;
         let view_projection = match camera {
             None => {
                 #[cfg(feature = "shadows")]
@@ -235,11 +221,6 @@ impl<D: RenderDevice> RenderService<D> {
                 return Ok(work);
             }
         };
-        // From here every visible Surface reaches submission unless the frame fails.
-        #[cfg(feature = "surfaces")]
-        {
-            self.submitted_surfaces = Some(Default::default());
-        }
         #[cfg(feature = "particles")]
         if self.particle_quad.is_none()
             && items
@@ -250,7 +231,9 @@ impl<D: RenderDevice> RenderService<D> {
         }
         #[cfg(feature = "particles")]
         let camera_model = world
-            .world_matrix(world.active_camera().unwrap())
+            .camera
+            .pose
+            .render_matrix()
             .map_err(|_| RenderError::InvalidTransform)?;
         let frustum = ipp_core::systems::geometry::frustum_planes(view_projection);
         // Cache repaints ran before `begin_frame`; their draws count here.
@@ -265,35 +248,37 @@ impl<D: RenderDevice> RenderService<D> {
         let shadow_capacity = 0;
         let mut lighting = self
             .light_selections
-            .entry(world.id())
+            .entry(world.selection)
             .or_default()
             .prepare(world, items, &customs, &frustum, shadow_capacity)?;
         let result = (|| {
             #[cfg(feature = "shadows")]
             self.prepare_shadow_storage(&mut lighting)?;
             self.light_selections
-                .get_mut(&world.id())
+                .get_mut(&world.selection)
                 .expect("prepared lighting")
                 .assign_shadows(&mut lighting);
             #[cfg(any(test, feature = "diagnostics"))]
             {
-                stats.statistics.unshadowed_lights = lighting
-                    .requested_shadows
-                    .saturating_sub(lighting.shadows.len())
-                    as u32;
+                stats.statistics.unshadowed_lights =
+                    stats.statistics.unshadowed_lights.saturating_add(
+                        lighting
+                            .requested_shadows
+                            .saturating_sub(lighting.shadows.len()) as u32,
+                    );
             }
             #[cfg(feature = "shadows")]
             if !lighting.shadows.is_empty() {
                 self.draw_shadow_map(world, items, &customs, &lighting, &mut stats, scratch)?;
             }
 
-            let debug = world.debug_render_items();
+            let debug = &world.debug;
             super::super::draw_order::prepare(
                 &mut scratch.draws,
                 items,
                 debug,
                 #[cfg(feature = "surfaces")]
-                surfaces,
+                &world.surfaces,
                 &customs,
                 &lighting,
                 &view_projection,
@@ -306,7 +291,7 @@ impl<D: RenderDevice> RenderService<D> {
                         items,
                         debug,
                         #[cfg(feature = "surfaces")]
-                        surfaces,
+                        &world.surfaces,
                     )
                 })
                 .peekable();
@@ -323,23 +308,18 @@ impl<D: RenderDevice> RenderService<D> {
                         continue;
                     }
                     #[cfg(feature = "surfaces")]
-                    Item::Surface(item) => {
-                        if !world.geometry_visible(item.entity, &frustum) {
+                    Item::Surface(surface) => {
+                        if !world.visible(surface.entity, &frustum) {
                             continue;
                         }
-                        // Cached Surfaces composite their image at this painter-order slot.
-                        if self.composite_surface_cache(world, item, view_projection, &mut stats)? {
-                            continue;
-                        }
-                        if let Some(submitted) = &mut self.submitted_surfaces {
-                            submitted.insert(item.entity);
-                        }
-                        self.draw_surface(
-                            world,
-                            item,
-                            camera::multiply(view_projection, item.model),
+                        #[cfg(feature = "particles")]
+                        self.device.borrow_mut().set_instances(&[])?;
+                        self.draw_output_surface(
+                            world.host,
+                            surface,
+                            view_projection,
+                            viewport,
                             &mut stats,
-                            &mut scratch.surface_instances,
                         )?;
                         continue;
                     }
@@ -382,7 +362,7 @@ impl<D: RenderDevice> RenderService<D> {
                                 if lighting.batched {
                                     lighting.visibility.matches(item.entity, 0)
                                 } else {
-                                    world.geometry_visible(item.entity, &frustum)
+                                    world.visible(item.entity, &frustum)
                                 }
                             },
                             |draw| draw.visible,
@@ -395,7 +375,7 @@ impl<D: RenderDevice> RenderService<D> {
                                 if lighting.batched {
                                     lighting.visibility.matches(item.entity, 0)
                                 } else {
-                                    world.geometry_visible(item.entity, &frustum)
+                                    world.visible(item.entity, &frustum)
                                 }
                             },
                             |draw| draw.visible,
@@ -405,8 +385,7 @@ impl<D: RenderDevice> RenderService<D> {
                     continue;
                 }
                 let data = world
-                    .asset_resources()
-                    .get(AssetKey::from_u64(item.mesh.asset))
+                    .resource(AssetKey::from_u64(item.mesh.asset))
                     .and_then(|r| r.data()?.as_any().downcast_ref::<GlMeshData<D>>());
                 #[cfg(feature = "particles")]
                 let data = if item.particle.is_some_and(|p| p.sprite) {
@@ -445,7 +424,7 @@ impl<D: RenderDevice> RenderService<D> {
                         .set_alpha_blend(custom.material.alpha_mode == 2)?;
                     #[cfg(feature = "skeletal-animation")]
                     if item.skinned
-                        && let Some(palette) = world.skin_palette(item.entity)
+                        && let Some(palette) = item.published.palette.as_deref()
                     {
                         self.device
                             .borrow_mut()
@@ -492,8 +471,7 @@ impl<D: RenderDevice> RenderService<D> {
                     .texture
                     .map(|key| {
                         world
-                            .asset_resources()
-                            .get(AssetKey::from_u64(key.asset))
+                            .resource(AssetKey::from_u64(key.asset))
                             .and_then(|resource| {
                                 resource.data()?.as_any().downcast_ref::<GlTextureData<D>>()
                             })
@@ -516,7 +494,7 @@ impl<D: RenderDevice> RenderService<D> {
                 #[cfg(feature = "skeletal-animation")]
                 let palette = item
                     .skinned
-                    .then(|| world.skin_palette(item.entity))
+                    .then_some(item.published.palette.as_deref())
                     .flatten();
                 let Some(program) = self.builtin_program(world, config, false) else {
                     stats.failed_draw();
@@ -571,7 +549,7 @@ impl<D: RenderDevice> RenderService<D> {
             Ok(stats)
         })();
         self.light_selections
-            .get_mut(&world.id())
+            .get_mut(&world.selection)
             .expect("prepared lighting")
             .recycle(lighting);
         self.custom_materials = customs;
@@ -579,8 +557,8 @@ impl<D: RenderDevice> RenderService<D> {
     }
     fn draw_debug(
         &mut self,
-        world: &WorldContext<'_>,
-        item: &ipp_core::DebugRenderItem,
+        world: &RenderScene<'_>,
+        item: &SceneDebug,
         view_projection: [f32; 16],
         stats: &mut RenderFrameWork,
     ) -> Result<(), RenderError> {

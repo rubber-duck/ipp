@@ -23,13 +23,14 @@ from pipeline.catalog import (
     PROFILES,
     REGRESSION_GROUPS,
     SUITES,
+    TEST_INPUTS,
     catalog,
     regression_ids,
     regression_group_ids,
     suite_ids,
 )
 from pipeline.cli import list_selections, make_plan, parser
-from pipeline.environment import Requirement, probe
+from pipeline.environment import Requirement, inspect as inspect_environment, probe
 from pipeline.model import ROOT, Plan, Task, select
 from pipeline.operations import validate_catalog
 from pipeline.runner import retry_ids, run_plan
@@ -87,6 +88,25 @@ class PlanningTests(unittest.TestCase):
                         )
                 if target in ("gallery", "gallery-site"):
                     self.assertNotIn("build:surface-assets", ids)
+
+    def test_raw_surface_targets_have_independent_strict_builds(self):
+        selected = plan(
+            "regression",
+            "--suite",
+            "surfaces",
+            "--only",
+            "test:surface-cache:browser-surfaces",
+        )
+        ids = {task.id for task in selected.tasks}
+        self.assertIn("build:surface-fixtures", ids)
+        self.assertIn("test:surfaces:native", ids)
+        self.assertIn("test:surfaces:browser", ids)
+        self.assertNotIn("build:typescript", ids)
+        self.assertNotIn("build:surface-gui-fixtures", ids)
+        self.assertNotIn("build:browser:headless-gui", ids)
+        gui = plan("regression", "--only", "test:surface-cache:browser-gui")
+        self.assertIn("build:surface-gui-fixtures", {task.id for task in gui.tasks})
+        self.assertIn("test:surface-cache:browser-gui", gui.requested)
 
     def test_performance_scene_stays_outside_regression(self):
         selected = plan("benchmark", "native", "--preset", "full", "--culling-views")
@@ -194,6 +214,45 @@ class PlanningTests(unittest.TestCase):
             ):
                 plan("benchmark", backend, "--surface-cache")
 
+    def test_gui_stress_benchmark_keeps_one_gui_build_per_backend(self):
+        browser = plan(
+            "benchmark", "browser", "--scene", "gui-stress", "--repetitions", "2"
+        ).tasks[-1]
+        self.assertEqual(browser.id, "benchmark:gui-stress")
+        self.assertEqual(browser.command[2:4], ("browser", "2"))
+        self.assertIn("build:browser:headless-gui", browser.dependencies)
+        self.assertNotIn("build:browser:render-surfaces", browser.dependencies)
+        native = plan(
+            "benchmark", "native", "--scene", "gui-stress", "--egl-dir", "/lib64"
+        ).tasks[-1]
+        self.assertEqual(native.command[2], "native-gles")
+        self.assertIn("build:gles-hosts", native.dependencies)
+        for flags in (("--frames", "4"), ("--group", "32"), ("--surface-cache",)):
+            with self.subTest(flags=flags), self.assertRaises(ValueError):
+                plan("benchmark", "browser", "--scene", "gui-stress", *flags)
+
+    def test_gui_stress_correctness_uses_its_strict_product_and_real_backends(self):
+        for backend in ("browser", "native"):
+            with self.subTest(backend=backend):
+                selected = plan(
+                    "regression",
+                    "--only",
+                    f"test:gui-stress:{backend}",
+                    "--egl-dir",
+                    "/lib64",
+                )
+                identifiers = {task.id for task in selected.tasks}
+                self.assertIn("build:gui-stress-fixtures", identifiers)
+                self.assertIn("build:surface-assets", identifiers)
+                self.assertNotIn("build:typescript", identifiers)
+                self.assertNotIn("build:surface-fixtures", identifiers)
+                self.assertIn(
+                    "build:browser:headless-gui"
+                    if backend == "browser"
+                    else "build:gles-hosts",
+                    identifiers,
+                )
+
     def test_ci_runs_retained_gui_as_its_own_bounded_cached_job(self):
         # Job blocks at two-space indentation below `jobs:`; no YAML dependency.
         jobs: dict[str, list[str]] = {}
@@ -265,7 +324,36 @@ class PlanningTests(unittest.TestCase):
 
     def test_typecheck_prepares_its_actual_target(self):
         ids = [task.id for task in plan("check", "typecheck").tasks]
-        self.assertEqual(ids, ["build:native", "build:client", "check:typecheck"])
+        self.assertEqual(
+            ids,
+            [
+                "build:native",
+                "build:client",
+                "build:react",
+                "build:gui-host",
+                "build:react-gui-authoring",
+                "build:gui-stress-fixtures",
+                "check:typecheck",
+            ],
+        )
+
+    def test_headless_example_build_and_native_cli_share_the_target(self):
+        prepared = plan("dev", "headless-client", "--build")
+        self.assertEqual(
+            [task.id for task in prepared.tasks],
+            ["build:native", "build:headless-client"],
+        )
+        running = plan("dev", "headless-client", "ws://127.0.0.1:9231")
+        self.assertEqual(
+            running.tasks[-1].command[1:],
+            ("target/headless-client/main.js", "ws://127.0.0.1:9231"),
+        )
+        checked = plan("regression", "--suite", "headless-client")
+        self.assertEqual(
+            [task.id for task in checked.tasks],
+            ["build:native", "build:headless-client", "test:headless-client:native"],
+        )
+        self.assertFalse(any("browser" in task.requirements for task in checked.tasks))
 
     def test_mesh_pose_fixtures_need_only_their_node_generator(self):
         selected = plan("build", "mesh-pose-fixtures")
@@ -358,8 +446,6 @@ class PlanningTests(unittest.TestCase):
         # Test targets, shared scenarios and schema-row participants each select
         # the suites whose commands or scenarios exercise them.
         owners = {
-            "crates/ipp-core/tests/gui.rs": ["gui"],
-            "crates/ipp-core/tests/gui_layout.rs": ["gui"],
             "crates/ipp-core/tests/schema_rows.rs": ["gui"],
             "crates/ipp-core/src/commands.rs": ["gui"],
             "crates/ipp-core/src/components/mod.rs": ["gui"],
@@ -383,7 +469,6 @@ class PlanningTests(unittest.TestCase):
                 "surface-cache",
                 "retained-gui",
             ],
-            "crates/ipp-core/tests/surfaces.rs": ["surfaces"],
             "crates/ipp-core/src/world/systems/skeleton/mod.rs": ["skinning"],
             "crates/ipp-core/src/world/systems/skeleton/component.rs": ["skinning"],
             "crates/ipp-core/src/world/systems/skeleton/update.rs": ["skinning"],
@@ -393,10 +478,6 @@ class PlanningTests(unittest.TestCase):
             "tests/render/mesh-poses-fixture.ts": ["mesh-poses"],
             "tests/render/custom-materials-fixture.ts": ["custom-materials"],
             "tests/render/blender-fixture.tsx": ["blender", "particles-blender"],
-            "crates/ipp-core/src/world/systems/state_overlay/lifecycle.rs": [
-                "command-streaming"
-            ],
-            "crates/ipp-core/tests/state_overlays.rs": ["command-streaming"],
             "crates/ipp-core/src/services/world_serialization/assets.rs": ["snapshots"],
             "crates/ipp-core/src/services/world_serialization/container.rs": [
                 "snapshots"
@@ -429,10 +510,8 @@ class PlanningTests(unittest.TestCase):
         # Selecting a suite for a Cargo test target is only useful when one of
         # its commands runs that target.
         targets = {
-            "gui": ["gui", "gui_layout", "schema_rows"],
-            "surfaces": ["surfaces"],
+            "gui": ["schema_rows"],
             "skinning": ["skeleton", "skeleton_animation"],
-            "command-streaming": ["state_overlays"],
             "snapshots": ["world_persistence"],
         }
         for suite, names in targets.items():
@@ -519,10 +598,6 @@ class PlanningTests(unittest.TestCase):
                 "crates/ipp-core/src/world/systems/animation/update.rs",
                 suite_ids(["animation"]),
             ),
-            (
-                "crates/ipp-core/src/world/systems/render/surface_preparation_tests.rs",
-                suite_ids(["gui"]),
-            ),
         ):
             with self.subTest(source=source):
                 ids, _ = affected([source], [])
@@ -540,11 +615,157 @@ class PlanningTests(unittest.TestCase):
             {"check:gles-spatial", "check:gles-textures", "check:gles-lighting"},
         )
 
+    def test_publication_suite_follows_renderer_library_tests_and_build_inputs(self):
+        expected = set(suite_ids(["render-publications"]))
+        for source in (
+            "Cargo.toml",
+            "Cargo.lock",
+            ".cargo/config.toml",
+            "rust-toolchain.toml",
+            "crates/ipp-render-gl/src/lib.rs",
+            "crates/ipp-render-gl/src/services/render/canvas_scene.rs",
+            "crates/ipp-render-gl/src/services/render/unlit.vert",
+            "crates/ipp-render-gl/tests/publication_rendering.rs",
+            "crates/ipp-render-gl/tests/mesh_residency.rs",
+            "crates/ipp-render-gl/tests/support/canvas.rs",
+            "crates/ipp-render-gl/Cargo.toml",
+            "crates/ipp-render-gl/build.rs",
+            "crates/ipp-core/src/world/systems/render/system.rs",
+            "crates/ipp-core/src/host/scene.rs",
+            "crates/ipp-core/tests/debug_geometry.rs",
+            "crates/ipp-core/tests/attachment_placement.rs",
+        ):
+            with self.subTest(source=source):
+                ids, _ = affected([source], [])
+                self.assertTrue(expected.issubset(ids), expected - set(ids))
+
+    def test_renderer_probes_do_not_select_the_publication_library_suite(self):
+        library_checks = set(suite_ids(["render-publications"]))
+        for source in (
+            "crates/ipp-render-gl/examples/egl_gui_clips.rs",
+            "crates/ipp-render-gl/examples/egl_gui_layout.rs",
+            "crates/ipp-render-gl/examples/egl_surface_cache.rs",
+            "crates/ipp-render-gl/examples/egl_smoke.rs",
+            "crates/ipp-render-gl/examples/egl_publications.rs",
+            "crates/ipp-render-gl/examples/smoke/publications.rs",
+            "crates/ipp-render-gl/examples/smoke/canvas_publications.rs",
+            "crates/ipp-render-gl/examples/smoke/canvas_assets.rs",
+            "crates/ipp-render-gl/examples/smoke/gui_publications.rs",
+            "crates/ipp-render-gl/examples/smoke/gui_control_publications.rs",
+            "crates/ipp-render-gl/examples/smoke/gui_cache_interaction.rs",
+            "crates/ipp-render-gl/examples/smoke/surface_visibility.rs",
+            "crates/ipp-render-gl/examples/smoke/egl.rs",
+            "crates/ipp-render-gl/examples/smoke/mod.rs",
+        ):
+            with self.subTest(source=source):
+                ids, _ = affected([source], [])
+                self.assertFalse(library_checks.intersection(ids))
+
+    def test_publication_gles_checks_follow_shared_build_inputs(self):
+        expected = {
+            "check:gles-publications",
+            "check:gles-publications-expanded",
+            "check:gles-publications-gui",
+        }
+        for source in (
+            "Cargo.toml",
+            "Cargo.lock",
+            ".cargo/config.toml",
+            "rust-toolchain.toml",
+            "crates/ipp-render-gl/Cargo.toml",
+            "crates/ipp-render-gl/build.rs",
+            "crates/ipp-render-gl/src/lib.rs",
+            "crates/ipp-render-gl/src/services/render/canvas_scene.rs",
+            "crates/ipp-render-gl/src/services/render/unlit.vert",
+            "crates/ipp-render-gl/examples/egl_publications.rs",
+            "crates/ipp-render-gl/examples/smoke/publications.rs",
+            "crates/ipp-render-gl/examples/smoke/egl.rs",
+            "crates/ipp-render-gl/examples/smoke/mod.rs",
+        ):
+            with self.subTest(source=source):
+                self.assertTrue((ROOT / source).is_file())
+                ids, _ = affected([source], [])
+                self.assertEqual(
+                    {
+                        task
+                        for task in ids
+                        if task.startswith("check:gles-publications")
+                    },
+                    expected,
+                )
+
+    def test_publication_gles_checks_follow_feature_gated_helpers(self):
+        for helper, expected in (
+            (
+                "canvas_assets",
+                {"check:gles-publications-expanded", "check:gles-publications-gui"},
+            ),
+            (
+                "canvas_publications",
+                {"check:gles-publications-expanded", "check:gles-publications-gui"},
+            ),
+            (
+                "surface_visibility",
+                {"check:gles-publications-expanded", "check:gles-publications-gui"},
+            ),
+            ("gui_publications", {"check:gles-publications-gui"}),
+            ("gui_control_publications", {"check:gles-publications-gui"}),
+            ("gui_cache_interaction", {"check:gles-publications-gui"}),
+        ):
+            with self.subTest(helper=helper):
+                source = f"crates/ipp-render-gl/examples/smoke/{helper}.rs"
+                self.assertTrue((ROOT / source).is_file())
+                ids, _ = affected([source], [])
+                self.assertEqual(
+                    {task for task in ids if task.startswith("check:gles-")}, expected
+                )
+
+    def test_publication_gles_roots_and_plans_preserve_target_requirements(self):
+        for record in GLES_CHECKS:
+            if not record["id"].startswith("check:gles-publications"):
+                continue
+            with self.subTest(check=record["id"]):
+                for source in record["sourceRoots"]:
+                    path = ROOT / source
+                    self.assertTrue(path.exists(), source)
+                    self.assertEqual(path.is_dir(), source.endswith("/"), source)
+                selected = plan(
+                    "regression", "--only", record["id"], "--egl-dir", "/validation/egl"
+                )
+                consumer = selected.tasks[-1]
+                self.assertEqual(consumer.id, record["id"])
+                self.assertEqual(
+                    consumer.command,
+                    tuple(
+                        "/validation/egl" if argument == "@egl" else argument
+                        for argument in record["command"]
+                    ),
+                )
+                self.assertEqual(consumer.dependencies, tuple(record["dependencies"]))
+                self.assertTrue({"rust", "gles"}.issubset(consumer.requirements))
+                if record["id"] != "check:gles-publications":
+                    self.assertIn(
+                        "build:surface-assets", [task.id for task in selected.tasks]
+                    )
+
+    def test_unrelated_renderer_probes_keep_exact_gles_consumers(self):
+        for source, expected in (
+            ("examples/egl_gui_layout.rs", {"check:gles-gui-layout"}),
+            ("examples/smoke/surface_cache_target.rs", {"check:gles-surface-cache"}),
+            ("tests/publication_rendering.rs", set()),
+            ("tests/support/canvas.rs", set()),
+        ):
+            with self.subTest(source=source):
+                ids, _ = affected([f"crates/ipp-render-gl/{source}"], [])
+                self.assertEqual(
+                    {task for task in ids if task.startswith("check:gles-")}, expected
+                )
+
     def test_native_retained_gui_check_drives_its_client_on_the_selected_egl(self):
         task = catalog("/validation/egl")["check:gles-retained-gui"]
         self.assertEqual(
             task.command[1:],
-            ("dist/tests/render/retained-gui-native.js", "/validation/egl"),
+            ("target/surface-gui-build/retained-gui-native.js", "/validation/egl"),
         )
         self.assertTrue({"rust", "gles", "node", "browser"}.issubset(task.requirements))
         self.assertIn("build:gles-hosts", task.dependencies)
@@ -609,6 +830,125 @@ class PlanningTests(unittest.TestCase):
         self.assertEqual(selected.coverage, "full")
         self.assertTrue(any("gles" in task.requirements for task in selected.tasks))
 
+    def test_browser_and_rendering_groups_do_not_select_native_canvas(self):
+        for group in ("browser", "rendering"):
+            with self.subTest(group=group):
+                selected = plan("regression", "--group", group)
+                ids = {task.id for task in selected.tasks}
+                self.assertNotIn("build:gles-hosts", ids)
+                self.assertNotIn("test:canvas:controller-gles", ids)
+                self.assertFalse(
+                    any("gles" in task.requirements for task in selected.tasks)
+                )
+                if group == "rendering":
+                    self.assertTrue(
+                        {
+                            "test:canvas:lifecycle",
+                            "test:canvas:dom",
+                            "test:canvas:controller-webgl",
+                        }.issubset(ids)
+                    )
+
+    def test_canvas_commands_replace_obsolete_dist_inputs(self):
+        selected = plan("regression", "--suite", "canvas")
+        tasks = {task.id: task for task in selected.tasks}
+        self.assertEqual(
+            tasks["test:canvas:dom"].command[1:],
+            (
+                "--test",
+                "target/canvas-build/canvas.test.js",
+                "target/canvas-build/dpi.test.js",
+            ),
+        )
+        self.assertEqual(
+            tasks["test:canvas:dom"].dependencies,
+            (
+                "build:canvas-fixtures",
+                "build:browser:headless",
+                "build:browser:render-surfaces",
+            ),
+        )
+        for name in ("canvas", "dpi"):
+            path = f"dist/tests/render/{name}.test.js"
+            self.assertNotIn(path, TEST_INPUTS)
+            self.assertNotIn(f"test:{path}", tasks)
+        self.assertNotIn("build:typescript", tasks)
+
+    def test_canvas_controller_backends_have_separate_prerequisites(self):
+        for backend in ("webgl", "gles"):
+            with self.subTest(backend=backend):
+                selected = plan(
+                    "regression",
+                    "--only",
+                    f"test:canvas:controller-{backend}",
+                    "--egl-dir",
+                    "/configured/egl",
+                )
+                ids = {task.id for task in selected.tasks}
+                requirements = {
+                    name for task in selected.tasks for name in task.requirements
+                }
+                task = selected.tasks[-1]
+                self.assertEqual(
+                    task.command[1], "target/canvas-build/canvas-controller.test.js"
+                )
+                self.assertEqual(task.command[2:4], ("--backend", backend))
+                self.assertIn("browser", requirements)
+                self.assertIn("build:canvas-fixtures", ids)
+                if backend == "gles":
+                    self.assertIn("gles", task.requirements)
+                    self.assertIn("build:gles-hosts", ids)
+                    self.assertNotIn("build:browser:render-surfaces", ids)
+                    self.assertEqual(task.command[4:], ("--egl-dir", "/configured/egl"))
+                else:
+                    self.assertNotIn("gles", requirements)
+                    self.assertNotIn("build:gles-hosts", ids)
+                    self.assertIn("build:browser:render-surfaces", ids)
+                    self.assertEqual(task.command[4:], ())
+
+    def test_canvas_native_egl_selection_and_preflight(self):
+        with patch.dict(os.environ, IPP_EGL_LIBRARY_DIR="/environment/egl"):
+            for flags, expected in (
+                ((), "/environment/egl"),
+                (("--egl-dir", "/explicit/egl"), "/explicit/egl"),
+            ):
+                with self.subTest(flags=flags):
+                    selected = plan(
+                        "regression", "--only", "test:canvas:controller-gles", *flags
+                    )
+                    self.assertEqual(
+                        selected.tasks[-1].command[-2:], ("--egl-dir", expected)
+                    )
+        with patch.dict(os.environ):
+            os.environ.pop("IPP_EGL_LIBRARY_DIR", None)
+            args = parser().parse_args(
+                ["regression", "--only", "test:canvas:controller-gles"]
+            )
+            self.assertIsNone(args.egl_dir)
+            selected = make_plan(args)
+            self.assertIn("gles", selected.tasks[-1].requirements)
+            requirement = next(
+                result
+                for result in inspect_environment({"gles"}, args.egl_dir)
+                if result.name == "gles"
+            )
+            self.assertFalse(requirement.ready)
+            self.assertIn("--egl-dir", requirement.remedy)
+
+    def test_canvas_variants_remain_reachable_without_duplicate_runs(self):
+        both = {"test:canvas:controller-webgl", "test:canvas:controller-gles"}
+        self.assertTrue(both.issubset(suite_ids(["canvas"])))
+        self.assertIn("test:canvas:controller-gles", regression_group_ids(["gles"]))
+        self.assertNotIn("test:canvas:controller-webgl", regression_group_ids(["gles"]))
+        for arguments in (
+            ("--suite", "canvas"),
+            ("--group", "rendering", "--group", "gles", "--suite", "canvas"),
+        ):
+            with self.subTest(arguments=arguments):
+                ids = [task.id for task in plan("regression", *arguments).tasks]
+                for name in both | {"build:canvas-fixtures", "build:gles-hosts"}:
+                    self.assertEqual(ids.count(name), 1)
+
     def test_default_core_keeps_real_native_coverage_without_optional_environments(
         self,
     ):
@@ -652,6 +992,41 @@ class PlanningTests(unittest.TestCase):
         self.assertEqual(ids.count("build:typescript"), 1)
         self.assertNotIn("test:rust:expanded", ids)
         self.assertNotIn("test:dist/tests/integration/scaling.test.js", ids)
+
+    def test_presentation_profiles_keep_browser_independent_of_gles(self):
+        webgl = plan("regression", "--only", "test:presentation:webgl")
+        self.assertFalse(any("gles" in task.requirements for task in webgl.tasks))
+        for group in ("browser", "rendering"):
+            selected = set(regression_group_ids([group]))
+            self.assertIn("test:presentation:webgl", selected)
+            self.assertNotIn("test:presentation:native-gles", selected)
+        self.assertIn("test:presentation:native-gles", regression_group_ids(["gles"]))
+        self.assertEqual(
+            set(suite_ids(["presentation"])),
+            {
+                "test:presentation:webgl",
+                "test:presentation:native-gles",
+                "test:presentation:diagnostics",
+                "test:presentation:host-wire",
+            },
+        )
+
+    def test_manifest_entries_build_the_current_host_wire_driver(self):
+        for entry in (
+            "test:lifecycle:manifest-codec",
+            "test:crates/ipp-protocol/tests/manifest-client.mjs",
+        ):
+            with self.subTest(entry=entry):
+                selected = plan("regression", "--only", entry)
+                self.assertEqual(
+                    {task.id for task in selected.tasks},
+                    {"build:client", "build:presentation-wire-host", entry},
+                )
+                requirements = {
+                    name for task in selected.tasks for name in task.requirements
+                }
+                self.assertEqual(requirements, {"node", "npm", "rust"})
+        self.assertIn("check:typecheck", plan("regression").requested)
 
     def test_groups_keep_all_full_checks_reachable_and_benchmarks_separate(self):
         tasks = catalog("/example/egl")
@@ -730,6 +1105,14 @@ class PlanningTests(unittest.TestCase):
                             t for t in selected.tasks if t.id == "check:gles-particles"
                         )
                         self.assertIn("/example/egl", gles.command)
+                        canvas = next(
+                            task
+                            for task in selected.tasks
+                            if task.id == "test:canvas:controller-gles"
+                        )
+                        self.assertEqual(
+                            canvas.command[-2:], ("--egl-dir", "/example/egl")
+                        )
             with self.assertRaisesRegex(ValueError, "retry cannot select --full"):
                 plan("regression", "--retry", str(report), "--full")
 

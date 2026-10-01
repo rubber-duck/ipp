@@ -1,38 +1,38 @@
-//! Staging of affected inputs before command application.
+//! Staging of affected components before command application.
 //!
-//! Hydration, dirty tracking and effective-value preparation. Ownership lives
-//! in [`super::super`]; this module only hosts the staging phase.
+//! Hydration, dirty tracking and commit preparation. Ownership lives in
+//! [`super::super`]; this module only hosts the staging phase.
 //!
-//! An affected component is hydrated once per batch and later operations write
-//! its staged producer in place. Preparation is a plain copy: each affected
-//! component's effective value is copied into the commit's `prepared` map once,
-//! when the batch commits, and installed into stable storage from there. Until
-//! then readers use the staged input, which has the same content. The copy
-//! never fails and owns no activation resources. After each operation, small
-//! components validate their complete value (see
-//! `ComponentLifecycle::validates_after_operation`); an invalid result stops
-//! the batch at that operation and leaves the incarnation inactive until
-//! corrected.
+//! A batch works on one transient staged copy of each component it touches:
+//! the component is hydrated from retained storage once, and later operations
+//! of the batch write that copy in place. The copy is not a second store: when
+//! the batch commits it moves into the commit's `prepared` values, is installed
+//! into stable storage after the invalidation hooks, and is dropped. Until then
+//! readers use the staged copy. Writes validate before they take effect, so an
+//! invalid operation leaves the staged copy unchanged.
 
 use super::super::*;
 
 impl WorldMutationState {
-    /// Hydrate only the affected value needed for lifecycle activation.
+    /// Hydrate the staged copy of a present component once per batch, from a
+    /// value prepared by an unfinished commit or else from retained storage.
     pub(in crate::world) fn stage_component(
         &mut self,
         components: &registry::ComponentStorage,
         entity: EntityId,
         component: u16,
     ) {
-        let hydrated = if let Some(layer) = self
-            .entities
-            .get_mut(&entity)
-            .and_then(|record| record.layers.get_mut(&component))
-            && layer.inputs.input_value().is_none()
+        let state = &mut self.entities_state;
+        let hydrated = if let Some(record) = state.entities.get_mut(&entity)
+            && let Some(stored) = record.components.get_mut(&component)
+            && stored.staged.is_none()
+            && let Some(value) = state
+                .prepared
+                .get(&(entity, component))
+                .cloned()
+                .or_else(|| components.get(component, entity.index() as usize))
         {
-            layer
-                .inputs
-                .stage(components.get(component, entity.index() as usize));
+            stored.staged = Some(Box::new(value));
             true
         } else {
             false
@@ -47,7 +47,7 @@ impl WorldMutationState {
         &mut self,
         components: &registry::ComponentStorage,
         command: &Command,
-        aliases: &BTreeMap<u32, EntityId>,
+        aliases: &EntityAliases,
     ) -> Result<(), ErrorReason> {
         match command {
             Command::InsertComponent {
@@ -56,6 +56,11 @@ impl WorldMutationState {
                 ..
             }
             | Command::SetField {
+                entity,
+                component,
+                ..
+            }
+            | Command::SetFieldIf {
                 entity,
                 component,
                 ..
@@ -69,19 +74,15 @@ impl WorldMutationState {
                 entity,
                 component,
                 ..
-            }
-            | Command::RemoveComponent {
-                entity,
-                component,
             } => {
-                let entity = self.resolve(*entity, aliases)?;
+                let entity = self.resolve(entity, aliases)?;
                 self.stage_component(components, entity, *component);
             }
             Command::InsertComponentValue {
                 entity,
                 value,
             } => {
-                let entity = self.resolve(*entity, aliases)?;
+                let entity = self.resolve(entity, aliases)?;
                 self.stage_component(components, entity, value.type_id());
             }
             _ => {}
@@ -91,8 +92,8 @@ impl WorldMutationState {
 }
 
 impl WorldMutationState {
-    /// Record that this operation may change the component's effective value in
-    /// any way; its observation compares the whole value.
+    /// Record that this operation may change the component's value in any way;
+    /// its observation compares the whole value.
     pub(in crate::world) fn touch_component(&mut self, id: EntityId, component: u16) {
         self.entities_state
             .operation_untracked
@@ -100,7 +101,7 @@ impl WorldMutationState {
         self.mark_component(id, component);
     }
 
-    /// Record an in-place producer write whose complete effect is `write`, and
+    /// Record an in-place staged write whose complete effect is `write`, and
     /// whether it changed the component's value.
     pub(in crate::world) fn touch_component_write(
         &mut self,
@@ -131,86 +132,50 @@ impl WorldMutationState {
             .insert_if_absent((id, component), incarnation);
     }
 
-    /// Validate each component this operation affected and defer its copy to
-    /// commit.
-    pub(in crate::world) fn prepare_changes(&mut self) -> Result<(), ErrorReason> {
-        let mut result = Ok(());
+    /// Defer the staged copy of each component this operation affected to commit.
+    pub(in crate::world) fn prepare_changes(&mut self) {
         for key in std::mem::take(&mut self.entities_state.dirty) {
             self.entities_state.prepared.remove(&key);
-            let active = self
+            let staged = self
                 .entities_state
                 .entities
                 .get(&key.0)
-                .and_then(|record| record.layers.get(&key.1))
-                .is_some_and(|layer| layer.inputs.input_value().is_some());
-            if !active {
+                .and_then(|record| record.components.get(&key.1))
+                .is_some_and(|state| state.staged.is_some());
+            if staged {
+                self.entities_state.deferred_preparation.insert(key);
+            } else {
                 self.entities_state.deferred_preparation.remove(&key);
-                continue;
             }
-            if let Err(reason) = self.validate_operation_result(key) {
-                // No rollback value exists: the invalid incarnation stays
-                // inactive until a later producer edit makes it valid again.
-                self.deactivate_input(key);
-                self.entities_state.deferred_preparation.remove(&key);
-                result = result.and(Err(reason));
-                continue;
-            }
-            self.entities_state.deferred_preparation.insert(key);
-        }
-        result
-    }
-
-    /// Check the complete value an operation produced for components whose
-    /// invariants span several fields; others were checked field by field.
-    fn validate_operation_result(&self, key: (EntityId, u16)) -> Result<(), ErrorReason> {
-        match self
-            .entities_state
-            .entities
-            .get(&key.0)
-            .and_then(|record| record.layers.get(&key.1))
-            .and_then(|layer| layer.inputs.input_value())
-        {
-            Some(input) if input.validates_after_operation() => input.validate_lifecycle(),
-            _ => Ok(()),
         }
     }
 
-    fn deactivate_input(&mut self, key: (EntityId, u16)) {
-        if let Some(layer) = self
-            .entities_state
-            .entities
-            .get_mut(&key.0)
-            .and_then(|record| record.layers.get_mut(&key.1))
-        {
-            layer.inputs.deactivate();
-        }
-    }
-
-    /// Make the effective copies deferred by earlier operations, once per commit.
+    /// Move the staged copies deferred by earlier operations into the commit's
+    /// prepared values, once per commit.
     pub(in crate::world) fn prepare_deferred_components(&mut self) {
         for key in std::mem::take(&mut self.entities_state.deferred_preparation) {
-            if let Some(input) = self
+            let Some(value) = self
                 .entities_state
                 .entities
-                .get(&key.0)
-                .and_then(|record| record.layers.get(&key.1))
-                .and_then(|layer| layer.inputs.input_value())
-            {
-                let value = input.clone();
+                .get_mut(&key.0)
+                .and_then(|record| record.components.get_mut(&key.1))
+                .and_then(|state| state.staged.take())
+            else {
+                continue;
+            };
 
-                // Test-only oracle: ingress validation must already have made
-                // every committed value whole-valid.
-                #[cfg(feature = "checked-invariants")]
-                if let Err(reason) = value.validate_lifecycle() {
-                    panic!(
-                        "checked invariant: component {} of entity {} fails whole validation ({reason})",
-                        key.1,
-                        key.0.to_bits()
-                    );
-                }
-
-                self.entities_state.prepared.insert(key, value);
+            // Test-only oracle: ingress validation must already have made
+            // every committed value whole-valid.
+            #[cfg(feature = "checked-invariants")]
+            if let Err(reason) = value.validate_lifecycle() {
+                panic!(
+                    "checked invariant: component {} of entity {} fails whole validation ({reason})",
+                    key.1,
+                    key.0.to_bits()
+                );
             }
+
+            self.entities_state.prepared.insert(key, *value);
         }
     }
 }

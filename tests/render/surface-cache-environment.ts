@@ -34,10 +34,11 @@ export interface SurfaceCacheBuildReport {
 export async function runSurfaceCache(
   signal: AbortSignal,
   output: string,
+  builds: readonly (typeof SURFACE_CACHE_BUILDS)[number][] = SURFACE_CACHE_BUILDS,
 ): Promise<SurfaceCacheBuildReport[]> {
   const workspace = process.cwd();
   const reports: SurfaceCacheBuildReport[] = [];
-  for (const { name, gui } of SURFACE_CACHE_BUILDS) {
+  for (const { name, gui } of builds) {
     const directory = resolve("target/browser-build", name);
     const build = {
       name,
@@ -69,7 +70,7 @@ export async function runSurfaceCache(
         },
         signal,
         async (env) => {
-          const module = `${env.urls.origin}/target/surface-build/fixture.js`;
+          const module = `${env.urls.origin}/target/${gui ? "surface-gui-build" : "surface-build"}/fixture.js`;
           const call = <T>(operation: string, args: readonly unknown[] = []) =>
             env.execute(operation, args, () =>
               invoke<T>(env.page, module, operation, args),

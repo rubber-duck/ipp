@@ -2,17 +2,19 @@
 
 use super::*;
 
+/// Format version of the AnimationSystem's saved state. Version 8 saves each
+/// controller's contributions instead of the originals its drivers kept.
+const STATE_VERSION: u32 = 8;
+
 impl AnimationSystem {
-    /// Snapshot only controller declarations and clocks, never resolved runtime targets.
+    /// Snapshot controller declarations, clocks and what each controller has
+    /// added to its fields, never resolved runtime bindings.
     pub fn persistent_state(&self) -> AnimationPersistentState {
         let transitions = self
             .state
             .controllers
             .iter()
             .filter_map(|(&id, controller)| {
-                if self.is_derived_skin_controller(id) {
-                    return None;
-                }
                 let transition = controller.transition.as_deref()?;
                 let source = match &transition.source {
                     super::system_state::AnimationTransitionSource::Live(source) => {
@@ -35,7 +37,6 @@ impl AnimationSystem {
                                 target: value.target,
                                 property: value.property.clone(),
                                 value: value.value.clone(),
-                                baseline: value.baseline.clone(),
                             })
                             .collect(),
                         bindings: bindings.snapshot.clone(),
@@ -59,18 +60,32 @@ impl AnimationSystem {
             controllers: self
                 .state
                 .controllers
-                .iter()
-                .filter(|(id, _)| !self.is_derived_skin_controller(**id))
-                .map(|(_, controller)| controller.snapshot.clone())
+                .values()
+                .map(|controller| controller.snapshot.clone())
                 .collect(),
             transitions,
             directional_starts: self
                 .state
                 .controllers
                 .iter()
-                .filter_map(|(&id, controller)| {
-                    (!self.is_derived_skin_controller(id) && controller.directional_start_pending)
-                        .then_some(id)
+                .filter_map(|(&id, controller)| controller.directional_start_pending.then_some(id))
+                .collect(),
+            contributions: self
+                .state
+                .controllers
+                .iter()
+                .flat_map(|(&id, controller)| {
+                    controller
+                        .contributions
+                        .entries()
+                        .iter()
+                        .filter(|(_, value)| !value.is_empty())
+                        .map(move |(identity, value)| AnimationPersistentContribution {
+                            controller: id,
+                            target: identity.entity,
+                            property: identity.property.clone(),
+                            value: value.value(),
+                        })
                 })
                 .collect(),
         }
@@ -83,10 +98,7 @@ impl AnimationSystem {
         max_bytes: usize,
     ) -> Result<AnimationPersistentState, String> {
         // Validate the borrowed graph and budget before allocating owned descriptions.
-        for (&id, controller) in &self.state.controllers {
-            if self.is_derived_skin_controller(id) {
-                continue;
-            }
+        for controller in self.state.controllers.values() {
             *bytes = bytes.checked_add(128).ok_or("Snapshot size overflow")?;
             if *bytes > max_bytes {
                 return Err("Snapshot byte budget exhausted".into());
@@ -101,6 +113,9 @@ impl AnimationSystem {
                                     name,
                                     ..
                                 } => name.len(),
+                                AnimationTrackTarget::EntityLink => {
+                                    driver.entity_bindings.len() * 8
+                                }
                                 _ => 0,
                             },
                     )
@@ -111,15 +126,14 @@ impl AnimationSystem {
                 if !ids.contains_key(&driver.target) {
                     return Err("Animation references excluded or missing entity".into());
                 }
+                validate_binding_ids(driver, ids)?;
             }
         }
         let directional_count = self
             .state
             .controllers
-            .iter()
-            .filter(|(id, controller)| {
-                !self.is_derived_skin_controller(**id) && controller.directional_start_pending
-            })
+            .values()
+            .filter(|controller| controller.directional_start_pending)
             .count();
         *bytes = bytes
             .checked_add(directional_count.saturating_mul(8))
@@ -127,10 +141,7 @@ impl AnimationSystem {
         if *bytes > max_bytes {
             return Err("Snapshot byte budget exhausted".into());
         }
-        for (&id, controller) in &self.state.controllers {
-            if self.is_derived_skin_controller(id) {
-                continue;
-            }
+        for controller in self.state.controllers.values() {
             let Some(transition) = controller.transition.as_deref() else {
                 continue;
             };
@@ -167,19 +178,32 @@ impl AnimationSystem {
                 if !ids.contains_key(&driver.target) {
                     return Err("Animation transition references excluded or missing entity".into());
                 }
+                validate_binding_ids(driver, ids)?;
             }
         }
         let mut state = self.persistent_state();
+        for contribution in &mut state.contributions {
+            *bytes = bytes
+                .checked_add(64 + contribution.property.owned_bytes())
+                .ok_or("Snapshot size overflow")?;
+            if *bytes > max_bytes {
+                return Err("Snapshot byte budget exhausted".into());
+            }
+            contribution.target = ids
+                .get(&contribution.target)
+                .map(|id| EntityId::from_bits(id.0))
+                .ok_or("Animation contribution references excluded or missing entity")?;
+        }
         for controller in &mut state.controllers {
             for driver in &mut controller.description.drivers {
-                driver.target = EntityId::from_bits(ids[&driver.target].0);
+                persist_driver(driver, ids);
             }
         }
         for transition in &mut state.transitions {
             match &mut transition.source {
                 AnimationPersistentTransitionSource::Live(source) => {
                     for driver in &mut source.description.drivers {
-                        driver.target = EntityId::from_bits(ids[&driver.target].0);
+                        persist_driver(driver, ids);
                     }
                 }
                 AnimationPersistentTransitionSource::Frozen {
@@ -191,7 +215,7 @@ impl AnimationSystem {
                         value.target = EntityId::from_bits(ids[&value.target].0);
                     }
                     for driver in &mut bindings.description.drivers {
-                        driver.target = EntityId::from_bits(ids[&driver.target].0);
+                        persist_driver(driver, ids);
                     }
                 }
             }
@@ -201,12 +225,12 @@ impl AnimationSystem {
 }
 
 impl AnimationPersistentState {
-    /// Encode this subsystem's versioned controller descriptions and clocks.
+    /// Encode this subsystem's versioned controller descriptions, clocks and contributions.
     pub fn encode(&self, max_bytes: usize) -> Result<Vec<u8>, String> {
         super::codec::validate_values(self)?;
         let mut writer =
             crate::services::world_serialization::binary::WorldBinaryWriter::new(max_bytes);
-        writer.u32(5)?;
+        writer.u32(STATE_VERSION)?;
         super::codec::encode(&mut writer, self)?;
         Ok(writer.bytes)
     }
@@ -219,10 +243,10 @@ impl AnimationPersistentState {
         let mut reader =
             crate::services::world_serialization::binary::WorldBinaryReader::new(bytes, max_bytes);
         let version = reader.u32()?;
-        if !matches!(version, 1..=5) {
+        if version != STATE_VERSION {
             return Err("Unsupported animation state version".into());
         }
-        let state = super::codec::decode(&mut reader, version)?;
+        let state = super::codec::decode(&mut reader)?;
         reader.end()?;
         super::codec::validate_values(&state)?;
         Ok(state)
@@ -255,11 +279,9 @@ impl AnimationPersistentState {
                         let entity = entities.get(&value.target.to_bits()).ok_or(
                             "Animation transition references an excluded or missing entity",
                         )?;
-                        if !entity
-                            .components
-                            .iter()
-                            .any(|component| component.type_id() == value.property.component())
-                        {
+                        if !entity.components.iter().any(|component| {
+                            component.type_id() == value.property.component_target()
+                        }) {
                             return Err(
                                 "Animation transition references an excluded or missing component"
                                     .into(),
@@ -267,6 +289,20 @@ impl AnimationPersistentState {
                         }
                     }
                 }
+            }
+        }
+        for contribution in &self.contributions {
+            let entity = entities
+                .get(&contribution.target.to_bits())
+                .ok_or("Animation contribution references an excluded or missing entity")?;
+            if !entity
+                .components
+                .iter()
+                .any(|value| value.type_id() == contribution.property.component_target())
+            {
+                return Err(
+                    "Animation contribution references an excluded or missing component".into(),
+                );
             }
         }
         Ok(())
@@ -278,9 +314,7 @@ impl AnimationPersistentState {
     ) -> Result<Self, String> {
         for controller in &self.controllers {
             for driver in &controller.description.drivers {
-                if !ids.contains_key(&crate::EntityPersistentId(driver.target.to_bits())) {
-                    return Err("Missing persistent animation target".into());
-                }
+                validate_remap_targets(std::slice::from_ref(driver), ids)?;
             }
         }
         for transition in &self.transitions {
@@ -304,14 +338,14 @@ impl AnimationPersistentState {
         }
         for controller in &mut self.controllers {
             for driver in &mut controller.description.drivers {
-                driver.target = ids[&crate::EntityPersistentId(driver.target.to_bits())];
+                remap_driver(driver, ids);
             }
         }
         for transition in &mut self.transitions {
             match &mut transition.source {
                 AnimationPersistentTransitionSource::Live(source) => {
                     for driver in &mut source.description.drivers {
-                        driver.target = ids[&crate::EntityPersistentId(driver.target.to_bits())];
+                        remap_driver(driver, ids);
                     }
                 }
                 AnimationPersistentTransitionSource::Frozen {
@@ -323,10 +357,16 @@ impl AnimationPersistentState {
                         value.target = ids[&crate::EntityPersistentId(value.target.to_bits())];
                     }
                     for driver in &mut bindings.description.drivers {
-                        driver.target = ids[&crate::EntityPersistentId(driver.target.to_bits())];
+                        remap_driver(driver, ids);
                     }
                 }
             }
+        }
+        for contribution in &mut self.contributions {
+            contribution.target = ids
+                .get(&crate::EntityPersistentId(contribution.target.to_bits()))
+                .copied()
+                .ok_or("Missing persistent animation contribution target")?;
         }
         Ok(self)
     }
@@ -343,12 +383,20 @@ fn validate_persistent_drivers(
         let entity = entities
             .get(&driver.target.to_bits())
             .ok_or("Animation driver references an excluded or missing entity")?;
-        if !entity
-            .components
-            .iter()
-            .any(|component| component.type_id() == driver.property.component())
+        if !matches!(driver.property, AnimationTrackTarget::EntityLink)
+            && !entity
+                .components
+                .iter()
+                .any(|component| component.type_id() == driver.property.component_target())
         {
             return Err("Animation driver references an excluded or missing component".into());
+        }
+        if driver
+            .entity_bindings
+            .iter()
+            .any(|entity| !entities.contains_key(&entity.to_bits()))
+        {
+            return Err("Animation structural key references an excluded or missing entity".into());
         }
     }
     Ok(())
@@ -362,6 +410,47 @@ fn validate_remap_targets(
         if !ids.contains_key(&crate::EntityPersistentId(driver.target.to_bits())) {
             return Err("Missing persistent animation transition target".into());
         }
+        if driver
+            .entity_bindings
+            .iter()
+            .any(|entity| !ids.contains_key(&crate::EntityPersistentId(entity.to_bits())))
+        {
+            return Err("Missing persistent structural binding".into());
+        }
     }
     Ok(())
+}
+
+fn validate_binding_ids(
+    driver: &AnimationDriverDescription,
+    ids: &std::collections::BTreeMap<EntityId, crate::EntityPersistentId>,
+) -> Result<(), String> {
+    if driver
+        .entity_bindings
+        .iter()
+        .any(|entity| !ids.contains_key(entity))
+    {
+        return Err("Animation structural key references excluded or missing entity".into());
+    }
+    Ok(())
+}
+
+fn persist_driver(
+    driver: &mut AnimationDriverDescription,
+    ids: &std::collections::BTreeMap<EntityId, crate::EntityPersistentId>,
+) {
+    driver.target = EntityId::from_bits(ids[&driver.target].0);
+    for entity in &mut driver.entity_bindings {
+        *entity = EntityId::from_bits(ids[entity].0);
+    }
+}
+
+fn remap_driver(
+    driver: &mut AnimationDriverDescription,
+    ids: &std::collections::BTreeMap<crate::EntityPersistentId, EntityId>,
+) {
+    driver.target = ids[&crate::EntityPersistentId(driver.target.to_bits())];
+    for entity in &mut driver.entity_bindings {
+        *entity = ids[&crate::EntityPersistentId(entity.to_bits())];
+    }
 }

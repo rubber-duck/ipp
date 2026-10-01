@@ -30,6 +30,10 @@ python tools/ipp.py dev blender-viewer
 
 The [suite registry](../../tools/pipeline/suites.json) builds viewer/addon prerequisites, checks isolated extension installation and runs real Blender HTTPS/WSS export with browser state/frame assertions. It also includes disk export/restore and separate particle export coverage. The [fixture guide](../../tests/fixtures/blender/README.md) owns source provenance and regeneration.
 
+For the independent subworld adapter checkpoint, run `python tools/ipp.py regression --suite blender-headless` for native WebSocket and worker-WASM link, correction, OutputRef and graph checks, and `python tools/ipp.py regression --suite blender-disk-headless` for real Blender export, reference-only disk import and worker reload. These headless selections do not establish live viewer presentation, joint-pose pixels or GUI responsiveness.
+
+Adapter disposal fences new revisions, drains submitted work and releases acknowledged controllers and owned clip publications before completing; it does not close the borrowed runtime session or destroy its World. The headless transport scenarios hold real controller and asset-publication acknowledgements while checking repeated disposal and preservation of caller-owned state. Their detached data-URI clip fixture isolates runtime cleanup, not live addon HTTPS/WSS delivery.
+
 On this VM, `/home/dev/.local/bin/ipp-browser-env python tools/ipp.py test blender` supplies private Chromium libraries/fonts from `/home/dev/.local/opt/ipp-browser-support`. Ordinary installations use Playwright's system dependencies. This wrapper changes the child environment only.
 
 ## GUI on a virtual display

@@ -1,6 +1,8 @@
 //! Focused failure injection for real resource/renderer policies; GL harnesses own image evidence.
 
 mod support;
+#[path = "support/world_presentation.rs"]
+mod world_presentation;
 
 #[cfg(feature = "shadows")]
 use ipp_core::{Batch, Command, EntityRef};
@@ -16,6 +18,7 @@ use ipp_render_gl::RenderError;
 use ipp_render_gl::{RenderDevice, RenderService};
 use std::{any::Any, rc::Rc};
 use support::*;
+use world_presentation::present_world;
 
 fn triangle() -> Vec<u8> {
     let mut bytes = b"IPPM".to_vec();
@@ -36,7 +39,7 @@ fn triangle() -> Vec<u8> {
 fn renderable(world: &mut WorldContext<'_>, asset: u64, x: f32) -> EntityId {
     let values = vec![
         ComponentValue::MeshInstance(MeshInstance {
-            source: format!("asset://1/{asset}"),
+            source: format!("asset://1/{asset}").into(),
             variant: 0,
         }),
         ComponentValue::Transform(Transform {
@@ -105,9 +108,10 @@ fn frame_accounting_reports_between_frame_uploads_once() {
     upload(&mut world, 1);
 
     // Uploads completed between renders belong to the next completed render.
-    let first = renderer.render_stats(&mut world, 100, 100).unwrap();
+    let first = present_world!(render_frame, &mut renderer, host, world, 100, 100).unwrap();
     assert_eq!(first.uploaded_bytes, 78);
-    let second = renderer.render_stats(&mut world, 100, 100).unwrap();
+    let second =
+        present_world!(finish; render_frame, &mut renderer, host, world, 100, 100).unwrap();
     assert_eq!(second.uploaded_bytes, 0);
     assert_eq!(
         renderer.viewport_limits(),
@@ -136,7 +140,7 @@ fn failed_shared_upload_is_cached_preserves_cpu_and_does_not_block_ready_draws()
         "loading attempts each shared mesh before any draw"
     );
 
-    let stats = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
+    let stats = present_world!(render_frame, &mut renderer, host, world, 100, 100).unwrap();
     assert_eq!((stats.draw_calls, stats.failed_draw_calls), (1, 2));
     assert_eq!((state.mesh_attempts.get(), state.live_meshes.get()), (2, 1));
     assert_eq!(
@@ -157,7 +161,7 @@ fn failed_shared_upload_is_cached_preserves_cpu_and_does_not_block_ready_draws()
     ));
     assert_cpu_usable(&mut world, 1, first);
     for _ in 0..3 {
-        let stats = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
+        let stats = present_world!(render_frame, &mut renderer, host, world, 100, 100).unwrap();
         assert_eq!(
             (
                 stats.draw_calls,
@@ -174,21 +178,21 @@ fn failed_shared_upload_is_cached_preserves_cpu_and_does_not_block_ready_draws()
     );
     assert_eq!(
         state.ended_frames.get(),
-        5,
-        "the initial program preparation frame and ready frames all complete"
+        4,
+        "program preparation is separate from the four completed draws"
     );
 
     let world_id = world.id();
     drop(world);
-    renderer.unload_host(&mut host);
+    renderer.unload_host(&mut host).unwrap();
     host.flush_resource_lifecycle();
     let mut world = host.world_mut(world_id).unwrap();
     assert_eq!(state.live_meshes.get(), 0);
-    let stats = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
+    let stats = present_world!(render_frame, &mut renderer, host, world, 100, 100).unwrap();
     assert_eq!((stats.draw_calls, stats.failed_draw_calls), (3, 0));
     assert_eq!((state.mesh_attempts.get(), state.live_meshes.get()), (4, 2));
     drop(world);
-    renderer.unload_host(&mut host);
+    renderer.unload_host(&mut host).unwrap();
     host.flush_resource_lifecycle();
     assert_eq!(state.live_meshes.get(), 0);
 }
@@ -229,14 +233,14 @@ fn cpu_residency_above_former_quota_does_not_suppress_mesh_upload() {
     upload(&mut world, 1);
     let entity = renderable(&mut world, 1, 0.0);
 
-    let stats = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
+    let stats = present_world!(render_frame, &mut renderer, host, world, 100, 100).unwrap();
     assert_eq!(
         (
             stats.draw_calls,
             stats.failed_draw_calls,
             stats.uploaded_bytes
         ),
-        (1, 0, 0)
+        (1, 0, 78)
     );
     assert_eq!(state.mesh_attempts.get(), 1);
     assert_eq!(non_program_residency(&world), bytes + metadata_bytes() + 78);
@@ -247,7 +251,7 @@ fn cpu_residency_above_former_quota_does_not_suppress_mesh_upload() {
     drop(world);
     host.flush_resource_lifecycle();
     let mut world = host.world_mut(world_id).unwrap();
-    let stats = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
+    let stats = present_world!(render_frame, &mut renderer, host, world, 100, 100).unwrap();
     assert_eq!(
         (stats.draw_calls, stats.failed_draw_calls),
         (1, 0),
@@ -256,10 +260,10 @@ fn cpu_residency_above_former_quota_does_not_suppress_mesh_upload() {
     assert_eq!(state.mesh_attempts.get(), 1);
     let world_id = world.id();
     drop(world);
-    renderer.unload_host(&mut host);
+    renderer.unload_host(&mut host).unwrap();
     host.flush_resource_lifecycle();
     let mut world = host.world_mut(world_id).unwrap();
-    let stats = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
+    let stats = present_world!(render_frame, &mut renderer, host, world, 100, 100).unwrap();
     assert_eq!((stats.draw_calls, stats.failed_draw_calls), (1, 0));
     assert_eq!(state.mesh_attempts.get(), 2);
     assert_eq!(non_program_residency(&world), metadata_bytes() + 78);
@@ -290,7 +294,7 @@ fn detached_demanded_mesh_publishes_cpu_metadata_and_requeues_gpu_recovery() {
     let request = host
         .take_resource_requests()
         .into_iter()
-        .find(|request| request.source == source)
+        .find(|request| *request.source == *source)
         .expect("demanded mesh request");
     host.complete_resource(request.id, Ok(triangle())).unwrap();
 
@@ -315,7 +319,7 @@ fn detached_demanded_mesh_publishes_cpu_metadata_and_requeues_gpu_recovery() {
     );
     assert_eq!(state.mesh_attempts.get(), 0);
 
-    renderer.unload_host(&mut host);
+    renderer.unload_host(&mut host).unwrap();
     host.flush_resource_lifecycle();
     assert!(
         host.asset_resources()
@@ -406,8 +410,8 @@ fn detached_progress_defers_pending_font_and_drawing_gpu_preparation() {
 #[cfg(feature = "surfaces")]
 #[test]
 fn surface_draw_failure_restores_mesh_culling_state() {
-    use ipp_core::services::asset_management::{AssetSource, drawing::DRAWING_TYPE};
-    use ipp_core::{Surface, SurfaceItemContent, SurfaceItemStyle};
+    use ipp_core::components::CanvasDrawing;
+    use support::canvas::CanvasSurface;
 
     let mut host = ipp_core::HostRuntime::new();
     host.data_sources_mut()
@@ -417,50 +421,32 @@ fn surface_draw_failure_restores_mesh_culling_state() {
     renderable(&mut world, 41, 0.0);
     upload(&mut world, 41);
     let world_id = world.id();
-    let mut surface = Surface::default();
-    surface
-        .insert_item(
-            0,
-            SurfaceItemContent::Drawing,
-            SurfaceItemStyle {
-                asset: Some(AssetSource {
-                    kind: DRAWING_TYPE,
-                    uri: "fixture:///drawing.ippd".into(),
-                    variant: 0,
-                }),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-    create(
-        &mut world,
-        vec![
-            ComponentValue::Transform(Transform::default()),
-            ComponentValue::Surface(surface),
-        ],
-    );
     drop(world);
+    let surface = CanvasSurface::new(
+        &mut host,
+        world_id,
+        0.0,
+        vec![ComponentValue::CanvasDrawing(CanvasDrawing {
+            source: "fixture:///drawing.ippd".into(),
+            ..Default::default()
+        })],
+    );
     for _ in 0..16 {
         host.progress_assets();
         for request in host.take_resource_requests() {
             host.complete_resource(request.id, Ok(surface_drawing()))
                 .unwrap();
         }
-        update(&mut host.world_mut(world_id).unwrap()).unwrap();
-        if host.world_mut(world_id).unwrap().surface_render_items()[0]
-            .primitives
-            .len()
-            == 1
-        {
+        host.frame(0.0).unwrap();
+        if surface.publication(&host).entries.len() == 1 {
             break;
         }
     }
+    assert_eq!(surface.publication(&host).entries.len(), 1);
     let mut world = host.world_mut(world_id).unwrap();
-    assert_eq!(world.surface_render_items().len(), 1);
-    assert_eq!(world.surface_render_items()[0].primitives.len(), 1);
 
     state.fail_surface_state_start.set(true);
-    let error = render_frame(&mut renderer, &mut world, 100, 100).unwrap_err();
+    let error = present_world!(render_frame, &mut renderer, host, world, 100, 100).unwrap_err();
     assert!(error.contains("injected Surface state failure"), "{error}");
     assert!(!state.surface_double_sided.get());
     assert_eq!(&*state.surface_state_changes.borrow(), &[true, false]);
@@ -469,14 +455,14 @@ fn surface_draw_failure_restores_mesh_culling_state() {
     state.fail_surface_state_start.set(false);
     state.surface_state_changes.borrow_mut().clear();
     state.fail_surface_draw.set(true);
-    let error = render_frame(&mut renderer, &mut world, 100, 100).unwrap_err();
+    let error = present_world!(render_frame, &mut renderer, host, world, 100, 100).unwrap_err();
     assert!(error.contains("injected Surface draw failure"), "{error}");
     assert!(!state.surface_double_sided.get());
     assert_eq!(&*state.surface_state_changes.borrow(), &[true, false]);
     assert_eq!(state.ended_frames.get(), 2);
 
     state.fail_surface_draw.set(false);
-    let stats = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
+    let stats = present_world!(finish; render_frame, &mut renderer, host, world, 100, 100).unwrap();
     assert_eq!(stats.draw_calls, 2);
     assert_eq!(
         &*state.surface_state_changes.borrow(),
@@ -523,21 +509,21 @@ fn shadow_pass_restores_target_after_error_reuses_storage_and_releases_on_unload
     host.flush_resource_lifecycle();
     let mut world = host.world_mut(world_id).unwrap();
     state.fail_shadow_draw.set(true);
-    assert!(render_frame(&mut renderer, &mut world, 100, 100).is_err());
+    assert!(present_world!(render_frame, &mut renderer, host, world, 100, 100).is_err());
     assert!(
         !state.shadow_pass.get(),
         "Failed depth draw must leave the shadow target"
     );
     assert_eq!(state.live_shadow_maps.get(), 1);
-    assert_eq!(state.ended_frames.get(), 2);
+    assert_eq!(state.ended_frames.get(), 1);
     state.fail_shadow_draw.set(false);
-    let stats = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
+    let stats = present_world!(render_frame, &mut renderer, host, world, 100, 100).unwrap();
     assert_eq!(stats.shadow_draw_calls, 1);
     assert_eq!(stats.shadow_resident_bytes, 4 * 1024 * 1024);
     assert_eq!(state.live_shadow_maps.get(), 1);
     let world_id = world.id();
     drop(world);
-    renderer.unload_host(&mut host);
+    renderer.unload_host(&mut host).unwrap();
     host.flush_resource_lifecycle();
     let mut world = host.world_mut(world_id).unwrap();
     assert_eq!(state.live_shadow_maps.get(), 0);
@@ -547,7 +533,7 @@ fn shadow_pass_restores_target_after_error_reuses_storage_and_releases_on_unload
     drop(world);
     host.flush_resource_lifecycle();
     let mut world = host.world_mut(world_id).unwrap();
-    render_frame(&mut renderer, &mut world, 100, 100).unwrap();
+    present_world!(render_frame, &mut renderer, host, world, 100, 100).unwrap();
     world
         .enqueue(Batch {
             id: 99,
@@ -557,7 +543,7 @@ fn shadow_pass_restores_target_after_error_reuses_storage_and_releases_on_unload
         })
         .unwrap();
     update(&mut world).unwrap();
-    render_frame(&mut renderer, &mut world, 100, 100).unwrap();
+    present_world!(finish; render_frame, &mut renderer, host, world, 100, 100).unwrap();
     assert_eq!(state.live_shadow_maps.get(), 0);
 }
 
@@ -588,7 +574,7 @@ fn excess_lights_keep_drawing_with_per_draw_shader_capacity() {
         );
     }
     assert_eq!(
-        render_frame(&mut renderer, &mut world, 100, 100)
+        present_world!(render_frame, &mut renderer, host, world, 100, 100)
             .unwrap()
             .draw_calls,
         1
@@ -601,7 +587,7 @@ fn excess_lights_keep_drawing_with_per_draw_shader_capacity() {
         ],
     );
     assert_eq!(
-        render_frame(&mut renderer, &mut world, 100, 100)
+        present_world!(finish; render_frame, &mut renderer, host, world, 100, 100)
             .unwrap()
             .draw_calls,
         1
@@ -609,13 +595,13 @@ fn excess_lights_keep_drawing_with_per_draw_shader_capacity() {
 }
 
 #[test]
-fn device_replacement_releases_old_payloads_before_swapping_and_waits_for_worlds() {
+fn device_replacement_releases_old_payloads() {
     let mut host = ipp_core::HostRuntime::new();
     let (mut world, mut renderer, old) = setup(&mut host);
     upload(&mut world, 1);
     renderable(&mut world, 1, 0.0);
     assert_eq!(
-        render_frame(&mut renderer, &mut world, 100, 100)
+        present_world!(render_frame, &mut renderer, host, world, 100, 100)
             .unwrap()
             .draw_calls,
         1
@@ -624,22 +610,7 @@ fn device_replacement_releases_old_payloads_before_swapping_and_waits_for_worlds
     let world_id = world.id();
     drop(world);
 
-    let peer = host.create_world(Default::default()).unwrap();
-    host.world_mut(peer).unwrap().prepare_update(0.0).unwrap();
     let next = Rc::new(DeviceState::default());
-    assert!(
-        renderer
-            .replace_device(&mut host, TestDevice(next.clone()))
-            .is_err()
-    );
-    assert_eq!(
-        old.live_meshes.get(),
-        1,
-        "a prepared peer must defer the entire transition"
-    );
-    assert_eq!(next.live_meshes.get(), 0);
-    host.world_mut(peer).unwrap().step(0.0).unwrap();
-
     renderer
         .replace_device(&mut host, TestDevice(next.clone()))
         .unwrap();
@@ -653,8 +624,8 @@ fn device_replacement_releases_old_payloads_before_swapping_and_waits_for_worlds
         0,
         "the new device cannot receive old-handle destruction"
     );
-    let mut world = host.world_mut(world_id).unwrap();
-    let stats = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
+    let world = host.world_mut(world_id).unwrap();
+    let stats = present_world!(finish; render_frame, &mut renderer, host, world, 100, 100).unwrap();
     assert_eq!((stats.draw_calls, stats.failed_draw_calls), (1, 0));
     assert_eq!(old.mesh_attempts.get(), 1);
     assert_eq!((next.mesh_attempts.get(), next.live_meshes.get()), (1, 1));
@@ -672,23 +643,7 @@ fn render_host_frame<D: RenderDevice>(
     host: &mut ipp_core::HostRuntime,
     world_id: ipp_core::WorldId,
 ) -> FrameStats {
-    for _ in 0..8 {
-        host.world_mut(world_id)
-            .unwrap()
-            .prepare_update(0.0)
-            .unwrap();
-        host.progress_assets();
-        let mut world = host.world_mut(world_id).unwrap();
-        world.step(0.0).unwrap();
-        let stats = renderer.render_stats(&mut world, 100, 100).unwrap();
-        if !world.asset_resources().iter().any(|resource| {
-            resource.source().kind == AssetTypeId(14)
-                && *resource.status() == AssetLoadStatus::Unloaded
-        }) {
-            return stats;
-        }
-    }
-    panic!("built-in program readiness did not settle");
+    render_frame(renderer, host, world_id, 100, 100).unwrap()
 }
 
 fn non_program_residency(world: &WorldContext<'_>) -> usize {
@@ -712,7 +667,7 @@ fn graphics_loss_and_failed_recovery_keep_cpu_picking_and_metadata_available() {
         render_host_frame(&mut renderer, &mut host, world_id).draw_calls,
         1
     );
-    renderer.unload_host(&mut host);
+    renderer.unload_host(&mut host).unwrap();
     host.flush_resource_lifecycle();
     let provider = host
         .asset_resources()
@@ -737,7 +692,7 @@ fn graphics_loss_and_failed_recovery_keep_cpu_picking_and_metadata_available() {
     assert!(provider.decoded_available());
     assert_eq!(provider.stats().resident_bytes, metadata_bytes());
     drop(world);
-    renderer.unload_host(&mut host);
+    renderer.unload_host(&mut host).unwrap();
     host.flush_resource_lifecycle();
     assert_eq!(
         render_host_frame(&mut renderer, &mut host, world_id).draw_calls,
@@ -788,7 +743,7 @@ fn atlas_allocation_failure_keeps_lighting_and_does_not_retry_every_frame() {
     let mut world = host.world_mut(world_id).unwrap();
     state.fail_shadow_allocation.set(true);
     for _ in 0..3 {
-        let stats = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
+        let stats = present_world!(render_frame, &mut renderer, host, world, 100, 100).unwrap();
         assert_eq!(
             stats.draw_calls,
             1,
@@ -813,24 +768,46 @@ fn culled_text_surface_reuses_retained_glyphs_when_visible_again() {
     let (mut renderer, state, world_id, entity) = text_surface_scene(&mut host);
     let mut world = host.world_mut(world_id).unwrap();
 
-    let cold = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
+    let cold = present_world!(render_frame, &mut renderer, host, world, 100, 100).unwrap();
     assert_eq!((cold.glyph_populates, cold.gui_batches), (1, 1), "{cold:?}");
     let uploads = state.gui_batch_writes.get();
     let populations = state.atlas_populations.get();
 
-    // Behind the camera for one frame: nothing is submitted and nothing is released.
-    place(&mut world, entity, 10.0);
-    let culled = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
-    assert_eq!(
-        (culled.draw_calls, culled.gui_batches),
-        (0, 0),
-        "{culled:?}"
-    );
-    assert_eq!(culled.glyph_pages, 1);
-    assert!(culled.gui_resident_bytes > 0);
+    // Behind the perspective camera at different quality distances: no work or retirement.
+    for z in [10.0, 100.0, 1000.0] {
+        place(&mut world, entity.anchor, z);
+        let culled = present_world!(render_frame, &mut renderer, host, world, 100, 100).unwrap();
+        drop(world);
+        let publication = host
+            .publication(host.latest_publication(world_id).unwrap())
+            .unwrap();
+        let edge = publication
+            .attachments
+            .iter()
+            .find(|edge| edge.anchor == entity.anchor)
+            .unwrap();
+        assert_eq!(edge.placement[14], f64::from(z));
+        world = host.world_mut(world_id).unwrap();
+        assert_eq!(
+            (culled.draw_calls, culled.gui_batches),
+            (0, 0),
+            "{culled:?}"
+        );
+        assert_eq!(
+            (
+                culled.uploaded_bytes,
+                culled.gui_rebuilds,
+                culled.glyph_page_retirements
+            ),
+            (0, 0, 0)
+        );
+        assert_eq!(culled.glyph_pages, 1);
+        assert!(culled.gui_resident_bytes > 0);
+    }
 
-    place(&mut world, entity, 0.0);
-    let visible = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
+    place(&mut world, entity.anchor, 0.0);
+    let visible =
+        present_world!(finish; render_frame, &mut renderer, host, world, 100, 100).unwrap();
     assert_eq!(visible.gui_batches, 1, "{visible:?}");
     assert_eq!(visible.uploaded_bytes, 0);
     assert_eq!(visible.gui_rebuilds, 0);
@@ -853,7 +830,7 @@ fn recoverable_glyph_population_failure_keeps_analytic_text_and_backs_off() {
         .replace(Some(RenderError::RenderDevice(
             "injected atlas failure".into(),
         )));
-    let failed = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
+    let failed = present_world!(render_frame, &mut renderer, host, world, 100, 100).unwrap();
     assert_eq!(failed.glyph_population_failures, 1, "{failed:?}");
     assert_eq!((failed.glyph_populates, failed.gui_batches), (0, 0));
     assert_eq!((failed.draw_calls, failed.failed_draw_calls), (1, 0));
@@ -862,14 +839,15 @@ fn recoverable_glyph_population_failure_keeps_analytic_text_and_backs_off() {
 
     // The glyph waits before retrying, so a persistent failure is not paid every frame.
     state.fail_atlas_begin.replace(None);
-    let waiting = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
+    let waiting = present_world!(render_frame, &mut renderer, host, world, 100, 100).unwrap();
     assert_eq!(waiting.glyph_population_failures, 0);
     assert_eq!(waiting.draw_calls, 1);
     assert_eq!(state.atlas_populations.get(), 1);
     assert_eq!(state.analytic_glyph_draws.get(), 2);
 
+    drop(world);
     let populated = (0..8)
-        .map(|_| render_frame(&mut renderer, &mut world, 100, 100).unwrap())
+        .map(|_| render_frame(&mut renderer, &mut host, world_id, 100, 100).unwrap())
         .find(|stats| stats.glyph_populates == 1)
         .expect("backed-off glyph is populated again");
     assert_eq!(populated.gui_batches, 1);
@@ -886,7 +864,7 @@ fn glyph_population_context_loss_and_restore_failures_fail_the_frame() {
     state
         .fail_atlas_begin
         .replace(Some(RenderError::ContextLost));
-    let error = render_frame(&mut renderer, &mut world, 100, 100).unwrap_err();
+    let error = present_world!(render_frame, &mut renderer, host, world, 100, 100).unwrap_err();
     assert_eq!(error, RenderError::ContextLost.to_string());
     assert!(!state.atlas_target_bound.get());
 
@@ -896,8 +874,9 @@ fn glyph_population_context_loss_and_restore_failures_fail_the_frame() {
         "injected atlas restore failure".into(),
     )));
     let attempts = state.atlas_populations.get();
+    drop(world);
     let error = (0..8)
-        .find_map(|_| render_frame(&mut renderer, &mut world, 100, 100).err())
+        .find_map(|_| render_frame(&mut renderer, &mut host, world_id, 100, 100).err())
         .expect("retried population reports the restore failure");
     assert!(error.contains("injected atlas restore failure"), "{error}");
     assert_eq!(state.atlas_populations.get(), attempts + 1);
@@ -912,7 +891,7 @@ fn cold_glyph_population_binds_each_atlas_page_once_and_restores_once() {
         text_run_scene(&mut host, glyph_font(3, 10, 130.0), &[0, 1, 2]);
     let mut world = host.world_mut(world_id).unwrap();
 
-    let cold = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
+    let cold = present_world!(render_frame, &mut renderer, host, world, 100, 100).unwrap();
     assert_eq!(
         (cold.glyph_misses, cold.glyph_populates),
         (3, 3),
@@ -932,7 +911,7 @@ fn cold_glyph_population_binds_each_atlas_page_once_and_restores_once() {
     assert_eq!(cold.gui_batches, 3, "one glyph batch per page");
     assert_eq!(state.analytic_glyph_draws.get(), 0);
 
-    let warm = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
+    let warm = present_world!(finish; render_frame, &mut renderer, host, world, 100, 100).unwrap();
     assert_eq!((warm.glyph_misses, warm.glyph_populates), (0, 0));
     assert_eq!((warm.uploaded_bytes, warm.gui_rebuilds), (0, 0));
     assert_eq!(warm.gui_batches, 3);
@@ -953,19 +932,19 @@ fn population_budget_defers_misses_and_resumes_next_frame() {
 
     // Without time beyond the floor, population stops there; the incomplete run
     // stays analytic this frame.
-    let first = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
+    let first = present_world!(render_frame, &mut renderer, host, world, 100, 100).unwrap();
     assert_eq!(first.glyph_misses, floor + 8, "{first:?}");
     assert_eq!(first.glyph_populates, floor);
     assert_eq!(first.gui_batches, 0);
     assert_eq!(state.analytic_glyph_draws.get(), 1);
 
     // The next frame populates the remainder and switches the run to the atlas.
-    let second = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
+    let second = present_world!(render_frame, &mut renderer, host, world, 100, 100).unwrap();
     assert_eq!((second.glyph_misses, second.glyph_populates), (8, 8));
     assert_eq!(second.gui_batches, 1);
     assert_eq!(state.analytic_glyph_draws.get(), 1);
 
-    let warm = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
+    let warm = present_world!(finish; render_frame, &mut renderer, host, world, 100, 100).unwrap();
     assert_eq!((warm.glyph_misses, warm.glyph_populates), (0, 0));
     assert_eq!(warm.uploaded_bytes, 0);
 }
@@ -979,11 +958,11 @@ fn cold_text_within_the_time_budget_reaches_the_atlas_in_one_frame() {
     let mut host = ipp_core::HostRuntime::new();
     let (mut renderer, state, world_id, _) =
         text_run_scene(&mut host, glyph_font(count, 1000, 1.0), &ids);
-    let mut world = host.world_mut(world_id).unwrap();
+    let world = host.world_mut(world_id).unwrap();
 
     // The default budget covers them at the estimated cost: one population pass,
     // and the run samples the atlas in its first frame.
-    let cold = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
+    let cold = present_world!(finish; render_frame, &mut renderer, host, world, 100, 100).unwrap();
     assert_eq!((cold.glyph_misses, cold.glyph_populates), (count, count));
     assert_eq!(cold.gui_batches, 1, "{cold:?}");
     assert_eq!(state.analytic_glyph_draws.get(), 0);
@@ -1000,7 +979,7 @@ fn context_loss_during_glyph_population_reaches_recovery_and_repopulates() {
     state
         .fail_atlas_begin
         .replace(Some(RenderError::ContextLost));
-    let error = render_frame(&mut renderer, &mut world, 100, 100).unwrap_err();
+    let error = present_world!(render_frame, &mut renderer, host, world, 100, 100).unwrap_err();
     assert_eq!(error, RenderError::ContextLost.to_string());
     assert_eq!(
         state.analytic_glyph_draws.get(),
@@ -1013,8 +992,9 @@ fn context_loss_during_glyph_population_reaches_recovery_and_repopulates() {
     state.fail_atlas_begin.replace(None);
     recover_context(&mut renderer, &mut host, world_id, &surface_font());
     let pages = state.atlas_pages_created.get();
-    let mut world = host.world_mut(world_id).unwrap();
-    let recovered = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
+    let world = host.world_mut(world_id).unwrap();
+    let recovered =
+        present_world!(finish; render_frame, &mut renderer, host, world, 100, 100).unwrap();
     assert_eq!(
         (recovered.glyph_populates, recovered.gui_batches),
         (1, 1),
@@ -1040,7 +1020,7 @@ fn context_loss_during_gui_storage_write_reaches_recovery() {
     state
         .fail_gui_batch_write
         .replace(Some(RenderError::ContextLost));
-    let error = render_frame(&mut renderer, &mut world, 100, 100).unwrap_err();
+    let error = present_world!(render_frame, &mut renderer, host, world, 100, 100).unwrap_err();
     assert_eq!(error, RenderError::ContextLost.to_string());
     assert_eq!(state.analytic_glyph_draws.get(), 0);
     drop(world);
@@ -1048,7 +1028,7 @@ fn context_loss_during_gui_storage_write_reaches_recovery() {
     state.fail_gui_batch_write.replace(None);
     recover_context(&mut renderer, &mut host, world_id, &surface_font());
     let mut world = host.world_mut(world_id).unwrap();
-    let recovered = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
+    let recovered = present_world!(render_frame, &mut renderer, host, world, 100, 100).unwrap();
     assert_eq!(
         (recovered.glyph_populates, recovered.gui_batches),
         (1, 1),
@@ -1059,38 +1039,8 @@ fn context_loss_during_gui_storage_write_reaches_recovery() {
         recovered.gui_resident_bytes as usize,
         (6 + 24 + 12) * std::mem::size_of::<ipp_render_gl::GuiVertex>()
     );
-    let warm = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
+    let warm = present_world!(finish; render_frame, &mut renderer, host, world, 100, 100).unwrap();
     assert_eq!((warm.uploaded_bytes, warm.gui_batches), (0, 1));
-}
-
-/// A one-glyph text Surface of the support font with its run at `position`.
-#[cfg(feature = "gui")]
-fn glyph_surface(position: [f32; 2]) -> ipp_core::Surface {
-    use ipp_core::services::asset_management::{AssetSource, font::FONT_TYPE};
-    use ipp_core::{PositionedGlyph, Surface, SurfaceItemContent, SurfaceItemStyle};
-
-    let mut surface = Surface::default();
-    surface
-        .insert_item(
-            0,
-            SurfaceItemContent::GlyphRun(vec![PositionedGlyph {
-                glyph_id: 0,
-                position: [0.0, 0.0],
-                color: None,
-            }]),
-            SurfaceItemStyle {
-                position,
-                font_size: 1.0,
-                asset: Some(AssetSource {
-                    kind: FONT_TYPE,
-                    uri: "fixture:///font.ippf".into(),
-                    variant: 0,
-                }),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-    surface
 }
 
 #[cfg(feature = "gui")]
@@ -1104,19 +1054,15 @@ fn recoverable_gui_storage_failure_skips_only_its_surface_and_backs_off() {
     // failing Surface.
     renderable(&mut world, 41, 0.0);
     upload(&mut world, 41);
-    create(
-        &mut world,
-        vec![
-            ComponentValue::Transform(Transform {
-                z: 1.0,
-                ..Transform::default()
-            }),
-            ComponentValue::Surface(glyph_surface([0.5, 0.5])),
-            ComponentValue::BoundingGeometry(Default::default()),
-        ],
+    drop(world);
+    canvas::CanvasSurface::new(
+        &mut host,
+        world_id,
+        1.0,
+        canvas::glyph_run(&[0], [0.5, 0.5]),
     );
     let warm = (0..4)
-        .map(|_| render_frame(&mut renderer, &mut world, 100, 100).unwrap())
+        .map(|_| render_frame(&mut renderer, &mut host, world_id, 100, 100).unwrap())
         .last()
         .unwrap();
     assert_eq!(
@@ -1129,21 +1075,21 @@ fn recoverable_gui_storage_failure_skips_only_its_surface_and_backs_off() {
     let analytic = state.analytic_glyph_draws.get();
 
     // Moving the first Surface's text rewrites its storage, which runs out of memory.
-    world
-        .enqueue(ipp_core::Batch {
-            id: world.tick() + 1,
-            operations: vec![ipp_core::Command::insert_value(
-                ipp_core::EntityRef::Handle(failing),
-                ComponentValue::Surface(glyph_surface([0.4, 0.5])),
-            )],
-        })
-        .unwrap();
+    failing.set_style(
+        &mut host,
+        ipp_core::components::CanvasStyle {
+            x: 0.4,
+            y: 0.5,
+            ..Default::default()
+        },
+    );
+    world = host.world_mut(world_id).unwrap();
     state
         .fail_gui_batch_write
         .replace(Some(RenderError::RenderDevice("out of memory".into())));
     state.surface_events.borrow_mut().clear();
     let meshes = state.mesh_draws.get();
-    let failed = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
+    let failed = present_world!(render_frame, &mut renderer, host, world, 100, 100).unwrap();
     assert_eq!(failed.gui_batches, 1, "{failed:?}");
     assert_eq!(failed.failed_draw_calls, 1);
     assert_eq!(failed.draw_calls, warm.draw_calls);
@@ -1158,20 +1104,22 @@ fn recoverable_gui_storage_failure_skips_only_its_surface_and_backs_off() {
 
     // The failing Surface waits before retrying its allocation.
     let writes = state.gui_batch_writes.get();
-    let waiting = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
+    let waiting = present_world!(render_frame, &mut renderer, host, world, 100, 100).unwrap();
     assert_eq!((waiting.gui_batches, waiting.failed_draw_calls), (1, 1));
     assert_eq!(state.gui_batch_writes.get(), writes);
 
     // Once the device recovers, a retry rebuilds the storage and draws from it.
     state.fail_gui_batch_write.replace(None);
+    drop(world);
     let recovered = (0..8)
-        .map(|_| render_frame(&mut renderer, &mut world, 100, 100).unwrap())
+        .map(|_| render_frame(&mut renderer, &mut host, world_id, 100, 100).unwrap())
         .find(|stats| stats.gui_batches == 2)
         .expect("the Surface's storage is rebuilt");
+    world = host.world_mut(world_id).unwrap();
     assert_eq!(recovered.failed_draw_calls, 0, "{recovered:?}");
     assert_eq!(recovered.gui_resident_bytes, resident);
     let analytic = state.analytic_glyph_draws.get();
-    let warm = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
+    let warm = present_world!(finish; render_frame, &mut renderer, host, world, 100, 100).unwrap();
     assert_eq!((warm.gui_batches, warm.uploaded_bytes), (2, 0));
     assert_eq!(state.analytic_glyph_draws.get(), analytic);
 }
@@ -1187,12 +1135,15 @@ fn analytic_text_uploads_its_instances_once_and_draws_them_every_frame() {
     let mut host = ipp_core::HostRuntime::new();
     let (mut renderer, state, world_id, _) =
         text_run_scene(&mut host, glyph_font(4, 1000, 1.0), &ids);
+    canvas::set_viewport(&mut host, world_id, ANALYTIC_VIEWPORT, ANALYTIC_VIEWPORT);
     let mut world = host.world_mut(world_id).unwrap();
     let bytes = 4 * 16 * std::mem::size_of::<f32>() as u32;
 
-    let cold = render_frame(
+    let cold = present_world!(
+        render_frame,
         &mut renderer,
-        &mut world,
+        host,
+        world,
         ANALYTIC_VIEWPORT,
         ANALYTIC_VIEWPORT,
     )
@@ -1202,9 +1153,11 @@ fn analytic_text_uploads_its_instances_once_and_draws_them_every_frame() {
     assert_eq!(cold.analytic_glyph_resident_bytes, bytes);
 
     for frame in 2..5 {
-        let idle = render_frame(
+        let idle = present_world!(
+            render_frame,
             &mut renderer,
-            &mut world,
+            host,
+            world,
             ANALYTIC_VIEWPORT,
             ANALYTIC_VIEWPORT,
         )
@@ -1224,10 +1177,13 @@ fn analytic_text_streams_release_with_their_surface_world_and_context() {
     let font = glyph_font(4, 1000, 1.0);
     let mut host = ipp_core::HostRuntime::new();
     let (mut renderer, state, world_id, entity) = text_run_scene(&mut host, font.clone(), &ids);
+    canvas::set_viewport(&mut host, world_id, ANALYTIC_VIEWPORT, ANALYTIC_VIEWPORT);
     let mut world = host.world_mut(world_id).unwrap();
-    render_frame(
+    present_world!(
+        render_frame,
         &mut renderer,
-        &mut world,
+        host,
+        world,
         ANALYTIC_VIEWPORT,
         ANALYTIC_VIEWPORT,
     )
@@ -1239,9 +1195,11 @@ fn analytic_text_streams_release_with_their_surface_world_and_context() {
     recover_context(&mut renderer, &mut host, world_id, &font);
     assert_eq!(state.live_analytic_streams.get(), 0);
     let mut world = host.world_mut(world_id).unwrap();
-    let recovered = render_frame(
+    let recovered = present_world!(
+        render_frame,
         &mut renderer,
-        &mut world,
+        host,
+        world,
         ANALYTIC_VIEWPORT,
         ANALYTIC_VIEWPORT,
     )
@@ -1254,14 +1212,16 @@ fn analytic_text_streams_release_with_their_surface_world_and_context() {
         .enqueue(ipp_core::Batch {
             id: world.tick() + 1,
             operations: vec![ipp_core::Command::Delete {
-                entity: ipp_core::EntityRef::Handle(entity),
+                entity: ipp_core::EntityRef::Handle(entity.anchor),
             }],
         })
         .unwrap();
     update(&mut world).unwrap();
-    let removed = render_frame(
+    let removed = present_world!(
+        render_frame,
         &mut renderer,
-        &mut world,
+        host,
+        world,
         ANALYTIC_VIEWPORT,
         ANALYTIC_VIEWPORT,
     )
@@ -1272,17 +1232,26 @@ fn analytic_text_streams_release_with_their_surface_world_and_context() {
 
     // Forgetting a World releases every stream it still holds.
     let mut other_host = ipp_core::HostRuntime::new();
-    let (mut other, other_state, other_id, _) = text_run_scene(&mut other_host, font, &ids);
+    let (mut other, other_state, other_id, other_surface) =
+        text_run_scene(&mut other_host, font, &ids);
+    canvas::set_viewport(
+        &mut other_host,
+        other_id,
+        ANALYTIC_VIEWPORT,
+        ANALYTIC_VIEWPORT,
+    );
     let mut other_world = other_host.world_mut(other_id).unwrap();
-    render_frame(
+    present_world!(
+        render_frame,
         &mut other,
-        &mut other_world,
+        other_host,
+        other_world,
         ANALYTIC_VIEWPORT,
         ANALYTIC_VIEWPORT,
     )
     .unwrap();
     drop(other_world);
     assert_eq!(other_state.live_analytic_streams.get(), 1);
-    other.forget_world(other_id);
+    other.forget_world(other_surface.output.world().id());
     assert_eq!(other_state.live_analytic_streams.get(), 0);
 }

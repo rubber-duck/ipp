@@ -115,7 +115,7 @@ fn defaults(definition: &ShaderDefinition) -> Result<DynamicProperties, String> 
             Kind::Texture2D => {
                 DynamicValue::Asset(ipp_core::services::asset_management::AssetSource {
                     kind: ipp_core::TEXTURE_TYPE,
-                    uri: String::new(),
+                    uri: Default::default(),
                     variant: 0,
                 })
             }

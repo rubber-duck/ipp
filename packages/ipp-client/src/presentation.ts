@@ -1,30 +1,3 @@
-/** Work of one completed frame, observed without reading pixels back. */
-export interface FrameSummary {
-  session: bigint;
-  tick: bigint;
-  /** Drawing-buffer size the frame rendered at, bounded by the device limits. */
-  width: number;
-  height: number;
-  drawCalls: number;
-  triangles: number;
-  /** Instances skipped after a mesh upload failure. */
-  failedDrawCalls: number;
-  /** Whether the frame cleared because its camera was unusable. */
-  invalidCamera: boolean;
-  contextGeneration: number;
-}
-
-/** Completed GPU output, separate from the runtime command protocol. */
-export interface FrameCapture extends FrameSummary {
-  /** RGBA8 sRGB pixels of the full drawing buffer, row zero at the top. */
-  pixels: ArrayBuffer;
-  /**
-   * Renderer, device and ingress statistics, read inside this capture. Present
-   * only when the runtime is a `diagnostics` build; never a readiness signal.
-   */
-  statistics?: RenderStatisticsSnapshot;
-}
-
 /** Largest drawing buffer the attached graphics device accepts, per axis. */
 export interface ViewportLimits {
   maxWidth: number;
@@ -35,16 +8,18 @@ export interface ViewportLimits {
  * Optional statistics of a `diagnostics` runtime build, grouped by the
  * capability that produces them. A group is absent when its capability is
  * compiled out: absent counters are unavailable, never zero work. Per-frame
- * counters describe the captured frame; `total*` counters accumulate in the
+ * counters describe the latest completed draw at observation, not a capture fence; `total*` counters accumulate in the
  * runtime over every rendered frame of this presentation, so compare two
- * captures to measure work between them.
+ * observations to measure work between them.
  */
 export interface RenderStatisticsSnapshot {
-  /** Worker time spent finishing GPU work and reading the pixels back. */
+  /** Platform time spent finishing GPU work and reading the most recent capture. */
   readbackMs: number;
   frame: FrameRenderStatistics;
   shadows?: ShadowRenderStatistics;
   gui?: GuiRenderStatistics;
+  /** Ordinary-layout evaluation across the Host, not a selected-output or draw statistic. */
+  guiLayout?: HostGuiLayoutStatistics | null;
   surfaces?: SurfaceRenderStatistics;
   /** Absent when the worker hosts no presentation ingress. */
   ingress?: IngressStatistics;
@@ -80,18 +55,40 @@ export interface GuiRenderStatistics {
   totalGlyphPopulates: number;
   totalGlyphPopulationFailures: number;
   totalGlyphPageRetirements: number;
-  /** Root reflows of the rendered World's latest GUI layout pass. */
-  guiLayoutReflows: number;
-  /** Text measurements (retained-cache misses) of that pass. */
-  guiTextMeasurements: number;
-  /**
-   * Root reflows over the rendered World's lifetime. Unlike the other
-   * totals this follows the World, not the presentation, so compare two
-   * captures of the same World.
-   */
-  totalGuiLayoutReflows: number;
-  /** Text measurements over the rendered World's lifetime. */
-  totalGuiTextMeasurements: number;
+  /** Actual ordinary reflows in the last Host frame; absent before a supported sample. */
+  guiLayoutReflows?: number;
+  guiTextMeasurements?: number;
+  /** Whole-Host lifetime totals, including retired Worlds; membership is in guiLayout. */
+  totalGuiLayoutReflows?: number;
+  totalGuiTextMeasurements?: number;
+}
+
+export interface GuiLayoutWorkStatistics {
+  readonly reflows: number;
+  readonly visitedEntities: number;
+  readonly textMeasurements: number;
+  readonly reusedTexts: number;
+}
+
+/** Diagnostics use decimal identity strings and saturating u32 work counters on both backends. */
+export interface HostGuiLayoutStatistics {
+  readonly scope: "host";
+  readonly frame: string;
+  readonly complete: boolean;
+  readonly retiredWorlds: number;
+  readonly retired: GuiLayoutWorkStatistics;
+  readonly latest: GuiLayoutWorkStatistics | null;
+  readonly total: GuiLayoutWorkStatistics | null;
+  readonly worlds: readonly {
+    readonly world: { readonly id: string; readonly incarnation: string };
+    readonly tick: string;
+    readonly status: "evaluated" | "unavailable";
+    /** Null when ordinary GUI layout is not selected; unevaluated latest work is never repeated. */
+    readonly layout: {
+      readonly latest: GuiLayoutWorkStatistics | null;
+      readonly total: GuiLayoutWorkStatistics;
+    } | null;
+  }[];
 }
 
 export interface SurfaceRenderStatistics {
@@ -164,7 +161,7 @@ export const SURFACE_CACHE_MODES: readonly SurfaceCacheMode[] = [
 
 /**
  * Read-only whole-Surface cache state of one opted-in Surface, reported by
- * `FrameCapture.statistics.surfaces` in diagnostics render builds with Surfaces.
+ * `RenderStatisticsSnapshot.surfaces` in diagnostics render builds with Surfaces.
  */
 export interface SurfaceCacheRecord {
   /** Generational entity identity within the captured World. */
@@ -184,28 +181,9 @@ export interface SurfaceCacheRecord {
   residentBytes: number;
 }
 
-/** Optional presentation controls of a host with an attached canvas. */
-export interface ClientPresentation {
-  /**
-   * Resolve with the next frame rendered at or after `afterTick`, reading the
-   * full drawing buffer back. Readback finishes pending GPU work and copies
-   * width × height × 4 bytes; prefer `frame` when pixels are not needed. While
-   * an open command batch withholds presentation, or the Host is paused, no
-   * frame renders; request the capture after the batch ends, or observe the
-   * presented tick through `waitForFrame` instead.
-   */
-  capture(afterTick?: bigint): Promise<FrameCapture>;
-  /** Resolve with the summary of a completed frame at or after `afterTick`, without readback. */
-  frame(afterTick?: bigint): Promise<FrameSummary>;
-  /**
-   * Request a drawing-buffer size. The worker bounds it to the device's
-   * `viewportLimits`, preserving the aspect ratio; frames report the size used.
-   */
-  resize(width: number, height: number): void;
-  /** Limits of the attached device; undefined until the renderer first attaches. */
-  readonly viewportLimits: ViewportLimits | undefined;
-  /** Observe changed limits, reported at attach and after context restoration. */
-  onViewportLimits(listener: (limits: ViewportLimits) => void): () => void;
+/** Optional diagnostic observations; never a frame or capture fence. */
+export interface RenderDiagnostics {
+  statistics(): Promise<RenderStatisticsSnapshot>;
 }
 
 /** Worker control messages of `@ipp/client/testing`, honoured only by diagnostics builds. */
@@ -215,28 +193,10 @@ export type PresentationTestingMessage =
   | {
       type: "glyph-atlas-limits";
       maxPages: number;
-      idlePagePublications: number;
+      idlePageFrames: number;
     }
   | { type: "surface-cache-budget"; bytes: number }
   | { type: "exhaustive-draw-checks"; enabled: boolean };
-
-export interface Presentation {
-  frame(
-    session: bigint,
-    afterTick: bigint,
-    timeoutMs: number,
-    readback: false,
-  ): Promise<FrameSummary>;
-  frame(
-    session: bigint,
-    afterTick: bigint,
-    timeoutMs: number,
-    readback: true,
-  ): Promise<FrameCapture>;
-  resize(width: number, height: number): void;
-  readonly viewportLimits: ViewportLimits | undefined;
-  onViewportLimits(listener: (limits: ViewportLimits) => void): () => void;
-}
 
 /**
  * Registered symbol linking a presentation object to its worker control
@@ -268,27 +228,27 @@ export function testingChannel(target: object): TestingChannel {
 /**
  * Testing bounds of the renderer's shared glyph atlas on one graphics context,
  * replacing the renderer-owned budget. They survive context loss and apply at
- * the renderer's next glyph demand publication.
+ * the renderer's next frame.
  */
 export interface GlyphAtlasLimits {
   /** Resident page budget, at least one; allocation beyond it reclaims pages. */
   maxPages: number;
-  /** Demand publications a page without demand stays resident before it retires. */
-  idlePagePublications: number;
+  /** Host frames a page without demand stays resident before it retires. */
+  idlePageFrames: number;
 }
 
 export function validateGlyphAtlasLimits(limits: GlyphAtlasLimits): void {
-  const { maxPages, idlePagePublications } = limits;
+  const { maxPages, idlePageFrames } = limits;
   if (
     !Number.isInteger(maxPages) ||
     maxPages < 1 ||
     maxPages > 0xffff_ffff ||
-    !Number.isInteger(idlePagePublications) ||
-    idlePagePublications < 0 ||
-    idlePagePublications > 0xffff_ffff
+    !Number.isInteger(idlePageFrames) ||
+    idlePageFrames < 0 ||
+    idlePageFrames > 0xffff_ffff
   ) {
     throw new RangeError(
-      "Glyph atlas limits must be integers: maxPages in 1..=2^32-1 and idlePagePublications in 0..=2^32-1",
+      "Glyph atlas limits must be integers: maxPages in 1..=2^32-1 and idlePageFrames in 0..=2^32-1",
     );
   }
 }
@@ -344,178 +304,74 @@ export function validateViewportLimits(limits: unknown): ViewportLimits {
   return { maxWidth: candidate.maxWidth!, maxHeight: candidate.maxHeight! };
 }
 
-interface FrameWaiter {
-  session: bigint;
-  afterTick: bigint;
-  readback: boolean;
-  resolve(frame: FrameSummary | FrameCapture): void;
-  reject(error: Error): void;
-  timer: ReturnType<typeof setTimeout>;
-}
-
-/** Bounded request bookkeeping for the dedicated worker's presentation channel. */
-export class PortPresentation implements Presentation {
-  private readonly pending = new Map<number, FrameWaiter>();
-  private readonly limitListeners = new Set<(limits: ViewportLimits) => void>();
-  private limits: ViewportLimits | undefined;
+/** Diagnostic messages are independent of presentation completion and pixel transfers. */
+export class PortRenderDiagnostics implements RenderDiagnostics {
   private nextId = 1;
+  private stopped: Error | undefined;
+  private readonly pending = new Map<
+    number,
+    {
+      resolve(value: RenderStatisticsSnapshot): void;
+      reject(error: Error): void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
 
   constructor(private readonly send: (message: unknown) => void) {
-    bindTestingChannel(this, (message) => this.send(message));
+    bindTestingChannel(this, (message) => {
+      if (this.stopped) throw this.stopped;
+      this.send(message);
+    });
   }
 
-  get viewportLimits(): ViewportLimits | undefined {
-    return this.limits;
-  }
-
-  onViewportLimits(listener: (limits: ViewportLimits) => void): () => void {
-    this.limitListeners.add(listener);
-    return () => {
-      this.limitListeners.delete(listener);
-    };
-  }
-
-  frame(
-    session: bigint,
-    afterTick: bigint,
-    timeoutMs: number,
-    readback: false,
-  ): Promise<FrameSummary>;
-  frame(
-    session: bigint,
-    afterTick: bigint,
-    timeoutMs: number,
-    readback: true,
-  ): Promise<FrameCapture>;
-  frame(
-    session: bigint,
-    afterTick: bigint,
-    timeoutMs: number,
-    readback: boolean,
-  ): Promise<FrameSummary | FrameCapture> {
-    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 60_000) {
-      return Promise.reject(
-        new RangeError("Frame timeout must be in (0, 60000]"),
-      );
-    }
-    if (session <= 0n || afterTick < 0n || afterTick > 0xffff_ffff_ffff_ffffn) {
-      return Promise.reject(new RangeError("Invalid frame session or tick"));
-    }
+  statistics(): Promise<RenderStatisticsSnapshot> {
+    if (this.stopped) return Promise.reject(this.stopped);
     if (this.pending.size >= 4)
-      return Promise.reject(new Error("Frame request queue is full"));
+      return Promise.reject(new Error("Diagnostics queue full"));
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        try {
-          this.send({ type: "frame-cancel", id });
-        } catch {
-          /* A closed host already owns cleanup. */
-        }
-        reject(
-          new Error(
-            readback
-              ? "Frame capture timed out"
-              : "Frame observation timed out",
-          ),
-        );
-      }, timeoutMs);
-      this.pending.set(id, {
-        session,
-        afterTick,
-        readback,
-        resolve,
-        reject,
-        timer,
-      });
+        reject(new Error("Diagnostics timed out"));
+      }, 5000);
+      this.pending.set(id, { resolve, reject, timer });
       try {
-        this.send({ type: "frame", id, session, afterTick, readback });
+        this.send({ type: "render-statistics", id });
       } catch (error) {
-        clearTimeout(timer);
-        this.pending.delete(id);
-        reject(error);
+        this.close(error instanceof Error ? error : new Error(String(error)));
       }
     });
   }
 
-  resize(width: number, height: number): void {
-    validateViewport(width, height);
-    this.send({ type: "resize", width, height });
-  }
-
   receive(data: Record<string, unknown>): boolean {
     if (data.type === "viewport-limits") {
-      const limits = validateViewportLimits(data.limits);
-      if (
-        this.limits?.maxWidth === limits.maxWidth &&
-        this.limits.maxHeight === limits.maxHeight
-      )
-        return true;
-      this.limits = limits;
-      for (const listener of [...this.limitListeners]) listener(limits);
+      validateViewportLimits(data.limits);
       return true;
     }
-    if (data.type !== "frame-result" && data.type !== "frame-error")
-      return false;
+    if (data.type !== "render-statistics") return false;
     if (
       !Number.isSafeInteger(data.id) ||
       (data.id as number) <= 0 ||
-      (data.id as number) >= this.nextId
-    ) {
-      throw new Error("Invalid frame response identity");
-    }
-    const id = data.id as number;
-    const waiter = this.pending.get(id);
-    // A timed-out readback may already be in transit. It cannot resolve another request.
-    if (!waiter) return true;
-    if (data.type === "frame-error") {
-      if (typeof data.message !== "string")
-        throw new Error("Invalid frame diagnostic");
+      (data.id as number) >= this.nextId ||
+      typeof data.statistics !== "object" ||
+      data.statistics === null
+    )
+      throw new Error("Invalid diagnostics response");
+    const waiter = this.pending.get(data.id as number);
+    if (waiter) {
       clearTimeout(waiter.timer);
-      this.pending.delete(id);
-      waiter.reject(new Error(data.message));
-      return true;
+      this.pending.delete(data.id as number);
+      waiter.resolve(data.statistics as RenderStatisticsSnapshot);
     }
-    const frame = data.frame as Partial<FrameCapture> | undefined;
-    if (
-      !frame ||
-      typeof frame !== "object" ||
-      frame.session !== waiter.session ||
-      typeof frame.tick !== "bigint" ||
-      frame.tick < waiter.afterTick ||
-      typeof frame.invalidCamera !== "boolean"
-    ) {
-      throw new Error("Invalid or stale frame");
-    }
-    validateViewport(frame.width!, frame.height!);
-    if (
-      ![
-        frame.drawCalls,
-        frame.triangles,
-        frame.failedDrawCalls,
-        frame.contextGeneration,
-      ].every((value) => Number.isSafeInteger(value) && value! >= 0) ||
-      (waiter.readback
-        ? !(frame.pixels instanceof ArrayBuffer) ||
-          frame.pixels.byteLength !== frame.width! * frame.height! * 4 ||
-          (frame.statistics !== undefined &&
-            (typeof frame.statistics !== "object" || frame.statistics === null))
-        : "pixels" in frame || "statistics" in frame)
-    ) {
-      throw new Error("Invalid frame layout");
-    }
-    clearTimeout(waiter.timer);
-    this.pending.delete(id);
-    waiter.resolve(frame as FrameSummary | FrameCapture);
     return true;
   }
 
   close(error: Error): void {
+    this.stopped ??= error;
     for (const waiter of this.pending.values()) {
       clearTimeout(waiter.timer);
       waiter.reject(error);
     }
     this.pending.clear();
-    this.limitListeners.clear();
   }
 }

@@ -49,7 +49,6 @@ test("combined objects drag on the picked view plane and reject late or canceled
             type: "CameraProjectQuery",
             x: start.x + dx,
             y: start.y + dy,
-            ...start.viewport,
             plane: start.hit.viewPlane,
           },
         );
@@ -81,7 +80,6 @@ test("combined objects drag on the picked view plane and reject late or canceled
           type: "GeometryPickQuery",
           x: point.x,
           y: point.y,
-          ...point.viewport,
         });
         assert.ok(repick.ok && repick.hit?.entity === start.hit.entity);
       }

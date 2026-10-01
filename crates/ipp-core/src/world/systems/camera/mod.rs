@@ -3,15 +3,17 @@
 mod component;
 pub use component::Camera;
 
+mod publication;
 mod update;
+pub use publication::{CameraPublication, CameraViewRay};
 
 use crate::{EntityId, ErrorReason, components::Transform, components::schema::ComponentLifecycle};
 
 mod navigation;
+mod view;
+pub use view::{CameraNavigationCommand, CameraProjectionView, CameraViewMotion};
 
-pub(crate) use navigation::navigate;
-
-/// Camera-local navigation applied to the active camera's producer components.
+/// Camera-local navigation applied to the active camera's components.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum CameraMotion {
     /// Orbit about the implied focus pivot, yaw then pitch in radians.
@@ -79,7 +81,7 @@ mod camera_math;
 pub(crate) use camera_math::CameraAffineTransform;
 #[cfg(feature = "skeletal-animation")]
 pub use camera_math::inverse_model_matrix;
-pub use camera_math::{model_matrix, multiply, prepare, prepare_affine};
+pub use camera_math::{model_matrix, multiply, prepare, prepare_affine, prepare_affine_for_extent};
 
 #[cfg(feature = "skeletal-animation")]
 pub(crate) use camera_math::invertible;

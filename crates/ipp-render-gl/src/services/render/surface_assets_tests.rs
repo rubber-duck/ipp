@@ -20,12 +20,12 @@ impl RenderDevice for Device {
     type SurfaceInstances = ();
     #[cfg(feature = "shadows")]
     type ShadowMap = ();
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     type GuiBatch = ();
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     type GlyphAtlasPage = ();
 
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     fn glyph_atlas_texture(page: &Self::GlyphAtlasPage) -> &Self::Texture {
         page
     }

@@ -28,6 +28,10 @@ name = "egl_smoke"
 required-features = ["diagnostics"]
 
 [[example]]
+name = "egl_publications"
+required-features = ["diagnostics"]
+
+[[example]]
 name = "egl_custom_materials"
 required-features = ["diagnostics"]
 
@@ -62,6 +66,14 @@ required-features = ["gui", "diagnostics"]
 # Integration tests read renderer statistics and use its testing overrides.
 [[test]]
 name = "mesh_residency"
+required-features = ["diagnostics"]
+
+[[test]]
+name = "publication_rendering"
+required-features = ["diagnostics"]
+
+[[test]]
+name = "selected_preparation"
 required-features = ["diagnostics"]
 
 [[test]]

@@ -3,6 +3,7 @@ mod support;
 use ipp_core::services::asset_management::{AssetSource, AssetTypeId};
 use ipp_core::*;
 use support::WorldTestDriver;
+use support::selection::{ASSETS, RENDER, select};
 
 fn run(world: &mut WorldContext<'_>, operations: Vec<Command>) -> BatchOutcome {
     world
@@ -81,7 +82,7 @@ fn descriptor_and_value_roundtrip_preserves_keys_and_owned_textures() {
 #[test]
 fn named_base_writes_keep_sparse_overrides_and_latest_producer_value() {
     let mut host = HostRuntime::new();
-    let id = host.create_world(WorldLimits::default()).unwrap();
+    let id = host.create_world(WorldLimits::default(), RENDER).unwrap();
     let mut world = host.world_mut(id).unwrap();
     let outcome = run(
         &mut world,
@@ -92,11 +93,13 @@ fn named_base_writes_keep_sparse_overrides_and_latest_producer_value() {
                     symbolic_id: Some("material".into()),
                     classes: vec![],
                 },
+                adopt: false,
             },
             Command::InsertComponent {
                 entity: EntityRef::Alias(1),
                 component: ComponentValue::CUSTOM_MATERIAL,
                 fields: vec![],
+                adopt: false,
             },
             Command::SetDynamicProperty {
                 entity: EntityRef::Alias(1),
@@ -111,7 +114,7 @@ fn named_base_writes_keep_sparse_overrides_and_latest_producer_value() {
         world
             .inspect(entity)
             .unwrap()
-            .effective
+            .components
             .into_iter()
             .find_map(|v| match v {
                 ComponentValue::CustomMaterial(material) => Some(material.properties.get("tint")),
@@ -141,14 +144,11 @@ fn named_base_writes_keep_sparse_overrides_and_latest_producer_value() {
     assert_eq!(property(&world), None);
 }
 
-fn material(world: &WorldContext<'_>, entity: EntityId, base: bool) -> DynamicProperties {
-    let snapshot = world.inspect(entity).unwrap();
-    let values = if base {
-        snapshot.base
-    } else {
-        snapshot.effective
-    };
-    values
+fn material(world: &WorldContext<'_>, entity: EntityId) -> DynamicProperties {
+    world
+        .inspect(entity)
+        .unwrap()
+        .components
         .into_iter()
         .find_map(|value| match value {
             ComponentValue::CustomMaterial(value) => Some(value.properties),
@@ -158,217 +158,13 @@ fn material(world: &WorldContext<'_>, entity: EntityId, base: bool) -> DynamicPr
 }
 
 #[test]
-fn overlays_restore_hidden_values_and_do_not_rebind_retyped_properties() {
-    let mesh = |source: &str| {
-        DynamicValue::Asset(AssetSource {
-            kind: MESH_TYPE,
-            uri: source.into(),
-            variant: 3,
-        })
-    };
-    for (original, overridden, updated) in [
-        (
-            DynamicValue::Vec3([0.2; 3]),
-            DynamicValue::Vec3([0.9; 3]),
-            DynamicValue::Vec3([0.6; 3]),
-        ),
-        (
-            mesh("file:///base.mesh"),
-            mesh("file:///override.mesh"),
-            mesh("file:///updated.mesh"),
-        ),
-    ] {
-        let mut host = HostRuntime::new();
-        let id = host.create_world(WorldLimits::default()).unwrap();
-        let mut world = host.world_mut(id).unwrap();
-        let entity = run(
-            &mut world,
-            vec![
-                Command::Create {
-                    alias: 1,
-                    metadata: EntityMetadata {
-                        symbolic_id: Some("material".into()),
-                        classes: vec![],
-                    },
-                },
-                Command::InsertComponent {
-                    entity: EntityRef::Alias(1),
-                    component: ComponentValue::CUSTOM_MATERIAL,
-                    fields: vec![],
-                },
-                Command::SetDynamicProperty {
-                    entity: EntityRef::Alias(1),
-                    component: ComponentValue::CUSTOM_MATERIAL,
-                    name: "tint".into(),
-                    value: original.clone(),
-                },
-            ],
-        )
-        .result
-        .unwrap()[0]
-            .1;
-        let aliases = run(
-            &mut world,
-            vec![
-                Command::CreateStateOverlayOwner {
-                    alias: 1,
-                },
-                Command::AttachEntityOverlayBinding {
-                    owner: StateOverlayRef::Alias(1),
-                    alias: 2,
-                    symbolic_id: "material".into(),
-                    mode: EntityOverlayMode::Bound,
-                },
-                Command::AttachComponentStateOverlay {
-                    owner: StateOverlayRef::Alias(1),
-                    binding: StateOverlayRef::Alias(2),
-                    alias: 3,
-                    component: ComponentValue::CUSTOM_MATERIAL,
-                    mode: ComponentOverlayMode::Bound,
-                    fields: vec![],
-                },
-                Command::UpdateDynamicComponentStateOverlay {
-                    owner: StateOverlayRef::Alias(1),
-                    overlay: StateOverlayRef::Alias(3),
-                    properties: vec![("tint".into(), overridden.clone())],
-                    clear: vec![],
-                },
-            ],
-        )
-        .state_overlays;
-        let owner = StateOverlayRef::Handle(aliases[0].id);
-        let overlay = StateOverlayRef::Handle(aliases[2].id);
-        assert_eq!(
-            material(&world, entity, false).get("tint"),
-            Some(overridden.clone())
-        );
-        run(
-            &mut world,
-            vec![Command::SetDynamicProperty {
-                entity: EntityRef::Handle(entity),
-                component: ComponentValue::CUSTOM_MATERIAL,
-                name: "tint".into(),
-                value: updated.clone(),
-            }],
-        );
-        assert_eq!(
-            material(&world, entity, true).get("tint"),
-            Some(updated.clone())
-        );
-        assert_eq!(
-            material(&world, entity, false).get("tint"),
-            Some(overridden.clone())
-        );
-        run(
-            &mut world,
-            vec![Command::SetDynamicProperty {
-                entity: EntityRef::Handle(entity),
-                component: ComponentValue::CUSTOM_MATERIAL,
-                name: "tint".into(),
-                value: DynamicValue::Bool(true),
-            }],
-        );
-        assert_eq!(
-            material(&world, entity, false).get("tint"),
-            Some(DynamicValue::Bool(true))
-        );
-        run(
-            &mut world,
-            vec![Command::UpdateDynamicComponentStateOverlay {
-                owner,
-                overlay,
-                properties: vec![],
-                clear: vec!["tint".into()],
-            }],
-        );
-        run(
-            &mut world,
-            vec![Command::ReleaseStateOverlayOwner {
-                owner,
-            }],
-        );
-        assert_eq!(
-            material(&world, entity, false).get("tint"),
-            Some(DynamicValue::Bool(true))
-        );
-    }
-}
-
-#[test]
-fn owned_overlay_defines_properties_in_the_attachment_batch() {
-    let mut host = HostRuntime::new();
-    let id = host.create_world(WorldLimits::default()).unwrap();
-    let mut world = host.world_mut(id).unwrap();
-    let outcome = run(
-        &mut world,
-        vec![
-            Command::CreateStateOverlayOwner {
-                alias: 1,
-            },
-            Command::AttachEntityOverlayBinding {
-                owner: StateOverlayRef::Alias(1),
-                alias: 2,
-                symbolic_id: "owned".into(),
-                mode: EntityOverlayMode::Owned,
-            },
-            Command::AttachComponentStateOverlay {
-                owner: StateOverlayRef::Alias(1),
-                binding: StateOverlayRef::Alias(2),
-                alias: 3,
-                component: ComponentValue::CUSTOM_MATERIAL,
-                mode: ComponentOverlayMode::Owned,
-                fields: vec![],
-            },
-            Command::UpdateDynamicComponentStateOverlay {
-                owner: StateOverlayRef::Alias(1),
-                overlay: StateOverlayRef::Alias(3),
-                properties: vec![("amount".into(), DynamicValue::F32(0.7))],
-                clear: vec![],
-            },
-        ],
-    );
-    let entity = outcome.state_overlays[1].entity.unwrap();
-    assert_eq!(
-        material(&world, entity, false).get("amount"),
-        Some(DynamicValue::F32(0.7))
-    );
-    let owner = StateOverlayRef::Handle(outcome.state_overlays[0].id);
-    let overlay = StateOverlayRef::Handle(outcome.state_overlays[2].id);
-    run(
-        &mut world,
-        vec![Command::SetDynamicProperty {
-            entity: EntityRef::Handle(entity),
-            component: ComponentValue::CUSTOM_MATERIAL,
-            name: "amount".into(),
-            value: DynamicValue::F32(0.3),
-        }],
-    );
-    assert_eq!(
-        material(&world, entity, false).get("amount"),
-        Some(DynamicValue::F32(0.7))
-    );
-    run(
-        &mut world,
-        vec![Command::UpdateDynamicComponentStateOverlay {
-            owner,
-            overlay,
-            properties: vec![],
-            clear: vec!["amount".into()],
-        }],
-    );
-    assert_eq!(
-        material(&world, entity, false).get("amount"),
-        Some(DynamicValue::F32(0.3)),
-        "omitting an owned override reveals an explicitly authored producer value"
-    );
-}
-
-#[test]
 fn named_animation_interpolates_and_property_loss_preserves_sibling_binding() {
     use services::asset_management::{AssetUpload, AssetUploadIdentity};
     use systems::animation::*;
     let mut host = HostRuntime::new();
-    let id = host.create_world(WorldLimits::default()).unwrap();
+    let id = host
+        .create_world(WorldLimits::default(), &select(&[ASSETS, RENDER]))
+        .unwrap();
     let mut world = host.world_mut(id).unwrap();
     let entity = run(
         &mut world,
@@ -376,11 +172,13 @@ fn named_animation_interpolates_and_property_loss_preserves_sibling_binding() {
             Command::Create {
                 alias: 1,
                 metadata: Default::default(),
+                adopt: false,
             },
             Command::InsertComponent {
                 entity: EntityRef::Alias(1),
                 component: ComponentValue::CUSTOM_MATERIAL,
                 fields: vec![],
+                adopt: false,
             },
             Command::SetDynamicProperty {
                 entity: EntityRef::Alias(1),
@@ -425,7 +223,7 @@ fn named_animation_interpolates_and_property_loss_preserves_sibling_binding() {
         })
         .collect();
     let clip = AnimationClip::new(2.0, tracks).unwrap();
-    assert_eq!(&clip.encode()[4..8], &3u32.to_le_bytes());
+    assert_eq!(&clip.encode()[4..8], &4u32.to_le_bytes());
     let clip = AnimationClip::decode(&clip.encode()).unwrap();
     world
         .enqueue_asset(AssetUpload {
@@ -451,6 +249,7 @@ fn named_animation_interpolates_and_property_loss_preserves_sibling_binding() {
                     track: i as u32,
                     target: entity,
                     property: track.target().clone(),
+                    entity_bindings: Vec::new(),
                     weight: 1.0,
                     additive: false,
                     reference_time: 0.0,
@@ -470,9 +269,10 @@ fn named_animation_interpolates_and_property_loss_preserves_sibling_binding() {
         .enqueue_playback(controller, AnimationPlaybackControl::Pause)
         .unwrap();
     world.update_for_test(0.0).unwrap();
+    // Each property holds its base plus the clip's change so far.
     assert_eq!(
-        material(&world, entity, false).get("a"),
-        Some(DynamicValue::Vec2([5.0; 2]))
+        material(&world, entity).get("a"),
+        Some(DynamicValue::Vec2([12.0; 2]))
     );
     // Unrelated additions relocate the component-owned byte buffer while keeping
     // the bound component and selected property identities live.
@@ -488,12 +288,12 @@ fn named_animation_interpolates_and_property_loss_preserves_sibling_binding() {
             .collect(),
     );
     assert_eq!(
-        material(&world, entity, false).get("a"),
-        Some(DynamicValue::Vec2([5.0; 2]))
+        material(&world, entity).get("a"),
+        Some(DynamicValue::Vec2([12.0; 2]))
     );
     assert_eq!(
-        material(&world, entity, false).get("b"),
-        Some(DynamicValue::Vec2([5.0; 2]))
+        material(&world, entity).get("b"),
+        Some(DynamicValue::Vec2([13.0; 2]))
     );
     run(
         &mut world,
@@ -504,23 +304,23 @@ fn named_animation_interpolates_and_property_loss_preserves_sibling_binding() {
         }],
     );
     assert_eq!(
-        material(&world, entity, false).get("b"),
-        Some(DynamicValue::Vec2([5.0; 2]))
+        material(&world, entity).get("b"),
+        Some(DynamicValue::Vec2([13.0; 2]))
     );
     world
         .enqueue_playback(controller, AnimationPlaybackControl::Seek(1.5))
         .unwrap();
     world.update_for_test(0.0).unwrap();
     assert_eq!(
-        material(&world, entity, false).get("b"),
-        Some(DynamicValue::Vec2([7.5; 2]))
+        material(&world, entity).get("b"),
+        Some(DynamicValue::Vec2([15.5; 2]))
     );
     world
         .enqueue_playback(controller, AnimationPlaybackControl::Stop)
         .unwrap();
     world.update_for_test(0.0).unwrap();
     assert_eq!(
-        material(&world, entity, false).get("b"),
+        material(&world, entity).get("b"),
         Some(DynamicValue::Vec2([8.0; 2]))
     );
 }
@@ -529,7 +329,9 @@ fn named_animation_interpolates_and_property_loss_preserves_sibling_binding() {
 fn world_save_load_preserves_dynamic_descriptors_without_shader_availability() {
     use services::world_serialization::{WorldLoadOptions, WorldPersistenceLimits};
     let mut host = HostRuntime::new();
-    let id = host.create_world(WorldLimits::default()).unwrap();
+    let id = host
+        .create_world(WorldLimits::default(), &select(&[ASSETS, RENDER]))
+        .unwrap();
     {
         let mut world = host.world_mut(id).unwrap();
         let mut material = components::CustomMaterial {
@@ -568,6 +370,7 @@ fn world_save_load_preserves_dynamic_descriptors_without_shader_availability() {
                 Command::Create {
                     alias: 1,
                     metadata: Default::default(),
+                    adopt: false,
                 },
                 Command::insert_value(
                     EntityRef::Alias(1),
@@ -591,6 +394,7 @@ fn world_save_load_preserves_dynamic_descriptors_without_shader_availability() {
                         component: ComponentValue::CUSTOM_MATERIAL,
                         name: "basis".into(),
                     },
+                    entity_bindings: Vec::new(),
                     weight: 1.0,
                     additive: false,
                     reference_time: 0.0,
@@ -623,7 +427,9 @@ fn world_save_load_preserves_dynamic_descriptors_without_shader_availability() {
             WorldLimits::default(),
             WorldPersistenceLimits::default(),
         )
-        .unwrap();
+        .unwrap()
+        .root
+        .id();
     let world = host.world_mut(loaded).unwrap();
     let entity = world.entities()[0].id;
     let animation = world.animation_persistent_state();
@@ -640,11 +446,11 @@ fn world_save_load_preserves_dynamic_descriptors_without_shader_availability() {
         }
     );
     assert_eq!(
-        material(&world, entity, true).get("basis"),
+        material(&world, entity).get("basis"),
         Some(DynamicValue::Mat4([0.25; 16]))
     );
     assert_eq!(
-        material(&world, entity, true).get("texture"),
+        material(&world, entity).get("texture"),
         Some(DynamicValue::Asset(AssetSource {
             kind: TEXTURE_TYPE,
             uri: "file:///unavailable.png".into(),
@@ -652,109 +458,12 @@ fn world_save_load_preserves_dynamic_descriptors_without_shader_availability() {
         }))
     );
     assert_eq!(
-        material(&world, entity, true).get("geometry"),
+        material(&world, entity).get("geometry"),
         Some(DynamicValue::Asset(AssetSource {
             kind: MESH_TYPE,
             uri: "file:///unavailable.mesh".into(),
             variant: 4,
         }))
-    );
-}
-
-#[test]
-fn auto_overlay_does_not_reuse_dynamic_identities_after_component_replacement() {
-    let mut host = HostRuntime::new();
-    let id = host.create_world(WorldLimits::default()).unwrap();
-    let mut world = host.world_mut(id).unwrap();
-    let entity = run(
-        &mut world,
-        vec![
-            Command::Create {
-                alias: 1,
-                metadata: EntityMetadata {
-                    symbolic_id: Some("material".into()),
-                    classes: vec![],
-                },
-            },
-            Command::InsertComponent {
-                entity: EntityRef::Alias(1),
-                component: ComponentValue::CUSTOM_MATERIAL,
-                fields: vec![],
-            },
-            Command::SetDynamicProperty {
-                entity: EntityRef::Alias(1),
-                component: ComponentValue::CUSTOM_MATERIAL,
-                name: "tint".into(),
-                value: DynamicValue::Vec3([0.2; 3]),
-            },
-        ],
-    )
-    .result
-    .unwrap()[0]
-        .1;
-    let aliases = run(
-        &mut world,
-        vec![
-            Command::CreateStateOverlayOwner {
-                alias: 1,
-            },
-            Command::AttachEntityOverlayBinding {
-                owner: StateOverlayRef::Alias(1),
-                alias: 2,
-                symbolic_id: "material".into(),
-                mode: EntityOverlayMode::Bound,
-            },
-            Command::AttachComponentStateOverlay {
-                owner: StateOverlayRef::Alias(1),
-                binding: StateOverlayRef::Alias(2),
-                alias: 3,
-                component: ComponentValue::CUSTOM_MATERIAL,
-                mode: ComponentOverlayMode::Auto,
-                fields: vec![],
-            },
-            Command::UpdateDynamicComponentStateOverlay {
-                owner: StateOverlayRef::Alias(1),
-                overlay: StateOverlayRef::Alias(3),
-                properties: vec![("tint".into(), DynamicValue::Vec3([0.9; 3]))],
-                clear: vec![],
-            },
-        ],
-    )
-    .state_overlays;
-    let owner = StateOverlayRef::Handle(aliases[0].id);
-    let overlay = StateOverlayRef::Handle(aliases[2].id);
-    assert_eq!(
-        material(&world, entity, false).get("tint"),
-        Some(DynamicValue::Vec3([0.9; 3]))
-    );
-    let mut replacement = components::CustomMaterial::default();
-    replacement
-        .properties
-        .set("other", DynamicValue::Vec3([0.1; 3]))
-        .unwrap();
-    run(
-        &mut world,
-        vec![Command::insert_value(
-            EntityRef::Handle(entity),
-            ComponentValue::CustomMaterial(replacement),
-        )],
-    );
-    assert_eq!(
-        material(&world, entity, false).get("other"),
-        Some(DynamicValue::Vec3([0.1; 3]))
-    );
-    run(
-        &mut world,
-        vec![Command::UpdateDynamicComponentStateOverlay {
-            owner,
-            overlay,
-            properties: vec![("other".into(), DynamicValue::Vec3([0.4; 3]))],
-            clear: vec![],
-        }],
-    );
-    assert_eq!(
-        material(&world, entity, false).get("other"),
-        Some(DynamicValue::Vec3([0.4; 3]))
     );
 }
 

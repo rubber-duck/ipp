@@ -2,6 +2,7 @@
 
 mod support;
 use support::WorldTestDriver;
+use support::selection::CAMERA;
 
 use std::mem::offset_of;
 
@@ -37,6 +38,7 @@ fn create(
                     symbolic_id: Some(name),
                     classes: vec![],
                 },
+                adopt: false,
             },
             Command::insert_value(EntityRef::Alias(0), ComponentValue::Camera(camera)),
             Command::insert_value(EntityRef::Alias(0), ComponentValue::Transform(transform)),
@@ -45,17 +47,8 @@ fn create(
     report.outcomes[0].result.as_ref().unwrap()[0].1
 }
 
-fn inputs(
-    world: &ipp_core::WorldContext<'_>,
-    entity: EntityId,
-    effective: bool,
-) -> (Camera, Transform) {
-    let snapshot = world.inspect(entity).unwrap();
-    let values = if effective {
-        snapshot.effective
-    } else {
-        snapshot.base
-    };
+fn inputs(world: &ipp_core::WorldContext<'_>, entity: EntityId) -> (Camera, Transform) {
+    let values = world.inspect(entity).unwrap().components;
     let camera = values
         .iter()
         .find_map(|value| match value {
@@ -80,7 +73,6 @@ fn navigate(world: &mut ipp_core::WorldContext<'_>, motion: CameraMotion) {
     assert!(report.outcomes.is_empty());
     assert!(report.camera_state_changes.is_empty());
     assert!(report.render_state_changes.is_empty());
-    assert!(report.diagnostics.is_empty());
 }
 
 fn close(actual: f64, expected: f64, tolerance: f64) {
@@ -123,7 +115,7 @@ fn repeated_local_orbits_preserve_the_implied_pivot_with_nonuniform_scale() {
     for projection in [0, 1] {
         let mut world_host = ipp_core::HostRuntime::new();
         let world_id = world_host
-            .create_world(ipp_core::WorldLimits::default())
+            .create_world(ipp_core::WorldLimits::default(), CAMERA)
             .unwrap();
         let mut world = world_host.world_mut(world_id).unwrap();
         let entity = create(
@@ -161,7 +153,7 @@ fn repeated_local_orbits_preserve_the_implied_pivot_with_nonuniform_scale() {
                     pitch: 0.02,
                 },
             );
-            let (camera, transform) = inputs(&world, entity, false);
+            let (camera, transform) = inputs(&world, entity);
             for (actual, expected) in pivot(camera, transform).into_iter().zip(expected) {
                 close(actual, expected, 0.0002);
             }
@@ -185,7 +177,7 @@ fn repeated_local_orbits_preserve_the_implied_pivot_with_nonuniform_scale() {
 fn yaw_then_pitch_uses_camera_local_axes_and_reverses_in_reverse_order() {
     let mut world_host = ipp_core::HostRuntime::new();
     let world_id = world_host
-        .create_world(ipp_core::WorldLimits::default())
+        .create_world(ipp_core::WorldLimits::default(), CAMERA)
         .unwrap();
     let mut world = world_host.world_mut(world_id).unwrap();
     let entity = create(
@@ -206,7 +198,7 @@ fn yaw_then_pitch_uses_camera_local_axes_and_reverses_in_reverse_order() {
             pitch: 0.0,
         },
     );
-    let (_, transform) = inputs(&world, entity, false);
+    let (_, transform) = inputs(&world, entity);
     close(f64::from(transform.x), 6.0, 0.00001);
     close(f64::from(transform.z), 0.0, 0.00001);
 
@@ -217,7 +209,7 @@ fn yaw_then_pitch_uses_camera_local_axes_and_reverses_in_reverse_order() {
             pitch: std::f32::consts::FRAC_PI_2,
         },
     );
-    let (_, transform) = inputs(&world, entity, false);
+    let (_, transform) = inputs(&world, entity);
     close(f64::from(transform.x), 0.0, 0.00001);
     close(f64::from(transform.y), -6.0, 0.00001);
 
@@ -236,7 +228,7 @@ fn yaw_then_pitch_uses_camera_local_axes_and_reverses_in_reverse_order() {
             pitch: 0.0,
         },
     );
-    let (_, transform) = inputs(&world, entity, false);
+    let (_, transform) = inputs(&world, entity);
     close(f64::from(transform.x), 0.0, 0.00001);
     close(f64::from(transform.y), 0.0, 0.00001);
     close(f64::from(transform.z), 6.0, 0.00001);
@@ -247,7 +239,7 @@ fn projection_pan_tracks_the_cursor_and_zoom_preserves_the_pivot() {
     for projection in [0, 1] {
         let mut world_host = ipp_core::HostRuntime::new();
         let world_id = world_host
-            .create_world(ipp_core::WorldLimits::default())
+            .create_world(ipp_core::WorldLimits::default(), CAMERA)
             .unwrap();
         let mut world = world_host.world_mut(world_id).unwrap();
         let entity = create(
@@ -273,7 +265,7 @@ fn projection_pan_tracks_the_cursor_and_zoom_preserves_the_pivot() {
         world.enqueue_camera_activate(entity).unwrap();
         world.update_for_test(0.0).unwrap();
 
-        let (original_camera, original_transform) = inputs(&world, entity, false);
+        let (original_camera, original_transform) = inputs(&world, entity);
         let expected_pivot = pivot(original_camera, original_transform);
         navigate(
             &mut world,
@@ -281,7 +273,7 @@ fn projection_pan_tracks_the_cursor_and_zoom_preserves_the_pivot() {
                 amount: std::f32::consts::LN_2,
             },
         );
-        let (camera, transform) = inputs(&world, entity, false);
+        let (camera, transform) = inputs(&world, entity);
         for (actual, expected) in pivot(camera, transform).into_iter().zip(expected_pivot) {
             close(actual, expected, 0.00001);
         }
@@ -320,7 +312,7 @@ fn projection_pan_tracks_the_cursor_and_zoom_preserves_the_pivot() {
                 amount: -std::f32::consts::LN_2,
             },
         );
-        let (camera, transform) = inputs(&world, entity, false);
+        let (camera, transform) = inputs(&world, entity);
         assert_eq!(camera, original_camera);
         for (actual, expected) in [transform.x, transform.y, transform.z].into_iter().zip([
             original_transform.x,
@@ -336,7 +328,7 @@ fn projection_pan_tracks_the_cursor_and_zoom_preserves_the_pivot() {
 fn navigation_selection_and_base_writes_follow_one_ordered_queue() {
     let mut world_host = ipp_core::HostRuntime::new();
     let world_id = world_host
-        .create_world(ipp_core::WorldLimits::default())
+        .create_world(ipp_core::WorldLimits::default(), CAMERA)
         .unwrap();
     let mut world = world_host.world_mut(world_id).unwrap();
     let first = create(&mut world, Camera::default(), Transform::default());
@@ -384,17 +376,17 @@ fn navigation_selection_and_base_writes_follow_one_ordered_queue() {
             .collect::<Vec<_>>(),
         [Some(first), Some(second), Some(first)]
     );
-    assert_eq!(inputs(&world, first, false).0.focus_distance, 12.0);
-    assert_eq!(inputs(&world, second, false).0.focus_distance, 20.0);
-    assert_eq!(inputs(&world, first, false).1.z, 6.0);
-    assert_eq!(inputs(&world, second, false).1.z, 10.0);
+    assert_eq!(inputs(&world, first).0.focus_distance, 12.0);
+    assert_eq!(inputs(&world, second).0.focus_distance, 20.0);
+    assert_eq!(inputs(&world, first).1.z, 6.0);
+    assert_eq!(inputs(&world, second).1.z, 10.0);
 }
 
 #[test]
 fn invalid_and_unrepresentable_navigation_preserves_every_component() {
     let mut world_host = ipp_core::HostRuntime::new();
     let world_id = world_host
-        .create_world(ipp_core::WorldLimits::default())
+        .create_world(ipp_core::WorldLimits::default(), CAMERA)
         .unwrap();
     let mut world = world_host.world_mut(world_id).unwrap();
     navigate(
@@ -524,10 +516,13 @@ fn invalid_and_unrepresentable_navigation_preserves_every_component() {
 fn navigation_shares_queue_bounds_and_invalid_time_preserves_pending_commands() {
     let mut world_host = ipp_core::HostRuntime::new();
     let world_id = world_host
-        .create_world(WorldLimits {
-            max_queued_batches: 1,
-            ..WorldLimits::default()
-        })
+        .create_world(
+            WorldLimits {
+                max_queued_batches: 1,
+                ..WorldLimits::default()
+            },
+            CAMERA,
+        )
         .unwrap();
     let mut world = world_host.world_mut(world_id).unwrap();
     let entity = create(&mut world, Camera::default(), Transform::default());
@@ -553,237 +548,12 @@ fn navigation_shares_queue_bounds_and_invalid_time_preserves_pending_commands() 
         world.update_for_test(f64::NAN),
         Err(ErrorReason::InvalidValue)
     );
-    assert_eq!(inputs(&world, entity, false).0.focus_distance, 6.0);
+    assert_eq!(inputs(&world, entity).0.focus_distance, 6.0);
     world.update_for_test(0.0).unwrap();
 
     close(
-        f64::from(inputs(&world, entity, false).0.focus_distance),
+        f64::from(inputs(&world, entity).0.focus_distance),
         12.0,
         0.0001,
     );
-}
-
-#[test]
-fn navigation_retains_bound_declarations_and_uses_hidden_producer_values() {
-    use ipp_core::{ComponentOverlayMode, EntityOverlayMode, StateOverlayRef};
-
-    let mut world_host = ipp_core::HostRuntime::new();
-    let world_id = world_host
-        .create_world(ipp_core::WorldLimits::default())
-        .unwrap();
-    let mut world = world_host.world_mut(world_id).unwrap();
-    let entity = create(
-        &mut world,
-        Camera::default(),
-        Transform {
-            z: 6.0,
-            ..Transform::default()
-        },
-    );
-    let report = run(
-        &mut world,
-        vec![
-            Command::CreateStateOverlayOwner {
-                alias: 0,
-            },
-            Command::AttachEntityOverlayBinding {
-                owner: StateOverlayRef::Alias(0),
-                alias: 1,
-                symbolic_id: "camera-0".into(),
-                mode: EntityOverlayMode::Bound,
-            },
-            Command::AttachComponentStateOverlay {
-                owner: StateOverlayRef::Alias(0),
-                binding: StateOverlayRef::Alias(1),
-                alias: 2,
-                component: ComponentValue::CAMERA,
-                mode: ComponentOverlayMode::Bound,
-                fields: vec![FieldWrite {
-                    offset: offset_of!(Camera, focus_distance) as u32,
-                    value: FieldValue::F32(50.0),
-                }],
-            },
-            Command::AttachComponentStateOverlay {
-                owner: StateOverlayRef::Alias(0),
-                binding: StateOverlayRef::Alias(1),
-                alias: 3,
-                component: ComponentValue::TRANSFORM,
-                mode: ComponentOverlayMode::Bound,
-                fields: vec![FieldWrite {
-                    offset: offset_of!(Transform, z) as u32,
-                    value: FieldValue::F32(80.0),
-                }],
-            },
-        ],
-    );
-    let owner = StateOverlayRef::Handle(report.outcomes[0].state_overlays[0].id);
-    world.enqueue_camera_activate(entity).unwrap();
-    world.update_for_test(0.0).unwrap();
-
-    navigate(
-        &mut world,
-        CameraMotion::Zoom {
-            amount: std::f32::consts::LN_2,
-        },
-    );
-    let (base_camera, base_transform) = inputs(&world, entity, false);
-    assert_eq!((base_camera.focus_distance, base_transform.z), (12.0, 12.0));
-    let (effective_camera, effective_transform) = inputs(&world, entity, true);
-    assert_eq!(
-        (effective_camera.focus_distance, effective_transform.z),
-        (50.0, 80.0)
-    );
-
-    navigate(
-        &mut world,
-        CameraMotion::Zoom {
-            amount: std::f32::consts::LN_2,
-        },
-    );
-    let (base_camera, base_transform) = inputs(&world, entity, false);
-    assert_eq!((base_camera.focus_distance, base_transform.z), (24.0, 24.0));
-    let report = run(
-        &mut world,
-        vec![Command::ReleaseStateOverlayOwner {
-            owner,
-        }],
-    );
-    assert!(report.outcomes[0].result.is_ok());
-    assert!(report.diagnostics.is_empty());
-    assert_eq!(inputs(&world, entity, true), (base_camera, base_transform));
-}
-
-#[test]
-fn fallback_components_remain_renderable_but_cannot_navigate() {
-    use ipp_core::{ComponentOverlayMode, EntityOverlayMode, StateOverlayRef};
-
-    for component in [ComponentValue::CAMERA, ComponentValue::TRANSFORM] {
-        let mut world_host = ipp_core::HostRuntime::new();
-        let world_id = world_host
-            .create_world(ipp_core::WorldLimits::default())
-            .unwrap();
-        let mut world = world_host.world_mut(world_id).unwrap();
-        let entity = create(&mut world, Camera::default(), Transform::default());
-        let report = run(
-            &mut world,
-            vec![
-                Command::CreateStateOverlayOwner {
-                    alias: 0,
-                },
-                Command::AttachEntityOverlayBinding {
-                    owner: StateOverlayRef::Alias(0),
-                    alias: 1,
-                    symbolic_id: "camera-0".into(),
-                    mode: EntityOverlayMode::Bound,
-                },
-                Command::AttachComponentStateOverlay {
-                    owner: StateOverlayRef::Alias(0),
-                    binding: StateOverlayRef::Alias(1),
-                    alias: 2,
-                    component,
-                    mode: ComponentOverlayMode::Auto,
-                    fields: vec![],
-                },
-                Command::RemoveComponent {
-                    entity: EntityRef::Handle(entity),
-                    component,
-                },
-            ],
-        );
-        assert!(report.outcomes[0].result.is_ok());
-        world.enqueue_camera_activate(entity).unwrap();
-        world.update_for_test(0.0).unwrap();
-
-        let before = world.inspect(entity).unwrap();
-        for motion in [
-            CameraMotion::Rotate {
-                yaw: 1.0,
-                pitch: 0.0,
-            },
-            CameraMotion::Pan {
-                x: 0.1,
-                y: 0.0,
-                width: 100,
-                height: 100,
-            },
-            CameraMotion::Zoom {
-                amount: 1.0,
-            },
-        ] {
-            navigate(&mut world, motion);
-            assert_eq!(world.inspect(entity), Some(before.clone()));
-            assert_eq!(world.prepare_camera(100, 100).unwrap().entity, entity);
-        }
-    }
-}
-
-#[test]
-fn effective_projection_failure_keeps_navigation_and_can_be_corrected_by_overlay_release() {
-    use ipp_core::{ComponentOverlayMode, EntityOverlayMode, StateOverlayRef};
-
-    let mut world_host = ipp_core::HostRuntime::new();
-    let world_id = world_host
-        .create_world(ipp_core::WorldLimits::default())
-        .unwrap();
-    let mut world = world_host.world_mut(world_id).unwrap();
-    let entity = create(&mut world, Camera::default(), Transform::default());
-    let report = run(
-        &mut world,
-        vec![
-            Command::CreateStateOverlayOwner {
-                alias: 0,
-            },
-            Command::AttachEntityOverlayBinding {
-                owner: StateOverlayRef::Alias(0),
-                alias: 1,
-                symbolic_id: "camera-0".into(),
-                mode: EntityOverlayMode::Bound,
-            },
-            Command::AttachComponentStateOverlay {
-                owner: StateOverlayRef::Alias(0),
-                binding: StateOverlayRef::Alias(1),
-                alias: 2,
-                component: ComponentValue::TRANSFORM,
-                mode: ComponentOverlayMode::Bound,
-                fields: vec![FieldWrite {
-                    offset: offset_of!(Transform, sz) as u32,
-                    value: FieldValue::F32(1.0e-38),
-                }],
-            },
-        ],
-    );
-    let owner = StateOverlayRef::Handle(report.outcomes[0].state_overlays[0].id);
-    world.enqueue_camera_activate(entity).unwrap();
-    world.update_for_test(0.0).unwrap();
-
-    assert_eq!(world.prepare_camera(100, 100).unwrap().entity, entity);
-
-    // The overlay makes the resulting view overflow; authored navigation still applies.
-    navigate(
-        &mut world,
-        CameraMotion::Zoom {
-            amount: std::f32::consts::LN_2,
-        },
-    );
-    let expected = (
-        Camera {
-            focus_distance: 12.0,
-            ..Camera::default()
-        },
-        Transform {
-            z: 6.0,
-            ..Transform::default()
-        },
-    );
-    assert_eq!(inputs(&world, entity, false), expected);
-    let report = run(
-        &mut world,
-        vec![Command::ReleaseStateOverlayOwner {
-            owner,
-        }],
-    );
-    assert!(report.outcomes[0].result.is_ok());
-    assert!(report.diagnostics.is_empty());
-    assert_eq!(inputs(&world, entity, false), expected);
-    assert_eq!(inputs(&world, entity, true), expected);
 }

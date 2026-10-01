@@ -78,9 +78,11 @@ test("combined scene animates radial, orbital and sun motion plus a solid skinne
       near(position(rest.inspection, "lighting-spot"), [-3, 5, 3]);
       for (const id of ANIMATED_IDS.slice(0, 3)) {
         const value = entity(rest.inspection, id);
-        assert.ok(value.effective.some((entry) => "intensity" in entry.fields));
         assert.ok(
-          value.effective.some((entry) =>
+          value.components.some((entry) => "intensity" in entry.fields),
+        );
+        assert.ok(
+          value.components.some((entry) =>
             String(entry.fields.source).includes("mesh"),
           ),
         );
@@ -111,8 +113,8 @@ test("combined scene animates radial, orbital and sun motion plus a solid skinne
         (await g.difference("beam-rest", "beam-bent")).changedPixels > 100,
       );
       const beam = entity(bent.inspection, "lighting-skinning");
-      assert.ok(beam.effective.some((entry) => "roughness" in entry.fields));
-      assert.ok(beam.effective.some((entry) => "skeleton" in entry.fields));
+      assert.ok(beam.components.some((entry) => "roughness" in entry.fields));
+      assert.ok(beam.components.some((entry) => "skeleton" in entry.fields));
       assert.ok(
         bent.inspection.resources.some(
           (resource) =>

@@ -2,10 +2,12 @@
 
 use super::{catalog::AssetSlot, resource::AssetLoaderConstructor};
 use crate::ErrorReason;
+use crate::components::schema::same_text;
 use crate::services::asset_management::*;
 use crate::services::data_source::DataSourceManagementService;
 use crate::services::data_source::MemoryDataSource;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::sync::Arc;
 use std::task::{Context, Waker};
 
 /// Compiled resource type identity, extensible through registered factories.
@@ -31,7 +33,7 @@ pub struct AssetAcquisitionRequest {
     /// Expected compiled payload type.
     pub kind: AssetResourceKind,
     /// Named immutable source.
-    pub source: String,
+    pub source: Arc<str>,
     /// Requested immutable variant.
     pub variant: u32,
     /// Recover previously accepted immutable content.
@@ -48,7 +50,7 @@ pub struct AssetResourceSnapshot {
     /// Compiled payload type.
     pub kind: AssetResourceKind,
     /// Named immutable source.
-    pub source: String,
+    pub source: Arc<str>,
     /// Immutable variant.
     pub variant: u32,
     /// AssetProvider-owned availability.
@@ -56,23 +58,21 @@ pub struct AssetResourceSnapshot {
 }
 
 pub(crate) fn validate_source(source: &str) -> Result<(), ErrorReason> {
-    u32::try_from(source.len())
-        .map(|_| ())
-        .map_err(|_| ErrorReason::Capacity)
+    super::validate_reference(None, source)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct AssetDemandSelection {
     pub(crate) kind: AssetResourceKind,
-    pub(crate) source: String,
+    pub(crate) source: Arc<str>,
     pub(crate) variant: u32,
 }
 
 impl AssetDemandSelection {
-    pub(crate) fn new(kind: AssetResourceKind, source: &str, variant: u32) -> Self {
+    pub(crate) fn new(kind: AssetResourceKind, source: &Arc<str>, variant: u32) -> Self {
         Self {
             kind,
-            source: source.to_owned(),
+            source: source.clone(),
             variant,
         }
     }
@@ -80,7 +80,7 @@ impl AssetDemandSelection {
     pub(crate) fn insert_into(
         demand: &mut BTreeSet<Self>,
         kind: AssetTypeId,
-        source: &str,
+        source: &Arc<str>,
         variant: u32,
     ) {
         let query = super::source_lookup::AssetSourceLookup {
@@ -114,6 +114,10 @@ pub struct AssetManagementService {
     pub(super) graphics_loaders: BTreeSet<AssetTypeId>,
     pub(super) used: BTreeSet<AssetKey>,
     pub(super) owned: BTreeSet<AssetKey>,
+    pub(super) publication_identity: u64,
+    pub(super) next_publication: u64,
+    pub(super) publications: BTreeMap<super::AssetPublicationId, BTreeSet<AssetKey>>,
+    pub(super) publication_users: BTreeMap<AssetKey, BTreeSet<super::AssetPublicationId>>,
     pub(super) idle: BTreeMap<AssetKey, IdleAsset>,
     pub(super) idle_resident_bytes: usize,
     pub(super) idle_epoch: u64,
@@ -122,7 +126,8 @@ pub struct AssetManagementService {
     pub(super) events: VecDeque<AssetLoadProgress>,
     pub(super) lifecycle_barrier: bool,
     pub(super) lifecycle_recipients: BTreeMap<AssetKey, BTreeSet<crate::WorldId>>,
-    pub(super) pending_releases: BTreeMap<AssetKey, super::lifecycle::AssetReleaseKind>,
+    pub(super) pending_releases: BTreeMap<AssetKey, super::lifecycle::PendingAssetRelease>,
+    pub(super) next_release_revision: u64,
     pub(super) lifecycle_events: VecDeque<super::lifecycle::AssetLifecycleEvent>,
     pub(crate) renderer_driven: bool,
 }
@@ -156,10 +161,15 @@ impl Default for AssetManagementService {
 }
 
 impl AssetManagementService {
-    /// Default soft memory target for completed resources without active users.
-    /// Eviction preserves lifecycle retirement and generational freshness;
-    /// Hosts opt into idle retention with an explicit target.
-    pub const DEFAULT_IDLE_RESIDENT_BYTES_TARGET: usize = 0;
+    /// Default soft memory target (64 MiB) for completed resources without active users.
+    ///
+    /// Retaining unused immutable content while the cache has space is the documented
+    /// behaviour, so it must work without Host configuration: returning demand reuses
+    /// the content instead of acquiring it again. 64 MiB holds typical clips, meshes
+    /// and textures for scene changes while staying small beside browser and native
+    /// memory budgets. Hosts may raise it, or set 0 to evict on release (lean or
+    /// embedded Hosts). Eviction preserves lifecycle retirement and generational freshness.
+    pub const DEFAULT_IDLE_RESIDENT_BYTES_TARGET: usize = 64 * 1024 * 1024;
 
     /// Construct the compiled loaders and Host input bridge.
     pub fn new() -> Self {
@@ -252,7 +262,7 @@ impl AssetManagementService {
     ) -> AssetDemandSelection {
         let mut selection = selection.clone();
         if let Some(path) = selection.source.strip_prefix("asset://") {
-            selection.source = format!("producer://{}/{path}", world.0);
+            selection.source = format!("producer://{}/{path}", world.0).into();
         }
         selection
     }
@@ -287,7 +297,7 @@ impl AssetManagementService {
             world,
             &AssetDemandSelection::new(
                 key.kind,
-                &format!("asset://{}/{}", key.kind.0, key.asset),
+                &format!("asset://{}/{}", key.kind.0, key.asset).into(),
                 key.variant,
             ),
         )
@@ -576,7 +586,11 @@ impl AssetManagementService {
                 .expect("resource references validated before commit");
             self.used.insert(key);
             self.remove_idle(key);
-            if self.pending_releases.get(&key) == Some(&super::AssetReleaseKind::Remove) {
+            if self
+                .pending_releases
+                .get(&key)
+                .is_some_and(|release| release.cancelable_orphan())
+            {
                 self.pending_releases.remove(&key);
             }
         }
@@ -599,7 +613,7 @@ impl AssetManagementService {
         self.consumers.insert(world, consumer);
         for key in released {
             self.used.remove(&key);
-            if !self.owned.contains(&key) {
+            if !self.is_required(key) {
                 self.retain_idle_or_remove(key);
             }
         }
@@ -649,7 +663,7 @@ impl AssetManagementService {
                 Some(AssetAcquisitionRequest {
                     id: request.id,
                     kind: source.kind,
-                    source: request.identifier,
+                    source: request.identifier.into(),
                     variant: source.variant,
                     recovery: request.recovery,
                 })
@@ -691,7 +705,7 @@ impl AssetManagementService {
                             let source = _asset.source();
                             selection.kind == source.kind
                                 && selection.variant == source.variant
-                                && selection.source == source.uri
+                                && same_text(&selection.source, &source.uri)
                         })
                     });
                 }
@@ -764,10 +778,10 @@ impl AssetManagementService {
             .collect()
     }
 
-    fn local_source(world: crate::WorldId, source: &str) -> String {
+    fn local_source(world: crate::WorldId, source: &Arc<str>) -> Arc<str> {
         source
             .strip_prefix(&format!("producer://{}/", world.0))
-            .map_or_else(|| source.to_owned(), |path| format!("asset://{path}"))
+            .map_or_else(|| source.clone(), |path| format!("asset://{path}").into())
     }
 
     fn distribute_events(&mut self, events: Vec<AssetResourceSnapshot>) {
@@ -804,11 +818,14 @@ impl AssetManagementService {
             return Ok(Vec::new());
         };
         consumer.observations_dirty = false;
-        consumer.observed_sources = consumer
-            .demand
-            .iter()
-            .map(AssetDemandSelection::descriptor)
-            .collect();
+        let previous = std::mem::replace(
+            &mut consumer.observed_sources,
+            consumer
+                .demand
+                .iter()
+                .map(AssetDemandSelection::descriptor)
+                .collect(),
+        );
         consumer.observed_sources.extend(
             consumer
                 .owned
@@ -816,6 +833,19 @@ impl AssetManagementService {
                 .filter(|key| !consumer.internal.contains(key))
                 .filter_map(|key| self.get(*key).map(|asset| asset.source().clone())),
         );
+        // A departing consumer still observes the eventual release of what it used:
+        // publication leases or the Host lifecycle barrier can defer that release past
+        // this reconciliation, when the source is no longer observed here.
+        if self.lifecycle_barrier {
+            for source in previous.difference(&consumer.observed_sources) {
+                if let Some(key) = self.find(source) {
+                    self.lifecycle_recipients
+                        .entry(key)
+                        .or_default()
+                        .insert(world);
+                }
+            }
+        }
         let events = std::mem::take(&mut consumer.events);
         self.consumers.insert(world, consumer);
         Ok(events)
@@ -873,7 +903,7 @@ impl AssetManagementService {
             world,
             &AssetDemandSelection::new(
                 key.kind,
-                &format!("asset://{}/{}", key.kind.0, key.asset),
+                &format!("asset://{}/{}", key.kind.0, key.asset).into(),
                 key.variant,
             ),
         )

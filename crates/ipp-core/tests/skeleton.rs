@@ -3,6 +3,7 @@
 
 mod support;
 use support::WorldTestDriver;
+use support::selection::{RENDER, SKINNING, select};
 
 use ipp_core::{
     components::{JointOverrideRow, MeshInstance, Skeleton, Skin, Transform},
@@ -24,6 +25,7 @@ fn create(alias: u32) -> Command {
     Command::Create {
         alias,
         metadata: Default::default(),
+        adopt: false,
     }
 }
 
@@ -32,6 +34,7 @@ fn insert(alias: u32, component: u16, fields: Vec<FieldWrite>) -> Command {
         entity: EntityRef::Alias(alias),
         component,
         fields,
+        adopt: false,
     }
 }
 
@@ -66,7 +69,12 @@ fn upload(
 }
 
 fn fixture(host: &mut ipp_core::HostRuntime) -> (ipp_core::WorldContext<'_>, EntityId, EntityId) {
-    let world_id = host.create_world(ipp_core::WorldLimits::default()).unwrap();
+    let world_id = host
+        .create_world(
+            ipp_core::WorldLimits::default(),
+            &select(&[RENDER, SKINNING]),
+        )
+        .unwrap();
     let mut world = host.world_mut(world_id).unwrap();
     for (kind, asset, uri) in [
         (SKELETON_TYPE, 1, "ipp://skeleton/rig-strip"),
@@ -167,7 +175,7 @@ fn rest_inverse_binds_mapping_and_independent_poses_have_stable_buffers() {
             a,
             ComponentValue::SKELETON,
             std::mem::offset_of!(Skeleton, pose_source),
-            FieldValue::String(String::new()),
+            FieldValue::String(std::sync::Arc::<str>::default()),
         )],
     );
     assert!(report.outcomes[0].result.is_ok());
@@ -188,6 +196,7 @@ fn repeated_numeric_commits_hide_palettes_until_each_skinning_pass() {
             entity: EntityRef::Handle(a),
             component: ComponentValue::CUSTOM_MATERIAL,
             fields: vec![],
+            adopt: false,
         }],
     );
     assert!(report.outcomes[0].result.is_ok());
@@ -336,7 +345,7 @@ fn invalid_override_keeps_neighbor_edits_and_malformed_assets_reject() {
         world
             .inspect(a)
             .unwrap()
-            .base
+            .components
             .iter()
             .any(|value| { matches!(value, ComponentValue::Transform(value) if value.x == 5.0) })
     );
@@ -557,7 +566,7 @@ fn mapped_geometry_invalidates_on_skeleton_replacement_until_explicitly_rebound(
             a,
             ComponentValue::SKELETON,
             std::mem::offset_of!(Skeleton, source),
-            FieldValue::String(String::new()),
+            FieldValue::String(std::sync::Arc::<str>::default()),
         )],
     );
     apply(
@@ -744,7 +753,7 @@ fn skeleton_value(world: &ipp_core::WorldContext<'_>, entity: EntityId) -> Skele
     world
         .inspect(entity)
         .unwrap()
-        .base
+        .components
         .into_iter()
         .find_map(|value| match value {
             ComponentValue::Skeleton(value) => Some(value),
@@ -909,7 +918,9 @@ fn partial_joint_overrides_survive_world_persistence() {
             ipp_core::WorldLimits::default(),
             WorldPersistenceLimits::default(),
         )
-        .unwrap();
+        .unwrap()
+        .root
+        .id();
     let world = fixture_host.world_mut(loaded).unwrap();
     let restored = world
         .entities()

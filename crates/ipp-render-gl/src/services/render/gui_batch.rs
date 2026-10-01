@@ -39,9 +39,9 @@ pub use super::retained_surfaces::RetainedSurfaceSubmission;
 use super::retained_surfaces::SurfacePaint;
 use crate::services::render::frame_statistics::RenderFrameWork;
 use crate::{RenderDevice, RenderError};
-use ipp_core::systems::surface::{
-    GuiShapeFill, GuiShapeGlow, SurfaceClipRect, SurfacePrimitiveIdentity, SurfacePrimitiveStyle,
-    SurfaceRenderPrimitive,
+use ipp_core::systems::canvas::{
+    CanvasClip, CanvasPrimitive, CanvasPrimitiveId, CanvasPrimitiveStyle, CanvasShapeFill,
+    CanvasShapeGlow,
 };
 
 /// One vertex of a non-indexed GUI triangle list (152 bytes).
@@ -110,10 +110,10 @@ pub const GUI_FILL_GLYPH: f32 = 3.0;
 /// Stable key identifying one live primitive's CPU geometry cache entry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PrimitiveKey {
-    /// Live entity owning the Surface component.
+    /// Retained Surface key; a Canvas output uses [`CANVAS_SURFACE`](super::retained_surfaces::CANVAS_SURFACE).
     pub entity: ipp_core::EntityId,
     /// Live primitive identity.
-    pub identity: SurfacePrimitiveIdentity,
+    pub identity: CanvasPrimitiveId,
 }
 
 /// Boxes one retained batch holds at most.
@@ -165,7 +165,7 @@ pub struct CachedPrimitiveGeometry {
 
 /// One box of the run being batched.
 struct RunBox {
-    identity: SurfacePrimitiveIdentity,
+    identity: CanvasPrimitiveId,
     hash: u64,
     volatile: bool,
     boundary: bool,
@@ -187,7 +187,7 @@ pub struct GuiBatchRenderCache<D: RenderDevice> {
     /// Retained batches of that Surface in painter order.
     pieces: Vec<GuiPiece>,
     /// Box identities referenced by box pieces.
-    piece_boxes: Vec<SurfacePrimitiveIdentity>,
+    piece_boxes: Vec<CanvasPrimitiveId>,
     run_boxes: Vec<RunBox>,
     scratch: GuiCommitScratch,
     frame: u64,
@@ -257,13 +257,13 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
     pub fn push_boxes(
         &mut self,
         paint: SurfacePaint,
-        boxes: &[(&SurfaceRenderPrimitive, SurfaceClipRect)],
+        boxes: &[(&CanvasPrimitive, CanvasClip)],
         stats: &mut RenderFrameWork,
     ) {
         // Refresh every box's geometry and volatility before choosing batch boundaries.
         self.run_boxes.clear();
         for &(primitive, clip) in boxes {
-            let SurfaceRenderPrimitive::Box {
+            let CanvasPrimitive::Box {
                 style,
                 size,
                 corner_radius,
@@ -276,6 +276,9 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
                 continue;
             };
 
+            let mut adjusted = *style;
+            adjusted.opacity *= paint.opacity;
+            let style = &adjusted;
             let hash = || {
                 hash_box_inputs(
                     style,
@@ -413,7 +416,7 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
     /// returned as an error.
     pub fn commit_surface<'g>(
         &mut self,
-        glyphs: impl Fn(SurfacePrimitiveIdentity, u32) -> &'g [GuiVertex],
+        glyphs: impl Fn(CanvasPrimitiveId, u32) -> &'g [GuiVertex],
         stats: &mut RenderFrameWork,
     ) -> Result<bool, RenderError> {
         if self.pieces.is_empty() {
@@ -558,7 +561,7 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
 
 /// Whether a stable box identity may start a batch. Boundaries depend only on
 /// identities, so edits elsewhere in a run keep the batches that do not contain them.
-fn identity_starts_batch(identity: SurfacePrimitiveIdentity) -> bool {
+fn identity_starts_batch(identity: CanvasPrimitiveId) -> bool {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     identity.hash(&mut hasher);
     hasher.finish().is_multiple_of(BATCH_BOUNDARY_PERIOD)
@@ -577,14 +580,14 @@ impl<D: RenderDevice> Drop for GuiBatchRenderCache<D> {
 /// Every vertex carries the effective `clip`.
 #[allow(clippy::too_many_arguments)]
 pub fn generate_box_vertices(
-    style: &SurfacePrimitiveStyle,
+    style: &CanvasPrimitiveStyle,
     size: &[f32; 2],
     corner_radius: &[f32; 2],
     border_width: f32,
     border_color: &[f32; 4],
-    fill: &GuiShapeFill,
-    glow: Option<&GuiShapeGlow>,
-    clip: SurfaceClipRect,
+    fill: &CanvasShapeFill,
+    glow: Option<&CanvasShapeGlow>,
+    clip: CanvasClip,
 ) -> Vec<GuiVertex> {
     let pos = style.position;
     let scale = style.scale;
@@ -592,21 +595,29 @@ pub fn generate_box_vertices(
 
     let placement = [pos[0], pos[1], placed_size[0], placed_size[1]];
     let shape = [corner_radius[0], corner_radius[1], border_width, 0.0];
-    let border = [
+    let tint = |color: [f32; 4]| {
+        [
+            color[0] * style.color[0],
+            color[1] * style.color[1],
+            color[2] * style.color[2],
+            color[3] * style.color[3],
+        ]
+    };
+    let border = tint([
         border_color[0],
         border_color[1],
         border_color[2],
         border_color[3] * style.opacity,
-    ];
+    ]);
 
     let (fill_type, color0, color1, gradient_coords) = match fill {
-        GuiShapeFill::Solid(color) => (
+        CanvasShapeFill::Solid(color) => (
             0.0f32,
             [color[0], color[1], color[2], color[3] * style.opacity],
             [color[0], color[1], color[2], color[3] * style.opacity],
             [0.0; 4],
         ),
-        GuiShapeFill::LinearGradient {
+        CanvasShapeFill::LinearGradient {
             start,
             end,
             start_color,
@@ -632,7 +643,7 @@ pub fn generate_box_vertices(
                 end[1] * scale[1],
             ],
         ),
-        GuiShapeFill::RadialGradient {
+        CanvasShapeFill::RadialGradient {
             center,
             radius,
             start_color,
@@ -661,20 +672,35 @@ pub fn generate_box_vertices(
     };
 
     let (glow_intensity, glow_radius, glow_falloff, glow_color) = match glow {
-        Some(g) if g.is_valid() && g.intensity > 0.0 && g.radius > 0.0 => (
-            g.intensity,
-            g.cutoff_distance() * scale[0].abs().max(scale[1].abs()),
-            g.falloff,
-            [
-                g.color[0],
-                g.color[1],
-                g.color[2],
-                g.color[3] * style.opacity,
-            ],
-        ),
+        Some(g)
+            if g.intensity.is_finite()
+                && g.intensity > 0.0
+                && g.radius.is_finite()
+                && g.radius > 0.0
+                && g.falloff.is_finite()
+                && g.falloff >= 0.0
+                && g.color
+                    .iter()
+                    .all(|value| value.is_finite() && (0.0..=1.0).contains(value)) =>
+        {
+            (
+                g.intensity,
+                g.radius * scale[0].abs().max(scale[1].abs()),
+                g.falloff,
+                [
+                    g.color[0],
+                    g.color[1],
+                    g.color[2],
+                    g.color[3] * style.opacity,
+                ],
+            )
+        }
         _ => (0.0, 0.0, 1.0, [0.0; 4]),
     };
 
+    let color0 = tint(color0);
+    let color1 = tint(color1);
+    let glow_color = tint(glow_color);
     let material_params = [fill_type, glow_intensity, glow_radius, glow_falloff];
 
     let pad = glow_radius.max(0.0) + GUI_BOX_ANTIALIAS_PAD;
@@ -710,7 +736,7 @@ pub fn generate_box_vertices(
     };
 
     let is_border_only = border_width > 0.0
-        && matches!(fill, GuiShapeFill::Solid(col) if col[3] <= 0.0 || style.opacity <= 0.0);
+        && matches!(fill, CanvasShapeFill::Solid(col) if col[3] <= 0.0 || style.opacity <= 0.0);
 
     let strip_thickness = border_width.max(corner_radius[0]).max(corner_radius[1]) + pad;
     let can_use_strips = is_border_only
@@ -750,14 +776,14 @@ pub fn generate_box_vertices(
 /// gradient box therefore changes no vertex and uploads nothing.
 #[allow(clippy::too_many_arguments)]
 pub fn hash_box_inputs(
-    style: &SurfacePrimitiveStyle,
+    style: &CanvasPrimitiveStyle,
     size: &[f32; 2],
     corner_radius: &[f32; 2],
     border_width: f32,
     border_color: &[f32; 4],
-    fill: &GuiShapeFill,
-    glow: Option<&GuiShapeGlow>,
-    clip: SurfaceClipRect,
+    fill: &CanvasShapeFill,
+    glow: Option<&CanvasShapeGlow>,
+    clip: CanvasClip,
 ) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
 
@@ -770,6 +796,9 @@ pub fn hash_box_inputs(
     hasher.write_u32(style.scale[0].to_bits());
     hasher.write_u32(style.scale[1].to_bits());
     hasher.write_u32(style.opacity.to_bits());
+    for lane in style.color {
+        hasher.write_u32(lane.to_bits());
+    }
 
     hasher.write_u32(size[0].to_bits());
     hasher.write_u32(size[1].to_bits());
@@ -782,13 +811,13 @@ pub fn hash_box_inputs(
     }
 
     match fill {
-        GuiShapeFill::Solid(color) => {
+        CanvasShapeFill::Solid(color) => {
             hasher.write_u8(0);
             for lane in color {
                 hasher.write_u32(lane.to_bits());
             }
         }
-        GuiShapeFill::LinearGradient {
+        CanvasShapeFill::LinearGradient {
             start,
             end,
             start_color,
@@ -806,7 +835,7 @@ pub fn hash_box_inputs(
                 hasher.write_u32(lane.to_bits());
             }
         }
-        GuiShapeFill::RadialGradient {
+        CanvasShapeFill::RadialGradient {
             center,
             radius,
             start_color,

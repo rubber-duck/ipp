@@ -64,7 +64,10 @@ impl crate::WorldContext<'_> {
     }
 
     /// Current committed settings. Fresh worlds start with defaults.
-    pub fn render_state(&self) -> RenderState {
-        self.render_read().render_state()
+    pub fn render_state(&self) -> Result<RenderState, ErrorReason> {
+        Ok(self
+            .render_read()
+            .ok_or(ErrorReason::UnsupportedDependency)?
+            .render_state())
     }
 }

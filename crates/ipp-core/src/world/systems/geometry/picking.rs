@@ -20,31 +20,18 @@ impl GeometryRay {
         affine: &GeometryShapeTransform,
         query: GeometryPickQuery,
     ) -> Result<Self, ErrorReason> {
-        let aspect = f64::from(query.width) / f64::from(query.height);
-        let x = f64::from(query.x) * 2.0 - 1.0;
-        let y = 1.0 - f64::from(query.y) * 2.0;
-        let (origin, direction) = if camera.projection == 0 {
-            let extent = (f64::from(camera.fov_y) * 0.5).tan();
-            (
-                affine.point([0.0; 3]),
-                affine.vector([x * extent * aspect, y * extent, -1.0]),
-            )
-        } else {
-            let extent = f64::from(camera.ortho_height) * 0.5;
-            (
-                affine.point([x * extent * aspect, y * extent, 0.0]),
-                affine.vector([0.0, 0.0, -1.0]),
-            )
-        };
-        let length = dot(direction, direction).sqrt();
-        if !length.is_finite() || length <= 0.0 {
-            return Err(ErrorReason::InvalidGeometry);
-        }
+        let view = crate::systems::camera::CameraViewRay::new(
+            camera,
+            affine,
+            [query.x, query.y],
+            query.width,
+            query.height,
+        )?;
         Ok(Self {
-            origin,
-            direction: direction.map(|value| value / length),
-            near: f64::from(camera.near) * length,
-            far: f64::from(camera.far) * length,
+            origin: view.ray.origin,
+            direction: view.ray.direction,
+            near: view.near,
+            far: view.far,
         })
     }
 }

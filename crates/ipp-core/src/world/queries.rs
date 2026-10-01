@@ -1,5 +1,6 @@
 use super::*;
 
+/// Read a live entity's metadata, link and stored components.
 pub(in crate::world) fn inspect_entity(
     world: &WorldSimulationState,
     state: &WorldEntityState,
@@ -9,72 +10,23 @@ pub(in crate::world) fn inspect_entity(
         return None;
     }
     let record = state.entities.get(&id)?;
-    let mut base = Vec::new();
-    let mut effective = Vec::new();
-    for &component in record.layers.keys() {
-        if let Some(value) = state.producer_value(&world.components, id, component) {
-            base.push(value);
-        }
-    }
+    let mut components = Vec::new();
     world
         .components
-        .inspect(id.index() as usize, &mut effective);
-    base.sort_by_key(ComponentValue::type_id);
-    effective.sort_by_key(ComponentValue::type_id);
+        .inspect(id.index() as usize, &mut components);
+    components.sort_by_key(ComponentValue::type_id);
     Some(EntitySnapshot {
         id,
         metadata: record.metadata.clone(),
-        base,
-        effective,
+        link: state.links.effective(id)?.clone(),
+        components,
     })
 }
 
 impl<'a> crate::world::WorldReadContext<'a> {
-    /// Recover the pre-evaluation input while keeping effective overlay fields.
-    pub(in crate::world) fn underlying_input_component(
-        &self,
-        entity: EntityId,
-        component: u16,
-    ) -> Option<ComponentValue> {
-        let layer = self.state.entities.get(&entity)?.layers.get(&component)?;
-        let _input = layer.input()?;
-        let value = self
-            .state
-            .input_value(&self.world.components, entity, component)?;
-        let mut value = value;
-        for instance in self.after.iter().rev().chain(self.before.iter().rev()) {
-            instance
-                .system
-                .restore_component_input(entity, _input.incarnation, &mut value);
-        }
-        Some(value)
-    }
-
-    /// Recover producer input through only the systems that control this component.
-    pub(in crate::world) fn producer_component(
-        &self,
-        entity: EntityId,
-        component: u16,
-    ) -> Option<ComponentValue> {
-        let layer = self.state.entities.get(&entity)?.layers.get(&component)?;
-        layer.inputs.base()?;
-        if let Some(value) = layer.inputs.base_value() {
-            return Some(value.clone());
-        }
-        let mut value = self.underlying_input_component(entity, component)?;
-        self.state.restore_producer_value(entity, &mut value);
-        Some(value)
-    }
-
-    /// Read a live entity's actual retained and evaluated components.
+    /// Read a live entity's metadata, link and stored components.
     pub fn inspect(&self, id: EntityId) -> Option<EntitySnapshot> {
-        let mut snapshot = inspect_entity(self.world, self.state, id)?;
-        snapshot.base = self.state.entities[&id]
-            .layers
-            .keys()
-            .filter_map(|&component| self.producer_component(id, component))
-            .collect();
-        Some(snapshot)
+        inspect_entity(self.world, self.state, id)
     }
 
     /// Snapshot every live entity in ascending handle-bit order.
@@ -103,6 +55,16 @@ impl<'a> crate::world::WorldReadContext<'a> {
             .take(limit)
             .filter_map(|(&id, _)| self.inspect(id))
             .collect()
+    }
+
+    /// Current lifetime of one stored component, the identity GUI action
+    /// targets and lifecycle baselines name; absent without the component.
+    pub fn component_incarnation(&self, entity: EntityId, component: u16) -> Option<u64> {
+        self.state
+            .entities
+            .get(&entity)?
+            .input(component)
+            .map(|input| input.incarnation)
     }
 
     /// Resolve a world-unique symbolic ID.
@@ -138,7 +100,7 @@ impl WorldContext<'_> {
 }
 
 impl crate::WorldContext<'_> {
-    /// Read a live entity's actual retained and evaluated components.
+    /// Read a live entity's metadata, link and stored components.
     pub fn inspect(&self, id: EntityId) -> Option<EntitySnapshot> {
         self.read().inspect(id)
     }
@@ -151,6 +113,11 @@ impl crate::WorldContext<'_> {
     /// Snapshot every live entity in ascending handle-bit order.
     pub fn entities(&self) -> Vec<EntitySnapshot> {
         self.read().entities()
+    }
+
+    /// Current lifetime of one stored component; absent without the component.
+    pub fn component_incarnation(&self, entity: EntityId, component: u16) -> Option<u64> {
+        self.read().component_incarnation(entity, component)
     }
 
     /// Resolve a world-unique symbolic ID.

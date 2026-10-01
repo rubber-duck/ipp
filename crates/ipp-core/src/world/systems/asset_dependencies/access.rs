@@ -9,33 +9,11 @@ impl AssetDependencySystem {
             world: runtime.world,
             state: &mut self.state,
             asset_acquisition: runtime.asset_acquisition,
-            data_sources: runtime.data_sources,
         }
     }
 }
 
 impl AssetDependencyAccess<'_> {
-    /// Drain newly issued provider work once; source I/O belongs to the host.
-    pub fn take_resource_requests(&mut self) -> Vec<crate::AssetAcquisitionRequest> {
-        self.asset_acquisition.requests(self.data_sources)
-    }
-
-    /// Drain cancelled host input streams.
-    pub fn take_resource_cancellations(&mut self) -> Vec<u64> {
-        self.data_sources.take_cancellations()
-    }
-
-    /// Queue owned provider data for the next boundary. Obsolete input streams are harmless.
-    pub fn complete_resource(
-        &mut self,
-        id: u64,
-        result: Result<Vec<u8>, String>,
-    ) -> Result<(), ErrorReason> {
-        self.data_sources
-            .complete_read(id, result)
-            .map_err(|_| ErrorReason::Capacity)
-    }
-
     pub(in crate::world) fn begin_resource_reconcile(
         &mut self,
     ) -> Result<Vec<crate::AssetResourceSnapshot>, ErrorReason> {
@@ -46,42 +24,6 @@ impl AssetDependencyAccess<'_> {
         let mut prepared = std::mem::take(&mut self.state.prepared_changes);
         prepared.extend(changes);
         Ok(prepared)
-    }
-
-    /// Bind a URI scheme to this world's bounded external stream bridge.
-    ///
-    /// Hosts install only schemes they implement during initialization. Source
-    /// reads remain asynchronous and use the ordinary request/cancellation APIs.
-    pub fn register_stream_resource_provider(&mut self, scheme: &str) -> Result<(), ErrorReason> {
-        self.data_sources
-            .register_stream(&format!("{scheme}:"))
-            .map_err(|_| ErrorReason::InvalidValue)
-    }
-
-    /// Let the renderer drive concrete resource loading during stage 7.
-    pub fn set_renderer_asset_loading(&mut self, enabled: bool) {
-        self.asset_acquisition.renderer_driven = enabled;
-    }
-
-    /// Progress all shared loaders at an embedding Host boundary with an existing
-    /// world borrow. Multi-world hosts call Host::progress_assets once instead.
-    pub fn poll_all_assets(&mut self) {
-        self.asset_acquisition.poll(self.data_sources);
-    }
-
-    /// Poll resource-owned loaders during the caller's host execution phase.
-    pub fn poll_assets(&mut self) {
-        if self.asset_acquisition.renderer_driven {
-            self.asset_acquisition
-                .poll_evaluation_assets(self.data_sources);
-        } else {
-            self.asset_acquisition.poll(self.data_sources);
-        }
-    }
-
-    /// Drain lifecycle observations after renderer work and before frame events.
-    pub fn take_asset_events(&mut self) -> Result<Vec<crate::AssetResourceSnapshot>, String> {
-        self.asset_acquisition.events(self.world.id)
     }
 
     /// Queue producer bytes through the same factories used for source references.
@@ -206,7 +148,9 @@ impl AssetDependencyReadAccess<'_> {
 
     /// Number of upload replies still awaiting a resource-owned result.
     pub fn pending_asset_uploads(&self) -> usize {
-        self.state.asset_queue.len() + self.state.asset_pending.len()
+        self.state.map_or(0, |state| {
+            state.asset_queue.len() + state.asset_pending.len()
+        })
     }
 }
 
@@ -214,10 +158,9 @@ impl crate::WorldContext<'_> {
     fn asset_read(&self) -> AssetDependencyReadAccess<'_> {
         AssetDependencyReadAccess {
             world: self.world,
-            state: &self
+            state: self
                 .system::<AssetDependencySystem>(AssetDependencySystem::ID)
-                .expect("World requires AssetDependencySystem")
-                .state,
+                .map(|system| &system.state),
             asset_acquisition: self.asset_acquisition,
             data_sources: self.data_sources,
         }
@@ -226,22 +169,21 @@ impl crate::WorldContext<'_> {
     fn with_asset_dependency<R>(
         &mut self,
         operation: impl FnOnce(&mut AssetDependencyAccess<'_>) -> R,
-    ) -> R {
+    ) -> Option<R> {
         self.with_system::<AssetDependencySystem, _>(
             AssetDependencySystem::ID,
             |system, runtime| operation(&mut system.access(runtime)),
         )
-        .expect("World requires AssetDependencySystem")
     }
 
     /// Drain newly issued provider work once; source I/O belongs to the host.
     pub fn take_resource_requests(&mut self) -> Vec<crate::AssetAcquisitionRequest> {
-        self.with_asset_dependency(|access| access.take_resource_requests())
+        self.asset_acquisition.requests(self.data_sources)
     }
 
     /// Drain cancelled host input streams.
     pub fn take_resource_cancellations(&mut self) -> Vec<u64> {
-        self.with_asset_dependency(|access| access.take_resource_cancellations())
+        self.data_sources.take_cancellations()
     }
 
     /// Queue owned provider data for the next boundary. Obsolete input streams are harmless.
@@ -250,7 +192,9 @@ impl crate::WorldContext<'_> {
         id: u64,
         result: Result<Vec<u8>, String>,
     ) -> Result<(), ErrorReason> {
-        self.with_asset_dependency(|access| access.complete_resource(id, result))
+        self.data_sources
+            .complete_read(id, result)
+            .map_err(|_| ErrorReason::Capacity)
     }
 
     /// Observe current typed demand in kind/source/variant order.
@@ -273,7 +217,9 @@ impl crate::WorldContext<'_> {
     /// Hosts install only schemes they implement during initialization. Source
     /// reads remain asynchronous and use the ordinary request/cancellation APIs.
     pub fn register_stream_resource_provider(&mut self, scheme: &str) -> Result<(), ErrorReason> {
-        self.with_asset_dependency(|access| access.register_stream_resource_provider(scheme))
+        self.data_sources
+            .register_stream(&format!("{scheme}:"))
+            .map_err(|_| ErrorReason::InvalidValue)
     }
 
     /// Resolve a world-local producer key or a retained Host resource identity.
@@ -298,23 +244,28 @@ impl crate::WorldContext<'_> {
 
     /// Let the renderer drive concrete resource loading during stage 7.
     pub fn set_renderer_asset_loading(&mut self, enabled: bool) {
-        self.with_asset_dependency(|access| access.set_renderer_asset_loading(enabled))
+        self.asset_acquisition.renderer_driven = enabled;
     }
 
     /// Progress all shared loaders at an embedding Host boundary with an existing
     /// world borrow. Multi-world hosts call Host::progress_assets once instead.
     pub fn poll_all_assets(&mut self) {
-        self.with_asset_dependency(|access| access.poll_all_assets())
+        self.asset_acquisition.poll(self.data_sources);
     }
 
     /// Poll resource-owned loaders during the caller's host execution phase.
     pub fn poll_assets(&mut self) {
-        self.with_asset_dependency(|access| access.poll_assets())
+        if self.asset_acquisition.renderer_driven {
+            self.asset_acquisition
+                .poll_evaluation_assets(self.data_sources);
+        } else {
+            self.asset_acquisition.poll(self.data_sources);
+        }
     }
 
     /// Drain lifecycle observations after renderer work and before frame events.
     pub fn take_asset_events(&mut self) -> Result<Vec<crate::AssetResourceSnapshot>, String> {
-        self.with_asset_dependency(|access| access.take_asset_events())
+        self.asset_acquisition.events(self.world.id)
     }
 
     /// Feed a bounded stream chunk; false applies backpressure to the host.
@@ -333,11 +284,13 @@ impl crate::WorldContext<'_> {
     }
 
     /// Queue producer bytes through the same factories used for source references.
+    /// Requires the selected World upload queue owned by AssetDependencySystem.
     pub fn enqueue_asset(
         &mut self,
         upload: crate::services::asset_management::AssetUpload,
     ) -> Result<(), ErrorReason> {
         self.with_asset_dependency(|access| access.enqueue_asset(upload))
+            .ok_or(ErrorReason::UnsupportedDependency)?
     }
 
     /// Complete upload receipts after the resource itself reports availability.
@@ -345,6 +298,7 @@ impl crate::WorldContext<'_> {
         &mut self,
     ) -> Vec<crate::services::asset_management::AssetUploadOutcome> {
         self.with_asset_dependency(|access| access.take_asset_outcomes())
+            .unwrap_or_default()
     }
 
     /// Number of upload replies still awaiting a resource-owned result.
@@ -360,7 +314,12 @@ impl crate::WorldContext<'_> {
         &mut self,
         key: crate::services::asset_management::AssetUploadIdentity,
     ) {
-        self.with_asset_dependency(|access| access.release_asset_upload(key));
+        if self
+            .with_asset_dependency(|access| access.release_asset_upload(key))
+            .is_none()
+        {
+            self.asset_acquisition.release_upload(self.world.id, key);
+        }
     }
 }
 
@@ -381,7 +340,7 @@ pub(in crate::world) fn resolve_asset_key(
     }
     let selection = AssetDemandSelection::new(
         key.kind,
-        &format!("asset://{}/{}", key.kind.0, key.asset),
+        &format!("asset://{}/{}", key.kind.0, key.asset).into(),
         key.variant,
     );
     assets.find(
@@ -403,7 +362,7 @@ impl AssetDependencyAccess<'_> {
         );
         if self.state.source_users.keys().any(|selection| {
             let scoped = AssetManagementService::scoped_selection(self.world.id, selection);
-            scoped.kind == key.kind && scoped.source == source && scoped.variant == key.variant
+            scoped.kind == key.kind && *scoped.source == *source && scoped.variant == key.variant
         }) {
             return;
         }

@@ -1,8 +1,4 @@
-import type {
-  GuiObservationBatch,
-  GuiTextFence,
-  GuiTextFocusState,
-} from "@ipp/client";
+import type { GuiTextFence, GuiNativeTextState } from "@ipp/client";
 import type {
   BrowserGuiInputCommand,
   GuiInputSink,
@@ -44,9 +40,9 @@ import {
  * of applying, and every platform failure sends nothing.
  *
  * Focus fencing: every text, selection and composition command carries the
- * runtime fence (input context and focus generations, target and text
- * revision) of the committed state the buffer last synchronized from, so
- * core rejects edits that raced a focus move, node removal, session change
+ * runtime fence (input context, target and focus generation) of the
+ * committed state the buffer last synchronized from, so
+ * core rejects edits that raced a focus move, entity removal, session change
  * or external replacement as conflicts without writing. A clipboard paste
  * stamps the fence observed when the read started. The optional focus
  * token additionally cancels delayed paste and selection reads locally
@@ -85,6 +81,7 @@ export function stampTextFence(
     case "composition":
     case "commitComposition":
     case "cancelComposition":
+    case "key":
       return { ...command, fence };
     default:
       return command;
@@ -92,15 +89,8 @@ export function stampTextFence(
 }
 
 /** The fence a native buffer stamps after observing one focus state. */
-export function textFenceOf(state: GuiTextFocusState): GuiTextFence {
-  return {
-    contextGeneration: state.contextGeneration,
-    focusGeneration: state.focusGeneration,
-    entity: state.entity,
-    rootIncarnation: state.rootIncarnation,
-    node: state.node,
-    revision: state.revision,
-  };
+export function textFenceOf(state: GuiNativeTextState): GuiTextFence {
+  return state.fence;
 }
 
 export interface TextBridgeOptions {
@@ -122,6 +112,8 @@ export interface TextBridgeHandle {
   placeAt(x: number, y: number): void;
   /** Sync the buffer from committed core text; false without a reader. */
   syncFromCore(): boolean;
+  /** Fence delayed native composition after an external focus/value change. */
+  invalidate(): void;
   /** Focus the buffer and request the soft keyboard on trusted gestures. */
   focusFromGesture(request: SoftKeyboardRequest): void;
   /** Focus-fenced clipboard paste into the core-focused input. */
@@ -218,15 +210,10 @@ export function viewportToBridgeOffset(
   };
 }
 
-/** Focus identity plus committed revision fencing one text-bridge sync. */
+/** Focus identity plus native text generation fencing one text-bridge sync. */
 export interface TextBridgeTarget {
-  readonly session: bigint;
-  readonly contextGeneration: bigint;
-  readonly focusGeneration: bigint;
-  readonly entity: bigint;
-  readonly rootIncarnation: bigint;
-  readonly node: number;
-  readonly revision: number;
+  readonly context: bigint;
+  readonly fence: GuiTextFence;
 }
 
 /** User-driven buffer selection in core UTF-8 byte offsets. `start` is the
@@ -236,7 +223,7 @@ export interface TextBridgeLocalSelection {
   readonly end: number;
 }
 
-/** Focus/revision-fenced view of runtime text state for one bridge.
+/** Focus/generation-fenced view of runtime text state for one bridge.
  *
  * Pure store with no DOM: the canvas flow folds the authoritative transient
  * focus record from runtime observations and reads the synchronous
@@ -244,8 +231,8 @@ export interface TextBridgeLocalSelection {
  * authoritative; no focus, text, selection or composition state is inferred
  * from control commits.
  *
- * The token includes session, input-context/focus generations, complete
- * target identity and the text revision. A local activation or selection
+ * The token includes session, input-context/focus generations and complete
+ * target identity. A local activation or selection
  * also advances an adapter fence so delayed clipboard reads cannot land
  * after a newer user intent while the runtime observation is in flight.
  */
@@ -255,7 +242,7 @@ export interface TextBridgeModel {
   /** Committed text plus caret for `readCommitted`; null while unfocused. */
   committed(): TextBridgeCommitted | null;
   /** Fold one authoritative runtime focus update; undefined means no update. */
-  observe(state: GuiTextFocusState | null | undefined): boolean;
+  observe(state: GuiNativeTextState | null | undefined): boolean;
   /** One local activation (trusted tap, Tab/Escape); invalidates in-flight reads. */
   noteActivation(): void;
   /** Track a user-driven buffer selection (core UTF-8 bytes); never syncs. */
@@ -266,20 +253,20 @@ export interface TextBridgeModel {
 
 /** Create the fenced runtime-text view for one client session. */
 export function createTextBridgeModel(session: bigint): TextBridgeModel {
-  let focus: GuiTextFocusState | null = null;
+  let focus: GuiNativeTextState | null = null;
   let localFence = 0;
   let needsResync = false;
   const sameState = (
-    left: GuiTextFocusState,
-    right: GuiTextFocusState,
+    left: GuiNativeTextState,
+    right: GuiNativeTextState,
   ): boolean =>
-    left.session === right.session &&
-    left.contextGeneration === right.contextGeneration &&
-    left.focusGeneration === right.focusGeneration &&
-    left.entity === right.entity &&
-    left.rootIncarnation === right.rootIncarnation &&
-    left.node === right.node &&
-    left.revision === right.revision &&
+    left.fence.target.world.id === right.fence.target.world.id &&
+    left.fence.target.world.incarnation ===
+      right.fence.target.world.incarnation &&
+    left.fence.target.entity === right.fence.target.entity &&
+    left.fence.target.component === right.fence.target.component &&
+    left.fence.target.incarnation === right.fence.target.incarnation &&
+    left.fence.generation === right.fence.generation &&
     left.text === right.text &&
     left.selectionStart === right.selectionStart &&
     left.selectionEnd === right.selectionEnd &&
@@ -291,7 +278,8 @@ export function createTextBridgeModel(session: bigint): TextBridgeModel {
       const head = `s${session.toString(10)}:l${localFence}`;
       const current = focus;
       if (current === null) return head;
-      return `${head}:c${current.contextGeneration}:f${current.focusGeneration}:n${current.entity}:${current.rootIncarnation}:${current.node}:r${current.revision}`;
+      const { target, generation } = current.fence;
+      return `${head}:w${target.world.id}:${target.world.incarnation}:e${target.entity}:c${target.component}:${target.incarnation}:f${generation}`;
     },
     committed(): TextBridgeCommitted | null {
       const current = focus;
@@ -322,7 +310,6 @@ export function createTextBridgeModel(session: bigint): TextBridgeModel {
     },
     observe(state): boolean {
       if (state === undefined) return false;
-      if (state !== null && state.session !== session) return false;
       if (state === null) {
         localFence += 1;
         needsResync = false;
@@ -361,19 +348,6 @@ export function createTextBridgeModel(session: bigint): TextBridgeModel {
   };
 }
 
-/** Fold one runtime observation batch into the bridge model.
- *
- * Only the authoritative text-focus field changes the model. Ordinary
- * effects, conflicts, cancellations and unhandled input never imply focus.
- * Returns true when `syncFromCore` should run.
- */
-export function observeTextBridgeBatch(
-  model: TextBridgeModel,
-  batch: GuiObservationBatch,
-): boolean {
-  return model.observe(batch.textFocus);
-}
-
 /** Mount the native editable buffer into a container beside the canvas.
  *
  * The buffer is visually hidden but focusable; it never takes focus
@@ -406,7 +380,7 @@ export function attachTextBridge(
   };
   // Every text edit names the committed state the buffer currently shows.
   const send = (command: BrowserGuiInputCommand): void => {
-    deliver(stampTextFence(command, readCommitted?.()?.fence));
+    deliver(command);
   };
   // Delayed completions stamp the state observed when they started.
   const sinkFencedAt = (fence: GuiTextFence | undefined): GuiInputSink => ({
@@ -422,6 +396,7 @@ export function attachTextBridge(
   wrapper.style.overflow = "hidden";
   const area = document.createElement("textarea");
   area.rows = 1;
+  area.dataset.ippNativeText = "true";
   area.autocomplete = "off";
   area.setAttribute("autocorrect", "off");
   area.setAttribute("autocapitalize", "off");
@@ -475,9 +450,9 @@ export function attachTextBridge(
       return;
     }
     if (event.inputType === "deleteContentBackward") {
-      send({ kind: "key", key: "backspace", pressed: true });
+      send({ kind: "key", key: "backspace" });
     } else if (event.inputType === "deleteContentForward") {
-      send({ kind: "key", key: "delete", pressed: true });
+      send({ kind: "key", key: "delete" });
     }
   };
 
@@ -486,14 +461,20 @@ export function attachTextBridge(
     // Keys during composition belong to the IME: Enter confirming a
     // candidate must not submit, and arrows move within the candidate.
     if (isComposingKeyEvent(event) || ime.isComposing()) return;
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a") {
+      event.preventDefault();
+      send({ kind: "key", key: "selectAll" });
+      return;
+    }
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
     const key = keyboardKeyToGuiKey(event.key, event.shiftKey);
     if (key === null) return;
     // Space, backspace and delete ride through beforeinput on an editable
     // buffer; forwarding them here as well would apply every keystroke
     // twice. All other mapped keys have no beforeinput payload.
     if (key === "space" || key === "backspace" || key === "delete") return;
-    if (key === "tab" || key === "backTab") event.preventDefault();
-    send({ kind: "key", key, pressed: true });
+    event.preventDefault();
+    send({ kind: "key", key });
   };
 
   const onCompositionStart = (): void => {
@@ -518,6 +499,11 @@ export function attachTextBridge(
     if (getFocusToken !== undefined && getFocusToken() !== tokenAtSync) return;
     const { selectionStart, selectionEnd, selectionDirection, value } = area;
     if (selectionStart === null || selectionEnd === null) return;
+    // DOM offsets only address the committed text while the buffer shows it:
+    // a buffer still holding platform composition or pre-sync text waits for
+    // the runtime resync instead of selecting inside other characters.
+    const committed = readCommitted?.();
+    if (committed && (committed.composing || committed.text !== value)) return;
     const backward = selectionDirection === "backward";
     const start = utf16UnitsToUtf8Bytes(
       value,
@@ -544,7 +530,9 @@ export function attachTextBridge(
   };
 
   const onBlur = (): void => {
+    if (disposed || suppressSelection) return;
     ime.blur();
+    send({ kind: "blur" });
   };
 
   const onPaste = (event: ClipboardEvent): void => {
@@ -579,10 +567,11 @@ export function attachTextBridge(
     event.preventDefault();
     if (event.clipboardData !== null) {
       event.clipboardData.setData("text/plain", text);
-      if (cut) send({ kind: "key", key: "delete", pressed: true });
+      if (cut) send({ kind: "key", key: "delete" });
       return;
     }
     const token = getFocusToken?.();
+    const fence = readCommitted?.()?.fence;
     void copyFocusedTextToClipboard(text, resolveClipboardWriter(), {
       ...(onError === undefined ? {} : { onError }),
     }).then((copied) => {
@@ -593,7 +582,7 @@ export function attachTextBridge(
         );
         return;
       }
-      send({ kind: "key", key: "delete", pressed: true });
+      sinkFencedAt(fence).send({ kind: "key", key: "delete" });
     });
   };
 
@@ -621,6 +610,9 @@ export function attachTextBridge(
 
   return {
     element: area,
+    invalidate(): void {
+      ime.reset();
+    },
     placeAt(x: number, y: number): void {
       if (disposed) return;
       wrapper.style.transform = `translate(${x}px, ${y}px)`;
@@ -630,7 +622,9 @@ export function attachTextBridge(
       const committed = readCommitted();
       tokenAtSync = getFocusToken?.() ?? null;
       if (committed === null) {
-        if (document.activeElement === area) area.blur();
+        withSuppressedSelection(() => {
+          if (document.activeElement === area) area.blur();
+        });
         lastSentSelection = null;
         withSuppressedSelection(() => {
           area.value = "";
@@ -694,8 +688,8 @@ export function attachTextBridge(
     },
     dispose(): void {
       if (disposed) return;
-      disposed = true;
       ime.blur();
+      disposed = true;
       area.removeEventListener("beforeinput", onBeforeInput as EventListener);
       area.removeEventListener("keydown", onKeyDown as EventListener);
       area.removeEventListener("compositionstart", onCompositionStart);

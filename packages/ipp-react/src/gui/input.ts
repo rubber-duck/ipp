@@ -1,354 +1,47 @@
 import type {
-  GuiInputCommand,
+  GuiPhysicalContext,
+  GuiPhysicalInput,
+  GuiPhysicalKey,
   GuiInputRoutingOutcome,
-  GuiKey,
-  GuiLogicalPoint,
-  GuiPointerButton,
+  HostPhysicalInput,
+  PresentationView,
+  GuiNativeEdit,
   GuiTextFence,
+  GuiPhysicalContextOptions,
 } from "@ipp/client";
 import {
-  createImeBridge,
-  isComposingKeyEvent,
-  shouldSkipBeforeInput,
-} from "./ime.js";
+  attachTextBridge,
+  createTextBridgeModel,
+  viewportToBridgeOffset,
+} from "./text-bridge.js";
 import {
-  closeUnhandledInputGate,
   openUnhandledInputGate,
-  settleUnhandledInputGateSubmission,
+  closeUnhandledInputGate,
   trackUnhandledInputGate,
+  settleUnhandledInputGateSubmission,
   type GuiUnhandledInputGate,
 } from "./scene-input.js";
 
-/** Browser pointer/keyboard/touch relay into GUI input contexts.
- *
- * Platform adapter for the optional `@ipp/react/gui` entry point: DOM
- * listeners translate mouse, touch, pen, wheel and keyboard events into
- * ordered [`BrowserGuiInputCommand`] payloads for an existing ordered
- * ingress sink. Headless use imports no DOM dependencies: the DOM is
- * touched only inside {@link attachCanvasGuiInput}.
- *
- * Ownership: the core `GuiInputSystem` owns focus, capture, hover and
- * gesture decisions; this module keeps no input state beyond the set of
- * live pointer identities needed to cancel on platform blur. It never
- * mutates scene state and never re-decides routing. Unhandled input stays
- * observable host-side for ordinary scene controls without duplicate
- * dispatch here. Browser composition (calling `attachCanvasGuiInput` on
- * the live canvas) stays in `@ipp/react/web`.
- *
- * Ordering: listeners forward in DOM event order and the sink must
- * preserve that order into one session-fenced ingress stream (the
- * correlated production `RequestBody::GuiInput` path via
- * {@link createGuiInputSink}, or `WorldContext::enqueue_gui_input_command`
- * for host-owned loops). One active input context per World supports
- * multiple panels and pointer identities; other clients may author or
- * observe without acquiring input ownership.
- */
-
-/**
- * Normalized viewport point: CSS fraction of the live canvas rect,
- * top-left origin, +Y down. DevicePixelRatio cancels in the normalization,
- * so the same on-screen point maps identically across densities; values
- * may extend outside `0..=1`, matching the geometry pick convention. The
- * core projects these through the current camera, so scene-fallback sinks
- * (including `onUnhandled`) reuse this same point for their own rays.
- */
 export type GuiViewportPoint = readonly [number, number];
-
-/**
- * Explicitly marked scene blocker. The distance rides along for logical
- * routing without a camera; on the projected path the core resolves every
- * marked distance from current-tick scene geometry instead.
- */
-export interface GuiBlockerHit {
-  readonly entity: bigint;
-  readonly distance: number;
-}
-
-/** Browser-shaped GUI input, mirroring the core `GuiInputCommand`. */
-export type BrowserGuiInputCommand =
-  | {
-      readonly kind: "pointerDown";
-      readonly pointer: number;
-      readonly position: GuiViewportPoint;
-      readonly button: GuiPointerButton;
-      readonly blockers?: readonly GuiBlockerHit[];
-      readonly panelDistance?: number;
-    }
-  | {
-      readonly kind: "pointerUp";
-      readonly pointer: number;
-      readonly position: GuiViewportPoint;
-      readonly button: GuiPointerButton;
-      readonly blockers?: readonly GuiBlockerHit[];
-      readonly panelDistance?: number;
-    }
-  | {
-      readonly kind: "pointerMove";
-      readonly pointer: number;
-      readonly position: GuiViewportPoint;
-      readonly blockers?: readonly GuiBlockerHit[];
-      readonly panelDistance?: number;
-    }
-  | { readonly kind: "pointerCancel"; readonly pointer: number }
-  | {
-      readonly kind: "scroll";
-      readonly position: GuiViewportPoint;
-      readonly delta: GuiLogicalPoint;
-      readonly blockers?: readonly GuiBlockerHit[];
-      readonly panelDistance?: number;
-    }
-  | { readonly kind: "key"; readonly key: GuiKey; readonly pressed: true }
-  | {
-      readonly kind: "text";
-      readonly text: string;
-      readonly fence?: GuiTextFence;
-    }
-  | { readonly kind: "blur" }
-  | {
-      readonly kind: "composition";
-      readonly text: string;
-      readonly caretStart: number;
-      readonly caretEnd: number;
-      readonly fence?: GuiTextFence;
-    }
-  | { readonly kind: "commitComposition"; readonly fence?: GuiTextFence }
-  | { readonly kind: "cancelComposition"; readonly fence?: GuiTextFence }
-  | {
-      readonly kind: "selection";
-      readonly start: number;
-      readonly end: number;
-      readonly fence?: GuiTextFence;
-    };
-
-/** Ordered, session-fenced ingress sink. Must preserve call order. */
+export type BrowserGuiInputCommand = (
+  | GuiNativeEdit
+  | { kind: "key"; key: GuiPhysicalKey }
+  | { kind: "blur" }
+) & { readonly fence?: GuiTextFence };
 export interface GuiInputSink {
   send(command: BrowserGuiInputCommand): void;
-  /**
-   * Revoke the sink after detach: later sends drop instead of reaching a
-   * replacement session. Optional so older sinks keep compiling; the canvas
-   * relay calls it when present.
-   */
-  close?(): void;
 }
 
-/** Minimal submitter surface the browser sink needs from a GUI-capable client. */
-export interface GuiInputSubmitter {
-  submitGuiInput(input: GuiInputCommand): Promise<GuiInputRoutingOutcome>;
+export function keyboardKeyToGuiKey(
+  key: string,
+  shift = false,
+): GuiPhysicalKey | "backspace" | "delete" | null {
+  if (key === "Backspace") return "backspace";
+  if (key === "Delete") return "delete";
+  return key === "Tab" && shift ? "backTab" : (keys[key] ?? null);
 }
 
-export interface GuiInputSinkOptions {
-  readonly onError?: (error: Error) => void;
-  /** Route only authoritative no-panel misses into scene gesture admission. */
-  readonly unhandledInputGate?: GuiUnhandledInputGate;
-}
-
-/** The stamped text fence, omitted rather than undefined when absent. */
-function fenceOf(command: { readonly fence?: GuiTextFence }): {
-  fence?: GuiTextFence;
-} {
-  return command.fence === undefined ? {} : { fence: command.fence };
-}
-
-/** Translate one relayed browser command to the wire input command.
- *
- * Positions already arrive as normalized viewport points; the relay
- * carries no panel scope, so callers needing a non-overlay panel supply
- * `panel` at the wire layer instead.
- */
-export function toGuiInputCommand(
-  command: BrowserGuiInputCommand,
-): GuiInputCommand {
-  switch (command.kind) {
-    case "pointerDown":
-      return {
-        kind: "pointerDown",
-        pointer: command.pointer,
-        position: [command.position[0], command.position[1]],
-        button: command.button,
-        ...(command.blockers === undefined
-          ? {}
-          : { blockers: command.blockers }),
-        ...(command.panelDistance === undefined
-          ? {}
-          : { panelDistance: command.panelDistance }),
-      };
-    case "pointerUp":
-      return {
-        kind: "pointerUp",
-        pointer: command.pointer,
-        position: [command.position[0], command.position[1]],
-        button: command.button,
-        ...(command.blockers === undefined
-          ? {}
-          : { blockers: command.blockers }),
-        ...(command.panelDistance === undefined
-          ? {}
-          : { panelDistance: command.panelDistance }),
-      };
-    case "pointerMove":
-      return {
-        kind: "pointerMove",
-        pointer: command.pointer,
-        position: [command.position[0], command.position[1]],
-        ...(command.blockers === undefined
-          ? {}
-          : { blockers: command.blockers }),
-        ...(command.panelDistance === undefined
-          ? {}
-          : { panelDistance: command.panelDistance }),
-      };
-    case "pointerCancel":
-      return { kind: "pointerCancel", pointer: command.pointer };
-    case "scroll":
-      return {
-        kind: "scroll",
-        position: [command.position[0], command.position[1]],
-        delta: [command.delta[0], command.delta[1]],
-        ...(command.blockers === undefined
-          ? {}
-          : { blockers: command.blockers }),
-        ...(command.panelDistance === undefined
-          ? {}
-          : { panelDistance: command.panelDistance }),
-      };
-    case "key":
-      return { kind: "key", key: command.key, pressed: true };
-    case "text":
-      return { kind: "text", text: command.text, ...fenceOf(command) };
-    case "blur":
-      return { kind: "blur" };
-    case "composition":
-      return {
-        kind: "composition",
-        text: command.text,
-        caretStart: command.caretStart,
-        caretEnd: command.caretEnd,
-        ...fenceOf(command),
-      };
-    case "commitComposition":
-      return { kind: "commitComposition", ...fenceOf(command) };
-    case "cancelComposition":
-      return { kind: "cancelComposition", ...fenceOf(command) };
-    case "selection":
-      return {
-        kind: "setTextSelection",
-        start: command.start,
-        end: command.end,
-        ...fenceOf(command),
-      };
-  }
-}
-
-/** Map relayed browser commands onto a session-fenced ordered submitter.
- *
- * Every command is submitted immediately in call order. The transport and
- * Host preserve that order; replies report each command independently and
- * never gate later input. Every rejection reaches `onError`.
- */
-export function createGuiInputSink(
-  submitter: GuiInputSubmitter,
-  options: GuiInputSinkOptions = {},
-): GuiInputSink {
-  const { onError, unhandledInputGate } = options;
-  const report = (error: unknown): void => {
-    onError?.(error instanceof Error ? error : new Error(String(error)));
-  };
-  const gateGeneration = openUnhandledInputGate(unhandledInputGate);
-  let closed = false;
-
-  const submit = (command: BrowserGuiInputCommand): void => {
-    const gateSubmission = trackUnhandledInputGate(
-      unhandledInputGate,
-      gateGeneration,
-      command,
-    );
-    let input: GuiInputCommand;
-    try {
-      input = toGuiInputCommand(command);
-    } catch (error) {
-      settleUnhandledInputGateSubmission(unhandledInputGate, gateSubmission);
-      report(error);
-      return;
-    }
-    let request: Promise<GuiInputRoutingOutcome>;
-    try {
-      request = submitter.submitGuiInput(input);
-    } catch (error) {
-      settleUnhandledInputGateSubmission(unhandledInputGate, gateSubmission);
-      report(error);
-      return;
-    }
-    void request.then(
-      (outcome) => {
-        settleUnhandledInputGateSubmission(
-          unhandledInputGate,
-          gateSubmission,
-          outcome,
-        );
-      },
-      (error: unknown) => {
-        settleUnhandledInputGateSubmission(unhandledInputGate, gateSubmission);
-        report(error);
-      },
-    );
-  };
-
-  return {
-    send(command: BrowserGuiInputCommand): void {
-      // Fence queued relay sends to the owning context: after close, late
-      // input drops instead of entering a replacement session.
-      if (closed) return;
-      submit(command);
-    },
-    close(): void {
-      closed = true;
-      closeUnhandledInputGate(unhandledInputGate, gateGeneration);
-    },
-  };
-}
-
-export interface AttachCanvasGuiInputOptions {
-  /**
-   * Remap a normalized viewport point (identity by default) for
-   * letterboxed canvases. This replaces the old CSS-to-logical hook:
-   * pointer positions now ship normalized so the core can project them
-   * through the current camera.
-   */
-  readonly toViewport?: (point: GuiViewportPoint) => GuiViewportPoint;
-  /** Explicitly marked scene blockers; visual occlusion alone never blocks. */
-  readonly blockers?: readonly GuiBlockerHit[];
-  /**
-   * World-space panel distance; omitted means overlay-nearest on logical
-   * routing. On the projected path the core resolves panel distances
-   * from the camera ray and this stays an unused hint.
-   */
-  readonly panelDistance?: number;
-  /** Element receiving keyboard/text input; defaults to the canvas. */
-  readonly keyboardTarget?: HTMLElement | null;
-  /**
-   * Whether this relay owns keyboard, text and composition listeners on the
-   * keyboard target. Disable when an adapter-owned native editor is the sole
-   * translator for that event stream; pointer, wheel and window-blur routing
-   * remain attached.
-   */
-  readonly keyboardInput?: boolean;
-  /**
-   * Send core blur when `keyboardTarget` loses DOM focus. Disable this when
-   * the target is an adapter-owned native editor whose focus follows core
-   * focus; window blur still clears the input context.
-   */
-  readonly blurOnKeyboardTarget?: boolean;
-  /** Call `preventDefault` on pointer events before async responses. */
-  readonly preventDefaultPointer?: boolean;
-  /** Set `touch-action: none` while attached; restored on detach. */
-  readonly enableTouchActionNone?: boolean;
-  /**
-   * Mount the native editable buffer beside the canvas for IME and
-   * soft-keyboard input; pass `false` to keep the canvas-only relay.
-   * Mounted by default; see `attachTextBridge`.
-   */
-  readonly textBridge?: boolean;
-  /** Optional shared gate for camera or other scene fallback gestures. */
+export interface CanvasGuiInputOptions extends GuiPhysicalContextOptions {
   readonly unhandledInputGate?: GuiUnhandledInputGate;
   /**
    * GUI logical units one wheel notch scrolls; finite and positive,
@@ -356,141 +49,16 @@ export interface AttachCanvasGuiInputOptions {
    * {@link wheelDeltaToLogical} for choosing it.
    */
   readonly wheelStep?: number;
-  readonly onError?: (error: Error) => void;
-}
-
-/** DOM mouse button to GUI button; other buttons are ignored. */
-export function domMouseButtonToGuiButton(
-  button: number,
-): GuiPointerButton | null {
-  switch (button) {
-    case 0:
-      return "primary";
-    case 2:
-      return "secondary";
-    case 1:
-      return "auxiliary";
-    default:
-      return null;
-  }
-}
-
-/** `KeyboardEvent.key` and Shift state to a non-text GUI key; printable
- * input uses `text`. Shift+Tab is reverse traversal. */
-export function keyboardKeyToGuiKey(
-  key: string,
-  shiftKey = false,
-): GuiKey | null {
-  switch (key) {
-    case "Tab":
-      return shiftKey ? "backTab" : "tab";
-    case "Enter":
-      return "enter";
-    case " ":
-    case "Spacebar":
-      return "space";
-    case "Escape":
-      return "escape";
-    case "Backspace":
-      return "backspace";
-    case "Delete":
-      return "delete";
-    case "ArrowLeft":
-      return "left";
-    case "ArrowRight":
-      return "right";
-    case "ArrowUp":
-      return "up";
-    case "ArrowDown":
-      return "down";
-    case "Home":
-      return "home";
-    case "End":
-      return "end";
-    default:
-      return null;
-  }
-}
-
-/** DOM focus state around one authoritative runtime text-focus update. */
-export interface KeyboardHandoffState {
-  /** Runtime text focus after the update: true while a text input has it,
-   * false once cleared, undefined when the update left it unchanged. */
-  readonly textFocused: boolean | undefined;
-  /** The document has system focus. */
-  readonly documentFocused: boolean;
-  /** The native editor had DOM focus before the update synced it. */
-  readonly editorFocused: boolean;
-  /** The canvas relay's keyboard target has DOM focus. */
-  readonly ownerFocused: boolean;
-  /** A trusted pointer activation awaits this result; it focuses the editor
-   * itself with the soft keyboard. */
-  readonly pointerActivationPending: boolean;
+  readonly onError: (error: Error) => void;
+  readonly onUnhandled?: (
+    input: GuiPhysicalInput,
+    outcome: GuiInputRoutingOutcome,
+  ) => void;
 }
 
 /**
- * Keyboard ownership handoff between the canvas relay and the native editor.
- *
- * Exactly one element owns keys: the native editor while a text input has
- * runtime focus, the relay's keyboard target otherwise. Keyboard traversal
- * into a text input therefore moves DOM focus to the editor, and traversal
- * or Escape out of one returns it to the relay target. Returns the element
- * to focus, or null to leave DOM focus alone.
- */
-export function keyboardFocusHandoff(
-  state: KeyboardHandoffState,
-): "editor" | "owner" | null {
-  if (!state.documentFocused || state.textFocused === undefined) return null;
-  if (state.textFocused)
-    return state.ownerFocused && !state.pointerActivationPending
-      ? "editor"
-      : null;
-  return state.editorFocused ? "owner" : null;
-}
-
-/** Client coordinates to canvas-relative CSS pixels. */
-export function canvasRelativePoint(
-  clientX: number,
-  clientY: number,
-  rect: { readonly left: number; readonly top: number },
-): GuiLogicalPoint {
-  return [clientX - rect.left, clientY - rect.top];
-}
-
-/**
- * Client coordinates to a normalized viewport point for the live canvas
- * rect. Returns null when the rect has no area, so callers skip events
- * that carry no viewport. Scene-fallback sinks reuse this same point for
- * their own rays; it is all routing needs beyond the ordered commands.
- */
-export function canvasViewportPoint(
-  clientX: number,
-  clientY: number,
-  rect: {
-    readonly left: number;
-    readonly top: number;
-    readonly width: number;
-    readonly height: number;
-  },
-): GuiViewportPoint | null {
-  if (
-    !Number.isFinite(rect.width) ||
-    !Number.isFinite(rect.height) ||
-    rect.width <= 0 ||
-    rect.height <= 0
-  ) {
-    return null;
-  }
-  return [
-    (clientX - rect.left) / rect.width,
-    (clientY - rect.top) / rect.height,
-  ];
-}
-
-/**
- * Default GUI logical units one wheel notch scrolls. At the default root
- * density of one logical unit per metre this is a quarter metre: an eighth
- * of a 2-unit ScrollView viewport.
+ * Default GUI logical units one wheel notch scrolls: an eighth of a 2-unit
+ * ScrollView viewport.
  */
 export const DEFAULT_GUI_WHEEL_STEP = 0.25;
 
@@ -507,11 +75,11 @@ const WHEEL_PAGE_NOTCHES = 8;
 /**
  * Browser wheel deltas to GUI logical units.
  *
- * Browser deltas count CSS pixels, lines or pages, none of which relate to
- * a panel's logical units: panels are authored at any density and seen at
- * any projected size. Deltas therefore convert to wheel notches first,
- * with fractional notches for smooth pixel scrolling (trackpads), and each
- * notch scrolls `step` logical units. Choose the step as a fraction of the
+ * Browser deltas count CSS pixels, lines or pages, none of which relate to a
+ * canvas's logical units: canvases are authored at any density and seen at any
+ * projected size. Deltas therefore convert to wheel notches first, with
+ * fractional notches for smooth pixel scrolling (trackpads), and each notch
+ * scrolls `step` logical units. Choose the step as a fraction of the
  * ScrollView viewports the canvas shows, about an eighth of the smallest.
  */
 export function wheelDeltaToLogical(
@@ -519,64 +87,46 @@ export function wheelDeltaToLogical(
   deltaY: number,
   deltaMode: number,
   step = DEFAULT_GUI_WHEEL_STEP,
-): GuiLogicalPoint {
+): readonly [number, number] {
   const notches = (delta: number): number =>
-    deltaMode === 1
+    deltaMode === WheelEvent.DOM_DELTA_LINE
       ? delta / WHEEL_NOTCH_LINES
-      : deltaMode === 2
+      : deltaMode === WheelEvent.DOM_DELTA_PAGE
         ? delta * WHEEL_PAGE_NOTCHES
         : delta / WHEEL_NOTCH_PIXELS;
   return [notches(deltaX) * step, notches(deltaY) * step];
 }
 
-/** Whether an element edits text natively and so needs its key defaults. */
-function isEditableTarget(element: HTMLElement): boolean {
-  return (
-    element.isContentEditable ||
-    element.tagName === "INPUT" ||
-    element.tagName === "TEXTAREA"
-  );
-}
+const keys: Readonly<Record<string, GuiPhysicalKey>> = {
+  Tab: "tab",
+  Enter: "enter",
+  " ": "space",
+  Escape: "escape",
+  ArrowLeft: "left",
+  ArrowRight: "right",
+  ArrowUp: "up",
+  ArrowDown: "down",
+  Home: "home",
+  End: "end",
+};
 
-function toU32(pointerId: number): number {
-  return pointerId >>> 0;
-}
-
-/** Attach real browser input to an ordered GUI ingress sink.
- *
- * Feeds the existing ordered ingress: pointer (mouse/touch/pen via
- * Pointer Events), wheel-as-scroll, keyboard keys, `beforeinput` text,
- * IME composition updates/commits, and platform blur. Capture, focus
- * scopes and gesture arbitration stay in core; releases of other buttons
- * never complete a press there. Composition `beforeinput` payloads are
- * skipped so each provisional applies exactly once.
- *
- * Browser capture management: presses acquire canvas pointer capture so a
- * drag released outside the canvas still terminates exactly once on the
- * canvas; capture loss, window blur and detach each cancel live pointers
- * and clear the input context before access is lost. Detach revokes the
- * sink, so queued relay sends never enter a replacement session. Returns
- * a detach function removing every listener.
+/** DOM order enters one Host-owned physical context. Local capture only keeps
+ * out-of-bounds releases observable; callbacks use committed effect observations.
  */
 export function attachCanvasGuiInput(
   canvas: HTMLCanvasElement,
-  sink: GuiInputSink,
-  options: AttachCanvasGuiInputOptions = {},
+  context: GuiPhysicalContext,
+  options: CanvasGuiInputOptions,
 ): () => void {
-  const {
-    toViewport = (point) => point,
-    blockers = [],
-    panelDistance,
-    keyboardTarget = null,
-    keyboardInput = true,
-    blurOnKeyboardTarget = true,
-    preventDefaultPointer = false,
-    enableTouchActionNone = true,
-    onError,
-  } = options;
-  const report = (error: unknown): void => {
-    onError?.(error instanceof Error ? error : new Error(String(error)));
-  };
+  let live = true;
+  const gateGeneration = openUnhandledInputGate(options.unhandledInputGate);
+  const model = createTextBridgeModel(context.identity);
+  let epoch = 0;
+  let working = false;
+  const nativePending: { command: BrowserGuiInputCommand; epoch: number }[] =
+    [];
+  const report = (error: unknown) =>
+    options.onError(error instanceof Error ? error : new Error(String(error)));
   // An invalid step is reported once and scrolls by the default instead.
   let wheelStep = options.wheelStep ?? DEFAULT_GUI_WHEEL_STEP;
   if (!Number.isFinite(wheelStep) || wheelStep <= 0) {
@@ -587,268 +137,321 @@ export function attachCanvasGuiInput(
     );
     wheelStep = DEFAULT_GUI_WHEEL_STEP;
   }
-  // Live pointers by relay identity, keeping the raw browser identity for
-  // capture calls: the relay converts to u32 while the browser API takes
-  // the event's own identifier.
-  const live = new Map<number, number>();
-  const target = keyboardTarget ?? canvas;
-  let detached = false;
-  // `exactOptionalPropertyTypes`: omit when unset rather than assigning
-  // `undefined` explicitly.
-  const maybeDistance = panelDistance === undefined ? {} : { panelDistance };
-
-  const viewportAt = (event: PointerEvent): GuiViewportPoint | null => {
-    const rect = canvas.getBoundingClientRect();
-    const point = canvasViewportPoint(event.clientX, event.clientY, rect);
-    if (point === null) return null;
-    return toViewport(point);
-  };
-
-  const send = (command: BrowserGuiInputCommand): void => {
-    if (detached) return;
+  const drainNative = async () => {
+    if (working) return;
+    working = true;
     try {
-      sink.send(command);
-    } catch (error) {
-      report(error);
-    }
-  };
-
-  /** Acquire canvas capture for one press; drags outside the canvas then
-   * retarget to it instead of losing their release. Missing capture APIs
-   * (headless stubs) keep the old listener-only behavior. */
-  const acquireCapture = (pointerId: number): void => {
-    try {
-      canvas.setPointerCapture?.(pointerId);
-    } catch (error) {
-      report(error);
-    }
-  };
-
-  /** Release canvas capture when still held; never throws out. */
-  const releaseCapture = (pointerId: number): void => {
-    try {
-      if (canvas.hasPointerCapture?.(pointerId) ?? false) {
-        canvas.releasePointerCapture?.(pointerId);
+      while (live && !context.isClosed && nativePending.length) {
+        const entry = nativePending.shift()!;
+        if (entry.epoch !== epoch) continue;
+        const command = entry.command;
+        if (
+          command.kind === "blur" ||
+          (command.kind === "key" &&
+            ["tab", "backTab", "escape", "up", "down", "space"].includes(
+              command.key,
+            ))
+        ) {
+          await context.send(command as GuiPhysicalInput);
+          continue;
+        }
+        const state = context.nativeText;
+        if (!state) continue;
+        const outcome = await context.editText(
+          command.fence ?? state.fence,
+          command as GuiNativeEdit,
+        );
+        if (outcome.rejected || outcome.cancelled || outcome.error) {
+          nativePending.length = 0;
+          report(new Error(outcome.error ?? "Native text edit cancelled"));
+        }
       }
     } catch (error) {
-      report(error);
+      nativePending.length = 0;
+      if (live) report(error);
+    } finally {
+      working = false;
     }
   };
-
-  /** Terminate one pointer exactly once: later up/cancel/loss events for
-   * the same identity find no live entry and send nothing. */
-  const terminate = (
-    pointer: number,
-    command: BrowserGuiInputCommand,
-  ): void => {
-    const raw = live.get(pointer);
-    if (raw === undefined) return;
-    live.delete(pointer);
-    releaseCapture(raw);
-    send(command);
+  const sink: GuiInputSink = {
+    send(command) {
+      if (!live || context.isClosed) return;
+      if (nativePending.length >= 32)
+        throw new Error("Native text ingress capacity exceeded");
+      nativePending.push({ command, epoch });
+      void drainNative();
+    },
   };
-
-  const onPointerDown = (event: PointerEvent): void => {
-    const button = domMouseButtonToGuiButton(event.button);
-    if (button === null) return;
-    const position = viewportAt(event);
-    if (position === null) return;
-    if (preventDefaultPointer) event.preventDefault();
-    const pointer = toU32(event.pointerId);
-    live.set(pointer, event.pointerId);
-    acquireCapture(event.pointerId);
+  const bridge = attachTextBridge(canvas.parentElement ?? document.body, sink, {
+    onError: report,
+    getFocusToken: model.token,
+    readCommitted: model.committed,
+    onLocalSelection: (selection) =>
+      model.noteLocalSelection(selection.start, selection.end),
+  });
+  const textSubscription = context.onText((state, origin) => {
+    if (origin === "notification") {
+      epoch += 1;
+      nativePending.length = 0;
+      bridge.invalidate();
+    }
+    const ownedFocus = document.activeElement === bridge.element;
+    model.observe(state);
+    bridge.syncFromCore();
+    if (state && document.hasFocus())
+      bridge.element.focus({ preventScroll: true });
+    else if (ownedFocus && !context.isClosed && document.hasFocus())
+      canvas.focus({ preventScroll: true });
+  });
+  const captures = new Set<number>();
+  const originalTabIndex = canvas.getAttribute("tabindex");
+  if (originalTabIndex === null) canvas.tabIndex = 0;
+  const originalTouchAction = canvas.style.touchAction;
+  canvas.style.touchAction = "none";
+  const point = (event: MouseEvent): readonly [number, number] => {
+    const rect = canvas.getBoundingClientRect();
+    return [
+      (event.clientX - rect.left) / rect.width,
+      (event.clientY - rect.top) / rect.height,
+    ];
+  };
+  const release = (pointer: number) => {
+    captures.delete(pointer);
+    if (canvas.hasPointerCapture(pointer))
+      canvas.releasePointerCapture(pointer);
+  };
+  const send = (input: GuiPhysicalInput) => {
+    if (!live || context.isClosed) return;
+    const submission = trackUnhandledInputGate(
+      options.unhandledInputGate,
+      gateGeneration,
+      input,
+    );
+    void context
+      .send(input)
+      .then((outcome) => {
+        settleUnhandledInputGateSubmission(
+          options.unhandledInputGate,
+          submission,
+          outcome,
+        );
+        if (!live) return;
+        if (
+          outcome.rejected ||
+          outcome.cancelled ||
+          outcome.error !== undefined
+        ) {
+          for (const pointer of [...captures]) release(pointer);
+          return;
+        }
+        if (input.kind === "pointerDown" && outcome.disposition !== "routed")
+          release(Number(input.pointer));
+        if (
+          input.kind === "wheel" &&
+          outcome.remaining?.some((value) => value !== 0)
+        )
+          options.onUnhandled?.(
+            { ...input, delta: outcome.remaining },
+            outcome,
+          );
+        else if (
+          outcome.disposition === "miss" ||
+          outcome.disposition === "unhandled"
+        )
+          options.onUnhandled?.(input, outcome);
+      })
+      .catch((error: unknown) => {
+        settleUnhandledInputGateSubmission(
+          options.unhandledInputGate,
+          submission,
+        );
+        for (const pointer of [...captures]) release(pointer);
+        if (live)
+          options.onError(
+            error instanceof Error ? error : new Error(String(error)),
+          );
+      });
+  };
+  const down = (event: PointerEvent) => {
+    if (!live || event.button < 0 || event.button > 2) return;
+    if (event.button !== 0) {
+      event.preventDefault();
+      send({
+        kind: "pointerDown",
+        pointer: BigInt(event.pointerId),
+        point: point(event),
+        button: event.button === 1 ? "auxiliary" : "secondary",
+      });
+      return;
+    }
+    if (!context.nativeText) canvas.focus({ preventScroll: true });
+    epoch += 1;
+    nativePending.length = 0;
+    model.noteActivation();
+    captures.add(event.pointerId);
+    canvas.setPointerCapture(event.pointerId);
     send({
       kind: "pointerDown",
-      pointer,
-      position,
-      button,
-      blockers,
-      ...maybeDistance,
+      pointer: BigInt(event.pointerId),
+      point: point(event),
     });
+    event.preventDefault();
   };
-
-  const onPointerMove = (event: PointerEvent): void => {
-    const position = viewportAt(event);
-    if (position === null) return;
+  const move = (event: PointerEvent) =>
     send({
       kind: "pointerMove",
-      pointer: toU32(event.pointerId),
-      position,
-      blockers,
-      ...maybeDistance,
+      pointer: BigInt(event.pointerId),
+      point: point(event),
     });
-  };
-
-  const onPointerUp = (event: PointerEvent): void => {
-    const button = domMouseButtonToGuiButton(event.button);
-    if (button === null) return;
-    const position = viewportAt(event);
-    if (position === null) return;
-    const pointer = toU32(event.pointerId);
-    terminate(pointer, {
-      kind: "pointerUp",
-      pointer,
-      position,
-      button,
-      blockers,
-      ...maybeDistance,
-    });
-  };
-
-  const onPointerCancel = (event: PointerEvent): void => {
-    const pointer = toU32(event.pointerId);
-    terminate(pointer, { kind: "pointerCancel", pointer });
-  };
-
-  /** The browser took capture without a release (focus loss, overlay, or
-   * explicit takeover): cancel the live press so no runtime capture stays
-   * active. A normal release already terminated the pointer, so the
-   * post-release loss event sends nothing. */
-  const onLostPointerCapture = (event: PointerEvent): void => {
-    const pointer = toU32(event.pointerId);
-    terminate(pointer, { kind: "pointerCancel", pointer });
-  };
-
-  const onWheel = (event: WheelEvent): void => {
-    event.preventDefault();
-    const rect = canvas.getBoundingClientRect();
-    const raw = canvasViewportPoint(event.clientX, event.clientY, rect);
-    if (raw === null) return;
+  const up = (event: PointerEvent) => {
+    if (event.button < 0 || event.button > 2) return;
+    if (event.button !== 0) {
+      send({
+        kind: "pointerUp",
+        pointer: BigInt(event.pointerId),
+        point: point(event),
+        button: event.button === 1 ? "auxiliary" : "secondary",
+      });
+      return;
+    }
     send({
-      kind: "scroll",
-      position: toViewport(raw),
-      delta: wheelDeltaToLogical(
-        event.deltaX,
-        event.deltaY,
-        event.deltaMode,
-        wheelStep,
-      ),
-      blockers,
-      ...maybeDistance,
+      kind: "pointerUp",
+      pointer: BigInt(event.pointerId),
+      point: point(event),
     });
+    release(event.pointerId);
+    if (context.nativeText) {
+      const container = canvas.parentElement ?? document.body;
+      const offset = viewportToBridgeOffset(
+        point(event),
+        canvas.getBoundingClientRect(),
+        container.getBoundingClientRect(),
+      );
+      bridge.placeAt(offset.x, offset.y);
+      bridge.focusFromGesture({ trigger: "tap", isTrusted: event.isTrusted });
+    }
   };
-
-  const onKeyDown = (event: KeyboardEvent): void => {
-    // Keys during composition belong to the IME: Enter confirming a
-    // candidate must not reach core as a GUI key.
-    if (isComposingKeyEvent(event)) return;
-    const key = keyboardKeyToGuiKey(event.key, event.shiftKey);
-    if (key === null) return;
-    // Traversal keys never move DOM focus. On a non-editable target the
-    // other forwarded keys would scroll the page or activate browser
-    // defaults, so their defaults are prevented too; an editable target keeps
-    // them for its own `beforeinput`.
-    if (key === "tab" || key === "backTab" || !isEditableTarget(target)) {
+  const cancel = (event: PointerEvent) => {
+    if (!captures.has(event.pointerId)) return;
+    send({ kind: "pointerCancel", pointer: BigInt(event.pointerId) });
+    release(event.pointerId);
+  };
+  const wheel = (event: WheelEvent) => {
+    const [x, y] = wheelDeltaToLogical(
+      event.deltaX,
+      event.deltaY,
+      event.deltaMode,
+      wheelStep,
+    );
+    send({
+      kind: "wheel",
+      point: point(event),
+      delta: [x, y],
+    });
+    event.preventDefault();
+  };
+  const key = (event: KeyboardEvent) => {
+    if (event.isComposing || event.ctrlKey || event.metaKey || event.altKey)
+      return;
+    const key =
+      event.key === "Tab" && event.shiftKey ? "backTab" : keys[event.key];
+    if (!key) return;
+    send({ kind: "key", key });
+    event.preventDefault();
+  };
+  const blur = () => {
+    send({ kind: "blur" });
+    for (const pointer of [...captures]) release(pointer);
+  };
+  const canvasBlur = (event: FocusEvent) => {
+    if (event.relatedTarget !== bridge.element) blur();
+  };
+  const bridgeKey = (event: KeyboardEvent) => {
+    if (event.key === "Tab") {
       event.preventDefault();
+      if (context.nativeText === null) canvas.focus({ preventScroll: true });
     }
-    send({ kind: "key", key, pressed: true });
   };
-
-  const ime = createImeBridge(
-    { send },
-    onError === undefined ? {} : { onError },
-  );
-
-  const onCompositionStart = (): void => {
-    ime.compositionStart();
+  bridge.element.addEventListener("keydown", bridgeKey);
+  canvas.addEventListener("pointerdown", down);
+  canvas.addEventListener("pointermove", move);
+  canvas.addEventListener("pointerup", up);
+  canvas.addEventListener("pointercancel", cancel);
+  canvas.addEventListener("lostpointercapture", cancel);
+  canvas.addEventListener("wheel", wheel, { passive: false });
+  canvas.addEventListener("keydown", key);
+  canvas.addEventListener("blur", canvasBlur);
+  window.addEventListener("blur", blur);
+  const detach = () => {
+    if (!live) return;
+    live = false;
+    closeUnhandledInputGate(options.unhandledInputGate, gateGeneration);
+    epoch += 1;
+    nativePending.length = 0;
+    textSubscription();
+    bridge.element.removeEventListener("keydown", bridgeKey);
+    bridge.dispose();
+    for (const pointer of [...captures]) release(pointer);
+    canvas.removeEventListener("pointerdown", down);
+    canvas.removeEventListener("pointermove", move);
+    canvas.removeEventListener("pointerup", up);
+    canvas.removeEventListener("pointercancel", cancel);
+    canvas.removeEventListener("lostpointercapture", cancel);
+    canvas.removeEventListener("wheel", wheel);
+    canvas.removeEventListener("keydown", key);
+    canvas.removeEventListener("blur", canvasBlur);
+    window.removeEventListener("blur", blur);
+    if (originalTabIndex === null) canvas.removeAttribute("tabindex");
+    else canvas.setAttribute("tabindex", originalTabIndex);
+    canvas.style.touchAction = originalTouchAction;
   };
-
-  const onBeforeInput = (event: InputEvent): void => {
-    if (typeof event.data !== "string" || event.data.length === 0) return;
-    if (event.inputType.startsWith("delete")) return;
-    if (shouldSkipBeforeInput(event.inputType)) return;
-    send({ kind: "text", text: event.data });
-  };
-
-  const onCompositionUpdate = (event: CompositionEvent): void => {
-    ime.compositionUpdate(event.data);
-  };
-
-  const onCompositionEnd = (event: CompositionEvent): void => {
-    ime.compositionEnd(event.data);
-  };
-
-  const onBlur = (): void => {
-    for (const pointer of [...live.keys()]) {
-      terminate(pointer, { kind: "pointerCancel", pointer });
-    }
-    ime.blur();
-    send({ kind: "blur" });
-  };
-
-  canvas.addEventListener("pointerdown", onPointerDown);
-  canvas.addEventListener("pointermove", onPointerMove);
-  canvas.addEventListener("pointerup", onPointerUp);
-  canvas.addEventListener("pointercancel", onPointerCancel);
-  canvas.addEventListener(
-    "lostpointercapture",
-    onLostPointerCapture as EventListener,
-  );
-  canvas.addEventListener("wheel", onWheel, { passive: false });
-  if (keyboardInput) {
-    target.addEventListener("keydown", onKeyDown as EventListener);
-    target.addEventListener("beforeinput", onBeforeInput as EventListener);
-    target.addEventListener(
-      "compositionstart",
-      onCompositionStart as EventListener,
-    );
-    target.addEventListener(
-      "compositionupdate",
-      onCompositionUpdate as EventListener,
-    );
-    target.addEventListener(
-      "compositionend",
-      onCompositionEnd as EventListener,
-    );
-    if (blurOnKeyboardTarget) target.addEventListener("blur", onBlur);
-  }
-  // Window blur fires when the canvas target never blurs itself (alt-tab,
-  // devtools focus); headless runtimes skip it without a window.
-  const windowTarget = typeof window !== "undefined" ? window : null;
-  windowTarget?.addEventListener("blur", onBlur);
-
-  const previousTouchAction = canvas.style.touchAction;
-  if (enableTouchActionNone) canvas.style.touchAction = "none";
-
+  const unsubscribe = context.onClose(detach);
+  const cancelNative = context.onCancel((event) => {
+    for (const pointer of event.pointers) release(Number(pointer));
+  });
   return () => {
-    // Detach cancels the context it owns before losing access: every live
-    // press terminates and the focus clears, then the sink revokes so late
-    // events never enter a replacement session (canvas replacement,
-    // unmount-while-held, connection/session changes).
-    for (const pointer of [...live.keys()]) {
-      terminate(pointer, { kind: "pointerCancel", pointer });
-    }
-    ime.blur();
-    send({ kind: "blur" });
-    detached = true;
-    sink.close?.();
-    canvas.removeEventListener("pointerdown", onPointerDown);
-    canvas.removeEventListener("pointermove", onPointerMove);
-    canvas.removeEventListener("pointerup", onPointerUp);
-    canvas.removeEventListener("pointercancel", onPointerCancel);
-    canvas.removeEventListener(
-      "lostpointercapture",
-      onLostPointerCapture as EventListener,
-    );
-    canvas.removeEventListener("wheel", onWheel);
-    if (keyboardInput) {
-      target.removeEventListener("keydown", onKeyDown as EventListener);
-      target.removeEventListener("beforeinput", onBeforeInput as EventListener);
-      target.removeEventListener(
-        "compositionstart",
-        onCompositionStart as EventListener,
-      );
-      target.removeEventListener(
-        "compositionupdate",
-        onCompositionUpdate as EventListener,
-      );
-      target.removeEventListener(
-        "compositionend",
-        onCompositionEnd as EventListener,
-      );
-      if (blurOnKeyboardTarget) target.removeEventListener("blur", onBlur);
-    }
-    windowTarget?.removeEventListener("blur", onBlur);
-    if (enableTouchActionNone) canvas.style.touchAction = previousTouchAction;
+    unsubscribe();
+    cancelNative();
+    detach();
   };
+}
+
+/** A physical view lifetime, independent of authoring sessions. */
+export class CanvasGuiInput {
+  private generation = 0;
+  private context: GuiPhysicalContext | undefined;
+  private detach: (() => void) | undefined;
+  private stopped = false;
+
+  constructor(
+    private readonly canvas: HTMLCanvasElement,
+    private readonly input: HostPhysicalInput,
+    private readonly options: CanvasGuiInputOptions,
+  ) {}
+
+  async select(view: PresentationView | null): Promise<void> {
+    const generation = ++this.generation;
+    const previous = this.context;
+    this.context = undefined;
+    this.detach?.();
+    this.detach = undefined;
+    const release = previous?.close();
+    if (release) void release.catch(this.options.onError);
+    if (!view || this.stopped) {
+      await release;
+      return;
+    }
+    const context = await this.input.open(view, this.options);
+    if (generation !== this.generation || this.stopped) {
+      await context.close();
+      return;
+    }
+    this.context = context;
+    this.detach = attachCanvasGuiInput(this.canvas, context, this.options);
+  }
+
+  close(): Promise<void> {
+    this.stopped = true;
+    return this.select(null);
+  }
 }

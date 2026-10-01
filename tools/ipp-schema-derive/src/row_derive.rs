@@ -1,9 +1,6 @@
 use quote::quote;
 use syn::{Data, DeriveInput, Fields};
 
-/// Property count bound; one presence mask byte covers eight properties.
-const MAX_ROW_PROPERTIES: usize = 256;
-
 /// One declared row property: `schema(rotation)` marks a Vec4 quaternion and
 /// `schema(text = N)` gives a text property its UTF-8 byte bound.
 struct RowField {
@@ -90,10 +87,10 @@ pub(super) fn derive_row(input: DeriveInput) -> syn::Result<proc_macro2::TokenSt
         });
     }
 
-    if properties.is_empty() || properties.len() > MAX_ROW_PROPERTIES {
+    if properties.is_empty() {
         return Err(syn::Error::new_spanned(
             name,
-            "schema rows require between 1 and 256 properties",
+            "schema rows require at least one property",
         ));
     }
 
@@ -140,7 +137,7 @@ pub(super) fn derive_row(input: DeriveInput) -> syn::Result<proc_macro2::TokenSt
             quote! {
                 const _: () = assert!(
                     matches!(#field_kind, #kind::Text),
-                    "schema(text = N) requires a String row property",
+                    "schema(text = N) requires an Arc<str> row property",
                 );
 
                 const _: () = assert!(
@@ -152,7 +149,7 @@ pub(super) fn derive_row(input: DeriveInput) -> syn::Result<proc_macro2::TokenSt
             quote! {
                 const _: () = assert!(
                     !matches!(#field_kind, #kind::Text),
-                    "a String row property requires schema(text = N)",
+                    "an Arc<str> row property requires schema(text = N)",
                 );
             }
         }
@@ -219,8 +216,15 @@ pub(super) fn derive_row(input: DeriveInput) -> syn::Result<proc_macro2::TokenSt
         }
     });
 
+    let property_count = properties.len();
+
     Ok(quote! {
         #(#kind_checks)*
+
+        const _: () = assert!(
+            #property_count <= #path::MAX_ROW_PROPERTIES,
+            "schema rows declare more than MAX_ROW_PROPERTIES properties"
+        );
 
         impl #path::SchemaRow for #name {
             const LAYOUT: #path::RowsLayout = #path::RowsLayout {

@@ -1,8 +1,8 @@
 /** Analytic image and geometry oracle independent of the runtime mesh generator. */
-import type { FrameCapture } from "@ipp/client";
 import {
   BACKGROUND_RGB,
   VIEWPORT,
+  type FramePixels,
   type ImageSummary,
 } from "./image-assertions.js";
 import type { ShapeDefinition } from "./shapes-fixture.js";
@@ -22,7 +22,7 @@ const PLANE_HALF_SIZE = 1;
 const PLANE_NORMAL_LENGTH = 1.25;
 const PLANE_NORMAL_OFFSET = 0.1;
 const PLANE_STROKE = 0.05;
-export function foregroundMask(frame: FrameCapture): Uint8Array<ArrayBuffer> {
+export function foregroundMask(frame: FramePixels): Uint8Array<ArrayBuffer> {
   const mask = new Uint8Array(frame.width * frame.height);
   for (let index = 0; index < mask.length; index += 1) {
     if (maximumDifference(pixelRgb(frame, index), BACKGROUND_RGB) > 8)
@@ -32,7 +32,7 @@ export function foregroundMask(frame: FrameCapture): Uint8Array<ArrayBuffer> {
 }
 
 export function colorMask(
-  frame: FrameCapture,
+  frame: FramePixels,
   colors: readonly Vec3[],
   tolerance: number,
 ): Uint8Array<ArrayBuffer> {
@@ -47,7 +47,7 @@ export function colorMask(
 }
 
 export function oraclePixels(
-  frame: FrameCapture,
+  frame: FramePixels,
   definition: ShapeDefinition,
   difference: boolean,
   rotationY: number,
@@ -106,7 +106,7 @@ export function oraclePixels(
 }
 
 export function analyticMask(
-  frame: FrameCapture,
+  frame: FramePixels,
   shape: BaseShape,
   rotationY: number,
 ): Uint8Array<ArrayBuffer> {
@@ -686,7 +686,7 @@ export function checkerColors(
   ) as unknown as readonly [Vec3, Vec3, Vec3, Vec3];
 }
 
-export function pixelRgb(frame: FrameCapture, index: number): Vec3 {
+export function pixelRgb(frame: FramePixels, index: number): Vec3 {
   const pixels = new Uint8Array(frame.pixels);
   const offset = index * 4;
   return [

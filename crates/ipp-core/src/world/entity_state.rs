@@ -19,13 +19,10 @@ impl WorldMutationState {
 
     pub(crate) fn resolve(
         &self,
-        reference: EntityRef,
-        aliases: &BTreeMap<u32, EntityId>,
+        reference: &EntityRef,
+        aliases: &EntityAliases,
     ) -> Result<EntityId, ErrorReason> {
-        let id = match reference {
-            EntityRef::Handle(id) => id,
-            EntityRef::Alias(alias) => *aliases.get(&alias).ok_or(ErrorReason::UnknownAlias)?,
-        };
+        let id = aliases.identity(reference, &self.entities_state.symbols)?;
         if self.entities_state.allocator.contains(id) {
             Ok(id)
         } else {
@@ -37,7 +34,7 @@ impl WorldMutationState {
         &self,
         component: u16,
         field: FieldWrite,
-        aliases: &BTreeMap<u32, EntityId>,
+        aliases: &EntityAliases,
     ) -> Result<FieldWrite, ErrorReason> {
         let value = match field.value {
             FieldValue::Entity(EntityRef::Handle(id))
@@ -47,7 +44,7 @@ impl WorldMutationState {
                 field.value.clone()
             }
             FieldValue::Entity(reference) => {
-                FieldValue::Entity(EntityRef::Handle(self.resolve(reference, aliases)?))
+                FieldValue::Entity(EntityRef::Handle(self.resolve(&reference, aliases)?))
             }
             FieldValue::F32(value) if !value.is_finite() => return Err(ErrorReason::InvalidValue),
             value => value,
@@ -125,11 +122,33 @@ impl WorldMutationState {
         &mut self,
         alias: u32,
         metadata: &EntityMetadata,
-        aliases: &mut BTreeMap<u32, EntityId>,
+        adopt: bool,
+        aliases: &mut EntityAliases,
         created: &mut Vec<(u32, EntityId)>,
     ) -> Result<(), ErrorReason> {
-        if aliases.contains_key(&alias) {
+        if aliases.contains_created(alias) {
             return Err(ErrorReason::DuplicateAlias);
+        }
+        if adopt
+            && let Some(symbol) = &metadata.symbolic_id
+            && let Some(&id) = self.entities_state.symbols.get(symbol)
+        {
+            // Adoption binds the alias to the live entity and writes the declared
+            // metadata over it, exactly as SetMetadata would.
+            self.set_metadata(id, metadata.clone())?;
+            aliases.insert_created(alias, id);
+            created.push((alias, id));
+            self.operation_adopted = true;
+            return Ok(());
+        }
+        // A refused creation allocates nothing: check the symbol before the
+        // identity, record and lifecycle effects exist.
+        if metadata
+            .symbolic_id
+            .as_ref()
+            .is_some_and(|symbol| self.entities_state.symbols.contains_key(symbol))
+        {
+            return Err(ErrorReason::DuplicateSymbolicId);
         }
         let id = self
             .entities_state
@@ -144,6 +163,7 @@ impl WorldMutationState {
                 ..WorldEntityRecord::default()
             },
         );
+        self.links.insert(id, persistent_id);
         self.operation_created.insert(id);
         self.lifecycle_effects
             .push(systems::lifecycle_publisher::LifecycleObservation::Entity {
@@ -152,7 +172,7 @@ impl WorldMutationState {
             });
         #[cfg(feature = "diagnostics")]
         self.record_entity_effect("entity.create", id);
-        aliases.insert(alias, id);
+        aliases.insert_created(alias, id);
         created.push((alias, id));
         let observation_count = self.lifecycle_effects.len();
         let metadata_result = self.set_metadata(id, metadata.clone());
@@ -161,8 +181,9 @@ impl WorldMutationState {
     }
 
     pub(in crate::world) fn delete_entity(&mut self, id: EntityId) {
+        self.links.retire(id);
         let components: Vec<_> = self.entities_state.entities[&id]
-            .layers
+            .components
             .keys()
             .copied()
             .collect();

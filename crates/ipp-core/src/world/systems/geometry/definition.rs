@@ -1,6 +1,7 @@
 //! Immutable geometry definitions and their bounded portable encoding.
 
 use super::{GeometryShape, GeometryShapeTransform};
+use crate::services::asset_management::MAX_JOINTS;
 use crate::{
     ErrorReason, components::Transform, components::schema::ComponentLifecycle,
     services::asset_management::*,
@@ -177,8 +178,8 @@ impl GeometryDefinition {
             )?)?;
             if let Some(joints) = part.joints
                 && (!cfg!(feature = "skeletal-animation")
-                    || joints[0] >= 32
-                    || joints[1] >= 32
+                    || joints[0] >= MAX_JOINTS as u32
+                    || joints[1] >= MAX_JOINTS as u32
                     || !matches!(part.shape, GeometryShape::Pill { start, end, .. } if start == [0.0; 3] && end == [0.0; 3]))
             {
                 return Err(ErrorReason::InvalidGeometry);

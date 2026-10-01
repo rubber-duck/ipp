@@ -1,6 +1,8 @@
 pub(super) struct WireContract {
     pub(super) capabilities: Capabilities,
     pub(super) conventions: Vec<(String, String)>,
+    /// Named numeric bounds that no layout field carries.
+    pub(super) limits: Vec<(String, u32)>,
     pub(super) layouts: Vec<WireLayout>,
     pub(super) tags: Vec<WireTag>,
     pub(super) asset_formats: Vec<AssetFormat>,
@@ -43,6 +45,7 @@ pub(super) enum WireEncoding {
     Union,
     Bool,
     Masked,
+    U8CountedList,
 }
 
 pub(super) struct AssetFormat {
@@ -60,12 +63,12 @@ pub(super) struct TargetFeature {
 
 #[derive(Clone, Copy, Default)]
 pub(super) struct Capabilities {
+    pub(super) lifecycle_diagnostics: bool,
     pub(super) surfaces: bool,
     pub(super) gui: bool,
     pub(super) animation: bool,
     pub(super) skeletal_animation: bool,
     pub(super) assets: bool,
-    pub(super) state_overlays: bool,
     pub(super) spatial: bool,
     pub(super) textures: bool,
     pub(super) builtin_assets: bool,
@@ -110,6 +113,18 @@ pub(super) struct RowProperty {
     pub(super) max_bytes: Option<u32>,
 }
 
+/// Rows addressing and size bounds declared by the core registry export.
+pub(super) struct RowLimits {
+    /// Offset span of one rows region; region `k` starts at `(k + 1)` spans.
+    pub(super) region_span: u32,
+    /// Rows fields one component may declare.
+    pub(super) fields: u8,
+    /// Properties one row type may declare.
+    pub(super) properties: u16,
+    /// Largest UTF-8 byte bound of a text row property.
+    pub(super) text_bytes: u32,
+}
+
 pub(super) struct Export {
     pub(super) expected: u64,
     pub(super) arch: String,
@@ -117,5 +132,14 @@ pub(super) struct Export {
     pub(super) pointer: u8,
     pub(super) features: Vec<TargetFeature>,
     pub(super) components: Vec<Component>,
+    pub(super) paint_keys: Vec<GuiPaintKey>,
+    pub(super) row_limits: RowLimits,
     pub(super) wire: WireContract,
+}
+
+pub(super) struct GuiPaintKey {
+    pub(super) index: u32,
+    pub(super) part: String,
+    pub(super) state: String,
+    pub(super) variant: String,
 }

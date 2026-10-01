@@ -1,18 +1,19 @@
-import {
-  guiNodeStyleOffset,
-  guiPartStateOffset,
-  type AnimationClipSource,
-  type AnimationControllerState,
-  type AnimationTrack,
-  type AnimationWorldClient,
-  type AssetResourceSnapshot,
-  type ClientAssetSource,
-  type ComponentDescriptor,
-  type GuiNodeHandle,
-  type GuiObservationBatch,
-  type GuiWorldClient,
+import type {
+  AnimationClipSource,
+  AnimationControllerState,
+  AnimationTrack,
+  AnimationWorldClient,
+  AssetResourceSnapshot,
+  Client,
+  ClientAssetSource,
+  Command,
+  GuiPickingBlocker,
+  GuiWorldClient,
+  Inspection,
+  WorldReference,
 } from "@ipp/client";
 import {
+  CanvasWorld,
   Entity,
   FragmentShader,
   ShaderAsset,
@@ -20,8 +21,8 @@ import {
   SurfaceCache,
   Transform,
   VertexShader,
+  type CanvasWorldHandle,
 } from "@ipp/react";
-import { GuiRoot, type GuiBlockerHit } from "@ipp/react/gui";
 import { World, type IppCanvasHandle } from "@ipp/react/web";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -41,32 +42,53 @@ import METAL_SHADER from "./projector-metal.glsl";
 import SHIELD_SHADER from "./input-shield.glsl";
 import SHIELD_VERTEX_SHADER from "./input-shield-vertex.glsl";
 import { InputShield, SHIELD_ENTITY } from "./shield.js";
-
 import {
+  INITIAL_AUTOSCAN,
+  INITIAL_CALLSIGN,
+  INITIAL_GAIN,
   PALETTES,
   ProjectorDashboard,
-  SURFACE_WIDTH,
   SURFACE_HEIGHT,
+  SURFACE_WIDTH,
   SWITCH_KNOB,
+  THEME_ENTITIES,
+  dashboardThemes,
   switchKnobColor,
   type Palette,
+  type ThemeName,
 } from "./dashboard.js";
 import {
-  BoundWaveformAnimations,
-  useWaveformNode,
+  WAVEFORM_ENTITIES,
+  WaveformAnimations,
   waveformClips,
   waveformResourceSources,
   type WaveformMotionAssets,
 } from "./waveform.js";
 
 const FONT_URL = "/target/font-assets/shure-tech-mono.ippf";
-const INITIAL_GAIN = 0.64;
-const INITIAL_CALLSIGN = "VESPER-7";
-const INITIAL_AUTOSCAN = true;
 /** Event log history bound: long enough that the log's VirtualList holds
  * many viewports of items while it declares only the visible few. */
 const MAX_EVENTS = 256;
 const STAGING_X = 1_000;
+
+/** Symbolic ID of the Surface entity that presents the panel World. */
+export const PANEL_ENTITY = "gui-demo";
+
+/** Symbolic ID of the World whose canvas holds the panel's controls. */
+export const PANEL_WORLD = "gui-demo-panel";
+
+/** The panel World evaluates Canvas, GUI and animation; it does not render
+ * 3D content of its own. */
+const PANEL_SYSTEMS = [
+  "ipp.animation",
+  "ipp.gui",
+  "ipp.gui-layout",
+  "ipp.canvas",
+  "ipp.asset-dependencies",
+  "ipp.lifecycle-publisher",
+] as const;
+
+export { SHIELD_ENTITY };
 
 export type GuiDemoSkin = "aurora" | "ember" | "neon";
 
@@ -131,6 +153,16 @@ const INITIAL_EVENTS: readonly string[] = Array.from(
   },
 );
 
+/** The values the dashboard's controls declare, as their f32 fields report
+ * them. */
+const INITIAL_CONTROL_VALUES = {
+  autoscan: INITIAL_AUTOSCAN,
+  gain: Math.fround(INITIAL_GAIN),
+  callsign: INITIAL_CALLSIGN,
+};
+
+type GuiControlValues = typeof INITIAL_CONTROL_VALUES;
+
 /** Items of the event log a VirtualList currently declares, `[first,
  * last)`, as its wanted-range callback last reported them. */
 export interface GuiEventWindow {
@@ -150,6 +182,15 @@ interface MotionOwnership {
   released: boolean;
 }
 
+type PanelClient = AnimationWorldClient & GuiWorldClient;
+
+/** An observation session on the panel World, opened after its attachment
+ * is ready and closed with it. */
+interface PanelSession {
+  readonly world: WorldReference;
+  readonly client: PanelClient;
+}
+
 export interface GuiSceneState {
   readonly ready: boolean;
   readonly vectorOnly: boolean;
@@ -163,24 +204,23 @@ export interface GuiSceneState {
   readonly gain: number;
   readonly callsign: string;
   readonly pulseSequence: number;
+  readonly pulseActive: boolean;
   readonly lastCommand: string;
   /** Event log entries, newest first. */
   readonly events: readonly string[];
   /** Event log items the VirtualList declares for its wanted range. */
   readonly eventWindow: GuiEventWindow;
-  /** Resolves to the event log VirtualList once acknowledged. */
-  readonly eventLog: { current: GuiNodeHandle | null };
   readonly setEventWindow: (range: GuiEventWindow) => void;
-  /** Whether the input shield in front of PURGE is marked as a blocker. */
+  /** Whether the input shield in front of PURGE is armed. */
   readonly shieldArmed: boolean;
-  /** Pointer presses and wheel notches the armed shield has blocked. */
-  readonly shieldBlocks: number;
-  /** Scene blockers for `IppCanvas.guiInput`: the armed, mounted shield. */
-  readonly blockers: readonly GuiBlockerHit[];
+  /** Scene blockers for `IppCanvas.guiInput`: the armed, mounted shield's
+   * exact picking geometry. */
+  readonly blockers: readonly GuiPickingBlocker[];
   readonly motions?: MotionAssets;
   readonly beamSection?: ProjectorBeamSection;
   readonly font: ClientAssetSource;
   readonly onCommit: () => void;
+  readonly attachPanel: (handle: CanvasWorldHandle) => void;
   readonly pulse: () => void;
   readonly uplink: () => void;
   readonly purge: () => void;
@@ -192,11 +232,8 @@ export interface GuiSceneState {
   readonly setAutoscan: (value: boolean) => void;
   readonly setGain: (value: number) => void;
   readonly setCallsign: (value: string) => void;
+  readonly setPulseActive: (active: boolean) => void;
   readonly readWaveformPulse: () => Promise<AnimationControllerState>;
-  readonly prepareWaveform: (
-    signal: GuiNodeHandle,
-    pulse: GuiNodeHandle,
-  ) => Promise<void>;
   readonly reportFailure: (failure: unknown) => void;
 }
 
@@ -211,24 +248,18 @@ function errorMessage(failure: unknown): string {
   return failure instanceof Error ? failure.message : String(failure);
 }
 
-/** One skin channel track. Its target hint is the channel of part-row
- * slot 0; the runtime binds the track to each transitioning node's own
- * channel. */
+/** Skin motion channels in track order. The clip tracks carry typed samples
+ * only: the runtime binds consecutive tracks to each transitioning control's
+ * own colour, opacity, scale and alignment channels. */
+const SKIN_CHANNELS = ["color", "opacity", "scale", "align_x"] as const;
+
 function channelTrack(
-  guiRoot: ComponentDescriptor,
-  channel: "color" | "opacity" | "scale" | "alignX",
+  material: number,
+  channel: (typeof SKIN_CHANNELS)[number],
   values: readonly (readonly [number, unknown])[],
 ): AnimationTrack {
-  const live = `live${channel[0]!.toUpperCase()}${channel.slice(1)}` as
-    | "liveColor"
-    | "liveOpacity"
-    | "liveScale"
-    | "liveAlignX";
   return {
-    property: {
-      component: guiRoot.id,
-      offsets: [guiPartStateOffset(guiRoot, 0, live)],
-    },
+    property: { component: material, name: `skin_${channel}` },
     keys: values.map(([time, value], index) => ({
       time,
       value: {
@@ -256,10 +287,7 @@ function channelTrack(
 /** Complete color/opacity/scale samples for every interaction destination,
  * then the SCAN switch knob's two ends, which also animate alignment. Other
  * controls hold alignment at 0 and never sample the knob times. */
-function skinMotion(
-  guiRoot: ComponentDescriptor,
-  palette: Palette,
-): AnimationClipSource {
+function skinMotion(material: number, palette: Palette): AnimationClipSource {
   const knob = [SWITCH_KNOB.scale, SWITCH_KNOB.scale] as const;
   const samples = [
     { time: 0, color: palette.button, opacity: 1, scale: [1, 1] as const },
@@ -282,18 +310,6 @@ function skinMotion(
       scale: [1, 1] as const,
     },
     {
-      time: 0.4,
-      color: palette.secondary,
-      opacity: 1,
-      scale: [1, 1] as const,
-    },
-    {
-      time: 0.5,
-      color: palette.button,
-      opacity: 0.8,
-      scale: [1, 1] as const,
-    },
-    {
       time: SWITCH_KNOB.unchecked.time,
       color: switchKnobColor(palette, false),
       opacity: 1,
@@ -312,23 +328,23 @@ function skinMotion(
     duration: SWITCH_KNOB.checked.time,
     tracks: [
       channelTrack(
-        guiRoot,
+        material,
         "color",
         samples.map(({ time, color }) => [time, color] as const),
       ),
       channelTrack(
-        guiRoot,
+        material,
         "opacity",
         samples.map(({ time, opacity }) => [time, opacity] as const),
       ),
       channelTrack(
-        guiRoot,
+        material,
         "scale",
         samples.map(({ time, scale }) => [time, scale] as const),
       ),
       channelTrack(
-        guiRoot,
-        "alignX",
+        material,
+        "align_x",
         samples.map(
           (sample) =>
             [sample.time, "alignX" in sample ? sample.alignX : 0] as const,
@@ -341,26 +357,24 @@ function skinMotion(
 async function createMotionAssets(
   client: AnimationWorldClient,
 ): Promise<MotionAssets> {
-  const guiRoot = client.components.GuiRoot;
-  const component = guiRoot?.id;
+  const canvasStyle = client.components.CanvasStyle;
+  const offset = canvasStyle?.fields.x?.offset;
   const material = client.components.CustomMaterial?.id;
-  if (guiRoot === undefined || component === undefined)
-    throw new Error("The gallery GUI profile does not expose GuiRoot");
+  if (canvasStyle === undefined || offset === undefined)
+    throw new Error("The gallery GUI profile does not expose CanvasStyle");
+  const translation = { component: canvasStyle.id, offset };
   if (material === undefined)
     throw new Error("The gallery GUI profile does not expose CustomMaterial");
   const created: ClientAssetSource[] = [];
+  const create = async (clip: AnimationClipSource) => {
+    const bytes = client.encodeAnimationClip(clip);
+    created.push(await client.createAsset(10, bytes.slice().buffer));
+  };
   try {
-    for (const name of ["aurora", "ember", "neon"] as const) {
-      const bytes = client.encodeAnimationClip(
-        skinMotion(guiRoot, PALETTES[name]),
-      );
-      created.push(await client.createAsset(10, bytes.slice().buffer));
-    }
-    for (const clip of waveformClips(guiRoot)) {
-      const bytes = client.encodeAnimationClip(clip);
-      created.push(await client.createAsset(10, bytes.slice().buffer));
-    }
-    const dust = client.encodeAnimationClip({
+    for (const name of ["aurora", "ember", "neon"] as const)
+      await create(skinMotion(material, PALETTES[name]));
+    for (const clip of waveformClips(translation)) await create(clip);
+    await create({
       duration: 40,
       tracks: [
         {
@@ -382,7 +396,6 @@ async function createMotionAssets(
         },
       ],
     });
-    created.push(await client.createAsset(10, dust.slice().buffer));
     return {
       aurora: created[0]!,
       ember: created[1]!,
@@ -390,7 +403,7 @@ async function createMotionAssets(
       scan: created[3]!,
       wavePulse: created[4]!,
       dust: created[5]!,
-      guiRoot,
+      translation,
       materialComponent: material,
     };
   } catch (failure) {
@@ -421,13 +434,13 @@ async function releaseMotionOwnership(
 /**
  * Wait until the projector resources are loaded, then for a completed frame
  * that drew them without failed draws. Readiness comes from inspection and
- * the frame summary; no pixels are read back.
+ * the presented frame summary; no pixels are read back.
  */
 async function awaitCompleteProjectorFrame(
   canvas: IppCanvasHandle,
   active: () => boolean,
 ): Promise<void> {
-  const client = canvas.client as AnimationWorldClient;
+  const client = canvas.client;
   for (let attempt = 0; attempt < 120; attempt += 1) {
     if (!active()) return;
     await canvas.flush();
@@ -450,7 +463,7 @@ async function awaitCompleteProjectorFrame(
       (symbolicId) =>
         inspection.entities
           .find((entity) => entity.metadata.symbolicId === symbolicId)
-          ?.effective.find(({ component }) => component === material)?.fields
+          ?.components.find(({ component }) => component === material)?.fields
           .source,
     );
     const shaders = shaderSources.map((source) =>
@@ -471,7 +484,7 @@ async function awaitCompleteProjectorFrame(
       projector.every((resource) => resource?.status === "loaded") &&
       shaders.every((resource) => resource?.status === "loaded")
     ) {
-      const frame = await client.presentation!.frame(inspection.tick);
+      const frame = await canvas.frame();
       if (!active()) return;
       if (frame.failedDrawCalls === 0 && frame.drawCalls > 0) return;
     }
@@ -480,9 +493,135 @@ async function awaitCompleteProjectorFrame(
   throw new Error("Projector resources did not produce a complete frame");
 }
 
+/**
+ * Author each skinned theme's motion rows beside its GuiTheme: the
+ * transitions sample the selected skin's clip. The theme entities are
+ * declared by the panel's React root; their skin motion is an ordinary
+ * component this observation session inserts once and then rewrites as a
+ * whole table when the skin changes.
+ */
+async function writeThemeMotion(
+  panel: PanelClient,
+  skin: GuiDemoSkin,
+  motion: string,
+  active: () => boolean,
+): Promise<void> {
+  const component = panel.components.GuiThemeMotion;
+  const parts = component?.fields.parts;
+  if (!component || !parts)
+    throw new Error("The gallery GUI profile does not expose GuiThemeMotion");
+  const themes = dashboardThemes(skin, motion);
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    if (!active()) return;
+    const inspection = await panel.inspect();
+    if (!active()) return;
+    const commands: Command[] = [];
+    let declared = true;
+    for (const name of Object.keys(THEME_ENTITIES) as ThemeName[]) {
+      const rows = themes[name].motion;
+      if (!rows) continue;
+      const entity = inspection.entities.find(
+        ({ metadata }) => metadata.symbolicId === THEME_ENTITIES[name],
+      );
+      if (!entity) {
+        declared = false;
+        break;
+      }
+      const field = {
+        offset: parts.offset,
+        value: { kind: "rows" as const, value: rows },
+      };
+      const target = { kind: "handle" as const, id: entity.id };
+      commands.push(
+        entity.components.some(({ component: id }) => id === component.id)
+          ? { kind: "setField", entity: target, component: component.id, field }
+          : {
+              kind: "insertComponent",
+              entity: target,
+              component: component.id,
+              fields: [field],
+            },
+      );
+    }
+    if (declared) {
+      const outcome = await panel.batch(commands);
+      if (!outcome.ok)
+        throw new Error(`Skin motion was rejected: ${outcome.error.reason}`);
+      return;
+    }
+    await panel.waitForFrame(inspection.tick);
+  }
+  throw new Error("The GUI theme entities were not declared");
+}
+
+/** GUI control components, whose entities also carry GuiBehavior. */
+const CONTROL_COMPONENTS = [
+  "GuiButton",
+  "GuiCheckbox",
+  "GuiSlider",
+  "GuiTextInput",
+  "GuiScrollView",
+  "GuiVirtualList",
+] as const;
+
+/** Whether the panel World has controls and each is evaluated visible. */
+function controlsVisible(panel: PanelClient, inspection: Inspection): boolean {
+  const controls = new Set(
+    CONTROL_COMPONENTS.map((name) => panel.components[name]?.id),
+  );
+  const behavior = panel.components.GuiBehavior?.id;
+  let found = false;
+  for (const entity of inspection.entities) {
+    if (!entity.components.some(({ component }) => controls.has(component)))
+      continue;
+    found = true;
+    const fields = entity.components.find(
+      ({ component }) => component === behavior,
+    )?.fields;
+    if (fields?.effective_visible !== true) return false;
+  }
+  return found;
+}
+
+/**
+ * Wait until the panel World has committed its prepared controls and bound
+ * both waveform controllers, so the reveal never places a panel whose
+ * controls are still hidden.
+ */
+async function awaitPreparedPanel(
+  panel: PanelClient,
+  motions: MotionAssets,
+  active: () => boolean,
+): Promise<boolean> {
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    if (!active()) return false;
+    const inspection = await panel.inspect();
+    if (!active()) return false;
+    const targets = [WAVEFORM_ENTITIES.signal, WAVEFORM_ENTITIES.pulse].map(
+      (symbolicId) =>
+        inspection.entities.find(
+          ({ metadata }) => metadata.symbolicId === symbolicId,
+        )?.id,
+    );
+    const bound = [motions.scan, motions.wavePulse].every((clip, index) =>
+      inspection.controllers?.some(({ description }) =>
+        description.drivers.some(
+          (driver) =>
+            driver.source === clip.source &&
+            targets[index] !== undefined &&
+            driver.target === targets[index],
+        ),
+      ),
+    );
+    if (bound && controlsVisible(panel, inspection)) return true;
+    await panel.waitForFrame(inspection.tick);
+  }
+  throw new Error("The GUI panel did not commit its prepared controls");
+}
+
 /** Page through the entity collection for one symbolic ID. */
 async function findEntity(
-  client: IppCanvasHandle["client"],
+  client: Client,
   symbolicId: string,
 ): Promise<bigint | undefined> {
   let after = 0n;
@@ -497,19 +636,51 @@ async function findEntity(
   return undefined;
 }
 
+/** The mounted shield's exact PickingGeometry incarnation, read from the
+ * baseline of a one-shot lifecycle watch. */
+async function resolveShieldBlocker(
+  client: Client,
+): Promise<GuiPickingBlocker | undefined> {
+  const world = client.worldReference;
+  const picking = client.components.PickingGeometry?.id;
+  if (!world || picking === undefined)
+    throw new Error("The gallery World does not expose picking geometry");
+  const entity = await findEntity(client, SHIELD_ENTITY);
+  if (entity === undefined) return undefined;
+  const watch = await client.watchLifecycle(
+    [{ target: { kind: "component", entity, component: picking }, kinds: 8 }],
+    () => {},
+  );
+  try {
+    const lifetime = watch.baselines[0]?.lifetime;
+    return lifetime?.kind === "component" && lifetime.incarnation !== null
+      ? { world, entity, incarnation: lifetime.incarnation }
+      : undefined;
+  } finally {
+    await watch.remove();
+  }
+}
+
 function assetKey(asset: ClientAssetSource): string {
   return `${asset.kind}:${asset.variant ?? 0}:${asset.source}`;
 }
 
-/** Subscribe before inspection so readiness cannot race the initial snapshot. */
+/** Subscribe before inspection so readiness cannot race the initial snapshot.
+ * Each World reports the resources it demands. */
 function observeEssentialResources(
-  client: AnimationWorldClient,
-  assets: readonly ClientAssetSource[],
+  demands: readonly {
+    readonly client: AnimationWorldClient;
+    readonly assets: readonly ClientAssetSource[];
+  }[],
   active: () => boolean,
   ready: () => void,
   failed: (message: string) => void,
 ): () => void {
-  const expected = new Set(assets.map(assetKey));
+  const expected = new Set(
+    demands.flatMap(({ assets }, index) =>
+      assets.map((asset) => `${index}/${assetKey(asset)}`),
+    ),
+  );
   const observed = new Map<string, AssetResourceSnapshot>();
   const publish = () => {
     if (!active()) return;
@@ -526,28 +697,31 @@ function observeEssentialResources(
       ready();
     }
   };
-  const observe = (resource: AssetResourceSnapshot) => {
-    const key = assetKey(resource);
-    if (!expected.has(key)) return;
-    observed.set(key, resource);
-    publish();
-  };
-  const unsubscribe = client.onResourceChange(observe);
-  void client.inspect().then(
-    (inspection) => {
-      if (!active()) return;
-      for (const resource of inspection.resources) {
-        const key = assetKey(resource);
-        if (expected.has(key) && !observed.has(key))
-          observed.set(key, resource);
-      }
+  const unsubscribers = demands.map(({ client }, index) => {
+    const record = (resource: AssetResourceSnapshot, replace: boolean) => {
+      const key = `${index}/${assetKey(resource)}`;
+      if (!expected.has(key) || (!replace && observed.has(key))) return;
+      observed.set(key, resource);
+    };
+    const unsubscribe = client.onResourceChange((resource) => {
+      record(resource, true);
       publish();
-    },
-    (failure: unknown) => {
-      if (active()) failed(errorMessage(failure));
-    },
-  );
-  return unsubscribe;
+    });
+    void client.inspect().then(
+      (inspection) => {
+        if (!active()) return;
+        for (const resource of inspection.resources) record(resource, false);
+        publish();
+      },
+      (failure: unknown) => {
+        if (active()) failed(errorMessage(failure));
+      },
+    );
+    return unsubscribe;
+  });
+  return () => {
+    for (const unsubscribe of unsubscribers) unsubscribe();
+  };
 }
 
 export function useGuiScene(
@@ -559,6 +733,7 @@ export function useGuiScene(
   const [prepared, setPrepared] = useState(false);
   const [revealed, setRevealed] = useState(false);
   const [treeCommitted, setTreeCommitted] = useState(false);
+  const [panel, setPanel] = useState<PanelSession>();
   const [error, setError] = useState<string>();
   const [motions, setMotions] = useState<MotionAssets>();
   const [beamSection, setBeamSection] = useState<ProjectorBeamSection>();
@@ -571,20 +746,24 @@ export function useGuiScene(
   const [callsign, setCallsignState] = useState(INITIAL_CALLSIGN);
   const [lastCommand, setLastCommand] = useState("Awaiting command");
   const [pulseSequence, setPulseSequence] = useState(0);
+  const [pulseActive, setPulseActive] = useState(false);
   const [events, setEvents] = useState<readonly string[]>(INITIAL_EVENTS);
   const [eventWindow, setEventWindowState] = useState<GuiEventWindow>({
     first: 0,
     last: 0,
   });
-  const eventLog = useRef<GuiNodeHandle | null>(null);
   const [shieldArmed, setShieldArmed] = useState(true);
-  const [shieldEntity, setShieldEntity] = useState<bigint>();
-  const [shieldBlocks, setShieldBlocks] = useState(0);
+  const [shieldBlocker, setShieldBlocker] = useState<GuiPickingBlocker>();
   const shieldRequest = useRef(0);
   const sequence = useRef(INITIAL_EVENTS.length);
+  // Value callbacks report a control's current value when they register and
+  // then each change; only a value that differs from the one the scene holds
+  // is an operator event for the log.
+  const controlValues = useRef<GuiControlValues>(INITIAL_CONTROL_VALUES);
   const generation = useRef(0);
   const finishingFrame = useRef(false);
   const motionOwnership = useRef<MotionOwnership | undefined>(undefined);
+  const panelRequest = useRef(0);
 
   const releaseMotions = useCallback(async () => {
     const ownership = motionOwnership.current;
@@ -596,9 +775,10 @@ export function useGuiScene(
 
   const record = useCallback((message: string) => {
     sequence.current += 1;
-    setEvents((current) =>
-      [eventEntry(sequence.current, message), ...current].slice(0, MAX_EVENTS),
-    );
+    // Number the entry now: records batched before the next render each
+    // keep their own sequence.
+    const entry = eventEntry(sequence.current, message);
+    setEvents((current) => [entry, ...current].slice(0, MAX_EVENTS));
   }, []);
 
   useEffect(() => {
@@ -608,10 +788,11 @@ export function useGuiScene(
     setPrepared(false);
     setRevealed(false);
     setTreeCommitted(false);
+    setPanel(undefined);
     setError(undefined);
     setMotions(undefined);
     setBeamSection(undefined);
-    setShieldEntity(undefined);
+    setShieldBlocker(undefined);
     shieldRequest.current += 1;
     finishingFrame.current = false;
     if (!canvas || !active) return;
@@ -623,11 +804,12 @@ export function useGuiScene(
     setCallsignState(INITIAL_CALLSIGN);
     setLastCommand("Awaiting command");
     setPulseSequence(0);
+    setPulseActive(false);
     setEvents(INITIAL_EVENTS);
     setEventWindowState({ first: 0, last: 0 });
     setShieldArmed(true);
-    setShieldBlocks(0);
     sequence.current = INITIAL_EVENTS.length;
+    controlValues.current = INITIAL_CONTROL_VALUES;
     const client = canvas.client as AnimationWorldClient;
     if (
       !client.capabilities.gui ||
@@ -677,62 +859,112 @@ export function useGuiScene(
     void releaseMotions();
   }, [error, releaseMotions]);
 
+  // The observation session closes with the panel World's attachment, or
+  // when the scene stops observing it.
   useEffect(() => {
-    if (!canvas || !active || !motions || !treeCommitted || error || prepared)
+    if (!panel) return;
+    return () => {
+      void panel.client.close().catch(() => {});
+    };
+  }, [panel]);
+
+  const attachPanel = useCallback(
+    (handle: CanvasWorldHandle) => {
+      if (!canvas || !active) return;
+      const request = ++panelRequest.current;
+      const current = generation.current;
+      void (async () => {
+        const client = (await canvas.host.openWorld(
+          handle.world,
+        )) as PanelClient;
+        if (
+          panelRequest.current !== request ||
+          generation.current !== current
+        ) {
+          await client.close();
+          return;
+        }
+        setPanel({ world: handle.world, client });
+        void handle.closed.then(() => {
+          if (panelRequest.current === request) setPanel(undefined);
+        });
+      })().catch((failure: unknown) => {
+        if (generation.current === current) setError(errorMessage(failure));
+      });
+    },
+    [canvas, active],
+  );
+
+  useEffect(() => {
+    if (
+      !canvas ||
+      !active ||
+      !motions ||
+      !treeCommitted ||
+      !panel ||
+      error ||
+      prepared
+    )
       return;
     const request = generation.current;
-    const client = canvas.client as AnimationWorldClient;
     return observeEssentialResources(
-      client,
       [
-        absoluteAsset(17, FONT_URL),
-        ...waveformResourceSources(),
-        motions.aurora,
-        motions.ember,
-        motions.neon,
-        motions.scan,
-        motions.wavePulse,
-        motions.dust,
-        ...projectorResourceSources(),
+        {
+          client: canvas.client as AnimationWorldClient,
+          assets: [motions.dust, ...projectorResourceSources()],
+        },
+        {
+          client: panel.client,
+          assets: [
+            absoluteAsset(17, FONT_URL),
+            ...waveformResourceSources(),
+            motions.scan,
+            motions.wavePulse,
+          ],
+        },
       ],
       () => generation.current === request,
       () => setPrepared(true),
       (message) => setError(message),
     );
-  }, [canvas, active, motions, treeCommitted, error, prepared]);
+  }, [canvas, active, motions, treeCommitted, panel, error, prepared]);
 
-  const prepareWaveform = useCallback(
-    async (signal: GuiNodeHandle, pulse: GuiNodeHandle) => {
-      if (!canvas || !active)
-        throw new Error("The waveform World is not active");
-      const client = canvas.client;
-      if (signal.session !== client.session || pulse.session !== client.session)
-        throw new Error("The waveform nodes belong to a different session");
-      const guiRoot = client.components.GuiRoot!;
-      const result = await client.batch(
-        [signal, pulse].map((node) => ({
-          kind: "setField" as const,
-          entity: { kind: "handle" as const, id: node.entity },
-          component: guiRoot.id,
-          field: {
-            offset: guiNodeStyleOffset(guiRoot, node.nodeId, "position"),
-            value: {
-              kind: "dynamic" as const,
-              value: { kind: "vec2" as const, value: [0, 0] as const },
-            },
-          },
-        })),
-      );
-      if (!result.ok)
-        throw new Error("Could not initialize waveform positions");
-    },
-    [canvas, active],
-  );
+  // Reveal the staged assembly once the panel World has committed its
+  // prepared controls and both waveform controllers.
+  useEffect(() => {
+    if (!prepared || revealed || !panel || !motions || error) return;
+    const request = generation.current;
+    const current = () => generation.current === request;
+    void awaitPreparedPanel(panel.client, motions, current).then(
+      (bound) => {
+        if (bound && current()) setRevealed(true);
+      },
+      (failure: unknown) => {
+        if (current()) setError(errorMessage(failure));
+      },
+    );
+  }, [prepared, revealed, panel, motions, error]);
+
+  // Skin transitions follow the selected skin's clip.
+  useEffect(() => {
+    if (!panel || !motions || error) return;
+    let active = true;
+    void writeThemeMotion(
+      panel.client,
+      skin,
+      motions[skin].source,
+      () => active,
+    ).catch((failure: unknown) => {
+      if (active) setError(errorMessage(failure));
+    });
+    return () => {
+      active = false;
+    };
+  }, [panel, motions, skin, error]);
 
   const readWaveformPulse = useCallback(async () => {
-    if (!canvas || !active || !motions)
-      throw new Error("The waveform World is not active");
-    const inspection = await canvas.client.inspect();
+    if (!panel || !motions) throw new Error("The waveform World is not active");
+    const inspection = await panel.client.inspect();
     const controller = inspection.controllers?.find(({ description }) =>
       description.drivers.some(
         ({ source }) => source === motions.wavePulse.source,
@@ -741,20 +973,21 @@ export function useGuiScene(
     if (!controller)
       throw new Error("The waveform pulse controller is no longer mounted");
     return controller;
-  }, [canvas, active, motions]);
+  }, [panel, motions]);
 
   const onCommit = useCallback(() => {
     if (!canvas || !active || error) return;
-    if (revealed && !vectorOnly && shieldEntity === undefined) {
-      // This commit mounted the shield with the revealed panel; name its
-      // entity so the canvas can mark it as a GUI input blocker.
+    if (revealed && !vectorOnly && shieldBlocker === undefined) {
+      // This commit mounted the shield with the revealed assembly; name its
+      // exact picking geometry so the canvas can mark it as a GUI input
+      // blocker.
       const request = ++shieldRequest.current;
-      void findEntity(canvas.client, SHIELD_ENTITY).then(
-        (entity) => {
+      void resolveShieldBlocker(canvas.client).then(
+        (blocker) => {
           if (shieldRequest.current !== request) return;
-          if (entity === undefined)
+          if (blocker === undefined)
             setError("The GUI input shield is not mounted");
-          else setShieldEntity(entity);
+          else setShieldBlocker(blocker);
         },
         (failure: unknown) => {
           if (shieldRequest.current === request)
@@ -765,32 +998,6 @@ export function useGuiScene(
     if (ready) return;
     if (!revealed) {
       if (!treeCommitted) setTreeCommitted(true);
-      else if (prepared) {
-        const request = generation.current;
-        void canvas.client.inspect().then(
-          (inspection) => {
-            if (generation.current !== request) return;
-            const panel = inspection.entities.find(
-              ({ metadata }) => metadata.symbolicId === "gui-demo",
-            );
-            const waves = inspection.controllers?.filter(({ description }) =>
-              description.drivers.some(
-                (driver) =>
-                  driver.target === panel?.id &&
-                  [motions?.scan.source, motions?.wavePulse.source].includes(
-                    driver.source,
-                  ) &&
-                  "offsets" in driver.property &&
-                  driver.property.offsets !== undefined,
-              ),
-            );
-            if (waves?.length === 2) setRevealed(true);
-          },
-          (failure: unknown) => {
-            if (generation.current === request) setError(errorMessage(failure));
-          },
-        );
-      }
       return;
     }
     if (finishingFrame.current) return;
@@ -812,42 +1019,18 @@ export function useGuiScene(
     active,
     error,
     ready,
-    prepared,
     revealed,
     treeCommitted,
-    motions,
     vectorOnly,
-    shieldEntity,
+    shieldBlocker,
   ]);
 
-  // Blocked presses and wheel notches are observable for scene controls;
-  // the demo logs each one the shield intercepts.
-  useEffect(() => {
-    if (!canvas || !active || shieldEntity === undefined) return;
-    const client = canvas.client as GuiWorldClient;
-    return client.subscribeGuiObservations((batch: GuiObservationBatch) => {
-      for (const { input, reason } of batch.unhandled ?? []) {
-        if (
-          reason.kind !== "blocked" ||
-          reason.entity !== shieldEntity ||
-          (input.kind !== "pointerDown" && input.kind !== "scroll")
-        )
-          continue;
-        setShieldBlocks((current) => current + 1);
-        record(`SHIELD BLOCKED ${input.kind === "scroll" ? "WHEEL" : "PRESS"}`);
-      }
-    });
-  }, [canvas, active, shieldEntity, record]);
-
-  const blockers = useMemo<readonly GuiBlockerHit[]>(
+  const blockers = useMemo<readonly GuiPickingBlocker[]>(
     () =>
-      shieldArmed && shieldEntity !== undefined && !vectorOnly
-        ? // The projected input path resolves the distance from the
-          // shield's current picking geometry; this value is only the
-          // logical-routing hint and is never used with a camera.
-          [{ entity: shieldEntity, distance: 0 }]
+      shieldArmed && shieldBlocker !== undefined && !vectorOnly
+        ? [shieldBlocker]
         : [],
-    [shieldArmed, shieldEntity, vectorOnly],
+    [shieldArmed, shieldBlocker, vectorOnly],
   );
 
   const pulse = useCallback(() => {
@@ -859,21 +1042,14 @@ export function useGuiScene(
     setLastCommand("Uplink sent");
     record("UPLINK PACKET QUEUED");
   }, [record]);
-  // PURGE leaves one entry and anchors the log at its first item: the
-  // runtime keeps a VirtualList's anchor across item count changes, so
-  // without it a log scrolled deep into the history would jump back there
-  // once new entries grow it past the old anchor.
+  // PURGE leaves one entry. The runtime clamps the log's scroll position to
+  // the remaining content, and later growth never returns to the discarded
+  // position.
   const purge = useCallback(() => {
     sequence.current += 1;
     setEvents([eventEntry(sequence.current, "LOG PURGED")]);
     setLastCommand("Log purged");
-    const handle = eventLog.current;
-    if (!canvas || !active || !handle) return;
-    const client = canvas.client as GuiWorldClient;
-    void client
-      .editGui({ action: "scrollToIndex", handle, index: 0, offset: 0 })
-      .catch((failure: unknown) => setError(errorMessage(failure)));
-  }, [canvas, active]);
+  }, []);
   const setEventWindow = useCallback((range: GuiEventWindow) => {
     setEventWindowState((current) =>
       current.first === range.first && current.last === range.last
@@ -893,7 +1069,7 @@ export function useGuiScene(
     // Isolation unmounts the shield with the projector; its next mount is a
     // new entity, resolved again after that commit.
     shieldRequest.current += 1;
-    setShieldEntity(undefined);
+    setShieldBlocker(undefined);
     setVectorOnly((current) => !current);
   }, []);
   const selectSkin = useCallback(
@@ -903,26 +1079,40 @@ export function useGuiScene(
     },
     [record],
   );
+  const changedValue = useCallback(
+    <Key extends keyof GuiControlValues>(
+      key: Key,
+      value: GuiControlValues[Key],
+    ) => {
+      if (controlValues.current[key] === value) return false;
+      controlValues.current = { ...controlValues.current, [key]: value };
+      return true;
+    },
+    [],
+  );
   const setAutoscan = useCallback(
     (value: boolean) => {
       setAutoscanState(value);
-      record(`AUTOSCAN ${value ? "ENABLED" : "STANDBY"}`);
+      if (changedValue("autoscan", value))
+        record(`AUTOSCAN ${value ? "ENABLED" : "STANDBY"}`);
     },
-    [record],
+    [changedValue, record],
   );
   const setGain = useCallback(
     (value: number) => {
       setGainState(value);
-      record(`SIGNAL GAIN ${Math.round(value * 100)} PERCENT`);
+      if (changedValue("gain", value))
+        record(`SIGNAL GAIN ${Math.round(value * 100)} PERCENT`);
     },
-    [record],
+    [changedValue, record],
   );
   const setCallsign = useCallback(
     (value: string) => {
       setCallsignState(value);
-      record(`CALLSIGN ${value || "CLEARED"}`);
+      if (changedValue("callsign", value))
+        record(`CALLSIGN ${value || "CLEARED"}`);
     },
-    [record],
+    [changedValue, record],
   );
   const reportFailure = useCallback((failure: unknown) => {
     setError(errorMessage(failure));
@@ -941,18 +1131,18 @@ export function useGuiScene(
     gain,
     callsign,
     pulseSequence,
+    pulseActive,
     lastCommand,
     events,
     eventWindow,
-    eventLog,
     setEventWindow,
     shieldArmed,
-    shieldBlocks,
     blockers,
     ...(motions ? { motions } : {}),
     ...(beamSection ? { beamSection } : {}),
     font: absoluteAsset(17, FONT_URL),
     onCommit,
+    attachPanel,
     pulse,
     uplink,
     purge,
@@ -964,17 +1154,46 @@ export function useGuiScene(
     setAutoscan,
     setGain,
     setCallsign,
-    reportFailure,
-    prepareWaveform,
+    setPulseActive,
     readWaveformPulse,
+    reportFailure,
   };
 }
 
-export function GuiWorld({ scene }: { scene: GuiSceneState }) {
+/**
+ * The GUI page's World root. Unmounting a React root deletes nothing, so once
+ * the page has shown its content the root stays mounted and leaving the page
+ * removes its declarations, which deletes the entities, assets and panel World
+ * they created. Before the content first shows, nothing mounts, so the scene's
+ * commit callback only ever sees commits of the page's own declarations.
+ */
+export function GuiWorld({
+  scene,
+  active,
+}: {
+  scene: GuiSceneState;
+  active: boolean;
+}) {
+  const shown =
+    active &&
+    scene.motions !== undefined &&
+    scene.beamSection !== undefined &&
+    !scene.error;
+  const [mounted, setMounted] = useState(false);
+  if (shown && !mounted) setMounted(true);
+  if (!shown && !mounted) return null;
+  return (
+    <World onCommit={scene.onCommit}>
+      {shown ? <GuiWorldContent scene={scene} /> : null}
+    </World>
+  );
+}
+
+function GuiWorldContent({ scene }: { scene: GuiSceneState }) {
   if (!scene.motions || !scene.beamSection || scene.error) return null;
   const stagingX = scene.revealed ? 0 : STAGING_X;
   return (
-    <World onCommit={scene.onCommit}>
+    <>
       <ShaderAsset
         id="gui-projector-background-shader"
         recipe={{}}
@@ -1026,10 +1245,15 @@ export function GuiWorld({ scene }: { scene: GuiSceneState }) {
         </>
       )}
       <ProjectorPanel scene={scene} stagingX={stagingX} />
-    </World>
+    </>
   );
 }
 
+/**
+ * The projected panel: a Surface on a parent entity presents the canvas of
+ * a separate panel World. The parent owns the Surface size, placement and
+ * cache policy; the panel World owns the canvas density and content.
+ */
 function ProjectorPanel({
   scene,
   stagingX,
@@ -1037,38 +1261,34 @@ function ProjectorPanel({
   scene: GuiSceneState;
   stagingX: number;
 }) {
-  const [signal, setSignal] = useWaveformNode();
-  const [pulse, setPulse] = useWaveformNode();
-  const [pulseActive, setPulseActive] = useState(false);
   const { x: panelX, ...panelTransform } = PROJECTED_PANEL_TRANSFORM;
   return (
-    <Entity id="gui-demo">
-      <Transform bound={false} {...panelTransform} x={panelX + stagingX} />
-      <Surface bound={false} width={SURFACE_WIDTH} height={SURFACE_HEIGHT} />
-      {scene.surfaceCache !== "direct" && (
-        <SurfaceCache
-          {...GUI_SURFACE_CACHE}
-          direct_distance={
-            scene.surfaceCache === "cached"
-              ? 0
-              : GUI_SURFACE_CACHE.direct_distance
-          }
-        />
-      )}
-      <GuiRoot>
-        <ProjectorDashboard
-          scene={scene}
-          waveform={{ signal: setSignal, pulse: setPulse, pulseActive }}
-        />
-      </GuiRoot>
-      {signal && pulse && (
-        <BoundWaveformAnimations
-          scene={scene}
-          signal={signal}
-          pulse={pulse}
-          onPulseActive={setPulseActive}
-        />
-      )}
-    </Entity>
+    <>
+      <Entity id={PANEL_ENTITY}>
+        <Transform {...panelTransform} x={panelX + stagingX} />
+        <Surface width={SURFACE_WIDTH} height={SURFACE_HEIGHT} />
+        {scene.surfaceCache !== "direct" && (
+          <SurfaceCache
+            {...GUI_SURFACE_CACHE}
+            direct_distance={
+              scene.surfaceCache === "cached"
+                ? 0
+                : GUI_SURFACE_CACHE.direct_distance
+            }
+          />
+        )}
+      </Entity>
+      <CanvasWorld
+        presentation={{ anchor: PANEL_ENTITY }}
+        create={{ symbolicId: PANEL_WORLD, selectedSystems: PANEL_SYSTEMS }}
+        extent={[SURFACE_WIDTH, SURFACE_HEIGHT]}
+        unitsPerMetre={1}
+        onReady={scene.attachPanel}
+        onError={scene.reportFailure}
+      >
+        <ProjectorDashboard scene={scene} />
+        <WaveformAnimations scene={scene} />
+      </CanvasWorld>
+    </>
   );
 }

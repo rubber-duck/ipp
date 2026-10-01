@@ -8,6 +8,8 @@ use ipp_host_session::HostServices;
 /// Identity namespace and built-in resource provider of the native Host.
 pub struct NativeHostServices {
     pending: VecDeque<ipp_core::AssetAcquisitionRequest>,
+    #[cfg(feature = "gui")]
+    input: ipp_host_session::services::gui_input::GuiHostInputService,
 }
 
 impl HostServices for NativeHostServices {
@@ -26,7 +28,16 @@ impl HostServices for NativeHostServices {
             .map_err(|error| error.to_string())?;
         Ok(Self {
             pending: VecDeque::new(),
+            #[cfg(feature = "gui")]
+            input: Default::default(),
         })
+    }
+
+    #[cfg(feature = "gui")]
+    fn gui_input(
+        &mut self,
+    ) -> Option<&mut ipp_host_session::services::gui_input::GuiHostInputService> {
+        Some(&mut self.input)
     }
 
     fn service_resources(&mut self, host: &mut HostRuntime) -> Result<(), String> {
@@ -61,7 +72,20 @@ mod tests {
     fn native_host_installs_only_its_builtin_provider() {
         let mut host = HostRuntime::new();
         let mut platform = NativeHostServices::initialize(&mut host).unwrap();
-        let id = host.create_world(Default::default()).unwrap();
+        let id = host
+            .create_world(
+                Default::default(),
+                &[
+                    ipp_core::systems::animation::AnimationSystem::ID,
+                    ipp_core::systems::asset_dependencies::AssetDependencySystem::ID,
+                    ipp_core::systems::hierarchy::HierarchySystem::ID,
+                    ipp_core::systems::look_at::LookAtSystem::ID,
+                    ipp_core::systems::hierarchy::FinalPropagationSystem::ID,
+                    ipp_core::systems::geometry::GeometrySystem::ID,
+                    ipp_core::systems::render::RenderSystem::ID,
+                ],
+            )
+            .unwrap();
         let mut world = host.world_mut(id).unwrap();
         let builtin = "ipp://mesh/cube?width=1&height=1&length=1";
         let unsupported = "https://example.test/mesh.ippm";
@@ -77,6 +101,7 @@ mod tests {
                             Command::Create {
                                 alias,
                                 metadata: Default::default(),
+                                adopt: false,
                             },
                             Command::InsertComponent {
                                 entity: EntityRef::Alias(alias),
@@ -85,6 +110,7 @@ mod tests {
                                     offset: offset_of!(MeshInstance, source) as u32,
                                     value: FieldValue::String(source.into()),
                                 }],
+                                adopt: false,
                             },
                         ]
                     })
@@ -103,7 +129,7 @@ mod tests {
         assert_eq!(
             resources
                 .iter()
-                .find(|resource| resource.source == builtin)
+                .find(|resource| *resource.source == *builtin)
                 .unwrap()
                 .status,
             AssetResourceStatus::Loaded
@@ -111,7 +137,7 @@ mod tests {
         assert!(matches!(
             &resources
                 .iter()
-                .find(|resource| resource.source == unsupported)
+                .find(|resource| *resource.source == *unsupported)
                 .unwrap()
                 .status,
             AssetResourceStatus::Failed(error) if error.contains("https")

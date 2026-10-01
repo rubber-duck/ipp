@@ -7,7 +7,12 @@ import {
   propertyAnimationScenario,
   type AnimationContract,
 } from "./animation-fixtures.js";
-import type { AnimationWorldClient, GeometryEncoder } from "@ipp/client";
+import type {
+  AnimationWorldClient,
+  Client,
+  GeometryEncoder,
+  HostClientBase,
+} from "@ipp/client";
 import { cameraCases, CameraFixture } from "./scenarios/cameras-and-picking.js";
 import { renderStatePreservesDeclarations } from "./scenarios/render-state.js";
 import type {
@@ -17,19 +22,20 @@ import type {
 } from "@ipp/client";
 import type { DriverConnectOptions } from "./driver.js";
 import {
-  overlayAliasDriver,
-  type OverlayAliasContract,
-} from "./drivers/overlay-aliases.js";
-import {
   resourcePressureDriver,
   type ResourceContract,
 } from "./drivers/resources.js";
-import { overlayAliasesResolve } from "./scenarios/overlay-aliases.js";
 import { assetSourceDuringBatch } from "./scenarios/command-batches.js";
 import { resourcePressurePreservesSession } from "./scenarios/resource-pressure.js";
+import { oversizedInspectionRecord } from "./scenarios/inspection-limits.js";
+import {
+  CONSTRAINTS,
+  LIFECYCLE,
+  SCENE,
+  selectSystems,
+} from "./system-selections.js";
 
-export type WorldHostContract = OverlayAliasContract &
-  ResourceContract &
+export type WorldHostContract = ResourceContract &
   AnimationContract & {
     encodeBoundingShape: GeometryEncoder;
     encodeRequest(
@@ -38,16 +44,22 @@ export type WorldHostContract = OverlayAliasContract &
   };
 
 /** The same production-client cases run in native and browser host environments. */
+/** Systems of the World every world-host case authors: animated Scalars and
+ * drivers, cameras with picking geometry, rendered and custom-material meshes,
+ * render state and lifecycle observation. */
+export const WORLD_HOST_SYSTEMS = selectSystems(SCENE, CONSTRAINTS, LIFECYCLE);
+
 export const worldHostCases: ReadonlyArray<{
   name: string;
   run(
     client: SpatialWorldClient,
     contract: WorldHostContract,
     record: DriverConnectOptions["record"],
+    host: HostClientBase<Client>,
   ): Promise<unknown>;
 }> = [
   {
-    name: "asset source delivery bypasses held command batches and command byte limits",
+    name: "asset source delivery bypasses open command batches and command byte limits",
     run: (client, contract, record) =>
       assetSourceDuringBatch(client as AnimationWorldClient, contract, record),
   },
@@ -89,12 +101,14 @@ export const worldHostCases: ReadonlyArray<{
       client: SpatialWorldClient,
       contract: WorldHostContract,
       record: DriverConnectOptions["record"],
+      host: HostClientBase<Client>,
     ) => {
       if (!client.capabilities.picking)
         throw new Error("Camera scenarios require picking");
       return scenario.run(
         new CameraFixture(
           client as PickingWorldClient,
+          host,
           record,
           contract.encodeBoundingShape,
         ),
@@ -109,8 +123,8 @@ export const worldHostCases: ReadonlyArray<{
       ),
   },
   {
-    name: "overlay aliases resolve and rejected updates preserve bindings",
-    run: (client, contract, record) =>
-      overlayAliasesResolve(overlayAliasDriver(client, contract, record)),
+    name: "an oversized inspection record fails explicitly and the session keeps serving",
+    run: (client, _contract, record) =>
+      oversizedInspectionRecord(client, record),
   },
 ];

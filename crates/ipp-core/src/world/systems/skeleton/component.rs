@@ -2,11 +2,12 @@ use crate::{
     ErrorReason,
     components::Transform,
     components::rows::{Rows, SchemaRow, row_address, row_region_relative},
-    components::schema::ComponentLifecycle,
+    components::schema::{ComponentLifecycle, same_text},
     services::asset_management::service::{AssetDemandSelection, validate_source},
 };
 use ipp_schema_derive::SchemaComponent;
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 /// Per-instance skeleton source, optional reusable pose, and sparse local overrides.
 ///
@@ -17,11 +18,11 @@ use std::collections::BTreeSet;
 #[derive(Debug, SchemaComponent)]
 pub struct Skeleton {
     /// Immutable hierarchy/rest-pose URI; empty leaves the instance inactive.
-    pub source: String,
+    pub source: Arc<str>,
     /// Skeleton variant.
     pub variant: u32,
     /// Optional immutable local pose URI; empty selects the skeleton rest pose.
-    pub pose_source: String,
+    pub pose_source: Arc<str>,
     /// Reusable pose variant.
     pub pose_variant: u32,
     /// Joint-local overrides; the slot is the joint ordinal in the skeleton asset.
@@ -167,9 +168,9 @@ fn joint_override_rows() -> Rows<JointOverrideRow> {
 impl Default for Skeleton {
     fn default() -> Self {
         Self {
-            source: String::new(),
+            source: Arc::default(),
             variant: 0,
-            pose_source: String::new(),
+            pose_source: Arc::default(),
             pose_variant: 0,
             joints: joint_override_rows(),
             runtime: SkeletonRuntimeState::default(),
@@ -215,9 +216,9 @@ impl Clone for Skeleton {
 
 impl PartialEq for Skeleton {
     fn eq(&self, other: &Self) -> bool {
-        self.source == other.source
+        same_text(&self.source, &other.source)
             && self.variant == other.variant
-            && self.pose_source == other.pose_source
+            && same_text(&self.pose_source, &other.pose_source)
             && self.pose_variant == other.pose_variant
             && self.joints == other.joints
     }
@@ -229,7 +230,7 @@ impl ComponentLifecycle for Skeleton {
     }
 
     fn preserve_runtime(&mut self, previous: &mut Self) {
-        if self.source == previous.source && self.variant == previous.variant {
+        if same_text(&self.source, &previous.source) && self.variant == previous.variant {
             self.runtime = std::mem::take(&mut previous.runtime);
         }
     }

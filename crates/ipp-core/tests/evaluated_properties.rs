@@ -3,6 +3,7 @@ mod support;
 use ipp_core::{systems::*, *};
 use std::sync::{Arc, Mutex};
 use support::WorldTestDriver;
+use support::selection::{RENDER, select};
 
 type Patch = Option<(EntityId, Vec<(u32, DynamicValue)>)>;
 #[derive(Default)]
@@ -88,7 +89,12 @@ fn numeric_patch_keeps_old_storage_until_observers_finish_and_rejects_invalid_ed
     let mut factories = compiled_system_factories();
     factories.push(Arc::new(Factory(Arc::clone(&shared))));
     let mut host = HostRuntime::with_system_factories(factories).unwrap();
-    let world_id = host.create_world(Default::default()).unwrap();
+    let world_id = host
+        .create_world(
+            Default::default(),
+            &[select(&[RENDER]), vec![SystemId("test.numeric-properties")]].concat(),
+        )
+        .unwrap();
     let mut world = host.world_mut(world_id).unwrap();
     let mut value = components::CustomMaterial::default();
     let key = value
@@ -102,6 +108,7 @@ fn numeric_patch_keeps_old_storage_until_observers_finish_and_rejects_invalid_ed
                 Command::Create {
                     alias: 1,
                     metadata: Default::default(),
+                    adopt: false,
                 },
                 Command::insert_value(EntityRef::Alias(1), ComponentValue::CustomMaterial(value)),
             ],
@@ -147,7 +154,7 @@ fn numeric_patch_keeps_old_storage_until_observers_finish_and_rejects_invalid_ed
         let value = world
             .inspect(entity)
             .unwrap()
-            .effective
+            .components
             .into_iter()
             .find(|v| v.type_id() == ComponentValue::CUSTOM_MATERIAL)
             .unwrap();

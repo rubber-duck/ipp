@@ -363,7 +363,7 @@ fn each_rows_field_appears_once_at_its_real_offset_and_round_trips() {
     assert_eq!(restored.items.slot_state(0), RowSlotState::Unallocated);
 
     let mut sources = Vec::new();
-    restored.visit_row_assets(&mut |asset| sources.push(asset.uri.clone()));
+    restored.visit_row_assets(&mut |asset| sources.push(asset.uri.to_string()));
     assert_eq!(sources, ["textures/a.png"]);
     assert!(fixture.retained_bytes().unwrap() >= "textures/a.png".len());
 }
@@ -387,6 +387,59 @@ fn table_encoding_matches_the_documented_layout() {
     expected.extend(0i32.to_le_bytes());
     assert_eq!(rows.encode(), expected);
     assert_eq!(Rows::<RowsFixtureItem>::decode(&expected), Ok(rows));
+}
+
+#[test]
+fn field_asset_visitation_ignores_unrelated_tables() {
+    let mut value = fixture();
+    value.items.get_mut(0).unwrap().texture = Some(AssetSource {
+        kind: crate::services::asset_management::AssetTypeId(2),
+        uri: "asset://2/42".into(),
+        variant: 0,
+    });
+    let mut sources = Vec::new();
+    value.visit_row_field_assets(offset_of!(RowsFixture, tags) as u32, &mut |source| {
+        sources.push(source.uri.to_string());
+    });
+    assert!(sources.is_empty());
+    value.visit_row_field_assets(offset_of!(RowsFixture, items) as u32, &mut |source| {
+        sources.push(source.uri.to_string());
+    });
+    assert_eq!(sources, ["asset://2/42"]);
+
+    let mut value = ComponentValue::RowsFixture(value);
+    let mut sources = Vec::new();
+    value.visit_row_field_assets(offset_of!(RowsFixture, tags) as u32, &mut |source| {
+        sources.push(source.uri.to_string());
+    });
+    assert!(sources.is_empty());
+    value.visit_row_field_assets(offset_of!(RowsFixture, items) as u32, &mut |source| {
+        sources.push(source.uri.to_string());
+    });
+    assert_eq!(sources, ["asset://2/42"]);
+
+    if let ComponentValue::RowsFixture(value) = &mut value {
+        value
+            .items
+            .get_mut(0)
+            .unwrap()
+            .texture
+            .as_mut()
+            .unwrap()
+            .uri = "asset://malformed".into();
+    }
+    crate::components::registry::write(
+        &mut value,
+        &crate::FieldWrite {
+            offset: offset_of!(RowsFixture, tags) as u32,
+            value: crate::FieldValue::Rows(Rows::<RowsFixtureTag>::new().encode()),
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        crate::components::registry::validate_asset_references(&value),
+        Err(crate::ErrorReason::InvalidAsset)
+    );
 }
 
 #[test]
@@ -569,7 +622,7 @@ fn text_properties_travel_as_bounded_string_values() {
     assert_eq!(fixture.field(label), Ok(FieldValue::String(full.into())));
     assert_eq!(fixture.items.get(1).unwrap().label.as_deref(), Some(full));
     assert_eq!(
-        fixture.set_field(label, FieldValue::String(format!("{full}!"))),
+        fixture.set_field(label, FieldValue::String(format!("{full}!").into())),
         Err(FieldError::TextTooLong)
     );
     assert_eq!(fixture.items.get(1).unwrap().label.as_deref(), Some(full));
@@ -608,7 +661,7 @@ fn text_properties_travel_as_bounded_string_values() {
     assert_eq!(
         fixture
             .items
-            .set_property(1, LABEL, DynamicValue::Text("x".repeat(17))),
+            .set_property(1, LABEL, DynamicValue::Text("x".repeat(17).into())),
         Err(FieldError::TextTooLong)
     );
     assert_eq!(fixture.set_field(label, FieldValue::Unset), Ok(()));
@@ -620,7 +673,7 @@ fn required_text_rejects_clearing_and_derives_its_bound() {
     #[derive(Debug, Default, PartialEq, SchemaRow)]
     struct Named {
         #[schema(text = 4)]
-        name: String,
+        name: Arc<str>,
     }
 
     assert_eq!(Named::LAYOUT.properties[0].kind, DynamicPropertyKind::Text);
@@ -633,7 +686,7 @@ fn required_text_rejects_clearing_and_derives_its_bound() {
         rows.set_row_field(0, FieldValue::String("four".into())),
         Ok(())
     );
-    assert_eq!(rows.get(0).unwrap().name, "four");
+    assert_eq!(&*rows.get(0).unwrap().name, "four");
     assert_eq!(
         rows.set_row_field(0, FieldValue::String("fives".into())),
         Err(FieldError::TextTooLong)
@@ -703,16 +756,14 @@ fn text_encodes_as_length_and_utf8_and_decoding_checks_both() {
 }
 
 #[test]
-fn retained_bytes_count_text_capacity() {
+fn retained_bytes_count_text_length() {
     let mut rows = Rows::<RowsFixtureItem>::new();
     rows.push(RowsFixtureItem::default()).unwrap();
     let without = rows.retained_bytes();
 
-    let mut label = String::with_capacity(16);
-    label.push_str("label");
-    rows.get_mut(0).unwrap().label = Some(label);
-    assert_eq!(rows.retained_bytes(), without + 16);
-    assert_eq!(rows.get(0).unwrap().retained_bytes(), 16);
+    rows.get_mut(0).unwrap().label = Some("label".into());
+    assert_eq!(rows.retained_bytes(), without + "label".len());
+    assert_eq!(rows.get(0).unwrap().retained_bytes(), "label".len());
 }
 
 #[test]
@@ -720,7 +771,7 @@ fn contract_stream_carries_the_text_bound_after_the_hint() {
     #[derive(Default, SchemaRow)]
     struct Titled {
         #[schema(text = 300)]
-        title: Option<String>,
+        title: Option<Arc<str>>,
     }
 
     let mut stream = Vec::new();
@@ -872,8 +923,7 @@ mod world {
     use super::*;
     use crate::world::WorldLimits;
     use crate::{
-        Batch, BatchOutcome, Command, ComponentOverlayMode, EntityId, EntityMetadata,
-        EntityOverlayMode, EntityRef, HostRuntime, StateOverlayRef, WorldId,
+        Batch, BatchOutcome, Command, EntityId, EntityMetadata, EntityRef, HostRuntime, WorldId,
     };
 
     fn run(host: &mut HostRuntime, world: WorldId, operations: Vec<Command>) -> BatchOutcome {
@@ -898,28 +948,267 @@ mod world {
         }
     }
 
-    fn state(
-        host: &mut HostRuntime,
-        world: WorldId,
-        entity: EntityId,
-    ) -> (RowsFixture, RowsFixture) {
-        let snapshot = host.world_mut(world).unwrap().inspect(entity).unwrap();
-        let find = |values: Vec<ComponentValue>| {
-            values
-                .into_iter()
-                .find_map(|value| match value {
-                    ComponentValue::RowsFixture(value) => Some(value),
-                    _ => None,
+    fn state(host: &mut HostRuntime, world: WorldId, entity: EntityId) -> RowsFixture {
+        host.world_mut(world)
+            .unwrap()
+            .inspect(entity)
+            .unwrap()
+            .components
+            .into_iter()
+            .find_map(|value| match value {
+                ComponentValue::RowsFixture(value) => Some(value),
+                _ => None,
+            })
+            .unwrap()
+    }
+
+    #[cfg(feature = "gui")]
+    #[test]
+    fn private_row_assignments_validate_only_the_final_table() {
+        use crate::components::Scalar;
+        use crate::systems::gui::motion::{GuiMotionPart, GuiThemeMotion};
+
+        let mut host = HostRuntime::new();
+        let world = host
+            .create_world(
+                WorldLimits::default(),
+                &[
+                    crate::systems::animation::AnimationSystem::ID,
+                    crate::systems::constraints::ConstraintSystem::ID,
+                    crate::systems::asset_dependencies::AssetDependencySystem::ID,
+                    crate::systems::gui::GuiSystem::ID,
+                ],
+            )
+            .unwrap();
+        let table = |uri: &str| {
+            let mut parts = Rows::new();
+            parts
+                .push(GuiMotionPart {
+                    source: Some(AssetSource {
+                        kind: crate::systems::animation::ANIMATION_TYPE,
+                        uri: uri.into(),
+                        variant: 0,
+                    }),
+                    ..Default::default()
                 })
-                .unwrap()
+                .unwrap();
+            parts
         };
-        (find(snapshot.base), find(snapshot.effective))
+        let invalid = table("asset://ordinary-motion-A");
+        let valid = table("asset://10/42");
+        let field = |parts: &Rows<GuiMotionPart>| crate::FieldWrite {
+            offset: offset_of!(GuiThemeMotion, parts) as u32,
+            value: crate::FieldValue::Rows(parts.encode()),
+        };
+        let created = run(
+            &mut host,
+            world,
+            vec![Command::Create {
+                alias: 0,
+                metadata: Default::default(),
+                adopt: false,
+            }],
+        );
+        let entity = created.result.unwrap()[0].1;
+        let insert = |fields| Command::InsertComponent {
+            entity: EntityRef::Handle(entity),
+            component: ComponentValue::GUI_THEME_MOTION,
+            fields,
+            adopt: false,
+        };
+        let accepted = run(
+            &mut host,
+            world,
+            vec![insert(vec![field(&invalid), field(&valid)])],
+        );
+        assert!(accepted.result.is_ok(), "{accepted:?}");
+        let expected = ComponentValue::GuiThemeMotion(GuiThemeMotion {
+            parts: valid.clone(),
+        });
+        assert!(
+            host.world_mut(world)
+                .unwrap()
+                .inspect(entity)
+                .unwrap()
+                .components
+                .contains(&expected)
+        );
+
+        let rejected = run(
+            &mut host,
+            world,
+            vec![
+                Command::insert_value(
+                    EntityRef::Handle(entity),
+                    ComponentValue::Scalar(Scalar {
+                        value: 7.0,
+                    }),
+                ),
+                insert(vec![field(&valid), field(&invalid)]),
+                Command::insert_value(
+                    EntityRef::Handle(entity),
+                    ComponentValue::Scalar(Scalar {
+                        value: 99.0,
+                    }),
+                ),
+            ],
+        );
+        assert_eq!(rejected.result.unwrap_err().operation, Some(1));
+        let snapshot = host.world_mut(world).unwrap().inspect(entity).unwrap();
+        assert!(snapshot.components.contains(&expected));
+        assert!(
+            snapshot
+                .components
+                .contains(&ComponentValue::Scalar(Scalar {
+                    value: 7.0
+                }))
+        );
+        let write = |parts: &Rows<GuiMotionPart>| Command::SetField {
+            entity: EntityRef::Handle(entity),
+            component: ComponentValue::GUI_THEME_MOTION,
+            field: field(parts),
+        };
+        let rejected = run(&mut host, world, vec![write(&invalid), write(&valid)]);
+        assert_eq!(rejected.result.unwrap_err().operation, Some(0));
+        assert!(
+            host.world_mut(world)
+                .unwrap()
+                .inspect(entity)
+                .unwrap()
+                .components
+                .contains(&expected)
+        );
+        assert_eq!(host.world_mut(world).unwrap().resource_snapshots().len(), 1);
+        assert!(run(&mut host, world, vec![write(&valid)]).result.is_ok());
     }
 
     #[test]
-    fn world_writes_and_overlays_address_live_row_properties_by_offset() {
+    fn malformed_row_assets_reject_without_poisoning_demand_or_losing_prior_writes() {
         let mut host = HostRuntime::new();
-        let world = host.create_world(WorldLimits::default()).unwrap();
+        let world = host
+            .create_world(
+                WorldLimits::default(),
+                &[
+                    crate::systems::animation::AnimationSystem::ID,
+                    crate::systems::asset_dependencies::AssetDependencySystem::ID,
+                ],
+            )
+            .unwrap();
+        let mut rows = Rows::new();
+        rows.insert(5, item(1.0)).unwrap();
+        let created = run(
+            &mut host,
+            world,
+            vec![
+                Command::Create {
+                    alias: 0,
+                    metadata: EntityMetadata::default(),
+                    adopt: false,
+                },
+                Command::insert_value(
+                    EntityRef::Alias(0),
+                    ComponentValue::RowsFixture(RowsFixture {
+                        items: rows,
+                        ..RowsFixture::default()
+                    }),
+                ),
+            ],
+        );
+        let entity = created.result.unwrap()[0].1;
+        let rejected = run(
+            &mut host,
+            world,
+            vec![
+                set(
+                    entity,
+                    item_offset(5, WEIGHT),
+                    crate::FieldValue::Dynamic(DynamicValue::F32(2.0)),
+                ),
+                set(
+                    entity,
+                    item_offset(5, TEXTURE),
+                    crate::FieldValue::Dynamic(DynamicValue::Asset(AssetSource {
+                        kind: crate::TEXTURE_TYPE,
+                        uri: "asset://ordinary-motion-A".into(),
+                        variant: 0,
+                    })),
+                ),
+                set(
+                    entity,
+                    item_offset(5, WEIGHT),
+                    crate::FieldValue::Dynamic(DynamicValue::F32(3.0)),
+                ),
+            ],
+        );
+        assert!(rejected.result.is_err(), "{rejected:?}");
+        assert_eq!(rejected.result.as_ref().unwrap_err().operation, Some(1));
+        let stored = state(&mut host, world, entity);
+        assert_eq!(stored.items.get(5).unwrap().weight, 2.0);
+        assert_eq!(stored.items.get(5).unwrap().texture, None);
+        assert!(
+            host.world_mut(world)
+                .unwrap()
+                .resource_snapshots()
+                .is_empty()
+        );
+
+        let corrected = run(
+            &mut host,
+            world,
+            vec![set(
+                entity,
+                item_offset(5, TEXTURE),
+                crate::FieldValue::Dynamic(DynamicValue::Asset(AssetSource {
+                    kind: crate::TEXTURE_TYPE,
+                    uri: "asset://2/42".into(),
+                    variant: 0,
+                })),
+            )],
+        );
+        assert!(corrected.result.is_ok(), "{corrected:?}");
+        assert_eq!(host.world_mut(world).unwrap().resource_snapshots().len(), 1);
+
+        let mut invalid = state(&mut host, world, entity);
+        invalid
+            .items
+            .get_mut(5)
+            .unwrap()
+            .texture
+            .as_mut()
+            .unwrap()
+            .uri = "asset://malformed".into();
+        for command in [
+            set(
+                entity,
+                offset_of!(RowsFixture, items) as u32,
+                crate::FieldValue::Rows(invalid.items.encode()),
+            ),
+            Command::insert_value(
+                EntityRef::Handle(entity),
+                ComponentValue::RowsFixture(invalid),
+            ),
+        ] {
+            let rejected = run(&mut host, world, vec![command]);
+            assert!(rejected.result.is_err(), "{rejected:?}");
+            assert_eq!(
+                &*state(&mut host, world, entity)
+                    .items
+                    .get(5)
+                    .unwrap()
+                    .texture
+                    .as_ref()
+                    .unwrap()
+                    .uri,
+                "asset://2/42"
+            );
+            assert_eq!(host.world_mut(world).unwrap().resource_snapshots().len(), 1);
+        }
+    }
+
+    #[test]
+    fn world_writes_address_live_row_properties_by_offset() {
+        let mut host = HostRuntime::new();
+        let world = host.create_world(WorldLimits::default(), &[]).unwrap();
         let mut table = Rows::<RowsFixtureItem>::new();
         table.push(item(1.0)).unwrap();
         table.push(item(2.0)).unwrap();
@@ -935,6 +1224,7 @@ mod world {
                         symbolic_id: Some("rows".into()),
                         classes: vec![],
                     },
+                    adopt: false,
                 },
                 Command::InsertComponent {
                     entity: EntityRef::Alias(1),
@@ -943,6 +1233,7 @@ mod world {
                         offset: offset_of!(RowsFixture, items) as u32,
                         value: crate::FieldValue::Rows(table.encode()),
                     }],
+                    adopt: false,
                 },
             ],
         );
@@ -961,9 +1252,9 @@ mod world {
             ],
         );
         assert!(outcome.result.is_ok());
-        let (base, _) = state(&mut host, world, entity);
-        assert_eq!(base.items.get(1).unwrap().weight, 6.0);
-        assert_eq!(base.items.get(1).unwrap().offset, None);
+        let stored = state(&mut host, world, entity);
+        assert_eq!(stored.items.get(1).unwrap().weight, 6.0);
+        assert_eq!(stored.items.get(1).unwrap().offset, None);
 
         for rejected in [
             set(
@@ -981,52 +1272,46 @@ mod world {
             assert!(run(&mut host, world, vec![rejected]).result.is_err());
         }
 
+        // A symbolic reference addresses the same row property by offset.
         let outcome = run(
             &mut host,
             world,
-            vec![
-                Command::CreateStateOverlayOwner {
-                    alias: 1,
+            vec![Command::SetField {
+                entity: EntityRef::Symbol("rows".into()),
+                component: ComponentValue::ROWS_FIXTURE,
+                field: crate::FieldWrite {
+                    offset: item_offset(1, ROTATION),
+                    value: crate::FieldValue::Dynamic(DynamicValue::Vec4([0.0, 1.0, 0.0, 0.0])),
                 },
-                Command::AttachEntityOverlayBinding {
-                    owner: StateOverlayRef::Alias(1),
-                    alias: 2,
-                    symbolic_id: "rows".into(),
-                    mode: EntityOverlayMode::Bound,
-                },
-                Command::AttachComponentStateOverlay {
-                    owner: StateOverlayRef::Alias(1),
-                    binding: StateOverlayRef::Alias(2),
-                    alias: 3,
-                    component: ComponentValue::ROWS_FIXTURE,
-                    mode: ComponentOverlayMode::Bound,
-                    fields: vec![crate::FieldWrite {
-                        offset: item_offset(1, ROTATION),
-                        value: crate::FieldValue::Dynamic(DynamicValue::Vec4([0.0, 1.0, 0.0, 0.0])),
-                    }],
-                },
-            ],
+            }],
         );
         assert!(outcome.result.is_ok(), "{:?}", outcome.result);
-        let (base, effective) = state(&mut host, world, entity);
-        assert_eq!(base.items.get(1).unwrap().rotation, None);
+        let stored = state(&mut host, world, entity);
         assert_eq!(
-            effective.items.get(1).unwrap().rotation,
+            stored.items.get(1).unwrap().rotation,
             Some([0.0, 1.0, 0.0, 0.0])
         );
-        assert_eq!(effective.items.get(1).unwrap().weight, 6.0);
+        assert_eq!(stored.items.get(1).unwrap().weight, 6.0);
     }
 
     #[test]
-    fn text_rows_are_written_bounded_overlaid_and_never_animated() {
+    fn text_rows_are_written_bounded_and_never_animated() {
+        use crate::ErrorReason;
         use crate::systems::animation::{
             AnimationControllerDescription, AnimationDriverDescription, AnimationProperty,
             AnimationTrackTarget,
         };
-        use crate::{ErrorReason, StateOverlayAlias};
 
         let mut host = HostRuntime::new();
-        let world = host.create_world(WorldLimits::default()).unwrap();
+        let world = host
+            .create_world(
+                WorldLimits::default(),
+                &[
+                    crate::systems::animation::AnimationSystem::ID,
+                    crate::systems::asset_dependencies::AssetDependencySystem::ID,
+                ],
+            )
+            .unwrap();
         let mut table = Rows::<RowsFixtureItem>::new();
         table.push(item(1.0)).unwrap();
         let outcome = run(
@@ -1039,6 +1324,7 @@ mod world {
                         symbolic_id: Some("text".into()),
                         classes: vec![],
                     },
+                    adopt: false,
                 },
                 Command::InsertComponent {
                     entity: EntityRef::Alias(1),
@@ -1047,6 +1333,7 @@ mod world {
                         offset: offset_of!(RowsFixture, items) as u32,
                         value: crate::FieldValue::Rows(table.encode()),
                     }],
+                    adopt: false,
                 },
             ],
         );
@@ -1057,12 +1344,7 @@ mod world {
         let outcome = run(&mut host, world, vec![set(entity, label, text("base"))]);
         assert!(outcome.result.is_ok(), "{:?}", outcome.result);
         assert_eq!(
-            state(&mut host, world, entity)
-                .0
-                .items
-                .get(0)
-                .unwrap()
-                .label,
+            state(&mut host, world, entity).items.get(0).unwrap().label,
             Some("base".into())
         );
 
@@ -1088,76 +1370,11 @@ mod world {
             ErrorReason::InvalidField
         );
 
-        // An overlay sets the text as a discrete value and withdrawing restores the base.
-        let outcome = run(
-            &mut host,
-            world,
-            vec![
-                Command::CreateStateOverlayOwner {
-                    alias: 1,
-                },
-                Command::AttachEntityOverlayBinding {
-                    owner: StateOverlayRef::Alias(1),
-                    alias: 2,
-                    symbolic_id: "text".into(),
-                    mode: EntityOverlayMode::Bound,
-                },
-                Command::AttachComponentStateOverlay {
-                    owner: StateOverlayRef::Alias(1),
-                    binding: StateOverlayRef::Alias(2),
-                    alias: 3,
-                    component: ComponentValue::ROWS_FIXTURE,
-                    mode: ComponentOverlayMode::Bound,
-                    fields: vec![crate::FieldWrite {
-                        offset: label,
-                        value: text("overlay"),
-                    }],
-                },
-            ],
-        );
-        assert!(outcome.result.is_ok(), "{:?}", outcome.result);
-        let handle = |aliases: &[StateOverlayAlias], alias| {
-            StateOverlayRef::Handle(aliases.iter().find(|a| a.alias == alias).unwrap().id)
-        };
-        let (owner, overlay) = (
-            handle(&outcome.state_overlays, 1),
-            handle(&outcome.state_overlays, 3),
-        );
-        let (base, effective) = state(&mut host, world, entity);
-        assert_eq!(base.items.get(0).unwrap().label, Some("base".into()));
+        // A rejected write leaves the stored text unchanged.
         assert_eq!(
-            effective.items.get(0).unwrap().label,
-            Some("overlay".into())
+            state(&mut host, world, entity).items.get(0).unwrap().label,
+            Some("base".into())
         );
-
-        let over_long = run(
-            &mut host,
-            world,
-            vec![Command::UpdateComponentStateOverlay {
-                owner,
-                overlay,
-                fields: vec![crate::FieldWrite {
-                    offset: label,
-                    value: text(&"y".repeat(17)),
-                }],
-                clear: vec![],
-            }],
-        );
-        assert!(over_long.result.is_err());
-
-        let outcome = run(
-            &mut host,
-            world,
-            vec![Command::UpdateComponentStateOverlay {
-                owner,
-                overlay,
-                fields: vec![],
-                clear: vec![label],
-            }],
-        );
-        assert!(outcome.result.is_ok(), "{:?}", outcome.result);
-        let (_, effective) = state(&mut host, world, entity);
-        assert_eq!(effective.items.get(0).unwrap().label, Some("base".into()));
 
         // Animation binds numeric row properties but rejects the text property.
         let description = |offset| AnimationControllerDescription {
@@ -1170,6 +1387,7 @@ mod world {
                     component: ComponentValue::ROWS_FIXTURE,
                     offsets: vec![offset],
                 }),
+                entity_bindings: Vec::new(),
                 weight: 1.0,
                 additive: false,
                 reference_time: 0.0,

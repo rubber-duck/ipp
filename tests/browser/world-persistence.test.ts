@@ -9,6 +9,10 @@ const worldHostCases = [
     name: "World metadata grows and restores beyond the former byte ceiling",
     method: "worldMetadataGrowth",
   },
+  {
+    name: "selected World links, overlays and admission",
+    method: "selectedWorldFoundation",
+  },
 ];
 import {
   runBrowserEnvironment,
@@ -46,7 +50,7 @@ for (const scenario of worldHostCases) {
             async ({ urls, method }) => {
               const contract = await import(urls.generated);
               const scenarios = await import(
-                `${urls.origin}/dist/tests/integration/scenarios/world-persistence.js`
+                `${urls.origin}/dist/tests/integration/scenarios/${method === "selectedWorldFoundation" ? "selected-world" : "world-persistence"}.js`
               );
               const client = await contract.IppHostClient.connectWorker(
                 urls.workerScript,

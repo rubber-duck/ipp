@@ -52,29 +52,25 @@ impl SystemInstanceAccess<'_> {
 }
 
 impl SystemRuntimeAccess<'_> {
-    #[cfg(feature = "surfaces")]
-    pub(in crate::world) fn can_apply_authored_in_place(
-        &self,
-        entity: EntityId,
-        component: u16,
-    ) -> bool {
-        !self.world.state.dirty.contains(&(entity, component))
-            && !self.world.state.prepared.contains_key(&(entity, component))
-            && self
-                .world
-                .state
-                .entities
-                .get(&entity)
-                .and_then(|record| record.layers.get(&component))
-                .is_some_and(|layer| layer.inputs.supports_in_place_authored_mutation())
-    }
-
     pub(in crate::world) fn apply_operation(
         &mut self,
         mut current: Option<&mut dyn System>,
         command: &Command,
-        aliases: &mut BTreeMap<u32, EntityId>,
+        aliases: &mut EntityAliases,
         created: &mut Vec<(u32, EntityId)>,
+        effects: &mut Vec<crate::OperationEffect>,
+    ) -> Result<(), ErrorReason> {
+        self.prepare_operation_boundary(
+            current
+                .as_deref_mut()
+                .map(|system| system as &mut dyn System),
+        )?;
+        self.apply_prepared_operation(current, command, aliases, created, effects)
+    }
+
+    pub(in crate::world) fn prepare_operation_boundary(
+        &mut self,
+        current: Option<&mut dyn System>,
     ) -> Result<(), ErrorReason> {
         // A subsequent operation may reuse a deleted entity slot only after all
         // handlers have completed against the old occupied component storage.
@@ -82,12 +78,47 @@ impl SystemRuntimeAccess<'_> {
             super::access::commit_components(
                 self.world,
                 &mut self.instances,
-                current
-                    .as_deref_mut()
-                    .map(|system| system as &mut dyn System),
+                current,
                 self.asset_acquisition,
                 false,
             )?;
+        }
+        Ok(())
+    }
+
+    pub(in crate::world) fn apply_prepared_operation(
+        &mut self,
+        mut current: Option<&mut dyn System>,
+        command: &Command,
+        aliases: &mut EntityAliases,
+        created: &mut Vec<(u32, EntityId)>,
+        effects: &mut Vec<crate::OperationEffect>,
+    ) -> Result<(), ErrorReason> {
+        debug_assert!(self.world.state.retired_entities.is_empty());
+        self.world.manifest.admit_command(command)?;
+        let requested_component = match command {
+            Command::InsertComponent {
+                component,
+                ..
+            } => Some(*component),
+            Command::InsertComponentValue {
+                value,
+                ..
+            } => Some(ComponentValue::type_id(value)),
+            _ => None,
+        };
+        if let Some(component) = requested_component {
+            let slots = self.world.state.allocator.slots();
+            let mut pending = vec![component];
+            let mut visited = BTreeSet::new();
+            while let Some(component) = pending.pop() {
+                if visited.insert(component) {
+                    self.world
+                        .components
+                        .try_reserve_component(component, slots)?;
+                    pending.extend_from_slice(ComponentValue::required_components(component));
+                }
+            }
         }
         let mut staged = WorldMutationState {
             entities_state: std::mem::take(&mut self.world.state),
@@ -98,6 +129,8 @@ impl SystemRuntimeAccess<'_> {
         staged.operation_writes.clear();
         staged.operation_created.clear();
         staged.operation_deleted.clear();
+        staged.operation_adopted = false;
+        staged.links.operation_changed.clear();
         let mut result = Ok(());
         self.instances.visit_scoped(
             self.world.identity,
@@ -107,12 +140,15 @@ impl SystemRuntimeAccess<'_> {
             |system, dependencies| {
                 if result.is_ok() {
                     result = system.before_operation(&mut SystemOperationContext {
+                        effects,
                         world_data: self.world,
                         staged: &mut staged,
                         command,
                         aliases,
                         dependencies,
                         assets: self.asset_acquisition,
+                        topology: self.topology,
+                        frame_context: self.frame_context,
                     });
                 }
             },
@@ -127,12 +163,15 @@ impl SystemRuntimeAccess<'_> {
                 |system, dependencies| {
                     if handled.is_none() {
                         handled = system.apply_operation(&mut SystemOperationContext {
+                            effects,
                             world_data: self.world,
                             staged: &mut staged,
                             command,
                             aliases,
                             dependencies,
                             assets: self.asset_acquisition,
+                            topology: self.topology,
+                            frame_context: self.frame_context,
                         });
                     }
                 },
@@ -147,72 +186,33 @@ impl SystemRuntimeAccess<'_> {
                 )
             });
         }
+        // Applied effects are retained on failure, so the requirement rule
+        // completes every operation, including a failed one.
+        result = result.and(staged.insert_required_components(&self.world.components));
+        let link_result = staged.links.reconcile();
+        result = result.and(link_result);
         self.instances
             .visit_scoped(self.world.identity, current, |system, dependencies| {
                 let resolved = system.after_operation(&mut SystemOperationContext {
+                    effects,
                     world_data: self.world,
                     staged: &mut staged,
                     command,
                     aliases,
                     dependencies,
                     assets: self.asset_acquisition,
+                    topology: self.topology,
+                    frame_context: self.frame_context,
                 });
                 result = std::mem::replace(&mut result, Ok(())).and(resolved);
             });
-        result = result.and(staged.prepare_changes());
+        staged.prepare_changes();
         staged.record_component_observations(&self.world.components);
+        if staged.operation_adopted {
+            effects.push(crate::OperationEffect::Adopted);
+        }
         self.world.state = staged.entities_state;
         result
-    }
-
-    /// Apply a prevalidated authored value edit after synchronous commit
-    /// invalidation. Identity and resource declaration changes use staged commands.
-    #[cfg(feature = "surfaces")]
-    pub(in crate::world) fn apply_authored_in_place(
-        &mut self,
-        current: &mut dyn System,
-        entity: EntityId,
-        component: u16,
-        fields: impl IntoIterator<Item = u32>,
-        apply: impl FnOnce(&mut registry::ComponentStorage) -> Result<(), ErrorReason> + 'static,
-    ) -> Result<(), ErrorReason> {
-        if !self.can_apply_authored_in_place(entity, component) {
-            return Err(ErrorReason::InvalidValue);
-        }
-        self.world.state.explicit_fields.clear();
-        let incarnation = self
-            .world
-            .state
-            .entities
-            .get(&entity)
-            .and_then(|record| record.input(component))
-            .ok_or(ErrorReason::MissingComponent)?
-            .incarnation;
-        self.world
-            .state
-            .changed
-            .insert((entity, component), Some(incarnation));
-        for field in fields {
-            self.world
-                .state
-                .explicit_fields
-                .insert((entity, component, field));
-        }
-        self.world
-            .state
-            .deferred_mutations
-            .push(DeferredComponentMutation {
-                entity,
-                component,
-                apply: Box::new(apply),
-            });
-        super::access::commit_components(
-            self.world,
-            &mut self.instances,
-            Some(current),
-            self.asset_acquisition,
-            false,
-        )
     }
 
     pub(in crate::world) fn apply_authored_commands(
@@ -220,7 +220,7 @@ impl SystemRuntimeAccess<'_> {
         mut current: Option<&mut dyn System>,
         commands: &[Command],
     ) -> Result<(), ErrorReason> {
-        let mut aliases = BTreeMap::new();
+        let mut aliases = EntityAliases::default();
         let mut created = Vec::new();
         let mut result = Ok(());
         for command in commands {
@@ -231,6 +231,7 @@ impl SystemRuntimeAccess<'_> {
                 command,
                 &mut aliases,
                 &mut created,
+                &mut Vec::new(),
             );
             if result.is_err() {
                 break;
@@ -258,47 +259,18 @@ impl WorldContext<'_> {
             },
             asset_acquisition: self.asset_acquisition,
             data_sources: self.data_sources,
+            topology: self.topology,
+            frame_context: self.frame_context,
+            reference_worlds: self.reference_worlds.as_ref(),
         }
     }
 
-    /// Stage only affected pre-evaluation inputs; unrelated evaluated storage stays live.
-    pub(in crate::world) fn stage_underlying_components(
+    fn apply_batch(
         &mut self,
-        targets: impl IntoIterator<Item = (EntityId, u16)>,
-    ) {
-        for (entity, component) in targets {
-            let value = self.read().underlying_input_component(entity, component);
-            if let Some(layer) = self
-                .world
-                .state
-                .entities
-                .get_mut(&entity)
-                .and_then(|record| record.layers.get_mut(&component))
-            {
-                layer.inputs.stage(value);
-            }
-        }
-    }
-
-    pub(in crate::world) fn apply_cleanup_commands(&mut self, commands: &[Command]) {
-        assert!(!self.world.updating, "cleanup requires a World boundary");
-        self.world.forced_cleanup = true;
-        if self.world.command_stream.is_none() {
-            self.instances
-                .visit_scoped(self.world.identity, None, |system, _| system.begin_batch());
-        }
-        let mut aliases = BTreeMap::new();
-        let mut created = Vec::new();
-        for command in commands {
-            let _ =
-                self.runtime_access()
-                    .apply_operation(None, command, &mut aliases, &mut created);
-        }
-        let _ = self.commit_pending_changes();
-        self.world.forced_cleanup = false;
-    }
-
-    fn apply_batch(&mut self, batch: Batch, tick: u64) -> BatchOutcome {
+        mut batch: Batch,
+        tick: u64,
+        mut effect_sink: Option<&mut dyn crate::OperationEffectSink>,
+    ) -> BatchOutcome {
         if let Some(reason) = self.world.fault {
             return BatchOutcome {
                 batch_id: batch.id,
@@ -309,7 +281,8 @@ impl WorldContext<'_> {
                     reason,
                     aliases: Vec::new(),
                 }),
-                state_overlays: Vec::new(),
+                symbols: Vec::new(),
+                effects: Vec::new(),
             };
         }
         #[cfg(feature = "diagnostics")]
@@ -321,23 +294,57 @@ impl WorldContext<'_> {
                 batch.operations.len()
             );
         }
-        if self.world.command_stream.is_none() {
-            self.instances
-                .visit_scoped(self.world.identity, None, |system, _| system.begin_batch());
-        }
-        let mut aliases = self
-            .world
-            .command_stream
-            .as_mut()
-            .map(std::mem::take)
-            .unwrap_or_default();
+        self.instances
+            .visit_scoped(self.world.identity, None, |system, _| system.begin_batch());
+        let mut aliases = EntityAliases::default();
         let mut created = Vec::new();
+        let mut symbols = Vec::new();
+        let mut resolved_symbols = BTreeSet::new();
         let mut result = Ok(());
-        for (operation, command) in batch.operations.iter().enumerate() {
-            if let Err(reason) =
-                self.runtime_access()
-                    .apply_operation(None, command, &mut aliases, &mut created)
-            {
+        let mut effects = Vec::new();
+        let mut operation_effects = Vec::new();
+        for (operation, command) in batch.operations.iter_mut().enumerate() {
+            let applied = (|| {
+                self.runtime_access().prepare_operation_boundary(None)?;
+                if let Command::DetachWorldAttachmentReceipt {
+                    receipt,
+                } = command
+                {
+                    let expected = effect_sink
+                        .as_ref()
+                        .ok_or(ErrorReason::InvalidEntity)?
+                        .attachment_receipt(*receipt)?;
+                    *command = Command::DetachWorldAttachmentIf {
+                        expected,
+                    };
+                }
+                self.resolve_operation_references(command)?;
+                self.resolve_symbol_references(command, &mut symbols, &mut resolved_symbols)?;
+                if let Some(sink) = effect_sink.as_mut() {
+                    self.apply_admitted_operation(
+                        command,
+                        &mut aliases,
+                        &mut created,
+                        &mut operation_effects,
+                        &mut **sink,
+                    )
+                } else {
+                    self.runtime_access().apply_prepared_operation(
+                        None,
+                        command,
+                        &mut aliases,
+                        &mut created,
+                        &mut operation_effects,
+                    )
+                }
+            })();
+            effects.extend(operation_effects.drain(..).map(|effect| {
+                crate::AppliedOperationEffect {
+                    operation,
+                    effect,
+                }
+            }));
+            if let Err(reason) = applied {
                 result = Err(BatchError {
                     aliases: Vec::new(),
                     scope: crate::BatchErrorScope::Operation,
@@ -346,9 +353,6 @@ impl WorldContext<'_> {
                 });
                 break;
             }
-        }
-        if let Some(retained) = &mut self.world.command_stream {
-            *retained = aliases;
         }
         let validation = self.commit_pending_changes();
         #[cfg(feature = "diagnostics")]
@@ -401,7 +405,8 @@ impl WorldContext<'_> {
             batch_id: batch.id,
             tick,
             result,
-            state_overlays: Vec::new(),
+            symbols,
+            effects,
         };
         self.instances
             .visit_scoped(self.world.identity, None, |system, _| {
@@ -411,18 +416,39 @@ impl WorldContext<'_> {
         outcome
     }
 
+    /// Replace each symbolic reference of `command` with the handle it names at
+    /// this operation boundary, recording each distinct symbol and handle once,
+    /// in first-resolution order, for the batch outcome.
+    fn resolve_symbol_references(
+        &self,
+        command: &mut Command,
+        symbols: &mut Vec<(std::sync::Arc<str>, EntityId)>,
+        resolved: &mut BTreeSet<(std::sync::Arc<str>, EntityId)>,
+    ) -> Result<(), ErrorReason> {
+        let index = &self.world.state.symbols;
+        command.visit_entity_refs_mut(&mut |reference| {
+            let EntityRef::Symbol(symbol) = reference else {
+                return Ok(());
+            };
+            let id = index
+                .get(&**symbol)
+                .copied()
+                .ok_or(ErrorReason::MissingSymbolicId)?;
+            if resolved.insert((symbol.clone(), id)) {
+                symbols.push((symbol.clone(), id));
+            }
+            *reference = EntityRef::Handle(id);
+            Ok(())
+        })
+    }
+
     fn dispatch_phase(
         &mut self,
         dt: f64,
         phase: SystemFramePhase,
         report: &mut WorldUpdateReport,
     ) -> Result<(), ErrorReason> {
-        for position in 0..self.instances.before.len() {
-            let index = if matches!(phase, SystemFramePhase::Restore) {
-                self.instances.before.len() - 1 - position
-            } else {
-                position
-            };
+        for index in 0..self.instances.before.len() {
             let (systems_before_current, tail) = self.instances.before.split_at_mut(index);
             let (current_system, systems_after_current) =
                 tail.split_first_mut().expect("schedule index");
@@ -436,127 +462,31 @@ impl WorldContext<'_> {
                     },
                     asset_acquisition: self.asset_acquisition,
                     data_sources: self.data_sources,
+                    topology: self.topology,
+                    frame_context: self.frame_context,
+                    reference_worlds: self.reference_worlds.as_ref(),
                 },
                 dt: &dt,
                 dependent: index,
             };
             #[cfg(feature = "profiling")]
-            let _measurement =
-                crate::profiling::Stage::system(index, phase as usize, current_system.id.0);
+            let _measurement = crate::profiling::Stage::system(
+                current_system.profile_slot,
+                phase as usize,
+                current_system.id.0,
+            );
             match phase {
                 SystemFramePhase::Check => current_system.system.prepare_frame(&mut context)?,
                 SystemFramePhase::Accept => current_system.system.accept_ingress(&mut context),
-                SystemFramePhase::Restore => current_system.system.prepare_mutation(&mut context),
                 SystemFramePhase::Prepare => current_system.system.prepare_evaluation(&mut context),
                 SystemFramePhase::Evaluate => current_system.system.update(&mut context),
                 SystemFramePhase::Finish => {
                     current_system.system.finish_update(&mut context, report)
                 }
+                SystemFramePhase::Observe => current_system
+                    .system
+                    .observe_frame(context.world.view(), report.tick),
             }
-        }
-        Ok(())
-    }
-
-    /// Whether ordered world ingress or subsystem-deferred input must drain
-    /// before a later command chunk may be admitted. The Host checks this
-    /// before scoping a chunk so deferred chunks can wait without losing
-    /// their scoped state; `apply_command_chunk` enforces the same gate.
-    pub fn has_deferred_world_input(&self) -> bool {
-        !self.world.queue.is_empty()
-            || self
-                .instances
-                .before
-                .iter()
-                .any(|instance| instance.system.has_deferred_input())
-    }
-
-    /// Apply one buffer at a Host-controlled mutation boundary without evaluation.
-    /// The Host must finish or abort the stream before calling `step` again.
-    /// Aliases span the stream; outcomes contain only identities from this buffer.
-    /// A nonempty queue or subsystem-deferred input is transient backpressure
-    /// (`Capacity`), never a terminal rejection: the Host defers the chunk
-    /// until earlier input drains. Only calling while updating is a
-    /// programming error (`InvalidValue`).
-    pub fn apply_command_chunk(&mut self, batch: Batch) -> Result<BatchOutcome, ErrorReason> {
-        if self.world.updating {
-            return Err(ErrorReason::InvalidValue);
-        }
-        if self.has_deferred_world_input() {
-            return Err(ErrorReason::Capacity);
-        }
-
-        self.enqueue(batch)?;
-        if let Err(error) = self.prepare_command_stream() {
-            self.discard_command_chunk();
-            return Err(error);
-        }
-
-        let Some(Ingress::Batch(batch)) = self.world.queue.pop_front() else {
-            unreachable!("exclusive command buffer ingress");
-        };
-        Ok(self.apply_batch(batch, self.world.tick))
-    }
-
-    /// Apply one ordered subsystem-command buffer under the Host's existing
-    /// logical stream gate. The Host must finish or abort the stream before
-    /// calling `step`; a failed command stops the buffer without rollback.
-    pub fn apply_system_command_chunk<T: 'static>(
-        &mut self,
-        system: systems::SystemId,
-        session: u64,
-        request_id: u64,
-        commands: Vec<T>,
-    ) -> Result<systems::SystemCommandOutcome, ErrorReason> {
-        if self.world.updating {
-            return Err(ErrorReason::InvalidValue);
-        }
-        if self.has_deferred_world_input() {
-            return Err(ErrorReason::Capacity);
-        }
-        self.prepare_command_stream()?;
-
-        let mut applied = 0;
-        let mut result = Ok(());
-        for command in &commands {
-            result = self.apply_system_command(system, session, command);
-            if result.is_err() {
-                break;
-            }
-            applied += 1;
-        }
-        Ok(systems::SystemCommandOutcome {
-            session,
-            request_id,
-            applied,
-            result,
-        })
-    }
-
-    /// Restore before ingress that queue inspection cannot see, returning
-    /// every retained evaluated output before inputs are staged.
-    fn restore_for_ingress(
-        &mut self,
-        dt: f64,
-        report: &mut WorldUpdateReport,
-    ) -> Result<(), ErrorReason> {
-        self.world.admitting_ingress = true;
-        let restored = self.dispatch_phase(dt, SystemFramePhase::Restore, report);
-        self.world.admitting_ingress = false;
-        restored?;
-        self.world.mutation_prepared = true;
-        Ok(())
-    }
-
-    fn prepare_command_stream(&mut self) -> Result<(), ErrorReason> {
-        self.prepare_update(0.0)?;
-        if !self.world.mutation_prepared {
-            self.restore_for_ingress(0.0, &mut WorldUpdateReport::default())?;
-        }
-
-        if self.world.command_stream.is_none() {
-            self.instances
-                .visit_scoped(self.world.identity, None, |system, _| system.begin_batch());
-            self.world.command_stream = Some(BTreeMap::new());
         }
         Ok(())
     }
@@ -570,10 +500,19 @@ impl WorldContext<'_> {
         if let Some(reason) = self.world.fault {
             return Err(reason);
         }
+        let publications = self.publications;
+        let local_outputs = self.outputs();
         self.with_system_dyn(system, |current, world| {
+            let mut declared_worlds = BTreeSet::new();
+            current.command_world_references(command, &mut |world| {
+                declared_worlds.insert(world);
+            });
             current.command(
                 &mut systems::SystemCommandContext {
                     world,
+                    publications,
+                    declared_worlds,
+                    local_outputs,
                 },
                 session,
                 command,
@@ -582,36 +521,7 @@ impl WorldContext<'_> {
         .unwrap_or(Err(ErrorReason::InvalidValue))
     }
 
-    fn discard_command_chunk(&mut self) {
-        let batch = match self
-            .world
-            .queue
-            .pop_front()
-            .expect("command chunk ingress must remain at the queue head")
-        {
-            Ingress::Batch(batch) => batch,
-            Ingress::System {
-                ..
-            }
-            | Ingress::SystemBatch {
-                ..
-            } => unreachable!("exclusive command chunk ingress"),
-        };
-        self.recycle_command_buffer(batch.operations);
-    }
-
-    /// Release the evaluation gate, retaining every applied effect on all exits.
-    pub fn finish_command_stream(&mut self) {
-        self.world.command_stream = None;
-        self.release_state_overlay_owners([]);
-    }
-
     /// Admit queued inputs through subsystem hooks before shared service progression.
-    ///
-    /// When a subsystem holds deferred input, such as a GUI input commit, this
-    /// first runs the Restore phase with full restoration, so the admitted
-    /// input stages authored values rather than retained evaluated output.
-    /// The following `step` then skips its own Restore.
     pub fn prepare_update(&mut self, dt: f64) -> Result<(), ErrorReason> {
         if self.world.updating || !dt.is_finite() || dt < 0.0 || !(self.world.time + dt).is_finite()
         {
@@ -626,17 +536,6 @@ impl WorldContext<'_> {
         }
         let mut report = WorldUpdateReport::default();
         self.dispatch_phase(dt, SystemFramePhase::Check, &mut report)?;
-        // Subsystem input commits at Accept. Restore first, so those commits
-        // stage authored inputs rather than retained evaluated output.
-        let subsystem_ingress = self
-            .instances
-            .before
-            .iter()
-            .any(|instance| instance.system.has_deferred_input());
-        if subsystem_ingress && self.world.fault.is_none() && !self.world.mutation_prepared {
-            self.restore_for_ingress(dt, &mut report)?;
-        }
-
         self.dispatch_phase(dt, SystemFramePhase::Accept, &mut report)?;
         self.world.prepared_frame = true;
         Ok(())
@@ -644,9 +543,11 @@ impl WorldContext<'_> {
 
     /// Commit ordered ingress, evaluate the fixed schedule, then detach subsystem observations.
     pub fn step(&mut self, dt: f64) -> Result<WorldUpdateReport, ErrorReason> {
-        if self.world.command_stream.is_some() {
-            return Err(ErrorReason::InvalidValue);
-        }
+        let report = self.admit_frame(dt)?;
+        self.evaluate_frame(dt, report)
+    }
+
+    pub(crate) fn admit_frame(&mut self, dt: f64) -> Result<WorldUpdateReport, ErrorReason> {
         self.prepare_update(dt)?;
         self.owns_update = true;
         self.world.updating = true;
@@ -655,12 +556,34 @@ impl WorldContext<'_> {
             time: self.world.time + dt,
             ..Default::default()
         };
-        if self.world.fault.is_none() && !self.world.mutation_prepared {
-            self.dispatch_phase(dt, SystemFramePhase::Restore, &mut report)?;
-        }
-        while let Some(ingress) = self.world.queue.pop_front() {
+        while let Some(front) = self.world.queue.front() {
+            if let Ingress::System {
+                system,
+                command,
+                ..
+            } = front
+                && self
+                    .instances
+                    .before
+                    .iter()
+                    .find(|instance| instance.id == *system)
+                    .is_some_and(|instance| !instance.system.command_ready(command.as_ref()))
+            {
+                break;
+            }
+            let ingress = self.world.queue.pop_front().expect("observed ingress head");
             match ingress {
-                Ingress::Batch(batch) => report.outcomes.push(self.apply_batch(batch, report.tick)),
+                Ingress::Batch {
+                    batch,
+                    mut effect_sink,
+                } => {
+                    let sink = effect_sink
+                        .as_mut()
+                        .map(|sink| &mut **sink as &mut dyn crate::OperationEffectSink);
+                    report
+                        .outcomes
+                        .push(self.apply_batch(batch, report.tick, sink));
+                }
                 Ingress::System {
                     system,
                     session,
@@ -707,6 +630,18 @@ impl WorldContext<'_> {
                 }
             }
         }
+        self.world.updating = false;
+        self.owns_update = false;
+        Ok(report)
+    }
+
+    pub(crate) fn evaluate_frame(
+        &mut self,
+        dt: f64,
+        mut report: WorldUpdateReport,
+    ) -> Result<WorldUpdateReport, ErrorReason> {
+        self.owns_update = true;
+        self.world.updating = true;
         if self.world.fault.is_none() {
             self.dispatch_phase(dt, SystemFramePhase::Prepare, &mut report)?;
             self.world.accepting_removals = true;
@@ -720,9 +655,9 @@ impl WorldContext<'_> {
         self.world.time = report.time;
         if self.world.fault.is_none() {
             self.dispatch_phase(dt, SystemFramePhase::Finish, &mut report)?;
+            self.dispatch_phase(dt, SystemFramePhase::Observe, &mut report)?;
         }
         self.world.prepared_frame = false;
-        self.world.mutation_prepared = false;
         self.world.updating = false;
         self.owns_update = false;
         Ok(report)
@@ -751,17 +686,22 @@ impl WorldContext<'_> {
                 },
                 asset_acquisition: self.asset_acquisition,
                 data_sources: self.data_sources,
+                topology: self.topology,
+                frame_context: self.frame_context,
+                reference_worlds: self.reference_worlds.as_ref(),
             },
         ))
     }
 }
 
+/// Frame phases in dispatch order; profiling numbers them in this order.
 #[derive(Clone, Copy)]
 enum SystemFramePhase {
     Check,
     Accept,
-    Restore,
     Prepare,
     Evaluate,
     Finish,
+    /// Read-only comparison of final stored values, after every System's Finish.
+    Observe,
 }

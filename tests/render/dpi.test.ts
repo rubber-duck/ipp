@@ -18,8 +18,8 @@ import type {
 } from "./canvas-fixture.js";
 
 const workspace = resolve(process.cwd());
-const render = browserBuild("render");
-const overlays = browserBuild("headless");
+const render = browserBuild("render-surfaces");
+const headless = browserBuild("headless");
 const fixtureModule = "/target/canvas-build/fixture.js";
 
 test("canvas follows CSS size and display density without replacing its runtime", {
@@ -31,7 +31,7 @@ test("canvas follows CSS size and display density without replacing its runtime"
     {
       workspace,
       build: render,
-      mismatchBuild: overlays,
+      mismatchBuild: headless,
       deviceScaleFactor: 2,
       operationTimeoutMs: 12_000,
       closeTimeoutMs: 5_000,
@@ -133,7 +133,9 @@ test("canvas follows CSS size and display density without replacing its runtime"
           600,
         ]);
         const duringLoss = await layout(scenario.page, moduleUrl);
-        assertIdentity(duringLoss, initialScene);
+        assertIdentity(duringLoss, initialScene, [
+          "Presentation failed: unavailable",
+        ]);
         assert.deepEqual(duringLoss.transfers, initialTransfers);
         await invoke(scenario.page, moduleUrl, "setCanvasContextLost", [
           "left",
@@ -166,7 +168,9 @@ test("canvas follows CSS size and display density without replacing its runtime"
           bounded.width,
           bounded.height,
         );
-        assertIdentity(cappedLayout, initialScene);
+        assertIdentity(cappedLayout, initialScene, [
+          "Presentation failed: unavailable",
+        ]);
         assert.deepEqual(cappedLayout.transfers, initialTransfers);
         transfers = cappedLayout.transfers;
       } catch (error) {
@@ -202,7 +206,9 @@ test("canvas follows CSS size and display density without replacing its runtime"
   await assertLoopbackClosed(result.origin);
 });
 
-function browserBuild(name: "render" | "headless"): BrowserBuildConfiguration {
+function browserBuild(
+  name: "render-surfaces" | "headless",
+): BrowserBuildConfiguration {
   const directory = resolve(workspace, "target/browser-build", name);
   return {
     name,
@@ -251,6 +257,7 @@ function assertLayout(
 function assertIdentity(
   current: CanvasLayoutObservation,
   initial: CanvasObservation,
+  allowedErrors: readonly string[] = [],
 ): void {
   assert.equal(current.observation.session, initial.session);
   assert.deepEqual(current.observation.entityIds, initial.entityIds);
@@ -259,7 +266,8 @@ function assertIdentity(
     initial.runtimeEntityIds,
   );
   assert.equal(current.observation.ownedExists, true);
-  assert.deepEqual(current.observation.errors, []);
+  for (const error of current.observation.errors)
+    assert.ok(allowedErrors.includes(error), error);
 }
 
 function requireCanvas(

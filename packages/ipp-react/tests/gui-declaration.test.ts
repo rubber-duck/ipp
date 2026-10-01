@@ -1,191 +1,212 @@
-/** GUI asset binding and enabled-lane declaration tests.
- *
- * Headless and node-runnable: pure tree description, commit signatures and
- * diffs with no transport and no reconciler. Real runtime coverage stays in
- * the pipeline `react` suite.
- */
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { GuiNodeHandle } from "@ipp/client";
-import { ENTITY_HOST_TYPE } from "../src/components.js";
+import { FieldKind } from "@ipp/client";
 import type { ReactWorldClient } from "../src/contract.js";
-import {
-  GUI_CHECKBOX_HOST_TYPE,
-  GUI_COLUMN_HOST_TYPE,
-  GUI_IMAGE_HOST_TYPE,
-  GUI_ROOT_HOST_TYPE,
-} from "../src/gui/components.js";
-import { normalizeGuiStyle } from "../src/gui/description.js";
-import { diffGuiTree, type GuiAcknowledgedNode } from "../src/gui/diff.js";
+import { componentNames } from "../src/components.js";
 import { ReactWorldTree } from "../src/tree.js";
 
-function guiClient(): ReactWorldClient {
+function client(): ReactWorldClient {
   return {
     session: 1n,
-    components: { GuiRoot: { id: 26, fields: {} } },
-  } as unknown as ReactWorldClient;
-}
-
-function makeHandle(nodeId: number): GuiNodeHandle {
-  return {
-    session: 1n,
-    entity: 100n,
-    rootIncarnation: 1n,
-    nodeId,
+    schemaHash: 1n,
+    capabilities: {
+      spatial: false,
+      textures: false,
+      builtinAssets: false,
+      picking: false,
+      debugGeometry: false,
+      pbr: false,
+      shadows: false,
+      skeletalAnimation: false,
+      meshPoses: false,
+    },
+    components: {
+      GuiCheckbox: {
+        id: 10,
+        fields: {
+          label: { offset: 0, kind: FieldKind.String },
+          checked: { offset: 8, kind: FieldKind.Bool },
+        },
+      },
+      GuiBehavior: {
+        id: 11,
+        fields: { enabled: { offset: 0, kind: FieldKind.Bool } },
+      },
+      GuiTheme: {
+        id: 12,
+        fields: { parts: { offset: 0, kind: FieldKind.Rows } },
+      },
+      GuiSkin: {
+        id: 13,
+        fields: {
+          theme: { offset: 0, kind: FieldKind.Entity },
+          parts: { offset: 8, kind: FieldKind.Rows },
+        },
+      },
+    },
+    batch: async () => {
+      throw new Error("Declaration validation must not submit");
+    },
   };
 }
 
-function describePanel(
-  tree: ReactWorldTree,
-  imageProps: Record<string, unknown>,
-  checkboxProps: Record<string, unknown>,
-): void {
-  const entity = tree.instance(ENTITY_HOST_TYPE, { id: "panel" });
-  const root = tree.instance(GUI_ROOT_HOST_TYPE, {});
-  const column = tree.instance(GUI_COLUMN_HOST_TYPE, {});
-  const checkbox = tree.instance(GUI_CHECKBOX_HOST_TYPE, {
-    checked: false,
-    ...checkboxProps,
+test("GUI declarations use ordinary entities, plain component declarations and explicit links", () => {
+  const tree = new ReactWorldTree(client());
+  const parent = tree.instance("ipp-entity", { id: "parent" });
+  const child = tree.instance("ipp-entity", { bindTo: "child" });
+  child.children.push(tree.instance("ipp-gui-checkbox", { checked: true }));
+  parent.children.push(
+    child,
+    tree.instance("ipp-gui-behavior", { enabled: false }),
+  );
+  tree.children.push(parent);
+  const description = tree.describe();
+  assert.deepEqual(
+    description.entities.map((entity) => [entity.symbolicId, entity.kind]),
+    [
+      ["parent", "declared"],
+      ["child", "bound"],
+    ],
+  );
+  assert.deepEqual(description.links, []);
+  assert.deepEqual(
+    description.components.map((component) => [
+      component.entity,
+      component.component,
+      component.control,
+    ]),
+    [
+      [child.identity, 10, true],
+      [parent.identity, 11, undefined],
+    ],
+  );
+  assert.deepEqual(description.components[0]!.fields.get(8), {
+    kind: "bool",
+    value: true,
   });
-  const image = tree.instance(GUI_IMAGE_HOST_TYPE, {
-    size: [1, 1],
-    ...imageProps,
-  });
-  column.children.push(checkbox, image);
-  root.children.push(column);
-  entity.children.push(root);
+  assert.equal("gui" in description, false);
+  // Component modes are gone: `bound` is not a component prop.
+  assert.throws(
+    () => tree.instance("ipp-gui-checkbox", { bound: true }),
+    /Unsupported/,
+  );
+});
+
+test("Rows and generated sparse writes snapshot their values and retain declaration identity", () => {
+  const tree = new ReactWorldTree(client());
+  const entity = tree.instance("ipp-entity", { id: "theme" });
+  const bytes = new Uint8Array([1, 2, 3]);
+  const theme = tree.instance("ipp-gui-theme", { parts: bytes });
+  entity.children.push(theme);
   tree.children.push(entity);
-}
-
-const drawingA = { kind: 18, source: "asset://18/7", variant: 0 };
-const drawingB = { kind: 18, source: "asset://18/8", variant: 0 };
-
-test("gui asset binds inline with no overlays and dedupes identical sources", () => {
-  const tree = new ReactWorldTree(guiClient());
-  describePanel(tree, { asset: drawingA }, { asset: drawingA });
-  const description = tree.describe();
-
-  // Inline sources create no asset declarations and no component overlays:
-  // nothing tears down when assets bind or swap.
-  assert.deepEqual(description.assets, []);
-  assert.deepEqual(description.overlays, []);
-  assert.equal(description.gui.length, 1);
-  const nodes = description.gui[0]!.nodes;
-  assert.equal(nodes.length, 3);
-  const bound = nodes.filter((node) => node.style.asset !== undefined);
-  assert.equal(bound.length, 2);
-  for (const node of bound) assert.deepEqual(node.style.asset, drawingA);
-});
-
-test("gui asset and enabled props validate loudly", () => {
-  const tree = new ReactWorldTree(guiClient());
-  assert.throws(
-    () =>
-      tree.instance(GUI_IMAGE_HOST_TYPE, {
-        size: [1, 1],
-        asset: { kind: 0, source: "" },
-      }),
-    /GUI asset must be an asset source/,
-  );
-  assert.throws(
-    () =>
-      tree.instance(GUI_CHECKBOX_HOST_TYPE, {
-        checked: false,
-        enabled: "no" as unknown as boolean,
-      }),
-    /GUI enabled must be a boolean/,
-  );
-});
-
-test("asset swap resubmits through the style signature as one update", () => {
-  const before = new ReactWorldTree(guiClient());
-  describePanel(before, { asset: drawingA }, {});
-  const rootA = before.describe().gui[0]!;
-  const after = new ReactWorldTree(guiClient());
-  describePanel(after, { asset: drawingB }, {});
-  const rootB = after.describe().gui[0]!;
-  assert.notEqual(rootA.signature, rootB.signature);
-
-  const acked = new Map<number, GuiAcknowledgedNode>(
-    rootA.nodes.map((node) => [
-      node.identity,
-      {
-        nodeId: node.identity,
-        parent: node.parent,
-        parentId: node.parent,
-        data: node.data,
-        values: node.values,
-        style: node.style,
-      },
-    ]),
-  );
-  const ids = new Map(
-    rootA.nodes.map((node) => [node.identity, node.identity]),
-  );
-  const order = new Map<number | undefined, number[]>();
-  for (const node of rootA.nodes) {
-    const list = order.get(node.parent);
-    if (list) list.push(node.identity);
-    else order.set(node.parent, [node.identity]);
-  }
-  const plan = diffGuiTree(rootB.nodes, acked, ids, 100, order, makeHandle);
-  // Exactly one in-place update naming the new source: no remove, no
-  // insert, no overlay work.
-  assert.equal(plan.edits.length, 1);
-  const edit = plan.edits[0]!;
-  assert.equal(edit.action, "update");
-  if (edit.action !== "update") throw new Error("expected update");
-  assert.deepEqual(edit.patch.style?.asset, drawingB);
-});
-
-test("enabled property disables through insert style and update patches", () => {
-  const tree = new ReactWorldTree(guiClient());
-  describePanel(tree, {}, { enabled: false });
-  const description = tree.describe();
-  const checkbox = description.gui[0]!.nodes[1]!;
-  assert.equal(checkbox.style.enabled, false);
-
-  const enabled = new ReactWorldTree(guiClient());
-  describePanel(enabled, {}, {});
-  const enabledRoot = enabled.describe().gui[0]!;
-  assert.equal(enabledRoot.nodes[1]!.style.enabled, true);
-  assert.notEqual(description.gui[0]!.signature, enabledRoot.signature);
-
-  // Toggling the lane diffs to an update carrying the lane.
-  const acked = new Map<number, GuiAcknowledgedNode>(
-    enabledRoot.nodes.map((node) => [
-      node.identity,
-      {
-        nodeId: node.identity,
-        parent: node.parent,
-        parentId: node.parent,
-        data: node.data,
-        values: node.values,
-        style: node.style,
-      },
-    ]),
-  );
-  const ids = new Map(
-    enabledRoot.nodes.map((node) => [node.identity, node.identity]),
-  );
-  const plan = diffGuiTree(
-    description.gui[0]!.nodes,
-    acked,
-    ids,
-    100,
-    new Map(),
-    makeHandle,
-  );
-  const updates = plan.edits.filter((edit) => edit.action === "update");
-  assert.equal(updates.length, 1);
-  const patch = (
-    updates[0] as Extract<(typeof plan.edits)[number], { action: "update" }>
-  ).patch;
+  const initial = tree.describe();
+  assert.equal(tree.describe().signature, initial.signature);
+  // A rerender that reuses a mutated array still compares its content.
+  bytes[0] = 9;
+  theme.props = { ...theme.props };
+  const changed = tree.describe();
+  assert.notEqual(changed.signature, initial.signature);
+  assert.deepEqual(initial.components[0]!.fields.get(0), {
+    kind: "rows",
+    value: new Uint8Array([1, 2, 3]),
+  });
   assert.equal(
-    (patch.style as { enabled?: boolean } | undefined)?.enabled,
-    false,
+    changed.components[0]!.identity,
+    initial.components[0]!.identity,
   );
+  theme.props = { fields: [{ offset: 100, value: { kind: "unset" } }] };
+  assert.deepEqual(tree.describe().components[0]!.fields.get(100), {
+    kind: "unset",
+  });
+});
 
-  // Sparse reads default the lane to true.
-  assert.equal(normalizeGuiStyle({}).enabled, true);
+test("GUI component names require selected evaluators and do not fall back to GuiRoot", () => {
+  const unselected: ReactWorldClient = {
+    ...client(),
+    manifest: {
+      systems: [],
+      operations: [],
+      components: [],
+    },
+  };
+  const tree = new ReactWorldTree(unselected);
+  assert.throws(() => tree.instance("ipp-gui-checkbox", {}), /select/);
+  assert.equal(Object.hasOwn(componentNames, "ipp-gui-root"), false);
+});
+
+test("Ordinary GUI rejects obsolete callbacks, unknown props and unqualified refs", () => {
+  const tree = new ReactWorldTree(client());
+  assert.throws(
+    () => tree.instance("ipp-gui-checkbox", { onChange: () => {} }),
+    /Unsupported/,
+  );
+  assert.throws(
+    () => tree.instance("ipp-gui-behavior", { enabled: "no" }),
+    /boolean/,
+  );
+  assert.throws(
+    () => tree.instance("ipp-gui-checkbox", { controlRef: { current: null } }),
+    /ordinary GUI client/,
+  );
+  assert.throws(
+    () =>
+      tree.instance("ipp-gui-theme", {
+        fields: [{ offset: 1, value: { kind: "world", value: null } }],
+      }),
+    /field/i,
+  );
+});
+
+test("Symbolic theme references resolve to root-local declared entity identities", () => {
+  const tree = new ReactWorldTree(client());
+  const theme = tree.instance("ipp-entity", { bindTo: "shared-theme" });
+  const control = tree.instance("ipp-entity", { id: "control" });
+  control.children.push(
+    tree.instance("ipp-gui-skin", { theme: "shared-theme" }),
+  );
+  tree.children.push(control, theme);
+  const description = tree.describe();
+  assert.deepEqual(description.components[0]!.fields.get(0), {
+    kind: "entity-reference",
+    value: { entity: theme.identity },
+  });
+});
+
+test("Descriptions reuse unchanged declarations and listener changes keep the signature", () => {
+  const unused = async (): Promise<never> => {
+    throw new Error("Description must not observe");
+  };
+  const tree = new ReactWorldTree({
+    ...client(),
+    subscribeGuiEffects: unused,
+    inspectPage: unused,
+    watchLifecycle: unused,
+  });
+  const entity = tree.instance("ipp-entity", { id: "row" });
+  const first = () => {};
+  const checkbox = tree.instance("ipp-gui-checkbox", {
+    checked: true,
+    onToggle: first,
+  });
+  entity.children.push(checkbox);
+  tree.children.push(entity);
+  const initial = tree.describe();
+  const second = () => {};
+  checkbox.props = { checked: true, onToggle: second };
+  const rerendered = tree.describe();
+  assert.equal(rerendered.signature, initial.signature);
+  assert.equal(rerendered.entities[0], initial.entities[0]);
+  assert.equal(rerendered.components[0]!.fields, initial.components[0]!.fields);
+  assert.equal(rerendered.components[0]!.controlListeners?.onToggle, second);
+  checkbox.props = { checked: false, onToggle: second };
+  const changed = tree.describe();
+  assert.notEqual(changed.signature, initial.signature);
+  assert.deepEqual(changed.components[0]!.fields.get(8), {
+    kind: "bool",
+    value: false,
+  });
+  checkbox.props = { checked: false, onToggle: second };
+  assert.equal(tree.describe().signature, changed.signature);
+  entity.children.push(tree.instance("ipp-gui-behavior", { enabled: true }));
+  assert.notEqual(tree.describe().signature, changed.signature);
 });

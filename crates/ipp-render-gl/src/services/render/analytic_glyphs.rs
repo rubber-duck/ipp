@@ -24,9 +24,7 @@ use crate::services::render::frame_statistics::RenderFrameWork;
 use crate::{RenderDevice, RenderError};
 use ipp_core::EntityId;
 use ipp_core::services::asset_management::AssetKey;
-use ipp_core::systems::surface::{
-    SurfaceClipRect, SurfaceGlyph, SurfacePrimitiveIdentity, SurfacePrimitiveStyle,
-};
+use ipp_core::systems::canvas::{CanvasClip, CanvasGlyph, CanvasPrimitiveId, CanvasPrimitiveStyle};
 
 /// Bytes the device packs per analytic instance: sixteen `f32` lanes.
 pub const ANALYTIC_INSTANCE_BYTES: usize = 16 * std::mem::size_of::<f32>();
@@ -34,18 +32,18 @@ pub const ANALYTIC_INSTANCE_BYTES: usize = 16 * std::mem::size_of::<f32>();
 /// Evaluated inputs of one analytic glyph run.
 #[derive(Clone, Copy, Debug)]
 pub struct AnalyticGlyphRun<'a> {
-    /// Live entity owning the Surface component.
+    /// Retained Surface key; a Canvas output uses [`CANVAS_SURFACE`](super::retained_surfaces::CANVAS_SURFACE).
     pub entity: EntityId,
     /// Evaluated style carrying the stable primitive identity.
-    pub style: &'a SurfacePrimitiveStyle,
+    pub style: &'a CanvasPrimitiveStyle,
     /// Effective clip rectangle in Surface metres.
-    pub clip: SurfaceClipRect,
+    pub clip: CanvasClip,
     /// Ready font asset incarnation; its curves and bounds are immutable.
     pub font_key: AssetKey,
     /// Metres per em.
     pub font_size: f32,
     /// Positioned glyphs in painter order.
-    pub glyphs: &'a [SurfaceGlyph],
+    pub glyphs: &'a [CanvasGlyph],
 }
 
 impl AnalyticGlyphRun<'_> {
@@ -95,7 +93,7 @@ struct RetainedAnalyticRun<D: RenderDevice> {
 /// Retained analytic glyph instance streams of one World.
 pub struct AnalyticGlyphCache<D: RenderDevice> {
     device: Rc<RefCell<D>>,
-    runs: BTreeMap<(EntityId, SurfacePrimitiveIdentity), RetainedAnalyticRun<D>>,
+    runs: BTreeMap<(EntityId, CanvasPrimitiveId), RetainedAnalyticRun<D>>,
     /// Sum of `bytes` over every retained stream.
     #[cfg(any(test, feature = "diagnostics"))]
     resident: usize,
@@ -186,7 +184,7 @@ impl<D: RenderDevice> AnalyticGlyphCache<D> {
     /// Rebuild a run's instances and replace or create its stream.
     fn replace(
         &mut self,
-        key: (EntityId, SurfacePrimitiveIdentity),
+        key: (EntityId, CanvasPrimitiveId),
         path: &D::SurfacePath,
         hash: u64,
         scratch: &mut Vec<SurfacePathInstance>,

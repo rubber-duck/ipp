@@ -72,7 +72,7 @@ async function connect(options = {}) {
         closes++;
       },
     },
-    options,
+    { ...options, selectedSystems: [] },
   );
   assert.ok(client instanceof IppClient);
   return {
@@ -92,7 +92,7 @@ function inspection(requestId, tick) {
 }
 
 function batchResponse(requestId, tick, batchId) {
-  const bytes = new Uint8Array(50);
+  const bytes = new Uint8Array(54); // Outcome, empty aliases, overlays and effects.
   bytes.set(
     packet({ requestId, tick, tag: codec.WIRE.RESPONSE_BATCH }).slice(0, 25),
   );
@@ -169,24 +169,24 @@ test("minimal generated codec retains every generic field value encoding", () =>
     session: 7n,
     requestId: 1n,
     body: {
-      kind: "batch",
-      batch: {
-        id: 2n,
-        operations: [
-          {
-            kind: "setField",
-            entity: codec.Entity.alias(4),
-            component: 99,
-            field: { offset: 12, value: { kind: "bytes", value: payload } },
-          },
-        ],
-      },
+      kind: "submitBatch",
+      batchId: 2,
+      last: true,
+      operations: [
+        {
+          kind: "setField",
+          entity: codec.Entity.alias(4),
+          component: 99,
+          field: { offset: 12, value: { kind: "bytes", value: payload } },
+        },
+      ],
     },
   });
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  assert.equal(bytes[41], codec.WIRE.VALUE_BYTES);
-  assert.equal(view.getUint32(42, true), payload.length);
-  assert.deepEqual([...bytes.slice(46)], [...payload]);
+  // Header: session, request, tag, u32 batch identity, last flag, count.
+  assert.equal(bytes[38], codec.WIRE.VALUE_BYTES);
+  assert.equal(view.getUint32(39, true), payload.length);
+  assert.deepEqual([...bytes.slice(43)], [...payload]);
 });
 
 test("generated client rejects a bootstrap mismatch and closes its transport", async () => {
@@ -210,7 +210,7 @@ test("generated client rejects a bootstrap mismatch and closes its transport", a
           closes++;
         },
       },
-      { timeoutMs: 1_000 },
+      { selectedSystems: [], timeoutMs: 1_000 },
     ),
     /bootstrap compatibility mismatch/,
   );
@@ -249,11 +249,12 @@ test("frame waits send no data, explicit thresholds reuse latest, default waits 
 test("unsolicited frames interleave correlated async batch and inspect responses", async () => {
   const { client, sent, emit } = await connect();
   try {
-    const batch = client.batch([], 12n);
+    const batch = client.batch([]);
     const inspect = client.inspectPage();
     const frame = client.waitForFrame();
     emit(packet());
-    emit(batchResponse(1n, 2n, 12n));
+    // The first client-assigned batch identity is zero.
+    emit(batchResponse(1n, 2n, 0n));
     emit(inspection(2n, 2n));
     assert.equal((await batch).tick, 2n);
     assert.equal((await inspect).tick, 2n);

@@ -1,4 +1,26 @@
 use super::*;
+use ipp_core::services::reliable_output::OutputClass;
+
+/// Payload-free name for capacity failure reasons.
+fn response_kind(body: &ResponseBody) -> &'static str {
+    match body {
+        ResponseBody::Frame {
+            ..
+        } => "frame",
+        ResponseBody::Resources {
+            ..
+        } => "resources",
+        ResponseBody::LifecycleEvents(_) => "lifecycle",
+        ResponseBody::RuntimeFailure {
+            ..
+        } => "runtime-failure",
+        ResponseBody::Batch(_) => "batch",
+        ResponseBody::Error {
+            ..
+        } => "error",
+        _ => "other",
+    }
+}
 
 impl<P: HostServices> WorldSessionContext<'_, P> {
     pub(super) fn record_runtime_failure(
@@ -7,8 +29,8 @@ impl<P: HostServices> WorldSessionContext<'_, P> {
         faulted: bool,
         mut message: String,
     ) -> Result<(), String> {
-        if message.len() > 2048 {
-            let mut end = 2048;
+        if message.len() > ipp_protocol::MAX_FAILURE_MESSAGE_BYTES {
+            let mut end = ipp_protocol::MAX_FAILURE_MESSAGE_BYTES;
             while !message.is_char_boundary(end) {
                 end -= 1;
             }
@@ -31,21 +53,12 @@ impl<P: HostServices> WorldSessionContext<'_, P> {
 
     pub(super) fn publish_report(
         &mut self,
-        report: &ipp_core::WorldUpdateReport,
+        report: &mut ipp_core::WorldUpdateReport,
     ) -> Result<(), String> {
         self.session.prepared = false;
         let mut replies = std::mem::take(&mut self.session.replies);
         let origins: std::collections::BTreeSet<_> =
             self.session.request_origins.keys().copied().collect();
-        let diagnostics: Vec<_> = report
-            .diagnostics
-            .iter()
-            .filter(|diagnostic| self.session.owners.contains(&diagnostic.owner))
-            .cloned()
-            .collect();
-        for change in report.camera_state_changes.iter().cloned() {
-            self.queue_response(0, ResponseBody::CameraStateChangedEvent(change))?;
-        }
         for change in report.render_state_changes.iter().cloned() {
             self.queue_response(0, ResponseBody::RenderStateUpdatedEvent(change))?;
         }
@@ -54,14 +67,6 @@ impl<P: HostServices> WorldSessionContext<'_, P> {
                 0,
                 ResponseBody::PlaybackEvents(report.playback_events.clone()),
             )?;
-        }
-        // Committed GUI observations travel as unsolicited, chunked wire
-        // messages: broadcast effects/conflicts/cancellations plus
-        // supplier-only unhandled input for scene fallback. The helper
-        // filters by session so raw input never leaks across sessions.
-        #[cfg(feature = "gui")]
-        for body in ipp_protocol::gui_observation_bodies(report, self.session.id) {
-            self.queue_response(0, body)?;
         }
         let mut controller_outcomes = report
             .animation_controller_outcomes
@@ -77,106 +82,22 @@ impl<P: HostServices> WorldSessionContext<'_, P> {
             .collect::<VecDeque<_>>();
         let mut outcomes = report
             .outcomes
-            .iter()
-            .filter(|outcome| origins.contains(&outcome.batch_id))
-            .cloned();
-        let mut geometry_picks = report
-            .geometry_picks
-            .iter()
-            .filter(|outcome| origins.contains(&outcome.request_id))
-            .cloned();
-        let mut camera_projections = report
-            .camera_projections
-            .iter()
-            .filter(|outcome| origins.contains(&outcome.request_id))
-            .cloned();
+            .extract_if(.., |outcome| origins.contains(&outcome.batch_id));
         let result = (|| {
             for (request_id, reply) in replies.drain(..) {
                 let body = match reply {
-                    #[cfg(feature = "surfaces")]
-                    WorldSessionReply::SurfaceCommand => {
+                    WorldSessionReply::CameraNavigate => {
                         let outcome = system_outcomes
                             .pop_front()
-                            .ok_or("core did not publish Surface outcome")?;
+                            .ok_or("core did not publish navigation outcome")?;
                         if outcome.request_id != request_id {
-                            return Err("Surface outcome correlation".into());
+                            return Err("navigation outcome correlation".into());
                         }
                         match outcome.result {
-                            Ok(()) => ResponseBody::SurfaceCommand,
+                            Ok(()) => ResponseBody::CameraNavigated,
                             Err(reason) => ResponseBody::Error {
                                 code: 1,
                                 message: reason.to_string(),
-                            },
-                        }
-                    }
-                    #[cfg(feature = "gui")]
-                    WorldSessionReply::GuiCommands => {
-                        let outcome = system_outcomes
-                            .pop_front()
-                            .ok_or("core did not publish GUI outcome")?;
-                        if outcome.request_id != request_id {
-                            return Err("GUI outcome correlation".into());
-                        }
-                        ResponseBody::GuiCommands {
-                            applied: u32::try_from(outcome.applied)
-                                .map_err(|_| "GUI applied prefix exceeds u32")?,
-                            error: outcome.result.err(),
-                        }
-                    }
-                    #[cfg(feature = "gui")]
-                    WorldSessionReply::GuiInspect(query) => {
-                        match self.world.inspect_gui(
-                            query.entity,
-                            query.node_id,
-                            query.max_depth,
-                            query.limit,
-                        ) {
-                            Ok(response) => ResponseBody::GuiInspect(response),
-                            Err(error) => ResponseBody::Error {
-                                code: 1,
-                                message: error.to_string(),
-                            },
-                        }
-                    }
-                    #[cfg(feature = "gui")]
-                    WorldSessionReply::GuiInput => {
-                        let outcome = system_outcomes
-                            .pop_front()
-                            .ok_or("core did not publish GUI input outcome")?;
-                        if outcome.request_id != request_id {
-                            return Err("GUI input outcome correlation".into());
-                        }
-                        match outcome.result {
-                            Ok(()) => {
-                                let mut routed =
-                                    report.gui_unhandled_inputs.iter().filter(|input| {
-                                        input.session == self.session.id
-                                            && input.source_request_id == request_id
-                                    });
-                                let unhandled = routed.next().map(|input| input.reason.clone());
-                                if routed.next().is_some() {
-                                    return Err(
-                                        "GUI input published duplicate routing dispositions".into(),
-                                    );
-                                }
-                                ResponseBody::GuiInput {
-                                    tick: report.tick,
-                                    unhandled,
-                                }
-                            }
-                            Err(reason) => ResponseBody::Error {
-                                code: 1,
-                                message: reason.to_string(),
-                            },
-                        }
-                    }
-                    #[cfg(feature = "gui")]
-                    WorldSessionReply::GuiSemanticSnapshot(query) => {
-                        match self.gui_semantic_snapshot(&query) {
-                            Ok(tree) => ResponseBody::GuiSemanticSnapshot(tree),
-                            Err(error) => ResponseBody::Error {
-                                code: 1,
-                                message: error,
                             },
                         }
                     }
@@ -243,38 +164,18 @@ impl<P: HostServices> WorldSessionContext<'_, P> {
                                 );
                             }
                         }
-                        ResponseBody::Batch(outcome)
+                        ResponseBody::Batch(self.session.receipts.borrow().outcome(outcome)?)
                     }
                     WorldSessionReply::Inspect(query) => {
                         self.inspection_page(query, request_id, report.tick, report.time)
                     }
-                    WorldSessionReply::GeometryPick(result) => {
-                        let outcome = match result {
-                            Ok(()) => geometry_picks.next().ok_or_else(|| {
-                                "core did not publish the submitted geometry outcome".to_owned()
-                            })?,
-                            Err(reason) => ipp_core::GeometryPickOutcome {
-                                request_id,
-                                tick: report.tick,
-                                camera: self.world.active_camera(),
-                                result: Err(reason),
-                            },
-                        };
-                        ResponseBody::GeometryPickResultEvent(outcome)
+                    #[cfg(feature = "diagnostics")]
+                    WorldSessionReply::LifecycleDiagnostics(query) => {
+                        self.lifecycle_diagnostics(query)
                     }
-                    WorldSessionReply::CameraProject(result) => {
-                        let outcome = match result {
-                            Ok(()) => camera_projections.next().ok_or_else(|| {
-                                "core did not publish the submitted projection".to_owned()
-                            })?,
-                            Err(reason) => ipp_core::CameraProjectOutcome {
-                                request_id,
-                                tick: report.tick,
-                                camera: self.world.active_camera(),
-                                result: Err(reason),
-                            },
-                        };
-                        ResponseBody::CameraProjectResultEvent(outcome)
+                    WorldSessionReply::CompletedView(body) => body,
+                    WorldSessionReply::GeometryPick(_) | WorldSessionReply::CameraProject(_) => {
+                        return Err("Host did not resolve the completed-view query".into());
                     }
                     WorldSessionReply::Rejected(message) => ResponseBody::Error {
                         code: 1,
@@ -292,20 +193,6 @@ impl<P: HostServices> WorldSessionContext<'_, P> {
         }
         if outcomes.next().is_some() {
             return Err("core published an uncorrelated batch outcome".to_owned());
-        }
-        if geometry_picks.next().is_some() {
-            return Err("core published an uncorrelated geometry outcome".to_owned());
-        }
-        if camera_projections.next().is_some() {
-            return Err("core published an uncorrelated projection outcome".to_owned());
-        }
-        if !diagnostics.is_empty() {
-            self.queue_response(
-                0,
-                ResponseBody::Lifecycle {
-                    diagnostics,
-                },
-            )?;
         }
         let mut resources = Vec::new();
         let mut resource_bytes = 29;
@@ -342,21 +229,31 @@ impl<P: HostServices> WorldSessionContext<'_, P> {
                 },
             )?;
         }
-        for output in self.world.drain_system_events::<LifecyclePublisherOutput>(
-            LifecyclePublisherSystem::ID,
-            self.session.id,
-        ) {
-            self.queue_response(0, ResponseBody::LifecycleEvents(output))?;
+        // Every drained observation is charged to the connection's reliable output account;
+        // exhaustion fails this connection rather than dropping observations.
+        for LifecyclePublisherOutput(events) in
+            self.world.drain_system_events::<LifecyclePublisherOutput>(
+                LifecyclePublisherSystem::ID,
+                self.session.id,
+            )
+        {
+            let mut events = events.into_iter().peekable();
+            while events.peek().is_some() {
+                let page = events
+                    .by_ref()
+                    .take(ipp_protocol::MAX_LIFECYCLE_PUBLICATIONS)
+                    .collect();
+                self.queue_response(
+                    0,
+                    ResponseBody::LifecycleEvents(LifecyclePublisherOutput(page)),
+                )?;
+            }
         }
-        self.session
-            .owners
-            .retain(|owner| self.world.state_overlay_owner_is_live(*owner));
-        self.queue_response(
-            0,
-            ResponseBody::Frame {
-                time: report.time,
-            },
-        )
+        self.session.progress = Some(progress::WorldProgress {
+            tick: report.tick,
+            time: report.time,
+        });
+        Ok(())
     }
 
     pub(super) fn queue_response(
@@ -364,10 +261,12 @@ impl<P: HostServices> WorldSessionContext<'_, P> {
         request_id: u64,
         mut body: ResponseBody,
     ) -> Result<(), String> {
-        if self.session.outbox.len() >= MAX_OUTBOX {
-            return Err("connection congestion: reliable output capacity exhausted".into());
+        if !self.session.outbox.is_live() {
+            return Err("World session output is closed".into());
         }
 
+        let reservation = self.session.reply_reservations.remove(&request_id);
+        let is_batch = matches!(body, ResponseBody::Batch(_));
         let request_id = if request_id == 0 {
             0
         } else {
@@ -378,19 +277,8 @@ impl<P: HostServices> WorldSessionContext<'_, P> {
                 .ok_or("World response has no session correlation")?;
             match &mut body {
                 ResponseBody::Batch(outcome) => {
-                    outcome.batch_id =
+                    outcome.outcome.batch_id =
                         batch_id.ok_or("Batch response has no caller batch identity")?;
-                    {
-                        self.session.owners.extend(
-                            outcome
-                                .state_overlays
-                                .iter()
-                                .filter(|alias| {
-                                    alias.kind == ipp_core::StateOverlayHandleKind::Owner
-                                })
-                                .map(|alias| alias.id),
-                        );
-                    }
                 }
                 ResponseBody::GeometryPickResultEvent(outcome) => outcome.request_id = original,
                 ResponseBody::CameraProjectResultEvent(outcome) => outcome.request_id = original,
@@ -398,41 +286,65 @@ impl<P: HostServices> WorldSessionContext<'_, P> {
             }
             original
         };
-        let mut bytes = self
-            .response_buffers
-            .pop()
-            .unwrap_or_else(|| Vec::with_capacity(4096));
-        let result = ipp_protocol::encode_response_into(
-            &Response {
-                session: self.session.id,
-                request_id,
-                tick: self.world.tick(),
-                body,
-            },
-            &mut bytes,
-        )
-        .or_else(|error| {
-            if request_id == 0 {
-                return Err(error);
-            }
-            ipp_protocol::encode_response_into(
-                &Response {
-                    session: self.session.id,
-                    request_id,
-                    tick: self.world.tick(),
-                    body: ResponseBody::Error {
-                        code: 3,
-                        message: format!("response unavailable: {error}"),
-                    },
-                },
-                &mut bytes,
-            )
-        });
-        if let Err(error) = result {
-            self.recycle_response_buffer(bytes);
-            return Err(error.to_string());
+        let mut response = Response {
+            session: self.session.id,
+            request_id,
+            tick: self.world.tick(),
+            body,
+        };
+        #[cfg(feature = "diagnostics")]
+        if matches!(response.body, ResponseBody::LifecycleDiagnostics(_)) {
+            response.tick = 0;
         }
-        self.session.outbox.push_back(bytes);
+        let size = ipp_protocol::encoded_response_size(&response)
+            .or_else(|error| {
+                if request_id == 0 || is_batch {
+                    return Err(error);
+                }
+                response.body = ResponseBody::Error {
+                    code: 3,
+                    message: format!("response unavailable: {error}"),
+                };
+                ipp_protocol::encoded_response_size(&response)
+            })
+            .map_err(|error| error.to_string())?;
+        let reservation = match reservation {
+            Some(reservation) => Ok(reservation),
+            None => attachment_receipts::ReplyReservation::new(
+                self.session.reply_budget.clone(),
+                OutputClass::Ordinary,
+                size,
+            )
+            .map(|reservation| std::rc::Rc::new(std::cell::RefCell::new(reservation))),
+        }
+        .and_then(|reservation| {
+            reservation.borrow_mut().reserve_bytes(size)?;
+            Ok(reservation)
+        });
+        let reservation = match reservation {
+            Ok(reservation) => reservation,
+            Err(error) => {
+                let usage = self.session.reply_budget.0.usage();
+                return Err(format!(
+                    "connection congestion: shared reliable output capacity exhausted: {error} body={} session={} request={request_id} size={size} entries={} bytes={} account={:?}",
+                    response_kind(&response.body),
+                    self.session.id,
+                    usage.entries,
+                    usage.bytes,
+                    self.session.reply_budget.0.status(),
+                ));
+            }
+        };
+        let mut bytes = Vec::with_capacity(size);
+        ipp_protocol::encode_response_into(&response, &mut bytes)
+            .map_err(|error| error.to_string())?;
+        self.session.outbox.observe_tick(response.tick);
+        drop(response);
+        reservation.borrow_mut().encoded(bytes.capacity());
+        self.session.outbox.push_back(QueuedResponse {
+            bytes,
+            reservation,
+        });
         Ok(())
     }
 }

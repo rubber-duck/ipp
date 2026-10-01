@@ -1,4 +1,10 @@
-import type { PickingWorldClient, RenderWorldClient } from "@ipp/client";
+import {
+  sameOutputReference,
+  type OutputReference,
+  type PickingWorldClient,
+  type PresentationView,
+  type RenderWorldClient,
+} from "@ipp/client";
 import type { IppCanvasHandle } from "@ipp/react/web";
 import type { GuiUnhandledInputGate } from "@ipp/react/gui";
 import { useEffect, useRef, useState } from "react";
@@ -19,9 +25,18 @@ declare global {
 type GalleryClient = PickingWorldClient & RenderWorldClient;
 type PickHandler = Parameters<typeof installCameraControls>[1]["picked"];
 
-/** Authored worlds share a session; the disk scene owns a fresh loaded session. */
+/** Authored worlds share a session; the disk scene owns a fresh loaded session.
+ * Each session presents its gallery camera as the explicit Canvas root output. */
 export function useGallery() {
-  const [canvas, setCanvas] = useState<IppCanvasHandle>();
+  const [attached, setAttached] = useState<{
+    handle: IppCanvasHandle;
+    output: OutputReference;
+  }>();
+  const [view, setView] = useState<PresentationView | null>(null);
+  const canvas =
+    attached && view && sameOutput(view.binding.output, attached.output)
+      ? attached.handle
+      : undefined;
   const canvasFrame = useRef<HTMLDivElement>(null);
   const cameraControls = useRef<(() => void) | undefined>(undefined);
   const cameraId = useRef<bigint | undefined>(undefined);
@@ -56,21 +71,26 @@ export function useGallery() {
         "The gallery requires GUI, picking, animation and skinning support",
       );
     }
+    const world = client.worldReference;
+    if (!world) throw new Error("The gallery requires an explicit World");
+    let camera: bigint;
     if (page === "platformer") {
       const state = await client.inspect();
-      const camera = state.entities.find(
+      const saved = state.entities.find(
         (value) => value.metadata.symbolicId === "platformer-camera",
       );
-      cameraId.current = camera?.id;
+      if (!saved) throw new Error("Saved platformer camera is missing");
+      camera = saved.id;
       cameraRest.current =
-        camera?.base.find((value) => "qx" in value.fields)?.fields ?? {};
+        saved.components.find((value) => "qx" in value.fields)?.fields ?? {};
     } else {
-      cameraId.current = await initializeCamera(client);
-      if (page !== "shapes")
-        await setCameraView(client, cameraId.current, page);
+      camera = await initializeCamera(client);
+      if (page !== "shapes") await setCameraView(client, camera, page);
     }
+    cameraId.current = camera;
+    const output = await handle.host.bindOutput(world, camera, "camera");
     setSwitching(false);
-    setCanvas(handle);
+    setAttached({ handle, output });
   }
 
   async function navigate(nextPage: CameraView) {
@@ -80,7 +100,8 @@ export function useGallery() {
     setSwitching(true);
     const diskPage = (value: CameraView) => value === "platformer";
     if (page !== nextPage && (diskPage(page) || diskPage(nextPage))) {
-      setCanvas(undefined);
+      setAttached(undefined);
+      setView(null);
       cameraId.current = undefined;
       setPage(nextPage);
       window.location.hash = nextPage;
@@ -94,7 +115,9 @@ export function useGallery() {
         const camera = state.entities.find(
           (value) => value.id === cameraId.current,
         )!;
-        const transform = camera.base.find((value) => "qx" in value.fields)!;
+        const transform = camera.components.find(
+          (value) => "qx" in value.fields,
+        )!;
         const result = await canvas.client.batch(
           Object.entries(cameraRest.current).map(([name, value]) => ({
             kind: "setField" as const,
@@ -127,6 +150,8 @@ export function useGallery() {
 
   return {
     canvas,
+    output: attached?.output ?? null,
+    viewChanged: setView,
     canvasFrame,
     cameraControls,
     page,
@@ -163,12 +188,14 @@ export function useGalleryControls(
       client: canvas.client as GalleryClient,
       picking: page === "lighting",
       pan: false,
-      viewport: () => canvas.viewport,
+      binding: () => canvas.view?.binding,
       flush: () => canvas.flush(),
       pending: (delta) => setPendingPicks((count) => count + delta),
       error: (failure) => setError(message(failure)),
       picked,
-      ...(unhandledInputGate === undefined ? {} : { unhandledInputGate }),
+      ...(unhandledInputGate === undefined
+        ? {}
+        : guiAdmission(unhandledInputGate)),
     });
     cameraControls.current = dispose;
     return () => {
@@ -188,6 +215,32 @@ export function useGalleryControls(
     enabled,
     unhandledInputGate,
   ]);
+}
+
+/** Scene gestures proceed only when the runtime reports that GUI left them unhandled. */
+function guiAdmission(gate: GuiUnhandledInputGate) {
+  return {
+    admitPointer(pointer: number, button: number, signal: AbortSignal) {
+      const gui =
+        button === 0
+          ? "primary"
+          : button === 1
+            ? "auxiliary"
+            : button === 2
+              ? "secondary"
+              : undefined;
+      return gui === undefined
+        ? Promise.resolve(false)
+        : gate.pointerDown(pointer, gui, signal);
+    },
+    admitScroll(signal: AbortSignal) {
+      return gate.scroll(signal);
+    },
+  };
+}
+
+function sameOutput(left: OutputReference, right: OutputReference): boolean {
+  return sameOutputReference(left, right);
 }
 
 export function message(error: unknown): string {

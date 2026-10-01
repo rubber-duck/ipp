@@ -2,6 +2,7 @@
 
 mod support;
 use support::WorldTestDriver;
+use support::selection::CONSTRAINTS;
 
 use ipp_core::{
     Batch, Command, ComponentValue, EntityId, EntityMetadata, EntityRef, ErrorReason, FieldValue,
@@ -19,6 +20,7 @@ fn create(alias: u32, name: &str) -> Command {
             symbolic_id: Some(name.into()),
             classes: vec!["spatial".into(), "spatial".into()],
         },
+        adopt: false,
     }
 }
 
@@ -27,6 +29,7 @@ fn scalar(entity: EntityRef, value: f32) -> Command {
         entity,
         component: scalar_id(),
         fields: vec![write(value)],
+        adopt: false,
     }
 }
 
@@ -57,20 +60,21 @@ fn setup(world: &mut ipp_core::WorldContext<'_>, name: &str, value: f32) -> Enti
         .1
 }
 
-fn values(world: &ipp_core::WorldContext<'_>, id: EntityId) -> (f32, f32) {
+/// The stored Scalar of `id`: authored, or evaluated by a constraint.
+fn values(world: &ipp_core::WorldContext<'_>, id: EntityId) -> f32 {
     let snapshot = world.inspect(id).unwrap();
     let get = |values: Vec<ComponentValue>| match values.first() {
         Some(ComponentValue::Scalar(scalar)) => scalar.value,
         _ => panic!("expected scalar first in registry order"),
     };
-    (get(snapshot.base), get(snapshot.effective))
+    get(snapshot.components)
 }
 
 #[test]
 fn failed_batch_keeps_values_metadata_and_allocations_and_stops_execution() {
     let mut world_host = ipp_core::HostRuntime::new();
     let world_id = world_host
-        .create_world(ipp_core::WorldLimits::default())
+        .create_world(ipp_core::WorldLimits::default(), CONSTRAINTS)
         .unwrap();
     let mut world = world_host.world_mut(world_id).unwrap();
     let id = setup(&mut world, "original", 7.0);
@@ -104,7 +108,7 @@ fn failed_batch_keeps_values_metadata_and_allocations_and_stops_execution() {
         (failed.operation, failed.reason),
         (Some(3), ErrorReason::InvalidEntity)
     );
-    assert_eq!(values(&world, id), (99.0, 99.0));
+    assert_eq!(values(&world, id), 99.0);
     assert_eq!(world.lookup_id("original"), None);
     assert_eq!(world.lookup_id("changed"), Some(id));
     assert_eq!(world.lookup_id("partial"), Some(failed.aliases[0].1));
@@ -121,7 +125,7 @@ fn failed_batch_keeps_values_metadata_and_allocations_and_stops_execution() {
 fn delete_and_reuse_fence_stale_handles_and_remove_indexes() {
     let mut world_host = ipp_core::HostRuntime::new();
     let world_id = world_host
-        .create_world(ipp_core::WorldLimits::default())
+        .create_world(ipp_core::WorldLimits::default(), CONSTRAINTS)
         .unwrap();
     let mut world = world_host.world_mut(world_id).unwrap();
     let id = setup(&mut world, "one", 1.0);
@@ -148,14 +152,14 @@ fn delete_and_reuse_fence_stale_handles_and_remove_indexes() {
             .reason,
         ErrorReason::InvalidEntity
     );
-    assert_eq!(values(&world, replacement), (2.0, 2.0));
+    assert_eq!(values(&world, replacement), 2.0);
 }
 
 #[test]
 fn aliases_are_ordered_unique_and_batch_local() {
     let mut world_host = ipp_core::HostRuntime::new();
     let world_id = world_host
-        .create_world(ipp_core::WorldLimits::default())
+        .create_world(ipp_core::WorldLimits::default(), CONSTRAINTS)
         .unwrap();
     let mut world = world_host.world_mut(world_id).unwrap();
     assert_eq!(
@@ -194,7 +198,7 @@ fn aliases_are_ordered_unique_and_batch_local() {
 fn metadata_uniqueness_and_class_order_survive_staged_deletion() {
     let mut world_host = ipp_core::HostRuntime::new();
     let world_id = world_host
-        .create_world(ipp_core::WorldLimits::default())
+        .create_world(ipp_core::WorldLimits::default(), CONSTRAINTS)
         .unwrap();
     let mut world = world_host.world_mut(world_id).unwrap();
     let one = setup(&mut world, "one", 1.0);
@@ -233,7 +237,7 @@ fn metadata_uniqueness_and_class_order_survive_staged_deletion() {
 fn invalid_exact_fields_and_values_reject_atomically() {
     let mut world_host = ipp_core::HostRuntime::new();
     let world_id = world_host
-        .create_world(ipp_core::WorldLimits::default())
+        .create_world(ipp_core::WorldLimits::default(), CONSTRAINTS)
         .unwrap();
     let mut world = world_host.world_mut(world_id).unwrap();
     let id = setup(&mut world, "value", 3.0);
@@ -262,7 +266,7 @@ fn invalid_exact_fields_and_values_reject_atomically() {
             .result
             .is_err()
         );
-        assert_eq!(values(&world, id), (3.0, 3.0));
+        assert_eq!(values(&world, id), 3.0);
     }
     assert_eq!(
         run(
@@ -270,7 +274,8 @@ fn invalid_exact_fields_and_values_reject_atomically() {
             vec![Command::InsertComponent {
                 entity: EntityRef::Handle(id),
                 component: u16::MAX,
-                fields: vec![]
+                fields: vec![],
+                adopt: false,
             }]
         )
         .result
@@ -283,7 +288,7 @@ fn invalid_exact_fields_and_values_reject_atomically() {
 #[test]
 fn default_ingress_preserves_large_indivisible_batches() {
     let mut host = ipp_core::HostRuntime::new();
-    let id = host.create_world(WorldLimits::default()).unwrap();
+    let id = host.create_world(WorldLimits::default(), &[]).unwrap();
     let mut world = host.world_mut(id).unwrap();
     // Exceed both historical defaults: 256 operations and 64 KiB estimated bytes.
     let operations = (0..600)
@@ -301,7 +306,7 @@ fn ingress_budgets_reject_complete_batches_and_allow_world_growth() {
         ..WorldLimits::default()
     };
     let mut world_host = ipp_core::HostRuntime::new();
-    let world_id = world_host.create_world(limits).unwrap();
+    let world_id = world_host.create_world(limits, &[]).unwrap();
     let mut world = world_host.world_mut(world_id).unwrap();
     assert_eq!(
         world.enqueue(Batch {
@@ -335,7 +340,7 @@ fn ingress_budgets_reject_complete_batches_and_allow_world_growth() {
 fn invalid_time_preserves_queue_and_clock() {
     let mut world_host = ipp_core::HostRuntime::new();
     let world_id = world_host
-        .create_world(ipp_core::WorldLimits::default())
+        .create_world(ipp_core::WorldLimits::default(), &[])
         .unwrap();
     let mut world = world_host.world_mut(world_id).unwrap();
     world
@@ -362,7 +367,7 @@ fn invalid_time_preserves_queue_and_clock() {
 fn outcomes_keep_submission_order_across_failure_and_later_success() {
     let mut world_host = ipp_core::HostRuntime::new();
     let world_id = world_host
-        .create_world(ipp_core::WorldLimits::default())
+        .create_world(ipp_core::WorldLimits::default(), CONSTRAINTS)
         .unwrap();
     let mut world = world_host.world_mut(world_id).unwrap();
     for (id, operations) in [
@@ -423,6 +428,7 @@ mod drivers {
                     value: FieldValue::F32(bias),
                 },
             ],
+            adopt: false,
         }
     }
 
@@ -430,7 +436,7 @@ mod drivers {
     fn aliases_resolve_nested_driver_sources_and_base_is_retained() {
         let mut world_host = ipp_core::HostRuntime::new();
         let world_id = world_host
-            .create_world(ipp_core::WorldLimits::default())
+            .create_world(ipp_core::WorldLimits::default(), CONSTRAINTS)
             .unwrap();
         let mut world = world_host.world_mut(world_id).unwrap();
         let ids = run(
@@ -446,10 +452,10 @@ mod drivers {
         .result
         .unwrap();
         let (from, target) = (ids[0].1, ids[1].1);
-        assert_eq!(values(&world, target), (10.0, 7.0));
+        assert_eq!(values(&world, target), 7.0);
         for _ in 0..3 {
             world.update_for_test(0.25).unwrap();
-            assert_eq!(values(&world, target), (10.0, 7.0));
+            assert_eq!(values(&world, target), 7.0);
         }
         run(
             &mut world,
@@ -461,14 +467,14 @@ mod drivers {
         )
         .result
         .unwrap();
-        assert_eq!(values(&world, target), (10.0, 9.0));
+        assert_eq!(values(&world, target), 9.0);
     }
 
     #[test]
     fn source_replacement_invalidates_and_explicit_reference_write_rebinds() {
         let mut world_host = ipp_core::HostRuntime::new();
         let world_id = world_host
-            .create_world(ipp_core::WorldLimits::default())
+            .create_world(ipp_core::WorldLimits::default(), CONSTRAINTS)
             .unwrap();
         let mut world = world_host.world_mut(world_id).unwrap();
         let from = setup(&mut world, "source", 3.0);
@@ -484,10 +490,12 @@ mod drivers {
         )
         .result
         .unwrap();
+        // Replacing the source's Scalar unbinds the driver; the target keeps
+        // the last value the constraint wrote.
         run(&mut world, vec![scalar(EntityRef::Handle(from), 5.0)])
             .result
             .unwrap();
-        assert_eq!(values(&world, target), (10.0, 10.0));
+        assert_eq!(values(&world, target), 7.0);
         run(
             &mut world,
             vec![Command::SetField {
@@ -498,7 +506,7 @@ mod drivers {
         )
         .result
         .unwrap();
-        assert_eq!(values(&world, target), (10.0, 11.0));
+        assert_eq!(values(&world, target), 11.0);
         run(
             &mut world,
             vec![
@@ -511,7 +519,7 @@ mod drivers {
         )
         .result
         .unwrap();
-        assert_eq!(values(&world, target), (10.0, 10.0));
+        assert_eq!(values(&world, target), 11.0);
         let replacement = world.lookup_id("replacement").unwrap();
         assert_eq!(replacement.index(), from.index());
         assert_ne!(replacement, from);
@@ -535,7 +543,7 @@ mod drivers {
     fn failed_batch_keeps_source_removal_and_binding_invalidation() {
         let mut world_host = ipp_core::HostRuntime::new();
         let world_id = world_host
-            .create_world(ipp_core::WorldLimits::default())
+            .create_world(ipp_core::WorldLimits::default(), CONSTRAINTS)
             .unwrap();
         let mut world = world_host.world_mut(world_id).unwrap();
         let from = setup(&mut world, "source", 3.0);
@@ -562,15 +570,15 @@ mod drivers {
             ],
         );
         assert!(failure.result.is_err());
-        assert!(world.inspect(from).unwrap().effective.is_empty());
-        assert_eq!(values(&world, target), (10.0, 10.0));
+        assert!(world.inspect(from).unwrap().components.is_empty());
+        assert_eq!(values(&world, target), 7.0);
     }
 
     #[test]
     fn drivers_evaluate_in_dependency_order_and_cycles_stay_inactive_until_corrected() {
         let mut world_host = ipp_core::HostRuntime::new();
         let world_id = world_host
-            .create_world(ipp_core::WorldLimits::default())
+            .create_world(ipp_core::WorldLimits::default(), CONSTRAINTS)
             .unwrap();
         let mut world = world_host.world_mut(world_id).unwrap();
         let a = setup(&mut world, "a", 2.0);
@@ -588,20 +596,31 @@ mod drivers {
         )
         .result
         .unwrap();
-        assert_eq!(values(&world, c), (30.0, 6.0));
-        assert_eq!(values(&world, b), (20.0, 13.0));
+        assert_eq!(values(&world, c), 6.0);
+        assert_eq!(values(&world, b), 13.0);
 
-        // Closing a cycle is accepted; its members keep their underlying values.
+        // Closing a cycle is accepted; its members stop evaluating and keep
+        // their values, including a later write to one of them.
         run(
             &mut world,
             vec![driver(EntityRef::Handle(a), EntityRef::Handle(b), 1.0, 0.0)],
         )
         .result
         .unwrap();
+        run(
+            &mut world,
+            vec![Command::SetField {
+                entity: EntityRef::Handle(a),
+                component: scalar_id(),
+                field: write(5.0),
+            }],
+        )
+        .result
+        .unwrap();
         for _ in 0..2 {
-            assert_eq!(values(&world, a), (2.0, 2.0));
-            assert_eq!(values(&world, b), (20.0, 20.0));
-            assert_eq!(values(&world, c), (30.0, 30.0));
+            assert_eq!(values(&world, a), 5.0);
+            assert_eq!(values(&world, b), 13.0);
+            assert_eq!(values(&world, c), 6.0);
             world.update_for_test(0.25).unwrap();
         }
 
@@ -615,11 +634,11 @@ mod drivers {
         )
         .result
         .unwrap();
-        assert_eq!(values(&world, c), (30.0, 6.0));
-        assert_eq!(values(&world, b), (20.0, 13.0));
+        assert_eq!(values(&world, c), 15.0);
+        assert_eq!(values(&world, b), 31.0);
 
-        // A self-dependency is inactive, while its reader evaluates from the
-        // underlying value; correcting the source recovers the chain.
+        // A self-dependency is inactive and keeps its value, while its reader
+        // evaluates from that value; correcting the source recovers the chain.
         run(
             &mut world,
             vec![Command::SetField {
@@ -630,8 +649,19 @@ mod drivers {
         )
         .result
         .unwrap();
-        assert_eq!(values(&world, c), (30.0, 30.0));
-        assert_eq!(values(&world, b), (20.0, 61.0));
+        assert_eq!(values(&world, c), 15.0);
+        run(
+            &mut world,
+            vec![Command::SetField {
+                entity: EntityRef::Handle(c),
+                component: scalar_id(),
+                field: write(30.0),
+            }],
+        )
+        .result
+        .unwrap();
+        assert_eq!(values(&world, c), 30.0);
+        assert_eq!(values(&world, b), 61.0);
         run(
             &mut world,
             vec![Command::SetField {
@@ -642,8 +672,8 @@ mod drivers {
         )
         .result
         .unwrap();
-        assert_eq!(values(&world, c), (30.0, 6.0));
-        assert_eq!(values(&world, b), (20.0, 13.0));
+        assert_eq!(values(&world, c), 15.0);
+        assert_eq!(values(&world, b), 31.0);
 
         // Scale and bias are finite at ingress; evaluated results are not validated.
         for offset in [
@@ -689,8 +719,8 @@ mod drivers {
         )
         .result
         .unwrap();
-        assert_eq!(values(&world, a), (f32::MAX, f32::MAX));
-        assert!(values(&world, c).1.is_infinite());
+        assert_eq!(values(&world, a), f32::MAX);
+        assert!(values(&world, c).is_infinite());
         run(
             &mut world,
             vec![Command::SetField {
@@ -701,8 +731,8 @@ mod drivers {
         )
         .result
         .unwrap();
-        assert_eq!(values(&world, c), (30.0, 6.0));
-        assert_eq!(values(&world, b), (20.0, 13.0));
+        assert_eq!(values(&world, c), 6.0);
+        assert_eq!(values(&world, b), 13.0);
     }
 }
 
@@ -710,10 +740,13 @@ mod drivers {
 fn retained_metadata_grows_while_batch_allocation_bounds_include_spare_capacity() {
     let mut world_host = ipp_core::HostRuntime::new();
     let world_id = world_host
-        .create_world(WorldLimits {
-            max_batch_bytes: 65536,
-            ..WorldLimits::default()
-        })
+        .create_world(
+            WorldLimits {
+                max_batch_bytes: 65536,
+                ..WorldLimits::default()
+            },
+            &[],
+        )
         .unwrap();
     let mut world = world_host.world_mut(world_id).unwrap();
     let class = "x".repeat(16 * 1024);
@@ -726,6 +759,7 @@ fn retained_metadata_grows_while_batch_allocation_bounds_include_spare_capacity(
                     symbolic_id: Some(format!("metadata-{index}")),
                     classes: vec![class.clone()],
                 },
+                adopt: false,
             }],
         )
         .result
@@ -752,7 +786,7 @@ fn retained_metadata_grows_while_batch_allocation_bounds_include_spare_capacity(
     );
     let mut world_host = ipp_core::HostRuntime::new();
     let world_id = world_host
-        .create_world(ipp_core::WorldLimits::default())
+        .create_world(ipp_core::WorldLimits::default(), CONSTRAINTS)
         .unwrap();
     let mut world = world_host.world_mut(world_id).unwrap();
     let first = setup(&mut world, "first", 1.0);

@@ -1,4 +1,417 @@
 {
+  "headless-client": {
+    "description": "Maintained headless example CLI against a real native Host with explicit World cleanup",
+    "sourceRoots": [
+      "examples/headless-client/",
+      "tests/integration/headless-client.test.ts",
+      "tools/build_headless_client.mjs"
+    ],
+    "commands": [
+      {
+        "name": "native",
+        "command": ["@node", "--test", "target/headless-client/headless-client.test.js"],
+        "builds": ["headless-client"],
+        "requirements": ["node", "npm"]
+      }
+    ]
+  },
+  "composed-queries": {
+    "description": "Completed Camera/Canvas/spatial queries and physical Surface projection",
+    "sourceRoots": [
+      "crates/ipp-core/src/services/gui_input/query/",
+      "crates/ipp-core/src/host/view_queries.rs",
+      "crates/ipp-core/src/host/ingress.rs",
+      "crates/ipp-core/src/world/systems/camera/",
+      "crates/ipp-core/tests/composed_queries.rs",
+      "crates/ipp-host-session/src/camera_tests.rs",
+      "crates/ipp-host-session/src/view_queries.rs",
+      "crates/ipp-host-session/src/command_batches.rs",
+      "crates/ipp-host-session/src/publication.rs",
+      "crates/ipp-protocol/src/",
+      "crates/ipp-protocol/tests/composed-query-client.mjs",
+      "packages/ipp-client/src/",
+      "tools/ipp-schema-gen/src/codec.template.ts",
+      "tools/build_composed_queries.mjs",
+      "tests/integration/composed-queries.test.ts",
+      "tests/integration/tsconfig.composed-queries.json",
+      "examples/world-gallery/shared/camera-controls.ts"
+    ],
+    "commands": [
+      {
+        "name": "native",
+        "command": ["@node", "--test", "target/composed-queries/composed-queries.test.js"],
+        "builds": ["composed-query-fixtures"], "requirements": ["node", "npm", "rust"]
+      },
+      {
+        "name": "navigation",
+        "command": ["cargo", "test", "-p", "ipp-host-session", "-p", "ipp-protocol", "--no-default-features", "--lib", "--locked", "camera"],
+        "builds": [], "requirements": ["rust"]
+      },
+      {
+        "name": "client",
+        "command": ["@node", "--test", "crates/ipp-protocol/tests/composed-query-client.mjs"],
+        "builds": [], "requirements": ["rust", "node", "npm"]
+      },
+      {
+        "name": "core",
+        "command": ["cargo", "test", "-p", "ipp-core", "--no-default-features", "--features", "gui", "--test", "composed_queries", "--test", "view_queries", "--test", "camera_publication", "--locked"],
+        "builds": [], "requirements": ["rust"]
+      },
+      {
+        "name": "lint",
+        "command": ["cargo", "clippy", "-p", "ipp-core", "--no-default-features", "--features", "gui", "--lib", "--test", "composed_queries", "--locked", "--", "-D", "warnings"],
+        "builds": [], "requirements": ["rust"]
+      },
+      {
+        "name": "lean-lint",
+        "command": ["cargo", "clippy", "-p", "ipp-core", "-p", "ipp-host-session", "-p", "ipp-protocol", "-p", "ipp-render-gl", "--no-default-features", "--lib", "--locked", "--", "-D", "warnings"],
+        "builds": [], "requirements": ["rust"]
+      }
+    ]
+  },
+  "render-publications": {
+    "description": "Publication-backed renderer ordering, affine composition and selected optional renderer algorithms",
+    "sourceRoots": [
+      "Cargo.toml",
+      "Cargo.lock",
+      ".cargo/config.toml",
+      "rust-toolchain.toml",
+      "crates/ipp-render-gl/src/",
+      "crates/ipp-render-gl/tests/",
+      "crates/ipp-render-gl/Cargo.toml",
+      "crates/ipp-render-gl/build.rs",
+      "crates/ipp-core/src/world/systems/render/",
+      "crates/ipp-core/tests/debug_geometry.rs",
+      "crates/ipp-core/src/host/scene.rs",
+      "crates/ipp-core/tests/attachment_placement.rs"
+    ],
+    "commands": [
+      {
+        "name": "lean",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "ipp-render-gl",
+          "--lib",
+          "--no-default-features",
+          "--features",
+          "diagnostics",
+          "--locked"
+        ],
+        "builds": [],
+        "requirements": [
+          "rust"
+        ]
+      },
+      {
+        "name": "expanded",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "ipp-render-gl",
+          "--lib",
+          "--no-default-features",
+          "--features",
+          "gui,shadows,skeletal-animation,mesh-poses,particles,diagnostics",
+          "--locked"
+        ],
+        "builds": [],
+        "requirements": [
+          "rust"
+        ]
+      },
+      {
+        "name": "wasm",
+        "command": [
+          "cargo",
+          "check",
+          "-p",
+          "ipp-render-gl",
+          "--lib",
+          "--target",
+          "wasm32-unknown-unknown",
+          "--no-default-features",
+          "--features",
+          "gui,shadows,skeletal-animation,mesh-poses,particles,diagnostics",
+          "--locked"
+        ],
+        "builds": [],
+        "requirements": [
+          "rust"
+        ]
+      },
+      {
+        "name": "root-lean",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "ipp-render-gl",
+          "--test",
+          "publication_rendering",
+          "--no-default-features",
+          "--features",
+          "diagnostics",
+          "--locked"
+        ],
+        "builds": [],
+        "requirements": [
+          "rust"
+        ]
+      },
+      {
+        "name": "root-expanded",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "ipp-render-gl",
+          "--test",
+          "publication_rendering",
+          "--no-default-features",
+          "--features",
+          "gui,shadows,skeletal-animation,mesh-poses,particles,diagnostics",
+          "--locked"
+        ],
+        "builds": [],
+        "requirements": [
+          "rust"
+        ]
+      },
+      {
+        "name": "residency",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "ipp-render-gl",
+          "--test",
+          "mesh_residency",
+          "--no-default-features",
+          "--features",
+          "shadows,diagnostics",
+          "--locked"
+        ],
+        "builds": [],
+        "requirements": [
+          "rust"
+        ]
+      },
+      {
+        "name": "targets-lean",
+        "command": [
+          "cargo",
+          "check",
+          "-p",
+          "ipp-render-gl",
+          "--all-targets",
+          "--no-default-features",
+          "--features",
+          "diagnostics",
+          "--locked"
+        ],
+        "builds": [],
+        "requirements": [
+          "rust"
+        ]
+      },
+      {
+        "name": "targets-expanded",
+        "command": [
+          "cargo",
+          "check",
+          "-p",
+          "ipp-render-gl",
+          "--all-targets",
+          "--no-default-features",
+          "--features",
+          "gui,shadows,skeletal-animation,mesh-poses,particles,diagnostics",
+          "--locked"
+        ],
+        "builds": [],
+        "requirements": [
+          "rust"
+        ]
+      },
+      {
+        "name": "clippy-lean",
+        "command": [
+          "cargo",
+          "clippy",
+          "-p",
+          "ipp-render-gl",
+          "--all-targets",
+          "--no-default-features",
+          "--features",
+          "diagnostics",
+          "--locked"
+        ],
+        "builds": [],
+        "requirements": [
+          "rust"
+        ]
+      },
+      {
+        "name": "clippy-expanded",
+        "command": [
+          "cargo",
+          "clippy",
+          "-p",
+          "ipp-render-gl",
+          "--all-targets",
+          "--no-default-features",
+          "--features",
+          "gui,shadows,skeletal-animation,mesh-poses,particles,diagnostics",
+          "--locked"
+        ],
+        "builds": [],
+        "requirements": [
+          "rust"
+        ]
+      },
+      {
+        "name": "debug-producer",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "ipp-core",
+          "--test",
+          "debug_geometry",
+          "--no-default-features",
+          "--locked"
+        ],
+        "builds": [],
+        "requirements": [
+          "rust"
+        ]
+      },
+      {
+        "name": "debug-readers",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "ipp-core",
+          "--test",
+          "geometry_runtime",
+          "--test",
+          "skeleton",
+          "--no-default-features",
+          "--features",
+          "skeletal-animation,builtin-assets",
+          "--locked"
+        ],
+        "builds": [],
+        "requirements": [
+          "rust"
+        ]
+      },
+      {
+        "name": "clippy-debug-producer",
+        "command": [
+          "cargo",
+          "clippy",
+          "-p",
+          "ipp-core",
+          "--test",
+          "debug_geometry",
+          "--no-default-features",
+          "--locked",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "builds": [],
+        "requirements": [
+          "rust"
+        ]
+      },
+      {
+        "name": "scene-core-lean",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "ipp-core",
+          "--test",
+          "attachment_placement",
+          "--test",
+          "host_composition",
+          "--no-default-features",
+          "--locked"
+        ],
+        "builds": [],
+        "requirements": [
+          "rust"
+        ]
+      },
+      {
+        "name": "scene-core-surfaces",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "ipp-core",
+          "--test",
+          "attachment_placement",
+          "--test",
+          "host_composition",
+          "--no-default-features",
+          "--features",
+          "surfaces",
+          "--locked"
+        ],
+        "builds": [],
+        "requirements": [
+          "rust"
+        ]
+      },
+      {
+        "name": "clippy-scene-core",
+        "command": [
+          "cargo",
+          "clippy",
+          "-p",
+          "ipp-core",
+          "--test",
+          "attachment_placement",
+          "--no-default-features",
+          "--features",
+          "surfaces",
+          "--locked",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "builds": [],
+        "requirements": [
+          "rust"
+        ]
+      },
+      {
+        "name": "canvas-scenes",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "ipp-render-gl",
+          "--lib",
+          "canvas_scene::tests",
+          "--no-default-features",
+          "--features",
+          "surfaces,diagnostics",
+          "--locked"
+        ],
+        "builds": [],
+        "requirements": [
+          "rust"
+        ]
+      }
+    ]
+  },
   "gallery-site": {
     "description": "Published gallery files render through HTTP, worker/WASM and WebGL at root and project URLs",
     "sourceRoots": [
@@ -26,7 +439,7 @@
     ]
   },
   "scaling": {
-    "description": "Release timings and operation counts for 1k/4k/16k core mutation and restoration",
+    "description": "Release timings and operation counts for 1k/4k/16k core mutation, restoration and ordinary GUI layout",
     "files": [
       "dist/tests/integration/scaling.test.js",
       "dist/tests/browser/scaling.test.js"
@@ -50,11 +463,32 @@
         "requirements": [
           "rust"
         ]
+      },
+      {
+        "name": "gui-core",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "ipp-core",
+          "--release",
+          "--features",
+          "gui,diagnostics",
+          "--test",
+          "gui_entity_scaling",
+          "--locked",
+          "--",
+          "--nocapture"
+        ],
+        "builds": [],
+        "requirements": [
+          "rust"
+        ]
       }
     ]
   },
   "custom-materials": {
-    "description": "Backend shader bodies, named properties, animation, overlays, fallbacks and completed WebGL frames",
+    "description": "Backend shader bodies, named properties, animation, fallbacks and completed WebGL frames",
     "files": [
       "dist/tests/render/custom-materials.test.js"
     ],
@@ -145,18 +579,59 @@
           "blender"
         ],
         "builds": []
+      },
+      {
+        "name": "viewer",
+        "command": ["@node", "--test", "--test-concurrency=1", "target/blender-test/blender.test.js"],
+        "builds": ["blender-viewer", "blender-addon", "blender-fixtures"],
+        "requirements": ["node", "npm", "browser", "blender", "certificates"]
+      },
+      {
+        "name": "stream",
+        "command": ["@node", "--test", "--test-concurrency=1", "target/blender-test/blender-stream.test.js"],
+        "builds": ["blender-viewer", "blender-addon", "blender-fixtures"],
+        "requirements": ["node", "npm", "browser", "blender", "certificates"]
+      },
+      {
+        "name": "disk",
+        "command": ["@node", "--test", "--test-concurrency=1", "target/blender-test/blender-disk.test.js"],
+        "builds": ["blender-viewer", "blender-addon", "blender-fixtures"],
+        "requirements": ["node", "npm", "browser", "blender", "certificates"]
       }
-    ],
-    "files": [
-      "dist/tests/render/blender.test.js",
-      "dist/tests/render/blender-stream.test.js",
-      "dist/tests/render/blender-disk.test.js"
     ],
     "sourceRoots": [
       "integrations/blender/",
       "tests/blender/",
-      "tests/render/blender-fixture.tsx"
+      "examples/blender-viewer/",
+      "tests/render/blender-fixture.tsx",
+      "tests/render/blender.test.ts",
+      "tests/render/blender-stream.test.ts",
+      "tests/render/blender-disk-fixture.ts",
+      "tests/render/blender-disk.test.ts",
+      "tests/render/tsconfig.blender-viewer.json",
+      "tools/build_blender_fixtures.mjs",
+      "tools/build_blender_viewer.mjs"
     ]
+  },
+  "blender-headless": {
+    "description": "Blender ordered links, correction and graph persistence over native WebSocket and worker WASM",
+    "sourceRoots": ["integrations/blender/client/", "tests/render/blender-headless-driver.ts", "tests/render/blender-headless-scenario.ts", "tests/render/blender-headless.test.ts", "tests/render/tsconfig.blender-headless.json", "tools/build_blender_headless.mjs"],
+    "commands": [{
+      "name": "transports",
+      "command": ["@node", "--test", "target/blender-headless/blender-headless.test.js"],
+      "builds": ["world-hosts", "browser:render-expanded", "blender-headless-fixtures"],
+      "requirements": ["node", "npm", "browser"]
+    }]
+  },
+  "blender-disk-headless": {
+    "description": "Real Blender export and disk importer through target-generated worker WASM without viewer presentation",
+    "sourceRoots": ["integrations/blender/", "tests/render/blender-disk-headless.test.ts", "tests/render/tsconfig.blender-headless.json", "tools/import_blender_scene.mjs", "tools/build_blender_headless.mjs"],
+    "commands": [{
+      "name": "disk",
+      "command": ["@node", "--test", "target/blender-headless/blender-disk-headless.test.js"],
+      "builds": ["browser:render-expanded", "blender-headless-fixtures"],
+      "requirements": ["node", "npm", "browser", "blender"]
+    }]
   },
   "runner": {
     "description": "Suite routing and shared build dependency invariants",
@@ -231,13 +706,13 @@
     "description": "Generated client codecs, events and correlation",
     "files": [
       "dist/packages/ipp-client/tests/asset-sources.test.js",
-      "dist/packages/ipp-client/tests/gui-input.test.js",
       "dist/packages/ipp-client/tests/gui-semantics.test.js",
-      "dist/packages/ipp-client/tests/gui-observations.test.js",
+      "dist/packages/ipp-client/tests/profile-worker.test.js",
       "dist/packages/ipp-client/tests/resource-worker.test.js",
       "dist/packages/ipp-client/tests/transport.test.js",
       "dist/packages/ipp-client/tests/worker.test.js",
       "crates/ipp-protocol/tests/frame-client.mjs",
+      "crates/ipp-protocol/tests/host-client.mjs",
       "crates/ipp-protocol/tests/lifecycle-client.mjs",
       "crates/ipp-protocol/tests/animation-client.mjs",
       "crates/ipp-protocol/tests/camera-client.mjs",
@@ -245,11 +720,10 @@
       "crates/ipp-protocol/tests/manifest-client.mjs",
       "crates/ipp-protocol/tests/mesh-client.mjs",
       "crates/ipp-protocol/tests/texture-client.mjs",
-      "crates/ipp-protocol/tests/gui-input-client.mjs",
-      "crates/ipp-protocol/tests/gui-semantics-client.mjs",
-      "crates/ipp-protocol/tests/gui-observations-client.mjs"
+      "crates/ipp-protocol/tests/gui-semantics-client.mjs"
     ],
     "sourceRoots": [
+      "packages/ipp-client/src/profile-worker.ts",
       "crates/ipp-protocol/tests/generated-client.mjs"
     ]
   },
@@ -258,9 +732,36 @@
     "sourceRoots": [
       "crates/ipp-core/src/lib.rs",
       "tools/ipp-schema-derive/src/",
-      "tools/ipp-schema-gen/tests/target-contract.mjs"
+      "tools/ipp-schema-gen/",
+      "crates/ipp-protocol/src/fixture.rs",
+      "tools/check_contracts.py"
     ],
-    "commands": []
+    "commands": [
+      {
+        "name": "generator",
+        "command": ["cargo", "test", "-p", "ipp-schema-gen", "--locked"],
+        "builds": [],
+        "requirements": ["rust"]
+      },
+      {
+        "name": "rows",
+        "command": ["cargo", "test", "-p", "ipp-core", "--no-default-features", "--test", "schema_rows", "--locked"],
+        "builds": [],
+        "requirements": ["rust"]
+      },
+      {
+        "name": "row-lifetimes",
+        "command": ["cargo", "test", "-p", "ipp-core", "--no-default-features", "--lib", "components::rows::", "--locked"],
+        "builds": [],
+        "requirements": ["rust"]
+      },
+      {
+        "name": "lint",
+        "command": ["cargo", "clippy", "-p", "ipp-schema-gen", "-p", "ipp-protocol", "--all-targets", "--no-default-features", "--features", "schema-export,gui", "--locked", "--", "-D", "warnings"],
+        "builds": [],
+        "requirements": ["rust"]
+      }
+    ]
   },
   "filesystem": {
     "description": "Explicit read-only native filesystem routing",
@@ -335,6 +836,312 @@
       "crates/ipp-core/tests/world_persistence.rs"
     ]
   },
+  "multiplex": {
+    "description": "Independent World sessions and exact runtime references through native WebSocket and production browser worker transports",
+    "sourceRoots": [
+      "tests/integration/scenarios/multiplex.ts",
+      "tests/integration/scenarios/attachment-receipts.ts",
+      "tests/integration/scenarios/command-batches.ts",
+      "tests/integration/scenarios/graph-transfers.ts",
+      "tests/integration/scenarios/host-lifecycle.ts",
+      "tests/integration/host-transport-driver.ts",
+      "tests/integration/multiplex.test.ts",
+      "tests/integration/worker-startup.ts",
+      "tests/integration/worker-startup.test.ts",
+      "tools/build_transports.mjs"
+    ],
+    "commands": [
+      {
+        "name": "worker-startup",
+        "command": ["@node", "--test", "target/multiplex-tests/worker-startup.test.js"],
+        "builds": ["browser:headless", "transport-fixtures"],
+        "requirements": ["node", "npm", "browser"]
+      },
+      {
+        "name": "transports",
+        "command": [
+          "@node",
+          "--test",
+          "target/multiplex-tests/multiplex.test.js"
+        ],
+        "builds": [
+          "world-hosts",
+          "transport-fixtures"
+        ],
+        "requirements": [
+          "node",
+          "npm",
+          "browser"
+        ]
+      }
+    ]
+  },
+  "presentation": {
+    "description": "Host presentation wire policy and exact completed captures through native GLES and Chromium worker WebGL",
+    "sourceRoots": [
+      "crates/ipp-host-session/src/services/presentation_tests.rs",
+      "crates/ipp-protocol/tests/presentation-cancellation.mjs",
+      "tests/integration/scenarios/presentation.ts",
+      "tests/integration/scenarios/output-inclusion.ts",
+      "tests/integration/output-inclusion.test.ts",
+      "tests/integration/presentation.test.ts",
+      "tests/integration/presentation-transport.ts",
+      "tests/integration/tsconfig.presentation.json",
+      "packages/ipp-client/tests/render-diagnostics.test.ts",
+      "tools/build_transports.mjs"
+    ],
+    "commands": [
+      {
+        "name": "host-wire",
+        "command": ["cargo", "test", "-p", "ipp-host-session", "--no-default-features", "--lib", "--locked", "services::presentation::tests::"],
+        "builds": [],
+        "requirements": ["rust"]
+      },
+      {
+        "name": "webgl",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "worker WASM/WebGL",
+          "target/multiplex-tests/presentation.test.js"
+        ],
+        "builds": [
+          "browser:render-surfaces",
+          "transport-fixtures"
+        ],
+        "requirements": [
+          "node",
+          "npm",
+          "browser"
+        ]
+      },
+      {
+        "name": "native-gles",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "native WebSocket/GLES",
+          "target/multiplex-tests/presentation.test.js"
+        ],
+        "builds": [
+          "gles-hosts",
+          "transport-fixtures"
+        ],
+        "requirements": [
+          "node",
+          "npm",
+          "browser",
+          "gles"
+        ]
+      },
+      {
+        "name": "diagnostics",
+        "command": [
+          "@node",
+          "--test",
+          "target/multiplex-tests/render-diagnostics.test.js"
+        ],
+        "builds": [
+          "transport-fixtures"
+        ],
+        "requirements": [
+          "node",
+          "npm"
+        ]
+      }
+    ]
+  },
+  "output-inclusion": {
+    "description": "Exact post-admission output inclusion through native GLES and development/production worker WebGL",
+    "sourceRoots": ["tests/integration/scenarios/output-inclusion.ts", "tests/integration/output-inclusion.test.ts", "tests/integration/presentation-transport.ts", "crates/ipp-host-session/src/services/presentation.rs", "crates/ipp-render-gl/src/services/render/", "packages/ipp-client/src/host-presentation.ts"],
+    "commands": [
+      {
+        "name": "lint",
+        "command": ["cargo", "clippy", "-p", "ipp-render-gl", "--no-default-features", "--features", "gui,diagnostics", "--lib", "--test", "publication_rendering", "--test", "surface_cache", "--locked", "--", "-D", "warnings"],
+        "builds": [],
+        "requirements": ["rust"]
+      },
+      {
+        "name": "development",
+        "command": ["@node", "--test", "--test-name-pattern", "development", "target/multiplex-tests/output-inclusion.test.js"],
+        "builds": ["browser:headless-gui", "transport-fixtures"],
+        "requirements": ["node", "npm", "browser"]
+      },
+      {
+        "name": "production",
+        "command": ["@node", "--test", "--test-name-pattern", "production", "target/multiplex-tests/output-inclusion.test.js"],
+        "builds": ["browser:headless-gui", "transport-fixtures"],
+        "requirements": ["node", "npm", "browser"]
+      },
+      {
+        "name": "native",
+        "command": ["@node", "--test", "--test-name-pattern", "native", "target/multiplex-tests/output-inclusion.test.js"],
+        "builds": ["gles-hosts", "transport-fixtures"],
+        "requirements": ["node", "npm", "browser", "gles"]
+      }
+    ]
+  },
+  "gui-motion": {
+    "description": "Ordinary skin motion through generated native/worker clients and causally witnessed nested Canvas captures",
+    "sourceRoots": [
+      "tests/integration/gui-motion/",
+      "crates/ipp-core/src/world/systems/gui/motion/",
+      "crates/ipp-core/src/world/systems/animation/gui_motion.rs"
+    ],
+    "commands": [
+      {
+        "name": "development",
+        "command": ["@node", "--test", "--test-name-pattern", "development", "target/gui-motion/environment.test.js"],
+        "builds": ["browser:headless-gui", "gui-motion-fixtures"],
+        "requirements": ["node", "npm", "browser"]
+      },
+      {
+        "name": "production",
+        "command": ["@node", "--test", "--test-name-pattern", "production", "target/gui-motion/environment.test.js"],
+        "builds": ["browser:headless-gui", "gui-motion-fixtures"],
+        "requirements": ["node", "npm", "browser"]
+      },
+      {
+        "name": "native",
+        "command": ["@node", "--test", "--test-name-pattern", "native", "target/gui-motion/environment.test.js"],
+        "builds": ["gles-hosts", "gui-motion-fixtures"],
+        "requirements": ["node", "npm", "browser", "gles"]
+      }
+    ]
+  },
+  "gui-local": {
+    "description": "Ordinary headless GUI actions as batch commands and their effects",
+    "files": [
+      "crates/ipp-protocol/tests/gui-semantics-client.mjs",
+      "crates/ipp-protocol/tests/gui-semantics-wasm-client.mjs"
+    ],
+    "sourceRoots": [
+      "crates/ipp-host-session/src/gui_observations.rs",
+      "crates/ipp-host-session/src/reliable_output.rs",
+      "crates/ipp-host-session/src/services/connection/gui_output_pressure_tests.rs",
+      "crates/ipp-server/src/websocket.rs",
+      "crates/ipp-server/src/websocket_congestion_tests.rs",
+      "crates/ipp-wasm/src/boundary.rs",
+      "crates/ipp-wasm/src/boundary_output_tests.rs",
+      "crates/ipp-wasm/src/connection_output.rs",
+      "crates/ipp-host-session/src/reliable_output_tests.rs",
+      "packages/ipp-client/src/worker-connections.ts",
+      "packages/ipp-client/src/worker.ts",
+      "packages/ipp-client/src/transport.ts",
+      "packages/ipp-client/src/wasm-worker.ts",
+      "packages/ipp-client/tests/worker-connections.test.ts",
+      "packages/ipp-client/tests/transport.test.ts",
+      "crates/ipp-host-session/src/outbox.rs",
+      "crates/ipp-protocol/src/gui.rs",
+      "crates/ipp-protocol/tests/gui-semantics-codec.mjs",
+      "tools/ipp-schema-gen/src/gui.template.ts",
+      "packages/ipp-client/src/gui-types.ts",
+      "tests/integration/gui-local.test.ts",
+      "tests/integration/gui-control-persistence.test.ts",
+      "tests/integration/gui-local-transport.ts",
+      "tests/integration/gui-observer-endpoint.ts",
+      "tests/integration/worker-observer-delivery.ts",
+      "tests/integration/scenarios/gui-local.ts",
+      "tests/integration/scenarios/gui-control-persistence.ts",
+      "tests/integration/scenarios/gui-observations.ts",
+      "tools/build_transports.mjs"
+    ],
+    "commands": [
+      {
+        "name": "lint-native",
+        "command": ["cargo", "clippy", "-p", "ipp-core", "-p", "ipp-protocol", "-p", "ipp-host-session", "-p", "ipp-server", "--no-default-features", "--features", "ipp-server/websocket,ipp-server/gui", "--lib", "--locked", "--", "-D", "warnings"],
+        "builds": [],
+        "requirements": ["rust"]
+      },
+      {
+        "name": "lint-wasm",
+        "command": ["cargo", "clippy", "-p", "ipp-wasm", "--no-default-features", "--features", "gui", "--target", "wasm32-unknown-unknown", "--lib", "--locked", "--", "-D", "warnings"],
+        "builds": [],
+        "requirements": ["rust", "wasm"]
+      },
+      {
+        "name": "native-output",
+        "command": ["cargo", "test", "-p", "ipp-server", "--no-default-features", "--features", "websocket,gui", "--lib", "--locked", "websocket::"],
+        "builds": [],
+        "requirements": ["rust"]
+      },
+      {
+        "name": "wasm-output",
+        "command": ["cargo", "test", "-p", "ipp-wasm", "--no-default-features", "--features", "gui", "--lib", "--locked", "--", "boundary::output_tests::", "wasm_host_tests::"],
+        "builds": [],
+        "requirements": ["rust"]
+      },
+      {
+        "name": "host",
+        "command": ["cargo", "test", "-p", "ipp-host-session", "--no-default-features", "--features", "gui", "--lib", "--locked"],
+        "builds": [],
+        "requirements": ["rust"]
+      },
+      {
+        "name": "sdk",
+        "command": ["@node", "--test", "target/multiplex-tests/gui-semantics.test.js", "target/multiplex-tests/physical-input-sdk.test.js"],
+        "builds": ["transport-fixtures"],
+        "requirements": ["node", "npm"]
+      },
+      {
+        "name": "worker-delivery",
+        "command": ["@node", "--test", "target/multiplex-tests/transport.test.js", "target/multiplex-tests/worker-connections.test.js"],
+        "builds": ["transport-fixtures"],
+        "requirements": ["node", "npm"]
+      },
+      {
+        "name": "native",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "native",
+          "target/multiplex-tests/gui-local.test.js"
+        ],
+        "builds": [
+          "gui-host",
+          "transport-fixtures"
+        ],
+        "requirements": [
+          "node",
+          "npm"
+        ]
+      },
+      {
+        "name": "worker",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "worker",
+          "target/multiplex-tests/gui-local.test.js"
+        ],
+        "builds": [
+          "browser:semantic-gui",
+          "transport-fixtures"
+        ],
+        "requirements": [
+          "node",
+          "npm",
+          "browser"
+        ]
+      },
+      {
+        "name": "control-persistence-native",
+        "command": ["@node", "--test", "--test-name-pattern", "native", "target/multiplex-tests/gui-control-persistence.test.js"],
+        "builds": ["gui-host", "transport-fixtures"],
+        "requirements": ["node", "npm"]
+      },
+      {
+        "name": "control-persistence-worker",
+        "command": ["@node", "--test", "--test-name-pattern", "worker", "target/multiplex-tests/gui-control-persistence.test.js"],
+        "builds": ["browser:semantic-gui", "transport-fixtures"],
+        "requirements": ["node", "npm", "browser"]
+      }
+    ]
+  },
   "worlds": {
     "description": "Shared native and browser world/resource scenarios",
     "files": [
@@ -344,6 +1151,156 @@
   },
   "lifecycle": {
     "description": "Lifecycle subscriptions, partial effects and session fences through native/browser clients",
+    "sourceRoots": [
+      "crates/ipp-core/src/world/systems/lifecycle_publisher/",
+      "crates/ipp-core/src/world/systems/contexts.rs",
+      "crates/ipp-host-session/src/lifecycle_watch.rs",
+      "crates/ipp-host-session/src/lifecycle_watch_tests.rs",
+      "crates/ipp-protocol/src/lifecycle_watch.rs",
+      "packages/ipp-client/src/lifecycle-types.ts",
+      "packages/ipp-client/src/lifecycle-watches.ts",
+      "tests/integration/scenarios/lifecycle-targets.ts",
+      "tests/integration/scenarios/lifecycle-subsets.ts",
+      "tests/integration/lifecycle-target-transport.ts",
+      "tests/integration/lifecycle-targets.test.ts",
+      "crates/ipp-core/src/services/asset_management/",
+      "crates/ipp-core/src/world/systems/asset_dependencies/",
+      "crates/ipp-core/tests/asset_runtime.rs"
+    ],
+    "commands": [
+      {
+        "name": "targets-native",
+        "command": ["@node", "--test", "--test-name-pattern=native lifecycle target", "target/multiplex-tests/lifecycle-targets.test.js"],
+        "builds": ["world-hosts", "transport-fixtures"],
+        "requirements": ["node", "npm", "rust", "wasm"]
+      },
+      {
+        "name": "targets-worker",
+        "command": ["@node", "--test", "--test-name-pattern=worker lifecycle targets", "target/multiplex-tests/lifecycle-targets.test.js"],
+        "builds": ["world-hosts", "transport-fixtures"],
+        "requirements": ["node", "npm", "rust", "wasm", "browser"]
+      },
+      {
+        "name": "host-accounting",
+        "command": ["cargo", "test", "-p", "ipp-host-session", "--no-default-features", "--lib", "--locked", "lifecycle_watch::tests::", "--", "--show-output"],
+        "builds": [],
+        "requirements": ["rust"]
+      },
+      {
+        "name": "diagnostics-host",
+        "command": ["cargo", "test", "-p", "ipp-host-session", "--no-default-features", "--features", "diagnostics", "--lib", "--locked", "lifecycle_watch::tests::", "--", "--show-output"],
+        "builds": [],
+        "requirements": ["rust"]
+      },
+      {
+        "name": "diagnostics-protocol",
+        "command": ["cargo", "test", "-p", "ipp-protocol", "--no-default-features", "--features", "diagnostics", "--lib", "--locked"],
+        "builds": [],
+        "requirements": ["rust"]
+      },
+      {
+        "name": "diagnostics-transports",
+        "command": ["@node", "--test", "--test-name-pattern=diagnostic lifecycle", "target/multiplex-tests/lifecycle-targets.test.js"],
+        "builds": ["lifecycle-diagnostics-hosts", "transport-fixtures"],
+        "requirements": ["node", "npm", "rust", "wasm", "browser"]
+      },
+      {
+        "name": "diagnostics-codecs",
+        "command": ["@node", "--test", "crates/ipp-protocol/tests/lifecycle-diagnostics-client.mjs"],
+        "builds": ["lifecycle-diagnostics-hosts", "world-hosts"],
+        "requirements": ["node", "npm", "rust", "wasm"]
+      },
+      {
+        "name": "diagnostics-lint-native",
+        "command": ["cargo", "clippy", "-p", "ipp-host-session", "-p", "ipp-protocol", "-p", "ipp-schema-gen", "--all-targets", "--no-default-features", "--features", "ipp-host-session/diagnostics,ipp-protocol/diagnostics", "--locked", "--", "-D", "warnings"],
+        "builds": [],
+        "requirements": ["rust"]
+      },
+      {
+        "name": "diagnostics-lint-wasm",
+        "command": ["cargo", "clippy", "-p", "ipp-wasm", "--lib", "--target", "wasm32-unknown-unknown", "--no-default-features", "--features", "diagnostics", "--locked", "--", "-D", "warnings"],
+        "builds": [],
+        "requirements": ["rust", "wasm"]
+      },
+      {
+        "name": "protocol-lean",
+        "command": ["cargo", "test", "-p", "ipp-protocol", "--no-default-features", "--lib", "--locked"],
+        "builds": [],
+        "requirements": ["rust"]
+      },
+      {
+        "name": "target-codecs",
+        "command": ["@node", "--test", "crates/ipp-protocol/tests/lifecycle-target-client.mjs"],
+        "builds": ["world-hosts"],
+        "requirements": ["node", "npm", "rust", "wasm"]
+      },
+      {
+        "name": "manifest-codec",
+        "command": ["@node", "--test", "crates/ipp-protocol/tests/manifest-client.mjs"],
+        "builds": ["client", "presentation-wire-host"],
+        "requirements": ["node", "npm", "rust"]
+      },
+      {
+        "name": "sdk",
+        "command": ["@node", "--test", "target/multiplex-tests/lifecycle-watches.test.js"],
+        "builds": ["transport-fixtures"],
+        "requirements": ["node", "npm"]
+      },
+      {
+        "name": "core-lean",
+        "command": ["cargo", "test", "-p", "ipp-core", "--no-default-features", "--lib", "--locked", "--", "world::systems::lifecycle_publisher::"],
+        "builds": [],
+        "requirements": ["rust"]
+      },
+      {
+        "name": "core-expanded",
+        "command": ["cargo", "test", "-p", "ipp-core", "--all-features", "--lib", "--locked", "--", "world::systems::lifecycle_publisher::"],
+        "builds": [],
+        "requirements": ["rust"]
+      },
+      {
+        "name": "lint-lean",
+        "command": ["cargo", "clippy", "-p", "ipp-core", "--all-targets", "--no-default-features", "--locked", "--", "-D", "warnings"],
+        "builds": [],
+        "requirements": ["rust"]
+      },
+      {
+        "name": "lint-expanded",
+        "command": ["cargo", "clippy", "-p", "ipp-core", "--all-targets", "--all-features", "--locked", "--", "-D", "warnings"],
+        "builds": [],
+        "requirements": ["rust"]
+      },
+      {
+        "name": "asset-runtime",
+        "command": ["cargo", "test", "-p", "ipp-core", "--test", "asset_runtime", "--test", "asset_render_release", "--test", "asset_release_recipients", "--test", "asset_lifecycle", "--test", "selected_asset_access", "--test", "system_asset_lifecycle", "--locked"],
+        "builds": [],
+        "requirements": ["rust"]
+      },
+      {
+        "name": "asset-publications",
+        "command": ["cargo", "test", "-p", "ipp-core", "--lib", "services::asset_management::", "--locked"],
+        "builds": [],
+        "requirements": ["rust"]
+      },
+      {
+        "name": "asset-reference-fields",
+        "command": ["cargo", "test", "-p", "ipp-core", "--no-default-features", "--lib", "components::", "--locked"],
+        "builds": [],
+        "requirements": ["rust"]
+      },
+      {
+        "name": "asset-rejection-native",
+        "command": ["node", "--test", "target/asset-rejection-tests/tests/integration/asset-rejection.test.js"],
+        "builds": ["asset-rejection-tests", "world-hosts"],
+        "requirements": ["node", "npm"]
+      },
+      {
+        "name": "asset-rejection-worker",
+        "command": ["node", "--test", "target/asset-rejection-worker-tests/tests/browser/asset-rejection.test.js"],
+        "builds": ["asset-rejection-worker-tests", "world-hosts"],
+        "requirements": ["node", "npm", "browser"]
+      }
+    ],
     "files": [
       "dist/tests/integration/lifecycle-subscriptions.test.js",
       "dist/tests/browser/lifecycle-subscriptions.test.js"
@@ -359,6 +1316,8 @@
       "crates/ipp-core/tests/animation_transitions.rs",
       "crates/ipp-core/tests/animation_transition_lifecycle.rs",
       "crates/ipp-core/tests/reversible_animation.rs",
+      "crates/ipp-core/tests/animation_dynamic_property_persistence.rs",
+      "crates/ipp-core/tests/animation_row_properties.rs",
       "crates/ipp-core/src/world/mod.rs",
       "crates/ipp-core/src/world/mutation.rs",
       "crates/ipp-core/src/world/runtime.rs",
@@ -386,6 +1345,26 @@
           "animation_transition_lifecycle",
           "--test",
           "reversible_animation",
+          "--test",
+          "animation_dynamic_property_persistence",
+          "--locked"
+        ],
+        "builds": [],
+        "requirements": [
+          "rust"
+        ]
+      },
+      {
+        "name": "row-properties",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "ipp-core",
+          "--features",
+          "gui",
+          "--test",
+          "animation_row_properties",
           "--locked"
         ],
         "builds": [],
@@ -431,18 +1410,102 @@
       "tests/render/skinning-fixture.ts"
     ]
   },
+  "react-gui-authoring": {
+    "description": "Ordinary React GUI entities, exact ACK control refs, generic links/rows and cleanup through native and worker transports",
+    "sourceRoots": ["packages/ipp-react/src/", "packages/ipp-react/tests/control-refs.test.ts", "packages/ipp-react/tests/gui-declaration.test.ts", "packages/ipp-react/tests/gui-callbacks.test.ts", "tests/react/gui-authoring.tsx", "tests/react/gui-callbacks.tsx", "tests/react/gui-scroll.tsx", "tests/react/control-ref-lifetimes.tsx", "tests/react/control-ref-scaling.tsx", "tests/react/control-ref-subsets.tsx", "tests/react/control-ref-cleanup.tsx", "tests/react/gui-root.test.ts", "tests/react/gui-paint.tsx", "tests/react/gui-paint.test.ts"],
+    "commands": [
+      {
+        "name": "refs",
+        "command": ["@node", "--test", "target/react-gui-authoring/control-refs.test.js", "target/react-gui-authoring/gui-declaration.test.js", "target/react-gui-authoring/gui-callbacks.test.js"],
+        "builds": ["react-gui-authoring"],
+        "requirements": ["node", "npm"]
+      },
+      {
+        "name": "native",
+        "command": ["@node", "--test", "--test-name-pattern=through native WebSocket", "target/react-gui-authoring/gui-authoring.test.js"],
+        "builds": ["react-gui-authoring"],
+        "requirements": ["node", "npm"]
+      },
+      {
+        "name": "worker",
+        "command": ["@node", "--test", "--test-name-pattern=through worker WASM", "target/react-gui-authoring/gui-authoring.test.js"],
+        "builds": ["react-gui-authoring", "browser:headless-gui"],
+        "requirements": ["node", "npm", "browser"]
+      },
+      {
+        "name": "webgl",
+        "command": ["@node", "target/react-gui-authoring/gui-paint.test.js", "--backend", "webgl"],
+        "builds": ["react-gui-authoring", "browser:headless-gui", "surface-assets"],
+        "requirements": ["node", "npm", "browser"]
+      },
+      {
+        "name": "gles",
+        "command": ["@node", "target/react-gui-authoring/gui-paint.test.js", "--backend", "gles", "--egl-dir", "@egl"],
+        "builds": ["react-gui-authoring", "gles-hosts", "surface-assets"],
+        "requirements": ["node", "npm", "browser", "gles"]
+      }
+    ]
+  },
+  "react-attached": {
+    "description": "Headless React fixed-World portals, exact receipt cleanup and batch outcome ownership through generated native and worker clients",
+    "sourceRoots": ["packages/ipp-react/src/", "packages/ipp-react/tests/attachment-journal.test.ts", "tests/react/"],
+    "commands": [
+      {
+        "name": "renderer",
+        "command": ["@node", "--test", "target/react-attached/renderer.test.js"],
+        "builds": ["react-attached"],
+        "requirements": ["node", "npm"]
+      },
+      {
+        "name": "journals",
+        "command": ["@node", "--test", "target/react-attached/attachment-journal.test.js"],
+        "builds": ["react-attached"],
+        "requirements": ["node", "npm"]
+      },
+      {
+        "name": "transports",
+        "command": ["@node", "--test", "target/react-attached/attached-world.test.js"],
+        "builds": ["react-attached", "surface-host", "browser:headless-surfaces"],
+        "requirements": ["node", "npm", "browser"]
+      }
+    ]
+  },
   "react": {
     "description": "React reconciliation, ownership and public package consumers",
     "files": [
+      "dist/tests/react/native.test.js",
       "dist/tests/react/react.test.js",
       "dist/packages/ipp-react/tests/renderer.test.js"
     ]
   },
   "canvas": {
     "description": "Canvas composition, lifecycle and pixel density",
-    "files": [
-      "dist/tests/render/canvas.test.js",
-      "dist/tests/render/dpi.test.js"
+    "sourceRoots": ["packages/ipp-react/src/", "tests/render/canvas-fixture.tsx", "tests/render/saved-canvas-fixture.tsx"],
+    "commands": [
+      {
+        "name": "lifecycle",
+        "command": ["@node", "--test", "target/canvas-build/canvas-presentation.test.js"],
+        "builds": ["canvas-fixtures"],
+        "requirements": ["node", "npm"]
+      },
+      {
+        "name": "dom",
+        "command": ["@node", "--test", "target/canvas-build/canvas.test.js", "target/canvas-build/dpi.test.js"],
+        "builds": ["canvas-fixtures", "browser:headless", "browser:render-surfaces"],
+        "requirements": ["node", "npm", "browser"]
+      },
+      {
+        "name": "controller-webgl",
+        "command": ["@node", "target/canvas-build/canvas-controller.test.js", "--backend", "webgl"],
+        "builds": ["canvas-fixtures", "browser:render-surfaces"],
+        "requirements": ["node", "npm", "browser"]
+      },
+      {
+        "name": "controller-gles",
+        "command": ["@node", "target/canvas-build/canvas-controller.test.js", "--backend", "gles", "--egl-dir", "@egl"],
+        "builds": ["canvas-fixtures", "gles-hosts"],
+        "requirements": ["node", "npm", "browser", "gles"]
+      }
     ]
   },
   "render": {
@@ -533,7 +1596,9 @@
       "packages/ipp-react/src/gui/theme.ts",
       "packages/ipp-client/tools/assemble.mjs",
       "tools/build/verify-browser.mjs",
+      "tests/render/gallery-gui-panel.ts",
       "tests/render/viewer-browser-helper.ts",
+      "tests/render/viewer-observation.ts",
       "tests/render/gallery-driver.ts",
       "tools/build_gallery_gui_assets.py",
       "tests/render/gallery-server.ts"
@@ -546,7 +1611,9 @@
     "description": "Runtime-routed Surface GUI and background camera gestures",
     "sourceRoots": [
       "examples/world-gallery/worlds/gui/",
+      "tests/render/gallery-gui-panel.ts",
       "tests/render/viewer-browser-helper.ts",
+      "tests/render/viewer-observation.ts",
       "tests/render/gallery-driver.ts",
       "tools/build_gallery_gui_assets.py",
       "tests/render/gallery-server.ts"
@@ -635,9 +1702,7 @@
     "sourceRoots": [
       "crates/ipp-core/src/world/mod.rs",
       "crates/ipp-core/src/world/mutation.rs",
-      "crates/ipp-core/src/world/runtime.rs",
-      "crates/ipp-core/src/world/systems/state_overlay/",
-      "crates/ipp-core/tests/state_overlays.rs"
+      "crates/ipp-core/src/world/runtime.rs"
     ],
     "commands": [
       {
@@ -647,21 +1712,6 @@
           "test",
           "-p",
           "ipp-host-session",
-          "--locked"
-        ],
-        "builds": [],
-        "requirements": [
-          "rust"
-        ]
-      },
-      {
-        "name": "overlay",
-        "command": [
-          "cargo",
-          "test",
-          "-p",
-          "ipp-core",
-          "state_overlay",
           "--locked"
         ],
         "builds": [],
@@ -683,24 +1733,6 @@
         "requirements": [
           "rust"
         ]
-      },
-      {
-        "name": "overlays",
-        "command": [
-          "cargo",
-          "test",
-          "-p",
-          "ipp-core",
-          "--features",
-          "gui",
-          "--test",
-          "state_overlays",
-          "--locked"
-        ],
-        "builds": [],
-        "requirements": [
-          "rust"
-        ]
       }
     ],
     "files": [
@@ -709,7 +1741,7 @@
     ]
   },
   "surfaces": {
-    "description": "Quadratic text/drawings, RGBA bitmaps, item lifecycle and real native/worker presentation",
+    "description": "Canvas entity lifecycle, quadratic text/drawings, RGBA bitmaps and real native/worker Surface presentation",
     "sourceRoots": [
       "crates/ipp-core/src/world/systems/surface/",
       "crates/ipp-render-gl/src/services/render/",
@@ -719,13 +1751,12 @@
       "assets/fonts/",
       "licences/fonts/",
       "tools/build_surface_assets.py",
+      "tools/build_surfaces.mjs",
+      "tests/render/tsconfig.surfaces.json",
       "tests/render/surface-fixture.tsx",
+      "tests/render/surface.test.ts",
       "tests/integration/surface-scenario.ts",
-      "crates/ipp-core/tests/surfaces.rs"
-    ],
-    "files": [
-      "dist/tests/integration/surface.test.js",
-      "dist/tests/render/surface.test.js"
+      "tests/integration/surface.test.ts"
     ],
     "commands": [
       {
@@ -748,50 +1779,219 @@
         ]
       },
       {
-        "name": "core",
-        "command": [
-          "cargo",
-          "test",
-          "-p",
-          "ipp-core",
-          "--features",
-          "surfaces",
-          "--test",
-          "surfaces",
-          "--locked"
-        ],
-        "builds": [],
-        "requirements": [
-          "rust"
-        ]
+        "name": "native",
+        "command": ["@node", "--test", "target/surface-build/lifecycle.test.js"],
+        "builds": ["surface-fixtures", "surface-host"],
+        "requirements": ["node", "npm"]
+      },
+      {
+        "name": "browser",
+        "command": ["@node", "--test", "target/surface-build/surface.test.js"],
+        "builds": ["surface-fixtures", "browser:render-surfaces"],
+        "requirements": ["node", "npm", "browser"]
       }
     ]
   },
   "gui": {
-    "description": "GUI roots, node identity, committed control values and ownership through real native and worker clients",
+    "description": "Ordinary GUI entity lifecycle, committed control values, physical input and presentation through real native, GLES and worker clients",
     "files": [
       "dist/tests/react/gui-root.test.js",
       "dist/packages/ipp-react/tests/gui-clipboard.test.js",
-      "dist/packages/ipp-react/tests/gui-commits.test.js",
-      "dist/packages/ipp-react/tests/gui-controls.test.js",
       "dist/packages/ipp-react/tests/gui-declaration.test.js",
-      "dist/packages/ipp-react/tests/gui-diff.test.js",
-      "dist/packages/ipp-react/tests/gui-effects.test.js",
       "dist/packages/ipp-react/tests/gui-ime.test.js",
       "dist/packages/ipp-react/tests/gui-input.test.js",
       "dist/packages/ipp-react/tests/gui-soft-keyboard.test.js",
       "dist/packages/ipp-react/tests/gui-text-bridge.test.js",
-      "dist/packages/ipp-client/tests/gui-input.test.js",
-      "dist/packages/ipp-client/tests/gui-observations.test.js",
       "dist/packages/ipp-client/tests/gui-semantics.test.js",
-      "crates/ipp-protocol/tests/gui-input-client.mjs",
-      "crates/ipp-protocol/tests/gui-observations-client.mjs",
       "crates/ipp-protocol/tests/gui-semantics-client.mjs",
       "dist/tests/integration/gui.test.js",
       "dist/tests/integration/gui-react-root.test.js",
       "dist/tests/browser/gui.test.js"
     ],
     "commands": [
+      {
+        "name": "skin-motion",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "ipp-core",
+          "--no-default-features",
+          "--features",
+          "gui,diagnostics",
+          "--test",
+          "gui_skin_motion",
+          "--locked"
+        ],
+        "builds": [],
+        "requirements": ["rust"]
+      },
+      {
+        "name": "skin-paint",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "ipp-core",
+          "--features",
+          "gui,diagnostics",
+          "--test",
+          "gui_skin_paint",
+          "--locked"
+        ],
+        "builds": [],
+        "requirements": ["rust"]
+      },
+      {
+        "name": "manifest",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "ipp-core",
+          "--features",
+          "gui",
+          "--test",
+          "host_systems",
+          "--locked",
+          "--",
+          "gui_"
+        ],
+        "builds": [],
+        "requirements": [
+          "rust"
+        ]
+      },
+      {
+        "name": "manifest-lean",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "ipp-core",
+          "--no-default-features",
+          "--test",
+          "host_systems",
+          "--locked",
+          "--",
+          "gui_"
+        ],
+        "builds": [],
+        "requirements": [
+          "rust"
+        ]
+      },
+      {
+        "name": "reliable-output-lean",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "ipp-core",
+          "--no-default-features",
+          "--lib",
+          "--locked",
+          "--",
+          "services::reliable_output::"
+        ],
+        "builds": [],
+        "requirements": [
+          "rust"
+        ]
+      },
+      {
+        "name": "input-foundation",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "ipp-core",
+          "--no-default-features",
+          "--features",
+          "gui",
+          "--lib",
+          "--locked",
+          "--",
+          "services::gui_input::"
+        ],
+        "builds": [],
+        "requirements": [
+          "rust"
+        ]
+      },
+      {
+        "name": "input-sdk",
+        "command": ["@node", "--test", "target/multiplex-tests/gui-input.test.js", "target/multiplex-tests/gui-text-bridge.test.js", "target/multiplex-tests/gui-ime.test.js", "target/multiplex-tests/gui-clipboard.test.js", "target/multiplex-tests/gui-soft-keyboard.test.js"],
+        "builds": ["transport-fixtures"],
+        "requirements": ["node", "npm"]
+      },
+      {
+        "name": "input-wire",
+        "command": ["cargo", "test", "-p", "ipp-protocol", "--features", "gui", "--lib", "--locked", "wire::tests::"],
+        "builds": [],
+        "requirements": ["rust"]
+      },
+      {
+        "name": "input-codec",
+        "command": ["@node", "--experimental-strip-types", "--test", "crates/ipp-protocol/tests/physical-input-client.mjs"],
+        "builds": ["browser:headless-gui", "gles-hosts"],
+        "requirements": ["node", "npm", "rust", "wasm"]
+      },
+      {
+        "name": "input-wire-lean",
+        "command": ["cargo", "test", "-p", "ipp-protocol", "--no-default-features", "--lib", "--locked", "wire::tests::"],
+        "builds": [],
+        "requirements": ["rust"]
+      },
+      {
+        "name": "physical-webgl",
+        "command": ["@node", "--test", "--test-name-pattern", "worker WASM/WebGL", "target/multiplex-tests/physical-input.test.js"],
+        "builds": ["browser:headless-gui", "transport-fixtures", "font-assets"],
+        "requirements": ["node", "npm", "browser"]
+      },
+      {
+        "name": "physical-gles",
+        "command": ["@node", "--test", "--test-name-pattern", "native WebSocket/GLES", "target/multiplex-tests/physical-input.test.js"],
+        "builds": ["gles-hosts", "transport-fixtures", "font-assets"],
+        "requirements": ["node", "npm", "browser", "gles"]
+      },
+      {
+        "name": "input-foundation-lint",
+        "command": [
+          "cargo",
+          "clippy",
+          "-p",
+          "ipp-core",
+          "--no-default-features",
+          "--features",
+          "gui",
+          "--lib",
+          "--locked",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "builds": [],
+        "requirements": [
+          "rust"
+        ]
+      },
+      {
+        "name": "input-foundation-lean",
+        "command": [
+          "cargo",
+          "check",
+          "-p",
+          "ipp-core",
+          "--no-default-features",
+          "--lib",
+          "--locked"
+        ],
+        "builds": [],
+        "requirements": [
+          "rust"
+        ]
+      },
       {
         "name": "core",
         "command": [
@@ -800,11 +2000,19 @@
           "-p",
           "ipp-core",
           "--features",
-          "gui",
+          "gui,diagnostics",
           "--test",
-          "gui",
+          "gui_entities",
           "--test",
-          "gui_layout",
+          "gui_controls",
+          "--test",
+          "canvas_publication",
+          "--test",
+          "gui_entity_layout",
+          "--test",
+          "gui_scroll_geometry",
+          "--test",
+          "canvas_output_changes",
           "--test",
           "schema_rows",
           "--locked"
@@ -846,7 +2054,7 @@
           "--features",
           "gui",
           "--lib",
-          "gui_",
+          "gui::tests::",
           "--locked"
         ],
         "builds": [],
@@ -857,6 +2065,10 @@
     ],
     "sourceRoots": [
       "crates/ipp-core/src/world/systems/gui/",
+      "crates/ipp-core/src/services/gui_input/",
+      "crates/ipp-core/src/services/reliable_output.rs",
+      "crates/ipp-core/src/services/reliable_output_tests.rs",
+      "crates/ipp-core/src/world/systems/canvas/",
       "crates/ipp-protocol/src/",
       "crates/ipp-host-session/src/",
       "tools/ipp-schema-gen/src/",
@@ -865,13 +2077,19 @@
       "tests/react/",
       "tests/integration/",
       "tests/browser/",
-      "crates/ipp-core/src/world/systems/render/gui_presentation.rs",
-      "crates/ipp-core/src/world/systems/render/surface_preparation_tests.rs",
       "crates/ipp-core/src/world/mod.rs",
       "crates/ipp-core/src/world/mutation.rs",
       "crates/ipp-core/src/world/runtime.rs",
-      "crates/ipp-core/tests/gui.rs",
-      "crates/ipp-core/tests/gui_layout.rs",
+      "crates/ipp-core/tests/gui_entities.rs",
+      "crates/ipp-core/tests/gui_controls.rs",
+      "crates/ipp-core/tests/gui_skin_motion.rs",
+      "crates/ipp-core/tests/gui_skin_paint.rs",
+      "crates/ipp-core/tests/host_systems.rs",
+      "crates/ipp-core/tests/canvas_publication.rs",
+      "crates/ipp-core/tests/gui_entity_layout.rs",
+      "crates/ipp-core/tests/gui_scroll_geometry.rs",
+      "crates/ipp-core/tests/canvas_output_changes.rs",
+      "crates/ipp-core/tests/support/",
       "crates/ipp-core/tests/schema_rows.rs",
       "crates/ipp-core/src/components/",
       "crates/ipp-core/src/commands.rs",
@@ -894,18 +2112,85 @@
       "crates/ipp-wasm/src/services/render.rs",
       "crates/ipp-wasm/src/services/render_statistics.rs",
       "packages/ipp-client/tools/assemble.mjs",
-      "packages/ipp-react/src/gui/theme.ts",
+      "packages/ipp-react/src/",
       "tools/build/verify-browser.mjs",
       "tools/build_surface_assets.py",
       "tests/render/retained-gui-environment.ts",
       "tests/render/retained-gui-images.ts",
       "tests/render/retained-gui-scenario.ts",
+      "tests/render/retained-gui-fixture.tsx",
+      "tests/render/retained-gui.test.ts",
+      "tests/render/tsconfig.retained-gui.json",
+      "tools/build_surface_gui.mjs",
       "tests/render/surface-fixture.tsx",
       "tests/performance/retained-gui.ts",
       "tests/integration/surface-scenario.ts"
     ],
-    "files": [
-      "dist/tests/render/retained-gui.test.js"
+    "commands": [
+      {
+        "name": "browser",
+        "command": ["@node", "--test", "target/surface-gui-build/retained-gui.test.js"],
+        "builds": ["surface-gui-fixtures", "browser:render-surfaces", "browser:headless-gui"],
+        "requirements": ["node", "npm", "browser"]
+      }
+    ]
+  },
+  "gui-stress": {
+    "description": "Fixed React GUI stress workload through generated worker client, assets, semantics and completed WebGL frames",
+    "sourceRoots": [
+      "examples/gui-stress/",
+      "tests/performance/gui-stress-fixture.tsx",
+      "tests/performance/gui-stress.ts",
+      "tests/performance/gui-stress.test.ts",
+      "tests/performance/tsconfig.gui-stress.json",
+      "crates/ipp-host-session/src/services/gui_layout_statistics.rs",
+      "crates/ipp-host-session/src/services/gui_layout_statistics_tests.rs",
+      "crates/ipp-wasm/src/services/render_statistics.rs",
+      "crates/ipp-server/examples/gles_presentation/statistics.rs",
+      "tools/build_gui_stress.mjs",
+      "tools/pipeline/benchmark.py",
+      "packages/ipp-react/src/gui/",
+      "packages/ipp-client/src/",
+      "crates/ipp-core/src/world/systems/gui/",
+      "crates/ipp-render-gl/src/services/render/"
+    ],
+    "commands": [
+      {
+        "name": "layout-host",
+        "command": ["cargo", "test", "-p", "ipp-host-session", "--no-default-features", "--features", "gui,diagnostics", "--lib", "--locked", "gui_layout_statistics"],
+        "builds": [],
+        "requirements": ["rust"]
+      },
+      {
+        "name": "layout-wasm-record",
+        "command": ["cargo", "test", "-p", "ipp-wasm", "--no-default-features", "--features", "render,gui,diagnostics", "--lib", "--locked", "services::render_statistics"],
+        "builds": [],
+        "requirements": ["rust"]
+      },
+      {
+        "name": "layout-lint-native",
+        "command": ["cargo", "clippy", "-p", "ipp-host-session", "-p", "ipp-server", "--all-targets", "--no-default-features", "--features", "ipp-server/websocket,ipp-server/gui,ipp-server/diagnostics", "--locked", "--", "-D", "warnings"],
+        "builds": [],
+        "requirements": ["rust"]
+      },
+      {
+        "name": "layout-lint-wasm",
+        "command": ["cargo", "clippy", "-p", "ipp-wasm", "--lib", "--target", "wasm32-unknown-unknown", "--no-default-features", "--features", "render,gui,diagnostics", "--locked", "--", "-D", "warnings"],
+        "builds": [],
+        "requirements": ["rust", "wasm"]
+      },
+      {
+        "name": "browser",
+        "command": ["@node", "--test", "--test-name-pattern=cycles|through browser", "target/gui-stress/gui-stress.test.js"],
+        "builds": ["gui-stress-fixtures", "surface-assets", "browser:headless-gui"],
+        "requirements": ["node", "npm", "browser"]
+      },
+      {
+        "name": "native",
+        "command": ["@node", "--test", "--test-name-pattern=through native-gles", "target/gui-stress/gui-stress.test.js"],
+        "builds": ["gui-stress-fixtures", "surface-assets", "gles-hosts"],
+        "requirements": ["node", "npm", "browser", "gles"]
+      }
     ]
   },
   "surface-cache": {
@@ -931,11 +2216,12 @@
       "tests/render/surface-cache-scenario.ts",
       "tests/render/surface-cache.test.ts",
       "tests/render/surface-fixture.tsx",
+      "tests/render/retained-gui-fixture.tsx",
+      "tools/build_surfaces.mjs",
+      "tools/build_surface_gui.mjs",
+      "tests/render/tsconfig.surfaces.json",
       "tests/integration/surface-scenario.ts",
       "crates/ipp-render-gl/Cargo.toml"
-    ],
-    "files": [
-      "dist/tests/render/surface-cache.test.js"
     ],
     "commands": [
       {
@@ -992,6 +2278,18 @@
         "requirements": [
           "rust"
         ]
+      },
+      {
+        "name": "browser-surfaces",
+        "command": ["@node", "--test", "--test-name-pattern=render-surfaces", "target/surface-build/surface-cache.test.js"],
+        "builds": ["surface-fixtures", "browser:render-surfaces"],
+        "requirements": ["node", "npm", "browser"]
+      },
+      {
+        "name": "browser-gui",
+        "command": ["@node", "--test", "--test-name-pattern=headless-gui", "target/surface-build/surface-cache.test.js"],
+        "builds": ["surface-gui-fixtures", "browser:headless-gui"],
+        "requirements": ["node", "npm", "browser"]
       }
     ]
   },

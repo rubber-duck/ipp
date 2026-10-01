@@ -14,12 +14,11 @@ pub(in crate::world) struct AssetDependencyAccess<'a> {
     world: &'a mut WorldSimulationState,
     state: &'a mut AssetDependencySystemState,
     asset_acquisition: &'a mut AssetManagementService,
-    data_sources: &'a mut crate::services::data_source::DataSourceManagementService,
 }
 
 pub(in crate::world) struct AssetDependencyReadAccess<'a> {
     world: &'a WorldSimulationState,
-    state: &'a AssetDependencySystemState,
+    state: Option<&'a AssetDependencySystemState>,
     asset_acquisition: &'a AssetManagementService,
     data_sources: &'a crate::services::data_source::DataSourceManagementService,
 }

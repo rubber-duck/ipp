@@ -169,8 +169,18 @@ fn typed_parameters_generate_order_and_borrow_independent_mutable_services() {
         count: 0,
     }));
     let mut host = HostRuntime::with_system_factories(factories).unwrap();
-    let one = host.create_world(Default::default()).unwrap();
-    let two = host.create_world(Default::default()).unwrap();
+    let one = host
+        .create_world(
+            Default::default(),
+            &[SystemId("test.dependent"), Source::ID],
+        )
+        .unwrap();
+    let two = host
+        .create_world(
+            Default::default(),
+            &[SystemId("test.dependent"), Source::ID],
+        )
+        .unwrap();
     host.world_mut(one).unwrap().step(0.25).unwrap();
     host.world_mut(one).unwrap().step(0.5).unwrap();
     host.world_mut(two).unwrap().step(0.75).unwrap();
@@ -196,7 +206,9 @@ fn optional_parameter_absence_is_valid_but_required_metadata_rejects_it() {
         }
     }));
     let mut host = HostRuntime::with_system_factories(factories).unwrap();
-    let world = host.create_world(Default::default()).unwrap();
+    let world = host
+        .create_world(Default::default(), &[SystemId("test.optional")])
+        .unwrap();
     host.world_mut(world).unwrap().step(0.0).unwrap();
     assert!(*absent.lock().unwrap());
 
@@ -223,25 +235,33 @@ fn duplicate_service_parameters_reject_during_initialization() {
         }
     }));
     let mut host = HostRuntime::with_system_factories(factories).unwrap();
-    assert!(host.create_world(Default::default()).is_err());
+    assert!(
+        host.create_world(Default::default(), &[SystemId("test.duplicate")])
+            .is_err()
+    );
 }
 
 #[test]
 fn extension_system_state_round_trips_through_generic_world_file_sections() {
-    use ipp_core::services::world_serialization::{WorldLoadOptions, WorldSnapshot};
+    use ipp_core::services::world_serialization::{WorldGraphSnapshot, WorldLoadOptions};
     let mut factories = compiled_system_factories();
     factories.push(factory(Source::ID, |bindings| Source {
         bindings,
         count: 0,
     }));
     let mut host = HostRuntime::with_system_factories(factories).unwrap();
-    let original = host.create_world(Default::default()).unwrap();
+    let original = host
+        .create_world(Default::default(), &[Source::ID])
+        .unwrap();
     for _ in 0..3 {
         host.world_mut(original).unwrap().step(0.0).unwrap();
     }
     let bytes = host.save_world(original, 77, Default::default()).unwrap();
-    let mut snapshot = WorldSnapshot::decode(&bytes, 77, Default::default()).unwrap();
-    assert_eq!(snapshot.systems[Source::ID.0], 3u64.to_le_bytes());
+    let mut snapshot = WorldGraphSnapshot::decode(&bytes, 77, Default::default()).unwrap();
+    assert_eq!(
+        snapshot.nodes[0].world.systems[Source::ID.0],
+        3u64.to_le_bytes()
+    );
     let restored = host
         .load_world(
             &bytes,
@@ -253,7 +273,9 @@ fn extension_system_state_round_trips_through_generic_world_file_sections() {
             Default::default(),
             Default::default(),
         )
-        .unwrap();
+        .unwrap()
+        .root
+        .id();
     assert_eq!(
         host.world_mut(restored)
             .unwrap()
@@ -279,7 +301,15 @@ fn extension_system_state_round_trips_through_generic_world_file_sections() {
             .count,
         3
     );
-    snapshot.systems.insert("test.unselected".into(), vec![1]);
+    snapshot.nodes[0]
+        .world
+        .systems
+        .insert("test.unselected".into(), vec![1]);
+    assert!(snapshot.encode(77, Default::default()).is_err());
+    snapshot.nodes[0]
+        .world
+        .selected_systems
+        .push("test.unselected".into());
     let invalid = snapshot.encode(77, Default::default()).unwrap();
     assert!(
         host.load_world(
@@ -299,6 +329,7 @@ fn extension_system_state_round_trips_through_generic_world_file_sections() {
 mod effective_observations {
     use super::*;
     use crate::support::HostWorldTestDriver;
+    use crate::support::selection::{ASSETS, CONSTRAINTS, select};
     use ipp_core::{
         Batch, Command, ComponentValue, EntityId, EntityRef,
         components::schema::FieldValue,
@@ -317,11 +348,12 @@ mod effective_observations {
         seen: Observations,
     }
 
-    fn scalar(snapshot: SystemEffectiveEntitySnapshot) -> f32 {
-        // Exhaustive destructuring keeps this callback API explicitly effective-only.
-        let SystemEffectiveEntitySnapshot {
+    fn scalar(snapshot: ipp_core::EntitySnapshot) -> f32 {
+        // Exhaustive destructuring keeps this callback API on the stored value.
+        let ipp_core::EntitySnapshot {
             id: _,
             metadata: _,
+            link: _,
             components,
         } = snapshot;
         components
@@ -411,7 +443,16 @@ mod effective_observations {
             },
         ));
         let mut host = HostRuntime::with_system_factories(factories).unwrap();
-        let id = host.create_world(Default::default()).unwrap();
+        let id = host
+            .create_world(
+                Default::default(),
+                &[
+                    select(&[ASSETS, CONSTRAINTS]),
+                    vec![SystemId("test.effective-observer")],
+                ]
+                .concat(),
+            )
+            .unwrap();
         let mut world = host.world_mut(id).unwrap();
         world
             .enqueue(Batch {
@@ -420,6 +461,7 @@ mod effective_observations {
                     Command::Create {
                         alias: 1,
                         metadata: Default::default(),
+                        adopt: false,
                     },
                     Command::insert_value(
                         EntityRef::Alias(1),
@@ -430,6 +472,7 @@ mod effective_observations {
                     Command::Create {
                         alias: 2,
                         metadata: Default::default(),
+                        adopt: false,
                     },
                     Command::insert_value(
                         EntityRef::Alias(2),
@@ -467,11 +510,18 @@ mod effective_observations {
             1.0,
             vec![AnimationTrack {
                 target: property.clone(),
-                keys: vec![AnimationKeyframe {
-                    time: 0.0,
-                    value: AnimationValue::Field(FieldValue::F32(5.0)),
-                    interpolation: AnimationInterpolation::Step,
-                }],
+                keys: vec![
+                    AnimationKeyframe {
+                        time: 0.0,
+                        value: AnimationValue::Field(FieldValue::F32(0.0)),
+                        interpolation: AnimationInterpolation::Linear,
+                    },
+                    AnimationKeyframe {
+                        time: 1.0,
+                        value: AnimationValue::Field(FieldValue::F32(2.0)),
+                        interpolation: AnimationInterpolation::Step,
+                    },
+                ],
             }],
         )
         .unwrap();
@@ -500,6 +550,7 @@ mod effective_observations {
                     track: 0,
                     target: source,
                     property,
+                    entity_bindings: Vec::new(),
                     weight: 1.0,
                     additive: false,
                     reference_time: 0.0,
@@ -511,35 +562,29 @@ mod effective_observations {
         world
             .enqueue_playback(controller, AnimationPlaybackControl::Play)
             .unwrap();
+        world
+            .enqueue_playback(controller, AnimationPlaybackControl::Seek(1.0))
+            .unwrap();
         *targets.lock().unwrap() = Some((source, target));
         seen.lock().unwrap().clear();
+        // The constraint writes before animation, so the target follows the
+        // animated source in the next frame.
+        world.step(0.0).unwrap();
         world.step(0.0).unwrap();
         let source_snapshot = world.inspect(source).unwrap();
         let target_snapshot = world.inspect(target).unwrap();
+        // Storage holds the animated and evaluated values: 3 plus the clip's
+        // change of 2, and the constraint's 2 * 5 + 1.
         assert!(
             source_snapshot
-                .base
-                .contains(&ComponentValue::Scalar(Scalar {
-                    value: 3.0
-                }))
-        );
-        assert!(
-            source_snapshot
-                .effective
+                .components
                 .contains(&ComponentValue::Scalar(Scalar {
                     value: 5.0
                 }))
         );
         assert!(
             target_snapshot
-                .base
-                .contains(&ComponentValue::Scalar(Scalar {
-                    value: 20.0
-                }))
-        );
-        assert!(
-            target_snapshot
-                .effective
+                .components
                 .contains(&ComponentValue::Scalar(Scalar {
                     value: 11.0
                 }))

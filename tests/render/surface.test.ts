@@ -48,17 +48,21 @@ test("Surface terminal renders crisp small text, drawings and RGBA through a gen
         return result;
       };
       try {
-        const initial = await call<{ nextId: number; ids: number[] }>(
-          "initialize",
-          [
-            {
-              generatedModuleUrl: env.urls.generated,
-              workerScriptUrl: env.urls.workerScript,
-              wasmUrl: env.urls.wasm,
-            },
-          ],
-        );
-        assert.equal(initial.nextId, 6);
+        const initial = await call<{ children: string[] }>("initialize", [
+          {
+            generatedModuleUrl: env.urls.generated,
+            workerScriptUrl: env.urls.workerScript,
+            wasmUrl: env.urls.wasm,
+          },
+        ]);
+        assert.deepEqual(initial.children, [
+          "background",
+          "highlight",
+          "text",
+          "cursor",
+          "icon",
+          "bitmap",
+        ]);
         const front = await capture("front-small");
         assert.ok(front.textPixels > 150, `text coverage ${front.textPixels}`);
         assert.ok(
@@ -67,7 +71,7 @@ test("Surface terminal renders crisp small text, drawings and RGBA through a gen
         );
         assert.ok(
           front.triangles > front.drawCalls * 2,
-          `instanced Surface quads must contribute to frame triangles: ${front.triangles}`,
+          `Canvas content must contribute to frame triangles: ${front.triangles}`,
         );
         assert.ok(
           [33, 44, 63].every(
@@ -96,7 +100,7 @@ test("Surface terminal renders crisp small text, drawings and RGBA through a gen
           oracle.union > 150 && oracle.similarity > 0.55,
           `independent browser font rasterizer overlap ${JSON.stringify(oracle)}`,
         );
-        assert.deepEqual(await call("changeView", [Math.PI]), initial.ids);
+        assert.deepEqual(await call("changeView", [Math.PI]), initial.children);
         const rear = await capture("rear-small");
         assert.ok(
           rear.textPixels > 150,
@@ -115,13 +119,13 @@ test("Surface terminal renders crisp small text, drawings and RGBA through a gen
           mirror.mismatchedPixels < 300 && mirror.meanError < 0.5,
           `rear Surface must mirror the live front image: ${JSON.stringify(mirror)}`,
         );
-        assert.deepEqual(await call("changeView", [0]), initial.ids);
+        assert.deepEqual(await call("changeView", [0]), initial.children);
         await capture("rear-view-restored");
         assert.equal(
           await call("equal", ["front-small", "rear-view-restored"]),
           true,
         );
-        assert.deepEqual(await call("perspective", [0.65]), initial.ids);
+        assert.deepEqual(await call("perspective", [0.65]), initial.children);
         assert.ok((await capture("perspective")).textPixels > 70);
         await call("orthographic");
         await call("changeView", [0, 640, 480]);
@@ -141,8 +145,8 @@ test("Surface terminal renders crisp small text, drawings and RGBA through a gen
           true,
         );
         const contextAssets = await call<{
-          beforeGeneration: number;
-          afterGeneration: number;
+          beforeGeneration: string;
+          afterGeneration: string;
           whileLost: Array<{
             status: string;
             representation: { decoded: boolean; graphicsReady: boolean | null };
@@ -164,8 +168,9 @@ test("Surface terminal renders crisp small text, drawings and RGBA through a gen
             typeof value === "bigint" ? String(value) : value,
           ),
         );
-        assert.ok(
-          contextAssets.afterGeneration > contextAssets.beforeGeneration,
+        assert.notEqual(
+          contextAssets.afterGeneration,
+          contextAssets.beforeGeneration,
         );
         assert.equal(contextAssets.restored.length, 2);
         assert.ok(
@@ -188,17 +193,32 @@ test("Surface terminal renders crisp small text, drawings and RGBA through a gen
           true,
         );
         const keyed = await call<{
-          reordered: number[];
-          removedIds: number[];
-          removedProperty: unknown;
-          restoredIds: number[];
-          nextId: number;
+          reordered: string[];
+          reorderedIdentityPreserved: boolean;
+          removed: string[];
+          cursorRemoved: boolean;
+          restored: string[];
+          cursorReplaced: boolean;
         }>("keyedLifecycle");
-        assert.deepEqual(keyed.reordered, [1, 2, 3, 4, 6, 5]);
-        assert.deepEqual(keyed.removedIds, [1, 2, 3, 6, 5]);
-        assert.equal(keyed.removedProperty, null);
-        assert.deepEqual(keyed.restoredIds, [1, 2, 3, 7, 6, 5]);
-        assert.equal(keyed.nextId, 8);
+        assert.deepEqual(keyed.reordered, [
+          "background",
+          "highlight",
+          "text",
+          "cursor",
+          "bitmap",
+          "icon",
+        ]);
+        assert.equal(keyed.reorderedIdentityPreserved, true);
+        assert.deepEqual(keyed.removed, [
+          "background",
+          "highlight",
+          "text",
+          "bitmap",
+          "icon",
+        ]);
+        assert.equal(keyed.cursorRemoved, true);
+        assert.deepEqual(keyed.restored, keyed.reordered);
+        assert.equal(keyed.cursorReplaced, true);
         const cache = await call<{ observed: unknown[]; released: boolean }>(
           "surfaceCacheDeclarations",
         );

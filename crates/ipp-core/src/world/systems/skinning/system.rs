@@ -26,6 +26,10 @@ impl SystemFactory for SkinningSystemFactory {
         SkinningSystem::ID
     }
 
+    fn capabilities(&self) -> crate::systems::SystemCapabilities {
+        crate::systems::SystemCapabilities::new([crate::ComponentValue::SKIN], [])
+    }
+
     fn dependencies(&self) -> &[SystemDependency] {
         &[
             SystemDependency::Required(SystemId("ipp.skeleton")),

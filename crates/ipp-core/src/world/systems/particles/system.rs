@@ -28,6 +28,18 @@ impl SystemFactory for ParticleSystemFactory {
         ParticleSystem::ID
     }
 
+    fn capabilities(&self) -> crate::systems::SystemCapabilities {
+        crate::systems::SystemCapabilities::new(
+            [
+                crate::ComponentValue::PARTICLE_EMITTER,
+                crate::ComponentValue::PARTICLE_PLAYBACK,
+                crate::ComponentValue::PARTICLE_SPRITE,
+                crate::ComponentValue::PARTICLE_MESH,
+            ],
+            [crate::systems::WorldOperation::Particles],
+        )
+    }
+
     fn dependencies(&self) -> &[SystemDependency] {
         &[
             SystemDependency::Required(SystemId("ipp.asset-dependencies")),

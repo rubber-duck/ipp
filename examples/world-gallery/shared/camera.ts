@@ -1,6 +1,7 @@
 import type { CameraWorldClient, Command } from "@ipp/client";
 
-/** The gallery camera lives for the canvas session, across world mount toggles. */
+/** The gallery camera lives for the canvas session, across world mount toggles.
+ * The caller binds it as the Canvas root output; creating it selects nothing. */
 export async function initializeCamera(
   client: CameraWorldClient,
 ): Promise<bigint> {
@@ -52,11 +53,6 @@ export async function initializeCamera(
     throw new Error(`Camera creation failed: ${outcome.error.reason}`);
   const created = outcome.aliases.find((alias) => alias.alias === 1);
   if (!created) throw new Error("Camera creation returned no entity");
-
-  client.sendCommand({
-    type: "CameraActivateCommand",
-    entity: created.id,
-  });
   return created.id;
 }
 

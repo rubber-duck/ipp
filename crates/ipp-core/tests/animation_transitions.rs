@@ -2,6 +2,7 @@
 
 mod support;
 use support::WorldTestDriver;
+use support::selection::{ASSETS, CONSTRAINTS, GEOMETRY, SPATIAL, select};
 
 use ipp_core::{
     components::Scalar,
@@ -58,6 +59,7 @@ fn create(world: &mut WorldContext<'_>, value: f32) -> EntityId {
             Command::Create {
                 alias: 1,
                 metadata: Default::default(),
+                adopt: false,
             },
             Command::insert_value(
                 EntityRef::Alias(1),
@@ -105,7 +107,7 @@ fn upload(world: &mut WorldContext<'_>, asset: u64, clip: &AnimationClip) {
 
 fn driver(target: EntityId, asset: u64) -> AnimationDriverDescription {
     AnimationDriverDescription {
-        source: format!("asset://10/{asset}"),
+        source: std::sync::Arc::<str>::from(format!("asset://10/{asset}")),
         variant: 0,
         track: 0,
         target,
@@ -113,6 +115,7 @@ fn driver(target: EntityId, asset: u64) -> AnimationDriverDescription {
             component: ComponentValue::SCALAR,
             offsets: vec![VALUE_OFFSET],
         }),
+        entity_bindings: Vec::new(),
         weight: 1.0,
         additive: false,
         reference_time: 0.0,
@@ -140,13 +143,21 @@ fn transition(
     }
 }
 
+/// A World animating Scalars: animation, clip asset dependencies and constraints.
 fn host_world() -> (HostRuntime, WorldId) {
+    host_world_with(&[ASSETS, CONSTRAINTS])
+}
+
+fn host_world_with(parts: &[&[ipp_core::systems::SystemId]]) -> (HostRuntime, WorldId) {
     let mut host = HostRuntime::new();
-    let world = host.create_world(WorldLimits::default()).unwrap();
+    let world = host
+        .create_world(WorldLimits::default(), &select(parts))
+        .unwrap();
     (host, world)
 }
 
-fn scalar(world: &WorldContext<'_>, entity: EntityId) -> (f32, f32) {
+/// The stored Scalar: authored, or sampled while a driver binds it.
+fn scalar(world: &WorldContext<'_>, entity: EntityId) -> f32 {
     let snapshot = world.inspect(entity).unwrap();
     let value = |values: &[ComponentValue]| {
         values
@@ -157,7 +168,7 @@ fn scalar(world: &WorldContext<'_>, entity: EntityId) -> (f32, f32) {
             })
             .unwrap()
     };
-    (value(&snapshot.base), value(&snapshot.effective))
+    value(&snapshot.components)
 }
 
 fn close(actual: f32, expected: f32) {
@@ -192,7 +203,7 @@ fn first_sample_is_exact_and_source_destination_and_fade_clocks_advance_independ
         .create_animation_controller(source_description)
         .unwrap();
     play_at(&mut world, controller, 1.0);
-    close(scalar(&world, target).1, 5.0);
+    close(scalar(&world, target), 105.0);
 
     let mut destination_description = description(vec![driver(target, 2)]);
     destination_description.speed = 2.0;
@@ -207,19 +218,19 @@ fn first_sample_is_exact_and_source_destination_and_fade_clocks_advance_independ
         )
         .unwrap();
     world.update_for_test(0.0).unwrap();
-    close(scalar(&world, target).1, 5.0);
+    close(scalar(&world, target), 105.0);
     let snapshot = world.animation_controller(controller).unwrap();
     assert_eq!(snapshot.time, 0.0);
     assert_eq!(snapshot.transition.unwrap().elapsed, 0.0);
 
     world.update_for_test(0.5).unwrap();
-    close(scalar(&world, target).1, 16.875);
+    close(scalar(&world, target), 106.875);
     let snapshot = world.animation_controller(controller).unwrap();
     assert_eq!(snapshot.time, 1.0);
     assert_eq!(snapshot.transition.unwrap().elapsed, 0.5);
 
     world.update_for_test(0.5).unwrap();
-    close(scalar(&world, target).1, 40.0);
+    close(scalar(&world, target), 120.0);
     assert!(
         world
             .animation_controller(controller)
@@ -259,7 +270,7 @@ fn paused_transition_freezes_and_zero_speed_destination_holds_while_fade_progres
         )
         .unwrap();
     world.update_for_test(3.0).unwrap();
-    close(scalar(&world, target).1, 5.0);
+    close(scalar(&world, target), 55.0);
     let snapshot = world.animation_controller(controller).unwrap();
     assert_eq!(snapshot.state, AnimationPlaybackStatus::Paused);
     assert_eq!(snapshot.time, 0.0);
@@ -269,7 +280,7 @@ fn paused_transition_freezes_and_zero_speed_destination_holds_while_fade_progres
         .control_animation_controller(controller, AnimationPlaybackControl::Play)
         .unwrap();
     world.update_for_test(0.5).unwrap();
-    close(scalar(&world, target).1, 13.75);
+    close(scalar(&world, target), 53.75);
     let snapshot = world.animation_controller(controller).unwrap();
     assert_eq!(snapshot.time, 0.0);
     assert_eq!(snapshot.transition.unwrap().elapsed, 0.5);
@@ -310,12 +321,12 @@ fn destination_start_time_policies_select_restart_preserve_match_phase_and_seek(
             world.animation_controller(controller).unwrap().time,
             expected
         );
-        close(scalar(&world, target).1, 5.0);
+        close(scalar(&world, target), 55.0);
     }
 }
 
 #[test]
-fn partial_target_union_tracks_new_producer_values_and_stop_restores_every_target() {
+fn partial_target_union_keeps_client_writes_and_stop_subtracts_every_contribution() {
     let (mut host, world_id) = host_world();
     let mut world = host.world_mut(world_id).unwrap();
     let source_only = create(&mut world, 100.0);
@@ -339,17 +350,19 @@ fn partial_target_union_tracks_new_producer_values_and_stop_restores_every_targe
         )
         .unwrap();
     world.update_for_test(0.0).unwrap();
+    // The write replaces the field, contribution 5 included; the fading
+    // contribution then moves it by its change.
     set_base(&mut world, source_only, 200.0);
     world.update_for_test(0.5).unwrap();
-    close(scalar(&world, source_only).1, 103.75);
-    close(scalar(&world, destination_only).1, 37.5);
+    close(scalar(&world, source_only), 198.75);
+    close(scalar(&world, destination_only), 52.5);
 
     world
         .control_animation_controller(controller, AnimationPlaybackControl::Stop)
         .unwrap();
     world.update_for_test(0.0).unwrap();
-    assert_eq!(scalar(&world, source_only), (200.0, 200.0));
-    assert_eq!(scalar(&world, destination_only), (50.0, 50.0));
+    assert_eq!(scalar(&world, source_only), 195.0);
+    assert_eq!(scalar(&world, destination_only), 50.0);
 }
 
 #[test]
@@ -380,8 +393,8 @@ fn interruption_starts_from_the_current_composite_without_a_discontinuity() {
         .unwrap();
     world.update_for_test(0.0).unwrap();
     world.update_for_test(0.5).unwrap();
-    let before = scalar(&world, target).1;
-    close(before, 16.25);
+    let before = scalar(&world, target);
+    close(before, 106.25);
 
     world
         .transition_animation_controller(
@@ -394,7 +407,7 @@ fn interruption_starts_from_the_current_composite_without_a_discontinuity() {
         )
         .unwrap();
     world.update_for_test(0.0).unwrap();
-    close(scalar(&world, target).1, before);
+    close(scalar(&world, target), before);
     assert_eq!(
         world
             .animation_controller(controller)
@@ -407,7 +420,7 @@ fn interruption_starts_from_the_current_composite_without_a_discontinuity() {
 }
 
 #[test]
-fn frozen_interruption_tracks_new_underlying_values_for_stop_restoration() {
+fn frozen_interruption_stop_subtracts_the_captured_contributions_from_client_writes() {
     let (mut host, world_id) = host_world();
     let mut world = host.world_mut(world_id).unwrap();
     let source_only = create(&mut world, 100.0);
@@ -445,6 +458,9 @@ fn frozen_interruption_tracks_new_underlying_values_for_stop_restoration() {
         .unwrap();
     world.update_for_test(0.0).unwrap();
 
+    // The pending crossfade holds the contributions captured at the
+    // interruption: 5.625 and 6.875. Writes replace the fields; stop subtracts
+    // the captured contributions from them.
     set_base(&mut world, source_only, 301.0);
     set_base(&mut world, covered, 302.0);
     world
@@ -452,8 +468,8 @@ fn frozen_interruption_tracks_new_underlying_values_for_stop_restoration() {
         .unwrap();
     world.update_for_test(0.0).unwrap();
 
-    assert_eq!(scalar(&world, source_only), (301.0, 301.0));
-    assert_eq!(scalar(&world, covered), (302.0, 302.0));
+    close(scalar(&world, source_only), 295.375);
+    close(scalar(&world, covered), 295.125);
 
     let destination_only = create(&mut world, 300.0);
     upload(&mut world, 3, &clip(2.0, 50.0, 70.0));
@@ -476,6 +492,8 @@ fn frozen_interruption_tracks_new_underlying_values_for_stop_restoration() {
         .unwrap();
     world.update_for_test(0.0).unwrap();
     world.update_for_test(0.5).unwrap();
+    close(scalar(&world, source_only), 301.0);
+    close(scalar(&world, covered), 302.0);
     world
         .transition_animation_controller(
             controller,
@@ -496,9 +514,10 @@ fn frozen_interruption_tracks_new_underlying_values_for_stop_restoration() {
         .unwrap();
     world.update_for_test(0.0).unwrap();
 
-    assert_eq!(scalar(&world, source_only), (401.0, 401.0));
-    assert_eq!(scalar(&world, covered), (402.0, 402.0));
-    assert_eq!(scalar(&world, destination_only), (403.0, 403.0));
+    // The frozen side had faded nothing yet; the destination added nothing.
+    close(scalar(&world, source_only), 395.375);
+    close(scalar(&world, covered), 395.125);
+    close(scalar(&world, destination_only), 403.0);
 }
 
 #[test]
@@ -526,7 +545,7 @@ fn interrupting_with_a_pending_destination_keeps_the_controller_and_held_composi
         .unwrap();
     world.update_for_test(0.0).unwrap();
     world.update_for_test(0.5).unwrap();
-    let held = scalar(&world, target).1;
+    let held = scalar(&world, target);
 
     world
         .transition_animation_controller(
@@ -539,7 +558,7 @@ fn interrupting_with_a_pending_destination_keeps_the_controller_and_held_composi
         )
         .unwrap();
     world.update_for_test(0.0).unwrap();
-    close(scalar(&world, target).1, held);
+    close(scalar(&world, target), held);
     assert!(
         world
             .animation_controller(controller)
@@ -560,14 +579,14 @@ fn interrupting_with_a_pending_destination_keeps_the_controller_and_held_composi
         )
         .unwrap();
     world.update_for_test(10.0).unwrap();
-    close(scalar(&world, target).1, held);
+    close(scalar(&world, target), held);
     let snapshot = world.animation_controller(controller).unwrap();
     assert_eq!(snapshot.id, controller);
     assert!(snapshot.transition.unwrap().pending);
 
     world.remove_animation_controller(controller).unwrap();
     world.update_for_test(0.0).unwrap();
-    assert_eq!(scalar(&world, target), (100.0, 100.0));
+    assert_eq!(scalar(&world, target), 100.0);
     assert!(world.animation_controller(controller).is_none());
 }
 
@@ -592,7 +611,7 @@ fn live_source_holds_while_destination_asset_is_unavailable() {
         .control_animation_controller(controller, AnimationPlaybackControl::Pause)
         .unwrap();
     world.update_for_test(0.0).unwrap();
-    let held = scalar(&world, target).1;
+    let held = scalar(&world, target);
 
     world
         .transition_animation_controller(
@@ -606,15 +625,17 @@ fn live_source_holds_while_destination_asset_is_unavailable() {
         .unwrap();
     world.update_for_test(0.0).unwrap();
 
-    close(scalar(&world, target).1, held);
+    close(scalar(&world, target), held);
     let snapshot = world.animation_controller(controller).unwrap();
     assert_eq!(snapshot.state, AnimationPlaybackStatus::Paused);
     assert!(snapshot.transition.unwrap().pending);
 
+    // A pending crossfade writes nothing, so a client write lands as written.
     world.update_for_test(0.25).unwrap();
+    close(scalar(&world, target), held);
     set_base(&mut world, target, 84.0);
     world.update_for_test(0.0).unwrap();
-    close(scalar(&world, target).1, held);
+    close(scalar(&world, target), 84.0);
     let snapshot = world.animation_controller(controller).unwrap();
     assert_eq!(snapshot.state, AnimationPlaybackStatus::Paused);
     let transition = snapshot.transition.unwrap();
@@ -702,7 +723,7 @@ fn prepared_transition_persists_its_advanced_destination_clock() {
 }
 
 #[test]
-fn weighted_and_additive_sides_blend_their_fully_composed_values() {
+fn weighted_and_additive_sides_blend_their_weighted_contributions() {
     let (mut host, world_id) = host_world();
     let mut world = host.world_mut(world_id).unwrap();
     let target = create(&mut world, 10.0);
@@ -716,7 +737,7 @@ fn weighted_and_additive_sides_blend_their_fully_composed_values() {
         .create_animation_controller(description(vec![source_driver]))
         .unwrap();
     play_at(&mut world, controller, 1.0);
-    close(scalar(&world, target).1, 7.5);
+    close(scalar(&world, target), 12.5);
 
     let mut destination_driver = driver(target, 2);
     destination_driver.weight = 0.5;
@@ -734,12 +755,12 @@ fn weighted_and_additive_sides_blend_their_fully_composed_values() {
         .unwrap();
     world.update_for_test(0.0).unwrap();
     world.update_for_test(0.5).unwrap();
-    close(scalar(&world, target).1, 10.625);
+    close(scalar(&world, target), 13.125);
 }
 
 #[test]
 fn rejected_source_hold_keeps_the_existing_controller_installed() {
-    let (mut host, world_id) = host_world();
+    let (mut host, world_id) = host_world_with(&[ASSETS, CONSTRAINTS, GEOMETRY]);
     let mut world = host.world_mut(world_id).unwrap();
     let target = submit(
         &mut world,
@@ -747,6 +768,7 @@ fn rejected_source_hold_keeps_the_existing_controller_installed() {
             Command::Create {
                 alias: 1,
                 metadata: Default::default(),
+                adopt: false,
             },
             Command::insert_value(
                 EntityRef::Alias(1),
@@ -816,7 +838,7 @@ fn rejected_source_hold_keeps_the_existing_controller_installed() {
 }
 
 #[test]
-fn same_target_transitions_restore_the_underlying_value_not_the_held_source() {
+fn same_target_transitions_fade_contributions_and_stop_returns_to_the_base() {
     let (mut host, world_id) = host_world();
     let mut world = host.world_mut(world_id).unwrap();
     let target = create(&mut world, 100.0);
@@ -831,10 +853,10 @@ fn same_target_transitions_restore_the_underlying_value_not_the_held_source() {
         .create_animation_controller(held(vec![driver(target, 1)]))
         .unwrap();
     play_at(&mut world, controller, 1.0);
-    assert_eq!(scalar(&world, target), (100.0, 5.0));
+    assert_eq!(scalar(&world, target), 105.0);
 
-    // Seeking the same clip holds the live source sample in storage while the
-    // destination binds; the destination must still restore the base value.
+    // The destination seeks the same clip to its start, where it contributes
+    // nothing; the source's contribution fades out.
     world
         .transition_animation_controller(
             controller,
@@ -847,12 +869,10 @@ fn same_target_transitions_restore_the_underlying_value_not_the_held_source() {
         .unwrap();
     world.update_for_test(0.0).unwrap();
     world.update_for_test(0.5).unwrap();
-    let (base, effective) = scalar(&world, target);
-    assert_eq!(base, 100.0);
-    close(effective, 2.5);
+    close(scalar(&world, target), 102.5);
 
-    // Interrupting the prepared crossfade freezes its composite; the next
-    // destination on the same target restores from the frozen baseline.
+    // Interrupting the prepared crossfade freezes its contribution; the next
+    // destination on the same target fades in over it.
     world
         .transition_animation_controller(
             controller,
@@ -864,20 +884,20 @@ fn same_target_transitions_restore_the_underlying_value_not_the_held_source() {
         )
         .unwrap();
     world.update_for_test(0.0).unwrap();
-    close(scalar(&world, target).1, 2.5);
+    close(scalar(&world, target), 102.5);
     world.update_for_test(1.0).unwrap();
-    assert_eq!(scalar(&world, target), (100.0, 30.0));
+    assert_eq!(scalar(&world, target), 110.0);
 
     world
         .control_animation_controller(controller, AnimationPlaybackControl::Stop)
         .unwrap();
     world.update_for_test(0.0).unwrap();
-    assert_eq!(scalar(&world, target), (100.0, 100.0));
+    assert_eq!(scalar(&world, target), 100.0);
 }
 
 #[test]
 fn queued_transition_does_not_leak_its_held_source_into_same_boundary_staging() {
-    let (mut host, world_id) = host_world();
+    let (mut host, world_id) = host_world_with(&[ASSETS, CONSTRAINTS, SPATIAL]);
     let mut world = host.world_mut(world_id).unwrap();
     let x = offset_of!(components::Transform, x) as u32;
     let y = offset_of!(components::Transform, y) as u32;
@@ -887,6 +907,7 @@ fn queued_transition_does_not_leak_its_held_source_into_same_boundary_staging() 
             Command::Create {
                 alias: 1,
                 metadata: Default::default(),
+                adopt: false,
             },
             Command::insert_value(
                 EntityRef::Alias(1),
@@ -940,12 +961,12 @@ fn queued_transition_does_not_leak_its_held_source_into_same_boundary_staging() 
                 })
                 .unwrap()
         };
-        (fields(&snapshot.base), fields(&snapshot.effective))
+        fields(&snapshot.components)
     };
-    assert_eq!(transform(&world), ((100.0, 0.0), (5.0, 0.0)));
+    assert_eq!(transform(&world), (105.0, 0.0));
 
     // The queued transition and a later command staging the same component
-    // share one mutation boundary; staging must observe the authored input.
+    // share one mutation boundary; the write to the undriven field stays.
     world
         .enqueue_animation_controller(
             7,
@@ -969,15 +990,15 @@ fn queued_transition_does_not_leak_its_held_source_into_same_boundary_staging() 
         })
         .unwrap();
     world.update_for_test(0.0).unwrap();
-    let ((base_x, base_y), (effective_x, _)) = transform(&world);
-    assert_eq!((base_x, base_y), (100.0, 3.0));
-    close(effective_x, 5.0);
+    let (x, y) = transform(&world);
+    assert_eq!(y, 3.0);
+    close(x, 105.0);
     world.update_for_test(1.0).unwrap();
-    close(transform(&world).1.0, 0.0);
+    close(transform(&world).0, 100.0);
 
     world
         .control_animation_controller(controller, AnimationPlaybackControl::Stop)
         .unwrap();
     world.update_for_test(0.0).unwrap();
-    assert_eq!(transform(&world), ((100.0, 3.0), (100.0, 3.0)));
+    assert_eq!(transform(&world), (100.0, 3.0));
 }

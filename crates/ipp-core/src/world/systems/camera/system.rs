@@ -33,6 +33,13 @@ impl SystemFactory for CameraSystemFactory {
         CameraSystem::ID
     }
 
+    fn capabilities(&self) -> crate::systems::SystemCapabilities {
+        crate::systems::SystemCapabilities::new(
+            [crate::ComponentValue::CAMERA],
+            [crate::systems::WorldOperation::Camera],
+        )
+    }
+
     fn dependencies(&self) -> &[SystemDependency] {
         &[SystemDependency::Required(SystemId("ipp.geometry"))]
     }
@@ -49,12 +56,37 @@ impl SystemFactory for CameraSystemFactory {
 }
 
 impl System for CameraSystem {
+    fn command_world_references(
+        &self,
+        command: &dyn std::any::Any,
+        visit: &mut dyn FnMut(crate::WorldRef),
+    ) {
+        if let Some(command) = command.downcast_ref::<super::CameraNavigationCommand>() {
+            command.world_references(visit);
+        }
+    }
+
+    fn output_component(&self, kind: crate::OutputKind) -> Option<u16> {
+        (kind == crate::OutputKind::Camera).then_some(crate::ComponentValue::CAMERA)
+    }
+
+    fn publish_output(
+        &self,
+        world: &crate::WorldContext<'_>,
+        output: &mut crate::host::WorldOutputBuilder<'_>,
+    ) -> Result<(), crate::ErrorReason> {
+        self.publish(world, output)
+    }
+
     fn command(
         &mut self,
         _context: &mut crate::systems::SystemCommandContext<'_>,
         _session: u64,
         command: &dyn std::any::Any,
     ) -> Result<(), crate::ErrorReason> {
+        if let Some(command) = command.downcast_ref::<super::CameraNavigationCommand>() {
+            return command.apply(self, _context);
+        }
         if let Some(query) =
             command.downcast_ref::<crate::systems::geometry::GeometryQueryCommand>()
         {

@@ -1,4 +1,4 @@
-//! Sparse producer-reference lookup for mandatory deletion cleanup.
+//! Sparse entity-reference lookup for mandatory deletion cleanup.
 
 use super::SystemOperationContext;
 use crate::world::{WorldEntityState, WorldSimulationState};
@@ -39,14 +39,8 @@ impl ProducerReferenceIndex {
         offset: u32,
     ) {
         let target = state
-            .producer_value(&world.components, entity, component)
-            .and_then(|value| {
-                value
-                    .fields()
-                    .into_iter()
-                    .find(|(field, _)| *field == offset)
-            })
-            .and_then(|(_, value)| match value {
+            .input_field(&world.components, entity, component, offset)
+            .and_then(|value| match value {
                 crate::components::schema::FieldValue::Entity(target) if target.to_bits() != 0 => {
                     Some(target)
                 }
@@ -96,30 +90,7 @@ impl ProducerReferenceIndex {
             context
                 .staged
                 .write_component_field(&context.world_data.components, entity, component, &field)
-                .expect("indexed live producer reference");
-            let inputs = &mut context
-                .staged
-                .entities
-                .get_mut(&entity)
-                .unwrap()
-                .layers
-                .get_mut(&component)
-                .unwrap()
-                .inputs;
-            if let Some((_, value)) = inputs
-                .hidden_fields
-                .iter_mut()
-                .find(|(field, _)| *field == offset)
-            {
-                *value = crate::components::schema::FieldValue::Entity(EntityId::from_bits(0));
-            } else if let Some(value) = inputs.layered_value_mut() {
-                value
-                    .set_field(
-                        offset,
-                        crate::components::schema::FieldValue::Entity(EntityId::from_bits(0)),
-                    )
-                    .expect("typed reference");
-            }
+                .expect("indexed live entity reference");
         }
         for &(entity, kind) in &context.staged.operation_components {
             if kind == component {

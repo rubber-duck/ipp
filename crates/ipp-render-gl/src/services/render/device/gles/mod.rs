@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use std::ptr;
 use std::rc::Rc;
 
-#[cfg(feature = "gui")]
+#[cfg(feature = "surfaces")]
 pub use super::GuiVertex;
 use super::RenderDevice;
 #[cfg(feature = "surfaces")]
@@ -31,7 +31,7 @@ const INFO_LOG_LENGTH: u32 = 0x8B84;
 const ARRAY_BUFFER: u32 = 0x8892;
 const ELEMENT_ARRAY_BUFFER: u32 = 0x8893;
 const STATIC_DRAW: u32 = 0x88E4;
-#[cfg(feature = "gui")]
+#[cfg(feature = "surfaces")]
 const DYNAMIC_DRAW: u32 = 0x88E8;
 const FLOAT: u32 = 0x1406;
 const UNSIGNED_SHORT: u32 = 0x1403;
@@ -82,7 +82,7 @@ pub struct GlesRenderDevice {
     _thread: PhantomData<Rc<()>>,
     #[cfg(feature = "shadows")]
     shadow_target: Option<targets::GlesTarget>,
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     glyph_atlas_target: Option<(targets::GlesTarget, [f32; 2])>,
 }
 
@@ -120,7 +120,7 @@ pub struct GlesRenderMesh {
 }
 
 /// Native vertex array and buffer holding one Surface's retained GUI vertices.
-#[cfg(feature = "gui")]
+#[cfg(feature = "surfaces")]
 pub struct GlesGuiBatch {
     pub(crate) vao: u32,
     pub(crate) vbo: u32,
@@ -129,7 +129,7 @@ pub struct GlesGuiBatch {
 }
 
 /// Native texture and framebuffer for one glyph atlas page.
-#[cfg(feature = "gui")]
+#[cfg(feature = "surfaces")]
 pub struct GlesGlyphAtlasPage {
     pub(crate) texture: u32,
     pub(crate) framebuffer: u32,

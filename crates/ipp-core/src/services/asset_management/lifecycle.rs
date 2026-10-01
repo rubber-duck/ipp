@@ -11,6 +11,21 @@ pub enum AssetReleaseKind {
     Unload,
     /// Destroy the resource identity and make its slot reusable.
     Remove,
+    /// Explicit destruction defeats renewed demand and publication retention.
+    Revoke,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct PendingAssetRelease {
+    pub(super) kind: AssetReleaseKind,
+    pub(super) revision: u64,
+    pub(super) cancelable: bool,
+}
+
+impl PendingAssetRelease {
+    pub(super) fn cancelable_orphan(self) -> bool {
+        self.kind == AssetReleaseKind::Remove && self.cancelable
+    }
 }
 
 /// Applied resource transitions distinguish identity lifetime from residency.
@@ -37,6 +52,7 @@ pub struct AssetLifecycleEvent {
     pub kind: AssetLifecycleKind,
     /// Resource status after the transition.
     pub status: AssetLoadStatus,
+    pub(crate) release_revision: Option<u64>,
 }
 
 impl AssetManagementService {
@@ -56,6 +72,7 @@ impl AssetManagementService {
         }
         if self.get(key).is_some_and(|provider| {
             kind == AssetReleaseKind::Remove
+                || kind == AssetReleaseKind::Revoke
                 || provider.decoded_available()
                 || *provider.status() != AssetLoadStatus::Unloaded
         }) {
@@ -76,10 +93,22 @@ impl AssetManagementService {
                     .or_default()
                     .extend(recipients);
             }
-            self.pending_releases
-                .entry(key)
-                .and_modify(|previous| *previous = (*previous).max(kind))
-                .or_insert(kind);
+            let previous = self.pending_releases.get(&key).copied();
+            if previous.is_none_or(|pending| kind > pending.kind) {
+                let revision = self
+                    .next_release_revision
+                    .checked_add(1)
+                    .expect("asset release revision space exhausted");
+                self.next_release_revision = revision;
+                self.pending_releases.insert(
+                    key,
+                    PendingAssetRelease {
+                        kind,
+                        revision,
+                        cancelable: kind == AssetReleaseKind::Remove && previous.is_none(),
+                    },
+                );
+            }
         }
         true
     }
@@ -91,38 +120,53 @@ impl AssetManagementService {
             .filter_map(|(&key, &release)| {
                 let provider = self.get(key)?;
                 Some((
-                    release,
+                    release.kind,
                     AssetLifecycleEvent {
                         key,
                         source: provider.source().clone(),
-                        kind: match release {
+                        kind: match release.kind {
                             AssetReleaseKind::Graphics => AssetLifecycleKind::GraphicsInvalidated,
                             AssetReleaseKind::Unload => AssetLifecycleKind::StatusChanged,
-                            AssetReleaseKind::Remove => AssetLifecycleKind::Removed,
+                            AssetReleaseKind::Remove | AssetReleaseKind::Revoke => {
+                                AssetLifecycleKind::Removed
+                            }
                         },
                         status: AssetLoadStatus::Unloaded,
                         // Pending release is only used for synchronous invalidation. Public
                         // graphics observations come from the provider after release.
                         representation: Default::default(),
+                        release_revision: Some(release.revision),
                     },
                 ))
             })
             .collect()
     }
 
-    /// Commit only after the Host has completed every World's synchronous handlers.
-    pub(crate) fn finish_release(&mut self, event: &AssetLifecycleEvent) {
-        let Some(release) = self.pending_releases.remove(&event.key) else {
-            return;
+    /// Commit only the release snapshot whose full invalidation barrier completed.
+    /// A stronger request remains pending for another Host drain.
+    pub(crate) fn finish_release(&mut self, event: &AssetLifecycleEvent) -> bool {
+        let Some(release) = self.pending_releases.get(&event.key).copied() else {
+            return false;
         };
-        match release {
+        if event.release_revision != Some(release.revision)
+            || self
+                .get(event.key)
+                .is_none_or(|provider| provider.source() != &event.source)
+        {
+            return false;
+        }
+        self.pending_releases.remove(&event.key);
+        match release.kind {
             AssetReleaseKind::Graphics => self.invalidate_graphics_released(event.key),
             AssetReleaseKind::Unload => self.unload_released(event.key),
-            AssetReleaseKind::Remove => {
+            AssetReleaseKind::Remove | AssetReleaseKind::Revoke => {
+                let mut committed = event.clone();
+                committed.kind = AssetLifecycleKind::Removed;
                 self.remove_slot_released(event.key);
-                self.push_lifecycle(event.clone());
+                self.push_lifecycle(committed);
             }
         }
+        true
     }
 
     pub(super) fn record_lifecycle(&mut self, progress: &AssetLoadProgress) {
@@ -133,6 +177,7 @@ impl AssetManagementService {
                 kind: AssetLifecycleKind::StatusChanged,
                 status: progress.status.clone(),
                 representation: progress.representation,
+                release_revision: None,
             });
         }
     }

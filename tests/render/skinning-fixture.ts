@@ -3,20 +3,42 @@ import { settledAsset } from "../integration/asset-fixtures.js";
 import { clientAssetSource } from "../../packages/ipp-client/src/asset-sources.js";
 import type {
   AnimationWorldClient,
-  CameraWorldClient,
-  FrameCapture,
+  PickingWorldClient,
+  PresentedCapture,
+  RenderStatisticsSnapshot,
 } from "@ipp/client";
 import { AnimationFixture, check } from "../integration/animation-fixtures.js";
+import type { HostedWorldClient } from "../integration/camera-fixtures.js";
 import { summarizeImage, compareImages } from "./image-assertions.js";
+import {
+  RootPresentation,
+  capturedImage,
+  recoverRestoredContext,
+  worldReference,
+} from "./root-presentation.js";
+import {
+  CONSTRAINTS,
+  SKINNING,
+  SCENE,
+  selectSystems,
+} from "../integration/system-selections.js";
 
-let client: CameraWorldClient | undefined;
+type SkinningWorldClient = HostedWorldClient<
+  PickingWorldClient & AnimationWorldClient
+>;
+
+let client: SkinningWorldClient | undefined;
+let presentation: RootPresentation | undefined;
 let contract: Record<string, any>;
 let rigs: bigint[] = [];
 let receiver: bigint | undefined;
 let animation: AnimationFixture | undefined;
 let controllers: bigint[] = [];
 let animationSources: { walk: string; wave: string } | undefined;
-const captures = new Map<string, FrameCapture>();
+const captures = new Map<
+  string,
+  { frame: PresentedCapture; statistics: RenderStatisticsSnapshot }
+>();
 
 export async function initialize(configuration: {
   generatedModuleUrl: string;
@@ -33,7 +55,11 @@ export async function initialize(configuration: {
   client = await contract.IppClient.connectWorker(
     configuration.workerScriptUrl,
     configuration.wasmUrl,
-    { canvas: canvas.transferControlToOffscreen(), timeoutMs: 10_000 },
+    {
+      selectedSystems: selectSystems(SCENE, SKINNING, CONSTRAINTS),
+      canvas: canvas.transferControlToOffscreen(),
+      timeoutMs: 10_000,
+    },
   );
   const c = current();
   const {
@@ -67,10 +93,12 @@ export async function initialize(configuration: {
   const outcome = await c.batch(operations);
   if (!outcome.ok) throw new Error(JSON.stringify(outcome));
   rigs = outcome.aliases.slice(1).map((entry) => entry.id);
-  c.sendCommand({
-    type: "CameraActivateCommand",
-    entity: outcome.aliases[0]!.id,
-  });
+  presentation = await RootPresentation.camera(
+    c.host,
+    worldReference(c),
+    outcome.aliases[0]!.id,
+    { width: canvas.width, height: canvas.height },
+  );
   return {
     session: c.session,
     schemaHash: c.schemaHash,
@@ -78,9 +106,14 @@ export async function initialize(configuration: {
   };
 }
 
-function current(): CameraWorldClient {
+function current(): SkinningWorldClient {
   if (!client) throw new Error("fixture inactive");
   return client;
+}
+
+function presented(): RootPresentation {
+  if (!presentation) throw new Error("fixture camera is not presented");
+  return presentation;
 }
 
 /** Joint override patches keyed by joint ordinal. */
@@ -137,36 +170,42 @@ export async function pose(index: number, mode: "rest" | "bent" | "override") {
 
 export async function capture(label: string, draws = 2) {
   const c = current();
+  const view = presented();
   const after = (await c.waitForFrame()).tick;
   const deadline = performance.now() + 10_000;
   while (performance.now() < deadline) {
-    const frame = await c.presentation!.capture();
-    if (frame.tick > after && frame.drawCalls === draws) {
-      captures.set(label, frame);
+    const frame = await view.capture();
+    const tick = view.sourceTick(frame);
+    if (tick >= after && frame.drawCalls === draws) {
+      const statistics = await view.diagnostics.statistics();
+      captures.set(label, { frame, statistics });
       return {
-        tick: frame.tick,
+        tick,
         drawCalls: frame.drawCalls,
         triangles: frame.triangles,
         failedDrawCalls: frame.failedDrawCalls,
-        invalidCamera: frame.invalidCamera,
-        statistics: frame.statistics,
-        summary: summarizeImage(frame),
+        statistics,
+        summary: summarizeImage(capturedImage(frame)),
         resources: (await c.inspect()).resources,
       };
     }
-    await c.waitForFrame(frame.tick);
+    await c.waitForFrame(tick);
   }
   throw new Error("skinning frame readiness timed out");
 }
 
 export function captureMetadata(label: string) {
-  const { pixels: _, ...metadata } = frame(label);
-  return metadata;
+  const {
+    frame: { pixels: _, ...metadata },
+    statistics,
+  } = captures.get(label) ?? missingCapture();
+  return { ...metadata, statistics };
+}
+function missingCapture(): never {
+  throw new Error("missing capture");
 }
 function frame(label: string) {
-  const value = captures.get(label);
-  if (!value) throw new Error("missing capture");
-  return value;
+  return capturedImage((captures.get(label) ?? missingCapture()).frame);
 }
 export function captureDataUrl(label: string) {
   const f = frame(label);
@@ -219,19 +258,20 @@ export async function applyInvalidPose() {
   const inspect = await current().inspect();
   const scalar = inspect.entities
     .find((value) => value.id === rigs[0])!
-    .base.find((value) => value.component === Scalar.id)!.fields.value;
+    .components.find((value) => value.component === Scalar.id)!.fields.value;
   return { result, scalar };
 }
 export async function recover(draws = 2) {
-  const presentation = current().presentation!;
-  const previous = await presentation.capture();
-  presentationTesting(presentation).loseContext();
-  presentationTesting(presentation).restoreContext();
+  const view = presented();
+  const previous = await view.capture();
+  presentationTesting(view.diagnostics).loseContext();
+  presentationTesting(view.diagnostics).restoreContext();
+  await recoverRestoredContext(view);
   const deadline = performance.now() + 10_000;
   while (performance.now() < deadline) {
-    const next = await presentation.capture();
+    const next = await view.capture();
     if (
-      next.contextGeneration > previous.contextGeneration &&
+      next.view.surface.context > previous.view.surface.context &&
       next.drawCalls === draws
     )
       return;
@@ -241,6 +281,7 @@ export async function recover(draws = 2) {
 export async function close() {
   if (client) await client.close();
   client = undefined;
+  presentation = undefined;
   rigs = [];
   receiver = undefined;
   animation = undefined;
@@ -486,7 +527,7 @@ export async function animationScene() {
   await pose(0, "rest");
   await pose(1, "rest");
   animation = new AnimationFixture(
-    current() as CameraWorldClient & AnimationWorldClient,
+    current(),
     { encodeAnimationClip: contract.encodeAnimationClip },
     async () => {},
   );
@@ -609,6 +650,25 @@ async function waitForTransition(
 /** Real pose clips exercise full and partial joint coverage through WebGL. */
 export async function animationTransitions() {
   check(animation, "animation fixture missing");
+  // Clips add their change from a reference sample. The run clip holds the
+  // run pose except for the rest pose at its one-second reference, so every
+  // destination start time (restart, a matched quarter phase, a preserved
+  // endpoint) adds the run pose's change from rest.
+  const target = {
+    kind: "pose" as const,
+    value: [
+      { translation: [0.3, 0, 0] as [number, number, number] },
+      {
+        translation: [0, 1, 0] as [number, number, number],
+        rotation: [0, 0, -Math.SQRT1_2, Math.SQRT1_2] as [
+          number,
+          number,
+          number,
+          number,
+        ],
+      },
+    ],
+  };
   const run = await animation.upload(
     {
       duration: 2,
@@ -616,32 +676,17 @@ export async function animationTransitions() {
         {
           joints: [0, 1],
           keys: [
+            { time: 0, value: target, interpolation: { kind: "step" } },
             {
-              time: 0,
+              time: 1,
               value: {
                 kind: "pose",
-                value: [
-                  { translation: [0.3, 0, 0] },
-                  {
-                    translation: [0, 1, 0],
-                    rotation: [0, 0, -Math.SQRT1_2, Math.SQRT1_2],
-                  },
-                ],
+                value: [{ translation: [0, 0, 0] }, { translation: [0, 1, 0] }],
               },
+              interpolation: { kind: "step" },
             },
-            {
-              time: 2,
-              value: {
-                kind: "pose",
-                value: [
-                  { translation: [0.3, 0, 0] },
-                  {
-                    translation: [0, 1, 0],
-                    rotation: [0, 0, -Math.SQRT1_2, Math.SQRT1_2],
-                  },
-                ],
-              },
-            },
+            { time: 1.5, value: target, interpolation: { kind: "step" } },
+            { time: 2, value: target },
           ],
         },
       ],
@@ -663,6 +708,8 @@ export async function animationTransitions() {
           track: 0,
           target: rigs[0]!,
           property: { joints: [0, 1] },
+          additive: true,
+          referenceTime: 1,
         },
       ],
       speed: 0,
@@ -684,6 +731,8 @@ export async function animationTransitions() {
           track: 0,
           target: rigs[1]!,
           property: { joints: [0, 1] },
+          additive: true,
+          referenceTime: 1,
         },
       ],
       speed: 0,
@@ -874,14 +923,11 @@ export async function geometryPose() {
 }
 
 export async function geometryPick(x: number, y: number) {
-  const result = await (
-    current() as import("@ipp/client").PickingWorldClient
-  ).query({
+  const result = await current().query({
     type: "GeometryPickQuery",
+    view: { kind: "bound", binding: presented().binding },
     x: 0.5 + x / 4,
     y: 0.5 - (y - 1) / 3,
-    width: 400,
-    height: 300,
   });
   return result;
 }

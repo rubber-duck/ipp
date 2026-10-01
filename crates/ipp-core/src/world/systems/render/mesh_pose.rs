@@ -10,13 +10,14 @@ use crate::{
 };
 use ipp_schema_derive::SchemaComponent;
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 /// Interpolate the entity's MeshInstance toward a corresponding immutable mesh.
 #[repr(C)]
 #[derive(Clone, Debug, Default, PartialEq, SchemaComponent)]
 pub struct MeshPose {
     /// Target mesh URI; empty disables interpolation.
-    pub source: String,
+    pub source: Arc<str>,
     /// Target mesh variant. Vertex order and triangle indices must match the base.
     pub variant: u32,
     /// Linear blend in 0..=1: zero selects base positions, one target positions.
@@ -196,6 +197,8 @@ impl RenderReadAccess<'_> {
 impl crate::WorldContext<'_> {
     /// Resolve corresponding immutable mesh endpoints from evaluated state.
     pub fn mesh_pose(&self, entity: EntityId) -> Result<Option<(MeshKey, f32)>, ErrorReason> {
-        self.render_read().mesh_pose(entity)
+        self.render_read()
+            .ok_or(ErrorReason::UnsupportedDependency)?
+            .mesh_pose(entity)
     }
 }

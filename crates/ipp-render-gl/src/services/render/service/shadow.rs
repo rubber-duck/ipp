@@ -3,13 +3,14 @@
 use super::super::assets::GlMeshData;
 use super::super::frame_scratch::RenderFrameScratch;
 use super::super::frame_statistics::RenderFrameWork;
+use super::super::scene::{RenderEntity, RenderScene, SceneItem};
 use super::super::shader::RenderShaderConfig;
 #[cfg(feature = "particles")]
 use super::prepared_model;
 use super::{RenderError, RenderService, prepared_normal};
 use crate::RenderDevice;
+use ipp_core::services::asset_management::AssetKey;
 use ipp_core::systems::camera;
-use ipp_core::{WorldContext, services::asset_management::AssetKey};
 use std::collections::BTreeMap;
 
 impl<D: RenderDevice> RenderService<D> {
@@ -54,12 +55,9 @@ impl<D: RenderDevice> RenderService<D> {
     #[cfg(feature = "shadows")]
     pub(super) fn draw_shadow_map(
         &mut self,
-        world: &WorldContext<'_>,
-        items: &[ipp_core::RenderItem],
-        customs: &BTreeMap<
-            ipp_core::EntityId,
-            super::super::custom_material::PreparedCustomMaterial,
-        >,
+        world: &RenderScene<'_>,
+        items: &[SceneItem<'_>],
+        customs: &BTreeMap<RenderEntity, super::super::custom_material::PreparedCustomMaterial>,
         lighting: &super::super::light_selection::PreparedLighting,
         stats: &mut RenderFrameWork,
         scratch: &mut RenderFrameScratch,
@@ -74,8 +72,6 @@ impl<D: RenderDevice> RenderService<D> {
                 .saturating_mul(self.shadow_map_size)
                 .saturating_mul(4);
         }
-
-        use ipp_core::systems::geometry::GeometryBounds;
 
         let frames = &lighting.shadows;
         scratch.shadow_queries.clear();
@@ -134,22 +130,9 @@ impl<D: RenderDevice> RenderService<D> {
                 }
                 continue;
             }
-            // Resolve and prove the enclosure once per object, then test every
-            // selected shadow frustum through the same immutable borrow.
-            let shape = if unbounded || lighting.batched {
-                None
-            } else {
-                world.culling_geometry(item.entity)
-            };
             for (view, frustum) in scratch.shadow_frusta.iter().enumerate() {
-                scratch.shadow_visibility[view * items.len() + item_index] = if lighting.batched {
-                    unbounded
-                        || lighting
-                            .visibility
-                            .matches(item.entity, scratch.shadow_queries[view])
-                } else {
-                    shape.is_none_or(|shape| shape.intersects_frustum(frustum))
-                };
+                scratch.shadow_visibility[view * items.len() + item_index] =
+                    unbounded || world.visible(item.entity, frustum);
             }
         }
         for (view, (_, frame)) in frames.iter().enumerate() {
@@ -161,12 +144,9 @@ impl<D: RenderDevice> RenderService<D> {
     #[cfg(feature = "shadows")]
     fn draw_shadow_view(
         &mut self,
-        world: &WorldContext<'_>,
-        items: &[ipp_core::RenderItem],
-        customs: &BTreeMap<
-            ipp_core::EntityId,
-            super::super::custom_material::PreparedCustomMaterial,
-        >,
+        world: &RenderScene<'_>,
+        items: &[SceneItem<'_>],
+        customs: &BTreeMap<RenderEntity, super::super::custom_material::PreparedCustomMaterial>,
         view: (usize, &crate::RenderLightingFrame),
         stats: &mut RenderFrameWork,
         scratch: &mut RenderFrameScratch,
@@ -185,8 +165,7 @@ impl<D: RenderDevice> RenderService<D> {
                 continue;
             }
             let data = world
-                .asset_resources()
-                .get(AssetKey::from_u64(item.mesh.asset))
+                .resource(AssetKey::from_u64(item.mesh.asset))
                 .and_then(|r| r.data()?.as_any().downcast_ref::<GlMeshData<D>>())
                 .ok_or(RenderError::MissingMesh)?;
             let Some(_gpu) = data.gpu()? else {
@@ -235,8 +214,7 @@ impl<D: RenderDevice> RenderService<D> {
                 // Assets cannot be invalidated during this immutable World borrow.
                 // Keep GPU Ref guards local to the pass, never in retained scratch.
                 let data = world
-                    .asset_resources()
-                    .get(AssetKey::from_u64(item.mesh.asset))
+                    .resource(AssetKey::from_u64(item.mesh.asset))
                     .and_then(|r| r.data()?.as_any().downcast_ref::<GlMeshData<D>>())
                     .ok_or(RenderError::MissingMesh)?;
                 let gpu = data.gpu()?.ok_or(RenderError::MissingMesh)?;
@@ -296,7 +274,7 @@ impl<D: RenderDevice> RenderService<D> {
                 }
                 #[cfg(feature = "skeletal-animation")]
                 if item.skinned
-                    && let Some(palette) = world.skin_palette(item.entity)
+                    && let Some(palette) = item.published.palette.as_deref()
                 {
                     self.device
                         .borrow_mut()

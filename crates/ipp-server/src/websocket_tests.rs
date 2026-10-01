@@ -184,12 +184,27 @@ impl RunningConnection {
             connection: 7,
             request_id: 1,
             body: ipp_protocol::host::HostRequestBody::CreateWorld {
-                options: Default::default(),
+                options: ipp_protocol::host::WorldCreateOptions::new(Vec::new()),
                 temporary: true,
             },
         })
         .unwrap();
         running.client.send(Message::Binary(create.into())).unwrap();
+        let response = ipp_protocol::host::decode_host_response(&running.response(), 7).unwrap();
+        let ipp_protocol::host::HostResponseBody::Created {
+            reference,
+            ..
+        } = response.body
+        else {
+            panic!("World not created")
+        };
+        let open = ipp_protocol::host::encode_host_request(&ipp_protocol::host::HostRequest {
+            connection: 7,
+            request_id: 2,
+            body: ipp_protocol::host::HostRequestBody::OpenWorld(reference),
+        })
+        .unwrap();
+        running.client.send(Message::Binary(open.into())).unwrap();
         let response = ipp_protocol::host::decode_host_response(&running.response(), 7).unwrap();
         let ipp_protocol::host::HostResponseBody::Attached {
             session,
@@ -274,6 +289,7 @@ pub(super) fn inspect(session: u64, request_id: u64) -> Vec<u8> {
     bytes.push(0);
     bytes.extend_from_slice(&[0; 16]);
     bytes.extend_from_slice(&256u16.to_le_bytes());
+    bytes.extend_from_slice(&0u16.to_le_bytes());
     bytes
 }
 

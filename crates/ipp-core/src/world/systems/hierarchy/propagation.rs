@@ -14,7 +14,7 @@ pub(super) struct HierarchyPropagation {
 }
 
 struct HierarchyNode {
-    output: ComponentBinding<Hierarchy>,
+    output: ObjectTransformBinding,
     local: LocalTransformBinding,
     parent: Option<ParentTransformBinding>,
     invalid: bool,
@@ -26,8 +26,8 @@ struct LocalTransformBinding {
 }
 
 struct ParentTransformBinding {
-    hierarchy: Option<ComponentBinding<Hierarchy>>,
-    local: LocalTransformBinding,
+    model: ObjectTransformBinding,
+    #[cfg(feature = "skeletal-animation")]
     bone: u32,
     #[cfg(feature = "skeletal-animation")]
     skeleton: Option<ComponentBinding<crate::components::Skeleton>>,
@@ -71,20 +71,18 @@ impl LocalTransformBinding {
 }
 
 impl ParentTransformBinding {
-    fn evaluate(&self, storage: &ComponentStorage) -> Result<GeometryShapeTransform, ErrorReason> {
-        let object = match self.hierarchy {
-            Some(h) => h
-                .get(storage)
-                .runtime
-                .world
-                .ok_or(ErrorReason::InvalidValue)?,
-            None => self.local.evaluate(storage, true)?,
-        };
-        if self.bone == u32::MAX {
-            return Ok(object);
-        }
+    fn evaluate(
+        &self,
+        world: &WorldSimulationState,
+    ) -> Result<GeometryShapeTransform, ErrorReason> {
+        #[cfg(feature = "skeletal-animation")]
+        let storage = &world.components;
+        let object = self.model.evaluate(world)?;
         #[cfg(feature = "skeletal-animation")]
         {
+            if self.bone == u32::MAX {
+                return Ok(object);
+            }
             // Pose payloads may suspend/reallocate independently of the stable
             // Skeleton component. Borrow their current buffer only for this read.
             let pose = self
@@ -99,7 +97,7 @@ impl ParentTransformBinding {
             GeometryShapeTransform::from_matrix(*joint)?.then(&object)
         }
         #[cfg(not(feature = "skeletal-animation"))]
-        Err(ErrorReason::UnsupportedDependency)
+        Ok(object)
     }
 }
 
@@ -110,28 +108,27 @@ impl HierarchyPropagation {
         self.aims.clear();
     }
 
-    pub(super) fn prepare(&mut self, graph: &HierarchyGraph, storage: &ComponentStorage) {
+    pub(super) fn prepare(&mut self, graph: &HierarchyGraph, world: &WorldSimulationState) {
         self.invalidate();
+        let storage = &world.components;
         for &entity in &graph.order {
             let index = entity.index() as usize;
             if let Some(pointer) = storage.look_at_ptr(index) {
                 // SAFETY: Same stable-cell/lifecycle invariant as LocalTransformBinding.
                 self.aims.push(unsafe { ComponentBinding::new(pointer) });
             }
-            let Some(output) = storage.hierarchy_ptr(index) else {
-                continue;
-            };
-            let parent = graph.parents.get(&entity).map(|&parent| {
+            let parent = world.state.links.parent(entity).map(|parent| {
+                #[cfg(feature = "skeletal-animation")]
                 let parent_index = parent.index() as usize;
                 // SAFETY: Before-commit invalidation clears cached readers before
                 // component removal/replacement; numeric writes preserve these slots.
                 unsafe {
                     ParentTransformBinding {
-                        hierarchy: storage
-                            .hierarchy_ptr(parent_index)
-                            .map(|p| ComponentBinding::new(p)),
-                        local: LocalTransformBinding::bind(storage, parent),
-                        bone: storage.hierarchy(index).unwrap().parent_bone,
+                        model: ObjectTransformBinding::bind(world, parent),
+                        #[cfg(feature = "skeletal-animation")]
+                        bone: storage
+                            .parent_joint(index)
+                            .map_or(u32::MAX, |value| value.ordinal),
                         #[cfg(feature = "skeletal-animation")]
                         skeleton: storage
                             .skeleton_ptr(parent_index)
@@ -142,7 +139,7 @@ impl HierarchyPropagation {
             self.nodes.push(HierarchyNode {
                 // SAFETY: Cached output is discarded before incarnation destruction;
                 // propagation writes through an exclusive owning-storage borrow.
-                output: unsafe { ComponentBinding::new(output) },
+                output: unsafe { ObjectTransformBinding::bind(world, entity) },
                 local: LocalTransformBinding::bind(storage, entity),
                 parent,
                 invalid: graph.invalid.contains(&entity),
@@ -159,19 +156,19 @@ impl HierarchyPropagation {
         }
     }
 
-    pub(super) fn propagate(&self, storage: &mut ComponentStorage, aimed: bool) {
+    pub(super) fn propagate(&self, world: &mut WorldSimulationState, aimed: bool) {
         for node in &self.nodes {
             let result = if node.invalid {
                 Err(ErrorReason::UnsupportedDependency)
             } else {
                 node.local
-                    .evaluate(storage, aimed)
+                    .evaluate(&world.components, aimed)
                     .and_then(|local| match &node.parent {
-                        Some(parent) => local.then(&parent.evaluate(storage)?),
+                        Some(parent) => local.then(&parent.evaluate(world)?),
                         None => Ok(local),
                     })
             };
-            node.output.get_mut(storage).runtime.world = result.ok();
+            node.output.write(world, result.ok());
         }
     }
 }

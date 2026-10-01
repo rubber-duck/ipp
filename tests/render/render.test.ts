@@ -19,7 +19,7 @@ import {
 
 const workspace = resolve(process.cwd());
 const render = browserBuild("render");
-const overlays = browserBuild("headless");
+const headless = browserBuild("headless");
 
 for (const variant of ["development", "production"] as const) {
   test(`${variant}: React scene preserves ownership cleanup and WebGL recovery`, {
@@ -30,7 +30,7 @@ for (const variant of ["development", "production"] as const) {
       {
         workspace,
         build: render,
-        mismatchBuild: overlays,
+        mismatchBuild: headless,
         operationTimeoutMs: 12_000,
         closeTimeoutMs: 5_000,
         evidenceParent: resolve(
@@ -104,7 +104,6 @@ for (const variant of ["development", "production"] as const) {
           );
           assertTransformRotation(
             eulerInspection,
-            "effective",
             eulerQuaternion,
             setup.transformComponent,
           );
@@ -131,7 +130,6 @@ for (const variant of ["development", "production"] as const) {
           );
           assertTransformRotation(
             quaternionInspection,
-            "effective",
             eulerQuaternion,
             setup.transformComponent,
           );
@@ -166,6 +164,8 @@ for (const variant of ["development", "production"] as const) {
             qz: 0,
             qw: 0.9538469525677271,
           } as const;
+          // The application writes the rotation React declared: the last
+          // write wins, so the Transform holds the application's value.
           const producerInspection = await invoke<Inspection>(
             scenario.page,
             moduleUrl,
@@ -174,14 +174,7 @@ for (const variant of ["development", "production"] as const) {
           );
           assertTransformRotation(
             producerInspection,
-            "base",
             producerQuaternion,
-            setup.transformComponent,
-          );
-          assertTransformRotation(
-            producerInspection,
-            "effective",
-            eulerQuaternion,
             setup.transformComponent,
           );
 
@@ -195,19 +188,34 @@ for (const variant of ["development", "production"] as const) {
             rejected.message,
             "Transform cannot mix rx/ry/rz with qx/qy/qz/qw",
           );
+          // A declaration rejected before submission writes nothing.
           assertTransformRotation(
             rejected.inspection,
-            "base",
             producerQuaternion,
             setup.transformComponent,
           );
+
+          // Removing React's rotation props leaves the last written value.
+          const clearedInspection = await invoke<Inspection>(
+            scenario.page,
+            moduleUrl,
+            "setReactTransform",
+            [{}],
+          );
           assertTransformRotation(
-            rejected.inspection,
-            "effective",
-            eulerQuaternion,
+            clearedInspection,
+            producerQuaternion,
             setup.transformComponent,
           );
+          await capture(
+            scenario.page,
+            moduleUrl,
+            scenario.evidence.directory,
+            captured,
+            "cleared-to-producer-rotation",
+          );
 
+          // Declaring the rotation again writes it again.
           const correctedInspection = await invoke<Inspection>(
             scenario.page,
             moduleUrl,
@@ -216,7 +224,6 @@ for (const variant of ["development", "production"] as const) {
           );
           assertTransformRotation(
             correctedInspection,
-            "effective",
             eulerQuaternion,
             setup.transformComponent,
           );
@@ -235,26 +242,6 @@ for (const variant of ["development", "production"] as const) {
           );
           assert.deepEqual(corrected.summary, euler.summary);
           assert.ok(correctedDifference.changedFraction < 0.002);
-
-          const clearedInspection = await invoke<Inspection>(
-            scenario.page,
-            moduleUrl,
-            "setReactTransform",
-            [{}],
-          );
-          assertTransformRotation(
-            clearedInspection,
-            "effective",
-            producerQuaternion,
-            setup.transformComponent,
-          );
-          await capture(
-            scenario.page,
-            moduleUrl,
-            scenario.evidence.directory,
-            captured,
-            "cleared-to-producer-rotation",
-          );
           const clearedRotationDifference = await invoke<ImageDifference>(
             scenario.page,
             moduleUrl,
@@ -264,95 +251,50 @@ for (const variant of ["development", "production"] as const) {
           assert.ok(clearedRotationDifference.changedFraction > 0.01);
 
           // Restore this reusable fixture before the material/lifetime checks.
+          // The Transform stays declared without fields: removing the
+          // declaration would remove the cube's Transform.
           await invoke(scenario.page, moduleUrl, "updateProducerRotation", [
             { qx: 0, qy: 0, qz: 0, qw: 1 },
           ]);
-          await invoke(scenario.page, moduleUrl, "setReactTransform");
+          await invoke(scenario.page, moduleUrl, "setReactTransform", [{}]);
 
-          const hidden = await invoke<Inspection>(
+          // The application's color writes replace React's declared color.
+          const producerColor = await invoke<Inspection>(
             scenario.page,
             moduleUrl,
-            "updateHiddenProducerColor",
+            "updateProducerColor",
           );
-          assert.deepEqual(materialFields(hidden, "base"), {
+          assert.deepEqual(materialFields(producerColor), {
             r: approximately(0.95),
             g: approximately(0.18),
             b: approximately(0.12),
           });
-          assert.deepEqual(materialFields(hidden, "effective"), {
-            r: approximately(0.16),
-            g: approximately(0.95),
-            b: approximately(0.28),
-          });
 
-          const fallbackInspection = await invoke<Inspection>(
+          // Removing the component removes it: React supplies no value for
+          // a component it only declared fields of.
+          const removedInspection = await invoke<Inspection>(
             scenario.page,
             moduleUrl,
             "removeProducerMaterial",
           );
-          assert.equal(
-            optionalMaterialFields(fallbackInspection, "base"),
-            null,
-          );
-          assert.deepEqual(materialFields(fallbackInspection, "effective"), {
-            r: approximately(0.16),
-            g: approximately(0.95),
-            b: approximately(0.28),
-          });
-          const fallback = await capture(
-            scenario.page,
-            moduleUrl,
-            scenario.evidence.directory,
-            captured,
-            "auto-material-fallback",
-          );
+          assert.equal(optionalMaterialFields(removedInspection), null);
 
-          const reboundInspection = await invoke<Inspection>(
+          const reinsertedInspection = await invoke<Inspection>(
             scenario.page,
             moduleUrl,
             "reinsertProducerMaterial",
           );
-          assert.deepEqual(materialFields(reboundInspection, "base"), {
+          assert.deepEqual(materialFields(reinsertedInspection), {
             r: approximately(0.88),
             g: approximately(0.12),
             b: approximately(0.06),
           });
-          assert.deepEqual(materialFields(reboundInspection, "effective"), {
-            r: approximately(0.16),
-            g: approximately(0.95),
-            b: approximately(0.28),
-          });
-          const rebound = await capture(
+          const reinserted = await capture(
             scenario.page,
             moduleUrl,
             scenario.evidence.directory,
             captured,
-            "auto-material-rebound",
-          );
-          const fallbackDifference = await invoke<ImageDifference>(
-            scenario.page,
-            moduleUrl,
-            "compareCaptured",
-            ["react-override", "auto-material-fallback"],
-          );
-          const reboundDifference = await invoke<ImageDifference>(
-            scenario.page,
-            moduleUrl,
-            "compareCaptured",
-            ["auto-material-fallback", "auto-material-rebound"],
-          );
-          await verifyPair(
-            scenario.page,
-            moduleUrl,
-            scenario.evidence.directory,
-            "auto-material-rebound",
-            "auto-material-fallback",
-            () => {
-              assert.deepEqual(fallback.summary, override.summary);
-              assert.deepEqual(rebound.summary, override.summary);
-              assert.ok(fallbackDifference.changedFraction < 0.002);
-              assert.ok(reboundDifference.changedFraction < 0.002);
-            },
+            "producer-material-reinserted",
           );
 
           await invoke(scenario.page, moduleUrl, "clearMaterialOverride");
@@ -368,6 +310,13 @@ for (const variant of ["development", "production"] as const) {
             moduleUrl,
             "compareCaptured",
             ["react-override", "cleared-to-latest-base"],
+          );
+          // Removing React's color props leaves the reinserted color.
+          const clearedColorDifference = await invoke<ImageDifference>(
+            scenario.page,
+            moduleUrl,
+            "compareCaptured",
+            ["producer-material-reinserted", "cleared-to-latest-base"],
           );
           const centerPixel = await invoke<
             readonly [number, number, number, number]
@@ -389,6 +338,8 @@ for (const variant of ["development", "production"] as const) {
             "react-override",
             () => {
               requireVisible(cleared.summary, "cleared material override");
+              assert.deepEqual(cleared.summary, reinserted.summary);
+              assert.ok(clearedColorDifference.changedFraction < 0.002);
               assert.ok(colorDifference.changedFraction > 0.015);
               assert.ok(
                 cleared.summary.meanRgb[0] > override.summary.meanRgb[0],
@@ -464,8 +415,8 @@ for (const variant of ["development", "production"] as const) {
             "before-context-loss",
           );
           const recovery = await invoke<{
-            beforeGeneration: number;
-            afterGeneration: number;
+            beforeGeneration: bigint;
+            afterGeneration: bigint;
           }>(scenario.page, moduleUrl, "recoverContext");
           assert.ok(recovery.afterGeneration > recovery.beforeGeneration);
           await saveCapture(
@@ -566,7 +517,6 @@ for (const variant of ["development", "production"] as const) {
 
           return {
             statistics: override.statistics,
-            session: override.session,
             firstTick: override.tick,
             finalTick: reactOwnedUnmounted.tick,
             captures: [...captured],
@@ -590,7 +540,7 @@ for (const variant of ["development", "production"] as const) {
       },
     );
     assert.ok(result.value.finalTick > result.value.firstTick);
-    assert.equal(result.value.captures.length, 15);
+    assert.equal(result.value.captures.length, 14);
     await assertLoopbackClosed(result.origin);
   });
 }
@@ -604,7 +554,7 @@ test("render worker diagnostics honor levels, partial batch effects, and idle si
       {
         workspace,
         build: render,
-        mismatchBuild: overlays,
+        mismatchBuild: headless,
         operationTimeoutMs: 12_000,
         closeTimeoutMs: 5_000,
         evidenceParent: resolve(
@@ -866,7 +816,7 @@ test("HTTP resources remain declarative across pending, failure, cancellation, a
     {
       workspace,
       build: render,
-      mismatchBuild: overlays,
+      mismatchBuild: headless,
       operationTimeoutMs: 12_000,
       closeTimeoutMs: 5_000,
       evidenceParent: resolve(
@@ -1254,21 +1204,19 @@ async function writeFailureImages(
 
 function materialFields(
   inspection: Inspection,
-  layer: "base" | "effective",
 ): Readonly<Record<string, number | bigint>> {
-  const material = optionalMaterialFields(inspection, layer);
-  if (!material) throw new Error(`missing ${layer} UnlitMaterial inspection`);
+  const material = optionalMaterialFields(inspection);
+  if (!material) throw new Error("missing UnlitMaterial inspection");
   return material;
 }
 
 function optionalMaterialFields(
   inspection: Inspection,
-  layer: "base" | "effective",
 ): Readonly<Record<string, number | bigint>> | null {
   const entity = inspection.entities.find(
     ({ metadata }) => metadata.symbolicId === "cube",
   );
-  const material = entity?.[layer].find(({ component }) => component === 4);
+  const material = entity?.components.find(({ component }) => component === 4);
   if (!material) return null;
   return {
     r: approximately(Number(material.fields.r)),
@@ -1279,21 +1227,20 @@ function optionalMaterialFields(
 
 function assertTransformRotation(
   inspection: Inspection,
-  layer: "base" | "effective",
   expected: Readonly<Record<"qx" | "qy" | "qz" | "qw", number>>,
   componentId: number,
 ): void {
   const entity = inspection.entities.find(
     ({ metadata }) => metadata.symbolicId === "cube",
   );
-  const transform = entity?.[layer].find(
+  const transform = entity?.components.find(
     ({ component }) => component === componentId,
   );
-  if (!transform) throw new Error(`missing ${layer} Transform inspection`);
+  if (!transform) throw new Error("missing Transform inspection");
   for (const field of ["qx", "qy", "qz", "qw"] as const) {
     assert.ok(
       Math.abs(Number(transform.fields[field]) - expected[field]) < 1e-6,
-      `${layer} Transform.${field} expected ${expected[field]}, received ${transform.fields[field]}`,
+      `Transform.${field} expected ${expected[field]}, received ${transform.fields[field]}`,
     );
   }
 }
@@ -1337,14 +1284,12 @@ interface ResourceSceneObservation {
 }
 
 interface CaptureReport {
-  readonly session: bigint;
   readonly tick: bigint;
   readonly drawCalls: number;
   readonly triangles: number;
-  readonly contextGeneration: number;
+  readonly contextGeneration: bigint;
   readonly failedDrawCalls: number;
-  readonly invalidCamera: boolean;
-  readonly statistics?: RenderStatisticsSnapshot | undefined;
+  readonly statistics: RenderStatisticsSnapshot;
   readonly summary: ReturnType<
     typeof import("./image-assertions.js").summarizeImage
   >;
@@ -1353,8 +1298,7 @@ interface CaptureReport {
 interface Inspection {
   readonly entities: readonly {
     readonly metadata: { readonly symbolicId: string | null };
-    readonly base: readonly ComponentSnapshot[];
-    readonly effective: readonly ComponentSnapshot[];
+    readonly components: readonly ComponentSnapshot[];
   }[];
 }
 

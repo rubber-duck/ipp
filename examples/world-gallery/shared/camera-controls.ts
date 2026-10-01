@@ -1,11 +1,11 @@
-import type {
-  CameraMotion,
-  GeometryPickResultEvent,
-  GuiPointerButton,
-  PickingWorldClient,
-  WorldPlane,
+import {
+  sameOutputReference,
+  type CameraViewMotion,
+  type RootBinding,
+  type GeometryPickResultEvent,
+  type PickingWorldClient,
+  type WorldPlane,
 } from "@ipp/client";
-import type { GuiUnhandledInputGate } from "@ipp/react/gui";
 
 export interface PickInteraction {
   click(): void;
@@ -18,7 +18,7 @@ interface Controls {
   client: PickingWorldClient;
   picking?: boolean;
   pan?: boolean;
-  viewport(): { width: number; height: number };
+  binding(): RootBinding | undefined;
   flush(): Promise<void>;
   picked(
     result: GeometryPickResultEvent,
@@ -26,8 +26,13 @@ interface Controls {
   ): Promise<PickInteraction | undefined>;
   pending(delta: number): void;
   error(failure: unknown): void;
-  /** Runtime-authoritative admission when this canvas also routes GUI input. */
-  unhandledInputGate?: GuiUnhandledInputGate;
+  /** Application admission for scene input sharing a presented view. */
+  admitPointer?(
+    pointer: number,
+    button: number,
+    signal: AbortSignal,
+  ): Promise<boolean>;
+  admitScroll?(signal: AbortSignal): Promise<boolean>;
 }
 
 interface Gesture {
@@ -49,8 +54,7 @@ interface Gesture {
   abort: AbortController;
   interaction: PickInteraction | undefined;
   plane: WorldPlane | undefined;
-  camera: bigint | undefined;
-  viewport: { width: number; height: number };
+  binding: RootBinding;
   projecting: boolean;
   projectFrame: number;
   clicked: boolean;
@@ -67,16 +71,53 @@ export function installCameraControls(
   let active: Gesture | undefined;
   let disposed = false;
   let frame = 0;
-  let queued: CameraMotion | undefined;
+  let queued: { binding: RootBinding; motion: CameraViewMotion } | undefined;
   const wheelAdmissions = new Set<AbortController>();
 
+  function bindingIsCurrent(binding: RootBinding) {
+    const current = controls.binding();
+    return !disposed && current !== undefined && sameBinding(current, binding);
+  }
+
+  function releaseCapture(gesture: Gesture) {
+    const ownsCapture = gesture.ownsCapture;
+    gesture.ownsCapture = false;
+    if (ownsCapture && canvas.hasPointerCapture(gesture.pointer))
+      canvas.releasePointerCapture(gesture.pointer);
+  }
+
+  function cancelGesture(gesture: Gesture) {
+    const interaction = gesture.interaction;
+    const dragging = gesture.dragging;
+    gesture.interaction = undefined;
+    gesture.dragging = false;
+    gesture.released = true;
+    gestures.delete(gesture);
+    if (active === gesture) active = undefined;
+    cancelAnimationFrame(gesture.projectFrame);
+    gesture.projectFrame = 0;
+    releaseCapture(gesture);
+    gesture.abort.abort();
+    if (dragging) interaction?.dragging(false);
+    interaction?.finish?.();
+  }
+
+  function gestureIsCurrent(gesture: Gesture) {
+    if (!gesture.abort.signal.aborted && bindingIsCurrent(gesture.binding))
+      return true;
+    cancelGesture(gesture);
+    return false;
+  }
+
   function setDragging(gesture: Gesture, dragging: boolean) {
+    if (dragging && !gestureIsCurrent(gesture)) return;
     if (gesture.dragging === dragging) return;
     gesture.dragging = dragging;
     gesture.interaction?.dragging(dragging);
   }
 
   function finish(gesture: Gesture) {
+    if (!gestureIsCurrent(gesture)) return;
     if (
       !gesture.released ||
       !gesture.finished ||
@@ -89,12 +130,16 @@ export function installCameraControls(
       gesture.clicked = true;
       gesture.interaction?.click();
     }
-    if (gestures.delete(gesture)) gesture.interaction?.finish?.();
+    if (gestures.delete(gesture)) {
+      const interaction = gesture.interaction;
+      gesture.interaction = undefined;
+      interaction?.finish?.();
+    }
   }
 
   function moveObject(gesture: Gesture) {
     if (
-      gesture.abort.signal.aborted ||
+      !gestureIsCurrent(gesture) ||
       !gesture.dragged ||
       !gesture.interaction ||
       !gesture.plane ||
@@ -102,7 +147,10 @@ export function installCameraControls(
       gesture.projectFrame
     )
       return;
-    if (!gesture.released) setDragging(gesture, true);
+    if (!gesture.released) {
+      setDragging(gesture, true);
+      if (!gestureIsCurrent(gesture)) return;
+    }
     if (gesture.x === gesture.sentX && gesture.y === gesture.sentY) return;
     gesture.projectFrame = requestAnimationFrame(() => {
       gesture.projectFrame = 0;
@@ -111,17 +159,11 @@ export function installCameraControls(
   }
 
   async function project(gesture: Gesture) {
-    if (gesture.abort.signal.aborted || !gesture.plane || !gesture.interaction)
+    if (!gestureIsCurrent(gesture) || !gesture.plane || !gesture.interaction)
       return;
-    const viewport = controls.viewport();
     const bounds = canvas.getBoundingClientRect();
-    if (
-      !bounds.width ||
-      !bounds.height ||
-      viewport.width !== gesture.viewport.width ||
-      viewport.height !== gesture.viewport.height
-    ) {
-      cancel();
+    if (!bounds.width || !bounds.height) {
+      cancelGesture(gesture);
       return;
     }
     gesture.sentX = gesture.x;
@@ -133,15 +175,11 @@ export function installCameraControls(
         type: "CameraProjectQuery",
         x: (gesture.sentX - bounds.left) / bounds.width,
         y: (gesture.sentY - bounds.top) / bounds.height,
-        ...gesture.viewport,
+        view: { kind: "bound", binding: gesture.binding },
         plane: gesture.plane,
       });
-      if (gesture.abort.signal.aborted) return;
+      if (!gestureIsCurrent(gesture)) return;
       if (!result.ok) throw new Error(result.error);
-      if (result.camera !== gesture.camera) {
-        cancel();
-        return;
-      }
       if (result.position) {
         const point = result.position;
         gesture.interaction.move([
@@ -151,9 +189,8 @@ export function installCameraControls(
         ]);
       }
     } catch (failure) {
-      if (!gesture.abort.signal.aborted) {
-        gesture.abort.abort();
-        setDragging(gesture, false);
+      if (gestureIsCurrent(gesture)) {
+        cancelGesture(gesture);
         controls.error(failure);
       }
     } finally {
@@ -167,41 +204,40 @@ export function installCameraControls(
   function flushMotion() {
     cancelAnimationFrame(frame);
     frame = 0;
-    const motion = queued;
+    const request = queued;
     queued = undefined;
-    if (!motion || disposed) return;
-    try {
-      controls.client.sendCommand({ type: "CameraNavigateCommand", motion });
-    } catch (failure) {
-      controls.error(failure);
-    }
+    if (!request || !bindingIsCurrent(request.binding)) return;
+    controls.pending(1);
+    void controls.client
+      .navigateCamera(request)
+      .catch((failure: unknown) => {
+        if (bindingIsCurrent(request.binding)) controls.error(failure);
+      })
+      .finally(() => controls.pending(-1));
   }
 
-  function queue(motion: CameraMotion) {
+  function queue(motion: CameraViewMotion, binding: RootBinding) {
+    if (queued && !sameBinding(queued.binding, binding)) flushMotion();
+    const previous = queued?.motion;
     // Combine raw samples before submission. A change of operation preserves order.
-    if (queued?.kind === "rotate" && motion.kind === "rotate") {
-      queued.yaw += motion.yaw;
-      queued.pitch += motion.pitch;
-    } else if (
-      queued?.kind === "pan" &&
-      motion.kind === "pan" &&
-      queued.width === motion.width &&
-      queued.height === motion.height
-    ) {
-      queued.x += motion.x;
-      queued.y += motion.y;
-    } else if (queued?.kind === "zoom" && motion.kind === "zoom") {
-      queued.amount += motion.amount;
+    if (previous?.kind === "rotate" && motion.kind === "rotate") {
+      previous.yaw += motion.yaw;
+      previous.pitch += motion.pitch;
+    } else if (previous?.kind === "pan" && motion.kind === "pan") {
+      previous.x += motion.x;
+      previous.y += motion.y;
+    } else if (previous?.kind === "zoom" && motion.kind === "zoom") {
+      previous.amount += motion.amount;
     } else {
       flushMotion();
-      queued = motion;
+      queued = { binding, motion };
     }
     if (!frame) frame = requestAnimationFrame(flushMotion);
   }
 
   function moveCamera(gesture: Gesture) {
     if (
-      gesture.abort.signal.aborted ||
+      !gestureIsCurrent(gesture) ||
       gesture.admission !== "admitted" ||
       !gesture.dragged
     )
@@ -218,13 +254,13 @@ export function installCameraControls(
             kind: "pan",
             x: dx / gesture.width,
             y: dy / gesture.height,
-            ...controls.viewport(),
           }
         : {
             kind: "rotate",
             yaw: (-dx / gesture.height) * Math.PI,
             pitch: (-dy / gesture.height) * Math.PI,
           },
+      gesture.binding,
     );
   }
 
@@ -232,15 +268,15 @@ export function installCameraControls(
     controls.pending(1);
     try {
       await controls.flush();
-      if (gesture.abort.signal.aborted) return;
+      if (!gestureIsCurrent(gesture)) return;
       const result = await controls.client.query({
         type: "GeometryPickQuery",
         x,
         y,
-        ...controls.viewport(),
+        view: { kind: "bound", binding: gesture.binding },
         includeViewPlane: true,
       });
-      if (gesture.abort.signal.aborted) return;
+      if (!gestureIsCurrent(gesture)) return;
       if (!result.ok)
         throw new Error(
           result.error === "GeometryUnavailable"
@@ -249,17 +285,17 @@ export function installCameraControls(
         );
       gesture.pick = result.hit ? "hit" : "miss";
       gesture.plane = result.hit?.viewPlane;
-      gesture.camera = result.camera ?? undefined;
-      gesture.interaction = await controls.picked(result, gesture.abort.signal);
-      if (gesture.abort.signal.aborted) {
-        gesture.interaction?.finish?.();
+      const interaction = await controls.picked(result, gesture.abort.signal);
+      if (!gestureIsCurrent(gesture)) {
+        interaction?.finish?.();
         return;
       }
+      gesture.interaction = interaction;
       // A short completed drag may precede the RPC result. Apply its buffered delta.
       moveCamera(gesture);
       moveObject(gesture);
     } catch (failure) {
-      if (!gesture.abort.signal.aborted) controls.error(failure);
+      if (gestureIsCurrent(gesture)) controls.error(failure);
     } finally {
       gesture.finished = true;
       controls.pending(-1);
@@ -268,25 +304,16 @@ export function installCameraControls(
   }
 
   function release(gesture: Gesture) {
+    if (!gestureIsCurrent(gesture)) return;
     gesture.released = true;
     setDragging(gesture, false);
     if (active === gesture) active = undefined;
-    if (gesture.ownsCapture && canvas.hasPointerCapture(gesture.pointer))
-      canvas.releasePointerCapture(gesture.pointer);
+    releaseCapture(gesture);
     finish(gesture);
   }
 
   function cancel(includeWheelAdmissions = true) {
-    for (const gesture of gestures) {
-      gesture.abort.abort();
-      setDragging(gesture, false);
-      cancelAnimationFrame(gesture.projectFrame);
-      gesture.projectFrame = 0;
-      gesture.interaction?.finish?.();
-      gesture.interaction = undefined;
-    }
-    if (active) release(active);
-    gestures.clear();
+    for (const gesture of gestures) cancelGesture(gesture);
     if (includeWheelAdmissions) {
       for (const admission of wheelAdmissions) admission.abort();
       wheelAdmissions.clear();
@@ -297,18 +324,20 @@ export function installCameraControls(
   }
 
   function down(event: PointerEvent) {
+    if (active) gestureIsCurrent(active);
     if (
       active ||
       !event.isPrimary ||
       (event.button !== 0 && (event.button !== 1 || controls.pan === false))
     )
       return;
-    if (!controls.unhandledInputGate) event.preventDefault();
+    if (!controls.admitPointer) event.preventDefault();
     flushMotion();
     // A new gesture supersedes any unresolved gesture from an earlier press.
     cancel();
     const bounds = canvas.getBoundingClientRect();
-    if (!bounds.width || !bounds.height) return;
+    const binding = controls.binding();
+    if (!bounds.width || !bounds.height || !binding) return;
     const gesture: Gesture = {
       pointer: event.pointerId,
       button: event.button,
@@ -329,32 +358,22 @@ export function installCameraControls(
       abort: new AbortController(),
       interaction: undefined,
       plane: undefined,
-      camera: undefined,
-      viewport: controls.viewport(),
+      binding,
       projecting: false,
       projectFrame: 0,
       clicked: false,
-      admission: controls.unhandledInputGate ? "pending" : "admitted",
-      ownsCapture: controls.unhandledInputGate === undefined,
+      admission: controls.admitPointer ? "pending" : "admitted",
+      ownsCapture: controls.admitPointer === undefined,
     };
     active = gesture;
     gestures.add(gesture);
     if (gesture.ownsCapture) canvas.setPointerCapture(event.pointerId);
-    if (controls.unhandledInputGate) {
-      const button = guiButton(event.button);
-      if (button === undefined) {
-        gesture.abort.abort();
-        release(gesture);
-        gestures.delete(gesture);
-        return;
-      }
-      void controls.unhandledInputGate
-        .pointerDown(event.pointerId >>> 0, button, gesture.abort.signal)
+    if (controls.admitPointer) {
+      void controls
+        .admitPointer(event.pointerId >>> 0, event.button, gesture.abort.signal)
         .then((admitted) => {
-          if (gesture.abort.signal.aborted || !admitted) {
-            gesture.abort.abort();
-            if (active === gesture) active = undefined;
-            gestures.delete(gesture);
+          if (!gestureIsCurrent(gesture) || !admitted) {
+            cancelGesture(gesture);
             return;
           }
           gesture.admission = "admitted";
@@ -408,12 +427,16 @@ export function installCameraControls(
     if (active?.pointer === event.pointerId) cancel();
   }
 
+  // The canvas's GUI input shares pointer capture on this element and releases
+  // it once routing leaves the pointer to the scene, so losing capture while
+  // the button is held only ends ownership; the browser reports a real
+  // cancellation as pointercancel.
   function lostCapture(event: PointerEvent) {
     const gesture = active;
     if (!gesture || gesture.pointer !== event.pointerId) return;
     const buttonMask = gesture.button === 1 ? 4 : 1;
     if ((event.buttons & buttonMask) === 0) release(gesture);
-    else cancel();
+    else gesture.ownsCapture = false;
   }
 
   function wheel(event: WheelEvent) {
@@ -424,31 +447,31 @@ export function installCameraControls(
         : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
           ? canvas.clientHeight
           : 1;
-    const motion: CameraMotion = {
+    const binding = controls.binding();
+    if (!binding) return;
+    const motion: CameraViewMotion = {
       kind: "zoom",
       amount: Math.max(-1, Math.min(1, event.deltaY * unit * 0.0015)),
     };
     const apply = (): void => {
-      if (disposed) return;
+      if (!bindingIsCurrent(binding)) return;
       // Wheel input ends a pending drag before zooming the same active camera.
       if (gestures.size) {
         flushMotion();
         cancel(false);
       }
-      queue(motion);
+      queue(motion, binding);
     };
-    if (!controls.unhandledInputGate) {
+    if (!controls.admitScroll) {
       apply();
       return;
     }
     const admission = new AbortController();
     wheelAdmissions.add(admission);
-    void controls.unhandledInputGate
-      .scroll(admission.signal)
-      .then((admitted) => {
-        wheelAdmissions.delete(admission);
-        if (admitted && !admission.signal.aborted) apply();
-      });
+    void controls.admitScroll(admission.signal).then((admitted) => {
+      wheelAdmissions.delete(admission);
+      if (admitted && !admission.signal.aborted) apply();
+    });
   }
 
   function auxiliary(event: MouseEvent) {
@@ -465,7 +488,6 @@ export function installCameraControls(
   const cancelAll = () => cancel();
   window.addEventListener("blur", cancelAll);
   window.addEventListener("resize", cancelAll);
-  const stopCameraListener = controls.client.onCameraStateChanged(cancelAll);
   return () => {
     disposed = true;
     cancel();
@@ -478,19 +500,16 @@ export function installCameraControls(
     canvas.removeEventListener("auxclick", auxiliary);
     window.removeEventListener("blur", cancelAll);
     window.removeEventListener("resize", cancelAll);
-    stopCameraListener();
   };
 }
 
-function guiButton(button: number): GuiPointerButton | undefined {
-  switch (button) {
-    case 0:
-      return "primary";
-    case 1:
-      return "auxiliary";
-    case 2:
-      return "secondary";
-    default:
-      return undefined;
-  }
+function sameBinding(left: RootBinding, right: RootBinding): boolean {
+  return (
+    left.generation.host === right.generation.host &&
+    left.generation.serial === right.generation.serial &&
+    sameOutputReference(left.output, right.output) &&
+    left.viewport.width === right.viewport.width &&
+    left.viewport.height === right.viewport.height &&
+    left.viewport.devicePixelRatio === right.viewport.devicePixelRatio
+  );
 }

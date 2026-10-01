@@ -19,12 +19,34 @@ pub(crate) const KEY: ipp_core::MeshKey = ipp_core::MeshKey {
 pub(crate) const MATERIAL: [f32; 3] = [0.25, 0.5, 0.75];
 const BACKGROUND: [u8; 4] = [10, 14, 20, 255];
 
+/// The shared fixture scene: a camera over rendered content, Surface anchors
+/// for attached Worlds when compiled, and particle producers when compiled.
+fn fixture_systems() -> Vec<ipp_core::systems::SystemId> {
+    #[allow(unused_mut)]
+    let mut selected = super::selection::scene();
+    #[cfg(feature = "particles")]
+    selected.extend(super::selection::select(&[super::selection::PARTICLES]));
+    selected.sort_by_key(|id| id.0);
+    selected.dedup();
+    super::selection::select(&[&selected])
+}
+
 /// Install only the fixture provider implemented by this native test host.
 pub(crate) fn fixture_world(host: &mut ipp_core::HostRuntime) -> Result<WorldContext<'_>> {
+    fixture_world_selecting(host, &[])
+}
+
+/// A fixture World that also selects `extra` Systems.
+pub(crate) fn fixture_world_selecting<'host>(
+    host: &'host mut ipp_core::HostRuntime,
+    extra: &[ipp_core::systems::SystemId],
+) -> Result<WorldContext<'host>> {
     if host.data_sources().registration_id("fixture:///").is_none() {
         host.data_sources_mut().register_stream("fixture://")?;
     }
-    let id = host.create_world(Default::default())?;
+    let mut selected = fixture_systems();
+    selected.extend_from_slice(extra);
+    let id = host.create_world(Default::default(), &selected)?;
     let mut world = host.world_mut(id).unwrap();
 
     let yaw = 3.0_f32.atan2(5.0) * 0.5;
@@ -38,6 +60,7 @@ pub(crate) fn fixture_world(host: &mut ipp_core::HostRuntime) -> Result<WorldCon
                     symbolic_id: Some("fixture-camera".into()),
                     classes: vec!["fixture-camera".into()],
                 },
+                adopt: false,
             },
             Command::InsertComponent {
                 entity: EntityRef::Alias(0),
@@ -54,11 +77,13 @@ pub(crate) fn fixture_world(host: &mut ipp_core::HostRuntime) -> Result<WorldCon
                     ),
                     float(std::mem::offset_of!(Transform, qw), pitch.cos() * yaw.cos()),
                 ],
+                adopt: false,
             },
             Command::InsertComponent {
                 entity: EntityRef::Alias(0),
                 component: ComponentValue::CAMERA,
                 fields: vec![],
+                adopt: false,
             },
         ],
     )?;
@@ -67,7 +92,21 @@ pub(crate) fn fixture_world(host: &mut ipp_core::HostRuntime) -> Result<WorldCon
     world.step(0.0)?;
     assert_eq!(world.active_camera(), Some(camera));
 
-    Ok(world)
+    drop(world);
+    let selection = host.bind_output(
+        host.world_ref(id).unwrap(),
+        camera,
+        ipp_core::OutputKind::Camera,
+    )?;
+    host.set_root_output(
+        selection,
+        ipp_core::WorldViewport {
+            width: WIDTH,
+            height: HEIGHT,
+            device_pixel_ratio: 1.0,
+        },
+    )?;
+    Ok(host.world_mut(id).unwrap())
 }
 
 // Scenario intent is independent of EGL/process setup: a different native host
@@ -90,11 +129,13 @@ pub fn run<D: RenderDevice>(
             Command::Create {
                 alias: 1,
                 metadata: Default::default(),
+                adopt: false,
             },
             Command::InsertComponent {
                 entity: EntityRef::Alias(1),
                 component: transform,
                 fields: vec![],
+                adopt: false,
             },
             Command::InsertComponent {
                 entity: EntityRef::Alias(1),
@@ -104,6 +145,7 @@ pub fn run<D: RenderDevice>(
                     float(std::mem::offset_of!(UnlitMaterial, g), MATERIAL[1]),
                     float(std::mem::offset_of!(UnlitMaterial, b), MATERIAL[2]),
                 ],
+                adopt: false,
             },
             Command::InsertComponent {
                 entity: EntityRef::Alias(1),
@@ -112,6 +154,7 @@ pub fn run<D: RenderDevice>(
                     offset: std::mem::offset_of!(MeshInstance, source) as u32,
                     value: FieldValue::String("fixture:///fixture.mesh".into()),
                 }],
+                adopt: false,
             },
         ],
     )?;
@@ -176,6 +219,7 @@ pub fn run<D: RenderDevice>(
             Command::Create {
                 alias: 2,
                 metadata: Default::default(),
+                adopt: false,
             },
             Command::InsertComponent {
                 entity: EntityRef::Alias(2),
@@ -186,11 +230,13 @@ pub fn run<D: RenderDevice>(
                     float(std::mem::offset_of!(Transform, sy), 0.5),
                     float(std::mem::offset_of!(Transform, sz), 0.5),
                 ],
+                adopt: false,
             },
             Command::InsertComponent {
                 entity: EntityRef::Alias(2),
                 component: material,
                 fields: vec![],
+                adopt: false,
             },
             Command::InsertComponent {
                 entity: EntityRef::Alias(2),
@@ -199,6 +245,7 @@ pub fn run<D: RenderDevice>(
                     offset: std::mem::offset_of!(MeshInstance, source) as u32,
                     value: FieldValue::String("fixture:///delayed.mesh".into()),
                 }],
+                adopt: false,
             },
         ],
     )?;
@@ -256,7 +303,7 @@ pub fn run<D: RenderDevice>(
     apply(
         &mut world,
         vec![Command::SetField {
-            entity,
+            entity: entity.clone(),
             component: transform,
             field: float(std::mem::offset_of!(Transform, x), 1.0),
         }],
@@ -292,7 +339,7 @@ pub fn run<D: RenderDevice>(
     apply(
         &mut world,
         vec![Command::SetField {
-            entity,
+            entity: entity.clone(),
             component: material,
             field: float(std::mem::offset_of!(UnlitMaterial, r), 0.001),
         }],
@@ -332,7 +379,7 @@ pub fn run<D: RenderDevice>(
     apply(
         &mut world,
         vec![Command::SetField {
-            entity,
+            entity: entity.clone(),
             component: mesh,
             field: FieldWrite {
                 offset: std::mem::offset_of!(MeshInstance, source) as u32,
@@ -379,6 +426,7 @@ pub fn run<D: RenderDevice>(
             Command::Create {
                 alias: 1,
                 metadata: Default::default(),
+                adopt: false,
             },
             Command::insert_value(
                 EntityRef::Alias(1),
@@ -410,6 +458,7 @@ pub fn run<D: RenderDevice>(
     assert_eq!(stats.draw_calls, 1);
     assert!(coverage(&capture()?).0 > 0);
     drop(world);
+    renderer.prepare(&mut world_host, None)?;
     Ok(())
 }
 
@@ -571,7 +620,7 @@ pub(crate) fn save(output: &Path, name: &str, pixels: &[u8]) -> Result<()> {
 
 /// Empty world for clearing a render target without retaining another fixture.
 pub(crate) fn empty_world(host: &mut ipp_core::HostRuntime) -> WorldContext<'_> {
-    let id = host.create_world(Default::default()).unwrap();
+    let id = host.create_world(Default::default(), &[]).unwrap();
     host.world_mut(id).unwrap()
 }
 
@@ -591,43 +640,15 @@ pub(crate) fn resident_programs(
         .count()
 }
 
-/// The embedding host progresses resources and evaluates before presentation.
-pub(crate) fn render_frame<D: RenderDevice>(
-    renderer: &mut RenderService<D>,
-    world: &mut WorldContext<'_>,
-    width: u32,
-    height: u32,
-) -> std::result::Result<crate::smoke::frame_stats::FrameStats, String> {
-    let mut uploaded = 0u32;
-    // New built-in recipes are registered during demand collection. Complete
-    // their next Host loading phase before callers inspect a completed frame.
-    for _ in 0..8 {
-        world
-            .prepare_update(0.0)
-            .map_err(|error| error.to_string())?;
-        world.poll_all_assets();
-        world.step(0.0).map_err(|error| error.to_string())?;
-        let mut stats = renderer
-            .render_stats(world, width, height)
-            .map_err(|error| error.to_string())?;
-        uploaded = uploaded.saturating_add(stats.uploaded_bytes);
-        if !world.asset_resources().iter().any(|resource| {
-            resource.source().uri.starts_with("ipp-render://program/")
-                && matches!(
-                    resource.status(),
-                    ipp_core::services::asset_management::AssetLoadStatus::Unloaded
-                )
-        }) {
-            stats.uploaded_bytes = uploaded;
-            return Ok(stats);
-        }
-    }
-    Err("Built-in program preparation did not settle".into())
-}
-
 // Fixture code can keep its convenient World borrow between presentations. A
 // presentation releases that borrow so the Host can notify every resource user.
 macro_rules! present_world {
+    (finish; $renderer:expr, $host:ident, $world:ident, $width:expr, $height:expr) => {{
+        let id = $world.id();
+        drop($world);
+        $crate::smoke::world::render_host_frame($renderer, &mut $host, id, $width, $height)
+    }};
+
     ($renderer:expr, $host:ident, $world:ident, $width:expr, $height:expr) => {{
         let id = $world.id();
         drop($world);
@@ -650,18 +671,29 @@ pub(crate) fn render_host_frame<D: RenderDevice>(
 ) -> std::result::Result<crate::smoke::frame_stats::FrameStats, String> {
     let mut uploaded = 0u32;
     for _ in 0..8 {
-        host.world_mut(id)
-            .unwrap()
-            .prepare_update(0.0)
+        let frame = host.frame(0.0).map_err(|error| error.to_string())?;
+        for report in frame.worlds.values() {
+            report.as_ref().map_err(|error| error.to_string())?;
+        }
+        if !frame.publication_errors.is_empty() {
+            return Err(format!(
+                "publication failures: {:?}",
+                frame.publication_errors
+            ));
+        }
+        renderer
+            .prepare(
+                host,
+                host.root_output(id)
+                    .map(|(output, _, publication)| (output, publication)),
+            )
             .map_err(|error| error.to_string())?;
         host.progress_assets();
-        let mut world = host.world_mut(id).unwrap();
-        world.step(0.0).map_err(|error| error.to_string())?;
         let mut stats = renderer
-            .render_stats(&mut world, width, height)
+            .draw_stats(host, id, width, height)
             .map_err(|error| error.to_string())?;
         uploaded = uploaded.saturating_add(stats.uploaded_bytes);
-        if !world.asset_resources().iter().any(|resource| {
+        if !host.asset_resources().iter().any(|resource| {
             resource.source().uri.starts_with("ipp-render://program/")
                 && matches!(
                     resource.status(),
@@ -694,6 +726,7 @@ pub fn multiple_worlds<D: RenderDevice>(
                 Command::Create {
                     alias: 1,
                     metadata: Default::default(),
+                    adopt: false,
                 },
                 Command::insert_value(
                     EntityRef::Alias(1),
@@ -736,16 +769,14 @@ pub fn multiple_worlds<D: RenderDevice>(
         resource
     );
     let mut captures = Vec::new();
-    // Collect both Worlds' program demand, then run the shared Host loading phase.
-    for &id in &worlds {
-        renderer.render_stats(&mut host.world_mut(id).unwrap(), WIDTH, HEIGHT)?;
-    }
-    host.progress_assets();
-    for &id in &worlds {
-        host.world_mut(id).unwrap().step(0.0)?;
-    }
+    host.frame(0.0)?;
     for (index, &id) in worlds.iter().enumerate() {
-        let stats = renderer.render_stats(&mut host.world_mut(id).unwrap(), WIDTH, HEIGHT)?;
+        let selected = host
+            .root_output(id)
+            .map(|(output, _, publication)| (output, publication));
+        renderer.prepare(&mut host, selected)?;
+        host.progress_assets();
+        let stats = renderer.draw_stats(&host, id, WIDTH, HEIGHT)?;
         assert_eq!(stats.draw_calls, 1);
         if index == 1 {
             assert_eq!(
@@ -764,17 +795,20 @@ pub fn multiple_worlds<D: RenderDevice>(
     );
     host.destroy_world(worlds[0]);
     host.progress_assets();
-    let mut surviving = host.world_mut(worlds[1]).unwrap();
-    surviving.step(0.0)?;
-    assert_eq!(surviving.resource_snapshots()[0].id, resource);
+    host.frame(0.0)?;
+    assert_eq!(
+        host.world_mut(worlds[1]).unwrap().resource_snapshots()[0].id,
+        resource
+    );
     assert_eq!(
         renderer
-            .render_stats(&mut surviving, WIDTH, HEIGHT)?
+            .draw_stats(&host, worlds[1], WIDTH, HEIGHT)?
             .uploaded_bytes,
         0
     );
     let preserved = capture()?;
     save(output, "world-survives-peer-destruction", &preserved)?;
     assert_eq!(preserved, captures[1]);
+    renderer.prepare(&mut host, None)?;
     Ok(())
 }

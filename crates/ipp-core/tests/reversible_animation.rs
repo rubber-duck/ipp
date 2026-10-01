@@ -5,6 +5,7 @@ mod support;
 use std::mem::offset_of;
 
 use support::WorldTestDriver;
+use support::selection::{ASSETS, CONSTRAINTS, select};
 
 use ipp_core::{
     Batch, Command, ComponentValue, EntityId, EntityRef, HostRuntime, WorldContext, WorldLimits,
@@ -34,7 +35,9 @@ fn fixture() -> (
     AnimationControllerId,
 ) {
     let mut host = HostRuntime::new();
-    let world_id = host.create_world(WorldLimits::default()).unwrap();
+    let world_id = host
+        .create_world(WorldLimits::default(), &select(&[ASSETS, CONSTRAINTS]))
+        .unwrap();
     let mut world = host.world_mut(world_id).unwrap();
     world
         .enqueue(Batch {
@@ -43,6 +46,7 @@ fn fixture() -> (
                 Command::Create {
                     alias: 1,
                     metadata: Default::default(),
+                    adopt: false,
                 },
                 Command::insert_value(
                     EntityRef::Alias(1),
@@ -97,6 +101,7 @@ fn fixture() -> (
                 track: 0,
                 target,
                 property,
+                entity_bindings: Vec::new(),
                 weight: 1.0,
                 additive: false,
                 reference_time: 0.0,
@@ -135,7 +140,7 @@ fn effective_scalar(world: &WorldContext<'_>, target: EntityId) -> f32 {
     world
         .inspect(target)
         .unwrap()
-        .effective
+        .components
         .iter()
         .find_map(|value| {
             if let ComponentValue::Scalar(value) = value {
@@ -150,7 +155,9 @@ fn effective_scalar(world: &WorldContext<'_>, target: EntityId) -> f32 {
 #[test]
 fn delayed_reverse_restart_uses_ready_duration_and_explicit_seek_is_preserved() {
     let mut host = HostRuntime::new();
-    let world_id = host.create_world(WorldLimits::default()).unwrap();
+    let world_id = host
+        .create_world(WorldLimits::default(), &select(&[ASSETS, CONSTRAINTS]))
+        .unwrap();
     let mut world = host.world_mut(world_id).unwrap();
     world
         .enqueue(Batch {
@@ -159,6 +166,7 @@ fn delayed_reverse_restart_uses_ready_duration_and_explicit_seek_is_preserved() 
                 Command::Create {
                     alias: 1,
                     metadata: Default::default(),
+                    adopt: false,
                 },
                 Command::insert_value(
                     EntityRef::Alias(1),
@@ -195,11 +203,12 @@ fn delayed_reverse_restart_uses_ready_duration_and_explicit_seek_is_preserved() 
     .unwrap();
     let delayed_description = |asset| AnimationControllerDescription {
         drivers: vec![AnimationDriverDescription {
-            source: format!("asset://10/{asset}"),
+            source: std::sync::Arc::<str>::from(format!("asset://10/{asset}")),
             variant: 0,
             track: 0,
             target,
             property: property.clone(),
+            entity_bindings: Vec::new(),
             weight: 1.0,
             additive: false,
             reference_time: 0.0,
@@ -231,7 +240,7 @@ fn delayed_reverse_restart_uses_ready_duration_and_explicit_seek_is_preserved() 
     assert!(world.await_upload_for_test().assets[0].result.is_ok());
     world.update_for_test(0.0).unwrap();
     assert_eq!(state(&world, restarted).0, 2.0);
-    assert_eq!(effective_scalar(&world, target), 10.0);
+    assert_eq!(effective_scalar(&world, target), 109.0);
 
     world
         .enqueue_playback(restarted, AnimationPlaybackControl::Stop)
@@ -265,10 +274,10 @@ fn delayed_reverse_restart_uses_ready_duration_and_explicit_seek_is_preserved() 
     assert!(world.await_upload_for_test().assets[0].result.is_ok());
     world.update_for_test(0.0).unwrap();
     assert_eq!(state(&world, sought).0, 0.75);
-    assert_eq!(effective_scalar(&world, target), 3.75);
+    assert_eq!(effective_scalar(&world, target), 102.75);
     world.update_for_test(0.25).unwrap();
     assert_eq!(state(&world, sought).0, 0.5);
-    assert_eq!(effective_scalar(&world, target), 2.5);
+    assert_eq!(effective_scalar(&world, target), 101.5);
 
     let stopped = world
         .create_animation_controller(delayed_description(93))
@@ -308,13 +317,13 @@ fn signed_nonlooping_playback_holds_endpoints_and_resumes_inward() {
         state(&world, controller),
         (1.5, AnimationPlaybackStatus::Playing)
     );
-    assert_eq!(effective_scalar(&world, target), 7.5);
+    assert_eq!(effective_scalar(&world, target), 106.5);
     world.update_for_test(2.0).unwrap();
     assert_eq!(
         state(&world, controller),
         (0.0, AnimationPlaybackStatus::Completed)
     );
-    assert_eq!(effective_scalar(&world, target), 0.0);
+    assert_eq!(effective_scalar(&world, target), 99.0);
 
     world
         .enqueue_playback(controller, AnimationPlaybackControl::PlayAtSpeed(1.0))
@@ -324,7 +333,7 @@ fn signed_nonlooping_playback_holds_endpoints_and_resumes_inward() {
         state(&world, controller),
         (0.25, AnimationPlaybackStatus::Playing)
     );
-    assert_eq!(effective_scalar(&world, target), 1.25);
+    assert_eq!(effective_scalar(&world, target), 100.25);
 
     seek(&mut world, controller, 2.0);
     world
@@ -353,7 +362,7 @@ fn signed_looping_wraps_in_both_directions() {
         state(&world, controller),
         (1.75, AnimationPlaybackStatus::Playing)
     );
-    assert_eq!(effective_scalar(&world, target), 8.75);
+    assert_eq!(effective_scalar(&world, target), 107.75);
 
     world
         .enqueue_playback(controller, AnimationPlaybackControl::PlayAtSpeed(1.0))
@@ -363,7 +372,7 @@ fn signed_looping_wraps_in_both_directions() {
         state(&world, controller),
         (0.25, AnimationPlaybackStatus::Playing)
     );
-    assert_eq!(effective_scalar(&world, target), 1.25);
+    assert_eq!(effective_scalar(&world, target), 100.25);
 }
 
 #[test]
@@ -378,10 +387,10 @@ fn restart_and_plain_play_choose_the_endpoint_for_signed_direction() {
         .unwrap();
     world.update_for_test(0.0).unwrap();
     assert_eq!(state(&world, controller).0, 2.0);
-    assert_eq!(effective_scalar(&world, target), 10.0);
+    assert_eq!(effective_scalar(&world, target), 109.0);
     world.update_for_test(0.5).unwrap();
     assert_eq!(state(&world, controller).0, 1.5);
-    assert_eq!(effective_scalar(&world, target), 7.5);
+    assert_eq!(effective_scalar(&world, target), 106.5);
 
     world.update_for_test(2.0).unwrap();
     assert_eq!(
@@ -393,10 +402,10 @@ fn restart_and_plain_play_choose_the_endpoint_for_signed_direction() {
         .unwrap();
     world.update_for_test(0.0).unwrap();
     assert_eq!(state(&world, controller).0, 2.0);
-    assert_eq!(effective_scalar(&world, target), 10.0);
+    assert_eq!(effective_scalar(&world, target), 109.0);
     world.update_for_test(0.5).unwrap();
     assert_eq!(state(&world, controller).0, 1.5);
-    assert_eq!(effective_scalar(&world, target), 7.5);
+    assert_eq!(effective_scalar(&world, target), 106.5);
 
     seek(&mut world, controller, 2.0);
     world
@@ -412,10 +421,10 @@ fn restart_and_plain_play_choose_the_endpoint_for_signed_direction() {
         .unwrap();
     world.update_for_test(0.0).unwrap();
     assert_eq!(state(&world, controller).0, 0.0);
-    assert_eq!(effective_scalar(&world, target), 0.0);
+    assert_eq!(effective_scalar(&world, target), 99.0);
     world.update_for_test(0.5).unwrap();
     assert_eq!(state(&world, controller).0, 0.5);
-    assert_eq!(effective_scalar(&world, target), 2.5);
+    assert_eq!(effective_scalar(&world, target), 101.5);
 }
 
 #[test]
@@ -433,7 +442,7 @@ fn zero_speed_and_speed_only_update_preserve_the_current_contribution() {
         state(&world, controller),
         (1.0, AnimationPlaybackStatus::Paused)
     );
-    assert_eq!(effective_scalar(&world, target), 5.0);
+    assert_eq!(effective_scalar(&world, target), 104.0);
 
     world
         .enqueue_playback(controller, AnimationPlaybackControl::PlayAtSpeed(0.0))
@@ -443,5 +452,5 @@ fn zero_speed_and_speed_only_update_preserve_the_current_contribution() {
         state(&world, controller),
         (1.0, AnimationPlaybackStatus::Playing)
     );
-    assert_eq!(effective_scalar(&world, target), 5.0);
+    assert_eq!(effective_scalar(&world, target), 104.0);
 }

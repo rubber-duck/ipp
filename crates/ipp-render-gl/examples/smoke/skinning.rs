@@ -14,6 +14,7 @@ fn insert(alias: u32, component: u16, fields: Vec<FieldWrite>) -> Command {
         entity: EntityRef::Alias(alias),
         component,
         fields,
+        adopt: false,
     }
 }
 
@@ -33,7 +34,10 @@ pub fn run<D: RenderDevice>(
 ) -> Result<()> {
     let mut world_host = ipp_core::HostRuntime::new();
     renderer.install(&mut world_host)?;
-    let world_id = world_host.create_world(Default::default())?;
+    let world_id = world_host.create_world(
+        Default::default(),
+        &super::selection::select(&[&super::selection::scene(), super::selection::SKINNING]),
+    )?;
     let mut world = world_host.world_mut(world_id).unwrap();
     for (kind, id, name) in [
         (SKELETON_TYPE, 1, "rig.skeleton"),
@@ -55,6 +59,7 @@ pub fn run<D: RenderDevice>(
         Command::Create {
             alias: 0,
             metadata: Default::default(),
+            adopt: false,
         },
         insert(
             0,
@@ -81,6 +86,7 @@ pub fn run<D: RenderDevice>(
             Command::Create {
                 alias,
                 metadata: Default::default(),
+                adopt: false,
             },
             insert(
                 alias,
@@ -125,6 +131,7 @@ pub fn run<D: RenderDevice>(
             Command::Create {
                 alias: 3,
                 metadata: Default::default(),
+                adopt: false,
             },
             insert(
                 3,
@@ -154,6 +161,19 @@ pub fn run<D: RenderDevice>(
     let b = entities[2].id;
     world.enqueue_camera_activate(camera)?;
     drop(world);
+    let selection = world_host.bind_output(
+        world_host.world_ref(world_id).unwrap(),
+        camera,
+        ipp_core::OutputKind::Camera,
+    )?;
+    world_host.set_root_output(
+        selection,
+        ipp_core::WorldViewport {
+            width: WIDTH,
+            height: HEIGHT,
+            device_pixel_ratio: 1.0,
+        },
+    )?;
     ready(renderer, &mut world_host, world_id)?;
     world = world_host.world_mut(world_id).unwrap();
     let rest = capture()?;
@@ -243,6 +263,7 @@ pub fn run<D: RenderDevice>(
     let four = capture()?;
     save(output, "skin-four-slots", &four)?;
     assert_eq!(difference(&two, &four, 0, WIDTH), 0);
+    renderer.prepare(&mut world_host, None)?;
     Ok(())
 }
 

@@ -1,14 +1,16 @@
+use super::output::LifecycleMemberStatus;
+use super::target_index::LifecycleTargetIndex;
 use super::*;
 
 const MAX_SESSIONS: usize = 128;
 const MAX_SUBSCRIPTIONS: usize = 64;
-const MAX_OBSERVATIONS: usize = 128;
 
+/// Observations wait here only until the Host drains the session, which charges them to the
+/// connection's reliable output account.
 #[derive(Default)]
 struct LifecycleSession {
     subscriptions: BTreeMap<u64, LifecycleFilter>,
     observations: VecDeque<LifecyclePublication>,
-    overflow: Option<u64>,
 }
 
 /// World-owned subscription policy; no storage references or delivery callbacks escape.
@@ -16,11 +18,18 @@ struct LifecycleSession {
 pub struct LifecyclePublisherSystem {
     sessions: BTreeMap<u64, LifecycleSession>,
     sequence: u64,
+    targets: LifecycleTargetIndex,
 }
 
 impl LifecyclePublisherSystem {
     /// Stable composition and generic command/event routing identity.
     pub const ID: SystemId = SystemId("ipp.lifecycle-publisher");
+
+    /// Copy cumulative index work without visiting members or observing World time.
+    #[cfg(any(test, feature = "diagnostics"))]
+    pub fn target_work(&self) -> LifecycleTargetWork {
+        self.targets.work
+    }
 
     fn apply(
         &mut self,
@@ -41,7 +50,7 @@ impl LifecyclePublisherSystem {
                 if *subscription == 0 || state.subscriptions.contains_key(subscription) {
                     return Err(ErrorReason::InvalidValue);
                 }
-                if state.subscriptions.len() == MAX_SUBSCRIPTIONS || state.overflow.is_some() {
+                if state.subscriptions.len() == MAX_SUBSCRIPTIONS {
                     return Err(ErrorReason::Capacity);
                 }
                 filter.validate()?;
@@ -67,27 +76,108 @@ impl LifecyclePublisherSystem {
             .sequence
             .checked_add(1)
             .expect("World lifecycle sequence exhausted");
+
         for state in self.sessions.values_mut() {
-            let matching: Vec<_> = state
-                .subscriptions
-                .iter()
-                .filter_map(|(&id, filter)| filter.matches(observation).then_some(id))
-                .collect();
-            if matching.len() > MAX_OBSERVATIONS.saturating_sub(state.observations.len()) {
-                state.overflow = Some((state.observations.len() + matching.len()) as u64);
-                state.observations.clear();
-                state.subscriptions.clear();
-                continue;
-            }
-            for subscription in matching {
-                state.observations.push_back(LifecyclePublication {
-                    subscription,
-                    sequence: self.sequence,
-                    tick,
-                    observation: observation.clone(),
-                });
+            for (&subscription, filter) in &state.subscriptions {
+                if filter.matches(observation) {
+                    state.observations.push_back(LifecyclePublication {
+                        subscription,
+                        sequence: self.sequence,
+                        tick,
+                        observation: observation.clone(),
+                    });
+                }
             }
         }
+
+        for member in self.targets.matching(observation) {
+            if let Some(output) = member.0.output.upgrade() {
+                output.observe(member.id(), self.sequence, tick, observation);
+            }
+        }
+    }
+
+    fn membership(
+        &mut self,
+        world: super::super::SystemWorldView<'_>,
+        session: u64,
+        command: &LifecycleMembershipCommand,
+    ) {
+        let Some(mut pending) = command.take() else {
+            return;
+        };
+
+        let rejection = if command.world() != world.reference() {
+            Some(LifecycleMembershipRejection::StaleWorld)
+        } else if command.session() != session {
+            Some(LifecycleMembershipRejection::StaleSession)
+        } else if command.action == LifecycleMembershipAction::Add && !command.output.0.tracking() {
+            Some(LifecycleMembershipRejection::TrackingEnded)
+        } else if command.action == LifecycleMembershipAction::Add
+            && !self.sessions.contains_key(&session)
+            && self.sessions.len() == MAX_SESSIONS
+        {
+            Some(LifecycleMembershipRejection::Capacity)
+        } else if command.action == LifecycleMembershipAction::Add {
+            pending
+                .members
+                .iter()
+                .find_map(|member| match member.0.status.get() {
+                    LifecycleMemberStatus::Pending => None,
+                    LifecycleMemberStatus::Active => {
+                        Some(LifecycleMembershipRejection::AlreadyActive)
+                    }
+                    LifecycleMemberStatus::Removed => {
+                        Some(LifecycleMembershipRejection::StaleMember)
+                    }
+                })
+        } else {
+            None
+        };
+
+        let result = if let Some(rejection) = rejection {
+            LifecycleMembershipResult::Rejected(rejection)
+        } else {
+            for member in &pending.members {
+                let lifetime = match command.action {
+                    LifecycleMembershipAction::Add => {
+                        self.sessions.entry(session).or_default();
+                        self.targets.add(session, member.clone());
+                        match member.target() {
+                            LifecycleWatchTarget::Entity(entity) => {
+                                LifecycleTargetLifetime::Entity {
+                                    live: world.entity_is_live(entity),
+                                }
+                            }
+                            LifecycleWatchTarget::Component(entity, component)
+                            | LifecycleWatchTarget::Value(entity, component, _) => {
+                                LifecycleTargetLifetime::Component {
+                                    entity_live: world.entity_is_live(entity),
+                                    incarnation: world.component_incarnation(entity, component),
+                                }
+                            }
+                        }
+                    }
+                    LifecycleMembershipAction::Remove => {
+                        self.targets.remove(session, member);
+                        LifecycleTargetLifetime::Removed
+                    }
+                };
+                pending.baselines.push(LifecycleMembershipBaseline {
+                    member: member.id(),
+                    target: member.target(),
+                    lifetime,
+                });
+            }
+
+            LifecycleMembershipResult::Applied(pending.baselines)
+        };
+
+        command.finish(
+            Some((self.sequence, world.next_tick())),
+            result,
+            pending.lease,
+        );
     }
 }
 
@@ -108,10 +198,15 @@ impl SystemFactory for LifecyclePublisherSystemFactory {
 impl System for LifecyclePublisherSystem {
     fn command(
         &mut self,
-        _: &mut SystemCommandContext<'_>,
+        context: &mut SystemCommandContext<'_>,
         session: u64,
         command: &dyn Any,
     ) -> Result<(), ErrorReason> {
+        if let Some(command) = command.downcast_ref::<LifecycleMembershipCommand>() {
+            self.membership(context.world.view(), session, command);
+            return Ok(());
+        }
+
         self.apply(
             session,
             command
@@ -150,28 +245,34 @@ impl System for LifecyclePublisherSystem {
         };
         let mut output: Vec<Box<dyn Any>> = Vec::new();
         if !state.observations.is_empty() {
-            output.push(Box::new(LifecyclePublisherOutput::Events(
+            output.push(Box::new(LifecyclePublisherOutput(
                 state.observations.drain(..).collect(),
             )));
         }
-        if let Some(dropped) = state.overflow.take() {
-            output.push(Box::new(LifecyclePublisherOutput::Overflow {
-                dropped,
-            }));
-        }
-        if state.subscriptions.is_empty() {
+        if state.subscriptions.is_empty() && !self.targets.has_session(session) {
             self.sessions.remove(&session);
         }
         output
     }
 
     fn release_session(&mut self, session: u64) {
+        for output in self.targets.release_session(session) {
+            output.retire();
+        }
         self.sessions.remove(&session);
     }
 
     fn update(&mut self, _: &mut SystemUpdateContext<'_, '_>) {}
+
+    fn observe_frame(&mut self, world: super::super::SystemWorldView<'_>, tick: u64) {
+        self.targets.observe_values(world, tick);
+    }
 }
 
 #[cfg(test)]
 #[path = "lifecycle_publisher_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "target_tests.rs"]
+mod target_tests;

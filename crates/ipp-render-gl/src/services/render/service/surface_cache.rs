@@ -1,39 +1,54 @@
-//! Whole-Surface cache orchestration: presentation planning, the repaint
-//! pre-pass, composition and end-of-frame accounting.
-//!
-//! [`RenderService::render`] plans every opted-in Surface after preparing the
-//! camera, publishes glyph demand from that plan, and then, only on frames that
-//! repaint, populates glyph atlas misses and repaints images before
-//! `begin_frame`, so the main pass is never split by target switches. Each
-//! repaint draws the Surface's ordinary primitives (retained box batches,
-//! glyph-atlas runs, curve drawings and bitmaps) with a content-space
-//! projection into its image, whose size the device uses for antialiasing. In
-//! the main pass, cached Surfaces composite their image at their painter-order
-//! slot with the current placement. A repaint that skips primitives whose
-//! resources are not resident records them, and each plan reports whether one
-//! of them is resident now, so an incomplete image repaints as soon as it can
-//! be completed. A repaint also records how many of the Surface's own text
-//! runs it drew analytically while they waited for glyph atlas population,
-//! and each plan reports whether fewer of them wait now, so the image refines
-//! to atlas text at its refresh cadence. The store and its policy are
-//! documented beside it in `render/surface_cache.rs`.
+//! Publication-fenced Canvas image planning, rasterization and lifetime.
 
+use super::super::canvas_scene::{CanvasScene, OutputContentStamp};
 use super::super::frame_statistics::RenderFrameWork;
+use super::super::retained_surfaces::CANVAS_SURFACE;
 #[cfg(any(test, feature = "diagnostics"))]
 use super::super::surface_cache::SurfaceCacheDiagnostic;
-use super::super::surface_cache::{SurfaceCacheAction, SurfaceCacheInput, SurfaceCacheTargets};
+use super::super::surface_cache::SurfaceCacheTargets;
+use super::super::surface_cache::{SurfaceCacheAction, SurfaceCacheInput};
 use super::{RenderError, RenderService};
 use crate::RenderDevice;
-use ipp_core::services::asset_management::AssetKey;
-use ipp_core::{SurfaceRenderItem, WorldContext, systems::camera};
+use ipp_core::systems::canvas::CanvasClip;
+use ipp_core::{
+    EntityId, OutputRef, SurfaceCachePolicy, WorldAttachmentToken, WorldId, WorldRef, WorldViewport,
+};
+use std::collections::BTreeMap;
 
-/// Whether a Surface resource has its data and, where it owns any, its GPU data.
-fn surface_resource_resident(world: &WorldContext<'_>, key: AssetKey) -> bool {
-    world
-        .asset_resources()
-        .get(key)
-        .and_then(|resource| resource.data())
-        .is_some_and(|data| data.graphics_ready() != Some(false))
+#[derive(Clone)]
+pub(super) struct CanvasCacheRequest {
+    pub owner: WorldRef,
+    pub anchor: EntityId,
+    pub token: WorldAttachmentToken,
+    pub extent: [f32; 2],
+    pub policy: SurfaceCachePolicy,
+    pub distance: f32,
+    pub clip: CanvasClip,
+    pub opacity: f32,
+    pub visible: bool,
+    pub interaction: bool,
+}
+
+pub(super) struct CanvasCacheState {
+    root: OutputRef,
+    request: CanvasCacheRequest,
+    stamp: OutputContentStamp,
+    painted_stamp: Option<OutputContentStamp>,
+    painted_outputs: std::collections::BTreeSet<OutputRef>,
+    /// Raster changes propagate through caches containing independently refreshed images.
+    generation: u64,
+    raster_dependencies: Vec<(OutputRef, u64)>,
+    paint_revision: u64,
+    resource_revision: u64,
+}
+
+#[derive(Default)]
+pub(super) struct CanvasCacheFrame {
+    root: Option<OutputRef>,
+    bindings: BTreeMap<OutputRef, (WorldId, EntityId)>,
+    worlds: Vec<WorldId>,
+    repainting: Option<OutputRef>,
+    time: f64,
 }
 
 /// Adapts a device to the cache store's image operations.
@@ -55,71 +70,399 @@ impl<D: RenderDevice> SurfaceCacheTargets for DeviceCacheTargets<'_, D> {
     }
 }
 
-/// Where a Surface's primitives rasterize this frame, for glyph demand.
-#[cfg(feature = "gui")]
-pub(super) enum SurfaceRaster {
-    /// Culled or composited from an unchanged image: no primitive work.
-    Skip,
-    /// Rasterize with this projection into a target of this size in pixels.
-    Draw([f32; 16], (u32, u32)),
-}
+impl<D: RenderDevice> RenderService<D> {
+    /// Plan all output domains together so budget arbitration cannot evict a planned child.
+    pub(super) fn plan_canvas_caches(
+        &mut self,
+        host: &ipp_core::HostRuntime,
+        root: OutputRef,
+        requests: &[(OutputRef, ipp_core::WorldPublicationId, CanvasCacheRequest)],
+        time: f64,
+    ) -> Result<(), RenderError> {
+        self.canvas_cache_frame = CanvasCacheFrame {
+            root: Some(root),
+            time,
+            ..Default::default()
+        };
 
-/// Projection from Surface content metres to a cache image: `x_ndc = 2x/w - 1`,
-/// `y_ndc = 2y/h - 1`, so texture row 0 holds the content top as bitmap UVs expect.
-pub(super) fn content_projection(clip_size: [f32; 2]) -> [f32; 16] {
-    [
-        2.0 / clip_size[0],
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        2.0 / clip_size[1],
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        1.0,
-        0.0,
-        -1.0,
-        -1.0,
-        0.0,
-        1.0,
-    ]
-}
+        let mut inputs = Vec::new();
+        for (selection, publication, request) in requests {
+            let scene = CanvasScene::new(host, *selection, *publication)?;
+            if request.visible
+                && let Some(cache) = self.glyph_batch_cache.get_mut(selection)
+            {
+                cache.begin_publication();
+                cache.keep_waiting_surface(
+                    CANVAS_SURFACE,
+                    &self.glyph_atlas,
+                    &mut self.glyph_frame,
+                );
+                cache.end_publication(&mut self.glyph_atlas);
+                self.populate_glyph_misses(&scene)?;
+            }
 
-/// Where the planned frame rasterizes `item`'s primitives: its image for a
-/// repaint, nothing when culled or reused, otherwise the scene.
-#[cfg(feature = "gui")]
-pub(super) fn surface_raster<T>(
-    cache: &super::super::surface_cache::SurfaceTextureCache<T>,
-    world: &WorldContext<'_>,
-    item: &SurfaceRenderItem,
-    view_projection: [f32; 16],
-    viewport: (u32, u32),
-    frustum: &[ipp_core::systems::geometry::GeometryPlane; 6],
-) -> SurfaceRaster {
-    let action = item
-        .cache
-        .and_then(|_| cache.action(world.id(), item.entity));
-    match action {
-        Some(SurfaceCacheAction::Culled | SurfaceCacheAction::Reuse) => SurfaceRaster::Skip,
-        Some(SurfaceCacheAction::Repaint) => {
-            let size = cache
-                .image(world.id(), item.entity)
-                .map_or((1, 1), |(_, size)| (size[0], size[1]));
-            SurfaceRaster::Draw(content_projection(item.clip_size), size)
+            let stamp = OutputContentStamp::read(host, *selection, *publication)?;
+            let raster_dependencies: Vec<_> = stamp
+                .outputs
+                .iter()
+                .filter(|node| node.selection != *selection)
+                .filter_map(|node| {
+                    self.canvas_caches
+                        .get(&node.selection)
+                        .map(|state| (node.selection, state.generation))
+                })
+                .collect();
+            let replaced: Vec<_> = self
+                .canvas_caches
+                .iter()
+                .filter_map(|(output, state)| {
+                    (*output != *selection
+                        && state.request.owner == request.owner
+                        && state.request.anchor == request.anchor)
+                        .then_some(*output)
+                })
+                .collect();
+            for output in replaced {
+                self.canvas_caches.remove(&output);
+                self.surface_cache.forget_surface(
+                    request.owner.id(),
+                    request.anchor,
+                    &mut DeviceCacheTargets(&mut *self.device.borrow_mut()),
+                );
+            }
+
+            if self.canvas_caches.get(selection).is_some_and(|state| {
+                state.request.owner != request.owner
+                    || state.request.anchor != request.anchor
+                    || state.request.token != request.token
+            }) {
+                let state = self
+                    .canvas_caches
+                    .remove(selection)
+                    .expect("previous cache identity");
+                self.surface_cache.forget_surface(
+                    state.request.owner.id(),
+                    state.request.anchor,
+                    &mut DeviceCacheTargets(&mut *self.device.borrow_mut()),
+                );
+            }
+
+            let state = self
+                .canvas_caches
+                .entry(*selection)
+                .or_insert_with(|| CanvasCacheState {
+                    root,
+                    request: request.clone(),
+                    stamp: stamp.clone(),
+                    painted_stamp: None,
+                    painted_outputs: Default::default(),
+                    generation: 0,
+                    raster_dependencies: Vec::new(),
+                    paint_revision: 0,
+                    resource_revision: 0,
+                });
+
+            if state.stamp != stamp || state.raster_dependencies != raster_dependencies {
+                state.paint_revision += 1;
+            }
+            state.raster_dependencies = raster_dependencies;
+            if !state.stamp.same_dependencies(&stamp)
+                || state.request.clip != request.clip
+                || state.request.opacity != request.opacity
+            {
+                state.resource_revision += 1;
+            }
+            state.root = root;
+            state.stamp = stamp;
+            state.request = request.clone();
+            let world = request.owner.id();
+            self.canvas_cache_frame
+                .bindings
+                .insert(*selection, (world, request.anchor));
+            inputs.push((
+                world,
+                SurfaceCacheInput {
+                    entity: request.anchor,
+                    policy: request.policy,
+                    clip_size: request.extent,
+                    paint_revision: state.paint_revision,
+                    resource_revision: state.resource_revision,
+                    interaction: request.interaction,
+                    missing_resident: false,
+                    text_populated: self.glyph_batch_cache.get(selection).is_some_and(|cache| {
+                        cache.unpopulated_runs(CANVAS_SURFACE, &self.glyph_atlas)
+                            < self.surface_cache.unpopulated(world, request.anchor)
+                    }),
+                    visible: request.visible
+                        && request.opacity > 0.0
+                        && request.clip[0] < request.clip[2]
+                        && request.clip[1] < request.clip[3],
+                    distance: request.distance,
+                },
+            ));
         }
-        Some(SurfaceCacheAction::Direct) | None => {
-            if world.geometry_visible(item.entity, frustum) {
-                SurfaceRaster::Draw(camera::multiply(view_projection, item.model), viewport)
-            } else {
-                SurfaceRaster::Skip
+
+        self.canvas_cache_frame.worlds = self
+            .canvas_caches
+            .values()
+            .filter(|state| state.root == root)
+            .map(|state| state.request.owner.id())
+            .collect();
+        self.canvas_cache_frame.worlds.sort_unstable();
+        self.canvas_cache_frame.worlds.dedup();
+        let mut device = self.device.borrow_mut();
+        let limit = device.surface_cache_limit();
+        self.surface_cache.plan_outputs(
+            &self.canvas_cache_frame.worlds,
+            time,
+            limit,
+            &inputs,
+            &mut DeviceCacheTargets(&mut *device),
+        )
+    }
+
+    /// Rasterize per-primitive inherited opacity; the resulting premultiplied image blits at one.
+    pub(super) fn paint_canvas_cache(
+        &mut self,
+        scene: CanvasScene<'_>,
+        stats: &mut RenderFrameWork,
+    ) -> Result<(), RenderError> {
+        let selection = scene.canvas.selection;
+        let Some(&(world, anchor)) = self.canvas_cache_frame.bindings.get(&selection) else {
+            return Ok(());
+        };
+
+        if self.surface_cache.action(world, anchor) != Some(SurfaceCacheAction::Repaint) {
+            return Ok(());
+        }
+
+        let request = self.canvas_caches[&selection].request.clone();
+        let Some((target, size)) = self.surface_cache.take_image(world, anchor) else {
+            return Ok(());
+        };
+
+        self.canvas_cache_frame.repainting = Some(selection);
+        let parent_sources = std::mem::take(&mut self.inclusions.active);
+        self.inclusions.active.collect_image = true;
+        let begun = {
+            let mut device = self.device.borrow_mut();
+            device
+                .set_surface_double_sided(true)
+                .and_then(|()| device.begin_surface_cache_target(&target))
+        };
+
+        let result = match begun {
+            Ok(()) => {
+                let extent = scene.canvas.logical_extent;
+                let mvp = super::canvas_composition::plane_matrix(
+                    [-1.0, -1.0],
+                    [2.0 / f64::from(extent[0]), 2.0 / f64::from(extent[1])],
+                );
+                let before = stats.summary.failed_draw_calls;
+                let drawn = mvp.and_then(|mvp| {
+                    self.draw_canvas(
+                        &scene,
+                        mvp,
+                        request.clip,
+                        request.opacity,
+                        WorldViewport {
+                            width: size[0],
+                            height: size[1],
+                            device_pixel_ratio: 1.0,
+                        },
+                        stats,
+                    )
+                });
+
+                let finished = self.device.borrow_mut().end_surface_cache_target();
+                drawn.and(finished).and({
+                    if stats.summary.failed_draw_calls != before || self.surface_gui_unretained {
+                        Err(RenderError::UnavailableOutput)
+                    } else {
+                        Ok(())
+                    }
+                })
+            }
+            Err(error) => Err(error),
+        };
+
+        let restored = self.device.borrow_mut().set_surface_double_sided(false);
+        let result = result.and(restored);
+        let current_image = result.is_ok() && !self.inclusions.active.stale_image;
+        let painted_outputs = std::mem::take(&mut self.inclusions.active.image_outputs);
+        self.inclusions.active = parent_sources;
+        let state = self
+            .canvas_caches
+            .get_mut(&selection)
+            .expect("painted cache state");
+        state.painted_stamp = current_image.then(|| state.stamp.clone());
+        state.painted_outputs = painted_outputs;
+        self.canvas_cache_frame.repainting = None;
+        self.surface_cache.put_image(world, anchor, target, size);
+        self.canvas_caches
+            .get_mut(&selection)
+            .expect("painted cache state")
+            .generation += 1;
+        match result {
+            Ok(()) => {
+                let unpopulated = self.glyph_batch_cache.get(&selection).map_or(0, |cache| {
+                    cache.unpopulated_runs(CANVAS_SURFACE, &self.glyph_atlas)
+                });
+
+                self.surface_cache.repainted(
+                    world,
+                    anchor,
+                    self.canvas_cache_frame.time,
+                    &self.surface_missing,
+                    unpopulated,
+                );
+                Ok(())
+            }
+            Err(error) => {
+                self.surface_cache.failed(
+                    world,
+                    anchor,
+                    self.canvas_cache_frame.time,
+                    &mut DeviceCacheTargets(&mut *self.device.borrow_mut()),
+                );
+                if error == RenderError::ContextLost {
+                    Err(error)
+                } else {
+                    Ok(())
+                }
             }
         }
     }
-}
 
-impl<D: RenderDevice> RenderService<D> {
+    pub(super) fn draw_cached_canvas(
+        &mut self,
+        scene: &CanvasScene<'_>,
+        mvp: &[f32; 16],
+        clip: CanvasClip,
+        opacity: f32,
+        stats: &mut RenderFrameWork,
+    ) -> Result<bool, RenderError> {
+        let selection = scene.canvas.selection;
+        if self.canvas_cache_frame.repainting == Some(selection) {
+            return Ok(false);
+        }
+
+        let Some(&(world, anchor)) = self.canvas_cache_frame.bindings.get(&selection) else {
+            return Ok(false);
+        };
+
+        if !matches!(
+            self.surface_cache.action(world, anchor),
+            Some(SurfaceCacheAction::Reuse | SurfaceCacheAction::Repaint)
+        ) {
+            return Ok(false);
+        }
+
+        let request = &self.canvas_caches[&selection].request;
+        if request.clip != clip || request.opacity != opacity {
+            return Ok(false);
+        }
+
+        self.surface_cache_program()?;
+        let Some((target, _)) = self.surface_cache.image(world, anchor) else {
+            return Ok(false);
+        };
+
+        self.device.borrow_mut().set_surface_double_sided(true)?;
+        let drawn = self.device.borrow_mut().draw_surface_cache(
+            self.surface_cache_program
+                .as_ref()
+                .expect("composite program"),
+            target,
+            mvp,
+            &scene.canvas.logical_extent,
+            &scene.root_clip(),
+            1.0,
+        );
+        let restored = self.device.borrow_mut().set_surface_double_sided(false);
+        match drawn.and(restored) {
+            Ok(()) => {
+                self.surface_cache
+                    .presented(world, anchor, self.canvas_cache_frame.time);
+                let state = &self.canvas_caches[&selection];
+                let current_image = state.painted_stamp.as_ref() == Some(&state.stamp);
+                self.inclusions.active.stale_image |= !current_image;
+                if current_image && self.inclusions.observing() {
+                    let stale_parent = std::mem::take(&mut self.inclusions.active.stale_image);
+                    for (output, publication) in super::super::canvas_scene::output_order(
+                        scene.host,
+                        selection,
+                        scene.publication.id,
+                    )? {
+                        if state.painted_outputs.contains(&output) {
+                            self.inclusions.record(output, publication);
+                        }
+                    }
+                    self.inclusions.active.stale_image = stale_parent;
+                }
+                stats.draw(2);
+                Ok(true)
+            }
+            Err(error) => {
+                self.surface_cache.failed(
+                    world,
+                    anchor,
+                    self.canvas_cache_frame.time,
+                    &mut DeviceCacheTargets(&mut *self.device.borrow_mut()),
+                );
+                if error == RenderError::ContextLost {
+                    Err(error)
+                } else {
+                    Ok(false)
+                }
+            }
+        }
+    }
+
+    pub(super) fn finish_canvas_caches(&mut self, completed: bool) {
+        let frame = &self.canvas_cache_frame;
+        for world in &frame.worlds {
+            self.surface_cache.finish_frame(
+                *world,
+                frame.time,
+                completed,
+                &mut DeviceCacheTargets(&mut *self.device.borrow_mut()),
+            );
+        }
+
+        if completed {
+            self.canvas_caches.retain(|selection, state| {
+                Some(state.root) != frame.root || frame.bindings.contains_key(selection)
+            });
+        }
+    }
+
+    pub(super) fn retain_canvas_cache_outputs(
+        &mut self,
+        outputs: &std::collections::BTreeSet<OutputRef>,
+    ) {
+        let retired: Vec<_> = self
+            .canvas_caches
+            .iter()
+            .filter_map(|(selection, state)| {
+                (!outputs.contains(selection) || !outputs.contains(&state.root))
+                    .then_some(*selection)
+            })
+            .collect();
+        for selection in retired {
+            let state = self
+                .canvas_caches
+                .remove(&selection)
+                .expect("retired Canvas cache");
+            self.surface_cache.forget_surface(
+                state.request.owner.id(),
+                state.request.anchor,
+                &mut DeviceCacheTargets(&mut *self.device.borrow_mut()),
+            );
+            self.canvas_cache_frame.bindings.remove(&selection);
+        }
+    }
+
     /// Append the cache state of one World's opted-in Surfaces after the last
     /// completed frame, in entity order. Read-only; it never changes presentation.
     #[cfg(any(test, feature = "diagnostics"))]
@@ -148,329 +491,30 @@ impl<D: RenderDevice> RenderService<D> {
         self.surface_cache.budget()
     }
 
-    /// Select direct, reused or repainted presentation for every opted-in
-    /// Surface and allocate the images this frame repaints.
-    ///
-    /// Frames without opted-in Surfaces or entries make no cache calls.
-    pub(super) fn plan_surface_caches(
-        &mut self,
-        world: &WorldContext<'_>,
-        surfaces: &[SurfaceRenderItem],
-        view_projection: [f32; 16],
-    ) -> Result<(), RenderError> {
-        let mut inputs = std::mem::take(&mut self.surface_cache_inputs);
-        inputs.clear();
-        if surfaces.iter().any(|item| item.cache.is_some()) {
-            let frustum = ipp_core::systems::geometry::frustum_planes(view_projection);
-            let eye = world
-                .active_camera()
-                .and_then(|camera| world.world_matrix(camera).ok())
-                .map(|matrix| [matrix[12], matrix[13], matrix[14]]);
-            for item in surfaces {
-                let Some(policy) = item.cache else {
-                    continue;
-                };
-
-                // An unknown eye selects direct presentation.
-                let distance = eye.map_or(f32::NAN, |eye| {
-                    let d = [
-                        item.anchor[0] - eye[0],
-                        item.anchor[1] - eye[1],
-                        item.anchor[2] - eye[2],
-                    ];
-                    (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt()
-                });
-                inputs.push(SurfaceCacheInput {
-                    entity: item.entity,
-                    policy,
-                    clip_size: item.clip_size,
-                    paint_revision: item.paint_revision,
-                    resource_revision: item.resource_revision,
-                    #[cfg(feature = "gui")]
-                    interaction: item.interaction,
-                    #[cfg(not(feature = "gui"))]
-                    interaction: false,
-                    missing_resident: self
-                        .surface_cache
-                        .missing(world.id(), item.entity)
-                        .iter()
-                        .any(|&key| surface_resource_resident(world, key)),
-                    #[cfg(feature = "gui")]
-                    text_populated: {
-                        let painted = self.surface_cache.unpopulated(world.id(), item.entity);
-                        painted > 0 && self.unpopulated_runs(world.id(), item.entity) < painted
-                    },
-                    #[cfg(not(feature = "gui"))]
-                    text_populated: false,
-                    visible: world.geometry_visible(item.entity, &frustum),
-                    distance,
-                });
-            }
-        }
-
-        let result = if inputs.is_empty() && self.surface_cache.is_empty() {
-            Ok(())
-        } else {
-            let limit = if inputs.is_empty() {
-                0
-            } else {
-                self.device.borrow().surface_cache_limit()
-            };
-            let mut device = self.device.borrow_mut();
-            self.surface_cache.plan(
-                world.id(),
-                world.time(),
-                limit,
-                &inputs,
-                &mut DeviceCacheTargets(&mut *device),
-            )
-        };
-
-        self.surface_cache_inputs = inputs;
-        result?;
-
-        if self.surface_cache.composites_planned(world.id()) {
-            self.surface_cache_program()?;
-        }
-
-        Ok(())
-    }
-
-    /// Whether this frame repaints any cache image, which moves glyph atlas
-    /// population and the repaints ahead of `begin_frame`.
-    pub(super) fn surface_repaints_planned(&self, world: ipp_core::WorldId) -> bool {
-        self.surface_cache.repaints_planned(world)
-    }
-
-    /// Repaint every planned image before `begin_frame`, in item order.
-    ///
-    /// Recoverable failures, including a repaint without usable retained GUI
-    /// storage, release the image and present that Surface directly; context
-    /// loss fails the frame. The returned work seeds the
-    /// frame's work.
-    pub(super) fn repaint_surface_caches(
-        &mut self,
-        world: &WorldContext<'_>,
-        surfaces: &[SurfaceRenderItem],
-        instances: &mut Vec<super::super::device::SurfacePathInstance>,
-    ) -> Result<RenderFrameWork, RenderError> {
-        let mut stats = RenderFrameWork::default();
-        let world_id = world.id();
-        let time = world.time();
-        for item in surfaces {
-            if item.cache.is_none()
-                || self.surface_cache.action(world_id, item.entity)
-                    != Some(SurfaceCacheAction::Repaint)
-            {
-                continue;
-            }
-
-            self.surface_missing.clear();
-            // Device order: double-sided state, begin, draw, and always end.
-            let prepared = self
-                .prepare_surface_program()
-                .and_then(|()| self.device.borrow_mut().set_surface_double_sided(true));
-            let begun = prepared.and_then(|()| {
-                let (target, _) = self
-                    .surface_cache
-                    .image(world_id, item.entity)
-                    .expect("planned repaint has an image");
-                self.device.borrow_mut().begin_surface_cache_target(target)
-            });
-            let drawn = begun.clone().and_then(|()| {
-                self.draw_surface_primitives(
-                    world,
-                    item,
-                    &content_projection(item.clip_size),
-                    &mut stats,
-                    instances,
-                )
-            });
-            // An end error means the image is incomplete.
-            let ended = self.device.borrow_mut().end_surface_cache_target();
-            let restored = self.device.borrow_mut().set_surface_double_sided(false);
-
-            // Context loss anywhere outranks an earlier recoverable failure.
-            let outcomes = [begun, drawn, ended, restored];
-            let outcome = if outcomes.contains(&Err(RenderError::ContextLost)) {
-                Err(RenderError::ContextLost)
-            } else {
-                outcomes.into_iter().collect::<Result<(), _>>()
-            };
-            // An image without the Surface's retained GUI work would stay incomplete
-            // with nothing to report its recovery, so the Surface presents directly,
-            // retrying its GUI storage, until the cache retry interval ends.
-            #[cfg(feature = "gui")]
-            let unretained = self.surface_gui_unretained;
-            #[cfg(not(feature = "gui"))]
-            let unretained = false;
-            match outcome {
-                Ok(()) if !unretained => {
-                    // Skipped primitives leave the image incomplete until their
-                    // resources are resident. Text runs still waiting for atlas
-                    // population refine once some of them are populated.
-                    #[cfg(feature = "gui")]
-                    let unpopulated = if self.surface_analytic_text {
-                        self.unpopulated_runs(world_id, item.entity)
-                    } else {
-                        0
-                    };
-                    #[cfg(not(feature = "gui"))]
-                    let unpopulated = 0;
-                    self.surface_cache.repainted(
-                        world_id,
-                        item.entity,
-                        time,
-                        &self.surface_missing,
-                        unpopulated,
-                    );
-                }
-                outcome => {
-                    let mut device = self.device.borrow_mut();
-                    self.surface_cache.failed(
-                        world_id,
-                        item.entity,
-                        time,
-                        &mut DeviceCacheTargets(&mut *device),
-                    );
-                    if outcome == Err(RenderError::ContextLost) {
-                        return Err(RenderError::ContextLost);
-                    }
-                }
-            }
-        }
-
-        Ok(stats)
-    }
-
-    /// Text runs of a Surface that draw analytically only until glyph atlas
-    /// population reaches them.
-    #[cfg(feature = "gui")]
-    fn unpopulated_runs(&self, world: ipp_core::WorldId, entity: ipp_core::EntityId) -> u32 {
-        self.glyph_batch_cache
-            .get(&world)
-            .map_or(0, |cache| cache.unpopulated_runs(entity, &self.glyph_atlas))
-    }
-
-    /// Composite `item`'s image at its current placement when the plan caches
-    /// it. Returns `false` when the Surface must be drawn directly instead,
-    /// including after a recoverable composite failure.
-    pub(super) fn composite_surface_cache(
-        &mut self,
-        world: &WorldContext<'_>,
-        item: &SurfaceRenderItem,
-        view_projection: [f32; 16],
-        stats: &mut RenderFrameWork,
-    ) -> Result<bool, RenderError> {
-        let world_id = world.id();
-        let action = item
-            .cache
-            .and_then(|_| self.surface_cache.action(world_id, item.entity));
-        if !matches!(
-            action,
-            Some(SurfaceCacheAction::Reuse | SurfaceCacheAction::Repaint)
-        ) {
-            return Ok(false);
-        }
-
-        let started = self.device.borrow_mut().set_surface_double_sided(true);
-        let drawn = started.and_then(|()| {
-            let program = self
-                .surface_cache_program
-                .as_ref()
-                .expect("planned composites create their program");
-            let (target, _) = self
-                .surface_cache
-                .image(world_id, item.entity)
-                .expect("planned composite has an image");
-            self.device.borrow_mut().draw_surface_cache(
-                program,
-                target,
-                &camera::multiply(view_projection, item.model),
-                &item.clip_size,
-            )
-        });
-        let restored = self.device.borrow_mut().set_surface_double_sided(false);
-
-        let outcome = if restored == Err(RenderError::ContextLost) {
-            restored
-        } else {
-            drawn.and(restored)
-        };
-        match outcome {
-            Ok(()) => {
-                stats.draw(2);
-                self.surface_cache
-                    .presented(world_id, item.entity, world.time());
-                // A repainted Surface used its retained batches this frame; a
-                // reused one keeps them like a culled Surface.
-                if action == Some(SurfaceCacheAction::Repaint)
-                    && let Some(submitted) = &mut self.submitted_surfaces
-                {
-                    submitted.insert(item.entity);
-                }
-
-                Ok(true)
-            }
-            Err(RenderError::ContextLost) => Err(RenderError::ContextLost),
-            Err(_) => {
-                let mut device = self.device.borrow_mut();
-                self.surface_cache.failed(
-                    world_id,
-                    item.entity,
-                    world.time(),
-                    &mut DeviceCacheTargets(&mut *device),
-                );
-                Ok(false)
-            }
-        }
-    }
-
-    /// Finish the World's cache frame.
-    ///
-    /// A `completed` planned frame releases entries of Surfaces no longer live
-    /// or opted in and idle images. Failed and cameraless frames keep every
-    /// entry, as retained batches do. Returns whether the plan completed.
-    pub(super) fn finish_surface_caches(
-        &mut self,
-        world: &WorldContext<'_>,
-        completed: bool,
-    ) -> bool {
-        let mut device = self.device.borrow_mut();
-        self.surface_cache.finish_frame(
-            world.id(),
-            world.time(),
-            completed,
-            &mut DeviceCacheTargets(&mut *device),
-        )
-    }
-
-    /// Publish a completed plan's counts and context-wide cache residency.
-    #[cfg(any(test, feature = "diagnostics"))]
-    pub(super) fn publish_surface_cache_statistics(
-        &self,
-        planned: bool,
-        statistics: &mut crate::RenderStatistics,
-    ) {
-        if planned {
-            let counts = self.surface_cache.counts();
-            statistics.surface_cache_repaints = counts.repaints;
-            statistics.surface_cache_reuses = counts.reuses;
-            statistics.surface_cache_direct = counts.direct;
-            statistics.surface_cache_fallbacks = counts.fallbacks;
-            statistics.surface_cache_animated = counts.animated;
-            statistics.surface_cache_allocations = counts.allocations;
-        }
-
-        (
-            statistics.surface_cache_entries,
-            statistics.surface_cache_resident_bytes,
-        ) = self.surface_cache.resident();
-    }
-
-    /// Release every cache image of one World.
+    /// Release this World's retained images.
     pub(super) fn forget_surface_caches(&mut self, world: ipp_core::WorldId) {
+        let selections: Vec<_> = self
+            .canvas_caches
+            .iter()
+            .filter_map(|(selection, state)| {
+                (state.request.owner.id() == world || state.stamp.contains_world(world))
+                    .then_some(*selection)
+            })
+            .collect();
         let mut device = self.device.borrow_mut();
+        for selection in selections {
+            let state = self
+                .canvas_caches
+                .remove(&selection)
+                .expect("matching cache");
+            self.surface_cache.forget_surface(
+                state.request.owner.id(),
+                state.request.anchor,
+                &mut DeviceCacheTargets(&mut *device),
+            );
+            self.canvas_cache_frame.bindings.remove(&selection);
+        }
+
         self.surface_cache
             .forget_world(world, &mut DeviceCacheTargets(&mut *device));
     }
@@ -478,6 +522,8 @@ impl<D: RenderDevice> RenderService<D> {
     /// Release every cache image and the composite program after unload or
     /// context loss; the budget survives.
     pub(super) fn clear_surface_caches(&mut self) {
+        self.canvas_caches.clear();
+        self.canvas_cache_frame = Default::default();
         let mut device = self.device.borrow_mut();
         self.surface_cache
             .clear(&mut DeviceCacheTargets(&mut *device));

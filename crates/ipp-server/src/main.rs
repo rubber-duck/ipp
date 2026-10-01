@@ -7,6 +7,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut bind = "127.0.0.1:9231".parse::<SocketAddr>()?;
     let mut file_root = None;
     let mut file_prefix = None;
+    let mut asset_cache_bytes = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -22,9 +23,16 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         .ok_or("--file-prefix requires a literal prefix")?,
                 )
             }
+            "--asset-cache-bytes" => {
+                asset_cache_bytes = Some(
+                    args.next()
+                        .ok_or("--asset-cache-bytes requires a byte count")?
+                        .parse::<usize>()?,
+                )
+            }
             "--help" | "-h" => {
                 println!(
-                    "ipp-server [--bind LOOPBACK_IP:PORT] [--file-root DIRECTORY --file-prefix PREFIX]\n\nBinary IPP WebSocket sessions; use port 0 for an ephemeral endpoint."
+                    "ipp-server [--bind LOOPBACK_IP:PORT] [--file-root DIRECTORY --file-prefix PREFIX] [--asset-cache-bytes BYTES]\n\nBinary IPP WebSocket sessions; use port 0 for an ephemeral endpoint. The Host keeps up to 64 MiB of unused completed assets by default; --asset-cache-bytes sets that target and 0 evicts on release."
                 );
                 return Ok(());
             }
@@ -50,7 +58,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         _ => return Err("--file-root and --file-prefix must be provided together".into()),
     };
     let listener = TcpListener::bind(bind)?;
-    ipp_server::websocket::serve(listener, file_access, |address| {
+    let options = ipp_server::websocket::ServeOptions {
+        file_access,
+        asset_cache_bytes,
+    };
+    ipp_server::websocket::serve(listener, options, |address| {
         println!("{{\"event\":\"ready\",\"url\":\"ws://{address}\"}}");
         io::stdout().flush()
     })?;

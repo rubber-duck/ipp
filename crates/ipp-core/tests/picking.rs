@@ -2,6 +2,7 @@
 
 mod support;
 use support::WorldTestDriver;
+use support::selection::{CAMERA, RENDER, select};
 
 use ipp_core::{
     AssetResourceStatus, Batch, Command, ComponentValue, EntityId, EntityMetadata, EntityRef,
@@ -33,6 +34,7 @@ fn create(
             symbolic_id: Some(name.into()),
             classes: vec![],
         },
+        adopt: false,
     }];
     operations.extend(
         values
@@ -73,7 +75,9 @@ fn target(
 }
 
 fn setup(host: &mut ipp_core::HostRuntime) -> (ipp_core::WorldContext<'_>, EntityId) {
-    let world_id = host.create_world(ipp_core::WorldLimits::default()).unwrap();
+    let world_id = host
+        .create_world(ipp_core::WorldLimits::default(), &select(&[CAMERA, RENDER]))
+        .unwrap();
     let mut world = host.world_mut(world_id).unwrap();
     world.register_stream_resource_provider("https").unwrap();
     let camera = camera(
@@ -576,12 +580,12 @@ fn picking_loads_shared_geometry_even_when_renderer_drives_other_resources() {
     assert!(
         requests
             .iter()
-            .any(|request| request.source == "https://fixture/visual"),
+            .any(|request| request.source == std::sync::Arc::<str>::from("https://fixture/visual")),
         "automatic visual bounds also request CPU mesh metadata"
     );
     let geometry = requests
         .iter()
-        .find(|request| request.source == "https://fixture/shared")
+        .find(|request| request.source == std::sync::Arc::<str>::from("https://fixture/shared"))
         .unwrap();
     world.complete_resource(geometry.id, Ok(ring())).unwrap();
     world.enqueue_geometry_pick(100, query(0.4, 0.6)).unwrap();
@@ -594,25 +598,23 @@ fn picking_loads_shared_geometry_even_when_renderer_drives_other_resources() {
         report
             .resource_changes
             .iter()
-            .any(|resource| resource.source == "https://fixture/shared"
+            .any(|resource| resource.source
+                == std::sync::Arc::<str>::from("https://fixture/shared")
                 && resource.status == AssetResourceStatus::Loaded)
     );
     assert!(world.take_asset_events().unwrap().is_empty());
     let snapshots = world.resource_snapshots();
     assert_eq!(snapshots.len(), 2);
-    assert!(
-        snapshots
-            .iter()
-            .any(|resource| resource.source == "https://fixture/visual"
-                && resource.status == AssetResourceStatus::Start)
-    );
+    assert!(snapshots.iter().any(|resource| resource.source
+        == std::sync::Arc::<str>::from("https://fixture/visual")
+        && resource.status == AssetResourceStatus::Start));
 }
 
 #[test]
 fn query_validation_is_correlated_and_observes_surface_size_at_evaluation() {
     let mut world_host = ipp_core::HostRuntime::new();
     let world_id = world_host
-        .create_world(ipp_core::WorldLimits::default())
+        .create_world(ipp_core::WorldLimits::default(), &select(&[CAMERA, RENDER]))
         .unwrap();
     let mut world = world_host.world_mut(world_id).unwrap();
     assert_eq!(
@@ -641,58 +643,6 @@ fn query_validation_is_correlated_and_observes_surface_size_at_evaluation() {
     );
     world.set_render_viewport(None);
     assert_eq!(pick(&mut world, query(0.5, 0.5)), Ok(None));
-}
-
-#[test]
-fn effective_overlay_transforms_control_interaction_without_changing_base() {
-    use ipp_core::{
-        ComponentOverlayMode, EntityOverlayMode, FieldValue, FieldWrite, StateOverlayRef,
-    };
-    let mut fixture_host = ipp_core::HostRuntime::new();
-    let (mut world, _) = setup(&mut fixture_host);
-    let entity = target(&mut world, unit_geometry(), Transform::default());
-    let name = world.inspect(entity).unwrap().metadata.symbolic_id.unwrap();
-    let report = run(
-        &mut world,
-        vec![
-            Command::CreateStateOverlayOwner {
-                alias: 0,
-            },
-            Command::AttachEntityOverlayBinding {
-                owner: StateOverlayRef::Alias(0),
-                alias: 1,
-                symbolic_id: name,
-                mode: EntityOverlayMode::Bound,
-            },
-            Command::AttachComponentStateOverlay {
-                owner: StateOverlayRef::Alias(0),
-                binding: StateOverlayRef::Alias(1),
-                alias: 2,
-                component: ComponentValue::TRANSFORM,
-                mode: ComponentOverlayMode::Bound,
-                fields: vec![FieldWrite {
-                    offset: std::mem::offset_of!(Transform, x) as u32,
-                    value: FieldValue::F32(1.0),
-                }],
-            },
-        ],
-    );
-    let owner = StateOverlayRef::Handle(report.outcomes[0].state_overlays[0].id);
-    assert_eq!(pick(&mut world, query(0.5, 0.5)), Ok(None));
-    assert_eq!(
-        pick(&mut world, query(0.75, 0.5)).unwrap().unwrap().entity,
-        entity
-    );
-    run(
-        &mut world,
-        vec![Command::ReleaseStateOverlayOwner {
-            owner,
-        }],
-    );
-    assert_eq!(
-        pick(&mut world, query(0.5, 0.5)).unwrap().unwrap().entity,
-        entity
-    );
 }
 
 #[test]

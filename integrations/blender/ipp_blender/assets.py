@@ -4,6 +4,8 @@ import json
 import math
 import struct
 
+# The add-on ships without a generated contract, so this copies ipp-core's MAX_JOINTS
+# (services/asset_management/mod.rs); tools/check_repo.py compares the two.
 MAX_JOINTS = 32
 
 

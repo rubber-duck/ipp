@@ -47,10 +47,9 @@ test("Transform Euler conversion matches intrinsic XYZ axis rotations", () => {
   ];
   for (const angles of rotations) {
     const [rx, ry, rz] = angles;
-    const result = Transform({ rx, ry, rz, x: 7, bound: true });
+    const result = Transform({ rx, ry, rz, x: 7 });
     assert.equal(result.type, "ipp-transform");
     assert.equal(result.props.x, 7);
-    assert.equal(result.props.bound, true);
     for (const key of ["rx", "ry", "rz"])
       assert.ok(!Object.hasOwn(result.props, key));
     for (const key of ["qx", "qy", "qz", "qw"])

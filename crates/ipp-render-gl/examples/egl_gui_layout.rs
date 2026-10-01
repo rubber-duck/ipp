@@ -1,9 +1,11 @@
 //! Real Host/World/RenderService GLES scenario for retained GUI paint.
 //!
-//! The scenario exercises evaluated clip intersection, empty-clip submission
-//! suppression, painter order, externally delivered font/drawing/bitmap
-//! assets, independent named-part paint, and RenderService device replacement
-//! through the production Surface path.
+//! A camera World places a Surface anchor whose attachment presents the Canvas
+//! output of a child World. Ordinary layout, Canvas leaf and control entities in
+//! that child exercise evaluated clip intersection, empty-clip submission
+//! suppression, painter order and core reordering, externally delivered
+//! font/drawing/bitmap assets, control part overrides above a shared theme, and
+//! RenderService device replacement.
 
 #[cfg(target_os = "linux")]
 #[allow(dead_code)]
@@ -11,9 +13,6 @@ mod smoke;
 
 #[cfg(target_os = "linux")]
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
-
-#[cfg(target_os = "linux")]
-const SESSION: u64 = 1;
 
 #[cfg(target_os = "linux")]
 const BACKGROUND: [u8; 4] = [10, 14, 20, 255];
@@ -38,50 +37,68 @@ fn check(frame: &[u8], x: u32, y: u32, expected: [u8; 4], label: &str) -> Result
     }
 }
 
+/// Queue one ordered batch and apply it in a Host frame.
 #[cfg(target_os = "linux")]
-fn step(host: &mut ipp_core::HostRuntime, world: ipp_core::WorldId) -> Result<()> {
-    host.world_mut(world).unwrap().step(0.0)?;
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
-#[allow(clippy::too_many_arguments)]
-fn insert_node(
+fn apply(
     host: &mut ipp_core::HostRuntime,
     world: ipp_core::WorldId,
-    entity: ipp_core::EntityId,
-    root_incarnation: u64,
-    id: u32,
-    parent: Option<u32>,
-    index: u32,
-    data: ipp_core::GuiNodeData,
-    values: ipp_core::GuiNodeDataRow,
-    style: ipp_core::GuiNodeStyle,
-) -> Result<()> {
-    host.world_mut(world).unwrap().enqueue_gui_command(
-        SESSION,
-        ipp_core::GuiCommand::InsertNode {
-            entity,
-            root_incarnation,
-            id: ipp_core::GuiNodeId(id),
-            parent: parent.map(ipp_core::GuiNodeId),
-            index,
-            data,
-            values,
-            style,
-        },
-    )?;
-    Ok(())
+    operations: Vec<ipp_core::Command>,
+) -> Result<Vec<(u32, ipp_core::EntityId)>> {
+    host.world_mut(world)
+        .ok_or_else(|| format!("unknown World {world:?}"))?
+        .enqueue(ipp_core::Batch {
+            id: 1,
+            operations,
+        })?;
+
+    let update = host
+        .frame(0.0)?
+        .worlds
+        .remove(&world)
+        .ok_or_else(|| format!("World {world:?} was not updated"))?
+        .map_err(|reason| format!("World {world:?} update: {reason:?}"))?;
+    let outcome = update
+        .outcomes
+        .into_iter()
+        .next()
+        .ok_or_else(|| format!("World {world:?} reported no batch outcome"))?;
+
+    Ok(outcome
+        .result
+        .map_err(|error| format!("GUI batch failed: {error:?}"))?)
 }
 
+/// Create one entity with `values`, optionally as the last child of `parent`.
 #[cfg(target_os = "linux")]
-fn colored(width: f32, height: f32, color: [f32; 4]) -> ipp_core::GuiNodeStyle {
-    ipp_core::GuiNodeStyle {
-        width: Some(width),
-        height: Some(height),
-        background_color: Some(color),
-        ..Default::default()
+fn create(
+    host: &mut ipp_core::HostRuntime,
+    world: ipp_core::WorldId,
+    parent: Option<ipp_core::EntityId>,
+    values: Vec<ipp_core::ComponentValue>,
+) -> Result<ipp_core::EntityId> {
+    use ipp_core::{Command, EntityPlacementRef, EntityRef};
+
+    let mut operations = vec![Command::Create {
+        alias: 0,
+        metadata: Default::default(),
+        adopt: false,
+    }];
+    operations.extend(
+        values
+            .into_iter()
+            .map(|value| Command::insert_value(EntityRef::Alias(0), value)),
+    );
+    if let Some(parent) = parent {
+        operations.push(Command::PlaceEntity {
+            entity: EntityRef::Alias(0),
+            placement: EntityPlacementRef {
+                parent: Some(EntityRef::Handle(parent)),
+                before: None,
+            },
+        });
     }
+
+    Ok(apply(host, world, operations)?[0].1)
 }
 
 #[cfg(target_os = "linux")]
@@ -100,48 +117,38 @@ fn render(
     .map_err(Into::into)
 }
 
+/// The latest completed publication of the attached Canvas output.
+#[cfg(target_os = "linux")]
+fn canvas_publication(
+    host: &ipp_core::HostRuntime,
+    output: ipp_core::OutputRef,
+) -> Option<ipp_core::systems::canvas::CanvasPublication> {
+    host.output(host.latest_publication(output.world().id())?, output)?
+        .data::<ipp_core::systems::canvas::CanvasPublication>()
+        .cloned()
+}
+
 #[cfg(target_os = "linux")]
 fn gui_assets_are_prepared(
-    host: &mut ipp_core::HostRuntime,
-    world: ipp_core::WorldId,
-    panel: ipp_core::EntityId,
+    host: &ipp_core::HostRuntime,
+    canvas: ipp_core::OutputRef,
     sources: &[ipp_core::services::asset_management::AssetSource],
 ) -> bool {
-    let world = host.world_mut(world).unwrap();
     let Some(keys) = sources
         .iter()
-        .map(|source| world.asset_resources().find(source))
+        .map(|source| host.asset_resources().find(source))
         .collect::<Option<Vec<_>>>()
     else {
         return false;
     };
-    let prepared: std::collections::BTreeSet<_> = world
-        .surface_render_items()
-        .iter()
-        .find(|item| item.entity == panel)
-        .into_iter()
-        .flat_map(|item| &item.primitives)
-        .filter_map(|primitive| match primitive {
-            ipp_core::SurfaceRenderPrimitive::Glyphs {
-                font,
-                ..
-            } => Some(font.key),
-            ipp_core::SurfaceRenderPrimitive::Drawing {
-                drawing,
-                ..
-            } => Some(drawing.key),
-            ipp_core::SurfaceRenderPrimitive::Bitmap {
-                bitmap,
-                ..
-            } => Some(bitmap.key),
-            ipp_core::SurfaceRenderPrimitive::Box {
-                ..
-            } => None,
-        })
-        .collect();
+    let Some(publication) = canvas_publication(host, canvas) else {
+        return false;
+    };
+
+    let prepared: std::collections::BTreeSet<_> = publication.resources().collect();
     keys.into_iter().all(|key| {
         prepared.contains(&key)
-            && world.asset_resources().get(key).is_some_and(|resource| {
+            && host.asset_resources().get(key).is_some_and(|resource| {
                 resource.data().is_some() && resource.graphics_ready() == Some(true)
             })
     })
@@ -152,9 +159,9 @@ fn settle_assets(
     renderer: &mut ipp_render_gl::RenderService<ipp_render_gl::GlesRenderDevice>,
     host: &mut ipp_core::HostRuntime,
     world: ipp_core::WorldId,
-    panel: ipp_core::EntityId,
+    canvas: ipp_core::OutputRef,
     sources: &[ipp_core::services::asset_management::AssetSource],
-    payloads: &std::collections::BTreeMap<String, Vec<u8>>,
+    payloads: &std::collections::BTreeMap<std::sync::Arc<str>, Vec<u8>>,
 ) -> Result<crate::smoke::frame_stats::FrameStats> {
     let progress_limit = payloads
         .values()
@@ -174,26 +181,56 @@ fn settle_assets(
                 .ok_or_else(|| format!("unexpected GUI asset request {}", request.source))?;
             host.complete_resource(request.id, Ok(bytes.clone()))?;
         }
-        step(host, world)?;
+
         last = render(renderer, host, world)?;
-        if gui_assets_are_prepared(host, world, panel, sources) && last.failed_draw_calls == 0 {
+        if gui_assets_are_prepared(host, canvas, sources) && last.failed_draw_calls == 0 {
             return Ok(last);
         }
     }
     Err(format!("GUI assets did not settle through RenderService: {last:?}").into())
 }
 
+/// The published paint target of `entity`'s first primitive in painter order.
+#[cfg(target_os = "linux")]
+fn paint_target(
+    publication: &ipp_core::systems::canvas::CanvasPublication,
+    entity: ipp_core::EntityId,
+) -> Option<(usize, ipp_core::systems::canvas::CanvasTarget)> {
+    use ipp_core::systems::canvas::CanvasPaintEntry;
+
+    publication
+        .entries
+        .iter()
+        .enumerate()
+        .find_map(|(index, entry)| match entry.as_ref() {
+            CanvasPaintEntry::Primitive {
+                primitive,
+                ..
+            } if primitive.style().identity.target.entity == entity => {
+                Some((index, primitive.style().identity.target))
+            }
+            _ => None,
+        })
+}
+
 #[cfg(target_os = "linux")]
 fn main() -> Result<()> {
-    use ipp_core::components::{Camera, Hierarchy, Transform};
+    use ipp_core::components::rows::Rows;
+    use ipp_core::components::{
+        Camera, CanvasBox, CanvasDrawing, CanvasStyle, GuiButton, GuiFont, GuiLayout, GuiSkin,
+        GuiTheme, Surface, Transform,
+    };
     use ipp_core::services::asset_management::{
         AssetSource, drawing::DRAWING_TYPE, font::FONT_TYPE,
     };
-    use ipp_core::systems::gui::{GuiPartPatch, GuiPartProperty};
+    use ipp_core::systems::gui::GuiPrimitivePart;
+    use ipp_core::systems::gui::presentation::GuiPaintPart;
+    use ipp_core::systems::gui::{GuiPartId, GuiSkinState};
     use ipp_core::{
-        Batch, Command, ComponentValue, EntityRef, GuiCommand, GuiContainerKind, GuiNodeData,
-        GuiNodeHandle, GuiNodeId, GuiNodePatch, GuiNodeStyle, GuiRoot, Surface, TEXTURE_TYPE,
+        CanvasState, Command, ComponentValue, EntityPlacementRef, EntityRef, FieldValue,
+        FieldWrite, OutputKind, OutputRef, TEXTURE_TYPE, WorldAttachment, WorldCreateOptions,
     };
+    use std::mem::offset_of;
     use std::path::PathBuf;
 
     let args: Vec<_> = std::env::args_os().skip(1).collect();
@@ -212,138 +249,138 @@ fn main() -> Result<()> {
     let mut host = ipp_core::HostRuntime::new();
     renderer.install(&mut host)?;
     host.data_sources_mut().register_stream("fixture://")?;
-    let world = host.create_world(Default::default())?;
+    let world = host.create_world(Default::default(), &smoke::selection::scene())?;
 
-    let mut surface = Surface::default();
-    surface.width = 4.0;
-    surface.height = 2.0;
-    let (camera, panel, rear_parent) = {
-        let mut world_context = host.world_mut(world).unwrap();
-        world_context.enqueue(Batch {
-            id: 1,
-            operations: vec![
-                Command::Create {
-                    alias: 1,
-                    metadata: Default::default(),
-                },
-                Command::insert_value(
-                    EntityRef::Alias(1),
-                    ComponentValue::Transform(Transform {
-                        z: 5.0,
-                        ..Default::default()
-                    }),
-                ),
-                Command::insert_value(
-                    EntityRef::Alias(1),
-                    ComponentValue::Camera(Camera {
-                        projection: 1,
-                        ortho_height: 3.0,
-                        ..Default::default()
-                    }),
-                ),
-                Command::Create {
-                    alias: 2,
-                    metadata: Default::default(),
-                },
-                Command::insert_value(
-                    EntityRef::Alias(2),
-                    ComponentValue::Transform(Transform::default()),
-                ),
-                Command::insert_value(EntityRef::Alias(2), ComponentValue::Surface(surface)),
-                Command::insert_value(
-                    EntityRef::Alias(2),
-                    ComponentValue::GuiRoot(GuiRoot::default()),
-                ),
-                Command::Create {
-                    alias: 3,
-                    metadata: Default::default(),
-                },
-                Command::insert_value(
-                    EntityRef::Alias(3),
-                    ComponentValue::Transform(Transform {
-                        qy: 1.0,
-                        qw: 0.0,
-                        ..Default::default()
-                    }),
-                ),
-            ],
-        })?;
-        let report = world_context.step(0.0)?;
-        let created = report.outcomes[0]
-            .result
-            .as_ref()
-            .map_err(|error| format!("GUI setup batch failed: {error:?}"))?;
-        (created[0].1, created[1].1, created[2].1)
+    // One logical unit per Surface metre keeps content coordinates in panel metres.
+    let mut options = WorldCreateOptions::new(smoke::selection::panel());
+    options.canvas = Some(CanvasState {
+        extent: [4.0, 2.0],
+        units_per_metre: 1.0,
+    });
+    let gui = host.create_world_with_options(Default::default(), options)?;
+    let canvas = OutputRef::canvas(host.world_ref(gui).unwrap());
+
+    let surface = Surface {
+        width: 4.0,
+        height: 2.0,
     };
+    let camera = create(
+        &mut host,
+        world,
+        None,
+        vec![
+            ComponentValue::Transform(Transform {
+                z: 5.0,
+                ..Default::default()
+            }),
+            ComponentValue::Camera(Camera {
+                projection: 1,
+                ortho_height: 3.0,
+                ..Default::default()
+            }),
+        ],
+    )?;
+    let panel = create(
+        &mut host,
+        world,
+        None,
+        vec![
+            ComponentValue::Transform(Transform::default()),
+            ComponentValue::Surface(surface),
+            ComponentValue::WorldAttachment(WorldAttachment::surface(canvas)),
+        ],
+    )?;
+    let rear_parent = create(
+        &mut host,
+        world,
+        None,
+        vec![ComponentValue::Transform(Transform {
+            qy: 1.0,
+            qw: 0.0,
+            ..Default::default()
+        })],
+    )?;
     host.world_mut(world)
         .unwrap()
         .enqueue_camera_activate(camera)?;
-    step(&mut host, world)?;
+    host.frame(0.0)?;
     assert_eq!(host.world_mut(world).unwrap().active_camera(), Some(camera));
+    let selection = host.bind_output(host.world_ref(world).unwrap(), camera, OutputKind::Camera)?;
+    host.set_root_output(
+        selection,
+        ipp_core::WorldViewport {
+            width: smoke::world::WIDTH,
+            height: smoke::world::HEIGHT,
+            device_pixel_ratio: 1.0,
+        },
+    )?;
 
-    let root_incarnation = host
-        .world_mut(world)
-        .unwrap()
-        .inspect_gui(panel, None, 1, 1)?
-        .root_incarnation;
-    let container = GuiNodeData::Container;
-    insert_node(
+    // A clipped stack holds a viewport whose local CanvasStyle clip starts empty.
+    // The viewport's content column is laid out independently of that clip, so
+    // the visible region is the clip rectangle intersected with the stack clip.
+    let stack = create(
         &mut host,
-        world,
-        panel,
-        root_incarnation,
-        1,
+        gui,
         None,
-        0,
-        container(GuiContainerKind::Stack),
-        ipp_core::GuiNodeDataRow::default(),
-        GuiNodeStyle {
-            width: Some(4.0),
-            height: Some(2.0),
+        vec![ComponentValue::GuiLayout(GuiLayout {
+            kind: 3,
+            width: 4.0,
+            height: 2.0,
+            clip: true,
             ..Default::default()
-        },
+        })],
     )?;
-    insert_node(
+    let viewport = create(
         &mut host,
-        world,
-        panel,
-        root_incarnation,
-        2,
-        Some(1),
-        0,
-        container(GuiContainerKind::ScrollView),
-        ipp_core::GuiNodeDataRow::default(),
-        GuiNodeStyle {
-            width: Some(0.0),
-            height: Some(0.0),
+        gui,
+        Some(stack),
+        vec![
+            ComponentValue::GuiLayout(GuiLayout {
+                kind: 3,
+                ..Default::default()
+            }),
+            ComponentValue::CanvasStyle(CanvasStyle {
+                clipped: true,
+                ..Default::default()
+            }),
+        ],
+    )?;
+    let column = create(
+        &mut host,
+        gui,
+        Some(viewport),
+        vec![ComponentValue::GuiLayout(GuiLayout {
+            kind: 2,
             ..Default::default()
-        },
+        })],
     )?;
-    insert_node(
-        &mut host,
-        world,
-        panel,
-        root_incarnation,
-        3,
-        Some(2),
-        0,
-        container(GuiContainerKind::Column),
-        ipp_core::GuiNodeDataRow::default(),
-        GuiNodeStyle::default(),
-    )?;
-    insert_node(
-        &mut host,
-        world,
-        panel,
-        root_incarnation,
-        4,
-        Some(3),
-        0,
-        container(GuiContainerKind::SizedBox),
-        ipp_core::GuiNodeDataRow::default(),
-        colored(4.0, 1.0, [1.0, 0.0, 1.0, 1.0]),
-    )?;
-    step(&mut host, world)?;
+    let shape = |host: &mut ipp_core::HostRuntime,
+                 parent,
+                 size: [f32; 2],
+                 color: [f32; 3]|
+     -> Result<ipp_core::EntityId> {
+        create(
+            host,
+            gui,
+            Some(parent),
+            vec![
+                ComponentValue::CanvasBox(CanvasBox::default()),
+                ComponentValue::GuiLayout(GuiLayout {
+                    kind: 6,
+                    width: size[0],
+                    height: size[1],
+                    ..Default::default()
+                }),
+                ComponentValue::CanvasStyle(CanvasStyle {
+                    red: color[0],
+                    green: color[1],
+                    blue: color[2],
+                    ..Default::default()
+                }),
+            ],
+        )
+    };
+    shape(&mut host, column, [4.0, 1.0], [1.0, 0.0, 1.0])?;
 
     let empty_stats = render(&mut renderer, &mut host, world)?;
     assert_eq!(empty_stats.draw_calls, 0);
@@ -357,18 +394,22 @@ fn main() -> Result<()> {
     );
     std::fs::write(evidence.join("gui-layout-empty.rgba"), &empty_frame)?;
 
-    host.world_mut(world).unwrap().enqueue_gui_command(
-        SESSION,
-        GuiCommand::UpdateNode {
-            handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2)),
-            patch: GuiNodePatch {
-                width: Some(Some(4.0)),
-                height: Some(Some(0.5)),
-                ..Default::default()
-            },
+    let clip_edge = |offset: usize, value: f32| Command::SetField {
+        entity: EntityRef::Handle(viewport),
+        component: ComponentValue::CANVAS_STYLE,
+        field: FieldWrite {
+            offset: offset as u32,
+            value: FieldValue::F32(value),
         },
+    };
+    apply(
+        &mut host,
+        gui,
+        vec![
+            clip_edge(offset_of!(CanvasStyle, clip_max_x), 4.0),
+            clip_edge(offset_of!(CanvasStyle, clip_max_y), 0.5),
+        ],
     )?;
-    step(&mut host, world)?;
     let clipped_stats = render(&mut renderer, &mut host, world)?;
     assert_eq!(clipped_stats.draw_calls, 1);
     let clipped_frame = context.capture()?;
@@ -377,14 +418,14 @@ fn main() -> Result<()> {
         160,
         60,
         [255, 0, 255, 255],
-        "intersected scroll clip interior",
+        "intersected viewport clip interior",
     )?;
     check(
         &clipped_frame,
         160,
         100,
         BACKGROUND,
-        "content below the scroll intersection",
+        "content below the viewport intersection",
     )?;
     std::fs::write(evidence.join("gui-layout-clipped.rgba"), &clipped_frame)?;
 
@@ -403,118 +444,121 @@ fn main() -> Result<()> {
         uri: "fixture:///badge.ippt".into(),
         variant: 0,
     };
-    insert_node(
-        &mut host,
-        world,
-        panel,
-        root_incarnation,
-        5,
-        Some(1),
-        1,
-        container(GuiContainerKind::SizedBox),
-        ipp_core::GuiNodeDataRow::default(),
-        colored(1.5, 1.0, [1.0, 0.0, 0.0, 1.0]),
-    )?;
-    insert_node(
-        &mut host,
-        world,
-        panel,
-        root_incarnation,
-        6,
-        Some(1),
-        2,
-        container(GuiContainerKind::SizedBox),
-        ipp_core::GuiNodeDataRow::default(),
-        colored(1.5, 1.0, [0.0, 1.0, 0.0, 1.0]),
-    )?;
-    insert_node(
-        &mut host,
-        world,
-        panel,
-        root_incarnation,
-        7,
-        Some(1),
-        3,
-        GuiNodeData::Drawing,
-        ipp_core::GuiNodeDataRow::default(),
-        GuiNodeStyle {
-            width: Some(1.0),
-            height: Some(1.0),
-            margin: Some([0.75, 0.0, 0.0, 2.5]),
-            color: [0.2, 0.6, 1.0, 1.0],
-            asset: Some(drawing.clone()),
-            ..Default::default()
-        },
-    )?;
-    insert_node(
-        &mut host,
-        world,
-        panel,
-        root_incarnation,
-        8,
-        Some(1),
-        4,
-        GuiNodeData::Text("A".into()),
-        ipp_core::GuiNodeDataRow::default(),
-        GuiNodeStyle {
-            font_size: 0.35,
-            margin: Some([1.2, 0.0, 0.0, 2.8]),
-            color: [1.0, 1.0, 1.0, 1.0],
-            asset: Some(font.clone()),
-            ..Default::default()
-        },
-    )?;
-    insert_node(
-        &mut host,
-        world,
-        panel,
-        root_incarnation,
-        9,
-        Some(1),
-        5,
-        GuiNodeData::Image,
-        ipp_core::GuiNodeDataRow::image([0.4, 0.4]),
-        GuiNodeStyle {
-            margin: Some([1.3, 0.0, 0.0, 3.3]),
-            asset: Some(bitmap.clone()),
-            ..Default::default()
-        },
-    )?;
-    step(&mut host, world)?;
+    let red = shape(&mut host, stack, [1.5, 1.0], [1.0, 0.0, 0.0])?;
+    let green = shape(&mut host, stack, [1.5, 1.0], [0.0, 1.0, 0.0])?;
 
-    // Per-node part overrides: they take precedence over any theme for every
-    // state and variant.
-    let overrides = [
-        (
-            8,
-            ipp_core::systems::surface::GuiPrimitivePart::Label,
-            GuiPartProperty::Color,
-            ipp_core::DynamicValue::Vec4([1.0, 0.75, 0.1, 1.0]),
-        ),
-        (
-            7,
-            ipp_core::systems::surface::GuiPrimitivePart::Icon,
-            GuiPartProperty::Asset,
-            ipp_core::DynamicValue::Asset(drawing.clone()),
-        ),
-        (
-            9,
-            ipp_core::systems::surface::GuiPrimitivePart::Icon,
-            GuiPartProperty::Color,
-            ipp_core::DynamicValue::Vec4([0.75, 1.0, 0.75, 1.0]),
-        ),
-    ];
-    for (node, part, property, value) in overrides {
-        host.world_mut(world).unwrap().enqueue_gui_command(
-            SESSION,
-            ipp_core::GuiCommand::UpdatePart {
-                handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(node)),
-                part,
-                patch: GuiPartPatch::default().set(property, value),
-            },
-        )?;
+    // The drawing leaf keeps its view-box coordinates: its unit square is centred
+    // on its stack margin point, tinted by its CanvasStyle.
+    create(
+        &mut host,
+        gui,
+        Some(stack),
+        vec![
+            ComponentValue::CanvasDrawing(CanvasDrawing {
+                source: drawing.uri.clone(),
+                variant: drawing.variant,
+            }),
+            ComponentValue::GuiLayout(GuiLayout {
+                width: 1.0,
+                height: 1.0,
+                margin_top: 0.75,
+                margin_left: 2.5,
+                ..Default::default()
+            }),
+            ComponentValue::CanvasStyle(CanvasStyle {
+                red: 0.2,
+                green: 0.6,
+                blue: 1.0,
+                ..Default::default()
+            }),
+        ],
+    )?;
+
+    // A shared theme paints every control's idle background grey and label blue.
+    // Each control's own part overrides take precedence over it for every state
+    // and variant: the label is amber on a transparent background and the bitmap
+    // arrives as a tinted Background asset.
+    let mut theme_parts = Rows::new();
+    for (part, color) in [
+        (GuiPrimitivePart::Background, [0.5, 0.5, 0.5, 1.0]),
+        (GuiPrimitivePart::Label, [0.3, 0.5, 1.0, 1.0]),
+    ] {
+        theme_parts
+            .push(GuiPaintPart {
+                color: Some(color),
+                ..GuiPaintPart::keyed(GuiPartId::state(part, GuiSkinState::Idle))?
+            })
+            .unwrap();
     }
-    step(&mut host, world)?;
+    let theme = create(
+        &mut host,
+        gui,
+        None,
+        vec![ComponentValue::GuiTheme(GuiTheme {
+            parts: theme_parts,
+        })],
+    )?;
+    let skin = |overrides: Vec<GuiPaintPart>| -> ComponentValue {
+        let mut parts = Rows::new();
+        for part in overrides {
+            parts.push(part).unwrap();
+        }
+        ComponentValue::GuiSkin(GuiSkin {
+            theme,
+            parts,
+            ..Default::default()
+        })
+    };
+    let placed = |width: f32, height: f32, top: f32, left: f32| {
+        ComponentValue::GuiLayout(GuiLayout {
+            width,
+            height,
+            margin_top: top,
+            margin_left: left,
+            ..Default::default()
+        })
+    };
+    let background = GuiPaintPart::keyed(GuiPartId::base(GuiPrimitivePart::Background))?;
+    create(
+        &mut host,
+        gui,
+        Some(stack),
+        vec![
+            ComponentValue::GuiButton(GuiButton {
+                label: "A".into(),
+            }),
+            ComponentValue::GuiFont(GuiFont {
+                source: font.uri.clone(),
+                variant: 0,
+                font_size: 0.35,
+            }),
+            placed(-1.0, -1.0, 1.2, 2.8),
+            skin(vec![
+                GuiPaintPart {
+                    color: Some([0.0; 4]),
+                    ..background.clone()
+                },
+                GuiPaintPart {
+                    color: Some([1.0, 0.75, 0.1, 1.0]),
+                    ..GuiPaintPart::keyed(GuiPartId::base(GuiPrimitivePart::Label))?
+                },
+            ]),
+        ],
+    )?;
+    create(
+        &mut host,
+        gui,
+        Some(stack),
+        vec![
+            ComponentValue::GuiButton(GuiButton::default()),
+            placed(0.4, 0.4, 1.3, 3.3),
+            skin(vec![GuiPaintPart {
+                color: Some([0.75, 1.0, 0.75, 1.0]),
+                asset: Some(bitmap.clone()),
+                ..background
+            }]),
+        ],
+    )?;
 
     let sources = [font.clone(), drawing.clone(), bitmap.clone()];
     let payloads = std::collections::BTreeMap::from([
@@ -531,13 +575,9 @@ fn main() -> Result<()> {
             std::fs::read(assets.join("badge.ippt"))?,
         ),
     ]);
-    let layered_stats = settle_assets(&mut renderer, &mut host, world, panel, &sources, &payloads)?;
-    let drawing_key = host
-        .world_mut(world)
-        .unwrap()
-        .asset_resources()
-        .find(&drawing)
-        .unwrap();
+    let layered_stats =
+        settle_assets(&mut renderer, &mut host, world, canvas, &sources, &payloads)?;
+    let drawing_key = host.asset_resources().find(&drawing).unwrap();
     let layered = context.capture()?;
     check(
         &layered,
@@ -551,7 +591,7 @@ fn main() -> Result<()> {
         312,
         100,
         BACKGROUND,
-        "scroll clip remains effective beside layered siblings",
+        "viewport clip remains effective beside layered siblings",
     )?;
     check(
         &layered,
@@ -562,17 +602,31 @@ fn main() -> Result<()> {
     )?;
     std::fs::write(evidence.join("gui-layout-layered.rgba"), &layered)?;
 
-    host.world_mut(world).unwrap().enqueue_gui_command(
-        SESSION,
-        GuiCommand::MoveNode {
-            handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(6)),
-            parent: Some(GuiNodeId(1)),
-            index: 1,
-        },
+    // Core reordering moves the green sibling before the red one; both keep
+    // their entity and component identities while exchanging painter order.
+    let before = canvas_publication(&host, canvas).ok_or("no layered Canvas publication")?;
+    let (red_order, red_target) = paint_target(&before, red).ok_or("red box is not painted")?;
+    let (green_order, green_target) =
+        paint_target(&before, green).ok_or("green box is not painted")?;
+    assert!(red_order < green_order);
+    apply(
+        &mut host,
+        gui,
+        vec![Command::PlaceEntity {
+            entity: EntityRef::Handle(green),
+            placement: EntityPlacementRef {
+                parent: Some(EntityRef::Handle(stack)),
+                before: Some(EntityRef::Handle(red)),
+            },
+        }],
     )?;
-    step(&mut host, world)?;
     let reordered_stats = render(&mut renderer, &mut host, world)?;
     assert_eq!(reordered_stats.draw_calls, layered_stats.draw_calls);
+    let after = canvas_publication(&host, canvas).ok_or("no reordered Canvas publication")?;
+    let (red_order, red_reordered) = paint_target(&after, red).ok_or("red box vanished")?;
+    let (green_order, green_reordered) = paint_target(&after, green).ok_or("green box vanished")?;
+    assert!(green_order < red_order);
+    assert_eq!((red_reordered, green_reordered), (red_target, green_target));
     let reordered = context.capture()?;
     check(
         &reordered,
@@ -588,9 +642,6 @@ fn main() -> Result<()> {
     // positions. Restoring the view reproduces the front frame exactly.
     let turn = 30.0_f32.to_radians();
     let set_view = |host: &mut ipp_core::HostRuntime, perspective: bool| -> Result<()> {
-        use ipp_core::{FieldValue, FieldWrite};
-        use std::mem::offset_of;
-
         let (half_sin, half_cos) = if perspective {
             (turn * 0.5).sin_cos()
         } else {
@@ -604,10 +655,10 @@ fn main() -> Result<()> {
                 value,
             },
         };
-        let mut world_context = host.world_mut(world).unwrap();
-        world_context.enqueue(Batch {
-            id: world_context.tick() + 1,
-            operations: vec![
+        apply(
+            host,
+            world,
+            vec![
                 field(
                     camera,
                     ComponentValue::CAMERA,
@@ -633,12 +684,7 @@ fn main() -> Result<()> {
                     FieldValue::F32(half_cos),
                 ),
             ],
-        })?;
-        let report = world_context.step(0.0)?;
-        report.outcomes[0]
-            .result
-            .as_ref()
-            .map_err(|error| format!("view change failed: {error:?}"))?;
+        )?;
         Ok(())
     };
 
@@ -702,7 +748,7 @@ fn main() -> Result<()> {
         (
             [3.6, 0.25],
             [255, 0, 255, 255],
-            "perspective scroll content",
+            "perspective viewport content",
         ),
         ([1.9, 1.6], BACKGROUND, "perspective transparent stack"),
     ] {
@@ -727,22 +773,22 @@ fn main() -> Result<()> {
         return Err("restoring the front view changed its completed GUI frame".into());
     }
 
-    let show_rear = |host: &mut ipp_core::HostRuntime| -> Result<()> {
-        let mut world_context = host.world_mut(world).unwrap();
-        world_context.enqueue(Batch {
-            id: world_context.tick() + 1,
-            operations: vec![Command::insert_value(
-                EntityRef::Handle(panel),
-                ComponentValue::Hierarchy(Hierarchy {
-                    parent: rear_parent,
-                    ..Default::default()
-                }),
-            )],
-        })?;
-        world_context.step(0.0)?;
-        Ok(())
-    };
-    show_rear(&mut host)?;
+    let place_panel =
+        |host: &mut ipp_core::HostRuntime, parent: Option<ipp_core::EntityId>| -> Result<()> {
+            apply(
+                host,
+                world,
+                vec![Command::PlaceEntity {
+                    entity: EntityRef::Handle(panel),
+                    placement: EntityPlacementRef {
+                        parent: parent.map(EntityRef::Handle),
+                        before: None,
+                    },
+                }],
+            )?;
+            Ok(())
+        };
+    place_panel(&mut host, Some(rear_parent))?;
     let rear_stats = render(&mut renderer, &mut host, world)?;
     assert_eq!(rear_stats.draw_calls, reordered_stats.draw_calls);
     let rear = context.capture()?;
@@ -774,17 +820,7 @@ fn main() -> Result<()> {
         .into());
     }
     std::fs::write(evidence.join("gui-layout-rear.rgba"), &rear)?;
-    {
-        let mut world_context = host.world_mut(world).unwrap();
-        world_context.enqueue(Batch {
-            id: world_context.tick() + 1,
-            operations: vec![Command::RemoveComponent {
-                entity: EntityRef::Handle(panel),
-                component: ComponentValue::HIERARCHY,
-            }],
-        })?;
-        world_context.step(0.0)?;
-    }
+    place_panel(&mut host, None)?;
     render(&mut renderer, &mut host, world)?;
     if context.capture()? != reordered {
         return Err("restoring the GUI front changed its completed frame".into());
@@ -792,7 +828,7 @@ fn main() -> Result<()> {
 
     renderer.replace_device(&mut host, context.device()?)?;
     let recovered_stats =
-        settle_assets(&mut renderer, &mut host, world, panel, &sources, &payloads)?;
+        settle_assets(&mut renderer, &mut host, world, canvas, &sources, &payloads)?;
     let recovered = context.capture()?;
     std::fs::write(evidence.join("gui-layout-recovered.rgba"), &recovered)?;
     check(

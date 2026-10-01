@@ -1,18 +1,36 @@
 import { presentationTesting } from "../../packages/ipp-client/src/testing.js";
-import type { RenderWorldClient, Command, FrameCapture } from "@ipp/client";
+import type {
+  RenderWorldClient,
+  Command,
+  PresentedCapture,
+  RenderStatisticsSnapshot,
+} from "@ipp/client";
 import {
-  activateFixtureCamera,
   aliasId,
   componentFields,
   createEntity,
+  createFixtureCamera,
   insertComponent,
   successfulBatch,
+  type HostedWorldClient,
 } from "../integration/camera-fixtures.js";
 import { compareImages, summarizeImage } from "./image-assertions.js";
+import {
+  RootPresentation,
+  captureSummary,
+  capturedImage,
+  recoverRestoredContext,
+  worldReference,
+} from "./root-presentation.js";
+import { SCENE, selectSystems } from "../integration/system-selections.js";
 
-let client: RenderWorldClient | undefined;
+let client: HostedWorldClient<RenderWorldClient> | undefined;
+let presentation: RootPresentation | undefined;
 const entities = new Map<string, bigint>();
-const captures = new Map<string, FrameCapture>();
+const captures = new Map<
+  string,
+  { frame: PresentedCapture; statistics: RenderStatisticsSnapshot }
+>();
 const ambientEvents: [number, number, number][] = [];
 
 export async function initialize(configuration: {
@@ -30,7 +48,11 @@ export async function initialize(configuration: {
   client = await contract.IppClient.connectWorker(
     configuration.workerScriptUrl,
     configuration.wasmUrl,
-    { canvas: canvas.transferControlToOffscreen(), timeoutMs: 10000 },
+    {
+      selectedSystems: selectSystems(SCENE),
+      canvas: canvas.transferControlToOffscreen(),
+      timeoutMs: 10000,
+    },
   );
   const current = active();
   current.onRenderStateUpdated((event) => {
@@ -39,8 +61,14 @@ export async function initialize(configuration: {
   });
   if (!current.capabilities.pbr || !current.capabilities.shadows)
     throw new Error("Lighting fixture requires PBR and shadows");
-  const camera = await activateFixtureCamera(current);
+  const camera = await createFixtureCamera(current);
   entities.set("camera", camera);
+  presentation = await RootPresentation.camera(
+    current.host,
+    worldReference(current),
+    camera,
+    { width: canvas.width, height: canvas.height },
+  );
   await update("camera", "Transform", { x: 4, y: 5, z: 7, ...aim(4, 5, 7) });
   await update("camera", "Camera", { projection: 1, ortho_height: 6 });
   const scene = [
@@ -176,11 +204,18 @@ export async function capture(label: string) {
       inspection.resources.length >= 3 &&
       inspection.resources.every((resource) => resource.status === "loaded")
     ) {
-      const frame = await current.presentation!.capture(inspection.tick);
-      if (frame.tick <= inspection.tick)
+      const view = presented();
+      const frame = await view.capture();
+      if (view.sourceTick(frame) <= inspection.tick)
         throw new Error("Capture did not follow scene state");
-      captures.set(label, frame);
-      return { ...captureMetadata(label), summary: summarizeImage(frame) };
+      captures.set(label, {
+        frame,
+        statistics: await view.diagnostics.statistics(),
+      });
+      return {
+        ...captureMetadata(label),
+        summary: summarizeImage(capturedImage(frame)),
+      };
     }
     if (performance.now() > deadline)
       throw new Error("Lighting assets did not become ready");
@@ -200,8 +235,7 @@ export async function automaticBounds() {
       )
       .map((entity) => ({
         name: entity.metadata.symbolicId,
-        effective: entity.effective.some((value) => value.component === bounds),
-        authored: entity.base.some((value) => value.component === bounds),
+        present: entity.components.some((value) => value.component === bounds),
       }));
   const before = await observe();
   const entity = { kind: "handle", id: entities.get("cube")! } as const;
@@ -290,8 +324,8 @@ export function difference(a: string, b: string) {
   return compareImages(frame(a), frame(b));
 }
 export function captureMetadata(label: string) {
-  const { pixels: _, ...metadata } = frame(label);
-  return metadata;
+  const { frame, statistics } = captures.get(label) ?? missingCapture(label);
+  return { ...captureSummary(frame), statistics };
 }
 export function captureDataUrl(label: string) {
   const value = frame(label),
@@ -313,15 +347,18 @@ export function captureDataUrl(label: string) {
 }
 
 export async function recoverContext() {
-  presentationTesting(active().presentation!).loseContext();
+  const view = presented();
+  presentationTesting(view.diagnostics).loseContext();
   await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
   await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-  presentationTesting(active().presentation!).restoreContext();
+  presentationTesting(view.diagnostics).restoreContext();
+  await recoverRestoredContext(view);
 }
 
 export async function close() {
   const previous = client;
   client = undefined;
+  presentation = undefined;
   try {
     await previous?.close();
   } finally {
@@ -336,10 +373,15 @@ function active() {
   if (!client) throw new Error("Lighting fixture disconnected");
   return client;
 }
+function presented() {
+  if (!presentation) throw new Error("Lighting camera is not presented");
+  return presentation;
+}
+function missingCapture(label: string): never {
+  throw new Error(`No capture ${label}`);
+}
 function frame(label: string) {
-  const value = captures.get(label);
-  if (!value) throw new Error(`No capture ${label}`);
-  return value;
+  return capturedImage((captures.get(label) ?? missingCapture(label)).frame);
 }
 function aim(x: number, y: number, z: number) {
   const yaw = Math.atan2(x, z) / 2,
@@ -580,7 +622,7 @@ export async function separatedLightGroups() {
 }
 
 export function selectedLightColors(label: string) {
-  const frame = captures.get(label)!;
+  const frame = capturedImage(captures.get(label)!.frame);
   const pixels = new Uint8Array(frame.pixels);
   return [frame.width / 4, (frame.width * 3) / 4].map((center) => {
     const sums = [0, 0, 0];

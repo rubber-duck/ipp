@@ -1,6 +1,9 @@
 import type { RenderStatisticsSnapshot } from "@ipp/client";
 import { presentationTesting } from "../../packages/ipp-client/src/testing.js";
-import { activateFixtureCamera } from "../integration/camera-fixtures.js";
+import {
+  createFixtureCamera,
+  type HostedWorldClient,
+} from "../integration/camera-fixtures.js";
 import type { Client } from "@ipp/client";
 import type {
   Command,
@@ -9,7 +12,7 @@ import type {
   Inspection,
   AssetResourceSnapshot,
 } from "@ipp/client";
-import type { ClientPresentation, FrameCapture } from "@ipp/client";
+import type { PresentedCapture } from "@ipp/client";
 import {
   createRoot,
   Entity,
@@ -21,11 +24,18 @@ import {
 } from "@ipp/react";
 import {
   compareImages,
+  type FramePixels,
   type ImageDifference,
   type ImageSummary,
   summarizeImage,
   VIEWPORT,
 } from "./image-assertions.js";
+import {
+  RootPresentation,
+  capturedImage,
+  recoverRestoredContext,
+  worldReference,
+} from "./root-presentation.js";
 
 import {
   foregroundMask,
@@ -67,6 +77,7 @@ export const SHAPE_IDS = [
 export type ShapeId = (typeof SHAPE_IDS)[number];
 
 import type { Vec3, Point, BaseShape } from "./shapes-oracle.js";
+import { SCENE, selectSystems } from "../integration/system-selections.js";
 
 export interface ShapeDefinition {
   readonly recipe: string;
@@ -203,8 +214,12 @@ interface GeneratedModule {
     connectWorker(
       workerUrl: string | URL,
       wasmUrl: string | URL,
-      options: { readonly timeoutMs: number; readonly canvas: OffscreenCanvas },
-    ): Promise<Client>;
+      options: {
+        readonly timeoutMs: number;
+        readonly canvas: OffscreenCanvas;
+        readonly selectedSystems: readonly string[];
+      },
+    ): Promise<HostedWorldClient>;
   };
   readonly UnlitMaterial: { readonly id: number };
   readonly Entity: {
@@ -226,9 +241,9 @@ interface GeneratedModule {
 interface FixtureState {
   readonly contract: GeneratedModule;
   readonly client: Client;
-  readonly presentation: ClientPresentation;
+  readonly presentation: RootPresentation;
   readonly root: ReactWorldRoot;
-  readonly captures: Map<string, FrameCapture>;
+  readonly captures: Map<string, PresentedCapture>;
   readonly captureRotations: Map<string, number>;
   rotationY: number;
   selected: ShapeId | "arrow" | "axis";
@@ -259,15 +274,13 @@ export interface ShapeInspection {
 export interface ShapeCaptureReport {
   readonly label: string;
   readonly shape: ShapeId | "arrow" | "axis";
-  readonly session: bigint;
   readonly tick: bigint;
   readonly drawCalls: number;
   readonly triangles: number;
   readonly rotationY: number;
-  readonly contextGeneration: number;
+  readonly contextGeneration: bigint;
   readonly failedDrawCalls: number;
-  readonly invalidCamera: boolean;
-  readonly statistics?: RenderStatisticsSnapshot | undefined;
+  readonly statistics: RenderStatisticsSnapshot;
   readonly summary: ImageSummary;
   readonly inspection: ShapeInspection;
   readonly resourceCount: number;
@@ -331,7 +344,7 @@ export async function initializeShapes(
     throw new Error("Chromium does not expose OffscreenCanvas transfer");
   }
 
-  let client: Client | undefined;
+  let client: HostedWorldClient | undefined;
   let root: ReactWorldRoot | undefined;
   try {
     const contract = (await import(
@@ -341,26 +354,26 @@ export async function initializeShapes(
       configuration.workerScriptUrl,
       configuration.wasmUrl,
       {
+        selectedSystems: selectSystems(SCENE),
         timeoutMs: configuration.timeoutMs,
         canvas: canvas.transferControlToOffscreen(),
       },
     );
     if (
       !client.capabilities.spatial ||
-      !client.capabilities.stateOverlays ||
       !client.capabilities.textures ||
       !client.capabilities.builtinAssets
     ) {
       throw new Error(
-        "shape fixture requires scene, overlays, textures, and built-in assets",
+        "shape fixture requires scene, textures, and built-in assets",
       );
     }
-    const presentation = client.presentation;
-    if (!presentation)
-      throw new Error("shape worker did not expose presentation");
-    presentation.resize(VIEWPORT.width, VIEWPORT.height);
-
-    await activateFixtureCamera(client);
+    const presentation = await RootPresentation.camera(
+      client.host,
+      worldReference(client),
+      await createFixtureCamera(client),
+      VIEWPORT,
+    );
     root = createRoot(client);
     active = {
       contract,
@@ -417,9 +430,9 @@ export async function selectArrowGeometry(
   const state = requireActive();
   await state.root.render(
     <Entity id="shape-fixture">
-      <Transform bound={false} />
-      <UnlitMaterial bound={false} r={1} g={1} b={1} />
-      <MeshInstance bound={false} source={definition.source} />
+      <Transform />
+      <UnlitMaterial r={1} g={1} b={1} />
+      <MeshInstance source={definition.source} />
     </Entity>,
   );
   await state.root.flush();
@@ -520,15 +533,15 @@ export async function captureShapeFrame(
   const state = requireActive();
   const inspection = await inspectShape(state);
   const runtimeInspection = await state.client.inspect();
-  const frame = await state.presentation.capture(runtimeInspection.tick);
-  if (
-    frame.session !== state.client.session ||
-    frame.tick < runtimeInspection.tick
-  ) {
-    throw new Error("shape capture is not from the requested session and tick");
+  const frame = await state.presentation.capture();
+  const statistics = await state.presentation.diagnostics.statistics();
+  const tick = state.presentation.sourceTick(frame);
+  if (tick < runtimeInspection.tick) {
+    throw new Error("shape capture predates the inspected core tick");
   }
-  if (frame.width !== VIEWPORT.width || frame.height !== VIEWPORT.height) {
-    throw new Error(`unexpected capture size ${frame.width}x${frame.height}`);
+  const { width, height } = frame.view.binding.viewport;
+  if (width !== VIEWPORT.width || height !== VIEWPORT.height) {
+    throw new Error(`unexpected capture size ${width}x${height}`);
   }
   state.captures.set(label, { ...frame, pixels: frame.pixels.slice(0) });
   state.captureRotations.set(label, state.rotationY);
@@ -536,16 +549,14 @@ export async function captureShapeFrame(
   return {
     label,
     shape: state.selected,
-    session: frame.session,
-    tick: frame.tick,
+    tick,
     drawCalls: frame.drawCalls,
     triangles: frame.triangles,
     rotationY: state.rotationY,
-    contextGeneration: frame.contextGeneration,
+    contextGeneration: frame.view.surface.context,
     failedDrawCalls: frame.failedDrawCalls,
-    invalidCamera: frame.invalidCamera,
-    statistics: frame.statistics,
-    summary: summarizeImage(frame),
+    statistics,
+    summary: summarizeImage(capturedImage(frame)),
     inspection,
     resourceCount: runtimeInspection.resources.length,
   };
@@ -805,25 +816,27 @@ export async function recoverShapeContext(
   beforeLabel: string,
   afterLabel = "after-context-restore",
 ): Promise<{
-  readonly beforeGeneration: number;
+  readonly beforeGeneration: bigint;
   readonly after: ShapeCaptureReport;
   readonly resourceCountBefore: number;
   readonly resourceCountAfter: number;
 }> {
   const state = requireActive();
-  const before = requireCapture(state, beforeLabel);
+  const before = requireFrame(state, beforeLabel).view.surface.context;
   const resourceCountBefore = (await state.client.inspect()).resources.length;
-  presentationTesting(state.presentation).loseContext();
+  const testing = presentationTesting(state.presentation.diagnostics);
+  testing.loseContext();
   await compositorBarrier();
-  presentationTesting(state.presentation).restoreContext();
+  testing.restoreContext();
+  await recoverRestoredContext(state.presentation);
   const after = await captureShapeFrame(afterLabel);
-  if (after.contextGeneration <= before.contextGeneration) {
+  if (after.contextGeneration <= before) {
     throw new Error(
       "context generation did not advance after shape restoration",
     );
   }
   return {
-    beforeGeneration: before.contextGeneration,
+    beforeGeneration: before,
     after,
     resourceCountBefore,
     resourceCountAfter: after.resourceCount,
@@ -847,11 +860,8 @@ export async function shapeCaptureDataUrl(label: string): Promise<string> {
 
 export function shapeCaptureMetadata(
   label: string,
-): Omit<FrameCapture, "pixels"> {
-  const { pixels: _pixels, ...metadata } = requireCapture(
-    requireActive(),
-    label,
-  );
+): Omit<PresentedCapture, "pixels"> {
+  const { pixels: _pixels, ...metadata } = requireFrame(requireActive(), label);
   return metadata;
 }
 
@@ -943,19 +953,14 @@ async function renderShape(
   const definition = SHAPES[shape];
   await state.root.render(
     <Entity id="shape-fixture">
-      <Transform
-        bound={false}
-        qy={Math.sin(rotationY / 2)}
-        qw={Math.cos(rotationY / 2)}
-      />
+      <Transform qy={Math.sin(rotationY / 2)} qw={Math.cos(rotationY / 2)} />
       <UnlitMaterial
-        bound={false}
         r={definition.material[0]}
         g={definition.material[1]}
         b={definition.material[2]}
       />
-      <MeshInstance bound={false} source={source} />
-      <UnlitTexture bound={false} source={CHECKER_SOURCE} />
+      <MeshInstance source={source} />
+      <UnlitTexture source={CHECKER_SOURCE} />
     </Entity>,
   );
   await state.root.flush();
@@ -972,20 +977,23 @@ async function inspectShape(state: FixtureState): Promise<ShapeInspection> {
   return {
     selected: state.selected,
     entityExists: entity !== undefined,
-    transform: componentFields(entity?.effective, state.contract.Transform.id),
+    transform: componentFields(entity?.components, state.contract.Transform.id),
     material: componentFields(
-      entity?.effective,
+      entity?.components,
       state.contract.UnlitMaterial.id,
     ),
-    mesh: componentFields(entity?.effective, state.contract.MeshInstance.id),
-    texture: componentFields(entity?.effective, state.contract.UnlitTexture.id),
+    mesh: componentFields(entity?.components, state.contract.MeshInstance.id),
+    texture: componentFields(
+      entity?.components,
+      state.contract.UnlitTexture.id,
+    ),
   };
 }
 
 function componentFields(
-  components: Inspection["entities"][number]["effective"] | undefined,
+  components: Inspection["entities"][number]["components"] | undefined,
   id: number,
-): Inspection["entities"][number]["effective"][number]["fields"] | null {
+): Inspection["entities"][number]["components"][number]["fields"] | null {
   return components?.find(({ component }) => component === id)?.fields ?? null;
 }
 
@@ -994,10 +1002,14 @@ function requireActive(): FixtureState {
   return active;
 }
 
-function requireCapture(state: FixtureState, label: string): FrameCapture {
+function requireFrame(state: FixtureState, label: string): PresentedCapture {
   const frame = state.captures.get(label);
   if (!frame) throw new Error(`missing captured shape frame '${label}'`);
   return frame;
+}
+
+function requireCapture(state: FixtureState, label: string): FramePixels {
+  return capturedImage(requireFrame(state, label));
 }
 
 function requireCaptureRotation(state: FixtureState, label: string): number {
@@ -1054,7 +1066,7 @@ async function compositorBarrier(): Promise<void> {
   await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 }
 
-async function frameDataUrl(frame: FrameCapture): Promise<string> {
+async function frameDataUrl(frame: FramePixels): Promise<string> {
   return await rgbaDataUrl(
     frame.width,
     frame.height,

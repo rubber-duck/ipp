@@ -3,7 +3,12 @@
 //! The service boundary types live here; lifecycle, frame, surface and shadow
 //! submissions each own their implementation file.
 
+#[cfg(feature = "surfaces")]
+mod canvas_composition;
+#[cfg(feature = "surfaces")]
+mod composition;
 mod frame;
+mod inclusion;
 mod lifecycle;
 #[cfg(feature = "shadows")]
 mod shadow;
@@ -40,6 +45,10 @@ pub enum RenderError {
     InvalidViewport,
     /// An effective world transform cannot produce a finite model matrix.
     InvalidTransform,
+    /// The exact selected output or its publication is no longer available.
+    UnavailableOutput,
+    /// Deselect the previous Host explicitly before preparing another catalog.
+    HostCatalogMismatch,
     /// A final effective mesh reference had no retained CPU payload.
     MissingMesh,
     /// A final effective texture reference had no retained CPU payload.
@@ -54,6 +63,8 @@ impl fmt::Display for RenderError {
             Self::ContextLost => f.write_str("GL context lost"),
             Self::InvalidViewport => f.write_str("invalid GL viewport"),
             Self::InvalidTransform => f.write_str("invalid renderable transform"),
+            Self::UnavailableOutput => f.write_str("selected publication is unavailable"),
+            Self::HostCatalogMismatch => f.write_str("renderer is bound to another Host catalog"),
             Self::MissingMesh => f.write_str("renderable mesh has no retained CPU asset"),
             Self::MissingTexture => f.write_str("renderable texture has no retained CPU asset"),
             Self::RenderDevice(message) => write!(f, "GL device: {message}"),
@@ -69,30 +80,27 @@ impl std::error::Error for RenderError {}
 /// Drawing applies conservative frustum culling; LOD and visibility-driven residency
 /// remain unimplemented. Context recovery preserves logical resource identities.
 pub struct RenderService<D: RenderDevice> {
+    inclusions: inclusion::OutputInclusions,
     pub(super) device: Rc<RefCell<D>>,
     asset_context_active: Rc<Cell<bool>>,
     pub(super) recipe_scratch: Vec<(RenderShaderConfig, bool)>,
-    pub(super) program_keys: Vec<AssetKey>,
+    pub(super) program_demand: Option<super::program_assets::ProgramDemand>,
+    pub(super) prepared_output: Option<ipp_core::OutputRef>,
     // Rebuilt from this World's demand before submission. Keys only: payload and
     // device borrows still end before resource invalidation or World mutation.
     pub(super) program_lookup: Vec<Option<AssetKey>>,
     pub(super) custom_materials:
-        BTreeMap<ipp_core::EntityId, super::custom_material::PreparedCustomMaterial>,
+        BTreeMap<super::scene::RenderEntity, super::custom_material::PreparedCustomMaterial>,
     /// Retained custom-material fallbacks, so each changed reason is logged once.
     #[cfg(any(test, feature = "diagnostics"))]
-    pub(super) custom_fallbacks: BTreeMap<ipp_core::EntityId, CustomMaterialFallback>,
+    pub(super) custom_fallbacks: BTreeMap<super::scene::RenderEntity, CustomMaterialFallback>,
     uploads: super::frame_statistics::RenderUploadCounter,
     /// Statistics of the last completed render.
     #[cfg(any(test, feature = "diagnostics"))]
     statistics: super::frame_statistics::RenderStatistics,
-    /// Context-wide retained Surface residency, maintained per World render.
-    #[cfg(all(feature = "surfaces", any(test, feature = "diagnostics")))]
-    retained_surface_residency: surface::RetainedSurfaceResidency,
     frame_scratch: RenderFrameScratch,
-    #[cfg(feature = "particles")]
-    pub(super) particle_quad_metadata:
-        Option<ipp_core::services::asset_management::mesh_metadata::MeshMetadata>,
-    light_selections: BTreeMap<ipp_core::WorldId, super::light_selection::LightSelectionState>,
+    pub(super) light_selections:
+        BTreeMap<ipp_core::OutputRef, super::light_selection::LightSelectionState>,
     #[cfg(feature = "shadows")]
     shadow_capacity_limit: usize,
     #[cfg(feature = "particles")]
@@ -101,6 +109,10 @@ pub struct RenderService<D: RenderDevice> {
     shadow_map: Option<D::ShadowMap>,
     #[cfg(feature = "shadows")]
     shadow_map_size: u32,
+    #[cfg(feature = "surfaces")]
+    pub(super) camera_targets: BTreeMap<ipp_core::OutputRef, (D::SurfaceCacheTarget, [u32; 2])>,
+    #[cfg(feature = "surfaces")]
+    pub(super) camera_completed: std::collections::BTreeSet<ipp_core::OutputRef>,
     debug: crate::services::render::debug_geometry::DebugGeometryRenderCache<D>,
     #[cfg(feature = "surfaces")]
     pub(super) surface_program: Option<D::Program>,
@@ -113,48 +125,46 @@ pub struct RenderService<D: RenderDevice> {
     /// Whole-Surface cache images shared by every World on this context.
     #[cfg(feature = "surfaces")]
     surface_cache: super::surface_cache::SurfaceTextureCache<D::SurfaceCacheTarget>,
-    /// Reused per-frame cache planning inputs.
     #[cfg(feature = "surfaces")]
-    surface_cache_inputs: Vec<super::surface_cache::SurfaceCacheInput>,
+    canvas_caches: BTreeMap<ipp_core::OutputRef, surface_cache::CanvasCacheState>,
+    #[cfg(feature = "surfaces")]
+    canvas_cache_frame: surface_cache::CanvasCacheFrame,
     /// Resources whose primitives the last Surface submission skipped because
     /// they were not resident; a cache repaint records them as incomplete.
     #[cfg(feature = "surfaces")]
     surface_missing: Vec<ipp_core::services::asset_management::AssetKey>,
     /// The last Surface submission drew a text run analytically because its
     /// atlas entries were not all resident.
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     surface_analytic_text: bool,
     /// The last Surface submission had no usable retained GUI storage, so it
     /// skipped its boxes and drew its text analytically.
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     surface_gui_unretained: bool,
     /// Program drawing GUI boxes and atlas glyphs.
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     surface_gui_program: Option<D::Program>,
-    #[cfg(feature = "gui")]
-    gui_batch_cache: BTreeMap<ipp_core::WorldId, super::gui_batch::GuiBatchRenderCache<D>>,
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
+    gui_batch_cache: BTreeMap<ipp_core::OutputRef, super::gui_batch::GuiBatchRenderCache<D>>,
+    #[cfg(feature = "surfaces")]
     pub(super) glyph_atlas: super::glyph_atlas::GlyphAtlas<D>,
-    #[cfg(feature = "gui")]
-    glyph_batch_cache: BTreeMap<ipp_core::WorldId, super::glyph_atlas::GlyphBatchRenderCache>,
+    #[cfg(feature = "surfaces")]
+    glyph_batch_cache: BTreeMap<ipp_core::OutputRef, super::glyph_atlas::GlyphBatchRenderCache>,
     /// Painter-order work of the Surface being submitted.
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     surface_ops: Vec<surface::SurfaceOp>,
     /// Glyph misses, population queue and outcomes of the current World frame.
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     glyph_frame: super::glyph_atlas::GlyphFrameWork,
     /// Per-frame population allowance, shared by every World on this context.
-    #[cfg(feature = "gui")]
-    glyph_population: super::glyph_atlas::GlyphPopulationBudget,
-    /// Surfaces the current frame submitted; `None` until submission reaches them.
     #[cfg(feature = "surfaces")]
-    submitted_surfaces: Option<std::collections::BTreeSet<ipp_core::EntityId>>,
+    glyph_population: super::glyph_atlas::GlyphPopulationBudget,
     /// Each World's last drawn Surface paint revisions and identity orders.
     #[cfg(feature = "surfaces")]
-    surface_paint: BTreeMap<ipp_core::WorldId, super::retained_surfaces::SurfacePaintTracker>,
+    surface_paint: BTreeMap<ipp_core::OutputRef, super::retained_surfaces::SurfacePaintTracker>,
     /// Each World's retained analytic glyph instance streams.
     #[cfg(feature = "surfaces")]
-    analytic_glyphs: BTreeMap<ipp_core::WorldId, super::analytic_glyphs::AnalyticGlyphCache<D>>,
+    analytic_glyphs: BTreeMap<ipp_core::OutputRef, super::analytic_glyphs::AnalyticGlyphCache<D>>,
 }
 fn prepared_normal(item: &ipp_core::RenderItem) -> Result<&[f32; 16], RenderError> {
     #[cfg(feature = "particles")]

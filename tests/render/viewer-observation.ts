@@ -1,6 +1,10 @@
-import type { Client } from "@ipp/client";
-import type { FrameCapture } from "@ipp/client";
-import type { ComponentDescriptor, Inspection } from "@ipp/client";
+import type {
+  Client,
+  ComponentDescriptor,
+  Inspection,
+  PresentedCapture,
+  RenderStatisticsSnapshot,
+} from "@ipp/client";
 import type { IppCanvasHandle } from "@ipp/react/web";
 
 export { VIEWER_ENTITY_ID } from "../../examples/world-gallery/worlds/geometry/world.js";
@@ -24,7 +28,11 @@ export interface ViewerObservation {
 }
 
 export interface ViewerCapture extends ViewerObservation {
-  readonly frame: FrameCapture;
+  readonly frame: PresentedCapture;
+  /** Evaluated tick of the selected output in the captured draw. */
+  readonly tick: bigint;
+  /** Renderer statistics observed after the captured draw completed. */
+  readonly statistics: RenderStatisticsSnapshot;
 }
 
 export async function observeViewer(
@@ -91,41 +99,58 @@ export async function captureViewer(
   const canvas = document.querySelector<HTMLCanvasElement>("#ipp-world-canvas");
   if (!canvas) throw new Error("Viewer canvas is missing from the DOM");
   const bounds = canvas.getBoundingClientRect();
-  // The drawing buffer follows CSS size × density within the device limits.
-  const limits = handle.client.presentation!.viewportLimits;
+  // The selected viewport follows CSS size × density negotiated with the surface limits.
+  const surface = await handle.host.presentation.surface();
   const ratio = Math.min(
     window.devicePixelRatio,
-    limits ? limits.maxWidth / bounds.width : Number.POSITIVE_INFINITY,
-    limits ? limits.maxHeight / bounds.height : Number.POSITIVE_INFINITY,
+    surface.maxWidth / bounds.width,
+    surface.maxHeight / bounds.height,
   );
   const expected = {
-    width: Math.min(
-      limits?.maxWidth ?? Number.POSITIVE_INFINITY,
-      Math.max(1, Math.round(bounds.width * ratio)),
-    ),
-    height: Math.min(
-      limits?.maxHeight ?? Number.POSITIVE_INFINITY,
-      Math.max(1, Math.round(bounds.height * ratio)),
-    ),
+    width: Math.max(1, Math.round(bounds.width * ratio)),
+    height: Math.max(1, Math.round(bounds.height * ratio)),
   };
   const sizeDeadline = performance.now() + 10_000;
-  let frame = await handle.capture();
-  while (frame.width !== expected.width || frame.height !== expected.height) {
+  let frame = await captureSelected(handle);
+  let viewport = frame.view.binding.viewport;
+  while (
+    viewport.width !== expected.width ||
+    viewport.height !== expected.height
+  ) {
     if (performance.now() >= sizeDeadline) {
       throw new Error(
-        `Timed out waiting for ${expected.width}x${expected.height} viewer capture; latest was ${frame.width}x${frame.height}`,
+        `Timed out waiting for ${expected.width}x${expected.height} viewer capture; latest was ${viewport.width}x${viewport.height}`,
       );
     }
-    await handle.client.waitForFrame(frame.tick);
-    frame = await handle.capture();
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => resolve()),
+    );
+    frame = await captureSelected(handle);
+    viewport = frame.view.binding.viewport;
   }
-  if (frame.session !== observation.session) {
-    throw new Error("Captured frame belongs to another runtime session");
+  const statistics = await requireDiagnostics(handle).statistics();
+  if (frame.view.binding.output.world.id !== handle.client.worldReference?.id) {
+    throw new Error("Captured frame belongs to another runtime World");
   }
-  if (frame.tick < observation.inspection.tick) {
+  const [source] = frame.sources;
+  if (!source || source.tick < observation.inspection.tick) {
     throw new Error("Captured frame predates the inspected scene state");
   }
-  return { ...observation, frame };
+  return { ...observation, frame, tick: source.tick, statistics };
+}
+
+/** A completed draw including the selected output's content admitted before the request. */
+function captureSelected(handle: IppCanvasHandle): Promise<PresentedCapture> {
+  const view = handle.view;
+  if (!view) throw new Error("Viewer has no selected presentation view");
+  return handle.capture({ afterOutputs: [view.binding.output] });
+}
+
+function requireDiagnostics(handle: IppCanvasHandle) {
+  const diagnostics = handle.host.renderDiagnostics;
+  if (!diagnostics)
+    throw new Error("Viewer render diagnostics are unavailable");
+  return diagnostics;
 }
 
 function requireComponent(client: Client, name: string): ComponentDescriptor {

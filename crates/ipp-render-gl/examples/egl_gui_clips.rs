@@ -15,8 +15,9 @@
 mod smoke;
 
 #[cfg(target_os = "linux")]
-use ipp_core::systems::surface::{
-    GuiShapeFill, GuiShapeGlow, SurfaceItemId, SurfacePrimitiveIdentity, SurfacePrimitiveStyle,
+use ipp_core::systems::canvas::{
+    CanvasPart, CanvasPrimitiveId, CanvasPrimitiveStyle, CanvasShapeFill, CanvasShapeGlow,
+    CanvasTarget,
 };
 
 /// Surface content space: 4 x 3 metres at 80 pixels per metre on 320 x 240.
@@ -79,16 +80,23 @@ impl ProbeBox {
     /// Production retained-batch vertices for this box with any fill and glow.
     fn vertices_with(
         &self,
-        fill: GuiShapeFill,
-        glow: Option<&GuiShapeGlow>,
+        fill: CanvasShapeFill,
+        glow: Option<&CanvasShapeGlow>,
     ) -> Vec<ipp_render_gl::GuiVertex> {
-        let style = SurfacePrimitiveStyle {
-            identity: SurfacePrimitiveIdentity::Authored(SurfaceItemId(0)),
+        let style = CanvasPrimitiveStyle {
+            identity: CanvasPrimitiveId {
+                target: CanvasTarget {
+                    entity: ipp_core::EntityId::from_bits(0),
+                    component: ipp_core::ComponentValue::CANVAS_BOX,
+                    incarnation: 1,
+                },
+                part: CanvasPart::Content,
+            },
             position: [self.placement[0], self.placement[1]],
             scale: [1.0, 1.0],
             color: [1.0; 4],
             opacity: 1.0,
-            clip: None,
+            clip: ROOT,
         };
         ipp_render_gl::generate_gui_box_vertices(
             &style,
@@ -103,7 +111,7 @@ impl ProbeBox {
     }
 
     fn vertices(&self) -> Vec<ipp_render_gl::GuiVertex> {
-        self.vertices_with(GuiShapeFill::Solid(self.fill), None)
+        self.vertices_with(CanvasShapeFill::Solid(self.fill), None)
     }
 }
 
@@ -817,17 +825,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // GUI batch with gradients, borders, and localized glow.
-    let linear_style = ipp_core::systems::surface::SurfacePrimitiveStyle {
-        identity: ipp_core::systems::surface::SurfacePrimitiveIdentity::Authored(
-            ipp_core::systems::surface::SurfaceItemId(10),
-        ),
+    let linear_style = ipp_core::systems::canvas::CanvasPrimitiveStyle {
+        identity: CanvasPrimitiveId {
+            target: CanvasTarget {
+                entity: ipp_core::EntityId::from_bits(10),
+                component: ipp_core::ComponentValue::CANVAS_BOX,
+                incarnation: 1,
+            },
+            part: CanvasPart::Content,
+        },
         position: [0.5, 0.5],
         scale: [1.0, 1.0],
         color: [1.0, 1.0, 1.0, 1.0],
         opacity: 1.0,
-        clip: None,
+        clip: ROOT,
     };
-    let linear_fill = ipp_core::systems::surface::GuiShapeFill::LinearGradient {
+    let linear_fill = ipp_core::systems::canvas::CanvasShapeFill::LinearGradient {
         start: [0.0, 0.0],
         end: [1.0, 1.0],
         start_color: [1.0, 0.0, 0.0, 1.0],
@@ -845,17 +858,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ROOT,
     ));
 
-    let radial_style = ipp_core::systems::surface::SurfacePrimitiveStyle {
-        identity: ipp_core::systems::surface::SurfacePrimitiveIdentity::Authored(
-            ipp_core::systems::surface::SurfaceItemId(11),
-        ),
+    let radial_style = ipp_core::systems::canvas::CanvasPrimitiveStyle {
+        identity: CanvasPrimitiveId {
+            target: CanvasTarget {
+                entity: ipp_core::EntityId::from_bits(11),
+                component: ipp_core::ComponentValue::CANVAS_BOX,
+                incarnation: 1,
+            },
+            part: CanvasPart::Content,
+        },
         position: [2.0, 0.5],
         scale: [1.0, 1.0],
         color: [1.0, 1.0, 1.0, 1.0],
         opacity: 1.0,
-        clip: None,
+        clip: ROOT,
     };
-    let radial_fill = ipp_core::systems::surface::GuiShapeFill::RadialGradient {
+    let radial_fill = ipp_core::systems::canvas::CanvasShapeFill::RadialGradient {
         center: [0.5, 0.5],
         radius: 0.5,
         start_color: [1.0, 1.0, 0.0, 1.0],
@@ -872,17 +890,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ROOT,
     ));
 
-    let glow_style = ipp_core::systems::surface::SurfacePrimitiveStyle {
-        identity: ipp_core::systems::surface::SurfacePrimitiveIdentity::Authored(
-            ipp_core::systems::surface::SurfaceItemId(12),
-        ),
+    let glow_style = ipp_core::systems::canvas::CanvasPrimitiveStyle {
+        identity: CanvasPrimitiveId {
+            target: CanvasTarget {
+                entity: ipp_core::EntityId::from_bits(12),
+                component: ipp_core::ComponentValue::CANVAS_BOX,
+                incarnation: 1,
+            },
+            part: CanvasPart::Content,
+        },
         position: [0.5, 1.75],
         scale: [1.0, 1.0],
-        color: [0.0, 1.0, 1.0, 1.0],
+        color: [1.0; 4],
         opacity: 1.0,
-        clip: None,
+        clip: ROOT,
     };
-    let glow = ipp_core::systems::surface::GuiShapeGlow {
+    let glow = ipp_core::systems::canvas::CanvasShapeGlow {
         color: [0.0, 1.0, 0.0, 1.0],
         intensity: 1.0,
         radius: 0.15,
@@ -894,20 +917,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &[0.1, 0.1],
         0.0,
         &[0.0; 4],
-        &ipp_core::systems::surface::GuiShapeFill::Solid([0.0, 1.0, 1.0, 1.0]),
+        &ipp_core::systems::canvas::CanvasShapeFill::Solid([0.0, 1.0, 1.0, 1.0]),
         Some(&glow),
         ROOT,
     ));
 
-    let border_style = ipp_core::systems::surface::SurfacePrimitiveStyle {
-        identity: ipp_core::systems::surface::SurfacePrimitiveIdentity::Authored(
-            ipp_core::systems::surface::SurfaceItemId(13),
-        ),
+    let border_style = ipp_core::systems::canvas::CanvasPrimitiveStyle {
+        identity: CanvasPrimitiveId {
+            target: CanvasTarget {
+                entity: ipp_core::EntityId::from_bits(13),
+                component: ipp_core::ComponentValue::CANVAS_BOX,
+                incarnation: 1,
+            },
+            part: CanvasPart::Content,
+        },
         position: [2.0, 1.75],
         scale: [1.0, 1.0],
-        color: [0.0, 0.0, 0.0, 0.0],
+        color: [1.0; 4],
         opacity: 1.0,
-        clip: None,
+        clip: ROOT,
     };
     let border_verts = ipp_render_gl::generate_gui_box_vertices(
         &border_style,
@@ -915,7 +943,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &[0.1, 0.1],
         0.1,
         &[1.0, 0.5, 0.0, 1.0],
-        &ipp_core::systems::surface::GuiShapeFill::Solid([0.0; 4]),
+        &ipp_core::systems::canvas::CanvasShapeFill::Solid([0.0; 4]),
         None,
         ROOT,
     );
@@ -928,7 +956,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // A small glowing outline uses a full quad, so the shader must keep its
     // hollow center clear independently of the sparse-outline optimization.
-    let hollow_style = ipp_core::systems::surface::SurfacePrimitiveStyle {
+    let hollow_style = ipp_core::systems::canvas::CanvasPrimitiveStyle {
         position: [3.4, 1.75],
         ..border_style
     };
@@ -938,7 +966,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &[0.05, 0.05],
         0.02,
         &[1.0, 0.5, 0.0, 1.0],
-        &ipp_core::systems::surface::GuiShapeFill::Solid([0.0; 4]),
+        &ipp_core::systems::canvas::CanvasShapeFill::Solid([0.0; 4]),
         Some(&glow),
         ROOT,
     );
@@ -1004,7 +1032,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The halo belongs outside that crisp silhouette, with no tinted center or
     // extra blur of the opaque rail. Pixel-aligned probes are independent of
     // the shader's distance/coverage implementation.
-    let rail_style = ipp_core::systems::surface::SurfacePrimitiveStyle {
+    let rail_style = ipp_core::systems::canvas::CanvasPrimitiveStyle {
         position: [0.5, 0.5],
         ..glow_style
     };
@@ -1014,11 +1042,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &[0.0, 0.0],
         0.0,
         &[0.0; 4],
-        &ipp_core::systems::surface::GuiShapeFill::Solid([1.0; 4]),
+        &ipp_core::systems::canvas::CanvasShapeFill::Solid([1.0; 4]),
         Some(&glow),
         ROOT,
     );
-    let outline_style = ipp_core::systems::surface::SurfacePrimitiveStyle {
+    let outline_style = ipp_core::systems::canvas::CanvasPrimitiveStyle {
         position: [2.0, 0.5],
         ..rail_style
     };
@@ -1028,7 +1056,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &[0.0, 0.0],
         0.0125,
         &[1.0; 4],
-        &ipp_core::systems::surface::GuiShapeFill::Solid([0.0; 4]),
+        &ipp_core::systems::canvas::CanvasShapeFill::Solid([0.0; 4]),
         Some(&glow),
         ROOT,
     );
@@ -1184,7 +1212,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         corner: [0.0, 0.0],
         border: 0.0,
     };
-    let fading = GuiShapeFill::LinearGradient {
+    let fading = CanvasShapeFill::LinearGradient {
         start: [0.0, 0.0],
         end: [2.0, 0.0],
         start_color: [1.0, 0.0, 0.0, 1.0],
@@ -1223,7 +1251,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         corner: [0.0, 0.0],
         border: 0.0,
     };
-    let falloff_glow = GuiShapeGlow {
+    let falloff_glow = CanvasShapeGlow {
         color: [0.0, 1.0, 0.0, 1.0],
         intensity: 1.0,
         radius: 0.25,
@@ -1233,7 +1261,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     draw_batch(
         &mut device,
         &box_program,
-        &glowing.vertices_with(GuiShapeFill::Solid(glowing.fill), Some(&falloff_glow)),
+        &glowing.vertices_with(CanvasShapeFill::Solid(glowing.fill), Some(&falloff_glow)),
         &MVP,
         &ROOT,
     )?;

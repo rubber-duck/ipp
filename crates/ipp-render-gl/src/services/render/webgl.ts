@@ -6,7 +6,6 @@ declare const IPP_SKELETAL_ANIMATION: boolean;
 declare const IPP_MESH_POSES: boolean;
 declare const IPP_PARTICLES: boolean;
 declare const IPP_SURFACES: boolean;
-declare const IPP_GUI: boolean;
 
 /** Host bindings for the Rust GL device. No scene data or draw preparation lives here. */
 export interface WebGlHostExports {
@@ -249,10 +248,10 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
         { vao: WebGLVertexArrayObject; vbo: WebGLBuffer; count: number }
       >()
     : undefined;
-  const guiBatches = IPP_GUI
+  const guiBatches = IPP_SURFACES
     ? new Map<number, WebGlRetainedBatch>()
     : undefined;
-  const glyphAtlasPages = IPP_GUI
+  const glyphAtlasPages = IPP_SURFACES
     ? new Map<
         number,
         {
@@ -274,6 +273,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
         {
           texture: WebGLTexture;
           framebuffer: WebGLFramebuffer;
+          depth?: WebGLRenderbuffer;
           width: number;
           height: number;
         }
@@ -317,7 +317,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
 
   /** Antialiasing viewport of Surface draws: atlas page, then cache target, then drawing buffer. */
   function activeSurfaceViewport(): [number, number] {
-    if (IPP_GUI && glyphAtlasTarget)
+    if (IPP_SURFACES && glyphAtlasTarget)
       return [glyphAtlasTarget.width, glyphAtlasTarget.height];
     if (IPP_SURFACES && surfaceCacheTarget)
       return [surfaceCacheTarget.width, surfaceCacheTarget.height];
@@ -668,7 +668,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
    * layout table: stride, attribute count, then location, components and offset per
    * attribute.
    */
-  const createRetainedBatch = IPP_GUI
+  const createRetainedBatch = IPP_SURFACES
     ? (byteLength: number, layoutPointer: number): number => {
         const header = words(layoutPointer, 2);
         const stride = header[0]!;
@@ -716,7 +716,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     : undefined;
 
   /** Write whole vertices into retained storage at a vertex-aligned byte offset. */
-  const writeRetainedBatch = IPP_GUI
+  const writeRetainedBatch = IPP_SURFACES
     ? (
         batch: WebGlRetainedBatch | undefined,
         byteOffset: number,
@@ -966,7 +966,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
       surfaceCacheTargets!.clear();
       surfaceCacheTarget = undefined;
     }
-    if (IPP_GUI) {
+    if (IPP_SURFACES) {
       guiBatches!.clear();
       glyphAtlasPages!.clear();
       glyphAtlasTarget = undefined;
@@ -1001,7 +1001,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
       surfaceCacheTargets!.clear();
       surfaceCacheTarget = undefined;
     }
-    if (IPP_GUI) {
+    if (IPP_SURFACES) {
       guiBatches!.clear();
       glyphAtlasPages!.clear();
       glyphAtlasTarget = undefined;
@@ -1965,6 +1965,16 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
                 null,
               );
               gl.bindTexture(gl.TEXTURE_2D, null);
+              if (target.depth) {
+                gl.bindRenderbuffer(gl.RENDERBUFFER, target.depth);
+                gl.renderbufferStorage(
+                  gl.RENDERBUFFER,
+                  gl.DEPTH_COMPONENT24,
+                  width,
+                  height,
+                );
+                gl.bindRenderbuffer(gl.RENDERBUFFER, null);
+              }
               target.width = width;
               target.height = height;
               check();
@@ -1977,7 +1987,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
               if (!target) throw new Error("Stale Surface cache target handle");
               if (surfaceCacheTarget)
                 throw new Error("Surface cache targets cannot nest");
-              if (IPP_GUI && glyphAtlasTarget)
+              if (IPP_SURFACES && glyphAtlasTarget)
                 throw new Error("Surface cache target inside atlas population");
               surfaceCacheTarget = {
                 handle: handle >>> 0,
@@ -2004,6 +2014,75 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
               return 1;
             });
           },
+          begin_camera_target(handle: number, clearPointer: number): number {
+            return status(() => {
+              const target = surfaceCacheTargets!.get(handle >>> 0);
+              if (
+                !target ||
+                surfaceCacheTarget ||
+                (IPP_SURFACES && glyphAtlasTarget)
+              )
+                throw new Error("Unavailable Camera target");
+              surfaceCacheTarget = {
+                handle: handle >>> 0,
+                width: target.width,
+                height: target.height,
+                saved: currentTarget(),
+              };
+              try {
+                invalidateSubmission();
+                bindFramebuffers(target.framebuffer, target.framebuffer);
+                setViewport([0, 0, target.width, target.height]);
+                if (!target.depth) {
+                  const depth = gl.createRenderbuffer();
+                  if (!depth) throw new Error("Camera depth allocation failed");
+                  target.depth = depth;
+                  gl.bindRenderbuffer(gl.RENDERBUFFER, depth);
+                  gl.renderbufferStorage(
+                    gl.RENDERBUFFER,
+                    gl.DEPTH_COMPONENT24,
+                    target.width,
+                    target.height,
+                  );
+                  gl.framebufferRenderbuffer(
+                    gl.FRAMEBUFFER,
+                    gl.DEPTH_ATTACHMENT,
+                    gl.RENDERBUFFER,
+                    depth,
+                  );
+                }
+                if (
+                  gl.checkFramebufferStatus(gl.FRAMEBUFFER) !==
+                  gl.FRAMEBUFFER_COMPLETE
+                )
+                  throw new Error("Camera target incomplete");
+                const clear = floats(clearPointer >>> 0, 4);
+                gl.enable(gl.DEPTH_TEST);
+                gl.enable(gl.CULL_FACE);
+                gl.disable(gl.BLEND);
+                gl.disable(gl.SCISSOR_TEST);
+                gl.disable(gl.DITHER);
+                gl.disable(gl.POLYGON_OFFSET_FILL);
+                gl.disable(gl.SAMPLE_ALPHA_TO_COVERAGE);
+                gl.disable(gl.SAMPLE_COVERAGE);
+                gl.disable(gl.RASTERIZER_DISCARD);
+                gl.disable(gl.STENCIL_TEST);
+                gl.depthFunc(gl.LESS);
+                setDepthMask(true);
+                gl.colorMask(true, true, true, true);
+                gl.frontFace(gl.CCW);
+                gl.cullFace(gl.BACK);
+                gl.clearColor(clear[0]!, clear[1]!, clear[2]!, clear[3]!);
+                gl.clearDepth(1);
+                gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+                check();
+                return 1;
+              } catch (error) {
+                restoreSurfaceCacheTarget();
+                throw error;
+              }
+            });
+          },
           end_surface_cache_target(): number {
             return status(() => {
               restoreSurfaceCacheTarget();
@@ -2017,6 +2096,8 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
             handle: number,
             mvpPointer: number,
             sizePointer: number,
+            clipPointer: number,
+            opacity: number,
           ): number {
             return status(() => {
               const program = programs.get(programHandle >>> 0);
@@ -2051,7 +2132,16 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
                 parameterLocation(program, name);
               programMatrixAt(program, program.mvp, mvpPointer >>> 0);
               programVec4(program, uniform("u_placement"), 0, 0, width, height);
-              programVec4(program, uniform("u_clip"), 0, 0, width, height);
+              const clip = floats(clipPointer >>> 0, 4);
+              programVec4(
+                program,
+                uniform("u_clip"),
+                clip[0]!,
+                clip[1]!,
+                clip[2]!,
+                clip[3]!,
+              );
+              programFloat(program, uniform("u_opacity"), opacity);
               programInt(program, uniform("u_surface_cache"), 0);
               gl.activeTexture(gl.TEXTURE0);
               gl.bindTexture(gl.TEXTURE_2D, target.texture);
@@ -2072,12 +2162,13 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
             if (!disposed && !gl.isContextLost()) {
               gl.deleteFramebuffer(target.framebuffer);
               gl.deleteTexture(target.texture);
+              if (target.depth) gl.deleteRenderbuffer(target.depth);
             }
           },
         }
       : {}),
     // GUI boxes, retained batches and glyph atlases; omitted from non-GUI bridges.
-    ...(IPP_GUI
+    ...(IPP_SURFACES
       ? {
           create_gui_batch(byteLength: number, layoutPointer: number): number {
             return status(() =>
@@ -2302,7 +2393,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
         // while one is bound during a repaint.
         const offscreen =
           (IPP_SURFACES && surfaceCacheTarget !== undefined) ||
-          (IPP_GUI && glyphAtlasTarget !== undefined);
+          (IPP_SURFACES && glyphAtlasTarget !== undefined);
         if (
           (!offscreen && gl.getParameter(gl.DEPTH_BITS) < 16) ||
           gl.getParameter(gl.MAX_VERTEX_ATTRIBS) <
@@ -2920,7 +3011,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
             gl.deleteFramebuffer(map.framebuffer);
           }
         if (IPP_SHADOWS) shadows!.clear();
-        if (IPP_GUI) {
+        if (IPP_SURFACES) {
           for (const batch of guiBatches!.values()) {
             gl.deleteVertexArray(batch.vao);
             gl.deleteBuffer(batch.vbo);
@@ -2938,6 +3029,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
           for (const target of surfaceCacheTargets!.values()) {
             gl.deleteFramebuffer(target.framebuffer);
             gl.deleteTexture(target.texture);
+            if (target.depth) gl.deleteRenderbuffer(target.depth);
           }
         }
         surfacePaths.clear();
@@ -2953,7 +3045,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
         for (const program of programs.values())
           gl.deleteProgram(program.object);
       }
-      if (IPP_GUI) {
+      if (IPP_SURFACES) {
         guiBatches!.clear();
         glyphAtlasPages!.clear();
         glyphAtlasTarget = undefined;

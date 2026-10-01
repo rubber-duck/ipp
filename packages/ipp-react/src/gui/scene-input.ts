@@ -1,5 +1,6 @@
-import type { GuiInputRoutingOutcome, GuiPointerButton } from "@ipp/client";
-import type { BrowserGuiInputCommand } from "./input.js";
+import type { GuiInputRoutingOutcome, GuiPhysicalInput } from "@ipp/client";
+
+export type GuiPointerButton = "primary" | "secondary" | "auxiliary";
 
 /** Admission gate for scene gestures sharing a canvas with runtime GUI input.
  *
@@ -35,6 +36,7 @@ interface GateEntry {
   readonly kind: "pointerDown" | "scroll";
   readonly pointer?: number;
   readonly button?: GuiPointerButton;
+  readonly delta?: readonly [number, number];
   waiter: GateWaiter | undefined;
   done: boolean;
 }
@@ -143,26 +145,31 @@ export function createGuiUnhandledInputGate(): GuiUnhandledInputGate {
 export function trackUnhandledInputGate(
   gate: GuiUnhandledInputGate | undefined,
   generation: number,
-  command: BrowserGuiInputCommand,
+  command: GuiPhysicalInput,
 ): GuiUnhandledInputSubmission | undefined {
   if (
     gate === undefined ||
-    (command.kind !== "pointerDown" && command.kind !== "scroll")
+    (command.kind !== "pointerDown" && command.kind !== "wheel")
   )
     return undefined;
   const state = states.get(gate);
   if (state === undefined || state.closed || state.generation !== generation)
     return undefined;
   const entry: GateEntry =
-    command.kind === "pointerDown"
+    command.kind === "wheel"
       ? {
-          kind: command.kind,
-          pointer: command.pointer,
-          button: command.button,
+          kind: "scroll",
+          delta: [Math.fround(command.delta[0]), Math.fround(command.delta[1])],
           waiter: undefined,
           done: false,
         }
-      : { kind: command.kind, waiter: undefined, done: false };
+      : {
+          kind: "pointerDown",
+          pointer: Number(command.pointer),
+          button: command.button ?? "primary",
+          waiter: undefined,
+          done: false,
+        };
   state.entries.push(entry);
   match(state);
   return { generation, entry };
@@ -185,10 +192,19 @@ export function settleUnhandledInputGateSubmission(
   )
     return;
   entry.done = true;
-  const reason = outcome?.unhandled?.kind;
   const admitted =
-    reason === "noPanelHit" ||
-    (entry.kind === "scroll" && reason === "scrollUnconsumed");
+    outcome !== undefined &&
+    !outcome.rejected &&
+    !outcome.cancelled &&
+    !outcome.error &&
+    (outcome.disposition === "miss" ||
+      (entry.kind === "scroll" &&
+        (outcome.disposition === "unhandled" ||
+          (outcome.disposition === "routed" &&
+            entry.delta !== undefined &&
+            outcome.remaining?.every(
+              (value, axis) => value === entry.delta![axis],
+            ) === true))));
   if (entry.waiter) settleWaiter(state, entry.waiter, admitted);
   else removeEntry(state, entry);
 }

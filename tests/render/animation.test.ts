@@ -64,7 +64,7 @@ for (const name of ["headless", "render"] as const) {
         if (name === "headless") {
           assert.equal(result.contract?.independentControllers, 2);
           assert.equal(result.contract?.synchronizedTargets, 2);
-          assert.equal(result.contract?.inheritedOriginal, 88);
+          assert.equal(result.contract?.withdrawnBase, 88);
           assert.equal(result.contract?.signedPlayback, true);
           return;
         }
@@ -87,10 +87,11 @@ for (const name of ["headless", "render"] as const) {
           right!.summary.meanRgb[1] > 240 && right!.summary.meanRgb[0] < 10,
         );
         assert.deepEqual(paused!.summary, right!.summary);
+        // Stop subtracts the contribution: the cube is back at its base.
         assert.ok(
-          stopped!.summary.meanRgb[2] > 240 && stopped!.summary.meanRgb[0] < 10,
+          stopped!.summary.meanRgb[0] > 240 && stopped!.summary.meanRgb[1] < 10,
         );
-        assert.ok(Math.abs(stopped!.summary.centroidX! - 159.5) < 2);
+        assert.ok(Math.abs(stopped!.summary.centroidX! - 99.5) < 2);
         assert.ok(result.differences[0]!.changedFraction > 0.04);
         assert.equal(result.differences[1]!.changedPixels, 0);
       },

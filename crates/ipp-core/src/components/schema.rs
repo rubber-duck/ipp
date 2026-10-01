@@ -1,6 +1,7 @@
 //! Typed field replacement and streaming target contract primitives.
 
 use crate::EntityId;
+use std::sync::Arc;
 
 /// Component derive, compiled for the macro host and evaluated for the host target.
 pub use ipp_schema_derive::SchemaComponent;
@@ -12,6 +13,10 @@ pub(crate) use super::lifecycle::ComponentLifecycle;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum FieldKind {
+    /// Optional exact Host World lifetime, never a current-World entity reference.
+    World = 12,
+    /// Optional exact output producer lifetime and explicit domain.
+    Output = 13,
     /// Typed dynamic component property.
     Dynamic = 11,
     /// Finite IEEE754 single precision.
@@ -22,7 +27,7 @@ pub enum FieldKind {
     U32 = 3,
     /// Unsigned 64-bit integer.
     U64 = 4,
-    /// Owned UTF-8 string.
+    /// Shared immutable UTF-8 text.
     String = 5,
     /// Owned byte collection.
     Bytes = 6,
@@ -37,6 +42,10 @@ pub enum FieldKind {
 /// Fully owned, resolved field replacement.
 #[derive(Clone, Debug, PartialEq)]
 pub enum FieldValue {
+    /// Exact optional Host World lifetime.
+    World(Option<crate::WorldRef>),
+    /// Exact optional output lifetime, not a local entity reference.
+    Output(Option<crate::OutputRef>),
     /// Validated named-property payload.
     Dynamic(crate::DynamicValue),
     /// Numeric replacement.
@@ -47,8 +56,8 @@ pub enum FieldValue {
     U32(u32),
     /// Integer replacement.
     U64(u64),
-    /// Owned text replacement.
-    String(String),
+    /// Shared immutable text replacement.
+    String(Arc<str>),
     /// Owned collection replacement.
     Bytes(Vec<u8>),
     /// Boolean replacement.
@@ -63,6 +72,8 @@ impl FieldValue {
     /// Wire value kind.
     pub fn kind(&self) -> FieldKind {
         match self {
+            Self::World(_) => FieldKind::World,
+            Self::Output(_) => FieldKind::Output,
             Self::Dynamic(_) => FieldKind::Dynamic,
             Self::F32(_) => FieldKind::F32,
             Self::Entity(_) => FieldKind::Entity,
@@ -123,6 +134,14 @@ impl ContractSink for ContractHash {
     }
 }
 
+/// Compare shared immutable text by pointer first, then by content.
+///
+/// Text is replaced on every write and never edited in place, so equal
+/// pointers prove equal text without reading it.
+pub fn same_text(left: &Arc<str>, right: &Arc<str>) -> bool {
+    Arc::ptr_eq(left, right) || **left == **right
+}
+
 /// Canonical UTF-8 with a little-endian u32 byte length.
 pub fn write_string(sink: &mut impl ContractSink, value: &str) {
     sink.write(&(value.len() as u32).to_le_bytes());
@@ -161,6 +180,14 @@ pub trait SchemaComponent: Sized {
     /// Visit present asset properties held in schema rows fields.
     fn visit_row_assets(
         &self,
+        _visit: &mut dyn FnMut(&crate::services::asset_management::AssetSource),
+    ) {
+    }
+
+    /// Visit present asset properties held in one schema rows field.
+    fn visit_row_field_assets(
+        &self,
+        _offset: u32,
         _visit: &mut dyn FnMut(&crate::services::asset_management::AssetSource),
     ) {
     }
@@ -278,7 +305,10 @@ impl SchemaField for EntityId {
     }
 }
 
-impl SchemaField for String {
+/// Component text is shared and immutable: a write replaces the reference and
+/// never edits the text in place, so copies share one allocation and an
+/// unchanged pointer proves unchanged text.
+impl SchemaField for Arc<str> {
     fn to_value(&self) -> FieldValue {
         FieldValue::String(self.clone())
     }
@@ -297,7 +327,7 @@ impl SchemaField for String {
     }
 
     fn retained_bytes(&self) -> Option<usize> {
-        Some(self.capacity())
+        Some(self.len())
     }
 }
 

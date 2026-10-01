@@ -4,13 +4,14 @@ use crate::{
     DynamicProperties, ErrorReason,
     components::schema::{ComponentLifecycle, SchemaComponent},
 };
+use std::sync::Arc;
 
 /// Instance properties and render policy for an immutable shader-definition asset.
 #[repr(C)]
 #[derive(Clone, Debug, PartialEq, SchemaComponent)]
 pub struct CustomMaterial {
     /// Immutable shader-definition asset source.
-    pub source: String,
+    pub source: Arc<str>,
     /// Selected definition variant.
     pub variant: u32,
     /// 0 = opaque, 1 = cutout, 2 = straight alpha blend.
@@ -33,7 +34,7 @@ pub struct CustomMaterial {
 impl Default for CustomMaterial {
     fn default() -> Self {
         Self {
-            source: String::new(),
+            source: Arc::default(),
             variant: 0,
             alpha_mode: 0,
             alpha_cutoff: 0.5,
@@ -69,7 +70,7 @@ impl ComponentLifecycle for CustomMaterial {
         // Validate the scalar candidate on the stack. Resource/descriptor fields
         // cannot change through this API and are validated on the original above.
         let mut scalar = Self {
-            source: String::new(),
+            source: Arc::default(),
             variant: self.variant,
             properties: Default::default(),
             alpha_mode: self.alpha_mode,
@@ -125,6 +126,12 @@ impl ComponentLifecycle for CustomMaterial {
             return Err(ErrorReason::InvalidValue);
         }
         Ok(())
+    }
+
+    /// Dynamic properties are large indexed state: each write is checked
+    /// where it happens, by its own value and the field-local rules below.
+    fn validates_after_operation() -> bool {
+        false
     }
 
     fn validate_field(&self, _offset: u32) -> Result<(), ErrorReason> {

@@ -1,256 +1,296 @@
 use super::*;
 use ipp_core::{
-    Batch, CameraStateChange, CameraStatePatch, Command, ComponentValue, EntityId, EntityRef,
+    Batch, Command, ComponentValue, EntityRef, ErrorReason, OutputKind, OutputRef, WorldViewport,
     components::{Camera, Transform},
 };
 
-use ipp_core::ErrorReason;
+struct CameraPlatform;
 
-struct CameraPlatform {
-    viewport: Option<(u32, u32)>,
+struct FrameCheckFailure(std::sync::Arc<std::sync::atomic::AtomicU64>);
+
+impl ipp_core::systems::SystemFactory for FrameCheckFailure {
+    fn id(&self) -> ipp_core::systems::SystemId {
+        ipp_core::systems::SystemId("test.frame-check-failure")
+    }
+
+    fn create(
+        &self,
+        _: &mut ipp_core::systems::SystemInitContext<'_>,
+    ) -> Result<Box<dyn ipp_core::systems::System>, ipp_core::systems::SystemInitError> {
+        Ok(Box::new(Self(self.0.clone())))
+    }
+}
+
+impl ipp_core::systems::System for FrameCheckFailure {
+    fn prepare_frame(
+        &mut self,
+        context: &mut ipp_core::systems::SystemUpdateContext<'_, '_>,
+    ) -> Result<(), ErrorReason> {
+        if self.0.load(std::sync::atomic::Ordering::Relaxed) == context.world.id().0 {
+            Err(ErrorReason::Capacity)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn update(&mut self, _: &mut ipp_core::systems::SystemUpdateContext<'_, '_>) {}
 }
 
 impl HostServices for CameraPlatform {
     const NAME: &'static str = "camera-test";
 
-    fn initialize(_world: &mut ipp_core::HostRuntime) -> Result<Self, String> {
-        Ok(Self {
-            viewport: None,
-        })
+    fn initialize(_: &mut ipp_core::HostRuntime) -> Result<Self, String> {
+        Ok(Self)
     }
 
-    fn render_viewport(&self) -> Option<(u32, u32)> {
-        self.viewport
-    }
-
-    fn service_resources(&mut self, _world: &mut ipp_core::HostRuntime) -> Result<(), String> {
+    fn service_resources(&mut self, _: &mut ipp_core::HostRuntime) -> Result<(), String> {
         Ok(())
     }
 }
 
+/// The Camera entity and component lifetime a camera output selects.
+fn camera_target(output: ipp_core::OutputRef) -> (ipp_core::EntityId, u64) {
+    let ipp_core::OutputTarget::Camera {
+        entity,
+        incarnation,
+    } = output.target()
+    else {
+        panic!("camera output");
+    };
+    (entity, incarnation)
+}
+
 fn ready() -> Host<CameraPlatform> {
-    let mut session = Host::new().unwrap();
-    session.open_session(7).unwrap();
-    session
-        .test_session()
+    let mut host = Host::new().unwrap();
+    host.open_session(7, crate::host::TEST_CAMERA_SYSTEMS)
+        .unwrap();
+    host.test_session()
         .receive(&ipp_protocol::bootstrap())
         .unwrap();
-    session.test_session().take_response().unwrap();
-    session
+    host.test_session().take_response().unwrap();
+    host
 }
 
-fn request(request_id: u64, tag: u8) -> Vec<u8> {
+fn viewport() -> WorldViewport {
+    WorldViewport {
+        width: 640,
+        height: 480,
+        device_pixel_ratio: 1.0,
+    }
+}
+
+fn navigation(
+    request: u64,
+    binding: ipp_core::RootOutputBinding,
+    source: Option<ipp_core::WorldPublicationId>,
+) -> Vec<u8> {
     let mut bytes = 7u64.to_le_bytes().to_vec();
-    bytes.extend_from_slice(&request_id.to_le_bytes());
-    bytes.push(tag);
+    bytes.extend(request.to_le_bytes());
+    bytes.push(40);
+    let output = binding.output;
+    bytes.extend(output.world().id().0.to_le_bytes());
+    bytes.extend(output.world().incarnation().to_le_bytes());
+    let (entity, incarnation) = camera_target(output);
+    bytes.push(1);
+    bytes.extend(entity.to_bits().to_le_bytes());
+    bytes.extend(incarnation.to_le_bytes());
+    bytes.extend(binding.viewport.width.to_le_bytes());
+    bytes.extend(binding.viewport.height.to_le_bytes());
+    bytes.extend(binding.viewport.device_pixel_ratio.to_le_bytes());
+    let pair = binding.generation.identity();
+    bytes.extend(pair.0.to_le_bytes());
+    bytes.extend(pair.1.to_le_bytes());
+    bytes.push(u8::from(source.is_some()));
+    if let Some(source) = source {
+        let pair = source.identity();
+        bytes.extend(pair.0.to_le_bytes());
+        bytes.extend(pair.1.to_le_bytes());
+    }
+    bytes.extend(2u32.to_le_bytes());
+    bytes.extend(std::f32::consts::LN_2.to_le_bytes());
+    bytes.extend(0f32.to_le_bytes());
     bytes
 }
 
-fn activate(entity: EntityId) -> Vec<u8> {
-    let mut bytes = request(0, 8);
-    bytes.extend_from_slice(&entity.to_bits().to_le_bytes());
-    bytes
+#[test]
+fn camera_navigation_is_correlated_and_equal_rebind_rejects_without_fallback() {
+    use ipp_core::systems::camera::CameraPublication;
+    let mut host = ready();
+    let output = camera(&mut host, 0.0);
+    host.runtime_mut()
+        .set_root_output(output, viewport())
+        .unwrap();
+    host.tick(0.0).unwrap();
+    responses(&mut host);
+    let binding = host
+        .runtime()
+        .root_output_binding(output.world())
+        .unwrap()
+        .unwrap();
+    let source = host
+        .runtime()
+        .latest_publication(output.world().id())
+        .unwrap();
+    let previous = host
+        .runtime()
+        .output(source, output)
+        .unwrap()
+        .data::<CameraPublication>()
+        .unwrap()
+        .projection
+        .focus_distance;
+    host.test_session()
+        .receive(&navigation(71, binding, Some(source)))
+        .unwrap();
+    host.tick(0.0).unwrap();
+    let tick = host.test_session().world().tick();
+    let expected = ipp_protocol::encode_response(&Response {
+        session: 7,
+        request_id: 71,
+        tick,
+        body: ResponseBody::CameraNavigated,
+    })
+    .unwrap();
+    assert_eq!(&*responses(&mut host)[&71], expected.as_slice());
+    let source = host
+        .runtime()
+        .latest_publication(output.world().id())
+        .unwrap();
+    assert!(
+        (host
+            .runtime()
+            .output(source, output)
+            .unwrap()
+            .data::<CameraPublication>()
+            .unwrap()
+            .projection
+            .focus_distance
+            - previous * 2.0)
+            .abs()
+            < 1e-5
+    );
+    host.test_session()
+        .receive(&navigation(72, binding, Some(source)))
+        .unwrap();
+    host.runtime_mut()
+        .set_root_output(output, viewport())
+        .unwrap();
+    host.tick(0.0).unwrap();
+    let reply = responses(&mut host).remove(&72).unwrap();
+    assert_eq!(reply[24], 255);
+    let source = host
+        .runtime()
+        .latest_publication(output.world().id())
+        .unwrap();
+    assert!(
+        (host
+            .runtime()
+            .output(source, output)
+            .unwrap()
+            .data::<CameraPublication>()
+            .unwrap()
+            .projection
+            .focus_distance
+            - previous * 2.0)
+            .abs()
+            < 1e-5
+    );
 }
 
-fn delete(request_id: u64, entity: EntityId) -> Vec<u8> {
-    let mut bytes = request(request_id, 1);
-    bytes.extend_from_slice(&request_id.to_le_bytes());
-    bytes.extend_from_slice(&1u32.to_le_bytes());
-    bytes.extend_from_slice(&[2, 0]);
-    bytes.extend_from_slice(&entity.to_bits().to_le_bytes());
-    bytes
-}
-
-fn cameras(session: &mut Host<CameraPlatform>) -> [EntityId; 2] {
-    let operations = [1, 2]
-        .into_iter()
-        .flat_map(|alias| {
-            [
+fn camera(host: &mut Host<CameraPlatform>, horizontal: f32) -> OutputRef {
+    let world = host.session_world(7).unwrap();
+    host.runtime_mut()
+        .world_mut(world)
+        .unwrap()
+        .enqueue(Batch {
+            id: 1,
+            operations: vec![
                 Command::Create {
-                    alias,
+                    alias: 1,
                     metadata: Default::default(),
+                    adopt: false,
                 },
                 Command::insert_value(
-                    EntityRef::Alias(alias),
+                    EntityRef::Alias(1),
+                    ComponentValue::Camera(Camera::default()),
+                ),
+                Command::insert_value(
+                    EntityRef::Alias(1),
                     ComponentValue::Transform(Transform {
-                        z: alias as f32 + 4.0,
+                        x: horizontal,
+                        z: 5.0,
                         ..Default::default()
                     }),
                 ),
-                Command::insert_value(
-                    EntityRef::Alias(alias),
-                    ComponentValue::Camera(Camera::default()),
-                ),
-            ]
-        })
-        .collect();
-    session
-        .test_session()
-        .world_mut()
-        .enqueue(Batch {
-            id: 1,
-            operations,
+            ],
         })
         .unwrap();
-    let report = session.test_session().world_mut().step(0.0).unwrap();
-    let ids = report.outcomes[0].result.as_ref().unwrap();
-    [ids[0].1, ids[1].1]
+
+    let entity = host
+        .runtime_mut()
+        .frame(0.0)
+        .unwrap()
+        .worlds
+        .remove(&world)
+        .unwrap()
+        .unwrap()
+        .outcomes
+        .remove(0)
+        .result
+        .unwrap()[0]
+        .1;
+
+    host.runtime()
+        .bind_output(
+            host.runtime().world_ref(world).unwrap(),
+            entity,
+            OutputKind::Camera,
+        )
+        .unwrap()
 }
 
-fn camera_change(camera: EntityId, tick: u64) -> Vec<u8> {
-    ipp_protocol::encode_response(&Response {
-        session: 7,
-        request_id: 0,
-        tick,
-        body: ResponseBody::CameraStateChangedEvent(CameraStateChange {
-            tick,
-            changes: CameraStatePatch {
-                active_camera: Some(camera),
-            },
-        }),
-    })
-    .unwrap()
-}
-
-#[test]
-fn activation_interleaves_with_partial_batches_and_reports_each_selection() {
-    let mut session = ready();
-    let [first, second] = cameras(&mut session);
-    session.test_session().receive(&activate(first)).unwrap();
-    session.test_session().receive(&delete(12, first)).unwrap();
-    session.test_session().receive(&activate(second)).unwrap();
-    session.test_session().receive(&delete(14, first)).unwrap();
-    assert_eq!(session.test_session().world().active_camera(), None);
-    assert_eq!(session.test_session().world().tick(), 1);
-    assert!(session.test_session().take_response().is_none());
-
-    session.tick(0.0).unwrap();
-    assert_eq!(session.test_session().world().active_camera(), Some(second));
-    assert_eq!(session.test_session().world().entities().len(), 1);
-    assert_eq!(
-        session.test_session().take_response().unwrap(),
-        camera_change(first, 2)
-    );
-    assert_eq!(
-        session.test_session().take_response().unwrap(),
-        camera_change(second, 2)
-    );
-    // Deleting the active camera is accepted; the later activation selects again.
-    let accepted = session.test_session().take_response().unwrap();
-    assert_eq!(&accepted[8..16], &12u64.to_le_bytes());
-    assert_eq!(accepted[24], 1);
-    assert_eq!(accepted[41], 0);
-    let deleted = session.test_session().take_response().unwrap();
-    assert_eq!(&deleted[8..16], &14u64.to_le_bytes());
-    assert_eq!(deleted[41], 1);
-    assert!(String::from_utf8_lossy(&deleted).contains("InvalidEntity"));
-    assert_eq!(session.test_session().take_response().unwrap()[24], 4);
-    assert!(session.test_session().take_response().is_none());
-}
-
-#[test]
-fn invalid_noop_and_capacity_rejected_commands_have_no_reply() {
-    let mut session = ready();
-    session.test_limits(ipp_core::WorldLimits {
-        max_queued_batches: 1,
-        ..Default::default()
-    });
-    session
-        .test_session()
-        .receive(&activate(EntityId::from_bits(0)))
-        .unwrap();
-    session
-        .test_session()
-        .receive(&activate(EntityId::from_bits(0)))
-        .unwrap();
-    session.tick(0.0).unwrap();
-    assert_eq!(session.test_session().world().active_camera(), None);
-    assert_eq!(session.test_session().take_response().unwrap()[24], 4);
-    assert!(session.test_session().take_response().is_none());
-
-    let mut session = ready();
-    let [first, _] = cameras(&mut session);
-    session.test_session().receive(&activate(first)).unwrap();
-    session.test_session().receive(&activate(first)).unwrap();
-    session.tick(0.0).unwrap();
-    assert_eq!(
-        session.test_session().take_response().unwrap(),
-        camera_change(first, 2)
-    );
-    assert_eq!(session.test_session().take_response().unwrap()[24], 4);
-    assert!(session.test_session().take_response().is_none());
-}
-
-#[test]
-fn command_ingress_backpressure_rejects_explicitly_and_draining_recovers() {
-    let mut session = ready();
-    let command = activate(EntityId::from_bits(0));
-    for _ in 0..MAX_PENDING {
-        session.test_session().receive(&command).unwrap();
-    }
-    assert!(session.test_session().receive(&command).is_err());
-    assert_eq!(session.test_session().world().tick(), 0);
-    session.tick(0.0).unwrap();
-    assert_eq!(session.test_session().take_response().unwrap()[24], 4);
-    assert!(session.test_session().take_response().is_none());
-    session.test_session().receive(&command).unwrap();
-    session.tick(0.0).unwrap();
-    assert_eq!(session.test_session().world().tick(), 2);
-}
-
-#[test]
-fn navigation_keeps_command_order_and_emits_no_component_notification() {
-    let mut session = ready();
-    let [first, _] = cameras(&mut session);
-    session.test_session().receive(&activate(first)).unwrap();
-    let mut navigate = request(0, 11);
-    navigate.push(2);
-    navigate.extend_from_slice(&0.5f32.to_le_bytes());
-    session.test_session().receive(&navigate).unwrap();
-    session.tick(0.0).unwrap();
-    assert_eq!(
-        session.test_session().take_response().unwrap(),
-        camera_change(first, 2)
-    );
-    assert_eq!(session.test_session().take_response().unwrap()[24], 4);
-    assert!(session.test_session().take_response().is_none());
-    let entities = session.test_session().world().entities();
-    let camera = entities.iter().find(|entity| entity.id == first).unwrap();
-    let transform = camera
-        .base
-        .iter()
-        .find_map(|component| match component {
-            ComponentValue::Transform(transform) => Some(transform),
-            _ => None,
-        })
-        .unwrap();
-    assert!(transform.z > 5.0);
-}
-
-fn pick(request_id: u64, width: u32, height: u32) -> Vec<u8> {
-    let mut bytes = request(request_id, 9);
-    bytes.extend_from_slice(&0.5f32.to_le_bytes());
-    bytes.extend_from_slice(&0.5f32.to_le_bytes());
-    bytes.extend_from_slice(&width.to_le_bytes());
-    bytes.extend_from_slice(&height.to_le_bytes());
+fn pick(request_id: u64, output: OutputRef, viewport: WorldViewport) -> Vec<u8> {
+    let mut bytes = 7u64.to_le_bytes().to_vec();
+    bytes.extend(request_id.to_le_bytes());
+    bytes.extend([9, 0]);
+    bytes.extend(output.world().id().0.to_le_bytes());
+    bytes.extend(output.world().incarnation().to_le_bytes());
+    let (entity, incarnation) = camera_target(output);
+    bytes.push(1);
+    bytes.extend(entity.to_bits().to_le_bytes());
+    bytes.extend(incarnation.to_le_bytes());
+    bytes.extend(viewport.width.to_le_bytes());
+    bytes.extend(viewport.height.to_le_bytes());
+    bytes.extend(viewport.device_pixel_ratio.to_le_bytes());
+    bytes.extend(0.5f32.to_le_bytes());
+    bytes.extend(0.5f32.to_le_bytes());
     bytes.push(0);
     bytes
 }
 
-fn pick_reply(
+fn responses(host: &mut Host<CameraPlatform>) -> std::collections::BTreeMap<u64, ReliableResponse> {
+    let mut replies = std::collections::BTreeMap::new();
+    while let Some(bytes) = host.test_session().take_response() {
+        let request_id = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
+        if request_id != 0 {
+            replies.insert(request_id, bytes);
+        }
+    }
+    replies
+}
+
+fn expected(
     request_id: u64,
-    camera: Option<EntityId>,
     tick: u64,
-    result: Result<Option<ipp_core::GeometryPickHit>, ErrorReason>,
+    result: Result<(ipp_core::ViewDescriptor, Option<ipp_core::ViewPickHit>), ErrorReason>,
 ) -> Vec<u8> {
     ipp_protocol::encode_response(&Response {
         session: 7,
         request_id,
         tick,
-        body: ResponseBody::GeometryPickResultEvent(ipp_core::GeometryPickOutcome {
+        body: ResponseBody::GeometryPickResultEvent(ipp_protocol::views::ViewQueryOutcome {
             request_id,
             tick,
-            camera,
             result,
         }),
     })
@@ -258,77 +298,247 @@ fn pick_reply(
 }
 
 #[test]
-fn queries_observe_final_camera_and_host_surface_without_resizing_or_advancing_time() {
-    let mut session = ready();
-    let [first, second] = cameras(&mut session);
-    session.test_session().receive(&pick(31, 640, 480)).unwrap();
-    session.test_session().receive(&activate(first)).unwrap();
-    session.test_session().receive(&activate(second)).unwrap();
-    session.test_session().receive(&pick(34, 1, 1)).unwrap();
-    session.services_mut().viewport = Some((640, 480));
-    session.tick(0.0).unwrap();
+fn completed_view_replies_use_selected_root_not_legacy_active_camera_and_never_fallback() {
+    let mut host = ready();
+    let selected = camera(&mut host, 0.0);
+    let legacy = camera(&mut host, 100.0);
+    let world = selected.world().id();
+    host.runtime_mut()
+        .world_mut(world)
+        .unwrap()
+        .enqueue_camera_activate(legacy.camera_entity().unwrap())
+        .unwrap();
+    host.runtime_mut()
+        .set_root_output(selected, viewport())
+        .unwrap();
+    host.test_session()
+        .receive(&pick(31, selected, viewport()))
+        .unwrap();
+    host.test_session()
+        .receive(&pick(
+            32,
+            selected,
+            WorldViewport {
+                width: 1,
+                height: 1,
+                ..viewport()
+            },
+        ))
+        .unwrap();
+    host.tick(0.0).unwrap();
+    let view = host
+        .runtime()
+        .resolve_view(ipp_core::ViewQueryTarget::RootView {
+            output: selected,
+            expected_viewport: viewport(),
+        })
+        .unwrap();
+    let tick = host.test_session().world().tick();
+    let replies = responses(&mut host);
     assert_eq!(
-        session.test_session().take_response().unwrap(),
-        camera_change(first, 2)
+        &*replies[&31],
+        expected(31, tick, Ok((view, None))).as_slice()
     );
     assert_eq!(
-        session.test_session().take_response().unwrap(),
-        camera_change(second, 2)
+        &*replies[&32],
+        expected(32, tick, Err(ErrorReason::InvalidViewport)).as_slice()
     );
     assert_eq!(
-        session.test_session().take_response().unwrap(),
-        pick_reply(31, Some(second), 2, Ok(None))
+        host.test_session().world().active_camera(),
+        Some(legacy.camera_entity().unwrap())
     );
-    assert_eq!(
-        session.test_session().take_response().unwrap(),
-        pick_reply(34, Some(second), 2, Err(ErrorReason::InvalidViewport))
-    );
-    assert_eq!(session.test_session().world().time(), 0.0);
-    assert_eq!(session.services_mut().viewport, Some((640, 480)));
-    session.test_session().take_response().unwrap();
 
-    session.services_mut().viewport = None;
-    session.test_session().receive(&pick(35, 1, 1)).unwrap();
-    session.tick(0.0).unwrap();
+    host.runtime_mut().clear_root_output(world);
+    host.test_session()
+        .receive(&pick(33, selected, viewport()))
+        .unwrap();
+    host.tick(0.0).unwrap();
+    let tick = host.test_session().world().tick();
     assert_eq!(
-        session.test_session().take_response().unwrap(),
-        pick_reply(35, Some(second), 3, Ok(None))
+        &*responses(&mut host)[&33],
+        expected(33, tick, Err(ErrorReason::InvalidEntity)).as_slice()
+    );
+    assert!(host.runtime().root_output(world).is_none());
+}
+
+#[test]
+fn completed_view_query_is_world_and_session_fenced() {
+    let mut host = ready();
+    let foreign_world = host
+        .runtime_mut()
+        .create_world(Default::default(), &[])
+        .unwrap();
+    let output = camera(&mut host, 0.0);
+    let mut bytes = pick(41, output, viewport());
+    bytes[18..26].copy_from_slice(&foreign_world.0.to_le_bytes());
+    host.test_session().receive(&bytes).unwrap();
+    host.tick(0.0).unwrap();
+    let tick = host.test_session().world().tick();
+    assert_eq!(
+        &*responses(&mut host)[&41],
+        expected(41, tick, Err(ErrorReason::InvalidEntity)).as_slice()
+    );
+
+    let mut stale_session = pick(42, output, viewport());
+    stale_session[..8].copy_from_slice(&8u64.to_le_bytes());
+    assert!(host.test_session().receive(&stale_session).is_err());
+    assert!(host.test_session().session.pending.is_empty());
+}
+
+#[test]
+fn output_replacement_before_query_frame_invalidates_selection_without_rebinding() {
+    let mut host = ready();
+    let output = camera(&mut host, 0.0);
+    host.runtime_mut()
+        .set_root_output(output, viewport())
+        .unwrap();
+    host.test_session()
+        .receive(&pick(51, output, viewport()))
+        .unwrap();
+    let mut context = host.runtime_mut().world_mut(output.world().id()).unwrap();
+    context
+        .enqueue(Batch {
+            id: 0,
+            operations: vec![
+                Command::RemoveComponent {
+                    entity: EntityRef::Handle(output.camera_entity().unwrap()),
+                    component: ComponentValue::CAMERA,
+                },
+                Command::insert_value(
+                    EntityRef::Handle(output.camera_entity().unwrap()),
+                    ComponentValue::Camera(Camera::default()),
+                ),
+            ],
+        })
+        .unwrap();
+    drop(context);
+    host.tick(0.0).unwrap();
+    let tick = host.test_session().world().tick();
+    assert_eq!(
+        &*responses(&mut host)[&51],
+        expected(51, tick, Err(ErrorReason::InvalidEntity)).as_slice()
     );
 }
 
 #[test]
-fn queries_retain_capacity_failure_correlation_and_reject_replaced_sessions() {
-    let mut session = ready();
-    session.test_limits(ipp_core::WorldLimits {
-        max_queued_batches: 1,
-        ..Default::default()
-    });
-    session
-        .test_session()
-        .receive(&activate(EntityId::from_bits(0)))
-        .unwrap();
-    session.test_session().receive(&pick(61, 640, 480)).unwrap();
-    session.tick(0.0).unwrap();
-    assert_eq!(
-        session.test_session().take_response().unwrap(),
-        pick_reply(61, None, 1, Err(ErrorReason::Capacity))
-    );
-    assert_eq!(session.test_session().take_response().unwrap()[24], 4);
-    assert!(session.test_session().take_response().is_none());
-
-    let mut replacement = Host::<CameraPlatform>::new().unwrap();
-    replacement.open_session(8).unwrap();
-    replacement
-        .test_session()
+fn failed_frame_completes_queries_once_without_losing_queued_batches_or_healthy_peers() {
+    let failure = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(u64::MAX));
+    let mut factories = ipp_core::systems::compiled_system_factories();
+    factories.push(std::sync::Arc::new(FrameCheckFailure(failure.clone())));
+    let mut host = Host::<CameraPlatform>::with_system_factories(factories).unwrap();
+    host.open_session(
+        7,
+        &[
+            crate::host::TEST_CAMERA_SYSTEMS,
+            &[ipp_core::systems::SystemId("test.frame-check-failure")],
+        ]
+        .concat(),
+    )
+    .unwrap();
+    host.test_session()
         .receive(&ipp_protocol::bootstrap())
         .unwrap();
-    replacement.test_session().take_response().unwrap();
-    assert!(
-        replacement
-            .test_session()
-            .receive(&pick(62, 640, 480))
-            .is_err()
+    host.test_session().take_response().unwrap();
+    let output = camera(&mut host, 0.0);
+    host.runtime_mut()
+        .set_root_output(output, viewport())
+        .unwrap();
+    host.tick(0.0).unwrap();
+    responses(&mut host);
+    let tick = host.test_session().world().tick();
+
+    host.open_session(8, crate::host::TEST_CAMERA_SYSTEMS)
+        .unwrap();
+    host.session_mut(8)
+        .unwrap()
+        .receive(&ipp_protocol::bootstrap())
+        .unwrap();
+    host.session_mut(8).unwrap().take_response().unwrap();
+    let create = |session: u64, request: u64| {
+        let mut bytes = session.to_le_bytes().to_vec();
+        bytes.extend(request.to_le_bytes());
+        bytes.push(1);
+        bytes.extend(99u32.to_le_bytes());
+        bytes.push(1);
+        bytes.extend(1u32.to_le_bytes());
+        bytes.push(1);
+        bytes.extend(1u32.to_le_bytes());
+        bytes.push(0);
+        bytes.extend(0u32.to_le_bytes());
+        bytes.push(0);
+        bytes
+    };
+    host.session_mut(7)
+        .unwrap()
+        .receive(&create(7, 60))
+        .unwrap();
+    host.session_mut(7)
+        .unwrap()
+        .receive(&pick(61, output, viewport()))
+        .unwrap();
+    host.session_mut(8)
+        .unwrap()
+        .receive(&create(8, 70))
+        .unwrap();
+    failure.store(output.world().id().0, std::sync::atomic::Ordering::Relaxed);
+    assert!(host.tick_worlds(0.0).unwrap().is_empty());
+    let mut session = host.session_mut(7).unwrap();
+    assert_eq!(
+        &*session.take_response().unwrap(),
+        expected(61, tick, Err(ErrorReason::Capacity)).as_slice()
     );
-    assert_eq!(replacement.test_session().world().tick(), 0);
-    assert!(replacement.test_session().session.pending.is_empty());
+    assert_eq!(session.take_response().unwrap()[24], 22);
+    assert!(session.take_response().is_none());
+    assert_eq!(session.world().entities().len(), 1);
+    assert_eq!(session.session.replies.len(), 1);
+    assert!(session.session.prepared);
+    drop(session);
+    let peer = host.session_mut(8).unwrap().take_response().unwrap();
+    assert_eq!(u64::from_le_bytes(peer[8..16].try_into().unwrap()), 70);
+    assert_eq!(peer[24], 1);
+
+    assert!(host.tick_worlds(0.0).unwrap().is_empty());
+    assert!(host.session_mut(7).unwrap().take_response().is_none());
+    failure.store(u64::MAX, std::sync::atomic::Ordering::Relaxed);
+    assert!(host.tick_worlds(0.0).unwrap().is_empty());
+    let mut session = host.session_mut(7).unwrap();
+    let reply = session.take_response().unwrap();
+    assert_eq!(u64::from_le_bytes(reply[8..16].try_into().unwrap()), 60);
+    assert_eq!(reply[24], 1);
+    assert_eq!(session.world().entities().len(), 2);
+    assert!(!session.session.prepared);
+    while session.take_response().is_some() {}
+    session.receive(&pick(62, output, viewport())).unwrap();
+    let mut projection = pick(63, output, viewport());
+    projection[16] = 12;
+    projection.pop();
+    for value in [0.0f32, 0.0, 0.0, 0.0, 0.0, 1.0] {
+        projection.extend(value.to_le_bytes());
+    }
+    session.receive(&projection).unwrap();
+    drop(session);
+    failure.store(output.world().id().0, std::sync::atomic::Ordering::Relaxed);
+    assert!(host.tick_worlds(0.0).unwrap().is_empty());
+    let mut session = host.session_mut(7).unwrap();
+    assert_eq!(
+        &*session.take_response().unwrap(),
+        expected(62, session.world().tick(), Err(ErrorReason::Capacity)).as_slice()
+    );
+    assert_eq!(
+        &*session.take_response().unwrap(),
+        ipp_protocol::encode_response(&Response {
+            session: 7,
+            request_id: 63,
+            tick: session.world().tick(),
+            body: ResponseBody::CameraProjectResultEvent(ipp_protocol::views::ViewQueryOutcome {
+                request_id: 63,
+                tick: session.world().tick(),
+                result: Err(ErrorReason::Capacity),
+            }),
+        })
+        .unwrap()
+        .as_slice()
+    );
+    assert!(!session.session.prepared);
+    assert!(session.session.request_origins.is_empty());
 }

@@ -32,6 +32,11 @@ pub trait SystemFactory: Send + Sync {
         &[]
     }
 
+    /// Component and operation support contributed by this factory.
+    fn capabilities(&self) -> super::SystemCapabilities {
+        super::SystemCapabilities::default()
+    }
+
     /// Default reservations owned and interpreted by this system's module.
     fn capacity_hints(&self) -> crate::WorldSystemCapacityHints {
         crate::WorldSystemCapacityHints::default()
@@ -47,21 +52,45 @@ pub trait SystemFactory: Send + Sync {
 
 /// A World exclusively owns each instance and its ordinary mutable state.
 pub trait System: Any {
-    /// Substitute sparse producer originals without exposing this System's private storage.
-    fn restore_component_input(
+    /// Component whose entities are outputs of `kind` supplied by this evaluator.
+    fn output_component(&self, _kind: crate::OutputKind) -> Option<u16> {
+        None
+    }
+
+    /// Whether this evaluator supplies the World-level output of `kind`, which
+    /// names no entity and lives as long as the World.
+    fn world_output(&self, _kind: crate::OutputKind) -> bool {
+        false
+    }
+
+    /// Own final typed results before the Host assembles descendant outputs.
+    fn publish_output(
         &self,
-        _entity: crate::EntityId,
-        _incarnation: u64,
-        _value: &mut crate::ComponentValue,
+        _world: &crate::WorldContext<'_>,
+        _output: &mut crate::host::WorldOutputBuilder<'_>,
+    ) -> Result<(), crate::ErrorReason> {
+        Ok(())
+    }
+
+    /// Extract completed attachment inputs after local evaluation and before descendants run.
+    fn completed_attachments(
+        &self,
+        _world: &crate::WorldContext<'_>,
+        _attachments: &mut Vec<crate::PublishedWorldAttachment>,
     ) {
     }
 
-    /// Exclude subsystem-owned transient entities from durable capture.
-    fn include_entity_in_snapshot(&self, _entity: crate::EntityId) -> bool {
-        true
+    /// Claim derived placement after every local update and before descendant contexts form.
+    /// Return Unavailable for managed but unready anchors; never request spatial fallback.
+    fn attachment_placement(
+        &self,
+        _world: &crate::WorldContext<'_>,
+        _anchor: crate::EntityId,
+    ) -> crate::AttachmentPlacement {
+        crate::AttachmentPlacement::Unmanaged
     }
 
-    /// Capture owned subsystem state after generic producer identity selection.
+    /// Capture owned subsystem state after generic entity identity selection.
     fn save_persistent_state(
         &self,
         _context: &mut super::SystemSaveContext<'_>,
@@ -82,6 +111,24 @@ pub trait System: Any {
         }
     }
 
+    /// Pure declaration from command-owned identities, not current mutable System state.
+    /// Each queued command (including each group member) declares its own immutable
+    /// foreign World reads. This neither validates lifetimes nor authorizes execution.
+    fn command_world_references(
+        &self,
+        _command: &dyn Any,
+        _visit: &mut dyn FnMut(crate::WorldRef),
+    ) {
+    }
+
+    /// Read-only readiness of a standalone queued command, not a command group.
+    ///
+    /// A false result retains a standalone command at the ingress head, without
+    /// stopping evaluation. Cancellation must make a parked command drainable.
+    fn command_ready(&self, _command: &dyn Any) -> bool {
+        true
+    }
+
     /// Interpret an owned command at its ordered World boundary.
     fn command(
         &mut self,
@@ -100,14 +147,6 @@ pub trait System: Any {
     /// Release only one session's retained state at the session fence.
     fn release_session(&mut self, _session: u64) {}
 
-    /// Whether this System holds routed input that must drain through a
-    /// later mutation boundary before newer ingress may overtake it.
-    /// Command-chunk admission treats a positive answer as transient
-    /// backpressure, never as rejection.
-    fn has_deferred_input(&self) -> bool {
-        false
-    }
-
     /// Applied entity/component observation, after synchronous invalidation.
     fn lifecycle(
         &mut self,
@@ -124,7 +163,7 @@ pub trait System: Any {
         Ok(())
     }
 
-    /// Complete fallible service checks before ingress or evaluated restoration mutates state.
+    /// Complete fallible service checks before ingress mutates state.
     fn prepare_frame(
         &mut self,
         _context: &mut SystemUpdateContext<'_, '_>,
@@ -140,6 +179,25 @@ pub trait System: Any {
 
     /// Attach subsystem-owned batch outcomes after partial effects are committed.
     fn finish_batch(&mut self, _outcome: &mut crate::BatchOutcome) {}
+
+    /// Describe owned releases without invalidating bindings or staging any values.
+    fn operation_impact(
+        &self,
+        _context: &super::SystemOperationPreparationContext<'_>,
+        _impact: &mut super::OperationImpact,
+    ) -> Result<(), crate::ErrorReason> {
+        Ok(())
+    }
+
+    /// Reserve effects using the complete pure impact from core and all selected Systems.
+    fn operation_effect_demand(
+        &self,
+        _context: &super::SystemOperationPreparationContext<'_>,
+        _impact: &super::OperationImpact,
+        _demand: &mut crate::OperationEffectDemand,
+    ) -> Result<(), crate::ErrorReason> {
+        Ok(())
+    }
 
     /// Observe and stage subsystem inputs before the operation changes authored state.
     fn before_operation(
@@ -165,9 +223,6 @@ pub trait System: Any {
         Ok(())
     }
 
-    /// Restore sparse inputs before ordered ingress; no simulation time advances here.
-    fn prepare_mutation(&mut self, _context: &mut SystemUpdateContext<'_, '_>) {}
-
     /// Validate this subsystem's changes without taking ownership of generic mutation.
     fn validate_commit(
         &self,
@@ -186,6 +241,12 @@ pub trait System: Any {
     /// cannot replace storage or request structural cleanup; use lifecycle hooks
     /// for those operations. Numeric writes do not invoke commit validation.
     fn before_numeric_update(&mut self, _context: &mut super::SystemNumericContext<'_>) {}
+
+    /// Another System is about to write absolute values into these fields
+    /// (entity, component, field offset), replacing whatever they held. A System
+    /// that keeps contributions to a field forgets them here and applies them in
+    /// full after the write.
+    fn before_absolute_writes(&mut self, _fields: &[(crate::EntityId, u16, u32)]) {}
 
     /// Invalidate resource-dependent storage before the Host releases a shared payload or identity.
     fn before_asset_release(
@@ -214,6 +275,10 @@ pub trait System: Any {
     ) {
     }
 
+    /// Observe the final stored values of the evaluated `tick`. This last frame phase runs
+    /// after every System's [`Self::finish_update`] and cannot change World state.
+    fn observe_frame(&mut self, _world: super::SystemWorldView<'_>, _tick: u64) {}
+
     /// Release world-local service usage while predecessors and services still exist.
     fn teardown(&mut self, _context: &mut SystemTeardownContext<'_>) {}
 
@@ -239,6 +304,20 @@ pub enum SystemScheduleError {
     },
     /// Both kinds of ordering edges participate in cycle detection.
     Cycle(Vec<SystemId>),
+    /// A factory advertised a component outside the compiled registry.
+    InvalidComponentCapability {
+        /// Advertising factory.
+        system: SystemId,
+        /// Unknown compiled component identity.
+        component: u16,
+    },
+    /// A selected component requires a component with no selected evaluator.
+    MissingComponentCapability {
+        /// Admitted component that declares a requirement.
+        component: u16,
+        /// Required but unsupported component.
+        required: u16,
+    },
 }
 
 impl fmt::Display for SystemScheduleError {
@@ -252,6 +331,25 @@ impl fmt::Display for SystemScheduleError {
                 required,
             } => write!(f, "system {} requires {}", system.0, required.0),
             Self::Cycle(ids) => write!(f, "systems blocked by a dependency cycle: {ids:?}"),
+            Self::InvalidComponentCapability {
+                system,
+                component,
+            } => {
+                write!(
+                    f,
+                    "system {} advertises unknown component {component}",
+                    system.0
+                )
+            }
+            Self::MissingComponentCapability {
+                component,
+                required,
+            } => {
+                write!(
+                    f,
+                    "component {component} requires unsupported component {required}"
+                )
+            }
         }
     }
 }
@@ -391,6 +489,8 @@ impl SystemFactories {
 pub(in crate::world) struct SystemInstance {
     pub id: SystemId,
     pub system: Box<dyn System>,
+    #[cfg(feature = "profiling")]
+    pub profile_slot: Option<usize>,
 }
 
 /// World-owned instances in their construction and update order.

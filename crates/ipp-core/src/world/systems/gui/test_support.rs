@@ -1,5 +1,10 @@
-use crate::services::asset_management::AssetSource;
-use crate::services::asset_management::font::{FONT_TYPE, FontAsset};
+//! Font fixture and control reads shared by ordinary GUI lane tests.
+
+use super::local::control::{ancestry, eligibility, entity_control};
+use super::local::{GuiControlKind, GuiEntityTarget, GuiInteractionFlags};
+use crate::EntityId;
+use crate::services::asset_management::font::FontAsset;
+use std::sync::Arc;
 
 fn push_u32(bytes: &mut Vec<u8>, value: u32) {
     bytes.extend_from_slice(&value.to_le_bytes());
@@ -57,209 +62,101 @@ pub(super) fn test_font() -> FontAsset {
     FontAsset::decode(&font_fixture_bytes()).expect("GUI test font must decode")
 }
 
-pub(super) fn font_source() -> AssetSource {
-    AssetSource {
-        kind: FONT_TYPE,
-        uri: "test-font".to_owned(),
-        variant: 0,
-    }
-}
-
-/// Authored node for fixtures: kind and strings plus the kind-specific
-/// scalars an `InsertNode` seeds into the node's `node_data` row.
+/// A control's value field, read from the component store.
 #[derive(Clone, Debug, PartialEq)]
-pub(in crate::world::systems) struct AuthoredNode {
-    pub(in crate::world::systems) data: super::GuiNodeData,
-    pub(in crate::world::systems) values: super::GuiNodeDataRow,
+pub(crate) enum GuiTestValue {
+    /// A button has no value.
+    None,
+    /// A checkbox's `checked`.
+    Bool(bool),
+    /// A slider's `value`.
+    Scalar(f32),
+    /// A text input's `text`.
+    Text(Arc<str>),
+    /// A scroll view's or virtual list's `offset_x` and `offset_y`.
+    Scroll([f32; 2]),
 }
 
-impl From<super::GuiNodeData> for AuthoredNode {
-    fn from(data: super::GuiNodeData) -> Self {
-        Self {
-            data,
-            values: super::GuiNodeDataRow::default(),
+/// One control read the way a client reads it: its value and eligibility from
+/// component fields, focus and pointer feedback from the GUI System queries.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct GuiControlRead {
+    /// Exact control lifetime.
+    pub target: GuiEntityTarget,
+    /// Control role.
+    pub kind: GuiControlKind,
+    /// `GuiBehavior.effective_enabled`.
+    pub enabled: bool,
+    /// `GuiBehavior.effective_visible`.
+    pub visible: bool,
+    /// `GuiBehavior.available`.
+    pub available: bool,
+    /// Whether the `GuiFocus` query names this control.
+    pub focused: bool,
+    /// Union of this control's `GuiPointers` records.
+    pub interaction: GuiInteractionFlags,
+    /// The control's value field.
+    pub value: GuiTestValue,
+    /// `CanvasBounds` as `[x, y, width, height]`.
+    pub bounds: [f32; 4],
+    /// Root-first core ancestry, including the control.
+    pub ancestry: Arc<[EntityId]>,
+}
+
+/// Read one control's fields and System query records, if `entity` is a control.
+pub(crate) fn read_control(
+    world: &crate::WorldContext<'_>,
+    entity: EntityId,
+) -> Option<GuiControlRead> {
+    let simulation = &*world.world;
+    let control = entity_control(simulation, &simulation.state, entity)?;
+    let components = &simulation.components;
+    let index = entity.index() as usize;
+    let value = match control.kind {
+        GuiControlKind::Button => GuiTestValue::None,
+        GuiControlKind::Checkbox => GuiTestValue::Bool(components.gui_checkbox(index)?.checked),
+        GuiControlKind::Slider => GuiTestValue::Scalar(components.gui_slider(index)?.value),
+        GuiControlKind::TextInput => {
+            GuiTestValue::Text(components.gui_text_input(index)?.text.clone())
         }
-    }
-}
-
-/// Slider node with its initial value and range.
-pub(in crate::world::systems) fn slider_node(
-    value: f32,
-    min: f32,
-    max: f32,
-    step: f32,
-) -> AuthoredNode {
-    AuthoredNode {
-        data: super::GuiNodeData::Slider,
-        values: super::GuiNodeDataRow::slider(value, min, max, step),
-    }
-}
-
-/// Checkbox node with its initial state.
-pub(in crate::world::systems) fn checkbox_node(checked: bool) -> AuthoredNode {
-    AuthoredNode {
-        data: super::GuiNodeData::Checkbox,
-        values: super::GuiNodeDataRow::checkbox(checked),
-    }
-}
-
-/// Part identity named like `background`, `icon_pressed` or
-/// `icon_idle_unchecked`: a base part, an optional state and, under a
-/// state, an optional variant.
-pub(in crate::world::systems) fn part_id(name: &str) -> super::GuiPartId {
-    use super::{GUI_BASE_PARTS, GuiPartId, GuiPartVariant, GuiSkinState};
-
-    let mut words = name.split('_');
-    let base = words.next().unwrap_or_default();
-    let part = GUI_BASE_PARTS
-        .into_iter()
-        .find(|part| part.as_str() == base)
-        .unwrap_or_else(|| panic!("unknown base part in {name}"));
-    let state = words.next().map(|state| match state {
-        "idle" => GuiSkinState::Idle,
-        "hovered" => GuiSkinState::Hovered,
-        "pressed" => GuiSkinState::Pressed,
-        "disabled" => GuiSkinState::Disabled,
-        other => panic!("unknown part state {other}"),
-    });
-    let variant = words.next().map(|variant| match variant {
-        "checked" => GuiPartVariant::Checked,
-        "unchecked" => GuiPartVariant::Unchecked,
-        other => panic!("unknown part variant {other}"),
-    });
-    assert!(words.next().is_none(), "unknown part {name}");
-    GuiPartId {
-        part,
-        state,
-        variant,
-    }
-}
-
-/// Part property by its row layout name.
-pub(in crate::world::systems) fn part_property(name: &str) -> super::GuiPartProperty {
-    super::GuiPartProperty::ALL
-        .into_iter()
-        .find(|property| property.name() == name)
-        .unwrap_or_else(|| panic!("unknown part property {name}"))
-}
-
-/// Write one field of a root through the component registry, as staging
-/// does, so the root re-derives its indexes and live channels.
-fn write_field(
-    root: &mut super::GuiRoot,
-    offset: u32,
-    value: crate::components::schema::FieldValue,
-) {
-    let mut component = crate::ComponentValue::GuiRoot(std::mem::take(root));
-    component.set_field(offset, value).unwrap();
-    let crate::ComponentValue::GuiRoot(written) = component else {
-        unreachable!("GUI root writes keep the component type")
+        GuiControlKind::ScrollView => {
+            let scroll = components.gui_scroll_view(index)?;
+            GuiTestValue::Scroll([scroll.offset_x, scroll.offset_y])
+        }
+        GuiControlKind::VirtualList => {
+            let list = components.gui_virtual_list(index)?;
+            GuiTestValue::Scroll([list.offset_x, list.offset_y])
+        }
     };
-    *root = written;
-}
-
-/// Apply GUI command writes to a root value as staging does.
-pub(in crate::world::systems) fn apply_writes(
-    root: &mut super::GuiRoot,
-    writes: Vec<crate::FieldWrite>,
-) {
-    use crate::components::schema::FieldValue;
-
-    for write in writes {
-        let value = match write.value {
-            crate::FieldValue::Dynamic(value) => FieldValue::Dynamic(value),
-            crate::FieldValue::Unset => FieldValue::Unset,
-            crate::FieldValue::Rows(bytes) => FieldValue::Rows(bytes),
-            other => panic!("unexpected GUI write {other:?}"),
-        };
-        write_field(root, write.offset, value);
-    }
-}
-
-/// Set or clear one property of one part of a root theme, creating the
-/// theme on its first part.
-pub(in crate::world::systems) fn set_theme_part(
-    root: &mut super::GuiRoot,
-    theme: u32,
-    part: &str,
-    property: &str,
-    value: Option<crate::DynamicValue>,
-) {
-    let patch = match value {
-        Some(value) => super::GuiPartPatch::default().set(part_property(property), value),
-        None => super::GuiPartPatch::default().clear(part_property(property)),
-    };
-    let writes = root
-        .theme_part_writes(theme, part_id(part), &patch)
-        .unwrap();
-    apply_writes(root, writes);
-}
-
-/// Point one live node at a theme handle, or clear its reference.
-pub(in crate::world::systems) fn set_node_theme(
-    root: &mut super::GuiRoot,
-    node: super::GuiNodeId,
-    theme: Option<u32>,
-) {
-    use crate::components::schema::FieldValue;
-
-    let offset =
-        super::GuiRoot::node_style_offset(node, super::GuiNodeStyleProperty::Theme).unwrap();
-    let value = theme.map_or(FieldValue::Unset, |theme| {
-        FieldValue::Dynamic(crate::DynamicValue::U32(theme))
+    let bounds = components.canvas_bounds(index).map_or([0.0; 4], |bounds| {
+        [bounds.x, bounds.y, bounds.width, bounds.height]
     });
-    write_field(root, offset, value);
-}
-
-/// Make nodes up to `node` exist, each a Stack child of node 1 that
-/// references the theme with its own identity, so per-node fixtures author
-/// their parts in a theme of their own.
-pub(in crate::world::systems) fn ensure_themed_nodes(root: &mut super::GuiRoot, node: u32) {
-    while root.next_node_id() <= node {
-        let id = super::GuiNodeId(root.next_node_id());
-        let parent = (id.0 != 1).then_some(super::GuiNodeId(1));
-        root.insert_node(
-            id,
-            parent,
-            usize::MAX,
-            super::GuiNodeData::Container(super::GuiContainerKind::Stack),
-            super::GuiNodeDataRow::default(),
-            &super::GuiNodeStyle::default(),
-        )
-        .unwrap();
-        set_node_theme(root, id, Some(id.0));
-    }
-}
-
-/// Author one part property of `node` in the node's own theme, the
-/// per-node fixture shape of named part properties.
-pub(in crate::world::systems) fn author_part(
-    root: &mut super::GuiRoot,
-    node: u32,
-    part: &str,
-    property: &str,
-    value: crate::DynamicValue,
-) {
-    ensure_themed_nodes(root, node);
-    set_theme_part(root, node, part, property, Some(value));
-}
-
-/// Write one live channel of a node's part row, as a skin transition does.
-/// The node's theme must declare motion for the part, which opens it.
-pub(in crate::world::systems) fn set_part_channel(
-    root: &mut super::GuiRoot,
-    node: u32,
-    part: crate::systems::surface::GuiPrimitivePart,
-    channel: super::GuiPartChannel,
-    value: crate::DynamicValue,
-) {
-    let (slot, _) = root
-        .part_row(super::GuiNodeId(node), part)
-        .expect("animated part has live channels");
-    let offset = super::GuiRoot::part_row_offset(slot, channel.index()).unwrap();
-    write_field(
-        root,
-        offset,
-        crate::components::schema::FieldValue::Dynamic(value),
-    );
+    let eligibility = eligibility(simulation, entity);
+    let focused = world
+        .gui_focus_page(0, entity.to_bits(), 1)
+        .first()
+        .is_some_and(|record| record.target == control.target);
+    let interaction = world
+        .gui_pointer_page(0, entity.to_bits(), usize::MAX)
+        .into_iter()
+        .filter(|record| record.target == control.target)
+        .fold(GuiInteractionFlags::default(), |flags, record| {
+            GuiInteractionFlags {
+                hovered: flags.hovered || record.state.hovered,
+                pressed: flags.pressed || record.state.pressed,
+                captured: flags.captured || record.state.captured,
+            }
+        });
+    Some(GuiControlRead {
+        target: control.target,
+        kind: control.kind,
+        enabled: eligibility.enabled,
+        visible: eligibility.visible,
+        available: eligibility.available,
+        focused,
+        interaction,
+        value,
+        bounds,
+        ancestry: ancestry(&simulation.state, entity),
+    })
 }

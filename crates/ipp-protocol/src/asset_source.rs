@@ -61,7 +61,7 @@ fn source(reader: &mut Reader<'_>) -> Result<AssetSource, ProtocolError> {
         kind: AssetTypeId(
             u16::try_from(reader.u32()?).map_err(|_| ProtocolError::Malformed("asset kind"))?,
         ),
-        uri: reader.string()?,
+        uri: reader.text()?,
         variant: reader.u32()?,
     })
 }
@@ -123,7 +123,7 @@ pub fn response(
     id: u64,
     result: Result<(), String>,
 ) -> Result<Vec<u8>, ProtocolError> {
-    let mut writer = Writer(Vec::new());
+    let mut writer = Writer::new(Vec::new());
     writer.raw(RESPONSE_MAGIC)?;
     writer.u64(session)?;
     writer.u64(id)?;

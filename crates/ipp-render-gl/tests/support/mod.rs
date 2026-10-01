@@ -3,10 +3,13 @@
 
 #![allow(dead_code)]
 
+#[cfg(feature = "surfaces")]
+pub mod canvas;
+pub mod selection;
+
 use ipp_core::{
     Batch, Command, ComponentValue, EntityId, EntityRef, MeshAsset, WorldContext,
     components::{Camera, Transform},
-    services::asset_management::{AssetLoadStatus, AssetTypeId},
 };
 use ipp_render_gl::{RenderDevice, RenderError, RenderService};
 #[cfg(feature = "surfaces")]
@@ -15,6 +18,8 @@ use std::{cell::Cell, rc::Rc};
 
 #[derive(Default)]
 pub struct DeviceState {
+    pub program_creates: Cell<u32>,
+    pub program_deletes: Cell<u32>,
     pub failed_attempts_remaining: Cell<u32>,
     pub mesh_attempts: Cell<u32>,
     /// Mesh draw submissions.
@@ -52,21 +57,21 @@ pub struct DeviceState {
     #[cfg(feature = "surfaces")]
     pub live_analytic_streams: Cell<i32>,
     /// Retained GUI storage writes.
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     pub gui_batch_writes: Cell<u32>,
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     pub atlas_populations: Cell<u32>,
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     pub atlas_target_bound: Cell<bool>,
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     pub fail_atlas_begin: RefCell<Option<RenderError>>,
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     pub fail_atlas_end: RefCell<Option<RenderError>>,
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     pub atlas_restores: Cell<u32>,
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     pub atlas_pages_created: Cell<u32>,
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     pub fail_gui_batch_write: RefCell<Option<RenderError>>,
     /// Largest cache target dimension; zero (the default) disables caching.
     #[cfg(feature = "surfaces")]
@@ -76,6 +81,8 @@ pub struct DeviceState {
     #[cfg(feature = "surfaces")]
     pub cache_creates: Cell<u32>,
     #[cfg(feature = "surfaces")]
+    pub cache_deletes: Cell<u32>,
+    #[cfg(feature = "surfaces")]
     pub cache_resizes: Cell<u32>,
     #[cfg(feature = "surfaces")]
     pub cache_begins: Cell<u32>,
@@ -83,6 +90,10 @@ pub struct DeviceState {
     pub cache_composites: Cell<u32>,
     #[cfg(feature = "surfaces")]
     pub cache_target_bound: Cell<bool>,
+    #[cfg(feature = "surfaces")]
+    pub bound_cache_target: Cell<Option<u32>>,
+    #[cfg(feature = "surfaces")]
+    pub camera_target_bound: Cell<bool>,
     #[cfg(feature = "surfaces")]
     pub fail_cache_create: RefCell<Option<RenderError>>,
     #[cfg(feature = "surfaces")]
@@ -95,10 +106,10 @@ pub struct DeviceState {
     #[cfg(feature = "surfaces")]
     pub surface_path_draws: Cell<u32>,
     /// Retained GUI draws sampling an atlas page.
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     pub glyph_batch_draws: Cell<u32>,
     /// Retained GUI draws of boxes only.
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     pub gui_batch_draws: Cell<u32>,
     /// Ordered Surface work: `B`/`E` begin and end a cache target, `C` composites,
     /// `P` draws paths, `G` analytic glyphs, `T` retained GUI work sampling atlas
@@ -120,7 +131,7 @@ impl RenderDevice for TestDevice {
     #[cfg(feature = "surfaces")]
     type SurfacePath = ();
     #[cfg(feature = "surfaces")]
-    type SurfaceCacheTarget = ();
+    type SurfaceCacheTarget = u32;
     #[cfg(feature = "surfaces")]
     type SurfaceInstances = ();
     type Program = ();
@@ -129,12 +140,12 @@ impl RenderDevice for TestDevice {
 
     #[cfg(feature = "shadows")]
     type ShadowMap = ();
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     type GuiBatch = ();
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     type GlyphAtlasPage = ();
 
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     fn glyph_atlas_texture(page: &Self::GlyphAtlasPage) -> &Self::Texture {
         page
     }
@@ -212,6 +223,7 @@ impl RenderDevice for TestDevice {
     }
 
     fn create_program(&mut self, _vertex: &str, _fragment: &str) -> Result<(), RenderError> {
+        self.0.program_creates.set(self.0.program_creates.get() + 1);
         Ok(())
     }
 
@@ -288,11 +300,11 @@ impl RenderDevice for TestDevice {
         self.0
             .surface_path_draws
             .set(self.0.surface_path_draws.get() + 1);
-        #[cfg(feature = "gui")]
+        #[cfg(feature = "surfaces")]
         if !self.0.atlas_target_bound.get() {
             self.0.surface_events.borrow_mut().push('P');
         }
-        #[cfg(not(feature = "gui"))]
+        #[cfg(not(feature = "surfaces"))]
         self.0.surface_events.borrow_mut().push('P');
         if self.0.fail_surface_draw.get() {
             Err(RenderError::RenderDevice(
@@ -348,7 +360,7 @@ impl RenderDevice for TestDevice {
         _: &[f32; 4],
         _: u32,
     ) -> Result<(), RenderError> {
-        #[cfg(feature = "gui")]
+        #[cfg(feature = "surfaces")]
         assert!(
             !self.0.atlas_target_bound.get(),
             "the main pass never draws into an atlas page"
@@ -366,7 +378,7 @@ impl RenderDevice for TestDevice {
     }
 
     #[cfg(feature = "surfaces")]
-    fn create_surface_cache_target(&mut self, width: u32, height: u32) -> Result<(), RenderError> {
+    fn create_surface_cache_target(&mut self, width: u32, height: u32) -> Result<u32, RenderError> {
         let limit = self.0.cache_limit.get();
         assert!(
             (1..=limit).contains(&width) && (1..=limit).contains(&height),
@@ -380,13 +392,13 @@ impl RenderDevice for TestDevice {
         self.0
             .cache_targets_live
             .set(self.0.cache_targets_live.get() + 1);
-        Ok(())
+        Ok(self.0.cache_creates.get())
     }
 
     #[cfg(feature = "surfaces")]
     fn resize_surface_cache_target(
         &mut self,
-        _: &mut (),
+        _: &mut u32,
         width: u32,
         height: u32,
     ) -> Result<(), RenderError> {
@@ -402,12 +414,21 @@ impl RenderDevice for TestDevice {
     /// Cache targets never nest or start inside atlas population; atlas
     /// population may nest inside one.
     #[cfg(feature = "surfaces")]
-    fn begin_surface_cache_target(&mut self, _: &()) -> Result<(), RenderError> {
+    fn begin_camera_target(&mut self, target: &mut u32, _: &[f32; 4]) -> Result<(), RenderError> {
+        assert!(!self.0.cache_target_bound.replace(true));
+        self.0.bound_cache_target.set(Some(*target));
+        self.0.camera_target_bound.set(true);
+        self.0.cache_begins.set(self.0.cache_begins.get() + 1);
+        Ok(())
+    }
+
+    #[cfg(feature = "surfaces")]
+    fn begin_surface_cache_target(&mut self, target: &u32) -> Result<(), RenderError> {
         assert!(
             !self.0.cache_target_bound.get(),
             "Surface cache targets never nest"
         );
-        #[cfg(feature = "gui")]
+        #[cfg(feature = "surfaces")]
         assert!(
             !self.0.atlas_target_bound.get(),
             "Surface cache targets never begin inside atlas population"
@@ -423,12 +444,15 @@ impl RenderDevice for TestDevice {
         }
 
         self.0.cache_target_bound.set(true);
+        self.0.bound_cache_target.set(Some(*target));
         Ok(())
     }
 
     #[cfg(feature = "surfaces")]
     fn end_surface_cache_target(&mut self) -> Result<(), RenderError> {
         self.0.cache_target_bound.set(false);
+        self.0.bound_cache_target.set(None);
+        self.0.camera_target_bound.set(false);
         self.0.surface_events.borrow_mut().push('E');
         match self.0.fail_cache_end.borrow().clone() {
             Some(error) => Err(error),
@@ -440,19 +464,22 @@ impl RenderDevice for TestDevice {
     fn draw_surface_cache(
         &mut self,
         _: &(),
-        _: &(),
+        target: &u32,
         _: &[f32; 16],
         _: &[f32; 2],
+        _clip: &[f32; 4],
+        _opacity: f32,
     ) -> Result<(), RenderError> {
         assert!(
             self.0.surface_double_sided.get(),
             "Surface cache composites run with back-face culling suspended"
         );
-        assert!(
-            !self.0.cache_target_bound.get(),
-            "the main pass never composites into a cache target"
+        assert_ne!(
+            self.0.bound_cache_target.get(),
+            Some(*target),
+            "a composite cannot sample its bound target"
         );
-        #[cfg(feature = "gui")]
+        #[cfg(feature = "surfaces")]
         assert!(
             !self.0.atlas_target_bound.get(),
             "the main pass never composites into an atlas page"
@@ -468,18 +495,19 @@ impl RenderDevice for TestDevice {
     }
 
     #[cfg(feature = "surfaces")]
-    fn delete_surface_cache_target(&mut self, _: ()) {
+    fn delete_surface_cache_target(&mut self, _: u32) {
+        self.0.cache_deletes.set(self.0.cache_deletes.get() + 1);
         self.0
             .cache_targets_live
             .set(self.0.cache_targets_live.get() - 1);
     }
 
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     fn create_gui_batch(&mut self, _: usize) -> Result<(), RenderError> {
         Ok(())
     }
 
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     fn write_gui_batch(
         &mut self,
         _: &mut (),
@@ -495,7 +523,7 @@ impl RenderDevice for TestDevice {
         }
     }
 
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     fn draw_gui_batch(
         &mut self,
         _: &(),
@@ -521,7 +549,7 @@ impl RenderDevice for TestDevice {
         Ok(())
     }
 
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     fn create_glyph_atlas_page(&mut self, _: u32, _: u32) -> Result<(), RenderError> {
         self.0
             .atlas_pages_created
@@ -530,7 +558,7 @@ impl RenderDevice for TestDevice {
     }
 
     /// Consecutive begins switch pages; one end restores the host target.
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     fn begin_glyph_atlas_page(&mut self, _: &()) -> Result<(), RenderError> {
         self.0
             .atlas_populations
@@ -543,7 +571,7 @@ impl RenderDevice for TestDevice {
         Ok(())
     }
 
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     fn end_glyph_atlas_page(&mut self) -> Result<(), RenderError> {
         self.0.atlas_restores.set(self.0.atlas_restores.get() + 1);
         self.0.atlas_target_bound.set(false);
@@ -608,35 +636,79 @@ impl RenderDevice for TestDevice {
         panic!("mesh-only scenarios never delete textures");
     }
 
-    fn delete_program(&mut self, _program: ()) {}
+    fn delete_program(&mut self, _program: ()) {
+        self.0.program_deletes.set(self.0.program_deletes.get() + 1);
+    }
+}
+
+/// Apply one queued batch and evaluate its World, returning the batch outcome.
+pub fn apply_batch(world: &mut WorldContext<'_>, batch: Batch) -> ipp_core::BatchOutcome {
+    world.enqueue(batch).unwrap();
+    update(world).unwrap().outcomes.remove(0)
 }
 
 pub fn create(world: &mut WorldContext<'_>, values: Vec<ComponentValue>) -> EntityId {
     let mut operations = vec![Command::Create {
         alias: 0,
         metadata: Default::default(),
+        adopt: false,
     }];
     operations.extend(
         values
             .into_iter()
             .map(|value| Command::insert_value(EntityRef::Alias(0), value)),
     );
-    world
-        .enqueue(Batch {
-            id: world.tick() + 1,
+    let id = world.tick() + 1;
+    let outcome = apply_batch(
+        world,
+        Batch {
+            id,
             operations,
-        })
-        .unwrap();
-    update(world).unwrap().outcomes[0].result.as_ref().unwrap()[0].1
+        },
+    );
+
+    outcome.result.unwrap()[0].1
+}
+
+/// The presenting scene World: a camera over rendered content, which with
+/// Surfaces also presents attached child Worlds on Surface anchors. Fixture
+/// Systems a test registered on this Host beyond the compiled ones are selected
+/// too, so their hooks observe the scene.
+pub fn scene_systems(host: &ipp_core::HostRuntime) -> Vec<ipp_core::systems::SystemId> {
+    #[cfg(feature = "surfaces")]
+    let parts = [
+        selection::ATTACHMENTS,
+        selection::CAMERA,
+        selection::RENDER,
+        selection::SURFACE,
+    ];
+    #[cfg(not(feature = "surfaces"))]
+    let parts = [selection::CAMERA, selection::RENDER];
+    let compiled: Vec<_> = ipp_core::systems::compiled_system_factories()
+        .iter()
+        .map(|factory| factory.id())
+        .collect();
+    let mut selected = selection::select(&parts);
+    selected.extend(host.system_ids().filter(|id| !compiled.contains(id)));
+    selected
 }
 
 pub fn setup(
     host: &mut ipp_core::HostRuntime,
 ) -> (WorldContext<'_>, RenderService<TestDevice>, Rc<DeviceState>) {
+    let systems = scene_systems(host);
+    setup_with(host, &systems)
+}
+
+/// [`setup`] with an explicit scene World selection.
+pub fn setup_with<'a>(
+    host: &'a mut ipp_core::HostRuntime,
+    systems: &[ipp_core::systems::SystemId],
+) -> (WorldContext<'a>, RenderService<TestDevice>, Rc<DeviceState>) {
     let state = Rc::new(DeviceState::default());
     let renderer = RenderService::new(TestDevice(state.clone())).unwrap();
     renderer.install(host).unwrap();
-    let id = host.create_world(Default::default()).unwrap();
+    let id = host.create_world(Default::default(), systems).unwrap();
     let mut world = host.world_mut(id).unwrap();
     let entity = create(
         &mut world,
@@ -650,7 +722,24 @@ pub fn setup(
     );
     world.enqueue_camera_activate(entity).unwrap();
     update(&mut world).unwrap();
-    (world, renderer, state)
+    drop(world);
+    let selection = host
+        .bind_output(
+            host.world_ref(id).unwrap(),
+            entity,
+            ipp_core::OutputKind::Camera,
+        )
+        .unwrap();
+    host.set_root_output(
+        selection,
+        ipp_core::WorldViewport {
+            width: 100,
+            height: 100,
+            device_pixel_ratio: 1.0,
+        },
+    )
+    .unwrap();
+    (host.world_mut(id).unwrap(), renderer, state)
 }
 
 #[cfg(feature = "surfaces")]
@@ -764,45 +853,60 @@ impl std::ops::DerefMut for FrameStats {
 
 /// Render and collect the completed frame's summary and statistics.
 pub trait RenderFrameStats {
-    fn render_stats(
+    fn draw_stats(
         &mut self,
-        world: &mut ipp_core::WorldContext<'_>,
+        host: &ipp_core::HostRuntime,
+        world: ipp_core::WorldId,
         width: u32,
         height: u32,
     ) -> Result<FrameStats, ipp_render_gl::RenderError>;
 }
 
 impl<D: ipp_render_gl::RenderDevice> RenderFrameStats for ipp_render_gl::RenderService<D> {
-    fn render_stats(
+    fn draw_stats(
         &mut self,
-        world: &mut ipp_core::WorldContext<'_>,
+        host: &ipp_core::HostRuntime,
+        world: ipp_core::WorldId,
         width: u32,
         height: u32,
     ) -> Result<FrameStats, ipp_render_gl::RenderError> {
-        let summary = self.render(world, width, height)?;
+        let viewport = ipp_core::WorldViewport {
+            width,
+            height,
+            device_pixel_ratio: 1.0,
+        };
+        let summary = if let Some((selection, _, publication)) = host.root_output(world) {
+            let time = host
+                .publication(publication)
+                .expect("selected publication")
+                .time;
+            self.draw(host, selection, publication, viewport, time)?
+        } else {
+            self.clear(viewport)?
+        };
         Ok(FrameStats::new(summary, *self.statistics()))
     }
 }
 
 pub fn render_frame<D: RenderDevice>(
     renderer: &mut RenderService<D>,
-    world: &mut WorldContext<'_>,
+    host: &mut ipp_core::HostRuntime,
+    world: ipp_core::WorldId,
     width: u32,
     height: u32,
 ) -> Result<FrameStats, String> {
-    update(world).map_err(|error| error.to_string())?;
-    let result = renderer
-        .render_stats(world, width, height)
+    host.frame(0.0).map_err(|error| error.to_string())?;
+    renderer
+        .prepare(
+            host,
+            host.root_output(world)
+                .map(|(output, _, publication)| (output, publication)),
+        )
         .map_err(|error| error.to_string())?;
-    if world.asset_resources().iter().any(|resource| {
-        resource.source().kind == AssetTypeId(14) && *resource.status() == AssetLoadStatus::Unloaded
-    }) {
-        update(world).map_err(|error| error.to_string())?;
-        return renderer
-            .render_stats(world, width, height)
-            .map_err(|error| error.to_string());
-    }
-    Ok(result)
+    host.progress_assets();
+    renderer
+        .draw_stats(host, world, width, height)
+        .map_err(|error| error.to_string())
 }
 
 /// One text Surface in front of the default camera, with its font resolved.
@@ -813,7 +917,7 @@ pub fn text_surface_scene(
     RenderService<TestDevice>,
     Rc<DeviceState>,
     ipp_core::WorldId,
-    EntityId,
+    canvas::CanvasSurface,
 ) {
     text_run_scene(host, surface_font(), &[0])
 }
@@ -828,75 +932,61 @@ pub fn text_run_scene(
     RenderService<TestDevice>,
     Rc<DeviceState>,
     ipp_core::WorldId,
-    EntityId,
+    canvas::CanvasSurface,
 ) {
-    use ipp_core::services::asset_management::{AssetSource, font::FONT_TYPE};
-    use ipp_core::{PositionedGlyph, Surface, SurfaceItemContent, SurfaceItemStyle};
+    let systems = scene_systems(host);
+    text_run_scene_with(host, font, glyph_ids, &systems)
+}
 
+/// [`text_run_scene`] with an explicit scene World selection.
+#[cfg(feature = "surfaces")]
+pub fn text_run_scene_with(
+    host: &mut ipp_core::HostRuntime,
+    font: Vec<u8>,
+    glyph_ids: &[u32],
+    systems: &[ipp_core::systems::SystemId],
+) -> (
+    RenderService<TestDevice>,
+    Rc<DeviceState>,
+    ipp_core::WorldId,
+    canvas::CanvasSurface,
+) {
     host.data_sources_mut()
         .register_stream("fixture://")
         .unwrap();
-    let (mut world, renderer, state) = setup(host);
+    let (world, renderer, state) = setup_with(host, systems);
     let world_id = world.id();
-
-    // A 1 m em five metres away projects to about 24 px: an atlas band, not analytic.
-    let mut surface = Surface::default();
-    surface
-        .insert_item(
-            0,
-            SurfaceItemContent::GlyphRun(
-                glyph_ids
-                    .iter()
-                    .enumerate()
-                    .map(|(index, &glyph_id)| PositionedGlyph {
-                        glyph_id,
-                        position: [0.01 * index as f32, 0.0],
-                        color: None,
-                    })
-                    .collect(),
-            ),
-            SurfaceItemStyle {
-                position: [0.5, 0.5],
-                font_size: 1.0,
-                asset: Some(AssetSource {
-                    kind: FONT_TYPE,
-                    uri: "fixture:///font.ippf".into(),
-                    variant: 0,
-                }),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-    let entity = create(
-        &mut world,
-        vec![
-            ComponentValue::Transform(Transform::default()),
-            ComponentValue::Surface(surface),
-            ComponentValue::BoundingGeometry(Default::default()),
-        ],
-    );
     drop(world);
+    let surface = canvas::CanvasSurface::new(
+        host,
+        world_id,
+        0.0,
+        canvas::glyph_run(glyph_ids, [0.5, 0.5]),
+    );
 
     resolve_text(host, world_id, &font);
-    (renderer, state, world_id, entity)
+    assert_eq!(surface.publication(host).entries.len(), 1);
+    (renderer, state, world_id, surface)
 }
 
 /// Complete font requests until the text Surface prepares its glyph run.
 #[cfg(feature = "surfaces")]
 pub fn resolve_text(host: &mut ipp_core::HostRuntime, world_id: ipp_core::WorldId, font: &[u8]) {
+    assert!(host.world_ref(world_id).is_some());
     for _ in 0..16 {
         host.progress_assets();
         for request in host.take_resource_requests() {
             host.complete_resource(request.id, Ok(font.to_vec()))
                 .unwrap();
         }
-        let mut world = host.world_mut(world_id).unwrap();
-        update(&mut world).unwrap();
-        if world
-            .surface_render_items()
-            .first()
-            .is_some_and(|item| item.primitives.len() == 1)
-        {
+        let report = host.frame(0.0).unwrap();
+        assert!(report.worlds.values().all(Result::is_ok));
+        assert!(report.publication_errors.is_empty());
+        if host.asset_resources().iter().any(|resource| {
+            &*resource.source().uri == "fixture:///font.ippf"
+                && resource.status()
+                    == &ipp_core::services::asset_management::AssetLoadStatus::Loaded
+        }) {
             return;
         }
     }
@@ -951,7 +1041,7 @@ pub fn recover_context(
     font: &[u8],
 ) {
     renderer.set_asset_context_active(false);
-    renderer.unload_host(host);
+    renderer.unload_host(host).unwrap();
     host.flush_resource_lifecycle();
     renderer.set_asset_context_active(true);
     resolve_text(host, world_id, font);

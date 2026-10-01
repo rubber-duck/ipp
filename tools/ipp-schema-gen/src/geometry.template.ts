@@ -80,8 +80,8 @@ export function encodeBoundingShape(
       if (!(Math.fround(scale) > 0)) fail("invalid shape scale");
     for (const value of [...t, ...q, ...s]) w.f32(value);
     const joints = part.type === "pill" ? part.joints : undefined;
-    w.u32(joints ? uint(joints[0], 31) : 0xffff_ffff);
-    w.u32(joints ? uint(joints[1], 31) : 0xffff_ffff);
+    w.u32(joints ? uint(joints[0], MAX_JOINTS - 1) : 0xffff_ffff);
+    w.u32(joints ? uint(joints[1], MAX_JOINTS - 1) : 0xffff_ffff);
   }
   return w.finish();
 }

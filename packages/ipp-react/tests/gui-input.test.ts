@@ -1,39 +1,320 @@
-/** Browser relay mapping, ordered sink and DOM attach coverage; headless fakes only. */
 import assert from "node:assert/strict";
-import test from "node:test";
-import type { GuiInputCommand, GuiInputRoutingOutcome } from "@ipp/client";
+import test, { type TestContext } from "node:test";
+import { canvasOutput } from "@ipp/client";
+import { physicalWireTag } from "../../ipp-client/tests/physical-wire-fixture.js";
+import {
+  GuiPhysicalContext,
+  type GuiPhysicalInput,
+  type GuiInputRoutingOutcome,
+  type GuiNativeEdit,
+  type GuiTextFence,
+} from "../../ipp-client/src/host-input.js";
 import {
   attachCanvasGuiInput,
-  canvasRelativePoint,
-  createGuiInputSink,
   DEFAULT_GUI_WHEEL_STEP,
-  domMouseButtonToGuiButton,
-  keyboardFocusHandoff,
   keyboardKeyToGuiKey,
-  toGuiInputCommand,
   wheelDeltaToLogical,
-  type AttachCanvasGuiInputOptions,
-  type BrowserGuiInputCommand,
 } from "../src/gui/input.js";
-import { createGuiUnhandledInputGate } from "../src/gui/scene-input.js";
+import {
+  createGuiUnhandledInputGate,
+  openUnhandledInputGate,
+  closeUnhandledInputGate,
+  trackUnhandledInputGate,
+  settleUnhandledInputGateSubmission,
+} from "../src/gui/scene-input.js";
 
-test("button, key and geometry helpers translate platform values", () => {
-  assert.equal(domMouseButtonToGuiButton(0), "primary");
-  assert.equal(domMouseButtonToGuiButton(2), "secondary");
-  assert.equal(domMouseButtonToGuiButton(1), "auxiliary");
-  assert.equal(domMouseButtonToGuiButton(4), null);
-  assert.equal(keyboardKeyToGuiKey("Tab"), "tab");
-  assert.equal(keyboardKeyToGuiKey("Tab", false), "tab");
-  assert.equal(keyboardKeyToGuiKey("Tab", true), "backTab");
-  assert.equal(keyboardKeyToGuiKey(" ", true), "space");
-  assert.equal(keyboardKeyToGuiKey(" "), "space");
-  assert.equal(keyboardKeyToGuiKey("ArrowDown"), "down");
-  assert.equal(keyboardKeyToGuiKey("a"), null);
-  assert.equal(keyboardKeyToGuiKey("Enter"), "enter");
-  assert.deepEqual(canvasRelativePoint(15, 25, { left: 10, top: 20 }), [5, 5]);
+const applied: GuiInputRoutingOutcome = {
+  disposition: "routed",
+  applied: 1,
+  rejected: 0,
+  cancelled: 0,
+};
+const miss: GuiInputRoutingOutcome = {
+  ...applied,
+  disposition: "miss",
+  applied: 0,
+};
+const fence: GuiTextFence = {
+  target: {
+    world: { id: 1n, incarnation: 1n },
+    entity: 2n,
+    component: 9,
+    incarnation: 1n,
+  },
+  generation: 1n,
+};
+
+class Element {
+  readonly listeners = new Map<string, Set<(event: never) => void>>();
+  readonly style: Record<string, string> = { touchAction: "pan-y" };
+  readonly dataset: Record<string, string> = {};
+  readonly attributes = new Map<string, string>();
+  readonly children: Element[] = [];
+  readonly captures = new Set<number>();
+  parentElement: Element | null = null;
+  value = "";
+  selectionStart = 0;
+  selectionEnd = 0;
+  selectionDirection = "none";
+  clientHeight = 100;
+  tabIndex = -1;
+  constructor(readonly owner: Dom) {}
+  append(child: Element) {
+    this.children.push(child);
+    child.parentElement = this;
+  }
+  remove() {
+    if (this.parentElement)
+      this.parentElement.children.splice(
+        this.parentElement.children.indexOf(this),
+        1,
+      );
+  }
+  setAttribute(key: string, value: string) {
+    this.attributes.set(key, value);
+  }
+  getAttribute(key: string) {
+    return this.attributes.get(key) ?? null;
+  }
+  removeAttribute(key: string) {
+    this.attributes.delete(key);
+  }
+  getBoundingClientRect() {
+    return { left: 10, top: 20, width: 200, height: 100 };
+  }
+  addEventListener(type: string, listener: (event: never) => void) {
+    const group = this.listeners.get(type) ?? new Set();
+    group.add(listener);
+    this.listeners.set(type, group);
+  }
+  removeEventListener(type: string, listener: (event: never) => void) {
+    this.listeners.get(type)?.delete(listener);
+  }
+  dispatch(type: string, values: Record<string, unknown> = {}) {
+    let prevented = false;
+    for (const listener of this.listeners.get(type) ?? [])
+      listener({
+        ...values,
+        preventDefault() {
+          prevented = true;
+        },
+      } as never);
+    return { prevented };
+  }
+  focus() {
+    const previous = this.owner.activeElement;
+    if (previous === this) return;
+    this.owner.activeElement = this;
+    previous?.dispatch("blur", { relatedTarget: this });
+  }
+  blur() {
+    if (this.owner.activeElement !== this) return;
+    this.owner.activeElement = null;
+    this.dispatch("blur");
+  }
+  setSelectionRange(start: number, end: number, direction: string) {
+    this.selectionStart = start;
+    this.selectionEnd = end;
+    this.selectionDirection = direction;
+  }
+  setPointerCapture(pointer: number) {
+    this.captures.add(pointer);
+  }
+  hasPointerCapture(pointer: number) {
+    return this.captures.has(pointer);
+  }
+  releasePointerCapture(pointer: number) {
+    this.captures.delete(pointer);
+    this.dispatch("lostpointercapture", { pointerId: pointer });
+  }
+}
+
+class Dom {
+  activeElement: Element | null = null;
+  readonly body = new Element(this);
+  readonly events = new Element(this);
+  readonly window = new Element(this);
+  createElement() {
+    return new Element(this);
+  }
+  hasFocus() {
+    return true;
+  }
+  addEventListener(type: string, listener: (event: never) => void) {
+    this.events.addEventListener(type, listener);
+  }
+  removeEventListener(type: string, listener: (event: never) => void) {
+    this.events.removeEventListener(type, listener);
+  }
+}
+
+function harness(context: TestContext, wheelStep?: number) {
+  const dom = new Dom();
+  const previous = new Map(
+    ["document", "window", "WheelEvent"].map((key) => [
+      key,
+      Object.getOwnPropertyDescriptor(globalThis, key),
+    ]),
+  );
+  Object.defineProperties(globalThis, {
+    document: { configurable: true, value: dom },
+    window: { configurable: true, value: dom.window },
+    WheelEvent: {
+      configurable: true,
+      value: { DOM_DELTA_LINE: 1, DOM_DELTA_PAGE: 2 },
+    },
+  });
+  const canvas = new Element(dom);
+  dom.body.append(canvas);
+  const input = new GuiPhysicalContext(
+    1n,
+    {
+      surface: { id: 1n, context: 1n, maxWidth: 200, maxHeight: 100 },
+      selection: 1n,
+      binding: {
+        output: canvasOutput(fence.target.world),
+        generation: { host: 1n, serial: 1n },
+        viewport: { width: 200, height: 100, devicePixelRatio: 1 },
+      },
+    },
+    async () => {
+      throw new Error("Unexpected wire request");
+    },
+    () => {},
+    physicalWireTag,
+  );
+  const sent: GuiPhysicalInput[] = [];
+  const edits: { fence: GuiTextFence; edit: GuiNativeEdit }[] = [];
+  let route: (event: GuiPhysicalInput) => Promise<GuiInputRoutingOutcome> =
+    async () => applied;
+  let edit: (value: GuiNativeEdit) => Promise<GuiInputRoutingOutcome> =
+    async () => applied;
+  input.send = (event) => {
+    sent.push(event);
+    return route(event);
+  };
+  input.editText = (value, command) => {
+    edits.push({ fence: value, edit: command });
+    return edit(command);
+  };
+  const errors: Error[] = [];
+  const unhandled: GuiPhysicalInput[] = [];
+  const gate = createGuiUnhandledInputGate();
+  const detach = attachCanvasGuiInput(
+    canvas as unknown as HTMLCanvasElement,
+    input,
+    {
+      onError: (error) => errors.push(error),
+      onUnhandled: (event) => unhandled.push(event),
+      unhandledInputGate: gate,
+      ...(wheelStep === undefined ? {} : { wheelStep }),
+    },
+  );
+  const area = dom.body.children[1]!.children[0]!;
+  context.after(() => {
+    detach();
+    for (const [key, descriptor] of previous) {
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+      else Reflect.deleteProperty(globalThis, key);
+    }
+  });
+  return {
+    dom,
+    canvas,
+    input,
+    sent,
+    edits,
+    errors,
+    area,
+    gate,
+    unhandled,
+    detach,
+    route(next: typeof route) {
+      route = next;
+    },
+    edit(next: typeof edit) {
+      edit = next;
+    },
+    focus() {
+      input.observeText({
+        fence,
+        text: "ab",
+        selectionStart: 2,
+        selectionEnd: 2,
+      });
+    },
+  };
+}
+
+const flush = async () => {
+  for (let turn = 0; turn < 5; turn++) await Promise.resolve();
+};
+
+test("Core focus handoff blurs the old buffer without clearing the new target", (context) => {
+  const state = harness(context);
+  state.focus();
+  state.input.observeText(null);
+  assert.equal(state.dom.activeElement, state.canvas);
+  assert.deepEqual(state.sent, []);
+  assert.deepEqual(state.edits, []);
 });
 
-test("wheel deltas scroll a fixed number of logical units per notch", () => {
+test("keyboard mapping preserves traversal, edit and control keys", () => {
+  for (const [key, value] of [
+    ["Enter", "enter"],
+    ["Tab", "tab"],
+    [" ", "space"],
+    ["ArrowDown", "down"],
+    ["Backspace", "backspace"],
+    ["Delete", "delete"],
+  ])
+    assert.equal(keyboardKeyToGuiKey(key!), value);
+  assert.equal(keyboardKeyToGuiKey("Tab", true), "backTab");
+  assert.equal(keyboardKeyToGuiKey("a"), null);
+});
+
+test("pointer, wheel and keys submit immediately in DOM order", async (context) => {
+  const state = harness(context);
+  state.canvas.dispatch("pointerdown", {
+    button: 0,
+    pointerId: 7,
+    clientX: 110,
+    clientY: 45,
+  });
+  state.canvas.dispatch("pointermove", {
+    pointerId: 7,
+    clientX: 210,
+    clientY: 120,
+  });
+  state.canvas.dispatch("wheel", {
+    clientX: 110,
+    clientY: 45,
+    deltaMode: 1,
+    deltaX: -3,
+    deltaY: 6,
+  });
+  state.canvas.dispatch("keydown", { key: "Tab", shiftKey: true });
+  state.canvas.dispatch("pointerup", {
+    button: 0,
+    pointerId: 7,
+    clientX: 310,
+    clientY: 170,
+  });
+  assert.deepEqual(state.sent, [
+    { kind: "pointerDown", pointer: 7n, point: [0.5, 0.25] },
+    { kind: "pointerMove", pointer: 7n, point: [1, 1] },
+    { kind: "wheel", point: [0.5, 0.25], delta: [-0.25, 0.5] },
+    { kind: "key", key: "backTab" },
+    { kind: "pointerUp", pointer: 7n, point: [1.5, 1.5] },
+  ]);
+  await flush();
+  assert.equal(state.canvas.captures.size, 0);
+  assert.deepEqual(state.errors, []);
+});
+
+test("wheel deltas scroll a fixed number of logical units per notch", (context) => {
+  // The harness installs the DOM delta-mode constants.
+  harness(context);
   // One notch in each delta mode: 100 CSS px, 3 lines, or an eighth page.
   assert.deepEqual(wheelDeltaToLogical(0, 100, 0), [0, DEFAULT_GUI_WHEEL_STEP]);
   assert.deepEqual(wheelDeltaToLogical(-3, 0, 1), [-DEFAULT_GUI_WHEEL_STEP, 0]);
@@ -47,869 +328,389 @@ test("wheel deltas scroll a fixed number of logical units per notch", () => {
   assert.deepEqual(wheelDeltaToLogical(0, 1, 2, 0.5), [0, 4]);
 });
 
-test("the canvas relay scrolls by its wheel step and rejects invalid steps", () => {
-  const wheel = { clientX: 15, clientY: 25, deltaX: 0, deltaMode: 0 };
-  const stepped = harness({ wheelStep: 0.1 });
-  stepped.canvas.dispatch("wheel", { ...wheel, deltaY: 500 });
-  assert.deepEqual(stepped.errors, []);
-  assert.deepEqual(stepped.sent, [
-    { kind: "scroll", position: [0.05, 0.05], delta: [0, 0.5], blockers: [] },
-  ]);
-  stepped.detach();
-
-  const invalid = harness({ wheelStep: 0 });
-  invalid.canvas.dispatch("wheel", { ...wheel, deltaY: 100 });
-  assert.equal(invalid.errors.length, 1);
-  assert.match(
-    invalid.errors[0]!.message,
-    /wheel step must be finite and positive/,
-  );
-  assert.deepEqual(invalid.sent[0], {
-    kind: "scroll",
-    position: [0.05, 0.05],
-    delta: [0, DEFAULT_GUI_WHEEL_STEP],
-    blockers: [],
-  });
-  invalid.detach();
-});
-
-test("browser commands map to wire inputs without panel scope", () => {
-  assert.deepEqual(
-    toGuiInputCommand({
-      kind: "pointerDown",
-      pointer: 7,
-      position: [2, 1.5],
-      button: "primary",
-      blockers: [{ entity: 42n, distance: 0.5 }],
-      panelDistance: 3.25,
-    }),
-    {
-      kind: "pointerDown",
-      pointer: 7,
-      position: [2, 1.5],
-      button: "primary",
-      blockers: [{ entity: 42n, distance: 0.5 }],
-      panelDistance: 3.25,
-    },
-  );
-  const move = toGuiInputCommand({
-    kind: "pointerMove",
-    pointer: 7,
-    position: [2, 1.5],
-  });
-  assert.equal(move.kind, "pointerMove");
-  assert.equal(Object.hasOwn(move, "blockers"), false);
-  assert.equal(Object.hasOwn(move, "panelDistance"), false);
-  assert.equal(Object.hasOwn(move, "panel"), false);
-  assert.deepEqual(toGuiInputCommand({ kind: "pointerCancel", pointer: 7 }), {
-    kind: "pointerCancel",
-    pointer: 7,
-  });
-  assert.deepEqual(
-    toGuiInputCommand({ kind: "scroll", position: [1, 1], delta: [0, -4] }),
-    { kind: "scroll", position: [1, 1], delta: [0, -4] },
-  );
-  assert.deepEqual(
-    toGuiInputCommand({ kind: "key", key: "tab", pressed: true }),
-    {
-      kind: "key",
-      key: "tab",
-      pressed: true,
-    },
-  );
-  assert.deepEqual(toGuiInputCommand({ kind: "text", text: "hi" }), {
-    kind: "text",
-    text: "hi",
-  });
-  assert.deepEqual(toGuiInputCommand({ kind: "blur" }), { kind: "blur" });
-  assert.deepEqual(
-    toGuiInputCommand({
-      kind: "composition",
-      text: "世界",
-      caretStart: 6,
-      caretEnd: 6,
-    }),
-    { kind: "composition", text: "世界", caretStart: 6, caretEnd: 6 },
-  );
-  assert.deepEqual(toGuiInputCommand({ kind: "commitComposition" }), {
-    kind: "commitComposition",
-  });
-  assert.deepEqual(toGuiInputCommand({ kind: "cancelComposition" }), {
-    kind: "cancelComposition",
-  });
-});
-
-test("stamped text fences reach the wire command unchanged", () => {
-  const fence = {
-    contextGeneration: 1n,
-    focusGeneration: 2n,
-    entity: 3n,
-    rootIncarnation: 4n,
-    node: 5,
-    revision: 6,
-  };
-  assert.deepEqual(toGuiInputCommand({ kind: "text", text: "hi", fence }), {
-    kind: "text",
-    text: "hi",
-    fence,
-  });
-  assert.deepEqual(
-    toGuiInputCommand({ kind: "selection", start: 0, end: 2, fence }),
-    { kind: "setTextSelection", start: 0, end: 2, fence },
-  );
-  assert.deepEqual(
-    toGuiInputCommand({
-      kind: "composition",
-      text: "a",
-      caretStart: 1,
-      caretEnd: 1,
-      fence,
-    }),
-    { kind: "composition", text: "a", caretStart: 1, caretEnd: 1, fence },
-  );
-  assert.deepEqual(toGuiInputCommand({ kind: "commitComposition", fence }), {
-    kind: "commitComposition",
-    fence,
-  });
-  assert.deepEqual(toGuiInputCommand({ kind: "cancelComposition", fence }), {
-    kind: "cancelComposition",
-    fence,
-  });
-});
-
-test("sink submits every input immediately in call order", async () => {
-  const submitted: GuiInputCommand[] = [];
-  const pending: Array<(outcome: GuiInputRoutingOutcome) => void> = [];
-  const failures: unknown[] = [];
-  const sink = createGuiInputSink(
-    {
-      submitGuiInput(input) {
-        submitted.push(input);
-        return new Promise((resolve) => pending.push(resolve));
-      },
-    },
-    { onError: (error) => failures.push(error) },
-  );
-  sink.send({
-    kind: "pointerDown",
-    pointer: 1,
-    position: [0, 0],
-    button: "primary",
-  });
-  sink.send({
-    kind: "pointerMove",
-    pointer: 1,
-    position: [0.1, 0.1],
-  });
-  sink.send({
-    kind: "pointerUp",
-    pointer: 1,
-    position: [0.2, 0.2],
-    button: "primary",
-  });
-  assert.deepEqual(
-    submitted.map(({ kind }) => kind),
-    ["pointerDown", "pointerMove", "pointerUp"],
-  );
-  pending[2]!({ tick: 3n });
-  pending[0]!({ tick: 1n });
-  pending[1]!({ tick: 2n });
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  assert.deepEqual(failures, []);
-});
-
-test("sink reports one rejection without delaying later input", async () => {
-  const submitted: GuiInputCommand[] = [];
-  const errors: Error[] = [];
-  let calls = 0;
-  const sink = createGuiInputSink(
-    {
-      submitGuiInput(input) {
-        submitted.push(input);
-        calls++;
-        return calls === 1
-          ? Promise.reject(new Error("Pending request limit"))
-          : Promise.resolve({ tick: 2n });
-      },
-    },
-    { onError: (error) => errors.push(error) },
-  );
-  sink.send({ kind: "text", text: "a" });
-  sink.send({ kind: "text", text: "b" });
-  await new Promise((resolve) => setTimeout(resolve, 10));
-  assert.equal(submitted.length, 2);
-  assert.equal(errors.length, 1);
-  assert.match(errors[0]!.message, /Pending request limit/);
-  assert.deepEqual(submitted[1], { kind: "text", text: "b" });
-});
-
-function gatedSubmitter() {
-  const pending: Array<{
-    input: GuiInputCommand;
-    resolve: (outcome: GuiInputRoutingOutcome) => void;
-    reject: (error: Error) => void;
-  }> = [];
-  return {
-    pending,
-    submitGuiInput(input: GuiInputCommand): Promise<GuiInputRoutingOutcome> {
-      return new Promise((resolve, reject) =>
-        pending.push({ input, resolve, reject }),
-      );
-    },
-  };
-}
-
-test("correlated replies gate identical consecutive pointer gestures", async () => {
-  const submitter = gatedSubmitter();
-  const gate = createGuiUnhandledInputGate();
-  const sink = createGuiInputSink(submitter, { unhandledInputGate: gate });
-  const firstAbort = new AbortController();
-  const down = {
-    kind: "pointerDown" as const,
-    pointer: 3,
-    position: [0.1, 0.2] as const,
-    button: "primary" as const,
-  };
-  sink.send(down);
-  const firstAdmission = gate.pointerDown(3, "primary", firstAbort.signal);
-  sink.send({
-    kind: "pointerUp",
-    pointer: 3,
-    position: [0.1, 0.2],
-    button: "primary",
-  });
-  sink.send(down);
-  const secondAbort = new AbortController();
-  const secondAdmission = gate.pointerDown(3, "primary", secondAbort.signal);
-  assert.equal(submitter.pending.length, 3);
-  submitter.pending[2]!.resolve({
-    tick: 2n,
-    unhandled: { kind: "noPanelHit" },
-  });
-  assert.equal(await secondAdmission, true);
-  submitter.pending[0]!.resolve({ tick: 1n });
-  assert.equal(await firstAdmission, false);
-  submitter.pending[1]!.resolve({
-    tick: 2n,
-    unhandled: { kind: "noCapture" },
-  });
-  sink.close?.();
-});
-
-test("only no-panel misses and unconsumed scrolls enter scene controls", async () => {
-  const submitter = gatedSubmitter();
-  const gate = createGuiUnhandledInputGate();
-  const sink = createGuiInputSink(submitter, { unhandledInputGate: gate });
-  sink.send({
-    kind: "pointerDown",
-    pointer: 7,
-    position: [0.4, 0.5],
-    button: "primary",
-  });
-  const pointerAbort = new AbortController();
-  const pointer = gate.pointerDown(7, "primary", pointerAbort.signal);
-  submitter.pending[0]!.resolve({
-    tick: 3n,
-    unhandled: { kind: "notFocusable" },
-  });
-  assert.equal(await pointer, false);
-
-  sink.send({ kind: "scroll", position: [0.8, 0.1], delta: [0, 16] });
-  const scrollAbort = new AbortController();
-  const scroll = gate.scroll(scrollAbort.signal);
-  submitter.pending[1]!.resolve({
-    tick: 4n,
-    unhandled: { kind: "noPanelHit" },
-  });
-  assert.equal(await scroll, true);
-
-  // A wheel no ScrollView consumed reaches scene controls; one a ScrollView
-  // handled does not.
-  sink.send({ kind: "scroll", position: [0.5, 0.5], delta: [0, 16] });
-  const unconsumed = gate.scroll(new AbortController().signal);
-  submitter.pending[2]!.resolve({
-    tick: 5n,
-    unhandled: { kind: "scrollUnconsumed" },
-  });
-  assert.equal(await unconsumed, true);
-  sink.send({ kind: "scroll", position: [0.5, 0.5], delta: [0, 16] });
-  const consumed = gate.scroll(new AbortController().signal);
-  submitter.pending[3]!.resolve({ tick: 6n });
-  assert.equal(await consumed, false);
-
-  sink.send({
-    kind: "pointerDown",
-    pointer: 8,
-    position: [0, 0],
-    button: "primary",
-  });
-  const detachedAbort = new AbortController();
-  const detached = gate.pointerDown(8, "primary", detachedAbort.signal);
-  sink.close?.();
-  assert.equal(await detached, false);
-});
-
-test("detached routing replies cannot admit a replacement generation", async () => {
-  const gate = createGuiUnhandledInputGate();
-  const firstSubmitter = gatedSubmitter();
-  const firstSink = createGuiInputSink(firstSubmitter, {
-    unhandledInputGate: gate,
-  });
-  const down: BrowserGuiInputCommand = {
-    kind: "pointerDown",
-    pointer: 8,
-    position: [0.2, 0.3],
-    button: "primary",
-  };
-  firstSink.send(down);
-  const oldAdmission = gate.pointerDown(
-    8,
-    "primary",
-    new AbortController().signal,
-  );
-  firstSink.close?.();
-  assert.equal(await oldAdmission, false);
-
-  const nextSubmitter = gatedSubmitter();
-  const nextSink = createGuiInputSink(nextSubmitter, {
-    unhandledInputGate: gate,
-  });
-  nextSink.send(down);
-  const nextAdmission = gate.pointerDown(
-    8,
-    "primary",
-    new AbortController().signal,
-  );
-  let settled = false;
-  void nextAdmission.then(() => {
-    settled = true;
-  });
-  firstSubmitter.pending[0]!.resolve({
-    tick: 5n,
-    unhandled: { kind: "noPanelHit" },
-  });
-  await Promise.resolve();
-  assert.equal(settled, false);
-  nextSubmitter.pending[0]!.resolve({ tick: 6n });
-  assert.equal(await nextAdmission, false);
-  nextSink.close?.();
-});
-
-interface FakeTarget {
-  listeners: Map<string, Set<(event: never) => void>>;
-  style: Record<string, string>;
-  rect: { left: number; top: number; width: number; height: number };
-  getBoundingClientRect(): {
-    left: number;
-    top: number;
-    width: number;
-    height: number;
-  };
-  addEventListener(
-    type: string,
-    listener: (event: never) => void,
-    options?: unknown,
-  ): void;
-  removeEventListener(type: string, listener: (event: never) => void): void;
-  dispatch(
-    type: string,
-    event: Record<string, unknown>,
-  ): { prevented: boolean };
-}
-
-function fakeTarget(): FakeTarget {
-  const listeners = new Map<string, Set<(event: never) => void>>();
-  const rect = { left: 10, top: 20, width: 100, height: 100 };
-  return {
-    listeners,
-    style: {},
-    rect,
-    getBoundingClientRect: () => rect,
-    addEventListener(type, listener) {
-      let group = listeners.get(type);
-      if (!group) listeners.set(type, (group = new Set()));
-      group.add(listener);
-    },
-    removeEventListener(type, listener) {
-      listeners.get(type)?.delete(listener);
-    },
-    dispatch(type, event) {
-      let prevented = false;
-      const full = {
-        ...event,
-        preventDefault: () => {
-          prevented = true;
-        },
-      };
-      for (const listener of listeners.get(type) ?? []) listener(full as never);
-      return { prevented };
-    },
-  };
-}
-
-function harness(options: AttachCanvasGuiInputOptions = {}) {
-  const canvas = fakeTarget();
-  const keyboard = fakeTarget();
-  const sent: BrowserGuiInputCommand[] = [];
-  const errors: Error[] = [];
-  const detach = attachCanvasGuiInput(
-    canvas as unknown as HTMLCanvasElement,
-    { send: (command) => sent.push(command) },
-    {
-      keyboardTarget: keyboard as unknown as HTMLElement,
-      onError: (error) => errors.push(error),
-      ...options,
-    },
-  );
-  return { canvas, keyboard, sent, errors, detach };
-}
-
-test("pointer, wheel and keyboard events forward in DOM order", () => {
-  const { canvas, keyboard, sent, detach } = harness();
-  canvas.dispatch("pointerdown", {
-    button: 0,
-    pointerId: 3,
-    clientX: 15,
-    clientY: 25,
-  });
-  canvas.dispatch("pointermove", { pointerId: 3, clientX: 16, clientY: 26 });
-  canvas.dispatch("pointerup", {
-    button: 0,
-    pointerId: 3,
-    clientX: 16,
-    clientY: 26,
-  });
-  // Other buttons never complete a press.
-  canvas.dispatch("pointerdown", {
-    button: 4,
-    pointerId: 5,
-    clientX: 0,
-    clientY: 0,
-  });
-  const wheel = canvas.dispatch("wheel", {
-    clientX: 15,
-    clientY: 25,
+test("the canvas adapter scrolls by its configured wheel step", (context) => {
+  const state = harness(context, 15);
+  state.canvas.dispatch("wheel", {
+    clientX: 110,
+    clientY: 45,
     deltaX: 0,
-    deltaY: -200,
+    deltaY: 200,
     deltaMode: 0,
   });
-  keyboard.dispatch("keydown", { key: "Tab" });
-  keyboard.dispatch("keydown", { key: "a" });
-  keyboard.dispatch("beforeinput", { inputType: "insertText", data: "x" });
-  // Composition text must not double-commit through beforeinput.
-  keyboard.dispatch("beforeinput", {
-    inputType: "insertCompositionText",
-    data: "y",
-  });
-  keyboard.dispatch("beforeinput", {
-    inputType: "deleteContentBackward",
-    data: "x",
-  });
-  assert.equal(wheel.prevented, true);
-  assert.deepEqual(sent, [
-    {
-      kind: "pointerDown",
-      pointer: 3,
-      position: [0.05, 0.05],
-      button: "primary",
-      blockers: [],
-    },
-    {
-      kind: "pointerMove",
-      pointer: 3,
-      position: [0.06, 0.06],
-      blockers: [],
-    },
-    {
-      kind: "pointerUp",
-      pointer: 3,
-      position: [0.06, 0.06],
-      button: "primary",
-      blockers: [],
-    },
-    {
-      kind: "scroll",
-      position: [0.05, 0.05],
-      delta: [0, -0.5],
-      blockers: [],
-    },
-    { kind: "key", key: "tab", pressed: true },
-    { kind: "text", text: "x" },
+  assert.deepEqual(state.errors, []);
+  assert.deepEqual(state.sent, [
+    { kind: "wheel", point: [0.5, 0.25], delta: [0, 30] },
   ]);
-  detach();
-  assert.equal(canvas.listeners.get("pointerdown")?.size ?? 0, 0);
-  assert.equal(keyboard.listeners.get("keydown")?.size ?? 0, 0);
 });
 
-test("canvas key ownership forwards traversal and activation keys once", () => {
-  const { keyboard, sent, detach } = harness();
-  const pressed = [
-    keyboard.dispatch("keydown", { key: "Tab", shiftKey: false }),
-    keyboard.dispatch("keydown", { key: "Tab", shiftKey: true }),
-    keyboard.dispatch("keydown", { key: " " }),
-    keyboard.dispatch("keydown", { key: "Enter" }),
-    keyboard.dispatch("keydown", { key: "ArrowRight" }),
-    keyboard.dispatch("keydown", { key: "Shift", shiftKey: true }),
-  ];
-  // A non-editable key owner prevents every forwarded default: traversal
-  // never moves DOM focus and Space or arrows never scroll the page.
+test("an invalid wheel step reports once and scrolls by the default", (context) => {
+  const state = harness(context, 0);
+  state.canvas.dispatch("wheel", {
+    clientX: 110,
+    clientY: 45,
+    deltaX: 0,
+    deltaY: 100,
+    deltaMode: 0,
+  });
+  assert.equal(state.errors.length, 1);
+  assert.match(
+    state.errors[0]!.message,
+    /wheel step must be finite and positive/,
+  );
+  assert.deepEqual(state.sent, [
+    { kind: "wheel", point: [0.5, 0.25], delta: [0, DEFAULT_GUI_WHEEL_STEP] },
+  ]);
+});
+
+test("secondary buttons do not capture and composition keys do not relay", (context) => {
+  const state = harness(context);
+  state.canvas.dispatch("pointerdown", {
+    button: 2,
+    pointerId: 4,
+    clientX: 10,
+    clientY: 20,
+  });
+  state.canvas.dispatch("keydown", { key: "Enter", isComposing: true });
+  state.canvas.dispatch("keydown", { key: "a", ctrlKey: true });
+  assert.deepEqual(state.sent, [
+    { kind: "pointerDown", button: "secondary", pointer: 4n, point: [0, 0] },
+  ]);
+  assert.equal(state.canvas.captures.size, 0);
+});
+
+test("wholly unconsumed correlated wheel admits scene fallback exactly once", async (context) => {
+  const state = harness(context);
+  state.route(async () => ({ ...applied, remaining: [0, 1] }));
+  const waiting = state.gate.scroll(new AbortController().signal);
+  state.canvas.dispatch("wheel", {
+    clientX: 10,
+    clientY: 20,
+    deltaX: 0,
+    deltaY: 400,
+    deltaMode: 0,
+  });
+  assert.equal(await waiting, true);
+  assert.equal(state.unhandled.length, 1);
+});
+
+test("secondary and auxiliary misses settle the exact button without a primary press", async (context) => {
+  const state = harness(context);
+  state.route(async () => miss);
+  for (const [button, name] of [
+    [2, "secondary"],
+    [1, "auxiliary"],
+  ] as const) {
+    let settled: boolean | undefined;
+    const abort = new AbortController();
+    void state.gate.pointerDown(7, name, abort.signal).then((value) => {
+      settled = value;
+    });
+    state.canvas.dispatch("pointerdown", {
+      button,
+      pointerId: 7,
+      clientX: 10,
+      clientY: 20,
+    });
+    await flush();
+    abort.abort();
+    assert.equal(settled, true);
+    assert.deepEqual(state.sent.at(-1), {
+      kind: "pointerDown",
+      pointer: 7n,
+      point: [0, 0],
+      button: name,
+    });
+  }
+});
+
+test("partial consumption and negative terminals never authorize scene wheel", async () => {
+  const gate = createGuiUnhandledInputGate();
+  const generation = openUnhandledInputGate(gate);
+  for (const outcome of [
+    { ...applied, remaining: [0, 5] as const },
+    { ...applied, remaining: [0, 0] as const },
+    { ...applied, remaining: [0, 20] as const, rejected: 1 },
+    { ...applied, remaining: [0, 20] as const, cancelled: 1 },
+  ]) {
+    const waiting = gate.scroll(new AbortController().signal);
+    const submission = trackUnhandledInputGate(gate, generation, {
+      kind: "wheel",
+      point: [0, 0],
+      delta: [0, 20],
+    });
+    settleUnhandledInputGateSubmission(gate, submission, outcome);
+    assert.equal(await waiting, false);
+  }
+  closeUnhandledInputGate(gate, generation);
+});
+
+test("secondary gate abort, rebind and a fresh auxiliary hit preserve exact identity", async () => {
+  const gate = createGuiUnhandledInputGate();
+  const old = openUnhandledInputGate(gate);
+  const abort = new AbortController();
+  const waiting = gate.pointerDown(1, "secondary", abort.signal);
+  const submission = trackUnhandledInputGate(gate, old, {
+    kind: "pointerDown",
+    button: "secondary",
+    pointer: 1n,
+    point: [0, 0],
+  });
+  abort.abort();
+  assert.equal(await waiting, false);
+  closeUnhandledInputGate(gate, old);
+  const current = openUnhandledInputGate(gate);
+  const fresh = gate.pointerDown(1, "auxiliary", new AbortController().signal);
+  const next = trackUnhandledInputGate(gate, current, {
+    kind: "pointerDown",
+    button: "auxiliary",
+    pointer: 1n,
+    point: [0, 0],
+  });
+  settleUnhandledInputGateSubmission(gate, submission, miss);
+  settleUnhandledInputGateSubmission(gate, next, {
+    ...miss,
+    disposition: "blocked",
+  });
+  assert.equal(await fresh, false);
+  closeUnhandledInputGate(gate, current);
+});
+
+test("capture loss cancels once and blur cancels all native capture", (context) => {
+  const state = harness(context);
+  state.canvas.dispatch("pointerdown", {
+    button: 0,
+    pointerId: 7,
+    clientX: 10,
+    clientY: 20,
+  });
+  state.canvas.releasePointerCapture(7);
+  assert.deepEqual(state.sent.at(-1), { kind: "pointerCancel", pointer: 7n });
+  assert.equal(
+    state.sent.filter((event) => event.kind === "pointerCancel").length,
+    1,
+  );
+  state.canvas.dispatch("pointerdown", {
+    button: 0,
+    pointerId: 8,
+    clientX: 10,
+    clientY: 20,
+  });
+  state.dom.window.dispatch("blur");
+  assert.equal(state.canvas.captures.size, 0);
+  assert.deepEqual(state.sent.at(-1), { kind: "blur" });
+});
+
+test("negative routing releases capture and later events are not blocked", async (context) => {
+  const state = harness(context);
+  state.route(async () => {
+    throw new Error("delivery lost");
+  });
+  state.canvas.dispatch("pointerdown", {
+    button: 0,
+    pointerId: 7,
+    clientX: 10,
+    clientY: 20,
+  });
+  await flush();
+  assert.equal(state.canvas.captures.size, 0);
+  assert.equal(state.errors.length, 1);
+  state.route(async () => miss);
+  state.canvas.dispatch("keydown", { key: "Enter" });
+  await flush();
+  assert.deepEqual(state.unhandled, [{ kind: "key", key: "enter" }]);
+});
+
+test("native editor receives focus without a Core blur and sends each edit once", async (context) => {
+  const state = harness(context);
+  state.canvas.focus();
+  state.focus();
+  assert.equal(state.dom.activeElement, state.area);
+  assert.deepEqual(state.sent, []);
+  state.area.dispatch("beforeinput", { inputType: "insertText", data: "c" });
+  state.area.dispatch("keydown", { key: "Backspace" });
+  state.area.dispatch("beforeinput", { inputType: "deleteContentBackward" });
+  state.area.dispatch("keydown", { key: "Tab" });
+  await flush();
   assert.deepEqual(
-    pressed.map((result) => result.prevented),
-    [true, true, true, true, true, false],
+    state.edits.map((entry) => entry.edit),
+    [
+      { kind: "text", text: "c" },
+      { kind: "key", key: "backspace" },
+    ],
   );
-  assert.deepEqual(sent, [
-    { kind: "key", key: "tab", pressed: true },
-    { kind: "key", key: "backTab", pressed: true },
-    { kind: "key", key: "space", pressed: true },
-    { kind: "key", key: "enter", pressed: true },
-    { kind: "key", key: "right", pressed: true },
-  ]);
-  detach();
+  assert.deepEqual(state.sent, [{ kind: "key", key: "tab" }]);
 });
 
-test("editable key owners keep text defaults but never Tab", () => {
-  const editable = fakeTarget();
-  Object.assign(editable, { tagName: "TEXTAREA", isContentEditable: false });
-  const { sent, detach } = harness({
-    keyboardTarget: editable as unknown as HTMLElement,
+test("composition update and terminal payloads do not double commit", async (context) => {
+  const state = harness(context);
+  state.focus();
+  state.area.dispatch("compositionstart");
+  state.area.dispatch("compositionupdate", { data: "é" });
+  state.area.dispatch("beforeinput", {
+    inputType: "insertCompositionText",
+    data: "é",
   });
-  const space = editable.dispatch("keydown", { key: " " });
-  const back = editable.dispatch("keydown", { key: "Tab", shiftKey: true });
-  assert.equal(space.prevented, false);
-  assert.equal(back.prevented, true);
-  assert.deepEqual(sent, [
-    { kind: "key", key: "space", pressed: true },
-    { kind: "key", key: "backTab", pressed: true },
-  ]);
-  detach();
-});
-
-test("keyboard ownership hands off between the key owner and the native editor", () => {
-  const base = {
-    documentFocused: true,
-    editorFocused: false,
-    ownerFocused: false,
-    pointerActivationPending: false,
-  };
-  // Tab from the focused canvas into a text input focuses the editor.
-  assert.equal(
-    keyboardFocusHandoff({ ...base, textFocused: true, ownerFocused: true }),
-    "editor",
-  );
-  // A pending trusted tap focuses the editor itself with the soft keyboard.
-  assert.equal(
-    keyboardFocusHandoff({
-      ...base,
-      textFocused: true,
-      ownerFocused: true,
-      pointerActivationPending: true,
-    }),
-    null,
-  );
-  // Focus elsewhere in the page is never stolen.
-  assert.equal(keyboardFocusHandoff({ ...base, textFocused: true }), null);
-  // Tab or Escape out of the editor returns keys to the canvas.
-  assert.equal(
-    keyboardFocusHandoff({ ...base, textFocused: false, editorFocused: true }),
-    "owner",
-  );
-  assert.equal(keyboardFocusHandoff({ ...base, textFocused: false }), null);
-  // Unchanged text focus and a background document move nothing.
-  assert.equal(
-    keyboardFocusHandoff({
-      ...base,
-      textFocused: undefined,
-      editorFocused: true,
-    }),
-    null,
-  );
-  assert.equal(
-    keyboardFocusHandoff({
-      ...base,
-      textFocused: false,
-      editorFocused: true,
-      documentFocused: false,
-    }),
-    null,
+  state.area.dispatch("keydown", { key: "Enter", isComposing: true });
+  state.area.dispatch("compositionend", { data: "é" });
+  state.area.dispatch("beforeinput", {
+    inputType: "insertFromComposition",
+    data: "é",
+  });
+  await flush();
+  assert.deepEqual(
+    state.edits.map((entry) => entry.edit),
+    [
+      { kind: "composition", text: "é", caretStart: 2, caretEnd: 2 },
+      { kind: "commitComposition" },
+    ],
   );
 });
 
-test("composition updates commit once and empty ends cancel", () => {
-  const { keyboard, sent, detach } = harness();
-  keyboard.dispatch("compositionupdate", { data: "世界" });
-  keyboard.dispatch("compositionend", { data: "世界" });
-  keyboard.dispatch("compositionupdate", { data: "" });
-  keyboard.dispatch("compositionend", { data: "" });
-  assert.deepEqual(sent, [
-    { kind: "composition", text: "世界", caretStart: 6, caretEnd: 6 },
-    { kind: "commitComposition" },
-    { kind: "cancelComposition" },
-  ]);
-  detach();
+test("buffer selections address only the committed text they display", async (context) => {
+  const state = harness(context);
+  state.focus();
+  assert.equal(state.area.value, "ab");
+  // Platform text not yet reflected by the runtime (a committed IME
+  // candidate before its acknowledgement) must not select inside it.
+  state.area.value = "a世b";
+  state.area.setSelectionRange(2, 2, "none");
+  state.area.dispatch("select");
+  state.dom.events.dispatch("selectionchange");
+  await flush();
+  assert.equal(state.edits.length, 0);
+  // Once the buffer shows the committed text again, selections forward in
+  // UTF-8 bytes.
+  state.area.value = "ab";
+  state.area.setSelectionRange(0, 1, "forward");
+  state.area.dispatch("select");
+  await flush();
+  assert.deepEqual(
+    state.edits.map((entry) => entry.edit),
+    [{ kind: "selection", start: 0, end: 1 }],
+  );
+  assert.deepEqual(state.errors, []);
 });
 
-test("native editor ownership leaves keyboard and IME off the canvas relay", () => {
-  const { keyboard, sent, detach } = harness({ keyboardInput: false });
-  keyboard.dispatch("keydown", { key: "Tab" });
-  keyboard.dispatch("beforeinput", { inputType: "insertText", data: "x" });
-  keyboard.dispatch("compositionstart", { data: "" });
-  keyboard.dispatch("compositionupdate", { data: "世" });
-  keyboard.dispatch("compositionend", { data: "世界" });
-  assert.deepEqual(sent, []);
-  assert.equal(keyboard.listeners.get("keydown")?.size ?? 0, 0);
-  assert.equal(keyboard.listeners.get("beforeinput")?.size ?? 0, 0);
-  assert.equal(keyboard.listeners.get("compositionend")?.size ?? 0, 0);
-  detach();
-  assert.deepEqual(sent, [{ kind: "blur" }]);
+test("native edit queue uses preceding ACK state and external changes cancel pending work", async (context) => {
+  const state = harness(context);
+  state.focus();
+  let release!: (outcome: GuiInputRoutingOutcome) => void;
+  state.edit(
+    () =>
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+  );
+  state.area.dispatch("beforeinput", { inputType: "insertText", data: "c" });
+  state.area.dispatch("beforeinput", { inputType: "insertText", data: "d" });
+  assert.equal(state.edits.length, 1);
+  state.input.observeText(
+    {
+      fence: { ...fence, generation: 2n },
+      text: "abc",
+      selectionStart: 3,
+      selectionEnd: 3,
+    },
+    "terminal",
+  );
+  state.edit(async () => applied);
+  release(applied);
+  await flush();
+  assert.equal(state.edits[1]!.fence.generation, 2n);
+  state.edit(
+    () =>
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+  );
+  state.area.dispatch("beforeinput", { inputType: "insertText", data: "e" });
+  state.area.dispatch("beforeinput", { inputType: "insertText", data: "f" });
+  state.input.observeText({
+    fence: { ...fence, generation: 3n },
+    text: "reset",
+    selectionStart: 5,
+    selectionEnd: 5,
+  });
+  release(applied);
+  await flush();
+  assert.equal(state.edits.length, 3);
 });
 
-test("platform blur cancels live pointers and touch policy restores", () => {
-  const { canvas, keyboard, sent, detach } = harness();
-  assert.equal(canvas.style["touchAction"], "none");
-  canvas.dispatch("pointerdown", {
+test("detach releases capture, removes native buffer and fences all listeners", (context) => {
+  const state = harness(context);
+  state.canvas.dispatch("pointerdown", {
     button: 0,
-    pointerId: -1,
+    pointerId: 7,
     clientX: 10,
     clientY: 20,
   });
-  keyboard.dispatch("blur", {});
-  assert.deepEqual(sent, [
-    {
+  state.detach();
+  const length = state.sent.length;
+  state.canvas.dispatch("keydown", { key: "Enter" });
+  state.area.dispatch("beforeinput", { inputType: "insertText", data: "late" });
+  assert.equal(state.sent.length, length);
+  assert.equal(state.edits.length, 0);
+  assert.equal(state.canvas.captures.size, 0);
+  assert.equal(state.canvas.style.touchAction, "pan-y");
+  assert.equal(state.dom.body.children.length, 1);
+});
+
+test("exact correlated replies admit only misses and wholly unconsumed wheels", async () => {
+  const gate = createGuiUnhandledInputGate();
+  const generation = openUnhandledInputGate(gate);
+  for (const outcome of [
+    miss,
+    applied,
+    { ...applied, rejected: 1 },
+    { ...applied, disposition: "unhandled" as const },
+  ]) {
+    const input: GuiPhysicalInput = {
       kind: "pointerDown",
-      pointer: 4294967295,
-      position: [0, 0],
-      button: "primary",
-      blockers: [],
-    },
-    { kind: "pointerCancel", pointer: 4294967295 },
-    { kind: "blur" },
-  ]);
-  detach();
-  assert.equal(canvas.style["touchAction"], undefined);
+      pointer: 7n,
+      point: [0, 0],
+    };
+    const submission = trackUnhandledInputGate(gate, generation, input);
+    const first = gate.pointerDown(7, "primary", new AbortController().signal);
+    const secondSubmission = trackUnhandledInputGate(gate, generation, input);
+    const second = gate.pointerDown(7, "primary", new AbortController().signal);
+    settleUnhandledInputGateSubmission(gate, submission, outcome);
+    settleUnhandledInputGateSubmission(gate, secondSubmission, miss);
+    assert.equal(await first, outcome === miss);
+    assert.equal(await second, true);
+  }
+  for (const disposition of ["routed", "unhandled"] as const) {
+    const submission = trackUnhandledInputGate(gate, generation, {
+      kind: "wheel",
+      point: [0, 0],
+      delta: [0, 5],
+    });
+    const waiting = gate.scroll(new AbortController().signal);
+    settleUnhandledInputGateSubmission(gate, submission, {
+      ...applied,
+      disposition,
+    });
+    assert.equal(await waiting, disposition === "unhandled");
+  }
 });
 
-test("adapter-owned keyboard focus can transfer without clearing core focus", () => {
-  const { keyboard, sent, detach } = harness({
-    blurOnKeyboardTarget: false,
+test("aborted and detached scene gestures cannot admit a replacement generation", async () => {
+  const gate = createGuiUnhandledInputGate();
+  const generation = openUnhandledInputGate(gate);
+  const submission = trackUnhandledInputGate(gate, generation, {
+    kind: "pointerDown",
+    pointer: 7n,
+    point: [0, 0],
   });
-  keyboard.dispatch("blur", {});
-  assert.deepEqual(sent, []);
-  detach();
-  assert.deepEqual(sent, [{ kind: "blur" }]);
-});
-
-/** Live browser capture (real pointer-capture retargeting, OS focus loss,
- * unmount timing) belongs to the browser GUI suite: real-browser drags
- * outside the canvas, window focus loss and unmount-while-held are captured
- * there. These headless fakes prove the relay termination and fencing
- * logic that the live captures exercise. */
-
-function capturingCanvas(): FakeTarget & {
-  captured: Set<number>;
-  released: number[];
-} {
-  const base = fakeTarget() as FakeTarget & {
-    captured: Set<number>;
-    released: number[];
-    setPointerCapture(id: number): void;
-    hasPointerCapture(id: number): boolean;
-    releasePointerCapture(id: number): void;
-  };
-  base.captured = new Set();
-  base.released = [];
-  base.setPointerCapture = (id: number): void => {
-    base.captured.add(id);
-  };
-  base.hasPointerCapture = (id: number): boolean => base.captured.has(id);
-  base.releasePointerCapture = (id: number): void => {
-    base.captured.delete(id);
-    base.released.push(id);
-  };
-  return base;
-}
-
-test("drag released outside the canvas terminates exactly once on it", () => {
-  const canvas = capturingCanvas();
-  const sent: BrowserGuiInputCommand[] = [];
-  const detach = attachCanvasGuiInput(
-    canvas as unknown as HTMLCanvasElement,
-    { send: (command) => sent.push(command) },
-    {},
-  );
-  canvas.dispatch("pointerdown", {
-    button: 0,
-    pointerId: 3,
-    clientX: 15,
-    clientY: 25,
-  });
-  assert.deepEqual([...canvas.captured], [3]);
-  // Far outside the 100x100 rect: capture retargets the drag to the canvas.
-  canvas.dispatch("pointermove", {
-    pointerId: 3,
-    clientX: 500,
-    clientY: 500,
-  });
-  canvas.dispatch("pointerup", {
-    button: 0,
-    pointerId: 3,
-    clientX: 500,
-    clientY: 500,
-  });
-  assert.deepEqual(canvas.released, [3]);
-  assert.deepEqual(sent, [
-    {
-      kind: "pointerDown",
-      pointer: 3,
-      position: [0.05, 0.05],
-      button: "primary",
-      blockers: [],
-    },
-    {
-      kind: "pointerMove",
-      pointer: 3,
-      position: [4.9, 4.8],
-      blockers: [],
-    },
-    {
-      kind: "pointerUp",
-      pointer: 3,
-      position: [4.9, 4.8],
-      button: "primary",
-      blockers: [],
-    },
-  ]);
-  // The post-release capture loss sends nothing: one termination total.
-  canvas.dispatch("lostpointercapture", { pointerId: 3 });
-  assert.equal(sent.length, 3);
-  // A duplicate release after termination sends nothing either.
-  canvas.dispatch("pointerup", {
-    button: 0,
-    pointerId: 3,
-    clientX: 500,
-    clientY: 500,
-  });
-  assert.equal(sent.length, 3);
-  detach();
-});
-
-test("capture loss without release cancels the live press", () => {
-  const canvas = capturingCanvas();
-  const sent: BrowserGuiInputCommand[] = [];
-  const detach = attachCanvasGuiInput(
-    canvas as unknown as HTMLCanvasElement,
-    { send: (command) => sent.push(command) },
-    {},
-  );
-  canvas.dispatch("pointerdown", {
-    button: 0,
-    pointerId: 9,
-    clientX: 15,
-    clientY: 25,
-  });
-  // The browser takes capture (overlay, focus loss, explicit takeover).
-  canvas.dispatch("lostpointercapture", { pointerId: 9 });
-  assert.deepEqual(sent, [
-    {
-      kind: "pointerDown",
-      pointer: 9,
-      position: [0.05, 0.05],
-      button: "primary",
-      blockers: [],
-    },
-    { kind: "pointerCancel", pointer: 9 },
-  ]);
-  assert.deepEqual(canvas.released, [9]);
-  // The later release finds no live pointer: no residual runtime capture.
-  canvas.dispatch("pointerup", {
-    button: 0,
-    pointerId: 9,
-    clientX: 15,
-    clientY: 25,
-  });
-  assert.equal(sent.length, 2);
-  detach();
-});
-
-test("detach while held cancels pointers, blurs and revokes the sink", async () => {
-  const canvas = capturingCanvas();
-  const submitted: GuiInputCommand[] = [];
-  const sink = createGuiInputSink({
-    submitGuiInput(input) {
-      submitted.push(input);
-      return Promise.resolve({ tick: 1n });
-    },
-  });
-  const detach = attachCanvasGuiInput(
-    canvas as unknown as HTMLCanvasElement,
-    sink,
-    {},
-  );
-  canvas.dispatch("pointerdown", {
-    button: 0,
-    pointerId: 3,
-    clientX: 15,
-    clientY: 25,
-  });
-  detach();
-  await new Promise((resolve) => setTimeout(resolve, 10));
-  // Unmount-while-held terminates the press and clears the context before
-  // access is lost: exactly one termination plus blur.
-  assert.deepEqual(submitted, [
-    {
-      kind: "pointerDown",
-      pointer: 3,
-      position: [0.05, 0.05],
-      button: "primary",
-      blockers: [],
-    },
-    { kind: "pointerCancel", pointer: 3 },
-    { kind: "blur" },
-  ]);
-  // Late input after detach never enters a replacement session.
-  canvas.dispatch("pointerdown", {
-    button: 0,
-    pointerId: 3,
-    clientX: 15,
-    clientY: 25,
-  });
-  sink.send({ kind: "text", text: "late" });
-  await new Promise((resolve) => setTimeout(resolve, 10));
-  assert.equal(submitted.length, 3);
-});
-
-test("sink close fences queued sends to the old context", async () => {
-  const submitted: GuiInputCommand[] = [];
-  const sink = createGuiInputSink({
-    submitGuiInput(input) {
-      submitted.push(input);
-      return Promise.resolve({ tick: 1n });
-    },
-  });
-  sink.send({ kind: "text", text: "first" });
-  sink.close?.();
-  sink.send({ kind: "text", text: "second" });
-  await new Promise((resolve) => setTimeout(resolve, 10));
-  assert.deepEqual(submitted, [{ kind: "text", text: "first" }]);
-});
-
-test("prevent-default and touch policies follow options", () => {
-  const first = harness({ enableTouchActionNone: false });
-  assert.equal(first.canvas.style["touchAction"], undefined);
-  const down = first.canvas.dispatch("pointerdown", {
-    button: 0,
-    pointerId: 1,
-    clientX: 10,
-    clientY: 20,
-  });
-  assert.equal(down.prevented, false);
-  first.detach();
-  const second = harness({ preventDefaultPointer: true });
-  const guarded = second.canvas.dispatch("pointerdown", {
-    button: 0,
-    pointerId: 1,
-    clientX: 10,
-    clientY: 20,
-  });
-  assert.equal(guarded.prevented, true);
-  second.detach();
+  const abort = new AbortController();
+  const waiting = gate.pointerDown(7, "primary", abort.signal);
+  abort.abort();
+  assert.equal(await waiting, false);
+  const old = gate.scroll(new AbortController().signal);
+  closeUnhandledInputGate(gate, generation);
+  assert.equal(await old, false);
+  const replacement = openUnhandledInputGate(gate);
+  const fresh = gate.pointerDown(7, "primary", new AbortController().signal);
+  settleUnhandledInputGateSubmission(gate, submission, miss);
+  closeUnhandledInputGate(gate, replacement);
+  assert.equal(await fresh, false);
 });

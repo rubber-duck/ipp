@@ -56,7 +56,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let listener = TcpListener::bind(bind)?;
     ipp_server::websocket::serve_with::<gles_presentation::GlesHostServices>(
         listener,
-        None,
+        ipp_server::websocket::ServeOptions::default(),
         |address| {
             println!(
                 "{{\"event\":\"ready\",\"url\":\"ws://{address}\",\"presentation\":\"ws://{presentation_address}\"}}"

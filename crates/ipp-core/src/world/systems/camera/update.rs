@@ -51,10 +51,20 @@ impl super::CameraSystem {
             .state
             .active_camera
             .ok_or(ErrorReason::NoActiveCamera)?;
+        self.navigate_entity(context, entity, motion, None)
+    }
+
+    pub(super) fn navigate_entity(
+        &mut self,
+        context: &mut crate::systems::SystemRuntimeAccess<'_>,
+        entity: EntityId,
+        motion: CameraMotion,
+        extent: Option<[f64; 2]>,
+    ) -> Result<(), ErrorReason> {
         let ComponentValue::Camera(camera) = context
             .world
             .state
-            .producer_value(&context.world.components, entity, ComponentValue::CAMERA)
+            .input_value(&context.world.components, entity, ComponentValue::CAMERA)
             .ok_or(ErrorReason::MissingComponent)?
         else {
             unreachable!("camera component")
@@ -62,12 +72,13 @@ impl super::CameraSystem {
         let ComponentValue::Transform(transform) = context
             .world
             .state
-            .producer_value(&context.world.components, entity, ComponentValue::TRANSFORM)
+            .input_value(&context.world.components, entity, ComponentValue::TRANSFORM)
             .ok_or(ErrorReason::MissingComponent)?
         else {
             unreachable!("transform component")
         };
-        let (next_camera, next_transform) = super::navigate(entity, camera, transform, motion)?;
+        let (next_camera, next_transform) =
+            super::navigation::navigate_in_view(entity, camera, transform, motion, extent)?;
         let mut commands = Vec::new();
         for (previous, next) in [
             (
@@ -177,16 +188,14 @@ impl crate::WorldContext<'_> {
 
     /// Observe the explicit selection; a new world has none.
     pub fn active_camera(&self) -> Option<EntityId> {
-        self.system::<super::CameraSystem>(super::CameraSystem::ID)
-            .expect("compiled camera system")
+        self.system::<super::CameraSystem>(super::CameraSystem::ID)?
             .read(self.world)
             .active_camera()
     }
 
     /// Borrow the selected camera's final effective component without a snapshot.
     pub fn active_camera_component(&self) -> Option<&super::Camera> {
-        self.system::<super::CameraSystem>(super::CameraSystem::ID)
-            .expect("compiled camera system")
+        self.system::<super::CameraSystem>(super::CameraSystem::ID)?
             .read(self.world)
             .active_camera_component()
     }
@@ -194,7 +203,7 @@ impl crate::WorldContext<'_> {
     /// Prepare the selected effective camera for rendering and matching queries.
     pub fn prepare_camera(&self, width: u32, height: u32) -> Result<PreparedCamera, ErrorReason> {
         self.system::<super::CameraSystem>(super::CameraSystem::ID)
-            .expect("compiled camera system")
+            .ok_or(ErrorReason::UnsupportedDependency)?
             .read(self.world)
             .prepare_camera(width, height)
     }
@@ -203,8 +212,7 @@ impl crate::WorldContext<'_> {
 impl crate::WorldContext<'_> {
     /// Read the Host surface dimensions recorded for camera queries and rendering.
     pub fn render_viewport(&self) -> Option<(u32, u32)> {
-        self.system::<super::CameraSystem>(super::CameraSystem::ID)
-            .expect("compiled camera system")
+        self.system::<super::CameraSystem>(super::CameraSystem::ID)?
             .read(self.world)
             .render_viewport()
     }

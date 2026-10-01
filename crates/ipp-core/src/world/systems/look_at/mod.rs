@@ -9,3 +9,5 @@ mod system;
 pub use system::{LookAtSystem, LookAtSystemFactory};
 
 mod system_state;
+#[cfg(test)]
+pub(crate) use system_state::LOOK_AT_CHECKS;

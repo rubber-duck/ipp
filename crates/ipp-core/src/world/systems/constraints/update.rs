@@ -23,9 +23,16 @@ fn declaration(
 
 fn binding(
     state: &WorldEntityState,
+    manifest: &crate::systems::WorldManifest,
     target: EntityId,
     source: EntityId,
 ) -> Result<ScalarConstraintBinding, ErrorReason> {
+    if !manifest.supports_operation(crate::systems::WorldOperation::Constraints)
+        || !manifest.supports_component(ComponentValue::LINEAR_DRIVER)
+        || !manifest.supports_component(ComponentValue::SCALAR)
+    {
+        return Err(ErrorReason::UnsupportedDependency);
+    }
     let target_incarnation = state
         .entities
         .get(&target)
@@ -66,7 +73,7 @@ fn valid(state: &WorldEntityState, target: EntityId, binding: ScalarConstraintBi
 impl ConstraintSystem {
     pub(super) fn reconcile(
         &mut self,
-        components: &ComponentStorage,
+        world: &WorldSimulationState,
         staged: &WorldMutationState,
     ) -> Result<(), ErrorReason> {
         let mut touched = Vec::new();
@@ -97,7 +104,7 @@ impl ConstraintSystem {
             .collect();
         let mut result = Ok(());
         for target in targets {
-            let current = declaration(components, staged, target);
+            let current = declaration(&world.components, staged, target);
             let previous = self.state.declarations.get(&target).copied();
             if current == previous
                 && !staged.explicit_fields.contains(&(
@@ -112,7 +119,7 @@ impl ConstraintSystem {
             touched.push(target);
             if let Some(current) = current {
                 self.state.declarations.insert(target, current);
-                match binding(staged, target, current.source) {
+                match binding(staged, &world.manifest, target, current.source) {
                     Ok(binding) => {
                         self.state.bindings.insert(target, binding);
                     }
@@ -142,6 +149,7 @@ impl ConstraintSystem {
 
     pub(super) fn prepare_numeric(&mut self, components: &ComponentStorage) {
         self.state.numeric.clear();
+        self.state.targets.clear();
         for entity in evaluation_order(&self.state.bindings, &self.state.invalid) {
             let binding = self.state.bindings[&entity];
             let Some(source) = components.scalar_ptr(binding.source.index() as usize) else {
@@ -153,13 +161,16 @@ impl ConstraintSystem {
             let Some(driver) = components.linear_driver_ptr(entity.index() as usize) else {
                 continue;
             };
+            self.state.targets.push((
+                entity,
+                ComponentValue::SCALAR,
+                std::mem::offset_of!(crate::components::Scalar, value) as u32,
+            ));
             // SAFETY: Reconciliation established exact source/target incarnations.
             // before_commit clears these cell-origin bindings before any referenced
             // component changes. Evaluation borrows the same World's storage.
             self.state.numeric.push(unsafe {
                 super::system_state::ScalarNumericBinding {
-                    entity,
-                    incarnation: binding.target_incarnation,
                     source: crate::world::component_binding::ComponentBinding::new(source),
                     target: crate::world::component_binding::ComponentBinding::new(target),
                     driver: crate::world::component_binding::ComponentBinding::new(driver),
@@ -169,41 +180,20 @@ impl ConstraintSystem {
         self.state.numeric_dirty = false;
     }
 
-    pub(super) fn restore_inputs(&mut self, world: &mut WorldSimulationState) {
-        if !self.state.restores_active {
-            return;
-        }
-        for binding in &self.state.numeric {
-            if let Some(original) = self.state.restores.get(&binding.entity) {
-                *binding.target.get_mut(&mut world.components) = original.base;
-            }
-        }
-        // Retain map nodes for the next frame, but expose no inactive original.
-        self.state.restores_active = false;
-    }
-
     pub(super) fn evaluate(&mut self, world: &mut WorldSimulationState) {
         for binding in &self.state.numeric {
             let driver = *binding.driver.get(&world.components);
             let source = binding.source.get(&world.components).value;
-            let value = binding.target.get_mut(&mut world.components);
-            self.state.restores.insert(
-                binding.entity,
-                crate::world::ComponentStateInstance {
-                    base: *value,
-                    incarnation: binding.incarnation,
-                },
-            );
-            value.value = source * driver.scale + driver.bias;
+            binding.target.get_mut(&mut world.components).value =
+                source * driver.scale + driver.bias;
         }
-        self.state.restores_active = true;
     }
 }
 
 /// Classify the drivers reachable from `affected` along their source chains.
 /// Every driver has one source, so a walk either ends, reaches a chain that is
 /// already classified, or closes a cycle; only the cycle's members are invalid.
-/// Drivers that read an invalid driver still evaluate from its underlying value.
+/// Drivers that read an invalid driver's target still evaluate from its current value.
 fn classify_cycles(
     bindings: &BTreeMap<EntityId, ScalarConstraintBinding>,
     invalid: &mut BTreeSet<EntityId>,

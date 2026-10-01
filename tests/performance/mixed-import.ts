@@ -14,6 +14,11 @@ import { runNativeEnvironment } from "../integration/environment.js";
 import { successfulBatch } from "../integration/camera-fixtures.js";
 import { createCubeMesh } from "../../examples/world-gallery/assets/cube-mesh.js";
 import { AnimationFixture } from "../integration/animation-fixtures.js";
+import {
+  CONSTRAINTS,
+  RENDER,
+  selectSystems,
+} from "../integration/system-selections.js";
 
 const [outputArg, nativeArg] = process.argv.slice(2);
 assert.ok(
@@ -76,7 +81,11 @@ const result = await runNativeEnvironment(
         signal: environment.signal,
       }),
     );
-    const client = await host.createWorld({ symbolicId: "mixed-benchmark" });
+    const created = await host.createWorld({
+      selectedSystems: selectSystems(RENDER, CONSTRAINTS),
+      symbolicId: "mixed-benchmark",
+    });
+    const client = await host.openWorld(created.reference);
     const fixture = new AnimationFixture(client, contract, async () => {});
     await fixture.create("benchmark-camera", {
       Transform: { z: 9 },
@@ -209,7 +218,10 @@ const result = await runNativeEnvironment(
         looping: false,
       });
     }
-    await writeFile(resolve(output, "benchmark.ipp"), await host.saveWorld());
+    await writeFile(
+      resolve(output, "benchmark.ipp"),
+      await host.saveWorld(client.session),
+    );
     await writeFile(resolve(output, "camera.txt"), "benchmark-camera\n");
     return {
       entities: 257,

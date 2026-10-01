@@ -1,4 +1,6 @@
-import type { ReactNode } from "react";
+import { createElement, type ReactNode } from "react";
+import { AttachmentContext } from "./attached-world.js";
+import { ReactAttachmentGroup } from "./attachment-state.js";
 import {
   ConcurrentRoot,
   DefaultEventPriority,
@@ -12,20 +14,36 @@ import {
   reconciler,
 } from "./reconciler.js";
 import { ReactWorldTree } from "./tree.js";
+import { rootCleanup } from "./root-cleanup.js";
+import type { CameraOutputReference } from "@ipp/client";
 
-export {
-  ReactWorldBatchRejectedError,
-  EntityOverlayBindingLostError,
-} from "./commits.js";
-export type { ReactWorldRootOptions } from "./commits.js";
+export { AttachedWorld, AttachedWorldCleanupError } from "./attached-world.js";
 export type {
-  StateOverlayLifecycleDiagnostic,
-  ReactWorldClient,
-} from "./contract.js";
+  AttachedWorldProps,
+  AttachedWorldChild,
+  AttachedWorldAttachment,
+  AttachedWorldHandle,
+  AttachedWorldCleanupJournal,
+  AttachedWorldCleanupRecovery,
+  ReactCompositionHost,
+} from "./attached-world.js";
+
+export { CanvasWorld } from "./canvas-world.js";
+export type {
+  CanvasWorldHandle,
+  CanvasWorldPresentation,
+  CanvasWorldProps,
+} from "./canvas-world.js";
+
+export { ReactWorldBatchRejectedError } from "./commits.js";
+export { ReactWorldDuplicateEntityError } from "./tree.js";
+export type { ReactWorldRootOptions } from "./commits.js";
+export type { ReactWorldClient } from "./contract.js";
 export type {
   EntityProps,
   ChildrenProps,
-  HierarchyProps,
+  EntityLinkProps,
+  ParentJointProps,
   LookAtProps,
   ScalarProps,
   TransformProps,
@@ -41,12 +59,12 @@ export type {
   ComponentProps,
   SurfaceProps,
   SurfaceCacheProps,
-  SurfaceItemProps,
 } from "./components.js";
 export {
   Entity,
   Children,
-  Hierarchy,
+  EntityLink,
+  ParentJoint,
   LookAt,
   Scalar,
   Transform,
@@ -64,6 +82,15 @@ export {
 } from "./components.js";
 
 export interface ReactWorldRoot {
+  /**
+   * Resolve an acknowledged Camera declaration in this fixed World, without
+   * selecting presentation. A World's canvas needs no binding:
+   * `canvasOutput(world)` names it.
+   */
+  bindOutput(
+    entity: string | bigint,
+    kind: "camera",
+  ): Promise<CameraOutputReference>;
   getAsset(id: string): import("./asset_state.js").ReactAssetState | undefined;
   onAssetChange(
     listener: (state: import("./asset_state.js").ReactAssetState) => void,
@@ -78,13 +105,24 @@ export function createRoot(
   client: ReactWorldClient,
   options: ReactWorldRootOptions = {},
 ): ReactWorldRoot {
-  if (!client.capabilities.stateOverlays)
-    throw new Error("This runtime does not support overlays");
+  if (client.closure) throw client.closure.reason;
+  if (
+    options.host &&
+    (!client.worldReference ||
+      options.host.sessions.get(client.session) !== client)
+  )
+    throw new Error("React composition requires a live session from this Host");
   const tree = new ReactWorldTree(client);
   const commits = new ReactWorldCommits(client, options);
   const state = new ReactWorldContainer(tree, commits);
+  const attachments = options.host
+    ? new ReactAttachmentGroup(options.host, state, client, options)
+    : undefined;
+  let uncaughtError: unknown;
   const onUncaughtError = (error: Error): void => {
+    uncaughtError = error;
     state.uncaught(error);
+    attachments?.uncaught(error);
   };
   const container = reconciler.createContainer(
     state,
@@ -104,60 +142,137 @@ export function createRoot(
   );
   let current: ReactNode = null;
   let closing: Promise<void> | undefined;
+  let cleanupFailed = false;
+  const wrapped = (element: ReactNode): ReactNode =>
+    createElement(AttachmentContext, { value: state }, element);
 
-  const render = (element: ReactNode): Promise<void> => {
-    if (closing)
-      return Promise.reject(new Error("The React root is unmounted"));
+  const flush = async (): Promise<void> => {
+    if (closing) return closing;
+    if (uncaughtError) throw uncaughtError;
+    reconciler.flushPassiveEffects();
+    await new Promise<void>((resolve) => {
+      const priority = exchangePriority(DefaultEventPriority);
+      try {
+        reconciler.updateContainer(wrapped(current), container, null, resolve);
+      } finally {
+        exchangePriority(priority);
+      }
+    });
+    reconciler.flushPassiveEffects();
+    if (uncaughtError) throw uncaughtError;
+    state.publish();
+    attachments?.publish();
+    await Promise.all([commits.checkpoint(), attachments?.settled()]);
+  };
+
+  const update = (element: ReactNode): Promise<void> => {
     current = element;
+    uncaughtError = undefined;
     try {
       reconciler.flushSyncFromReconciler(() => {
-        reconciler.updateContainerSync(element, container, null);
+        reconciler.updateContainerSync(wrapped(element), container, null);
       });
     } catch (error) {
-      state.uncaught(error);
+      onUncaughtError(
+        error instanceof Error ? error : new Error(String(error)),
+      );
     }
     state.publish();
+    attachments?.publish();
     // React may bail out when given the same element; never retry the rejected
     // description just because a caller asks to render or flush it again.
-    return commits.settled();
+    return attachments ? flush() : commits.settled();
   };
 
-  return {
-    getAsset: (id) => commits.assets.get(id),
-    onAssetChange: (listener) => commits.assets.subscribe(listener),
-    render,
-    async flush() {
-      if (closing) return closing;
-      // A default-priority root callback is an explicit React scheduling barrier
-      // for ordinary hook updates, including passive effects already scheduled.
-      reconciler.flushPassiveEffects();
-      for (;;) {
-        await new Promise<void>((resolve) => {
-          const priority = exchangePriority(DefaultEventPriority);
-          try {
-            reconciler.updateContainer(current, container, null, resolve);
-          } finally {
-            exchangePriority(priority);
-          }
-        });
-        reconciler.flushPassiveEffects();
-        state.publish();
-        const pending = commits.settled();
-        await pending;
-        // A later commit can arrive while an outcome is pending. Its promise
-        // must settle too; an empty React callback commit does not restart work.
-        if (pending === commits.settled()) return;
+  const render = (element: ReactNode): Promise<void> =>
+    closing
+      ? Promise.reject(new Error("The React root is unmounted"))
+      : update(element);
+
+  const dispose = async (retry = false): Promise<void> => {
+    if (!attachments) return commits.dispose();
+    const results = await Promise.allSettled([
+      commits.dispose(),
+      attachments?.dispose(retry),
+    ]);
+    const errors = results.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (errors.length)
+      throw new AggregateError(errors, "React root cleanup is incomplete");
+  };
+  const cleanup = (retry: boolean): Promise<void> => {
+    cleanupFailed = false;
+    let resolve!: () => void;
+    let reject!: (error: unknown) => void;
+    const attempt = new Promise<void>((accept, fail) => {
+      resolve = accept;
+      reject = fail;
+    });
+    closing = attempt;
+    void attempt.catch(() => {
+      if (closing === attempt) cleanupFailed = true;
+    });
+    if (!retry) {
+      // Unmount deletes nothing: fence authoring and attached Worlds before
+      // React clears the tree, so the empty tree is never committed.
+      commits.fence();
+      attachments?.fence();
+      try {
+        void update(null).catch(() => {});
+      } catch (error) {
+        commits.report(error);
       }
+    }
+    void dispose(retry).then(resolve, reject);
+    return attempt;
+  };
+  const root: ReactWorldRoot = {
+    async bindOutput(entity, kind) {
+      if (!options.host || !client.worldReference)
+        throw new Error("Output binding requires createRoot(client, { host })");
+      if (closing || client.closure)
+        throw new Error("The React root is unavailable");
+      if (kind !== "camera")
+        throw new Error(
+          "Only Camera outputs bind; canvasOutput(world) names a World's canvas",
+        );
+      const id = commits.resolveEntity(entity);
+      const output = await options.host.bindOutput(
+        client.worldReference,
+        id,
+        kind,
+      );
+      if (closing || client.closure || commits.resolveEntity(entity) !== id)
+        throw new Error("Output declaration changed while binding");
+      if (output.kind !== "camera")
+        throw new Error("The Host bound a non-Camera output");
+      return output;
     },
+    getAsset: (id) => commits.assets.get(id),
+    onAssetChange: (listener) =>
+      commits.assets.subscribe((state) => {
+        if (!client.closure && !closing) listener(state);
+      }),
+    render,
+    flush,
     unmount() {
-      if (closing) return closing;
-      // Local teardown is immediate; remote release follows every queued commit.
-      // A failed attachment creates no resource; an acknowledged one is released.
-      void render(null).catch(() => {});
-      closing = commits.dispose();
-      return closing;
+      if (closing) return cleanupFailed ? cleanup(true) : closing;
+      return cleanup(false);
     },
   };
+  rootCleanup.set(root, {
+    async retry() {
+      if (!closing) throw new Error("The React root is not unmounted");
+      await root.unmount();
+    },
+    async abandon() {
+      if (!closing) throw new Error("The React root is not unmounted");
+      await closing.catch(() => {});
+      await attachments?.abandon();
+    },
+  });
+  return root;
 }
 
 export {
@@ -179,12 +294,19 @@ export type { DynamicPropertyInput } from "@ipp/client";
 export { VertexShader, FragmentShader } from "./shaders.js";
 export type { ShaderProps } from "./shaders.js";
 
-export { Asset, AnimationAsset, ShaderAsset, assetRef } from "./assets.js";
+export {
+  Asset,
+  AnimationAsset,
+  ShaderAsset,
+  assetRef,
+  assetField,
+} from "./assets.js";
 export type {
   AssetProps,
   AnimationAssetProps,
   ShaderAssetProps,
   AssetReference,
+  AssetFieldWrite,
 } from "./assets.js";
 
 export type { ReactAssetState } from "./asset_state.js";

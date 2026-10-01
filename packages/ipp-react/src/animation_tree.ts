@@ -6,13 +6,14 @@ import {
   type AnimationBinding,
   type AnimationProps,
 } from "./animation.js";
-import type { EntityOverlayBindingDescription } from "./tree.js";
+import type { ReactEntityDescription } from "./tree.js";
+import { describeEntityReference } from "./entity_references.js";
 
 export function describeAnimation(
   identity: number,
   props: AnimationProps & { mailbox: AnimationMailbox },
   parent: number | undefined,
-  entities: readonly EntityOverlayBindingDescription[],
+  entities: readonly ReactEntityDescription[],
   assets: ReadonlyMap<string, { kind: number; clip?: AnimationClipSource }>,
 ): AnimationDescription {
   if (!(props.mailbox instanceof AnimationMailbox))
@@ -56,24 +57,36 @@ export function describeAnimation(
         "Animation binding requires a property or clip track hint",
       );
     const target = binding.target ?? props.target;
-    let entity = parent;
-    if (typeof target === "string") {
-      const matches = entities.filter((entry) => entry.symbolicId === target);
-      if (matches.length !== 1)
-        throw new Error(
-          `Animation target must identify one scene Entity: ${target}`,
-        );
-      entity = matches[0]!.identity;
-    } else if (target !== undefined && typeof target !== "bigint")
+    if (
+      target !== undefined &&
+      typeof target !== "string" &&
+      typeof target !== "bigint"
+    )
       throw new Error("Invalid Animation target");
-    if (typeof target !== "bigint" && entity === undefined)
+    if (target === undefined && parent === undefined)
       throw new Error("Animation requires a target or enclosing Entity");
+    const { entityBindings, ...fields } = binding;
     // Capture mutable authoring arrays at the committed boundary.
     return {
-      ...binding,
+      ...fields,
       source: isAssetReference(source) ? { assetId: source.assetId } : source!,
       property: structuredClone(property) as AnimationDriverTarget,
-      target: typeof target === "bigint" ? target : { entity: entity! },
+      target:
+        target === undefined
+          ? { entity: parent! }
+          : describeEntityReference(target, entities),
+      ...(entityBindings === undefined
+        ? {}
+        : {
+            entityBindings: entityBindings.map((reference) => {
+              if (
+                typeof reference !== "string" &&
+                typeof reference !== "bigint"
+              )
+                throw new Error("Invalid Animation entity binding");
+              return describeEntityReference(reference, entities);
+            }),
+          }),
     };
   });
   if (props.speed !== undefined && !Number.isFinite(props.speed))

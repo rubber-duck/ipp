@@ -12,6 +12,7 @@ fn template_identifiers() -> &'static std::collections::BTreeSet<String> {
             include_str!("geometry.template.ts"),
             include_str!("skeleton.template.ts"),
             include_str!("skinning.template.ts"),
+            include_str!("gui-paint.template.ts"),
         ] {
             let mut bindings = String::new();
             for line in template.lines() {
@@ -126,6 +127,7 @@ const RESERVED: &[&str] = &[
     "WIRE",
     "CAPABILITIES",
     "SCHEMA_HASH",
+    "GUI_PAINT_PART_KEYS",
     "Entity",
     "__proto__",
     "prototype",

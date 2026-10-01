@@ -181,15 +181,17 @@ impl RenderShaderConfig {
         ];
         if self.lit {
             return Ok((
-                self.vertex_source(crate::services::render::embedded_shader!(
-                    "shaders/lit.vert"
-                ))?,
-                template::evaluate(
-                    crate::services::render::embedded_shader!("shaders/lit.frag"),
-                    &values,
-                    &conditions,
-                )
-                .map_err(|error| RenderError::RenderDevice(error.0))?,
+                with_limit_definitions(self.vertex_source(
+                    crate::services::render::embedded_shader!("shaders/lit.vert"),
+                )?),
+                with_limit_definitions(
+                    template::evaluate(
+                        crate::services::render::embedded_shader!("shaders/lit.frag"),
+                        &values,
+                        &conditions,
+                    )
+                    .map_err(|error| RenderError::RenderDevice(error.0))?,
+                ),
             ));
         }
 
@@ -208,7 +210,9 @@ impl RenderShaderConfig {
                 .replace("vec4(linear_rgb, 1.0)", "vec4(linear_rgb, v_particle_opacity * (1.0 - smoothstep(0.35, 0.5, length(v_particle_uv - vec2(0.5)))))");
         }
         Ok((
-            self.vertex_source(crate::services::render::embedded_shader!("unlit.vert"))?,
+            with_limit_definitions(
+                self.vertex_source(crate::services::render::embedded_shader!("unlit.vert"))?,
+            ),
             fragment,
         ))
     }
@@ -216,9 +220,9 @@ impl RenderShaderConfig {
     #[cfg(feature = "shadows")]
     pub(crate) fn shadow_sources(self) -> Result<(String, String), RenderError> {
         Ok((
-            self.vertex_source(crate::services::render::embedded_shader!(
-                "shaders/shadow.vert"
-            ))?,
+            with_limit_definitions(self.vertex_source(
+                crate::services::render::embedded_shader!("shaders/shadow.vert"),
+            )?),
             crate::services::render::embedded_shader!("shaders/shadow.frag").into(),
         ))
     }
@@ -319,9 +323,51 @@ impl RenderShaderConfig {
     }
 }
 
+/// Preprocessor definitions of the array bounds shader declarations share with their
+/// Rust uploaders, so each bound has one Rust source: [`MAX_LIGHTS`] punctual lights
+/// per draw and, with skeletal animation, [`ipp_core::MAX_JOINTS`] joint matrices.
+///
+/// [`MAX_LIGHTS`]: super::lighting::MAX_LIGHTS
+pub(super) fn limit_definitions() -> String {
+    #[allow(unused_mut)]
+    let mut definitions = format!("#define IPP_MAX_LIGHTS {}\n", super::lighting::MAX_LIGHTS);
+    #[cfg(feature = "skeletal-animation")]
+    definitions.push_str(&format!(
+        "#define IPP_MAX_JOINTS {}\n",
+        ipp_core::MAX_JOINTS
+    ));
+    definitions
+}
+
+/// Place [`limit_definitions`] directly after a composed program's `#version` line.
+fn with_limit_definitions(source: String) -> String {
+    debug_assert!(source.starts_with("#version "));
+    let split = source.find('\n').map_or(source.len(), |end| end + 1);
+    let mut defined = String::with_capacity(source.len() + 64);
+    defined.push_str(&source[..split]);
+    defined.push_str(&limit_definitions());
+    defined.push_str(&source[split..]);
+    defined
+}
+
 #[cfg(test)]
 mod tests {
     use super::RenderShaderConfig;
+
+    #[test]
+    fn composed_programs_define_their_array_bounds_after_the_version() {
+        let config = RenderShaderConfig::new(true, true).with_lighting(true, true);
+        #[cfg(feature = "skeletal-animation")]
+        let config = config.with_skinning(true);
+        let (vertex, fragment) = config.sources().unwrap();
+        let definitions = super::limit_definitions();
+        for source in [&vertex, &fragment] {
+            assert!(source.starts_with(&format!("#version 300 es\n{definitions}")));
+        }
+        assert!(fragment.contains("u_lights[IPP_MAX_LIGHTS * 4]"));
+        #[cfg(feature = "skeletal-animation")]
+        assert!(vertex.contains("u_joints[IPP_MAX_JOINTS]"));
+    }
 
     #[test]
     fn lighting_composes_texture_weights_normals_and_deformation() {

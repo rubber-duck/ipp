@@ -18,15 +18,15 @@ use std::collections::HashMap;
 use super::gui_batch::GuiVertex;
 use crate::services::render::frame_statistics::RenderFrameWork;
 use crate::{RenderDevice, RenderError};
-use ipp_core::systems::surface::SurfacePrimitiveIdentity;
+use ipp_core::systems::canvas::CanvasPrimitiveId;
 
 /// Stable identity of one retained piece within its Surface.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum GuiPieceKey {
     /// Box batch starting with this primitive identity.
-    Boxes(SurfacePrimitiveIdentity),
+    Boxes(CanvasPrimitiveId),
     /// Atlas page batch `index` of the text run with this identity.
-    Glyphs(SurfacePrimitiveIdentity, u32),
+    Glyphs(CanvasPrimitiveId, u32),
 }
 
 /// Where a piece's vertices come from when its slot is written.
@@ -35,7 +35,7 @@ pub(crate) enum GuiPieceSource {
     /// Consecutive box identities, as a range of the submission's box list.
     Boxes(std::ops::Range<usize>),
     /// Atlas page batch `index` of a text run.
-    Glyphs(SurfacePrimitiveIdentity, u32),
+    Glyphs(CanvasPrimitiveId, u32),
 }
 
 /// One retained batch of the Surface being submitted, in painter order.
@@ -522,15 +522,17 @@ fn write_planned<D: RenderDevice>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ipp_core::systems::gui::GuiNodeId;
-    use ipp_core::systems::surface::{GuiPrimitiveId, GuiPrimitivePart};
+    use ipp_core::systems::canvas::CanvasPart;
 
     fn key(node: u32) -> GuiPieceKey {
-        GuiPieceKey::Boxes(SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
-            root_incarnation: 1,
-            node: GuiNodeId(node),
-            part: GuiPrimitivePart::Background,
-        }))
+        GuiPieceKey::Boxes(CanvasPrimitiveId {
+            target: ipp_core::systems::canvas::CanvasTarget {
+                entity: ipp_core::EntityId::from_bits(u64::from(node)),
+                component: ipp_core::ComponentValue::CANVAS_BOX,
+                incarnation: 1,
+            },
+            part: CanvasPart::Background,
+        })
     }
 
     fn piece(node: u32, len: usize) -> GuiPiece {

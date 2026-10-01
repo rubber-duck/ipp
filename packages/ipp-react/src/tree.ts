@@ -1,12 +1,30 @@
 import {
+  declarationFields,
+  fieldIdentity,
+  type DeclarationFieldValue,
+} from "./field_values.js";
+import { guiControlNames } from "./gui/manifest.js";
+import {
+  controlCallbackNames,
+  controlValueCallbackNames,
+  type GuiActionListeners,
+  type GuiControlListeners,
+} from "./gui/callbacks.js";
+import { validateControlRef, type GuiControlRef } from "./gui/control-ref.js";
+import {
   ANIMATION_HOST_TYPE,
   type AnimationDescription,
   type AnimationProps,
   type AnimationMailbox,
 } from "./animation.js";
 import { describeAnimation, animationSignature } from "./animation_tree.js";
-import { SurfaceItemDeclarations } from "./surface_items.js";
-import type { SurfaceItemProps } from "./components.js";
+import type { ReactEntityReference } from "./entity_references.js";
+import { attachmentIdentity } from "./attachment-identity.js";
+import {
+  ATTACHED_WORLD_HOST_TYPE,
+  describeAttachedWorld,
+  type AttachedWorldDescription,
+} from "./attached-world.js";
 import {
   isAsset,
   ANIMATION_ASSET_HOST_TYPE,
@@ -25,11 +43,7 @@ import {
   describeShader,
   type ShaderHostType,
 } from "./shaders.js";
-import type {
-  ComponentOverlayMode,
-  EntityOverlayMode,
-  ReactWorldClient,
-} from "./contract.js";
+import type { ReactWorldClient } from "./contract.js";
 import {
   FieldKind,
   inferDynamicValue,
@@ -37,79 +51,28 @@ import {
   encodeShaderDefinition,
   type ComponentDescriptor,
   type FieldKind as FieldKindValue,
-  type FieldValue,
 } from "@ipp/client";
 import {
   componentNames,
   ENTITY_HOST_TYPE,
   CHILDREN_HOST_TYPE,
-  componentContract,
+  ENTITY_LINK_HOST_TYPE,
   type ReactWorldComponentType,
 } from "./components.js";
-import {
-  GUI_BUTTON_HOST_TYPE,
-  GUI_CHECKBOX_HOST_TYPE,
-  GUI_IMAGE_HOST_TYPE,
-  GUI_ROOT_HOST_TYPE,
-  GUI_SLIDER_HOST_TYPE,
-  GUI_TEXT_HOST_TYPE,
-  GUI_TEXT_INPUT_HOST_TYPE,
-  GUI_VIRTUAL_ITEM_HOST_TYPE,
-  GUI_VIRTUAL_LIST_HOST_TYPE,
-  guiNodeFor,
-  virtualListNode,
-  guiStyleFor,
-  isGuiHostType,
-  isGuiLeafHostType,
-  validateGuiNodeRef,
-  type GuiActionListener,
-  type GuiHostType,
-  type GuiNodeProps,
-  type GuiRootProps,
-  type GuiNodeRef,
-  type GuiRangeChangeListener,
-} from "./gui/components.js";
-import {
-  guiRootSignature,
-  type GuiDescribedNode,
-  type GuiDescribedRoot,
-} from "./gui/description.js";
-import type {
-  GuiPressListener,
-  GuiScalarCommitListener,
-  GuiTextCommitListener,
-  GuiTextSubmitListener,
-  GuiToggleListener,
-} from "./gui/callbacks.js";
-import { guiStyleWithTheme, validateGuiTheme } from "./gui/theme.js";
-import {
-  validateButtonProps,
-  validateCheckboxProps,
-  validateSliderProps,
-  validateTextInputProps,
-  type ButtonProps,
-  type CheckboxProps,
-  type SliderProps,
-  type TextInputProps,
-} from "./gui/controls.js";
-
 export type ReactWorldElementType =
+  | typeof ATTACHED_WORLD_HOST_TYPE
   | typeof ANIMATION_HOST_TYPE
   | typeof CHILDREN_HOST_TYPE
+  | typeof ENTITY_LINK_HOST_TYPE
   | typeof ENTITY_HOST_TYPE
   | ReactWorldComponentType
   | ShaderHostType
-  | AssetHostType
-  | GuiHostType;
-export type StateOverlayFieldValue = Extract<
-  FieldValue,
-  { kind: "f32" | "u32" | "u64" | "string" | "bytes" | "bool" | "entity" }
->;
-/** A local declaration dependency, resolved to a runtime entity after attachment. */
+  | AssetHostType;
 export type ReactWorldFieldValue =
-  | StateOverlayFieldValue
-  | { kind: "binding"; value: number }
-  | { kind: "asset"; value: string };
+  | DeclarationFieldValue
+  | { kind: "asset"; value: string }
+  | { kind: "row-asset"; value: string }
+  | { kind: "entity-reference"; value: string | ReactEntityReference };
 export type ReactWorldElementProps = Readonly<Record<string, unknown>>;
 
 const declarationFieldKinds: ReadonlySet<FieldKindValue> = new Set([
@@ -119,95 +82,127 @@ const declarationFieldKinds: ReadonlySet<FieldKindValue> = new Set([
   FieldKind.Entity,
   FieldKind.String,
   FieldKind.Bytes,
+  FieldKind.Rows,
   FieldKind.Bool,
 ]);
 
 export interface ReactWorldInstance {
   readonly identity: number;
   readonly type: ReactWorldElementType;
+  /** The tree whose container committed this instance. */
+  readonly tree: ReactWorldTree;
   props: ReactWorldElementProps;
   children: ReactWorldInstance[];
   hidden: boolean;
 }
 
-export interface EntityOverlayBindingDescription {
-  readonly identity: number;
-  readonly symbolicId: string;
-  readonly mode: EntityOverlayMode;
+/**
+ * A render declares two `<Entity id>` nodes with the same symbolic id. Like
+ * other invalid trees, the render is rejected locally before anything is
+ * sent. An id may still move to another node across renders.
+ */
+export class ReactWorldDuplicateEntityError extends Error {
+  constructor(readonly symbolicId: string) {
+    super(`Duplicate Entity id: ${symbolicId}`);
+    this.name = "ReactWorldDuplicateEntityError";
+  }
 }
 
-export interface ComponentStateOverlayDescription {
+/** One `<Entity>` declaration. */
+export interface ReactEntityDescription extends GuiActionListeners {
+  readonly identity: number;
+  readonly symbolicId: string;
+  /**
+   * `declared` for `<Entity id>`: the root creates or adopts the entity with
+   * this symbolic id and deletes it when the declaration disappears. `bound`
+   * for `<Entity bindTo>`: the root only refers to an existing entity.
+   */
+  readonly kind: "declared" | "bound";
+  /** The enclosing Entity declaration in React's element tree. */
+  readonly parent: number | undefined;
+}
+
+/** One component declaration on the Entity declaration `entity`. */
+export interface ReactComponentDescription {
   readonly identity: number;
   readonly entity: number;
   readonly component: number;
-  readonly mode: ComponentOverlayMode;
+  /** Declared field values by offset; an omitted prop is not written. */
   readonly fields: ReadonlyMap<number, ReactWorldFieldValue>;
   readonly properties?: Readonly<Record<string, DynamicValue>>;
+  /** Set exactly on GUI control components. */
+  readonly control?: true;
+  readonly controlRef?: GuiControlRef | undefined;
+  readonly controlListeners?: GuiControlListeners | undefined;
+}
+
+/** One `<Children>` or `<EntityLink>` placement of the Entity `entity`. */
+export interface ReactEntityLinkDescription {
+  readonly identity: number;
+  readonly entity: number;
+  readonly parent: ReactEntityReference | null;
+  readonly before: ReactEntityReference | null;
 }
 
 export interface ReactWorldDescription {
+  /** Some Entity declares `onAction` or `onActionCapture`. */
+  readonly guiActions?: boolean;
+  /** Momentary GUI effects (press, submit, actions) have listeners. */
+  readonly guiEffects?: boolean;
+  readonly attachments?: readonly AttachedWorldDescription[];
   readonly animations: readonly AnimationDescription[];
   readonly assets: readonly AssetDescription[];
-  readonly entities: readonly EntityOverlayBindingDescription[];
-  readonly overlays: readonly ComponentStateOverlayDescription[];
-  readonly gui: readonly GuiDescribedRoot[];
+  readonly entities: readonly ReactEntityDescription[];
+  readonly components: readonly ReactComponentDescription[];
+  readonly links: readonly ReactEntityLinkDescription[];
   readonly signature: string;
 }
 
-/** JS-only listeners retained on one described GUI node. The commit signature
- * and diff ignore them, so changing a listener alone resubmits nothing. */
-export interface GuiRetainedNodeCallbacks {
-  readonly onAction: GuiActionListener | undefined;
-  readonly onActionCapture: GuiActionListener | undefined;
-  readonly onPress: GuiPressListener | undefined;
-  readonly onToggle: GuiToggleListener | undefined;
-  readonly onScalarCommit: GuiScalarCommitListener | undefined;
-  readonly onTextCommit: GuiTextCommitListener | undefined;
-  readonly onSubmit: GuiTextSubmitListener | undefined;
-  /** A VirtualList's wanted-range observer. */
-  readonly onRangeChange?: GuiRangeChangeListener | undefined;
-}
-
-/** Described GUI node with its JS-only callback seam attached. This remains
- * assignable to `GuiDescribedNode`, so descriptions keep flowing through the
- * existing commit types without transport changes. */
-export interface GuiDescribedNodeWithCallbacks extends GuiDescribedNode {
-  readonly callbackSeam: GuiRetainedNodeCallbacks;
-}
-
-/** Read the JS-only listeners retained on a described GUI node. Nodes built
- * outside `ReactWorldTree.describe` carry no seam and report no listeners. */
-export function retainedNodeCallbacks(
-  node: GuiDescribedNode,
-): GuiRetainedNodeCallbacks {
-  const seam = (node as Partial<GuiDescribedNodeWithCallbacks>).callbackSeam;
-  return (
-    seam ?? {
-      onAction: undefined,
-      onActionCapture: undefined,
-      onPress: undefined,
-      onToggle: undefined,
-      onScalarCommit: undefined,
-      onTextCommit: undefined,
-      onSubmit: undefined,
-    }
-  );
-}
-
 export class ReactWorldTree {
-  private readonly surfaceItems = new WeakMap<
-    ReactWorldInstance,
-    SurfaceItemDeclarations
-  >();
   children: ReactWorldInstance[] = [];
+  /** Set by reconciler mutations; a container re-describes only when set. */
+  changed = true;
   private readonly components: ReactWorldClient["components"];
   private nextIdentity = 1;
   private nextAssetVersion = 1;
-  private readonly byteSignatures = new WeakMap<
-    Uint8Array<ArrayBuffer>,
-    string
+  private revision = 0;
+  private described:
+    | {
+        resources: string;
+        entities: readonly ReactEntityDescription[];
+        components: readonly ReactComponentDescription[];
+        links: readonly ReactEntityLinkDescription[];
+      }
+    | undefined;
+  private readonly descriptors = new Map<
+    ReactWorldElementType,
+    ComponentDescriptor
   >();
-  private readonly surfaceBytes = new WeakSet<Uint8Array<ArrayBuffer>>();
+  /** The props each instance last validated. */
+  private readonly validated = new WeakMap<
+    ReactWorldInstance,
+    ReactWorldElementProps
+  >();
+  private readonly entityDescriptions = new WeakMap<
+    ReactWorldInstance,
+    {
+      props: ReactWorldElementProps;
+      parent: number | undefined;
+      description: ReactEntityDescription;
+    }
+  >();
+  private readonly componentDescriptions = new WeakMap<
+    ReactWorldInstance,
+    {
+      props: ReactWorldElementProps;
+      structure: ComponentShape;
+      description: ReactComponentDescription;
+    }
+  >();
+  private readonly attachmentDescriptions = new WeakMap<
+    ReactWorldInstance,
+    { props: ReactWorldElementProps; description: AttachedWorldDescription }
+  >();
   private readonly assetEncodings = new WeakMap<
     ReactWorldInstance,
     {
@@ -252,23 +247,14 @@ export class ReactWorldTree {
     this.components = client.components;
   }
 
-  private byteSignature(bytes: Uint8Array<ArrayBuffer>): string {
-    if (!this.surfaceBytes.has(bytes)) return byteSignature(bytes);
-    let signature = this.byteSignatures.get(bytes);
-    if (signature === undefined) {
-      signature = byteSignature(bytes);
-      this.byteSignatures.set(bytes, signature);
-    }
-    return signature;
-  }
-
   validate(type: ReactWorldElementType, props: ReactWorldElementProps): void {
-    if (isGuiHostType(type)) {
-      this.validateGui(type, props);
+    if (type === ATTACHED_WORLD_HOST_TYPE) {
+      describeAttachedWorld(props);
       return;
     }
     if (props.ref != null) throw new Error("Remote refs are not supported yet");
     if (type === ANIMATION_HOST_TYPE) {
+      this.requireOperation("animation");
       if (
         !this.client.createAnimationController ||
         !this.client.updateAnimationController ||
@@ -331,37 +317,93 @@ export class ReactWorldTree {
         throw new Error("Entity requires exactly one nonempty id or bindTo");
       }
       for (const key of Object.keys(props)) {
-        if (!["id", "bindTo", "children", "ref"].includes(key)) {
+        if (
+          ![
+            "id",
+            "bindTo",
+            "children",
+            "ref",
+            "onAction",
+            "onActionCapture",
+          ].includes(key)
+        ) {
           throw new Error(`Unsupported Entity prop: ${key}`);
         }
       }
+      for (const key of ["onAction", "onActionCapture"] as const)
+        if (props[key] !== undefined && typeof props[key] !== "function")
+          throw new Error(`${key} must be a callback`);
       return;
     }
     if (type === CHILDREN_HOST_TYPE) {
+      this.requireOperation("entityLinks");
       for (const key of Object.keys(props)) {
         if (!["children", "ref"].includes(key))
           throw new Error(`Unsupported Children prop: ${key}`);
       }
       return;
     }
+    if (type === ENTITY_LINK_HOST_TYPE) {
+      this.requireOperation("entityLinks");
+      for (const key of Object.keys(props))
+        if (!["parent", "before", "ref"].includes(key))
+          throw new Error(`Unsupported EntityLink prop: ${key}`);
+      for (const key of ["parent", "before"] as const) {
+        const value = props[key];
+        if (key === "before" && value === undefined) continue;
+        if (
+          value !== null &&
+          typeof value !== "bigint" &&
+          !(typeof value === "string" && value.length > 0)
+        )
+          throw new Error(
+            `EntityLink.${key} must be an Entity reference or null`,
+          );
+      }
+      return;
+    }
     const descriptor = this.descriptor(type);
     const name = componentNames[type];
-    if (props.bound != null && typeof props.bound !== "boolean") {
-      throw new Error(`${name}.bound must be true, false, null, or undefined`);
+    const supportedCallbacks: readonly string[] =
+      name === "GuiButton"
+        ? ["onPress"]
+        : name === "GuiCheckbox"
+          ? ["onToggle"]
+          : name === "GuiSlider"
+            ? ["onScalarCommit"]
+            : name === "GuiTextInput"
+              ? ["onTextCommit", "onSubmit"]
+              : name === "GuiScrollView" || name === "GuiVirtualList"
+                ? ["onRangeChange", "onScroll"]
+                : [];
+    for (const key of controlCallbackNames) {
+      if (props[key] === undefined) continue;
+      if (!supportedCallbacks.includes(key) || typeof props[key] !== "function")
+        throw new Error(`Unsupported ${name} callback: ${key}`);
+    }
+    declarationFields(props.fields);
+    if (props.controlRef !== undefined) {
+      if (!guiControlNames.has(name))
+        throw new Error("Only controls accept control refs");
+      validateControlRef(props.controlRef);
+      if (
+        props.controlRef &&
+        (!this.client.inspectPage || !this.client.watchLifecycle)
+      )
+        throw new Error("Control refs require the ordinary GUI client");
+      if (props.controlRef) this.requireLifecyclePublisher("Control refs");
     }
     for (const key of Object.keys(props)) {
-      if (["bound", "ref", "children"].includes(key)) continue;
       if (
-        type === componentContract.Surface.host &&
-        key === "items" &&
-        Array.isArray(props.items)
-      ) {
-        if (props.bound !== false || !this.client.encodeSurfaceItems)
-          throw new Error(
-            "Keyed Surface items require bound={false} and a Surface-capable client",
-          );
+        [
+          "ref",
+          "children",
+          "fields",
+          "controlRef",
+          ...supportedCallbacks,
+        ].includes(key)
+      )
         continue;
-      }
       const field = Object.hasOwn(descriptor.fields, key)
         ? descriptor.fields[key]
         : undefined;
@@ -377,7 +419,10 @@ export class ReactWorldTree {
       const valid =
         value === undefined ||
         (key === "source" && isAssetReference(value)) ||
-        (field.kind === FieldKind.Bytes
+        (field.kind === FieldKind.Entity &&
+          typeof value === "string" &&
+          value.length > 0) ||
+        (field.kind === FieldKind.Bytes || field.kind === FieldKind.Rows
           ? value instanceof Uint8Array
           : typeof value ===
             (field.kind === FieldKind.String
@@ -405,225 +450,35 @@ export class ReactWorldTree {
     }
   }
 
-  private validateGui(type: GuiHostType, props: ReactWorldElementProps): void {
-    const gui = props as unknown as Record<string, unknown>;
-    validateGuiNodeRef((gui.nodeRef as unknown) ?? null);
-    for (const key of ["onAction", "onActionCapture"] as const) {
-      const listener = gui[key];
-      if (listener !== undefined && typeof listener !== "function")
-        throw new Error(`GUI ${key} must be a function`);
-    }
-    // Inline asset binding: a concrete source shared by two views creates
-    // no duplicate asset, and swaps commit as ordinary style updates
-    // without overlay teardown. Registry-id references stay a follow-up.
-    const asset = gui.asset as unknown;
-    if (asset !== undefined && asset !== null) {
-      if (
-        typeof asset !== "object" ||
-        !Number.isInteger((asset as { kind: unknown }).kind) ||
-        (asset as { kind: number }).kind <= 0 ||
-        (asset as { kind: number }).kind > 65535 ||
-        typeof (asset as { source: unknown }).source !== "string" ||
-        (asset as { source: string }).source.length === 0 ||
-        ((asset as { variant: unknown }).variant !== undefined &&
-          (!Number.isInteger((asset as { variant: unknown }).variant) ||
-            (asset as { variant: number }).variant < 0 ||
-            (asset as { variant: number }).variant > 0xffffffff))
-      )
-        throw new Error(
-          "GUI asset must be an asset source with kind, source and variant",
-        );
-    }
-    if (gui.enabled !== undefined && typeof gui.enabled !== "boolean")
-      throw new Error("GUI enabled must be a boolean or undefined");
-    if (gui.focusScope !== undefined && typeof gui.focusScope !== "boolean")
-      throw new Error("GUI focusScope must be a boolean or undefined");
-    if (gui.theme !== undefined)
-      validateGuiTheme(gui.theme as import("./gui/theme.js").GuiControlTheme);
-    if (type === GUI_ROOT_HOST_TYPE) {
-      for (const key of Object.keys(props)) {
-        if (
-          !["children", "nodeRef", "onAction", "onActionCapture"].includes(key)
-        )
-          throw new Error(`Unsupported GuiRoot prop: ${key}`);
-      }
-      return;
-    }
-    if (gui.bound !== undefined)
-      throw new Error("GUI declarations do not accept a bound prop");
-    const name = type;
-    const finite = (key: string): void => {
-      const value = gui[key];
-      if (
-        value !== undefined &&
-        (typeof value !== "number" || !Number.isFinite(value))
-      )
-        throw new Error(`GUI ${key} must be a finite number or undefined`);
-    };
-    for (const key of [
-      "width",
-      "height",
-      "minWidth",
-      "minHeight",
-      "maxWidth",
-      "maxHeight",
-      "flex",
-      "alignX",
-      "alignY",
-    ])
-      finite(key);
-    const tuple = (
-      key: string,
-      length: 4 | 2,
-      check: (value: number) => boolean,
-      what: string,
-    ): void => {
-      const value = gui[key];
-      if (value === undefined) return;
-      if (
-        !Array.isArray(value) ||
-        value.length !== length ||
-        !value.every((entry) => typeof entry === "number" && check(entry))
-      )
-        throw new Error(`GUI ${key} ${what}`);
-    };
-    const inUnit = (value: number): boolean =>
-      Number.isFinite(value) && value >= 0 && value <= 1;
-    tuple(
-      "padding",
-      4,
-      (value) => Number.isFinite(value) && value >= 0,
-      "must be four finite numbers >= 0",
-    );
-    tuple("margin", 4, Number.isFinite, "must be four finite numbers");
-    tuple("color", 4, inUnit, "must be four finite numbers in 0..1");
-    tuple("backgroundColor", 4, inUnit, "must be four finite numbers in 0..1");
-    const opacity = gui.opacity;
+  private requireLifecyclePublisher(feature: string): void {
     if (
-      opacity !== undefined &&
-      (typeof opacity !== "number" || !inUnit(opacity))
+      this.client.manifest &&
+      !this.client.manifest.systems.includes("ipp.lifecycle-publisher")
     )
-      throw new Error("GUI opacity must be a finite number in 0..1");
-    const fontSize = gui.fontSize;
+      throw new Error(`${feature} require the selected lifecycle publisher`);
+  }
+
+  private requireOperation(
+    operation: NonNullable<ReactWorldClient["manifest"]>["operations"][number],
+  ): void {
     if (
-      fontSize !== undefined &&
-      (typeof fontSize !== "number" ||
-        !Number.isFinite(fontSize) ||
-        fontSize <= 0)
+      this.client.manifest &&
+      !this.client.manifest.operations.includes(operation)
     )
-      throw new Error("GUI fontSize must be a finite number > 0");
-    const allowed = new Set([
-      "width",
-      "height",
-      "minWidth",
-      "minHeight",
-      "maxWidth",
-      "maxHeight",
-      "padding",
-      "margin",
-      "flex",
-      "alignX",
-      "alignY",
-      "color",
-      "backgroundColor",
-      "opacity",
-      "fontSize",
-      "asset",
-      "enabled",
-      "focusScope",
-      "children",
-      "nodeRef",
-      "onAction",
-      "onActionCapture",
-      "theme",
-    ]);
-    if (type === GUI_TEXT_HOST_TYPE) {
-      if (gui.text !== undefined && typeof gui.text !== "string")
-        throw new Error("GUI Text text must be a string or undefined");
-      allowed.add("text");
-      if (gui.children != null)
-        throw new Error(
-          "GUI Text cannot contain declarations; pass text instead",
-        );
-    } else if (type === GUI_IMAGE_HOST_TYPE) {
-      tuple(
-        "size",
-        2,
-        (value) => Number.isFinite(value) && value > 0,
-        "must be two finite numbers > 0",
-      );
-      allowed.add("size");
-      if (gui.children != null)
-        throw new Error("GUI Image cannot contain declarations");
-    } else if (isGuiLeafHostType(type)) {
-      if (gui.children != null)
-        throw new Error(`GUI ${name} cannot contain declarations`);
-    }
-    switch (type) {
-      case GUI_BUTTON_HOST_TYPE:
-        validateButtonProps(gui as unknown as ButtonProps);
-        allowed.add("label");
-        allowed.add("onPress");
-        break;
-      case GUI_CHECKBOX_HOST_TYPE:
-        validateCheckboxProps(gui as unknown as CheckboxProps);
-        allowed.add("checked");
-        allowed.add("onToggle");
-        break;
-      case GUI_SLIDER_HOST_TYPE:
-        validateSliderProps(gui as unknown as SliderProps);
-        allowed.add("value");
-        allowed.add("min");
-        allowed.add("max");
-        allowed.add("step");
-        allowed.add("onScalarCommit");
-        break;
-      case GUI_TEXT_INPUT_HOST_TYPE:
-        validateTextInputProps(gui as unknown as TextInputProps);
-        allowed.add("text");
-        allowed.add("placeholder");
-        allowed.add("onTextCommit");
-        allowed.add("onSubmit");
-        break;
-      case GUI_VIRTUAL_LIST_HOST_TYPE:
-        virtualListNode(gui as { itemCount?: number; itemExtent?: number });
-        if (
-          gui.onRangeChange !== undefined &&
-          typeof gui.onRangeChange !== "function"
-        )
-          throw new Error("GUI VirtualList onRangeChange must be a function");
-        allowed.add("itemCount");
-        allowed.add("itemExtent");
-        allowed.add("overscan");
-        allowed.add("axis");
-        allowed.add("onRangeChange");
-        break;
-      case GUI_VIRTUAL_ITEM_HOST_TYPE:
-        if (
-          !Number.isInteger(gui.itemIndex) ||
-          (gui.itemIndex as number) < 0 ||
-          (gui.itemIndex as number) > 0xffffffff
-        )
-          throw new Error("GUI VirtualList item index must be a u32 integer");
-        allowed.add("itemIndex");
-        break;
-      default:
-        break;
-    }
-    for (const key of Object.keys(props)) {
-      if (!allowed.has(key))
-        throw new Error(`Unsupported ${name} prop: ${key}`);
-    }
+      throw new Error(`This World does not select ${operation}`);
   }
 
   private descriptor(type: ReactWorldElementType): ComponentDescriptor {
+    const cached = this.descriptors.get(type);
+    if (cached) return cached;
     if (
+      type === ATTACHED_WORLD_HOST_TYPE ||
       type === ANIMATION_HOST_TYPE ||
       isAsset(type) ||
       isShader(type) ||
       type === ENTITY_HOST_TYPE ||
       type === CHILDREN_HOST_TYPE ||
-      isGuiHostType(type) ||
+      type === ENTITY_LINK_HOST_TYPE ||
       !Object.hasOwn(componentNames, type)
     )
       throw new Error(`Unsupported element: ${type}`);
@@ -631,11 +486,17 @@ export class ReactWorldTree {
     const descriptor = this.components[name];
     if (!descriptor) throw new Error(`This runtime does not support ${name}`);
     if (
+      this.client.manifest &&
+      !this.client.manifest.components.includes(descriptor.id)
+    )
+      throw new Error(`This World does not select ${name}`);
+    if (
       Object.values(descriptor.fields).some(
         (field) => !declarationFieldKinds.has(field.kind),
       )
     )
       throw new Error(`Unsupported ${name} field kind`);
+    this.descriptors.set(type, descriptor);
     return descriptor;
   }
 
@@ -643,17 +504,237 @@ export class ReactWorldTree {
     type: ReactWorldElementType,
     props: ReactWorldElementProps,
   ): ReactWorldInstance {
-    this.validate(type, props);
-    return {
+    if (type !== ATTACHED_WORLD_HOST_TYPE) this.validate(type, props);
+    const instance: ReactWorldInstance = {
       identity: this.nextIdentity++,
       type,
+      tree: this,
       props,
       children: [],
       hidden: false,
     };
+    this.validated.set(instance, props);
+    return instance;
   }
 
+  /** Validate props that changed a declared value since their last check. */
+  private validateOnce(instance: ReactWorldInstance): void {
+    const previous = this.validated.get(instance);
+    if (previous === instance.props) return;
+    if (!previous || !sameDeclarationProps(previous, instance.props))
+      this.validate(instance.type, instance.props);
+    this.validated.set(instance, instance.props);
+  }
+
+  private describeEntity(
+    instance: ReactWorldInstance,
+    parent: number | undefined,
+  ): ReactEntityDescription {
+    const props = instance.props;
+    const cached = this.entityDescriptions.get(instance);
+    if (cached?.props === props && cached.parent === parent)
+      return cached.description;
+    this.validateOnce(instance);
+    const symbolicId = (props.id ?? props.bindTo) as string;
+    const kind: ReactEntityDescription["kind"] =
+      props.id === undefined ? "bound" : "declared";
+    const onAction = props.onAction as GuiActionListeners["onAction"];
+    const onActionCapture =
+      props.onActionCapture as GuiActionListeners["onActionCapture"];
+    const previous = cached?.description;
+    const description =
+      previous &&
+      previous.symbolicId === symbolicId &&
+      previous.kind === kind &&
+      previous.parent === parent &&
+      previous.onAction === onAction &&
+      previous.onActionCapture === onActionCapture
+        ? previous
+        : {
+            identity: instance.identity,
+            symbolicId,
+            kind,
+            parent,
+            onAction,
+            onActionCapture,
+          };
+    this.entityDescriptions.set(instance, { props, parent, description });
+    return description;
+  }
+
+  /**
+   * Describe one component declaration from its own props. Unchanged values
+   * keep their field map and property objects, so the commit diff and change
+   * detection compare them by identity instead of by value.
+   */
+  private describeComponent(
+    instance: ReactWorldInstance,
+    parent: number,
+  ): { description: ReactComponentDescription; structure: ComponentShape } {
+    const props = instance.props;
+    const cached = this.componentDescriptions.get(instance);
+    if (cached?.props === props && cached.description.entity === parent)
+      return cached;
+    let structure = cached?.structure;
+    this.validateOnce(instance);
+    if (!cached || !sameDeclarationProps(cached.props, props)) {
+      const next = this.componentShape(instance.type, props);
+      if (!structure || !sameShape(structure, next)) structure = next;
+    }
+    const name = componentNames[instance.type as ReactWorldComponentType];
+    const control = guiControlNames.has(name);
+    const controlRef = props.controlRef as GuiControlRef | undefined;
+    const controlListeners = control
+      ? (Object.fromEntries(
+          controlCallbackNames
+            .filter((key) => props[key] !== undefined)
+            .map((key) => [key, props[key]]),
+        ) as GuiControlListeners)
+      : undefined;
+    const previous = cached?.description;
+    const description: ReactComponentDescription =
+      previous &&
+      previous.entity === parent &&
+      previous.fields === structure!.fields &&
+      previous.properties === structure!.properties &&
+      previous.controlRef === controlRef &&
+      sameListeners(previous.controlListeners, controlListeners)
+        ? previous
+        : {
+            identity: instance.identity,
+            entity: parent,
+            component: structure!.component,
+            fields: structure!.fields,
+            ...(control
+              ? { control: true as const, controlRef, controlListeners }
+              : {}),
+            ...(structure!.properties
+              ? { properties: structure!.properties }
+              : {}),
+          };
+    const result = { props, structure: structure!, description };
+    this.componentDescriptions.set(instance, result);
+    return result;
+  }
+
+  private componentShape(
+    type: ReactWorldElementType,
+    props: ReactWorldElementProps,
+  ): ComponentShape {
+    const descriptor = this.descriptor(type);
+    const fields = new Map<number, ReactWorldFieldValue>();
+    const assetIds: string[] = [];
+    let entityReferences = false;
+    for (const [name, field] of Object.entries(descriptor.fields)) {
+      const value = props[name];
+      if (value === undefined) continue;
+      if (name === "source" && isAssetReference(value)) {
+        fields.set(field.offset, { kind: "asset", value: value.assetId });
+        assetIds.push(value.assetId);
+        continue;
+      }
+      if (field.kind === FieldKind.Entity && typeof value === "string") {
+        fields.set(field.offset, { kind: "entity-reference", value });
+        entityReferences = true;
+        continue;
+      }
+      fields.set(
+        field.offset,
+        field.kind === FieldKind.String
+          ? { kind: "string", value: value as string }
+          : field.kind === FieldKind.Bool
+            ? { kind: "bool", value: value as boolean }
+            : field.kind === FieldKind.Bytes || field.kind === FieldKind.Rows
+              ? {
+                  kind: field.kind === FieldKind.Rows ? "rows" : "bytes",
+                  value: (value as Uint8Array<ArrayBuffer>).slice(),
+                }
+              : field.kind === FieldKind.U64 || field.kind === FieldKind.Entity
+                ? field.kind === FieldKind.Entity
+                  ? {
+                      kind: "entity",
+                      value: { kind: "handle", id: value as bigint },
+                    }
+                  : { kind: "u64", value: value as bigint }
+                : {
+                    kind: field.kind === FieldKind.U32 ? "u32" : "f32",
+                    value: value as number,
+                  },
+      );
+    }
+    for (const write of declarationFields(props.fields)) {
+      if (fields.has(write.offset))
+        throw new Error("Component prop and FieldWrite overlap");
+      if ("asset" in write) assetIds.push(write.asset.assetId);
+      fields.set(
+        write.offset,
+        "asset" in write
+          ? { kind: "row-asset", value: write.asset.assetId }
+          : (structuredClone(write.value) as DeclarationFieldValue),
+      );
+    }
+    const properties = descriptor.dynamicProperties
+      ? Object.fromEntries(
+          Object.entries(props)
+            .filter(
+              ([name, value]) =>
+                value !== undefined &&
+                ![
+                  "ref",
+                  "children",
+                  "fields",
+                  "controlRef",
+                  ...controlCallbackNames,
+                ].includes(name) &&
+                !Object.hasOwn(descriptor.fields, name),
+            )
+            .map(([name, value]) => [name, inferDynamicValue(value)]),
+        )
+      : undefined;
+    return {
+      component: descriptor.id,
+      fields,
+      properties,
+      assetIds,
+      entityReferences,
+    };
+  }
+
+  private describeAttachment(
+    instance: ReactWorldInstance,
+    suspended: boolean,
+  ): AttachedWorldDescription {
+    let cached = this.attachmentDescriptions.get(instance);
+    if (cached?.props !== instance.props) {
+      cached = {
+        props: instance.props,
+        description: describeAttachedWorld(instance.props),
+      };
+      this.attachmentDescriptions.set(instance, cached);
+    }
+    return { ...cached.description, suspended };
+  }
+
+  /**
+   * Describe the committed host tree. Instances whose props object is
+   * unchanged reuse their previous description; the signature changes only
+   * when a described declaration, link, asset or animation changes.
+   */
   describe(): ReactWorldDescription {
+    const attachments: AttachedWorldDescription[] = [];
+    const pending = this.children.toReversed().map((instance) => ({
+      instance,
+      hidden: false,
+    }));
+    while (pending.length) {
+      const { instance, hidden } = pending.pop()!;
+      const suspended = hidden || instance.hidden;
+      if (instance.type === ATTACHED_WORLD_HOST_TYPE)
+        attachments.push(this.describeAttachment(instance, suspended));
+      else
+        for (const child of instance.children.toReversed())
+          pending.push({ instance: child, hidden: suspended });
+    }
     const assets: AssetDescription[] = [];
     const animationNodes: {
       instance: ReactWorldInstance;
@@ -663,171 +744,39 @@ export class ReactWorldTree {
       string,
       import("@ipp/client").AnimationClipSource
     >();
-    const entities: EntityOverlayBindingDescription[] = [];
-    const overlays: ComponentStateOverlayDescription[] = [];
-    const guiRoots = new Map<
+    const entities: ReactEntityDescription[] = [];
+    const components: ReactComponentDescription[] = [];
+    const shapes: ComponentShape[] = [];
+    const unresolvedLinks: (Omit<
+      ReactEntityLinkDescription,
+      "parent" | "before"
+    > & {
+      parent: ReactEntityReference | string | null;
+      before: ReactEntityReference | string | null;
+    })[] = [];
+    const precedingChildren = new Map<
       number,
-      {
-        entity: number;
-        nodeRef: GuiNodeRef | null;
-        onAction: GuiActionListener | undefined;
-        onActionCapture: GuiActionListener | undefined;
-        nodes: GuiDescribedNodeWithCallbacks[];
-      }
+      (typeof unresolvedLinks)[number]
     >();
-    // VirtualLists place children by item index, so only their own item
-    // wrappers may sit directly inside them.
-    const virtualLists = new Set<number>();
     const visit = (
       instance: ReactWorldInstance,
       parent?: number,
       hierarchyParent?: number,
-      guiRoot?: number,
-      guiParent?: number,
     ): void => {
       if (instance.hidden) return;
-      let props = instance.props;
-      this.validate(instance.type, props);
-      if (instance.type === GUI_ROOT_HOST_TYPE) {
-        if (parent === undefined || hierarchyParent !== undefined)
-          throw new Error("GuiRoot must be directly inside an Entity");
-        if (guiRoot !== undefined)
-          throw new Error("GuiRoot cannot be nested inside another GuiRoot");
-        if (!this.components["GuiRoot"])
-          throw new Error("This runtime does not support GuiRoot");
-        // Root ownership is producer-side. The commit phase creates the
-        // GuiRoot component with insertComponent, drives its node tree only
-        // through incremental GUI edits, and removes the producer with
-        // removeComponent on unmount. No overlay is described here: core
-        // rejects overlay declarations that would create a GuiRoot or write
-        // its node tree, so Auto/Owned root overlays always fail, and any
-        // property-lane overlay must stay Bound. GuiRoot therefore accepts
-        // no `bound` prop. Its action listeners are the outermost entries of
-        // every action path in the root.
-        const rootProps = props as unknown as GuiRootProps;
-        const record = {
-          entity: parent,
-          nodeRef: rootProps.nodeRef ?? null,
-          onAction: rootProps.onAction,
-          onActionCapture: rootProps.onActionCapture,
-          nodes: [] as GuiDescribedNodeWithCallbacks[],
-        };
-        guiRoots.set(instance.identity, record);
-        let roots = 0;
-        for (const child of instance.children) {
-          if (child.hidden) continue;
-          roots += 1;
-          visit(child, parent, hierarchyParent, instance.identity, undefined);
-        }
-        if (roots > 1) throw new Error("GuiRoot owns exactly one root node");
+      if (instance.type === ATTACHED_WORLD_HOST_TYPE) {
         return;
       }
-      if (isGuiHostType(instance.type)) {
-        if (guiRoot === undefined || parent === undefined)
-          throw new Error("GUI nodes must be inside a GuiRoot");
-        const record = guiRoots.get(guiRoot);
-        if (!record) throw new Error("Missing GUI root declaration");
-        const inList = guiParent !== undefined && virtualLists.has(guiParent);
-        if (inList !== (instance.type === GUI_VIRTUAL_ITEM_HOST_TYPE))
-          throw new Error(
-            "VirtualList children are declared only through its renderItem",
-          );
-        if (instance.type === GUI_VIRTUAL_LIST_HOST_TYPE)
-          virtualLists.add(instance.identity);
-        const nodeProps = props as unknown as GuiNodeProps & {
-          text?: string | undefined;
-          size?: readonly [number, number] | undefined;
-          label?: string | undefined;
-          checked?: boolean | undefined;
-          value?: number | undefined;
-          min?: number | undefined;
-          max?: number | undefined;
-          step?: number | undefined;
-          placeholder?: string | undefined;
-          itemCount?: number | undefined;
-          itemExtent?: number | undefined;
-          overscan?: number | undefined;
-          axis?: "horizontal" | "vertical" | undefined;
-          itemIndex?: number | undefined;
-          onRangeChange?: GuiRangeChangeListener | undefined;
-        };
-        // Control listeners are validated with their control props and held
-        // JS-only on the described node (see GuiRetainedNodeCallbacks): they
-        // never reach the commit signature, the diff, or any transport.
-        const controlListeners = props as unknown as {
-          onPress?: GuiPressListener | undefined;
-          onToggle?: GuiToggleListener | undefined;
-          onScalarCommit?: GuiScalarCommitListener | undefined;
-          onTextCommit?: GuiTextCommitListener | undefined;
-          onSubmit?: GuiTextSubmitListener | undefined;
-        };
-        const callbacks: GuiRetainedNodeCallbacks = {
-          onAction: nodeProps.onAction as GuiActionListener | undefined,
-          onActionCapture: nodeProps.onActionCapture as
-            | GuiActionListener
-            | undefined,
-          onPress: controlListeners.onPress,
-          onToggle: controlListeners.onToggle,
-          onScalarCommit: controlListeners.onScalarCommit,
-          onTextCommit: controlListeners.onTextCommit,
-          onSubmit: controlListeners.onSubmit,
-          onRangeChange: nodeProps.onRangeChange,
-        };
-        const described: GuiDescribedNodeWithCallbacks = {
-          identity: instance.identity,
-          parent: guiParent,
-          type: instance.type,
-          ...guiNodeFor(instance.type, nodeProps),
-          style: guiStyleWithTheme(guiStyleFor(nodeProps), nodeProps.theme),
-          nodeRef: (nodeProps.nodeRef as GuiNodeRef | null | undefined) ?? null,
-          onAction: callbacks.onAction,
-          onActionCapture: callbacks.onActionCapture,
-          ...(nodeProps.theme === undefined ? {} : { theme: nodeProps.theme }),
-          ...(nodeProps.itemIndex === undefined
-            ? {}
-            : { itemIndex: nodeProps.itemIndex }),
-          callbackSeam: callbacks,
-        };
-        record.nodes.push(described);
-        if (isGuiLeafHostType(instance.type)) {
-          if (instance.children.some((child) => !child.hidden))
-            throw new Error("GUI leaves cannot contain declarations");
-          return;
-        }
-        for (const child of instance.children) {
-          if (child.hidden) continue;
-          visit(child, parent, hierarchyParent, guiRoot, instance.identity);
-        }
-        return;
-      }
-      if (guiRoot !== undefined)
-        throw new Error("Only GUI declarations can be inside a GuiRoot");
-      if (
-        instance.type === componentContract.Surface.host &&
-        Array.isArray(props.items)
-      ) {
-        let declarations = this.surfaceItems.get(instance);
-        if (!declarations) {
-          declarations = new SurfaceItemDeclarations();
-          this.surfaceItems.set(instance, declarations);
-        }
-        const described = declarations.describe(
-          props.items as SurfaceItemProps[],
-          (collection) => this.client.encodeSurfaceItems!(collection),
-        );
-        this.surfaceBytes.add(described.items);
-        props = {
-          ...props,
-          ...described,
-        };
-      }
+      const props = instance.props;
       if (instance.type === ANIMATION_HOST_TYPE) {
+        this.validateOnce(instance);
         if (instance.children.length)
           throw new Error("Animation cannot contain declarations");
         animationNodes.push({ instance, parent });
         return;
       }
       if (isAsset(instance.type)) {
+        this.validateOnce(instance);
         let encoded: ReturnType<ReactWorldTree["encodedAsset"]>;
         let kind: number;
         if (instance.type === SHADER_ASSET_HOST_TYPE) {
@@ -903,91 +852,61 @@ export class ReactWorldTree {
             visit(child, parent, hierarchyParent);
         return;
       }
+      if (isShader(instance.type)) {
+        this.validateOnce(instance);
+        throw new Error("Shader declarations must be children of ShaderAsset");
+      }
       if (hierarchyParent !== undefined && instance.type !== ENTITY_HOST_TYPE)
         throw new Error("Children must contain Entity declarations");
       if (instance.type === CHILDREN_HOST_TYPE) {
+        this.validateOnce(instance);
         if (parent === undefined)
           throw new Error("Children must be inside an Entity");
-        for (const child of instance.children) visit(child, parent, parent);
+        for (const child of instance.children) {
+          if (child.hidden) continue;
+          if (child.type !== ENTITY_HOST_TYPE)
+            throw new Error("Children must contain Entity declarations");
+          const preceding = precedingChildren.get(parent);
+          if (preceding) preceding.before = { entity: child.identity };
+          const link = {
+            identity: -child.identity,
+            entity: child.identity,
+            parent: { entity: parent },
+            before: null,
+          };
+          unresolvedLinks.push(link);
+          precedingChildren.set(parent, link);
+          visit(child, parent, parent);
+        }
         return;
       }
       if (instance.type === ENTITY_HOST_TYPE) {
-        entities.push({
-          identity: instance.identity,
-          symbolicId: (props.id ?? props.bindTo) as string,
-          mode: props.id === undefined ? "bound" : "owned",
-        });
-        if (hierarchyParent !== undefined) {
-          const descriptor = this.descriptor(componentContract.Hierarchy.host);
-          overlays.push({
-            // Host identities are positive; each Entity has at most one implicit parent overlay.
-            identity: -instance.identity,
-            entity: instance.identity,
-            component: descriptor.id,
-            mode: "auto",
-            fields: new Map([
-              [
-                descriptor.fields.parent!.offset,
-                { kind: "binding", value: hierarchyParent },
-              ],
-            ]),
-          });
-        }
+        entities.push(this.describeEntity(instance, parent));
         for (const child of instance.children) visit(child, instance.identity);
         return;
       }
-      if (isShader(instance.type))
-        throw new Error("Shader declarations must be children of ShaderAsset");
-      if (parent === undefined)
+      if (instance.type === ENTITY_LINK_HOST_TYPE) {
+        this.validateOnce(instance);
+        if (parent === undefined)
+          throw new Error("EntityLink must be inside an Entity");
+        unresolvedLinks.push({
+          identity: instance.identity,
+          entity: parent,
+          parent: props.parent as string | bigint | null,
+          before: (props.before ?? null) as string | bigint | null,
+        });
+        return;
+      }
+      if (parent === undefined) {
+        this.validateOnce(instance);
         throw new Error(
           `${componentNames[instance.type]} must be inside an Entity`,
         );
-      const descriptor = this.descriptor(instance.type);
-      const fields = new Map<number, ReactWorldFieldValue>();
-      for (const [name, field] of Object.entries(descriptor.fields)) {
-        const value = props[name];
-        if (value === undefined) continue;
-        if (name === "source" && isAssetReference(value)) {
-          fields.set(field.offset, { kind: "asset", value: value.assetId });
-          continue;
-        }
-        fields.set(
-          field.offset,
-          field.kind === FieldKind.String
-            ? { kind: "string", value: value as string }
-            : field.kind === FieldKind.Bool
-              ? { kind: "bool", value: value as boolean }
-              : field.kind === FieldKind.Bytes
-                ? {
-                    kind: "bytes",
-                    value: value as Uint8Array<ArrayBuffer>,
-                  }
-                : field.kind === FieldKind.U64 ||
-                    field.kind === FieldKind.Entity
-                  ? field.kind === FieldKind.Entity
-                    ? {
-                        kind: "entity",
-                        value: { kind: "handle", id: value as bigint },
-                      }
-                    : { kind: "u64", value: value as bigint }
-                  : {
-                      kind: field.kind === FieldKind.U32 ? "u32" : "f32",
-                      value: value as number,
-                    },
-        );
       }
-      const properties = descriptor.dynamicProperties
-        ? Object.fromEntries(
-            Object.entries(props)
-              .filter(
-                ([name, value]) =>
-                  value !== undefined &&
-                  !["bound", "ref", "children"].includes(name) &&
-                  !Object.hasOwn(descriptor.fields, name),
-              )
-              .map(([name, value]) => [name, inferDynamicValue(value)]),
-          )
-        : undefined;
+      const { description, structure } = this.describeComponent(
+        instance,
+        parent,
+      );
       for (const child of instance.children) {
         if (!child.hidden && !isAsset(child.type))
           throw new Error(
@@ -995,27 +914,84 @@ export class ReactWorldTree {
           );
         visit(child, parent);
       }
-      overlays.push({
-        identity: instance.identity,
-        entity: parent,
-        component: descriptor.id,
-        mode: props.bound == null ? "auto" : props.bound ? "bound" : "owned",
-        fields,
-        ...(properties ? { properties } : {}),
-      });
+      components.push(description);
+      shapes.push(structure);
     };
     for (const child of this.children) visit(child);
+
+    // One node per created or adopted entity; `bindTo` only refers to one.
+    // Checked before references and links, which would report the same
+    // mistake less precisely.
+    const declared = new Set<string>();
+    for (const entity of entities) {
+      if (entity.kind !== "declared") continue;
+      if (declared.has(entity.symbolicId))
+        throw new ReactWorldDuplicateEntityError(entity.symbolicId);
+      declared.add(entity.symbolicId);
+    }
+
+    const guiActions = entities.some(
+      (entity) => entity.onAction || entity.onActionCapture,
+    );
+    const guiEffects =
+      guiActions ||
+      components.some(
+        (component) =>
+          component.controlListeners?.onPress ||
+          component.controlListeners?.onSubmit,
+      );
+    const guiValues =
+      (guiActions && components.some((component) => component.control)) ||
+      components.some(
+        (component) =>
+          component.controlListeners &&
+          controlValueCallbackNames.some(
+            (name) => component.controlListeners![name],
+          ),
+      );
+    if (guiEffects || guiValues) this.requireOperation("gui");
+    if (guiEffects && !this.client.subscribeGuiEffects)
+      throw new Error(
+        "GUI callbacks require the ordinary GUI observation client",
+      );
+    if (guiValues) {
+      if (!this.client.watchLifecycle)
+        throw new Error("GUI value callbacks require lifecycle watches");
+      this.requireLifecyclePublisher("GUI value callbacks");
+    }
 
     const ids = new Set<string>();
     for (const asset of assets) {
       if (ids.has(asset.id)) throw new Error(`Duplicate asset id: ${asset.id}`);
       ids.add(asset.id);
     }
-    for (const overlay of overlays)
-      for (const field of overlay.fields.values()) {
-        if (field.kind === "asset" && !ids.has(field.value))
-          throw new Error(`Unknown asset id: ${field.value}`);
-      }
+    for (const shape of shapes)
+      for (const id of shape.assetIds)
+        if (!ids.has(id)) throw new Error(`Unknown asset id: ${id}`);
+    const symbolic = new Map<string, number[]>();
+    const symbols = new Map(
+      entities.map((entity) => [entity.identity, entity.symbolicId]),
+    );
+    for (const entity of entities) {
+      const matches = symbolic.get(entity.symbolicId);
+      if (matches) matches.push(entity.identity);
+      else symbolic.set(entity.symbolicId, [entity.identity]);
+    }
+    const reference = (value: string | bigint): ReactEntityReference => {
+      if (typeof value === "bigint") return value;
+      const matches = symbolic.get(value);
+      if (matches?.length !== 1)
+        throw new Error(`Reference must identify one scene Entity: ${value}`);
+      return { entity: matches[0]! };
+    };
+    for (let index = 0; index < components.length; index++) {
+      const shape = shapes[index]!;
+      if (shape.entityReferences)
+        components[index] = {
+          ...components[index]!,
+          fields: resolvedFields(shape, reference),
+        };
+    }
     const animationAssets = new Map(
       assets.map((asset) => [
         asset.id,
@@ -1038,59 +1014,249 @@ export class ReactWorldTree {
         animationAssets,
       ),
     );
-    const parented = new Set(
-      overlays
-        .filter((overlay) => overlay.identity < 0)
-        .map((overlay) => overlay.entity),
-    );
-    for (const overlay of overlays) {
-      if (
-        overlay.identity > 0 &&
-        parented.has(overlay.entity) &&
-        overlay.component === this.components.Hierarchy?.id
-      )
+    for (const animation of animations)
+      for (const binding of animation.bindings) {
+        if (binding.property.entityLink) this.requireOperation("entityLinks");
+        if (binding.property.joints) this.requireOperation("jointAnimation");
+        const component = binding.property.component;
+        if (
+          component !== undefined &&
+          this.client.manifest &&
+          !this.client.manifest.components.includes(component)
+        )
+          throw new Error(
+            `This World does not select animation component ${component}`,
+          );
+      }
+    // Declarations sharing a symbolic id reach one entity, so at most one of
+    // them may place it.
+    const parented = new Set<string>();
+    const links = unresolvedLinks.map((link): ReactEntityLinkDescription => {
+      const symbol = symbols.get(link.entity)!;
+      if (parented.has(symbol))
         throw new Error(
-          "An Entity inside Children already has a Hierarchy declaration",
+          "Children or EntityLink conflicts with another link declaration",
         );
-    }
+      parented.add(symbol);
+      return {
+        ...link,
+        parent:
+          typeof link.parent === "string"
+            ? reference(link.parent)
+            : link.parent,
+        before:
+          typeof link.before === "string"
+            ? reference(link.before)
+            : link.before,
+      };
+    });
 
-    const gui: GuiDescribedRoot[] = [...guiRoots].map(([identity, record]) => ({
-      identity,
-      entity: record.entity,
-      nodeRef: record.nodeRef,
-      onAction: record.onAction,
-      onActionCapture: record.onActionCapture,
-      nodes: record.nodes,
-      signature: guiRootSignature(record.nodes),
-    }));
     // Preserve NaN, infinities and -0 so encoder-rejected authored values
     // cannot compare equal to a later corrected declaration.
-    const signature = JSON.stringify([
+    const resources = JSON.stringify([
       assets.map(({ bytes, signature, ...asset }) => asset),
       animations.map(({ mailbox, onPlaybackEvent, ...description }) =>
         animationSignature(description),
       ),
-      entities,
-      overlays.map((overlay) => ({
-        ...overlay,
-        fields: [...overlay.fields].map(([offset, value]) => [
-          offset,
-          value.kind,
-          value.kind === "entity"
-            ? value.value.kind === "handle"
-              ? String(value.value.id)
-              : `alias:${value.value.alias}`
-            : value.kind === "bytes"
-              ? this.byteSignature(value.value)
-              : Object.is(value.value, -0)
-                ? "-0"
-                : String(value.value),
-        ]),
-      })),
-      gui.map((root) => [root.identity, root.entity, root.signature]),
     ]);
-    return { assets, animations, entities, overlays, gui, signature };
+    const previous = this.described;
+    if (
+      !previous ||
+      previous.resources !== resources ||
+      !sameEach(previous.entities, entities, sameEntity) ||
+      !sameEach(previous.components, components, sameComponent) ||
+      !sameEach(previous.links, links, sameLink)
+    )
+      this.revision++;
+    this.described = { resources, entities, components, links };
+    return {
+      guiActions,
+      guiEffects,
+      assets,
+      animations,
+      entities,
+      components,
+      links,
+      attachments,
+      signature: String(this.revision),
+    };
   }
+}
+
+/** Declaration inputs derived from one component's props. */
+interface ComponentShape {
+  readonly component: number;
+  readonly fields: ReadonlyMap<number, ReactWorldFieldValue>;
+  readonly properties: Readonly<Record<string, DynamicValue>> | undefined;
+  readonly assetIds: readonly string[];
+  readonly entityReferences: boolean;
+  resolved?: {
+    readonly key: string;
+    readonly fields: ReadonlyMap<number, ReactWorldFieldValue>;
+  };
+}
+
+/**
+ * Whether a props update leaves every declared value unchanged. Callbacks and
+ * callback refs are listeners rather than declared values; byte arrays always
+ * compare by content because callers may reuse and mutate them.
+ */
+function sameDeclarationProps(
+  previous: ReactWorldElementProps,
+  next: ReactWorldElementProps,
+): boolean {
+  const keys = Object.keys(next);
+  if (keys.length !== Object.keys(previous).length) return false;
+  for (const key of keys) {
+    if (key === "children") continue;
+    if (!Object.hasOwn(previous, key)) return false;
+    const before = previous[key];
+    const after = next[key];
+    if (Object.is(before, after)) {
+      if (after instanceof Uint8Array) return false;
+      continue;
+    }
+    if (typeof before === "function" && typeof after === "function") continue;
+    return false;
+  }
+  return true;
+}
+
+function sameListeners(
+  left: GuiControlListeners | undefined,
+  right: GuiControlListeners | undefined,
+): boolean {
+  if (left === right) return true;
+  if (!left || !right) return false;
+  const keys = Object.keys(right) as (keyof GuiControlListeners)[];
+  return (
+    keys.length === Object.keys(left).length &&
+    keys.every((key) => left[key] === right[key])
+  );
+}
+
+function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
+  if (left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index++)
+    if (left[index] !== right[index]) return false;
+  return true;
+}
+
+function sameFieldValue(
+  left: ReactWorldFieldValue,
+  right: ReactWorldFieldValue,
+): boolean {
+  if (left.kind !== right.kind) return false;
+  if (
+    (left.kind === "bytes" || left.kind === "rows") &&
+    (right.kind === "bytes" || right.kind === "rows")
+  )
+    return sameBytes(left.value, right.value);
+  if (
+    left.kind === "asset" ||
+    left.kind === "row-asset" ||
+    left.kind === "entity-reference"
+  )
+    return Object.is(left.value, (right as typeof left).value);
+  return fieldIdentity(left) === fieldIdentity(right as DeclarationFieldValue);
+}
+
+function sameShape(left: ComponentShape, right: ComponentShape): boolean {
+  if (
+    left.component !== right.component ||
+    left.fields.size !== right.fields.size
+  )
+    return false;
+  for (const [offset, value] of right.fields) {
+    const previous = left.fields.get(offset);
+    if (!previous || !sameFieldValue(previous, value)) return false;
+  }
+  if (!left.properties || !right.properties)
+    return left.properties === right.properties;
+  return (
+    attachmentIdentity(left.properties) === attachmentIdentity(right.properties)
+  );
+}
+
+/** Symbolic entity fields resolved against this description's entities. */
+function resolvedFields(
+  shape: ComponentShape,
+  reference: (value: string | bigint) => ReactEntityReference,
+): ReadonlyMap<number, ReactWorldFieldValue> {
+  const targets = new Map<number, ReactEntityReference>();
+  for (const [offset, value] of shape.fields)
+    if (value.kind === "entity-reference" && typeof value.value === "string")
+      targets.set(offset, reference(value.value));
+  const key = [...targets]
+    .map(([offset, target]) =>
+      typeof target === "bigint"
+        ? `${offset}:${target}n`
+        : `${offset}:${target.entity}`,
+    )
+    .join();
+  if (shape.resolved?.key === key) return shape.resolved.fields;
+  const fields = new Map(shape.fields);
+  for (const [offset, target] of targets)
+    fields.set(offset, { kind: "entity-reference", value: target });
+  shape.resolved = { key, fields };
+  return fields;
+}
+
+function sameEach<T>(
+  left: readonly T[],
+  right: readonly T[],
+  same: (left: T, right: T) => boolean,
+): boolean {
+  if (left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index++)
+    if (!same(left[index]!, right[index]!)) return false;
+  return true;
+}
+
+function sameEntity(
+  left: ReactEntityDescription,
+  right: ReactEntityDescription,
+): boolean {
+  return (
+    left.identity === right.identity &&
+    left.symbolicId === right.symbolicId &&
+    left.kind === right.kind &&
+    left.parent === right.parent
+  );
+}
+
+function sameComponent(
+  left: ReactComponentDescription,
+  right: ReactComponentDescription,
+): boolean {
+  return (
+    left.identity === right.identity &&
+    left.entity === right.entity &&
+    left.component === right.component &&
+    left.fields === right.fields &&
+    left.properties === right.properties
+  );
+}
+
+function sameReference(
+  left: ReactEntityReference | null,
+  right: ReactEntityReference | null,
+): boolean {
+  if (left === null || right === null || typeof left === "bigint")
+    return left === right;
+  return typeof right === "object" && left.entity === right.entity;
+}
+
+function sameLink(
+  left: ReactEntityLinkDescription,
+  right: ReactEntityLinkDescription,
+): boolean {
+  return (
+    left.identity === right.identity &&
+    left.entity === right.entity &&
+    sameReference(left.parent, right.parent) &&
+    sameReference(left.before, right.before)
+  );
 }
 
 export function remove(

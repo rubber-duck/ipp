@@ -1,4 +1,5 @@
 use super::*;
+use crate::components::schema::same_text;
 
 pub(in crate::world) fn local_pose(
     assets: &AssetManagementService,
@@ -103,7 +104,7 @@ pub(in crate::world) fn rebase_sampled_inputs(
     assets: &AssetManagementService,
     world: WorldId,
 ) -> Result<(), ErrorReason> {
-    if value.source != sampled.source || value.variant != sampled.variant {
+    if !same_text(&value.source, &sampled.source) || value.variant != sampled.variant {
         return Ok(());
     }
     let resolved = local_pose(assets, world, sampled)?;

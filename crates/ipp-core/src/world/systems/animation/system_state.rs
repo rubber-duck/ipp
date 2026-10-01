@@ -3,18 +3,23 @@
 use super::{driver::AnimationDriverBinding, *};
 use std::collections::{BTreeMap, BTreeSet};
 
+#[cfg(test)]
+thread_local! {
+    pub(super) static STRUCTURAL_CANDIDATE_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Multi-entity playback clock and validated typed driver bindings.
 #[derive(Debug)]
 pub struct AnimationController {
     pub(in crate::world) snapshot: AnimationControllerSnapshot,
     pub(in crate::world) drivers: Vec<Box<dyn AnimationDriverBinding>>,
+    pub(super) structural_drivers: Vec<super::structural::AnimationStructuralDriver>,
     pub(super) driver_targets: BTreeMap<(EntityId, u16), Vec<usize>>,
     pub(in crate::world) incarnations: Vec<(u64, AnimationTrackTarget)>,
     pub(in crate::world) sought: bool,
     pub(super) directional_start_pending: bool,
     pub(super) duration: f64,
     pub(super) ready: bool,
-    pub(super) retain_numeric: bool,
     pub(super) numeric_targets: Vec<(EntityId, u16)>,
     pub(super) discrete_drivers: Vec<usize>,
     pub(super) numeric_outputs: Vec<(
@@ -23,13 +28,14 @@ pub struct AnimationController {
     )>,
     pub(in crate::world) failure: Option<ErrorReason>,
     pub(super) transition: Option<Box<AnimationTransitionRuntime>>,
+    /// What this controller has added to its fields.
+    pub(in crate::world) contributions: super::contribution::AnimationContributions,
 }
 
 #[derive(Debug)]
 pub(super) struct AnimationTransitionRuntime {
     pub(super) source: AnimationTransitionSource,
     pub(super) start_time: AnimationTransitionStartTime,
-    pub(super) hold_program: Option<super::transition::AnimationTransitionProgram>,
     pub(super) program: Option<super::transition::AnimationTransitionProgram>,
 }
 
@@ -45,6 +51,9 @@ pub(super) enum AnimationTransitionSource {
     },
 }
 
+/// A captured value of one target. A controller crossfade captures its
+/// contribution and fades it out; GUI motion captures the value it fades from,
+/// and `baseline` is where a new channel starts.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct AnimationRuntimeFrozenTransitionValue {
     pub(super) target: EntityId,
@@ -81,44 +90,46 @@ impl AnimationController {
 
     pub(in crate::world) fn clear_drivers(&mut self) {
         self.drivers.clear();
+        self.structural_drivers.clear();
         self.numeric_targets.clear();
         self.discrete_drivers.clear();
         self.numeric_outputs.clear();
+        self.contributions.invalidate();
         self.ready = false;
-        self.retain_numeric = false;
     }
 
     pub(super) fn reindex_drivers(&mut self) {
         self.ready = false;
-        self.retain_numeric = false;
         self.numeric_targets.clear();
         self.discrete_drivers.clear();
         self.numeric_outputs.clear();
-        for driver in &mut self.drivers {
-            driver.clear_numeric_binding();
-        }
+        self.contributions.invalidate();
         self.duration = self
             .drivers
             .iter()
             .map(|driver| driver.duration())
+            .chain(
+                self.structural_drivers
+                    .iter()
+                    .map(|driver| driver.duration()),
+            )
             .fold(0.0, f64::max);
         self.driver_targets.clear();
         // Rebuild the direct lookup whenever bindings change.
         for (index, driver) in self.drivers.iter().enumerate() {
             let identity = driver.identity();
             self.driver_targets
-                .entry((identity.entity, identity.property.component()))
+                .entry((identity.entity, identity.property.component_target()))
                 .or_default()
                 .push(index);
         }
     }
 
+    /// Bind whole-component numeric outputs and each driver's contribution entry.
     pub(super) fn bind_numeric_targets(
         &mut self,
         storage: &crate::components::registry::ComponentStorage,
-        owners: &BTreeMap<(EntityId, u16), BTreeSet<AnimationControllerId>>,
     ) {
-        self.retain_numeric = false;
         self.numeric_targets.clear();
         self.discrete_drivers.clear();
         self.numeric_outputs.clear();
@@ -129,57 +140,12 @@ impl AnimationController {
                 self.numeric_targets.push(key);
             }
         }
-        for driver in &mut self.drivers {
-            driver.bind_numeric(storage);
-        }
-        // Whole-value staging must remain coherent within its target component.
-        // Discrete single-property patches cannot overwrite other numeric properties.
-        for (&key, indices) in &self.driver_targets {
-            for &index in indices {
-                let exclusive = owners.get(&key).is_some_and(|owners| owners.len() == 1)
-                    && indices
-                        .iter()
-                        .filter(|&&other| {
-                            self.drivers[other].identity().property
-                                == self.drivers[index].identity().property
-                        })
-                        .count()
-                        == 1;
-                self.drivers[index].set_discrete_retention(exclusive);
-                if self.drivers[index].discrete() {
-                    self.discrete_drivers.push(index);
-                }
-            }
-            if indices
-                .iter()
-                .all(|&i| self.drivers[i].has_numeric_binding() || self.drivers[i].discrete())
-            {
-                if self
-                    .numeric_outputs
-                    .binary_search_by_key(&key, |entry| entry.0)
-                    .is_err()
-                {
-                    self.numeric_targets.push(key);
-                }
-            } else {
-                for &i in indices {
-                    self.drivers[i].clear_numeric_binding();
-                }
+        for (index, driver) in self.drivers.iter().enumerate() {
+            if driver.discrete() {
+                self.discrete_drivers.push(index);
             }
         }
-
-        // Every binding replaces its destination without reading the prior sample.
-        // Other controllers on the component may need its underlying inputs;
-        // membership changes invalidate readiness before this proof is reused.
-        self.retain_numeric = !self.drivers.is_empty()
-            && self
-                .drivers
-                .iter()
-                .all(|driver| driver.has_numeric_binding())
-            && self
-                .driver_targets
-                .keys()
-                .all(|key| owners.get(key).is_some_and(|owners| owners.len() == 1));
+        self.contributions.prepare(&self.drivers);
     }
 
     pub(super) fn numeric_output(
@@ -216,7 +182,7 @@ impl AnimationController {
                 };
                 source.drivers.iter().filter_map(move |driver| {
                     let identity = driver.identity();
-                    ((identity.entity, identity.property.component()) == key)
+                    ((identity.entity, identity.property.component_target()) == key)
                         .then_some(driver.as_ref())
                 })
             });
@@ -249,21 +215,11 @@ impl AnimationController {
                     let identity = driver.identity();
                     staged
                         .changed
-                        .contains_key(&(identity.entity, identity.property.component()))
+                        .contains_key(&(identity.entity, identity.property.component_target()))
                         .then_some(driver.as_ref())
                 })
             });
         selected.map(|driver| driver.as_ref()).chain(transition)
-    }
-
-    pub(super) fn restoration_drivers(
-        &self,
-    ) -> impl Iterator<Item = &Box<dyn AnimationDriverBinding>> {
-        self.drivers.iter().chain(
-            self.transition_source()
-                .into_iter()
-                .flat_map(|source| source.drivers.iter()),
-        )
     }
 
     /// Read persistent descriptions and clock state without runtime bindings.
@@ -284,6 +240,8 @@ pub struct AnimationSystemState {
     // may leave a conservative superset until the next explicit description update.
     pub(super) target_controllers: BTreeMap<(EntityId, u16), BTreeSet<AnimationControllerId>>,
     target_keys: BTreeMap<AnimationControllerId, Vec<(EntityId, u16)>>,
+    pub(super) structural_target_controllers: BTreeMap<EntityId, BTreeSet<AnimationControllerId>>,
+    structural_target_keys: BTreeMap<AnimationControllerId, Vec<EntityId>>,
     pub(super) description_demand_clean: bool,
     pub(in crate::world) demand_revision: u64,
     pub(super) affected_controllers: Vec<AnimationControllerId>,
@@ -292,9 +250,6 @@ pub struct AnimationSystemState {
     pub(super) controller_ids: Vec<AnimationControllerId>,
     pub(super) ready_controllers: Vec<AnimationControllerId>,
     pub(in crate::world) next_id: u64,
-    /// Originals retained until the next mutation after in-frame binding invalidation.
-    pub(in crate::world) pending_restorations:
-        BTreeMap<driver::AnimationTargetIdentity, AnimationValue>,
     pub(in crate::world) playback_events: Vec<AnimationPlaybackEvent>,
     pub(in crate::world) controller_outcomes: Vec<AnimationControllerOutcome>,
     pub(in crate::world) animation_sources:
@@ -307,6 +262,8 @@ impl Default for AnimationSystemState {
             controllers: BTreeMap::new(),
             target_controllers: BTreeMap::new(),
             target_keys: BTreeMap::new(),
+            structural_target_controllers: BTreeMap::new(),
+            structural_target_keys: BTreeMap::new(),
             description_demand_clean: false,
             demand_revision: 0,
             affected_controllers: Vec::new(),
@@ -315,7 +272,6 @@ impl Default for AnimationSystemState {
             controller_ids: Vec::new(),
             ready_controllers: Vec::new(),
             next_id: 1,
-            pending_restorations: BTreeMap::new(),
             playback_events: Vec::new(),
             controller_outcomes: Vec::new(),
             animation_sources: BTreeSet::new(),
@@ -341,6 +297,16 @@ impl AnimationSystemState {
                 }
             }
         }
+        if let Some(keys) = self.structural_target_keys.remove(&id) {
+            for key in keys {
+                if let Some(ids) = self.structural_target_controllers.get_mut(&key) {
+                    ids.remove(&id);
+                    if ids.is_empty() {
+                        self.structural_target_controllers.remove(&key);
+                    }
+                }
+            }
+        }
     }
 
     pub(super) fn index_controller(&mut self, id: AnimationControllerId) {
@@ -350,7 +316,8 @@ impl AnimationSystemState {
             .description
             .drivers
             .iter()
-            .map(|driver| (driver.target, driver.property.component()))
+            .filter(|driver| !matches!(driver.property, AnimationTrackTarget::EntityLink))
+            .map(|driver| (driver.target, driver.property.component_target()))
             .collect();
         if let Some(transition) = &self.controllers[&id].transition {
             match &transition.source {
@@ -360,7 +327,7 @@ impl AnimationSystemState {
                         .description
                         .drivers
                         .iter()
-                        .map(|driver| (driver.target, driver.property.component())),
+                        .map(|driver| (driver.target, driver.property.component_target())),
                 ),
                 AnimationTransitionSource::Frozen {
                     values,
@@ -370,7 +337,7 @@ impl AnimationSystemState {
                     keys.extend(
                         values
                             .iter()
-                            .map(|value| (value.target, value.property.component())),
+                            .map(|value| (value.target, value.property.component_target())),
                     );
                     keys.extend(
                         bindings
@@ -378,7 +345,7 @@ impl AnimationSystemState {
                             .description
                             .drivers
                             .iter()
-                            .map(|driver| (driver.target, driver.property.component())),
+                            .map(|driver| (driver.target, driver.property.component_target())),
                     );
                 }
             }
@@ -400,12 +367,31 @@ impl AnimationSystemState {
             }
         }
         self.target_keys.insert(id, keys);
+        let mut structural_targets: Vec<_> = self.controllers[&id]
+            .snapshot
+            .description
+            .drivers
+            .iter()
+            .filter(|driver| matches!(driver.property, AnimationTrackTarget::EntityLink))
+            .map(|driver| driver.target)
+            .collect();
+        structural_targets.sort_unstable();
+        structural_targets.dedup();
+        for &target in &structural_targets {
+            self.structural_target_controllers
+                .entry(target)
+                .or_default()
+                .insert(id);
+        }
+        self.structural_target_keys.insert(id, structural_targets);
     }
 
     pub(super) fn rebuild_target_index(&mut self) {
         self.description_demand_clean = false;
         self.target_controllers.clear();
         self.target_keys.clear();
+        self.structural_target_controllers.clear();
+        self.structural_target_keys.clear();
         let ids: Vec<_> = self.controllers.keys().copied().collect();
         for id in ids {
             self.index_controller(id);
@@ -422,6 +408,16 @@ impl AnimationSystemState {
         for key in staged.changed.keys() {
             if let Some(targets) = self.target_controllers.get(key) {
                 ids.extend(targets);
+            }
+        }
+        for target in &staged.operation_deleted {
+            #[cfg(test)]
+            STRUCTURAL_CANDIDATE_VISITS.set(STRUCTURAL_CANDIDATE_VISITS.get() + 1);
+            if let Some(controllers) = self.structural_target_controllers.get(target) {
+                #[cfg(test)]
+                STRUCTURAL_CANDIDATE_VISITS
+                    .set(STRUCTURAL_CANDIDATE_VISITS.get() + controllers.len());
+                ids.extend(controllers);
             }
         }
         ids.sort_unstable();
@@ -447,19 +443,24 @@ impl AnimationSystemState {
                     transition: None,
                 },
                 drivers: Vec::new(),
+                structural_drivers: Vec::new(),
                 driver_targets: BTreeMap::new(),
                 incarnations: Vec::new(),
                 sought: false,
                 directional_start_pending: false,
                 duration: 0.0,
                 ready: false,
-                retain_numeric: false,
                 numeric_targets: Vec::new(),
                 discrete_drivers: Vec::new(),
                 numeric_outputs: Vec::new(),
                 failure: None,
                 transition: None,
+                contributions: Default::default(),
             },
         ))
     }
 }
+
+#[cfg(test)]
+#[path = "system_state_tests.rs"]
+mod tests;

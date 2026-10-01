@@ -1,6 +1,6 @@
-#[cfg(feature = "gui")]
+#[cfg(feature = "surfaces")]
 use super::super::retained_vertices::{GUI_VERTEX_LAYOUT, RetainedVertexLayout};
-#[cfg(feature = "gui")]
+#[cfg(feature = "surfaces")]
 use super::{ARRAY_BUFFER, DYNAMIC_DRAW, FLOAT, TRIANGLES};
 use super::{GlesRenderDevice, GlesRenderProgram, GlesSurfacePath};
 use crate::RenderError;
@@ -48,7 +48,7 @@ impl GlesRenderDevice {
     ///
     /// The device context is current with the destination vertex array and its array
     /// buffer bound, so each offset addresses that buffer rather than client memory.
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     unsafe fn point_retained_attributes<const N: usize>(&self, layout: &RetainedVertexLayout<N>) {
         for attribute in &layout.attributes {
             // SAFETY: The caller binds the destination vertex array and buffer in the
@@ -502,7 +502,7 @@ impl GlesRenderDevice {
         self.check_draw()
     }
 
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     pub(super) fn create_gui_batch(
         &mut self,
         capacity: usize,
@@ -555,7 +555,7 @@ impl GlesRenderDevice {
         Ok(batch)
     }
 
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     pub(super) fn write_gui_batch(
         &mut self,
         batch: &mut super::GlesGuiBatch,
@@ -591,7 +591,7 @@ impl GlesRenderDevice {
         Ok(())
     }
 
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     pub(super) fn delete_gui_batch(&mut self, batch: super::GlesGuiBatch) {
         self.submission.invalidate();
         // SAFETY: Handle deletion is context-checked; invalid handles are tolerated.
@@ -605,7 +605,7 @@ impl GlesRenderDevice {
         }
     }
 
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     pub(super) fn draw_gui_batch(
         &mut self,
         program: &GlesRenderProgram,
@@ -684,7 +684,7 @@ impl GlesRenderDevice {
         self.check_draw()
     }
 
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     pub(super) fn create_glyph_atlas_page(
         &mut self,
         width: u32,
@@ -763,7 +763,7 @@ impl GlesRenderDevice {
         })
     }
 
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     pub(super) fn delete_glyph_atlas_page(&mut self, page: super::GlesGlyphAtlasPage) {
         self.submission.invalidate();
         self.forget_framebuffer(page.framebuffer);
@@ -779,7 +779,7 @@ impl GlesRenderDevice {
         }
     }
 
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     pub(super) fn begin_glyph_atlas_page(
         &mut self,
         page: &super::GlesGlyphAtlasPage,
@@ -800,7 +800,7 @@ impl GlesRenderDevice {
         Ok(())
     }
 
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     pub(super) fn end_glyph_atlas_page(&mut self) -> Result<(), RenderError> {
         self.submission.invalidate();
 

@@ -68,6 +68,12 @@ export async function generateClient(name, features = [], transformContract) {
   );
   return {
     codec: await import(pathToFileURL(resolve(output, "js/generated.js"))),
+    hostProtocol: await import(
+      pathToFileURL(resolve(output, "js/host-protocol.js"))
+    ),
+    hostPresentation: await import(
+      pathToFileURL(resolve(output, "js/host-presentation.js"))
+    ),
     manifest: await import(
       pathToFileURL(resolve(output, "js/generated-manifest.js"))
     ),
@@ -101,7 +107,7 @@ function scalarFieldContract(input) {
     return value;
   };
 
-  assertContract(u16() === 4, "target contract version");
+  assertContract(u16() === 6, "target contract version");
   string();
   string();
   u8();
@@ -110,6 +116,11 @@ function scalarFieldContract(input) {
     u8();
     string();
   }
+  // Rows bounds: region span, row fields, row properties, row text bytes.
+  u32();
+  u8();
+  u16();
+  u32();
   assertContract(u16() >= 1, "component fixture");
   u16();
   assertContract(string() === "Scalar", "scalar fixture");
@@ -240,14 +251,9 @@ const TAG_SPACES = {
   5: "response",
   6: "outcome",
   8: "option",
-  9: "entity-overlay-mode",
-  10: "component-overlay-mode",
-  11: "state-overlay-handle-kind",
-  12: "state-overlay-lifecycle-reason",
   13: "resource-status",
   15: "snapshot-value",
   16: "snapshot-reference",
-  17: "camera-motion",
   18: "geometry-pick-outcome",
   19: "lifecycle-observation",
   20: "batch-error-scope",
@@ -260,6 +266,18 @@ const TAG_SPACES = {
   27: "playback-control",
   28: "playback-state",
   29: "playback-event",
+  32: "output-kind",
+  33: "view-target",
+  34: "operation-effect",
+  46: "gui-physical-request",
+  47: "gui-physical-event",
+  48: "gui-physical-response",
+  49: "gui-physical-button",
+  50: "gui-physical-key",
+  51: "gui-native-edit",
+  52: "gui-physical-disposition",
+  53: "gui-action",
+  54: "output-target",
 };
 
 export function manifestVariant(client, name) {
@@ -301,10 +319,10 @@ export function encodeManifestLayout(client, name, values) {
       chunks.push(integer(value.length, 4), value);
     } else if (field.encoding === "named")
       chunks.push(nested(client, field.target, value));
-    else if (field.encoding === "list") {
+    else if (["list", "u8-counted-list"].includes(field.encoding)) {
       if (!Array.isArray(value) || value.length > field.limit)
         throw new Error("manifest list limit");
-      chunks.push(integer(value.length, 4));
+      chunks.push(integer(value.length, field.encoding === "list" ? 4 : 1));
       for (const item of value) chunks.push(nested(client, field.target, item));
     } else if (field.encoding === "option") {
       chunks.push(
@@ -329,7 +347,8 @@ export function encodeManifestLayout(client, name, values) {
 
 function nested(client, target, value) {
   if (target === "bool") return integer(value ? 1 : 0, 1);
-  if (["u16", "u32", "u64", "utf8-65536"].includes(target)) {
+  if (["u8", "u16", "u32", "u64", "utf8-65536"].includes(target)) {
+    if (target === "u8") return integer(value, 1);
     if (target === "u16") return integer(value, 2);
     if (target === "u32") return integer(value, 4);
     if (target === "u64") return integer(value, 8);
@@ -383,28 +402,37 @@ function concatenate(chunks) {
 }
 
 /** Controlled Host attachment for focused World-codec tests; real Hosts have separate suites. */
-export function replyToHostCreate(bytes, events) {
+export function replyToHostCreate(bytes, events, session = 7n) {
   if (String.fromCharCode(...bytes.subarray(0, 4)) !== "IPPH") return false;
-  assert.equal(bytes[24], 2, "Controlled transport expects CreateWorld");
-  const body = Buffer.alloc(8 + 4 + 4 + 16 + 4 + 4 + 8);
+  const requestTag = bytes[24];
+  assert.ok([2, 3, 6].includes(requestTag), "Expected create, open or detach");
+  const descriptor = Buffer.alloc(8 + 4 + 4 + 16 + 4 + 4);
   let at = 0;
-  body.writeBigUInt64LE(1n, at);
+  descriptor.writeBigUInt64LE(1n, at);
   at += 8;
-  body.writeUInt32LE(4, at);
+  descriptor.writeUInt32LE(4, at);
   at += 4;
-  body.write("test", at);
+  descriptor.write("test", at);
   at += 4;
-  body.writeBigUInt64LE(1n, at);
+  descriptor.writeBigUInt64LE(1n, at);
   at += 16;
-  body.writeUInt32LE(256, at);
-  at += 4;
-  body.writeUInt32LE(0, at);
-  at += 4;
-  body.writeBigUInt64LE(7n, at);
+  descriptor.writeUInt32LE(256, at);
+  const reference = Buffer.alloc(16);
+  reference.writeBigUInt64LE(1n, 0);
+  reference.writeBigUInt64LE(1n, 8);
+  const sessionManifest = Buffer.alloc(8 + 4 + 4 + 4 + 1);
+  sessionManifest.writeBigUInt64LE(session, 0);
+  sessionManifest.writeUInt32LE(1, 16);
+  const body =
+    requestTag === 2
+      ? Buffer.concat([descriptor, reference])
+      : requestTag === 3
+        ? Buffer.concat([descriptor, sessionManifest, reference])
+        : Buffer.alloc(0);
   const reply = new Uint8Array(25 + body.length);
   reply.set(bytes.subarray(0, 24));
   reply[3] = 65;
-  reply[24] = 2;
+  reply[24] = requestTag === 2 ? 12 : requestTag === 3 ? 2 : 4;
   reply.set(body, 25);
   events.message(reply);
   return true;

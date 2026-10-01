@@ -5,8 +5,7 @@ use crate::{
     services::asset_management::*,
 };
 
-/// Initial portable palette bound, below the WebGL 2/GLES 3 uniform baseline.
-pub const MAX_JOINTS: usize = 32;
+pub use super::MAX_JOINTS;
 
 /// Immutable hierarchy and rest-pose resource type.
 pub const SKELETON_TYPE: AssetTypeId = AssetTypeId(3);

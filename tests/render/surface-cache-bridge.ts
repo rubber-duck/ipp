@@ -224,6 +224,8 @@ export async function probeSurfaceCacheBridge(bridgeUrl: string, gui: boolean) {
       target,
       content,
       size,
+      floats([0, 0, 2, 1]),
+      1,
     );
     report.boundResize = rejected(
       "resizing the bound target",
@@ -268,7 +270,15 @@ export async function probeSurfaceCacheBridge(bridgeUrl: string, gui: boolean) {
         ...present!,
       );
       ok("set_surface_double_sided", 1);
-      ok("draw_surface_cache", program, target, floats(mvp), size);
+      ok(
+        "draw_surface_cache",
+        program,
+        target,
+        floats(mvp),
+        size,
+        floats([0, 0, 2, 1]),
+        1,
+      );
       ok("set_surface_double_sided", 0);
       ok("end_frame", 1);
       captures.push(device.capture());
@@ -418,6 +428,8 @@ export async function probeSurfaceCacheBridge(bridgeUrl: string, gui: boolean) {
       small,
       floats(MAGNIFIED),
       floats([2, 1]),
+      floats([0, 0, 2, 1]),
+      1,
     );
     ok("set_surface_double_sided", 0);
     ok("end_frame", 1);

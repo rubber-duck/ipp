@@ -1,15 +1,22 @@
 //! Factory initialization, owned state, dependency borrowing and lifecycle on real Worlds.
 
+mod support;
+
 use ipp_core::systems::{
-    System, SystemCommitContext, SystemDependency, SystemDependencyBinding, SystemFactories,
-    SystemFactory, SystemId, SystemInitContext, SystemInitError, SystemScheduleError,
-    SystemTeardownContext, SystemUpdateContext, compiled_system_factories,
+    System, SystemCapabilities, SystemCapability, SystemCommitContext, SystemDependency,
+    SystemDependencyBinding, SystemFactories, SystemFactory, SystemId, SystemInitContext,
+    SystemInitError, SystemScheduleError, SystemTeardownContext, SystemUpdateContext,
+    compiled_system_factories,
 };
-use ipp_core::{Batch, Command, HostRuntime, WorldConstructionError, WorldLimits};
+use ipp_core::{
+    Batch, Command, ComponentValue, EntityRef, ErrorReason, HostRuntime, WorldConstructionError,
+    WorldCreateOptions, WorldLimits,
+};
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
 };
+use support::selection::RENDER;
 
 type SystemTrace = Arc<Mutex<Vec<(&'static str, &'static str, u64)>>>;
 type RetainedBinding = Arc<Mutex<Option<SystemDependencyBinding<RecordingSystem>>>>;
@@ -20,6 +27,7 @@ struct RecordingSystemFactory {
     events: SystemTrace,
     fail: Arc<AtomicBool>,
     retained: RetainedBinding,
+    capabilities: SystemCapabilities,
 }
 
 struct RecordingSystem {
@@ -37,6 +45,10 @@ impl SystemFactory for RecordingSystemFactory {
 
     fn dependencies(&self) -> &[SystemDependency] {
         &self.dependencies
+    }
+
+    fn capabilities(&self) -> SystemCapabilities {
+        self.capabilities.clone()
     }
 
     fn create(
@@ -142,6 +154,7 @@ fn factory(
         events: Arc::clone(events),
         fail: Default::default(),
         retained: Default::default(),
+        capabilities: Default::default(),
     })
 }
 
@@ -166,7 +179,9 @@ fn ordered_initialization_mutable_updates_invalidation_and_reverse_destruction()
             &events,
         ),
     ]);
-    let id = host.create_world(Default::default()).unwrap();
+    let id = host
+        .create_world(Default::default(), &[SystemId("last"), SystemId("first")])
+        .unwrap();
     {
         let mut world = host.world_mut(id).unwrap();
         world
@@ -175,6 +190,7 @@ fn ordered_initialization_mutable_updates_invalidation_and_reverse_destruction()
                 operations: vec![Command::Create {
                     alias: 0,
                     metadata: Default::default(),
+                    adopt: false,
                 }],
             })
             .unwrap();
@@ -214,9 +230,15 @@ fn reusable_factories_create_independent_state_and_bindings_cannot_cross_worlds_
     let factories = vec![first as Arc<dyn SystemFactory>, last];
     let mut a = host(factories.clone());
     let mut b = host(factories);
-    let one = a.create_world(Default::default()).unwrap();
-    let two = a.create_world(Default::default()).unwrap();
-    let other_host = b.create_world(Default::default()).unwrap();
+    let one = a
+        .create_world(Default::default(), &[SystemId("first"), SystemId("last")])
+        .unwrap();
+    let two = a
+        .create_world(Default::default(), &[SystemId("first"), SystemId("last")])
+        .unwrap();
+    let other_host = b
+        .create_world(Default::default(), &[SystemId("first"), SystemId("last")])
+        .unwrap();
     assert_eq!(
         one, other_host,
         "Host-local IDs intentionally collide; binding identities cannot"
@@ -257,7 +279,7 @@ fn initialization_failure_unwinds_before_publication_and_factories_can_retry() {
     last.fail.store(true, Ordering::Relaxed);
     let mut host = host(vec![last.clone(), first]);
     assert!(matches!(
-        host.create_world(Default::default()),
+        host.create_world(Default::default(), &[SystemId("last"), SystemId("first")]),
         Err(WorldConstructionError::Initialization {
             system: SystemId("last"),
             ..
@@ -274,35 +296,314 @@ fn initialization_failure_unwinds_before_publication_and_factories_can_retry() {
         ]
     );
     last.fail.store(false, Ordering::Relaxed);
-    host.create_world(Default::default()).unwrap();
+    host.create_world(Default::default(), &[SystemId("last"), SystemId("first")])
+        .unwrap();
     assert_eq!(host.world_ids().len(), 1);
 }
 
 #[test]
-fn invalid_limits_or_missing_authoring_factories_do_not_initialize_anything() {
+fn invalid_limits_and_unknown_factories_do_not_initialize_anything() {
     let events = SystemTrace::default();
     let mut host = host(vec![factory("custom", vec![], &events)]);
     assert!(matches!(
-        host.create_world(WorldLimits {
-            max_operations: 0,
-            ..Default::default()
-        }),
+        host.create_world(
+            WorldLimits {
+                max_operations: 0,
+                ..Default::default()
+            },
+            &[SystemId("custom")]
+        ),
         Err(WorldConstructionError::Limits(_))
     ));
     assert!(matches!(
-        host.create_world_with_systems(Default::default(), &[SystemId("custom")]),
-        Err(WorldConstructionError::Systems(
-            SystemScheduleError::MissingRequired { .. }
-        ))
-    ));
-    assert!(matches!(
-        host.create_world_with_systems(Default::default(), &[SystemId("unknown")]),
+        host.create_world(Default::default(), &[SystemId("unknown")]),
         Err(WorldConstructionError::Systems(
             SystemScheduleError::Unknown(_)
         ))
     ));
     assert!(events.lock().unwrap().is_empty());
     assert_eq!(host.world_ids().len(), 0);
+}
+
+#[test]
+fn selected_worlds_admit_only_supported_components_and_keep_selection_out_of_hints() {
+    let mut host = HostRuntime::new();
+    let empty = host
+        .create_world_with_options(WorldLimits::default(), WorldCreateOptions::new([]))
+        .unwrap();
+    let mut world = host.world_mut(empty).unwrap();
+    assert!(world.manifest().systems().is_empty());
+    assert!(world.capacity_hints().systems.is_empty());
+    assert!(!world.manifest().supports_component(ComponentValue::SCALAR));
+    assert!(
+        !world
+            .manifest()
+            .supports_component(ComponentValue::TRANSFORM)
+    );
+    assert_eq!(
+        world.enqueue_system_command(ipp_core::systems::animation::AnimationSystem::ID, 0, (),),
+        Err(ErrorReason::UnsupportedDependency)
+    );
+    assert_eq!(
+        world.enqueue_system_command_batch_with_reply(
+            ipp_core::systems::animation::AnimationSystem::ID,
+            0,
+            1,
+            vec![()],
+        ),
+        Err(ErrorReason::UnsupportedDependency)
+    );
+    world
+        .enqueue(Batch {
+            id: 1,
+            operations: vec![
+                Command::Create {
+                    alias: 1,
+                    metadata: Default::default(),
+                    adopt: false,
+                },
+                Command::InsertComponent {
+                    entity: EntityRef::Alias(1),
+                    component: ComponentValue::TRANSFORM,
+                    fields: Vec::new(),
+                    adopt: false,
+                },
+            ],
+        })
+        .unwrap();
+    let report = world.step(0.0).unwrap();
+    assert_eq!(
+        report.outcomes[0].result.as_ref().unwrap_err().reason,
+        ErrorReason::UnsupportedDependency
+    );
+    drop(world);
+    let selected = host
+        .create_world(
+            WorldLimits::default(),
+            &[
+                ipp_core::systems::animation::AnimationSystem::ID,
+                ipp_core::systems::hierarchy::HierarchySystem::ID,
+            ],
+        )
+        .unwrap();
+    let world = host.world_mut(selected).unwrap();
+    assert!(
+        world
+            .manifest()
+            .supports_component(ComponentValue::TRANSFORM)
+    );
+    assert!(!world.manifest().systems().is_empty());
+    assert!(
+        world
+            .manifest()
+            .supports_operation(ipp_core::systems::WorldOperation::Animation)
+    );
+    assert!(
+        world
+            .manifest()
+            .supports_operation(ipp_core::systems::WorldOperation::EntityLinks)
+    );
+}
+
+#[cfg(feature = "gui")]
+#[test]
+fn gui_domain_operation_does_not_imply_layout_or_physical_input() {
+    use ipp_core::systems::{WorldOperation, gui::GuiSystem};
+
+    let mut host = HostRuntime::new();
+    let id = host
+        .create_world(
+            WorldLimits::default(),
+            &[
+                ipp_core::systems::animation::AnimationSystem::ID,
+                ipp_core::systems::hierarchy::HierarchySystem::ID,
+                ipp_core::systems::look_at::LookAtSystem::ID,
+                ipp_core::systems::hierarchy::FinalPropagationSystem::ID,
+                ipp_core::systems::asset_dependencies::AssetDependencySystem::ID,
+                ipp_core::systems::geometry::GeometrySystem::ID,
+                ipp_core::systems::surface::SurfaceSystem::ID,
+                ipp_core::systems::canvas::CanvasSystem::ID,
+                GuiSystem::ID,
+            ],
+        )
+        .unwrap();
+    let manifest = host.world_manifest(id).unwrap();
+    assert!(manifest.supports_component(ComponentValue::GUI_CHECKBOX));
+    assert!(manifest.supports_operation(WorldOperation::Gui));
+    assert!(
+        !manifest
+            .systems()
+            .contains(&ipp_core::systems::gui::GuiLayoutSystem::ID)
+    );
+    assert!(!manifest.supports_component(ComponentValue::GUI_LAYOUT));
+}
+
+#[cfg(feature = "gui")]
+#[test]
+fn gui_operation_has_one_local_control_provider_in_minimal_and_full_compositions() {
+    use ipp_core::systems::{WorldOperation, canvas::CanvasSystem, gui::GuiSystem};
+
+    let providers: Vec<_> = compiled_system_factories()
+        .into_iter()
+        .flat_map(|factory| {
+            factory
+                .capabilities()
+                .operations
+                .into_iter()
+                .filter_map(move |capability| {
+                    (capability.value == WorldOperation::Gui)
+                        .then_some((factory.id(), capability.requires))
+                })
+        })
+        .collect();
+    assert_eq!(providers, [(GuiSystem::ID, Vec::new())]);
+    let mut host = HostRuntime::new();
+    // Controls require CanvasBounds, so the smallest GUI World selects Canvas.
+    let minimal = host
+        .create_world(WorldLimits::default(), &[CanvasSystem::ID, GuiSystem::ID])
+        .unwrap();
+    let manifest = host.world_manifest(minimal).unwrap();
+    assert_eq!(manifest.systems().len(), 2);
+    assert!(manifest.supports_operation(WorldOperation::Gui));
+    assert!(manifest.supports_component(ComponentValue::GUI_CHECKBOX));
+    assert!(manifest.supports_component(ComponentValue::CANVAS_BOUNDS));
+    assert!(!manifest.supports_component(ComponentValue::GUI_LAYOUT));
+
+    // Without Canvas the GUI operation remains, but no control is admitted.
+    let gui_only = host
+        .create_world(WorldLimits::default(), &[GuiSystem::ID])
+        .unwrap();
+    let manifest = host.world_manifest(gui_only).unwrap();
+    assert!(manifest.supports_operation(WorldOperation::Gui));
+    assert!(!manifest.supports_component(ComponentValue::GUI_CHECKBOX));
+    assert!(!manifest.supports_component(ComponentValue::CANVAS_BOUNDS));
+    let everything: Vec<_> = host.system_ids().collect();
+    let full = host
+        .create_world(WorldLimits::default(), &everything)
+        .unwrap();
+    let manifest = host.world_manifest(full).unwrap();
+    assert_eq!(
+        manifest
+            .operations()
+            .filter(|operation| *operation == WorldOperation::Gui)
+            .count(),
+        1
+    );
+    let omitted = host.create_world(WorldLimits::default(), &[]).unwrap();
+    assert!(
+        !host
+            .world_manifest(omitted)
+            .unwrap()
+            .supports_operation(WorldOperation::Gui)
+    );
+}
+
+#[cfg(not(feature = "gui"))]
+#[test]
+fn gui_operation_is_absent_when_gui_is_not_compiled() {
+    assert!(compiled_system_factories().iter().all(|factory| {
+        !factory.id().0.starts_with("ipp.gui")
+            && factory
+                .capabilities()
+                .operations
+                .iter()
+                .all(|capability| format!("{:?}", capability.value) != "Gui")
+    }));
+    let mut host = HostRuntime::new();
+    let everything: Vec<_> = host.system_ids().collect();
+    let world = host
+        .create_world(WorldLimits::default(), &everything)
+        .unwrap();
+    assert!(
+        host.world_manifest(world)
+            .unwrap()
+            .operations()
+            .all(|operation| format!("{operation:?}") != "Gui")
+    );
+}
+
+#[cfg(feature = "skeletal-animation")]
+#[test]
+fn joint_animation_and_parent_joint_require_their_selected_evaluators() {
+    use ipp_core::systems::{WorldOperation, animation::AnimationSystem};
+
+    let mut host = HostRuntime::new();
+    let basic = host
+        .create_world(WorldLimits::default(), &[AnimationSystem::ID])
+        .unwrap();
+    assert!(
+        !host
+            .world_manifest(basic)
+            .unwrap()
+            .supports_operation(WorldOperation::JointAnimation)
+    );
+
+    let joint = host
+        .create_world(
+            WorldLimits::default(),
+            &[
+                AnimationSystem::ID,
+                ipp_core::systems::asset_dependencies::AssetDependencySystem::ID,
+                ipp_core::systems::skeleton::SkeletonSystem::ID,
+            ],
+        )
+        .unwrap();
+    let manifest = host.world_manifest(joint).unwrap();
+    assert!(manifest.supports_operation(WorldOperation::JointAnimation));
+    assert!(manifest.supports_component(ComponentValue::SKELETON));
+    assert!(!manifest.supports_component(ComponentValue::PARENT_JOINT));
+}
+
+#[test]
+fn selecting_a_dependent_without_its_required_predecessor_fails() {
+    let events = SystemTrace::default();
+    let mut host = host(vec![
+        factory(
+            "dependent",
+            vec![SystemDependency::Required(SystemId("predecessor"))],
+            &events,
+        ),
+        factory("predecessor", vec![], &events),
+    ]);
+    assert!(matches!(
+        host.create_world(WorldLimits::default(), &[SystemId("dependent")]),
+        Err(WorldConstructionError::Systems(
+            SystemScheduleError::MissingRequired { .. }
+        ))
+    ));
+    assert!(events.lock().unwrap().is_empty());
+}
+
+#[test]
+fn invalid_factory_capabilities_fail_before_initialization() {
+    let events = SystemTrace::default();
+    let mut invalid = factory("invalid", vec![], &events);
+    Arc::get_mut(&mut invalid).unwrap().capabilities.components =
+        vec![SystemCapability::new(u16::MAX)];
+    let mut host = host(vec![invalid]);
+    assert!(matches!(
+        host.create_world(WorldLimits::default(), &[SystemId("invalid")]),
+        Err(WorldConstructionError::Systems(
+            SystemScheduleError::InvalidComponentCapability { .. }
+        ))
+    ));
+    assert!(events.lock().unwrap().is_empty());
+}
+
+#[test]
+fn selected_component_requirements_need_their_evaluator() {
+    let events = SystemTrace::default();
+    let mut partial = factory("partial-render", vec![], &events);
+    Arc::get_mut(&mut partial).unwrap().capabilities.components =
+        vec![SystemCapability::new(ComponentValue::MESH_INSTANCE)];
+    let mut host = host(vec![partial]);
+    assert!(matches!(
+        host.create_world(WorldLimits::default(), &[SystemId("partial-render")]),
+        Err(WorldConstructionError::Systems(
+            SystemScheduleError::MissingComponentCapability { .. }
+        ))
+    ));
+    assert!(events.lock().unwrap().is_empty());
 }
 
 #[test]
@@ -377,7 +678,12 @@ fn bindings_are_scoped_to_the_declaring_dependent_even_inside_one_world() {
     );
     Arc::get_mut(&mut b).unwrap().retained = Arc::clone(&a.retained);
     let mut host = host(vec![b, a, first]);
-    let id = host.create_world(Default::default()).unwrap();
+    let id = host
+        .create_world(
+            Default::default(),
+            &[SystemId("b"), SystemId("a"), SystemId("first")],
+        )
+        .unwrap();
     host.world_mut(id).unwrap().step(0.25).unwrap();
 }
 
@@ -395,12 +701,13 @@ fn incorrect_dependency_type_rejects_initialization_and_preserves_existing_world
         .iter()
         .map(|factory| factory.id())
         .collect();
-    let existing = host
-        .create_world_with_systems(Default::default(), &builtins)
-        .unwrap();
+    let existing = host.create_world(Default::default(), &builtins).unwrap();
     host.world_mut(existing).unwrap().step(0.0).unwrap();
     assert!(matches!(
-        host.create_world(Default::default()),
+        host.create_world(
+            Default::default(),
+            &[HierarchySystem::ID, SystemId("wrong")]
+        ),
         Err(WorldConstructionError::Initialization {
             error: SystemInitError::DependencyType(HierarchySystem::ID),
             ..
@@ -432,7 +739,13 @@ impl SystemFactory for InvalidBindingFactory {
 fn presence_alone_does_not_grant_dependency_access() {
     let mut host = host(vec![Arc::new(InvalidBindingFactory)]);
     assert!(matches!(
-        host.create_world(Default::default()),
+        host.create_world(
+            Default::default(),
+            &[
+                ipp_core::systems::hierarchy::HierarchySystem::ID,
+                SystemId("invalid-binding"),
+            ]
+        ),
         Err(WorldConstructionError::Initialization {
             error: SystemInitError::UnavailableDependency(_),
             ..
@@ -461,7 +774,7 @@ fn builtin_instances_cannot_be_hidden_under_an_extension_identity() {
         "aliased-builtin",
     )))]);
     assert!(matches!(
-        host.create_world(Default::default()),
+        host.create_world(Default::default(), &[SystemId("aliased-builtin")]),
         Err(WorldConstructionError::Initialization {
             error: SystemInitError::AuthoringSystemType(SystemId("aliased-builtin")),
             ..
@@ -477,8 +790,8 @@ fn producer_assets_grow_and_world_teardown_preserves_other_consumers() {
     let limits = WorldLimits {
         ..Default::default()
     };
-    let first = host.create_world(limits).unwrap();
-    let second = host.create_world(limits).unwrap();
+    let first = host.create_world(limits, RENDER).unwrap();
+    let second = host.create_world(limits, RENDER).unwrap();
     let triangle = || {
         let mut bytes = b"IPPM".to_vec();
         for value in [1u32, 3, 3] {
@@ -543,8 +856,8 @@ fn destroying_one_consumer_preserves_another_worlds_in_flight_reader() {
     use ipp_core::{AssetResourceStatus, ComponentValue, EntityRef, components::MeshInstance};
     let mut host = HostRuntime::new();
     host.register_stream_resource_provider("fixture").unwrap();
-    let first = host.create_world(Default::default()).unwrap();
-    let second = host.create_world(Default::default()).unwrap();
+    let first = host.create_world(Default::default(), RENDER).unwrap();
+    let second = host.create_world(Default::default(), RENDER).unwrap();
     for id in [first, second] {
         let mut world = host.world_mut(id).unwrap();
         world
@@ -554,6 +867,7 @@ fn destroying_one_consumer_preserves_another_worlds_in_flight_reader() {
                     Command::Create {
                         alias: 0,
                         metadata: Default::default(),
+                        adopt: false,
                     },
                     Command::insert_value(
                         EntityRef::Alias(0),

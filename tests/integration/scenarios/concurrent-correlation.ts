@@ -50,10 +50,14 @@ export async function concurrentRpcResponsesStayCorrelated(
     assert.ok(batch);
     assert.ok(expectedId !== undefined);
     assert.equal(batch.requestedBatchId, expectedId);
-    assert.equal(batch.returnedBatchId, expectedId);
     assert.ok(batch.commitTick > seed.commitTick);
     assert.equal(batch.aliasCount, 1);
   }
+  // The client assigns batch identities; concurrent batches never share one.
+  assert.equal(
+    new Set(correlation.batches.map((batch) => batch.returnedBatchId)).size,
+    CONCURRENT_BATCHES,
+  );
   for (const inspection of correlation.inspections) {
     assert.ok(inspection.tick > seed.commitTick);
     assert.ok(Number.isFinite(inspection.time));

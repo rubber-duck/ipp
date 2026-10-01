@@ -16,7 +16,7 @@
 //! `(component binding, slot, property)`, never a pointer into the table.
 //!
 //! Properties are scalars, vectors, asset references or bounded text. A text
-//! property is `String` or `Option<String>` declaring `#[schema(text = N)]`, its
+//! property is `Arc<str>` or `Option<Arc<str>>` declaring `#[schema(text = N)]`, its
 //! UTF-8 byte bound of at most [`MAX_ROW_TEXT_BYTES`]; the layout and target
 //! contract carry the bound. Row text travels as a string field value at its
 //! property address and as [`DynamicValue::Text`] inside the row API; it is
@@ -31,6 +31,7 @@
 use super::dynamic_properties::{DynamicPropertyKind, DynamicValue};
 use super::schema::{ContractSink, FieldError, FieldKind, FieldValue, SchemaField, write_string};
 use crate::services::asset_management::{AssetSource, AssetTypeId};
+use std::sync::Arc;
 
 /// Row derive, compiled for the macro host and evaluated for the host target.
 pub use ipp_schema_derive::SchemaRow;
@@ -43,6 +44,12 @@ pub const MAX_ROW_FIELDS: usize = 7;
 
 /// Largest byte bound a text row property may declare: one string field value.
 pub const MAX_ROW_TEXT_BYTES: u32 = 65_536;
+
+/// Properties one row type declares; the row derive rejects larger types at compile time.
+///
+/// One presence-mask byte covers eight properties, so 256 properties cost 32 mask bytes per
+/// row, and the count fits the contract's 16-bit layout size. Maintained rows use a handful.
+pub const MAX_ROW_PROPERTIES: usize = 256;
 
 /// First property address of rows field `field` (0-based among rows fields).
 pub const fn row_region_base(field: usize) -> u32 {
@@ -299,7 +306,7 @@ impl RowPropertyValue for AssetSource {
     }
 
     fn from_dynamic(value: DynamicValue) -> Result<Self, FieldError> {
-        value.validate()?;
+        value.validate_representation()?;
         match value {
             DynamicValue::Asset(value) => Ok(value),
             _ => Err(FieldError::WrongType),
@@ -311,13 +318,14 @@ impl RowPropertyValue for AssetSource {
     }
 
     fn heap_bytes(&self) -> usize {
-        self.uri.capacity()
+        self.uri.len()
     }
 }
 
 /// Text rows accept any UTF-8 string here; the derive adds the declared byte
-/// bound through [`check_row_text`].
-impl RowPropertyValue for String {
+/// bound through [`check_row_text`]. Row text is shared and immutable like
+/// component text: a write replaces the reference.
+impl RowPropertyValue for Arc<str> {
     const KIND: DynamicPropertyKind = DynamicPropertyKind::Text;
 
     fn to_dynamic(&self) -> DynamicValue {
@@ -332,7 +340,7 @@ impl RowPropertyValue for String {
     }
 
     fn heap_bytes(&self) -> usize {
-        self.capacity()
+        self.len()
     }
 }
 
@@ -713,27 +721,6 @@ impl<R: SchemaRow> Rows<R> {
         }
     }
 
-    /// Add every nonempty asset property to a component's resource demand; the
-    /// owning component calls this from its lifecycle resource hook.
-    #[cfg(any(test, feature = "gui"))]
-    pub(crate) fn resource_demand(
-        &self,
-        demand: &mut std::collections::BTreeSet<
-            crate::services::asset_management::service::AssetDemandSelection,
-        >,
-    ) {
-        self.visit_assets(&mut |asset| {
-            if !asset.uri.is_empty() {
-                crate::services::asset_management::service::AssetDemandSelection::insert_into(
-                    demand,
-                    asset.kind,
-                    &asset.uri,
-                    asset.variant,
-                );
-            }
-        });
-    }
-
     /// Encode the table: little-endian `u32` next slot and `u32` live row count,
     /// then per live row in ascending slot order a `u32` slot, a presence mask of
     /// [`RowsLayout::mask_bytes`] bytes (bit `i % 8` of byte `i / 8` marks
@@ -1002,7 +989,7 @@ pub fn decode_row_value(
         }
     };
 
-    value.validate()?;
+    value.validate_representation()?;
     Ok(value)
 }
 

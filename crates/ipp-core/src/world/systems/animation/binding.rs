@@ -7,7 +7,37 @@ use crate::{
     services::asset_management::{AssetKey, service::AssetDemandSelection},
     world::WorldEntityState,
 };
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
+
+pub(super) fn validate_target_support(
+    manifest: &crate::systems::WorldManifest,
+    target: &AnimationTrackTarget,
+) -> Result<(), ErrorReason> {
+    use crate::systems::WorldOperation;
+
+    if !manifest.supports_operation(WorldOperation::Animation) {
+        return Err(ErrorReason::UnsupportedDependency);
+    }
+    match target {
+        AnimationTrackTarget::EntityLink => {
+            if !manifest.supports_operation(WorldOperation::EntityLinks) {
+                return Err(ErrorReason::UnsupportedDependency);
+            }
+        }
+        _ => {
+            if !manifest.supports_component(target.component_target()) {
+                return Err(ErrorReason::UnsupportedDependency);
+            }
+            #[cfg(feature = "skeletal-animation")]
+            if matches!(target, AnimationTrackTarget::Joints(_))
+                && !manifest.supports_operation(WorldOperation::JointAnimation)
+            {
+                return Err(ErrorReason::UnsupportedDependency);
+            }
+        }
+    }
+    Ok(())
+}
 
 /// Whether an offset names a property that may depart within a component
 /// incarnation: a dynamic property (removal) or a row property (row removal,
@@ -167,6 +197,7 @@ impl<'a> AnimationReadAccess<'a> {
         let mut duration: f64 = 0.0;
         let mut all_ready = true;
         for driver in &description.drivers {
+            validate_target_support(&self.world.manifest, &driver.property)?;
             crate::services::asset_management::service::validate_source(&driver.source)?;
             if driver.source.is_empty()
                 || !driver.weight.is_finite()
@@ -176,20 +207,58 @@ impl<'a> AnimationReadAccess<'a> {
             {
                 return Err(ErrorReason::InvalidValue);
             }
+            if matches!(driver.property, AnimationTrackTarget::EntityLink) {
+                let bindings = &driver.entity_bindings;
+                if driver.weight != 1.0 || driver.additive || driver.reference_time != 0.0 {
+                    return Err(ErrorReason::InvalidField);
+                }
+                if !self.state.entities.contains_key(&driver.target)
+                    || bindings
+                        .iter()
+                        .any(|entity| !self.state.entities.contains_key(entity))
+                {
+                    return Err(ErrorReason::InvalidEntity);
+                }
+                if let Some(clip) = self
+                    .source_key(driver)
+                    .and_then(|key| self.clip_by_key(key))
+                {
+                    let track = clip
+                        .typed_track::<AnimationEntityPlacementKey>(driver.track as usize)
+                        .ok_or(ErrorReason::InvalidField)?;
+                    if !matches!(track.target, AnimationTrackTarget::EntityLink) {
+                        return Err(ErrorReason::InvalidField);
+                    }
+                    if !super::structural::structural_slots_valid(track, bindings) {
+                        return Err(ErrorReason::InvalidField);
+                    }
+                    if f64::from(driver.reference_time) > clip.duration() {
+                        return Err(ErrorReason::InvalidValue);
+                    }
+                    duration = duration.max(clip.duration());
+                } else {
+                    all_ready = false;
+                }
+                incarnations.push((0, driver.property.clone()));
+                continue;
+            }
+            if !driver.entity_bindings.is_empty() {
+                return Err(ErrorReason::InvalidField);
+            }
             let record = self
                 .state
                 .entities
                 .get(&driver.target)
                 .ok_or(ErrorReason::InvalidEntity)?;
             let input = record
-                .input(driver.property.component())
+                .input(driver.property.component_target())
                 .ok_or(ErrorReason::MissingComponent)?;
             let value = self
                 .state
                 .input_value(
                     &self.world.components,
                     driver.target,
-                    driver.property.component(),
+                    driver.property.component_target(),
                 )
                 .ok_or(ErrorReason::MissingComponent)?;
             // Every offset must be a field the component lets animation write,
@@ -219,7 +288,11 @@ impl<'a> AnimationReadAccess<'a> {
                 }
                 Err(reason) => return Err(reason),
             };
-            if driver.additive && current.as_ref().is_some_and(|current| !current.numeric()) {
+            if driver.additive
+                && current
+                    .as_ref()
+                    .is_some_and(|current| !super::contribution::contributes(current))
+            {
                 return Err(ErrorReason::InvalidField);
             }
             if let Some(clip) = self
@@ -257,18 +330,21 @@ impl<'a> AnimationReadAccess<'a> {
         identity: &AnimationTargetIdentity,
         state: &crate::world::WorldEntityState,
     ) -> bool {
+        if matches!(identity.property, AnimationTrackTarget::EntityLink) {
+            return state.entities.contains_key(&identity.entity);
+        }
         if let [offset] = identity.property.indices()
             && removable_field(*offset)
         {
             return state
                 .entities
                 .get(&identity.entity)
-                .and_then(|record| record.input(identity.property.component()))
+                .and_then(|record| record.input(identity.property.component_target()))
                 .is_some_and(|input| input.incarnation == identity.incarnation)
                 && present_field(state.input_field(
                     &self.world.components,
                     identity.entity,
-                    identity.property.component(),
+                    identity.property.component_target(),
                     *offset,
                 ));
         }
@@ -281,7 +357,7 @@ impl<'a> AnimationReadAccess<'a> {
                 .input_value(
                     &self.world.components,
                     identity.entity,
-                    identity.property.component(),
+                    identity.property.component_target(),
                 )
                 .is_some_and(|v| self.read_animation_target(&identity.property, &v).is_ok())
         {
@@ -290,7 +366,7 @@ impl<'a> AnimationReadAccess<'a> {
         state
             .entities
             .get(&identity.entity)
-            .and_then(|record| record.input(identity.property.component()))
+            .and_then(|record| record.input(identity.property.component_target()))
             .is_some_and(|input| input.incarnation == identity.incarnation)
     }
 
@@ -344,7 +420,7 @@ impl<'a> AnimationReadAccess<'a> {
             return true;
         }
         #[cfg(feature = "particles")]
-        if driver.identity().property.component() == ComponentValue::PARTICLE_PLAYBACK
+        if driver.identity().property.component_target() == ComponentValue::PARTICLE_PLAYBACK
             && let Some(playback) = self
                 .world
                 .components
@@ -383,7 +459,6 @@ impl<'a> AnimationReadAccess<'a> {
     pub(super) fn bind_controller(
         &self,
         controller: &AnimationController,
-        baselines: &HashMap<AnimationTargetIdentity, Option<AnimationValue>>,
     ) -> Result<Option<Vec<Box<dyn super::driver::AnimationDriverBinding>>>, ErrorReason> {
         let mut drivers = Vec::new();
         for (description, (incarnation, property)) in controller
@@ -393,6 +468,10 @@ impl<'a> AnimationReadAccess<'a> {
             .iter()
             .zip(&controller.incarnations)
         {
+            validate_target_support(&self.world.manifest, property)?;
+            if matches!(property, AnimationTrackTarget::EntityLink) {
+                continue;
+            }
             let identity = AnimationTargetIdentity {
                 entity: description.target,
                 incarnation: *incarnation,
@@ -412,15 +491,29 @@ impl<'a> AnimationReadAccess<'a> {
                 .tracks()
                 .get(description.track as usize)
                 .ok_or(ErrorReason::InvalidField)?;
-            let Some(original) = baselines.get(&identity).and_then(Option::as_ref).cloned() else {
+            let current = match self
+                .state
+                .input_value(
+                    &self.world.components,
+                    identity.entity,
+                    identity.property.component_target(),
+                )
+                .ok_or(ErrorReason::MissingComponent)
+                .and_then(|value| self.read_animation_target(&identity.property, &value))
+            {
+                Ok(current) => current,
+                // Joint targets wait for the Skeleton's assets.
                 #[cfg(feature = "skeletal-animation")]
-                if matches!(description.property, AnimationTrackTarget::Joints(_)) {
+                Err(ErrorReason::InvalidAsset)
+                    if matches!(description.property, AnimationTrackTarget::Joints(_)) =>
+                {
                     return Ok(None);
                 }
-                return Err(ErrorReason::InvalidField);
+                Err(reason) => return Err(reason),
             };
-            if !original.same_type(&track.sample_value(0.0))
-                || description.additive && !original.numeric()
+            let template = track.sample_value(0.0);
+            if !current.same_type(&template)
+                || description.additive && !super::contribution::contributes(&template)
                 || description.property.indices().len() != track.target().indices().len()
             {
                 return Err(ErrorReason::InvalidField);
@@ -455,7 +548,7 @@ impl<'a> AnimationReadAccess<'a> {
                 property.clone(),
                 key,
                 clip.duration(),
-                original,
+                template,
                 #[cfg(feature = "skeletal-animation")]
                 skeleton_source,
             )?);
@@ -482,7 +575,7 @@ impl<'a> AnimationReadAccess<'a> {
                     world.parse::<u64>() == Ok(self.world.id.0) && path == local
                 })
         } else {
-            source.uri == value.source
+            crate::components::schema::same_text(&source.uri, &value.source)
         };
         matches && source.kind == crate::SKELETON_TYPE && source.variant == value.variant
     }
@@ -531,6 +624,7 @@ impl<'a> AnimationReadAccess<'a> {
         #[cfg(feature = "skeletal-animation")] skeleton_source: Option<AssetKey>,
     ) -> Result<AnimationValue, ErrorReason> {
         match target {
+            AnimationTrackTarget::EntityLink => Err(ErrorReason::InvalidField),
             AnimationTrackTarget::DynamicProperty {
                 component,
                 name,
@@ -654,7 +748,7 @@ impl<'a> AnimationReadAccess<'a> {
                 for id in ids {
                     for driver in self.animation.controllers[id].drivers_for(*key) {
                         let identity = driver.identity();
-                        if (identity.entity, identity.property.component()) == *key {
+                        if (identity.entity, identity.property.component_target()) == *key {
                             self.validate_animation_driver(driver, staged)?;
                         }
                     }
@@ -672,7 +766,7 @@ impl<'a> AnimationReadAccess<'a> {
         let identity = driver.identity();
         if !staged
             .changed
-            .contains_key(&(identity.entity, identity.property.component()))
+            .contains_key(&(identity.entity, identity.property.component_target()))
         {
             return Ok(());
         }
@@ -694,7 +788,7 @@ impl<'a> AnimationReadAccess<'a> {
             .input_value(
                 &self.world.components,
                 identity.entity,
-                identity.property.component(),
+                identity.property.component_target(),
             )
             .ok_or(ErrorReason::MissingComponent)?;
         #[cfg(feature = "skeletal-animation")]

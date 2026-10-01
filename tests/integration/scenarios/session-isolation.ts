@@ -28,7 +28,7 @@ export async function reconnectStartsWithEmptyWorld(
       await context.execute("inspect first-session entity", firstEntity, () =>
         context.driver.inspect(firstEntity, { signal: context.signal }),
       ),
-    ).scalar?.base,
+    ).scalar?.value,
     17,
   );
 

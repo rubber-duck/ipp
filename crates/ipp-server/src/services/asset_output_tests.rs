@@ -68,7 +68,7 @@ fn authored_world_state_round_trips_through_native_file_publication() {
             Default::default(),
             WorldCreateOptions {
                 symbolic_id: "file-world".into(),
-                ..Default::default()
+                ..WorldCreateOptions::new([ipp_core::systems::constraints::ConstraintSystem::ID])
             },
         )
         .unwrap();
@@ -80,11 +80,13 @@ fn authored_world_state_round_trips_through_native_file_publication() {
                 Command::Create {
                     alias: 1,
                     metadata: Default::default(),
+                    adopt: false,
                 },
                 Command::InsertComponent {
                     entity: EntityRef::Alias(1),
                     component: ComponentValue::SCALAR,
                     fields: vec![],
+                    adopt: false,
                 },
             ],
         })
@@ -107,7 +109,7 @@ fn authored_world_state_round_trips_through_native_file_publication() {
         .unwrap();
     assert_eq!(
         restored_host
-            .world_mut(restored)
+            .world_mut(restored.root.id())
             .unwrap()
             .capture_world(limits)
             .unwrap(),

@@ -3,6 +3,7 @@
 
 mod support;
 use support::HostWorldTestDriver;
+use support::selection::{CONSTRAINTS, RENDER, select};
 
 use ipp_core::{
     AssetResourceKind, AssetResourceStatus, Batch, Command, ComponentValue, EntityId, EntityRef,
@@ -12,7 +13,9 @@ use ipp_core::{
 use std::mem::offset_of;
 
 fn source_world(host: &mut ipp_core::HostRuntime) -> ipp_core::WorldId {
-    let world_id = host.create_world(ipp_core::WorldLimits::default()).unwrap();
+    let world_id = host
+        .create_world(ipp_core::WorldLimits::default(), RENDER)
+        .unwrap();
     let mut world = host.world_mut(world_id).unwrap();
     for scheme in ["http", "https", "file", "ipc", "ipp"] {
         world.register_stream_resource_provider(scheme).unwrap();
@@ -60,21 +63,25 @@ fn create(host: &mut ipp_core::HostRuntime, world: ipp_core::WorldId, uri: &str)
             Command::Create {
                 alias: 0,
                 metadata: Default::default(),
+                adopt: false,
             },
             Command::InsertComponent {
                 entity: EntityRef::Alias(0),
                 component: ComponentValue::TRANSFORM,
                 fields: vec![],
+                adopt: false,
             },
             Command::InsertComponent {
                 entity: EntityRef::Alias(0),
                 component: ComponentValue::UNLIT_MATERIAL,
                 fields: vec![],
+                adopt: false,
             },
             Command::InsertComponent {
                 entity: EntityRef::Alias(0),
                 component: ComponentValue::MESH_INSTANCE,
                 fields: vec![source(uri)],
+                adopt: false,
             },
         ],
     );
@@ -106,8 +113,311 @@ fn triangle() -> Vec<u8> {
 }
 
 #[test]
+fn malformed_asset_rejection_preserves_shared_demand_recovery_and_publication_leases() {
+    let mut host = ipp_core::HostRuntime::new();
+    host.asset_resources_mut().set_idle_resident_bytes_target(0);
+    let memory = ipp_core::services::data_source::MemoryDataSource::default();
+    let shared = "rejection:shared";
+    memory.insert(shared.into(), triangle()).unwrap();
+    host.data_sources_mut()
+        .register("rejection:", memory)
+        .unwrap();
+    let left = host
+        .create_world(WorldLimits::default(), &select(&[CONSTRAINTS, RENDER]))
+        .unwrap();
+    let right = host
+        .create_world(WorldLimits::default(), &select(&[CONSTRAINTS, RENDER]))
+        .unwrap();
+    let left_entity = create(&mut host, left, shared);
+    let right_entity = create(&mut host, right, shared);
+    for _ in 0..4 {
+        host.progress_assets();
+        apply(&mut host, left, vec![]);
+        apply(&mut host, right, vec![]);
+    }
+    let descriptor = ipp_core::services::asset_management::AssetSource {
+        kind: ipp_core::MESH_TYPE,
+        uri: shared.into(),
+        variant: 0,
+    };
+    let key = host.asset_resources().find(&descriptor).unwrap();
+    assert!(host.asset_resources().get(key).unwrap().data().is_some());
+    let publication = host
+        .asset_resources_mut()
+        .retain_publication([key])
+        .unwrap();
+
+    let report = apply(
+        &mut host,
+        left,
+        vec![
+            Command::insert_value(
+                EntityRef::Handle(left_entity),
+                ComponentValue::Scalar(ipp_core::components::Scalar {
+                    value: 7.0,
+                }),
+            ),
+            set(left_entity, "asset://ordinary-motion-A"),
+            Command::Delete {
+                entity: EntityRef::Handle(left_entity),
+            },
+        ],
+    );
+    let failure = report.outcomes[0].result.as_ref().unwrap_err();
+    assert_eq!(failure.operation, Some(1));
+    assert_eq!(failure.reason, ErrorReason::InvalidAsset);
+    let snapshot = host.world_mut(left).unwrap().inspect(left_entity).unwrap();
+    assert!(
+        snapshot
+            .components
+            .contains(&ComponentValue::Scalar(ipp_core::components::Scalar {
+                value: 7.0
+            }))
+    );
+    assert!(snapshot.components.iter().any(
+        |value| matches!(value, ComponentValue::MeshInstance(value) if value.source == std::sync::Arc::<str>::from(&*shared))
+    ));
+    assert_eq!(
+        host.world_mut(left).unwrap().resource_snapshots()[0].id,
+        key.to_u64()
+    );
+    assert_eq!(
+        host.world_mut(right).unwrap().resource_snapshots()[0].id,
+        key.to_u64()
+    );
+
+    let pending = apply(&mut host, left, vec![set(left_entity, "asset://1/42")]);
+    assert!(pending.outcomes[0].result.is_ok());
+    assert!(
+        host.world_mut(left)
+            .unwrap()
+            .resource_snapshots()
+            .iter()
+            .any(|resource| resource.source == std::sync::Arc::<str>::from("asset://1/42"))
+    );
+    assert!(host.asset_resources().get(key).unwrap().data().is_some());
+    assert!(
+        apply(&mut host, left, vec![set(left_entity, "")]).outcomes[0]
+            .result
+            .is_ok()
+    );
+    assert!(
+        host.world_mut(left)
+            .unwrap()
+            .resource_snapshots()
+            .is_empty()
+    );
+    assert!(
+        apply(
+            &mut host,
+            right,
+            vec![Command::Delete {
+                entity: EntityRef::Handle(right_entity)
+            }]
+        )
+        .outcomes[0]
+            .result
+            .is_ok()
+    );
+    assert!(
+        host.world_mut(right)
+            .unwrap()
+            .resource_snapshots()
+            .is_empty()
+    );
+    assert!(host.asset_resources().get(key).unwrap().data().is_some());
+    assert!(
+        host.asset_resources()
+            .publication_resource(publication, key)
+            .is_some()
+    );
+    assert!(host.asset_resources_mut().release_publication(publication));
+    assert!(!host.asset_resources_mut().release_publication(publication));
+    host.progress_assets();
+    assert!(host.asset_resources().get(key).is_none());
+    assert!(
+        apply(
+            &mut host,
+            right,
+            vec![Command::Create {
+                alias: 0,
+                metadata: Default::default(),
+                adopt: false,
+            }]
+        )
+        .outcomes[0]
+            .result
+            .is_ok()
+    );
+}
+
+#[test]
+fn rejected_unavailable_type_does_not_index_it_or_retain_a_replaced_selection() {
+    use ipp_core::services::asset_management::{AssetSource, AssetTypeId};
+    let mut host = ipp_core::HostRuntime::new();
+    let world = source_world(&mut host);
+    let created = apply(
+        &mut host,
+        world,
+        vec![
+            Command::Create {
+                alias: 0,
+                metadata: Default::default(),
+                adopt: false,
+            },
+            Command::insert_value(
+                EntityRef::Alias(0),
+                ComponentValue::CustomMaterial(Default::default()),
+            ),
+        ],
+    );
+    let entity = created.outcomes[0].result.as_ref().unwrap()[0].1;
+    let property = |name: &str, kind| Command::SetDynamicProperty {
+        entity: EntityRef::Handle(entity),
+        component: ComponentValue::CUSTOM_MATERIAL,
+        name: name.into(),
+        value: ipp_core::DynamicValue::Asset(AssetSource {
+            kind,
+            uri: "asset-reference:pending".into(),
+            variant: 0,
+        }),
+    };
+    assert!(
+        apply(
+            &mut host,
+            world,
+            vec![
+                property("retained", ipp_core::TEXTURE_TYPE),
+                property("replaced", ipp_core::MESH_TYPE)
+            ]
+        )
+        .outcomes[0]
+            .result
+            .is_ok()
+    );
+    assert_eq!(host.world_mut(world).unwrap().resource_snapshots().len(), 2);
+    let rejected = apply(
+        &mut host,
+        world,
+        vec![property("replaced", AssetTypeId(u16::MAX))],
+    );
+    assert_eq!(
+        rejected.outcomes[0].result.as_ref().unwrap_err().reason,
+        ErrorReason::InvalidAsset
+    );
+    let demand = host.world_mut(world).unwrap().resource_snapshots();
+    assert_eq!(demand.len(), 1);
+    assert_eq!(demand[0].kind, ipp_core::TEXTURE_TYPE);
+    assert!(
+        apply(
+            &mut host,
+            world,
+            vec![Command::Delete {
+                entity: EntityRef::Handle(entity)
+            }]
+        )
+        .outcomes[0]
+            .result
+            .is_ok()
+    );
+    assert!(
+        host.world_mut(world)
+            .unwrap()
+            .resource_snapshots()
+            .is_empty()
+    );
+}
+
+#[test]
+fn whole_insert_validates_the_completed_source_not_overwritten_private_fields() {
+    let mut host = ipp_core::HostRuntime::new();
+    let world = host.create_world(WorldLimits::default(), RENDER).unwrap();
+    let report = apply(
+        &mut host,
+        world,
+        vec![
+            Command::Create {
+                alias: 0,
+                metadata: Default::default(),
+                adopt: false,
+            },
+            Command::InsertComponent {
+                entity: EntityRef::Alias(0),
+                component: ComponentValue::MESH_INSTANCE,
+                fields: vec![source("asset://malformed"), source("asset://1/42")],
+                adopt: false,
+            },
+        ],
+    );
+    let entity = report.outcomes[0].result.as_ref().unwrap()[0].1;
+    let snapshot = host.world_mut(world).unwrap().inspect(entity).unwrap();
+    assert!(snapshot.components.iter().any(
+        |value| matches!(value, ComponentValue::MeshInstance(value) if value.source == std::sync::Arc::<str>::from("asset://1/42"))
+    ));
+    assert_eq!(host.world_mut(world).unwrap().resource_snapshots().len(), 1);
+}
+
+#[test]
+fn invalid_custom_material_insert_does_not_install_a_component_or_demand() {
+    let mut host = ipp_core::HostRuntime::new();
+    let world = source_world(&mut host);
+    for typed in [false, true] {
+        let value = ipp_core::components::CustomMaterial {
+            source: "asset://materials/x".into(),
+            ..Default::default()
+        };
+        let insert = if typed {
+            Command::insert_value(EntityRef::Alias(0), ComponentValue::CustomMaterial(value))
+        } else {
+            Command::InsertComponent {
+                entity: EntityRef::Alias(0),
+                component: ComponentValue::CUSTOM_MATERIAL,
+                fields: vec![FieldWrite {
+                    offset: offset_of!(ipp_core::components::CustomMaterial, source) as u32,
+                    value: FieldValue::String(value.source),
+                }],
+                adopt: false,
+            }
+        };
+        let report = apply(
+            &mut host,
+            world,
+            vec![
+                Command::Create {
+                    alias: 0,
+                    metadata: Default::default(),
+                    adopt: false,
+                },
+                insert,
+            ],
+        );
+        let failure = report.outcomes[0].result.as_ref().unwrap_err();
+        assert_eq!(failure.operation, Some(1));
+        assert_eq!(failure.reason, ErrorReason::InvalidAsset);
+        assert!(
+            host.world_mut(world)
+                .unwrap()
+                .inspect(failure.aliases[0].1)
+                .unwrap()
+                .components
+                .is_empty()
+        );
+        assert!(
+            host.world_mut(world)
+                .unwrap()
+                .resource_snapshots()
+                .is_empty()
+        );
+    }
+}
+
+#[test]
 fn committed_pending_demand_shares_work_and_becomes_drawable_only_at_boundary() {
     let mut fixture_host = ipp_core::HostRuntime::new();
+    // This test proves eviction at final demand, so the Host keeps no idle cache.
+    fixture_host
+        .asset_resources_mut()
+        .set_idle_resident_bytes_target(0);
     let world = source_world(&mut fixture_host);
     let first = create(&mut fixture_host, world, "https://assets.test/a.mesh");
     let second = create(&mut fixture_host, world, "https://assets.test/a.mesh");
@@ -216,9 +526,6 @@ fn committed_pending_demand_shares_work_and_becomes_drawable_only_at_boundary() 
         fixture_host.world_mut(world).unwrap().mesh(key).is_none(),
         "source retention ends with final demand"
     );
-    fixture_host
-        .asset_resources_mut()
-        .set_idle_resident_bytes_target(0);
     fixture_host.flush_resource_lifecycle();
     assert!(fixture_host.world_mut(world).unwrap().mesh(key).is_none());
 }
@@ -236,8 +543,16 @@ fn builtin_query_sources_keep_exact_identity_and_publish_through_resource_manage
 
     let requests = resource_requests(&mut fixture_host, world);
     assert_eq!(requests.len(), 2);
-    assert!(requests.iter().any(|request| request.source == reordered));
-    assert!(requests.iter().any(|request| request.source == canonical));
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.source == std::sync::Arc::<str>::from(&*reordered))
+    );
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.source == std::sync::Arc::<str>::from(&*canonical))
+    );
     for request in requests {
         fixture_host
             .world_mut(world)
@@ -287,7 +602,7 @@ fn structurally_valid_encoded_nul_reaches_builtin_provider_failure() {
     let world = source_world(&mut fixture_host);
     let entity = create(&mut fixture_host, world, uri);
     let request = resource_requests(&mut fixture_host, world).pop().unwrap();
-    assert_eq!(request.source, uri);
+    assert_eq!(request.source, std::sync::Arc::<str>::from(uri));
     let started = fixture_host
         .world_mut(world)
         .unwrap()
@@ -310,7 +625,10 @@ fn structurally_valid_encoded_nul_reaches_builtin_provider_failure() {
         report.resource_changes,
         fixture_host.world_mut(world).unwrap().resource_snapshots()
     );
-    assert_eq!(report.resource_changes[0].source, uri);
+    assert_eq!(
+        report.resource_changes[0].source,
+        std::sync::Arc::<str>::from(uri)
+    );
     assert!(
         fixture_host
             .update_world_for_test(world, 0.0)
@@ -456,8 +774,8 @@ fn failed_batches_keep_new_demand_and_ignore_cancelled_source_completions() {
         ],
     );
     assert!(report.outcomes[0].result.is_err());
-    assert!(fixture_host.world_mut(world).unwrap().inspect(entity).unwrap().base.iter().any(|value| {
-        matches!(value, ComponentValue::MeshInstance(value) if value.source == "https://replacement.test/mesh")
+    assert!(fixture_host.world_mut(world).unwrap().inspect(entity).unwrap().components.iter().any(|value| {
+        matches!(value, ComponentValue::MeshInstance(value) if value.source == std::sync::Arc::<str>::from("https://replacement.test/mesh"))
     }));
     assert!(
         fixture_host
@@ -467,7 +785,10 @@ fn failed_batches_keep_new_demand_and_ignore_cancelled_source_completions() {
             .contains(&request.id)
     );
     let replacement = resource_requests(&mut fixture_host, world)[0].clone();
-    assert_eq!(replacement.source, "https://replacement.test/mesh");
+    assert_eq!(
+        replacement.source,
+        std::sync::Arc::<str>::from("https://replacement.test/mesh")
+    );
     fixture_host
         .world_mut(world)
         .unwrap()
@@ -604,7 +925,7 @@ fn source_routing_preserves_opaque_names_and_owned_allocations() {
                 component: ComponentValue::MESH_INSTANCE,
                 field: FieldWrite {
                     offset: 0,
-                    value: FieldValue::String(reserved)
+                    value: FieldValue::String(std::sync::Arc::<str>::from(&*reserved))
                 }
             }]
         }),
@@ -726,11 +1047,11 @@ fn queued_batches_reconcile_only_the_final_boundary_demand() {
     assert_eq!(requests.len(), 1);
     assert_eq!(
         requests[0].source,
-        "https://assets.test/replacement-63.mesh"
+        std::sync::Arc::<str>::from("https://assets.test/replacement-63.mesh")
     );
     assert_eq!(
         fixture_host.world_mut(world).unwrap().resource_snapshots()[0].source,
-        "https://assets.test/replacement-63.mesh"
+        std::sync::Arc::<str>::from("https://assets.test/replacement-63.mesh")
     );
 }
 
@@ -802,8 +1123,8 @@ fn replacing_the_only_resource_waits_for_its_host_release_barrier() {
         fixture_host.asset_resources().get(original_key).is_some(),
         "the occupied slot cannot be reused before all Host lifecycle handlers"
     );
-    assert!(fixture_host.world_mut(world).unwrap().inspect(entity).unwrap().base.iter().any(|value| {
-            matches!(value, ComponentValue::MeshInstance(mesh) if mesh.source == "ipc://replacement")
+    assert!(fixture_host.world_mut(world).unwrap().inspect(entity).unwrap().components.iter().any(|value| {
+            matches!(value, ComponentValue::MeshInstance(mesh) if mesh.source == std::sync::Arc::<str>::from("ipc://replacement"))
         }));
 
     fixture_host.flush_resource_lifecycle();
@@ -812,7 +1133,10 @@ fn replacing_the_only_resource_waits_for_its_host_release_barrier() {
     fixture_host.update_world_for_test(world, 0.0).unwrap();
     let replacement = resource_requests(&mut fixture_host, world);
     assert_eq!(replacement.len(), 1);
-    assert_eq!(replacement[0].source, "ipc://replacement");
+    assert_eq!(
+        replacement[0].source,
+        std::sync::Arc::<str>::from("ipc://replacement")
+    );
     assert_ne!(replacement[0].id, original);
     assert_eq!(fixture_host.asset_resources().iter().count(), 1);
     let replacement_key = fixture_host.asset_resources().iter().next().unwrap().key();
@@ -851,6 +1175,7 @@ fn typed_demand_is_distinct_and_uv_incompatibility_does_not_poison_shared_mesh()
                 offset: offset_of!(ipp_core::components::UnlitTexture, source) as u32,
                 value: FieldValue::String("https://assets.test/shared".into()),
             }],
+            adopt: false,
         }],
     );
     assert!(report.outcomes[0].result.is_ok());

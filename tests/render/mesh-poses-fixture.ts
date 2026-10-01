@@ -2,19 +2,35 @@ import { presentationTesting } from "../../packages/ipp-client/src/testing.js";
 import { clientAssetSource } from "../../packages/ipp-client/src/asset-sources.js";
 import type {
   AnimationWorldClient,
-  CameraWorldClient,
   Command,
-  FrameCapture,
+  PresentedCapture,
 } from "@ipp/client";
 import { AnimationFixture, check } from "../integration/animation-fixtures.js";
-import { compareImages, summarizeImage } from "./image-assertions.js";
+import type { HostedWorldClient } from "../integration/camera-fixtures.js";
+import {
+  compareImages,
+  summarizeImage,
+  type FramePixels,
+} from "./image-assertions.js";
 import {
   affinePosePosition,
   affinePoseTransform,
   poseMesh,
 } from "./mesh-pose-assets.js";
+import {
+  RootPresentation,
+  captureSummary,
+  capturedImage,
+  recoverRestoredContext,
+  worldReference,
+} from "./root-presentation.js";
+import {
+  SKINNING,
+  SCENE,
+  selectSystems,
+} from "../integration/system-selections.js";
 
-function png(frame: Pick<FrameCapture, "width" | "height" | "pixels">) {
+function png(frame: FramePixels) {
   const imageCanvas = document.createElement("canvas");
   imageCanvas.width = frame.width;
   imageCanvas.height = frame.height;
@@ -43,11 +59,18 @@ export async function run(configuration: {
   canvas.width = 400;
   canvas.height = 300;
   document.body.replaceChildren(canvas);
-  const client: AnimationWorldClient & CameraWorldClient =
+  const client: HostedWorldClient<AnimationWorldClient> =
     await contract.IppClient.connectWorker(
       configuration.workerScript,
       configuration.wasm,
-      { canvas: canvas.transferControlToOffscreen(), timeoutMs: 10_000 },
+      {
+        // Skinned poses only exist in builds with skeletal animation.
+        selectedSystems: contract.CAPABILITIES.skeletalAnimation
+          ? selectSystems(SCENE, SKINNING)
+          : selectSystems(SCENE),
+        canvas: canvas.transferControlToOffscreen(),
+        timeoutMs: 10_000,
+      },
     );
   const record = async (kind: string, value: unknown) => {
     await (
@@ -64,16 +87,12 @@ export async function run(configuration: {
     );
   };
   const fixture = new AnimationFixture(client, contract, record);
-  const frames = new Map<string, FrameCapture>();
+  const frames = new Map<string, FramePixels>();
   const comparisons: ({ actual: string; expected: string } & ReturnType<
     typeof compareImages
   >)[] = [];
   try {
-    check(
-      client.capabilities.meshPoses && client.presentation,
-      "mesh pose renderer missing",
-    );
-    const presentation = client.presentation;
+    check(client.capabilities.meshPoses, "mesh pose renderer missing");
     // Select the lit/shadow scene only for the expanded distribution; the other
     // scene exercises standard unlit and textured deformation without shadows.
     const lit = client.capabilities.shadows;
@@ -96,21 +115,28 @@ export async function run(configuration: {
     const capture = async (label: string, draws = lit ? 3 : 2) => {
       const state = await client.inspect();
       const deadline = performance.now() + 10_000;
-      let frame: FrameCapture;
+      let frame: PresentedCapture;
       do {
-        frame = await presentation.capture(state.tick);
+        frame = await presentation.capture();
+        check(
+          presentation.sourceTick(frame) >= state.tick,
+          `${label}: capture does not include the inspected scene`,
+        );
         check(
           performance.now() < deadline,
           `${label}: expected ${draws} draws, got ${frame.drawCalls}`,
         );
       } while (frame.drawCalls !== draws);
-      frames.set(label, frame);
-      const { pixels: _pixels, ...metadata } = frame;
+      const image = capturedImage(frame);
+      frames.set(label, image);
       await record("capture", {
         label,
-        metadata,
-        summary: summarizeImage(frame),
-        dataUrl: png(frame),
+        metadata: {
+          ...captureSummary(frame),
+          sourceTick: presentation.sourceTick(frame),
+        },
+        summary: summarizeImage(image),
+        dataUrl: png(image),
       });
       return frame;
     };
@@ -148,7 +174,12 @@ export async function run(configuration: {
       Transform: { z: 6 },
       Camera: { projection: 1, ortho_height: 4.5 },
     });
-    client.sendCommand({ type: "CameraActivateCommand", entity: camera });
+    const presentation = await RootPresentation.camera(
+      client.host,
+      worldReference(client),
+      camera,
+      { width: canvas.width, height: canvas.height },
+    );
     const base = await upload(101n, poseMesh(0, { skin }));
     const target = await upload(102n, poseMesh(1));
     const baked = [];
@@ -322,6 +353,14 @@ export async function run(configuration: {
       entity: { kind: "handle", id },
       component: client.components[name]!.id,
     });
+    const place = (id: bigint, parent: bigint | null): Command => ({
+      kind: "placeEntity",
+      entity: { kind: "handle", id },
+      placement: {
+        parent: parent === null ? null : { kind: "handle", id: parent },
+        before: null,
+      },
+    });
     const parent = await fixture.create("pose-affine-parent", {
       Transform: affinePoseTransform,
     });
@@ -330,7 +369,7 @@ export async function run(configuration: {
       Transform: { x: x!, y: y!, z: z! },
     });
     await batch([
-      insert(b, "Hierarchy", { parent }),
+      place(b, parent),
       ...fixture.set(b, "MeshInstance", { source: base }),
       ...fixture.set(b, "MeshPose", { source: target, weight: 0.5 }),
     ]);
@@ -343,7 +382,7 @@ export async function run(configuration: {
       poseMesh(0.5, { aim: true, affine: true }),
     );
     await batch([
-      remove(b, "Hierarchy"),
+      place(b, null),
       remove(b, "LookAt"),
       ...fixture.set(b, "MeshInstance", { source: aimedHalf }),
       ...fixture.set(b, "MeshPose", { source: "" }),
@@ -359,10 +398,10 @@ export async function run(configuration: {
       );
       await batch([
         remove(a, "Skin"),
-        insert(b, "Hierarchy", { parent }),
+        place(b, parent),
         insert(b, "LookAt", { target: aimTarget }),
         ...fixture.set(skeleton, "Transform", { x: 0 }),
-        insert(skeleton, "Hierarchy", { parent: b }),
+        place(skeleton, b),
         insert(b, "Skin", { skeleton, source: skinSource }),
         ...fixture.set(b, "MeshInstance", { source: base }),
         ...fixture.set(b, "MeshPose", { source: target, weight: 0.5 }),
@@ -370,7 +409,7 @@ export async function run(configuration: {
       await capture("skinned-aimed-pose");
       await batch([
         remove(b, "Skin"),
-        remove(b, "Hierarchy"),
+        place(b, null),
         remove(b, "LookAt"),
         ...fixture.set(b, "MeshInstance", { source: skinnedHalf }),
         ...fixture.set(b, "MeshPose", { source: "" }),
@@ -378,7 +417,7 @@ export async function run(configuration: {
       await capture("skinned-aimed-baked");
       await same("skinned-aimed-pose", "skinned-aimed-baked");
       await batch([
-        remove(skeleton, "Hierarchy"),
+        place(skeleton, null),
         ...fixture.set(skeleton, "Transform", { x: -1.25 }),
         insert(a, "Skin", { skeleton, source: skinSource }),
       ]);
@@ -416,13 +455,17 @@ export async function run(configuration: {
     await same("animated-half", "pose-0.5");
     const inspection = await fixture.inspect();
     check(
-      fixture.value(inspection, a, "MeshPose", "weight", "base") === 0 &&
-        fixture.value(inspection, a, "MeshPose", "weight") === 0.5,
-      "sampling changed authored weight",
+      fixture.value(inspection, a, "MeshPose", "weight") === 0.5,
+      "the weight field does not hold the sampled value",
     );
     client.playback(controller, { action: "stop" });
     await capture("stopped");
     await same("stopped", "pose-0");
+    // Stop subtracts the controller's contribution, leaving the authored weight.
+    check(
+      fixture.value(await fixture.inspect(), a, "MeshPose", "weight") === 0,
+      "stopping did not subtract the contribution",
+    );
     for (const weight of [-0.1, 1.1]) {
       const outcome = await client.batch([
         ...fixture.set(a, "Transform", { x: 99 }),
@@ -479,15 +522,14 @@ export async function run(configuration: {
       ...fixture.set(a, "MeshPose", { source: target, weight: 0.5 }),
     ]);
     const before = await capture("before-recovery");
-    presentationTesting(presentation).loseContext();
-    presentationTesting(presentation).restoreContext();
-    const deadline = performance.now() + 10_000;
-    while (
-      (await presentation.capture()).contextGeneration <=
-      before.contextGeneration
-    )
-      check(performance.now() < deadline, "context restoration timed out");
-    await capture("recovered");
+    presentationTesting(presentation.diagnostics).loseContext();
+    presentationTesting(presentation.diagnostics).restoreContext();
+    await recoverRestoredContext(presentation);
+    const recovered = await capture("recovered");
+    check(
+      recovered.view.surface.context > before.view.surface.context,
+      "recovered capture did not use the restored context",
+    );
     await same("recovered", "before-recovery");
     // Late input enters the normal owned data plane; pending use stays absent.
     await batch(

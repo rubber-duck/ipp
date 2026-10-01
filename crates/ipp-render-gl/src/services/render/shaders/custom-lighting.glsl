@@ -1,6 +1,6 @@
 uniform vec4 u_camera;
 uniform vec3 u_ambient;
-uniform vec4 u_lights[32];
+uniform vec4 u_lights[IPP_MAX_LIGHTS * 4];
 uniform int u_light_count;
 // Directional/point/spot light records share the built-in material interface.
 vec3 ippSurfaceNormal() {

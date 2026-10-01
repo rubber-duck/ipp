@@ -269,8 +269,9 @@ export function entity(inspection: Inspection, id: string): EntitySnapshot {
   return entity;
 }
 export function transform(inspection: Inspection, id = "gallery-camera") {
-  return entity(inspection, id).effective.find((entry) => "qx" in entry.fields)!
-    .fields;
+  return entity(inspection, id).components.find(
+    (entry) => "qx" in entry.fields,
+  )!.fields;
 }
 export function position(inspection: Inspection, id: string) {
   const t = transform(inspection, id);
@@ -279,7 +280,7 @@ export function position(inspection: Inspection, id: string) {
 export function selected(inspection: Inspection) {
   return inspection.entities
     .filter((entity) =>
-      entity.effective.some(
+      entity.components.some(
         (entry) =>
           entry.fields.is_rendered === true && "outline" in entry.fields,
       ),

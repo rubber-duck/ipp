@@ -2,7 +2,7 @@
   "compilerOptions": {
     "target": "ES2023",
     "lib": [
-      "ES2023",
+      "ES2024",
       "DOM"
     ],
     "module": "NodeNext",
@@ -10,6 +10,12 @@
     "paths": {
       "@ipp/client": [
         "./packages/ipp-client/src/index.ts"
+      ],
+      "@ipp/gui-authoring-contract": [
+        "./target/react-gui-contract/generated.d.ts"
+      ],
+      "@ipp/gui-stress-contract": [
+        "./target/gui-stress-contract/generated.d.ts"
       ]
     },
     "rootDir": ".",
@@ -44,6 +50,7 @@
     "tests/render/**/*.tsx",
     "integrations/blender/client/**/*.ts",
     "tests/performance/**/*.ts",
+    "tests/performance/**/*.tsx",
     "crates/ipp-render-gl/src/services/render/webgl.ts"
   ],
   "exclude": [

@@ -63,7 +63,7 @@ struct Joint {
 #[repr(C)]
 #[derive(Clone, Debug, Default, PartialEq, SchemaComponent)]
 struct Rig {
-    label: String,
+    label: std::sync::Arc<str>,
     #[schema(rows)]
     joints: Rows<Joint>,
 }

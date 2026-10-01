@@ -100,7 +100,9 @@ def main(selected_profiles=None):
         expected.extend(["BoundingGeometry", "PickingGeometry"])
         if "mesh-poses" in features:
             expected.append("MeshPose")
-        expected.extend(["Hierarchy", "LookAt", "BaseColorTexture", "CustomMaterial"])
+        if "skeletal-animation" in features:
+            expected.append("ParentJoint")
+        expected.extend(["LookAt", "BaseColorTexture", "CustomMaterial"])
         if "particles" in features:
             expected.extend(
                 [
@@ -112,10 +114,39 @@ def main(selected_profiles=None):
             )
         if "surfaces" in features:
             expected.append("Surface")
-        if "gui" in features:
-            expected.append("GuiRoot")
         if "surfaces" in features:
             expected.append("SurfaceCache")
+        expected.append("WorldAttachment")
+        if "surfaces" in features:
+            expected.extend(
+                [
+                    "CanvasStyle",
+                    "CanvasText",
+                    "CanvasGlyphRun",
+                    "CanvasDrawing",
+                    "CanvasBitmap",
+                    "CanvasBox",
+                ]
+            )
+        if "gui" in features:
+            expected.extend(
+                [
+                    "GuiBehavior",
+                    "GuiButton",
+                    "GuiCheckbox",
+                    "GuiSlider",
+                    "GuiTextInput",
+                    "GuiLayout",
+                    "GuiTheme",
+                    "GuiSkin",
+                    "GuiFont",
+                    "GuiThemeMotion",
+                    "GuiScrollView",
+                    "GuiVirtualList",
+                    "GuiVirtualItem",
+                    "CanvasBounds",
+                ]
+            )
         if names != expected:
             raise ValueError(f"{configuration}: unexpected compiled registry {names}")
         reports[configuration] = report
@@ -139,9 +170,9 @@ def main(selected_profiles=None):
                 raise ValueError(
                     f"{configuration}/{target}: client generation is not reproducible"
                 )
-            if 'case "attachComponentStateOverlay"' not in client.read_text():
+            if 'case "setFieldIf"' not in client.read_text():
                 raise ValueError(
-                    f"{configuration}/{target}: baseline overlay codecs missing"
+                    f"{configuration}/{target}: baseline command codecs missing"
                 )
             generated.append(str(client))
         run(
@@ -161,6 +192,10 @@ def main(selected_profiles=None):
                 raise ValueError(
                     f"{configuration}/{target}: persistence inheritance mismatch"
                 )
+        run("node", "tools/ipp-schema-gen/tests/rows-contract.mjs", str(directory))
+        generated.extend(
+            str(directory / f"{target}-rows-types.ts") for target in ("native", "wasm")
+        )
     for target in ("native", "wasm"):
         if len({report[target]["hash"] for report in reports.values()}) != len(reports):
             raise ValueError(

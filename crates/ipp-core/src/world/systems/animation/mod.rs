@@ -3,8 +3,11 @@
 mod binding;
 mod clip;
 mod component_values;
+mod contribution;
 mod controller_commands;
 mod driver;
+#[cfg(feature = "gui")]
+mod gui_motion;
 mod lifecycle;
 mod math;
 mod numeric_binding;
@@ -12,14 +15,11 @@ mod numeric_fields;
 mod numeric_output;
 mod persistence;
 mod row_property_destination;
+mod structural;
 mod transition;
 mod update;
 mod world_api;
 pub(in crate::world) use update::{AnimationAccess, AnimationReadAccess};
-#[cfg(feature = "gui")]
-pub(in crate::world) use world_api::{
-    AnimationCommand, AnimationInternalCommand, GuiSkinAnimationOwner, GuiSkinAnimationSample,
-};
 
 #[cfg(feature = "profiling")]
 mod sampling_profile;
@@ -29,13 +29,13 @@ mod pose;
 
 pub(crate) use clip::animation_asset_loader;
 pub use clip::{
-    ANIMATION_TYPE, AnimationClip, AnimationInterpolation, AnimationKeyframe, AnimationProperty,
-    AnimationSample, AnimationTrack, AnimationTrackData, AnimationTrackTarget, AnimationValue,
-    IntoAnimationTrack,
+    ANIMATION_TYPE, AnimationClip, AnimationEntityPlacementKey, AnimationInterpolation,
+    AnimationKeyframe, AnimationProperty, AnimationSample, AnimationTrack, AnimationTrackData,
+    AnimationTrackTarget, AnimationValue, IntoAnimationTrack,
 };
 pub use driver::AnimationDriver;
+pub(crate) use math::mix;
 pub(crate) use math::normalize;
-pub(crate) use math::{additive, mix};
 
 use crate::{EntityId, ErrorReason};
 
@@ -61,8 +61,8 @@ impl AnimationControllerId {
 /// Serializable binding of one immutable source track to one entity property.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AnimationDriverDescription {
-    /// Clip source URI.
-    pub source: String,
+    /// Clip source URI, shared with asset demand rather than copied.
+    pub source: std::sync::Arc<str>,
     /// Immutable source variant.
     pub variant: u32,
     /// Stable track index in the clip.
@@ -71,9 +71,12 @@ pub struct AnimationDriverDescription {
     pub target: EntityId,
     /// Exact component property coverage or joint ordinals.
     pub property: AnimationTrackTarget,
+    /// World-local entities selected by clip-local structural key slots.
+    pub entity_bindings: Vec<EntityId>,
     /// Contribution weight in 0..=1.
     pub weight: f32,
-    /// Apply a sampled delta from the reference value.
+    /// Measure contributions from the sample at `reference_time` instead of the
+    /// clip's start. Only fields that take contributions accept it.
     pub additive: bool,
     /// Reference time for an additive driver.
     pub reference_time: f32,
@@ -157,12 +160,12 @@ impl Default for AnimationControllerDescription {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(u8)]
 pub enum AnimationPlaybackStatus {
-    /// No sampled contribution; local position is retained.
+    /// No contribution; local position is retained.
     #[default]
     Stopped = 0,
     /// Advance when all source bindings are ready.
     Playing = 1,
-    /// Hold local time and sampled contribution.
+    /// Hold local time and contribution.
     Paused = 2,
     /// Hold the final sample of a nonlooping controller.
     Completed = 3,
@@ -177,7 +180,7 @@ pub enum AnimationPlaybackControl {
     PlayAtSpeed(f32),
     /// Hold current time and contribution.
     Pause,
-    /// Withdraw contributions and retain local time.
+    /// Subtract contributions, leave absolute writes and retain local time.
     Stop,
     /// Sample the exact destination without further advancement in this frame.
     Seek(f64),
@@ -211,6 +214,9 @@ pub struct AnimationPersistentState {
     pub transitions: Vec<AnimationPersistentTransition>,
     /// Controllers awaiting a negative-speed directional start after clip readiness.
     pub directional_starts: Vec<AnimationControllerId>,
+    /// What each controller has added to its fields. Component storage holds the
+    /// fields with these contributions in them; stopping subtracts them.
+    pub contributions: Vec<AnimationPersistentContribution>,
 }
 
 impl Default for AnimationPersistentState {
@@ -220,11 +226,26 @@ impl Default for AnimationPersistentState {
             controllers: Vec::new(),
             transitions: Vec::new(),
             directional_starts: Vec::new(),
+            contributions: Vec::new(),
         }
     }
 }
 
-/// Sparse durable origin captured when a crossfade is interrupted.
+/// A controller's contribution to one field.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AnimationPersistentContribution {
+    /// Contributing controller.
+    pub controller: AnimationControllerId,
+    /// Driven entity.
+    pub target: EntityId,
+    /// Driven property, with dynamic properties resolved to their keys.
+    pub property: AnimationTrackTarget,
+    /// What the controller has added: a float delta, or a rotation composed on
+    /// the right of the field.
+    pub value: AnimationValue,
+}
+
+/// Contribution captured when a crossfade is interrupted; it fades out.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AnimationFrozenTransitionValue {
     /// Entity whose property was captured.
@@ -233,8 +254,6 @@ pub struct AnimationFrozenTransitionValue {
     pub property: AnimationTrackTarget,
     /// Frozen outgoing contribution at the interruption boundary.
     pub value: AnimationValue,
-    /// Live producer value to restore or fade toward.
-    pub baseline: AnimationValue,
 }
 
 /// Durable outgoing side of an active crossfade.
@@ -244,7 +263,7 @@ pub enum AnimationPersistentTransitionSource {
     Live(AnimationControllerSnapshot),
     /// Sparse composite captured from an interrupted transition.
     Frozen {
-        /// Captured values and their restoration baselines.
+        /// Captured contributions.
         values: Vec<AnimationFrozenTransitionValue>,
         /// Declaration metadata used only to rebuild stable output bindings.
         bindings: AnimationControllerSnapshot,
@@ -325,7 +344,7 @@ pub enum AnimationControllerCommand {
         /// Destination and crossfade policy.
         transition: AnimationControllerTransition,
     },
-    /// Restore contributions and delete a controller.
+    /// Subtract contributions and delete a controller.
     Delete {
         /// Existing controller identity.
         id: AnimationControllerId,
@@ -352,10 +371,6 @@ mod system_state;
 pub use system_state::{AnimationController, AnimationSystemState};
 
 mod system;
-#[cfg(feature = "gui")]
-pub(in crate::world) use system::GuiSkinControllerState;
 pub use system::{AnimationSystem, AnimationSystemFactory};
 
 mod codec;
-
-pub(crate) use codec::decode_legacy as decode_legacy_persistent_state;

@@ -1,9 +1,15 @@
 //! Shared direct-light preparation; graphics handles remain in the device.
 
+use super::scene::{RenderEntity, RenderScene};
 use crate::RenderError;
-use ipp_core::{WorldContext, components::Camera, systems::camera};
+use ipp_core::{components::Camera, systems::camera};
 
-/// Shader capacity for each individual draw. Scene candidate counts are unrestricted.
+/// Punctual lights one draw shades; scene candidate counts are unrestricted.
+///
+/// Light selection keeps the highest-ranked lights for each draw and leaves the rest out of
+/// that draw. Shader array sizes come from this constant (`IPP_MAX_LIGHTS`, see
+/// `shader::limit_definitions`). Eight lights use 32 fragment vec4s for light records plus
+/// 40 for shadow matrices and settings, well inside the 224 vectors GLSL ES 3.00 guarantees.
 pub const MAX_LIGHTS: usize = 8;
 
 pub(crate) const SHADOW_TILE_SIZE: u32 = 1024;
@@ -29,19 +35,16 @@ pub struct RenderLightingFrame {
 }
 
 impl RenderLightingFrame {
-    pub(crate) fn prepare(
-        world: &WorldContext<'_>,
-        lights: &[(ipp_core::EntityId, [f32; 16], ipp_core::components::Light)],
+    pub(super) fn prepare(
+        world: &RenderScene<'_>,
+        lights: &[(RenderEntity, [f32; 16], ipp_core::components::Light)],
     ) -> Result<Self, RenderError> {
         assert!(lights.len() <= MAX_LIGHTS, "per-draw shader capacity");
-        let entity = world.active_camera().ok_or(RenderError::InvalidTransform)?;
-        let orthographic = world
-            .active_camera_component()
-            .ok_or(RenderError::InvalidTransform)?
-            .projection
-            == 1;
+        let orthographic = world.camera.projection.projection == 1;
         let pose = world
-            .world_matrix(entity)
+            .camera
+            .pose
+            .render_matrix()
             .map_err(|_| RenderError::InvalidTransform)?;
         let camera = if orthographic {
             let direction = unit([pose[8], pose[9], pose[10]])?;
@@ -49,18 +52,18 @@ impl RenderLightingFrame {
         } else {
             [pose[12], pose[13], pose[14], 0.0]
         };
-        Self::prepare_with_camera(camera, world.render_state().ambient_light, lights)
+        Self::prepare_with_camera(camera, world.state.ambient_light, lights)
     }
 
     pub(super) fn prepare_with_camera(
         camera: [f32; 4],
         ambient: [f32; 3],
-        lights: &[(ipp_core::EntityId, [f32; 16], ipp_core::components::Light)],
+        lights: &[(RenderEntity, [f32; 16], ipp_core::components::Light)],
     ) -> Result<Self, RenderError> {
         assert!(lights.len() <= MAX_LIGHTS, "per-draw shader capacity");
         let mut frame = Self::empty(camera, ambient);
         for (index, &(entity, model, light)) in lights.iter().enumerate() {
-            frame.push(index, &PreparedLight::prepare(entity, model, light)?);
+            frame.push(index, &PreparedLight::prepare(entity.entity, model, light)?);
         }
         frame.finish();
         Ok(frame)

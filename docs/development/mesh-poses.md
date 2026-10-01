@@ -40,7 +40,7 @@ await client.batch([
 | `MeshPose.setWeight(Entity.handle(id), weight)` | Direct weight update |
 | Property track | Target `MeshPose.fields.weight.offset`; ordinary controllers/binding invalidation |
 
-Activate a camera separately. Animation preserves producer/overlay values and binds component incarnations, never vertex pointers; replacement needs explicit rebinding. `CAPABILITIES.meshPoses` reports support. Disabled builds omit component/GL imports/snippets, preserving ordinary mesh encoding.
+Activate a camera separately. Animation controllers keep only their own contributions and bind component incarnations, never vertex pointers; replacement needs explicit rebinding. `CAPABILITIES.meshPoses` reports support. Disabled builds omit component/GL imports/snippets, preserving ordinary mesh encoding.
 
 ## Shading, geometry and lifecycle
 
@@ -58,7 +58,7 @@ flowchart LR
     readiness -->|"Incompatible"| diagnostic["Per-use diagnostic; preserve shared assets"]
 ```
 
-Nonfinite/out-of-range weights fail; prior operations stay applied and the component may become inactive. Repair with valid `MeshPose.insert`. Loaded topology mismatch is reported at commit after applying changes in debug/release; late mismatch appears in render diagnostics. Compatible consumers remain usable; lifecycle/rebinding is ordinary component/resource policy.
+Nonfinite/out-of-range weights reject the operation without effect; prior operations stay applied. Loaded topology mismatch is reported at commit after applying changes in debug/release; late mismatch appears in render diagnostics. Compatible consumers remain usable; lifecycle/rebinding is ordinary component/resource policy.
 
 Scope: pairwise poses only; no additive multi-targets or topology changes. The [Blender exporter](../../integrations/blender/ipp_blender/EXPORTER.md) maps a supported single relative shape key to these endpoints and sampled weight tracks, including deformation before a supported linear armature. Blending may produce degenerate intermediate geometry. Consumption compares indices; no large-mesh throughput claim.
 

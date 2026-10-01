@@ -1,10 +1,14 @@
-//! Typed per-property restoration and immutable resource-index bindings.
+//! Typed per-property drivers and immutable resource-index bindings.
+//!
+//! A driver of a linear or rotation field computes a contribution, its weighted
+//! change from the clip's reference sample; the controller adds it to the field.
+//! A driver of any other field type writes its sample.
 
 use super::*;
 use crate::{ComponentValue, services::asset_management::AssetKey};
 use std::{any::Any, fmt::Debug};
 
-/// Stable lifetime identity and exact property coverage for baseline inheritance.
+/// Stable lifetime identity and exact property coverage of one driven target.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(in crate::world) struct AnimationTargetIdentity {
     pub entity: EntityId,
@@ -32,6 +36,7 @@ impl AnimationRuntimeTarget {
         #[cfg(feature = "skeletal-animation")] source: Option<AssetKey>,
     ) -> Result<Self, ErrorReason> {
         match property {
+            AnimationTrackTarget::EntityLink => Err(ErrorReason::InvalidField),
             AnimationTrackTarget::DynamicProperty {
                 ..
             }
@@ -43,69 +48,9 @@ impl AnimationRuntimeTarget {
             }),
         }
     }
-
-    #[cfg(feature = "skeletal-animation")]
-    pub(in crate::world) fn write_joints(
-        &self,
-        storage: &mut crate::components::registry::ComponentStorage,
-        entity: EntityId,
-        value: AnimationValue,
-    ) -> Result<(), ErrorReason> {
-        let (
-            Self::JointLocal {
-                source,
-                joints,
-            },
-            AnimationValue::Pose(values),
-        ) = (self, value)
-        else {
-            return Err(ErrorReason::InvalidField);
-        };
-        let _ = (source, joints);
-        self.write_joint_slice(storage, entity, &values)
-    }
-
-    pub(in crate::world) fn write_joint_slice(
-        &self,
-        storage: &mut crate::components::registry::ComponentStorage,
-        entity: EntityId,
-        values: &[crate::components::Transform],
-    ) -> Result<(), ErrorReason> {
-        let Self::JointLocal {
-            source,
-            joints,
-        } = self
-        else {
-            return Err(ErrorReason::InvalidField);
-        };
-        if joints.len() != values.len() {
-            return Err(ErrorReason::InvalidField);
-        }
-        for value in values {
-            crate::components::schema::ComponentLifecycle::validate(value)?;
-        }
-        let pose = storage
-            .skeleton_mut(entity.index() as usize)
-            .and_then(|value| value.runtime.pose.as_mut())
-            .filter(|pose| pose.valid && pose.source == *source)
-            .ok_or(ErrorReason::MissingComponent)?;
-        if joints
-            .last()
-            .is_some_and(|&joint| joint as usize >= pose.local.len())
-        {
-            return Err(ErrorReason::InvalidField);
-        }
-        for (&joint, &value) in joints.iter().zip(values) {
-            *pose
-                .local
-                .get_mut(joint as usize)
-                .ok_or(ErrorReason::InvalidField)? = value;
-        }
-        Ok(())
-    }
 }
 
-/// A typed curve binding and its sparse restoration value.
+/// A typed curve binding of one target property.
 ///
 /// Target identity is validated at binding and mutation boundaries; target storage
 /// is borrowed only within the exclusive World phase. Typed curve ownership and
@@ -116,18 +61,17 @@ pub struct AnimationDriver<T: AnimationSample> {
     pub(in crate::world) description: AnimationDriverDescription,
     pub(in crate::world) identity: AnimationTargetIdentity,
     pub(in crate::world) clip: AssetKey,
-    pub(in crate::world) original_value: T,
+    /// A value of the target's type.
+    template: AnimationValue,
+    contributes: bool,
     interval: std::cell::Cell<usize>,
     duration: f64,
     track: Option<std::sync::Arc<AnimationTrack<T>>>,
+    /// The sample contributions are measured from.
+    reference: Option<AnimationValue>,
     segment: std::cell::RefCell<Option<super::clip::AnimationSampleSegment<T>>>,
     cache_segment: bool,
-    pub(super) destination: Option<crate::world::component_binding::ComponentBinding<T>>,
-    transition_destination: Option<crate::world::component_binding::ComponentBinding<T>>,
-    dynamic_destination: Option<DynamicValueDestination>,
-    transition_dynamic_destination: Option<DynamicValueDestination>,
     discrete: bool,
-    retain_discrete: bool,
     discrete_interval: std::cell::Cell<Option<usize>>,
     #[cfg(feature = "skeletal-animation")]
     pub(in crate::world) runtime_target: AnimationRuntimeTarget,
@@ -137,13 +81,10 @@ pub struct AnimationDriver<T: AnimationSample> {
 /// its validated descriptor, or a row property kept by its offset.
 #[derive(Clone, Copy, Debug)]
 pub(in crate::world) enum DynamicValueDestination {
+    #[cfg(feature = "gui")]
+    GuiSkin(crate::systems::gui::motion::GuiMotionDestination),
     CustomMaterial(
         crate::world::component_binding::ComponentBinding<crate::components::CustomMaterial>,
-        crate::components::dynamic_properties::DynamicPropertyDescriptor,
-    ),
-    #[cfg(feature = "surfaces")]
-    Surface(
-        crate::world::component_binding::ComponentBinding<crate::components::Surface>,
         crate::components::dynamic_properties::DynamicPropertyDescriptor,
     ),
     Row(super::row_property_destination::RowPropertyDestination),
@@ -163,6 +104,14 @@ impl DynamicValueDestination {
         key: u32,
     ) -> Option<Self> {
         let index = entity.index() as usize;
+        #[cfg(feature = "gui")]
+        if component == ComponentValue::GUI_SKIN && key >= 0xffff_0000 {
+            // SAFETY: This binding's caller owns the same storage and invalidates before reuse.
+            return unsafe {
+                crate::systems::gui::motion::GuiMotionDestination::bind(storage, entity, key)
+            }
+            .map(Self::GuiSkin);
+        }
         if crate::components::rows::row_region(key).is_some() {
             return super::row_property_destination::RowPropertyDestination::bind(
                 storage, entity, component, key,
@@ -189,17 +138,6 @@ impl DynamicValueDestination {
                         .descriptor(key)
                         .filter(numeric)?,
                 )),
-                #[cfg(feature = "surfaces")]
-                ComponentValue::SURFACE => Some(Self::Surface(
-                    crate::world::component_binding::ComponentBinding::new(
-                        storage.surface_ptr(index)?,
-                    ),
-                    storage
-                        .surface(index)?
-                        .properties
-                        .descriptor(key)
-                        .filter(numeric)?,
-                )),
                 _ => None,
             }
         }
@@ -211,12 +149,9 @@ impl DynamicValueDestination {
         value: crate::DynamicValue,
     ) -> Result<(), ErrorReason> {
         match self {
+            #[cfg(feature = "gui")]
+            Self::GuiSkin(destination) => return destination.write(storage, value),
             Self::CustomMaterial(binding, descriptor) => binding
-                .get_mut(storage)
-                .properties
-                .set_descriptor(descriptor, value),
-            #[cfg(feature = "surfaces")]
-            Self::Surface(binding, descriptor) => binding
                 .get_mut(storage)
                 .properties
                 .set_descriptor(descriptor, value),
@@ -235,37 +170,25 @@ pub(in crate::world) trait AnimationDriverBinding: Debug {
 
     fn duration(&self) -> f64;
 
-    fn bind_numeric(&mut self, storage: &crate::components::registry::ComponentStorage);
+    /// A value of the target's type.
+    fn template(&self) -> &AnimationValue;
 
-    fn has_numeric_binding(&self) -> bool;
+    /// Whether this driver adds a contribution rather than writing its sample.
+    fn contributes(&self) -> bool;
 
-    fn clear_numeric_binding(&mut self);
-
-    fn bind_transition_output(&mut self, storage: &crate::components::registry::ComponentStorage);
-
-    fn transition_output(&self) -> Option<AnimationTransitionOutput>;
-
-    fn restore_numeric(&self, storage: &mut crate::components::registry::ComponentStorage) -> bool;
-
-    fn sample_numeric(
+    /// The output a crossfade writes this driver's target through.
+    fn transition_output(
         &self,
-        time: f64,
-        storage: &mut crate::components::registry::ComponentStorage,
-    ) -> bool;
+        storage: &crate::components::registry::ComponentStorage,
+    ) -> Option<AnimationTransitionOutput>;
 
     fn discrete(&self) -> bool;
-
-    fn retain_discrete(&self) -> bool;
-
-    fn set_discrete_retention(&mut self, exclusive: bool);
 
     fn reset_discrete(&self);
 
     fn unchanged_discrete(&self, time: f64) -> bool;
 
     fn mark_discrete(&self, time: f64);
-
-    fn original(&self) -> AnimationValue;
 
     fn suspend_track(&mut self);
 
@@ -274,24 +197,14 @@ pub(in crate::world) trait AnimationDriverBinding: Debug {
 
     fn resolve_track(&mut self, clip: &AnimationClip) -> Result<(), ErrorReason>;
 
-    fn sample_bound(
-        &self,
-        time: f64,
-        current: AnimationValue,
-    ) -> Result<AnimationValue, ErrorReason>;
+    /// The clip's value at controller time `time`.
+    fn sample(&self, time: f64) -> AnimationValue;
+
+    /// The weighted change from the reference sample to the sample at `time`.
+    fn contribution(&self, time: f64) -> Result<AnimationValue, ErrorReason>;
 
     #[cfg(feature = "skeletal-animation")]
     fn bound_pose_track(&self) -> &AnimationTrack<Vec<crate::components::Transform>>;
-
-    #[cfg(feature = "skeletal-animation")]
-    fn joint_original(&self) -> Option<&[crate::components::Transform]>;
-
-    #[cfg(feature = "skeletal-animation")]
-    fn joint_original_mut(&mut self) -> Option<(&[u32], &mut Vec<crate::components::Transform>)>;
-
-    fn refresh_original(&mut self, value: AnimationValue) -> Result<(), ErrorReason>;
-
-    fn restore(&self, component: &mut ComponentValue) -> Result<(), ErrorReason>;
 
     #[cfg(feature = "skeletal-animation")]
     fn runtime_target(&self) -> &AnimationRuntimeTarget;
@@ -317,12 +230,42 @@ pub(in crate::world) enum AnimationTransitionOutput {
 
 impl AnimationTransitionOutput {
     pub(super) fn validate(&self, value: &AnimationValue) -> Result<(), ErrorReason> {
-        let identity = match self {
+        validate_transition_value(self.identity(), value)
+    }
+
+    pub(super) fn identity(&self) -> &AnimationTargetIdentity {
+        match self {
             Self::F32(_, identity) | Self::Rotation(_, identity) | Self::Dynamic(_, identity) => {
                 identity
             }
-        };
-        validate_transition_value(identity, value)
+        }
+    }
+
+    /// The target's current value.
+    pub(super) fn read(
+        &self,
+        storage: &crate::components::registry::ComponentStorage,
+    ) -> Result<AnimationValue, ErrorReason> {
+        Ok(match self {
+            Self::F32(source, _) => AnimationValue::Field(
+                crate::components::schema::FieldValue::F32(*source.get(storage)),
+            ),
+            Self::Rotation(source, _) => AnimationValue::Rotation(*source.get(storage)),
+            Self::Dynamic(_, identity) => {
+                let property = identity
+                    .property
+                    .property()
+                    .ok_or(ErrorReason::InvalidField)?;
+                let &[offset] = property.offsets.as_slice() else {
+                    return Err(ErrorReason::InvalidField);
+                };
+                AnimationValue::Field(
+                    storage
+                        .field(property.component, identity.entity.index() as usize, offset)
+                        .ok_or(ErrorReason::MissingComponent)?,
+                )
+            }
+        })
     }
 
     pub(super) fn write(
@@ -401,7 +344,7 @@ pub(super) fn frozen_transition_target_supported(
             .is_some_and(|offset| {
                 target.property().unwrap().offsets.len() == 1
                     && super::numeric_binding::frozen_f32_field_supported(
-                        target.component(),
+                        target.component_target(),
                         offset,
                     )
             }),
@@ -451,27 +394,13 @@ fn validate_transition_value(
         }
         AnimationValue::Field(crate::components::schema::FieldValue::Dynamic(value)) => {
             value.validate().map_err(|_| ErrorReason::InvalidValue)?;
-            #[cfg(feature = "surfaces")]
-            if let AnimationTrackTarget::DynamicProperty {
-                component,
-                name,
-            } = &identity.property
-                && *component == ComponentValue::SURFACE
-            {
-                crate::systems::surface::validate_animation_property(name, value)?;
-            }
-            // Row targets are checked before any channel publishes, so a
-            // rejected value leaves every transition output unchanged.
             #[cfg(feature = "gui")]
             if let Some(property) = identity.property.property()
-                && property.component == ComponentValue::GUI_ROOT
+                && property.component == ComponentValue::GUI_SKIN
                 && let [offset] = property.offsets.as_slice()
-                && crate::components::rows::row_region(*offset).is_some()
+                && *offset >= 0xffff_0000
             {
-                if !crate::systems::gui::GuiRoot::numeric_animatable(*offset) {
-                    return Err(ErrorReason::InvalidField);
-                }
-                crate::systems::gui::GuiRoot::validate_row_value(*offset, value)?;
+                crate::systems::gui::motion::GuiMotionDestination::validate(*offset, value)?;
             }
         }
         AnimationValue::Rotation(value) if value.iter().any(|value| !value.is_finite()) => {
@@ -525,175 +454,27 @@ impl<T: AnimationSample> AnimationDriverBinding for AnimationDriver<T> {
         self.clip
     }
 
-    fn bind_numeric(&mut self, storage: &crate::components::registry::ComponentStorage) {
-        self.destination = super::numeric_binding::bind(self, storage);
-        self.transition_destination = super::numeric_binding::bind_transition(self, storage);
-        self.dynamic_destination = None;
-        let property = self.identity.property.property();
-        self.discrete = self.description.weight == 1.0
-            && !self.description.additive
-            && property.is_some_and(|p| p.offsets.len() == 1)
-            && matches!(
-                self.original(),
-                AnimationValue::Field(
-                    crate::components::schema::FieldValue::String(_)
-                        | crate::components::schema::FieldValue::Bytes(_)
-                        | crate::components::schema::FieldValue::Entity(_)
-                        | crate::components::schema::FieldValue::Dynamic(
-                            crate::DynamicValue::Asset(_)
-                        )
-                )
-            );
-        #[cfg(feature = "skeletal-animation")]
-        if property.is_some_and(|p| p.component == ComponentValue::SKELETON) {
-            // Pose-source writes rebase unkeyed joints at their declaration-order
-            // position, so they keep the skeletal evaluator's staging contract.
-            self.discrete = false;
-        }
-        self.reset_discrete();
-        if self.description.weight == 1.0
-            && !self.description.additive
-            && std::any::TypeId::of::<T>() == std::any::TypeId::of::<crate::DynamicValue>()
-            && let Some(property) = property
-            && let [key] = property.offsets.as_slice()
-        {
-            // SAFETY: Animation invalidates departing property identities, rows and
-            // component incarnations before reuse. Stable component pointers own
-            // their buffers; only validated keys and offsets are retained across
-            // buffer or table reallocation.
-            self.dynamic_destination = unsafe {
-                DynamicValueDestination::bind(
-                    storage,
-                    self.identity.entity,
-                    property.component,
-                    *key,
-                )
-            };
-        }
+    fn duration(&self) -> f64 {
+        self.duration
     }
 
-    fn has_numeric_binding(&self) -> bool {
-        self.destination.is_some() || self.dynamic_destination.is_some()
+    fn template(&self) -> &AnimationValue {
+        &self.template
     }
 
-    fn clear_numeric_binding(&mut self) {
-        self.destination = None;
-        self.transition_destination = None;
-        self.dynamic_destination = None;
-        self.transition_dynamic_destination = None;
+    fn contributes(&self) -> bool {
+        self.contributes
     }
 
-    fn bind_transition_output(&mut self, storage: &crate::components::registry::ComponentStorage) {
-        self.transition_destination = super::numeric_binding::bind_transition(self, storage);
-        self.transition_dynamic_destination = None;
-        if std::any::TypeId::of::<T>() == std::any::TypeId::of::<crate::DynamicValue>()
-            && let Some(property) = self.identity.property.property()
-            && let [key] = property.offsets.as_slice()
-        {
-            // SAFETY: the retained binding points into stable occupied component storage. World
-            // lifecycle hooks invalidate the controller before slot or row reuse, and animation
-            // owns the only mutable access while publishing this output.
-            self.transition_dynamic_destination = unsafe {
-                DynamicValueDestination::bind(
-                    storage,
-                    self.identity.entity,
-                    property.component,
-                    *key,
-                )
-            };
-        }
-    }
-
-    fn transition_output(&self) -> Option<AnimationTransitionOutput> {
-        if let Some(destination) = self.transition_dynamic_destination {
-            return Some(AnimationTransitionOutput::Dynamic(
-                destination,
-                self.identity.clone(),
-            ));
-        }
-        let destination = self.transition_destination?;
-        // SAFETY: bind_transition established the concrete track/sample type. The
-        // TypeId check preserves alignment and representation, and animation drops
-        // this binding synchronously before target incarnation replacement. Frame
-        // evaluation holds exclusive access to the owning component storage.
-        unsafe {
-            if std::any::TypeId::of::<T>() == std::any::TypeId::of::<f32>() {
-                return Some(AnimationTransitionOutput::F32(
-                    destination.cast(),
-                    self.identity.clone(),
-                ));
-            }
-            if std::any::TypeId::of::<T>() == std::any::TypeId::of::<[f32; 4]>() {
-                return Some(AnimationTransitionOutput::Rotation(
-                    destination.cast(),
-                    self.identity.clone(),
-                ));
-            }
-        }
-        None
-    }
-
-    fn restore_numeric(&self, storage: &mut crate::components::registry::ComponentStorage) -> bool {
-        if let Some(destination) = self.dynamic_destination {
-            let AnimationValue::Field(crate::components::schema::FieldValue::Dynamic(value)) =
-                self.original()
-            else {
-                unreachable!()
-            };
-            // A rejected write changes nothing; the general path reports it.
-            return destination.write(storage, value).is_ok();
-        }
-        let Some(destination) = self.destination else {
-            return false;
-        };
-        *destination.get_mut(storage) = self.original_value.clone();
-        true
-    }
-
-    fn sample_numeric(
+    fn transition_output(
         &self,
-        time: f64,
-        storage: &mut crate::components::registry::ComponentStorage,
-    ) -> bool {
-        if !self.has_numeric_binding() {
-            return false;
-        }
-        let time = if self.description.repeat {
-            time.rem_euclid(self.duration)
-        } else {
-            time
-        };
-        let track = self.track.as_deref().expect("compiled numeric track");
-        let value = if self.cache_segment {
-            track.sample_segment(time, &mut self.segment.borrow_mut())
-        } else {
-            track.sample_cached(time, &self.interval)
-        };
-        if let Some(destination) = self.destination {
-            *destination.get_mut(storage) = value;
-        } else if let Some(destination) = self.dynamic_destination {
-            let AnimationValue::Field(crate::components::schema::FieldValue::Dynamic(value)) =
-                value.into_value()
-            else {
-                unreachable!()
-            };
-            // A rejected row value changes nothing; the general path samples
-            // again and reports the failure through ordinary validation.
-            return destination.write(storage, value).is_ok();
-        }
-        true
+        storage: &crate::components::registry::ComponentStorage,
+    ) -> Option<AnimationTransitionOutput> {
+        bind_frozen_transition_output(self.identity.clone(), &self.template, storage)
     }
 
     fn discrete(&self) -> bool {
         self.discrete
-    }
-
-    fn retain_discrete(&self) -> bool {
-        self.retain_discrete
-    }
-
-    fn set_discrete_retention(&mut self, exclusive: bool) {
-        self.retain_discrete = self.discrete && exclusive;
     }
 
     fn reset_discrete(&self) {
@@ -704,11 +485,7 @@ impl<T: AnimationSample> AnimationDriverBinding for AnimationDriver<T> {
         if !self.discrete {
             return false;
         }
-        let time = if self.description.repeat {
-            time.rem_euclid(self.duration)
-        } else {
-            time
-        };
+        let time = self.local_time(time);
         let Some(track) = self.track.as_deref() else {
             return false;
         };
@@ -720,11 +497,7 @@ impl<T: AnimationSample> AnimationDriverBinding for AnimationDriver<T> {
         if !self.discrete {
             return;
         }
-        let time = if self.description.repeat {
-            time.rem_euclid(self.duration)
-        } else {
-            time
-        };
+        let time = self.local_time(time);
         let Some(track) = self.track.as_deref() else {
             self.reset_discrete();
             return;
@@ -733,12 +506,9 @@ impl<T: AnimationSample> AnimationDriverBinding for AnimationDriver<T> {
             .set(Some(track.keys.partition_point(|key| key.time <= time)));
     }
 
-    fn duration(&self) -> f64 {
-        self.duration
-    }
-
     fn suspend_track(&mut self) {
         self.track = None;
+        self.reference = None;
         *self.segment.get_mut() = None;
     }
 
@@ -757,20 +527,36 @@ impl<T: AnimationSample> AnimationDriverBinding for AnimationDriver<T> {
                 .shared_track::<T>(self.description.track as usize)
                 .ok_or(ErrorReason::InvalidField)?;
             self.cache_segment = matches!(track.value_kind(), 1 | 8);
+            if self.contributes {
+                let reference = if self.description.additive {
+                    f64::from(self.description.reference_time)
+                } else {
+                    0.0
+                };
+                self.reference = Some(track.sample(reference).into_value());
+            }
             self.track = Some(track);
         }
         Ok(())
     }
 
-    fn sample_bound(
-        &self,
-        time: f64,
-        current: AnimationValue,
-    ) -> Result<AnimationValue, ErrorReason> {
-        self.sample_track(
-            self.track.as_deref().expect("prepared animation driver"),
-            time,
-            current,
+    fn sample(&self, time: f64) -> AnimationValue {
+        let time = self.local_time(time);
+        let track = self.track.as_deref().expect("prepared animation driver");
+        if self.cache_segment {
+            track.sample_segment(time, &mut self.segment.borrow_mut())
+        } else {
+            track.sample_cached(time, &self.interval)
+        }
+        .into_value()
+    }
+
+    fn contribution(&self, time: f64) -> Result<AnimationValue, ErrorReason> {
+        let reference = self.reference.as_ref().ok_or(ErrorReason::InvalidField)?;
+        super::contribution::delta(
+            &self.sample(time),
+            reference,
+            f64::from(self.description.weight),
         )
     }
 
@@ -779,51 +565,6 @@ impl<T: AnimationSample> AnimationDriverBinding for AnimationDriver<T> {
         (self.track.as_deref().expect("prepared animation driver") as &dyn Any)
             .downcast_ref()
             .expect("bound joint driver")
-    }
-
-    fn original(&self) -> AnimationValue {
-        self.original_value.to_value()
-    }
-
-    #[cfg(feature = "skeletal-animation")]
-    fn joint_original(&self) -> Option<&[crate::components::Transform]> {
-        (&self.original_value as &dyn Any)
-            .downcast_ref::<Vec<crate::components::Transform>>()
-            .map(Vec::as_slice)
-    }
-
-    #[cfg(feature = "skeletal-animation")]
-    fn joint_original_mut(&mut self) -> Option<(&[u32], &mut Vec<crate::components::Transform>)> {
-        let AnimationRuntimeTarget::JointLocal {
-            joints,
-            ..
-        } = &self.runtime_target
-        else {
-            return None;
-        };
-        Some((
-            joints,
-            (&mut self.original_value as &mut dyn Any).downcast_mut()?,
-        ))
-    }
-
-    fn refresh_original(&mut self, value: AnimationValue) -> Result<(), ErrorReason> {
-        self.original_value = T::from_value(value)?;
-        self.reset_discrete();
-        Ok(())
-    }
-
-    fn restore(&self, component: &mut ComponentValue) -> Result<(), ErrorReason> {
-        match &self.identity.property {
-            AnimationTrackTarget::DynamicProperty {
-                ..
-            } => Err(ErrorReason::InvalidField),
-            AnimationTrackTarget::AnimationProperty(property) => {
-                self.original_value.to_value().write(property, component)
-            }
-            #[cfg(feature = "skeletal-animation")]
-            AnimationTrackTarget::Joints(_) => Ok(()),
-        }
     }
 
     #[cfg(feature = "skeletal-animation")]
@@ -848,57 +589,52 @@ impl<T: AnimationSample> AnimationDriverBinding for AnimationDriver<T> {
 }
 
 impl<T: AnimationSample> AnimationDriver<T> {
-    pub(super) fn track_for_binding(&self) -> Option<&AnimationTrack<T>> {
-        self.track.as_deref()
-    }
-
-    fn sample_track(
-        &self,
-        track: &AnimationTrack<T>,
-        time: f64,
-        current: AnimationValue,
-    ) -> Result<AnimationValue, ErrorReason> {
-        let time = if self.description.repeat {
+    fn local_time(&self, time: f64) -> f64 {
+        if self.description.repeat {
             time.rem_euclid(self.duration)
         } else {
             time
-        };
-        let sample = if self.cache_segment {
-            track.sample_segment(time, &mut self.segment.borrow_mut())
-        } else {
-            track.sample_cached(time, &self.interval)
-        }
-        .into_value();
-        if !self.description.additive && self.description.weight == 1.0 {
-            return Ok(sample);
-        }
-        let weight = f64::from(self.description.weight);
-        if self.description.additive {
-            additive(
-                &current,
-                &sample,
-                &track
-                    .sample(f64::from(self.description.reference_time))
-                    .into_value(),
-                weight,
-            )
-        } else {
-            Ok(mix(&current, &sample, weight))
         }
     }
 }
 
+/// Bind a typed driver. `template` is a value of the target's type; a driver of a
+/// linear or rotation type contributes, any other writes its samples.
 pub(in crate::world) fn make_driver(
     description: AnimationDriverDescription,
     incarnation: u64,
     resolved_property: AnimationTrackTarget,
     clip: AssetKey,
     duration: f64,
-    original: AnimationValue,
+    template: AnimationValue,
     #[cfg(feature = "skeletal-animation")] skeleton_source: Option<AssetKey>,
 ) -> Result<Box<dyn AnimationDriverBinding>, ErrorReason> {
+    let contributes = super::contribution::contributes(&template);
+    // Discrete resource fields write only when the selected key changes.
+    // Pose-source writes rebase unkeyed joints at their declaration-order
+    // position, so Skeleton drivers keep the skeletal evaluator's staging contract.
+    #[cfg(feature = "skeletal-animation")]
+    let skeleton = resolved_property.component() == Some(ComponentValue::SKELETON);
+    #[cfg(not(feature = "skeletal-animation"))]
+    let skeleton = false;
+    let discrete = !contributes
+        && !skeleton
+        && description.weight == 1.0
+        && resolved_property
+            .property()
+            .is_some_and(|property| property.offsets.len() == 1)
+        && matches!(
+            template,
+            AnimationValue::Field(
+                crate::components::schema::FieldValue::String(_)
+                    | crate::components::schema::FieldValue::Bytes(_)
+                    | crate::components::schema::FieldValue::Entity(_)
+                    | crate::components::schema::FieldValue::Dynamic(crate::DynamicValue::Asset(_))
+            )
+        );
     macro_rules! typed {
-        ($type:ty) => {
+        ($type:ty) => {{
+            <$type>::from_value(template.clone())?;
             Box::new(AnimationDriver::<$type> {
                 identity: AnimationTargetIdentity {
                     entity: description.target,
@@ -913,30 +649,27 @@ pub(in crate::world) fn make_driver(
                 )?,
                 description,
                 clip,
-                original_value: <$type>::from_value(original)?,
+                template: template.clone(),
+                contributes,
                 interval: std::cell::Cell::new(0),
                 duration,
                 track: None,
+                reference: None,
                 segment: std::cell::RefCell::new(None),
                 cache_segment: false,
-                destination: None,
-                transition_destination: None,
-                dynamic_destination: None,
-                transition_dynamic_destination: None,
-                discrete: false,
-                retain_discrete: false,
+                discrete,
                 discrete_interval: std::cell::Cell::new(None),
             }) as Box<dyn AnimationDriverBinding>
-        };
+        }};
     }
 
-    Ok(match original.kind() {
+    Ok(match template.kind() {
         11 => typed!(crate::DynamicValue),
         1 => typed!(f32),
         2 => typed!(EntityId),
         3 => typed!(u32),
         4 => typed!(u64),
-        5 => typed!(String),
+        5 => typed!(std::sync::Arc<str>),
         6 => typed!(Vec<u8>),
         7 => typed!(bool),
         8 => typed!([f32; 4]),
@@ -944,61 +677,4 @@ pub(in crate::world) fn make_driver(
         9 => typed!(Vec<crate::components::Transform>),
         _ => return Err(ErrorReason::InvalidField),
     })
-}
-
-impl AnimationSystemState {
-    /// Whether [`Self::restore_underlying`] can change this component
-    /// incarnation, so callers clone it only when restoration applies.
-    #[cfg(feature = "gui")]
-    pub(in crate::world) fn has_underlying(
-        &self,
-        entity: EntityId,
-        incarnation: u64,
-        component: u16,
-    ) -> bool {
-        let matches = |identity: &AnimationTargetIdentity| {
-            identity.entity == entity
-                && identity.incarnation == incarnation
-                && identity.property.component() == component
-        };
-
-        self.pending_restorations
-            .iter()
-            .any(|(identity, _)| matches(identity) && identity.property.property().is_some())
-            || self.controllers.values().any(|controller| {
-                controller
-                    .drivers
-                    .iter()
-                    .any(|driver| matches(driver.identity()))
-            })
-    }
-
-    /// Restore only driver-controlled fields into a temporary component snapshot.
-    pub(in crate::world) fn restore_underlying(
-        &self,
-        entity: EntityId,
-        incarnation: u64,
-        value: &mut ComponentValue,
-    ) {
-        for (identity, original) in &self.pending_restorations {
-            if identity.entity == entity
-                && identity.incarnation == incarnation
-                && identity.property.component() == ComponentValue::type_id(value)
-                && let Some(property) = identity.property.property()
-            {
-                let _ = original.clone().write(property, value);
-            }
-        }
-        for controller in self.controllers.values() {
-            for driver in &controller.drivers {
-                let identity = driver.identity();
-                if identity.entity == entity
-                    && identity.incarnation == incarnation
-                    && identity.property.component() == ComponentValue::type_id(value)
-                {
-                    let _ = driver.restore(value);
-                }
-            }
-        }
-    }
 }

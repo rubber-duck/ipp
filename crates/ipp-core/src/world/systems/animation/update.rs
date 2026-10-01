@@ -3,12 +3,12 @@
 use super::controller_commands::directional_start;
 pub(super) use super::controller_commands::{description_bytes, validate_control};
 use super::system_state::AnimationTransitionSource;
-use super::{driver::AnimationTargetIdentity, *};
+use super::*;
 use crate::{
     ComponentValue,
     world::{WorldEntityState, WorldSimulationState},
 };
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 fn advance_transition_source(
     controller: &mut AnimationController,
@@ -150,159 +150,15 @@ impl AnimationAccess<'_, '_> {
             .values()
             .all(|controller| controller.snapshot.state == AnimationPlaybackStatus::Stopped)
         {
-            // Inputs were restored before ingress. Withdraw evaluated source demand
-            // without allocating target lookups or cloning transaction metadata.
+            // Stopped controllers withdrew their contributions. Withdraw evaluated
+            // source demand without allocating target lookups.
             self.sync_description_demand();
             return;
         }
-        // Producer commits refresh sparse originals at their boundary. Joint
-        // preparation below refreshes only bindings whose inputs changed.
         let mut controllers = std::mem::take(&mut self.system.state.controllers);
 
-        // One temporary target lookup and one scan of existing active drivers.
-        let mut baselines: HashMap<AnimationTargetIdentity, Option<AnimationValue>> =
-            HashMap::new();
-        let mut baseline_order = Vec::new();
-        for controller in controllers.values() {
-            if controller.snapshot.state != AnimationPlaybackStatus::Stopped
-                && controller.drivers.is_empty()
-            {
-                for (description, (incarnation, property)) in controller
-                    .snapshot
-                    .description
-                    .drivers
-                    .iter()
-                    .zip(&controller.incarnations)
-                {
-                    // Binding stops at the first unavailable source. Preserve the
-                    // same ordered validation prefix without allocating originals
-                    // for the rest of a controller on every loading frame.
-                    if !self
-                        .read()
-                        .source_key(description)
-                        .is_some_and(|key| self.read().clip_ready(key) == Ok(true))
-                    {
-                        break;
-                    }
-                    let identity = AnimationTargetIdentity {
-                        entity: description.target,
-                        incarnation: *incarnation,
-                        property: property.clone(),
-                    };
-                    if let std::collections::hash_map::Entry::Vacant(entry) =
-                        baselines.entry(identity.clone())
-                    {
-                        baseline_order.push(identity);
-                        entry.insert(None);
-                    }
-                }
-            }
-            if let Some(transition) = controller.transition.as_deref() {
-                let source = match &transition.source {
-                    AnimationTransitionSource::Live(source)
-                        if source.snapshot.state != AnimationPlaybackStatus::Stopped =>
-                    {
-                        Some(source.as_ref())
-                    }
-                    AnimationTransitionSource::Frozen {
-                        bindings,
-                        ..
-                    } => Some(bindings.as_ref()),
-                    _ => None,
-                };
-                if let Some(source) = source
-                    && source.drivers.is_empty()
-                {
-                    for (description, (incarnation, property)) in source
-                        .snapshot
-                        .description
-                        .drivers
-                        .iter()
-                        .zip(&source.incarnations)
-                    {
-                        let identity = AnimationTargetIdentity {
-                            entity: description.target,
-                            incarnation: *incarnation,
-                            property: property.clone(),
-                        };
-                        if let std::collections::hash_map::Entry::Vacant(entry) =
-                            baselines.entry(identity.clone())
-                        {
-                            baseline_order.push(identity);
-                            entry.insert(None);
-                        }
-                    }
-                }
-            }
-        }
-        let needs_baselines = !baselines.is_empty();
-        for controller in controllers.values().filter(|_| needs_baselines) {
-            for driver in &controller.drivers {
-                if let Some(baseline) = baselines.get_mut(driver.identity())
-                    && baseline.is_none()
-                {
-                    *baseline = Some(driver.original());
-                }
-            }
-        }
-
-        // A pending transition publishes its held source into component
-        // storage, so a destination sharing those targets takes restoration
-        // values from the source instead of capturing the held sample.
-        for controller in controllers.values().filter(|_| needs_baselines) {
-            let Some(transition) = controller.transition.as_deref() else {
-                continue;
-            };
-            match &transition.source {
-                AnimationTransitionSource::Live(source) => {
-                    for driver in &source.drivers {
-                        if let Some(baseline) = baselines.get_mut(driver.identity())
-                            && baseline.is_none()
-                        {
-                            *baseline = Some(driver.original());
-                        }
-                    }
-                }
-                AnimationTransitionSource::Frozen {
-                    values,
-                    ..
-                } => {
-                    for value in values {
-                        let identity = AnimationTargetIdentity {
-                            entity: value.target,
-                            incarnation: value.incarnation,
-                            property: value.property.clone(),
-                        };
-                        if let Some(baseline) = baselines.get_mut(&identity)
-                            && baseline.is_none()
-                        {
-                            *baseline = Some(value.baseline.clone());
-                        }
-                    }
-                }
-            }
-        }
-
-        for identity in &baseline_order {
-            let baseline = baselines.get_mut(identity).unwrap();
-            if baseline.is_none()
-                && self
-                    .read()
-                    .animation_target_alive(identity, &self.context.world.state)
-                && let Some(value) = self.context.world.state.input_value(
-                    &self.context.world.components,
-                    identity.entity,
-                    identity.property.component(),
-                )
-            {
-                *baseline = self
-                    .read()
-                    .read_animation_target(&identity.property, &value)
-                    .ok();
-            }
-        }
-
         let mut advance_failures = BTreeMap::new();
+        let mut invalidated = Vec::new();
         let mut ready_controllers = std::mem::take(&mut self.system.state.ready_controllers);
         ready_controllers.clear();
         for (&id, controller) in &mut controllers {
@@ -324,8 +180,7 @@ impl AnimationAccess<'_, '_> {
                     };
                     if let Some(source) = source {
                         if source.drivers.is_empty() {
-                            let Some(drivers) = self.read().bind_controller(source, &baselines)?
-                            else {
+                            let Some(drivers) = self.read().bind_controller(source)? else {
                                 return Ok(());
                             };
                             source.drivers = drivers;
@@ -357,15 +212,23 @@ impl AnimationAccess<'_, '_> {
                         }
                     }
                 }
-                if controller.drivers.is_empty() {
-                    let Some(drivers) = self.read().bind_controller(controller, &baselines)? else {
+                if controller.drivers.is_empty() && controller.structural_drivers.is_empty() {
+                    if !self.structural_sources_ready(controller)? {
+                        return Ok(());
+                    }
+                    let Some(drivers) = self.read().bind_controller(controller)? else {
                         return Ok(());
                     };
+                    self.bind_structural_drivers(controller)?;
                     controller.drivers = drivers;
                     controller.ready = false;
                     controller.reindex_drivers();
                 }
                 if !controller.ready {
+                    if !self.structural_sources_ready(controller)? {
+                        return Ok(());
+                    }
+                    self.prepare_structural_drivers(controller)?;
                     if controller.drivers.iter().any(|driver| {
                         !self
                             .read()
@@ -376,7 +239,7 @@ impl AnimationAccess<'_, '_> {
                     let mut ready_clip = None;
                     for driver in &mut controller.drivers {
                         #[cfg(feature = "particles")]
-                        if driver.identity().property.component()
+                        if driver.identity().property.component_target()
                             == crate::ComponentValue::PARTICLE_PLAYBACK
                         {
                             let playback = self
@@ -412,24 +275,19 @@ impl AnimationAccess<'_, '_> {
                                 .ok_or(ErrorReason::InvalidAsset)?,
                         )?;
                         #[cfg(feature = "skeletal-animation")]
-                        if let Some(source) = driver.skeleton_source() {
-                            if !self
+                        if let Some(source) = driver.skeleton_source()
+                            && !self
                                 .context
                                 .world
                                 .components
                                 .skeleton(driver.identity().entity.index() as usize)
                                 .and_then(|value| value.runtime.pose.as_ref())
                                 .is_some_and(|pose| pose.valid && pose.source == source)
-                            {
-                                return Ok(());
-                            }
-                            self.read().refresh_joint_original(driver.as_mut())?;
+                        {
+                            return Ok(());
                         }
                     }
-                    controller.bind_numeric_targets(
-                        &self.context.world.components,
-                        &self.system.state.target_controllers,
-                    );
+                    controller.bind_numeric_targets(&self.context.world.components);
                     controller.ready = true;
                 }
                 ready_controllers.push(id);
@@ -536,7 +394,6 @@ impl AnimationAccess<'_, '_> {
                     let (program, time) = prepare?;
                     let runtime = controller.transition.as_mut().unwrap();
                     runtime.program = Some(program);
-                    runtime.hold_program = None;
                     controller.snapshot.time = time;
                     let summary = controller.snapshot.transition.as_mut().unwrap();
                     summary.pending = false;
@@ -550,6 +407,16 @@ impl AnimationAccess<'_, '_> {
                         return Err(ErrorReason::InvalidValue);
                     }
                     if controller.snapshot.description.looping && advance != 0.0 {
+                        let crossed_boundary = if advance > 0.0 {
+                            controller.snapshot.time + advance >= duration
+                        } else {
+                            controller.snapshot.time + advance < 0.0
+                        };
+                        if crossed_boundary {
+                            for driver in &mut controller.structural_drivers {
+                                driver.reset_selection();
+                            }
+                        }
                         controller.snapshot.time = if duration == 0.0 {
                             0.0
                         } else {
@@ -575,14 +442,20 @@ impl AnimationAccess<'_, '_> {
                         summary.elapsed = (summary.elapsed + dt).min(summary.duration);
                     }
                 }
+                if controller.sought {
+                    for driver in &mut controller.structural_drivers {
+                        driver.reset_selection();
+                    }
+                }
                 controller.sought = false;
                 Ok(())
             })();
             if let Err(reason) = result {
                 advance_failures.insert(id, reason);
                 if reason == ErrorReason::MissingComponent {
-                    controller.clear_drivers();
-                    controller.transition = None;
+                    // The controller withdraws its contributions once every
+                    // controller is installed for lifecycle callbacks.
+                    invalidated.push(id);
                     controller.snapshot.transition = None;
                     controller.snapshot.state = AnimationPlaybackStatus::Stopped;
                     self.event(
@@ -600,65 +473,34 @@ impl AnimationAccess<'_, '_> {
         controller_ids.clear();
         controller_ids.extend(controllers.keys().copied());
         self.system.state.controllers = controllers;
+        for id in invalidated {
+            self.withdraw_controller(id);
+            let controller = self.system.state.controllers.get_mut(&id).unwrap();
+            let structural = std::mem::take(&mut controller.structural_drivers);
+            controller.clear_drivers();
+            controller.transition = None;
+            self.release_structural_drivers(structural);
+        }
         for &id in &controller_ids {
             let mut controller = self.system.state.take_controller(id).unwrap();
+            // A pending crossfade writes nothing while its clocks and fade
+            // progress are frozen; its contributions stay in their fields.
             if controller
                 .snapshot
                 .transition
                 .is_some_and(|transition| transition.pending)
             {
-                let result = (|| {
-                    let runtime = controller.transition.as_deref_mut().unwrap();
-                    if let Some(program) = runtime.program.as_ref() {
-                        self.context
-                            .before_numeric_update(program.numeric_targets());
-                        return program.write_composite_hold(&mut self.context.world.components);
-                    }
-                    if runtime.hold_program.is_none() {
-                        runtime.hold_program = Some(match &mut runtime.source {
-                            AnimationTransitionSource::Live(source) => {
-                                let mut program =
-                                    super::transition::AnimationTransitionProgram::bind_source(
-                                        source,
-                                        &self.context.world.components,
-                                    )?;
-                                program.prepare_source_hold(source)?;
-                                program
-                            }
-                            AnimationTransitionSource::Frozen {
-                                values,
-                                ..
-                            } => super::transition::AnimationTransitionProgram::bind_frozen_source(
-                                values,
-                                &self.context.world.components,
-                            )?,
-                        });
-                    }
-                    let program = runtime.hold_program.as_ref().unwrap();
-                    self.context
-                        .before_numeric_update(program.numeric_targets());
-                    program.write_source_hold(&mut self.context.world.components)
-                })();
-                // A pending crossfade republishes its prepared held source after mutation
-                // preparation, while all clocks and fade elapsed remain frozen.
                 self.system.state.controllers.insert(id, controller);
-                if let Err(reason) = result {
-                    failures.insert(id, reason);
-                }
                 continue;
             }
+            // A failing or pending controller stops contributing; what it applied
+            // stays in its fields until it stops.
             if controller.snapshot.state == AnimationPlaybackStatus::Stopped
-                || controller.drivers.is_empty()
+                || (controller.drivers.is_empty() && controller.structural_drivers.is_empty())
                 || ready_controllers.binary_search(&id).is_err()
                 || failures.contains_key(&id)
             {
-                let restore = controller.retain_numeric;
                 self.system.state.controllers.insert(id, controller);
-                if restore {
-                    // An advance failure or newly pending binding must withdraw
-                    // the retained preceding sample before downstream evaluation.
-                    self.restore_controller(id);
-                }
                 continue;
             }
             if controller.transition.is_some() {
@@ -692,12 +534,16 @@ impl AnimationAccess<'_, '_> {
                     .before_numeric_update(program.numeric_targets());
                 let result = program.evaluate(
                     source,
-                    &controller,
+                    &controller.drivers,
+                    controller.snapshot.time,
+                    &mut controller.contributions,
                     progress,
                     &mut self.context.world.components,
                 );
                 let finished = result.is_ok() && summary.elapsed >= summary.duration;
                 if finished {
+                    // Fields only the outgoing side drove hold nothing of it now.
+                    controller.contributions.prune_empty();
                     controller.snapshot.transition = None;
                     let at_endpoint = if controller.snapshot.description.speed < 0.0 {
                         controller.snapshot.time == 0.0
@@ -721,7 +567,14 @@ impl AnimationAccess<'_, '_> {
                 }
                 continue;
             }
-            let (mut values, mut result) = self.sample_controller(&controller);
+            if !controller.contributions.prepared() {
+                controller.contributions.prepare(&controller.drivers);
+            }
+            // Absolute writers go first: structural placements, then this
+            // controller's absolute fields and its contributions.
+            let mut result = self.sample_structural_drivers(&mut controller);
+            let (mut values, sampled) = self.sample_controller(&mut controller);
+            result = result.and(sampled);
 
             // Sampling only writes numeric joint data or temporary public values.
             // Reinstall the current controller before those values can release
@@ -730,7 +583,15 @@ impl AnimationAccess<'_, '_> {
             let (properties, updates) = values.drain();
             for (key, value) in updates {
                 let output = self.system.state.controllers[&id].numeric_output(key);
-                result = result.and(self.apply_component_update(key, output, value, properties));
+                let written = self.apply_component_update(key, output, value, properties);
+                // A contribution counts as applied only once its write landed; a
+                // rejected write is retried with the same change next frame.
+                if written.is_ok()
+                    && let Some(controller) = self.system.state.controllers.get_mut(&id)
+                {
+                    controller.contributions.commit(key);
+                }
+                result = result.and(written);
             }
             (
                 self.system.state.component_scratch,
@@ -766,9 +627,12 @@ impl AnimationAccess<'_, '_> {
 }
 
 impl AnimationAccess<'_, '_> {
+    /// Stage one frame of a ready controller: absolute fields take their sample,
+    /// each contributed field moves by the change of this controller's total, and
+    /// joint contributions apply onto the Skeleton's rebuilt pose.
     pub(super) fn sample_controller(
         &mut self,
-        controller: &AnimationController,
+        controller: &mut AnimationController,
     ) -> (
         super::component_values::AnimationComponentValues,
         Result<(), ErrorReason>,
@@ -785,21 +649,10 @@ impl AnimationAccess<'_, '_> {
         );
         self.context
             .before_numeric_update(&controller.numeric_targets);
-        let assets = &*self.context.asset_acquisition;
+        let time = controller.snapshot.time;
         let result = (|| {
-            for driver in &controller.drivers {
-                if driver
-                    .sample_numeric(controller.snapshot.time, &mut self.context.world.components)
-                {
-                    continue;
-                }
-                if driver.unchanged_discrete(controller.snapshot.time) {
-                    continue;
-                }
-                let description = driver.description();
-                if description.weight == 0.0 {
-                    continue;
-                }
+            controller.contributions.begin();
+            for (index, driver) in controller.drivers.iter().enumerate() {
                 #[cfg(feature = "skeletal-animation")]
                 if matches!(
                     driver.runtime_target(),
@@ -809,129 +662,60 @@ impl AnimationAccess<'_, '_> {
                         driver.as_ref(),
                         driver.bound_pose_track(),
                         driver.duration(),
-                        controller.snapshot.time,
+                        time,
                         &mut self.context.world.components,
                     )?;
                     continue;
                 }
-                let component = description.property.component();
-                let key = (description.target, component);
-                if let Some(property) = driver.identity().property.property()
-                    && let [offset] = property.offsets.as_slice()
-                    && let Some(current) =
-                        values.numeric_current(key, *offset, &self.context.world.components)
-                {
-                    let result = driver
-                        .sample_bound(controller.snapshot.time, AnimationValue::Field(current))?;
-                    let AnimationValue::Field(result) = result else {
-                        return Err(ErrorReason::InvalidField);
-                    };
-                    values.set_numeric(key, *offset, result)?;
+                if driver.contributes() {
+                    controller
+                        .contributions
+                        .add(index, &driver.contribution(time)?)?;
                     continue;
                 }
-                let current = if driver.discrete() {
-                    driver.original()
-                } else {
-                    let value = values.get_or_insert(key, || {
-                        self.context
-                            .world
-                            .components
-                            .get(key.1, key.0.index() as usize)
-                            .ok_or(ErrorReason::MissingComponent)
-                    })?;
-                    (AnimationReadAccess {
-                        animation: &self.system.state,
-                        world: self.context.world,
-                        state: &self.context.world.state,
-                        asset_acquisition: assets,
-                    })
-                    .read_bound_animation_target(driver.as_ref(), value)?
-                };
-                let result = driver.sample_bound(controller.snapshot.time, current)?;
-                if let AnimationValue::Field(crate::components::schema::FieldValue::Entity(entity)) =
-                    &result
-                    && !(entity.to_bits() == 0
-                        && description.property.property().is_some_and(|property| {
-                            property.offsets.len() == 1
-                                && ComponentValue::accepts_null_entity(
-                                    component,
-                                    property.offsets[0],
-                                )
-                        }))
-                    && !self.context.world.state.entities.contains_key(entity)
-                {
-                    return Err(ErrorReason::InvalidEntity);
-                }
-                // Source hints belong to interchange only. Check the actual destination.
-                // A restored producer clip preserves its original namespace; external clips
-                // can introduce producer references only within the current World.
-                if let AnimationValue::Field(crate::components::schema::FieldValue::String(source)) =
-                    &result
-                    && let Some(property) = description.property.property()
-                    && ComponentValue::asset_references(component)
-                        .iter()
-                        .any(|reference| property.offsets == [reference.source_offset])
-                    && !(AnimationReadAccess {
-                        animation: &self.system.state,
-                        world: self.context.world,
-                        state: &self.context.world.state,
-                        asset_acquisition: assets,
-                    })
-                    .sampled_source_is_authorized(source, &description.source)
-                {
-                    return Err(ErrorReason::InvalidAsset);
-                }
-                if let AnimationValue::Field(crate::components::schema::FieldValue::Dynamic(
-                    crate::DynamicValue::Asset(asset),
-                )) = &result
-                    && !(AnimationReadAccess {
-                        animation: &self.system.state,
-                        world: self.context.world,
-                        state: &self.context.world.state,
-                        asset_acquisition: assets,
-                    })
-                    .sampled_source_is_authorized(&asset.uri, &description.source)
-                {
-                    return Err(ErrorReason::InvalidAsset);
-                }
-                if driver.discrete()
-                    && let Some(property) = driver.identity().property.property()
-                    && let [offset] = property.offsets.as_slice()
-                    && let AnimationValue::Field(result) = result
-                {
-                    values.set_numeric(key, *offset, result)?;
+                if driver.unchanged_discrete(time) || driver.description().weight == 0.0 {
                     continue;
                 }
-                let value = values.get_or_insert(key, || {
-                    self.context
-                        .world
-                        .components
-                        .get(key.1, key.0.index() as usize)
-                        .ok_or(ErrorReason::MissingComponent)
-                })?;
-                result.write(
-                    driver
-                        .identity()
+                self.stage_absolute(driver.as_ref(), time, &mut values)?;
+            }
+            for index in 0..controller.contributions.entries().len() {
+                if !controller.contributions.moves(index) {
+                    continue;
+                }
+                let (before, after) = {
+                    let contributions = &controller.contributions;
+                    let identity = contributions.identity(index);
+                    let property = identity
                         .property
                         .property()
-                        .ok_or(ErrorReason::InvalidField)?,
-                    value,
-                )?;
-                #[cfg(feature = "skeletal-animation")]
-                if let ComponentValue::Skeleton(sampled) = value {
-                    let current = self
-                        .context
-                        .world
-                        .components
-                        .skeleton_mut(description.target.index() as usize)
-                        .ok_or(ErrorReason::MissingComponent)?;
-                    crate::systems::skeleton::rebase_sampled_inputs(
-                        current,
-                        sampled,
-                        self.context.asset_acquisition,
-                        self.context.world.id,
-                    )?;
-                }
+                        .ok_or(ErrorReason::InvalidField)?;
+                    let key = (identity.entity, property.component);
+                    if let [offset] = property.offsets.as_slice()
+                        && let Some(current) =
+                            values.numeric_current(key, *offset, &self.context.world.components)
+                    {
+                        let current = AnimationValue::Field(current);
+                        let next = contributions.moved(index, &current)?;
+                        let AnimationValue::Field(field) = next.clone() else {
+                            return Err(ErrorReason::InvalidField);
+                        };
+                        values.set_numeric(key, *offset, field)?;
+                        (current, next)
+                    } else {
+                        let value = values.get_or_insert(key, || {
+                            self.context
+                                .world
+                                .components
+                                .get(key.1, key.0.index() as usize)
+                                .ok_or(ErrorReason::MissingComponent)
+                        })?;
+                        let current = AnimationValue::read(property, value)?;
+                        let next = contributions.moved(index, &current)?;
+                        next.write(property, value)?;
+                        (current, next)
+                    }
+                };
+                controller.contributions.stage(index, before, after);
             }
             Ok(())
         })();
@@ -942,5 +726,88 @@ impl AnimationAccess<'_, '_> {
             }
         }
         (values, result)
+    }
+
+    /// Stage the sample of a driver of a field without a delta.
+    fn stage_absolute(
+        &mut self,
+        driver: &dyn super::driver::AnimationDriverBinding,
+        time: f64,
+        values: &mut super::component_values::AnimationComponentValues,
+    ) -> Result<(), ErrorReason> {
+        let description = driver.description();
+        let component = description.property.component_target();
+        let key = (description.target, component);
+        let result = driver.sample(time);
+        if let AnimationValue::Field(crate::components::schema::FieldValue::Entity(entity)) =
+            &result
+            && !(entity.to_bits() == 0
+                && description.property.property().is_some_and(|property| {
+                    property.offsets.len() == 1
+                        && ComponentValue::accepts_null_entity(component, property.offsets[0])
+                }))
+            && !self.context.world.state.entities.contains_key(entity)
+        {
+            return Err(ErrorReason::InvalidEntity);
+        }
+        // Source hints belong to interchange only. Check the actual destination.
+        // A restored producer clip preserves its original namespace; external clips
+        // can introduce producer references only within the current World.
+        if let AnimationValue::Field(crate::components::schema::FieldValue::String(source)) =
+            &result
+            && let Some(property) = description.property.property()
+            && ComponentValue::asset_references(component)
+                .iter()
+                .any(|reference| property.offsets == [reference.source_offset])
+            && !self
+                .read()
+                .sampled_source_is_authorized(source, &description.source)
+        {
+            return Err(ErrorReason::InvalidAsset);
+        }
+        if let AnimationValue::Field(crate::components::schema::FieldValue::Dynamic(
+            crate::DynamicValue::Asset(asset),
+        )) = &result
+            && !self
+                .read()
+                .sampled_source_is_authorized(&asset.uri, &description.source)
+        {
+            return Err(ErrorReason::InvalidAsset);
+        }
+        let property = driver
+            .identity()
+            .property
+            .property()
+            .ok_or(ErrorReason::InvalidField)?;
+        if driver.discrete()
+            && let [offset] = property.offsets.as_slice()
+            && let AnimationValue::Field(result) = result
+        {
+            return values.set_numeric(key, *offset, result);
+        }
+        let value = values.get_or_insert(key, || {
+            self.context
+                .world
+                .components
+                .get(key.1, key.0.index() as usize)
+                .ok_or(ErrorReason::MissingComponent)
+        })?;
+        result.write(property, value)?;
+        #[cfg(feature = "skeletal-animation")]
+        if let ComponentValue::Skeleton(sampled) = value {
+            let current = self
+                .context
+                .world
+                .components
+                .skeleton_mut(description.target.index() as usize)
+                .ok_or(ErrorReason::MissingComponent)?;
+            crate::systems::skeleton::rebase_sampled_inputs(
+                current,
+                sampled,
+                self.context.asset_acquisition,
+                self.context.world.id,
+            )?;
+        }
+        Ok(())
     }
 }

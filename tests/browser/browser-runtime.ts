@@ -15,6 +15,18 @@ import type {
   EntitySnapshot,
 } from "../../target/integration-artifacts/client/generated.js";
 import type { Client, PortTransport } from "@ipp/client";
+import {
+  HostWireReader,
+  HostWireWriter,
+} from "../../packages/ipp-client/src/host-protocol.js";
+import {
+  readWorldReference,
+  writeWorldReference,
+} from "../../packages/ipp-client/src/references.js";
+import {
+  CONSTRAINTS,
+  selectSystems,
+} from "../integration/system-selections.js";
 
 export interface BrowserRuntimeConfiguration {
   readonly workerScriptUrl: string;
@@ -66,6 +78,7 @@ export async function connect(
     configuration.workerScriptUrl,
     configuration.wasmUrl,
     {
+      selectedSystems: selectSystems(CONSTRAINTS),
       timeoutMs: configuration.timeoutMs,
       ...(configuration.logLevel === undefined
         ? {}
@@ -78,7 +91,6 @@ export async function connect(
 
 export async function submit(
   connectionId: string,
-  batchId: bigint,
   operations: readonly SceneOperation[],
 ): Promise<BatchOutcome> {
   const { client, contract } = connection(connectionId);
@@ -145,7 +157,7 @@ export async function submit(
     }
   }
 
-  const outcome = await client.batch(commands, batchId);
+  const outcome = await client.batch(commands);
   return normalizeBatchOutcome(outcome, aliases);
 }
 
@@ -183,15 +195,12 @@ export async function correlateConcurrentRequests(
   for (const batchId of batchIds) {
     pending.push(
       client
-        .batch(
-          [
-            contract.Entity.create(1, {
-              symbolicId: `concurrent-${batchId}`,
-              classes: ["concurrent-rpc"],
-            }),
-          ],
-          batchId,
-        )
+        .batch([
+          contract.Entity.create(1, {
+            symbolicId: `concurrent-${batchId}`,
+            classes: ["concurrent-rpc"],
+          }),
+        ])
         .then((outcome) => {
           if (!outcome.ok) {
             throw new Error(
@@ -277,7 +286,7 @@ export async function rejectConnection(
     const client = await contract.IppClient.connectWorker(
       configuration.workerScriptUrl,
       configuration.wasmUrl,
-      { timeoutMs: configuration.timeoutMs },
+      { selectedSystems: [], timeoutMs: configuration.timeoutMs },
     );
     await client.close();
     return {
@@ -308,16 +317,15 @@ export async function rejectStaleSession(
       session: session + 1n,
       requestId: 1n,
       body: {
-        kind: "batch",
-        batch: {
-          id: 1n,
-          operations: [
-            contract.Entity.create(1, {
-              symbolicId: "stale-must-not-apply",
-              classes: [],
-            }),
-          ],
-        },
+        kind: "submitBatch",
+        batchId: 1,
+        last: true,
+        operations: [
+          contract.Entity.create(1, {
+            symbolicId: "stale-must-not-apply",
+            classes: [],
+          }),
+        ],
       },
     });
     return await expectRawRejection(
@@ -406,6 +414,7 @@ export async function terminatedPendingRequestRejects(
   let client: Client | undefined;
   try {
     client = await contract.IppClient.connectTransport(owner.transport, {
+      selectedSystems: [],
       timeoutMs,
     });
     owner.worker.terminate();
@@ -472,7 +481,7 @@ export async function closeErrorRejectsOnce(
   const transportModule = await loadTransportModule(transportModuleUrl);
   const channel = new MessageChannel();
   let disposals = 0;
-  const transport = new transportModule.PortTransport(channel.port1, () => {
+  const transport = new transportModule.PortTransport(channel.port1, 1n, () => {
     disposals += 1;
   });
   transport.start({
@@ -490,6 +499,7 @@ export async function closeErrorRejectsOnce(
     ) {
       channel.port2.postMessage({
         type: "error",
+        connection: 1n,
         message: "shutdown failed",
       });
     }
@@ -573,30 +583,23 @@ function normalizeObservation(
 ): EntityObservation {
   const scalarId = contract.components.Scalar.id;
   const driverId = contract.components.LinearDriver?.id;
-  const scalarBase = snapshot.base.find(
-    (component) => component.component === scalarId,
-  );
-  const scalarEffective = snapshot.effective.find(
+  const scalar = snapshot.components.find(
     (component) => component.component === scalarId,
   );
   const driver =
     driverId === undefined
       ? undefined
-      : snapshot.base.find((component) => component.component === driverId);
+      : snapshot.components.find(
+          (component) => component.component === driverId,
+        );
   return {
     entity: normalizeEntity(snapshot.id),
     symbolicId: snapshot.metadata.symbolicId,
     classes: [...snapshot.metadata.classes],
     scalar:
-      scalarBase === undefined || scalarEffective === undefined
+      scalar === undefined
         ? null
-        : {
-            base: requiredNumber(scalarBase.fields.value, "Scalar base value"),
-            effective: requiredNumber(
-              scalarEffective.fields.value,
-              "Scalar effective value",
-            ),
-          },
+        : { value: requiredNumber(scalar.fields.value, "Scalar value") },
     linearDriver:
       driver === undefined
         ? null
@@ -732,14 +735,22 @@ async function createWorkerTransport(
     name: "ipp-runtime-probe",
   });
   const channel = new MessageChannel();
+  const control = new MessageChannel();
+  const connection = 1n;
   const transport = new transportModule.PortTransport(
     channel.port1,
+    connection,
     () => {
-      worker.terminate();
+      channel.port1.close();
+      control.port1.postMessage({ type: "dispose", connection });
     },
-    false,
+    undefined,
     closeTimeoutMs,
   );
+  control.port1.onmessage = (event) => {
+    if (event.data.type === "error")
+      transport.fail(new Error(event.data.message));
+  };
   worker.addEventListener("error", (event) => {
     transport.fail(new Error(event.message || "Worker failed"));
   });
@@ -750,9 +761,13 @@ async function createWorkerTransport(
     {
       type: "init",
       wasmUrl: new URL(configuration.wasmUrl, globalThis.location.href).href,
-      port: channel.port2,
+      port: control.port2,
       maxMessageBytes: contract.MAX_MESSAGE_BYTES,
     },
+    [control.port2],
+  );
+  control.port1.postMessage(
+    { type: "connect", connection, port: channel.port2 },
     [channel.port2],
   );
   return {
@@ -760,6 +775,7 @@ async function createWorkerTransport(
     transport,
     async close() {
       await transport.close().catch(() => undefined);
+      control.port1.close();
       worker.terminate();
     },
   };
@@ -775,7 +791,66 @@ async function rawHandshake(
   if (response.kind !== "message") {
     throw new Error(`bootstrap rejected: ${response.detail}`);
   }
-  return contract.acceptBootstrap(response.bytes);
+  const connection = contract.acceptBootstrap(response.bytes);
+  const request = (requestId: bigint, tag: number): HostWireWriter => {
+    const writer = new HostWireWriter();
+    writer.raw(new Uint8Array([73, 80, 80, 72, 2, 0, 0, 0]));
+    writer.u64(connection);
+    writer.u64(requestId);
+    writer.u8(tag);
+    return writer;
+  };
+  const reply = async (
+    requestId: bigint,
+    tag: number,
+  ): Promise<HostWireReader> => {
+    const result = await raw.next(configuration.timeoutMs);
+    if (result.kind !== "message")
+      throw new Error(`Host request rejected: ${result.detail}`);
+    const reader = new HostWireReader(result.bytes);
+    const magic = new Uint8Array([73, 80, 80, 65, 2, 0, 0, 0]);
+    if (
+      !reader.raw(8).every((byte, index) => byte === magic[index]) ||
+      reader.u64() !== connection ||
+      reader.u64() !== requestId ||
+      reader.u8() !== tag
+    )
+      throw new Error("Unexpected raw Host response");
+    return reader;
+  };
+  const create = request(1n, 2);
+  create.string("raw-worker-probe");
+  create.hints();
+  // An explicit, empty System selection: the probe authors no components.
+  create.u8(1);
+  create.u32(0);
+  // No Canvas state, since the Canvas System is not selected.
+  create.u8(0);
+  create.u8(1);
+  raw.transport.send(create.finish());
+  const created = await reply(1n, 12);
+  const world = created.world();
+  const reference = readWorldReference(created);
+  created.end();
+  if (reference.id !== world.id)
+    throw new Error("Invalid raw worker World reference");
+  const open = request(2n, 3);
+  writeWorldReference(open, reference);
+  raw.transport.send(open.finish());
+  const attached = await reply(2n, 2);
+  const attachedWorld = attached.world();
+  const session = attached.u64();
+  attached.manifest();
+  const attachedReference = readWorldReference(attached);
+  attached.end();
+  if (
+    session === 0n ||
+    attachedWorld.id !== world.id ||
+    attachedReference.id !== reference.id ||
+    attachedReference.incarnation !== reference.incarnation
+  )
+    throw new Error("Invalid raw worker World attachment");
+  return session;
 }
 
 async function expectRawRejection(

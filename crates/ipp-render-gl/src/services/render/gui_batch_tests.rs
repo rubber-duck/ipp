@@ -13,10 +13,9 @@ use super::{
 };
 use crate::services::render::frame_statistics::RenderFrameWork;
 use crate::{RenderDevice, RenderError};
-use ipp_core::systems::gui::GuiNodeId;
-use ipp_core::systems::surface::{
-    GuiPrimitiveId, GuiPrimitivePart, GuiShapeFill, GuiShapeGlow, SurfaceClipRect,
-    SurfacePrimitiveIdentity, SurfacePrimitiveStyle, SurfaceRenderPrimitive,
+use ipp_core::systems::canvas::{
+    CanvasClip, CanvasPart, CanvasPrimitive, CanvasPrimitiveId, CanvasPrimitiveStyle,
+    CanvasShapeFill, CanvasShapeGlow,
 };
 
 #[derive(Default)]
@@ -241,35 +240,43 @@ impl RenderDevice for MockGuiDevice {
 
 fn sample_box_primitive(
     node: u32,
-    part: GuiPrimitivePart,
+    part: CanvasPart,
     position: [f32; 2],
     size: [f32; 2],
-    clip: Option<SurfaceClipRect>,
-) -> SurfaceRenderPrimitive {
-    SurfaceRenderPrimitive::Box {
-        style: SurfacePrimitiveStyle {
-            identity: SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
-                root_incarnation: 1,
-                node: GuiNodeId(node),
+    clip: Option<CanvasClip>,
+) -> CanvasPrimitive {
+    CanvasPrimitive::Box {
+        style: CanvasPrimitiveStyle {
+            identity: CanvasPrimitiveId {
+                target: ipp_core::systems::canvas::CanvasTarget {
+                    entity: ipp_core::EntityId::from_bits(u64::from(node)),
+                    component: ipp_core::ComponentValue::CANVAS_BOX,
+                    incarnation: 1,
+                },
                 part,
-            }),
+            },
             position,
             scale: [1.0, 1.0],
             color: [0.2, 0.4, 0.6, 1.0],
             opacity: 1.0,
-            clip,
+            clip: clip.unwrap_or([
+                f32::NEG_INFINITY,
+                f32::NEG_INFINITY,
+                f32::INFINITY,
+                f32::INFINITY,
+            ]),
         },
         size,
         corner_radius: [0.05, 0.05],
         border_width: 0.01,
         border_color: [0.8, 0.8, 0.8, 1.0],
-        fill: GuiShapeFill::Solid([0.2, 0.4, 0.6, 1.0]),
+        fill: CanvasShapeFill::Solid([0.2, 0.4, 0.6, 1.0]),
         glow: None,
     }
 }
 
 /// Clip of generated test geometry.
-const CLIP: SurfaceClipRect = [-100.0, -100.0, 100.0, 100.0];
+const CLIP: CanvasClip = [-100.0, -100.0, 100.0, 100.0];
 
 /// One Surface submission whose boxes all share a clip, as the service performs it.
 trait DrawBoxBatch {
@@ -278,9 +285,9 @@ trait DrawBoxBatch {
         &mut self,
         program: &u32,
         entity: ipp_core::EntityId,
-        clip: SurfaceClipRect,
+        clip: CanvasClip,
         paint: SurfacePaint,
-        boxes: &[&SurfaceRenderPrimitive],
+        boxes: &[&CanvasPrimitive],
         mvp: &[f32; 16],
         stats: &mut RenderFrameWork,
     ) -> Result<(), RenderError>;
@@ -291,9 +298,9 @@ impl DrawBoxBatch for GuiBatchRenderCache<MockGuiDevice> {
         &mut self,
         program: &u32,
         entity: ipp_core::EntityId,
-        clip: SurfaceClipRect,
+        clip: CanvasClip,
         paint: SurfacePaint,
-        boxes: &[&SurfaceRenderPrimitive],
+        boxes: &[&CanvasPrimitive],
         mvp: &[f32; 16],
         stats: &mut RenderFrameWork,
     ) -> Result<(), RenderError> {
@@ -311,22 +318,30 @@ impl DrawBoxBatch for GuiBatchRenderCache<MockGuiDevice> {
 
 #[test]
 fn box_vertices_form_two_counter_clockwise_triangles_per_quad() {
-    let style = SurfacePrimitiveStyle {
-        identity: SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
-            root_incarnation: 1,
-            node: GuiNodeId(1),
-            part: GuiPrimitivePart::Background,
-        }),
+    let style = CanvasPrimitiveStyle {
+        identity: CanvasPrimitiveId {
+            target: ipp_core::systems::canvas::CanvasTarget {
+                entity: ipp_core::EntityId::from_bits(1),
+                component: ipp_core::ComponentValue::CANVAS_BOX,
+                incarnation: 1,
+            },
+            part: CanvasPart::Background,
+        },
         position: [1.0, 2.0],
         scale: [1.0, 1.0],
-        color: [1.0, 0.0, 0.0, 1.0],
+        color: [1.0; 4],
         opacity: 1.0,
-        clip: None,
+        clip: [
+            f32::NEG_INFINITY,
+            f32::NEG_INFINITY,
+            f32::INFINITY,
+            f32::INFINITY,
+        ],
     };
     let size = [3.0, 4.0];
     let corner = [0.1, 0.2];
     let border_color = [0.0, 1.0, 0.0, 1.0];
-    let fill = GuiShapeFill::Solid([1.0, 0.0, 0.0, 1.0]);
+    let fill = CanvasShapeFill::Solid([1.0, 0.0, 0.0, 1.0]);
 
     let vertices = generate_box_vertices(
         &style,
@@ -367,19 +382,27 @@ fn box_vertices_form_two_counter_clockwise_triangles_per_quad() {
 
 #[test]
 fn linear_gradient_fill_sets_coordinates_and_material_type() {
-    let style = SurfacePrimitiveStyle {
-        identity: SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
-            root_incarnation: 1,
-            node: GuiNodeId(1),
-            part: GuiPrimitivePart::Background,
-        }),
+    let style = CanvasPrimitiveStyle {
+        identity: CanvasPrimitiveId {
+            target: ipp_core::systems::canvas::CanvasTarget {
+                entity: ipp_core::EntityId::from_bits(1),
+                component: ipp_core::ComponentValue::CANVAS_BOX,
+                incarnation: 1,
+            },
+            part: CanvasPart::Background,
+        },
         position: [0.0, 0.0],
         scale: [1.0, 1.0],
         color: [1.0, 1.0, 1.0, 1.0],
         opacity: 0.5,
-        clip: None,
+        clip: [
+            f32::NEG_INFINITY,
+            f32::NEG_INFINITY,
+            f32::INFINITY,
+            f32::INFINITY,
+        ],
     };
-    let fill = GuiShapeFill::LinearGradient {
+    let fill = CanvasShapeFill::LinearGradient {
         start: [0.0, 0.0],
         end: [2.0, 1.0],
         start_color: [1.0, 0.0, 0.0, 1.0],
@@ -408,19 +431,27 @@ fn linear_gradient_fill_sets_coordinates_and_material_type() {
 
 #[test]
 fn radial_gradient_fill_sets_center_radius_and_material_type() {
-    let style = SurfacePrimitiveStyle {
-        identity: SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
-            root_incarnation: 1,
-            node: GuiNodeId(1),
-            part: GuiPrimitivePart::Background,
-        }),
+    let style = CanvasPrimitiveStyle {
+        identity: CanvasPrimitiveId {
+            target: ipp_core::systems::canvas::CanvasTarget {
+                entity: ipp_core::EntityId::from_bits(1),
+                component: ipp_core::ComponentValue::CANVAS_BOX,
+                incarnation: 1,
+            },
+            part: CanvasPart::Background,
+        },
         position: [0.0, 0.0],
         scale: [2.0, 2.0],
         color: [1.0, 1.0, 1.0, 1.0],
         opacity: 1.0,
-        clip: None,
+        clip: [
+            f32::NEG_INFINITY,
+            f32::NEG_INFINITY,
+            f32::INFINITY,
+            f32::INFINITY,
+        ],
     };
-    let fill = GuiShapeFill::RadialGradient {
+    let fill = CanvasShapeFill::RadialGradient {
         center: [0.5, 0.5],
         radius: 0.25,
         start_color: [1.0, 1.0, 0.0, 1.0],
@@ -449,19 +480,27 @@ fn radial_gradient_fill_sets_center_radius_and_material_type() {
 
 #[test]
 fn glow_expands_quad_padding_and_packs_glow_parameters() {
-    let style = SurfacePrimitiveStyle {
-        identity: SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
-            root_incarnation: 1,
-            node: GuiNodeId(1),
-            part: GuiPrimitivePart::Background,
-        }),
+    let style = CanvasPrimitiveStyle {
+        identity: CanvasPrimitiveId {
+            target: ipp_core::systems::canvas::CanvasTarget {
+                entity: ipp_core::EntityId::from_bits(1),
+                component: ipp_core::ComponentValue::CANVAS_BOX,
+                incarnation: 1,
+            },
+            part: CanvasPart::Background,
+        },
         position: [2.0, 3.0],
         scale: [1.0, 1.0],
-        color: [0.0, 0.0, 0.0, 1.0],
+        color: [1.0; 4],
         opacity: 0.8,
-        clip: None,
+        clip: [
+            f32::NEG_INFINITY,
+            f32::NEG_INFINITY,
+            f32::INFINITY,
+            f32::INFINITY,
+        ],
     };
-    let glow = GuiShapeGlow {
+    let glow = CanvasShapeGlow {
         color: [0.3, 0.6, 0.9, 1.0],
         intensity: 1.5,
         radius: 0.05,
@@ -474,7 +513,7 @@ fn glow_expands_quad_padding_and_packs_glow_parameters() {
         &[0.02, 0.02],
         0.0,
         &[0.0; 4],
-        &GuiShapeFill::Solid([0.0; 4]),
+        &CanvasShapeFill::Solid([0.0; 4]),
         Some(&glow),
         CLIP,
     );
@@ -500,24 +539,32 @@ fn glow_expands_quad_padding_and_packs_glow_parameters() {
 
 #[test]
 fn border_only_box_splits_into_four_edge_strips_without_interior() {
-    let style = SurfacePrimitiveStyle {
-        identity: SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
-            root_incarnation: 1,
-            node: GuiNodeId(1),
-            part: GuiPrimitivePart::Background,
-        }),
+    let style = CanvasPrimitiveStyle {
+        identity: CanvasPrimitiveId {
+            target: ipp_core::systems::canvas::CanvasTarget {
+                entity: ipp_core::EntityId::from_bits(1),
+                component: ipp_core::ComponentValue::CANVAS_BOX,
+                incarnation: 1,
+            },
+            part: CanvasPart::Background,
+        },
         position: [0.0, 0.0],
         scale: [1.0, 1.0],
-        color: [0.0, 0.0, 0.0, 0.0],
+        color: [1.0; 4],
         opacity: 1.0,
-        clip: None,
+        clip: [
+            f32::NEG_INFINITY,
+            f32::NEG_INFINITY,
+            f32::INFINITY,
+            f32::INFINITY,
+        ],
     };
     let border_color = [1.0, 1.0, 1.0, 1.0];
     let size = [10.0, 10.0];
     let corner = [0.1, 0.1];
     let border_width = 0.2;
 
-    let glow = GuiShapeGlow {
+    let glow = CanvasShapeGlow {
         color: [0.0, 1.0, 0.0, 1.0],
         intensity: 1.0,
         radius: 0.15,
@@ -530,7 +577,7 @@ fn border_only_box_splits_into_four_edge_strips_without_interior() {
             &corner,
             border_width,
             &border_color,
-            &GuiShapeFill::Solid([0.0, 0.0, 0.0, 0.0]),
+            &CanvasShapeFill::Solid([0.0, 0.0, 0.0, 0.0]),
             glow,
             CLIP,
         );
@@ -550,17 +597,25 @@ fn border_only_box_splits_into_four_edge_strips_without_interior() {
 
 #[test]
 fn small_border_only_box_uses_single_quad() {
-    let style = SurfacePrimitiveStyle {
-        identity: SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
-            root_incarnation: 1,
-            node: GuiNodeId(1),
-            part: GuiPrimitivePart::Background,
-        }),
+    let style = CanvasPrimitiveStyle {
+        identity: CanvasPrimitiveId {
+            target: ipp_core::systems::canvas::CanvasTarget {
+                entity: ipp_core::EntityId::from_bits(1),
+                component: ipp_core::ComponentValue::CANVAS_BOX,
+                incarnation: 1,
+            },
+            part: CanvasPart::Background,
+        },
         position: [0.0, 0.0],
         scale: [1.0, 1.0],
-        color: [0.0, 0.0, 0.0, 0.0],
+        color: [1.0; 4],
         opacity: 1.0,
-        clip: None,
+        clip: [
+            f32::NEG_INFINITY,
+            f32::NEG_INFINITY,
+            f32::INFINITY,
+            f32::INFINITY,
+        ],
     };
     let border_color = [1.0, 1.0, 1.0, 1.0];
     let size = [0.3, 0.3];
@@ -573,7 +628,7 @@ fn small_border_only_box_uses_single_quad() {
         &corner,
         border_width,
         &border_color,
-        &GuiShapeFill::Solid([0.0, 0.0, 0.0, 0.0]),
+        &CanvasShapeFill::Solid([0.0, 0.0, 0.0, 0.0]),
         None,
         CLIP,
     );
@@ -590,20 +645,8 @@ fn warm_frame_uploads_zero_geometry_bytes() {
     let mut cache = GuiBatchRenderCache::new(device.clone());
 
     let entity = ipp_core::EntityId::from_bits(1);
-    let box1 = sample_box_primitive(
-        1,
-        GuiPrimitivePart::Background,
-        [0.0, 0.0],
-        [1.0, 1.0],
-        None,
-    );
-    let box2 = sample_box_primitive(
-        2,
-        GuiPrimitivePart::Background,
-        [1.5, 0.0],
-        [1.0, 1.0],
-        None,
-    );
+    let box1 = sample_box_primitive(1, CanvasPart::Background, [0.0, 0.0], [1.0, 1.0], None);
+    let box2 = sample_box_primitive(2, CanvasPart::Background, [1.5, 0.0], [1.0, 1.0], None);
     let boxes = [&box1, &box2];
     let clip = [0.0, 0.0, 4.0, 2.0];
     let mvp = [0.0; 16];
@@ -663,20 +706,8 @@ fn local_change_replaces_batch_storage_and_rebuilds_only_affected_primitive() {
     let mut cache = GuiBatchRenderCache::new(device.clone());
 
     let entity = ipp_core::EntityId::from_bits(1);
-    let box1 = sample_box_primitive(
-        1,
-        GuiPrimitivePart::Background,
-        [0.0, 0.0],
-        [1.0, 1.0],
-        None,
-    );
-    let box2 = sample_box_primitive(
-        2,
-        GuiPrimitivePart::Background,
-        [1.5, 0.0],
-        [1.0, 1.0],
-        None,
-    );
+    let box1 = sample_box_primitive(1, CanvasPart::Background, [0.0, 0.0], [1.0, 1.0], None);
+    let box2 = sample_box_primitive(2, CanvasPart::Background, [1.5, 0.0], [1.0, 1.0], None);
     let boxes_initial = [&box1, &box2];
     let clip = [0.0, 0.0, 4.0, 2.0];
     let mvp = [0.0; 16];
@@ -697,12 +728,12 @@ fn local_change_replaces_batch_storage_and_rebuilds_only_affected_primitive() {
 
     // Modify only box2 (e.g. hovered fill colour or slider thumb position)
     let mut box2_modified = box2.clone();
-    if let SurfaceRenderPrimitive::Box {
+    if let CanvasPrimitive::Box {
         fill,
         ..
     } = &mut box2_modified
     {
-        *fill = GuiShapeFill::Solid([1.0, 1.0, 0.0, 1.0]);
+        *fill = CanvasShapeFill::Solid([1.0, 1.0, 0.0, 1.0]);
     }
     let boxes_modified = [&box1, &box2_modified];
 
@@ -735,23 +766,17 @@ fn local_change_replaces_batch_storage_and_rebuilds_only_affected_primitive() {
 }
 
 #[test]
-fn colour_only_change_on_gradient_box_keeps_retained_geometry() {
+fn tint_change_on_gradient_box_rebuilds_retained_geometry() {
     let device = Rc::new(RefCell::new(MockGuiDevice::default()));
     let mut cache = GuiBatchRenderCache::new(device.clone());
 
-    let mut panel = sample_box_primitive(
-        1,
-        GuiPrimitivePart::Background,
-        [0.0, 0.0],
-        [1.0, 1.0],
-        None,
-    );
-    if let SurfaceRenderPrimitive::Box {
+    let mut panel = sample_box_primitive(1, CanvasPart::Background, [0.0, 0.0], [1.0, 1.0], None);
+    if let CanvasPrimitive::Box {
         fill,
         ..
     } = &mut panel
     {
-        *fill = GuiShapeFill::LinearGradient {
+        *fill = CanvasShapeFill::LinearGradient {
             start: [0.0, 0.0],
             end: [1.0, 0.0],
             start_color: [0.1, 0.2, 0.3, 1.0],
@@ -775,9 +800,8 @@ fn colour_only_change_on_gradient_box_keeps_retained_geometry() {
     };
     draw(&mut cache, &panel);
 
-    // A colour transition reaches the style lane, which a gradient box never paints.
     let mut transitioning = panel.clone();
-    if let SurfaceRenderPrimitive::Box {
+    if let CanvasPrimitive::Box {
         style,
         ..
     } = &mut transitioning
@@ -785,28 +809,28 @@ fn colour_only_change_on_gradient_box_keeps_retained_geometry() {
         style.color = [1.0, 0.0, 0.0, 1.0];
     }
     let stats = draw(&mut cache, &transitioning);
-    assert_eq!(stats.statistics.gui_rebuilds, 0);
-    assert_eq!(stats.statistics.gui_allocations, 0);
-    assert_eq!(stats.statistics.uploaded_bytes, 0);
-    assert_eq!(device.borrow().writes.len(), 1);
+    assert_eq!(stats.statistics.gui_rebuilds, 1);
+    assert_eq!(stats.statistics.gui_allocations, 1);
+    assert!(stats.statistics.uploaded_bytes > 0);
+    assert_eq!(device.borrow().writes.len(), 2);
 }
 
 #[test]
 fn boxes_of_every_part_class_share_one_batch() {
     let device = Rc::new(RefCell::new(MockGuiDevice::default()));
     let mut cache = GuiBatchRenderCache::new(device.clone());
-    let part_box = |node: u32, part: GuiPrimitivePart, x: f32| {
+    let part_box = |node: u32, part: CanvasPart, x: f32| {
         sample_box_primitive(node, part, [x, 0.0], [0.4, 0.4], None)
     };
 
     // A row's background, slider track, fill, checkbox icon and focus ring paint in
     // this order under one clip; none of them changed recently.
     let row = [
-        part_box(1, GuiPrimitivePart::Background, 0.0),
-        part_box(2, GuiPrimitivePart::Background, 0.5),
-        part_box(2, GuiPrimitivePart::Fill, 0.6),
-        part_box(3, GuiPrimitivePart::Icon, 1.0),
-        part_box(3, GuiPrimitivePart::FocusRing, 1.0),
+        part_box(1, CanvasPart::Background, 0.0),
+        part_box(2, CanvasPart::Background, 0.5),
+        part_box(2, CanvasPart::Fill, 0.6),
+        part_box(3, CanvasPart::Icon, 1.0),
+        part_box(3, CanvasPart::FocusRing, 1.0),
     ];
     let boxes: Vec<_> = row.iter().collect();
     let mut stats = RenderFrameWork::default();
@@ -832,20 +856,20 @@ fn boxes_of_every_part_class_share_one_batch() {
 fn text_overlay_boxes_of_one_node_keep_their_own_geometry() {
     let device = Rc::new(RefCell::new(MockGuiDevice::default()));
     let mut cache = GuiBatchRenderCache::new(device.clone());
-    let overlay = |part: GuiPrimitivePart, x: f32, width: f32| {
+    let overlay = |part: CanvasPart, x: f32, width: f32| {
         sample_box_primitive(7, part, [x, 0.0], [width, 0.1], None)
     };
 
     // A focused text input paints its selection highlight, then its caret bar;
     // both belong to node 7 but keep separate retained geometry.
-    let selection = overlay(GuiPrimitivePart::Selection, 0.0, 1.5);
-    let caret = overlay(GuiPrimitivePart::Caret, 2.0, 0.01);
+    let selection = overlay(CanvasPart::Selection, 0.0, 1.5);
+    let caret = overlay(CanvasPart::Caret, 2.0, 0.01);
     let boxes = [&selection, &caret];
     let clip = [0.0, 0.0, 4.0, 2.0];
     let expected: Vec<GuiVertex> = boxes
         .iter()
         .flat_map(|primitive| {
-            let SurfaceRenderPrimitive::Box {
+            let CanvasPrimitive::Box {
                 style,
                 size,
                 corner_radius,
@@ -916,16 +940,17 @@ fn unchanged_paint_revisions_skip_hashing_until_the_revision_changes() {
     let clip = [0.0, 0.0, 4.0, 2.0];
     let draw = |cache: &mut GuiBatchRenderCache<MockGuiDevice>,
                 paint: SurfacePaint,
-                boxes: &[&SurfaceRenderPrimitive]| {
+                boxes: &[&CanvasPrimitive]| {
         let mut stats = RenderFrameWork::default();
         cache
             .draw_box_batch(&1, entity, clip, paint, boxes, &[0.0; 16], &mut stats)
             .unwrap();
         stats
     };
-    let first = sample_box_primitive(1, GuiPrimitivePart::Background, [0.0; 2], [1.0; 2], None);
-    let second = sample_box_primitive(2, GuiPrimitivePart::Background, [1.5, 0.0], [1.0; 2], None);
+    let first = sample_box_primitive(1, CanvasPart::Background, [0.0; 2], [1.0; 2], None);
+    let second = sample_box_primitive(2, CanvasPart::Background, [1.5, 0.0], [1.0; 2], None);
     let revision = |revision, reusable| SurfacePaint {
+        opacity: 1.0,
         revision,
         reusable,
     };
@@ -972,13 +997,7 @@ fn root_replacement_prevents_reusing_a_node_batch() {
     let mut cache = GuiBatchRenderCache::new(device.clone());
 
     let entity = ipp_core::EntityId::from_bits(1);
-    let box_gen1 = sample_box_primitive(
-        1,
-        GuiPrimitivePart::Background,
-        [0.0, 0.0],
-        [1.0, 1.0],
-        None,
-    );
+    let box_gen1 = sample_box_primitive(1, CanvasPart::Background, [0.0, 0.0], [1.0, 1.0], None);
     let clip = [0.0, 0.0, 4.0, 2.0];
     let mvp = [0.0; 16];
 
@@ -997,20 +1016,14 @@ fn root_replacement_prevents_reusing_a_node_batch() {
     assert_eq!(stats1.statistics.gui_allocations, 1);
 
     // The root is replaced: the same node identity under a new incarnation.
-    let mut box_gen2 = sample_box_primitive(
-        1,
-        GuiPrimitivePart::Background,
-        [0.0, 0.0],
-        [1.0, 1.0],
-        None,
-    );
-    if let SurfaceRenderPrimitive::Box {
+    let mut box_gen2 =
+        sample_box_primitive(1, CanvasPart::Background, [0.0, 0.0], [1.0, 1.0], None);
+    if let CanvasPrimitive::Box {
         style,
         ..
     } = &mut box_gen2
-        && let SurfacePrimitiveIdentity::Gui(id) = &mut style.identity
     {
-        id.root_incarnation = 2;
+        style.identity.target.incarnation = 2;
     }
 
     let mut stats2 = RenderFrameWork::default();
@@ -1040,20 +1053,8 @@ fn finish_frame_prunes_unreferenced_batches_and_tracks_resident_bytes() {
 
     let entity1 = ipp_core::EntityId::from_bits(1);
     let entity2 = ipp_core::EntityId::from_bits(2);
-    let box1 = sample_box_primitive(
-        1,
-        GuiPrimitivePart::Background,
-        [0.0, 0.0],
-        [1.0, 1.0],
-        None,
-    );
-    let box2 = sample_box_primitive(
-        2,
-        GuiPrimitivePart::Background,
-        [0.0, 0.0],
-        [1.0, 1.0],
-        None,
-    );
+    let box1 = sample_box_primitive(1, CanvasPart::Background, [0.0, 0.0], [1.0, 1.0], None);
+    let box2 = sample_box_primitive(2, CanvasPart::Background, [0.0, 0.0], [1.0, 1.0], None);
     let clip = [0.0, 0.0, 4.0, 2.0];
     let mvp = [0.0; 16];
 
@@ -1111,13 +1112,7 @@ fn culled_surfaces_keep_retained_batches_and_incomplete_frames_prune_nothing() {
 
     let shown = ipp_core::EntityId::from_bits(1);
     let culled = ipp_core::EntityId::from_bits(2);
-    let panel = sample_box_primitive(
-        1,
-        GuiPrimitivePart::Background,
-        [0.0, 0.0],
-        [1.0, 1.0],
-        None,
-    );
+    let panel = sample_box_primitive(1, CanvasPart::Background, [0.0, 0.0], [1.0, 1.0], None);
     let clip = [0.0, 0.0, 4.0, 2.0];
     let mvp = [0.0; 16];
     let draw = |cache: &mut GuiBatchRenderCache<MockGuiDevice>, entity, stats: &mut _| {
@@ -1182,20 +1177,8 @@ fn failed_batch_replacement_releases_storage_instead_of_drawing_stale_vertices()
     let mut cache = GuiBatchRenderCache::new(device.clone());
 
     let entity = ipp_core::EntityId::from_bits(1);
-    let panel = sample_box_primitive(
-        1,
-        GuiPrimitivePart::Background,
-        [0.0, 0.0],
-        [1.0, 1.0],
-        None,
-    );
-    let moved = sample_box_primitive(
-        1,
-        GuiPrimitivePart::Background,
-        [0.5, 0.0],
-        [1.0, 1.0],
-        None,
-    );
+    let panel = sample_box_primitive(1, CanvasPart::Background, [0.0, 0.0], [1.0, 1.0], None);
+    let moved = sample_box_primitive(1, CanvasPart::Background, [0.5, 0.0], [1.0, 1.0], None);
     let clip = [0.0, 0.0, 4.0, 2.0];
     let mvp = [0.0; 16];
     let draw = |cache: &mut GuiBatchRenderCache<MockGuiDevice>, primitive| {
@@ -1243,20 +1226,8 @@ fn repeated_storage_failures_double_the_retry_wait_until_a_commit_succeeds() {
     let device = Rc::new(RefCell::new(MockGuiDevice::default()));
     let mut cache = GuiBatchRenderCache::new(device.clone());
     let entity = ipp_core::EntityId::from_bits(1);
-    let panel = sample_box_primitive(
-        1,
-        GuiPrimitivePart::Background,
-        [0.0, 0.0],
-        [1.0, 1.0],
-        None,
-    );
-    let moved = sample_box_primitive(
-        1,
-        GuiPrimitivePart::Background,
-        [0.5, 0.0],
-        [1.0, 1.0],
-        None,
-    );
+    let panel = sample_box_primitive(1, CanvasPart::Background, [0.0, 0.0], [1.0, 1.0], None);
+    let moved = sample_box_primitive(1, CanvasPart::Background, [0.5, 0.0], [1.0, 1.0], None);
     let mut stats = RenderFrameWork::default();
     let mut commit = |cache: &mut GuiBatchRenderCache<MockGuiDevice>, primitive| {
         cache.begin_surface(entity);
@@ -1298,17 +1269,17 @@ fn repeated_storage_failures_double_the_retry_wait_until_a_commit_succeeds() {
 const BOX_BYTES: u32 = 6 * std::mem::size_of::<GuiVertex>() as u32;
 
 /// A long run of small filled boxes, one per GUI node.
-fn box_run(nodes: std::ops::RangeInclusive<u32>) -> Vec<SurfaceRenderPrimitive> {
+fn box_run(nodes: std::ops::RangeInclusive<u32>) -> Vec<CanvasPrimitive> {
     nodes
         .map(|node| {
             let mut primitive = sample_box_primitive(
                 node,
-                GuiPrimitivePart::Background,
+                CanvasPart::Background,
                 [node as f32 * 0.01, 0.0],
                 [0.005, 0.005],
                 None,
             );
-            if let SurfaceRenderPrimitive::Box {
+            if let CanvasPrimitive::Box {
                 border_width,
                 ..
             } = &mut primitive
@@ -1320,21 +1291,21 @@ fn box_run(nodes: std::ops::RangeInclusive<u32>) -> Vec<SurfaceRenderPrimitive> 
         .collect()
 }
 
-fn set_fill(primitive: &mut SurfaceRenderPrimitive, red: f32) {
-    if let SurfaceRenderPrimitive::Box {
+fn set_fill(primitive: &mut CanvasPrimitive, red: f32) {
+    if let CanvasPrimitive::Box {
         fill,
         ..
     } = primitive
     {
-        *fill = GuiShapeFill::Solid([red, 0.4, 0.6, 1.0]);
+        *fill = CanvasShapeFill::Solid([red, 0.4, 0.6, 1.0]);
     }
 }
 
 /// Submit one complete frame of a single visible Surface.
 fn draw_run_frame(
     cache: &mut GuiBatchRenderCache<MockGuiDevice>,
-    boxes: &[SurfaceRenderPrimitive],
-    clip: SurfaceClipRect,
+    boxes: &[CanvasPrimitive],
+    clip: CanvasClip,
 ) -> RenderFrameWork {
     let entity = ipp_core::EntityId::from_bits(1);
     let refs: Vec<_> = boxes.iter().collect();
@@ -1358,7 +1329,7 @@ fn draw_run_frame(
     stats
 }
 
-const RUN_CLIP: SurfaceClipRect = [0.0, 0.0, 8.0, 2.0];
+const RUN_CLIP: CanvasClip = [0.0, 0.0, 8.0, 2.0];
 
 #[test]
 fn large_runs_split_into_bounded_batches_at_identity_boundaries() {
@@ -1414,7 +1385,7 @@ fn early_box_edits_insertions_and_removals_rebuild_only_nearby_batches() {
     let mut boxes = box_run(2..=401);
     let cold = draw_run_frame(&mut cache, &boxes, RUN_CLIP);
     let written = device.borrow().writes.len();
-    if let SurfaceRenderPrimitive::Box {
+    if let CanvasPrimitive::Box {
         size,
         ..
     } = &mut boxes[0]
@@ -1545,7 +1516,7 @@ fn clip_changes_rewrite_only_the_boxes_they_clip() {
 }
 
 /// Glyph quad vertices of one test text batch, tinted and clipped.
-fn glyph_quads(count: usize, x: f32, clip: SurfaceClipRect) -> Vec<GuiVertex> {
+fn glyph_quads(count: usize, x: f32, clip: CanvasClip) -> Vec<GuiVertex> {
     (0..count * 6)
         .map(|index| GuiVertex {
             position: [x + (index / 6) as f32 * 0.01, 0.0],
@@ -1560,7 +1531,7 @@ fn glyph_quads(count: usize, x: f32, clip: SurfaceClipRect) -> Vec<GuiVertex> {
 
 /// One Surface's painter-order GUI work: box runs and text batches.
 enum TestWork {
-    Boxes(Vec<(SurfaceRenderPrimitive, SurfaceClipRect)>),
+    Boxes(Vec<(CanvasPrimitive, CanvasClip)>),
     Text {
         node: u32,
         page: usize,
@@ -1569,12 +1540,15 @@ enum TestWork {
     },
 }
 
-fn text_identity(node: u32) -> SurfacePrimitiveIdentity {
-    SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
-        root_incarnation: 1,
-        node: GuiNodeId(node),
-        part: GuiPrimitivePart::Label,
-    })
+fn text_identity(node: u32) -> CanvasPrimitiveId {
+    CanvasPrimitiveId {
+        target: ipp_core::systems::canvas::CanvasTarget {
+            entity: ipp_core::EntityId::from_bits(u64::from(node)),
+            component: ipp_core::ComponentValue::CANVAS_BOX,
+            incarnation: 1,
+        },
+        part: CanvasPart::Label,
+    }
 }
 
 /// One submitted Surface: its stats, its draws' vertices and whether each bound an
@@ -1595,7 +1569,7 @@ fn submit_work(
     let entity = ipp_core::EntityId::from_bits(1);
     cache.begin_surface(entity);
     let mut expected = Vec::new();
-    let mut text: BTreeMap<SurfacePrimitiveIdentity, &[GuiVertex]> = BTreeMap::new();
+    let mut text: BTreeMap<CanvasPrimitiveId, &[GuiVertex]> = BTreeMap::new();
     for item in work {
         match item {
             TestWork::Boxes(boxes) => {
@@ -1605,7 +1579,7 @@ fn submit_work(
                     .collect();
                 cache.push_boxes(SurfacePaint::UNKNOWN, &refs, &mut stats);
                 for (primitive, clip) in boxes {
-                    let SurfaceRenderPrimitive::Box {
+                    let CanvasPrimitive::Box {
                         style,
                         size,
                         corner_radius,
@@ -1680,7 +1654,7 @@ fn boxes_and_text_under_different_clips_draw_once_per_atlas_page() {
     let device = Rc::new(RefCell::new(MockGuiDevice::default()));
     let mut cache = GuiBatchRenderCache::new(device.clone());
     let clips = [[0.0, 0.0, 1.0, 1.0], [0.2, 0.0, 0.8, 1.0]];
-    let row = |node: u32, clip: SurfaceClipRect| {
+    let row = |node: u32, clip: CanvasClip| {
         TestWork::Boxes(
             box_run(node..=node + 2)
                 .into_iter()

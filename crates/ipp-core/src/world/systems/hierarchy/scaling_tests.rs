@@ -1,8 +1,19 @@
 //! Release timing and graph-work assertions over the real core mutation paths.
-use super::system_state::VISITS;
-use crate::components::{Hierarchy, LookAt};
-use crate::{Batch, Command, ComponentValue, EntityId, EntityRef, HostRuntime};
+use crate::components::LookAt;
+use crate::systems::look_at::LOOK_AT_CHECKS;
+use crate::world::entity_links::VISITS;
+use crate::{
+    Batch, Command, ComponentValue, EntityId, EntityPlacementRef, EntityRef, ErrorReason,
+    HostRuntime,
+};
 use std::time::Instant;
+
+/// Transforms, terminal aiming and final propagation, which maintain the graph.
+const SPATIAL_SYSTEMS: &[crate::systems::SystemId] = &[
+    crate::systems::hierarchy::HierarchySystem::ID,
+    crate::systems::look_at::LookAtSystem::ID,
+    crate::systems::hierarchy::FinalPropagationSystem::ID,
+];
 
 const SCALING_SIZES: &[usize] = &[1_000, 4_000, 16_000];
 
@@ -52,7 +63,9 @@ fn maintained_scaling_flat_and_deep_creation_restore_and_removal() {
                 "flat"
             };
             let mut host = HostRuntime::default();
-            let world = host.create_world(Default::default()).unwrap();
+            let world = host
+                .create_world(Default::default(), SPATIAL_SYSTEMS)
+                .unwrap();
             let entities = measure(size, shape, "create", || {
                 apply(
                     &mut host,
@@ -61,6 +74,7 @@ fn maintained_scaling_flat_and_deep_creation_restore_and_removal() {
                         .map(|alias| Command::Create {
                             alias: alias as u32,
                             metadata: Default::default(),
+                            adopt: false,
                         })
                         .collect(),
                 )
@@ -72,18 +86,16 @@ fn maintained_scaling_flat_and_deep_creation_restore_and_removal() {
                     entities
                         .iter()
                         .enumerate()
-                        .map(|(i, &entity)| {
-                            Command::insert_value(
-                                EntityRef::Handle(entity),
-                                ComponentValue::Hierarchy(Hierarchy {
-                                    parent: if deep && i > 0 {
-                                        entities[i - 1]
-                                    } else {
-                                        EntityId::from_bits(0)
-                                    },
-                                    ..Default::default()
-                                }),
-                            )
+                        .map(|(i, &entity)| Command::PlaceEntity {
+                            entity: EntityRef::Handle(entity),
+                            placement: EntityPlacementRef {
+                                parent: if deep && i > 0 {
+                                    Some(EntityRef::Handle(entities[i - 1]))
+                                } else {
+                                    None
+                                },
+                                before: None,
+                            },
                         })
                         .collect(),
                 )
@@ -104,8 +116,22 @@ fn maintained_scaling_flat_and_deep_creation_restore_and_removal() {
                     limits,
                 )
                 .unwrap()
+                .root
+                .id()
             });
-            assert_eq!(host.world_mut(restored).unwrap().entities().len(), size);
+            let restored_entities = host.world_mut(restored).unwrap().entities();
+            assert_eq!(restored_entities.len(), size);
+            assert_eq!(
+                restored_entities
+                    .iter()
+                    .filter(|entity| entity.link.parent.is_some())
+                    .count(),
+                if deep {
+                    size - 1
+                } else {
+                    0
+                }
+            );
             host.world_mut(restored).unwrap().step(0.0).unwrap();
             measure(size, shape, "delete-root-first", || {
                 apply(
@@ -128,7 +154,9 @@ fn maintained_scaling_flat_and_deep_creation_restore_and_removal() {
 fn maintained_scaling_sparse_look_at_edit_keeps_unrelated_graph_work_constant() {
     for &size in SCALING_SIZES {
         let mut host = HostRuntime::default();
-        let world = host.create_world(Default::default()).unwrap();
+        let world = host
+            .create_world(Default::default(), SPATIAL_SYSTEMS)
+            .unwrap();
         let entities = apply(
             &mut host,
             world,
@@ -136,6 +164,7 @@ fn maintained_scaling_sparse_look_at_edit_keeps_unrelated_graph_work_constant() 
                 .map(|alias| Command::Create {
                     alias,
                     metadata: Default::default(),
+                    adopt: false,
                 })
                 .collect(),
         );
@@ -173,6 +202,84 @@ fn maintained_scaling_sparse_look_at_edit_keeps_unrelated_graph_work_constant() 
             0,
             "a LookAt edit must not rebuild the hierarchy"
         );
+    }
+}
+
+#[test]
+fn maintained_scaling_dependency_placement_and_correction_touch_only_their_readers() {
+    for &size in SCALING_SIZES {
+        let mut host = HostRuntime::default();
+        let world = host
+            .create_world(Default::default(), SPATIAL_SYSTEMS)
+            .unwrap();
+        let entities = apply(
+            &mut host,
+            world,
+            (0..size as u32)
+                .map(|alias| Command::Create {
+                    alias,
+                    metadata: Default::default(),
+                    adopt: false,
+                })
+                .collect(),
+        );
+        let tracker = entities[0];
+        let target = entities[1];
+        apply(
+            &mut host,
+            world,
+            vec![Command::insert_value(
+                EntityRef::Handle(tracker),
+                ComponentValue::LookAt(LookAt {
+                    target,
+                    ..Default::default()
+                }),
+            )],
+        );
+
+        // Placing the aimed-at target beneath its own tracker is reported as
+        // an unsupported dependency; it checks only the LookAt that reads it.
+        let mut world = host.world_mut(world).unwrap();
+        let place = |parent: Option<EntityId>| Command::PlaceEntity {
+            entity: EntityRef::Handle(target),
+            placement: EntityPlacementRef {
+                parent: parent.map(EntityRef::Handle),
+                before: None,
+            },
+        };
+        LOOK_AT_CHECKS.set(0);
+        VISITS.set(0);
+        world
+            .enqueue(Batch {
+                id: world.tick() + 1,
+                operations: vec![place(Some(tracker))],
+            })
+            .unwrap();
+        let outcome = world.step(0.0).unwrap().outcomes.remove(0);
+        assert_eq!(
+            outcome.result.unwrap_err().reason,
+            ErrorReason::UnsupportedDependency
+        );
+        assert!(LOOK_AT_CHECKS.get() <= 16, "checked unrelated declarations");
+        assert!(VISITS.get() <= 16, "traversed unrelated links");
+        assert!(world.world_matrix(tracker).is_err());
+
+        // The correction is just as local and restores evaluation.
+        LOOK_AT_CHECKS.set(0);
+        VISITS.set(0);
+        world
+            .enqueue(Batch {
+                id: world.tick() + 1,
+                operations: vec![place(None)],
+            })
+            .unwrap();
+        assert!(world.step(0.0).unwrap().outcomes[0].result.is_ok());
+        assert!(
+            LOOK_AT_CHECKS.get() <= 16,
+            "correction checked unrelated declarations"
+        );
+        assert!(VISITS.get() <= 16, "correction traversed unrelated links");
+        assert!(world.world_matrix(tracker).is_ok());
     }
 }
 
@@ -229,7 +336,16 @@ fn maintained_scaling_empty_extension_dispatch() {
                 factories.push(Arc::new(Factory(id, calls.clone())));
             }
             let mut host = HostRuntime::with_system_factories(factories).unwrap();
-            let world = host.create_world(Default::default()).unwrap();
+            let world = host
+                .create_world(
+                    Default::default(),
+                    &[
+                        SPATIAL_SYSTEMS.to_vec(),
+                        IDS[..width].iter().map(|&id| SystemId(id)).collect(),
+                    ]
+                    .concat(),
+                )
+                .unwrap();
             let start = Instant::now();
             VISITS.set(0);
             apply(
@@ -239,6 +355,7 @@ fn maintained_scaling_empty_extension_dispatch() {
                     .map(|alias| Command::Create {
                         alias: alias as u32,
                         metadata: Default::default(),
+                        adopt: false,
                     })
                     .collect(),
             );

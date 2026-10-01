@@ -6,7 +6,7 @@ use crate::{ErrorReason, WorldContext};
 
 impl WorldContext<'_> {
     /// Rebuild only prepared track access for controlled locality profiling.
-    /// Runs outside frame timing and preserves target bindings, originals and clocks.
+    /// Runs outside frame timing and preserves target bindings, contributions and clocks.
     #[doc(hidden)]
     pub fn profile_rebind_animation_tracks(&mut self) -> Result<(usize, usize), ErrorReason> {
         self.with_system::<AnimationSystem, _>(AnimationSystem::ID, |system, context| {
@@ -52,8 +52,7 @@ impl WorldContext<'_> {
                 ) {
                     continue;
                 }
-                let sample = driver
-                    .sample_bound(controller.snapshot.time + time_offset, driver.original())?;
+                let sample = driver.sample(controller.snapshot.time + time_offset);
                 std::hint::black_box(sample);
                 count += 1;
             }
@@ -97,8 +96,7 @@ impl WorldContext<'_> {
                 } else {
                     time
                 };
-                let expected = driver
-                    .sample_bound(controller.snapshot.time + time_offset, driver.original())?;
+                let expected = driver.sample(controller.snapshot.time + time_offset);
                 if let Some(track) = clip.typed_track::<f32>(description.track as usize) {
                     if track.sample(time).into_value() != expected {
                         return Err(ErrorReason::InvalidValue);

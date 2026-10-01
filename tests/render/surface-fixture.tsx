@@ -9,74 +9,92 @@ import {
   Entity,
   Surface,
   SurfaceCache,
-  Transform,
+  type AttachedWorldHandle,
   type ReactWorldRoot,
   type SurfaceCacheProps,
 } from "@ipp/react";
+import { CanvasWorldSession } from "@ipp/react/web";
+import { Drawing, Style } from "@ipp/react/gui";
 import {
-  Checkbox,
-  Drawing,
-  GuiRoot,
-  Padding,
-  Row,
-  Stack,
-  Text,
-  type GuiControlTheme,
-} from "@ipp/react/gui";
-import {
-  terminalWorkloadItems,
+  terminalWorkloadLayers,
+  type TerminalGlyphRowsCodec,
   type TerminalWorkload,
 } from "../../examples/surface-terminal/workload.js";
-import {
-  clientAssetSource,
-  entityLocalToSurfaceContent,
-  surfaceProperty,
-} from "@ipp/client";
+import { clientAssetSource, entityLocalToSurfaceContent } from "@ipp/client";
 import { compareGlyph } from "./surface-glyph-oracle.js";
 import { probeErrorCheckBridge } from "./error-check-bridge.js";
 import { probeSurfaceCacheBridge } from "./surface-cache-bridge.js";
 import type {
-  FrameCapture,
-  GuiWorldClient,
+  OutputReference,
+  PresentedCapture,
   PickingWorldClient,
   RenderWorldClient,
   WorldPersistenceHostClient,
 } from "@ipp/client";
-import type { SurfaceItemProps } from "@ipp/react";
 import type { ReactNode } from "react";
 import {
   Terminal,
-  terminalItems,
+  terminalLayers,
   TERMINAL_TEXT,
   type TerminalAssets,
 } from "../../examples/surface-terminal/scene.js";
 import {
-  activateFixtureCamera,
   componentFields,
+  createFixtureCamera,
   successfulBatch,
 } from "../integration/camera-fixtures.js";
 import {
   exerciseSurfaceLifecycle,
   surfaceCachePolicy,
-  surfaceSnapshot,
+  canvasSnapshot,
   waitSurfaceAssets,
   type SurfaceTestClient,
 } from "../integration/surface-scenario.js";
+import {
+  ATTACHMENTS,
+  LIFECYCLE,
+  CAMERA,
+  SURFACE,
+  selectSystems,
+} from "../integration/system-selections.js";
 
 type Client = SurfaceTestClient & RenderWorldClient & PickingWorldClient;
 let host: WorldPersistenceHostClient<Client>;
 let client: Client;
+let presentation: CanvasWorldSession;
+let cameraOutput: OutputReference;
 let root: ReactWorldRoot;
 let assets: TerminalAssets;
-let terminal: bigint;
+let glyphCodec: TerminalGlyphRowsCodec;
 let camera: bigint;
 let metrics: { units: number; ascender: number; line: number };
 let workloadGlyphs: number[];
 let unseenGlyphs: number[];
-const frames = new Map<string, FrameCapture>();
+const frames = new Map<string, PresentedCapture>();
 const ORTHO_HEIGHT = 3;
 const references = new Map<string, HTMLCanvasElement>();
 const failures: unknown[] = [];
+const observedCanvasClients = new Set<SurfaceTestClient>();
+const canvasSessions = new Map<string, Promise<SurfaceTestClient>>();
+let lastSequence: bigint | undefined;
+
+async function resizePresentation(
+  width: number,
+  height: number,
+  devicePixelRatio = 1,
+) {
+  await presentation.selectOutput(cameraOutput, {
+    width,
+    height,
+    devicePixelRatio,
+  });
+}
+
+function rendererDiagnostics() {
+  const diagnostics = host.renderDiagnostics;
+  if (!diagnostics) throw new Error("Render diagnostics are unavailable");
+  return diagnostics;
+}
 
 /** Authored SurfaceCache policies of cache scenario Surfaces, by symbolic id. */
 const cachePolicies = new Map<string, SurfaceCachePolicy>();
@@ -99,7 +117,83 @@ function presentCached(scene: () => ReactNode) {
 /** The React SurfaceCache declaration of one scenario Surface, if any. */
 function cacheDeclaration(symbolicId: string) {
   const policy = cachePolicies.get(symbolicId);
-  return policy ? <SurfaceCache bound={false} {...policy} /> : null;
+  return policy ? <SurfaceCache {...policy} /> : null;
+}
+
+function observeCanvas(anchor: string) {
+  return (handle: AttachedWorldHandle) => {
+    let tracked: Promise<SurfaceTestClient>;
+    tracked = host.openWorld(handle.world).then((session) => {
+      observedCanvasClients.add(session);
+      const release = async () => {
+        observedCanvasClients.delete(session);
+        if (!session.closure) await session.close();
+        if (canvasSessions.get(anchor) === tracked)
+          canvasSessions.delete(anchor);
+      };
+      void handle.closed.then(release, release).catch(() => {});
+      return session;
+    });
+    canvasSessions.set(anchor, tracked);
+    void tracked.catch(() => {});
+  };
+}
+
+async function canvasSession(anchor = "surface-terminal") {
+  const session = canvasSessions.get(anchor);
+  if (!session) throw new Error(`No attached Canvas session for ${anchor}`);
+  return session;
+}
+
+async function canvasRoot(client: SurfaceTestClient) {
+  const root = (await client.inspect()).entities.find(
+    (entity) => entity.metadata.symbolicId === "canvas",
+  );
+  if (!root) throw new Error("Attached Canvas root disappeared");
+  return root.id;
+}
+
+async function terminalCanvasSnapshot() {
+  const session = await canvasSession();
+  return canvasSnapshot(session, await canvasRoot(session));
+}
+
+async function terminalCanvasChildren() {
+  const session = await canvasSession();
+  const root = await canvasRoot(session);
+  return (await session.inspect()).entities
+    .filter((entity) => entity.link.parent === root)
+    .sort((left, right) =>
+      left.link.order < right.link.order
+        ? -1
+        : left.link.order > right.link.order
+          ? 1
+          : 0,
+    );
+}
+
+function canvasDrawingEntity(
+  id: string,
+  source: TerminalAssets["panel"],
+  position: readonly [number, number],
+  scale: readonly [number, number],
+  color: readonly [number, number, number, number],
+): ReactNode {
+  return (
+    <Entity key={id} id={id}>
+      <Style
+        x={position[0]}
+        y={position[1]}
+        scale_x={scale[0]}
+        scale_y={scale[1]}
+        red={color[0]}
+        green={color[1]}
+        blue={color[2]}
+        alpha={color[3]}
+      />
+      <Drawing source={source.source} />
+    </Entity>
+  );
 }
 
 /**
@@ -132,12 +226,16 @@ export async function initialize(
       { canvas: canvas.transferControlToOffscreen(), timeoutMs: 20000 },
     );
   }
-  client = await host.createWorld({ symbolicId: "surface-rendering" });
+  const created = await host.createWorld({
+    selectedSystems: selectSystems(ATTACHMENTS, CAMERA, SURFACE, LIFECYCLE),
+    symbolicId: "surface-rendering",
+  });
+  client = await host.openWorld(created.reference);
   client.onRuntimeFailure((failure) => {
     failures.push(failure);
     console.error("Surface runtime failure", failure.message);
   });
-  camera = await activateFixtureCamera(client);
+  camera = await createFixtureCamera(client);
   for (const [component, values] of [
     ["Transform", { x: 0, y: 0, z: 6, qx: 0, qy: 0, qz: 0, qw: 1 }],
     ["Camera", { projection: 1, ortho_height: ORTHO_HEIGHT }],
@@ -184,21 +282,42 @@ export async function initialize(
   unseenGlyphs = await (
     await fetch("/target/surface-assets/unseen-glyphs.json")
   ).json();
-  const lifecycle = await exerciseSurfaceLifecycle(client, assets, glyphs.A);
+  const lifecycle = await exerciseSurfaceLifecycle(
+    host,
+    client,
+    assets,
+    glyphs.A,
+    { encodeRowsTable: contract.encodeRowsTable },
+  );
+  const glyphRows =
+    lifecycle.canvasClient.components.CanvasGlyphRun?.fields.glyphs?.rows;
+  if (!glyphRows) throw new Error("CanvasGlyphRun omitted its rows layout");
+  glyphCodec = {
+    layout: glyphRows,
+    encodeRowsTable: contract.encodeRowsTable,
+  };
+  await lifecycle.canvasClient.close();
   successfulBatch(
     await client.batch([
       { kind: "delete", entity: { kind: "handle", id: lifecycle.entity } },
     ]),
   );
-  root = createRoot(client);
-  await present(<Terminal assets={assets} />);
+  await client.waitForFrame();
+  await host.destroyWorld(lifecycle.canvasWorld);
+  presentation = new CanvasWorldSession({ host, client });
+  root = presentation.createRoot();
+  cameraOutput = await host.bindOutput(created.reference, camera, "camera");
+  await present(
+    <Terminal assets={assets} onWorld={observeCanvas("surface-terminal")}>
+      {terminalLayers(assets)}
+    </Terminal>,
+  );
+  await resizePresentation(320, 240);
+  const initialCanvasClient = await canvasSession();
   await waitSurfaceAssets(
-    client,
+    initialCanvasClient,
     Object.values(assets).map((asset) => asset.source),
   );
-  terminal = (await client.inspect()).entities.find(
-    (entity) => entity.metadata.symbolicId === "surface-terminal",
-  )!.id;
   const fontFace = new FontFace(
     "SurfaceOracle",
     await (
@@ -207,9 +326,8 @@ export async function initialize(
   );
   document.fonts.add(await fontFace.load());
   return {
-    nextId: lifecycle.nextId,
-    ids: (await surfaceSnapshot(client, terminal)).collection.items.map(
-      (item) => item.id,
+    children: (await terminalCanvasSnapshot()).children.map(
+      (item) => item.symbolicId,
     ),
   };
 }
@@ -222,19 +340,26 @@ export async function capture(label: string, options: { next?: boolean } = {}) {
   const captureStarted = performance.now();
   const update = pendingUpdate;
   pendingUpdate = undefined;
-  const tick = options.next ? undefined : (await client.inspect()).tick;
   if (failures.length)
     throw new Error(
       `Surface runtime failures: ${JSON.stringify(failures, (_, value) => (typeof value === "bigint" ? String(value) : value))}`,
     );
-  const frame = await client.presentation!.capture(tick);
+  const frame = await presentation.capture({
+    afterOutputs: [cameraOutput],
+    ...(options.next && lastSequence !== undefined
+      ? { afterSequence: lastSequence }
+      : {}),
+  });
+  lastSequence = frame.sequence;
   const presentedAt = performance.now();
   frames.set(label, frame);
   const pixels = new Uint8Array(frame.pixels);
+  const { width, height, devicePixelRatio } = frame.view.binding.viewport;
+  const statistics = await rendererDiagnostics().statistics();
   let textPixels = 0;
-  for (let y = Math.round(frame.height * 0.12); y < frame.height * 0.65; y++) {
-    for (let x = 12; x < frame.width * 0.88; x++) {
-      const offset = (y * frame.width + x) * 4;
+  for (let y = Math.round(height * 0.12); y < height * 0.65; y++) {
+    for (let x = 12; x < width * 0.88; x++) {
+      const offset = (y * width + x) * 4;
       if (
         pixels[offset + 1]! > 160 &&
         pixels[offset]! > 120 &&
@@ -244,22 +369,18 @@ export async function capture(label: string, options: { next?: boolean } = {}) {
     }
   }
   const sample = (x: number, y: number) => [
-    ...pixels.subarray(
-      (y * frame.width + x) * 4,
-      (y * frame.width + x) * 4 + 4,
-    ),
+    ...pixels.subarray((y * width + x) * 4, (y * width + x) * 4 + 4),
   ];
   return {
-    width: frame.width,
-    height: frame.height,
-    devicePixelRatio: window.devicePixelRatio,
+    width,
+    height,
+    devicePixelRatio,
     drawCalls: frame.drawCalls,
     triangles: frame.triangles,
     failedDrawCalls: frame.failedDrawCalls,
-    invalidCamera: frame.invalidCamera,
     // Cache records carry bigint entity identities; report them as decimal text.
     statistics: JSON.parse(
-      JSON.stringify(frame.statistics ?? null, (_, value) =>
+      JSON.stringify(statistics, (_, value) =>
         typeof value === "bigint" ? value.toString() : value,
       ),
     ) as RenderStatisticsSnapshot | null,
@@ -272,14 +393,11 @@ export async function capture(label: string, options: { next?: boolean } = {}) {
       updateMs:
         update === undefined ? null : update.appliedAt - update.startedAt,
       captureMs: presentedAt - captureStarted,
-      readbackMs: frame.statistics?.readbackMs ?? null,
+      readbackMs: statistics.readbackMs,
     },
-    background: sample(frame.width >> 1, Math.round(frame.height * 0.875)),
+    background: sample(width >> 1, Math.round(height * 0.875)),
     corner: sample(0, 0),
-    bitmap: sample(
-      Math.round(frame.width * 0.8625),
-      Math.round(frame.height * 0.35),
-    ),
+    bitmap: sample(Math.round(width * 0.8625), Math.round(height * 0.35)),
   };
 }
 
@@ -299,7 +417,7 @@ export async function workload(
 ) {
   const startedAt = performance.now();
   pendingUpdate = undefined;
-  client.presentation!.resize(config.width ?? 640, config.height ?? 480);
+  await resizePresentation(config.width ?? 640, config.height ?? 480);
   for (const id of [...cachePolicies.keys()])
     if (id.startsWith("workload-")) cachePolicies.delete(id);
   if (config.cache)
@@ -307,25 +425,26 @@ export async function workload(
       cachePolicies.set(`workload-${index}`, config.cache);
   await presentCached(() =>
     Array.from({ length: config.panels ?? 1 }, (_, index) => (
-      <Entity key={index} id={`workload-${index}`}>
-        <Transform
-          bound={false}
-          x={index * 0.1}
-          z={-index * 0.02}
-          ry={config.angle ?? 0}
-        />
-        <Surface
-          bound={false}
-          width={3.8}
-          height={2.4}
-          items={terminalWorkloadItems(assets, {
+      <Terminal
+        key={index}
+        id={`workload-${index}`}
+        worldId={`workload-content-${index}`}
+        assets={assets}
+        x={index * 0.1}
+        z={-index * 0.02}
+        angle={config.angle ?? 0}
+        cache={cachePolicies.get(`workload-${index}`)}
+      >
+        {terminalWorkloadLayers(
+          assets,
+          {
             ...config,
             glyphs: workloadGlyphs,
             unseenGlyphs,
-          })}
-        />
-        {cacheDeclaration(`workload-${index}`)}
-      </Entity>
+          },
+          glyphCodec,
+        )}
+      </Terminal>
     )),
   );
   pendingUpdate = { startedAt, appliedAt: performance.now() };
@@ -338,197 +457,31 @@ export function glyphSets() {
 
 /** Bound the renderer's shared glyph atlas through the presentation channel. */
 export function glyphAtlasLimits(limits: GlyphAtlasLimits) {
-  presentationTesting(client.presentation!).setGlyphAtlasLimits(limits);
+  presentationTesting(rendererDiagnostics()).setGlyphAtlasLimits(limits);
 }
 
 export async function clearWorkload(viewport?: {
   width: number;
   height: number;
 }) {
-  if (viewport) client.presentation!.resize(viewport.width, viewport.height);
+  if (viewport) await resizePresentation(viewport.width, viewport.height);
   await present(null);
-}
-
-type Color = readonly [number, number, number, number];
-const PANEL_COLOR: Color = [0.02, 0.03, 0.05, 1];
-/**
- * A GUI panel on the same camera, viewport and DPR as the terminal workload.
- * `mixed` combines a gradient shape with glow, atlas glyphs and a curve drawing;
- * `filled` and `sparse` differ only in the shape's interior fill. `control`
- * places a checkbox before the shape, under {@link CONTROL_POINT}, for pointer
- * interaction.
- */
-export async function guiPanel(config: {
-  variant: "mixed" | "mixed-without-glow" | "filled" | "sparse" | "empty";
-  control?: boolean;
-  /** Shape size, border and corner radius in logical units (metres at the default density). */
-  shape: {
-    width: number;
-    height: number;
-    borderWidth: number;
-    cornerRadius: number;
-  };
-  angle?: number;
-  /** Mixed-variant label overrides; defaults render "Gui" in green. */
-  label?: { text?: string; color?: Color };
-}) {
-  const [width, height] = [640, 480];
-  client.presentation!.resize(width, height);
-  const { variant, shape } = config;
-  const edge = {
-    cornerRadius: [shape.cornerRadius, shape.cornerRadius] as const,
-    borderWidth: shape.borderWidth,
-    borderColor: [1, 1, 1, 1] as Color,
-  };
-  const theme: GuiControlTheme = {
-    parts: {
-      background: {
-        base: variant.startsWith("mixed")
-          ? {
-              ...edge,
-              gradient: {
-                kind: "linear",
-                start: [0, 0],
-                end: [0, shape.height],
-                color0: [1, 0.08, 0.04, 1],
-                color1: [1, 0.8, 0.08, 1],
-              },
-              ...(variant === "mixed"
-                ? {
-                    glow: {
-                      color: [1, 0.35, 0.05, 1],
-                      intensity: 0.8,
-                      radius: 0.18,
-                      falloff: 2,
-                    },
-                  }
-                : {}),
-            }
-          : edge,
-      },
-    },
-  };
-  const fill: Color =
-    variant === "sparse" ? [0, 0, 0, 0] : [0.85, 0.25, 0.08, 1];
-  // Count the GUI requests and node edits this render commits, observed at
-  // the generated client's transport entry point.
-  const gui = client as unknown as GuiWorldClient;
-  const editGuiBatch = gui.editGuiBatch;
-  const guiEdits = { requests: 0, edits: 0 };
-  gui.editGuiBatch = async (edits) => {
-    guiEdits.requests += 1;
-    guiEdits.edits += edits.length;
-    return await editGuiBatch.call(gui, edits);
-  };
-  try {
-    await renderGuiPanel(config, theme, fill);
-  } finally {
-    gui.editGuiBatch = editGuiBatch;
-  }
-  // The orthographic fixture camera spans ORTHO_HEIGHT metres vertically.
-  return { pixelsPerMetre: height / ORTHO_HEIGHT, guiEdits };
-}
-
-function renderGuiPanel(
-  config: Parameters<typeof guiPanel>[0],
-  theme: GuiControlTheme,
-  fill: Color,
-) {
-  const { variant, shape } = config;
-  return presentCached(() => (
-    <Entity key="gui" id="retained-gui-panel">
-      <Transform bound={false} ry={config.angle ?? 0} />
-      <Surface bound={false} width={3.8} height={2.4} />
-      {cacheDeclaration("retained-gui-panel")}
-      <GuiRoot>
-        <Stack width={3.8} height={2.4} backgroundColor={PANEL_COLOR}>
-          <Padding padding={[0.6, 0, 0, 0.3]}>
-            <Row>
-              {config.control ? <Checkbox width={0.5} height={1.2} /> : null}
-              {variant === "empty" ? (
-                <Stack width={shape.width} height={shape.height} />
-              ) : (
-                <Stack
-                  width={shape.width}
-                  height={shape.height}
-                  backgroundColor={fill}
-                  theme={theme}
-                />
-              )}
-              {variant.startsWith("mixed") ? (
-                <>
-                  {/* Scale the 32 x 24 unit icon to 0.8 x 0.6 metres. */}
-                  <Drawing
-                    asset={assets.icon}
-                    width={0.8}
-                    height={0.6}
-                    color={[1, 1, 1, 1]}
-                    margin={[0.3, 0, 0, 0.15]}
-                    theme={{
-                      parts: { icon: { base: { scale: [0.025, 0.025] } } },
-                    }}
-                  />
-                  <Text
-                    text={config.label?.text ?? "Gui"}
-                    asset={assets.font}
-                    fontSize={0.36}
-                    color={config.label?.color ?? [0.2, 1, 0.35, 1]}
-                    margin={[0.3, 0, 0, 0.15]}
-                  />
-                </>
-              ) : null}
-            </Row>
-          </Padding>
-        </Stack>
-      </GuiRoot>
-    </Entity>
-  ));
-}
-
-/**
- * Write the retained GUI panel's root density through an ordinary GuiRoot
- * field write and return its root node's evaluated logical bounds once a
- * frame has reflowed it.
- */
-export async function guiPanelDensity(units: number) {
-  const entity = await entityBySymbol("retained-gui-panel");
-  successfulBatch(
-    await client.batch(
-      componentFields(client, "GuiRoot", { units_per_metre: units }).map(
-        (field) => ({
-          kind: "setField",
-          entity: { kind: "handle", id: entity },
-          component: client.components.GuiRoot!.id,
-          field,
-        }),
-      ),
-    ),
-  );
-  await client.waitForFrame();
-  const tree = await (client as unknown as GuiWorldClient).semanticSnapshot({
-    entity,
-  });
-  const rootNode = tree.nodes.find((node) => node.parent === undefined);
-  if (!rootNode) throw new Error("Retained GUI panel has no root node");
-  return [...rootNode.bounds];
 }
 
 /**
  * Present a second World on this Host's graphics context. Detaching the
  * current World ends its presentation, so the shared renderer releases that
  * World's retained batches and glyph demand while it stays resident on the
- * Host. The second World copies the current camera and renders `panel`;
- * later fixture calls address it.
+ * Host. The second World copies the current camera; later fixture calls
+ * address it.
  */
-export async function presentSecondWorld(
-  panel: Parameters<typeof guiPanel>[0],
-) {
+async function replacePresentedWorld() {
   const inspection = await client.inspect();
   const view = inspection.entities.find(({ id }) => id === camera)!;
   const fields = (component: "Transform" | "Camera") =>
     Object.fromEntries(
       Object.entries(
-        view.effective.find(
+        view.components.find(
           (value) => value.component === client.components[component]!.id,
         )!.fields,
       ).filter(([, value]) => typeof value === "number"),
@@ -537,16 +490,19 @@ export async function presentSecondWorld(
     Transform: fields("Transform"),
     Camera: fields("Camera"),
   };
-  await host.detachWorld();
-  client = await host.createWorld({
+  await presentation.close();
+  await host.detachWorld(client.session);
+  const created = await host.createWorld({
+    selectedSystems: selectSystems(ATTACHMENTS, CAMERA, SURFACE, LIFECYCLE),
     symbolicId: "surface-second",
     temporary: true,
   });
+  client = await host.openWorld(created.reference);
   client.onRuntimeFailure((failure) => {
     failures.push(failure);
     console.error("Second World runtime failure", failure.message);
   });
-  camera = await activateFixtureCamera(client);
+  camera = await createFixtureCamera(client);
   for (const [component, values] of Object.entries(placement))
     successfulBatch(
       await client.batch(
@@ -558,14 +514,18 @@ export async function presentSecondWorld(
         })),
       ),
     );
-  root = createRoot(client);
+  presentation = new CanvasWorldSession({ host, client });
+  root = presentation.createRoot();
+  cameraOutput = await host.bindOutput(created.reference, camera, "camera");
+  await resizePresentation(640, 480);
+  lastSequence = undefined;
   cachePolicies.clear();
-  return guiPanel(panel);
 }
 
 /** Raw RGBA pixels of a completed capture, base64 encoded for Node-side comparison. */
 export async function capturePixels(label: string) {
   const frame = frames.get(label)!;
+  const { width, height } = frame.view.binding.viewport;
   const encoded = await new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result));
@@ -573,18 +533,19 @@ export async function capturePixels(label: string) {
     reader.readAsDataURL(new Blob([frame.pixels]));
   });
   return {
-    width: frame.width,
-    height: frame.height,
+    width,
+    height,
     pixels: encoded.slice(encoded.indexOf(",") + 1),
   };
 }
 
 export async function referenceText(label: string) {
   const frame = frames.get(label)!;
+  const { width, height } = frame.view.binding.viewport;
   const canvas = document.createElement("canvas");
   const supersampling = 8;
-  canvas.width = frame.width * supersampling;
-  canvas.height = frame.height * supersampling;
+  canvas.width = width * supersampling;
+  canvas.height = height * supersampling;
   const context = canvas.getContext("2d")!;
   const scale = canvas.height / 3;
   context.fillStyle = "white";
@@ -608,12 +569,12 @@ export async function referenceText(label: string) {
   };
   let intersection = 0,
     union = 0;
-  for (let y = Math.round(frame.height * 0.12); y < frame.height * 0.65; y++) {
+  for (let y = Math.round(height * 0.12); y < height * 0.65; y++) {
     // Sample left of the text, then invert linear compositing with its authored
     // 0.92 green tint so both rasterizers use the same coverage threshold.
-    const backgroundGreen = linear(actual[(y * frame.width + 12) * 4 + 1]!);
-    for (let x = 12; x < frame.width * 0.88; x++) {
-      const offset = (y * frame.width + x) * 4;
+    const backgroundGreen = linear(actual[(y * width + 12) * 4 + 1]!);
+    for (let x = 12; x < width * 0.88; x++) {
+      const offset = (y * width + x) * 4;
       let coverage = 0;
       for (let dy = 0; dy < supersampling; dy++)
         for (let dx = 0; dx < supersampling; dx++) {
@@ -649,7 +610,7 @@ export async function glyphProbe(
   projected: boolean,
   label: string,
 ) {
-  client.presentation!.resize(320, 240);
+  await resizePresentation(320, 240);
   successfulBatch(
     await client.batch(
       componentFields(client, "Camera", {
@@ -663,22 +624,21 @@ export async function glyphProbe(
       })),
     ),
   );
+  const glyphLayers = terminalLayers(assets, {
+    backgroundColor: [0, 0, 0, 1],
+    text: glyph,
+    textFontSize: fontSize,
+    textPosition: [1.9 - 0.3 * fontSize, 1.2 + 0.25 * fontSize],
+    textColor: [1, 1, 1],
+  });
   await present(
     <Terminal
       assets={assets}
       angle={angle}
-      items={[
-        { ...terminalItems(assets)[0]!, color: [0, 0, 0, 1] },
-        {
-          key: "text",
-          content: { kind: "label", text: glyph },
-          asset: assets.font,
-          position: [1.9 - 0.3 * fontSize, 1.2 + 0.25 * fontSize],
-          fontSize,
-          color: [1, 1, 1, 1],
-        },
-      ]}
-    />,
+      onWorld={observeCanvas("surface-terminal")}
+    >
+      {[glyphLayers[0], glyphLayers[2]]}
+    </Terminal>,
   );
   await capture(label);
   const reference = compareGlyph(
@@ -694,10 +654,18 @@ export async function glyphProbe(
 }
 
 export async function changeView(angle: number, width = 320, height = 240) {
-  client.presentation!.resize(width, height);
-  await present(<Terminal assets={assets} angle={angle} />);
-  return (await surfaceSnapshot(client, terminal)).collection.items.map(
-    (item) => item.id,
+  await resizePresentation(width, height);
+  await present(
+    <Terminal
+      assets={assets}
+      angle={angle}
+      onWorld={observeCanvas("surface-terminal")}
+    >
+      {terminalLayers(assets)}
+    </Terminal>,
+  );
+  return (await terminalCanvasSnapshot()).children.map(
+    (item) => item.symbolicId,
   );
 }
 
@@ -732,25 +700,62 @@ export async function orthographic() {
 }
 
 export async function keyedLifecycle() {
-  const items = terminalItems(assets);
-  // Adjacent foreground items do not overlap; changing their order must retain identities.
-  [items[4], items[5]] = [items[5]!, items[4]!];
-  await present(<Terminal assets={assets} items={items} />);
-  const reordered = (
-    await surfaceSnapshot(client, terminal)
-  ).collection.items.map((item) => item.id);
-  const cursor = items.splice(3, 1)[0]!;
-  await present(<Terminal assets={assets} items={items} />);
-  const removed = await surfaceSnapshot(client, terminal);
-  items.splice(3, 0, cursor);
-  await present(<Terminal assets={assets} items={items} />);
-  const restored = await surfaceSnapshot(client, terminal);
+  const layers = terminalLayers(assets);
+  const before = await terminalCanvasChildren();
+  [layers[4], layers[5]] = [layers[5]!, layers[4]!];
+  await present(
+    <Terminal assets={assets} onWorld={observeCanvas("surface-terminal")}>
+      {layers}
+    </Terminal>,
+  );
+  const reordered = await terminalCanvasSnapshot();
+  const reorderedEntities = await terminalCanvasChildren();
+  const cursor = layers.splice(3, 1)[0]!;
+  await present(
+    <Terminal assets={assets} onWorld={observeCanvas("surface-terminal")}>
+      {layers}
+    </Terminal>,
+  );
+  const removed = await terminalCanvasSnapshot();
+  const removedEntities = await terminalCanvasChildren();
+  layers.splice(3, 0, cursor);
+  await present(
+    <Terminal assets={assets} onWorld={observeCanvas("surface-terminal")}>
+      {layers}
+    </Terminal>,
+  );
+  const restored = await terminalCanvasSnapshot();
+  const restoredEntities = await terminalCanvasChildren();
+  const originalCursor = before.find(
+    (item) => item.metadata.symbolicId === "cursor",
+  );
+  const replacementCursor = restoredEntities.find(
+    (item) => item.metadata.symbolicId === "cursor",
+  );
   return {
-    reordered,
-    removedIds: removed.collection.items.map((item) => item.id),
-    removedProperty: removed.properties[surfaceProperty(4, "color")] ?? null,
-    restoredIds: restored.collection.items.map((item) => item.id),
-    nextId: restored.collection.nextId,
+    reordered: reordered.children.map((item) => item.symbolicId),
+    reorderedIdentityPreserved:
+      reorderedEntities.length === before.length &&
+      before.every((item) =>
+        reorderedEntities.some(
+          (candidate) =>
+            candidate.metadata.symbolicId === item.metadata.symbolicId &&
+            candidate.id === item.id,
+        ),
+      ),
+    removed: removed.children.map((item) => item.symbolicId),
+    cursorRemoved: !removedEntities.some(
+      (item) => item.metadata.symbolicId === "cursor",
+    ),
+    restored: restored.children.map((item) => item.symbolicId),
+    cursorReplaced:
+      originalCursor !== undefined &&
+      replacementCursor !== undefined &&
+      originalCursor.id !== replacementCursor.id &&
+      restored.children.find((item) => item.symbolicId === "cursor")?.components
+        .CanvasDrawing !== undefined &&
+      restored.children.find((item) => item.symbolicId === "cursor")?.components
+        .CanvasStyle !== undefined,
   };
 }
 
@@ -762,8 +767,8 @@ export async function surfaceCacheDeclarations() {
   const policyRoot = createRoot(client);
   const panel = (cache?: SurfaceCacheProps) => (
     <Entity id="surface-cache-policy">
-      <Surface bound={false} width={1} height={1} />
-      {cache ? <SurfaceCache bound={false} {...cache} /> : null}
+      <Surface width={1} height={1} />
+      {cache ? <SurfaceCache {...cache} /> : null}
     </Entity>
   );
   const observed: unknown[] = [];
@@ -782,6 +787,8 @@ export async function surfaceCacheDeclarations() {
   await observe();
   await policyRoot.render(panel());
   await observe();
+  // Unmount deletes nothing; removing the declaration deletes the entity.
+  await policyRoot.render(null);
   await policyRoot.unmount();
   return {
     observed,
@@ -792,42 +799,52 @@ export async function surfaceCacheDeclarations() {
 }
 
 export async function paintOrder(reverse: boolean, angle = 0) {
-  const items = terminalItems(assets);
+  const layers = terminalLayers(assets);
   const probes = [
-    {
-      key: "red",
-      content: { kind: "drawing" as const },
-      asset: assets.panel,
-      position: [1.9, 1.85] as const,
-      scale: [0.4, 0.4] as const,
-      color: [1, 0, 0, 1] as const,
-    },
-    {
-      key: "green",
-      content: { kind: "drawing" as const },
-      asset: assets.panel,
-      position: [1.9, 1.85] as const,
-      scale: [0.4, 0.4] as const,
-      color: [0, 1, 0, 1] as const,
-    },
+    canvasDrawingEntity(
+      "paint-red",
+      assets.panel,
+      [1.9, 1.85],
+      [0.4, 0.4],
+      [1, 0, 0, 1],
+    ),
+    canvasDrawingEntity(
+      "paint-green",
+      assets.panel,
+      [1.9, 1.85],
+      [0.4, 0.4],
+      [0, 1, 0, 1],
+    ),
   ];
   if (reverse) probes.reverse();
-  items.push(...probes, {
-    key: "clip",
-    content: { kind: "drawing" },
-    asset: assets.panel,
-    position: [3.8, 1.2],
-    scale: [0.5, 0.5],
-    color: [1, 0, 0, 1],
-  });
-  await present(<Terminal assets={assets} items={items} angle={angle} />);
+  layers.push(
+    ...probes,
+    canvasDrawingEntity(
+      "paint-clipped",
+      assets.panel,
+      [3.8, 1.2],
+      [0.5, 0.5],
+      [1, 0, 0, 1],
+    ),
+  );
+  await present(
+    <Terminal
+      assets={assets}
+      angle={angle}
+      onWorld={observeCanvas("surface-terminal")}
+    >
+      {layers}
+    </Terminal>,
+  );
 }
 
 /** Compare a rear capture with the independently expected horizontal reflection. */
 export function mirrorComparison(frontLabel: string, rearLabel: string) {
   const front = frames.get(frontLabel)!;
   const rear = frames.get(rearLabel)!;
-  if (front.width !== rear.width || front.height !== rear.height)
+  const { width, height } = front.view.binding.viewport;
+  const rearViewport = rear.view.binding.viewport;
+  if (width !== rearViewport.width || height !== rearViewport.height)
     throw new Error("Surface mirror captures have different dimensions");
   const a = new Uint8Array(front.pixels);
   const b = new Uint8Array(rear.pixels);
@@ -835,10 +852,10 @@ export function mirrorComparison(frontLabel: string, rearLabel: string) {
   let mismatchedPixels = 0;
   let totalError = 0;
   const background = [...a.subarray(0, 4)];
-  for (let y = 0; y < front.height; y++) {
-    for (let x = 0; x < front.width; x++) {
-      const source = (y * front.width + x) * 4;
-      const reflected = (y * front.width + (front.width - x - 1)) * 4;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const source = (y * width + x) * 4;
+      const reflected = (y * width + (width - x - 1)) * 4;
       let pixelError = 0;
       let content = false;
       for (let channel = 0; channel < 4; channel++) {
@@ -856,7 +873,7 @@ export function mirrorComparison(frontLabel: string, rearLabel: string) {
   return {
     contentPixels,
     mismatchedPixels,
-    meanError: totalError / (front.width * front.height),
+    meanError: totalError / (width * height),
   };
 }
 
@@ -866,32 +883,34 @@ export function mirrorComparison(frontLabel: string, rearLabel: string) {
  * production camera projection and Surface inverse assign to a rendered pixel.
  */
 export async function orientationProbe(redY: number, label: string) {
-  client.presentation!.resize(320, 240);
-  const marker = (
-    key: string,
-    position: readonly [number, number],
-    scale: readonly [number, number],
-    color: readonly [number, number, number, number],
-  ): SurfaceItemProps => ({
-    key,
-    content: { kind: "drawing" },
-    asset: assets.panel,
-    position,
-    scale,
-    color,
-  });
+  await resizePresentation(320, 240);
+  const layers = terminalLayers(assets, {
+    backgroundColor: [0, 0, 0, 1],
+  }).slice(0, 1);
+  layers.push(
+    canvasDrawingEntity(
+      "orientation-red",
+      assets.panel,
+      [0.6, redY],
+      [0.4, 0.2],
+      [1, 0, 0, 1],
+    ),
+    canvasDrawingEntity(
+      "orientation-green",
+      assets.panel,
+      [3.2, 1.9],
+      [0.2, 0.4],
+      [0, 1, 0, 1],
+    ),
+  );
   await present(
-    <Terminal
-      assets={assets}
-      items={[
-        { ...terminalItems(assets)[0]!, color: [0, 0, 0, 1] },
-        marker("red", [0.6, redY], [0.4, 0.2], [1, 0, 0, 1]),
-        marker("green", [3.2, 1.9], [0.2, 0.4], [0, 1, 0, 1]),
-      ]}
-    />,
+    <Terminal assets={assets} onWorld={observeCanvas("surface-terminal")}>
+      {layers}
+    </Terminal>,
   );
   await capture(label);
   const frame = frames.get(label)!;
+  const { width, height } = frame.view.binding.viewport;
   const pixels = new Uint8Array(frame.pixels);
   const region = (select: (r: number, g: number, b: number) => boolean) => {
     let count = 0,
@@ -901,9 +920,9 @@ export async function orientationProbe(redY: number, label: string) {
       right = -Infinity,
       top = Infinity,
       bottom = -Infinity;
-    for (let row = 0; row < frame.height; row++)
-      for (let column = 0; column < frame.width; column++) {
-        const offset = (row * frame.width + column) * 4;
+    for (let row = 0; row < height; row++)
+      for (let column = 0; column < width; column++) {
+        const offset = (row * width + column) * 4;
         if (!select(pixels[offset]!, pixels[offset + 1]!, pixels[offset + 2]!))
           continue;
         count++;
@@ -924,15 +943,17 @@ export async function orientationProbe(redY: number, label: string) {
   const green = region((r, g, b) => g > 180 && r < 90 && b < 90);
   const projection = await client.query({
     type: "CameraProjectQuery",
-    x: (red.centroid[0] + 0.5) / frame.width,
-    y: (red.centroid[1] + 0.5) / frame.height,
-    width: frame.width,
-    height: frame.height,
+    view: {
+      kind: "bound",
+      binding: frame.view.binding,
+    },
+    x: (red.centroid[0] + 0.5) / width,
+    y: (red.centroid[1] + 0.5) / height,
     plane: { point: [0, 0, 0], normal: [0, 0, 1] },
   });
   if (!projection.ok || !projection.position)
     throw new Error(
-      `Surface plane projection failed: ${JSON.stringify(projection)}`,
+      `Surface plane projection failed: ${JSON.stringify(projection, (_, value) => (typeof value === "bigint" ? String(value) : value))}`,
     );
   const hit = entityLocalToSurfaceContent(
     [projection.position[0], projection.position[1]],
@@ -943,15 +964,18 @@ export async function orientationProbe(redY: number, label: string) {
 
 export function sample(label: string, x: number, y: number) {
   const frame = frames.get(label)!;
-  const offset = (y * frame.width + x) * 4;
+  const { width } = frame.view.binding.viewport;
+  const offset = (y * width + x) * 4;
   return [...new Uint8Array(frame.pixels).subarray(offset, offset + 4)];
 }
 
 export async function pendingFont() {
   const pending = clientAssetSource(client.session, 17, 9000n);
-  const items = terminalItems(assets);
-  items[2] = { ...items[2]!, asset: pending };
-  await present(<Terminal assets={assets} items={items} />);
+  await present(
+    <Terminal assets={assets} onWorld={observeCanvas("surface-terminal")}>
+      {terminalLayers(assets, { font: pending })}
+    </Terminal>,
+  );
 }
 
 export async function provideFont() {
@@ -962,28 +986,59 @@ export async function provideFont() {
       await fetch("/target/font-assets/shure-tech-mono.ippf")
     ).arrayBuffer(),
   );
-  await waitSurfaceAssets(client, [pending.source]);
+  await waitSurfaceAssets(await canvasSession(), [pending.source]);
 }
 
 export async function recover() {
-  const previous = await client.presentation!.capture();
-  presentationTesting(client.presentation!).loseContext();
+  const previous = await presentation.capture({ afterOutputs: [cameraOutput] });
+  presentationTesting(rendererDiagnostics()).loseContext();
   await new Promise<void>((resolve) =>
     requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
   );
-  presentationTesting(client.presentation!).restoreContext();
-  while (
-    (await client.presentation!.capture()).contextGeneration <=
-    previous.contextGeneration
-  ) {
+  presentationTesting(rendererDiagnostics()).restoreContext();
+  await presentation.recoverPresentation();
+  while (true) {
+    const restored = await presentation.capture({
+      afterOutputs: [cameraOutput],
+    });
+    if (restored.view.surface.context !== previous.view.surface.context) break;
     await new Promise<void>((resolve) =>
       requestAnimationFrame(() => resolve()),
     );
   }
-  await waitSurfaceAssets(
-    client,
-    Object.values(assets).map((asset) => asset.source),
+  await waitPresentedCanvasAssets();
+}
+
+/**
+ * Wait until every presented terminal Canvas World has its assets loaded: the
+ * observed terminal scene uses all four, and streamed workload panels, which
+ * the fixture does not observe, use the font and panel drawing.
+ */
+async function waitPresentedCanvasAssets() {
+  const terminal = canvasSessions.get("surface-terminal");
+  if (terminal) {
+    await waitSurfaceAssets(
+      await terminal,
+      Object.values(assets).map((asset) => asset.source),
+    );
+    return;
+  }
+  const worlds = (await host.listWorlds()).filter(({ symbolicId }) =>
+    symbolicId.startsWith("workload-content-"),
   );
+  if (worlds.length === 0)
+    throw new Error("No presented terminal Canvas World to recover");
+  for (const { symbolicId } of worlds) {
+    const session = await host.openWorld(await host.resolveWorld(symbolicId));
+    try {
+      await waitSurfaceAssets(session, [
+        assets.font.source,
+        assets.panel.source,
+      ]);
+    } finally {
+      await session.close();
+    }
+  }
 }
 
 export async function loadPendingSurfaceAssetsAcrossContextLoss() {
@@ -997,12 +1052,14 @@ export async function loadPendingSurfaceAssetsAcrossContextLoss() {
   ]);
   const font = clientAssetSource(client.session, 17, 9001n);
   const drawing = clientAssetSource(client.session, 18, 9002n);
-  const items = terminalItems(assets);
-  items[0] = { ...items[0]!, asset: drawing };
-  items[2] = { ...items[2]!, asset: font };
-  await present(<Terminal assets={assets} items={items} />);
-  const before = await client.presentation!.capture();
-  presentationTesting(client.presentation!).loseContext();
+  await present(
+    <Terminal assets={assets} onWorld={observeCanvas("surface-terminal")}>
+      {terminalLayers(assets, { font, panel: drawing })}
+    </Terminal>,
+  );
+  const contentClient = await canvasSession();
+  const before = await presentation.capture({ afterOutputs: [cameraOutput] });
+  presentationTesting(rendererDiagnostics()).loseContext();
   await new Promise<void>((resolve) =>
     requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
   );
@@ -1014,27 +1071,28 @@ export async function loadPendingSurfaceAssetsAcrossContextLoss() {
   await new Promise<void>((resolve) =>
     requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
   );
-  const whileLost = (await client.inspect()).resources.filter(
+  const whileLost = (await contentClient.inspect()).resources.filter(
     (resource) =>
       resource.source === font.source || resource.source === drawing.source,
   );
 
-  presentationTesting(client.presentation!).restoreContext();
-  await waitSurfaceAssets(client, [font.source, drawing.source]);
-  let after = await client.presentation!.capture();
-  while (after.contextGeneration <= before.contextGeneration) {
+  presentationTesting(rendererDiagnostics()).restoreContext();
+  await presentation.recoverPresentation();
+  await waitSurfaceAssets(contentClient, [font.source, drawing.source]);
+  let after = await presentation.capture({ afterOutputs: [cameraOutput] });
+  while (after.view.surface.context === before.view.surface.context) {
     await new Promise<void>((resolve) =>
       requestAnimationFrame(() => resolve()),
     );
-    after = await client.presentation!.capture();
+    after = await presentation.capture({ afterOutputs: [cameraOutput] });
   }
-  const restored = (await client.inspect()).resources.filter(
+  const restored = (await contentClient.inspect()).resources.filter(
     (resource) =>
       resource.source === font.source || resource.source === drawing.source,
   );
   return {
-    beforeGeneration: before.contextGeneration,
-    afterGeneration: after.contextGeneration,
+    beforeGeneration: String(before.view.surface.context),
+    afterGeneration: String(after.view.surface.context),
     whileLost,
     restored,
   };
@@ -1051,17 +1109,14 @@ export function equal(a: string, b: string) {
 
 export function captureDataUrl(label: string) {
   const frame = frames.get(label)!;
+  const { width, height } = frame.view.binding.viewport;
   const canvas = document.createElement("canvas");
-  canvas.width = frame.width;
-  canvas.height = frame.height;
+  canvas.width = width;
+  canvas.height = height;
   canvas
     .getContext("2d")!
     .putImageData(
-      new ImageData(
-        new Uint8ClampedArray(frame.pixels),
-        frame.width,
-        frame.height,
-      ),
+      new ImageData(new Uint8ClampedArray(frame.pixels), width, height),
       0,
       0,
     );
@@ -1071,9 +1126,17 @@ export function captureDataUrl(label: string) {
 export async function close() {
   cachePolicies.clear();
   cacheScene = null;
-  await root?.unmount();
+  await presentation?.close();
+  await Promise.all(
+    [...observedCanvasClients].map(async (session) => {
+      if (!session.closure) await session.close();
+    }),
+  );
+  observedCanvasClients.clear();
+  canvasSessions.clear();
   await host?.close();
   frames.clear();
+  lastSequence = undefined;
 }
 
 /** Authored `SurfaceCache` fields; see `ipp_core::SurfaceCachePolicy`. */
@@ -1141,58 +1204,39 @@ export async function cacheTerminal(config: {
   devicePixels?: boolean;
 }) {
   const scale = config.devicePixels ? window.devicePixelRatio : 1;
-  client.presentation!.resize(Math.round(320 * scale), Math.round(240 * scale));
-  const items = terminalItems(assets);
-  const cursor = items[3]!;
-  const color = config.cursor ?? cursor.color ?? [1, 1, 1, 1];
-  items[3] = {
-    ...cursor,
-    color: config.translucent ? [color[0], color[1], color[2], 0.5] : color,
+  await resizePresentation(
+    Math.round(320 * scale),
+    Math.round(240 * scale),
+    window.devicePixelRatio,
+  );
+  const layers = terminalLayers(assets, {
+    ...(config.cursor ? { cursorColor: config.cursor } : {}),
     ...(config.translucent
-      ? { position: [1.2, 1.1] as const, scale: [1.8, 0.5] as const }
+      ? {
+          cursorOpacity: 0.5,
+          cursorPosition: [1.2, 1.1] as const,
+          cursorScale: [1.8, 0.5] as const,
+        }
       : {}),
-  };
-  if (config.font === "pending")
-    items[2] = {
-      ...items[2]!,
-      asset: clientAssetSource(client.session, 17, 9000n),
-    };
+    ...(config.font === "pending"
+      ? { font: clientAssetSource(client.session, 17, 9000n) }
+      : {}),
+  });
   await presentCached(() => (
     <Terminal
       assets={assets}
-      items={items}
       angle={config.angle ?? 0}
       cache={cachePolicies.get("surface-terminal")}
-    />
+      onWorld={observeCanvas("surface-terminal")}
+    >
+      {layers}
+    </Terminal>
   ));
-}
-
-/**
- * Normalized viewport point over the `control` checkbox of an unrotated
- * {@link guiPanel}: the 3.8 x 2.4 m panel spans 16..624 x 48..432 pixels of the
- * 640 x 480 view at 160 px/m, and the checkbox follows the padding over panel
- * metres x 0.3..0.8 and y 0.6..1.8.
- */
-const CONTROL_POINT = [(16 + 0.55 * 160) / 640, (48 + 1.2 * 160) / 480];
-
-/**
- * Hover the `control` checkbox of the presented GUI panel through production
- * GUI input, or move the pointer off every panel.
- */
-export async function hoverPanel(active: boolean) {
-  const gui = client as unknown as {
-    submitGuiInput(input: Record<string, unknown>): Promise<unknown>;
-  };
-  return gui.submitGuiInput({
-    kind: "pointerMove",
-    pointer: 1,
-    position: active ? CONTROL_POINT : [0.01, 0.01],
-  });
 }
 
 /** Bound resident cache image bytes on this graphics context. */
 export function surfaceCacheBudget(bytes: number) {
-  presentationTesting(client.presentation!).setSurfaceCacheBudget(bytes);
+  presentationTesting(rendererDiagnostics()).setSurfaceCacheBudget(bytes);
 }
 
 /** Run the device-level cache target and error-check oracles against a build's shipped WebGL bridge. */
@@ -1203,3 +1247,24 @@ export async function bridgeProbe(build: string, gui: boolean) {
     errorChecks: await probeErrorCheckBridge(bridge),
   };
 }
+
+export const surfaceFixture = {
+  get host() {
+    return host;
+  },
+  get client() {
+    return client;
+  },
+  get presentation() {
+    return presentation;
+  },
+  get assets() {
+    return assets;
+  },
+  cameraHeight: ORTHO_HEIGHT,
+  resizePresentation,
+  presentCached,
+  cacheDeclaration,
+  entityBySymbol,
+  replacePresentedWorld,
+};

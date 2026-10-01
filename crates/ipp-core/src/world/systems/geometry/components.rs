@@ -1,11 +1,12 @@
 use super::{GEOMETRY_TYPE, GeometryDefinition, GeometryEvaluationState};
 use crate::{
     EntityId, ErrorReason,
-    components::schema::ComponentLifecycle,
+    components::schema::{ComponentLifecycle, same_text},
     services::asset_management::service::{AssetDemandSelection, validate_source},
 };
 use ipp_schema_derive::SchemaComponent;
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 /// Private evaluated storage of one bounding or picking component incarnation.
 #[derive(Debug, Default)]
@@ -24,7 +25,7 @@ macro_rules! geometry_component {
             /// Inline IPPG definition; empty selects the source or mesh-derived geometry.
             pub geometry: Vec<u8>,
             /// Immutable geometry source; empty uses inline data or the visual mesh.
-            pub source: String,
+            pub source: Arc<str>,
             /// Immutable geometry variant.
             pub variant: u32,
             /// Skeleton entity for joint-pair parts; zero selects this entity's rig.
@@ -52,7 +53,7 @@ macro_rules! geometry_component {
             fn default() -> Self {
                 Self {
                     geometry: Vec::new(),
-                    source: String::new(),
+                    source: Arc::default(),
                     variant: 0,
                     skeleton: EntityId::from_bits(0),
                     is_rendered: false,
@@ -89,7 +90,7 @@ macro_rules! geometry_component {
         impl PartialEq for $name {
             fn eq(&self, other: &Self) -> bool {
                 self.geometry == other.geometry
-                    && self.source == other.source
+                    && same_text(&self.source, &other.source)
                     && self.variant == other.variant
                     && self.skeleton == other.skeleton
                     && self.is_rendered == other.is_rendered
@@ -105,7 +106,7 @@ macro_rules! geometry_component {
         impl ComponentLifecycle for $name {
             fn preserve_runtime(&mut self, previous: &mut Self) {
                 if self.geometry == previous.geometry
-                    && self.source == previous.source
+                    && same_text(&self.source, &previous.source)
                     && self.variant == previous.variant
                     && self.skeleton == previous.skeleton
                 {

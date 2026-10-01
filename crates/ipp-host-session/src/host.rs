@@ -19,27 +19,35 @@ impl<P: HostServices> Host<P> {
             runtime,
             services,
             frame_scratch: Default::default(),
-            response_buffers: Vec::with_capacity(MAX_OUTBOX),
+            presentation_time: 0.0,
+            presentation: Default::default(),
         })
     }
 
-    /// Create a world and its initial logical connection. IDs are caller-fenced.
-    pub fn open_session(&mut self, id: u64) -> Result<WorldId, String> {
-        self.open_session_with_limits(id, Default::default())
+    /// Create a world with exactly these Systems and its initial logical
+    /// connection. IDs are caller-fenced.
+    pub fn open_session(
+        &mut self,
+        id: u64,
+        selected: &[ipp_core::systems::SystemId],
+    ) -> Result<WorldId, String> {
+        self.open_session_with_limits(id, Default::default(), selected)
     }
 
-    /// Construct a protocol world under the Host's selected entity/ingress limits.
+    /// Construct a protocol world with exactly these Systems under the Host's
+    /// selected entity/ingress limits.
     pub fn open_session_with_limits(
         &mut self,
         id: u64,
         limits: ipp_core::WorldLimits,
+        selected: &[ipp_core::systems::SystemId],
     ) -> Result<WorldId, String> {
         if id == 0 || self.sessions.contains_key(&id) {
             return Err("session identity is zero or already live".into());
         }
         let world = self
             .runtime
-            .create_world(limits)
+            .create_world(limits, selected)
             .map_err(|error| error.to_string())?;
         self.sessions
             .insert(id, WorldSession::new(id, world, false, true));
@@ -48,24 +56,13 @@ impl<P: HostServices> Host<P> {
 
     /// Borrow a logical session and the world selected by its Host routing record.
     pub fn session_mut(&mut self, id: u64) -> Option<WorldSessionContext<'_, P>> {
-        let slots = self.sessions.len().saturating_mul(2 * MAX_OUTBOX);
-        self.response_buffers
-            .reserve(slots.saturating_sub(self.response_buffers.len()));
         let session = self.sessions.get_mut(&id)?;
+        let world = self.runtime.world_mut(session.world)?;
         Some(WorldSessionContext {
-            world: self.runtime.world_mut(session.world)?,
+            world,
             session,
             services: &mut self.services,
-            response_buffers: &mut self.response_buffers,
         })
-    }
-
-    /// Recycle storage only after all transport reads and copies have finished.
-    pub fn recycle_response_buffer(&mut self, mut bytes: Vec<u8>) {
-        bytes.clear();
-        if bytes.capacity() != 0 && self.response_buffers.len() < self.response_buffers.capacity() {
-            self.response_buffers.push(bytes);
-        }
     }
 
     /// Observe the world chosen for a logical session without accessing its state.
@@ -94,134 +91,146 @@ impl<P: HostServices> Host<P> {
         if !dt.is_finite() || dt < 0.0 {
             return Err("invalid host frame delta".into());
         }
+        let presentation_time = self.presentation_time + dt;
+        if !presentation_time.is_finite() {
+            return Err("Host presentation time exhausted".into());
+        }
+
         let mut failures = self.process_host_requests();
-        failures.extend(self.process_command_batches());
+        failures.extend(self.admit_session_requests(dt));
         self.services.service_resources(&mut self.runtime)?;
         let mut scratch = std::mem::take(&mut self.frame_scratch);
         scratch.sessions.clear();
         scratch.prepared.clear();
-        scratch.worlds.clear();
-        scratch.evaluating.clear();
         scratch.sessions.extend(self.sessions.keys().copied());
         for &id in &scratch.sessions {
-            if self.command_batch_owner(self.sessions[&id].world).is_some() {
-                continue;
-            }
-            let result = self
-                .session_mut(id)
-                .expect("live session")
-                .prepare_frame(dt);
-            match result {
-                Ok(()) => {
-                    if self.sessions[&id].ready {
-                        scratch.prepared.push(id);
-                    }
-                }
-                Err(error) => failures.push((self.connection_for_session(id), error)),
-            }
-        }
-        scratch.worlds.extend(self.runtime.world_ids());
-        for &world in &scratch.worlds {
-            if self.command_batch_owner(world).is_some() {
-                continue;
-            }
-            if self
+            if let Some(error) = self
                 .sessions
-                .values()
-                .any(|session| session.world == world && session.private_world && !session.ready)
+                .get_mut(&id)
+                .unwrap()
+                .pending_errors
+                .remove(&0)
             {
-                continue;
-            }
-            let result = self
-                .runtime
-                .world_mut(world)
-                .expect("live World")
-                .prepare_update(dt);
-            match result {
-                Ok(()) => scratch.evaluating.push(world),
-                Err(error) => {
-                    let affected: Vec<_> = self
-                        .sessions
-                        .iter()
-                        .filter(|(_, session)| session.world == world)
-                        .map(|(&id, _)| id)
-                        .collect();
-                    for id in affected {
-                        let connection = self.connection_for_session(id);
-                        if let Err(error) = self
-                            .session_mut(id)
-                            .expect("live session")
-                            .record_runtime_failure(
-                                ipp_protocol::RuntimeFailureScope::World,
-                                false,
-                                error.to_string(),
-                            )
-                        {
-                            failures.push((connection, error));
-                        }
-                    }
-                }
+                failures.push((self.connection_for_session(id), error));
+            } else if self.sessions[&id].ready {
+                scratch.prepared.push(id);
             }
         }
         self.services.progress_assets(&mut self.runtime);
-        for &world in &scratch.evaluating {
-            let result = (|| {
-                let mut world = self.runtime.world_mut(world).expect("live World");
-                world.set_render_viewport(self.services.render_viewport());
-                #[allow(unused_mut)]
-                let mut report = world.step(dt).map_err(|error| error.to_string())?;
-                let mut failure = if let Some(reason) = world.fault() {
-                    Some((
-                        ipp_protocol::RuntimeFailureScope::World,
-                        true,
-                        reason.to_string(),
-                    ))
-                } else {
-                    self.services
-                        .present(&mut world)
-                        .err()
-                        .map(|failure| (failure.scope, false, failure.message))
-                };
-                match world.take_asset_events() {
-                    Ok(events) => report.resource_changes.extend(events),
-                    Err(error) => {
-                        failure = Some((ipp_protocol::RuntimeFailureScope::Resource, false, error))
+        let frame = self.runtime.frame(dt).map_err(|error| error.to_string())?;
+        #[cfg(feature = "diagnostics")]
+        self.services.record_frame(&mut self.runtime, &frame);
+        self.complete_view_queries(&frame);
+        self.presentation_time = presentation_time;
+        let mut presentation_failures = std::collections::BTreeMap::new();
+        for failure in self.services.route_input(&mut self.runtime, &frame) {
+            let world = failure.output.world();
+            if self.runtime.world_ref(world.id()) == Some(world) {
+                presentation_failures.insert(
+                    world.id(),
+                    HostPresentationFailure {
+                        scope: ipp_protocol::RuntimeFailureScope::Context,
+                        message: failure.message,
+                    },
+                );
+            }
+        }
+        if let Some((world, error)) = self.presentation.draw(
+            &mut self.runtime,
+            &mut self.services,
+            self.presentation_time,
+            self.connections.now,
+        ) {
+            presentation_failures.insert(world, error);
+        }
+        failures.extend(self.publish_presentation_responses());
+        for (world, result) in frame.worlds {
+            let mut result = result.map(|mut report| {
+                if let Some(mut context) = self.runtime.world_mut(world) {
+                    match context.take_asset_events() {
+                        Ok(events) => report.resource_changes.extend(events),
+                        Err(message) => {
+                            presentation_failures.insert(
+                                world,
+                                HostPresentationFailure {
+                                    scope: ipp_protocol::RuntimeFailureScope::Resource,
+                                    message,
+                                },
+                            );
+                        }
                     }
+                    report.assets.extend(context.take_asset_outcomes());
                 }
-                report.assets.extend(world.take_asset_outcomes());
-                Ok::<_, String>((report, failure))
-            })();
+                report
+            });
             for &id in &scratch.prepared {
                 if self.sessions[&id].world != world {
                     continue;
                 }
-                let result = match &result {
-                    Ok((report, failure)) => {
+                let result = match &mut result {
+                    Ok(report) => {
                         let mut session = self.session_mut(id).expect("live session");
+                        let failure = presentation_failures
+                            .get(&world)
+                            .map(|error| (error.scope, false, error.message.clone()))
+                            .or_else(|| {
+                                frame.publication_errors.get(&world).map(|error| {
+                                    (
+                                        ipp_protocol::RuntimeFailureScope::World,
+                                        session.world.fault().is_some(),
+                                        error.clone(),
+                                    )
+                                })
+                            });
                         if let Some((scope, faulted, message)) = failure {
                             session
-                                .record_runtime_failure(*scope, *faulted, message.clone())
+                                .record_runtime_failure(scope, faulted, message)
                                 .and_then(|()| session.publish_report(report))
                         } else {
                             session.session.last_failure = None;
                             session.publish_report(report)
                         }
                     }
-                    Err(error) => self
-                        .session_mut(id)
-                        .expect("live session")
-                        .record_runtime_failure(
-                            ipp_protocol::RuntimeFailureScope::World,
-                            false,
-                            error.clone(),
-                        ),
+                    Err(error) => {
+                        let mut session = self.session_mut(id).expect("live session");
+                        session.fail_view_queries(*error).and_then(|()| {
+                            session.record_runtime_failure(
+                                ipp_protocol::RuntimeFailureScope::World,
+                                session.world.fault().is_some(),
+                                error.to_string(),
+                            )
+                        })
+                    }
                 };
                 if let Err(error) = result {
-                    failures.push((self.connection_for_session(id), error));
+                    let connection = self.connection_for_session(id);
+                    let mut sessions = 0;
+                    let mut progress = 0;
+                    let mut queued_progress = 0;
+                    let mut queued = 0;
+                    let mut reserved = 0;
+                    for (&peer, session) in &self.sessions {
+                        if self.connection_for_session(peer) != connection {
+                            continue;
+                        }
+                        sessions += 1;
+                        progress += session.progress_leases.get();
+                        queued_progress += session.outbox.progress_len();
+                        queued += session.outbox.len();
+                        reserved += session.reply_reservations.len();
+                    }
+                    let usage = self.sessions[&id].reply_budget.0.usage();
+                    failures.push((
+                        connection,
+                        format!("{error} sessions={sessions} frame_leases={progress} frame_queued={queued_progress} world_queued={queued} world_reserved={reserved} physical_entries={} physical_bytes={}", usage.entries, usage.bytes),
+                    ));
                 }
             }
         }
         self.runtime.flush_resource_lifecycle();
+        failures.extend(self.drain_lifecycle_watches());
+        #[cfg(feature = "gui")]
+        failures.extend(self.drain_gui_observations());
         self.frame_scratch = scratch;
         Ok(failures)
     }
@@ -277,6 +286,30 @@ impl<P: HostServices> Host<P> {
     }
 }
 
+/// Camera outputs and the evaluators they require, for session tests.
+#[cfg(test)]
+pub(crate) const TEST_CAMERA_SYSTEMS: &[ipp_core::systems::SystemId] = &[
+    ipp_core::systems::animation::AnimationSystem::ID,
+    ipp_core::systems::asset_dependencies::AssetDependencySystem::ID,
+    ipp_core::systems::hierarchy::HierarchySystem::ID,
+    ipp_core::systems::look_at::LookAtSystem::ID,
+    ipp_core::systems::hierarchy::FinalPropagationSystem::ID,
+    ipp_core::systems::geometry::GeometrySystem::ID,
+    ipp_core::systems::camera::CameraSystem::ID,
+];
+
+/// Rendered meshes and materials with the evaluators they require, for session tests.
+#[cfg(test)]
+pub(crate) const TEST_RENDER_SYSTEMS: &[ipp_core::systems::SystemId] = &[
+    ipp_core::systems::animation::AnimationSystem::ID,
+    ipp_core::systems::asset_dependencies::AssetDependencySystem::ID,
+    ipp_core::systems::hierarchy::HierarchySystem::ID,
+    ipp_core::systems::look_at::LookAtSystem::ID,
+    ipp_core::systems::hierarchy::FinalPropagationSystem::ID,
+    ipp_core::systems::geometry::GeometrySystem::ID,
+    ipp_core::systems::render::RenderSystem::ID,
+];
+
 #[cfg(test)]
 impl<P: HostServices> Host<P> {
     pub(crate) fn test_session(&mut self) -> WorldSessionContext<'_, P> {
@@ -289,8 +322,16 @@ impl<P: HostServices> Host<P> {
         assert_eq!(self.test_session().world().tick(), 0);
         assert!(self.test_session().world().entities().is_empty());
         let id = *self.sessions.keys().next().unwrap();
+        let world = self.session_world(id).unwrap();
+        let selected = self
+            .runtime
+            .world_manifest(world)
+            .unwrap()
+            .systems()
+            .to_vec();
         self.close_session(id);
-        self.open_session_with_limits(id, limits).unwrap();
+        self.open_session_with_limits(id, limits, &selected)
+            .unwrap();
         self.test_session()
             .receive(&ipp_protocol::bootstrap())
             .unwrap();
@@ -301,20 +342,20 @@ impl<P: HostServices> Host<P> {
 impl<P: HostServices> Host<P> {
     pub(crate) fn detach_world_session(&mut self, id: u64) -> Option<WorldId> {
         let session = self.sessions.remove(&id)?;
-        if session
-            .command_batch
-            .as_ref()
-            .is_some_and(|batch| batch.started.is_some())
-            && let Some(mut world) = self.runtime.world_mut(session.world)
-        {
-            world.finish_command_stream();
+        if let Some(watch) = &session.lifecycle_watch {
+            watch.close();
         }
-        self.services.detach_world(session.world);
+        session.outbox.close();
+        if session.private_world {
+            session.reply_budget.0.close();
+        }
+        #[cfg(feature = "gui")]
+        if let Some(observations) = &session.gui_observations {
+            observations.close();
+        }
+        session.receipts.borrow_mut().close();
         if let Some(mut world) = self.runtime.world_mut(session.world) {
             world.release_system_session(session.id);
-        }
-        if let Some(mut world) = self.runtime.world_mut(session.world) {
-            world.release_state_overlay_owners(session.owners);
         }
         if let Some(mut world) = self.runtime.world_mut(session.world) {
             for (source, _) in session

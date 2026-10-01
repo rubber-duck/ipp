@@ -1,9 +1,7 @@
 //! Resource selections and local transforms compiled at lifecycle boundaries.
 
 use super::{CompoundGeometryShape, GeometryShape, TransformedGeometryShape};
-use crate::{
-    ErrorReason, components::registry::ComponentStorage, systems::hierarchy::ObjectTransformBinding,
-};
+use crate::{ErrorReason, systems::hierarchy::ObjectTransformBinding, world::WorldSimulationState};
 
 pub(super) enum GeometryProgram {
     Rigid {
@@ -27,7 +25,7 @@ impl GeometryProgram {
     #[inline]
     pub(super) fn model(
         &self,
-        storage: &ComponentStorage,
+        world: &WorldSimulationState,
     ) -> Option<Result<super::GeometryShapeTransform, ErrorReason>> {
         match self {
             Self::Rigid {
@@ -37,7 +35,7 @@ impl GeometryProgram {
             | Self::Parts {
                 model,
                 ..
-            } => Some(model.evaluate(storage)),
+            } => Some(model.evaluate(world)),
             Self::Dynamic => None,
         }
     }

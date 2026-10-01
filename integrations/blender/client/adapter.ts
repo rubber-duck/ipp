@@ -7,21 +7,39 @@ import {
   type CameraWorldClient,
   type ClientAssetSource,
   type BatchOutcome,
+  type CommandBatchWriter,
+  type CommandPageLimits,
+  planCommandPages,
   type Request,
   type EntityRef,
+  type EntityPlacement,
   type FieldValue,
   type FieldWrite,
 } from "@ipp/client";
-import {
-  applyBlenderBatches,
-  BlenderCommandError,
-  type BlenderCommand,
-} from "./ordered-batches.js";
+import type { BlenderCommand } from "./ordered-batches.js";
 import type { BlenderClip, BlenderEntity, BlenderSnapshot } from "./types.js";
 
 export type BlenderClient = AnimationWorldClient & CameraWorldClient;
+
+/** Systems of a World the adapter authors: cameras, lights, meshes with mesh
+ * poses, skeletons and skins, particle emitters, and animation clips with
+ * their assets. */
+export const BLENDER_SYSTEMS = [
+  "ipp.animation",
+  "ipp.asset-dependencies",
+  "ipp.particles",
+  "ipp.skeleton",
+  "ipp.skinning",
+  "ipp.hierarchy",
+  "ipp.look-at",
+  "ipp.final-propagation",
+  "ipp.geometry",
+  "ipp.camera",
+  "ipp.render",
+] as const;
 export interface BlenderContract {
   encodeRequest(request: Request): Uint8Array<ArrayBuffer>;
+  COMMAND_PAGE_LIMITS: CommandPageLimits;
   encodeAnimationClip(clip: AnimationClipSource): Uint8Array<ArrayBuffer>;
   WIRE: { ASSET_ANIMATION: number };
 }
@@ -31,12 +49,19 @@ type Components = Map<string, Values>;
 interface RetainedEntity {
   handle: bigint;
   name: string | null;
+  parent: bigint | null;
   components: Components;
 }
 export interface ImportedClip {
   duration: number;
   source: string;
   properties: AnimationDriverTarget[];
+}
+/** A streamed entity whose handle is known once its entity batch completes. */
+interface StreamedEntity {
+  name: string | null;
+  parent: string | null;
+  components: Components;
 }
 interface RetainedController {
   autoplayAcknowledged: boolean;
@@ -60,31 +85,11 @@ export interface AppliedRevision {
   revision: number;
   tick: bigint;
   entities: ReadonlyMap<string, bigint>;
+  selectedCamera: bigint | null;
   diagnostics: NonNullable<BlenderSnapshot["scene"]["diagnostics"]>;
 }
 
-const VIEW_CAMERA = "$view-camera";
 const MAX_QUEUED_REVISIONS = 4;
-const defaultTransform = {
-  x: 0,
-  y: 0,
-  z: 6,
-  qx: 0,
-  qy: 0,
-  qz: 0,
-  qw: 1,
-  sx: 1,
-  sy: 1,
-  sz: 1,
-};
-const defaultCamera = {
-  projection: 0,
-  fov_y: Math.PI / 4,
-  near: 0.01,
-  far: 1000,
-  ortho_height: 4,
-  focus_distance: 6,
-};
 
 /** Detached revisions and React declarations share the existing generated client. */
 export class BlenderAdapter {
@@ -100,6 +105,7 @@ export class BlenderAdapter {
   private playbackRequest = 0;
   private socket: WebSocket | undefined;
   private readonly abort = new AbortController();
+  private cleanup: Promise<PromiseSettledResult<void>[]> = Promise.resolve([]);
   private readonly runtimeSession: bigint;
   private stopBatchListener = () => {};
   private stream:
@@ -109,9 +115,11 @@ export class BlenderAdapter {
         revision: number;
         sequence: number;
         failed: boolean;
-        batchId?: bigint | undefined;
+        /** Streamed entity chunks form one batch that applies at `entities-end`. */
+        writer?: CommandBatchWriter | undefined;
         nextAlias: number;
-        batchTick?: bigint | undefined;
+        refs: Map<string, EntityRef>;
+        pending: Map<string, StreamedEntity>;
       }
     | undefined;
   /** Import measurements relative to connect(), in milliseconds. */
@@ -142,31 +150,14 @@ export class BlenderAdapter {
     private readonly updated: (result: AppliedRevision) => void = () => {},
     private readonly failed: (error: Error) => void = () => {},
     private readonly assets?: BlenderAssetIO,
-    private readonly activateViewCamera = true,
   ) {
     this.runtimeSession = client.session;
     if (endpoint.protocol !== "https:")
       throw new Error("Blender requires HTTPS");
-    for (const name of [
-      "Transform",
-      "Camera",
-      "MeshInstance",
-      "MeshPose",
-      "Hierarchy",
-      "UnlitMaterial",
-      "BaseColorTexture",
-      "PbrMaterial",
-      "Light",
-      "Skeleton",
-      "Skin",
-    ])
-      if (!client.components[name])
-        throw new Error(`Viewer is missing ${name}`);
     this.stopBatchListener = client.onBatchAborted((failure) => {
-      if (this.stream?.batchId === failure.batchId) {
-        this.stream.batchId = undefined;
-        this.stream.failed = true;
-      }
+      const writer = this.stream?.writer;
+      if (writer && BigInt(writer.batchId) === failure.batchId)
+        this.stream!.failed = true;
     });
   }
 
@@ -255,7 +246,10 @@ export class BlenderAdapter {
     if (this.queued >= MAX_QUEUED_REVISIONS)
       return Promise.reject(new Error("Blender revision queue is full"));
     this.queued++;
-    const next = this.tail.then(operation);
+    const next = this.tail.then(() => {
+      this.checkLive();
+      return operation();
+    });
     this.tail = next.catch(() => {});
     return next.finally(() => {
       this.queued--;
@@ -314,6 +308,8 @@ export class BlenderAdapter {
           sequence: 0,
           failed: false,
           nextAlias: 1,
+          refs: new Map(),
+          pending: new Map(),
         };
       }
       const stream = this.stream;
@@ -359,7 +355,7 @@ export class BlenderAdapter {
       } else if (message.type === "entities-end") {
         await this.endEntityBatch();
       } else if (message.type === "commit") {
-        if (stream.batchId !== undefined)
+        if (stream.writer !== undefined)
           throw new Error(
             "Blender commit is missing an entity-batch terminator",
           );
@@ -400,17 +396,61 @@ export class BlenderAdapter {
     }
   }
 
+  /** Apply the streamed entity chunks as one batch and retain their handles. */
   private async endEntityBatch(): Promise<void> {
     const stream = this.stream;
-    if (stream?.batchId === undefined) return;
-    const id = stream.batchId;
-    stream.batchId = undefined;
-    stream.batchTick = undefined;
+    const writer = stream?.writer;
+    if (!stream || !writer) return;
+    const { refs, pending } = stream;
+    stream.writer = undefined;
     stream.nextAlias = 1;
-    await this.client.endBatch(id);
+    stream.refs = new Map();
+    stream.pending = new Map();
+    let outcome: BatchOutcome;
+    try {
+      outcome = await writer.finish();
+    } finally {
+      this.recordPages(writer.pages);
+    }
     this.importProfile.entityBatches++;
     this.importProfile.firstEntityBatch ||=
       performance.now() - this.importProfile.started;
+    const aliases = new Map(
+      outcome.aliases.map((entry) => [entry.alias, entry.id]),
+    );
+    if (!outcome.ok) {
+      stream.failed = true;
+      const failure = new Error(
+        `Blender entity batch failed at ${outcome.error.operation}: ${outcome.error.reason}`,
+      );
+      await this.recoverAcknowledged(refs, aliases, failure);
+      throw failure;
+    }
+    const handle = (id: string | null) => {
+      if (id === null) return null;
+      const ref = refs.get(id);
+      if (!ref || ref.kind === "symbol") return undefined;
+      return ref.kind === "handle" ? ref.id : aliases.get(ref.alias);
+    };
+    for (const [id, entity] of pending) {
+      const entityHandle = handle(id);
+      if (entityHandle == null)
+        throw new Error(`Streamed entity ${id} has no applied identity`);
+      this.retained.set(id, {
+        handle: entityHandle,
+        name: entity.name,
+        parent: handle(entity.parent) ?? null,
+        components: entity.components,
+      });
+    }
+  }
+
+  private recordPages(pages: readonly number[]): void {
+    this.importProfile.commandBatches += pages.length;
+    this.importProfile.maxBatchCommands = Math.max(
+      this.importProfile.maxBatchCommands,
+      ...pages,
+    );
   }
 
   private async completeImport(input: unknown): Promise<AppliedRevision> {
@@ -445,18 +485,28 @@ export class BlenderAdapter {
   close(): void {
     if (this.closed) return;
     this.closed = true;
-    void this.endEntityBatch().catch(() => {});
     this.stopBatchListener();
     this.abort.abort();
-    for (const controller of this.controllers.values()) {
-      void this.client
-        .deleteAnimationController(controller.handle)
-        .catch(() => {});
-    }
-    this.controllers.clear();
-    for (const source of this.ownedAssets)
-      void this.client.releaseAsset(source).catch(() => {});
-    this.ownedAssets.length = 0;
+    const submitted = this.tail;
+    this.cleanup = (async () => {
+      await submitted;
+      const termination = await Promise.allSettled([this.endEntityBatch()]);
+      const controllers = [...this.controllers.values()];
+      const assets = [...this.ownedAssets];
+      this.controllers.clear();
+      this.ownedAssets.length = 0;
+      const releases = await Promise.allSettled([
+        ...controllers.map((controller) =>
+          Promise.resolve().then(() =>
+            this.client.deleteAnimationController(controller.handle),
+          ),
+        ),
+        ...assets.map((source) =>
+          Promise.resolve().then(() => this.client.releaseAsset(source)),
+        ),
+      ]);
+      return [...termination, ...releases];
+    })();
     if (this.socket) {
       this.socket.onopen =
         this.socket.onmessage =
@@ -465,6 +515,18 @@ export class BlenderAdapter {
           null;
       this.socket.close();
     }
+  }
+
+  async dispose(): Promise<void> {
+    this.close();
+    const failures = (await this.cleanup)
+      .filter(
+        (result): result is PromiseRejectedResult =>
+          result.status === "rejected",
+      )
+      .map((result) => result.reason);
+    if (failures.length)
+      throw new AggregateError(failures, "Blender adapter cleanup failed");
   }
 
   private fail(error: Error): void {
@@ -489,7 +551,12 @@ export class BlenderAdapter {
       [...this.retained].map(([id, record]) => [id, record.handle]),
     );
     for (const [id, ref] of refs) {
-      const handle = ref.kind === "handle" ? ref.id : aliases.get(ref.alias);
+      const handle =
+        ref.kind === "handle"
+          ? ref.id
+          : ref.kind === "symbol"
+            ? undefined
+            : aliases.get(ref.alias);
       if (handle !== undefined) identities.set(id, handle);
     }
     const entities = new Map(
@@ -502,12 +569,13 @@ export class BlenderAdapter {
         this.retained.set(id, {
           handle,
           name: entity.metadata.symbolicId,
+          parent: entity.link.parent,
           // Presence comes from the runtime. Empty field records make the next
           // revision rewrite desired values after an indeterminate partial edit.
           components: new Map(
             Object.entries(this.client.components)
               .filter(([, descriptor]) =>
-                entity.base.some(
+                entity.components.some(
                   (component) => component.component === descriptor.id,
                 ),
               )
@@ -521,6 +589,7 @@ export class BlenderAdapter {
   private *commands(
     desired: Map<string, Components>,
     names: Map<string, string | null>,
+    parents: Map<string, string | null>,
     refs: Map<string, EntityRef>,
     partial: boolean,
   ): Generator<BlenderCommand> {
@@ -560,23 +629,30 @@ export class BlenderAdapter {
         };
       }
     }
-    // Detach changed relationships first: reversing a valid chain must not
-    // introduce a temporary cycle while the ordered batch applies new parents.
-    const detached = new Set<string>();
     for (const [id, previous] of this.retained) {
-      const old = previous.components.get("Hierarchy");
       if (
         (!partial || desired.has(id)) &&
-        old &&
-        old.parent !== desired.get(id)?.get("Hierarchy")?.parent
+        previous.parent !== null &&
+        previous.parent !== this.parentHandle(parents.get(id), refs)
       ) {
         yield {
-          kind: "removeComponent",
+          kind: "placeEntity",
           entity: { kind: "handle", id: previous.handle },
-          component: this.client.components.Hierarchy!.id,
+          placement: { parent: null, before: null },
         };
-        detached.add(id);
       }
+    }
+    for (const [id, parent] of parents) {
+      if (parent === null) continue;
+      const parentRef = refs.get(parent);
+      if (!parentRef) throw new Error(`Missing parent entity ${parent}`);
+      if (
+        this.retained.has(id) &&
+        this.retained.get(id)?.parent === this.parentHandle(parent, refs)
+      )
+        continue;
+      const placement: EntityPlacement = { parent: parentRef, before: null };
+      yield { kind: "placeEntity", entity: refs.get(id)!, placement };
     }
     // A cached old target may be incompatible with a newly authored base.
     // Disable interpolation while switching the pair, preserving component
@@ -592,7 +668,7 @@ export class BlenderAdapter {
         yield {
           kind: "setField",
           entity: refs.get(id)!,
-          component: this.client.components.MeshPose!.id,
+          component: this.component("MeshPose").id,
           field: this.writes("MeshPose", { source: "" }, refs)[0]!,
         };
         clearedPoses.add(id);
@@ -602,11 +678,8 @@ export class BlenderAdapter {
       const entity = refs.get(id)!;
       const previous = this.retained.get(id)?.components;
       for (const [name, values] of components) {
-        const descriptor = this.client.components[name]!;
-        const old =
-          name === "Hierarchy" && detached.has(id)
-            ? undefined
-            : previous?.get(name);
+        const descriptor = this.component(name);
+        const old = previous?.get(name);
         if (!old) {
           yield {
             kind: "insertComponent",
@@ -631,14 +704,11 @@ export class BlenderAdapter {
         }
       }
       for (const name of previous?.keys() ?? [])
-        if (
-          !components.has(name) &&
-          !(name === "Hierarchy" && detached.has(id))
-        )
+        if (!components.has(name))
           yield {
             kind: "removeComponent",
             entity,
-            component: this.client.components[name]!.id,
+            component: this.component(name).id,
           };
     }
     for (const [id, previous] of this.retained)
@@ -647,6 +717,15 @@ export class BlenderAdapter {
           kind: "delete",
           entity: { kind: "handle", id: previous.handle },
         };
+  }
+
+  private parentHandle(
+    parent: string | null | undefined,
+    refs: Map<string, EntityRef>,
+  ): bigint | null | undefined {
+    if (parent == null) return null;
+    const ref = refs.get(parent);
+    return ref?.kind === "handle" ? ref.id : undefined;
   }
 
   private async applyRevision(
@@ -664,11 +743,13 @@ export class BlenderAdapter {
 
     const desired = new Map<string, Components>();
     const names = new Map<string, string | null>();
+    const parents = new Map<string, string | null>();
     const uniqueNames = new Set<string>();
     for (const entity of snapshot.scene.entities) {
       if (entity.id.startsWith("$") || desired.has(entity.id))
         throw new Error("Duplicate or reserved Blender identity");
       desired.set(entity.id, this.components(entity));
+      parents.set(entity.id, entity.parent ?? null);
       const name = entity.name ?? entity.id;
       if (typeof name !== "string" || !name || uniqueNames.has(name))
         throw new Error("Duplicate or invalid Blender object name");
@@ -677,23 +758,12 @@ export class BlenderAdapter {
     }
     const selected =
       snapshot.scene.active_camera === undefined
-        ? snapshot.scene.entities.find((entity) => entity.camera)
+        ? undefined
         : snapshot.scene.entities.find(
             (entity) => entity.id === snapshot.scene.active_camera,
           );
     if (snapshot.scene.active_camera !== undefined && !selected?.camera)
       throw new Error("Selected Blender camera is missing");
-    if (!partial)
-      desired.set(
-        VIEW_CAMERA,
-        new Map<string, Values>([
-          ["Transform", { ...defaultTransform, ...(selected ? { z: 0 } : {}) }],
-          ["Camera", { ...(selected?.camera ?? defaultCamera) }],
-          ...(selected
-            ? [["Hierarchy", { parent: selected.id }] as [string, Values]]
-            : []),
-        ]),
-      );
 
     const library: AppliedRevision["clips"] = [];
     for (const entry of snapshot.scene.clips ?? []) {
@@ -733,65 +803,62 @@ export class BlenderAdapter {
     if (!partial)
       this.importProfile.clipsReady =
         performance.now() - this.importProfile.started;
-    const refs = new Map<string, EntityRef>(
-      partial
-        ? [...this.retained].map(([id, entity]) => [
-            id,
-            { kind: "handle", id: entity.handle },
-          ])
-        : [],
-    );
     this.session = snapshot.session;
+    if (partial) {
+      // Streamed chunks append to one open batch; later chunks name entities
+      // of earlier chunks by their batch aliases until `entities-end`.
+      const stream = this.stream;
+      if (!stream) throw new Error("Partial Blender revision without a stream");
+      if (!stream.writer) {
+        stream.writer = this.client.openBatch();
+        this.importProfile.logicalBatches++;
+      }
+      stream.writer.write(
+        this.commands(desired, names, parents, stream.refs, true),
+      );
+      for (const [id, components] of desired)
+        stream.pending.set(id, {
+          name: names.get(id) ?? null,
+          parent: parents.get(id) ?? null,
+          components,
+        });
+      return {
+        clips: [],
+        session: snapshot.session,
+        revision: snapshot.revision,
+        tick: 0n,
+        entities: new Map(
+          [...this.retained].map(([id, record]) => [id, record.handle]),
+        ),
+        selectedCamera: null,
+        diagnostics: [],
+      };
+    }
+    const refs = new Map<string, EntityRef>();
+    const commands = [...this.commands(desired, names, parents, refs, false)];
+    this.importProfile.logicalBatches++;
+    this.recordPages(
+      planCommandPages(
+        commands,
+        this.contract.encodeRequest,
+        this.contract.COMMAND_PAGE_LIMITS,
+      ).map((page) => page.length),
+    );
     let outcome: BatchOutcome;
     try {
-      outcome = await applyBlenderBatches(
-        {
-          beginBatch: async () => {
-            if (partial && this.stream?.batchId !== undefined)
-              return this.stream.batchId;
-            const id = await this.client.beginBatch();
-            this.importProfile.logicalBatches++;
-            if (partial && this.stream) this.stream.batchId = id;
-            return id;
-          },
-          endBatch: async (id) => {
-            if (!partial) await this.client.endBatch(id);
-          },
-          batchChunk: async (id, commands) => {
-            this.importProfile.commandBatches++;
-            this.importProfile.maxBatchCommands = Math.max(
-              this.importProfile.maxBatchCommands,
-              commands.length,
-            );
-            const outcome = await this.client.batchChunk(id, commands);
-            if (partial && this.stream) {
-              if (
-                this.stream.batchTick !== undefined &&
-                outcome.tick !== this.stream.batchTick
-              )
-                throw new Error(
-                  "World evaluated before the Blender entity-batch terminator",
-                );
-              this.stream.batchTick = outcome.tick;
-              if (!outcome.ok) this.stream.batchId = undefined;
-            }
-            return outcome;
-          },
-        },
-        this.commands(desired, names, refs, partial),
-        this.contract.encodeRequest,
-      );
+      outcome = await this.client.batch(commands);
     } catch (error) {
-      if (error instanceof BlenderCommandError) {
-        await this.endEntityBatch();
-        // Local generation/encoding failed with no buffer in flight. Preserve
-        // earlier acknowledged identities for a corrected revision.
-        await this.recoverEntities(refs, error.aliases);
-        throw error;
-      }
-      // Earlier buffers may have applied. An unacknowledged transport failure
-      // cannot safely reconstruct their aliases; reconnect with a fresh adapter.
-      this.close();
+      // A refused or rejected batch applied nothing; any other failure leaves
+      // its outcome unknown, so reconnect with a fresh adapter.
+      if (
+        !(
+          error instanceof Error &&
+          "code" in error &&
+          (error.code === "IPP_REQUEST_NOT_SENT" ||
+            error.code === "IPP_REQUEST_REJECTED")
+        )
+      )
+        this.close();
       throw error;
     }
     this.checkLive();
@@ -799,52 +866,50 @@ export class BlenderAdapter {
       outcome.aliases.map((entry) => [entry.alias, entry.id]),
     );
     if (!outcome.ok) {
-      await this.recoverEntities(refs, aliases);
-      throw new Error(
+      const failure = new Error(
         `Blender revision failed at ${outcome.error.operation}: ${outcome.error.reason}`,
       );
+      await this.recoverAcknowledged(refs, aliases, failure);
+      throw failure;
     }
-    const initial = this.revision === -1;
-    if (!partial) this.retained.clear();
+    const resolved = new Map<string, bigint>();
+    for (const [id, ref] of refs) {
+      const handle =
+        ref.kind === "handle"
+          ? ref.id
+          : ref.kind === "symbol"
+            ? undefined
+            : aliases.get(ref.alias);
+      if (handle !== undefined) resolved.set(id, handle);
+    }
+    this.retained.clear();
     for (const [id, components] of desired) {
-      const ref = refs.get(id)!;
-      const handle = ref.kind === "handle" ? ref.id : aliases.get(ref.alias)!;
+      const handle = resolved.get(id)!;
+      const parent = parents.get(id);
       this.retained.set(id, {
         handle,
         name: names.get(id) ?? null,
+        parent: parent ? (resolved.get(parent) ?? null) : null,
         components,
       });
     }
-    if (partial)
-      return {
-        clips: [],
-        session: snapshot.session,
-        revision: snapshot.revision,
-        tick: outcome.tick,
-        entities: new Map(
-          [...this.retained].map(([id, record]) => [id, record.handle]),
-        ),
-        diagnostics: [],
-      };
     this.importProfile.entitiesApplied =
       performance.now() - this.importProfile.started;
-    this.client.sendCommand({
-      type: "RenderStateUpdateCommand",
-      changes: { ambientLight: snapshot.scene.ambient_light ?? [0, 0, 0] },
-    });
-    this.session = snapshot.session;
-    if (initial && this.activateViewCamera)
+    if (this.client.manifest?.operations.includes("rendering"))
       this.client.sendCommand({
-        type: "CameraActivateCommand",
-        entity: this.retained.get(VIEW_CAMERA)!.handle,
+        type: "RenderStateUpdateCommand",
+        changes: { ambientLight: snapshot.scene.ambient_light ?? [0, 0, 0] },
       });
+    this.session = snapshot.session;
     for (const [id, controller] of this.controllers) {
+      this.checkLive();
       if (!desiredControllers.has(id)) {
         await this.client.deleteAnimationController(controller.handle);
         this.controllers.delete(id);
       }
     }
     for (const [id, desired] of desiredControllers) {
+      this.checkLive();
       const target = this.retained.get(desired.target)!.handle;
       const description: AnimationControllerDescription = {
         speed: desired.speed,
@@ -882,6 +947,7 @@ export class BlenderAdapter {
           !changed && (previous?.autoplayAcknowledged ?? false),
       });
       this.importProfile.controllers = this.controllers.size;
+      this.checkLive();
       if (desired.autoplay && !this.controllers.get(id)!.autoplayAcknowledged)
         await this.startController(id);
     }
@@ -901,10 +967,27 @@ export class BlenderAdapter {
       entities: new Map(
         [...this.retained].map(([id, value]) => [id, value.handle]),
       ),
+      selectedCamera: selected ? this.retained.get(selected.id)!.handle : null,
       diagnostics: snapshot.scene.diagnostics ?? [],
     };
     this.updated(result);
     return result;
+  }
+
+  private async recoverAcknowledged(
+    refs: Map<string, EntityRef>,
+    aliases: Map<number, bigint>,
+    failure: unknown,
+  ): Promise<void> {
+    try {
+      await this.recoverEntities(refs, aliases);
+    } catch (recoveryFailure) {
+      this.close();
+      throw new AggregateError(
+        [failure, recoveryFailure],
+        "Blender applied scope could not be recovered",
+      );
+    }
   }
 
   private components(entity: BlenderEntity): Components {
@@ -929,11 +1012,13 @@ export class BlenderAdapter {
       });
     }
     if (entity.transform) result.set("Transform", { ...entity.transform });
-    if (entity.parent !== undefined)
-      result.set("Hierarchy", {
-        parent: entity.parent,
-        parent_bone: entity.parent_bone ?? 0xffff_ffff,
-      });
+    if (entity.parent_bone !== undefined) {
+      if (!this.client.components.ParentJoint)
+        throw new Error(
+          "ParentJoint requires the skeletal animation capability",
+        );
+      result.set("ParentJoint", { ordinal: entity.parent_bone });
+    }
     if (entity.mesh)
       result.set("MeshInstance", {
         source: this.source(entity.mesh.source),
@@ -1000,7 +1085,7 @@ export class BlenderAdapter {
     values: Values,
     refs: Map<string, EntityRef>,
   ): FieldWrite[] {
-    const descriptor = this.client.components[name]!;
+    const descriptor = this.component(name);
     return Object.entries(values).map(([name, value]) => {
       const field = descriptor.fields[name];
       if (!field) throw new Error(`Unsupported field ${name}`);
@@ -1034,6 +1119,12 @@ export class BlenderAdapter {
       }
       return { offset: field.offset, value: typed };
     });
+  }
+
+  private component(name: string) {
+    const descriptor = this.client.components[name];
+    if (!descriptor) throw new Error(`Blender export requires ${name}`);
+    return descriptor;
   }
 
   private async clip(source: string): Promise<ImportedClip> {
@@ -1114,13 +1205,7 @@ export class BlenderAdapter {
       encoded.buffer,
     );
     this.ownedAssets.push(source);
-    try {
-      this.checkLive();
-    } catch (error) {
-      this.ownedAssets.pop();
-      await this.client.releaseAsset(source).catch(() => {});
-      throw error;
-    }
+    this.checkLive();
     return source.source;
   }
 

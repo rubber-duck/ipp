@@ -2,6 +2,7 @@
 
 mod support;
 use support::WorldTestDriver;
+use support::selection::RENDER;
 
 use ipp_core::{
     Batch, Command, ComponentValue, EntityId, EntityMetadata, EntityRef, ErrorReason, FieldValue,
@@ -11,7 +12,9 @@ use ipp_core::{
 use std::mem::offset_of;
 
 fn test_world(host: &mut ipp_core::HostRuntime) -> ipp_core::WorldContext<'_> {
-    let world_id = host.create_world(ipp_core::WorldLimits::default()).unwrap();
+    let world_id = host
+        .create_world(ipp_core::WorldLimits::default(), RENDER)
+        .unwrap();
     let mut world = host.world_mut(world_id).unwrap();
     world.register_stream_resource_provider("http").unwrap();
     world
@@ -123,7 +126,10 @@ fn mesh_fields(key: MeshKey) -> Vec<FieldWrite> {
     vec![
         FieldWrite {
             offset: offset_of!(MeshInstance, source) as u32,
-            value: FieldValue::String(format!("http://fixture/{}", key.asset)),
+            value: FieldValue::String(std::sync::Arc::<str>::from(format!(
+                "http://fixture/{}",
+                key.asset
+            ))),
         },
         FieldWrite {
             offset: offset_of!(MeshInstance, variant) as u32,
@@ -134,9 +140,10 @@ fn mesh_fields(key: MeshKey) -> Vec<FieldWrite> {
 
 fn insert(entity: EntityRef, component: u16, fields: Vec<FieldWrite>) -> Command {
     Command::InsertComponent {
-        entity,
+        entity: entity.clone(),
         component,
         fields,
+        adopt: false,
     }
 }
 
@@ -149,6 +156,7 @@ fn create(world: &mut ipp_core::WorldContext<'_>) -> EntityId {
                 symbolic_id: Some("cube".into()),
                 classes: vec![],
             },
+            adopt: false,
         }],
     );
     report.outcomes[0].result.as_ref().unwrap()[0].1
@@ -239,7 +247,7 @@ fn uploads_precede_batches_and_old_assets_remain_immutable_through_staging() {
         world
             .resource_snapshots()
             .iter()
-            .find(|resource| resource.source == "http://fixture/9")
+            .find(|resource| resource.source == std::sync::Arc::<str>::from("http://fixture/9"))
             .unwrap()
             .status,
         ipp_core::AssetResourceStatus::Unloaded
@@ -371,7 +379,7 @@ fn scene_activation_failures_allow_explicit_component_correction() {
         reject(
             &mut world,
             vec![Command::SetField {
-                entity,
+                entity: entity.clone(),
                 component: ComponentValue::TRANSFORM,
                 field,
             }],
@@ -379,7 +387,7 @@ fn scene_activation_failures_allow_explicit_component_correction() {
         );
         ok(
             &mut world,
-            vec![insert(entity, ComponentValue::TRANSFORM, vec![])],
+            vec![insert(entity.clone(), ComponentValue::TRANSFORM, vec![])],
         );
     }
     for field in [
@@ -390,7 +398,7 @@ fn scene_activation_failures_allow_explicit_component_correction() {
         reject(
             &mut world,
             vec![Command::SetField {
-                entity,
+                entity: entity.clone(),
                 component: ComponentValue::UNLIT_MATERIAL,
                 field,
             }],
@@ -398,7 +406,11 @@ fn scene_activation_failures_allow_explicit_component_correction() {
         );
         ok(
             &mut world,
-            vec![insert(entity, ComponentValue::UNLIT_MATERIAL, vec![])],
+            vec![insert(
+                entity.clone(),
+                ComponentValue::UNLIT_MATERIAL,
+                vec![],
+            )],
         );
     }
     for field in [
@@ -414,7 +426,7 @@ fn scene_activation_failures_allow_explicit_component_correction() {
         reject(
             &mut world,
             vec![Command::SetField {
-                entity,
+                entity: entity.clone(),
                 component: ComponentValue::TRANSFORM,
                 field,
             }],
@@ -423,14 +435,18 @@ fn scene_activation_failures_allow_explicit_component_correction() {
     }
     ok(
         &mut world,
-        vec![insert(entity, ComponentValue::MESH_INSTANCE, vec![])],
+        vec![insert(
+            entity.clone(),
+            ComponentValue::MESH_INSTANCE,
+            vec![],
+        )],
     );
     assert!(world.render_items().is_empty());
     assert!(world.resource_requests_for_test().is_empty());
     ok(
         &mut world,
         vec![insert(
-            entity,
+            entity.clone(),
             ComponentValue::MESH_INSTANCE,
             mesh_fields(key(1, 0)),
         )],
@@ -438,7 +454,7 @@ fn scene_activation_failures_allow_explicit_component_correction() {
     ok(
         &mut world,
         vec![insert(
-            entity,
+            entity.clone(),
             3,
             vec![
                 f32_field(offset_of!(Transform, qw), 0.0),
@@ -450,7 +466,7 @@ fn scene_activation_failures_allow_explicit_component_correction() {
     ok(
         &mut world,
         vec![Command::RemoveComponent {
-            entity,
+            entity: entity.clone(),
             component: ComponentValue::UNLIT_MATERIAL,
         }],
     );
@@ -458,13 +474,17 @@ fn scene_activation_failures_allow_explicit_component_correction() {
     assert!(world.inspect(id).is_some());
     ok(
         &mut world,
-        vec![insert(entity, ComponentValue::UNLIT_MATERIAL, vec![])],
+        vec![insert(
+            entity.clone(),
+            ComponentValue::UNLIT_MATERIAL,
+            vec![],
+        )],
     );
     assert_eq!(world.render_items().len(), 1);
     ok(
         &mut world,
         vec![Command::Delete {
-            entity,
+            entity: entity.clone(),
         }],
     );
     assert!(world.render_items().is_empty());
@@ -491,7 +511,7 @@ fn generated_registry_ids_and_field_types_match_exact_target_offsets() {
         vec![
             (
                 offset_of!(MeshInstance, source) as u32,
-                ipp_core::components::schema::FieldValue::String(String::new())
+                ipp_core::components::schema::FieldValue::String(std::sync::Arc::<str>::default())
             ),
             (
                 offset_of!(MeshInstance, variant) as u32,
@@ -513,370 +533,6 @@ fn generated_registry_ids_and_field_types_match_exact_target_offsets() {
     );
 }
 
-mod overlays {
-    use super::*;
-    use ipp_core::{
-        ComponentOverlayMode, EntityOverlayMode, StateOverlayLifecycleReason, StateOverlayRef,
-    };
-
-    #[derive(Clone, Copy)]
-    struct Declaration {
-        owner: u64,
-        overlay: u64,
-    }
-
-    impl Declaration {
-        fn edit(self, fields: Vec<FieldWrite>, clear: Vec<u32>) -> Command {
-            Command::UpdateComponentStateOverlay {
-                owner: StateOverlayRef::Handle(self.owner),
-                overlay: StateOverlayRef::Handle(self.overlay),
-                fields,
-                clear,
-            }
-        }
-
-        fn release(self) -> Command {
-            Command::ReleaseComponentStateOverlay {
-                owner: StateOverlayRef::Handle(self.owner),
-                overlay: StateOverlayRef::Handle(self.overlay),
-            }
-        }
-    }
-
-    fn declare(
-        world: &mut ipp_core::WorldContext<'_>,
-        component: u16,
-        mode: ComponentOverlayMode,
-        fields: Vec<FieldWrite>,
-    ) -> Declaration {
-        let report = ok(
-            world,
-            vec![
-                Command::CreateStateOverlayOwner {
-                    alias: 0,
-                },
-                Command::AttachEntityOverlayBinding {
-                    owner: StateOverlayRef::Alias(0),
-                    alias: 1,
-                    symbolic_id: "cube".into(),
-                    mode: EntityOverlayMode::Bound,
-                },
-                Command::AttachComponentStateOverlay {
-                    owner: StateOverlayRef::Alias(0),
-                    binding: StateOverlayRef::Alias(1),
-                    alias: 2,
-                    component,
-                    mode,
-                    fields,
-                },
-            ],
-        );
-        Declaration {
-            owner: report.outcomes[0].state_overlays[0].id,
-            overlay: report.outcomes[0].state_overlays[2].id,
-        }
-    }
-
-    #[test]
-    fn sparse_multi_field_precedence_clear_and_all_ten_transform_fields() {
-        let mut fixture_host = ipp_core::HostRuntime::new();
-        let mut world = test_world(&mut fixture_host);
-        let id = renderable(&mut world);
-        let entity = EntityRef::Handle(id);
-        let first = declare(
-            &mut world,
-            4,
-            ComponentOverlayMode::Auto,
-            vec![f32_field(0, 0.2), f32_field(4, 0.3)],
-        );
-        let second = declare(
-            &mut world,
-            4,
-            ComponentOverlayMode::Bound,
-            vec![f32_field(0, 0.6), f32_field(8, 0.7)],
-        );
-        ok(
-            &mut world,
-            vec![
-                first.edit(vec![f32_field(0, 0.4)], vec![]),
-                Command::SetField {
-                    entity,
-                    component: ComponentValue::UNLIT_MATERIAL,
-                    field: f32_field(0, 0.9),
-                },
-            ],
-        );
-        assert_eq!(
-            world.render_items()[0].material,
-            UnlitMaterial {
-                r: 0.6,
-                g: 0.3,
-                b: 0.7
-            }
-        );
-        reject(
-            &mut world,
-            vec![second.edit(vec![f32_field(0, 0.8)], vec![1])],
-            ErrorReason::InvalidField,
-        );
-        ok(&mut world, vec![second.edit(vec![], vec![0])]);
-        assert_eq!(world.render_items()[0].material.r, 0.4);
-        ok(&mut world, vec![first.release(), second.release()]);
-        assert_eq!(
-            world.render_items()[0].material,
-            UnlitMaterial {
-                r: 0.9,
-                g: 1.0,
-                b: 1.0
-            }
-        );
-
-        let fields = ComponentValue::Transform(Transform::default())
-            .fields()
-            .into_iter()
-            .map(|(offset, _)| f32_field(offset as usize, 2.0))
-            .collect();
-        let transform = declare(
-            &mut world,
-            ComponentValue::TRANSFORM,
-            ComponentOverlayMode::Auto,
-            fields,
-        );
-        let t = world.render_items()[0].transform;
-        assert_eq!(
-            [t.x, t.y, t.z, t.qx, t.qy, t.qz, t.qw, t.sx, t.sy, t.sz],
-            [2.0; 10]
-        );
-        ok(
-            &mut world,
-            vec![transform.edit(vec![f32_field(0, 3.0); 64], vec![])],
-        );
-        assert_eq!(world.render_items()[0].transform.x, 3.0);
-        ok(&mut world, vec![transform.release()]);
-        assert_eq!(world.render_items()[0].transform, Transform::default());
-    }
-
-    #[test]
-    fn shared_fallback_incarnations_and_cleanup_are_independent_per_component() {
-        let mut fixture_host = ipp_core::HostRuntime::new();
-        let mut world = test_world(&mut fixture_host);
-        let id = create(&mut world);
-        let entity = EntityRef::Handle(id);
-        let material = declare(
-            &mut world,
-            ComponentValue::UNLIT_MATERIAL,
-            ComponentOverlayMode::Auto,
-            vec![f32_field(0, 0.2)],
-        );
-        let other = declare(
-            &mut world,
-            ComponentValue::UNLIT_MATERIAL,
-            ComponentOverlayMode::Auto,
-            vec![f32_field(4, 0.3)],
-        );
-        let strict = declare(
-            &mut world,
-            ComponentValue::UNLIT_MATERIAL,
-            ComponentOverlayMode::Bound,
-            vec![f32_field(8, 0.4)],
-        );
-        let transform = declare(
-            &mut world,
-            ComponentValue::TRANSFORM,
-            ComponentOverlayMode::Owned,
-            vec![f32_field(0, 5.0)],
-        );
-        let report = ok(
-            &mut world,
-            vec![insert(
-                entity,
-                ComponentValue::UNLIT_MATERIAL,
-                vec![f32_field(8, 0.8)],
-            )],
-        );
-        assert_eq!(report.diagnostics.len(), 1);
-        assert_eq!(report.diagnostics[0].state_overlay, strict.overlay);
-        assert_eq!(report.diagnostics[0].component, Some(4));
-        assert_eq!(
-            report.diagnostics[0].reason,
-            StateOverlayLifecycleReason::ComponentReplaced
-        );
-        ok(
-            &mut world,
-            vec![
-                Command::RemoveComponent {
-                    entity,
-                    component: ComponentValue::UNLIT_MATERIAL,
-                },
-                material.release(),
-                strict.release(),
-            ],
-        );
-        let snapshot = world.inspect(id).unwrap();
-        assert!(
-            snapshot
-                .effective
-                .contains(&ComponentValue::UnlitMaterial(UnlitMaterial {
-                    r: 1.0,
-                    g: 0.3,
-                    b: 1.0
-                }))
-        );
-        assert!(
-            snapshot
-                .effective
-                .contains(&ComponentValue::Transform(Transform {
-                    x: 5.0,
-                    ..Default::default()
-                }))
-        );
-        ok(&mut world, vec![other.release(), transform.release()]);
-        assert!(world.inspect(id).unwrap().effective.is_empty());
-    }
-
-    #[test]
-    fn pending_mesh_reveal_clear_release_and_fallback_preserve_authored_state() {
-        let mut fixture_host = ipp_core::HostRuntime::new();
-        let mut world = test_world(&mut fixture_host);
-        let id = renderable(&mut world);
-        let entity = EntityRef::Handle(id);
-        let overlay = declare(
-            &mut world,
-            ComponentValue::MESH_INSTANCE,
-            ComponentOverlayMode::Auto,
-            mesh_fields(key(2, 1)),
-        );
-        ok(
-            &mut world,
-            vec![insert(
-                entity,
-                ComponentValue::MESH_INSTANCE,
-                mesh_fields(key(99, 0)),
-            )],
-        );
-        assert_eq!(selection(&world, world.render_items()[0].mesh), key(2, 1));
-        let report = run(
-            &mut world,
-            vec![overlay.edit(vec![], vec![offset_of!(MeshInstance, source) as u32])],
-        );
-        assert!(report.outcomes[0].result.is_ok());
-        assert!(world.render_items().is_empty());
-        assert!(
-            world
-                .resource_snapshots()
-                .iter()
-                .any(|asset| asset.source == "http://fixture/99")
-        );
-        let old = world.resource_requests_for_test()[0].id;
-        let report = run(&mut world, vec![overlay.release()]);
-        assert!(report.outcomes[0].result.is_ok());
-        let world_id = world.id();
-        drop(world);
-        fixture_host.flush_resource_lifecycle();
-        let mut world = fixture_host.world_mut(world_id).unwrap();
-        assert!(world.take_resource_cancellations().contains(&old));
-        assert_eq!(world.resource_snapshots()[0].variant, 0);
-        ok(
-            &mut world,
-            vec![insert(
-                entity,
-                ComponentValue::MESH_INSTANCE,
-                mesh_fields(key(1, 0)),
-            )],
-        );
-        let incomplete = declare(
-            &mut world,
-            ComponentValue::MESH_INSTANCE,
-            ComponentOverlayMode::Auto,
-            vec![],
-        );
-        ok(
-            &mut world,
-            vec![Command::RemoveComponent {
-                entity,
-                component: ComponentValue::MESH_INSTANCE,
-            }],
-        );
-        assert!(world.render_items().is_empty());
-        assert!(
-            world
-                .resource_snapshots()
-                .iter()
-                .all(|asset| asset.source.starts_with("asset://"))
-        );
-        ok(&mut world, vec![incomplete.release()]);
-    }
-
-    #[test]
-    fn owned_replacement_diagnostics_and_old_cleanup_preserve_new_producer() {
-        let mut fixture_host = ipp_core::HostRuntime::new();
-        let mut world = test_world(&mut fixture_host);
-        let id = create(&mut world);
-        let entity = EntityRef::Handle(id);
-        let owned = declare(
-            &mut world,
-            ComponentValue::UNLIT_MATERIAL,
-            ComponentOverlayMode::Owned,
-            vec![f32_field(0, 0.2)],
-        );
-        let report = ok(
-            &mut world,
-            vec![insert(
-                entity,
-                ComponentValue::UNLIT_MATERIAL,
-                vec![f32_field(0, 0.8)],
-            )],
-        );
-        assert_eq!(report.diagnostics[0].state_overlay, owned.overlay);
-        ok(&mut world, vec![owned.release()]);
-        assert_eq!(
-            world.inspect(id).unwrap().base,
-            vec![ComponentValue::UnlitMaterial(UnlitMaterial {
-                r: 0.8,
-                ..Default::default()
-            })]
-        );
-        let bound = declare(
-            &mut world,
-            ComponentValue::UNLIT_MATERIAL,
-            ComponentOverlayMode::Bound,
-            vec![f32_field(0, 0.4)],
-        );
-        let report = reject(
-            &mut world,
-            vec![
-                Command::Delete {
-                    entity,
-                },
-                Command::Delete {
-                    entity,
-                },
-            ],
-            ErrorReason::InvalidEntity,
-        );
-        assert!(world.inspect(id).is_none());
-        assert!(
-            report
-                .diagnostics
-                .iter()
-                .any(|d| d.state_overlay == bound.overlay
-                    && d.component == Some(4)
-                    && d.reason == StateOverlayLifecycleReason::EntityDeleted)
-        );
-        let replacement = create(&mut world);
-        ok(
-            &mut world,
-            vec![
-                bound.release(),
-                Command::ReleaseStateOverlayOwner {
-                    owner: StateOverlayRef::Handle(bound.owner),
-                },
-            ],
-        );
-        assert!(world.inspect(replacement).is_some());
-    }
-}
-
 #[test]
 fn render_order_is_stable_after_reuse_and_shared_mesh_selection_is_per_entity() {
     let mut fixture_host = ipp_core::HostRuntime::new();
@@ -890,6 +546,7 @@ fn render_order_is_stable_after_reuse_and_shared_mesh_selection_is_per_entity() 
             Command::Create {
                 alias: 1,
                 metadata: EntityMetadata::default(),
+                adopt: false,
             },
             insert(
                 EntityRef::Alias(1),
@@ -926,6 +583,7 @@ fn render_order_is_stable_after_reuse_and_shared_mesh_selection_is_per_entity() 
             Command::Create {
                 alias: 1,
                 metadata: EntityMetadata::default(),
+                adopt: false,
             },
             insert(EntityRef::Alias(1), ComponentValue::TRANSFORM, vec![]),
             insert(EntityRef::Alias(1), ComponentValue::UNLIT_MATERIAL, vec![]),

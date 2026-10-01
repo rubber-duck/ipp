@@ -5,7 +5,15 @@ fn resolved_asset_cache_checks_source_type_variant_entity_and_slot_generation() 
     use crate::services::asset_management::AssetSource;
 
     let mut host = crate::HostRuntime::new();
-    let world_id = host.create_world(Default::default()).unwrap();
+    let world_id = host
+        .create_world(
+            Default::default(),
+            &[
+                crate::systems::animation::AnimationSystem::ID,
+                crate::systems::asset_dependencies::AssetDependencySystem::ID,
+            ],
+        )
+        .unwrap();
     let source = AssetSource {
         kind: crate::MESH_TYPE,
         uri: "archive!/mesh?name=opaque text".into(),
@@ -156,13 +164,21 @@ fn resolved_asset_cache_preserves_exact_producer_namespace() {
     use crate::services::asset_management::AssetSource;
 
     let mut host = crate::HostRuntime::new();
-    let world_id = host.create_world(Default::default()).unwrap();
+    let world_id = host
+        .create_world(
+            Default::default(),
+            &[
+                crate::systems::animation::AnimationSystem::ID,
+                crate::systems::asset_dependencies::AssetDependencySystem::ID,
+            ],
+        )
+        .unwrap();
     let path = "1/7";
     let canonical = host
         .asset_resources_mut()
         .get_or_create(AssetSource {
             kind: crate::MESH_TYPE,
-            uri: format!("producer://{}/{path}", world_id.0),
+            uri: format!("producer://{}/{path}", world_id.0).into(),
             variant: 0,
         })
         .unwrap();
@@ -170,7 +186,7 @@ fn resolved_asset_cache_preserves_exact_producer_namespace() {
         .asset_resources_mut()
         .get_or_create(AssetSource {
             kind: crate::MESH_TYPE,
-            uri: format!("producer://{}/{path}", world_id.0 + 1),
+            uri: format!("producer://{}/{path}", world_id.0 + 1).into(),
             variant: 0,
         })
         .unwrap();

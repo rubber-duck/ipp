@@ -5,6 +5,21 @@ use crate::{ComponentValue, systems::SystemCommitContext};
 use std::collections::BTreeMap;
 
 impl AnimationSystem {
+    /// Another System overwrites these fields absolutely: contributions to them
+    /// are gone, so each controller applies its full total again next frame.
+    pub(super) fn forget_overwritten(&mut self, fields: &[(EntityId, u16, u32)]) {
+        for &(entity, component, offset) in fields {
+            let Some(ids) = self.state.target_controllers.get(&(entity, component)) else {
+                continue;
+            };
+            for id in ids {
+                if let Some(controller) = self.state.controllers.get_mut(id) {
+                    controller.contributions.forget(entity, component, offset);
+                }
+            }
+        }
+    }
+
     pub(super) fn suspend_asset(
         &mut self,
         world: &crate::world::WorldSimulationState,
@@ -22,7 +37,11 @@ impl AnimationSystem {
             let destination_uses = controller
                 .drivers
                 .iter()
-                .any(|driver| read.binding_uses_asset(driver.as_ref(), key));
+                .any(|driver| read.binding_uses_asset(driver.as_ref(), key))
+                || controller
+                    .structural_drivers
+                    .iter()
+                    .any(|driver| driver.clip() == key);
             let source_uses = controller.transition_source().is_some_and(|source| {
                 source
                     .drivers
@@ -37,6 +56,11 @@ impl AnimationSystem {
                     controller.ready = false;
                 }
                 for driver in &mut controller.drivers {
+                    if driver.clip() == key {
+                        driver.suspend_track();
+                    }
+                }
+                for driver in &mut controller.structural_drivers {
                     if driver.clip() == key {
                         driver.suspend_track();
                     }
@@ -88,35 +112,16 @@ impl AnimationSystem {
         let mut restorations = BTreeMap::new();
         for id in invalid {
             let mut controller = self.state.controllers.remove(&id).unwrap();
-            if let Some(program) = controller
-                .transition
-                .as_deref()
-                .and_then(|transition| transition.program.as_ref())
-            {
-                let _ = program.restore(&mut world.components, &world.state);
-            }
-            for driver in controller.restoration_drivers() {
-                let identity = driver.identity();
-                let key = (identity.entity, identity.property.component());
-                if !world
-                    .state
-                    .entities
-                    .get(&identity.entity)
-                    .and_then(|record| record.input(key.1))
-                    .is_some_and(|input| input.incarnation == identity.incarnation)
+            for (identity, applied) in controller.contributions.take() {
+                let key = (identity.entity, identity.property.component_target());
+                if applied.is_empty()
+                    || !world
+                        .state
+                        .entities
+                        .get(&identity.entity)
+                        .and_then(|record| record.input(key.1))
+                        .is_some_and(|input| input.incarnation == identity.incarnation)
                 {
-                    continue;
-                }
-                #[cfg(feature = "skeletal-animation")]
-                if matches!(
-                    driver.runtime_target(),
-                    super::driver::AnimationRuntimeTarget::JointLocal { .. }
-                ) {
-                    let _ = driver.runtime_target().write_joints(
-                        &mut world.components,
-                        identity.entity,
-                        driver.original(),
-                    );
                     continue;
                 }
                 if let std::collections::btree_map::Entry::Vacant(entry) = restorations.entry(key)
@@ -125,8 +130,11 @@ impl AnimationSystem {
                     entry.insert(value);
                 }
                 if let Some(value) = restorations.get_mut(&key) {
-                    let _ = driver.restore(value);
+                    let _ = withdraw_from(value, &identity, &applied);
                 }
+            }
+            for driver in std::mem::take(&mut controller.structural_drivers) {
+                self.state.resample_structural_target(driver.target());
             }
             controller.clear_drivers();
             controller.transition = None;
@@ -147,98 +155,6 @@ impl AnimationSystem {
             .into_iter()
             .map(|((entity, _), value)| (entity, value))
             .collect()
-    }
-
-    pub(in crate::world) fn refresh_after_commit(&mut self, context: &SystemCommitContext<'_>) {
-        if context.is_evaluated() {
-            return;
-        }
-        let affected = self.state.affected_by(context.staged);
-        let mut controllers = std::mem::take(&mut self.state.controllers);
-        let read = AnimationReadAccess {
-            animation: &self.state,
-            world: context.world_data,
-            state: context.staged,
-            asset_acquisition: context.assets,
-        };
-        for id in &affected {
-            let controller = controllers.get_mut(id).unwrap();
-            for driver in &mut controller.drivers {
-                let identity = driver.identity();
-                let key = (identity.entity, identity.property.component());
-                if !context.staged.changed.contains_key(&key) {
-                    continue;
-                }
-                if let Some(value) =
-                    context
-                        .staged
-                        .input_value(&context.world_data.components, key.0, key.1)
-                    && let Ok(original) = read.read_bound_animation_target(driver.as_ref(), &value)
-                {
-                    let _ = driver.refresh_original(original);
-                }
-            }
-            if let Some(source) = controller.transition_source_mut() {
-                for driver in &mut source.drivers {
-                    let identity = driver.identity();
-                    let key = (identity.entity, identity.property.component());
-                    if !context.staged.changed.contains_key(&key) {
-                        continue;
-                    }
-                    if let Some(value) =
-                        context
-                            .staged
-                            .producer_value(&context.world_data.components, key.0, key.1)
-                        && let Ok(original) =
-                            read.read_bound_animation_target(driver.as_ref(), &value)
-                    {
-                        let _ = driver.refresh_original(original);
-                    }
-                }
-            }
-            if let Some(mut transition) = controller.transition.take() {
-                match &mut transition.source {
-                    super::system_state::AnimationTransitionSource::Live(source) => {
-                        if let Some(program) = transition.program.as_mut() {
-                            program.refresh_baselines(Some(source.as_ref()), controller);
-                        }
-                        if let Some(program) = transition.hold_program.as_mut() {
-                            program.refresh_baselines(Some(source.as_ref()), controller);
-                        }
-                    }
-                    super::system_state::AnimationTransitionSource::Frozen {
-                        values,
-                        ..
-                    } => {
-                        for value in values.iter_mut() {
-                            let key = (value.target, value.property.component());
-                            if !context.staged.changed.contains_key(&key) {
-                                continue;
-                            }
-                            if let Some(component) = context.staged.producer_value(
-                                &context.world_data.components,
-                                key.0,
-                                key.1,
-                            ) && let Ok(baseline) =
-                                read.read_animation_target(&value.property, &component)
-                            {
-                                value.baseline = baseline;
-                            }
-                        }
-                        if let Some(program) = transition.program.as_mut() {
-                            program.refresh_baselines(None, controller);
-                            program.refresh_frozen_baselines(values);
-                        }
-                        if let Some(program) = transition.hold_program.as_mut() {
-                            program.refresh_frozen_baselines(values);
-                        }
-                    }
-                }
-                controller.transition = Some(transition);
-            }
-        }
-        self.state.controllers = controllers;
-        self.state.affected_controllers = affected;
     }
 
     pub(in crate::world) fn invalidate_changes(&mut self, context: &mut SystemCommitContext<'_>) {
@@ -262,16 +178,6 @@ impl AnimationSystem {
                 }
             }
         }
-        self.state.pending_restorations.retain(|identity, _| {
-            let key = (identity.entity, identity.property.component());
-            (context.is_evaluated() || !context.staged.changed.contains_key(&key))
-                && context
-                    .staged
-                    .entities
-                    .get(&identity.entity)
-                    .and_then(|record| record.input(key.1))
-                    .is_some_and(|input| input.incarnation == identity.incarnation)
-        });
         // Numeric playback time edits preserve readiness. Source replacement
         // must prepare the new particle cache even when the component survives.
         #[cfg(feature = "particles")]
@@ -281,7 +187,10 @@ impl AnimationSystem {
                     .world_data
                     .components
                     .particle_playback(key.0.index() as usize)
-                    .is_some_and(|old| old.source != next.source || old.variant != next.variant)
+                    .is_some_and(|old| {
+                        !crate::components::schema::same_text(&old.source, &next.source)
+                            || old.variant != next.variant
+                    })
                 && let Some(ids) = self.state.target_controllers.get(&key)
             {
                 for id in ids {
@@ -300,6 +209,7 @@ impl AnimationSystem {
             .changed
             .keys()
             .all(|key| read.unchanged_static_target(*key, context.staged))
+            && context.staged.operation_deleted.is_empty()
         {
             return;
         }
@@ -332,7 +242,7 @@ impl AnimationSystem {
                 .filter(|driver| {
                     context.staged.changed.contains_key(&(
                         driver.identity().entity,
-                        driver.identity().property.component(),
+                        driver.identity().property.component_target(),
                     )) && departs_individually(&driver.description().property)
                         && !read.animation_binding_alive(*driver, context.staged)
                 })
@@ -341,11 +251,20 @@ impl AnimationSystem {
             if removed.is_empty() {
                 continue;
             }
+            let departed: Vec<_> = controller
+                .drivers
+                .iter()
+                .filter(|driver| removed.contains(driver.description()))
+                .map(|driver| driver.identity().clone())
+                .collect();
+            controller
+                .contributions
+                .retain(|identity| !departed.contains(identity));
             controller
                 .drivers
                 .retain(|driver| !removed.contains(driver.description()));
             controller.reindex_drivers();
-            if controller.drivers.is_empty() {
+            if controller.drivers.is_empty() && controller.structural_drivers.is_empty() {
                 controller.snapshot.state = AnimationPlaybackStatus::Stopped;
             }
             events.push(AnimationPlaybackEvent {
@@ -374,91 +293,57 @@ impl AnimationSystem {
         }
         self.state.playback_events.extend(events);
         self.state.controllers = controllers;
-        let invalid: Vec<_> = {
-            let read = AnimationReadAccess {
-                animation: &self.state,
-                world: context.world_data,
-                state: context.staged,
-                asset_acquisition: context.assets,
-            };
-            affected
-                .iter()
-                .filter_map(|&id| {
-                    let controller = &self.state.controllers[&id];
-                    (controller.changed_drivers(context.staged).any(|driver| {
-                        context.staged.changed.contains_key(&(
-                            driver.identity().entity,
-                            driver.identity().property.component(),
-                        )) && !read.animation_binding_alive(driver, context.staged)
-                    }) || controller.transition.as_deref().is_some_and(|transition| {
-                        transition
-                            .program
-                            .as_ref()
-                            .or(transition.hold_program.as_ref())
-                            .is_some_and(|program| {
+        let invalid: Vec<_> =
+            {
+                let read = AnimationReadAccess {
+                    animation: &self.state,
+                    world: context.world_data,
+                    state: context.staged,
+                    asset_acquisition: context.assets,
+                };
+                affected
+                    .iter()
+                    .filter_map(|&id| {
+                        let controller = &self.state.controllers[&id];
+                        (controller.structural_drivers.iter().any(|driver| {
+                            context.staged.operation_deleted.contains(&driver.target())
+                        }) || controller.changed_drivers(context.staged).any(|driver| {
+                            context.staged.changed.contains_key(&(
+                                driver.identity().entity,
+                                driver.identity().property.component_target(),
+                            )) && !read.animation_binding_alive(driver, context.staged)
+                        }) || controller.transition.as_deref().is_some_and(|transition| {
+                            transition.program.as_ref().is_some_and(|program| {
                                 program
                                     .invalidated_by(context.staged, &context.world_data.components)
-                            })
-                    }))
-                    .then_some(id)
-                })
-                .collect()
-        };
+                            }) || matches!(
+                                &transition.source,
+                                super::system_state::AnimationTransitionSource::Frozen {
+                                    values,
+                                    ..
+                                } if super::transition::frozen_values_invalidated(
+                                    values,
+                                    context.staged,
+                                    &context.world_data.components,
+                                )
+                            )
+                        }))
+                        .then_some(id)
+                    })
+                    .collect()
+            };
+        // Contributions leave through commit cleanup onto each component's
+        // staged value, so the subtraction combines with this batch's writes.
         let mut restorations = BTreeMap::new();
         for id in invalid {
             let mut controller = self.state.controllers.remove(&id).unwrap();
-            if let Some(program) = controller.transition.as_deref().and_then(|transition| {
-                transition
-                    .program
-                    .as_ref()
-                    .or(transition.hold_program.as_ref())
-            }) {
-                let _ = program.restore(&mut context.world_data.components, context.staged);
+            for (identity, applied) in controller.contributions.take() {
+                if !applied.is_empty() {
+                    stage_withdrawal(&mut restorations, context, &identity, &applied);
+                }
             }
-            for driver in controller.restoration_drivers() {
-                let identity = driver.identity();
-                let key = (identity.entity, identity.property.component());
-                // An explicit pending value owns this component's resulting inputs.
-                if context.staged.changed.contains_key(&key)
-                    || !context
-                        .staged
-                        .entities
-                        .get(&identity.entity)
-                        .and_then(|record| record.input(key.1))
-                        .is_some_and(|input| input.incarnation == identity.incarnation)
-                {
-                    continue;
-                }
-                #[cfg(feature = "skeletal-animation")]
-                if matches!(
-                    driver.runtime_target(),
-                    super::driver::AnimationRuntimeTarget::JointLocal { .. }
-                ) {
-                    let _ = driver.runtime_target().write_joints(
-                        &mut context.world_data.components,
-                        identity.entity,
-                        driver.original(),
-                    );
-                    continue;
-                }
-                if context.is_evaluated() {
-                    self.state
-                        .pending_restorations
-                        .entry(identity.clone())
-                        .or_insert_with(|| driver.original());
-                    continue;
-                }
-                if let std::collections::btree_map::Entry::Vacant(entry) = restorations.entry(key)
-                    && let Some(value) = context
-                        .world_data
-                        .components
-                        .get(key.1, key.0.index() as usize)
-                {
-                    entry.insert(value);
-                }
-                if let Some(value) = restorations.get_mut(&key) {
-                    let _ = driver.restore(value);
-                }
+            for driver in std::mem::take(&mut controller.structural_drivers) {
+                self.state.resample_structural_target(driver.target());
             }
             controller.clear_drivers();
             controller.transition = None;
@@ -480,6 +365,66 @@ impl AnimationSystem {
             context.restore_evaluated_component(entity, value);
         }
     }
+}
+
+fn target_retained(
+    context: &SystemCommitContext<'_>,
+    identity: &super::driver::AnimationTargetIdentity,
+) -> bool {
+    context
+        .staged
+        .entities
+        .get(&identity.entity)
+        .and_then(|record| record.input(identity.property.component_target()))
+        .is_some_and(|input| input.incarnation == identity.incarnation)
+}
+
+/// Subtract one contribution from its component's staged value; a replaced or
+/// removed component keeps nothing of the departing controller.
+fn stage_withdrawal(
+    restorations: &mut BTreeMap<(EntityId, u16), ComponentValue>,
+    context: &SystemCommitContext<'_>,
+    identity: &super::driver::AnimationTargetIdentity,
+    applied: &super::contribution::AnimationApplied,
+) {
+    let Some(property) = identity.property.property() else {
+        return;
+    };
+    if !target_retained(context, identity) {
+        return;
+    }
+    let key = (identity.entity, property.component);
+    if let std::collections::btree_map::Entry::Vacant(entry) = restorations.entry(key)
+        && let Some(value) =
+            context
+                .staged
+                .input_value(&context.world_data.components, key.0, key.1)
+    {
+        entry.insert(value);
+    }
+    if let Some(value) = restorations.get_mut(&key) {
+        let _ = withdraw_from(value, identity, applied);
+    }
+}
+
+/// Subtract `applied` from its property of `value`. A result the field rejects
+/// leaves the value as it is.
+fn withdraw_from(
+    value: &mut ComponentValue,
+    identity: &super::driver::AnimationTargetIdentity,
+    applied: &super::contribution::AnimationApplied,
+) -> Result<(), ErrorReason> {
+    let property = identity
+        .property
+        .property()
+        .ok_or(ErrorReason::InvalidField)?;
+    let current = AnimationValue::read(property, value)?;
+    let next = applied.withdrawn(&current)?;
+    let mut candidate = value.clone();
+    next.write(property, &mut candidate)?;
+    candidate.validate_lifecycle()?;
+    *value = candidate;
+    Ok(())
 }
 
 /// A departed dynamic property, removed row or cleared optional row property

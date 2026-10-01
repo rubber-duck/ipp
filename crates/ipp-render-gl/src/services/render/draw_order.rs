@@ -1,13 +1,15 @@
 //! Frame-local material ordering. Fingerprints affect ordering only, never draw
 //! merging or upload elision: a hash collision cannot change submitted state.
 
+use super::scene::{
+    RenderEntity as EntityId, SceneDebug as DebugRenderItem, SceneItem as RenderItem,
+};
 use super::{
     custom_material::PreparedCustomMaterial,
     frame_scratch::{RenderDraw, RenderDrawIndex},
     light_selection::PreparedLighting,
     shader::RenderShaderConfig,
 };
-use ipp_core::{DebugRenderItem, EntityId, RenderItem};
 use std::{
     collections::{BTreeMap, hash_map::DefaultHasher},
     hash::{Hash, Hasher},
@@ -21,7 +23,7 @@ pub(super) struct RenderMaterialKey {
     values: u64,
 }
 
-pub(super) fn builtin_config(item: &RenderItem, shadow: bool) -> RenderShaderConfig {
+pub(super) fn builtin_config(item: &ipp_core::RenderItem, shadow: bool) -> RenderShaderConfig {
     let config = RenderShaderConfig::new(item.texture.is_some(), item.texture_weights)
         .with_solid_fallback(item.solid_fallback);
     let config = if item.pbr.is_some() {
@@ -42,7 +44,7 @@ pub(super) fn builtin_config(item: &RenderItem, shadow: bool) -> RenderShaderCon
 }
 
 fn material_key(
-    item: &RenderItem,
+    item: &ipp_core::RenderItem,
     custom: Option<&PreparedCustomMaterial>,
     shadow: bool,
 ) -> RenderMaterialKey {
@@ -78,7 +80,7 @@ fn material_key(
     }
 }
 
-fn depth(item: &RenderItem, view_projection: &[f32; 16]) -> f64 {
+fn depth(item: &RenderItem<'_>, view_projection: &[f32; 16]) -> f64 {
     // Clip Z is affine and monotonic in view depth for both supported projections.
     f64::from(view_projection[2]) * f64::from(item.model[12])
         + f64::from(view_projection[6]) * f64::from(item.model[13])
@@ -86,19 +88,11 @@ fn depth(item: &RenderItem, view_projection: &[f32; 16]) -> f64 {
         + f64::from(view_projection[14])
 }
 
-#[cfg(feature = "surfaces")]
-fn surface_depth(item: &ipp_core::SurfaceRenderItem, view_projection: &[f32; 16]) -> f64 {
-    f64::from(view_projection[2]) * f64::from(item.anchor[0])
-        + f64::from(view_projection[6]) * f64::from(item.anchor[1])
-        + f64::from(view_projection[10]) * f64::from(item.anchor[2])
-        + f64::from(view_projection[14])
-}
-
 pub(super) fn prepare(
     draws: &mut Vec<RenderDraw>,
-    items: &[RenderItem],
+    items: &[RenderItem<'_>],
     debug: &[DebugRenderItem],
-    #[cfg(feature = "surfaces")] surfaces: &[ipp_core::SurfaceRenderItem],
+    #[cfg(feature = "surfaces")] surfaces: &[super::scene::SceneOutputSurface],
     customs: &BTreeMap<EntityId, PreparedCustomMaterial>,
     lighting: &PreparedLighting,
     view_projection: &[f32; 16],
@@ -169,13 +163,17 @@ pub(super) fn prepare(
         phase: 1,
         depth: 0.0,
     }));
+
     #[cfg(feature = "surfaces")]
     draws.extend(surfaces.iter().enumerate().map(|(index, item)| RenderDraw {
         index: RenderDrawIndex::Surface(index),
         key: (item.entity, 2),
         material: RenderMaterialKey::default(),
         phase: 2,
-        depth: surface_depth(item, view_projection),
+        depth: f64::from(view_projection[2]) * f64::from(item.model[12])
+            + f64::from(view_projection[6]) * f64::from(item.model[13])
+            + f64::from(view_projection[10]) * f64::from(item.model[14])
+            + f64::from(view_projection[14]),
     }));
     draws.sort_unstable_by(RenderDraw::compare);
 }

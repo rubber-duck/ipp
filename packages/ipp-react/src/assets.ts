@@ -18,6 +18,18 @@ export interface AssetReference {
   readonly assetId: string;
 }
 
+export interface AssetFieldWrite {
+  readonly offset: number;
+  readonly asset: AssetReference;
+}
+
+export function assetField(
+  offset: number,
+  asset: AssetReference,
+): AssetFieldWrite {
+  return { offset, asset };
+}
+
 export function assetRef(id: string): AssetReference {
   if (!id) throw new Error("Asset reference requires an id");
   return Object.freeze({ assetId: id });

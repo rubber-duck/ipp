@@ -29,14 +29,15 @@ export async function animationComponents(
     component: scalar.id,
     offsets: [scalar.fields.value!.offset],
   };
-  const clip = (start: number) => ({
+  // A clip adds its change from its first key: here `change` per second.
+  const clip = (change: number) => ({
     duration: 1,
     tracks: [
       {
         property,
         keys: [
-          { time: 0, value: { kind: "f32" as const, value: start } },
-          { time: 1, value: { kind: "f32" as const, value: start + 4 } },
+          { time: 0, value: { kind: "f32" as const, value: 0 } },
+          { time: 1, value: { kind: "f32" as const, value: change } },
         ],
       },
     ],
@@ -101,7 +102,7 @@ export async function animationComponents(
   const snapshot = async () => {
     const state = await client.inspect();
     const value = (id: string) =>
-      findEntity(state, id)!.effective.find(
+      findEntity(state, id)!.components.find(
         (component) => component.component === scalar.id,
       )!.fields.value;
     return {
@@ -131,7 +132,9 @@ export async function animationComponents(
     await wait();
     const first = await snapshot();
     check(
-      first.controllers.length === 2 && first.value === 4 && first.peer === 3,
+      first.controllers.length === 2 &&
+        first.value === 11 &&
+        first.peer === 20.5,
       "forward and enclosing targets share a clip with independent playback under StrictMode",
     );
     const ids = first.controllers.map((controller) => controller.id);
@@ -141,7 +144,7 @@ export async function animationComponents(
     await root.render(scene(10));
     await gate.wait(client);
     check(
-      (await snapshot()).value === 4,
+      (await snapshot()).value === 11,
       "pending replacement keeps the previous animated value",
     );
     gate.hold(() => false);
@@ -151,8 +154,8 @@ export async function animationComponents(
     await root.flush();
     const replacement = await snapshot();
     check(
-      replacement.value === 22 &&
-        replacement.peer === 21 &&
+      replacement.value === 20 &&
+        replacement.peer === 25 &&
         replacement.controllers.every(
           (controller, index) =>
             controller.id === ids[index] &&
@@ -164,7 +167,7 @@ export async function animationComponents(
     await root.render(scene(30, true, true));
     await wait("failed");
     check(
-      (await snapshot()).value === 22 &&
+      (await snapshot()).value === 20 &&
         errors.some((message) => message.includes("failed")),
       "failed replacement preserves the previous controller binding",
     );
@@ -173,20 +176,20 @@ export async function animationComponents(
     await handle.stop();
     check(
       (await snapshot()).value === 10,
-      "stop restores underlying component values",
+      "stop subtracts the contribution from the component value",
     );
     await handle.restart();
     await handle.pause();
     await handle.seek(0.75);
     check(
-      (await snapshot()).value === 23,
+      (await snapshot()).value === 25,
       "restart pause and seek control real Host playback",
     );
     await root.render(scene(20, false));
     check(
       (await snapshot()).controllers.length === 0 &&
         (await snapshot()).peer === 20,
-      "removing Animation deletes controllers and restores surviving targets",
+      "removing Animation deletes controllers and subtracts their contributions",
     );
     check(
       (await rejectedMessage(handle.play())).includes("unmounted"),

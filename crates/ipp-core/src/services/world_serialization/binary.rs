@@ -138,6 +138,15 @@ impl<'a> WorldBinaryReader<'a> {
         String::from_utf8(bytes.to_vec()).map_err(|_| "Invalid World UTF-8".into())
     }
 
+    /// Decode component text straight into one shared immutable allocation.
+    pub fn text(&mut self) -> Result<std::sync::Arc<str>, String> {
+        let bytes = self.blob()?;
+        self.claim(bytes.len().saturating_mul(2).saturating_add(64))?;
+        std::str::from_utf8(bytes)
+            .map(std::sync::Arc::from)
+            .map_err(|_| "Invalid World UTF-8".into())
+    }
+
     pub fn end(&self) -> Result<(), String> {
         if self.remaining() == 0 {
             Ok(())

@@ -5,7 +5,6 @@ import {
   UnlitTexture,
   MeshInstance,
 } from "@ipp/react";
-import { World } from "@ipp/react/web";
 import {
   MESH_IDS,
   meshSource,
@@ -17,6 +16,9 @@ import { hexToLinear } from "../../shared/colors.js";
 import { ReadyGeometry } from "../../shared/ready-geometry.js";
 
 export const VIEWER_ENTITY_ID = "react-gallery-selection";
+
+/** `UnlitMaterial` default factors, shown when the colour override is off. */
+const UNLIT_DEFAULT_COLOR: readonly [number, number, number] = [1, 1, 1];
 export const VIEWER_TEXTURE_SOURCE =
   "ipp://texture/uv-grid?width=512&height=512&cellsX=8&cellsY=8";
 
@@ -31,7 +33,7 @@ export function ShapesWorld({
   const overview = shape === "gallery";
   const visible = overview ? MESH_IDS : [shape];
   return (
-    <World>
+    <>
       {visible.map((mesh, index) => {
         const settings = meshes[mesh];
         const id = overview ? `react-gallery-${mesh}` : VIEWER_ENTITY_ID;
@@ -40,9 +42,11 @@ export function ShapesWorld({
         const x =
           (overview ? ((index % 4) - 1.5) * 1.4 : 0) + settings.x * layoutScale;
         const y = overview ? 1.2 - Math.floor(index / 4) * 1.2 : 0;
+        // Withdrawn props keep their last written value, so switching the
+        // override off writes the material's default white explicitly.
         const color = settings.override
           ? hexToLinear(settings.color)
-          : undefined;
+          : UNLIT_DEFAULT_COLOR;
         // The catalog builds ordinary URIs, e.g. ipp://mesh/cube?width=2&height=2&length=2.
         const source = meshSource(mesh, settings);
         return (
@@ -69,15 +73,13 @@ export function ShapesWorld({
                   }
                 />
                 <MeshInstance source={source} />
-                <UnlitMaterial
-                  {...(color ? { r: color[0], g: color[1], b: color[2] } : {})}
-                />
+                <UnlitMaterial r={color[0]} g={color[1]} b={color[2]} />
                 {texture !== undefined && <UnlitTexture source={texture} />}
               </Entity>
             )}
           </ReadyGeometry>
         );
       })}
-    </World>
+    </>
   );
 }

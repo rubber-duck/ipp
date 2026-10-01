@@ -55,7 +55,7 @@ export async function partialFailureThenSuccess(
     }),
   );
   assert.deepEqual(partial.entity, failed.aliases.partial);
-  assert.deepEqual(partial.scalar, { base: 12, effective: 12 });
+  assert.deepEqual(partial.scalar, { value: 12 });
   committed(
     await context.driver.submit(
       31n,
@@ -67,7 +67,7 @@ export async function partialFailureThenSuccess(
     observed(
       await context.driver.inspect(partial.entity, { signal: context.signal }),
     ).scalar,
-    { base: 13, effective: 13 },
+    { value: 13 },
   );
 
   const success = committed(
@@ -93,5 +93,5 @@ export async function partialFailureThenSuccess(
     ),
   );
   assert.equal(observation.symbolicId, "after-rejection");
-  assert.deepEqual(observation.scalar, { base: 7, effective: 7 });
+  assert.deepEqual(observation.scalar, { value: 7 });
 }

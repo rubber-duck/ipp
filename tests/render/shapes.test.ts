@@ -30,7 +30,7 @@ import {
 
 const workspace = resolve(process.cwd());
 const render = browserBuild("render");
-const overlays = browserBuild("headless");
+const headless = browserBuild("headless");
 const EXPECTED_GEOMETRY: Readonly<
   Record<
     ShapeId,
@@ -71,7 +71,7 @@ for (const variant of ["development", "production"] as const) {
       {
         workspace,
         build: render,
-        mismatchBuild: overlays,
+        mismatchBuild: headless,
         operationTimeoutMs: 15_000,
         closeTimeoutMs: 5_000,
         evidenceParent: resolve(
@@ -560,7 +560,6 @@ for (const variant of ["development", "production"] as const) {
           });
 
           return {
-            session: beforeInvalid.session,
             firstTick: originalCaptures.get("cube")?.tick ?? 0n,
             finalTick: axisRecovery.after.tick,
             captures: [...captured],
@@ -584,7 +583,6 @@ for (const variant of ["development", "production"] as const) {
         }
       },
     );
-    assert.ok(result.value.session > 0n);
     assert.ok(result.value.finalTick > result.value.firstTick);
     assert.equal(
       result.value.captures.length,
@@ -630,7 +628,7 @@ function verifyInspection(
 
 function verifyRotatedPlaneInspection(inspection: ShapeInspection): void {
   const transform = inspection.transform;
-  assert.ok(transform, "rotated plane is missing its effective Transform");
+  assert.ok(transform, "rotated plane is missing its Transform");
   for (const [field, expected] of [
     ["qy", Math.sin(ROTATED_PLANE_Y / 2)],
     ["qw", Math.cos(ROTATED_PLANE_Y / 2)],
@@ -986,7 +984,7 @@ interface ImageDifference {
 }
 
 interface RecoveryReport {
-  readonly beforeGeneration: number;
+  readonly beforeGeneration: bigint;
   readonly after: ShapeCaptureReport;
   readonly resourceCountBefore: number;
   readonly resourceCountAfter: number;

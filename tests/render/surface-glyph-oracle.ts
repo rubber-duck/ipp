@@ -1,4 +1,4 @@
-import type { FrameCapture } from "@ipp/client";
+import type { PresentedCapture } from "@ipp/client";
 
 const EM_PIXELS = 1024;
 const ORIGIN = [512, 1280] as const;
@@ -28,7 +28,7 @@ function linear(encoded: number): number {
 
 /** Sample the original font through an independently inverted plane projection. */
 export function compareGlyph(
-  frame: FrameCapture,
+  frame: PresentedCapture,
   glyph: string,
   fontSize: number,
   angle: number,
@@ -37,7 +37,8 @@ export function compareGlyph(
 ) {
   const mask = glyphMask(glyph);
   const actual = new Uint8Array(frame.pixels);
-  const reference = new ImageData(frame.width, frame.height);
+  const { width, height } = frame.view.binding.viewport;
+  const reference = new ImageData(width, height);
   const cosine = Math.cos(angle),
     sine = Math.sin(angle);
   const focal = 1 / Math.tan(0.49 / 2);
@@ -46,26 +47,25 @@ export function compareGlyph(
     missingInterior = 0,
     expectedMass = 0,
     error = 0,
-    expectedTop = frame.height,
+    expectedTop = height,
     expectedBottom = -1,
-    actualTop = frame.height,
+    actualTop = height,
     actualBottom = -1;
-  for (let y = 0; y < frame.height; y++) {
-    for (let x = 0; x < frame.width; x++) {
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
       let coverage = 0;
       for (let sy = 0; sy < samples; sy++) {
         for (let sx = 0; sx < samples; sx++) {
           const px = x + (sx + 0.5) / samples;
           const py = y + (sy + 0.5) / samples;
-          const ndcX = (2 * px) / frame.width - 1;
-          const ndcY = 1 - (2 * py) / frame.height;
+          const ndcX = (2 * px) / width - 1;
+          const ndcY = 1 - (2 * py) / height;
           const localX = perspective
-            ? (6 * ndcX) /
-              ((focal * cosine * frame.height) / frame.width - ndcX * sine)
-            : ((px - frame.width / 2) * 3) / frame.height / cosine;
+            ? (6 * ndcX) / ((focal * cosine * height) / width - ndcX * sine)
+            : ((px - width / 2) * 3) / height / cosine;
           const localY = perspective
             ? (ndcY * (6 + localX * sine)) / focal
-            : ((frame.height / 2 - py) * 3) / frame.height;
+            : ((height / 2 - py) * 3) / height;
           const mx = Math.floor(
             ORIGIN[0] + (localX / fontSize + 0.3) * EM_PIXELS,
           );
@@ -77,7 +77,7 @@ export function compareGlyph(
         }
       }
       coverage /= samples ** 2;
-      const offset = (y * frame.width + x) * 4;
+      const offset = (y * width + x) * 4;
       const rendered = linear(actual[offset]!);
       if (coverage > 64 / 255) {
         expectedTop = Math.min(expectedTop, y);
@@ -93,8 +93,8 @@ export function compareGlyph(
       }
       // Restrict error to the glyph and its neighbouring pixels, excluding the plane edge.
       if (
-        Math.abs(x - frame.width / 2) < frame.width / 4 &&
-        Math.abs(y - frame.height / 2) < frame.height / 3
+        Math.abs(x - width / 2) < width / 4 &&
+        Math.abs(y - height / 2) < height / 3
       ) {
         expectedMass += coverage;
         error += Math.abs(coverage - rendered);
@@ -110,8 +110,8 @@ export function compareGlyph(
     }
   }
   const canvas = document.createElement("canvas");
-  canvas.width = frame.width;
-  canvas.height = frame.height;
+  canvas.width = width;
+  canvas.height = height;
   canvas.getContext("2d")!.putImageData(reference, 0, 0);
   return {
     canvas,

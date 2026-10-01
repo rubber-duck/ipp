@@ -1,5 +1,5 @@
 use crate::binary_reader::Reader;
-use crate::model::{Component, Export, Field, RowProperty, RowsLayout, TargetFeature};
+use crate::model::{Component, Export, Field, RowLimits, RowProperty, RowsLayout, TargetFeature};
 use crate::typescript_names::{identifier, js_string, member_identifier};
 use crate::wire_contract;
 
@@ -23,7 +23,7 @@ pub(super) fn read_export(bytes: &[u8]) -> Result<Export, String> {
         bytes: &bytes[16..],
         at: 0,
     };
-    if r.u16()? != 4 {
+    if r.u16()? != 6 {
         return Err("export format".into());
     }
 
@@ -34,6 +34,7 @@ pub(super) fn read_export(bytes: &[u8]) -> Result<Export, String> {
         return Err("target pointer width".into());
     }
     let features = read_target_features(&mut r)?;
+    let row_limits = read_row_limits(&mut r)?;
 
     let n = r.u16()?;
     let mut components = Vec::new();
@@ -76,7 +77,7 @@ pub(super) fn read_export(bytes: &[u8]) -> Result<Export, String> {
 
             let rows = if kind == ROWS_KIND {
                 row_fields += 1;
-                Some(read_rows_layout(&mut r, row_fields)?)
+                Some(read_rows_layout(&mut r, row_fields, &row_limits)?)
             } else {
                 None
             };
@@ -108,10 +109,14 @@ pub(super) fn read_export(bytes: &[u8]) -> Result<Export, String> {
                         let n = r.u32()? as usize;
                         format!("{:?} as const", r.take(n)?)
                     }
+                    12 | 13 => match r.u8()? {
+                        0 => "null".into(),
+                        _ => return Err("runtime reference cannot be a component default".into()),
+                    },
                     _ => return Err("unknown field kind".into()),
                 }
             };
-            if !(1..=ROWS_KIND).contains(&kind) {
+            if !(1..=ROWS_KIND).contains(&kind) && kind != 12 && kind != 13 {
                 return Err("unknown field kind".into());
             }
 
@@ -151,6 +156,12 @@ pub(super) fn read_export(bytes: &[u8]) -> Result<Export, String> {
         });
     }
 
+    let paint_keys = crate::paint_keys::read(
+        &mut r,
+        features
+            .iter()
+            .any(|feature| feature.name == "gui" && feature.enabled),
+    )?;
     let wire = wire_contract::read_wire_contract(&mut r, &components, &features)?;
 
     if !r.is_complete() {
@@ -164,6 +175,8 @@ pub(super) fn read_export(bytes: &[u8]) -> Result<Export, String> {
         pointer,
         features,
         components,
+        paint_keys,
+        row_limits,
         wire,
     })
 }
@@ -171,25 +184,47 @@ pub(super) fn read_export(bytes: &[u8]) -> Result<Export, String> {
 /// Field kind of a schema rows table.
 pub(super) const ROWS_KIND: u8 = 8;
 
-/// Offset span of one rows region; region `k` starts at `(k + 1)` spans.
-const ROW_REGION_SPAN: u32 = 0x1000_0000;
-
 /// `DynamicPropertyKind::Text`, the bounded row-only text kind.
 pub(super) const ROW_TEXT_KIND: u8 = 13;
 
-/// Largest text row bound: one string field value.
-const MAX_ROW_TEXT_BYTES: u32 = 65_536;
+/// Rows bounds the core registry exports ahead of its components.
+pub(super) fn read_row_limits(r: &mut Reader<'_>) -> Result<RowLimits, String> {
+    let limits = RowLimits {
+        region_span: r.u32()?,
+        fields: r.u8()?,
+        properties: r.u16()?,
+        text_bytes: r.u32()?,
+    };
+    // Every region, including the last at `fields` spans, must be addressable in u32.
+    if limits.region_span == 0
+        || limits.fields == 0
+        || limits.properties == 0
+        || limits.text_bytes == 0
+        || limits
+            .region_span
+            .checked_mul(u32::from(limits.fields) + 1)
+            .is_none()
+    {
+        return Err("rows limits".into());
+    }
+
+    Ok(limits)
+}
 
 /// Read the region base and ordered row layout that follow a rows field's kind.
 /// `ordinal` is the 1-based position among the component's rows fields.
-pub(super) fn read_rows_layout(r: &mut Reader<'_>, ordinal: u32) -> Result<RowsLayout, String> {
+pub(super) fn read_rows_layout(
+    r: &mut Reader<'_>,
+    ordinal: u32,
+    limits: &RowLimits,
+) -> Result<RowsLayout, String> {
     let region_base = r.u32()?;
-    if ordinal > 7 || region_base != ROW_REGION_SPAN * ordinal {
+    if ordinal > u32::from(limits.fields) || region_base != limits.region_span * ordinal {
         return Err("rows region".into());
     }
 
     let count = r.u16()?;
-    if count == 0 || count > 256 {
+    if count == 0 || count > limits.properties {
         return Err("rows layout size".into());
     }
 
@@ -220,7 +255,7 @@ pub(super) fn read_rows_layout(r: &mut Reader<'_>, ordinal: u32) -> Result<RowsL
         // Text properties follow their hint with a nonzero UTF-8 byte bound.
         let max_bytes = if kind == ROW_TEXT_KIND {
             let bound = r.u32()?;
-            if bound == 0 || bound > MAX_ROW_TEXT_BYTES {
+            if bound == 0 || bound > limits.text_bytes {
                 return Err("row text bound".into());
             }
 

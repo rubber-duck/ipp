@@ -137,6 +137,66 @@ def register(tasks: dict[str, Task]) -> None:
 def plan(args: argparse.Namespace, tasks: dict[str, Task]) -> list[str]:
     from .catalog import operation
 
+    if getattr(args, "scene", "stress") == "gui-stress":
+        if args.repetitions < 1:
+            raise ValueError("GUI stress repetitions must be positive")
+        if args.samples < 1 or args.samples > 32:
+            raise ValueError("GUI stress samples must be in 1..32")
+        if args.frames != 60:
+            raise ValueError(
+                "--frames does not apply to --scene gui-stress; use --repetitions"
+            )
+        if args.surface_cache:
+            raise ValueError("--surface-cache applies to --scene retained-gui")
+        unsupported = [
+            f"--{name.replace('_', '-')}"
+            for name in RETAINED_GUI_UNSUPPORTED
+            if getattr(args, name) not in (None, False)
+        ]
+        if unsupported:
+            raise ValueError(
+                "The GUI stress benchmark does not accept Blender stress options: "
+                + ", ".join(unsupported)
+            )
+        if args.backend == "native" and not args.egl_dir:
+            raise ValueError("Native GUI stress requires --egl-dir")
+        dependencies = (
+            "build:gui-stress-fixtures",
+            "build:surface-assets",
+            "build:browser:headless-gui"
+            if args.backend == "browser"
+            else "build:gles-hosts",
+            *(
+                ["build:browser:gui-stress-profile"]
+                if args.backend == "browser"
+                else []
+            ),
+        )
+        if args.build_only:
+            return list(dependencies)
+        tasks["benchmark:gui-stress"] = Task(
+            "benchmark:gui-stress",
+            "Measure the fixed React GUI stress workload through real completed frames",
+            (
+                node(),
+                "target/gui-stress/gui-stress.js",
+                "browser" if args.backend == "browser" else "native-gles",
+                str(args.repetitions),
+                args.output or "target/performance/gui-stress",
+                str(args.samples),
+                *([args.egl_dir] if args.backend == "native" else []),
+                *(["--core-profile"] if args.backend == "browser" else []),
+            ),
+            () if args.reuse_build else dependencies,
+            (
+                "node",
+                "npm",
+                "browser",
+                *(["gles"] if args.backend == "native" else ["wasm"]),
+            ),
+            timeout=7200,
+        )
+        return ["benchmark:gui-stress"]
     if getattr(args, "scene", "stress") == "retained-gui":
         if args.backend != "browser":
             raise ValueError("The retained GUI workload uses the browser backend")
@@ -155,7 +215,7 @@ def plan(args: argparse.Namespace, tasks: dict[str, Task]) -> list[str]:
             raise ValueError("Retained GUI streaming updates must be positive")
         dependencies = (
             "build:typescript",
-            "build:surface-fixtures",
+            "build:surface-gui-fixtures",
             "build:browser:render-surfaces",
             "build:browser:headless-gui",
         )
@@ -424,7 +484,6 @@ def browser_scene(config: dict, directory: Path, bundle: Path, output: Path) -> 
                 "--world",
                 "benchmark.ipp",
                 "--clips-only",
-                "--defer-presentation",
             ],
             env=env,
             timeout=3600,

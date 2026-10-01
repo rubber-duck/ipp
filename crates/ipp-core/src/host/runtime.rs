@@ -11,13 +11,35 @@ impl HostRuntime {
                 .expect("valid compiled factory graph"),
             data_sources: crate::services::data_source::DataSourceManagementService::new(),
             assets: crate::services::asset_management::service::AssetManagementService::new(),
+            topology: Default::default(),
+            publications: Default::default(),
+            frame: 0,
         };
         let mut host = host;
+        host.topology.identity = host.publications.identity;
         host.assets.require_lifecycle_barrier();
         host.assets
             .install_data_sources(&mut host.data_sources)
             .expect("private producer source");
         host
+    }
+
+    /// Stable identity of this runtime Host, including while it owns no Worlds.
+    /// Matches the Host part of runtime publication and root-binding identities;
+    /// it is observational metadata, not authority to construct runtime tokens.
+    pub fn identity(&self) -> u64 {
+        self.topology.identity
+    }
+
+    /// Observe an exact live World's current fault without advancing or flushing anything.
+    /// Scheduling admission and completed publication availability remain independent.
+    pub fn world_fault(&self, world: WorldRef) -> Result<Option<ErrorReason>, ErrorReason> {
+        let current = self
+            .worlds
+            .get(&world.id())
+            .filter(|current| current.runtime_ref() == world)
+            .ok_or(ErrorReason::InvalidEntity)?;
+        Ok(current.ingress_world_view().fault())
     }
 
     /// Register reusable construction configuration for every World on this Host.
@@ -31,8 +53,8 @@ impl HostRuntime {
         Ok(host)
     }
 
-    /// Whether any World has prepared an update that has not yet completed.
-    /// Host-wide resource/device transitions must wait for these phases to finish.
+    /// Whether any World has admitted frame inputs without completing evaluation.
+    /// This logical scheduling state is not an active World or service borrow.
     pub fn has_pending_world_updates(&self) -> bool {
         self.worlds.values().any(crate::World::has_prepared_update)
     }
@@ -42,17 +64,37 @@ impl HostRuntime {
         self.system_factories.ids()
     }
 
-    /// Initialize the complete registered composition and publish only on success.
-    pub fn create_world(&mut self, limits: WorldLimits) -> Result<WorldId, WorldConstructionError> {
-        self.create_world_with_options(limits, crate::WorldCreateOptions::default())
+    /// Instantiate exactly these registered factories in an automatically named
+    /// World; instance ownership is never supplied externally. Publishes only on success.
+    pub fn create_world(
+        &mut self,
+        limits: WorldLimits,
+        selected: &[SystemId],
+    ) -> Result<WorldId, WorldConstructionError> {
+        self.create_world_with_options(
+            limits,
+            crate::WorldCreateOptions::new(selected.iter().copied()),
+        )
     }
 
-    /// Create a named World with resolved reservation hints, publishing only on success.
+    /// Create a named World with its selection and resolved reservation hints,
+    /// publishing only on success.
     pub fn create_world_with_options(
         &mut self,
         limits: WorldLimits,
         options: crate::WorldCreateOptions,
     ) -> Result<WorldId, WorldConstructionError> {
+        if let Some(canvas) = options.canvas {
+            crate::systems::canvas::canvas_state::validate_creation_state(
+                canvas,
+                &options.selected_systems,
+            )
+            .map_err(WorldConstructionError::Canvas)?;
+        }
+        let factories = self
+            .system_factories
+            .select(&options.selected_systems)
+            .map_err(WorldConstructionError::Systems)?;
         let id = self.next_world_id()?;
         let symbolic_id = if options.symbolic_id.is_empty() {
             self.automatic_world_symbol(id)
@@ -65,11 +107,15 @@ impl HostRuntime {
             id,
             limits,
             options.capacity_hints,
-            &self.system_factories,
+            &factories,
             &mut self.assets,
             &mut self.data_sources,
         )
         .map(|mut world| {
+            #[cfg(feature = "surfaces")]
+            if let Some(canvas) = options.canvas {
+                world.seed_canvas_state(canvas);
+            }
             world.data.metadata = crate::WorldMetadata {
                 symbolic_id,
                 persistent_id: crate::WorldPersistentId(
@@ -78,28 +124,6 @@ impl HostRuntime {
             };
             world
         });
-        self.publish_world(id, result)
-    }
-
-    /// Select registered factory IDs for a World; instance ownership is never supplied externally.
-    pub fn create_world_with_systems(
-        &mut self,
-        limits: WorldLimits,
-        selected: &[SystemId],
-    ) -> Result<WorldId, WorldConstructionError> {
-        let factories = self
-            .system_factories
-            .select(selected)
-            .map_err(WorldConstructionError::Systems)?;
-        let id = self.next_world_id()?;
-        let result = World::construct(
-            id,
-            limits,
-            crate::WorldCapacityHints::default(),
-            &factories,
-            &mut self.assets,
-            &mut self.data_sources,
-        );
         self.publish_world(id, result)
     }
 
@@ -125,6 +149,8 @@ impl HostRuntime {
                         ),
                     };
                 }
+                self.topology.worlds.insert(id, world.runtime_ref());
+                self.topology.revision += 1;
                 self.worlds.insert(id, world);
                 self.next_world = id.0;
                 Ok(id)
@@ -139,11 +165,13 @@ impl HostRuntime {
     /// Borrow one world and shared services at a safe operation boundary.
     pub fn world_mut(&mut self, id: WorldId) -> Option<WorldContext<'_>> {
         self.flush_resource_lifecycle();
-        Some(
-            self.worlds
-                .get_mut(&id)?
-                .context(&mut self.assets, &mut self.data_sources),
-        )
+        let mut context = self.worlds.get_mut(&id)?.context(
+            &mut self.assets,
+            &mut self.data_sources,
+            &mut self.topology,
+        );
+        context.publications = Some(&self.publications);
+        Some(context)
     }
 
     /// Observe the HostRuntime's live world identities in construction order.
@@ -151,11 +179,24 @@ impl HostRuntime {
         self.worlds.keys().copied()
     }
 
+    /// Borrow a published World's immutable selected-system manifest.
+    pub fn world_manifest(&self, id: WorldId) -> Option<&crate::systems::WorldManifest> {
+        Some(&self.worlds.get(&id)?.data.manifest)
+    }
+
     /// Destroy a world independently of every other world.
     pub fn destroy_world(&mut self, id: WorldId) -> bool {
         let Some(mut world) = self.worlds.remove(&id) else {
             return false;
         };
+        self.topology.destroy(id);
+        self.publications.latest.remove(&id);
+        for entry in self.publications.completed.values_mut() {
+            if entry.data.world.id == id {
+                entry.available = false;
+            }
+        }
+        self.retire_publications();
         world.teardown(&mut self.assets, &mut self.data_sources);
         self.assets.release_world(id);
         self.flush_resource_lifecycle();
@@ -345,42 +386,37 @@ impl HostRuntime {
 
 impl HostRuntime {
     /// Finish every World's handlers before releasing shared resource storage.
+    /// Exclusive Host access ends live phase borrows; logical frame preparation
+    /// cannot delay invalidation. Strengthened release revisions are drained again.
     pub fn flush_resource_lifecycle(&mut self) {
-        for event in self.assets.take_lifecycle_events() {
-            for world in self.worlds.values_mut() {
-                world
-                    .context(&mut self.assets, &mut self.data_sources)
-                    .dispatch_asset_lifecycle(&event, false);
+        loop {
+            for event in self.assets.take_lifecycle_events() {
+                for world in self.worlds.values_mut() {
+                    world
+                        .context(&mut self.assets, &mut self.data_sources, &mut self.topology)
+                        .dispatch_asset_lifecycle(&event, false);
+                }
+                self.assets.finish_lifecycle_event(&event);
             }
-            self.assets.finish_lifecycle_event(&event);
-        }
-        // Prepared Worlds belong to the same Host update cycle. A release from
-        // one callback waits until every participating World's borrows have ended.
-        if self.has_pending_world_updates() {
-            return;
-        }
-        for (_, event) in self.assets.pending_releases() {
-            for world in self.worlds.values_mut() {
-                world
-                    .context(&mut self.assets, &mut self.data_sources)
-                    .dispatch_asset_lifecycle(&event, true);
+
+            let pending = self.assets.pending_releases();
+            if pending.is_empty() {
+                break;
             }
-            // Every World has dropped dependent bindings. Apply queued component
-            // restorations through the same all-System barrier while the payload lives.
-            for world in self.worlds.values_mut() {
-                world
-                    .context(&mut self.assets, &mut self.data_sources)
-                    .flush_lifecycle_cleanup();
+            for (_, event) in pending {
+                self.invalidate_publication_resources(&event);
+                for world in self.worlds.values_mut() {
+                    world
+                        .context(&mut self.assets, &mut self.data_sources, &mut self.topology)
+                        .dispatch_asset_lifecycle(&event, true);
+                }
+                for world in self.worlds.values_mut() {
+                    world
+                        .context(&mut self.assets, &mut self.data_sources, &mut self.topology)
+                        .flush_lifecycle_cleanup();
+                }
+                self.assets.finish_release(&event);
             }
-            self.assets.finish_release(&event);
-        }
-        for event in self.assets.take_lifecycle_events() {
-            for world in self.worlds.values_mut() {
-                world
-                    .context(&mut self.assets, &mut self.data_sources)
-                    .dispatch_asset_lifecycle(&event, false);
-            }
-            self.assets.finish_lifecycle_event(&event);
         }
     }
 }

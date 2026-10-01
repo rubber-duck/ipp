@@ -15,6 +15,7 @@ import {
   aliasId,
   createEntity,
   insertComponent,
+  successfulBatch,
 } from "../integration/camera-fixtures.js";
 
 export interface FeatureContract {
@@ -60,7 +61,7 @@ export async function addStressFeatures(
   const source = (component: string) => {
     const id = client.components[component]!.id;
     const value = imported.entities
-      .flatMap((e) => e.base)
+      .flatMap((e) => e.components)
       .find((c) => c.component === id)?.fields.source;
     check(
       typeof value === "string" && value.length > 0,
@@ -69,7 +70,7 @@ export async function addStressFeatures(
     return value;
   };
   const mesh = String(
-    find("drop-000-000").base.find(
+    find("drop-000-000").components.find(
       (c) => c.component === client.components.MeshInstance!.id,
     )!.fields.source,
   );
@@ -150,7 +151,7 @@ export async function addStressFeatures(
   // the imported timeline; short per-driver clips repeat within that interval.
   const camera = find("benchmark-camera");
   const fov = Number(
-    camera.base.find((c) => c.component === client.components.Camera!.id)!
+    camera.components.find((c) => c.component === client.components.Camera!.id)!
       .fields.fov_y,
   );
   await track(
@@ -265,12 +266,26 @@ export async function addStressFeatures(
 
   const rig = find("walker-00-rig");
   check(rig, "Stress fixture needs a walking rig");
-  await create("feature-joint-attachment", {
+  const attachment = await create("feature-joint-attachment", {
     Transform: { y: 0.15, sx: 0.25, sy: 0.25, sz: 0.25 },
-    Hierarchy: { parent: rig.id, parent_bone: 0 },
     MeshInstance: { source: mesh },
     UnlitMaterial: { r: 1, g: 0.8, b: 0.1 },
   });
+  successfulBatch(
+    await client.batch([
+      {
+        kind: "placeEntity",
+        entity: { kind: "handle", id: attachment },
+        placement: { parent: { kind: "handle", id: rig.id }, before: null },
+      },
+      insertComponent(
+        client,
+        "ParentJoint",
+        { kind: "handle", id: attachment },
+        { ordinal: 0 },
+      ),
+    ]),
+  );
   await create("feature-joint-pill", {
     Transform: {},
     PickingGeometry: {

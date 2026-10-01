@@ -1,8 +1,8 @@
 # Developing the React Integration
 
-[Core overlays](../architecture/runtime.md#component-modes) · [Strategy](../plans/react-reconciler.md) · [React package](../../packages/ipp-react/README.md)
+[Core lifetime](../architecture/runtime.md#entity-lifetime) · [Strategy](../plans/react-reconciler.md) · [React package](../../packages/ipp-react/README.md)
 
-The package uses React's mutation reconciler to submit committed declarations through the generated client. Core owns entity/component lifetime, overlays and fallback. The package guide owns public props, asset/animation declarations and browser composition APIs.
+The package uses React's mutation reconciler to submit committed declarations through the generated client. React writes ordinary component fields and deletes what it created or adopted; core owns entity/component lifetime and required components. The package guide owns public props, asset/animation declarations and browser composition APIs.
 
 ## Using a root
 
@@ -18,7 +18,6 @@ const client = await IppClient.connectWorker(
 );
 const root = createRoot(client, {
   onError: (error) => console.error(error),
-  onDiagnostic: (diagnostic) => console.warn(diagnostic),
 });
 
 try {
@@ -48,17 +47,17 @@ python tools/ipp.py setup browser --with-deps
 python tools/ipp.py test react canvas
 ```
 
-Development/production fixtures exercise real commits → generated client → MessagePort → worker/WASM. Production fixtures consume the public package and application React peer. Independent producer batches test overlay reveal and lifecycle; real response gates test pending attachment/unmount and failures.
+Development/production fixtures exercise real commits → generated client → MessagePort → worker/WASM. Production fixtures consume the public package and application React peer. Independent client batches test last-write-wins and lifecycle; real response gates test pending attachment/unmount and failures.
 
 | Maintained harness | Focus |
 | --- | --- |
-| [Reconciliation](../../tests/react/react.test.ts) | Acknowledged ownership, producer edits, rejection/correction and cleanup |
+| [Reconciliation](../../tests/react/react.test.ts) | Acknowledged identities, concurrent writes, rejection/correction and cleanup |
 | [Canvas](../../tests/render/canvas.test.ts) | DOM composition, context/error routing, multiple canvases, resize, startup/StrictMode and runtime replacement |
 | [Display density](../../tests/render/dpi.test.ts) | Completed WebGL frames at emulated densities, CSS resize and proportional caps |
 | [Custom materials](../../tests/render/custom-materials.test.ts) | Shader/asset declarations, parameter edits, readiness, fallback and recovery |
 | [Gallery animation](../../tests/render/gallery-animation.test.ts) | Playback declarations/controls and completed frames |
 
-Use `python tools/ipp.py test custom-materials animation` for the latter behaviors. [Rendering scenarios](rendering.md) add asset and image evidence. The [testing policy](integration-testing.md) owns synchronization, failure artifacts and cleanup requirements. Remote refs and declaration restoration across replacement sessions remain outside current support; a replacement canvas session starts a fresh World.
+Use `python tools/ipp.py test custom-materials animation` for the latter behaviors. [Rendering scenarios](rendering.md) add asset and image evidence. The [testing policy](integration-testing.md) owns synchronization, failure artifacts and cleanup requirements. Remote refs remain outside current support; a replacement canvas session starts a fresh World.
 
 ## Builds and artifacts
 

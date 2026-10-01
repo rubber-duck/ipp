@@ -5,7 +5,7 @@ import { runBrowserEnvironment } from "../browser/environment.js";
 import { invoke, recordCapture, writeDataUrl } from "./evidence.js";
 import type * as Fixture from "./custom-materials-fixture.js";
 
-test("custom materials use named instance values, sparse overlays, fallback, linear alpha and context recovery", {
+test("custom materials use named instance values, property writes, fallback, linear alpha and context recovery", {
   timeout: 120000,
 }, async (context) => {
   const workspace = process.cwd(),
@@ -171,12 +171,17 @@ test("custom materials use named instance values, sparse overlays, fallback, lin
           "vec4 materialFragment() { return p_tint; }",
           [1, 1, 0, 1],
         ]);
-        await rgb(
-          (await capture("react-editor-corrected")).left,
-          [255, 255, 0],
-        );
+        const editorCorrected = await capture("react-editor-corrected");
+        await rgb(editorCorrected.left, [255, 255, 0]);
         await call("closeShaderEditor");
-        await rgb((await capture("react-editor-restored")).left, [0, 255, 0]);
+        // The preview bound an existing material: unmounting leaves the tint
+        // it wrote in place and rebuilds no shader program.
+        const editorClosed = await capture("react-editor-closed");
+        await rgb(editorClosed.left, [255, 255, 0]);
+        assert.equal(
+          editorClosed.statistics!.device.shaderProgramsCreated,
+          editorCorrected.statistics!.device.shaderProgramsCreated,
+        );
         await call("poseAndSkin", [true]);
         await capture("pose-skinned");
         await call("poseAndSkin", [false]);
@@ -275,9 +280,11 @@ test("custom materials use named instance values, sparse overlays, fallback, lin
         assert.ok(Math.abs(mixedNumeric - 0.55) < 1e-6);
         await rgb((await capture("texture-step-forward")).left, [0, 188, 0]);
         await call("stopAnimation", [textureAnimation]);
+        // Stop withdraws the gain contribution; the stepped asset selection is an
+        // absolute write and keeps its last value, so both samplers stay green.
         await rgb(
           (await capture("texture-animation-restored")).left,
-          [188, 188, 0],
+          [0, 255, 0],
         );
         await call("deviceLimit");
         const limited = await capture("device-limit-fallback");
@@ -292,9 +299,13 @@ test("custom materials use named instance values, sparse overlays, fallback, lin
         assert.ok(unsupported.left[2]! > 40 && unsupported.left[0] === 0);
         await call("select", [tintShader]);
         const animation = await call<string>("animate");
-        await rgb((await capture("animated")).left, [0, 188, 0]);
+        // The paused animation adds half its red decrease to the yellow tint the
+        // closed shader preview left.
+        await rgb((await capture("animated")).left, [188, 255, 0]);
         await call("stopAnimation", [animation]);
-        await rgb((await capture("animation-restored")).left, [0, 255, 0]);
+        // Stopping withdraws that contribution and lands on the yellow again,
+        // which no key produces.
+        await rgb((await capture("animation-restored")).left, [255, 255, 0]);
         await call("select", [
           {
             parameters: {},
@@ -332,20 +343,24 @@ test("custom materials use named instance values, sparse overlays, fallback, lin
           { receives_light: false },
         ]);
         await call("select", [tintShader]);
+        // Successive property writes change the uniform in place: the
+        // latest value presents and no program is rebuilt.
         const beforeWrites = await capture("before-writes");
-        const owner = await call<string>("overlays");
-        await rgb((await capture("overlay")).left, [0, 0, 255]);
+        await call("parameter", [
+          "left",
+          "tint",
+          { kind: "vec4", value: [0, 0, 1, 1] },
+        ]);
+        await rgb((await capture("blue-write")).left, [0, 0, 255]);
         await call("parameter", [
           "left",
           "tint",
           { kind: "vec4", value: [1, 1, 0, 1] },
         ]);
-        await rgb((await capture("hidden-write")).left, [0, 0, 255]);
-        await call("releaseOverlay", [owner]);
-        const restored = await capture("restored");
-        await rgb(restored.left, [255, 255, 0]);
+        const rewritten = await capture("yellow-write");
+        await rgb(rewritten.left, [255, 255, 0]);
         assert.equal(
-          restored.statistics!.device.shaderProgramsCreated,
+          rewritten.statistics!.device.shaderProgramsCreated,
           beforeWrites.statistics!.device.shaderProgramsCreated,
         );
         await call("select", [

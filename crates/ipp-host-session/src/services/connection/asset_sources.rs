@@ -25,22 +25,33 @@ impl<P: HostServices> Host<P> {
             .states
             .get(&connection)
             .ok_or("Connection is closed")?;
-        let session = state
-            .session
-            .ok_or("Connection is not attached to a World")?;
-        if !state.can_reserve_reply(&self.sessions) {
+        let start = asset_source::REQUEST_MAGIC.len();
+        let session = u64::from_le_bytes(
+            bytes
+                .get(start..start + 8)
+                .ok_or("Truncated asset session")?
+                .try_into()
+                .unwrap(),
+        );
+        Self::require_session(state, session)?;
+        if state.admitted_requests(&self.sessions) >= crate::MAX_PENDING {
             return Err("connection congestion: asset source reply capacity exhausted".into());
         }
         let request = asset_source::decode(bytes, session).map_err(|error| error.to_string())?;
+        let reservation = state.reserve_reply(8192)?;
         let result = self.apply_asset_source(session, request.id, request.operation);
         let response = asset_source::response(session, request.id, result)
             .map_err(|error| error.to_string())?;
+        reservation.borrow_mut().encoded(response.capacity());
         self.connections
             .states
             .get_mut(&connection)
             .expect("live connection")
             .outbox
-            .push_back(response);
+            .push_back(ReliableResponse {
+                bytes: response,
+                reservation,
+            });
         Ok(())
     }
 

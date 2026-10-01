@@ -11,7 +11,7 @@ Camera/geometry/query APIs are standard and headless. Native/WASM clients descri
 | Camera | `projection` (0 perspective, 1 orthographic), `fov_y`, `near`, `far`, `ortho_height`, `focus_distance` |
 | BoundingGeometry / PickingGeometry | Inline `geometry` bytes or immutable `source`/`variant`, optional `skeleton`, `is_rendered`, `outline`, `stroke`, color override |
 
-Camera defaults: 45° vertical perspective, near/far 0.1/100, focus distance 6, orthographic height 2. Transform supplies pose; new Worlds have no active camera.
+Camera defaults: 45° vertical perspective, near/far 0.1/100, focus distance 6, orthographic height 2. Transform supplies pose; a new World has no selected root output.
 
 Use target-generated `encodeBoundingShape` for Box/Sphere/Pill/compound definitions:
 
@@ -41,34 +41,36 @@ flowchart LR
     edit --> command["Ordered base mutation"]
 ```
 
-Use resolved handles after an acknowledged creation batch:
+Use resolved handles after an acknowledged creation batch and explicitly bind the root through the Host. An authoring session alone never selects a camera:
 
 ```ts
-client.sendCommand({
-  type: "CameraActivateCommand",
-  entity: cameraEntity,
+const output = await host.bindOutput(world.reference, cameraEntity, "camera");
+const binding = await host.setRootOutput(output, {
+  width: canvas.width,
+  height: canvas.height,
+  devicePixelRatio: window.devicePixelRatio,
 });
+const view = { kind: "bound" as const, binding };
 
 const result = await client.query({
   type: "GeometryPickQuery",
+  view,
   x: 0.5,
   y: 0.5,
-  width: canvas.width,
-  height: canvas.height,
   includeViewPlane: true,
 });
 if (!result.ok) throw new Error(result.error);
 if (result.hit) {
-  console.log(result.requestId, result.camera, result.hit.entity, result.hit.position);
+  console.log(result.view, result.hit.world, result.hit.entity, result.hit.position);
 }
 ```
 
 | Output | Meaning |
 | --- | --- |
-| Camera command | No reply/promise; invalid activation logs diagnostics and preserves selection |
-| `CameraStateChangedEvent.changes.activeCamera` | Sparse selection change via `onCameraStateChanged`; session-scoped, requestId zero; reselection emits nothing |
-| `GeometryPickResultEvent` | Session/nonzero requestId/tick; correlated success/error, evaluated camera, hit or null |
-| Hit | World position/distance; zero-based primitive `part` in authored leaf order |
+| Root binding | Exact output, viewport and Host-qualified generation; even an equal-value rebind replaces it |
+| `navigateCamera` | Correlated promise, resolved after mutation or rejected; no active-camera fallback or selection event |
+| `GeometryPickResultEvent` | Session/nonzero requestId/tick; correlated success/error, exact source view, hit or null |
+| Hit | World-qualified entity/component lifetime and publication/path; containing-camera position/distance and authored primitive `part` |
 | Local failure | Existing transport throw/reject behavior |
 
 `includeViewPlane` adds the hit-point plane with unit camera-forward normal. Retain it during dragging:
@@ -77,49 +79,51 @@ if (result.hit) {
 if (result.ok && result.hit?.viewPlane) {
   const projected = await client.query({
     type: "CameraProjectQuery",
-    x: pointerX, y: pointerY, width: canvas.width, height: canvas.height,
+    view,
+    x: pointerX, y: pointerY,
     plane: result.hit.viewPlane,
   });
 }
 ```
 
-Projection returns World position or null for no unique forward intersection. Captured pointers may leave normalized viewport bounds. Gallery dragging preserves grab offset by applying displacement from the original hit to React-owned position.
+Projection returns a containing-camera-domain position or null for no unique forward intersection. Captured pointers may leave normalized viewport bounds. Gallery dragging preserves grab offset by applying displacement from the original hit to application-owned position. Consumers must dispatch edits to the hit's World, not assume entity handles are globally unique.
+
+The ordinary bound view above intentionally omits `publication`: each query reads current completed state at execution while preserving exact output, viewport and binding generation. It remains usable across normal autonomous Host frames. To require the source of a previous result, explicitly supply `publication: result.view.publication`; an expired source rejects rather than switching to latest. Source identifiers do not acquire a history lease. Explicit `kind: "publication"` queries supply their own dimensions for available CPU history and never grant presentation or mutation authority.
 
 Navigation commands:
 
 ```ts
-client.sendCommand({
-  type: "CameraNavigateCommand",
+await client.navigateCamera({
+  binding,
   motion: { kind: "rotate", yaw: 0.1, pitch: 0 },
 });
-client.sendCommand({
-  type: "CameraNavigateCommand",
-  motion: { kind: "pan", x: 0.05, y: 0, width: canvas.width, height: canvas.height },
+await client.navigateCamera({
+  binding,
+  motion: { kind: "pan", x: 0.05, y: 0 },
 });
-client.sendCommand({
-  type: "CameraNavigateCommand",
+await client.navigateCamera({
+  binding,
   motion: { kind: "zoom", amount: -0.1 },
 });
 ```
 
-Rust rotates around the camera-local −Z focus point, pans in the view plane and zooms out for positive logarithmic amounts. Commands write base components in order under overlay precedence; errors may leave partial changes. Camera-system events do not report entity-owned field edits.
+Rust rotates around the camera-local −Z focus point, pans in the view plane and zooms out for positive logarithmic amounts. Commands read Camera/Transform fields and write changed fields under ordinary mutation rules, never baking an evaluated pose back into authoring. Navigation also accepts an optional exact `publication` constraint; ordinary gestures omit it. A stale root generation always rejects, with or without that source constraint. Admission does not freeze evaluation, retry or replay rejected input.
 
-- Coordinates start at viewport top-left. Supply drawing-buffer dimensions including density; queries do not resize. Rendered hosts require current surface dimensions; headless hosts use supplied dimensions.
-- Queries use final state/queued activation for their evaluated Host frame, without advancing time or reading historical screenshots.
-- Active-camera removal can leave selection unusable after applied mutation; debug checks report it without rollback. Activate another camera before deleting the old one, or repair afterward. Keep session cameras outside routinely unmounted subtrees. See [removal tests](../../crates/ipp-core/tests/cameras.rs).
+- Coordinates start at viewport top-left. Root projection uses the binding's drawing-buffer dimensions; queries never resize. Nested Camera projection uses physical Surface aspect, independent of target pixel rounding or device limits.
+- Queries do not advance simulation or claim a displayed frame. Physical presentation/context selection has separate lifetimes; the owning adapter cancels gestures on those changes even when the root binding is unchanged.
+- Camera removal leaves its output selection unusable until explicitly repaired or rebound; there is no fallback. Equal rebind, viewport/DPR change and component replacement invalidate old gestures.
 - Missing/failed/incompatible geometry is an explicit error. Picking intersects closed primitive unions, independent of rendered coverage. GPU ID/depth picking is deferred.
 
 ## Maintained validation
 
-`python tools/ipp.py test geometry` builds native/WASM/browser artifacts and exercises shared Host queries plus WebGL visualization, skeletal mapping and culling. Combine affected suites to reuse prerequisites, e.g. `python tools/ipp.py test cameras render`.
+`python tools/ipp.py regression --suite composed-queries` selects the focused core, generated-codec and real native WebSocket query/navigation scenario. The shared gallery controller is exercised with a platform-event adapter against the actual autonomous Host, including pick-to-later-projection, navigation writes, exact-source expiry and equal-rebind rejection. It does not establish full browser input routing.
 
 | Environment | Evidence |
 | --- | --- |
-| Native WebSocket / headless worker | Correlation/sparse events, active-camera removal/recovery, transformed nearest hits, clipping, compound holes and delayed definitions |
-| WebGL | Completed camera-dependent images agree with picks; picking definitions upload no GPU data |
-| Real upload failure | CPU picks/replies/other draws survive; skipped draws are reported, repeated attempts avoided, same-session recovery |
-| Extreme viewport | Clear with `backend.invalidCamera`, explicit query failure, repair/recovery |
+| Core publications | Nested Canvas/Camera/spatial hit domains, blockers, navigation writes and exact path projection |
+| Native WebSocket | Generated client and representative controller keep current-bound drag/navigation usable across advancing frames without source substitution or timing gates |
+| Actual GLES | Completed captured colors and nested hit geometry agree under device-limited target allocation; warm pixels remain unchanged |
 
-CI retains event logs, build/environment identity and images under `target/integration-artifacts/`. Existing render/canvas/texture/shape scenarios retain explicit cameras.
+The maintained GUI GLES publication scenario includes the physical-aspect fixture. Run it through the rendering regression selection with the configured EGL/GLES environment and shared GPU lock. The harness retains logs, build/environment identity and images under `target/`; software GL proves correctness, not hardware performance.
 
-`python tools/ipp.py test contracts` checks reproducible native/WASM geometry contracts; `python tools/ipp.py test browser` checks export/final hashes and separate WASM/JS sizes. Software GL is integration evidence, not hardware performance.
+The [stateless composed reader](../../crates/ipp-core/src/services/gui_input/query/README.md) owns bounded-query semantics and the conservative unavailable-Spatial limitation. It does not replace GUI ticket admission, focus/capture ownership or local action execution.

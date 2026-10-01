@@ -1,98 +1,77 @@
-//! Shared object-transform access, separate from compact authored TRS values.
-
 use super::*;
-use crate::{components::registry::ComponentStorage, world::component_binding::ComponentBinding};
-use std::cell::OnceCell;
 
-/// Derived data attached to an occupied Transform slot, absent from copied values.
 #[derive(Default)]
 pub(crate) struct ObjectTransformRuntime {
-    pub(in crate::world) affine: OnceCell<Result<GeometryShapeTransform, ErrorReason>>,
+    world: std::cell::UnsafeCell<Option<GeometryShapeTransform>>,
+}
+
+impl ObjectTransformRuntime {
+    pub(in crate::world) fn clear(&mut self) {
+        *self.world.get_mut() = None;
+    }
+
+    pub(in crate::world) fn value(&self) -> Option<GeometryShapeTransform> {
+        // SAFETY: Runtime reads borrow the World phase; propagation and lifetime
+        // invalidation require its exclusive borrow and cannot overlap this read.
+        unsafe { *self.world.get() }
+    }
 }
 
 #[derive(Clone, Copy)]
 pub(in crate::world) struct ObjectTransformBinding {
-    transform: Option<ComponentBinding<Transform>>,
-    runtime: Option<ComponentBinding<ObjectTransformRuntime>>,
-    hierarchy: Option<ComponentBinding<Hierarchy>>,
-    aim: Option<ComponentBinding<crate::components::LookAt>>,
+    identity: usize,
+    runtime: std::ptr::NonNull<Option<GeometryShapeTransform>>,
 }
 
 impl ObjectTransformBinding {
-    /// The caller discards this binding before any selected component incarnation
-    /// ends, and binds again when optional component membership changes.
-    pub(in crate::world) unsafe fn bind(storage: &ComponentStorage, entity: EntityId) -> Self {
-        let index = entity.index() as usize;
-        // SAFETY: The caller owns synchronous incarnation invalidation. Every
-        // pointer originates from the same World's stable typed storage cells.
-        unsafe {
-            Self {
-                transform: storage
-                    .transform_ptr(index)
-                    .map(|p| ComponentBinding::new(p)),
-                runtime: storage
-                    .transform_runtime_ptr(index)
-                    .map(|p| ComponentBinding::new(p)),
-                hierarchy: storage
-                    .hierarchy_ptr(index)
-                    .map(|p| ComponentBinding::new(p)),
-                aim: storage.look_at_ptr(index).map(|p| ComponentBinding::new(p)),
-            }
+    /// Invalidate this binding before its entity generation is released.
+    pub(in crate::world) unsafe fn bind(world: &WorldSimulationState, entity: EntityId) -> Self {
+        Self {
+            identity: world.identity,
+            runtime: std::ptr::NonNull::new(
+                world
+                    .state
+                    .links
+                    .transform(entity)
+                    .expect("prepared entity transform")
+                    .world
+                    .get(),
+            )
+            .expect("occupied transform cell"),
         }
     }
 
-    #[inline]
     pub(in crate::world) fn borrow<'a>(
         &self,
-        storage: &'a ComponentStorage,
+        world: &'a WorldSimulationState,
     ) -> Option<Result<&'a GeometryShapeTransform, ErrorReason>> {
-        if let Some(hierarchy) = self.hierarchy {
-            return Some(
-                hierarchy
-                    .get(storage)
-                    .runtime
-                    .world
-                    .as_ref()
-                    .ok_or(ErrorReason::InvalidValue),
-            );
-        }
-        let runtime = self.runtime?;
-        Some(
-            runtime
-                .get(storage)
-                .affine
-                .get_or_init(|| self.evaluate_root(storage))
-                .as_ref()
-                .map_err(|error| *error),
-        )
+        assert_eq!(self.identity, world.identity);
+        // SAFETY: The owning System invalidates before entity release. The boxed
+        // runtime never moves while occupied; this shared World phase excludes
+        // propagation, mutation and release for the returned borrow's lifetime.
+        let runtime = unsafe { self.runtime.as_ref() };
+        Some(runtime.as_ref().ok_or(ErrorReason::InvalidValue))
     }
 
     pub(in crate::world) fn evaluate(
         &self,
-        storage: &ComponentStorage,
+        world: &WorldSimulationState,
     ) -> Result<GeometryShapeTransform, ErrorReason> {
-        match self.borrow(storage) {
-            Some(result) => result.copied(),
-            None => self.evaluate_root(storage),
-        }
+        self.borrow(world).expect("bound transform").copied()
     }
 
-    fn evaluate_root(
+    pub(super) fn write(
         &self,
-        storage: &ComponentStorage,
-    ) -> Result<GeometryShapeTransform, ErrorReason> {
-        let mut transform = self
-            .transform
-            .map_or_else(Transform::default, |t| *t.get(storage));
-        if let Some(aim) = self.aim {
-            let aim = aim.get(storage);
-            if aim.runtime.invalid {
-                return Err(ErrorReason::UnsupportedDependency);
-            }
-            if let Some(q) = aim.runtime.rotation {
-                [transform.qx, transform.qy, transform.qz, transform.qw] = q;
-            }
+        world: &mut WorldSimulationState,
+        value: Option<GeometryShapeTransform>,
+    ) {
+        assert_eq!(self.identity, world.identity);
+        let mut runtime = self.runtime;
+        // SAFETY: Propagation owns the exclusive World phase and retains no
+        // result borrows across writes. The compiled list is invalidated before
+        // this entity's stable boxed runtime is released or its slot reused.
+        unsafe {
+            *runtime.as_mut() = value;
         }
-        affine(&transform)
     }
 }

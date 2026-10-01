@@ -1,6 +1,7 @@
 // Manifest-derived byte fixtures mechanically validate the generated TypeScript codec.
 import assert from "node:assert/strict";
 import test from "node:test";
+import { executeCancellationConformance } from "./presentation-cancellation.mjs";
 import {
   ROWS_FIXTURE_PROPERTIES,
   encodeManifestLayout,
@@ -179,18 +180,18 @@ test("schema rows fields generate typed row helpers and decode inspected tables"
       session: 7n,
       requestId: 3n,
       body: {
-        kind: "batch",
-        batch: {
-          id: 9n,
-          operations: [...commands.slice(0, 2), commands[3]],
-        },
+        kind: "submitBatch",
+        batchId: 9,
+        last: true,
+        operations: [...commands.slice(0, 2), commands[3]],
       },
     }),
-    layout("request-batch", {
+    layout("request-submit-batch", {
       session: 7n,
       request_id: 3n,
-      tag: tag("REQUEST_BATCH"),
-      batch_id: 9n,
+      tag: tag("REQUEST_SUBMIT_BATCH"),
+      batch_id: 9,
+      last: true,
       operations: [
         layout("command-set", {
           tag: tag("COMMAND_SET"),
@@ -322,8 +323,10 @@ test("schema rows fields generate typed row helpers and decode inspected tables"
         layout("entity", {
           id: 0x100000001n,
           metadata: layout("metadata", { symbolic_id: null, classes: [] }),
-          base: [component],
-          effective: [component],
+          parent: 0n,
+          order_low: 0n,
+          order_high: 0n,
+          components: [component],
         }),
       ],
       resources: [],
@@ -332,7 +335,7 @@ test("schema rows fields generate typed row helpers and decode inspected tables"
     }).bytes,
     7n,
   );
-  const fields = inspected.body.entities[0].base[0].fields;
+  const fields = inspected.body.entities[0].components[0].fields;
   assert.equal(fields.value, 2.5);
   assert.deepEqual(fields.items, decoded);
   assert.ok(covered.has("SNAPSHOT_VALUE_ROWS"));
@@ -353,17 +356,16 @@ test("noncreatable descriptors preserve field helpers and native insertion stays
         session: 7n,
         requestId: 1n,
         body: {
-          kind: "batch",
-          batch: {
-            id: 1n,
-            operations: [
-              {
-                kind: "insertComponentValue",
-                entity: { kind: "handle", id: 1n },
-                value: {},
-              },
-            ],
-          },
+          kind: "submitBatch",
+          batchId: 1,
+          last: true,
+          operations: [
+            {
+              kind: "insertComponentValue",
+              entity: { kind: "handle", id: 1n },
+              value: {},
+            },
+          ],
         },
       }),
     /unsupported command/,
@@ -376,7 +378,7 @@ test("noncreatable descriptors preserve field helpers and native insertion stays
   );
 });
 
-test("baseline field, scene and lifecycle codecs conform to their manifest", () => {
+test("baseline field, scene and lifecycle codecs conform to their manifest", async () => {
   assert.deepEqual(
     bytesDefault.codec.components.Scalar.fields.value.default,
     [1, 2, 3],
@@ -405,8 +407,8 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", () 
     codec.WIRE,
     manifest.WIRE_TAG_LAYOUTS,
     manifest.WIRE_LAYOUTS,
-    manifest.WIRE_LAYOUTS["request-batch"].fields,
-    manifest.WIRE_LAYOUTS["request-batch"].fields[0],
+    manifest.WIRE_LAYOUTS["request-submit-batch"].fields,
+    manifest.WIRE_LAYOUTS["request-submit-batch"].fields[0],
     manifest.ASSET_FORMATS,
     codec.components,
     codec.components.Scalar,
@@ -483,48 +485,49 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", () 
       tag: tag(`COMMAND_${name.replaceAll("-", "_").toUpperCase()}`),
       ...values,
     });
+  const placement = (parent, before) =>
+    layout("entity-placement", {
+      parent:
+        parent === null ? null : layout("reference-value", { value: parent }),
+      before:
+        before === null ? null : layout("reference-value", { value: before }),
+    });
 
-  for (const [kind, name, tagName, extra] of [
-    ["beginBatch", "request-begin-batch", "REQUEST_BEGIN_BATCH", {}],
-    ["endBatch", "request-end-batch", "REQUEST_END_BATCH", { batch_id: 27n }],
-    [
-      "batchChunk",
-      "request-batch",
-      "REQUEST_BATCH_CHUNK",
-      { batch_id: 27n, operations: [] },
-    ],
-  ]) {
-    const body =
-      kind === "beginBatch"
-        ? { kind }
-        : kind === "endBatch"
-          ? { kind, batchId: 27n }
-          : { kind, batch: { id: 27n, operations: [] } };
-    assert.deepEqual(
-      codec.encodeRequest({ session: 7n, requestId: 17n, body }),
-      layout(name, {
-        session: 7n,
-        request_id: 17n,
-        tag: tag(tagName),
-        ...extra,
-      }).bytes,
+  // A non-final page is uncorrelated and carries a full u32 client identity.
+  assert.deepEqual(
+    codec.encodeRequest({
+      session: 7n,
+      requestId: 0n,
+      body: {
+        kind: "submitBatch",
+        batchId: 0xffff_ffff,
+        last: false,
+        operations: [],
+      },
+    }),
+    layout("request-submit-batch", {
+      session: 7n,
+      request_id: 0n,
+      tag: tag("REQUEST_SUBMIT_BATCH"),
+      batch_id: 0xffff_ffff,
+      last: false,
+      operations: [],
+    }).bytes,
+  );
+  for (const [requestId, last] of [
+    [17n, false],
+    [0n, true],
+  ])
+    assert.throws(
+      () =>
+        codec.encodeRequest({
+          session: 7n,
+          requestId,
+          body: { kind: "submitBatch", batchId: 1, last, operations: [] },
+        }),
+      /reserved request identity/,
     );
-  }
   for (const [kind, name, tagName, requestId, extra] of [
-    [
-      "batchStarted",
-      "response-batch-identity",
-      "RESPONSE_BATCH_STARTED",
-      17n,
-      {},
-    ],
-    [
-      "batchFinished",
-      "response-batch-identity",
-      "RESPONSE_BATCH_FINISHED",
-      18n,
-      {},
-    ],
     [
       "batchAborted",
       "response-batch-aborted",
@@ -552,6 +555,7 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", () 
   const refs = {
     alias: { kind: "alias", alias: 31 },
     handle: { kind: "handle", id: 41n },
+    symbol: { kind: "symbol", symbol: "sibling" },
   };
   const meta = { symbolicId: "oracle", classes: ["first", "second"] };
   const writes = [
@@ -583,7 +587,14 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", () 
   ];
   const operations = [
     { kind: "create", alias: 1, metadata: meta },
+    { kind: "create", alias: 2, metadata: meta, adopt: true },
     { kind: "delete", entity: refs.handle },
+    {
+      kind: "placeEntity",
+      entity: refs.alias,
+      placement: { parent: refs.handle, before: refs.symbol },
+    },
+    { kind: "deleteSubtree", root: refs.symbol },
     { kind: "setMetadata", entity: refs.alias, metadata: meta },
     {
       kind: "insertComponent",
@@ -591,57 +602,42 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", () 
       component: 321,
       fields: writes,
     },
+    {
+      kind: "insertComponent",
+      entity: refs.symbol,
+      component: 324,
+      fields: [writes[4]],
+      adopt: true,
+    },
     { kind: "setField", entity: refs.handle, component: 322, field: writes[4] },
+    {
+      kind: "setFieldIf",
+      entity: refs.symbol,
+      component: 325,
+      field: writes[4],
+      expected: { kind: "string", value: "current" },
+    },
     { kind: "removeComponent", entity: refs.alias, component: 323 },
-    { kind: "createStateOverlayOwner", alias: 2 },
-    { kind: "releaseStateOverlayOwner", owner: refs.handle },
-    {
-      kind: "attachEntityOverlayBinding",
-      owner: refs.alias,
-      alias: 3,
-      symbolicId: "owned",
-      mode: "owned",
-    },
-    {
-      kind: "attachEntityOverlayBinding",
-      owner: refs.handle,
-      alias: 4,
-      symbolicId: "bound",
-      mode: "bound",
-    },
-    {
-      kind: "releaseEntityOverlayBinding",
-      owner: refs.alias,
-      binding: refs.handle,
-    },
-    ...["auto", "bound", "owned"].map((mode, index) => ({
-      kind: "attachComponentStateOverlay",
-      owner: refs.alias,
-      binding: refs.handle,
-      alias: 10 + index,
-      component: 330 + index,
-      mode,
-      fields: [writes[index]],
-    })),
-    {
-      kind: "updateComponentStateOverlay",
-      owner: refs.handle,
-      overlay: refs.alias,
-      fields: [writes[3]],
-      clear: [71, 72],
-    },
-    {
-      kind: "releaseComponentStateOverlay",
-      owner: refs.alias,
-      overlay: refs.handle,
-    },
   ];
+  const symbol = (value) =>
+    layout("reference-symbol", { tag: tag("REF_SYMBOL"), symbol: value });
   const encodedOperations = [
     command("create", {
       alias: 1,
       metadata: metadata("oracle", ["first", "second"]),
+      adopt: false,
+    }),
+    command("create", {
+      alias: 2,
+      metadata: metadata("oracle", ["first", "second"]),
+      adopt: true,
     }),
     command("delete", { entity: handle(41n) }),
+    command("place-entity", {
+      entity: alias(31),
+      placement: placement(handle(41n), symbol("sibling")),
+    }),
+    command("delete-subtree", { root: symbol("sibling") }),
     command("metadata", {
       entity: alias(31),
       metadata: metadata("oracle", ["first", "second"]),
@@ -650,55 +646,26 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", () 
       entity: alias(31),
       component: 321,
       fields: encodedWrites,
+      adopt: false,
+    }),
+    command("insert", {
+      entity: symbol("sibling"),
+      component: 324,
+      fields: [encodedWrites[4]],
+      adopt: true,
     }),
     command("set", {
       entity: handle(41n),
       component: 322,
       field: encodedWrites[4],
     }),
+    command("set-field-if", {
+      entity: symbol("sibling"),
+      component: 325,
+      field: encodedWrites[4],
+      expected: value("string", "current"),
+    }),
     command("remove", { entity: alias(31), component: 323 }),
-    command("create-state-overlay-owner", { alias: 2 }),
-    command("release-state-overlay-owner", { owner: handle(41n) }),
-    command("attach-entity-overlay-binding", {
-      owner: alias(31),
-      alias: 3,
-      symbolic_id: "owned",
-      mode: tag("ENTITY_OVERLAY_MODE_OWNED"),
-    }),
-    command("attach-entity-overlay-binding", {
-      owner: handle(41n),
-      alias: 4,
-      symbolic_id: "bound",
-      mode: tag("ENTITY_OVERLAY_MODE_BOUND"),
-    }),
-    command("release-entity-overlay-binding", {
-      owner: alias(31),
-      binding: handle(41n),
-    }),
-    ...[
-      ["AUTO", 10],
-      ["BOUND", 11],
-      ["OWNED", 12],
-    ].map(([mode, aliasValue], index) =>
-      command("attach-component-state-overlay", {
-        owner: alias(31),
-        binding: handle(41n),
-        alias: aliasValue,
-        component: 330 + index,
-        mode: tag(`COMPONENT_OVERLAY_MODE_${mode}`),
-        fields: [encodedWrites[index]],
-      }),
-    ),
-    command("update-component-state-overlay", {
-      owner: handle(41n),
-      overlay: alias(31),
-      fields: [encodedWrites[3]],
-      clear: [71, 72],
-    }),
-    command("release-component-state-overlay", {
-      owner: alias(31),
-      overlay: handle(41n),
-    }),
   ];
   operations.push(
     {
@@ -714,13 +681,6 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", () 
       component: 20,
       name: "x",
     },
-    {
-      kind: "updateDynamicComponentStateOverlay",
-      owner: refs.handle,
-      overlay: refs.alias,
-      properties: { x: { kind: "f32", value: 1 } },
-      clear: ["y"],
-    },
   );
   encodedOperations.push(
     command("set-dynamic-property", {
@@ -734,28 +694,18 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", () 
       component: 20,
       name: "x",
     }),
-    command("update-dynamic-component-state-overlay", {
-      owner: handle(41n),
-      overlay: alias(31),
-      properties: [
-        layout("dynamic-property-write", {
-          name: "x",
-          value: new Uint8Array([1, 0, 0, 128, 63]),
-        }),
-      ],
-      clear: [layout("dynamic-property-name", { name: "y" })],
-    }),
   );
   const request = {
     session: 7n,
     requestId: 17n,
-    body: { kind: "batch", batch: { id: 27n, operations } },
+    body: { kind: "submitBatch", batchId: 27, last: true, operations },
   };
-  const expected = layout("request-batch", {
+  const expected = layout("request-submit-batch", {
     session: 7n,
     request_id: 17n,
-    tag: tag("REQUEST_BATCH"),
-    batch_id: 27n,
+    tag: tag("REQUEST_SUBMIT_BATCH"),
+    batch_id: 27,
+    last: true,
     operations: encodedOperations,
   }).bytes;
   assert.deepEqual(codec.encodeRequest(request), expected);
@@ -773,26 +723,21 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", () 
       after: 0n,
       target: 0n,
       limit: 256,
+      max_depth: 0,
     }).bytes,
   );
   const aliasHandle = (aliasValue, id) =>
     layout("alias-handle", { alias: aliasValue, handle: id });
-  const resourceAlias = (aliasValue, id, kind, entity) =>
-    layout("state-overlay-alias", {
-      alias: aliasValue,
-      id,
-      kind: tag(`STATE_OVERLAY_KIND_${kind}`),
-      entity,
-    });
+  const symbolHandle = (symbol, id) =>
+    layout("symbol-handle", { symbol, handle: id });
   const success = layout("outcome-success", {
     batch_id: 27n,
     tick: 37n,
     tag: tag("OUTCOME_SUCCESS"),
     aliases: [aliasHandle(1, 0x100000001n)],
-    stateOverlays: [
-      resourceAlias(2, 51n, "OWNER", null),
-      resourceAlias(3, 52n, "ENTITY_BINDING", 0x100000001n),
-      resourceAlias(4, 53n, "COMPONENT", 0x100000001n),
+    symbols: [
+      symbolHandle("oracle", 0x100000001n),
+      symbolHandle("sibling", 0x100000002n),
     ],
   });
   covered.add("OPTION_NONE");
@@ -803,6 +748,7 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", () 
     tick: 37n,
     tag: tag("RESPONSE_BATCH"),
     outcome: success,
+    effects: [],
   }).bytes;
   assert.deepEqual(codec.decodeResponse(batchBytes, 7n), {
     session: 7n,
@@ -815,24 +761,76 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", () 
         tick: 37n,
         ok: true,
         aliases: [{ alias: 1, id: 0x100000001n }],
-        stateOverlays: [
-          { alias: 2, id: 51n, kind: "owner", entity: null },
-          {
-            alias: 3,
-            id: 52n,
-            kind: "entityOverlayBinding",
-            entity: 0x100000001n,
-          },
-          {
-            alias: 4,
-            id: 53n,
-            kind: "componentStateOverlay",
-            entity: 0x100000001n,
-          },
+        symbols: [
+          { symbol: "oracle", id: 0x100000001n },
+          { symbol: "sibling", id: 0x100000002n },
         ],
+        effects: [],
       },
     },
   });
+  const worldReference = (id, incarnation) =>
+    layout("world-reference", { id, incarnation });
+  const attachmentEffects = [];
+  const encodedAttachmentEffects = [];
+  for (const [kind, variant, child] of [
+    ["written", "ATTACHMENT_WRITTEN", { id: 8n, incarnation: 3n }],
+    ["detached", "ATTACHMENT_DETACHED", null],
+    ["superseded", "ATTACHMENT_SUPERSEDED", { id: 9n, incarnation: 4n }],
+  ]) {
+    assert.equal(manifest.WIRE_TAG_LAYOUTS[variant].space, 34);
+    attachmentEffects.push({
+      operation: 3,
+      kind,
+      receipt: {
+        id: 71n,
+        parent: { id: 7n, incarnation: 2n },
+        anchor: 41n,
+        incarnation: 5n,
+        revision: 6n,
+        child,
+      },
+    });
+    encodedAttachmentEffects.push(
+      layout("applied-operation-effect", {
+        operation: 3,
+        effect: layout("attachment-effect", {
+          tag: tag(variant),
+          receipt: 71n,
+          parent: worldReference(7n, 2n),
+          anchor: 41n,
+          incarnation: 5n,
+          revision: 6n,
+          child: child && worldReference(child.id, child.incarnation),
+        }),
+      }),
+    );
+  }
+  // An adopting operation that found its target reports adoption in core order.
+  assert.equal(manifest.WIRE_TAG_LAYOUTS.OPERATION_ADOPTED.space, 34);
+  attachmentEffects.push({ operation: 4, kind: "adopted" });
+  encodedAttachmentEffects.push(
+    layout("applied-operation-effect", {
+      operation: 4,
+      effect: layout("operation-effect-adopted", {
+        tag: tag("OPERATION_ADOPTED"),
+      }),
+    }),
+  );
+  assert.deepEqual(
+    codec.decodeResponse(
+      layout("response-batch", {
+        session: 7n,
+        request_id: 17n,
+        tick: 37n,
+        tag: tag("RESPONSE_BATCH"),
+        outcome: success,
+        effects: encodedAttachmentEffects,
+      }).bytes,
+      7n,
+    ).body.outcome.effects,
+    attachmentEffects,
+  );
   const failure = layout("outcome-failure", {
     batch_id: 28n,
     tick: 38n,
@@ -841,36 +839,43 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", () 
     operation: 7,
     reason: "InvalidField",
     aliases: [layout("alias-handle", { alias: 9, handle: 17n })],
-    stateOverlays: [resourceAlias(2, 51n, "OWNER", null)],
+    symbols: [symbolHandle("failed", 18n)],
   });
-  assert.deepEqual(
-    codec.decodeResponse(
-      layout("response-batch", {
-        session: 7n,
-        request_id: 18n,
-        tick: 38n,
-        tag: tag("RESPONSE_BATCH"),
-        outcome: failure,
-      }).bytes,
-      7n,
-    ),
-    {
-      session: 7n,
-      requestId: 18n,
-      tick: 38n,
-      body: {
-        kind: "batch",
-        outcome: {
-          batchId: 28n,
+  for (const [encodedEffects, effects] of [
+    [[], []],
+    [encodedAttachmentEffects, attachmentEffects],
+  ]) {
+    assert.deepEqual(
+      codec.decodeResponse(
+        layout("response-batch", {
+          session: 7n,
+          request_id: 18n,
           tick: 38n,
-          ok: false,
-          error: { scope: "operation", operation: 7, reason: "InvalidField" },
-          aliases: [{ alias: 9, id: 17n }],
-          stateOverlays: [{ alias: 2, id: 51n, kind: "owner", entity: null }],
+          tag: tag("RESPONSE_BATCH"),
+          outcome: failure,
+          effects: encodedEffects,
+        }).bytes,
+        7n,
+      ),
+      {
+        session: 7n,
+        requestId: 18n,
+        tick: 38n,
+        body: {
+          kind: "batch",
+          outcome: {
+            batchId: 28n,
+            tick: 38n,
+            ok: false,
+            error: { scope: "operation", operation: 7, reason: "InvalidField" },
+            aliases: [{ alias: 9, id: 17n }],
+            symbols: [{ symbol: "failed", id: 18n }],
+            effects,
+          },
         },
       },
-    },
-  );
+    );
+  }
   assert.deepEqual(
     codec.decodeResponse(
       layout("response-frame", {
@@ -967,8 +972,10 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", () 
   const entity = layout("entity", {
     id: 0x100000001n,
     metadata: metadata(null, ["inspected"]),
-    base: [scalar, linearDriver, meshInstance],
-    effective: [scalar],
+    parent: 0n,
+    order_low: 0n,
+    order_high: 0n,
+    components: [scalar, linearDriver, meshInstance],
   });
   const inspectBytes = layout("response-inspect", {
     session: 7n,
@@ -996,74 +1003,24 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", () 
     symbolicId: null,
     classes: ["inspected"],
   });
-  assert.equal(inspected.body.entities[0].base[0].fields.value, 2.5);
-  assert.equal(inspected.body.entities[0].base[1].fields.source, 0x100000002n);
-  assert.equal(inspected.body.entities[0].base[1].fields.scale, 1.5);
-  assert.equal(inspected.body.entities[0].base[1].fields.bias, -0.25);
+  assert.equal(inspected.body.entities[0].components[0].fields.value, 2.5);
   assert.equal(
-    inspected.body.entities[0].base[2].fields.source,
+    inspected.body.entities[0].components[1].fields.source,
+    0x100000002n,
+  );
+  assert.equal(inspected.body.entities[0].components[1].fields.scale, 1.5);
+  assert.equal(inspected.body.entities[0].components[1].fields.bias, -0.25);
+  assert.equal(
+    inspected.body.entities[0].components[2].fields.source,
     "https://example.test/mesh",
   );
-  assert.equal(inspected.body.entities[0].base[2].fields.variant, 0xa1b2c3d4);
+  assert.equal(
+    inspected.body.entities[0].components[2].fields.variant,
+    0xa1b2c3d4,
+  );
   assert.equal(inspected.body.renderDiagnostics[0].entity, 0x100000001n);
   assert.equal(inspected.body.renderDiagnostics[0].reason, "InvalidAsset");
 
-  const lifecycle = [
-    ["ENTITY_DELETED", null],
-    ["COMPONENT_REPLACED", 321],
-    ["COMPONENT_REMOVED", 322],
-  ].map(([reason, component], index) =>
-    layout("state-overlay-lifecycle-diagnostic", {
-      owner: 71n + BigInt(index),
-      stateOverlay: 81n + BigInt(index),
-      entity: 0x100000001n,
-      component,
-      reason: tag(`STATE_OVERLAY_${reason}`),
-    }),
-  );
-  assert.deepEqual(
-    codec.decodeResponse(
-      layout("response-state-overlay-lifecycle", {
-        session: 7n,
-        request_id: 0n,
-        tick: 41n,
-        tag: tag("RESPONSE_STATE_OVERLAY_LIFECYCLE"),
-        diagnostics: lifecycle,
-      }).bytes,
-      7n,
-    ),
-    {
-      session: 7n,
-      requestId: 0n,
-      tick: 41n,
-      body: {
-        kind: "lifecycle",
-        diagnostics: [
-          {
-            owner: 71n,
-            stateOverlay: 81n,
-            entity: 0x100000001n,
-            component: null,
-            reason: "EntityDeleted",
-          },
-          {
-            owner: 72n,
-            stateOverlay: 82n,
-            entity: 0x100000001n,
-            component: 321,
-            reason: "ComponentReplaced",
-          },
-          {
-            owner: 73n,
-            stateOverlay: 83n,
-            entity: 0x100000001n,
-            component: 322,
-            reason: "ComponentRemoved",
-          },
-        ],
-      },
-    },
-  );
   assert.deepEqual(
     codec.decodeResponse(
       layout("response-resources", {
@@ -1171,87 +1128,123 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", () 
     },
   );
 
-  for (const [event, name, fields] of [
-    [
-      { type: "CameraActivateCommand", entity: 41n },
-      "camera-activate",
-      { entity: 41n },
-    ],
-    [
-      {
-        type: "GeometryPickQuery",
-        x: 0.25,
-        y: 0.75,
-        width: 640,
-        height: 480,
-      },
-      "geometry-pick",
-      { x: 0.25, y: 0.75, width: 640, height: 480, include_view_plane: false },
-    ],
-  ]) {
-    assert.deepEqual(
-      codec.encodeRequest({
-        session: 7n,
-        requestId: event.type === "GeometryPickQuery" ? 25n : 0n,
-        body:
-          event.type === "GeometryPickQuery"
-            ? { kind: "query", query: event }
-            : { kind: "command", command: event },
-      }),
-      layout(`request-${name}`, {
-        session: 7n,
-        request_id: event.type === "GeometryPickQuery" ? 25n : 0n,
-        tag: tag(`REQUEST_${name.toUpperCase().replaceAll("-", "_")}`),
-        ...fields,
-      }).bytes,
-    );
-  }
-  assert.deepEqual(
-    codec.decodeResponse(
-      layout("response-camera-state-changed", {
-        session: 7n,
-        request_id: 0n,
-        tick: 45n,
-        tag: tag("RESPONSE_CAMERA_STATE_CHANGED"),
-        changes: layout("camera-state-patch", {
-          mask: 1,
-          activeCamera: layout("camera-entity", { id: 41n }),
-        }),
-      }).bytes,
-      7n,
-    ).body,
-    {
-      kind: "event",
-      event: {
-        type: "CameraStateChangedEvent",
-        changes: { activeCamera: 41n },
-      },
-    },
-  );
-  for (const motion of [
-    { kind: "rotate", yaw: 0.25, pitch: -0.5 },
-    { kind: "pan", x: 0.25, y: -0.5, width: 640, height: 480 },
-    { kind: "zoom", amount: 0.25 },
-  ]) {
-    const { kind, ...fields } = motion;
-    assert.deepEqual(
+  assert.throws(
+    () =>
       codec.encodeRequest({
         session: 7n,
         requestId: 0n,
         body: {
           kind: "command",
-          command: { type: "CameraNavigateCommand", motion },
+          command: { type: "CameraActivateCommand", entity: 41n },
         },
       }),
-      layout("request-camera-navigate", {
+    /unsupported command/,
+  );
+  for (const name of [
+    "request-camera-activate",
+    "response-camera-state-changed",
+    "camera-state-patch",
+    "camera-entity",
+    "camera-motion-rotate",
+    "camera-motion-pan",
+    "camera-motion-zoom",
+  ])
+    assert.equal(name in manifest.WIRE_LAYOUTS, false, name);
+  for (const name of [
+    "REQUEST_CAMERA_ACTIVATE",
+    "RESPONSE_CAMERA_STATE_CHANGED",
+    "CAMERA_MOTION_ROTATE",
+    "CAMERA_MOTION_PAN",
+    "CAMERA_MOTION_ZOOM",
+  ])
+    assert.equal(name in codec.WIRE, false, name);
+  const output = {
+    world: { id: 7n, incarnation: 2n },
+    entity: 41n,
+    kind: "camera",
+    incarnation: 5n,
+  };
+  const encodedOutput = layout("output-reference", {
+    world: worldReference(7n, 2n),
+    target: layout("output-target-camera", {
+      tag: tag("OUTPUT_TARGET_CAMERA"),
+      entity: 41n,
+      incarnation: 5n,
+    }),
+  });
+  const viewport = { width: 640, height: 480, devicePixelRatio: 1 };
+  const encodedViewport = layout("view-viewport", {
+    width: 640,
+    height: 480,
+    device_pixel_ratio: 1,
+  });
+  const publication = { host: 9n, revision: 11n };
+  const encodedPublication = layout("publication-reference", publication);
+  const view = { output, publication, viewport };
+  const encodedView = layout("view-descriptor", {
+    output: encodedOutput,
+    publication: encodedPublication,
+    viewport: encodedViewport,
+  });
+  const rootView = { kind: "root", output, expectedViewport: viewport };
+  const encodedRootView = layout("view-root", {
+    tag: tag("VIEW_ROOT"),
+    output: encodedOutput,
+    expected_viewport: encodedViewport,
+  });
+  for (const [queryView, encodedQueryView] of [
+    [rootView, encodedRootView],
+    [
+      { kind: "publication", ...view },
+      layout("view-publication", {
+        tag: tag("VIEW_PUBLICATION"),
+        output: encodedOutput,
+        publication: encodedPublication,
+        viewport: encodedViewport,
+      }),
+    ],
+  ]) {
+    assert.deepEqual(
+      codec.encodeRequest({
         session: 7n,
-        request_id: 0n,
-        tag: tag("REQUEST_CAMERA_NAVIGATE"),
-        motion: layout(`camera-motion-${kind}`, {
-          tag: tag(`CAMERA_MOTION_${kind.toUpperCase()}`),
-          ...fields,
-        }),
+        requestId: 25n,
+        body: {
+          kind: "query",
+          query: {
+            type: "GeometryPickQuery",
+            view: queryView,
+            x: 0.25,
+            y: 0.75,
+          },
+        },
+      }),
+      layout("request-geometry-pick", {
+        session: 7n,
+        request_id: 25n,
+        tag: tag("REQUEST_GEOMETRY_PICK"),
+        view: encodedQueryView,
+        x: 0.25,
+        y: 0.75,
+        include_view_plane: false,
       }).bytes,
+    );
+  }
+  for (const motion of [
+    { kind: "rotate", yaw: 0.25, pitch: -0.5 },
+    { kind: "pan", x: 0.25, y: -0.5, width: 640, height: 480 },
+    { kind: "zoom", amount: 0.25 },
+  ]) {
+    assert.throws(
+      () =>
+        codec.encodeRequest({
+          session: 7n,
+          requestId: 0n,
+          body: {
+            kind: "command",
+            command: { type: "CameraNavigateCommand", motion },
+          },
+        }),
+      /unsupported command/,
     );
   }
   const plane = layout("pick-view-plane", {
@@ -1270,10 +1263,9 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", () 
         kind: "query",
         query: {
           type: "CameraProjectQuery",
+          view: rootView,
           x: 1.25,
           y: -0.5,
-          width: 640,
-          height: 480,
           plane: { point: [1, 2, 3], normal: [0, 0, -1] },
         },
       },
@@ -1282,10 +1274,9 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", () 
       session: 7n,
       request_id: 29n,
       tag: tag("REQUEST_CAMERA_PROJECT"),
+      view: encodedRootView,
       x: 1.25,
       y: -0.5,
-      width: 640,
-      height: 480,
       plane,
     }).bytes,
   );
@@ -1299,42 +1290,56 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", () 
       request_id: 29n,
       tick: 47n,
       tag: tag("RESPONSE_CAMERA_PROJECT"),
-      camera: 41n,
+      view: ok ? encodedView : null,
       ok,
       position: position && layout("world-point", { x: 1, y: 2, z: 3 }),
       error,
     }).bytes;
     assert.deepEqual(codec.decodeResponse(bytes, 7n).body.event, {
       type: "CameraProjectResultEvent",
-      camera: 41n,
       ok,
-      ...(ok ? { position } : { error }),
+      ...(ok ? { view, position } : { error }),
     });
     assert.throws(() => codec.decodeResponse(bytes.slice(0, -1), 7n));
   }
   const hitFields = {
+    view: encodedView,
+    world: worldReference(7n, 2n),
+    publication: encodedPublication,
     entity: 41n,
+    incarnation: 5n,
     position_x: 1,
     position_y: 2,
     position_z: 3,
     distance: 4,
     part: 0,
+    path: [
+      layout("view-path-entry", { world: worldReference(8n, 3n), anchor: 42n }),
+    ],
     view_plane: null,
   };
-  const hit = { entity: 41n, position: [1, 2, 3], distance: 4 };
-  for (const [camera, result, expected] of [
+  const hit = {
+    world: { id: 7n, incarnation: 2n },
+    publication,
+    entity: 41n,
+    incarnation: 5n,
+    position: [1, 2, 3],
+    distance: 4,
+    path: [{ world: { id: 8n, incarnation: 3n }, anchor: 42n }],
+  };
+  for (const [result, expected] of [
     [
-      41n,
-      layout("pick-result-miss", { tag: tag("PICK_OUTCOME_MISS") }),
-      { ok: true, hit: null },
+      layout("pick-result-miss", {
+        tag: tag("PICK_OUTCOME_MISS"),
+        view: encodedView,
+      }),
+      { ok: true, view, hit: null },
     ],
     [
-      41n,
       layout("pick-result-hit", { tag: tag("PICK_OUTCOME_HIT"), ...hitFields }),
-      { ok: true, hit: { ...hit, part: 0 } },
+      { ok: true, view, hit: { ...hit, part: 0 } },
     ],
     [
-      41n,
       layout("pick-result-hit", {
         tag: tag("PICK_OUTCOME_HIT"),
         ...hitFields,
@@ -1350,6 +1355,7 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", () 
       }),
       {
         ok: true,
+        view,
         hit: {
           ...hit,
           part: 8,
@@ -1358,7 +1364,6 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", () 
       },
     ],
     [
-      null,
       layout("pick-result-failure", {
         tag: tag("PICK_OUTCOME_FAILURE"),
         reason: "NoActiveCamera",
@@ -1373,14 +1378,13 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", () 
           request_id: 26n,
           tick: 46n,
           tag: tag("RESPONSE_GEOMETRY_PICK"),
-          camera,
           result,
         }).bytes,
         7n,
       ).body,
       {
         kind: "event",
-        event: { type: "GeometryPickResultEvent", camera, ...expected },
+        event: { type: "GeometryPickResultEvent", ...expected },
       },
     );
   }
@@ -1465,8 +1469,10 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", () 
         layout("entity", {
           id: 41n,
           metadata: metadata(null, []),
-          base: [debugComponent],
-          effective: [debugComponent],
+          parent: 0n,
+          order_low: 0n,
+          order_high: 0n,
+          components: [debugComponent],
         }),
       ],
       resources: [],
@@ -1476,10 +1482,13 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", () 
     7n,
   );
   assert.equal(
-    debugInspection.body.entities[0].effective[0].fields.is_rendered,
+    debugInspection.body.entities[0].components[0].fields.is_rendered,
     false,
   );
-  assert.equal(debugInspection.body.entities[0].base[0].fields.outline, false);
+  assert.equal(
+    debugInspection.body.entities[0].components[0].fields.outline,
+    false,
+  );
 
   assert.deepEqual(
     codec.encodeRequest({
@@ -1537,24 +1546,6 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", () 
       requestId: 1n,
       tick: 3n,
       body: { kind: "lifecycleSubscription" },
-    },
-  );
-  assert.deepEqual(
-    codec.decodeResponse(
-      layout("response-lifecycle-overflow", {
-        session: 7n,
-        request_id: 0n,
-        tick: 3n,
-        tag: tag("RESPONSE_LIFECYCLE_OVERFLOW"),
-        dropped: 129n,
-      }).bytes,
-      7n,
-    ),
-    {
-      session: 7n,
-      requestId: 0n,
-      tick: 3n,
-      body: { kind: "lifecycleOverflow", dropped: 129n },
     },
   );
 
@@ -1693,8 +1684,10 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", () 
         layout("entity", {
           id: 0x100000001n,
           metadata: metadata(null, []),
-          base: [customSnapshot],
-          effective: [customSnapshot],
+          parent: 0n,
+          order_low: 0n,
+          order_high: 0n,
+          components: [customSnapshot],
         }),
       ],
       resources: [],
@@ -1704,7 +1697,7 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", () 
     7n,
   );
   assert.deepEqual(
-    { ...dynamicInspection.body.entities[0].effective[0].properties },
+    { ...dynamicInspection.body.entities[0].components[0].properties },
     { x: { kind: "f32", value: 1 } },
   );
   // Dense descriptor tables exceed the old 64 KiB byte bound. The effective
@@ -1758,10 +1751,7 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", () 
         }),
       ],
     });
-  const baseDescriptors = layout("snapshot-value-base-descriptors", {
-    tag: tag("SNAPSHOT_VALUE_BASE_DESCRIPTORS"),
-  });
-  const denseInspection = (base, effective) =>
+  const denseInspection = (components) =>
     layout("response-inspect", {
       session: 7n,
       request_id: 1001n,
@@ -1773,47 +1763,30 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", () 
         layout("entity", {
           id: 0x100000001n,
           metadata: metadata(null, []),
-          base,
-          effective,
+          parent: 0n,
+          order_low: 0n,
+          order_high: 0n,
+          components,
         }),
       ],
       resources: [],
       controllers: [],
       render_diagnostics: [],
     }).bytes;
-  const denseBytes = denseInspection(
-    [denseSnapshot(snapshotValue("bytes", denseTable), 0)],
-    [denseSnapshot(baseDescriptors, 0.5)],
-  );
+  // Each dynamic component carries its own descriptor table.
+  const denseBytes = denseInspection([
+    denseSnapshot(snapshotValue("bytes", denseTable), 0.5),
+  ]);
   assert.ok(denseBytes.length < codec.MAX_MESSAGE_BYTES);
   const dense = codec.decodeResponse(denseBytes, 7n).body.entities[0];
-  for (const [snapshot, offset] of [
-    [dense.base[0], 0],
-    [dense.effective[0], 0.5],
-  ]) {
-    assert.equal(Object.keys(snapshot.properties).length, denseNames.length);
-    assert.deepEqual(snapshot.properties[denseNames.at(-1)], {
-      kind: "f32",
-      value: denseNames.length - 1 + offset,
-    });
-  }
-  // A reference is valid only after a base table for the same component.
-  assert.throws(
-    () =>
-      codec.decodeResponse(
-        denseInspection([], [denseSnapshot(baseDescriptors, 0)]),
-        7n,
-      ),
-    /no base table/,
+  assert.equal(
+    Object.keys(dense.components[0].properties).length,
+    denseNames.length,
   );
-  assert.throws(
-    () =>
-      codec.decodeResponse(
-        denseInspection([denseSnapshot(baseDescriptors, 0)], []),
-        7n,
-      ),
-    /invalid dynamic inspection/,
-  );
+  assert.deepEqual(dense.components[0].properties[denseNames.at(-1)], {
+    kind: "f32",
+    value: denseNames.length - 1 + 0.5,
+  });
 
   const oversizedSnapshot = {
     layout: customSnapshot.layout,
@@ -1837,8 +1810,10 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", () 
             layout("entity", {
               id: 0x100000001n,
               metadata: metadata(null, []),
-              base: [oversizedSnapshot],
-              effective: [],
+              parent: 0n,
+              order_low: 0n,
+              order_high: 0n,
+              components: [oversizedSnapshot],
             }),
           ],
           resources: [],
@@ -1872,9 +1847,59 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", () 
         after: 0n,
         target: 0n,
         limit: 256,
+        max_depth: 0,
       }).bytes,
     );
   }
+  assert.deepEqual(
+    codec.encodeRequest({
+      session: 7n,
+      requestId: 21n,
+      body: {
+        kind: "inspectTree",
+        root: 40n,
+        after: 41n,
+        limit: 1,
+        maxDepth: 2,
+      },
+    }),
+    layout("request-inspect", {
+      session: 7n,
+      request_id: 21n,
+      tag: tag("REQUEST_INSPECT"),
+      collection: tag("INSPECT_ENTITY_TREE"),
+      after: 41n,
+      target: 40n,
+      limit: 1,
+      max_depth: 2,
+    }).bytes,
+  );
+  const tree = codec.decodeResponse(
+    layout("response-entity-tree", {
+      session: 7n,
+      request_id: 21n,
+      tick: 40n,
+      tag: tag("RESPONSE_ENTITY_TREE"),
+      time: 2.25,
+      next: 41n,
+      nodes: [
+        layout("entity-tree-node", {
+          id: 41n,
+          parent: 40n,
+          order_low: 17n,
+          order_high: 1n << 16n,
+          depth: 1,
+        }),
+      ],
+    }).bytes,
+    7n,
+  ).body;
+  assert.deepEqual(tree, {
+    kind: "entityTree",
+    time: 2.25,
+    next: 41n,
+    nodes: [{ id: 41n, parent: 40n, order: (1n << 80n) | 17n, depth: 1 }],
+  });
   for (const scope of ["draw", "resource", "context", "world"]) {
     const body = codec.decodeResponse(
       layout("response-runtime-failure", {
@@ -1903,7 +1928,7 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", () 
     operation: null,
     reason: "NonConvergentCommit",
     aliases: [],
-    stateOverlays: [],
+    symbols: [],
   });
   assert.deepEqual(
     codec.decodeResponse(
@@ -1913,11 +1938,1177 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", () 
         tick: 38n,
         tag: tag("RESPONSE_BATCH"),
         outcome: commit,
+        effects: [],
       }).bytes,
       7n,
-    ).body.outcome.error,
-    { scope: "commit", operation: null, reason: "NonConvergentCommit" },
+    ).body.outcome,
+    {
+      batchId: 28n,
+      tick: 38n,
+      ok: false,
+      error: {
+        scope: "commit",
+        operation: null,
+        reason: "NonConvergentCommit",
+      },
+      aliases: [],
+      symbols: [],
+      effects: [],
+    },
   );
+
+  const declaredTag = (name, space, spaceId) => {
+    assert.equal(manifest.WIRE_TAG_LAYOUTS[name].space, spaceId, name);
+    return { space, value: tag(name).value };
+  };
+  const declaredUnion = (name, space, spaceId, fields = {}) => {
+    const variant = declaredTag(name, space, spaceId);
+    const layoutName = manifest.WIRE_TAG_LAYOUTS[name].layout;
+    const firstField = manifest.WIRE_LAYOUTS[layoutName].fields[0];
+    assert.equal(firstField.name, "tag");
+    assert.equal(firstField.encoding, "variant");
+    assert.equal(firstField.target, space);
+    return {
+      layout: space,
+      bytes: layout(layoutName, { ...fields, tag: variant }).bytes,
+    };
+  };
+  assert.deepEqual(
+    codec.encodeRequest({
+      session: 7n,
+      requestId: 31n,
+      body: {
+        kind: "submitBatch",
+        batchId: 29,
+        last: true,
+        operations: [{ kind: "detachWorldAttachment", receipt: 71n }],
+      },
+    }),
+    layout("request-submit-batch", {
+      session: 7n,
+      request_id: 31n,
+      tag: tag("REQUEST_SUBMIT_BATCH"),
+      batch_id: 29,
+      last: true,
+      operations: [command("detach-attachment-receipt", { receipt: 71n })],
+    }).bytes,
+  );
+  for (const release of [false, true]) {
+    assert.deepEqual(
+      codec.encodeRequest({
+        session: 7n,
+        requestId: 32n,
+        body: { kind: "attachmentReceipt", receipt: 71n, release },
+      }),
+      layout("request-attachment-receipt", {
+        session: 7n,
+        request_id: 32n,
+        tag: tag("REQUEST_ATTACHMENT_RECEIPT"),
+        receipt: 71n,
+        release,
+      }).bytes,
+    );
+  }
+  for (const state of ["pending", "retired", "released"]) {
+    const bytes = layout("response-attachment-receipt", {
+      session: 7n,
+      request_id: 32n,
+      tick: 48n,
+      tag: tag("RESPONSE_ATTACHMENT_RECEIPT"),
+      receipt: 71n,
+      state: declaredTag(
+        `RECEIPT_${state.toUpperCase()}`,
+        "attachment-receipt-state",
+        35,
+      ),
+    }).bytes;
+    assert.deepEqual(codec.decodeResponse(bytes, 7n), {
+      session: 7n,
+      requestId: 32n,
+      tick: 48n,
+      body: { kind: "attachmentReceipt", receipt: 71n, state },
+    });
+    assert.throws(() => codec.decodeResponse(bytes.subarray(0, -1), 7n));
+    const invalidState = bytes.slice();
+    invalidState[invalidState.length - 1] = 255;
+    assert.throws(
+      () => codec.decodeResponse(invalidState, 7n),
+      /invalid attachment receipt state/,
+    );
+  }
+
+  const watchWorld = { id: 3n, incarnation: 5n };
+  const watchOutput = 9n;
+  const watchRequest = (control) =>
+    codec.encodeRequest({
+      session: 7n,
+      requestId: 2n,
+      body: {
+        kind: "lifecycleWatch",
+        control: { world: watchWorld, ...control },
+      },
+    });
+  const watchTarget = (kind, entity = 42n, component = 1) =>
+    declaredUnion(
+      `LIFECYCLE_WATCH_${kind.toUpperCase()}`,
+      "lifecycle-watch-target",
+      40,
+      {
+        entity,
+        ...(kind === "component" ? { component } : {}),
+      },
+    );
+  for (const [kinds, name, kind] of [
+    [1, "ENTITY_CREATED", "entity"],
+    [2, "ENTITY_METADATA_CHANGED", "entity"],
+    [4, "ENTITY_DELETED", "entity"],
+    [8, "COMPONENT_INSERTED", "component"],
+    [16, "COMPONENT_UPDATED", "component"],
+    [32, "COMPONENT_REPLACED", "component"],
+    [64, "COMPONENT_REMOVED", "component"],
+  ]) {
+    const target = {
+      kind,
+      entity: 42n,
+      ...(kind === "component" ? { component: 1 } : {}),
+    };
+    const kindsTag = declaredTag(
+      `LIFECYCLE_WATCH_${name}`,
+      "lifecycle-watch-kinds",
+      45,
+    );
+    assert.equal(kindsTag.value, kinds);
+    assert.deepEqual(
+      watchRequest({ kind: "add", targets: [{ target, kinds }] }),
+      layout("request-lifecycle-watch", {
+        session: 7n,
+        request_id: 2n,
+        tag: tag("REQUEST_LIFECYCLE_WATCH"),
+        world: worldReference(3n, 5n),
+        change: declaredUnion(
+          "LIFECYCLE_WATCH_ADD",
+          "lifecycle-watch-change",
+          39,
+          {
+            members: [
+              layout("lifecycle-watch-selection", {
+                target: watchTarget(kind),
+                kinds: kindsTag,
+              }),
+            ],
+          },
+        ),
+      }).bytes,
+    );
+  }
+  assert.deepEqual(
+    watchRequest({
+      kind: "remove",
+      output: watchOutput,
+      generations: [2n, 6n],
+    }),
+    layout("request-lifecycle-watch", {
+      session: 7n,
+      request_id: 2n,
+      tag: tag("REQUEST_LIFECYCLE_WATCH"),
+      world: worldReference(3n, 5n),
+      change: declaredUnion(
+        "LIFECYCLE_WATCH_REMOVE",
+        "lifecycle-watch-change",
+        39,
+        {
+          output: watchOutput,
+          generations: [2n, 6n],
+        },
+      ),
+    }).bytes,
+  );
+  for (const generations of [[], [0n], [2n, 2n], [6n, 2n]])
+    assert.throws(() =>
+      watchRequest({ kind: "remove", output: watchOutput, generations }),
+    );
+  assert.throws(
+    () => watchRequest({ kind: "remove", output: 0n, generations: [2n] }),
+    /lifecycle remove page/,
+  );
+  assert.throws(
+    () => watchRequest({ kind: "add", targets: [] }),
+    /empty membership page/,
+  );
+  for (const target of [
+    { kind: "entity", entity: 42n },
+    { kind: "component", entity: 42n, component: 1 },
+  ]) {
+    for (const kinds of [0, 128, 1.5, target.kind === "entity" ? 8 : 1])
+      assert.throws(() =>
+        watchRequest({ kind: "add", targets: [{ target, kinds }] }),
+      );
+  }
+  for (const target of [
+    { kind: "entity", entity: 0n },
+    { kind: "component", entity: 0n, component: 1 },
+    { kind: "component", entity: 42n, component: 0 },
+  ])
+    assert.throws(() =>
+      watchRequest({
+        kind: "add",
+        targets: [{ target, kinds: target.kind === "entity" ? 4 : 32 }],
+      }),
+    );
+
+  const watchResponse = (record, requestId = 2n, envelope = {}) =>
+    layout("response-lifecycle-watch", {
+      session: 7n,
+      request_id: requestId,
+      tick: 0n,
+      tag: tag("RESPONSE_LIFECYCLE_WATCH"),
+      world: worldReference(3n, 5n),
+      output: watchOutput,
+      record,
+      ...envelope,
+    }).bytes;
+  const watchCut = layout("lifecycle-watch-cut", { sequence: 6n, tick: 8n });
+  const watchAck = (action, result, cut = watchCut) =>
+    declaredUnion("LIFECYCLE_WATCH_ACK", "lifecycle-watch-record", 41, {
+      action: declaredTag(
+        `LIFECYCLE_WATCH_${action.toUpperCase()}`,
+        "lifecycle-watch-change",
+        39,
+      ),
+      cut,
+      result,
+    });
+  const watchApplied = (baselines) =>
+    declaredUnion(
+      "LIFECYCLE_MEMBERSHIP_APPLIED",
+      "lifecycle-membership-result",
+      42,
+      {
+        baselines,
+      },
+    );
+  const entityLifetime = (live) =>
+    declaredUnion(
+      "LIFECYCLE_LIFETIME_ENTITY",
+      "lifecycle-target-lifetime",
+      43,
+      {
+        live,
+      },
+    );
+  const componentLifetime = (entityLive, incarnation) =>
+    declaredUnion(
+      "LIFECYCLE_LIFETIME_COMPONENT",
+      "lifecycle-target-lifetime",
+      43,
+      {
+        entity_live: entityLive,
+        incarnation,
+      },
+    );
+  const removedLifetime = declaredUnion(
+    "LIFECYCLE_LIFETIME_REMOVED",
+    "lifecycle-target-lifetime",
+    43,
+  );
+  const baseline = (generation, target, lifetime) =>
+    layout("lifecycle-watch-baseline", { generation, target, lifetime });
+  const baselineCases = [
+    ["entity", entityLifetime(true), { kind: "entity", live: true }],
+    ["entity", entityLifetime(false), { kind: "entity", live: false }],
+    [
+      "component",
+      componentLifetime(true, 12n),
+      { kind: "component", entityLive: true, incarnation: 12n },
+    ],
+    [
+      "component",
+      componentLifetime(true, 0n),
+      { kind: "component", entityLive: true, incarnation: null },
+    ],
+    [
+      "component",
+      componentLifetime(false, 0n),
+      { kind: "component", entityLive: false, incarnation: null },
+    ],
+  ];
+  for (const action of ["add", "remove"]) {
+    const encodedBaselines = baselineCases.map(([kind, lifetime], index) =>
+      baseline(
+        BigInt(index + 1),
+        watchTarget(kind),
+        action === "add" ? lifetime : removedLifetime,
+      ),
+    );
+    const bytes = watchResponse(
+      watchAck(action, watchApplied(encodedBaselines)),
+    );
+    assert.deepEqual(codec.decodeResponse(bytes, 7n), {
+      session: 7n,
+      requestId: 2n,
+      tick: 0n,
+      body: {
+        kind: "lifecycleWatch",
+        record: {
+          world: watchWorld,
+          output: watchOutput,
+          kind: "ack",
+          action,
+          cut: { sequence: 6n, tick: 8n },
+          result: {
+            kind: "applied",
+            baselines: baselineCases.map(([kind, , lifetime], index) => ({
+              member: { output: watchOutput, generation: BigInt(index + 1) },
+              target: {
+                kind,
+                entity: 42n,
+                ...(kind === "component" ? { component: 1 } : {}),
+              },
+              lifetime: action === "add" ? lifetime : { kind: "removed" },
+            })),
+          },
+        },
+      },
+    });
+    for (let length = 0; length < bytes.length; length++)
+      assert.throws(() => codec.decodeResponse(bytes.subarray(0, length), 7n));
+    assert.throws(() => codec.decodeResponse(Uint8Array.of(...bytes, 0), 7n));
+    assert.throws(() => codec.decodeResponse(bytes, 8n), /session mismatch/);
+  }
+  const watchRejected = (name) =>
+    declaredUnion(
+      "LIFECYCLE_MEMBERSHIP_REJECTED",
+      "lifecycle-membership-result",
+      42,
+      {
+        reason: declaredTag(
+          `LIFECYCLE_MEMBERSHIP_${name}`,
+          "lifecycle-membership-rejection",
+          44,
+        ),
+      },
+    );
+  for (const [name, reason] of [
+    ["STALE_WORLD", "StaleWorld"],
+    ["STALE_SESSION", "StaleSession"],
+    ["STALE_MEMBER", "StaleMember"],
+    ["ALREADY_ACTIVE", "AlreadyActive"],
+    ["TRACKING_ENDED", "TrackingEnded"],
+    ["CAPACITY", "Capacity"],
+  ]) {
+    assert.deepEqual(
+      codec.decodeResponse(
+        watchResponse(watchAck("add", watchRejected(name))),
+        7n,
+      ).body.record,
+      {
+        world: watchWorld,
+        output: watchOutput,
+        kind: "ack",
+        action: "add",
+        cut: { sequence: 6n, tick: 8n },
+        result: { kind: "rejected", reason },
+      },
+    );
+  }
+  const cancelled = declaredUnion(
+    "LIFECYCLE_MEMBERSHIP_CANCELLED",
+    "lifecycle-membership-result",
+    42,
+  );
+  assert.deepEqual(
+    codec.decodeResponse(watchResponse(watchAck("remove", cancelled, null)), 7n)
+      .body.record,
+    {
+      world: watchWorld,
+      output: watchOutput,
+      kind: "ack",
+      action: "remove",
+      cut: null,
+      result: { kind: "cancelled" },
+    },
+  );
+  const watchEvent = (observation, generation = 4n, sequence = 7n) =>
+    declaredUnion("LIFECYCLE_WATCH_EVENT", "lifecycle-watch-record", 41, {
+      generation,
+      sequence,
+      tick: 8n,
+      observation,
+    });
+  for (let index = 0; index < 7; index++) {
+    assert.deepEqual(
+      codec.decodeResponse(
+        watchResponse(watchEvent(encodedObservations[index]), 0n),
+        7n,
+      ),
+      {
+        session: 7n,
+        requestId: 0n,
+        tick: 0n,
+        body: {
+          kind: "lifecycleWatch",
+          record: {
+            world: watchWorld,
+            output: watchOutput,
+            kind: "event",
+            member: { output: watchOutput, generation: 4n },
+            sequence: 7n,
+            tick: 8n,
+            observation: lifecycleObservations[index],
+          },
+        },
+      },
+    );
+  }
+
+  // Value targets select value changes over ascending schema offsets; the ACK
+  // echoes them whole and value records carry snapshot fields or absence.
+  const valueTarget = declaredUnion(
+    "LIFECYCLE_WATCH_VALUE",
+    "lifecycle-watch-target",
+    40,
+    { entity: 42n, component: 1, fields: [0, 12] },
+  );
+  const decodedValueTarget = {
+    kind: "value",
+    entity: 42n,
+    component: 1,
+    fields: [0, 12],
+  };
+  const valueChanged = declaredTag(
+    "LIFECYCLE_WATCH_VALUE_CHANGED",
+    "lifecycle-watch-kinds",
+    45,
+  );
+  assert.equal(valueChanged.value, 128);
+  assert.deepEqual(
+    watchRequest({
+      kind: "add",
+      targets: [{ target: decodedValueTarget, kinds: 128 }],
+    }),
+    layout("request-lifecycle-watch", {
+      session: 7n,
+      request_id: 2n,
+      tag: tag("REQUEST_LIFECYCLE_WATCH"),
+      world: worldReference(3n, 5n),
+      change: declaredUnion(
+        "LIFECYCLE_WATCH_ADD",
+        "lifecycle-watch-change",
+        39,
+        {
+          members: [
+            layout("lifecycle-watch-selection", {
+              target: valueTarget,
+              kinds: valueChanged,
+            }),
+          ],
+        },
+      ),
+    }).bytes,
+  );
+  assert.deepEqual(
+    codec.decodeResponse(
+      watchResponse(
+        watchAck(
+          "add",
+          watchApplied([
+            baseline(4n, valueTarget, componentLifetime(true, 12n)),
+          ]),
+        ),
+      ),
+      7n,
+    ).body.record.result.baselines,
+    [
+      {
+        member: { output: watchOutput, generation: 4n },
+        target: decodedValueTarget,
+        lifetime: { kind: "component", entityLive: true, incarnation: 12n },
+      },
+    ],
+  );
+  const valueRecord = (values) =>
+    declaredUnion(
+      "LIFECYCLE_WATCH_VALUE_RECORD",
+      "lifecycle-watch-record",
+      41,
+      { generation: 4n, tick: 8n, values },
+    );
+  for (const [values, decoded] of [
+    [
+      layout("lifecycle-watch-values", {
+        fields: [
+          snapshotField(0, snapshotValue("f32", 1.5)),
+          snapshotField(12, snapshotValue("string", "é")),
+        ],
+      }),
+      [
+        { offset: 0, value: 1.5 },
+        { offset: 12, value: "é" },
+      ],
+    ],
+    [null, null],
+  ])
+    assert.deepEqual(
+      codec.decodeResponse(watchResponse(valueRecord(values), 0n), 7n).body
+        .record,
+      {
+        world: watchWorld,
+        output: watchOutput,
+        kind: "value",
+        member: { output: watchOutput, generation: 4n },
+        tick: 8n,
+        values: decoded,
+      },
+    );
+  const validBaseline = baseline(
+    4n,
+    watchTarget("entity"),
+    entityLifetime(true),
+  );
+  const validAck = watchAck("add", watchApplied([validBaseline]));
+  for (const [record, requestId, envelope] of [
+    [validAck, 0n, {}],
+    [validAck, 2n, { session: 0n }],
+    [validAck, 2n, { output: 0n }],
+    [validAck, 2n, { tick: 1n }],
+    [watchEvent(encodedObservations[0]), 2n, {}],
+    [watchEvent(encodedObservations[0], 0n), 0n, {}],
+    [watchEvent(encodedObservations[0], 4n, 0n), 0n, {}],
+    [watchAck("add", watchApplied([validBaseline]), null), 2n, {}],
+    [watchAck("add", watchRejected("CAPACITY"), null), 2n, {}],
+    [watchAck("remove", cancelled, watchCut), 2n, {}],
+    [watchAck("add", watchApplied([])), 2n, {}],
+    [watchAck("add", watchApplied([validBaseline, validBaseline])), 2n, {}],
+    [
+      watchAck(
+        "add",
+        watchApplied([
+          validBaseline,
+          baseline(2n, watchTarget("entity"), entityLifetime(true)),
+        ]),
+      ),
+      2n,
+      {},
+    ],
+    [watchAck("remove", watchApplied([validBaseline])), 2n, {}],
+  ])
+    assert.throws(() =>
+      codec.decodeResponse(watchResponse(record, requestId, envelope), 7n),
+    );
+  for (const malformedBaseline of [
+    baseline(0n, watchTarget("entity"), entityLifetime(true)),
+    baseline(4n, watchTarget("entity", 0n), entityLifetime(true)),
+    baseline(
+      4n,
+      watchTarget("component", 42n, 0),
+      componentLifetime(true, 12n),
+    ),
+    baseline(4n, watchTarget("entity"), componentLifetime(true, 12n)),
+    baseline(4n, watchTarget("component"), entityLifetime(true)),
+    baseline(4n, watchTarget("component"), componentLifetime(false, 12n)),
+    baseline(4n, watchTarget("entity"), removedLifetime),
+  ])
+    assert.throws(() =>
+      codec.decodeResponse(
+        watchResponse(watchAck("add", watchApplied([malformedBaseline]))),
+        7n,
+      ),
+    );
+  for (const observation of [
+    layout("lifecycle-entity", {
+      tag: tag("LIFECYCLE_ENTITY_CREATED"),
+      entity: 0n,
+    }),
+    layout("lifecycle-component", {
+      tag: tag("LIFECYCLE_COMPONENT_REPLACED"),
+      entity: 42n,
+      component: 0,
+      previous_incarnation: 1n,
+      incarnation: 2n,
+    }),
+    layout("lifecycle-component", {
+      tag: tag("LIFECYCLE_COMPONENT_REPLACED"),
+      entity: 42n,
+      component: 1,
+      previous_incarnation: 0n,
+      incarnation: 2n,
+    }),
+    layout("lifecycle-component", {
+      tag: tag("LIFECYCLE_COMPONENT_INSERTED"),
+      entity: 42n,
+      component: 1,
+      previous_incarnation: 1n,
+      incarnation: 2n,
+    }),
+    layout("lifecycle-component", {
+      tag: tag("LIFECYCLE_COMPONENT_REMOVED"),
+      entity: 42n,
+      component: 1,
+      previous_incarnation: 1n,
+      incarnation: 2n,
+    }),
+  ])
+    assert.throws(() =>
+      codec.decodeResponse(watchResponse(watchEvent(observation), 0n), 7n),
+    );
+  for (const offset of [0, 1, 2]) {
+    const bytes = validAck.bytes.slice();
+    bytes[offset] = 255;
+    assert.throws(() =>
+      codec.decodeResponse(
+        watchResponse({ layout: validAck.layout, bytes }),
+        7n,
+      ),
+    );
+  }
+  const invalidRejection = watchRejected("CAPACITY");
+  const invalidRejectionBytes = invalidRejection.bytes.slice();
+  invalidRejectionBytes[invalidRejectionBytes.length - 1] = 255;
+  assert.throws(
+    () =>
+      codec.decodeResponse(
+        watchResponse(
+          watchAck("add", {
+            layout: invalidRejection.layout,
+            bytes: invalidRejectionBytes,
+          }),
+        ),
+        7n,
+      ),
+    /membership rejection/,
+  );
+  const invalidTarget = watchTarget("entity");
+  const invalidTargetBytes = invalidTarget.bytes.slice();
+  invalidTargetBytes[0] = 255;
+  for (const malformedBaseline of [
+    baseline(
+      4n,
+      { layout: invalidTarget.layout, bytes: invalidTargetBytes },
+      entityLifetime(true),
+    ),
+    baseline(4n, watchTarget("entity"), {
+      layout: removedLifetime.layout,
+      bytes: Uint8Array.of(255),
+    }),
+  ])
+    assert.throws(() =>
+      codec.decodeResponse(
+        watchResponse(watchAck("add", watchApplied([malformedBaseline]))),
+        7n,
+      ),
+    );
+
+  const canvasOutput = { world: { id: 8n, incarnation: 3n }, kind: "canvas" };
+  const encodedCanvasOutput = layout("output-reference", {
+    world: worldReference(8n, 3n),
+    target: layout("output-target-canvas", {
+      tag: tag("OUTPUT_TARGET_CANVAS"),
+    }),
+  });
+  const attachment = codec.components.WorldAttachment;
+  for (const [child, selectedOutput, encodedChild, encodedSelectedOutput] of [
+    [null, null, null, null],
+    [
+      canvasOutput.world,
+      canvasOutput,
+      worldReference(8n, 3n),
+      encodedCanvasOutput,
+    ],
+    [output.world, output, worldReference(7n, 2n), encodedOutput],
+  ]) {
+    assert.deepEqual(
+      codec.encodeRequest({
+        session: 7n,
+        requestId: 33n,
+        body: {
+          kind: "submitBatch",
+          batchId: 30,
+          last: true,
+          operations: [
+            codec.WorldAttachment.insert(refs.handle, {
+              child,
+              output: selectedOutput,
+              mode: 0,
+            }),
+          ],
+        },
+      }),
+      layout("request-submit-batch", {
+        session: 7n,
+        request_id: 33n,
+        tag: tag("REQUEST_SUBMIT_BATCH"),
+        batch_id: 30,
+        last: true,
+        operations: [
+          command("insert", {
+            entity: handle(41n),
+            component: attachment.id,
+            fields: [
+              field(
+                attachment.fields.child.offset,
+                value("world", encodedChild),
+              ),
+              field(
+                attachment.fields.output.offset,
+                value("output", encodedSelectedOutput),
+              ),
+              field(attachment.fields.mode.offset, value("u32", 0)),
+            ],
+            adopt: false,
+          }),
+        ],
+      }).bytes,
+    );
+    const inspectedAttachment = layout("component", {
+      type_id: attachment.id,
+      fields: [
+        snapshotField(
+          attachment.fields.child.offset,
+          snapshotValue("world", encodedChild),
+        ),
+        snapshotField(
+          attachment.fields.output.offset,
+          snapshotValue("output", encodedSelectedOutput),
+        ),
+        snapshotField(attachment.fields.mode.offset, snapshotValue("u32", 0)),
+      ],
+    });
+    const inspected = codec.decodeResponse(
+      layout("response-inspect", {
+        session: 7n,
+        request_id: 34n,
+        tick: 49n,
+        tag: tag("RESPONSE_INSPECT"),
+        next: 0n,
+        time: 2.25,
+        entities: [
+          layout("entity", {
+            id: 41n,
+            metadata: metadata(null, []),
+            parent: 0n,
+            order_low: 0n,
+            order_high: 0n,
+            components: [inspectedAttachment],
+          }),
+        ],
+        resources: [],
+        controllers: [],
+        render_diagnostics: [],
+      }).bytes,
+      7n,
+    ).body.entities[0];
+    for (const components of [inspected.components])
+      assert.deepEqual(components, [
+        {
+          component: attachment.id,
+          fields: Object.assign(Object.create(null), {
+            child,
+            output: selectedOutput,
+            mode: 0,
+          }),
+        },
+      ]);
+  }
+
+  const presentationSurface = {
+    id: 11n,
+    context: 12n,
+    maxWidth: 64,
+    maxHeight: 64,
+  };
+  const encodedSurface = layout("presentation-surface", {
+    id: 11n,
+    context: 12n,
+    max_width: 64,
+    max_height: 64,
+  });
+  const rootBinding = {
+    output,
+    viewport: { width: 2, height: 3, devicePixelRatio: 1 },
+    generation: { host: 13n, serial: 14n },
+  };
+  const encodedBinding = layout("root-binding", {
+    output: encodedOutput,
+    width: 2,
+    height: 3,
+    device_pixel_ratio: 1,
+    generation: layout("presentation-identity", { host: 13n, serial: 14n }),
+  });
+  for (const navigationPublication of [
+    undefined,
+    { host: 13n, revision: 17n },
+  ]) {
+    const selectedSource =
+      navigationPublication === undefined
+        ? {}
+        : { publication: navigationPublication };
+    const encodedSource =
+      navigationPublication === undefined
+        ? null
+        : layout("publication-reference", navigationPublication);
+    for (const [motion, kind, first, second] of [
+      [{ kind: "rotate", yaw: 0.25, pitch: -0.5 }, 0, 0.25, -0.5],
+      [{ kind: "pan", x: -0.25, y: 0.5 }, 1, -0.25, 0.5],
+      [{ kind: "zoom", amount: 0.75 }, 2, 0.75, 0],
+    ])
+      assert.deepEqual(
+        codec.encodeRequest({
+          session: 7n,
+          requestId: 37n,
+          body: {
+            kind: "cameraNavigate",
+            request: { binding: rootBinding, ...selectedSource, motion },
+          },
+        }),
+        layout("request-camera-navigate", {
+          session: 7n,
+          request_id: 37n,
+          tag: tag("REQUEST_CAMERA_NAVIGATE"),
+          binding: encodedBinding,
+          publication: encodedSource,
+          kind,
+          first,
+          second,
+        }).bytes,
+      );
+    assert.deepEqual(
+      codec.encodeRequest({
+        session: 7n,
+        requestId: 38n,
+        body: {
+          kind: "query",
+          query: {
+            type: "GeometryPickQuery",
+            view: { kind: "bound", binding: rootBinding, ...selectedSource },
+            x: 0.25,
+            y: 0.75,
+            includeViewPlane: true,
+          },
+        },
+      }),
+      layout("request-geometry-pick", {
+        session: 7n,
+        request_id: 38n,
+        tag: tag("REQUEST_GEOMETRY_PICK"),
+        view: layout("view-bound", {
+          tag: tag("VIEW_BOUND"),
+          binding: encodedBinding,
+          publication: encodedSource,
+        }),
+        x: 0.25,
+        y: 0.75,
+        include_view_plane: true,
+      }).bytes,
+    );
+  }
+  assert.deepEqual(
+    codec.decodeResponse(
+      layout("response-camera-navigated", {
+        session: 7n,
+        request_id: 37n,
+        tick: 19n,
+        tag: tag("RESPONSE_CAMERA_NAVIGATED"),
+      }).bytes,
+      7n,
+    ),
+    {
+      session: 7n,
+      requestId: 37n,
+      tick: 19n,
+      body: { kind: "cameraNavigated" },
+    },
+  );
+  const presentationView = {
+    surface: presentationSurface,
+    selection: 15n,
+    binding: rootBinding,
+  };
+  const encodedPresentationView = layout("presentation-view", {
+    surface: encodedSurface,
+    selection: 15n,
+    binding: encodedBinding,
+  });
+  const presentedFrame = {
+    view: presentationView,
+    sequence: 16n,
+    publication: { host: 13n, revision: 17n },
+    drawCalls: 3,
+    triangles: 7,
+    failedDrawCalls: 1,
+    sources: [],
+  };
+  const encodedPresentedFrame = layout("presented-frame", {
+    view: encodedPresentationView,
+    sequence: 16n,
+    publication: layout("presentation-identity", { host: 13n, serial: 17n }),
+    draw_calls: 3,
+    triangles: 7,
+    failed_draw_calls: 1,
+    sources: [],
+  });
+  const presentationRequest = (name, fields = {}) =>
+    declaredUnion(
+      `PRESENTATION_REQUEST_${name}`,
+      "presentation-request",
+      36,
+      fields,
+    );
+  const presentationResponse = (name, fields = {}) =>
+    declaredUnion(
+      `PRESENTATION_RESPONSE_${name}`,
+      "presentation-response",
+      37,
+      fields,
+    );
+  const exchanges = [];
+  let transportEvents;
+  let bootstrapped = false;
+  let nextRequest = 1n;
+  let closes = 0;
+  const host = await codec.IppHostClient.connectTransport({
+    start(events) {
+      transportEvents = events;
+      events.ready();
+    },
+    send(bytes) {
+      if (!bootstrapped) {
+        assert.deepEqual(bytes, codec.bootstrap());
+        const response = new Uint8Array(24);
+        response.set(bytes);
+        new DataView(response.buffer).setBigUint64(16, 7n, true);
+        bootstrapped = true;
+        transportEvents.message(response);
+        return;
+      }
+      const exchange = exchanges.shift();
+      assert.ok(exchange, "unexpected Host request");
+      assert.deepEqual(
+        bytes,
+        layout("host-request-presentation", {
+          magic: 0x0000000248505049n,
+          connection: 7n,
+          request_id: nextRequest,
+          tag: manifestVariant(client, "HOST_REQUEST_PRESENTATION"),
+          body: exchange.request,
+        }).bytes,
+      );
+      transportEvents.message(
+        layout("host-response-presentation", {
+          magic: 0x0000000241505049n,
+          connection: 7n,
+          request_id: nextRequest++,
+          tag: manifestVariant(client, "HOST_RESPONSE_PRESENTATION"),
+          body: exchange.response,
+        }).bytes,
+      );
+    },
+    async close() {
+      closes++;
+    },
+  });
+  try {
+    exchanges.push({
+      request: presentationRequest("SURFACE"),
+      response: presentationResponse("SURFACE", { surface: encodedSurface }),
+    });
+    assert.deepEqual(await host.presentation.surface(), presentationSurface);
+    exchanges.push({
+      request: presentationRequest("SELECT", {
+        surface: encodedSurface,
+        binding: encodedBinding,
+      }),
+      response: presentationResponse("VIEW", { view: encodedPresentationView }),
+    });
+    assert.deepEqual(
+      await host.presentation.select(presentationSurface, rootBinding),
+      presentationView,
+    );
+    for (const options of [
+      {},
+      { afterSequence: 15n, publication: presentedFrame.publication },
+    ]) {
+      exchanges.push({
+        request: presentationRequest("FRAME", {
+          view: encodedPresentationView,
+          after_sequence: options.afterSequence ?? null,
+          publication: options.publication
+            ? layout("presentation-identity", { host: 13n, serial: 17n })
+            : null,
+          capture: false,
+          after_outputs: [],
+        }),
+        response: presentationResponse("FRAME", {
+          frame: encodedPresentedFrame,
+        }),
+      });
+      assert.deepEqual(
+        await host.presentation.frame(presentationView, options),
+        presentedFrame,
+      );
+    }
+    for (const stale of [false, true]) {
+      const source = {
+        output: stale
+          ? { ...output, incarnation: output.incarnation + 1n }
+          : output,
+        minimumTick: 21n,
+        publication: { host: 13n, revision: 20n },
+        tick: 22n,
+      };
+      const frame = layout("presented-frame", {
+        view: encodedPresentationView,
+        sequence: 16n,
+        publication: layout("presentation-identity", {
+          host: 13n,
+          serial: 17n,
+        }),
+        draw_calls: 3,
+        triangles: 7,
+        failed_draw_calls: 0,
+        sources: [
+          layout("presented-source", {
+            output: layout("output-reference", {
+              world: layout("world-reference", source.output.world),
+              target: layout("output-target-camera", {
+                tag: tag("OUTPUT_TARGET_CAMERA"),
+                entity: source.output.entity,
+                incarnation: source.output.incarnation,
+              }),
+            }),
+            minimum_tick: 21n,
+            publication: layout("presentation-identity", {
+              host: 13n,
+              serial: 20n,
+            }),
+            tick: 22n,
+          }),
+        ],
+      });
+      exchanges.push({
+        request: presentationRequest("FRAME", {
+          view: encodedPresentationView,
+          after_sequence: null,
+          publication: null,
+          capture: false,
+          after_outputs: [encodedOutput],
+        }),
+        response: presentationResponse("FRAME", { frame }),
+      });
+      const pending = host.presentation.frame(presentationView, {
+        afterOutputs: [output, output],
+      });
+      if (stale) await assert.rejects(pending, /requested output cut/);
+      else
+        assert.deepEqual(await pending, {
+          ...presentedFrame,
+          failedDrawCalls: 0,
+          sources: [source],
+        });
+    }
+    exchanges.push({
+      request: presentationRequest("CLEAR", { view: encodedPresentationView }),
+      response: presentationResponse("COMPLETE"),
+    });
+    assert.equal(await host.presentation.clear(presentationView), undefined);
+    const pixels = Uint8Array.from({ length: 24 }, (_, index) => index);
+    exchanges.push(
+      {
+        request: presentationRequest("FRAME", {
+          view: encodedPresentationView,
+          after_sequence: 15n,
+          publication: layout("presentation-identity", {
+            host: 13n,
+            serial: 17n,
+          }),
+          capture: true,
+          after_outputs: [],
+        }),
+        response: presentationResponse("CAPTURE", {
+          frame: encodedPresentedFrame,
+          capture: 18n,
+          bytes: 24n,
+        }),
+      },
+      {
+        request: presentationRequest("READ_CAPTURE", {
+          capture: 18n,
+          offset: 0n,
+        }),
+        response: presentationResponse("CHUNK", {
+          capture: 18n,
+          offset: 0n,
+          bytes: pixels,
+        }),
+      },
+      {
+        request: presentationRequest("RELEASE_CAPTURE", { capture: 18n }),
+        response: presentationResponse("COMPLETE"),
+      },
+    );
+    assert.deepEqual(
+      await host.presentation.capture(presentationView, {
+        afterSequence: 15n,
+        publication: presentedFrame.publication,
+      }),
+      { ...presentedFrame, pixels: pixels.buffer },
+    );
+    for (const [name, reason] of [
+      ["UNSUPPORTED", "unsupported"],
+      ["UNAVAILABLE", "unavailable"],
+      ["STALE_VIEW", "staleView"],
+      ["INVALID_VIEWPORT", "invalidViewport"],
+      ["OBSOLETE_PUBLICATION", "obsoletePublication"],
+      ["CAPACITY", "capacity"],
+      ["TIMEOUT", "timeout"],
+      ["DRAW_FAILED", "drawFailed"],
+    ]) {
+      exchanges.push({
+        request: presentationRequest("SURFACE"),
+        response: presentationResponse("ERROR", {
+          error: declaredUnion(
+            `PRESENTATION_ERROR_${name}`,
+            "presentation-error",
+            38,
+          ),
+        }),
+      });
+      await assert.rejects(host.presentation.surface(), (error) => {
+        assert.ok(error instanceof codec.PresentationError);
+        assert.equal(error.reason, reason);
+        return true;
+      });
+    }
+    exchanges.push({
+      request: presentationRequest("SURFACE"),
+      response: presentationResponse("ERROR", {
+        error: { layout: "presentation-error", bytes: Uint8Array.of(255) },
+      }),
+    });
+    await assert.rejects(
+      host.presentation.surface(),
+      /Invalid presentation failure/,
+    );
+    const complete = presentationResponse("COMPLETE");
+    exchanges.push({
+      request: presentationRequest("CLEAR", { view: encodedPresentationView }),
+      response: {
+        layout: complete.layout,
+        bytes: Uint8Array.of(...complete.bytes, 0),
+      },
+    });
+    await assert.rejects(
+      host.presentation.clear(presentationView),
+      /trailing/i,
+    );
+    assert.equal(exchanges.length, 0);
+    assert.equal(nextRequest, 21n);
+  } finally {
+    await host.close();
+  }
+  assert.equal(closes, 1);
+
+  executeCancellationConformance(client);
+  covered.add("PRESENTATION_REQUEST_CANCEL_FRAME");
 
   // Playback/controller branches are covered against this same manifest in animation-client.mjs.
   const animationTag = (name) =>
@@ -1947,8 +3138,9 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", () 
           !animationTag(name) &&
           // Physical Host controls/selectors are exercised by the maintained
           // native and worker Host lifecycle/persistence suites, separately
-          // from this World-envelope fixture.
-          ![23, 24, 25].includes(manifest.WIRE_TAG_LAYOUTS[name].space),
+          // from this World-envelope fixture. Output kinds (space 32) now
+          // appear only in the Host bind-output request.
+          ![23, 24, 25, 32].includes(manifest.WIRE_TAG_LAYOUTS[name].space),
       )
       .sort(),
   );

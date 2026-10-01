@@ -1,4 +1,5 @@
-//! Bounded native WebSocket ingress. Each connection has a single world owner.
+//! Bounded native WebSocket ingress. Each connection multiplexes Host requests and World
+//! sessions; one Host thread owns every World and service.
 
 use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -10,19 +11,49 @@ use tungstenite::protocol::{CloseFrame, WebSocketConfig, frame::coding::CloseCod
 use tungstenite::{Error, Message};
 
 use crate::services::NativeHostServices;
-use ipp_host_session::{Host, HostServices};
-use std::collections::BTreeMap;
+use ipp_host_session::{
+    Host, HostConnectionMessage, HostServices, ReliableResponse, ResponseLease,
+};
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
 
-/// Maximum simultaneous independent sessions served by this small native host.
+/// Maximum simultaneous connections served by this small native host. Each connection may
+/// open any number of World sessions.
+///
+/// Each connection owns a socket thread and its share of the Host's output budget; eight
+/// covers a development client, tools and a few peers. A further connection is answered
+/// with HTTP 503 and closed before the WebSocket handshake.
 pub const MAX_CONNECTIONS: usize = 8;
 
-/// Transport allocation limit, also enforced on complete application messages.
-pub const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
+/// Transport allocation limit: the protocol's complete application message budget.
+pub const MAX_MESSAGE_BYTES: usize = ipp_protocol::MAX_MESSAGE_BYTES;
 
-// A message can contain arbitrarily many empty continuation frames. Limit actual
-// socket reads, not only completed messages, so decoding must yield to the host.
+/// Socket bytes read per connection before yielding to the Host.
+///
+/// A message can contain arbitrarily many empty continuation frames, so actual socket reads
+/// are limited, not only completed messages, and decoding yields to the Host. 64 KiB is a
+/// few TCP segments per pass; the next pass continues where this one stopped.
 const READ_BUDGET_BYTES: usize = 64 * 1024;
+
+/// Decoded messages a socket thread may hold for the Host thread, per connection.
+///
+/// The socket reads only while the Host admits the connection's input and this window has
+/// room, so a throttled Host backs its sender up through TCP instead of failing it. This is
+/// read-ahead, not admission: the Host still admits each message itself. Matching the Host's
+/// request admission window ([`ipp_host_session::MAX_PENDING`]) lets one Host frame refill a
+/// connection's whole window, and each frame's per-connection service allowance drains it.
+const INGRESS_MESSAGES: usize = ipp_host_session::MAX_PENDING;
+
+/// Replies and events handed to a socket thread and not yet written, per connection.
+///
+/// Their bytes stay charged to the Host's reliable-output account until the socket flushes
+/// them, so this count bounds only the hand-off channel. Matching [`INGRESS_MESSAGES`] lets one
+/// flush pass hand over the replies to a full window of requests.
+const OUTPUT_MESSAGES: usize = INGRESS_MESSAGES;
+
+/// Connection lifecycle events waiting for the Host thread: each connection thread sends
+/// exactly one `Open` and one `Closed`, and threads beyond this wait for the Host to drain.
+const CONNECTION_EVENTS: usize = 2 * MAX_CONNECTIONS;
 
 #[derive(Debug)]
 struct BudgetedStream {
@@ -89,9 +120,11 @@ enum HostConnectionEvent {
         id: u64,
         replies: SyncSender<Vec<u8>>,
         failures: SyncSender<String>,
-        ingress: Receiver<Vec<u8>>,
+        ingress: Receiver<HostConnectionMessage>,
         queued: Arc<AtomicUsize>,
         throttled: Arc<AtomicBool>,
+        completed: Arc<AtomicU64>,
+        released: Arc<AtomicBool>,
     },
     Closed {
         id: u64,
@@ -101,8 +134,14 @@ enum HostConnectionEvent {
 struct HostConnectionOutput {
     sender: SyncSender<Vec<u8>>,
     failures: SyncSender<String>,
-    pending: Option<Vec<u8>>,
-    ingress: Receiver<Vec<u8>>,
+    pending: Option<ReliableResponse>,
+    inflight: VecDeque<ResponseLease>,
+    acknowledged: u64,
+    completed: Arc<AtomicU64>,
+    released: Arc<AtomicBool>,
+    failed: bool,
+    _transport_memory: ipp_core::services::reliable_output::ReliableOutputLease,
+    ingress: Receiver<HostConnectionMessage>,
     queued: Arc<AtomicUsize>,
     throttled: Arc<AtomicBool>,
 }
@@ -133,14 +172,33 @@ impl<P: HostServices> NativeConnectionHost<P> {
                 ingress,
                 queued,
                 throttled,
+                completed,
+                released,
             } => match self.host.open_connection(id) {
                 Ok(_) => {
+                    let memory = match self
+                        .host
+                        .reserve_connection_output_bytes(id, 2 * (MAX_MESSAGE_BYTES + 1024) + 16384)
+                    {
+                        Ok(memory) => memory,
+                        Err(error) => {
+                            report_connection_failure(&failures, &error);
+                            self.host.close_connection(id);
+                            return;
+                        }
+                    };
                     self.outputs.insert(
                         id,
                         HostConnectionOutput {
                             sender: replies,
                             failures,
                             pending: None,
+                            inflight: VecDeque::new(),
+                            acknowledged: 0,
+                            completed,
+                            released,
+                            failed: false,
+                            _transport_memory: memory,
                             ingress,
                             queued,
                             throttled,
@@ -148,7 +206,7 @@ impl<P: HostServices> NativeConnectionHost<P> {
                     );
                 }
                 Err(error) => {
-                    let _ = failures.try_send(error);
+                    report_connection_failure(&failures, &error);
                 }
             },
             HostConnectionEvent::Closed {
@@ -166,34 +224,41 @@ impl<P: HostServices> NativeConnectionHost<P> {
         // the same service allowance, independent of a noisy peer's readiness.
         let ids: Vec<_> = self.outputs.keys().copied().collect();
         for id in ids {
+            if self.outputs[&id].failed {
+                continue;
+            }
             let mut failure = None;
-            for _ in 0..64 {
+            for _ in 0..INGRESS_MESSAGES {
                 let admit = self.host.connection_accepts_input(id);
                 let output = self.outputs.get(&id).expect("live connection");
                 output.throttled.store(!admit, Ordering::Release);
                 if !admit {
                     break;
                 }
-                let bytes = match output.ingress.try_recv() {
-                    Ok(bytes) => bytes,
+                let message = match output.ingress.try_recv() {
+                    Ok(message) => message,
                     Err(_) => break,
                 };
                 output.queued.fetch_sub(1, Ordering::AcqRel);
-                if let Err(error) = self.host.receive_connection(id, &bytes) {
+                if let Err(error) = self.host.receive_connection_message(id, message) {
                     failure = Some(error);
                     break;
                 }
             }
             if let Some(error) = failure {
-                if let Some(output) = self.outputs.remove(&id) {
-                    let _ = output.failures.try_send(error);
+                if let Some(output) = self.outputs.get_mut(&id) {
+                    output.failed = true;
+                    output.pending = None;
+                    report_connection_failure(&output.failures, &error);
                 }
                 self.host.close_connection(id);
             }
         }
         for (id, error) in self.host.tick_worlds(dt)? {
-            if let Some(output) = self.outputs.remove(&id) {
-                let _ = output.failures.try_send(error);
+            if let Some(output) = self.outputs.get_mut(&id) {
+                output.failed = true;
+                output.pending = None;
+                report_connection_failure(&output.failures, &error);
             }
             self.host.close_connection(id);
         }
@@ -203,7 +268,18 @@ impl<P: HostServices> NativeConnectionHost<P> {
     fn flush(&mut self) {
         let mut closed = Vec::new();
         for (&id, output) in &mut self.outputs {
-            for _ in 0..64 {
+            let completed = output.completed.load(Ordering::Acquire);
+            while output.acknowledged < completed {
+                output
+                    .inflight
+                    .pop_front()
+                    .expect("socket completion has retained lease");
+                output.acknowledged += 1;
+            }
+            if output.failed {
+                continue;
+            }
+            for _ in 0..OUTPUT_MESSAGES {
                 let Some(bytes) = output
                     .pending
                     .take()
@@ -211,10 +287,13 @@ impl<P: HostServices> NativeConnectionHost<P> {
                 else {
                     break;
                 };
+                let (bytes, lease) = bytes.into_parts();
                 match output.sender.try_send(bytes) {
-                    Ok(()) => {}
+                    Ok(()) => {
+                        output.inflight.push_back(lease);
+                    }
                     Err(TrySendError::Full(bytes)) => {
-                        output.pending = Some(bytes);
+                        output.pending = Some(ReliableResponse::from_parts(bytes, lease));
                         break;
                     }
                     Err(TrySendError::Disconnected(_)) => {
@@ -225,20 +304,63 @@ impl<P: HostServices> NativeConnectionHost<P> {
             }
         }
         for id in closed {
-            self.outputs.remove(&id);
+            if let Some(output) = self.outputs.get_mut(&id) {
+                output.failed = true;
+                output.pending = None;
+            }
             self.host.close_connection(id);
         }
     }
 }
 
+impl<P: HostServices> Drop for NativeConnectionHost<P> {
+    fn drop(&mut self) {
+        for (&id, output) in &self.outputs {
+            report_connection_failure(&output.failures, "Host closed");
+            self.host.close_connection(id);
+        }
+        while self
+            .outputs
+            .values()
+            .any(|output| !output.released.load(Ordering::Acquire))
+        {
+            std::thread::sleep(IO_POLL_INTERVAL);
+        }
+    }
+}
+
+struct SocketOutputLifetime(Arc<AtomicBool>);
+
+impl Drop for SocketOutputLifetime {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Release);
+    }
+}
+
+fn report_connection_failure(sender: &SyncSender<String>, error: &str) {
+    let end = error.floor_char_boundary(2048);
+    let _ = sender.try_send(error[..end].to_owned());
+}
+
+/// Host settings chosen at startup.
+#[derive(Default)]
+pub struct ServeOptions {
+    /// Filesystem data source registered under its literal prefix.
+    pub file_access: Option<(String, crate::services::data_source::FileSystemDataSource)>,
+    /// Soft target in bytes for completed assets kept after their last consumer;
+    /// `None` keeps the Host default and 0 evicts on release.
+    pub asset_cache_bytes: Option<usize>,
+}
+
 /// Serve world-scoped connections with one owner for all worlds and services.
-/// Socket threads perform transport I/O only; the Host owns simulation clocks.
+/// Socket threads perform transport I/O and decode World requests as they arrive,
+/// in parallel with Host frames; the Host owns simulation clocks and all state.
 pub fn serve(
     listener: TcpListener,
-    file_access: Option<(String, crate::services::data_source::FileSystemDataSource)>,
+    options: ServeOptions,
     ready: impl FnOnce(std::net::SocketAddr) -> io::Result<()>,
 ) -> io::Result<()> {
-    serve_with::<NativeHostServices>(listener, file_access, ready)
+    serve_with::<NativeHostServices>(listener, options, ready)
 }
 
 /// [`serve`] with platform services composed by an embedder, such as a test host
@@ -246,7 +368,7 @@ pub fn serve(
 /// calling thread, which then runs every Host frame and presentation.
 pub fn serve_with<P: HostServices>(
     listener: TcpListener,
-    file_access: Option<(String, crate::services::data_source::FileSystemDataSource)>,
+    options: ServeOptions,
     ready: impl FnOnce(std::net::SocketAddr) -> io::Result<()>,
 ) -> io::Result<()> {
     #[cfg(feature = "diagnostics")]
@@ -264,14 +386,21 @@ pub fn serve_with<P: HostServices>(
         .map_err(io::Error::other)?
         .as_nanos();
     let sessions = AtomicU64::new(u64::try_from(seed).map_err(io::Error::other)?);
-    let (events, incoming) = mpsc::sync_channel(MAX_CONNECTIONS * 64);
+    let (events, incoming) = mpsc::sync_channel(CONNECTION_EVENTS);
     let mut host = NativeConnectionHost::<P>::new().map_err(io::Error::other)?;
-    if let Some((prefix, source)) = file_access {
+    if let Some((prefix, source)) = options.file_access {
         host.host
             .runtime_mut()
             .data_sources_mut()
             .register(&prefix, source)
             .map_err(io::Error::other)?;
+    }
+
+    if let Some(bytes) = options.asset_cache_bytes {
+        host.host
+            .runtime_mut()
+            .asset_resources_mut()
+            .set_idle_resident_bytes_target(bytes);
     }
     #[cfg(feature = "diagnostics")]
     crate::diagnostics::install(log_level, 0);
@@ -338,7 +467,7 @@ pub fn serve_with<P: HostServices>(
             }
         }
 
-        for _ in 0..MAX_CONNECTIONS * 64 {
+        for _ in 0..CONNECTION_EVENTS {
             let event = match incoming.try_recv() {
                 Ok(event) => event,
                 Err(TryRecvError::Empty) => break,
@@ -373,6 +502,8 @@ fn connection(
     session_id: u64,
     events: &SyncSender<HostConnectionEvent>,
 ) -> Result<(), String> {
+    let released = Arc::new(AtomicBool::new(false));
+    let _output_lifetime = SocketOutputLifetime(released.clone());
     let config = WebSocketConfig::default()
         .read_buffer_size(16 * 1024)
         .write_buffer_size(0)
@@ -399,12 +530,13 @@ fn connection(
         .set_write_timeout(None)
         .map_err(|error| error.to_string())?;
 
-    let (replies, responses): (_, Receiver<Vec<u8>>) = mpsc::sync_channel(64);
+    let (replies, responses): (_, Receiver<Vec<u8>>) = mpsc::sync_channel(OUTPUT_MESSAGES);
     let (failures, failure) = mpsc::sync_channel(1);
-    let (input, ingress) = mpsc::sync_channel(64);
+    let (input, ingress) = mpsc::sync_channel(INGRESS_MESSAGES);
     let queued = Arc::new(AtomicUsize::new(0));
     let throttled = Arc::new(AtomicBool::new(false));
-    let mut local_throttled = false;
+    let completed = Arc::new(AtomicU64::new(0));
+    let mut submitted = 0u64;
     events
         .send(HostConnectionEvent::Open {
             id: session_id,
@@ -413,6 +545,8 @@ fn connection(
             ingress,
             queued: queued.clone(),
             throttled: throttled.clone(),
+            completed: completed.clone(),
+            released,
         })
         .map_err(|_| "Host is closed")?;
     let mut ready = false;
@@ -443,21 +577,22 @@ fn connection(
         // Reset only when the host regains control, not between socket.read calls.
         // The decoder may also consume its bounded buffer from the previous turn.
         socket.get_mut().begin_iteration();
-        // Bound ingress work so a continuously readable peer cannot starve frames.
-        for _ in 0..64 {
-            let pending = queued.load(Ordering::Acquire);
-            if local_throttled {
-                local_throttled = pending >= 32;
-            } else {
-                local_throttled = pending >= 48;
-            }
-            if local_throttled || throttled.load(Ordering::Acquire) || blocked_since.is_some() {
+        // Bound ingress work so a continuously readable peer cannot starve frames. While the
+        // Host throttles this connection or the read-ahead window is full, unread messages
+        // wait in the socket: the sender sees TCP backpressure, never a failure.
+        for _ in 0..INGRESS_MESSAGES {
+            if queued.load(Ordering::Acquire) >= INGRESS_MESSAGES
+                || throttled.load(Ordering::Acquire)
+                || blocked_since.is_some()
+            {
                 break;
             }
             match socket.read() {
                 Ok(Message::Binary(bytes)) => {
                     queued.fetch_add(1, Ordering::AcqRel);
-                    if input.try_send(bytes.to_vec()).is_err() {
+                    // Decoding needs no Host state; the encoding is released here.
+                    let message = HostConnectionMessage::decode(bytes.to_vec());
+                    if input.try_send(message).is_err() {
                         queued.fetch_sub(1, Ordering::AcqRel);
                         return Err("connection ingress closed".into());
                     }
@@ -497,6 +632,7 @@ fn connection(
             Err(error) => return Err(error.to_string()),
         };
         if flushed {
+            completed.store(submitted, Ordering::Release);
             blocked_since = None;
             loop {
                 let reply = match responses.try_recv() {
@@ -505,8 +641,13 @@ fn connection(
                     Err(TryRecvError::Disconnected) => return Err("Host closed the session".into()),
                 };
                 ready = true;
+                submitted = submitted
+                    .checked_add(1)
+                    .ok_or("socket delivery identity exhausted")?;
                 match socket.send(Message::Binary(reply.into())) {
-                    Ok(()) => {}
+                    Ok(()) => {
+                        completed.store(submitted, Ordering::Release);
+                    }
                     // This frame is already retained by Tungstenite: do not resend.
                     Err(Error::Io(error)) if error.kind() == io::ErrorKind::WouldBlock => {
                         blocked_since = Some(Instant::now());

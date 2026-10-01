@@ -254,7 +254,13 @@ export class AnimationSession {
   async close() {
     if (this.closed) return;
     this.closed = true;
-    await this.root.unmount();
+    // Unmount deletes nothing; removing the declarations first removes the
+    // controllers and clips this root created.
+    try {
+      await this.root.render(null);
+    } finally {
+      await this.root.unmount();
+    }
   }
 
   private selected(selection: string) {

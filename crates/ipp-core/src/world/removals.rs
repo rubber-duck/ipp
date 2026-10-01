@@ -108,7 +108,7 @@ impl WorldContext<'_> {
     pub(super) fn drain_deferred_removals(&mut self) {
         let mut requests = std::mem::take(&mut self.world.deferred_removals);
         self.world.deferred_removal_members.clear();
-        let mut aliases = BTreeMap::new();
+        let mut aliases = EntityAliases::default();
         let mut created = Vec::new();
         for request in requests.drain(..) {
             let command = match request {
@@ -138,9 +138,13 @@ impl WorldContext<'_> {
                 }
                 _ => continue,
             };
-            let result =
-                self.runtime_access()
-                    .apply_operation(None, &command, &mut aliases, &mut created);
+            let result = self.runtime_access().apply_operation(
+                None,
+                &command,
+                &mut aliases,
+                &mut created,
+                &mut Vec::new(),
+            );
             let result = result.and(self.commit_pending_changes());
             if let Err(_error) = result {
                 crate::diagnostic!(

@@ -38,10 +38,8 @@ export function GuiControls({ scene }: GuiControlsProps) {
         {scene.shieldArmed ? "Lift input shield" : "Arm input shield"}
       </button>
       <p>
-        The hatched amber shield in front of PURGE is scene geometry marked as a
-        GUI input blocker: clicks and wheel notches on it never reach the panel.
-        Lifting it leaves the shield in place but stops marking it, so PURGE
-        takes clicks through it.
+        The hatched amber shield in front of PURGE is scene geometry with
+        picking geometry. Lifting it greys its frame and leaves it in place.
       </p>
       <label className="mesh-select" htmlFor="gui-surface-cache">
         <span>Panel presentation</span>
@@ -88,10 +86,7 @@ export function GuiControls({ scene }: GuiControlsProps) {
         </div>
         <div>
           <dt>Input shield</dt>
-          <dd id="gui-shield">
-            {scene.shieldArmed ? "armed" : "lifted"}, {scene.shieldBlocks}{" "}
-            blocked
-          </dd>
+          <dd id="gui-shield">{scene.shieldArmed ? "armed" : "lifted"}</dd>
         </div>
         <div>
           <dt>Event log</dt>

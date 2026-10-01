@@ -3,7 +3,10 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
 import { runNativeEnvironment } from "./environment.js";
-import { lifecycleHostCases } from "./lifecycle-subscriptions-cases.js";
+import {
+  lifecycleHostCases,
+  LIFECYCLE_SUBSCRIPTION_SYSTEMS,
+} from "./lifecycle-subscriptions-cases.js";
 
 for (const scenario of lifecycleHostCases) {
   test(`native ${scenario.name}`, { timeout: 30_000 }, async (context) => {
@@ -22,6 +25,14 @@ for (const scenario of lifecycleHostCases) {
         schemaArtifact: resolve(profile, "contract.bin"),
         workingDirectory: workspace,
         operationTimeoutMs: 20_000,
+        ...(scenario.assetCacheBytes === undefined
+          ? {}
+          : {
+              extraArguments: [
+                "--asset-cache-bytes",
+                String(scenario.assetCacheBytes),
+              ],
+            }),
       },
       context.signal,
       async (environment) => {
@@ -31,6 +42,7 @@ for (const scenario of lifecycleHostCases) {
           () =>
             environment.track<SpatialWorldClient>(
               contract.IppClient.connectWebSocket(environment.url, {
+                selectedSystems: LIFECYCLE_SUBSCRIPTION_SYSTEMS,
                 signal: environment.signal,
               }),
             ),

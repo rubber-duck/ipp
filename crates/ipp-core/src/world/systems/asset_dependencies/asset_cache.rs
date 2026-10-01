@@ -27,7 +27,7 @@ pub(in crate::world) fn source_key_from_fields(
                         && tail == path
                 })
         } else {
-            identity.uri == source
+            &*identity.uri == source
         };
         if identity.kind == kind && identity.variant == variant && same_source {
             return Some(key);

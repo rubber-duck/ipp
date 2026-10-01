@@ -5,13 +5,11 @@ import type { BrowserGuiInputCommand, GuiInputSink } from "./input.js";
  * Platform adapter slice for the optional `@ipp/react/gui` entry point:
  * DOM `compositionstart` / `compositionupdate` / `compositionend` and
  * `beforeinput` payloads translate into the ordered composition commands
- * owned by core (`UpdateComposition` / `CommitComposition` /
- * `CancelComposition`) through the existing ordered ingress sink
- * (`GuiInputSink` into the correlated `RequestBody::GuiInput` path, or
- * `WorldContext::enqueue_gui_input_command` for host-owned loops).
+ * owned by the ordinary GUI local receiver through the existing physical
+ * input context and its correlated delivery-reserved commands.
  *
- * Ownership: core `GuiInputSystem` owns the provisional composition buffer,
- * revision and focus fencing, and conflict decisions. This module retains
+ * Ownership: core `GuiSystem` owns the provisional composition buffer,
+ * target and generation fencing, and conflict decisions. This module retains
  * only the open flag and last provisional payload needed to make a terminal
  * `compositionend.data` authoritative when a platform omits its matching
  * final update. It never mutates scene state or re-decides routing. Headless
@@ -25,7 +23,7 @@ import type { BrowserGuiInputCommand, GuiInputSink } from "./input.js";
  * Every provisional therefore applies exactly once: updates flow through
  * `compositionupdate` only, and both `beforeinput` composition payloads
  * are skipped (see {@link shouldSkipBeforeInput}). `beforeinput` remains
- * the text source of truth, as in the `.11` relay; keys pressed while a
+ * the text source of truth; keys pressed while a
  * composition is open (`isComposing`, or the legacy `keyCode` 229) belong to
  * the IME and are never forwarded as GUI keys, so Enter confirming a
  * candidate never submits (see {@link isComposingKeyEvent}).
@@ -67,7 +65,7 @@ export function mapCompositionUpdate(
  *
  * A nonempty end commits the provisional built by earlier updates; an
  * empty or missing end (cancelled composition) cancels it. Either way the
- * session closes and the core focus/revision fence decides admission.
+ * session closes and the core target/generation fence decides admission.
  */
 export function mapCompositionEnd(
   data: string | null | undefined,
@@ -118,6 +116,8 @@ export interface ImeBridge {
   compositionEnd(data: string | null | undefined): void;
   /** Cancel an open session on platform blur; idle blur sends nothing. */
   blur(): void;
+  /** Discard an invalidated native session without editing a new focus owner. */
+  reset(): void;
 }
 
 /** Create an IME session tracker over an ordered GUI ingress sink.
@@ -150,6 +150,7 @@ export function createImeBridge(
       lastProvisional = null;
     },
     compositionUpdate: (data) => {
+      if (!composing) return;
       const command = mapCompositionUpdate(data);
       if (command === null) return;
       composing = true;
@@ -157,6 +158,7 @@ export function createImeBridge(
       send(command);
     },
     compositionEnd: (data) => {
+      if (!composing) return;
       composing = false;
       if (
         typeof data === "string" &&
@@ -174,6 +176,10 @@ export function createImeBridge(
       composing = false;
       lastProvisional = null;
       send({ kind: "cancelComposition" });
+    },
+    reset: () => {
+      composing = false;
+      lastProvisional = null;
     },
   };
 }

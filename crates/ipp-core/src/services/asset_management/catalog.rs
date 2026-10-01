@@ -30,6 +30,10 @@ impl AssetManagementService {
             graphics_loaders: BTreeSet::new(),
             used: BTreeSet::new(),
             owned: BTreeSet::new(),
+            publication_identity: super::publication::next_service_identity(),
+            next_publication: 0,
+            publications: BTreeMap::new(),
+            publication_users: BTreeMap::new(),
             idle: BTreeMap::new(),
             idle_resident_bytes: 0,
             idle_epoch: 0,
@@ -39,6 +43,7 @@ impl AssetManagementService {
             lifecycle_barrier: false,
             lifecycle_recipients: BTreeMap::new(),
             pending_releases: BTreeMap::new(),
+            next_release_revision: 0,
             lifecycle_events: VecDeque::new(),
             renderer_driven: false,
         }
@@ -102,7 +107,7 @@ impl AssetManagementService {
         self.upload_named(
             AssetSource {
                 kind: identity.kind,
-                uri: format!("asset://{}/{}", identity.kind.0, identity.asset),
+                uri: format!("asset://{}/{}", identity.kind.0, identity.asset).into(),
                 variant: identity.variant,
             },
             bytes,
@@ -115,6 +120,13 @@ impl AssetManagementService {
         bytes: Vec<u8>,
     ) -> Result<AssetKey, String> {
         let existing = self.find(&source);
+        if existing.is_some_and(|key| {
+            self.pending_releases
+                .get(&key)
+                .is_some_and(|release| release.kind == super::AssetReleaseKind::Revoke)
+        }) {
+            return Err("Resource revocation is pending".into());
+        }
         let key = self.get_or_create(source)?;
         if self
             .get(key)
@@ -147,8 +159,35 @@ impl AssetManagementService {
         self.free_unused();
     }
 
+    /// Explicitly revoke this exact resource, regardless of ordinary consumers.
+    /// The Host must drain pending lifecycle releases before unregistering its source.
+    pub fn revoke_resource(&mut self, key: AssetKey) {
+        if !self.defer_release(key, super::AssetReleaseKind::Revoke) {
+            self.remove_slot_released(key);
+        }
+    }
+
+    /// Revoke external resources routed through a DataSource registration before
+    /// that registration is removed. Producer-owned inputs use a different source.
+    pub fn revoke_source_prefix(&mut self, prefix: &str) {
+        let keys: Vec<_> = self
+            .iter()
+            .filter(|provider| {
+                provider.owned_input.is_none() && provider.source().uri.starts_with(prefix)
+            })
+            .map(AssetProvider::key)
+            .collect();
+        for key in keys {
+            self.revoke_resource(key);
+        }
+    }
+
     pub(super) fn retain_owned(&mut self, key: AssetKey) {
-        if self.pending_releases.get(&key) == Some(&super::AssetReleaseKind::Remove) {
+        if self
+            .pending_releases
+            .get(&key)
+            .is_some_and(|release| release.cancelable_orphan())
+        {
             self.pending_releases.remove(&key);
         }
         self.remove_idle(key);
@@ -157,7 +196,7 @@ impl AssetManagementService {
 
     /// Share immutable typed content, allocating a fresh generation when a slot is reused.
     pub fn get_or_create(&mut self, source: AssetSource) -> Result<AssetKey, String> {
-        validate_owned_source(&source)?;
+        source.validate().map_err(|error| error.to_string())?;
         if let Some(key) = self.find(&source) {
             return Ok(key);
         }
@@ -247,19 +286,23 @@ impl AssetManagementService {
     /// Validate proposed aggregate demand before its owner commits.
     pub fn validate_sources(&self, sources: &BTreeSet<AssetSource>) -> Result<(), String> {
         for source in sources {
-            validate_owned_source(source)?;
-            if !self.loaders.contains_key(&source.kind) {
-                return Err("Asset type is unavailable".into());
-            }
+            self.validate_reference(source)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn validate_reference(&self, source: &AssetSource) -> Result<(), String> {
+        source.validate().map_err(|error| error.to_string())?;
+        if !self.loaders.contains_key(&source.kind) {
+            return Err("Asset type is unavailable".into());
         }
         Ok(())
     }
 
     /// Explicit retained consumer set. Copying a key never changes ownership.
     pub fn set_used(&mut self, used: BTreeSet<AssetKey>) {
-        self.pending_releases.retain(|key, release| {
-            *release != super::AssetReleaseKind::Remove || !used.contains(key)
-        });
+        self.pending_releases
+            .retain(|key, release| !release.cancelable_orphan() || !used.contains(key));
         for key in &used {
             self.remove_idle(*key);
         }
@@ -288,6 +331,9 @@ impl AssetManagementService {
         };
         // Invalidate before freeing loaded allocations or making the slot reusable.
         slot.generation = slot.generation.wrapping_add(1);
+        self.forget_publication_key(key);
+        self.used.remove(&key);
+        self.owned.remove(&key);
         let mut events = Vec::new();
         provider.unload(&mut events);
         self.sources.remove(provider.source());
@@ -295,9 +341,7 @@ impl AssetManagementService {
             self.memory.remove(identifier);
         }
         self.free.push(key.slot);
-        for event in events {
-            self.load_progress(event);
-        }
+        self.events.extend(events);
     }
 
     /// Request destruction of resources absent from every committed retention set.
@@ -305,7 +349,7 @@ impl AssetManagementService {
         let stale: Vec<_> = self
             .iter()
             .map(AssetProvider::key)
-            .filter(|key| !self.used.contains(key) && !self.owned.contains(key))
+            .filter(|key| !self.is_required(*key))
             .collect();
         for key in stale {
             self.retain_idle_or_remove(key);
@@ -349,7 +393,7 @@ impl AssetManagementService {
         let mut candidates: Vec<_> = self
             .idle
             .iter()
-            .filter(|(key, _)| !self.used.contains(key) && !self.owned.contains(key))
+            .filter(|(key, _)| !self.is_required(**key))
             .map(|(&key, entry)| {
                 let age = now.saturating_sub(entry.last_used).max(1);
                 let score = (entry.resident_bytes as u128).saturating_mul(age as u128);
@@ -434,7 +478,7 @@ impl AssetManagementService {
     /// Host-owned services finish release after synchronous World invalidation.
     pub fn unload(&mut self, key: AssetKey) {
         if self.idle.contains_key(&key) {
-            self.remove_slot(key);
+            self.revoke_resource(key);
             return;
         }
         if self.defer_release(key, super::AssetReleaseKind::Unload) {
@@ -509,7 +553,7 @@ impl AssetManagementService {
             self.events.pop_back();
         }
         self.events.push_back(report);
-        if completed && !self.used.contains(&key) && !self.owned.contains(&key) {
+        if completed && !self.is_required(key) {
             self.retain_idle_or_remove(key);
             self.prune_idle();
         }
@@ -524,39 +568,4 @@ impl AssetManagementService {
         self.take_events()
             .expect("validated reconciliation event reservation")
     }
-}
-
-fn validate_owned_source(source: &AssetSource) -> Result<(), String> {
-    if let Some(path) = source.uri.strip_prefix("producer://") {
-        let parts: Vec<_> = path.split('/').collect();
-        if parts.len() != 3 {
-            return Err("InvalidAsset".into());
-        }
-        let world: u64 = parts[0].parse().map_err(|_| "InvalidAsset")?;
-        let kind: u16 = parts[1].parse().map_err(|_| "InvalidAsset")?;
-        let asset: u64 = parts[2].parse().map_err(|_| "InvalidAsset")?;
-        if world == 0
-            || kind != source.kind.0
-            || asset == 0
-            || asset >= 1 << 63
-            || source.uri != format!("producer://{world}/{kind}/{asset}")
-        {
-            return Err("InvalidAsset".into());
-        }
-        return Ok(());
-    }
-    let Some(path) = source.uri.strip_prefix("asset://") else {
-        return Ok(());
-    };
-    let (kind, asset) = path.split_once('/').ok_or("Invalid owned asset URI")?;
-    let kind: u16 = kind.parse().map_err(|_| "Invalid owned asset URI")?;
-    let asset: u64 = asset.parse().map_err(|_| "Invalid owned asset URI")?;
-    if kind != source.kind.0
-        || asset == 0
-        || asset >= 1 << 63
-        || source.uri != format!("asset://{kind}/{asset}")
-    {
-        return Err("Invalid owned asset URI".into());
-    }
-    Ok(())
 }

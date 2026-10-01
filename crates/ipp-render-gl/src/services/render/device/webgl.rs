@@ -1,5 +1,5 @@
 use super::RenderDevice;
-#[cfg(feature = "gui")]
+#[cfg(feature = "surfaces")]
 use super::retained_vertices::GUI_VERTEX_LAYOUT;
 use crate::RenderError;
 
@@ -215,18 +215,28 @@ unsafe extern "C" {
     fn begin_surface_cache_target(target: u32) -> u32;
 
     #[cfg(feature = "surfaces")]
+    fn begin_camera_target(target: u32, clear: *const f32) -> u32;
+
+    #[cfg(feature = "surfaces")]
     fn end_surface_cache_target() -> u32;
 
     #[cfg(feature = "surfaces")]
-    fn draw_surface_cache(program: u32, target: u32, mvp: *const f32, size: *const f32) -> u32;
+    fn draw_surface_cache(
+        program: u32,
+        target: u32,
+        mvp: *const f32,
+        size: *const f32,
+        clip: *const f32,
+        opacity: f32,
+    ) -> u32;
 
     #[cfg(feature = "surfaces")]
     fn delete_surface_cache_target(target: u32);
 
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     fn create_gui_batch(byte_length: u32, layout_ptr: *const u32) -> u32;
 
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     fn write_gui_batch(
         batch_handle: u32,
         byte_offset: u32,
@@ -234,10 +244,10 @@ unsafe extern "C" {
         byte_length: u32,
     ) -> u32;
 
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     fn delete_gui_batch(batch_handle: u32);
 
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     fn draw_gui_batch(
         program: u32,
         batch_handle: u32,
@@ -247,19 +257,19 @@ unsafe extern "C" {
         count: u32,
     ) -> u32;
 
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     fn create_glyph_atlas_page(width: u32, height: u32) -> u32;
 
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     fn delete_glyph_atlas_page(page_handle: u32);
 
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     fn begin_glyph_atlas_page(page_handle: u32) -> u32;
 
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     fn end_glyph_atlas_page() -> u32;
 
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     fn glyph_atlas_texture(page_handle: u32) -> u32;
 
     fn set_draw_checks(enabled: u32);
@@ -361,14 +371,14 @@ impl WebGlRenderDevice {
 }
 
 /// Context-local atlas target and its distinct sampleable texture handle.
-#[cfg(feature = "gui")]
+#[cfg(feature = "surfaces")]
 pub struct WebGlGlyphAtlasPage {
     target: u32,
     texture: u32,
 }
 
 /// Bytes of `vertices` retained GUI vertices, within the bridge's 32-bit offsets.
-#[cfg(feature = "gui")]
+#[cfg(feature = "surfaces")]
 fn gui_bytes(vertices: usize) -> Result<u32, RenderError> {
     vertices
         .checked_mul(std::mem::size_of::<super::GuiVertex>())
@@ -415,10 +425,10 @@ impl RenderDevice for WebGlRenderDevice {
     #[cfg(feature = "shadows")]
     type ShadowMap = u32;
 
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     type GuiBatch = u32;
 
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     type GlyphAtlasPage = WebGlGlyphAtlasPage;
 
     fn set_lighting(
@@ -775,17 +785,40 @@ impl RenderDevice for WebGlRenderDevice {
     }
 
     #[cfg(feature = "surfaces")]
+    fn begin_camera_target(
+        &mut self,
+        target: &mut Self::SurfaceCacheTarget,
+        clear: &[f32; 4],
+    ) -> Result<(), RenderError> {
+        self.uniform_epoch = self.uniform_epoch.wrapping_add(1);
+        // SAFETY: The bridge validates the owned handle and copies four live
+        // floats synchronously; it retains no pointer across memory growth.
+        self.check(unsafe { begin_camera_target(*target, clear.as_ptr()) })
+    }
+
+    #[cfg(feature = "surfaces")]
     fn draw_surface_cache(
         &mut self,
         program: &Self::Program,
         target: &Self::SurfaceCacheTarget,
         mvp: &[f32; 16],
         size: &[f32; 2],
+        clip: &[f32; 4],
+        opacity: f32,
     ) -> Result<(), RenderError> {
         // SAFETY: Handles are bridge-validated and the borrowed fixed arrays are
         // copied synchronously into uniforms; the bridge keeps no view and cannot
         // reenter Rust, so neither borrow is aliased or invalidated.
-        self.check(unsafe { draw_surface_cache(program.id, *target, mvp.as_ptr(), size.as_ptr()) })
+        self.check(unsafe {
+            draw_surface_cache(
+                program.id,
+                *target,
+                mvp.as_ptr(),
+                size.as_ptr(),
+                clip.as_ptr(),
+                opacity,
+            )
+        })
     }
 
     #[cfg(feature = "surfaces")]
@@ -795,7 +828,7 @@ impl RenderDevice for WebGlRenderDevice {
         unsafe { delete_surface_cache_target(target) };
     }
 
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     fn create_gui_batch(&mut self, capacity: usize) -> Result<Self::GuiBatch, RenderError> {
         let bytes = gui_bytes(capacity)?;
         let layout: *const u32 = std::ptr::from_ref(&GUI_VERTEX_LAYOUT).cast();
@@ -810,7 +843,7 @@ impl RenderDevice for WebGlRenderDevice {
         }
     }
 
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     fn write_gui_batch(
         &mut self,
         batch: &mut Self::GuiBatch,
@@ -828,14 +861,14 @@ impl RenderDevice for WebGlRenderDevice {
         Ok(())
     }
 
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     fn delete_gui_batch(&mut self, batch: Self::GuiBatch) {
         // SAFETY: Only a scalar handle crosses the boundary; no Rust memory is borrowed.
         // The bridge ignores unknown handles and cannot reenter Rust.
         unsafe { delete_gui_batch(batch) };
     }
 
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     fn draw_gui_batch(
         &mut self,
         program: &Self::Program,
@@ -865,7 +898,7 @@ impl RenderDevice for WebGlRenderDevice {
         })
     }
 
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     fn create_glyph_atlas_page(
         &mut self,
         width: u32,
@@ -886,7 +919,7 @@ impl RenderDevice for WebGlRenderDevice {
         }
     }
 
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     fn delete_glyph_atlas_page(&mut self, page: Self::GlyphAtlasPage) {
         // SAFETY: Only the scalar target handle crosses the boundary; the bridge also
         // releases the page's texture handle, ignores unknown handles and cannot
@@ -894,21 +927,21 @@ impl RenderDevice for WebGlRenderDevice {
         unsafe { delete_glyph_atlas_page(page.target) };
     }
 
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     fn begin_glyph_atlas_page(&mut self, page: &Self::GlyphAtlasPage) -> Result<(), RenderError> {
         // SAFETY: Only the scalar target handle crosses the boundary; the bridge rejects
         // stale handles and cannot reenter Rust. No Rust memory is borrowed.
         self.check(unsafe { begin_glyph_atlas_page(page.target) })
     }
 
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     fn end_glyph_atlas_page(&mut self) -> Result<(), RenderError> {
         // SAFETY: The import takes no arguments and borrows no Rust memory; it restores
         // bridge-owned bindings, checks GL errors and cannot reenter Rust.
         self.check(unsafe { end_glyph_atlas_page() })
     }
 
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     fn glyph_atlas_texture(page: &Self::GlyphAtlasPage) -> &Self::Texture {
         &page.texture
     }

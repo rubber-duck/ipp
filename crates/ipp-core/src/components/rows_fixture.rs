@@ -5,6 +5,7 @@
 use super::rows::{Rows, SchemaRow};
 use crate::services::asset_management::AssetSource;
 use ipp_schema_derive::SchemaComponent;
+use std::sync::Arc;
 
 /// Ten properties, so the presence mask spans two bytes; `label` is bounded text.
 #[derive(Clone, Debug, Default, PartialEq, SchemaRow)]
@@ -20,7 +21,7 @@ pub struct RowsFixtureItem {
     pub size: Option<[f32; 2]>,
     pub mark: Option<f32>,
     #[schema(text = 16)]
-    pub label: Option<String>,
+    pub label: Option<Arc<str>>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, SchemaRow)]
@@ -61,13 +62,64 @@ impl Clone for RowsFixture {
     }
 }
 
+impl RowsFixture {
+    /// Property index of `mark` in [`RowsFixtureItem`] layout order.
+    pub const MARK: u32 = 8;
+
+    /// Item row property addressed by `offset`, if any.
+    fn item_property(offset: u32) -> Option<u32> {
+        let relative = super::rows::row_region_relative(offset, 0)?;
+        super::rows::row_address(relative, RowsFixtureItem::LAYOUT.property_count())
+            .map(|address| address.property)
+    }
+}
+
+/// Item row properties take numeric animation through the compiled row
+/// destination, and `mark` accepts only values in `0..=1` there; the `tags`
+/// table is owned by its writer and is never an animation target.
 impl crate::components::schema::ComponentLifecycle for RowsFixture {
+    fn animatable_field(offset: u32) -> bool {
+        super::rows::row_region(offset).is_none_or(|(field, _)| field == 0)
+    }
+
+    fn supports_numeric_property(offset: u32) -> bool {
+        Self::item_property(offset).is_some()
+    }
+
+    fn validate_numeric_properties(
+        &self,
+        fields: &[(u32, crate::components::schema::FieldValue)],
+    ) -> Result<(), crate::ErrorReason> {
+        use crate::DynamicValue;
+        use crate::components::schema::FieldValue;
+
+        for (offset, value) in fields {
+            let property = Self::item_property(*offset).ok_or(crate::ErrorReason::InvalidField)?;
+            if property == Self::MARK
+                && let FieldValue::Dynamic(DynamicValue::F32(mark)) = value
+                && !(0.0..=1.0).contains(mark)
+            {
+                return Err(crate::ErrorReason::InvalidValue);
+            }
+        }
+        Ok(())
+    }
+
     fn resource_demand(
         &self,
         demand: &mut std::collections::BTreeSet<
             crate::services::asset_management::service::AssetDemandSelection,
         >,
     ) {
-        self.items.resource_demand(demand);
+        self.items.visit_assets(&mut |asset| {
+            if !asset.uri.is_empty() {
+                crate::services::asset_management::service::AssetDemandSelection::insert_into(
+                    demand,
+                    asset.kind,
+                    &asset.uri,
+                    asset.variant,
+                );
+            }
+        });
     }
 }

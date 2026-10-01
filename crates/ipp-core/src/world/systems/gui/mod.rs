@@ -1,128 +1,34 @@
-//! Authoritative GUI tree, stable node handles and committed control values on Surfaces.
+//! Ordinary-entity GUI: control components, layout, presentation and motion.
 //!
-//! `GuiRoot.node_tree` stores structure as rows at slot = node id: parent,
-//! sparse sibling order key, kind, bounded authored strings, committed text
-//! and control revision. Child order is derived from `(order, id)` into the
-//! [`GuiSystem`]'s per-root [`GuiTreeIndex`]. While a root incarnation is live
-//! the tree changes only through [`GuiCommand`], each a bounded number of row
-//! writes validated where they land; a new incarnation (insertion or restore)
-//! may supply it whole. Node style, node data, root-owned theme parts and
-//! per-node part state are compiled rows addressed by field offset too; node
-//! rows and part rows are removed with their node. Dynamic properties hold
-//! only application extension values.
-//! Operation guards reject raw Surface items on GUI-owned Surfaces, GUI roots on
-//! populated Surfaces and overlays that would supply either structure.
+//! GUI structure is the core entity tree. Controls are ordinary entities with
+//! control components ([`local`]) whose values are ordinary fields;
+//! [`layout`] places `GuiLayout` entities over core links and writes scroll
+//! geometry; [`presentation`] resolves themes, skins and fonts into control
+//! paint joined to Canvas output; [`motion`] drives skin transitions that
+//! `AnimationSystem` samples; [`observations`] publishes momentary control
+//! effects. [`GuiSystem`] owns focus, pointer interaction and native text
+//! state, writes control values for actions and input, keeps eligibility
+//! fields current and is the sole provider of GUI World operations. Physical
+//! input routing lives in the composed router of the GUI input service.
 //!
-//! ## Controls and actions
-//!
-//! Button, Checkbox (toggle), Slider and TextInput nodes keep ordinary
-//! authored state plus effective values. Authored content carries the initial
-//! value only; the committed revision always wins and authored edits never
-//! replay over it. Retained [`GuiEvaluatedView`] output measures and reports
-//! the effective value with its revision. Text edits reflow because they can
-//! change measurement; checkbox/slider commits and enabled changes refresh
-//! retained payload/paint state without reflow.
-//!
-//! Actions originate only from [`GuiInputSystem`] routing followed by
-//! liveness revalidation at the next mutation boundary. Committed outcomes
-//! report as revision-keyed [`GuiInputEffect`] records (`ButtonPressed`,
-//! `ControlCommitted`, and `Submitted` for Enter on a focused text input
-//! outside composition) with source and effect ticks; removals, hiding and
-//! session replacement cancel as [`GuiInputCancellation`], arbitration and
-//! admission losses conflict as [`GuiInputConflict`]. The authored
-//! `SetControlValue` path stays the explicit revision-aware external reset,
-//! never an input action; an accepted replacement publishes the same
-//! `ControlCommitted` effect, marked with its [`GuiCommitSource`], and
-//! replacing the focused text moves its focus generation and republishes
-//! the native text bridge state. A stale replacement is refused and
-//! publishes nothing.
-//!
-//! Boundaries: hidden, unavailable or disabled targets are ineligible for
-//! routing and application; retained interactions are synchronously cancelled
-//! when those states or their full identities change. The authored `enabled`
-//! style property defaults true and gates hit testing, activation and skin state.
-//! Sessions fence every handle, focus, capture
-//! and queued envelope; replacement cancels in-flight work. Clipboard,
-//! IME composition and soft keyboards belong to platform adapters: this
-//! system exposes no clipboard verbs and accepts text only through routed
-//! `Text` edits. Touch arbitration reuses routing state (one press per
-//! control, capture retention, no tap on an off-target release); scroll
-//! offsets stay input-owned and never reflow layout. A VirtualList's offset
-//! follows its persisted anchor (first visible item and offset into it),
-//! which scrolling and `ScrollToIndex` move; its children's order keys are
-//! their item indices, and the input system publishes its wanted item range
-//! as `VirtualRangeChanged`. Frames with no ingress still validate
-//! retained focus/capture/hover/caret targets proportionally to active cursors;
-//! when no cursor changes, publication and retained views stay untouched.
-//!
-//! Caps: `MAX_NODES` nodes per tree, [`MAX_LAYOUT_DEPTH`] evaluation depth
-//! (also the deepest placement a command may write), 1024 pending input
-//! envelopes, [`MAX_GUI_TEXT_BYTES`] text bytes, and bounded 32-deep /
-//! 256-node inspection.
-//! No extra passes or systems exist for controls. `AnimationSystem` stays the
-//! sole sampler: numeric style, theme part and part-state properties are
-//! row-addressed fields that animation writes directly through prepared row
-//! destinations and that sparse state overlays address by the same offsets.
-//! Committed control values and the slider range stay command-owned. Hit
-//! testing uses retained views, never widget entities.
-//!
-//! Downstream interface (skinning, semantic readers): effective control
-//! payloads on [`GuiEvaluatedContent`],
-//! revision-keyed input effects, bounded `inspect_gui` snapshots with
-//! committed values and revisions, and the focus/scroll cursors on
-//! `WorldContext`.
-//!
-//! [`semantics`] builds machine-client snapshots and translates actions over
-//! these read interfaces. `RenderSystem` keeps
-//! GUI presentation bookkeeping in `render::gui_presentation` at its
-//! existing schedule points. Components are re-exported through
-//! [`crate::components`]; the [GUI architecture](../../../../../../docs/architecture/gui.md)
-//! owns the design.
+//! Components are re-exported through [`crate::components`]; the
+//! [GUI architecture](../../../../../../docs/architecture/gui.md) owns the
+//! design.
 
-pub mod input;
 pub mod layout;
-pub mod semantics;
+pub mod local;
+pub mod motion;
+pub mod observations;
+pub mod presentation;
 mod system;
-mod system_state;
 #[cfg(test)]
-pub(in crate::world::systems) mod test_support;
-pub mod tree;
+pub(crate) mod test_support;
 
-pub use input::{
-    GuiCommitSource, GuiInputCancelReason, GuiInputCancellation, GuiInputCommand, GuiInputConflict,
-    GuiInputConflictReason, GuiInputEffect, GuiInputEffectKind, GuiInputFocus, GuiInputSystem,
-    GuiInputSystemFactory, GuiInputTarget, GuiKey, GuiPointerButton, GuiTextCompositionState,
-    GuiTextFence, GuiTextFocusState, GuiTextFocusUpdate, GuiUnhandledInput, GuiUnhandledReason,
+pub use layout::{GuiLayoutSystem, GuiLayoutSystemFactory, MAX_LAYOUT_DEPTH};
+pub use local::MAX_GUI_TEXT_BYTES;
+pub(crate) use local::slider::slider_rail;
+pub use presentation::{
+    FOCUS_BORDER_COLOR, FOCUS_BORDER_WIDTH, GUI_BASE_PARTS, GuiPartId, GuiPartProperty,
+    GuiPartStyle, GuiPartVariant, GuiPrimitivePart, GuiSkinState,
 };
-#[cfg(test)]
-pub(crate) use layout::GuiLayoutDiagnostic;
-pub use layout::{
-    DEFAULT_UNITS_PER_METRE, FOCUS_BORDER_COLOR, FOCUS_BORDER_WIDTH, GuiBlockerHit,
-    GuiControlVariant, GuiEvaluatedContent, GuiEvaluatedNode, GuiEvaluatedView, GuiFontResolution,
-    GuiHit, GuiInteractionState, GuiLayoutCache, GuiLayoutRequest, GuiLayoutSystem,
-    GuiLayoutSystemFactory, GuiPanelResolution, GuiPartMotion, GuiPartStyle, GuiResourceResolver,
-    GuiScrollBarCursor, GuiSkinCursors, GuiSkinState, GuiSkinnedAppearance, MAX_LAYOUT_DEPTH,
-    MAX_SKIN_DEPTH, MAX_SKIN_NODES, apply_appearance_to_primitive, apply_asset_to_primitive,
-    part_overrides, resolve_appearance, resolve_panel_hit, resolve_state_part_motion,
-    resolve_state_part_style, skinned_primitives_for_view, theme_part_style, variant_for_content,
-};
-#[cfg(feature = "diagnostics")]
-pub use layout::{GuiLayoutStatistics, GuiLayoutWork};
-pub(crate) use layout::{
-    appearance_with_effective_numeric, resolve_paint_appearance, skin_channels_complete,
-    skinned_parts_for_view, skinned_primitives_for_view_with_overrides,
-};
-pub(in crate::world) use system::validate_overlay_declaration;
-pub use system::{
-    GuiCommand, GuiInspectQuery, GuiInspectResponse, GuiInspectedNode, GuiSystem, GuiSystemFactory,
-};
-pub(crate) use tree::controls::slider_rail;
-pub use tree::{
-    GUI_BASE_PARTS, GuiContainerKind, GuiControlState, GuiControlValue, GuiNode, GuiNodeData,
-    GuiNodeDataProperty, GuiNodeDataRow, GuiNodeHandle, GuiNodeId, GuiNodeKind, GuiNodePatch,
-    GuiNodePropertyRef, GuiNodeRowProperty, GuiNodeStyle, GuiNodeStyleChange, GuiNodeStyleProperty,
-    GuiNodeStyleRow, GuiNodeTree, GuiNodeTreeProperty, GuiNodeTreeRow, GuiNodes, GuiPartChannel,
-    GuiPartId, GuiPartPatch, GuiPartProperty, GuiPartRow, GuiPartRowProperty, GuiPartVariant,
-    GuiRoot, GuiRootRowProperty, GuiThemePartRow, GuiTreeIndex, MAX_GUI_NODE_ID,
-    MAX_GUI_TEXT_BYTES, MAX_VIRTUAL_ITEMS,
-};
+pub use system::{GuiSystem, GuiSystemFactory};

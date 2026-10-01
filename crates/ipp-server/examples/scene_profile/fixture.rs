@@ -14,6 +14,7 @@ pub(super) struct Scene {
     pub entities: BTreeMap<String, EntityId>,
     pub bounds: Vec<EntityId>,
     pub drivers: usize,
+    presentation_time: f64,
 }
 
 impl Scene {
@@ -32,6 +33,7 @@ impl Scene {
             Default::default(),
             Default::default(),
         )?;
+        let world = world.root.id();
         let view = host.world_mut(world).unwrap();
         let snapshots = view.entities();
         let entities: BTreeMap<_, _> = snapshots
@@ -44,17 +46,20 @@ impl Scene {
                     .map(|name| (name, entity.id))
             })
             .collect();
+        // Required default bounds are ordinary components: select the meshes
+        // that still carry the inserted default.
+        let default_bounds = ComponentValue::BoundingGeometry(BoundingGeometry::default());
         let bounds = snapshots
             .iter()
             .filter(|entity| {
                 let has = |kind| {
                     entity
-                        .base
+                        .components
                         .iter()
                         .any(|component| component.type_id() == kind)
                 };
                 has(ComponentValue::MESH_INSTANCE)
-                    && !has(ComponentValue::BOUNDING_GEOMETRY)
+                    && entity.components.contains(&default_bounds)
                     && !has(ComponentValue::PARTICLE_EMITTER)
                     && !has(ComponentValue::PARTICLE_PLAYBACK)
             })
@@ -77,6 +82,7 @@ impl Scene {
             bounds,
             controllers,
             drivers,
+            presentation_time: 0.0,
         };
         let started = Instant::now();
         loop {
@@ -103,16 +109,12 @@ impl Scene {
         scene.control(AnimationPlaybackControl::Pause)?;
         scene.control(AnimationPlaybackControl::Seek(0.5))?;
         let camera = std::fs::read_to_string(bundle.join("camera.txt"))?;
-        scene
-            .host
-            .world_mut(world)
-            .unwrap()
-            .enqueue_camera_activate(
-                *scene
-                    .entities
-                    .get(camera.trim())
-                    .ok_or("missing benchmark camera")?,
-            )?;
+        scene.select_camera(
+            *scene
+                .entities
+                .get(camera.trim())
+                .ok_or("missing benchmark camera")?,
+        )?;
         scene.update(0.0)?;
         println!(
             "Loaded {} entities, {} controllers, {} drivers, {} assets in {:.3} seconds",
@@ -126,24 +128,67 @@ impl Scene {
     }
 
     pub fn update(&mut self, dt: f64) -> Result<()> {
-        self.host
-            .world_mut(self.world)
-            .unwrap()
-            .prepare_update(dt)?;
         self.host.progress_assets();
-        let report = self.host.world_mut(self.world).unwrap().step(dt)?;
-        if report
-            .outcomes
-            .iter()
-            .any(|outcome| outcome.result.is_err())
-            || report
-                .system_command_outcomes
+        let frame = self.host.frame(dt)?;
+        self.presentation_time += dt;
+        for report in frame.worlds.into_values() {
+            let report = report?;
+            if report
+                .outcomes
                 .iter()
                 .any(|outcome| outcome.result.is_err())
-        {
-            return Err("native benchmark mutation failed".into());
+                || report
+                    .system_command_outcomes
+                    .iter()
+                    .any(|outcome| outcome.result.is_err())
+            {
+                return Err("native benchmark mutation failed".into());
+            }
         }
         Ok(())
+    }
+
+    pub fn select_camera(&mut self, entity: EntityId) -> Result<()> {
+        let output = self.host.bind_output(
+            self.host.world_ref(self.world).ok_or("missing World")?,
+            entity,
+            ipp_core::OutputKind::Camera,
+        )?;
+        self.host.set_root_output(
+            output,
+            ipp_core::WorldViewport {
+                width: super::WIDTH,
+                height: super::HEIGHT,
+                device_pixel_ratio: 1.0,
+            },
+        )?;
+        Ok(())
+    }
+
+    pub fn camera(&self) -> Result<&ipp_core::systems::camera::CameraPublication> {
+        let (output, _, publication) = self
+            .host
+            .root_output(self.world)
+            .ok_or("missing root output")?;
+        self.host
+            .output(publication, output)
+            .and_then(|chunk| chunk.data())
+            .ok_or_else(|| "missing completed camera".into())
+    }
+
+    pub fn render(&mut self, renderer: &mut Renderer) -> Result<ipp_render_gl::RenderFrameSummary> {
+        let (output, viewport, publication) = self
+            .host
+            .root_output(self.world)
+            .ok_or("missing root output")?;
+        renderer.prepare(&mut self.host, Some((output, publication)))?;
+        Ok(renderer.draw(
+            &self.host,
+            output,
+            publication,
+            viewport,
+            self.presentation_time,
+        )?)
     }
 
     pub fn control(&mut self, control: AnimationPlaybackControl) -> Result<()> {
@@ -203,7 +248,7 @@ impl Scene {
                 .inspect(entity)
                 .ok_or("missing probe state")?;
             let transform = snapshot
-                .effective
+                .components
                 .iter()
                 .find_map(|value| {
                     if let ComponentValue::Transform(transform) = value {

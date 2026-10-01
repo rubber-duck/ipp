@@ -2,20 +2,49 @@
 
 use super::*;
 
-fn list(count: u32, extent: f32, overscan: u32, viewport: f32) -> GuiVirtualListLayout {
-    GuiVirtualListLayout::new(
-        &GuiNodeDataRow::virtual_list(count, extent, overscan, 1),
-        [4.0, viewport],
-    )
+/// Item identities are opaque to placement; plain integers stand in for entities.
+type TestList = GuiVirtualListLayout<u32>;
+
+fn list(count: u32, extent: f32, overscan: u32, viewport: f32) -> TestList {
+    TestList::from_parameters(count, extent, overscan, 1, [4.0, viewport])
 }
 
 /// Declare children at `indices` with main extents `extents`, as layout
 /// does in index order.
-fn declare(list: &mut GuiVirtualListLayout, children: &[(u32, f32)]) {
+fn declare(list: &mut TestList, children: &[(u32, f32)]) {
     for (slot, &(index, extent)) in children.iter().enumerate() {
         let index = list.accepts(index).expect("index accepted");
-        list.push(index, GuiNodeId(slot as u32 + 10), [4.0, extent], true);
+        list.push(index, slot as u32 + 10, [4.0, extent], true);
     }
+}
+
+#[test]
+fn ordinary_entity_generations_are_preserved_but_item_indices_determine_positions() {
+    let first_realized = crate::EntityId::from_bits((7_u64 << 32) | 3);
+    let second_realized = crate::EntityId::from_bits((11_u64 << 32) | 5);
+    let third_realized = crate::EntityId::from_bits((13_u64 << 32) | 2);
+    let mut realized = [
+        (9, first_realized, 4.0),
+        (2, second_realized, 3.0),
+        (6, third_realized, 1.0),
+    ];
+    realized.sort_by_key(|&(index, _, _)| index);
+    let mut list =
+        GuiVirtualListLayout::<crate::EntityId>::from_parameters(100, 2.0, 1, 1, [4.0, 5.0]);
+    for (index, entity, extent) in realized {
+        let index = list.accepts(index).unwrap();
+        list.push(index, entity, [4.0, extent], true);
+    }
+
+    assert_eq!(list.items[0].node, second_realized);
+    assert_eq!(list.items[1].node, third_realized);
+    assert_eq!(list.items[2].node, first_realized);
+    assert_eq!(list.position(2), 4.0);
+    assert_eq!(list.position(6), 13.0);
+    assert_eq!(list.position(9), 18.0);
+    assert_eq!(list.content_extent(), 202.0);
+    assert_eq!(list.anchored_offset(9, 1.0), 19.0);
+    assert_eq!(list.wanted_range(19.0), (8, 12));
 }
 
 #[test]
@@ -24,7 +53,6 @@ fn undeclared_items_take_the_estimate() {
 
     assert_eq!(list.content_extent(), 200.0);
     assert_eq!(list.content_size([4.0, 5.0]), [4.0, 200.0]);
-    assert_eq!(list.capacity(), 195.0);
     assert_eq!(list.position(7), 14.0);
     assert_eq!(list.item_at(0.0), 0);
     assert_eq!(list.item_at(13.9), 6);
@@ -37,7 +65,6 @@ fn undeclared_items_take_the_estimate() {
     assert_eq!(list.wanted_range(3.0), (0, 5));
     assert_eq!(list.wanted_range(4.0), (1, 6));
     assert_eq!(list.wanted_range(195.0), (96, 100));
-    assert_eq!(list.loaded_range(), (0, 0));
 }
 
 #[test]
@@ -53,7 +80,6 @@ fn declared_children_replace_the_estimate_and_move_later_items() {
     assert_eq!(list.position(10), 22.0);
     assert_eq!(list.position(11), 24.5);
     assert_eq!(list.content_extent(), 200.0 + 3.0 - 1.0 + 0.5);
-    assert_eq!(list.loaded_range(), (3, 11));
 
     assert_eq!(list.item_at(6.0), 3);
     assert_eq!(list.item_at(10.9), 3);
@@ -78,14 +104,14 @@ fn declared_children_replace_the_estimate_and_move_later_items() {
 fn children_past_the_count_or_repeating_an_index_are_not_placed() {
     let mut list = list(5, 1.0, 0, 2.0);
     assert_eq!(list.accepts(2), Some(2));
-    list.push(2, GuiNodeId(1), [4.0, 3.0], true);
+    list.push(2, 1, [4.0, 3.0], true);
     assert_eq!(list.accepts(2), None);
     assert_eq!(list.accepts(1), None);
     assert_eq!(list.accepts(5), None);
     assert_eq!(list.accepts(4), Some(4));
 
     // A child that could not measure keeps the estimate.
-    list.push(4, GuiNodeId(2), [0.0, 0.0], false);
+    list.push(4, 2, [0.0, 0.0], false);
     assert_eq!(list.items[1].extent, 1.0);
     assert_eq!(list.content_extent(), 7.0);
 }
@@ -94,7 +120,6 @@ fn children_past_the_count_or_repeating_an_index_are_not_placed() {
 fn an_empty_list_wants_nothing() {
     let list = list(0, 2.0, 3, 5.0);
     assert_eq!(list.content_extent(), 0.0);
-    assert_eq!(list.capacity(), 0.0);
     assert_eq!(list.item_at(10.0), 0);
     assert_eq!(list.wanted_range(0.0), (0, 0));
     assert_eq!(list.anchored_offset(4, 1.0), 1.0);
@@ -134,7 +159,7 @@ fn a_large_list_stays_bounded_by_its_declared_window() {
 
 #[test]
 fn horizontal_lists_place_along_x() {
-    let list = GuiVirtualListLayout::new(&GuiNodeDataRow::virtual_list(10, 3.0, 0, 0), [9.0, 4.0]);
+    let list = TestList::from_parameters(10, 3.0, 0, 0, [9.0, 4.0]);
     assert_eq!(list.axis, 0);
     assert_eq!(list.item_extent, 3.0);
     assert_eq!(list.viewport, 9.0);

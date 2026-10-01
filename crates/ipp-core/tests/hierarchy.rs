@@ -1,10 +1,14 @@
 //! Local graph/math/lifetime checks supplement the real hierarchy transport/render suite.
 mod support;
 use ipp_core::{
-    Batch, Command, ComponentValue, EntityId, EntityMetadata, EntityRef, ErrorReason, WorldContext,
-    components::{Hierarchy, LookAt, Transform},
+    Batch, Command, ComponentValue, EntityId, EntityMetadata, EntityPlacementRef, EntityRef,
+    ErrorReason, WorldContext,
+    components::{LookAt, Transform},
 };
 use support::WorldTestDriver;
+use support::selection::SPATIAL;
+#[cfg(all(feature = "skeletal-animation", feature = "builtin-assets"))]
+use support::selection::{SKELETON, select};
 
 fn run(world: &mut WorldContext<'_>, operations: Vec<Command>) -> ipp_core::WorldUpdateReport {
     world
@@ -24,7 +28,11 @@ fn ok(world: &mut WorldContext<'_>, operations: Vec<Command>) {
 fn create(world: &mut WorldContext<'_>, transform: Option<Transform>) -> EntityId {
     let mut operations = vec![Command::Create {
         alias: 1,
-        metadata: EntityMetadata::default(),
+        metadata: EntityMetadata {
+            symbolic_id: Some(format!("entity-{}", world.tick() + 1)),
+            ..Default::default()
+        },
+        adopt: false,
     }];
     if let Some(transform) = transform {
         operations.push(Command::insert_value(
@@ -42,13 +50,20 @@ fn put(entity: EntityId, value: ComponentValue) -> Command {
 }
 
 fn parent(entity: EntityId, parent: EntityId) -> Command {
-    put(
-        entity,
-        ComponentValue::Hierarchy(Hierarchy {
-            parent,
-            ..Default::default()
-        }),
-    )
+    Command::PlaceEntity {
+        entity: EntityRef::Handle(entity),
+        placement: EntityPlacementRef {
+            parent: Some(EntityRef::Handle(parent)),
+            before: None,
+        },
+    }
+}
+
+fn root(entity: EntityId) -> Command {
+    Command::PlaceEntity {
+        entity: EntityRef::Handle(entity),
+        placement: EntityPlacementRef::default(),
+    }
 }
 
 fn aim(entity: EntityId, target: EntityId) -> Command {
@@ -71,7 +86,7 @@ fn close(actual: &[f32], expected: &[f32]) {
 #[test]
 fn nested_affine_composition_preserves_shear_and_local_values_in_reverse_allocation_order() {
     let mut host = ipp_core::HostRuntime::default();
-    let id = host.create_world(Default::default()).unwrap();
+    let id = host.create_world(Default::default(), SPATIAL).unwrap();
     let mut world = host.world_mut(id).unwrap();
     let child_local = Transform {
         x: 1.0,
@@ -119,7 +134,7 @@ fn nested_affine_composition_preserves_shear_and_local_values_in_reverse_allocat
         world
             .inspect(child)
             .unwrap()
-            .effective
+            .components
             .contains(&ComponentValue::Transform(child_local))
     );
     let other = create(
@@ -144,12 +159,7 @@ fn nested_affine_composition_preserves_shear_and_local_values_in_reverse_allocat
         &world.world_matrix(child).unwrap()[12..15],
         &[1.0, 0.0, 0.0],
     );
-    let snapshot = world.inspect(middle).unwrap();
-    assert!(
-        snapshot
-            .base
-            .contains(&ComponentValue::Hierarchy(Hierarchy::default()))
-    );
+    assert_eq!(world.entity_link(middle).unwrap().parent, None);
     let replacement = create(
         &mut world,
         Some(Transform {
@@ -167,7 +177,7 @@ fn nested_affine_composition_preserves_shear_and_local_values_in_reverse_allocat
 #[test]
 fn terminal_aim_tracks_through_affine_parent_and_finalizes_children_without_changing_trs() {
     let mut host = ipp_core::HostRuntime::default();
-    let id = host.create_world(Default::default()).unwrap();
+    let id = host.create_world(Default::default(), SPATIAL).unwrap();
     let mut world = host.world_mut(id).unwrap();
     let root = create(
         &mut world,
@@ -240,7 +250,7 @@ fn terminal_aim_tracks_through_affine_parent_and_finalizes_children_without_chan
             world
                 .inspect(tracker)
                 .unwrap()
-                .effective
+                .components
                 .contains(&ComponentValue::Transform(local))
         );
     }
@@ -255,12 +265,22 @@ fn terminal_aim_tracks_through_affine_parent_and_finalizes_children_without_chan
         ipp_core::systems::camera::model_matrix(&local).unwrap(),
     );
     close(&world.world_matrix(tracker).unwrap(), &expected);
+    let replacement = create(
+        &mut world,
+        Some(Transform {
+            x: 50.0,
+            ..Default::default()
+        }),
+    );
+    assert_eq!(replacement.index(), target.index());
+    assert_ne!(replacement.generation(), target.generation());
+    close(&world.world_matrix(tracker).unwrap(), &expected);
 }
 
 #[test]
 fn cycles_and_terminal_dependencies_retain_changes_and_recover_on_correction() {
     let mut host = ipp_core::HostRuntime::default();
-    let id = host.create_world(Default::default()).unwrap();
+    let id = host.create_world(Default::default(), SPATIAL).unwrap();
     let mut world = host.world_mut(id).unwrap();
     let a = create(&mut world, Some(Transform::default()));
     let b = create(
@@ -288,13 +308,7 @@ fn cycles_and_terminal_dependencies_retain_changes_and_recover_on_correction() {
     assert!(world.world_matrix(b).is_err());
     assert!(world.world_matrix(descendant).is_err());
     assert!(world.world_matrix(c).is_ok());
-    ok(
-        &mut world,
-        vec![Command::RemoveComponent {
-            entity: EntityRef::Handle(a),
-            component: ComponentValue::HIERARCHY,
-        }],
-    );
+    ok(&mut world, vec![root(a)]);
     let report = run(&mut world, vec![aim(a, b)]);
     assert_eq!(
         report.outcomes[0].result.as_ref().unwrap_err().reason,
@@ -324,7 +338,7 @@ fn cycles_and_terminal_dependencies_retain_changes_and_recover_on_correction() {
 #[test]
 fn coincident_and_pole_targets_are_finite_and_runtime_fields_are_not_serialized() {
     let mut host = ipp_core::HostRuntime::default();
-    let id = host.create_world(Default::default()).unwrap();
+    let id = host.create_world(Default::default(), SPATIAL).unwrap();
     let mut world = host.world_mut(id).unwrap();
     let tracker = create(&mut world, Some(Transform::default()));
     let target = create(&mut world, Some(Transform::default()));
@@ -350,108 +364,7 @@ fn coincident_and_pole_targets_are_finite_and_runtime_fields_are_not_serialized(
         assert_eq!(world.world_matrix(tracker).unwrap(), first);
         close(&[-first[8], -first[9], -first[10]], &[0.0, y, 0.0]);
     }
-    assert_eq!(
-        ComponentValue::Hierarchy(Hierarchy::default())
-            .fields()
-            .len(),
-        2
-    );
     assert_eq!(ComponentValue::LookAt(LookAt::default()).fields().len(), 2);
-}
-
-#[test]
-fn discrete_parent_animation_reconciles_graph_and_restores_authored_relationship() {
-    use ipp_core::{
-        services::asset_management::{AssetUpload, AssetUploadIdentity},
-        systems::animation::*,
-    };
-    let mut host = ipp_core::HostRuntime::default();
-    let id = host.create_world(Default::default()).unwrap();
-    let mut world = host.world_mut(id).unwrap();
-    let parent_id = create(
-        &mut world,
-        Some(Transform {
-            x: 10.0,
-            ..Default::default()
-        }),
-    );
-    let child = create(
-        &mut world,
-        Some(Transform {
-            x: 1.0,
-            ..Default::default()
-        }),
-    );
-    ok(&mut world, vec![parent(child, EntityId::from_bits(0))]);
-    let property = AnimationTrackTarget::AnimationProperty(AnimationProperty {
-        component: ComponentValue::HIERARCHY,
-        offsets: vec![std::mem::offset_of!(Hierarchy, parent) as u32],
-    });
-    let clip = AnimationClip::new(
-        1.0,
-        vec![AnimationTrack {
-            target: property.clone(),
-            keys: vec![AnimationKeyframe {
-                time: 0.0,
-                value: AnimationValue::Field(ipp_core::components::schema::FieldValue::Entity(
-                    parent_id,
-                )),
-                interpolation: AnimationInterpolation::Step,
-            }],
-        }],
-    )
-    .unwrap();
-    world
-        .enqueue_asset(AssetUpload {
-            id: 601,
-            key: AssetUploadIdentity {
-                kind: ANIMATION_TYPE,
-                asset: 601,
-                variant: 0,
-            },
-            bytes: clip.encode(),
-        })
-        .unwrap();
-    assert!(world.await_upload_for_test().assets[0].result.is_ok());
-    let player = world
-        .create_animation_controller(AnimationControllerDescription {
-            drivers: vec![AnimationDriverDescription {
-                source: "asset://10/601".into(),
-                variant: 0,
-                track: 0,
-                target: child,
-                property,
-                weight: 1.0,
-                additive: false,
-                reference_time: 0.0,
-                repeat: false,
-            }],
-            ..Default::default()
-        })
-        .unwrap();
-    world
-        .enqueue_playback(player, AnimationPlaybackControl::Play)
-        .unwrap();
-    world.update_for_test(0.0).unwrap();
-    close(
-        &world.world_matrix(child).unwrap()[12..15],
-        &[11.0, 0.0, 0.0],
-    );
-    assert!(
-        world
-            .inspect(child)
-            .unwrap()
-            .base
-            .contains(&ComponentValue::Hierarchy(Hierarchy::default()))
-    );
-    world
-        .enqueue_playback(player, AnimationPlaybackControl::Stop)
-        .unwrap();
-    world.update_for_test(0.0).unwrap();
-    close(
-        &world.world_matrix(child).unwrap()[12..15],
-        &[1.0, 0.0, 0.0],
-    );
 }
 
 #[test]
@@ -487,7 +400,12 @@ fn deferred_parent_and_target_removal_refreshes_surviving_final_placement() {
     let mut factories = compiled_system_factories();
     factories.push(Arc::new(removal.clone()));
     let mut host = ipp_core::HostRuntime::with_system_factories(factories).unwrap();
-    let id = host.create_world(Default::default()).unwrap();
+    let id = host
+        .create_world(
+            Default::default(),
+            &[SPATIAL, &[SystemId("test.hierarchy-removal")]].concat(),
+        )
+        .unwrap();
     let mut world = host.world_mut(id).unwrap();
     let root = create(
         &mut world,
@@ -525,13 +443,7 @@ fn deferred_parent_and_target_removal_refreshes_surviving_final_placement() {
     assert!(world.inspect(root).is_none());
     assert!(world.inspect(target).is_none());
     close(&world.world_matrix(tip).unwrap()[12..15], &[0.0, 0.0, -1.0]);
-    assert!(
-        world
-            .inspect(tracker)
-            .unwrap()
-            .base
-            .contains(&ComponentValue::Hierarchy(Hierarchy::default()))
-    );
+    assert_eq!(world.entity_link(tracker).unwrap().parent, None);
 }
 
 #[cfg(all(feature = "skeletal-animation", feature = "builtin-assets"))]
@@ -542,7 +454,9 @@ fn bone_parent_composes_pose_and_offset_and_recovers_without_object_fallback() {
         services::asset_management::{AssetUpload, AssetUploadIdentity, builtin},
     };
     let mut host = ipp_core::HostRuntime::default();
-    let id = host.create_world(Default::default()).unwrap();
+    let id = host
+        .create_world(Default::default(), &select(&[SKELETON, SPATIAL]))
+        .unwrap();
     let mut world = host.world_mut(id).unwrap();
     let rig = create(
         &mut world,
@@ -576,12 +490,11 @@ fn bone_parent_composes_pose_and_offset_and_recovers_without_object_fallback() {
                     ..Default::default()
                 }),
             ),
+            parent(child, rig),
             put(
                 child,
-                ComponentValue::Hierarchy(Hierarchy {
-                    parent: rig,
-                    parent_bone: 1,
-                    ..Default::default()
+                ComponentValue::ParentJoint(ipp_core::components::ParentJoint {
+                    ordinal: 1,
                 }),
             ),
             parent(tip, child),
@@ -643,10 +556,8 @@ fn bone_parent_composes_pose_and_offset_and_recovers_without_object_fallback() {
         &mut world,
         vec![put(
             child,
-            ComponentValue::Hierarchy(Hierarchy {
-                parent: rig,
-                parent_bone: 30,
-                ..Default::default()
+            ComponentValue::ParentJoint(ipp_core::components::ParentJoint {
+                ordinal: 30,
             }),
         )],
     );
@@ -656,10 +567,8 @@ fn bone_parent_composes_pose_and_offset_and_recovers_without_object_fallback() {
         &mut world,
         vec![put(
             child,
-            ComponentValue::Hierarchy(Hierarchy {
-                parent: rig,
-                parent_bone: 1,
-                ..Default::default()
+            ComponentValue::ParentJoint(ipp_core::components::ParentJoint {
+                ordinal: 1,
             }),
         )],
     );

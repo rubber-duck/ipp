@@ -212,7 +212,7 @@ for (const initiallyHidden of [false, true]) {
             candidate.metadata.symbolicId === "created-while-paused",
         );
         assert.ok(entity);
-        assert.equal(entity.effective[0]?.fields.value, 44);
+        assert.equal(entity.components[0]?.fields.value, 44);
         assert.ok(report.resumed.time > report.paused.time);
         assert.ok(report.resumed.time - report.paused.time <= 0.25);
       },
@@ -221,7 +221,7 @@ for (const initiallyHidden of [false, true]) {
 }
 
 test("worker bounds undelivered output and fails a stalled receiver explicitly", {
-  timeout: 30_000,
+  timeout: 90_000,
 }, async (testContext) => {
   await runBrowserScenario(
     "worker stalled receiver",
@@ -229,6 +229,7 @@ test("worker bounds undelivered output and fails a stalled receiver explicitly",
       workspace,
       build: build("headless"),
       mismatchBuild: build("headless-builtins"),
+      operationTimeoutMs: 60_000,
     },
     testContext.signal,
     async (context) => {
@@ -252,15 +253,20 @@ test("worker bounds undelivered output and fails a stalled receiver explicitly",
                 context.urls,
                 context.urls.generated,
                 context.urls.wasm,
+                55_000,
               ),
             },
           ),
       );
-      assert.equal(report.delivered, 64);
-      assert.equal(report.frames, 62);
+      // Unacknowledged replies stay delivered and progress frames supersede
+      // one another, so a receiver that stops acknowledging holds its two
+      // replies and one frame. Nothing accumulates towards the output budget;
+      // the worker ends the stalled connection by its delivery deadline.
+      assert.equal(report.delivered, 3);
+      assert.equal(report.frames, 1);
       assert.match(
         report.error,
-        /connection congestion: reliable output capacity exhausted/,
+        /connection congestion: no delivery progress for 30 seconds/,
       );
     },
   );

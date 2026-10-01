@@ -187,13 +187,12 @@ for (const name of ["render-baseline", "render"] as const) {
           assert.equal(initial.drawCalls, 1);
           const allChanged = await patch({ showAllDebugGeometries: true });
           const all = await capture("show-all");
-          assert.equal(all.session, allChanged.session);
-          assert.ok(all.tick > allChanged.tick);
+          assert.ok(all.sourceTick > allChanged.tick);
           assert.equal(all.drawCalls, 2);
           assert.deepEqual(
             all.observation.entities,
             selected.entities,
-            "Show-all preserves both authored and effective component fields",
+            "Show-all preserves the component fields",
           );
           assert.ok(
             (await compare("selected-only", "show-all")).changedFraction >
@@ -233,8 +232,7 @@ for (const name of ["render-baseline", "render"] as const) {
           await color("global-blue-restored", [0, 0, 1]);
           await call("recoverContext");
           const recovered = await capture("context-restored");
-          assert.ok(recovered.contextGeneration > blue.contextGeneration);
-          assert.equal(recovered.session, blue.session);
+          assert.ok(recovered.context > blue.context);
           assert.equal(recovered.drawCalls, 1);
           assert.deepEqual(
             recovered.observation.entities,

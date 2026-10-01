@@ -82,10 +82,8 @@ export interface EntityObservation {
   readonly entity: EntityId;
   readonly symbolicId: string | null;
   readonly classes: readonly string[];
-  readonly scalar: {
-    readonly base: number;
-    readonly effective: number;
-  } | null;
+  /** The stored Scalar value, written by clients or a driving constraint. */
+  readonly scalar: { readonly value: number } | null;
   readonly linearDriver: {
     readonly source: EntityId;
     readonly scale: number;

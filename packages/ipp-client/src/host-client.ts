@@ -1,19 +1,40 @@
 import { isAssetSourceResponse } from "./asset-sources.js";
-import { validateOptions, type Client, type ConnectOptions } from "./client.js";
-import type { MessageTransport, TransportEvents } from "./transport.js";
+import { HostPhysicalInput } from "./host-input.js";
+import type {
+  CameraOutputReference,
+  OutputReference,
+  WorldReference,
+} from "./types.js";
 import {
-  bindTestingChannel,
-  testingChannel,
-  type Presentation,
-  type ViewportLimits,
-} from "./presentation.js";
+  HostPresentation,
+  readRootBinding,
+  writeRootBinding,
+  type RootBinding,
+} from "./host-presentation.js";
+import {
+  readWorldReference,
+  writeWorldReference,
+  readOutputReference,
+  writeOutputReference,
+} from "./references.js";
+import {
+  RequestNotSentError,
+  validateOptions,
+  type Client,
+  type ConnectOptions,
+} from "./client.js";
+import type { MessageTransport, TransportEvents } from "./transport.js";
+import { BatchIdentities } from "./command-pages.js";
 import {
   HostWireReader,
   HostWireWriter,
   type WorldCapacityHintsPatch,
   type WorldCreateOptions,
   type WorldDescriptor,
+  type WorldManifest,
   type WorldSelector,
+  type CreatedWorld,
+  WorldSelectionRequiredError,
 } from "./host-protocol.js";
 
 export type {
@@ -21,30 +42,49 @@ export type {
   WorldCapacityHintsPatch,
   WorldCreateOptions,
   WorldDescriptor,
+  WorldManifest,
   WorldSelector,
+  CreatedWorld,
 } from "./host-protocol.js";
+export { WorldSelectionRequiredError } from "./host-protocol.js";
 
 interface HostRequestWaiter {
   resolve(reader: HostWireReader): void;
   reject(error: Error): void;
-  timer: ReturnType<typeof setTimeout>;
+  /** The reply deadline, from when the request goes on the wire. */
+  timer: ReturnType<typeof setTimeout> | undefined;
+  accept?: (reader: HostWireReader) => void;
 }
 
 interface WorldAttachment<T extends Client> {
+  reference: WorldReference;
   session: bigint;
   world: WorldDescriptor;
+  manifest: WorldManifest;
   client?: T;
   events?: TransportEvents;
   queued: Uint8Array[];
   closeHost: boolean;
+  closing?: Promise<void>;
 }
 
-/** One physical connection, with at most one independently fenced World attachment. */
+/** One physical connection with independently fenced World authoring sessions. */
 export abstract class HostClientBase<T extends Client> {
+  readonly input = new HostPhysicalInput(
+    (tag, encode, accept) => this.request(tag, encode, accept),
+    (name) => this.hostTag(name),
+    (name) => this.hostLimit(name),
+  );
+  readonly presentation = new HostPresentation(
+    (tag, encode) => this.request(tag, encode),
+    (name) => this.hostTag(name),
+  );
   private connection = 0n;
   private nextRequest = 1n;
   private readonly pending = new Map<bigint, HostRequestWaiter>();
-  private attachment: WorldAttachment<T> | undefined;
+  private readonly attachments = new Map<bigint, WorldAttachment<T>>();
+  /** Batch identities are unique per connection, across its World sessions. */
+  private readonly batchIdentities = new BatchIdentities();
   private stopped = false;
   private closing?: Promise<void>;
   protected readonly timeoutMs: number;
@@ -57,6 +97,8 @@ export abstract class HostClientBase<T extends Client> {
   }
 
   protected abstract hostTag(name: string): number;
+  /** A named Host protocol bound of the connected target contract. */
+  protected abstract hostLimit(name: string): number;
   protected abstract hostMagic(response: boolean): Uint8Array<ArrayBuffer>;
   protected abstract bootstrap(): Uint8Array<ArrayBuffer>;
   protected abstract acceptBootstrap(bytes: Uint8Array): bigint;
@@ -64,10 +106,20 @@ export abstract class HostClientBase<T extends Client> {
     transport: MessageTransport,
     session: bigint,
     world: WorldDescriptor,
+    manifest: WorldManifest,
+    reference: WorldReference,
   ): T;
 
-  get world(): T | undefined {
-    return this.attachment?.client;
+  get sessions(): ReadonlyMap<bigint, T> {
+    return new Map(
+      [...this.attachments].flatMap(([id, attachment]) =>
+        attachment.client ? [[id, attachment.client] as const] : [],
+      ),
+    );
+  }
+
+  get renderDiagnostics() {
+    return this.transport.renderDiagnostics;
   }
 
   protected async initialize(): Promise<this> {
@@ -86,6 +138,7 @@ export abstract class HostClientBase<T extends Client> {
         const fail = (error: Error) => {
           finish(error);
           this.stop(error);
+          void this.close().catch(() => {});
         };
         const abort = () => fail(new Error("Host connection aborted"));
         const timer = setTimeout(
@@ -126,11 +179,12 @@ export abstract class HostClientBase<T extends Client> {
   protected request(
     tag: number,
     encode?: (writer: HostWireWriter) => void,
+    accept?: (reader: HostWireReader) => void,
   ): Promise<HostWireReader> {
     if (this.stopped || this.connection === 0n)
       return Promise.reject(new Error("Host connection is closed"));
-    if (this.pending.size >= 64)
-      return Promise.reject(new Error("Host request queue is full"));
+    // The transport holds the request until the connection's flow control
+    // lets it leave; a busy Host delays Host requests instead of refusing them.
     const id = this.nextRequest++;
     const writer = new HostWireWriter();
     writer.raw(this.hostMagic(false));
@@ -140,20 +194,36 @@ export abstract class HostClientBase<T extends Client> {
     encode?.(writer);
     const bytes = writer.finish();
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        const error = new Error(
-          "Host request timed out; its outcome is unknown",
-        );
-        this.stop(error);
-        void this.close().catch(() => {});
-      }, this.timeoutMs);
-      this.pending.set(id, { resolve, reject, timer });
+      const waiter: HostRequestWaiter = {
+        resolve,
+        reject,
+        timer: undefined,
+        ...(accept ? { accept } : {}),
+      };
+      this.pending.set(id, waiter);
+      // Waiting for connection credit is not a Host delay: the reply deadline
+      // starts when the request goes on the wire.
+      const deadline = () => {
+        if (this.pending.get(id) !== waiter) return;
+        waiter.timer = setTimeout(() => {
+          const error = new Error(
+            "Host request timed out; its outcome is unknown",
+          );
+          this.stop(error);
+          void this.close().catch(() => {});
+        }, this.timeoutMs);
+      };
       try {
-        this.transport.send(bytes);
+        const leaving = this.transport.send(bytes);
+        if (leaving) void leaving.then(deadline);
+        else deadline();
       } catch (error) {
-        this.pending.delete(id);
-        clearTimeout(timer);
-        reject(asError(error));
+        this.stop(
+          new Error("Host request send failed; its outcome is unknown", {
+            cause: error,
+          }),
+        );
+        void this.close().catch(() => {});
       }
     });
   }
@@ -191,28 +261,149 @@ export abstract class HostClientBase<T extends Client> {
     return worlds;
   }
 
-  async createWorld(options: WorldCreateOptions = {}): Promise<T> {
+  async createWorld(options: WorldCreateOptions): Promise<CreatedWorld> {
+    const reader = await this.request(
+      this.hostTag("HOST_REQUEST_CREATE_WORLD"),
+      (writer) => {
+        const selected = options?.selectedSystems;
+        if (selected === undefined) throw new WorldSelectionRequiredError();
+        writer.string(options.symbolicId ?? "");
+        writer.hints(options.capacityHints);
+        writer.u8(1);
+        if (
+          selected.length > 1024 ||
+          new Set(selected).size !== selected.length
+        )
+          throw new RangeError("Invalid selected systems");
+        writer.u32(selected.length);
+        for (const system of selected) writer.string(system);
+        const canvas = options.canvas;
+        writer.u8(canvas === undefined ? 0 : 1);
+        if (canvas !== undefined) {
+          if (!Array.isArray(canvas.extent) || canvas.extent.length !== 2)
+            throw new RangeError("Canvas extent requires width and height");
+          writer.f32(canvas.extent[0]);
+          writer.f32(canvas.extent[1]);
+          writer.f32(canvas.unitsPerMetre);
+        }
+        writer.u8(options.temporary ? 1 : 0);
+      },
+    );
+    return this.acceptCreated(reader);
+  }
+
+  protected acceptCreated(reader: HostWireReader): CreatedWorld {
+    this.expect(reader, this.hostTag("HOST_RESPONSE_CREATED"));
+    const world = reader.world();
+    const reference = readWorldReference(reader);
+    reader.end();
+    if (reference.id !== world.id)
+      throw new Error("Invalid created World reference");
+    return { ...world, reference };
+  }
+
+  async openWorld(world: WorldReference): Promise<T> {
     return this.acceptAttachment(
-      await this.request(
-        this.hostTag("HOST_REQUEST_CREATE_WORLD"),
-        (writer) => {
-          writer.string(options.symbolicId ?? "");
-          writer.hints(options.capacityHints);
-          writer.u8(options.temporary ? 1 : 0);
-        },
+      await this.request(this.hostTag("HOST_REQUEST_OPEN_WORLD"), (writer) =>
+        writeWorldReference(writer, world),
       ),
     );
   }
 
-  async attachWorld(world: WorldSelector): Promise<T> {
-    return this.acceptAttachment(
-      await this.request(this.hostTag("HOST_REQUEST_ATTACH_WORLD"), (writer) =>
+  async resolveWorld(world: WorldSelector): Promise<WorldReference> {
+    const reader = await this.request(
+      this.hostTag("HOST_REQUEST_RESOLVE_WORLD"),
+      (writer) =>
         writer.selector(
           world,
           this.hostTag("WORLD_SELECTOR_ID"),
           this.hostTag("WORLD_SELECTOR_SYMBOL"),
         ),
-      ),
+    );
+    this.expect(reader, this.hostTag("HOST_RESPONSE_WORLD_REFERENCE"));
+    const reference = readWorldReference(reader);
+    reader.end();
+    return reference;
+  }
+
+  /** Bind the current Camera output of `entity`. A World's canvas names no
+   * entity and needs no binding: select it with `canvasOutput(world)`. */
+  async bindOutput(
+    world: WorldReference,
+    entity: bigint,
+    kind: "camera",
+  ): Promise<CameraOutputReference> {
+    if (kind !== "camera")
+      throw new Error(
+        "Only Camera outputs bind; canvasOutput(world) names a World's canvas",
+      );
+    const reader = await this.request(
+      this.hostTag("HOST_REQUEST_BIND_OUTPUT"),
+      (writer) => {
+        writeWorldReference(writer, world);
+        writer.u64(entity);
+        writer.u8(1);
+      },
+    );
+    this.expect(reader, this.hostTag("HOST_RESPONSE_OUTPUT_REFERENCE"));
+    const output = readOutputReference(reader);
+    reader.end();
+    if (output.kind !== "camera")
+      throw new Error("The Host bound a non-Camera output");
+    return output;
+  }
+
+  async resolveOutput(output: OutputReference): Promise<OutputReference> {
+    const reader = await this.request(
+      this.hostTag("HOST_REQUEST_RESOLVE_OUTPUT"),
+      (writer) => writeOutputReference(writer, output),
+    );
+    this.expect(reader, this.hostTag("HOST_RESPONSE_OUTPUT_REFERENCE"));
+    const reference = readOutputReference(reader);
+    reader.end();
+    return reference;
+  }
+
+  async setRootOutput(
+    output: OutputReference,
+    viewport: { width: number; height: number; devicePixelRatio: number },
+  ): Promise<RootBinding> {
+    const reader = await this.request(
+      this.hostTag("HOST_REQUEST_SET_ROOT_OUTPUT"),
+      (writer) => {
+        writeOutputReference(writer, output);
+        writer.u32(viewport.width);
+        writer.u32(viewport.height);
+        writer.f64(viewport.devicePixelRatio);
+      },
+    );
+    this.expect(reader, this.hostTag("HOST_RESPONSE_ROOT_BINDING"));
+    if (reader.u8() !== 1)
+      throw new Error("Root binding acknowledgement is missing");
+    const binding = readRootBinding(reader);
+    reader.end();
+    return binding;
+  }
+
+  async getRootOutputBinding(
+    world: WorldReference,
+  ): Promise<RootBinding | null> {
+    const reader = await this.request(
+      this.hostTag("HOST_REQUEST_GET_ROOT_OUTPUT_BINDING"),
+      (writer) => writeWorldReference(writer, world),
+    );
+    this.expect(reader, this.hostTag("HOST_RESPONSE_ROOT_BINDING"));
+    const present = reader.u8();
+    if (present > 1) throw new Error("Invalid root binding option");
+    const binding = present === 1 ? readRootBinding(reader) : null;
+    reader.end();
+    return binding;
+  }
+
+  clearRootOutput(expected: RootBinding): Promise<void> {
+    return this.complete(
+      this.hostTag("HOST_REQUEST_CLEAR_ROOT_OUTPUT"),
+      (writer) => writeRootBinding(writer, expected),
     );
   }
 
@@ -238,29 +429,40 @@ export abstract class HostClientBase<T extends Client> {
     return descriptor;
   }
 
-  destroyWorld(world: WorldSelector): Promise<void> {
+  destroyWorld(world: WorldReference): Promise<void> {
     return this.complete(this.hostTag("HOST_REQUEST_DESTROY_WORLD"), (writer) =>
-      writer.selector(
-        world,
-        this.hostTag("WORLD_SELECTOR_ID"),
-        this.hostTag("WORLD_SELECTOR_SYMBOL"),
-      ),
+      writeWorldReference(writer, world),
     );
   }
 
-  async detachWorld(): Promise<void> {
-    const current = this.attachment;
-    await this.complete(this.hostTag("HOST_REQUEST_DETACH_WORLD"));
-    if (this.attachment === current)
-      this.invalidateAttachment(new Error("World detached"));
+  detachWorld(session: bigint): Promise<void> {
+    const attachment = this.attachments.get(session);
+    if (!attachment)
+      return Promise.reject(new Error("World session has ended"));
+    attachment.closing ??= this.complete(
+      this.hostTag("HOST_REQUEST_DETACH_WORLD"),
+      (writer) => writer.u64(session),
+    )
+      .then(() =>
+        this.invalidateAttachment(session, new Error("World detached")),
+      )
+      .catch((error: unknown) => {
+        if (error instanceof RequestNotSentError) delete attachment.closing;
+        throw error;
+      });
+    return attachment.closing;
   }
 
   async setCapacityHints(
+    session: bigint,
     hints: WorldCapacityHintsPatch,
   ): Promise<WorldDescriptor> {
     const reader = await this.request(
       this.hostTag("HOST_REQUEST_SET_CAPACITY_HINTS"),
-      (writer) => writer.hints(hints),
+      (writer) => {
+        writer.u64(session);
+        writer.hints(hints);
+      },
     );
     this.expect(reader, this.hostTag("HOST_RESPONSE_WORLD"));
     const descriptor = reader.world();
@@ -270,21 +472,25 @@ export abstract class HostClientBase<T extends Client> {
   }
 
   /** Used by IppClient.connect… convenience: closing that World also closes this Host. */
-  ownWorldConnection(): void {
-    if (!this.attachment) throw new Error("No World is attached");
-    this.attachment.closeHost = true;
+  ownWorldConnection(session: bigint): void {
+    const attachment = this.attachments.get(session);
+    if (!attachment) throw new Error("No World is attached");
+    attachment.closeHost = true;
   }
 
   protected acceptAttachment(reader: HostWireReader): T {
     this.expect(reader, this.hostTag("HOST_RESPONSE_ATTACHED"));
     reader.world();
     const session = reader.u64();
+    reader.manifest();
+    readWorldReference(reader);
     reader.end();
     // The receive path creates the attachment before subsequent frames arrive.
-    const attachment = this.attachment;
+    const attachment = this.attachments.get(session);
     if (!attachment || attachment.session !== session)
       throw new Error("Missing World attachment");
     const transport: MessageTransport = {
+      batchIdentities: this.batchIdentities,
       start: (events) => {
         attachment.events = events;
         events.ready();
@@ -292,79 +498,41 @@ export abstract class HostClientBase<T extends Client> {
       },
       send: (bytes) => {
         this.requireAttachment(attachment);
-        this.transport.send(bytes);
+        return this.transport.send(bytes);
       },
       ...(this.transport.sendParts
         ? {
             sendParts: (parts: Uint8Array<ArrayBuffer>[]) => {
               this.requireAttachment(attachment);
-              this.transport.sendParts!(parts);
+              return this.transport.sendParts!(parts);
             },
           }
         : {}),
       close: async () => {
         if (attachment.closeHost) return this.close();
-        if (this.attachment === attachment && !this.stopped)
-          await this.detachWorld();
+        if (this.attachments.get(session) === attachment && !this.stopped)
+          await this.detachWorld(session);
       },
     };
-    const presentation = this.transport.presentation;
-    if (presentation) {
-      const frame = async (
-        afterTick: bigint,
-        timeoutMs: number,
-        readback: boolean,
-      ) => {
-        this.requireAttachment(attachment);
-        const observed = await (readback
-          ? presentation.frame(this.connection, afterTick, timeoutMs, true)
-          : presentation.frame(this.connection, afterTick, timeoutMs, false));
-        this.requireAttachment(attachment);
-        return { ...observed, session };
-      };
-      Object.assign(transport, {
-        presentation: bindTestingChannel(
-          {
-            frame: ((
-              _session: bigint,
-              afterTick: bigint,
-              timeoutMs: number,
-              readback: boolean,
-            ) =>
-              frame(afterTick, timeoutMs, readback)) as Presentation["frame"],
-            resize: (width: number, height: number) => {
-              this.requireAttachment(attachment);
-              presentation.resize(width, height);
-            },
-            get viewportLimits() {
-              return presentation.viewportLimits;
-            },
-            onViewportLimits: (listener: (limits: ViewportLimits) => void) =>
-              presentation.onViewportLimits(listener),
-          } satisfies Presentation,
-          (message) => {
-            this.requireAttachment(attachment);
-            testingChannel(presentation)(message);
-          },
-        ),
-      });
-    }
     attachment.client = this.createWorldClient(
       transport,
       session,
       attachment.world,
+      attachment.manifest,
+      attachment.reference,
     );
     return attachment.client;
   }
 
   private requireAttachment(attachment: WorldAttachment<T>): void {
-    if (this.stopped || this.attachment !== attachment)
+    if (this.stopped || this.attachments.get(attachment.session) !== attachment)
       throw new Error("World session has ended");
   }
 
   private updateDescriptor(world: WorldDescriptor): void {
-    if (this.attachment?.world.id === world.id)
-      Object.assign(this.attachment.world, world);
+    for (const attachment of this.attachments.values())
+      if (attachment.world.id === world.id)
+        Object.assign(attachment.world, world);
   }
 
   private receive(bytes: Uint8Array): void {
@@ -377,44 +545,61 @@ export abstract class HostClientBase<T extends Client> {
       const tagReader = new HostWireReader(bytes.subarray(24));
       const tag = tagReader.u8();
       if (id === 0n) {
-        if (tag !== this.hostTag("HOST_RESPONSE_DETACHED"))
-          throw new Error("Unexpected Host notification");
+        if (tag !== this.hostTag("HOST_RESPONSE_DETACHED")) {
+          this.input.notification(new HostWireReader(bytes.subarray(24)));
+          return;
+        }
         const session = tagReader.u64();
         const reason = tagReader.string();
         tagReader.end();
-        if (this.attachment?.session === session)
-          this.invalidateAttachment(new Error(reason));
+        this.invalidateAttachment(session, new Error(reason));
         return;
       }
       const pending = this.pending.get(id);
       if (!pending) throw new Error("Unknown Host request correlation");
-      this.pending.delete(id);
-      clearTimeout(pending.timer);
       if (tag === this.hostTag("HOST_RESPONSE_ERROR")) {
         const reason = tagReader.string();
         tagReader.end();
+        this.pending.delete(id);
+        clearTimeout(pending.timer);
         pending.reject(new Error(reason));
         return;
       }
       if (tag === this.hostTag("HOST_RESPONSE_ATTACHED")) {
         const world = tagReader.world();
         const session = tagReader.u64();
+        const manifest = tagReader.manifest();
+        const reference = readWorldReference(tagReader);
         tagReader.end();
-        if (this.attachment || session === 0n)
+        if (
+          this.attachments.has(session) ||
+          session === 0n ||
+          reference.id !== world.id
+        )
           throw new Error("Invalid World attachment transition");
-        this.attachment = { world, session, queued: [], closeHost: false };
+        this.attachments.set(session, {
+          reference,
+          world,
+          session,
+          manifest,
+          queued: [],
+          closeHost: false,
+        });
       }
+      pending.accept?.(new HostWireReader(bytes.subarray(24)));
+      this.pending.delete(id);
+      clearTimeout(pending.timer);
       pending.resolve(reader);
     } else {
-      const attachment = this.attachment;
       const sessionOffset = isAssetSourceResponse(bytes) ? 4 : 0;
-      if (!attachment || bytes.length < sessionOffset + 8) return;
+      if (bytes.length < sessionOffset + 8) return;
       const session = new DataView(
         bytes.buffer,
         bytes.byteOffset + sessionOffset,
         8,
       ).getBigUint64(0, true);
-      if (session !== attachment.session) return;
+      const attachment = this.attachments.get(session);
+      if (!attachment) return;
       if (attachment.events) attachment.events.message(bytes);
       else {
         if (attachment.queued.length >= 128)
@@ -424,16 +609,18 @@ export abstract class HostClientBase<T extends Client> {
     }
   }
 
-  private invalidateAttachment(error: Error): void {
-    const attachment = this.attachment;
-    this.attachment = undefined;
+  private invalidateAttachment(session: bigint, error: Error): void {
+    const attachment = this.attachments.get(session);
+    this.attachments.delete(session);
     attachment?.events?.error(error);
   }
 
   private stop(error: Error): void {
     if (this.stopped) return;
     this.stopped = true;
-    this.invalidateAttachment(error);
+    this.input.stop(error);
+    for (const session of [...this.attachments.keys()])
+      this.invalidateAttachment(session, error);
     for (const waiter of this.pending.values()) {
       clearTimeout(waiter.timer);
       waiter.reject(error);

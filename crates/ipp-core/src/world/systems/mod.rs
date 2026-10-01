@@ -1,6 +1,7 @@
 //! World-specific evaluation and lifecycle modules.
 
 pub mod asset_dependencies;
+pub mod world_attachment;
 
 pub mod animation;
 
@@ -19,10 +20,10 @@ pub mod render;
 #[cfg(feature = "skeletal-animation")]
 pub mod skeleton;
 
-pub mod state_overlay;
-
 #[cfg(feature = "surfaces")]
 pub mod surface;
+
+pub mod canvas;
 
 #[cfg(feature = "gui")]
 pub mod gui;
@@ -40,11 +41,10 @@ pub use scheduler::{
 };
 
 mod composition;
-pub(in crate::world) use composition::{
-    validate_authoring_factories, validate_authoring_instances,
-};
+pub(in crate::world) use composition::validate_authoring_instances;
 
 pub use composition::compiled_system_factories;
+pub use composition::{SystemCapabilities, SystemCapability, WorldManifest, WorldOperation};
 
 pub use contexts::SystemAssetContext;
 
@@ -55,7 +55,8 @@ pub use scheduler::SystemCommandOutcome;
 mod persistence;
 pub use persistence::{SystemLoadContext, SystemPersistentState, SystemSaveContext};
 
-pub use contexts::{SystemDependencies, SystemEffectiveEntitySnapshot, SystemOperationContext};
+pub use super::{OperationImpact, SystemOperationPreparationContext};
+pub use contexts::{SystemDependencies, SystemOperationContext};
 
 mod bindings;
 pub use bindings::*;

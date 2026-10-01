@@ -2,6 +2,7 @@
 
 mod support;
 use support::WorldTestDriver;
+use support::selection::RENDER;
 
 use ipp_core::{
     Batch, Command, ComponentValue, EntityId, EntityRef, ErrorReason, FieldValue, FieldWrite,
@@ -34,6 +35,7 @@ fn create(world: &mut WorldContext<'_>, geometry: BoundingGeometry, x: f32) -> E
             Command::Create {
                 alias: 0,
                 metadata: Default::default(),
+                adopt: false,
             },
             Command::insert_value(
                 EntityRef::Alias(0),
@@ -67,14 +69,14 @@ fn declaration() -> BoundingGeometry {
 #[test]
 fn evaluated_geometry_reuses_storage_and_authored_copies_get_independent_results() {
     let mut host = HostRuntime::new();
-    let id = host.create_world(Default::default()).unwrap();
+    let id = host.create_world(Default::default(), RENDER).unwrap();
     let mut world = host.world_mut(id).unwrap();
     let entity = create(&mut world, declaration(), 0.0);
     let allocation = world.bounding_geometry(entity).unwrap().parts.as_ptr();
     let authored = world
         .inspect(entity)
         .unwrap()
-        .base
+        .components
         .into_iter()
         .find_map(|value| match value {
             ComponentValue::BoundingGeometry(value) => Some(value),
@@ -119,7 +121,7 @@ fn evaluated_geometry_reuses_storage_and_authored_copies_get_independent_results
         world
             .inspect(entity)
             .unwrap()
-            .base
+            .components
             .iter()
             .any(|value| matches!(value, ComponentValue::BoundingGeometry(value) if value.outline))
     );
@@ -143,7 +145,7 @@ fn evaluated_geometry_reuses_storage_and_authored_copies_get_independent_results
 #[test]
 fn mesh_generated_geometry_reuses_its_component_allocation() {
     let mut host = HostRuntime::new();
-    let id = host.create_world(Default::default()).unwrap();
+    let id = host.create_world(Default::default(), RENDER).unwrap();
     let mut world = host.world_mut(id).unwrap();
     let mut bytes = b"IPPM".to_vec();
     for value in [3u32, 3, 3, 1] {

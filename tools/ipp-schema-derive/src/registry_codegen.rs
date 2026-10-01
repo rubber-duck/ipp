@@ -131,6 +131,26 @@ pub(super) fn expand(input: TokenStream) -> TokenStream {
         }
     });
 
+    let storage_reserve_component = entries.iter().map(|entry| {
+        let attrs = &entry.attrs;
+        let field = snake_case(&entry.name);
+        let id = &entry.id;
+        quote! {
+            #(#attrs)*
+            #id => self.#field.try_reserve(slots),
+        }
+    });
+
+    let storage_page_counts = entries.iter().map(|entry| {
+        let attrs = &entry.attrs;
+        let field = snake_case(&entry.name);
+        let id = &entry.id;
+        quote! {
+            #(#attrs)*
+            #id => self.#field.page_count(),
+        }
+    });
+
     let storage_clear = entries.iter().map(|e| {
         let Entry {
             attrs,
@@ -499,6 +519,15 @@ pub(super) fn expand(input: TokenStream) -> TokenStream {
         }
     });
 
+    let row_field_assets = entries.iter().map(|entry| {
+        let attrs = &entry.attrs;
+        let component = &entry.name;
+        quote! {
+            #(#attrs)*
+            Self::#component(value) => ::ipp_core::components::schema::SchemaComponent::visit_row_field_assets(value, offset, visit),
+        }
+    });
+
     let retained_bytes = entries.iter().map(|e| {
         let attrs = &e.attrs;
         let component = &e.name;
@@ -594,6 +623,21 @@ pub(super) fn expand(input: TokenStream) -> TokenStream {
         }
 
         impl ComponentStorage {
+            pub(crate) fn try_reserve_component(&mut self, component: u16, slots: usize) -> Result<(), crate::ErrorReason> {
+                match component {
+                    #(#storage_reserve_component)*
+                    _ => Err(crate::ErrorReason::InvalidValue),
+                }
+            }
+
+            #[cfg(test)]
+            pub(crate) fn allocated_pages(&self, component: u16) -> usize {
+                match component {
+                    #(#storage_page_counts)*
+                    _ => 0,
+                }
+            }
+
             pub(crate) fn try_reserve(&mut self, slots: usize) -> Result<(), crate::ErrorReason> {
                 #(#storage_try_reserve)*
                 Ok(())
@@ -776,6 +820,15 @@ pub(super) fn expand(input: TokenStream) -> TokenStream {
                 visit: &mut dyn FnMut(&crate::services::asset_management::AssetSource),
             ) {
                 match self { #(#row_assets)* }
+            }
+
+            /// Visit present asset properties held in one schema rows field.
+            pub(crate) fn visit_row_field_assets(
+                &self,
+                offset: u32,
+                visit: &mut dyn FnMut(&crate::services::asset_management::AssetSource),
+            ) {
+                match self { #(#row_field_assets)* }
             }
 
             /// Default dependencies declared by the compiled component implementation.

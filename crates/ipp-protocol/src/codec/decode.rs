@@ -1,7 +1,7 @@
 use super::*;
 
 impl<'a> Reader<'a> {
-    pub(super) fn f64(&mut self) -> Result<f64, ProtocolError> {
+    pub(crate) fn f64(&mut self) -> Result<f64, ProtocolError> {
         Ok(f64::from_le_bytes(self.take(8)?.try_into().unwrap()))
     }
 
@@ -56,6 +56,36 @@ impl<'a> Reader<'a> {
         })
     }
 
+    /// Finite extent and density; positivity is the Canvas System's to validate.
+    pub(crate) fn canvas_state(&mut self) -> Result<ipp_core::CanvasState, ProtocolError> {
+        Ok(ipp_core::CanvasState {
+            extent: [self.f32()?, self.f32()?],
+            units_per_metre: self.f32()?,
+        })
+    }
+
+    #[cfg(feature = "surfaces")]
+    pub(super) fn canvas_state_update(
+        &mut self,
+    ) -> Result<ipp_core::CanvasStateUpdate, ProtocolError> {
+        let mask = self.u16()?;
+        if mask & !3 != 0 {
+            return Err(ProtocolError::Malformed("canvas state mask"));
+        }
+        Ok(ipp_core::CanvasStateUpdate {
+            extent: if mask & 1 != 0 {
+                Some([self.f32()?, self.f32()?])
+            } else {
+                None
+            },
+            units_per_metre: if mask & 2 != 0 {
+                Some(self.f32()?)
+            } else {
+                None
+            },
+        })
+    }
+
     pub(crate) fn u16(&mut self) -> Result<u16, ProtocolError> {
         Ok(u16::from_le_bytes(self.take(2)?.try_into().unwrap()))
     }
@@ -68,7 +98,7 @@ impl<'a> Reader<'a> {
         Ok(u64::from_le_bytes(self.take(8)?.try_into().unwrap()))
     }
 
-    pub(super) fn f32(&mut self) -> Result<f32, ProtocolError> {
+    pub(crate) fn f32(&mut self) -> Result<f32, ProtocolError> {
         let v = f32::from_bits(self.u32()?);
         if v.is_finite() {
             Ok(v)
@@ -87,14 +117,22 @@ impl<'a> Reader<'a> {
     }
 
     pub(crate) fn string(&mut self) -> Result<String, ProtocolError> {
-        let n = self.count(65536)?;
+        let n = self.count(crate::MAX_FIELD_BYTES)?;
         std::str::from_utf8(self.take(n)?)
             .map(str::to_owned)
             .map_err(|_| ProtocolError::Malformed("utf8"))
     }
 
+    /// Decode component or protocol text straight into one shared immutable allocation.
+    pub(crate) fn text(&mut self) -> Result<std::sync::Arc<str>, ProtocolError> {
+        let n = self.count(crate::MAX_FIELD_BYTES)?;
+        std::str::from_utf8(self.take(n)?)
+            .map(std::sync::Arc::from)
+            .map_err(|_| ProtocolError::Malformed("utf8"))
+    }
+
     pub(crate) fn bytes(&mut self) -> Result<Vec<u8>, ProtocolError> {
-        self.bytes_bounded(65536)
+        self.bytes_bounded(crate::MAX_FIELD_BYTES)
     }
 
     pub(crate) fn bytes_bounded(&mut self, max: usize) -> Result<Vec<u8>, ProtocolError> {
@@ -108,7 +146,7 @@ impl<'a> Reader<'a> {
             OPTION_SOME => Some(self.string()?),
             _ => return Err(ProtocolError::Malformed("option tag")),
         };
-        let n = self.count(256)?;
+        let n = self.count(crate::MAX_METADATA_CLASSES)?;
         let mut classes = Vec::with_capacity(n);
         for _ in 0..n {
             classes.push(self.string()?);
@@ -123,6 +161,7 @@ impl<'a> Reader<'a> {
         match self.u8()? {
             REF_HANDLE => Ok(EntityRef::Handle(EntityId::from_bits(self.u64()?))),
             REF_ALIAS => Ok(EntityRef::Alias(self.u32()?)),
+            REF_SYMBOL => Ok(EntityRef::Symbol(self.text()?)),
             tag => Err(ProtocolError::Unsupported(tag)),
         }
     }
@@ -134,13 +173,47 @@ impl<'a> Reader<'a> {
                 "named property requires named addressing",
             ));
         }
-        let value = match self.u8()? {
+        Ok(FieldWrite {
+            offset,
+            value: self.field_value()?,
+        })
+    }
+
+    /// Decode one tagged field value without its offset.
+    pub(super) fn field_value(&mut self) -> Result<FieldValue, ProtocolError> {
+        Ok(match self.u8()? {
+            VALUE_WORLD => {
+                if self.boolean()? {
+                    let reference = self.world_reference()?;
+                    FieldValue::UnresolvedWorld(ipp_core::WorldReferenceToken::untrusted(
+                        reference.id,
+                        reference.incarnation,
+                    ))
+                } else {
+                    FieldValue::World(None)
+                }
+            }
+            VALUE_OUTPUT => {
+                if self.boolean()? {
+                    let reference = self.output_reference()?;
+                    let target = reference.target.core();
+                    FieldValue::UnresolvedOutput(ipp_core::OutputReferenceToken::untrusted(
+                        ipp_core::WorldReferenceToken::untrusted(
+                            reference.world.id,
+                            reference.world.incarnation,
+                        ),
+                        target,
+                    ))
+                } else {
+                    FieldValue::Output(None)
+                }
+            }
             VALUE_BOOL => FieldValue::Bool(self.boolean()?),
             VALUE_F32 => FieldValue::F32(self.f32()?),
             VALUE_ENTITY => FieldValue::Entity(self.entity()?),
             VALUE_U32 => FieldValue::U32(self.u32()?),
             VALUE_U64 => FieldValue::U64(self.u64()?),
-            VALUE_STRING => FieldValue::String(self.string()?),
+            VALUE_STRING => FieldValue::String(self.text()?),
             VALUE_BYTES => FieldValue::Bytes(self.bytes()?),
             VALUE_DYNAMIC => FieldValue::Dynamic(
                 ipp_core::DynamicValue::decode(&self.bytes()?)
@@ -149,24 +222,47 @@ impl<'a> Reader<'a> {
             VALUE_ROWS => FieldValue::Rows(self.bytes_bounded(crate::MAX_MESSAGE_BYTES)?),
             VALUE_UNSET => FieldValue::Unset,
             tag => return Err(ProtocolError::Unsupported(tag)),
+        })
+    }
+
+    fn placement(&mut self) -> Result<ipp_core::EntityPlacementRef, ProtocolError> {
+        let parent = match self.u8()? {
+            OPTION_NONE => None,
+            OPTION_SOME => Some(self.entity()?),
+            _ => return Err(ProtocolError::Malformed("placement parent")),
         };
-        Ok(FieldWrite {
-            offset,
-            value,
+        let before = match self.u8()? {
+            OPTION_NONE => None,
+            OPTION_SOME => Some(self.entity()?),
+            _ => return Err(ProtocolError::Malformed("placement sibling")),
+        };
+        Ok(ipp_core::EntityPlacementRef {
+            parent,
+            before,
         })
     }
 
-    pub(super) fn resource(&mut self) -> Result<ipp_core::StateOverlayRef, ProtocolError> {
-        Ok(match self.u8()? {
-            REF_HANDLE => ipp_core::StateOverlayRef::Handle(self.u64()?),
-            REF_ALIAS => ipp_core::StateOverlayRef::Alias(self.u32()?),
-            tag => return Err(ProtocolError::Unsupported(tag)),
-        })
-    }
-
-    pub(super) fn fields(&mut self) -> Result<Vec<FieldWrite>, ProtocolError> {
-        let n = self.count(256)?;
-        (0..n).map(|_| self.field()).collect()
+    /// Decode the commands of one batch page into `operations` through the end of
+    /// the message.
+    fn batch_page(
+        &mut self,
+        message_bytes: usize,
+        operations: &mut Vec<Command>,
+    ) -> Result<(), ProtocolError> {
+        if message_bytes > crate::COMMAND_PAGE_BYTES {
+            return Err(ProtocolError::Limit("command page bytes"));
+        }
+        let n = self.count(crate::COMMAND_PAGE_COMMANDS)?;
+        operations.clear();
+        // Geometric growth could retain more than the wire limit for later batches.
+        operations.reserve_exact(n);
+        for _ in 0..n {
+            operations.push(self.command()?);
+        }
+        if self.at != self.bytes.len() {
+            return Err(ProtocolError::Malformed("trailing bytes"));
+        }
+        Ok(())
     }
 
     pub(super) fn command(&mut self) -> Result<Command, ProtocolError> {
@@ -174,9 +270,20 @@ impl<'a> Reader<'a> {
             COMMAND_CREATE => Command::Create {
                 alias: self.u32()?,
                 metadata: self.metadata()?,
+                adopt: self.boolean()?,
             },
             COMMAND_DELETE => Command::Delete {
                 entity: self.entity()?,
+            },
+            COMMAND_PLACE_ENTITY => Command::PlaceEntity {
+                entity: self.entity()?,
+                placement: self.placement()?,
+            },
+            COMMAND_DELETE_SUBTREE => Command::DeleteSubtree {
+                root: self.entity()?,
+            },
+            COMMAND_DETACH_ATTACHMENT_RECEIPT => Command::DetachWorldAttachmentReceipt {
+                receipt: self.u64()?,
             },
             COMMAND_METADATA => Command::SetMetadata {
                 entity: self.entity()?,
@@ -185,7 +292,7 @@ impl<'a> Reader<'a> {
             COMMAND_INSERT => {
                 let entity = self.entity()?;
                 let component = self.u16()?;
-                let n = self.count(256)?;
+                let n = self.count(crate::MAX_INSERT_FIELDS)?;
                 let mut fields = Vec::with_capacity(n);
                 for _ in 0..n {
                     fields.push(self.field()?);
@@ -194,6 +301,7 @@ impl<'a> Reader<'a> {
                     entity,
                     component,
                     fields,
+                    adopt: self.boolean()?,
                 }
             }
             COMMAND_SET_DYNAMIC_PROPERTY => Command::SetDynamicProperty {
@@ -208,88 +316,30 @@ impl<'a> Reader<'a> {
                 component: self.u16()?,
                 name: self.string()?,
             },
-            COMMAND_UPDATE_DYNAMIC_COMPONENT_STATE_OVERLAY => {
-                let owner = self.resource()?;
-                let overlay = self.resource()?;
-                let count = self.count(65536)?;
-                let properties = (0..count)
-                    .map(|_| {
-                        Ok((
-                            self.string()?,
-                            ipp_core::DynamicValue::decode(&self.bytes()?)
-                                .map_err(|_| ProtocolError::Malformed("dynamic value"))?,
-                        ))
-                    })
-                    .collect::<Result<Vec<_>, ProtocolError>>()?;
-                let count = self.count(65536)?;
-                let clear = (0..count)
-                    .map(|_| self.string())
-                    .collect::<Result<Vec<_>, _>>()?;
-                Command::UpdateDynamicComponentStateOverlay {
-                    owner,
-                    overlay,
-                    properties,
-                    clear,
-                }
-            }
             COMMAND_SET => Command::SetField {
                 entity: self.entity()?,
                 component: self.u16()?,
                 field: self.field()?,
             },
+            COMMAND_SET_FIELD_IF => {
+                let entity = self.entity()?;
+                let component = self.u16()?;
+                let field = self.field()?;
+                let expected = self.field_value()?;
+                Command::set_field_if(entity, component, field, expected)
+            }
             COMMAND_REMOVE => Command::RemoveComponent {
                 entity: self.entity()?,
                 component: self.u16()?,
             },
-            COMMAND_CREATE_STATE_OVERLAY_OWNER => Command::CreateStateOverlayOwner {
-                alias: self.u32()?,
-            },
-            COMMAND_RELEASE_STATE_OVERLAY_OWNER => Command::ReleaseStateOverlayOwner {
-                owner: self.resource()?,
-            },
-            COMMAND_ATTACH_ENTITY_OVERLAY_BINDING => Command::AttachEntityOverlayBinding {
-                owner: self.resource()?,
-                alias: self.u32()?,
-                symbolic_id: self.string()?,
-                mode: match self.u8()? {
-                    ENTITY_OVERLAY_MODE_OWNED => ipp_core::EntityOverlayMode::Owned,
-                    ENTITY_OVERLAY_MODE_BOUND => ipp_core::EntityOverlayMode::Bound,
-                    _ => return Err(ProtocolError::Malformed("entity mode")),
+            #[cfg(feature = "gui")]
+            COMMAND_GUI_ACTION => Command::GuiAction {
+                target: ipp_core::GuiActionTarget {
+                    entity: self.entity()?,
+                    component: self.u16()?,
+                    incarnation: self.u64()?,
                 },
-            },
-            COMMAND_RELEASE_ENTITY_OVERLAY_BINDING => Command::ReleaseEntityOverlayBinding {
-                owner: self.resource()?,
-                binding: self.resource()?,
-            },
-            COMMAND_ATTACH_COMPONENT_STATE_OVERLAY => Command::AttachComponentStateOverlay {
-                owner: self.resource()?,
-                binding: self.resource()?,
-                alias: self.u32()?,
-                component: self.u16()?,
-                mode: match self.u8()? {
-                    COMPONENT_OVERLAY_MODE_AUTO => ipp_core::ComponentOverlayMode::Auto,
-                    COMPONENT_OVERLAY_MODE_BOUND => ipp_core::ComponentOverlayMode::Bound,
-                    COMPONENT_OVERLAY_MODE_OWNED => ipp_core::ComponentOverlayMode::Owned,
-                    _ => return Err(ProtocolError::Malformed("component mode")),
-                },
-                fields: self.fields()?,
-            },
-            COMMAND_UPDATE_COMPONENT_STATE_OVERLAY => {
-                let owner = self.resource()?;
-                let overlay = self.resource()?;
-                let fields = self.fields()?;
-                let n = self.count(256)?;
-                let clear = (0..n).map(|_| self.u32()).collect::<Result<_, _>>()?;
-                Command::UpdateComponentStateOverlay {
-                    owner,
-                    overlay,
-                    fields,
-                    clear,
-                }
-            }
-            COMMAND_RELEASE_COMPONENT_STATE_OVERLAY => Command::ReleaseComponentStateOverlay {
-                owner: self.resource()?,
-                overlay: self.resource()?,
+                action: self.gui_action()?,
             },
             tag => return Err(ProtocolError::Unsupported(tag)),
         })
@@ -310,8 +360,65 @@ pub fn decode_request_with_buffer(
     expected_session: u64,
     operations: &mut Vec<Command>,
 ) -> Result<Request, ProtocolError> {
+    decode_world_request(bytes, Some(expected_session), operations).map_err(|error| match error {
+        RequestDecodeError::Request(error) => error,
+        RequestDecodeError::BatchPage(page) => page.error,
+    })
+}
+
+/// Whether a World request message is a batch page, judged by its request tag
+/// without decoding it.
+pub fn is_batch_page(bytes: &[u8]) -> bool {
+    bytes.get(16) == Some(&REQUEST_SUBMIT_BATCH)
+}
+
+/// A batch page whose identifying header decoded but whose content did not.
+///
+/// The failure belongs to the page's batch, not to its connection: the Host
+/// fails that batch and answers its final page with this error.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RejectedBatchPage {
+    /// Session named by the page.
+    pub session: u64,
+    /// Correlated identity, nonzero exactly on the final page.
+    pub request_id: u64,
+    /// Client-assigned batch identity.
+    pub batch_id: u32,
+    /// Whether this page completes the batch.
+    pub last: bool,
+    /// First decoding error of the page.
+    pub error: ProtocolError,
+}
+
+/// Why a World request could not be decoded.
+#[derive(Clone, Debug, PartialEq)]
+pub enum RequestDecodeError {
+    /// The message cannot be attributed to a batch page; its connection fails.
+    Request(ProtocolError),
+    /// An identified batch page is malformed; only its batch fails.
+    BatchPage(RejectedBatchPage),
+}
+
+impl From<ProtocolError> for RequestDecodeError {
+    fn from(error: ProtocolError) -> Self {
+        Self::Request(error)
+    }
+}
+
+/// Decode a World request without World or Host state, so a transport may run it
+/// as soon as a message arrives. `None` accepts any nonzero session; the caller
+/// then checks that the session belongs to the receiving connection.
+///
+/// Performs every check that needs no World state: framing, tags, field domains,
+/// counts and byte limits. Entity references, aliases and schema checks stay with
+/// each command's mutation boundary.
+pub fn decode_world_request(
+    bytes: &[u8],
+    expected_session: Option<u64>,
+    operations: &mut Vec<Command>,
+) -> Result<Request, RequestDecodeError> {
     if bytes.len() > MAX_MESSAGE_BYTES {
-        return Err(ProtocolError::Limit("message"));
+        return Err(ProtocolError::Limit("message").into());
     }
 
     let mut r = Reader {
@@ -319,70 +426,100 @@ pub fn decode_request_with_buffer(
         at: 0,
     };
     let session = r.u64()?;
-    if session == 0 || session != expected_session {
-        return Err(ProtocolError::SessionMismatch);
+    if session == 0 || expected_session.is_some_and(|expected| session != expected) {
+        return Err(ProtocolError::SessionMismatch.into());
     }
 
     let request_id = r.u64()?;
 
     let body = match r.u8()? {
-        #[cfg(feature = "surfaces")]
-        REQUEST_SURFACE => RequestBody::SurfaceCommand(r.surface_command()?),
         #[cfg(feature = "gui")]
-        REQUEST_GUI => RequestBody::GuiCommands {
-            batch_id: r.boolean()?.then(|| r.u64()).transpose()?,
-            commands: r.gui_commands()?,
+        REQUEST_GUI_OBSERVATION => RequestBody::GuiObservation(r.gui_observation_request()?),
+        REQUEST_ATTACHMENT_RECEIPT => RequestBody::AttachmentReceipt {
+            receipt: r.u64()?,
+            release: match r.u8()? {
+                0 => false,
+                1 => true,
+                _ => return Err(ProtocolError::Malformed("receipt release flag").into()),
+            },
         },
-        #[cfg(feature = "gui")]
-        REQUEST_GUI_INSPECT => RequestBody::GuiInspect(r.gui_inspect_query()?),
-        #[cfg(feature = "gui")]
-        REQUEST_GUI_INPUT => RequestBody::GuiInput(Box::new(r.gui_input_command()?)),
-        #[cfg(feature = "gui")]
-        REQUEST_GUI_SEMANTIC_SNAPSHOT => {
-            RequestBody::GuiSemanticSnapshot(r.gui_semantic_snapshot_query()?)
-        }
-        #[cfg(feature = "gui")]
-        REQUEST_GUI_SEMANTIC_ACTION => {
-            RequestBody::GuiSemanticAction(Box::new(r.gui_semantic_action()?))
-        }
-        REQUEST_END_BATCH => RequestBody::EndBatch(r.u64()?),
-        REQUEST_BEGIN_BATCH => RequestBody::BeginBatch,
-        tag @ (REQUEST_BATCH | REQUEST_BATCH_CHUNK) => {
-            let id = r.u64()?;
-            if bytes.len() > 128 * 1024 {
-                return Err(ProtocolError::Limit("command page bytes"));
-            }
-            let n = r.count(256)?;
-            operations.clear();
-            // Geometric growth could retain more than the wire limit for later batches.
-            operations.reserve_exact(n);
-            for _ in 0..n {
-                operations.push(r.command()?);
-            }
-            let batch = Batch {
-                id,
-                operations: std::mem::take(operations),
+        REQUEST_SUBMIT_BATCH => {
+            let batch_id = r.u32()?;
+            let last = match r.u8()? {
+                0 => false,
+                1 => true,
+                _ => return Err(ProtocolError::Malformed("batch page completion flag").into()),
             };
-            if tag == REQUEST_BATCH_CHUNK {
-                RequestBody::BatchChunk(batch)
-            } else {
-                RequestBody::Batch(batch)
+            // A batch is answered once, on its final page, so earlier pages are
+            // uncorrelated and never leave correlation state.
+            if last == (request_id == 0) {
+                return Err(ProtocolError::Malformed("reserved request identity").into());
             }
+            return r
+                .batch_page(bytes.len(), operations)
+                .map(|()| Request {
+                    session,
+                    request_id,
+                    body: RequestBody::SubmitBatch(crate::BatchPage {
+                        batch_id,
+                        last,
+                        operations: std::mem::take(operations),
+                    }),
+                })
+                .map_err(|error| {
+                    RequestDecodeError::BatchPage(RejectedBatchPage {
+                        session,
+                        request_id,
+                        batch_id,
+                        last,
+                        error,
+                    })
+                });
         }
         REQUEST_INSPECT => {
             let collection = r.u8()?;
             let after = r.u64()?;
             let target = r.u64()?;
             let limit = r.u16()?;
-            if collection > 4 || limit == 0 || limit > 256 || (target != 0 && after != 0) {
-                return Err(ProtocolError::Malformed("inspection query"));
+            let max_depth = r.u16()?;
+            #[cfg(feature = "gui")]
+            let gui_collection = matches!(collection, INSPECT_GUI_FOCUS | INSPECT_GUI_POINTERS);
+            #[cfg(not(feature = "gui"))]
+            let gui_collection = false;
+            #[cfg(feature = "surfaces")]
+            let canvas_collection = collection == INSPECT_CANVAS;
+            #[cfg(not(feature = "surfaces"))]
+            let canvas_collection = false;
+            if !(collection <= INSPECT_ENTITY_TREE || gui_collection || canvas_collection)
+                || limit == 0
+                || usize::from(limit) > crate::INSPECTION_PAGE_RECORDS
+                || (collection != 5 && (max_depth != 0 || (target != 0 && after != 0)))
+                || (collection == 5 && max_depth > crate::MAX_ENTITY_TREE_DEPTH)
+            {
+                return Err(ProtocolError::Malformed("inspection query").into());
             }
             RequestBody::Inspect(crate::InspectionQuery {
                 collection,
                 after,
                 target,
                 limit,
+                max_depth,
             })
+        }
+        REQUEST_LIFECYCLE_WATCH => RequestBody::LifecycleWatch(r.lifecycle_watch_request()?),
+        #[cfg(feature = "diagnostics")]
+        REQUEST_LIFECYCLE_DIAGNOSTICS => {
+            let world = r.world_reference()?;
+            let output = r.u64()?;
+            if world.id == 0 || world.incarnation == 0 || output == 0 {
+                return Err(ProtocolError::Malformed("lifecycle diagnostic endpoint").into());
+            }
+            RequestBody::LifecycleDiagnostics(
+                crate::lifecycle_diagnostics::LifecycleDiagnosticQuery {
+                    world,
+                    output,
+                },
+            )
         }
         REQUEST_LIFECYCLE_SUBSCRIBE => RequestBody::LifecycleSubscription(
             ipp_core::systems::lifecycle_publisher::LifecyclePublisherCommand::Subscribe {
@@ -430,58 +567,70 @@ pub fn decode_request_with_buffer(
         REQUEST_RENDER_STATE_UPDATE => {
             RequestBody::RenderStateUpdateCommand(r.render_state_patch()?)
         }
-        REQUEST_CAMERA_ACTIVATE => RequestBody::CameraActivateCommand {
-            entity: EntityId::from_bits(r.u64()?),
-        },
-        REQUEST_CAMERA_NAVIGATE => RequestBody::CameraNavigateCommand(match r.u8()? {
-            CAMERA_MOTION_ROTATE => ipp_core::CameraMotion::Rotate {
-                yaw: r.f32()?,
-                pitch: r.f32()?,
-            },
-            CAMERA_MOTION_PAN => ipp_core::CameraMotion::Pan {
-                x: r.f32()?,
-                y: r.f32()?,
-                width: r.u32()?,
-                height: r.u32()?,
-            },
-            CAMERA_MOTION_ZOOM => ipp_core::CameraMotion::Zoom {
-                amount: r.f32()?,
-            },
-            _ => return Err(ProtocolError::Malformed("camera motion tag")),
-        }),
-        REQUEST_GEOMETRY_PICK => RequestBody::GeometryPickQuery(ipp_core::GeometryPickQuery {
+        #[cfg(feature = "surfaces")]
+        REQUEST_CANVAS_STATE_UPDATE => {
+            RequestBody::CanvasStateUpdateCommand(r.canvas_state_update()?)
+        }
+        REQUEST_GEOMETRY_PICK => RequestBody::GeometryPickQuery(crate::views::GeometryPickQuery {
+            view: r.view_target()?,
             x: r.f32()?,
             y: r.f32()?,
-            width: r.u32()?,
-            height: r.u32()?,
             include_view_plane: r.boolean()?,
         }),
-        REQUEST_CAMERA_PROJECT => RequestBody::CameraProjectQuery(ipp_core::CameraProjectQuery {
-            x: r.f32()?,
-            y: r.f32()?,
-            width: r.u32()?,
-            height: r.u32()?,
-            plane: ipp_core::WorldPlane {
-                point: [r.f32()?, r.f32()?, r.f32()?],
-                normal: [r.f32()?, r.f32()?, r.f32()?],
-            },
-        }),
-        tag => return Err(ProtocolError::Unsupported(tag)),
+        REQUEST_CAMERA_PROJECT => {
+            RequestBody::CameraProjectQuery(crate::views::CameraProjectQuery {
+                view: r.view_target()?,
+                x: r.f32()?,
+                y: r.f32()?,
+                plane: ipp_core::WorldPlane {
+                    point: [r.f32()?, r.f32()?, r.f32()?],
+                    normal: [r.f32()?, r.f32()?, r.f32()?],
+                },
+            })
+        }
+        REQUEST_CAMERA_NAVIGATE => {
+            let binding = r.root_binding()?;
+            let publication = r.view_source()?;
+            let kind = r.u32()?;
+            let first = r.f32()?;
+            let second = r.f32()?;
+            use ipp_core::systems::camera::CameraViewMotion;
+            let motion = match kind {
+                0 => CameraViewMotion::Rotate {
+                    yaw: first,
+                    pitch: second,
+                },
+                1 => CameraViewMotion::Pan {
+                    x: first,
+                    y: second,
+                },
+                2 if second == 0.0 => CameraViewMotion::Zoom {
+                    amount: first,
+                },
+                _ => return Err(ProtocolError::Malformed("camera motion").into()),
+            };
+            RequestBody::CameraNavigate(crate::views::CameraNavigateRequest {
+                binding,
+                publication,
+                motion,
+            })
+        }
+        tag => return Err(ProtocolError::Unsupported(tag).into()),
     };
 
+    // Uncorrelated requests carry identity zero.
     let command = matches!(
         body,
-        RequestBody::AnimationPlaybackCommand { .. }
-            | RequestBody::CameraActivateCommand { .. }
-            | RequestBody::CameraNavigateCommand(_)
-            | RequestBody::RenderStateUpdateCommand(_)
+        RequestBody::AnimationPlaybackCommand { .. } | RequestBody::RenderStateUpdateCommand(_)
     );
+    #[cfg(feature = "surfaces")]
+    let command = command || matches!(body, RequestBody::CanvasStateUpdateCommand(_));
     if command != (request_id == 0) {
-        return Err(ProtocolError::Malformed("reserved request identity"));
+        return Err(ProtocolError::Malformed("reserved request identity").into());
     }
 
     if r.at != bytes.len() {
-        return Err(ProtocolError::Malformed("trailing bytes"));
+        return Err(ProtocolError::Malformed("trailing bytes").into());
     }
     Ok(Request {
         session,

@@ -7,10 +7,15 @@ use std::{
 };
 
 mod catalog;
+mod source;
+pub(crate) use source::validate_reference;
 mod source_lookup;
 
 mod lifecycle;
 pub use lifecycle::{AssetLifecycleEvent, AssetLifecycleKind, AssetReleaseKind};
+
+mod publication;
+pub use publication::AssetPublicationId;
 
 mod resource;
 
@@ -71,8 +76,8 @@ pub struct AssetUploadIdentity {
 pub struct AssetSource {
     /// Expected compiled payload type.
     pub kind: AssetTypeId,
-    /// Provider URI naming immutable content.
-    pub uri: String,
+    /// Provider URI naming immutable content, shared rather than copied.
+    pub uri: std::sync::Arc<str>,
     /// Immutable selected variant.
     pub variant: u32,
 }
@@ -206,6 +211,14 @@ pub trait AssetLoader: 'static {
         cx: &mut Context<'_>,
     ) -> Poll<Result<Self::Data, String>>;
 }
+
+/// Joints one skeleton, pose, skin binding or pill part may address.
+///
+/// A skinned draw uploads one mat4 per joint (`IPP_MAX_JOINTS` in the vertex shader):
+/// 32 joints use 128 of the 256 vertex uniform vectors GLSL ES 3.00 guarantees, leaving
+/// room for the draw's other uniforms. Assets with more joints, and joint references at or
+/// beyond the bound, are rejected as invalid.
+pub const MAX_JOINTS: usize = 32;
 
 /// Maximum UTF-8 byte length of an asset failure on all producer and protocol paths.
 pub const MAX_ASSET_ERROR_BYTES: usize = 2048;

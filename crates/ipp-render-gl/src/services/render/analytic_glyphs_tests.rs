@@ -9,9 +9,9 @@ use crate::services::render::device::{SurfacePathDescriptor, SurfacePathInstance
 use crate::services::render::frame_statistics::RenderFrameWork;
 use crate::services::render::retained_surfaces::{RetainedSurfaceSubmission, SurfacePaint};
 use crate::{RenderDevice, RenderError};
+use ipp_core::EntityId;
 use ipp_core::services::asset_management::AssetKey;
-use ipp_core::systems::surface::{SurfaceGlyph, SurfacePrimitiveIdentity, SurfacePrimitiveStyle};
-use ipp_core::{EntityId, SurfaceItemId};
+use ipp_core::systems::canvas::{CanvasGlyph, CanvasPrimitiveId, CanvasPrimitiveStyle};
 
 /// Counts stream allocations, replacements, releases and instanced draws.
 #[derive(Default)]
@@ -38,12 +38,12 @@ impl RenderDevice for MockDevice {
     type SurfaceInstances = usize;
     #[cfg(feature = "shadows")]
     type ShadowMap = ();
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     type GuiBatch = ();
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     type GlyphAtlasPage = ();
 
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     fn glyph_atlas_texture(page: &Self::GlyphAtlasPage) -> &Self::Texture {
         page
     }
@@ -188,21 +188,33 @@ const FONT: AssetKey = AssetKey {
     generation: 1,
 };
 
-fn style(id: u32, x: f32) -> SurfacePrimitiveStyle {
-    SurfacePrimitiveStyle {
-        identity: SurfacePrimitiveIdentity::Authored(SurfaceItemId(id)),
+fn style(id: u32, x: f32) -> CanvasPrimitiveStyle {
+    CanvasPrimitiveStyle {
+        identity: CanvasPrimitiveId {
+            target: ipp_core::systems::canvas::CanvasTarget {
+                entity: ipp_core::EntityId::from_bits(u64::from(id)),
+                component: ipp_core::ComponentValue::CANVAS_GLYPH_RUN,
+                incarnation: 1,
+            },
+            part: ipp_core::systems::canvas::CanvasPart::Content,
+        },
         position: [x, 0.1],
         scale: [1.0, 1.0],
         color: [1.0; 4],
         opacity: 1.0,
-        clip: None,
+        clip: [
+            f32::NEG_INFINITY,
+            f32::NEG_INFINITY,
+            f32::INFINITY,
+            f32::INFINITY,
+        ],
     }
 }
 
-fn glyphs(ids: &[u32]) -> Vec<SurfaceGlyph> {
+fn glyphs(ids: &[u32]) -> Vec<CanvasGlyph> {
     ids.iter()
         .enumerate()
-        .map(|(index, &glyph_id)| SurfaceGlyph {
+        .map(|(index, &glyph_id)| CanvasGlyph {
             glyph_id,
             position: [0.1 * index as f32, 0.0],
             color: None,
@@ -212,8 +224,8 @@ fn glyphs(ids: &[u32]) -> Vec<SurfaceGlyph> {
 
 fn run<'a>(
     entity: u64,
-    style: &'a SurfacePrimitiveStyle,
-    glyphs: &'a [SurfaceGlyph],
+    style: &'a CanvasPrimitiveStyle,
+    glyphs: &'a [CanvasGlyph],
 ) -> AnalyticGlyphRun<'a> {
     AnalyticGlyphRun {
         entity: EntityId::from_bits(entity),
@@ -326,6 +338,7 @@ fn reusable_paint_revisions_skip_hashing_until_the_revision_changes() {
     let moved = style(1, 0.4);
     let text = glyphs(&[1, 2]);
     let paint = |revision, reusable| SurfacePaint {
+        opacity: 1.0,
         revision,
         reusable,
     };

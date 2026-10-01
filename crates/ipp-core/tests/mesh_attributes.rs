@@ -3,12 +3,15 @@
 
 mod support;
 use support::WorldTestDriver;
+use support::selection::RENDER;
 
 use ipp_core::ComponentValue;
 use ipp_core::{ErrorReason, MeshKey, MeshUpload};
 
 fn test_world(host: &mut ipp_core::HostRuntime) -> ipp_core::WorldContext<'_> {
-    let world_id = host.create_world(ipp_core::WorldLimits::default()).unwrap();
+    let world_id = host
+        .create_world(ipp_core::WorldLimits::default(), RENDER)
+        .unwrap();
     let mut world = host.world_mut(world_id).unwrap();
     world.register_stream_resource_provider("http").unwrap();
     world
@@ -382,6 +385,7 @@ fn texture_activation(material_type: u16, texture_type: u16) {
         entity: EntityRef::Alias(0),
         component,
         fields,
+        adopt: false,
     };
     world
         .enqueue(Batch {
@@ -390,6 +394,7 @@ fn texture_activation(material_type: u16, texture_type: u16) {
                 Command::Create {
                     alias: 0,
                     metadata: EntityMetadata::default(),
+                    adopt: false,
                 },
                 insert(3, vec![]),
                 insert(material_type, vec![]),
@@ -435,7 +440,7 @@ fn texture_activation(material_type: u16, texture_type: u16) {
         world
             .resource_snapshots()
             .iter()
-            .any(|resource| resource.source == "http://fixture/1")
+            .any(|resource| resource.source == std::sync::Arc::<str>::from("http://fixture/1"))
     );
     assert!(world.mesh(key(1)).unwrap().colors().is_none());
 
@@ -446,13 +451,16 @@ fn texture_activation(material_type: u16, texture_type: u16) {
             offset: offset_of!(UnlitTexture, source) as u32,
             value: FieldValue::String("http://fixture/texture".into()),
         }],
+        adopt: false,
     };
     let select_mesh = |asset_id| Command::SetField {
         entity: EntityRef::Handle(entity),
         component: ComponentValue::MESH_INSTANCE,
         field: FieldWrite {
             offset: offset_of!(MeshInstance, source) as u32,
-            value: FieldValue::String(format!("http://fixture/{asset_id}")),
+            value: FieldValue::String(std::sync::Arc::<str>::from(format!(
+                "http://fixture/{asset_id}"
+            ))),
         },
     };
     world

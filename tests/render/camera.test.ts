@@ -1,3 +1,4 @@
+import { outputProducer } from "../../packages/ipp-client/src/references.js";
 import type { RenderStatisticsSnapshot } from "@ipp/client";
 import assert from "node:assert/strict";
 import { copyFile, mkdir, writeFile } from "node:fs/promises";
@@ -33,15 +34,15 @@ const build: BrowserBuildConfiguration = {
 };
 
 interface CaptureReport {
-  session: bigint;
-  tick: bigint;
   width: number;
   height: number;
+  devicePixelRatio: number;
+  sequence: bigint;
+  context: bigint;
   drawCalls: number;
   triangles: number;
   failedDrawCalls: number;
-  invalidCamera: boolean;
-  statistics?: RenderStatisticsSnapshot;
+  statistics: RenderStatisticsSnapshot;
   summary: ImageSummary;
 }
 
@@ -140,8 +141,11 @@ export function createWebGlDevice(canvas) {
           environment.execute(name, args, () =>
             invoke<T>(environment.page, module, name, args),
           );
-        const capture = async (label: string) => {
-          const result = await call<CaptureReport>("capture", [label]);
+        const capture = async (label: string, included = true) => {
+          const result = await call<CaptureReport>("capture", [
+            label,
+            included,
+          ]);
           await recordCapture(
             environment.page,
             module,
@@ -184,28 +188,29 @@ export function createWebGlDevice(canvas) {
               await call<CameraQueryObservation>("selectTinyCamera");
             assert.ok(selected.selection.ok);
             assertHit(selected.pick, declared.target);
+            assert.ok(selected.selection.ok);
+            const camera = outputProducer(
+              selected.selection.view.output,
+            )?.entity;
             const valid = await capture("tiny-camera-valid");
-            assert.equal(valid.invalidCamera, false);
             assert.equal(valid.drawCalls, 1);
             const resized =
               await call<CameraQueryObservation>("resizeTinyCamera");
             assert.equal(resized.selection.ok, false);
             assert.equal(resized.selection.session, selected.selection.session);
-            assert.equal(resized.selection.camera, selected.selection.camera);
+            assert.deepEqual(resized.binding, {
+              entity: camera,
+              width: 1,
+              height: 2048,
+            });
             assert.equal(resized.pick.session, selected.selection.session);
-            assert.equal(resized.pick.camera, selected.selection.camera);
             assert.ok(
               !resized.pick.ok && resized.pick.error === "InvalidValue",
             );
-            const invalid = await capture("tiny-camera-invalid-viewport");
-            assert.equal(invalid.width, 1);
-            assert.equal(invalid.height, 2048);
-            assert.equal(invalid.invalidCamera, true);
-            assert.equal(invalid.drawCalls, 0);
-            assert.equal(invalid.triangles, 0);
-            requireBlank(
-              invalid.summary,
-              "Non-finite camera projection clears its viewport",
+            assert.deepEqual(
+              await call<{ reason: string }>("captureFailure"),
+              { reason: "drawFailed" },
+              "Non-finite camera projection has no successful presented draw",
             );
             const repaired =
               await call<CameraQueryObservation>("repairTinyCamera");
@@ -214,26 +219,21 @@ export function createWebGlDevice(canvas) {
               repaired.selection.session,
               selected.selection.session,
             );
-            assert.equal(repaired.selection.camera, selected.selection.camera);
+            assert.equal(
+              outputProducer(repaired.selection.view.output)?.entity,
+              camera,
+            );
+            assert.deepEqual(repaired.binding, resized.binding);
             assert.equal(repaired.pick.session, selected.selection.session);
             assertHit(repaired.pick, declared.target);
             const restored = await capture("tiny-camera-repaired");
             assert.equal(restored.width, 1);
             assert.equal(restored.height, 2048);
-            assert.equal(restored.invalidCamera, false);
             assert.equal(restored.drawCalls, 1);
             assert.equal(restored.triangles, 12);
             requireVisible(
               restored.summary,
               "Repaired camera resumes rendering in the same viewport",
-            );
-            assert.ok(
-              (
-                await compare(
-                  "tiny-camera-invalid-viewport",
-                  "tiny-camera-repaired",
-                )
-              ).changedFraction > 0.2,
             );
             return;
           }
@@ -251,7 +251,7 @@ export function createWebGlDevice(canvas) {
             );
             const failed = await call<GpuFailureObservation>("failGpuMesh");
             assertGpuFailureObservation(failed, selection.session, false);
-            const unavailable = await capture("gpu-allocation-failed");
+            const unavailable = await capture("gpu-allocation-failed", false);
             assert.equal(unavailable.drawCalls, 1);
             assert.equal(unavailable.failedDrawCalls, 1);
             assert.equal(
@@ -271,7 +271,7 @@ export function createWebGlDevice(canvas) {
               await call<GpuFailureObservation>("observeGpuFailure");
             assertGpuFailureObservation(continued, selection.session, false);
             assert.equal(continued.entity, failed.entity);
-            const stillFailed = await capture("gpu-failure-retained");
+            const stillFailed = await capture("gpu-failure-retained", false);
             assert.equal(
               stillFailed.statistics!.device.testMeshAllocationAttempts,
               2,
@@ -355,16 +355,19 @@ export function createWebGlDevice(canvas) {
 
           const declared = await call<{
             target: bigint;
+            rootBinding: null;
             noCamera: GeometryPickResultEvent;
           }>("prepareVisibleScene");
-          assert.equal(declared.noCamera.ok, false);
-          assert.equal(declared.noCamera.camera, null);
-          const blank = await capture("no-active-camera");
-          requireBlank(
-            blank.summary,
-            "A populated scene without an active camera",
+          assert.equal(
+            declared.rootBinding,
+            null,
+            "A populated scene has no implicit root view",
           );
-          assert.equal(blank.drawCalls, 0);
+          assert.ok(
+            !declared.noCamera.ok &&
+              declared.noCamera.error === "InvalidEntity",
+            "An unselected camera cannot answer root view queries",
+          );
 
           if (scenario === "camera navigation") {
             for (const projection of [0, 1]) {
@@ -408,7 +411,7 @@ export function createWebGlDevice(canvas) {
               );
 
               const panned = await call<GeometryPickResultEvent>("navigate", [
-                { kind: "pan", x: 0.15, y: 0.1, width: 320, height: 240 },
+                { kind: "pan", x: 0.15, y: 0.1 },
                 0.65,
                 0.6,
               ]);
@@ -452,7 +455,11 @@ export function createWebGlDevice(canvas) {
                 zoomed.hit.viewPlane!.point,
                 zoomed.hit.position,
               );
-              assert.equal(zoomed.camera, selected.camera);
+              assert.ok(selected.ok);
+              assert.equal(
+                outputProducer(zoomed.view.output)?.entity,
+                outputProducer(selected.view.output)?.entity,
+              );
               const zoom = await capture(`${label}-navigation-zoom`);
               assert.ok(
                 zoom.summary.coverage > 0.005 && zoom.summary.bounds !== null,
@@ -487,10 +494,6 @@ export function createWebGlDevice(canvas) {
             centered.summary.centroidX !== null &&
               Math.abs(centered.summary.centroidX - 159.5) < 2,
           );
-          assert.ok(
-            (await compare("no-active-camera", "front-camera"))
-              .changedFraction > 0.02,
-          );
 
           const switched = await call<{
             selection: GeometryPickResultEvent;
@@ -519,18 +522,18 @@ export function createWebGlDevice(canvas) {
               0.02,
           );
 
-          const overlay = await call<{
-            base: { x: number };
-            effective: { x: number };
+          const moved = await call<{
+            before: number;
+            after: number;
             pick: GeometryPickResultEvent;
-          }>("overlayCamera");
-          assert.equal(overlay.base.x, 1.5);
-          assert.equal(overlay.effective.x, 0);
-          assertHit(overlay.pick, declared.target);
-          await capture("effective-camera-overlay");
+          }>("moveCamera");
+          assert.equal(moved.before, 1.5);
+          assert.equal(moved.after, 0);
+          assertHit(moved.pick, declared.target);
+          await capture("moved-camera");
           assert.ok(
-            (await compare("front-camera", "effective-camera-overlay"))
-              .changedFraction < 0.002,
+            (await compare("front-camera", "moved-camera")).changedFraction <
+              0.002,
           );
 
           assertHit(
@@ -544,21 +547,19 @@ export function createWebGlDevice(canvas) {
             "Perspective projection must change the rendered footprint",
           );
           assert.ok(
-            (await compare("effective-camera-overlay", "perspective-camera"))
+            (await compare("moved-camera", "perspective-camera"))
               .changedFraction > 0.005,
           );
 
-          const released = await call<GeometryPickResultEvent>(
-            "releaseCameraOverlay",
-          );
-          assert.ok(released.ok && released.hit === null);
-          await capture("released-camera-overlay");
+          const restored = await call<GeometryPickResultEvent>("restoreCamera");
+          assert.ok(restored.ok && restored.hit === null);
+          await capture("restored-camera");
           assert.ok(
-            (await compare("shifted-camera", "released-camera-overlay"))
+            (await compare("shifted-camera", "restored-camera"))
               .changedFraction < 0.002,
           );
         } catch (error) {
-          await capture("failure").catch((captureError: unknown) =>
+          await capture("failure", false).catch((captureError: unknown) =>
             environment.evidence.record("failure_capture_error", {
               captureError,
             }),
@@ -578,7 +579,6 @@ function assertHit(result: GeometryPickResultEvent, entity: bigint) {
   assert.equal(result.hit.entity, entity);
   assert.equal(result.hit.part, 0);
   assert.ok(Math.abs(result.hit.position[2] - 0.5) < 0.0001);
-  assert.ok(result.camera !== null);
 }
 
 interface GpuFailureObservation {
@@ -591,6 +591,7 @@ interface GpuFailureObservation {
 
 interface CameraQueryObservation {
   selection: GeometryPickResultEvent;
+  binding?: { entity: bigint; width: number; height: number } | null;
   pick: GeometryPickResultEvent;
 }
 
@@ -602,8 +603,11 @@ function assertGpuFailureObservation(
   assert.ok(observation.selection.ok);
   assert.equal(observation.selection.session, session);
   assert.equal(observation.rim.session, session);
-  assert.equal(observation.rim.camera, observation.selection.camera);
   assert.ok(observation.rim.ok && observation.rim.hit !== null);
+  assert.equal(
+    outputProducer(observation.rim.view.output)?.entity,
+    outputProducer(observation.selection.view.output)?.entity,
+  );
   assert.equal(observation.rim.hit.entity, observation.entity);
   assert.equal(observation.rim.hit.part, 1);
   assert.ok(observation.hole.ok && observation.hole.hit === null);

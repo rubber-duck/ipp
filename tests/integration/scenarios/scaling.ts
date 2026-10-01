@@ -10,6 +10,7 @@ import {
   insertComponent,
   successfulBatch,
 } from "../camera-fixtures.js";
+import { LIFECYCLE, SPATIAL, selectSystems } from "../system-selections.js";
 
 type Host = WorldPersistenceHostClient<AssetWorldClient>;
 function check(value: unknown, message: string): asserts value {
@@ -21,7 +22,11 @@ export async function scalingAndInspection(
   count: number,
   deep: boolean,
 ) {
-  const client = await host.createWorld({ temporary: true });
+  const world = await host.createWorld({
+    selectedSystems: selectSystems(SPATIAL, LIFECYCLE),
+    temporary: true,
+  });
+  const client = await host.openWorld(world.reference);
   const entities: bigint[] = [];
   const started = performance.now();
   for (let start = 0; start < count; start += 256) {
@@ -41,15 +46,9 @@ export async function scalingAndInspection(
       );
       if (deep && start + offset > 0)
         operations.push({
-          kind: "insertComponent",
+          kind: "placeEntity",
           entity,
-          component: client.components.Hierarchy!.id,
-          fields: [
-            {
-              offset: client.components.Hierarchy!.fields.parent!.offset,
-              value: { kind: "entity", value: parent },
-            },
-          ],
+          placement: { parent, before: null },
         });
     }
     const outcome = successfulBatch(await client.batch(operations));
@@ -92,13 +91,14 @@ export async function scalingAndInspection(
     "targeted read returns exactly one identity",
   );
   const saving = performance.now();
-  const bytes = await host.saveWorld();
+  const bytes = await host.saveWorld(client.session);
   const saved = performance.now();
   await client.close();
   const loading = performance.now();
-  const restored = await host.loadWorld(bytes, {
+  const graph = await host.loadWorld(bytes, {
     symbolicId: "restored-scaling",
   });
+  const restored = await host.openWorld(graph.root);
   const loaded = performance.now();
   const all = await restored.inspect();
   check(all.entities.length === count, "bulk restoration loses entities");

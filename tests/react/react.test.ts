@@ -46,11 +46,11 @@ for (const variant of ["development", "production"] as const) {
           "missing named references reject before submission",
           "AnimationAsset feeds the real controller through the generated client",
           "shader references require explicit declared types",
-          "unmount releases declarations and producer ownership",
+          "unmount during a pending asset load deletes nothing",
         ]),
     ],
     [
-      "custom material named properties reconcile and release owned state",
+      "custom material named properties reconcile and keep the last written value",
       "customMaterialProperties",
       (report: unknown[]) =>
         assert.deepEqual(report, [
@@ -81,96 +81,91 @@ for (const variant of ["development", "production"] as const) {
       (report: string[]) => {
         assert.deepEqual(report, [
           "Children assigns each enclosing parent through fragments and function components",
-          "plain nesting leaves parenting explicit and preserves producer base",
-          "keyed reordering preserves owned generations",
+          "plain nesting leaves parenting explicit",
+          "keyed reordering changes core sibling order and preserves generations",
           "parent replacement updates retained child relationships",
-          "unmount deletes owned descendants and reveals latest bound parent",
+          "declared parent deletion leaves an unrelated client child alive as a root",
+          "unmount deletes declared descendants and leaves the bound child where a client placed it",
           "explicit entity reference props update by handle value",
+          "all keyed permutations and insertion-removal preserve explicit order and retained identities",
           "Children rejects two declarations bound to the same actual entity",
-          "Children rejects an explicit Hierarchy on another binding to its child",
-          "a rejected parent relationship retains acknowledged partial ownership",
-          "corrected rendering cleans partial ownership and rebuilds relationships",
-          "final cleanup preserves only producer entities",
+          "Children rejects an EntityLink on another binding to its child",
+          "a keyed remount of an Entity id keeps its entity and placement",
+          "two Entity declarations of one id reject the render and send nothing",
+          "multiple roots place one entity and the last placement wins",
+          "withdrawing a root's link leaves the entity where it was last placed",
+          "typed structural animation resolves scene entityBindings after acknowledgement",
+          "callback-only animation rendering submits no structural operations and retains playback",
+          "structural animation accepts mixed scene names and runtime entity bindings",
+          "stopping structural animation leaves its last placement",
+          "stable keyed parent reversal orders acknowledged handle updates without reattachment",
+          "all four-entity chain permutations preserve generations and only move them",
+          "parent dependencies traverse unchanged declarations and preserve before ordering",
+          "reparent prefixes survive partial rejection and corrected rendering reconciles the keyed entities",
+          "a rejected parent relationship keeps its applied creation",
+          "corrected rendering deletes the partial entity and rebuilds relationships",
+          "unmount deletes nothing",
+          "removing the declarations preserves only client entities",
         ]);
       },
     ],
     [
-      "owned, bound, and automatic declarations follow real core lifecycle",
-      "ownershipAndAutomaticLifecycle",
-      (report: OwnershipReport) => {
+      "plain field declarations adopt, write and clean up through the real core",
+      "plainFieldLifecycle",
+      (report: PlainFieldReport) => {
         assert.deepEqual(
-          report.boundValues.map(({ base, effective }) => [base, effective]),
-          [
-            [10, 20],
-            [30, 20],
-            [30, 30],
-            [null, 0],
-            [40, 40],
-            [45, 50],
-          ],
+          report.boundValues.map(({ value }) => value),
+          [20, 30, 30, null, 40, 50, 45],
+          "adopt, client write, prop removal keeps, removal, insert, rewrite, replacement",
         );
         assert.deepEqual(
-          report.sharedFallbackValues.map(({ base, effective }) => [
-            base,
-            effective,
-          ]),
-          [
-            [null, 11],
-            [null, 22],
-            [null, 22],
-            [null, 33],
-            [null, 0],
-            [null, null],
-          ],
+          report.sharedValues.map(({ value }) => value),
+          [11, 22, 33, null, null, null],
+          "last write wins; removing either root's declaration removes the component",
         );
-        assert.match(report.boundMissingRejection, /MissingComponent/);
-        assert.deepEqual(report.boundMissingAfterRejection, scalar(null, null));
-        assert.deepEqual(report.ownedComponentValues, [
-          scalar(0, 13),
-          scalar(17, 17),
-          scalar(17, 17),
+        assert.match(report.boundMissingRejection, /MissingSymbolicId/);
+        assert.deepEqual(report.boundMissingAfterRejection, absent);
+        assert.deepEqual(report.insertedComponentValues, [
+          scalar(13),
+          scalar(17),
+          scalar(null),
         ]);
-        assert.deepEqual(report.autoEntityValues, [
-          scalar(4, 91),
-          { entityExists: false, base: null, effective: null },
-          scalar(27, 27),
-          scalar(27, 27),
+        assert.deepEqual(report.adoptedEntityValues, [
+          scalar(91),
+          absent,
+          scalar(27),
+          scalar(null),
         ]);
-        assert.deepEqual(report.ownedBeforeClear, {
-          entityExists: true,
-          base: 0,
-          effective: 7,
-        });
-        assert.equal(report.ownedExistsAfterClear, false);
+        assert.deepEqual(report.declaredBeforeClear, scalar(7));
+        assert.equal(report.declaredExistsAfterClear, false);
         assert.equal(report.boundExistsAfterClear, true);
       },
     ],
     [
-      "strict mode rejects mismatches and stale cleanup preserves replacements",
-      "strictBindingAndCorrection",
-      (report: StrictReport) => {
-        assert.match(report.rejection, /ComponentExists/);
-        assert.deepEqual(report.afterRejection, scalar(5, 5));
-        assert.deepEqual(report.corrected, scalar(5, 8));
+      "rejected and unsent commits keep records consistent with the World",
+      "rejectionAndCorrection",
+      (report: RejectionReport) => {
+        assert.match(report.rejection, /MissingSymbolicId/);
+        assert.deepEqual(report.afterRejection, scalar(5));
+        assert.deepEqual(report.corrected, scalar(8));
         assert.match(report.unsentRejection, /nonfinite/);
-        assert.deepEqual(report.afterUnsentRejection, scalar(5, 8));
-        assert.deepEqual(report.afterUnsentCorrection, scalar(5, 10));
-        assert.deepEqual(report.afterLargeBatch, scalar(5, 256));
-        assert.deepEqual(report.afterLargeBatchCleanup, scalar(5, 11));
-        assert.ok(report.diagnostics.includes("ComponentRemoved"));
-        assert.deepEqual(report.afterStrictLoss, scalar(null, null));
-        assert.deepEqual(report.afterReplacement, scalar(9, 9));
-        assert.deepEqual(report.afterStaleCleanup, scalar(9, 9));
-        assert.deepEqual(report.afterExplicitRecovery, scalar(9, 12));
+        assert.deepEqual(report.afterUnsentRejection, scalar(8));
+        assert.deepEqual(report.afterUnsentCorrection, scalar(10));
+        assert.deepEqual(report.afterLargeBatch, scalar(256));
+        assert.deepEqual(report.afterLargeBatchCleanup, scalar(11));
+        assert.deepEqual(report.afterLoss, scalar(null));
+        assert.deepEqual(report.afterReplacement, scalar(9));
+        assert.deepEqual(report.afterRemoval, scalar(null));
+        assert.deepEqual(report.afterRecovery, scalar(12));
       },
     ],
     [
       "React hooks and StrictMode commit one owned declaration",
       "hooksAndStrictMode",
       (report: HooksReport) => {
-        assert.deepEqual(report.observation, scalar(0, 42));
+        assert.deepEqual(report.observation, scalar(42));
         assert.equal(report.matchingEntities, 1);
-        assert.equal(report.existsAfterUnmount, false);
+        assert.equal(report.existsAfterUnmount, true);
       },
     ],
     [
@@ -181,14 +176,20 @@ for (const variant of ["development", "production"] as const) {
         assert.ok(report.gate.bufferedFrames >= 1);
         assert.equal(report.gate.renderPendingBeforeRelease, true);
         assert.equal(report.gate.unmountPendingBeforeRelease, true);
-        assert.equal(report.entityExistsAfterUnmount, false);
+        assert.equal(report.entityExistsAfterUnmount, true);
       },
     ],
   ] as const) {
     test(`${variant}: ${name}`, { timeout: 30_000 }, async (context) => {
       await runBrowserScenario(
         `react ${variant} ${fixtureExport}`,
-        { workspace, build: overlays, mismatchBuild: minimal },
+        {
+          workspace,
+          build: overlays,
+          mismatchBuild: minimal,
+          operationTimeoutMs:
+            fixtureExport === "childrenHierarchy" ? 15_000 : 5_000,
+        },
         context.signal,
         async (scenario) => {
           const report = await scenario.execute(name, { fixtureExport }, () =>
@@ -227,23 +228,22 @@ for (const variant of ["development", "production"] as const) {
 
 interface ScalarObservation {
   readonly entityExists: boolean;
-  readonly base: number | null;
-  readonly effective: number | null;
+  readonly value: number | null;
 }
 
-interface OwnershipReport {
+interface PlainFieldReport {
   readonly boundValues: readonly ScalarObservation[];
-  readonly sharedFallbackValues: readonly ScalarObservation[];
+  readonly sharedValues: readonly ScalarObservation[];
   readonly boundMissingRejection: string;
   readonly boundMissingAfterRejection: ScalarObservation;
-  readonly ownedComponentValues: readonly ScalarObservation[];
-  readonly autoEntityValues: readonly ScalarObservation[];
-  readonly ownedBeforeClear: ScalarObservation;
-  readonly ownedExistsAfterClear: boolean;
+  readonly insertedComponentValues: readonly ScalarObservation[];
+  readonly adoptedEntityValues: readonly ScalarObservation[];
+  readonly declaredBeforeClear: ScalarObservation;
+  readonly declaredExistsAfterClear: boolean;
   readonly boundExistsAfterClear: boolean;
 }
 
-interface StrictReport {
+interface RejectionReport {
   readonly rejection: string;
   readonly afterRejection: ScalarObservation;
   readonly corrected: ScalarObservation;
@@ -252,11 +252,10 @@ interface StrictReport {
   readonly afterUnsentCorrection: ScalarObservation;
   readonly afterLargeBatch: ScalarObservation;
   readonly afterLargeBatchCleanup: ScalarObservation;
-  readonly diagnostics: readonly string[];
-  readonly afterStrictLoss: ScalarObservation;
+  readonly afterLoss: ScalarObservation;
   readonly afterReplacement: ScalarObservation;
-  readonly afterStaleCleanup: ScalarObservation;
-  readonly afterExplicitRecovery: ScalarObservation;
+  readonly afterRemoval: ScalarObservation;
+  readonly afterRecovery: ScalarObservation;
 }
 
 interface HooksReport {
@@ -275,6 +274,8 @@ interface PendingUnmountReport {
   readonly entityExistsAfterUnmount: boolean;
 }
 
-function scalar(base: number | null, effective: number | null) {
-  return { entityExists: true, base, effective };
+function scalar(value: number | null) {
+  return { entityExists: true, value };
 }
+
+const absent = { entityExists: false, value: null };

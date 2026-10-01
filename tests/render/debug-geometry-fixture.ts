@@ -6,22 +6,32 @@ import type {
   ComponentFieldValue,
   EntityRef,
   FieldWrite,
-  FrameCapture,
+  PresentedCapture,
   RenderWorldClient,
   RenderStatePatch,
   RenderStateUpdatedEvent,
   AssetResourceSnapshot,
 } from "@ipp/client";
 import {
-  activateFixtureCamera,
+  createFixtureCamera,
   successfulBatch,
+  type HostedWorldClient,
 } from "../integration/camera-fixtures.js";
 import {
   BACKGROUND_RGB,
   compareImages,
   summarizeImage,
   VIEWPORT,
+  type FramePixels,
 } from "./image-assertions.js";
+import {
+  RootPresentation,
+  captureSummary,
+  capturedImage,
+  recoverRestoredContext,
+  worldReference,
+} from "./root-presentation.js";
+import { SCENE, selectSystems } from "../integration/system-selections.js";
 
 export interface DebugDeclaration {
   name: string;
@@ -32,9 +42,10 @@ export interface DebugDeclaration {
 }
 
 interface State {
-  client: RenderWorldClient;
+  client: HostedWorldClient<RenderWorldClient>;
+  presentation?: RootPresentation;
   encodeGeometry: GeometryEncoder;
-  captures: Map<string, FrameCapture>;
+  captures: Map<string, PresentedCapture>;
   entities: bigint[];
   resourceEvents: AssetResourceSnapshot[];
   updates: RenderStateUpdatedEvent[];
@@ -55,13 +66,18 @@ export async function initialize(configuration: {
   canvas.height = VIEWPORT.height;
   document.body.replaceChildren(canvas);
   const contract = await import(configuration.generatedModuleUrl);
-  const client: RenderWorldClient = await contract.IppClient.connectWorker(
-    configuration.workerScriptUrl,
-    configuration.wasmUrl,
-    { canvas: canvas.transferControlToOffscreen(), timeoutMs: 10_000 },
-  );
+  const client: HostedWorldClient<RenderWorldClient> =
+    await contract.IppClient.connectWorker(
+      configuration.workerScriptUrl,
+      configuration.wasmUrl,
+      {
+        selectedSystems: selectSystems(SCENE),
+        canvas: canvas.transferControlToOffscreen(),
+        timeoutMs: 10_000,
+      },
+    );
   try {
-    if (!client.presentation || !client.components.BoundingGeometry)
+    if (!client.components.BoundingGeometry)
       throw new Error("Debug fixture requires a rendering scene contract");
     active = {
       client,
@@ -77,7 +93,12 @@ export async function initialize(configuration: {
       client.onResourceChange((event) => current.resourceEvents.push(event)),
       client.onRenderStateUpdated((event) => current.updates.push(event)),
     );
-    await activateFixtureCamera(client);
+    current.presentation = await RootPresentation.camera(
+      client.host,
+      worldReference(client),
+      await createFixtureCamera(client),
+      VIEWPORT,
+    );
     return observe();
   } catch (error) {
     await close();
@@ -170,11 +191,8 @@ export async function observe() {
       .map((entity) => ({
         id: entity.id,
         name: entity.metadata.symbolicId,
-        base: namedFields(
-          entity.base.find((value) => value.component === component.id)?.fields,
-        ),
-        effective: namedFields(
-          entity.effective.find((value) => value.component === component.id)
+        fields: namedFields(
+          entity.components.find((value) => value.component === component.id)
             ?.fields,
         ),
       })),
@@ -184,29 +202,33 @@ export async function observe() {
 export async function capture(label: string) {
   const observation = await observe();
   const current = state();
-  const frame = await current.client.presentation!.capture(observation.tick);
-  if (frame.session !== observation.session || frame.tick <= observation.tick)
+  const view = presented();
+  const frame = await view.capture();
+  if (view.sourceTick(frame) <= observation.tick)
     throw new Error("Debug capture must follow its acknowledged scene state");
   current.captures.set(label, frame);
   return {
     ...captureMetadata(label),
-    summary: summarizeImage(frame),
+    summary: summarizeImage(capturedImage(frame)),
     observation,
   };
 }
 
 export function captureMetadata(label: string) {
-  const { pixels: _pixels, ...metadata } = frame(label);
-  return metadata;
+  const captured = frame(label);
+  return {
+    ...captureSummary(captured),
+    sourceTick: presented().sourceTick(captured),
+  };
 }
 
 export function captureDataUrl(label: string) {
-  return dataUrl(frame(label));
+  return dataUrl(capturedImage(frame(label)));
 }
 
 /** Count all foreground colors, including the plane's differently colored arrow. */
 export function uniformColor(label: string, linear: readonly number[]) {
-  const captured = frame(label);
+  const captured = capturedImage(frame(label));
   const bytes = new Uint8Array(captured.pixels);
   const expected = linear.map((channel) =>
     Math.round(
@@ -237,12 +259,15 @@ export function uniformColor(label: string, linear: readonly number[]) {
 }
 
 export function difference(first: string, second: string) {
-  return compareImages(frame(first), frame(second));
+  return compareImages(
+    capturedImage(frame(first)),
+    capturedImage(frame(second)),
+  );
 }
 
 export function differenceDataUrl(first: string, second: string) {
-  const a = frame(first);
-  const b = frame(second);
+  const a = capturedImage(frame(first));
+  const b = capturedImage(frame(second));
   const bytesA = new Uint8Array(a.pixels);
   const bytesB = new Uint8Array(b.pixels);
   const pixels = new Uint8Array(a.pixels.byteLength);
@@ -258,12 +283,13 @@ export function differenceDataUrl(first: string, second: string) {
 }
 
 export async function recoverContext() {
-  const current = state();
-  presentationTesting(current.client.presentation!).loseContext();
+  const view = presented();
+  presentationTesting(view.diagnostics).loseContext();
   // Match the maintained texture fixture's actual browser presentation barrier.
   await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
   await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-  presentationTesting(current.client.presentation!).restoreContext();
+  presentationTesting(view.diagnostics).restoreContext();
+  await recoverRestoredContext(view);
 }
 
 export async function close() {
@@ -280,6 +306,12 @@ export async function close() {
 function state() {
   if (!active) throw new Error("Debug fixture is not initialized");
   return active;
+}
+
+function presented() {
+  const presentation = state().presentation;
+  if (!presentation) throw new Error("Debug fixture camera is not presented");
+  return presentation;
 }
 
 function descriptor(name: string): ComponentDescriptor {
@@ -358,7 +390,7 @@ function frame(label: string) {
   return captured;
 }
 
-function dataUrl(frame: Pick<FrameCapture, "width" | "height" | "pixels">) {
+function dataUrl(frame: FramePixels) {
   const canvas = document.createElement("canvas");
   canvas.width = frame.width;
   canvas.height = frame.height;

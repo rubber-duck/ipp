@@ -42,7 +42,7 @@ The example prepares its matching client, creates source/driven entities, waits 
 
 ## Host operation
 
-The native executable listens on loopback; `--bind 127.0.0.1:0` selects an ephemeral port and prints a flushed JSON readiness URL. An explicit file root/prefix enables filesystem access; the default server exposes none. The current adapter is local `ws://`; see [startup options](../../crates/ipp-server/src/main.rs) and [transport limits](../../crates/ipp-server/src/websocket.rs).
+The native executable listens on loopback; `--bind 127.0.0.1:0` selects an ephemeral port and prints a flushed JSON readiness URL. An explicit file root/prefix enables filesystem access; the default server exposes none. `--asset-cache-bytes` sets the unused-asset cache target, like the worker option `assetCacheBytes` (default 64 MiB; 0 evicts on release). The current adapter is local `ws://`; see [startup options](../../crates/ipp-server/src/main.rs) and [transport limits](../../crates/ipp-server/src/websocket.rs).
 
 Bootstrap checks the target contract before ordinary requests. `batch()` resolves after ordered application and evaluation; `inspect()` observes a Host boundary. `waitForFrame()` waits for a newer notification and sends no step request. Semantic batch failure retains applied work and permits correction; protocol violations and connection congestion have separate failure handling. Use [diagnostics](building.md#diagnostic-output) for lifecycle and command boundaries.
 

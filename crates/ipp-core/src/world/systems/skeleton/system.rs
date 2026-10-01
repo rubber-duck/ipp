@@ -26,6 +26,19 @@ impl SystemFactory for SkeletonSystemFactory {
         SkeletonSystem::ID
     }
 
+    fn capabilities(&self) -> crate::systems::SystemCapabilities {
+        crate::systems::SystemCapabilities {
+            components: vec![
+                crate::systems::SystemCapability::new(crate::ComponentValue::SKELETON),
+                crate::systems::SystemCapability::requiring(
+                    crate::ComponentValue::PARENT_JOINT,
+                    [crate::systems::hierarchy::HierarchySystem::ID],
+                ),
+            ],
+            operations: Vec::new(),
+        }
+    }
+
     fn dependencies(&self) -> &[SystemDependency] {
         &[
             SystemDependency::Required(SystemId("ipp.asset-dependencies")),

@@ -1,8 +1,7 @@
 use super::*;
 use crate::{
-    ComponentValue,
-    components::Hierarchy,
-    components::registry::ComponentStorage,
+    Batch, Command, ComponentValue, EntityPlacementRef, EntityRef, HostRuntime,
+    components::Transform,
     systems::{geometry::program::GeometryProgram, hierarchy::ObjectTransformBinding},
 };
 
@@ -36,13 +35,51 @@ fn rigid_motion_updates_bounds_and_exact_query_shape_without_replacing_storage()
         min,
         max,
     };
-    let entity = EntityId::from_bits(1 << 32);
-    let mut storage = ComponentStorage::default();
-    storage.reserve(1);
-    storage.set(0, ComponentValue::Hierarchy(Hierarchy::default()));
-    // SAFETY: The test retains this occupied hierarchy slot until the state and
-    // binding are dropped. Each read ends before the next exclusive pose write.
-    let model = unsafe { ObjectTransformBinding::bind(&storage, entity) };
+    let mut host = HostRuntime::default();
+    let world_id = host
+        .create_world(
+            Default::default(),
+            &[
+                crate::systems::animation::AnimationSystem::ID,
+                crate::systems::asset_dependencies::AssetDependencySystem::ID,
+                crate::systems::hierarchy::HierarchySystem::ID,
+                crate::systems::look_at::LookAtSystem::ID,
+                crate::systems::hierarchy::FinalPropagationSystem::ID,
+                crate::systems::geometry::GeometrySystem::ID,
+            ],
+        )
+        .unwrap();
+    let mut world = host.world_mut(world_id).unwrap();
+    world
+        .enqueue(Batch {
+            id: 1,
+            operations: vec![
+                Command::Create {
+                    alias: 0,
+                    metadata: Default::default(),
+                    adopt: false,
+                },
+                Command::Create {
+                    alias: 1,
+                    metadata: Default::default(),
+                    adopt: false,
+                },
+                Command::PlaceEntity {
+                    entity: EntityRef::Alias(1),
+                    placement: EntityPlacementRef {
+                        parent: Some(EntityRef::Alias(0)),
+                        before: None,
+                    },
+                },
+            ],
+        })
+        .unwrap();
+    let entities = world.step(0.0).unwrap().outcomes.remove(0).result.unwrap();
+    let parent = entities[0].1;
+    let entity = entities[1].1;
+    // SAFETY: The test retains this entity generation until the binding is
+    // dropped. All reads end before the next exclusive World update.
+    let model = unsafe { ObjectTransformBinding::bind(world.world, entity) };
     let mut state = GeometryEvaluationState {
         program: Some(GeometryProgram::Rigid {
             shape,
@@ -59,30 +96,45 @@ fn rigid_motion_updates_bounds_and_exact_query_shape_without_replacing_storage()
     let address = state.evaluated().unwrap().parts.as_ptr();
     let capacity = state.evaluated().unwrap().parts.capacity();
     for frame in 0..128 {
-        let t = f64::from(frame) * 0.031;
-        // Reflected, nonuniformly scaled and sheared placements exercise the
-        // exact affine query shape as well as its conservative world enclosure.
-        let matrix = [
-            -1.0 - t,
-            0.0,
-            0.0,
-            0.0,
-            t.sin(),
-            0.7 + t,
-            0.0,
-            0.0,
-            0.1,
-            t.cos(),
-            1.3,
-            0.0,
-            t,
-            -2.0 * t,
-            0.4,
-            1.0,
-        ];
-        let model = GeometryShapeTransform::new(matrix).unwrap();
-        storage.hierarchy_mut(0).unwrap().runtime.world = Some(model);
-        assert!(state.update_rigid(&storage));
+        let time = frame as f32 * 0.031;
+        world
+            .enqueue(Batch {
+                id: frame + 2,
+                operations: vec![
+                    Command::insert_value(
+                        EntityRef::Handle(parent),
+                        ComponentValue::Transform(Transform {
+                            x: time,
+                            y: -2.0 * time,
+                            z: 0.4,
+                            sx: 1.0 + time,
+                            sy: 0.7 + time,
+                            sz: 1.3,
+                            ..Default::default()
+                        }),
+                    ),
+                    Command::insert_value(
+                        EntityRef::Handle(entity),
+                        ComponentValue::Transform(Transform {
+                            qz: (time / 2.0).sin(),
+                            qw: (time / 2.0).cos(),
+                            ..Default::default()
+                        }),
+                    ),
+                ],
+            })
+            .unwrap();
+        world.step(0.0).unwrap().outcomes.remove(0).result.unwrap();
+        let model = world
+            .world
+            .state
+            .links
+            .transform(entity)
+            .unwrap()
+            .value()
+            .unwrap();
+        let matrix = model.matrix();
+        assert!(state.update_rigid(world.world));
         assert!(state.changed);
         assert!(state.culling_valid);
         let enclosure = state.enclosure.unwrap();
@@ -105,19 +157,24 @@ fn rigid_motion_updates_bounds_and_exact_query_shape_without_replacing_storage()
         assert_eq!(evaluated.parts[0].shape, shape);
         assert_eq!(evaluated.parts[0].transform, model);
         assert_eq!(evaluated.bounds(), Some(enclosure.bounds));
-        assert!(state.update_rigid(&storage));
+        assert!(state.update_rigid(world.world));
         assert!(!state.changed);
     }
 
-    storage.hierarchy_mut(0).unwrap().runtime.world = None;
+    world
+        .world
+        .state
+        .links
+        .transform_mut(entity)
+        .unwrap()
+        .clear();
     assert!(
-        !state.update_rigid(&storage),
+        !state.update_rigid(world.world),
         "invalid poses use error evaluation"
     );
-    storage.hierarchy_mut(0).unwrap().runtime.world = Some(GeometryShapeTransform::default());
     state.program = None;
     assert!(
-        !state.update_rigid(&storage),
+        !state.update_rigid(world.world),
         "invalidated bindings require preparation"
     );
 }
@@ -138,4 +195,42 @@ fn direct_box_enclosure_preserves_flat_axes_and_rejects_overflow() {
     assert!(
         super::super::GeometryEnclosure::transformed_box([-2.0; 3], [2.0; 3], &overflow,).is_none()
     );
+}
+
+#[test]
+fn reflected_sheared_enclosures_match_independent_transformed_corners() {
+    for frame in 0..128 {
+        let time = f64::from(frame) * 0.031;
+        let matrix = [
+            -1.0 - time,
+            0.0,
+            0.0,
+            0.0,
+            time.sin(),
+            0.7 + time,
+            0.0,
+            0.0,
+            0.1,
+            time.cos(),
+            1.3,
+            0.0,
+            time,
+            -2.0 * time,
+            0.4,
+            1.0,
+        ];
+        let min = [-1.7, 0.25, -3.0];
+        let max = [2.1, 1.3, -0.1];
+        let enclosure =
+            super::super::GeometryEnclosure::transformed_box(min, max, &matrix).unwrap();
+        let expected = corner_bounds(min, max, &matrix);
+        for (actual, expected) in enclosure
+            .bounds
+            .iter()
+            .flatten()
+            .zip(expected.iter().flatten())
+        {
+            assert!((actual - expected).abs() < 1e-12);
+        }
+    }
 }

@@ -5,6 +5,7 @@ import {
   type AnimationContract,
   type AnimationRecord,
 } from "../animation-fixtures.js";
+import { pageCommands } from "../camera-fixtures.js";
 
 /** Logical worlds and observations are independent of socket/process arrangement. */
 export async function multipleWorldsShareAssets(
@@ -22,23 +23,49 @@ export async function multipleWorldsShareAssets(
   const stop = right.onResourceChange((event) => rightEvents.push(event));
   let replacement: AnimationWorldClient | undefined;
   try {
-    const stream = await left.beginBatch();
-    const held = await left.batchChunk(stream, []);
-    const peer = await right.inspect();
-    await right.waitForFrame(peer.tick);
-    await right.batchChunk(stream, []).then(
-      () => {
-        throw new Error("foreign World accepted batch identity");
+    // Batch identities belong to each connection: an open batch on one never
+    // absorbs or blocks another connection's batch.
+    const open = left.openBatch();
+    open.write(
+      Array.from({ length: pageCommands(left) + 1 }, (_, index) => ({
+        kind: "create" as const,
+        alias: index,
+        metadata: { symbolicId: `left-open-${index}`, classes: [] },
+      })),
+    );
+    const peer = await right.batch([
+      {
+        kind: "create",
+        alias: 0,
+        metadata: { symbolicId: "right-during-left-batch", classes: [] },
       },
-      () => {},
-    );
-    const stillHeld = await left.batchChunk(stream, []);
+    ]);
+    check(peer.ok, "an open batch on another connection blocked this batch");
     check(
-      held.tick === stillHeld.tick,
-      "peer World progression evaluated the gated World",
+      !(await left.inspect()).entities.some((entity) =>
+        entity.metadata.symbolicId?.startsWith("left-open-"),
+      ),
+      "a page of an unfinished batch applied",
     );
-    await left.endBatch(stream);
-    await record("host.command-batch-isolation", { held, peer, stillHeld });
+    const completed = await open.finish();
+    check(
+      completed.ok && completed.aliases.length === pageCommands(left) + 1,
+      "the open batch lost pages",
+    );
+    await left.batch(
+      completed.aliases.map(({ id }) => ({
+        kind: "delete",
+        entity: { kind: "handle", id },
+      })),
+    );
+    await right.batch([
+      { kind: "delete", entity: { kind: "handle", id: peer.aliases[0]!.id } },
+    ]);
+    await record("host.command-batch-isolation", {
+      leftBatch: open.batchId,
+      peer,
+      completed: completed.tick,
+    });
     const ea = await a.create("same-symbol", {
       Scalar: { value: 99 },
       MeshInstance: { source: shared },
@@ -80,9 +107,10 @@ export async function multipleWorldsShareAssets(
       "Resource events must be world scoped",
     );
 
-    // Identical producer IDs identify different immutable content in each world.
+    // Identical producer IDs identify different immutable content in each
+    // world. At x=.4375 the left curve has changed by 6 and the right by 56.
     const sourceA = await a.upload(a.curve("Scalar", "value", 0, 0), 501n);
-    const sourceB = await b.upload(b.curve("Scalar", "value", 100, 100), 501n);
+    const sourceB = await b.upload(b.curve("Scalar", "value", 0, 100), 501n);
     const pa = await a.controller([
       a.driver(ea, sourceA, 0, "Scalar", ["value"]),
     ]);
@@ -92,11 +120,11 @@ export async function multipleWorldsShareAssets(
     const sampledA = await a.seekPaused(pa, 0.4375);
     const sampledB = await b.seekPaused(pb, 0.4375);
     check(
-      a.value(sampledA, ea, "Scalar", "value") === 6,
+      Math.abs(a.value(sampledA, ea, "Scalar", "value") - 105) < 1e-4,
       "Left producer content was replaced",
     );
     check(
-      b.value(sampledB, eb, "Scalar", "value") === 106,
+      Math.abs(b.value(sampledB, eb, "Scalar", "value") - 133) < 1e-4,
       "Right producer content crossed worlds",
     );
     await left.close();
@@ -111,12 +139,16 @@ export async function multipleWorldsShareAssets(
       "Disconnect must preserve the other world's entities",
     );
     check(
-      b.value(survived, eb, "Scalar", "value") === 106,
+      Math.abs(b.value(survived, eb, "Scalar", "value") - 133) < 1e-4,
       "Replacement producer changed surviving playback",
     );
+    // Stopping the surviving controller subtracts its contribution from the
+    // authored value.
+    await right.controlAnimationController(pb, { action: "stop" });
+    const stopped = await right.inspect();
     check(
-      b.value(survived, eb, "Scalar", "value", "base") === 77,
-      "Playback changed authored base",
+      b.value(stopped, eb, "Scalar", "value") === 77,
+      "Playback lost the authored value",
     );
     const retained = await ready(right, shared);
     check(

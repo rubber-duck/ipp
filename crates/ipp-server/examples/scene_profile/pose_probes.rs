@@ -29,7 +29,7 @@ impl Scene {
             let world = self.host.world_mut(self.world).unwrap();
             let snapshot = world.inspect(entity).ok_or("missing pose state")?;
             let weight = snapshot
-                .effective
+                .components
                 .iter()
                 .find_map(|value| match value {
                     ComponentValue::MeshPose(pose) => Some(pose.weight),

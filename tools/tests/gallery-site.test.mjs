@@ -83,9 +83,15 @@ async function captureScene(page) {
       if (state.resources.every((resource) => resource.status === "loaded")) {
         if (state.renderDiagnostics.length)
           throw new Error(JSON.stringify(state.renderDiagnostics));
-        const frame = await handle.capture();
-        if (frame.tick < state.tick)
+        const output = handle.view?.binding.output;
+        if (!output) throw new Error("Gallery did not select a root view");
+        const frame = await handle.capture({ afterOutputs: [output] });
+        const source = frame.sources.find(
+          (source) => source.output.entity === output.entity,
+        );
+        if (!source || source.tick < state.tick)
           throw new Error("Capture predates the inspected World");
+        const { width, height } = frame.view.binding.viewport;
         const pixels = new Uint8ClampedArray(frame.pixels);
         let foreground = 0;
         for (let offset = 0; offset < pixels.length; offset += 4) {
@@ -96,14 +102,14 @@ async function captureScene(page) {
           if (difference > 40 && pixels[offset + 3] > 200) foreground++;
         }
         const canvas = document.createElement("canvas");
-        canvas.width = frame.width;
-        canvas.height = frame.height;
+        canvas.width = width;
+        canvas.height = height;
         canvas
           .getContext("2d")
-          .putImageData(new ImageData(pixels, frame.width, frame.height), 0, 0);
+          .putImageData(new ImageData(pixels, width, height), 0, 0);
         return {
-          width: frame.width,
-          height: frame.height,
+          width,
+          height,
           drawCalls: frame.drawCalls,
           triangles: frame.triangles,
           foreground,

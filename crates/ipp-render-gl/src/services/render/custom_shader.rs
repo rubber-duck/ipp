@@ -101,7 +101,8 @@ pub(crate) fn sources(
         0
     };
     let common = format!(
-        "#version 300 es\nprecision highp float;\nprecision highp int;\n#define IPP_SHADER_INTERFACE_VERSION 1\n#define IPP_PASS_SHADOW {pass}\n#define IPP_RECEIVES_LIGHT {}\n{declarations}\n",
+        "#version 300 es\n{}precision highp float;\nprecision highp int;\n#define IPP_SHADER_INTERFACE_VERSION 1\n#define IPP_PASS_SHADOW {pass}\n#define IPP_RECEIVES_LIGHT {}\n{declarations}\n",
+        super::shader::limit_definitions(),
         u8::from(lit)
     );
     let template = crate::services::render::embedded_shader!("shaders/custom.vert");

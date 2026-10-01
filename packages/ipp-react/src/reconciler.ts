@@ -6,6 +6,7 @@ import {
   NoEventPriority,
 } from "react-reconciler/constants.js";
 import type { ReactWorldCommits } from "./commits.js";
+import type { ReactCompositionHost } from "./attached-world.js";
 import { insert, remove } from "./tree.js";
 import type {
   ReactWorldDescription,
@@ -16,20 +17,32 @@ import type {
 } from "./tree.js";
 
 export class ReactWorldContainer {
+  attachmentHost: ReactCompositionHost | undefined;
+  capturePortals: (() => void) | undefined;
+  onFailure: ((settled: Promise<void>) => void) | undefined;
+  onPublish:
+    | ((description: ReactWorldDescription, settled: Promise<void>) => void)
+    | undefined;
   private pending: (
     | { description: ReactWorldDescription }
     | { error: unknown }
   )[] = [];
   private scheduled = false;
+  private captured = false;
 
   constructor(
     readonly tree: ReactWorldTree,
     readonly commits: ReactWorldCommits,
   ) {}
 
+  /** Describe this container's tree when a commit changed it. */
   capture(): void {
+    if (this.captured && !this.tree.changed) return;
+    this.captured = true;
+    this.tree.changed = false;
     try {
-      this.pending.push({ description: this.tree.describe() });
+      const description = this.tree.describe();
+      this.pending.push({ description });
     } catch (error) {
       this.pending.push({ error });
     }
@@ -45,8 +58,13 @@ export class ReactWorldContainer {
     const pending = this.pending;
     this.pending = [];
     for (const snapshot of pending) {
-      if ("description" in snapshot) this.commits.capture(snapshot.description);
-      else this.commits.failed(snapshot.error);
+      if ("description" in snapshot) {
+        const settled = this.commits.capture(snapshot.description);
+        this.onPublish?.(snapshot.description, settled);
+      } else {
+        const settled = this.commits.failed(snapshot.error);
+        this.onFailure?.(settled);
+      }
     }
   }
 
@@ -54,7 +72,8 @@ export class ReactWorldContainer {
     // React clears its host tree before reporting an uncaught render error.
     // Discard that recovery snapshot before it can delete acknowledged state.
     this.pending = [];
-    this.commits.failed(error);
+    const settled = this.commits.failed(error);
+    this.onFailure?.(settled);
   }
 }
 
@@ -98,6 +117,7 @@ const config: ReactWorldReconcilerConfig & {
   prepareForCommit: () => null,
   resetAfterCommit(container) {
     container.capture();
+    container.capturePortals?.();
   },
   createInstance: (type, props, container) =>
     container.tree.instance(type, props),
@@ -107,23 +127,44 @@ const config: ReactWorldReconcilerConfig & {
   appendInitialChild: insert,
   finalizeInitialChildren: no,
   shouldSetTextContent: (type) => isShader(type),
-  appendChild: insert,
-  appendChildToContainer: (container, child) => insert(container.tree, child),
-  insertBefore: insert,
-  insertInContainerBefore: (container, child, before) =>
-    insert(container.tree, child, before),
-  removeChild: remove,
-  removeChildFromContainer: (container, child) => remove(container.tree, child),
+  appendChild(parent, child) {
+    parent.tree.changed = true;
+    insert(parent, child);
+  },
+  appendChildToContainer(container, child) {
+    container.tree.changed = true;
+    insert(container.tree, child);
+  },
+  insertBefore(parent, child, before) {
+    parent.tree.changed = true;
+    insert(parent, child, before);
+  },
+  insertInContainerBefore(container, child, before) {
+    container.tree.changed = true;
+    insert(container.tree, child, before);
+  },
+  removeChild(parent, child) {
+    parent.tree.changed = true;
+    remove(parent, child);
+  },
+  removeChildFromContainer(container, child) {
+    container.tree.changed = true;
+    remove(container.tree, child);
+  },
   clearContainer(container) {
+    container.tree.changed = true;
     container.tree.children = [];
   },
   commitUpdate(instance, _type, _previous, props) {
+    instance.tree.changed = true;
     instance.props = props;
   },
   hideInstance(instance) {
+    instance.tree.changed = true;
     instance.hidden = true;
   },
   unhideInstance(instance) {
+    instance.tree.changed = true;
     instance.hidden = false;
   },
   scheduleTimeout: setTimeout,

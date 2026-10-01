@@ -37,6 +37,7 @@ async function connect({
       sent.push(parts);
     };
   const client = await selected.IppClient.connectTransport(transport, {
+    selectedSystems: [],
     timeoutMs,
   });
   return { client, sent, emit: (bytes) => events.message(bytes) };
@@ -47,7 +48,6 @@ test("baseline generation exposes standard scene descriptors and codecs", () => 
     snapshot: true,
     animation: true,
     assets: true,
-    stateOverlays: true,
     spatial: true,
     textures: true,
     builtinAssets: false,
@@ -65,7 +65,6 @@ test("baseline generation exposes standard scene descriptors and codecs", () => 
     snapshot: true,
     animation: true,
     assets: true,
-    stateOverlays: true,
     spatial: true,
     textures: true,
     builtinAssets: false,
@@ -130,7 +129,7 @@ test("baseline generation exposes standard scene descriptors and codecs", () => 
   const request = {
     session: 7n,
     requestId: 1n,
-    body: { kind: "batch", batch: { id: 1n, operations: [mesh] } },
+    body: { kind: "submitBatch", batchId: 1, last: true, operations: [mesh] },
   };
   assert.ok(codec.encodeRequest(request).length > 0);
   assert.ok(
@@ -138,7 +137,7 @@ test("baseline generation exposes standard scene descriptors and codecs", () => 
     "baseline field codecs use the same component contract",
   );
   for (const value of [-1, 0x1_00000000, 1.5, NaN]) {
-    request.body.batch.operations = [
+    request.body.operations = [
       codec.MeshInstance.setVariant(codec.Entity.alias(1), value),
     ];
     assert.throws(() => codec.encodeRequest(request), /integer out of range/);
@@ -176,13 +175,14 @@ test("inspection decodes typed scene fields by target offset without losing u64 
   u64(0x1_00000001n);
   u8(0);
   u32(0);
+  for (let index = 0; index < 3; index++) u64(0n);
   const descriptor = codec.components.MeshInstance;
   const mesh = {
     source: "https://example.test/é.ippm",
 
     variant: 0xffffffff,
   };
-  for (const _layer of ["base", "effective"]) {
+  {
     u32(1);
     u16(descriptor.id);
     u32(2);
@@ -204,8 +204,8 @@ test("inspection decodes typed scene fields by target offset without losing u64 
   const response = codec.decodeResponse(bytes.slice(0, at), 7n);
   assert.equal(response.body.kind, "inspect");
   const entity = response.body.entities[0];
-  for (const layer of ["base", "effective"])
-    assert.deepEqual({ ...entity[layer][0].fields }, mesh);
+  assert.deepEqual(entity.link, { parent: null, order: 0n });
+  assert.deepEqual({ ...entity.components[0].fields }, mesh);
 });
 
 test("source command strings use owned kind5 with strict bounded UTF8", () => {
@@ -213,13 +213,10 @@ test("source command strings use owned kind5 with strict bounded UTF8", () => {
     session: 7n,
     requestId: 1n,
     body: {
-      kind: "batch",
-      batch: {
-        id: 1n,
-        operations: [
-          codec.MeshInstance.setSource(codec.Entity.alias(1), source),
-        ],
-      },
+      kind: "submitBatch",
+      batchId: 1,
+      last: true,
+      operations: [codec.MeshInstance.setSource(codec.Entity.alias(1), source)],
     },
   });
   for (const source of ["", "https://example.test/é.ippm", "é".repeat(32768)]) {
@@ -229,9 +226,9 @@ test("source command strings use owned kind5 with strict bounded UTF8", () => {
       bytes.slice(-sourceBytes.length || bytes.length),
       sourceBytes,
     );
-    assert.equal(bytes[41], codec.WIRE.VALUE_STRING);
+    assert.equal(bytes[38], codec.WIRE.VALUE_STRING);
     assert.equal(
-      new DataView(bytes.buffer).getUint32(42, true),
+      new DataView(bytes.buffer).getUint32(39, true),
       sourceBytes.length,
     );
   }

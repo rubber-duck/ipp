@@ -3,6 +3,28 @@ use ipp_core::components::schema::ContractHash;
 use std::collections::BTreeSet;
 
 #[test]
+fn lifecycle_diagnostic_tags_and_layouts_are_omitted_without_diagnostics() {
+    for name in [
+        "REQUEST_LIFECYCLE_DIAGNOSTICS",
+        "RESPONSE_LIFECYCLE_DIAGNOSTICS",
+    ] {
+        assert_eq!(
+            TAGS.iter().any(|tag| tag.name == name),
+            cfg!(feature = "diagnostics")
+        );
+    }
+    for name in [
+        "request-lifecycle-diagnostics",
+        "response-lifecycle-diagnostics",
+    ] {
+        assert_eq!(
+            LAYOUTS.iter().any(|layout| layout.name == name),
+            cfg!(feature = "diagnostics")
+        );
+    }
+}
+
+#[test]
 fn manifest_names_tags_and_layout_references_are_valid() {
     let layout_names = LAYOUTS
         .iter()
@@ -23,23 +45,41 @@ fn manifest_names_tags_and_layout_references_are_valid() {
         "runtime-failure-scope",
         "inspection-collection",
         "host-request",
+        "gui-physical-request",
+        "gui-physical-event",
+        "gui-physical-response",
+        "gui-physical-button",
+        "gui-physical-key",
+        "gui-native-edit",
+        "gui-physical-disposition",
+        "gui-action",
         "host-response",
         "world-selector",
+        "output-kind",
+        "output-target",
         "animation-target",
         "playback-control",
         "playback-state",
         "playback-event-kind",
         "option",
-        "entity-overlay-mode",
-        "component-overlay-mode",
-        "state-overlay-handle-kind",
-        "state-overlay-lifecycle-reason",
         "resource-status",
         "snapshot-value",
         "snapshot-reference",
-        "camera-motion",
+        "view-target",
+        "operation-effect",
+        "attachment-receipt-state",
+        "presentation-request",
+        "presentation-response",
+        "presentation-error",
         "geometry-pick-outcome",
         "lifecycle-observation",
+        "lifecycle-watch-change",
+        "lifecycle-watch-target",
+        "lifecycle-watch-record",
+        "lifecycle-membership-result",
+        "lifecycle-target-lifetime",
+        "lifecycle-membership-rejection",
+        "lifecycle-watch-kinds",
     ]
     .into_iter()
     .collect::<BTreeSet<_>>();
@@ -53,10 +93,11 @@ fn manifest_names_tags_and_layout_references_are_valid() {
                         && (field.target == "bool" || layout_names.contains(field.target))
                 ),
                 FieldEncoding::Named => assert!(layout_names.contains(field.target)),
-                FieldEncoding::List => assert!(
+                FieldEncoding::List | FieldEncoding::U8CountedList => assert!(
                     layout_names.contains(field.target)
                         || tag_spaces.contains(field.target)
-                        || ["u32", "utf8-65536", "empty"].contains(&field.target)
+                        || ["u8", "u16", "u32", "u64", "utf8-65536", "empty"]
+                            .contains(&field.target)
                 ),
                 FieldEncoding::Option => {
                     assert!(
@@ -106,6 +147,7 @@ fn tag_space_name(space: TagSpace) -> &'static str {
         TagSpace::HostRequest => "host-request",
         TagSpace::HostResponse => "host-response",
         TagSpace::WorldSelector => "world-selector",
+        TagSpace::OutputKind => "output-kind",
         TagSpace::AnimationTarget => "animation-target",
         TagSpace::PlaybackControl => "playback-control",
         TagSpace::PlaybackState => "playback-state",
@@ -114,16 +156,33 @@ fn tag_space_name(space: TagSpace) -> &'static str {
         TagSpace::AnimationTransitionStartTime => "animation-transition-start-time",
 
         TagSpace::Option => "option",
-        TagSpace::EntityOverlayMode => "entity-overlay-mode",
-        TagSpace::ComponentOverlayMode => "component-overlay-mode",
-        TagSpace::StateOverlayHandleKind => "state-overlay-handle-kind",
-        TagSpace::StateOverlayLifecycleReason => "state-overlay-lifecycle-reason",
         TagSpace::AssetResourceStatus => "resource-status",
         TagSpace::SnapshotValue => "snapshot-value",
         TagSpace::SnapshotReference => "snapshot-reference",
-        TagSpace::CameraMotion => "camera-motion",
+        TagSpace::ViewTarget => "view-target",
+        TagSpace::OperationEffect => "operation-effect",
+        TagSpace::AttachmentReceiptState => "attachment-receipt-state",
+        TagSpace::PresentationRequest => "presentation-request",
+        TagSpace::PresentationResponse => "presentation-response",
+        TagSpace::PresentationError => "presentation-error",
         TagSpace::GeometryPickOutcome => "geometry-pick-outcome",
         TagSpace::LifecycleObservation => "lifecycle-observation",
+        TagSpace::LifecycleWatchChange => "lifecycle-watch-change",
+        TagSpace::LifecycleWatchTarget => "lifecycle-watch-target",
+        TagSpace::LifecycleWatchRecord => "lifecycle-watch-record",
+        TagSpace::LifecycleMembershipResult => "lifecycle-membership-result",
+        TagSpace::LifecycleTargetLifetime => "lifecycle-target-lifetime",
+        TagSpace::LifecycleMembershipRejection => "lifecycle-membership-rejection",
+        TagSpace::LifecycleWatchKinds => "lifecycle-watch-kinds",
+        TagSpace::GuiPhysicalRequest => "gui-physical-request",
+        TagSpace::GuiPhysicalEvent => "gui-physical-event",
+        TagSpace::GuiPhysicalResponse => "gui-physical-response",
+        TagSpace::GuiPhysicalButton => "gui-physical-button",
+        TagSpace::GuiPhysicalKey => "gui-physical-key",
+        TagSpace::GuiNativeEdit => "gui-native-edit",
+        TagSpace::GuiPhysicalDisposition => "gui-physical-disposition",
+        TagSpace::GuiAction => "gui-action",
+        TagSpace::OutputTarget => "output-target",
     }
 }
 
@@ -200,6 +259,24 @@ fn message_budget_bounds_share_one_declaration() {
         .find(|(name, _)| *name == "max-message-bytes")
         .map(|(_, value)| value.parse::<usize>().unwrap());
     assert_eq!(convention, Some(crate::MAX_MESSAGE_BYTES));
+    let page_bytes = CONVENTIONS
+        .iter()
+        .find(|(name, _)| *name == "command-page-bytes")
+        .map(|(_, value)| value.parse::<usize>().unwrap());
+    assert_eq!(page_bytes, Some(crate::COMMAND_PAGE_BYTES));
+    let outcome_aliases = CONVENTIONS
+        .iter()
+        .find(|(name, _)| *name == "batch-outcome-aliases")
+        .map(|(_, value)| value.parse::<usize>().unwrap());
+    assert_eq!(outcome_aliases, Some(crate::BATCH_OUTCOME_ALIASES));
+    assert_eq!(
+        limit("outcome-success", "aliases"),
+        Some(crate::BATCH_OUTCOME_ALIASES)
+    );
+    assert_eq!(
+        limit("request-submit-batch", "operations"),
+        Some(crate::COMMAND_PAGE_COMMANDS)
+    );
 
     // No bounded byte or text field may exceed the complete message budget.
     for layout in LAYOUTS {
@@ -245,6 +322,88 @@ fn nested_field_order_and_encoding_change_contract_hash() {
     let mut bytes = Vec::new();
     write_layout(&mut bytes, &original);
     assert!(!bytes.is_empty());
+}
+
+#[cfg(feature = "gui")]
+#[test]
+fn physical_input_subcodec_has_canonical_nested_layouts() {
+    for name in [
+        "gui-physical-open",
+        "gui-physical-event",
+        "gui-physical-text",
+        "gui-native-state",
+        "gui-native-compose",
+        "gui-physical-pointer-down",
+    ] {
+        assert!(
+            LAYOUTS.iter().any(|layout| layout.name == name),
+            "missing {name}"
+        );
+    }
+}
+
+#[cfg(not(feature = "gui"))]
+#[test]
+fn physical_input_subcodec_is_absent_without_gui() {
+    // Tag spaces 46-52 belong to the GUI physical input subcodec.
+    assert!(
+        TAGS.iter()
+            .all(|tag| !(46..=52).contains(&(tag.space as u16)))
+    );
+    assert!(
+        LAYOUTS
+            .iter()
+            .all(|layout| !layout.name.starts_with("gui-physical-")
+                && !layout.name.starts_with("gui-native-"))
+    );
+}
+
+#[cfg(feature = "gui")]
+#[test]
+fn physical_key_and_native_field_changes_require_a_new_bootstrap() {
+    let mut contract = Vec::new();
+    crate::write_contract(&mut contract);
+    let key = b"GUI_PHYSICAL_KEY_LEFT";
+    let offset = contract
+        .windows(key.len())
+        .position(|value| value == key)
+        .unwrap()
+        + key.len()
+        + 2;
+    let mut changed_key = contract.clone();
+    changed_key[offset] ^= 64;
+    let layout = LAYOUTS
+        .iter()
+        .find(|layout| layout.name == "gui-native-state")
+        .unwrap();
+    let mut original_layout = Vec::new();
+    write_layout(&mut original_layout, layout);
+    let offset = contract
+        .windows(original_layout.len())
+        .position(|value| value == original_layout)
+        .unwrap();
+    let field_name = b"selection_start";
+    let field_offset = original_layout
+        .windows(field_name.len())
+        .position(|value| value == field_name)
+        .unwrap()
+        + field_name.len();
+    assert_eq!(original_layout[field_offset], FieldEncoding::U32 as u8);
+    let mut changed_layout = original_layout.clone();
+    changed_layout[field_offset] = FieldEncoding::U64 as u8;
+    let mut changed_native = contract.clone();
+    changed_native[offset..offset + original_layout.len()].copy_from_slice(&changed_layout);
+    for changed in [changed_key, changed_native] {
+        let mut hash = ContractHash::default();
+        hash.write(&changed);
+        assert_ne!(hash.0, crate::schema_hash());
+        let mut bootstrap = crate::bootstrap();
+        bootstrap[8..].copy_from_slice(&hash.0.to_le_bytes());
+        assert!(matches!(
+            crate::accept_bootstrap(&bootstrap, 1),
+            Err(crate::ProtocolError::SchemaMismatch)
+        ));
+    }
 }
 
 #[test]

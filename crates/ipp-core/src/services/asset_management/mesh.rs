@@ -148,7 +148,11 @@ impl MeshAsset {
 
         let vertices = read_u32(bytes, 8);
         let indices = read_u32(bytes, 12);
-        if vertices == 0 || vertices > 65536 || indices == 0 || !indices.is_multiple_of(3) {
+        if vertices == 0
+            || vertices > MAX_MESH_VERTICES
+            || indices == 0
+            || !indices.is_multiple_of(3)
+        {
             return Err(ErrorReason::InvalidAsset);
         }
         let index_bytes = indices.checked_mul(2).ok_or(ErrorReason::InvalidAsset)?;
@@ -402,6 +406,10 @@ fn read_u32(bytes: &[u8], offset: usize) -> u32 {
             .expect("validated payload extent"),
     )
 }
+
+/// Vertices one mesh asset may hold: its triangle indices are 16-bit, so 65,536 vertices
+/// is the whole addressable range. A mesh declaring more is an invalid asset.
+pub const MAX_MESH_VERTICES: u32 = 65_536;
 
 /// Compiled mesh type identity, independent of factory and source scheme.
 pub const MESH_TYPE: crate::services::asset_management::AssetTypeId =

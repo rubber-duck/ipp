@@ -91,6 +91,21 @@ Gallery, Surface and GUI builds prepare [shared fonts](../../assets/fonts/README
 
 The [catalog](../../tools/pipeline/catalog.py) owns products/checks, [profiles](../../tools/pipeline/profiles.json) own target selections, [suite groups](../../tools/pipeline/suites.json) select tests, and [test inputs](../../tools/pipeline/test-inputs.json) own each test's prerequisites. A test shared by multiple suites keeps the same declared inputs. The catalog check rejects a test whose source, or a module it imports by relative path, literally names a build product directory it does not depend on; a suite command that runs only part of a shared test file lists the products that part never reaches under `partitionExcludes`. The [check](../../tools/pipeline/product_reads.py) sees only literal `target/` paths. Browser profiles build independently. Overlapping selections run each prerequisite and test once.
 
+### Optional compiler cache
+
+Every worktree has its own `target/`, because Cargo locks that directory for the length of a build. [sccache](https://github.com/mozilla/sccache) lets worktrees reuse each other's compiled third-party crates instead. It is a choice for each machine: the repository does not configure it, and every build and pipeline step works without it.
+
+Install a release binary on `PATH` and select it in the user-level `~/.cargo/config.toml`:
+
+```toml
+[build]
+rustc-wrapper = "sccache"
+```
+
+`RUSTC_WRAPPER= cargo build` runs one command without the cache, and `sccache --show-stats` reports hits and misses. Only third-party crates are shared. Workspace crates are compiled incrementally in the development profiles, several link an executable, dynamic library or procedural macro, and all of them name their checkout's path; sccache caches none of those. The dependency set is small, so the saving is small too: about one second of a sixteen-second native development build.
+
+The repository's [.cargo/config.toml](../../.cargo/config.toml) must not carry list values such as `rustflags`. From a worktree under `.worktrees/` Cargo also reads the primary checkout's copy and joins the lists, which passes each flag twice and makes every compiler command in that worktree differ from other checkouts'. Lints belong in `[workspace.lints]`.
+
 ## Formatting
 
 Pinned tools are Biome/Prettier in [package.json](../../package.json), Ruff/Mypy in [requirements-dev.txt](../../requirements-dev.txt), and rustfmt in [rust-toolchain.toml](../../rust-toolchain.toml). Mypy checks the Python pipeline's annotations. Formatting never applies lint fixes.

@@ -1,3 +1,5 @@
 [build]
-# Default build flags can be placed here
-rustflags = ["-W", "rust_2018_idioms"]
+# Keep list values such as `rustflags` out of this file. From a worktree under
+# `.worktrees/` Cargo also reads the primary checkout's copy and joins the lists,
+# so each flag would be passed twice there and no compiler command would match
+# another checkout's. Lints belong in `[workspace.lints]` in Cargo.toml.

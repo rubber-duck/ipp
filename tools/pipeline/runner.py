@@ -16,7 +16,7 @@ import threading
 import time
 
 from .artifacts import output_records, source_identity, workspace_lock, write_json
-from .environment import inspect, records
+from .environment import device_environment, inspect, records, select_browser_device
 from .model import ROOT, Plan, Task
 from .processes import blender, node
 from .windows_job import WindowsJob
@@ -39,16 +39,6 @@ def terminate_tree(child: subprocess.Popen, *, hard: bool = False) -> None:
             os.killpg(child.pid, signal.SIGKILL if hard else signal.SIGTERM)
         except ProcessLookupError:
             pass
-
-
-BROWSER_DEVICES = ("software", "vulkan", "gl-egl")
-
-
-def device_environment(device: str) -> dict[str, str | None]:
-    """The pipeline, not the caller's shell, selects every child's browser device."""
-    if device not in BROWSER_DEVICES:
-        raise ValueError(f"Unknown browser device: {device}")
-    return {"IPP_BROWSER_ANGLE": None if device == "software" else device}
 
 
 def child_environment(overrides: dict[str, str | None] | None = None) -> dict:
@@ -180,20 +170,55 @@ def run_plan(
     live: bool = False,
     cancel: threading.Event | None = None,
     preflight: bool = True,
-    browser_device: str = "software",
+    browser_device: str | None = None,
+    browser_choice: str = "requested",
 ) -> dict:
+    """Run a plan; without a browser device, detect one through the browser preflight.
+
+    `browser_choice` says how a given device was chosen: "requested" or "inherited".
+    """
     cancel = cancel or threading.Event()
-    # CLI selections reach every child as the environment its harness reads.
-    selection = {
-        **device_environment(browser_device),
-        **({"IPP_EGL_LIBRARY_DIR": egl_directory} if egl_directory else {}),
-    }
+    requirements = {r for task in plan.tasks for r in task.requirements}
+    egl_selection = {"IPP_EGL_LIBRARY_DIR": egl_directory} if egl_directory else {}
     # Streamed or interactive output stays readable only one step at a time.
     widths = scheduler_widths(live or any(task.interactive for task in plan.tasks))
     with workspace_lock(root):
         runs = root / "target/pipeline/runs"
         runs.mkdir(parents=True, exist_ok=True)
         directory = Path(tempfile.mkdtemp(prefix="run-", dir=runs))
+        verified = None
+        browser: dict = {"device": browser_device, "selection": browser_choice}
+        if browser_device is not None:
+            option = (
+                "--software"
+                if browser_device == "software"
+                else f"--hardware {browser_device}"
+            )
+            browser["reason"] = (
+                "kept from the retried run"
+                if browser_choice == "inherited"
+                else f"requested with {option}"
+            )
+        elif "browser" not in requirements:
+            browser.update(selection="automatic", reason="no browser steps")
+        elif not preflight:
+            browser.update(
+                device="software",
+                selection="automatic",
+                reason="automatic: preflight disabled, so software",
+            )
+        else:
+            chosen = select_browser_device(cancel, egl_selection)
+            verified = chosen.verified
+            browser.update(
+                device=chosen.device,
+                selection="automatic",
+                reason=chosen.reason,
+                attempts=list(chosen.attempts),
+            )
+        browser_device = browser["device"]
+        # CLI selections reach every child as the environment its harness reads.
+        selection = {**device_environment(browser_device), **egl_selection}
         report: dict = {
             "version": 2,
             "root": str(root),
@@ -224,30 +249,34 @@ def run_plan(
                     )
                     if name in os.environ
                 },
-                **({"IPP_EGL_LIBRARY_DIR": egl_directory} if egl_directory else {}),
+                **egl_selection,
                 "browserDevice": browser_device,
             },
             "scheduler": widths,
-            "browser": {"device": browser_device},
+            "browser": browser,
             "environment": [],
             "steps": [{**asdict(task), "status": "pending"} for task in plan.tasks],
         }
         save = lambda: write_json(directory / "summary.json", report)
         save()
         print(
-            f"IPP {plan.command}: {len(plan.tasks)} steps; browser device: {browser_device}; "
+            f"IPP {plan.command}: {len(plan.tasks)} steps; browser device: "
+            f"{browser_device or 'none'} ({browser['reason']}); "
             f"width {widths['steps']} (browser {widths['browser']}, cargo {widths['cargo']}) "
             f"on {widths['availableCores']} cores; evidence: {directory}",
             file=sys.stderr,
             flush=True,
         )
         if preflight:
+            # Automatic detection already ran the browser preflight on its device.
             environment = inspect(
-                {r for task in plan.tasks for r in task.requirements},
+                requirements - {"browser"} if verified else requirements,
                 egl_directory,
                 cancel,
                 selection,
             )
+            if verified:
+                environment = sorted([*environment, verified], key=lambda r: r.name)
             report["environment"] = records(environment)
             failed = [result for result in environment if not result.ready]
             if failed:

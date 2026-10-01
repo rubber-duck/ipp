@@ -16,7 +16,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pipeline.cli import main, parser
-from pipeline.environment import probe
+from pipeline.environment import Requirement, probe
 from pipeline.model import ROOT, Plan, Task
 from pipeline.runner import (
     device_environment,
@@ -342,8 +342,12 @@ class BrowserDeviceTests(Fixture):
         for previous, extra, expected in (
             ("vulkan", [], "vulkan"),
             ("gl-egl", [], "gl-egl"),
+            # An automatic run that fell back to software is not detected again.
             ("software", [], "software"),
+            # A run without browser steps recorded no device, so the retry detects.
+            (None, [], None),
             ("vulkan", ["--hardware", "gl-egl"], "gl-egl"),
+            ("vulkan", ["--software"], "software"),
             ("software", ["--hardware", "vulkan"], "vulkan"),
         ):
             report.write_text(
@@ -371,8 +375,12 @@ class BrowserDeviceTests(Fixture):
                     self.assertEqual(
                         runner.call_args.kwargs["browser_device"], expected
                     )
+                    self.assertEqual(
+                        runner.call_args.kwargs["browser_choice"],
+                        "inherited" if previous and not extra else "requested",
+                    )
 
-    def test_hardware_option_reaches_the_runner(self):
+    def test_device_options_reach_the_runner(self):
         arguments = parser()
         for command in (
             ["regression"],
@@ -383,17 +391,30 @@ class BrowserDeviceTests(Fixture):
             ["retry", "summary.json"],
         ):
             with self.subTest(command=command):
-                self.assertIsNone(arguments.parse_args(command).hardware)
+                self.assertIsNone(arguments.parse_args(command).device)
                 for device in ("vulkan", "gl-egl"):
                     parsed = arguments.parse_args([*command, "--hardware", device])
-                    self.assertEqual(parsed.hardware, device)
-        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
-            arguments.parse_args(["regression", "--hardware", "software"])
+                    self.assertEqual(parsed.device, device)
+                parsed = arguments.parse_args([*command, "--software"])
+                self.assertEqual(parsed.device, "software")
+                # The two options are mutually exclusive.
+                with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    arguments.parse_args(
+                        [*command, "--software", "--hardware", "vulkan"]
+                    )
+        for invalid in (
+            ["regression", "--hardware", "software"],
+            # Benchmarks require hardware and offer no software option.
+            ["benchmark", "browser", "--software"],
+        ):
+            with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                arguments.parse_args(invalid)
         self.assertEqual(
-            arguments.parse_args(["benchmark", "browser"]).hardware, "vulkan"
+            arguments.parse_args(["benchmark", "browser"]).device, "vulkan"
         )
         for argv, expected in (
-            (["regression", "--only", "check:catalog"], "software"),
+            (["regression", "--only", "check:catalog"], None),
+            (["regression", "--only", "check:catalog", "--software"], "software"),
             (
                 ["regression", "--only", "check:catalog", "--hardware", "gl-egl"],
                 "gl-egl",
@@ -406,6 +427,120 @@ class BrowserDeviceTests(Fixture):
                 ) as runner:
                     self.assertEqual(main(argv), 0)
                 self.assertEqual(runner.call_args.kwargs["browser_device"], expected)
+                self.assertEqual(runner.call_args.kwargs["browser_choice"], "requested")
+
+    def run_browser_plan(self, probe_results, **options):
+        """Run one browser step whose browser preflight answers per device."""
+        probed = []
+
+        def browser_probe(_cancel, environment):
+            device = environment.get("IPP_BROWSER_ANGLE") or "software"
+            probed.append(device)
+            result = probe_results[device]
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+        task = self.device_task(requirements=("browser",))
+        with (
+            patch("pipeline.environment.browser_probe", side_effect=browser_probe),
+            patch("pipeline.runner.inspect", return_value=[]) as inspect,
+            redirect_stderr(io.StringIO()) as console,
+        ):
+            report = run_plan(
+                Plan("test", (task.id,), (task,)), root=self.root, **options
+            )
+        return report, probed, inspect, console.getvalue()
+
+    def hardware_probe(self, renderer):
+        return json.dumps({"unmaskedRenderer": renderer})
+
+    def test_automatic_selection_uses_the_first_hardware_renderer(self):
+        refused = ValueError(
+            "Error: Hardware WebGL required; received renderer ANGLE (SwiftShader)"
+        )
+        for results, expected, probes in (
+            ({"vulkan": self.hardware_probe("RADV NAVI48")}, "vulkan", ["vulkan"]),
+            (
+                {"vulkan": refused, "gl-egl": self.hardware_probe("AMD radeonsi")},
+                "gl-egl",
+                ["vulkan", "gl-egl"],
+            ),
+        ):
+            with self.subTest(expected=expected):
+                report, probed, inspect, console = self.run_browser_plan(results)
+                self.assertEqual(probed, probes)
+                self.assertEqual(self.seen(), expected)
+                self.assertEqual(report["browser"]["device"], expected)
+                self.assertEqual(report["browser"]["selection"], "automatic")
+                self.assertTrue(report["browser"]["attempts"][-1]["ready"])
+                self.assertEqual(
+                    report["environmentSelection"]["browserDevice"], expected
+                )
+                # Detection was the browser preflight; it is not repeated.
+                self.assertNotIn("browser", inspect.call_args.args[0])
+                self.assertEqual(
+                    [r["name"] for r in report["environment"]], ["browser"]
+                )
+                self.assertIn(f"browser device: {expected} (automatic:", console)
+                (self.root / "device").unlink()
+
+    def test_automatic_selection_falls_back_to_software(self):
+        refused = ValueError(
+            "noise\nError: Hardware WebGL required; received renderer llvmpipe"
+        )
+        report, probed, inspect, console = self.run_browser_plan(
+            {"vulkan": refused, "gl-egl": refused}
+        )
+        self.assertEqual(probed, ["vulkan", "gl-egl"])
+        self.assertIsNone(self.seen())
+        self.assertEqual(report["browser"]["device"], "software")
+        self.assertEqual(report["browser"]["selection"], "automatic")
+        self.assertEqual(
+            report["browser"]["attempts"][0]["detail"],
+            "Error: Hardware WebGL required; received renderer llvmpipe",
+        )
+        # The software browser is still checked by the ordinary preflight.
+        self.assertIn("browser", inspect.call_args.args[0])
+        self.assertEqual(inspect.call_args.args[3]["IPP_BROWSER_ANGLE"], None)
+        self.assertIn("browser device: software (automatic: no hardware", console)
+
+    def test_requested_devices_are_not_detected(self):
+        for device in ("software", "vulkan"):
+            with self.subTest(device=device):
+                report, probed, inspect, console = self.run_browser_plan(
+                    {}, browser_device=device
+                )
+                self.assertEqual(probed, [])
+                self.assertEqual(report["browser"]["selection"], "requested")
+                self.assertIn("browser", inspect.call_args.args[0])
+                self.assertIn(f"browser device: {device} (requested with --", console)
+                (self.root / "device").unlink()
+
+    def test_requested_hardware_fails_closed(self):
+        task = self.device_task(requirements=("browser",))
+        failed = [Requirement("browser", False, "Hardware WebGL required", "")]
+        with (
+            patch("pipeline.runner.select_browser_device") as detect,
+            patch("pipeline.runner.inspect", return_value=failed),
+            redirect_stderr(io.StringIO()),
+        ):
+            report = run_plan(
+                Plan("test", (task.id,), (task,)),
+                root=self.root,
+                browser_device="vulkan",
+            )
+        detect.assert_not_called()
+        self.assertEqual(report["status"], "environment_failed")
+        self.assertEqual(report["browser"]["device"], "vulkan")
+        self.assertFalse((self.root / "device").exists())
+
+    def test_runs_without_browser_steps_select_no_device(self):
+        with patch("pipeline.runner.select_browser_device") as detect:
+            report = self.run_tasks([self.device_task()])
+        detect.assert_not_called()
+        self.assertIsNone(report["browser"]["device"])
+        self.assertEqual(report["browser"]["reason"], "no browser steps")
 
 
 if __name__ == "__main__":

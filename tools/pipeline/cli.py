@@ -21,10 +21,17 @@ from .catalog import (
     regression_ids,
     suite_ids,
 )
-from .environment import inspect, records
+from .environment import (
+    HARDWARE_DEVICES,
+    Requirement,
+    device_environment,
+    inspect,
+    records,
+    select_browser_device,
+)
 from .model import ROOT, Plan, Task, select
 from .processes import node
-from .runner import BROWSER_DEVICES, device_environment, retry_ids, run_plan
+from .runner import retry_ids, run_plan
 from .selection import affected, changed_files
 
 
@@ -60,16 +67,22 @@ def parser() -> argparse.ArgumentParser:
             "--fail-fast", action="store_true", help="stop after the first failed step"
         )
 
-    def hardware(command: argparse.ArgumentParser, default: str | None = None) -> None:
-        command.add_argument(
+    def hardware(command: argparse.ArgumentParser) -> None:
+        # Without either option the run detects hardware and falls back to software.
+        devices = command.add_mutually_exclusive_group()
+        devices.add_argument(
             "--hardware",
-            choices=BROWSER_DEVICES[1:],
-            default=default,
-            help=(
-                f"run browser steps on this hardware ANGLE backend (default: {default})"
-                if default
-                else "run browser steps on this hardware ANGLE backend instead of software rendering"
-            ),
+            dest="device",
+            choices=HARDWARE_DEVICES,
+            help="run browser steps on this hardware ANGLE backend and fail on a software renderer "
+            "(default: the first available of vulkan and gl-egl, otherwise software)",
+        )
+        devices.add_argument(
+            "--software",
+            dest="device",
+            action="store_const",
+            const="software",
+            help="run browser steps on software rendering (SwiftShader)",
         )
 
     for name in ("build", "test", "check"):
@@ -190,8 +203,14 @@ def parser() -> argparse.ArgumentParser:
         "benchmark", help="run opt-in scene performance experiments outside regression"
     )
     common(benchmarking)
-    # Performance claims need real hardware, so benchmarks never default to software.
-    hardware(benchmarking, BROWSER_DEVICES[1])
+    # Performance claims need real hardware, so benchmarks never fall back to software.
+    benchmarking.add_argument(
+        "--hardware",
+        dest="device",
+        choices=HARDWARE_DEVICES,
+        default=HARDWARE_DEVICES[0],
+        help="run browser steps on this hardware ANGLE backend (default: %(default)s)",
+    )
     benchmarking.add_argument("backend", choices=("native", "browser"))
     # Stress defaults are applied by the planner so other scenes can reject them.
     benchmarking.add_argument("--preset", choices=("smoke", "full"))
@@ -293,10 +312,12 @@ def make_plan(args: argparse.Namespace) -> Plan:
             if not args.egl_dir:
                 args.egl_dir = previous.get("eglDirectory")
                 tasks = catalog(args.egl_dir)
-            # A retry completes the earlier run on its device unless --hardware overrides it.
-            device = previous.get("browser", {}).get("device", "software")
-            if not args.hardware and device != "software":
-                args.hardware = device
+            # A retry completes the earlier run on its device instead of detecting
+            # again, unless --hardware or --software overrides it.
+            device = (previous.get("browser") or {}).get("device")
+            if args.device is None and device:
+                args.device = device
+                args.browser_choice = "inherited"
             if previous.get("source") != source_identity(ROOT):
                 notes.append(
                     "Source differs from the previous run. Old passing steps are not revalidated; add affected --group/--only/--suite selections."
@@ -541,8 +562,36 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 )
                 return 0
+            # Report the device a default run would select, and check on it.
+            egl = {"IPP_EGL_LIBRARY_DIR": args.egl_dir} if args.egl_dir else {}
+            selected = select_browser_device(cancel, egl)
             environment = inspect(
-                requirements, args.egl_dir, cancel, device_environment("software")
+                requirements - {"browser"} if selected.verified else requirements,
+                args.egl_dir,
+                cancel,
+                {**device_environment(selected.device), **egl},
+            )
+            failures = "; ".join(
+                f"{attempt['device']}: {attempt['detail']}"
+                for attempt in selected.attempts
+                if not attempt["ready"]
+            )
+            environment = sorted(
+                [
+                    *environment,
+                    *(
+                        [selected.verified]
+                        if selected.verified and "browser" in requirements
+                        else []
+                    ),
+                    Requirement(
+                        "browser-device",
+                        True,
+                        f"{selected.device} ({selected.reason})"
+                        + (f"; {failures}" if failures else ""),
+                    ),
+                ],
+                key=lambda result: result.name,
             )
             if args.json:
                 print(json.dumps(records(environment), indent=2))
@@ -581,7 +630,8 @@ def main(argv: list[str] | None = None) -> int:
             fail_fast=args.fail_fast,
             live=args.live,
             cancel=cancel,
-            browser_device=getattr(args, "hardware", None) or "software",
+            browser_device=getattr(args, "device", None),
+            browser_choice=getattr(args, "browser_choice", "requested"),
         )
         if args.json:
             print(json.dumps(report, indent=2))

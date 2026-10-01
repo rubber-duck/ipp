@@ -1,5 +1,6 @@
 """Read-only, selection-specific prerequisite checks with actionable diagnostics."""
 
+from collections.abc import Mapping
 import ctypes
 from dataclasses import asdict, dataclass
 import hashlib
@@ -24,6 +25,30 @@ class Requirement:
     ready: bool
     detail: str
     remedy: str = ""
+
+
+BROWSER_DEVICES = ("software", "vulkan", "gl-egl")
+
+# Automatic selection tries these in order and keeps the first real hardware renderer.
+HARDWARE_DEVICES = BROWSER_DEVICES[1:]
+
+
+def device_environment(device: str | None) -> dict[str, str | None]:
+    """The pipeline, not the caller's shell, selects every child's browser device."""
+    if device is not None and device not in BROWSER_DEVICES:
+        raise ValueError(f"Unknown browser device: {device}")
+    return {"IPP_BROWSER_ANGLE": None if device in (None, "software") else device}
+
+
+@dataclass(frozen=True)
+class BrowserSelection:
+    """An automatic device choice and the browser preflight result that made it."""
+
+    device: str
+    reason: str
+    attempts: tuple[dict, ...]
+    # The passing browser preflight of the chosen hardware device, reused by the run.
+    verified: Requirement | None = None
 
 
 def development_python() -> str:
@@ -55,6 +80,53 @@ def probe(
         if result["exitCode"] or result["timedOut"]:
             raise ValueError(output[-2500:] or "Environment probe failed or timed out")
         return output
+
+
+def browser_probe(
+    cancel: threading.Event | None, environment: dict[str, str | None] | None
+) -> str:
+    """Launch Chromium on the selected device; hardware devices fail on software renderers."""
+    return probe([node(), "tools/build/probe-browser.mjs"], 45, cancel, environment)
+
+
+def select_browser_device(
+    cancel: threading.Event | None = None,
+    environment: Mapping[str, str | None] | None = None,
+) -> BrowserSelection:
+    """Use the first hardware backend whose browser preflight passes, otherwise software."""
+    attempts = []
+    for device in HARDWARE_DEVICES:
+        try:
+            detail = browser_probe(
+                cancel, {**(environment or {}), **device_environment(device)}
+            )
+        except (OSError, ValueError, subprocess.SubprocessError) as error:
+            lines = str(error).strip().splitlines() or ["probe failed"]
+            # Node prints the thrown source line first; keep the error message itself.
+            reason = next(
+                (line for line in lines if re.match(r"\s*\w*Error: ", line)),
+                lines[-1],
+            ).strip()
+            attempts.append({"device": device, "ready": False, "detail": reason[:300]})
+            continue
+        try:
+            renderer = json.loads(detail.splitlines()[-1]).get("unmaskedRenderer")
+        except ValueError, AttributeError:
+            renderer = None
+        attempts.append({"device": device, "ready": True, "renderer": renderer})
+        return BrowserSelection(
+            device,
+            f"automatic: {device} presents hardware renderer {renderer}",
+            tuple(attempts),
+            Requirement("browser", True, detail),
+        )
+    return BrowserSelection(
+        "software",
+        "automatic: no hardware renderer from "
+        + " or ".join(HARDWARE_DEVICES)
+        + ", so software",
+        tuple(attempts),
+    )
 
 
 def inspect(
@@ -157,9 +229,7 @@ def inspect(
                 detail = f"{development_python()}: {versions}"
             elif name == "browser":
                 remedy = "python tools/ipp.py setup browser --with-deps; then run in the configured browser environment."
-                detail = inspect_command(
-                    [node(), "tools/build/probe-browser.mjs"], timeout=45
-                )
+                detail = browser_probe(cancel, environment)
             elif name == "blender":
                 remedy = "python tools/ipp.py setup blender, or set BLENDER_BIN."
                 detail = inspect_command([blender(), "--version"])

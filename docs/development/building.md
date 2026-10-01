@@ -15,36 +15,36 @@ Current support differs from the broader architectural direction:
 | Evaluation | Property/joint animation, reversible playback and runtime crossfades, affine object and joint parenting, scalar `LinearDriver`, terminal object LookAt | Other basic constraints, joint-local constraints and iterative solving |
 | Rendering | Unlit/PBR and custom materials, direct lights, uniform ambient fill, shared spotlight shadow allocation, WebGL/GLES and context recovery | Image-based lighting, MSAA, full PBR texture inputs and visibility/quality-driven residency |
 | Authoring | React declarations/assets/animation, including adoption of existing entities by declared symbolic id when a root mounts again after reconnect; Blender object/bone parenting, a single relative shape key and reusable active/stashed clips | React remote refs; general Blender shader graphs or lossless NLA/constraint translation |
-| Data and hosts | Shared Worlds, reference-only persistence, browser HTTP, native filesystem and optional ZIP input | Asset bundles, native HTTP/IPC source adapters and independent simultaneous GL contexts over one catalog |
+| Data and hosts | Shared Worlds, reference-only persistence, browser HTTP and native filesystem input | Asset bundles, native HTTP/IPC source adapters and independent simultaneous GL contexts over one catalog |
 
-Optional particles provide CPU emission/cache playback and instanced presentation; mesh poses and skeletal animation provide separate deformation paths. Optional [Surfaces](../../examples/surface-terminal/README.md) present Canvas content (quadratic text and drawings, RGBA bitmaps and clipping) on transformed planes. Text supports basic labels and client-shaped glyph runs; the offline SVG converter accepts a documented subset. Surfaces may opt into [whole-Surface texture caching](../architecture/rendering.md#optional-surface-texture-caching) that keeps nearby, focused and interacted-with Surfaces direct and lowers cache resolution and refresh with camera distance; the [policy](../../crates/ipp-core/src/world/systems/surface/cache_policy.rs) and [renderer cache](../../crates/ipp-render-gl/src/services/render/surface_cache.rs) own the numbers, and the [GUI demo](../../examples/world-gallery/worlds/gui/README.md) compares cached and direct presentation. [Exporter scope](../../integrations/blender/ipp_blender/EXPORTER.md) owns supported Blender combinations. Beads tracks remaining work; maintained suites establish behavior in their tested environment.
+Particles provide CPU emission/cache playback and instanced presentation; mesh poses and skeletal animation provide separate deformation paths. [Surfaces](../../examples/surface-terminal/README.md) present Canvas content (quadratic text and drawings, RGBA bitmaps and clipping) on transformed planes. Text supports basic labels and client-shaped glyph runs; the offline SVG converter accepts a documented subset. Surfaces may opt into [whole-Surface texture caching](../architecture/rendering.md#optional-surface-texture-caching) that keeps nearby, focused and interacted-with Surfaces direct and lowers cache resolution and refresh with camera distance; the [policy](../../crates/ipp-core/src/world/systems/surface/cache_policy.rs) and [renderer cache](../../crates/ipp-render-gl/src/services/render/surface_cache.rs) own the numbers, and the [GUI demo](../../examples/world-gallery/worlds/gui/README.md) compares cached and direct presentation. [Exporter scope](../../integrations/blender/ipp_blender/EXPORTER.md) owns supported Blender combinations. Beads tracks remaining work; maintained suites establish behavior in their tested environment.
 
-The optional `gui` capability provides GUI controls as ordinary entities in the core entity tree, control values and scroll state as ordinary component fields, headless layout, Canvas presentation of skin shape materials through retained triangle batches with shared glyph-atlas text, routed pointer/keyboard/text interaction including provisional composition, nested ScrollView wheel and drag scrolling with skinnable scroll bars, VirtualLists that scroll by item count and declare only their wanted item range, actions, field subscriptions and focus/pointer queries, and the `@ipp/react/gui` declarations with client text/clipboard/IME bridges. Screen-reader bridging and the other [out-of-scope items](../architecture/gui.md#ownership-and-scope) remain future work.
+The GUI capability provides controls as ordinary entities in the core entity tree, control values and scroll state as ordinary component fields, headless layout, Canvas presentation of skin shape materials through retained triangle batches with shared glyph-atlas text, routed pointer/keyboard/text interaction including provisional composition, nested ScrollView wheel and drag scrolling with skinnable scroll bars, VirtualLists that scroll by item count and declare only their wanted item range, actions, field subscriptions and focus/pointer queries, and the `@ipp/react/gui` declarations with client text/clipboard/IME bridges. Screen-reader bridging and the other [out-of-scope items](../architecture/gui.md#ownership-and-scope) remain future work.
 
 ## Crates and features
 
-[Workspace architecture](../architecture/rust-workspace.md) owns crate responsibilities and the baseline. Plain `cargo check` selects the default workspace members; `--workspace` includes rendering, WASM and tooling. Build individual packages with explicit features when checking lean distributions.
+[Workspace architecture](../architecture/rust-workspace.md#compile-time-composition) owns crate responsibilities and the three build axes. Plain `cargo check` selects the default workspace members; `--workspace` includes rendering, WASM and tooling. Every build compiles every capability; a World excludes one through its System selection.
 
-Core/protocol/session/hosts default to `builtin-assets`; renderer/build tools have empty defaults. Use `--no-default-features` to omit defaults. Scene selections include `skeletal-animation`, `mesh-poses`, `particles`, `surfaces`, `shadows` and `builtin-assets`. Hosts forward the relevant selections; the WASM host renders only with `render`, and the native host keeps the renderer as a dev-dependency of its profiling example and its `gles_host` testing host. Platform/tooling selections include `render`, native `websocket`, core `zip-data-source`, `diagnostics` (logging, render/resource/ingress statistics, Surface cache records and testing overrides), `profiling` (allocator, timers and benchmark exports) and `schema-export`. Exact declarations live in the [core](../../crates/ipp-core/Cargo.toml), [renderer](../../crates/ipp-render-gl/Cargo.toml), [native](../../crates/ipp-server/Cargo.toml) and [WASM](../../crates/ipp-wasm/Cargo.toml) manifests.
+Default features are empty everywhere, so a plain build is the production build; it logs, answers statistics requests and reports panics through its log sink. The only features are `instrumentation` (renderer testing overrides, the GLES test host's testing controls, the counting allocator, profiling timers and benchmark exports), forwarded by the hosts; `render` on the WASM host, which links the WebGL renderer; and `checked-invariants`, core's own test oracle. The native host keeps the renderer as a dev-dependency of its profiling example and its `gles_host` testing host, and always includes its WebSocket transport. Exact declarations live in the [core](../../crates/ipp-core/Cargo.toml), [renderer](../../crates/ipp-render-gl/Cargo.toml), [native](../../crates/ipp-server/Cargo.toml) and [WASM](../../crates/ipp-wasm/Cargo.toml) manifests.
 
-[Browser configurations](../../tools/pipeline/profiles.json) own distribution names and flags. For example:
+[Browser distributions](../../tools/pipeline/profiles.json) are named by their axis values and exist only where something consumes them: `headless` (no renderer, production), `render` (WebGL, production) and `render-instrumentation` (WebGL with test controls and profiling). Scenarios run `render` unless they use a test control or the profiler; the GLES test host likewise has a normal `gles-host` and a `gles-host-instrumentation` product. For example:
 
 ```sh
-python tools/ipp.py build browser:headless browser:render-particles
-python tools/ipp.py check contracts:baseline contracts:expanded
+python tools/ipp.py build browser:headless browser:render
+python tools/ipp.py check contracts contract-identities browser-identities
 ```
 
-The builder executes target exports, generates matching clients and verifies the final runtime contract and compiled-out payloads. `TARGET.features` and `CAPABILITIES` describe the receiving target. Contract changes require regenerated clients and fixtures; GPU selection/diagnostics do not change otherwise matching authored-state contracts. Contract export stays out of final runtimes.
+The builder compiles each distribution's runtime once, reads the contract from that runtime, generates the matching client and verifies the final runtime, client and assembled host. Each host target has one contract: `check:contracts` verifies the native and WASM contracts and their generated clients, and the identity checks prove that instrumentation and the renderer never change a target's contract. Contract changes require regenerated clients and fixtures. At connection the Host announces its compatibility hash and serves its contract on request; a generated client refuses a Host whose hash differs from its own ([client guide](../../packages/ipp-client/README.md#build-and-connect)).
 
 ## Diagnostic output
 
 Follow the [logging policy](../architecture/runtime.md#diagnostic-logging) and [levels](../../crates/ipp-core/src/diagnostics.rs).
 
-Native: `IPP_LOG=debug cargo run -p ipp-server --features websocket,diagnostics --locked`. Levels: `error`, `warn`, `info` (default), `debug`, `trace`, `off`.
+Native: `IPP_LOG=debug cargo run -p ipp-server --locked`. Levels: `error`, `warn`, `info` (default), `debug`, `trace`, `off`.
 
-Prepared browser render builds enable diagnostics: set `logLevel` in connection options or `IppCanvas.runtime`. Headless browser builds compile Rust logging out.
+Every browser distribution logs: set `logLevel` in connection options or `IppCanvas.runtime`. Every build also reports a panic's message and source location through the log sink before aborting.
 
-The same feature compiles in renderer, resource and ingress statistics, Surface cache records and the renderer testing overrides; lean and headless builds omit them. The worker reads statistics only inside a frame capture, where `FrameCapture.statistics` carries them as typed groups, and `@ipp/client/testing` sends loss simulation and budget overrides that only such builds honour. `profiling` is separate and loads the worker profiler module only when its exports exist.
+Every build keeps renderer, resource, ingress and lifecycle statistics, read on demand through [`@ipp/client/diagnostics`](../../packages/ipp-client/README.md#physical-presentation). `@ipp/client/testing` sends loss simulation and budget overrides that only `instrumentation` builds honour; against any other build each control throws at the call. Whether a browser distribution ships the worker side of those controls and the profiler module is decided by its build configuration in the [assembler](../../packages/ipp-client/tools/assemble.mjs), never by probing the runtime's exports.
 
 ## Pipeline setup and commands
 
@@ -68,7 +68,7 @@ Every public command supports `--help`, `--plan` and `--json`; build/test/check/
 ```sh
 python tools/ipp.py build gallery
 python tools/ipp.py build gallery-site
-python tools/ipp.py build browser:headless browser:render-particles
+python tools/ipp.py build browser:headless browser:render
 python tools/ipp.py check typecheck
 python tools/ipp.py test cameras worlds
 python tools/ipp.py test cameras --plan --json
@@ -89,7 +89,7 @@ Gallery builds require Blender 5.2 and Chromium (`python tools/ipp.py setup brow
 
 Gallery, Surface and GUI builds prepare [shared fonts](../../assets/fonts/README.md) through the `font-assets` prerequisite. Clean local and GitHub Actions builds download the pinned sources automatically and verify their SHA-256 checksums; subsequent builds reuse the verified `target/font-sources/` cache. `python tools/ipp.py build font-assets` prepares that cache and the shared runtime font directly.
 
-The [catalog](../../tools/pipeline/catalog.py) owns products/checks, [profiles](../../tools/pipeline/profiles.json) own target selections, [suite groups](../../tools/pipeline/suites.json) select tests, and [test inputs](../../tools/pipeline/test-inputs.json) own each test's prerequisites. A test shared by multiple suites keeps the same declared inputs. Browser profiles build independently. Overlapping selections run each prerequisite and test once.
+The [catalog](../../tools/pipeline/catalog.py) owns products/checks, [profiles](../../tools/pipeline/profiles.json) own target selections, [suite groups](../../tools/pipeline/suites.json) select tests, and [test inputs](../../tools/pipeline/test-inputs.json) own each test's prerequisites. A test shared by multiple suites keeps the same declared inputs. The catalog check rejects a test whose source, or a module it imports by relative path, literally names a build product directory it does not depend on; a suite command that runs only part of a shared test file lists the products that part never reaches under `partitionExcludes`. The [check](../../tools/pipeline/product_reads.py) sees only literal `target/` paths. Browser profiles build independently. Overlapping selections run each prerequisite and test once.
 
 ## Formatting
 
@@ -109,13 +109,15 @@ The npm formatting shortcuts invoke the same Python pipeline. JavaScript/TypeScr
 
 ## Evidence and execution
 
-Every run writes a unique `target/pipeline/runs/run-*/summary.json`, incremental status and complete child logs. Build steps also write manifests with source-content identity, commands, tool/environment identity, dependency manifests, and output hashes. Reports describe the exact products observed in that run. Browser products retain separate build reports, and generation verifies the exported and final runtime contracts before publication.
+Every run writes a unique `target/pipeline/runs/run-*/summary.json`, incremental status and complete child logs. Build steps also write manifests with source-content identity, commands, tool/environment identity, dependency manifests, and output hashes. Reports describe the exact products observed in that run. Browser products retain separate build reports, and generation verifies that the client matches the contract of the shipped runtime before publication.
 
-The executor serializes writers within a checkout using an OS lock, released even after a crash. Use separate source worktrees for concurrent pipeline execution. It owns child processes, reports timeouts/cancellation, blocks dependents after failure and continues independent work unless `--fail-fast` is selected. Interactive development servers stream their URL and stay owned until stopped. A source change during execution is recorded explicitly; that run cannot establish one unchanged source snapshot.
+The executor serializes writers within a checkout using an OS lock, released even after a crash. Use separate source worktrees for concurrent pipeline execution. It owns child processes, reports timeouts/cancellation, blocks dependents after failure and continues independent work unless `--fail-fast` is selected, which stops new starts and lets running steps finish. Interactive development servers stream their URL and stay owned until stopped. A source change during execution is recorded explicitly; that run cannot establish one unchanged source snapshot.
+
+Steps run concurrently over the dependency graph: a step starts once all its prerequisites passed. The [runner](../../tools/pipeline/runner.py) derives every width from the cores available to the process and records the widths and core counts as `scheduler` in `summary.json`. Steps declaring the `rust` requirement run one at a time because Cargo steps share one build directory and already use every core, so every step that drives Cargo must declare `rust`; a step that declares it without running Cargo only waits longer. Steps declaring `browser` share a smaller browser width, which bounds how many separate Chromium instances run at once; browser scenarios launch their own. `--live` and plans containing interactive steps run serially. Reports keep steps in plan order; the console prints a start and a finish line per step and one combined line of running steps every 30 seconds.
 
 Suites in the [suite registry](../../tools/pipeline/suites.json) and native GLES checks in [gles.json](../../tools/pipeline/gles.json) declare shared source ownership through `sourceRoots`: a root ending in `/` owns a directory, any other root one file. Changed-file selection includes every matching suite and check, and a changed test file declared by a suite selects itself, in addition to the conservative area rules; keep these roots aligned when moving shared implementation or test helpers. Files without a precise mapping still require an explicit suite selection.
 
-Each invocation rebuilds declared prerequisites through the underlying incremental tools. There is no implicit result cache or build-skipping flag. New reports do not certify previous passing checks after edits. Retries read unfinished IDs, resolve the current catalog and never execute commands stored in a report:
+Each invocation rebuilds declared prerequisites through the underlying incremental tools. There is no implicit result cache or build-skipping flag. New reports do not certify previous passing checks after edits. Retries read unfinished IDs, reuse the recorded browser device and EGL directory unless overridden, resolve the current catalog and never execute commands stored in a report:
 
 ```sh
 python tools/ipp.py retry target/pipeline/runs/run-EXAMPLE/summary.json
@@ -140,6 +142,12 @@ python tools/ipp.py regression --retry target/pipeline/runs/run-EXAMPLE/summary.
 LIBGL_ALWAYS_SOFTWARE=1 python tools/ipp.py regression --full --egl-dir /usr/lib/x86_64-linux-gnu
 ```
 
+Browser steps render in software (SwiftShader through ANGLE) by default: the pipeline removes `IPP_BROWSER_ANGLE` from every child and from the preflight probe, whatever the invoking shell sets. `--hardware vulkan` or `--hardware gl-egl` on `regression`, `test`, `check` or `retry` sets it for every child instead; the preflight then fails when Chromium reports a software renderer, and so do the hardware-checking scenarios. A retry keeps the browser device and EGL directory of the report it retries; an explicit `--hardware` or `--egl-dir` overrides them. `summary.json` records the device as `browser.device`, and `environmentSelection.browserDevice` carries it into every step manifest. `benchmark` defaults to `--hardware vulkan`.
+
+```sh
+python tools/ipp.py regression --group rendering --hardware vulkan
+```
+
 Repeatable `--group` adds on-demand coverage to core, using the existing suites and deduplicating shared tests and prerequisites. These groups select coverage by area; their real scenarios may require other environments for fixtures or participating runtimes. Inspect `--plan` before preparing an environment.
 
 | Group | Run when changing |
@@ -151,7 +159,7 @@ Repeatable `--group` adds on-demand coverage to core, using the existing suites 
 | `gallery` | Published gallery, demo behavior or application assets |
 | `blender` | Addon packaging, export, streaming or Blender integration |
 | `gles` | Native GL device/presentation or shared rendering behavior affecting GLES |
-| `matrix` | Crate features, target contracts, generation, dependencies or distribution composition |
+| `matrix` | Instrumentation or renderer features, target contracts, generation, dependencies or distribution composition: all-features Clippy, Rust tests and WASM builds, the production debug WASM, both target contracts and every browser distribution with its contract identity |
 | `scaling` | Bulk mutation, hierarchy, restoration or command-streaming complexity |
 
 Select the relevant combination or narrower named suites/checks; shared renderer changes generally require both browser rendering and GLES evidence. The [catalog](../../tools/pipeline/catalog.py) owns group membership and rejects unassigned new checks/suites. Core is an explicit selection so new expensive suites enter full regression and an on-demand group without silently expanding the routine gate.
@@ -162,33 +170,33 @@ For a smaller tooling or native-only selection, use named checks and suites dire
 
 ```sh
 python tools/ipp.py check repository catalog format-python python-types --suite runner
-python tools/ipp.py check workspace clippy-default clippy-minimal clippy-expanded --suite runner
+python tools/ipp.py check workspace clippy-default clippy-all-features --suite runner
 ```
 
-`IPP_EGL_LIBRARY_DIR` or `--egl-dir` selects actual EGL/GLES libraries. `NODE_BIN`, `BLENDER_BIN` and the invoking Python interpreter select executables; the executor passes the same selections to child harnesses. A Blender release installed through setup is resolved from `target/tools`. The browser inherits its configured environment; use the [Blender/browser environment guide](blender.md) on hosts with private library wrappers.
+`--egl-dir` (default `IPP_EGL_LIBRARY_DIR`) selects actual EGL/GLES libraries; the executor exports the selection to every child as `IPP_EGL_LIBRARY_DIR` and records it in the report's environment selection. `NODE_BIN`, `BLENDER_BIN` and the invoking Python interpreter select executables; the executor passes the same selections to child harnesses. A Blender release installed through setup is resolved from `target/tools`. Apart from the device selection, the browser inherits its configured environment; use the [Blender/browser environment guide](blender.md) on hosts with private library wrappers.
 
 The [Pages workflow](../../.github/workflows/gallery-pages.yml) invokes the `gallery-site` browser suite and the `retained-gui` and `surface-cache` browser suites through this CLI in separate jobs and uploads their evidence; the retained GUI job fails visibly when its browser environment is missing. Pipeline tests validate its commands against the current catalog. Regression commands and groups remain available for local use; routine pushes do not run them as separate GitHub Actions jobs. Local validation does not claim that hosted jobs ran. Extend the maintained real native WebSocket, browser worker/WASM/WebGL and GLES scenarios when changing participating behavior; keep scenario intent separate from process setup.
 
 ## Release and size experiments
 
-Build by package/target/explicit features; workspace unification can hide lean-build costs.
+Build by package, target and axis features; workspace unification can hide production-build costs.
 
 ```sh
-# Minimal native host library
-cargo build -p ipp-server --release --no-default-features --locked
+# Production native host
+cargo build -p ipp-server --release --locked
 
-# Optional stable size profile; not an established distribution default
-cargo build -p ipp-wasm --target wasm32-unknown-unknown --profile release-small --no-default-features --locked
-cargo build -p ipp-wasm --target wasm32-unknown-unknown --profile release-small --no-default-features --features render --locked
+# Release-small production WASM hosts, headless and rendered
+cargo build -p ipp-wasm --target wasm32-unknown-unknown --profile release-small --locked
+cargo build -p ipp-wasm --target wasm32-unknown-unknown --profile release-small --features render --locked
 
 # Inspect actual production dependencies and enabled features
-cargo tree -p ipp-wasm --target wasm32-unknown-unknown --no-default-features --features render --edges normal,build --locked
+cargo tree -p ipp-wasm --target wasm32-unknown-unknown --features render --edges normal,build --locked
 ```
 
-`release-small` is defined in [Cargo.toml](../../Cargo.toml). Compare meaningful workloads against normal release, reporting raw/compressed WASM separately from JavaScript, shaders and native shims. Use `python tools/ipp.py measure <artifact> ...` for raw size, deterministic gzip size and SHA-256. Count shared files once and record toolchain/features; empty modules are not runtime size baselines.
+`release-small` is defined in [Cargo.toml](../../Cargo.toml). Compare meaningful workloads against normal release, reporting raw/compressed WASM separately from JavaScript, shaders and native shims. Use `python tools/ipp.py measure <artifact> ...` for raw size, deterministic gzip size and SHA-256. Each browser distribution ships its `release-small` build unchanged as `target/browser-build/<distribution>/runtime.wasm`, and its `build-report.json` lists the JavaScript it emits; shaders are embedded in the WASM. Count shared files once and record toolchain/features; empty modules are not runtime size baselines.
 
 Stable remains mandatory for normal builds. Add a pinned dated nightly only for concrete Miri/sanitizer verification or measured size experiments; no empty nightly jobs or unstable baseline dependency.
 
 ## Opt-in performance scenes
 
-`python tools/ipp.py benchmark native|browser` runs the maintained [Blender stress scene](../../tests/performance/stress.md). Native runs accept `--egl-dir`; `--preset full` selects 10,000 animated cubes. Counters require the separate `--instrumented` native build. `python tools/ipp.py benchmark browser --scene retained-gui` compares analytic and retained Surface text over `--frames` streaming updates, optionally with the terminal panels cached (`--surface-cache`), and rejects stress-scene options; the [retained rendering guide](../../tests/performance/retained-gui.md) describes its self-identifying reports and the physical-device procedure. Benchmarks and performance build products are excluded from regression, including `--full`.
+`python tools/ipp.py benchmark native|browser` runs the maintained [Blender stress scene](../../tests/performance/stress.md). Native runs accept `--egl-dir`; `--preset full` selects 10,000 animated cubes. Timing runs measure the normal build; counters require the separate `--instrumented` native build, and the browser stress scene and the GUI stress core profile read the `render-instrumentation` profiler. `python tools/ipp.py benchmark browser --scene retained-gui` compares analytic and retained Surface text over `--frames` streaming updates, optionally with the terminal panels cached (`--surface-cache`), and rejects stress-scene options; the [retained rendering guide](../../tests/performance/retained-gui.md) describes its self-identifying reports and the physical-device procedure. Benchmarks and performance build products are excluded from regression, including `--full`.

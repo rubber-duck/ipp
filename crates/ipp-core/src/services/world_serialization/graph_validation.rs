@@ -178,19 +178,13 @@ impl WorldGraphSnapshot {
                             .map_err(|error| error.to_string())?;
                     }
                     if let ComponentValue::WorldAttachment(value) = component {
-                        if value.mode != 0 {
-                            #[cfg(feature = "surfaces")]
-                            if !entity
+                        if value.mode != 0
+                            && !entity
                                 .components
                                 .iter()
                                 .any(|component| component.type_id() == ComponentValue::SURFACE)
-                            {
-                                return Err("Surface attachment has no authored Surface".into());
-                            }
-                            #[cfg(not(feature = "surfaces"))]
-                            return Err(
-                                "Surface attachment requires compiled Surface support".into()
-                            );
+                        {
+                            return Err("Surface attachment has no authored Surface".into());
                         }
                         let child = references.get(&(
                             entity.persistent_id,

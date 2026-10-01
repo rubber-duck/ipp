@@ -158,9 +158,9 @@ impl AnimationSystem {
     }
 
     pub(in crate::world) fn invalidate_changes(&mut self, context: &mut SystemCommitContext<'_>) {
-        #[cfg(feature = "profiling")]
+        #[cfg(feature = "instrumentation")]
         let _allocation_scope = crate::profiling::AllocationScope::new(199, "animation.invalidate");
-        #[cfg(feature = "profiling")]
+        #[cfg(feature = "instrumentation")]
         let _measurement =
             crate::profiling::Stage::fixed(crate::profiling::FixedStage::AnimationInvalidate);
 
@@ -180,7 +180,6 @@ impl AnimationSystem {
         }
         // Numeric playback time edits preserve readiness. Source replacement
         // must prepare the new particle cache even when the component survives.
-        #[cfg(feature = "particles")]
         for (&key, value) in context.staged.prepared.iter() {
             if let ComponentValue::ParticlePlayback(next) = value
                 && context
@@ -214,7 +213,6 @@ impl AnimationSystem {
             return;
         }
         let affected = self.state.affected_by(context.staged);
-        #[cfg(feature = "skeletal-animation")]
         if context
             .staged
             .changed

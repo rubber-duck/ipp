@@ -13,7 +13,6 @@ pub(super) struct LifecycleTargetIndex {
     /// Value members, each compared with the stored values at every frame end.
     values: BTreeMap<LifecycleWatchId, LifecycleValueMember>,
     by_session: BTreeMap<u64, BTreeMap<LifecycleWatchId, LifecycleWatchMember>>,
-    #[cfg(any(test, feature = "diagnostics"))]
     pub work: LifecycleTargetWork,
 }
 
@@ -71,13 +70,10 @@ impl LifecycleTargetIndex {
         let members = target
             .as_ref()
             .and_then(|target| self.by_target.get(target));
-        #[cfg(any(test, feature = "diagnostics"))]
-        {
-            self.work.record(
-                usize::from(target.is_some()),
-                members.map_or(0, BTreeMap::len),
-            );
-        }
+        self.work.record(
+            usize::from(target.is_some()),
+            members.map_or(0, BTreeMap::len),
+        );
 
         members
             .into_iter()

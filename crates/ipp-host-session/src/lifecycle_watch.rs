@@ -96,7 +96,6 @@ impl SessionLifecycleWatch {
 }
 
 impl<P: HostServices> WorldSessionContext<'_, P> {
-    #[cfg(feature = "diagnostics")]
     pub(crate) fn lifecycle_diagnostics(
         &self,
         query: ipp_protocol::lifecycle_diagnostics::LifecycleDiagnosticQuery,

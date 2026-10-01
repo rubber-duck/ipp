@@ -25,13 +25,11 @@ pub(super) struct CustomDrawState {
     pub alpha_cutoff: f32,
     pub receives_light: bool,
     pub receives_shadows: bool,
-    #[cfg(feature = "shadows")]
     pub casts_shadows: bool,
     pub conservative_bounds: bool,
 }
 
 /// Why an entity's custom material falls back to default drawing.
-#[cfg(any(test, feature = "diagnostics"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CustomMaterialFallback {
     /// Authored shader source of the material.
@@ -55,7 +53,7 @@ impl<D: RenderDevice> RenderService<D> {
         world: &RenderScene<'_>,
         items: &[SceneItem<'_>],
     ) -> Result<BTreeMap<EntityId, PreparedCustomMaterial>, RenderError> {
-        #[cfg(feature = "profiling")]
+        #[cfg(feature = "instrumentation")]
         let _allocation_scope = ipp_core::profiling::AllocationScope::new(224, "gl.custom-prepare");
 
         // Records own only copied draw flags, asset identities and retained buffers.
@@ -69,7 +67,6 @@ impl<D: RenderDevice> RenderService<D> {
                     .iter()
                     .any(|item| item.entity == *entity && item.published.custom.is_some())
         });
-        #[cfg(any(test, feature = "diagnostics"))]
         self.custom_fallbacks.retain(|entity, _| {
             items
                 .binary_search_by_key(entity, |item| item.entity)
@@ -81,10 +78,8 @@ impl<D: RenderDevice> RenderService<D> {
                 continue;
             }
             previous = Some(item.entity);
-            #[cfg(feature = "particles")]
             if item.particle.is_some_and(|p| p.sprite) {
                 ready.remove(&item.entity);
-                #[cfg(any(test, feature = "diagnostics"))]
                 self.custom_fallbacks.remove(&item.entity);
                 continue;
             }
@@ -93,7 +88,6 @@ impl<D: RenderDevice> RenderService<D> {
                 .then_some(item.published.custom.as_ref())
                 .flatten();
             let Some(material) = material else {
-                #[cfg(any(test, feature = "diagnostics"))]
                 self.custom_fallbacks.remove(&item.entity);
                 continue;
             };
@@ -169,7 +163,6 @@ impl<D: RenderDevice> RenderService<D> {
                 }
                 prepared.textures.truncate(texture_index);
                 let normals = mesh.has_normals();
-                #[cfg(feature = "mesh-poses")]
                 let normals = normals
                     && item.pose.is_none_or(|(key, _)| {
                         world.mesh_metadata(key).is_some_and(|m| m.has_normals())
@@ -181,11 +174,8 @@ impl<D: RenderDevice> RenderService<D> {
                 }
                 let config = RenderShaderConfig::default()
                     .with_lighting(false, definition.recipe.features & 1 != 0);
-                #[cfg(feature = "skeletal-animation")]
                 let config = config.with_skinning(item.skinned);
-                #[cfg(feature = "mesh-poses")]
                 let config = config.with_mesh_pose(item.pose.is_some());
-                #[cfg(feature = "particles")]
                 let config = config.with_particles(item.particle.is_some(), false);
                 let key = CustomProgramKey {
                     asset: asset.to_u64(),
@@ -213,7 +203,6 @@ impl<D: RenderDevice> RenderService<D> {
                     alpha_cutoff: material.alpha_cutoff,
                     receives_light: material.receives_light,
                     receives_shadows: material.receives_shadows,
-                    #[cfg(feature = "shadows")]
                     casts_shadows: material.casts_shadows,
                     conservative_bounds: material.conservative_bounds,
                 };
@@ -221,7 +210,6 @@ impl<D: RenderDevice> RenderService<D> {
                 prepared.custom_vertex = shader.custom_vertex;
                 // Validate resource/unit/UBO limits before selecting the candidate for any pass.
                 self.prepare_custom_material(world, prepared, false)?;
-                #[cfg(feature = "shadows")]
                 if material.casts_shadows && material.alpha_mode != 2 {
                     self.prepare_custom_material(world, prepared, true)?;
                 }
@@ -229,14 +217,11 @@ impl<D: RenderDevice> RenderService<D> {
             })();
             match result {
                 Ok(()) => {
-                    #[cfg(any(test, feature = "diagnostics"))]
                     self.custom_fallbacks.remove(&item.entity);
                 }
                 Err(RenderError::ContextLost) => return Err(RenderError::ContextLost),
-                #[cfg_attr(not(any(test, feature = "diagnostics")), allow(unused_variables))]
                 Err(error) => {
                     ready.remove(&item.entity);
-                    #[cfg(any(test, feature = "diagnostics"))]
                     self.record_custom_fallback(
                         item.entity,
                         material
@@ -253,7 +238,6 @@ impl<D: RenderDevice> RenderService<D> {
     }
 
     /// Retain a fallback reason, logging it only when it changes.
-    #[cfg(any(test, feature = "diagnostics"))]
     fn record_custom_fallback(&mut self, entity: EntityId, source: &str, error: RenderError) {
         if self
             .custom_fallbacks
@@ -331,7 +315,6 @@ impl<D: RenderDevice> RenderService<D> {
     }
 
     /// Most recent material fallback reasons, separate from semantic World outcomes.
-    #[cfg(any(test, feature = "diagnostics"))]
     pub fn custom_material_diagnostics(&self) -> &BTreeMap<EntityId, CustomMaterialFallback> {
         &self.custom_fallbacks
     }

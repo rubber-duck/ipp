@@ -6,32 +6,19 @@
 //! captured contribution that fades out. GUI skin motion uses the same program
 //! with absolute channels that fade from a captured value to the clip's value.
 
-#![cfg_attr(
-    not(feature = "skeletal-animation"),
-    allow(
-        unreachable_patterns,
-        irrefutable_let_patterns,
-        clippy::unnecessary_filter_map
-    )
-)]
-
 use super::{
     contribution::AnimationContributions, driver::AnimationDriverBinding,
     system_state::AnimationRuntimeFrozenTransitionValue, *,
 };
-#[cfg(feature = "skeletal-animation")]
 use crate::ComponentValue;
-#[cfg(feature = "skeletal-animation")]
 use crate::components::Transform;
 use crate::components::registry::ComponentStorage;
-#[cfg(feature = "skeletal-animation")]
 use crate::components::schema::ComponentLifecycle;
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum TransitionChannelKey {
     Property(super::driver::AnimationTargetIdentity),
-    #[cfg(feature = "skeletal-animation")]
     Joint {
         entity: EntityId,
         incarnation: u64,
@@ -42,14 +29,12 @@ enum TransitionChannelKey {
 #[derive(Debug)]
 enum TransitionOutput {
     Value(super::driver::AnimationTransitionOutput),
-    #[cfg(feature = "skeletal-animation")]
     Joint(EntityId, u32),
 }
 
 #[derive(Clone, Debug, PartialEq)]
 enum TransitionChannelValue {
     Property(AnimationValue),
-    #[cfg(feature = "skeletal-animation")]
     Joint(Transform),
 }
 
@@ -69,12 +54,10 @@ enum TransitionOperation {
         driver: usize,
         channel: usize,
     },
-    #[cfg(feature = "gui")]
     Constant {
         channel: usize,
         value: AnimationValue,
     },
-    #[cfg(feature = "skeletal-animation")]
     Pose {
         driver: usize,
         channels: Vec<usize>,
@@ -99,7 +82,6 @@ pub(super) struct AnimationTransitionProgram {
 }
 
 impl AnimationTransitionProgram {
-    #[cfg(feature = "gui")]
     pub(super) fn set_constant_destination(
         &mut self,
         entity: EntityId,
@@ -225,7 +207,6 @@ impl AnimationTransitionProgram {
                         )
                         .ok_or(ErrorReason::InvalidField)?,
                     ),
-                    #[cfg(feature = "skeletal-animation")]
                     TransitionChannelKey::Joint {
                         entity,
                         joint,
@@ -320,7 +301,6 @@ impl AnimationTransitionProgram {
                 TransitionChannelKey::Property(identity) => {
                     Some((identity.entity, identity.property.component_target()))
                 }
-                #[cfg(feature = "skeletal-animation")]
                 TransitionChannelKey::Joint {
                     ..
                 } => None,
@@ -418,7 +398,6 @@ impl AnimationTransitionProgram {
                 ) => {
                     TransitionChannelValue::Property(mix(source_value, destination_value, progress))
                 }
-                #[cfg(feature = "skeletal-animation")]
                 (
                     TransitionChannelValue::Joint(source_value),
                     TransitionChannelValue::Joint(destination_value),
@@ -455,7 +434,6 @@ impl AnimationTransitionProgram {
                         (TransitionChannelValue::Property(value.clone()), None)
                     }
                 }
-                #[cfg(feature = "skeletal-animation")]
                 (TransitionChannelValue::Joint(value), TransitionOutput::Joint(entity, joint)) => {
                     let value = if self.contributions {
                         super::contribution::compose_joint(
@@ -477,7 +455,6 @@ impl AnimationTransitionProgram {
                 (TransitionChannelValue::Property(value), TransitionOutput::Value(output)) => {
                     output.write(storage, value.clone())?;
                 }
-                #[cfg(feature = "skeletal-animation")]
                 (TransitionChannelValue::Joint(value), TransitionOutput::Joint(entity, joint)) => {
                     *joint_local_mut(storage, *entity, *joint)? = *value;
                 }
@@ -505,7 +482,6 @@ impl AnimationTransitionProgram {
             TransitionChannelKey::Property(identity) => {
                 (identity.entity, identity.property.component_target())
             }
-            #[cfg(feature = "skeletal-animation")]
             TransitionChannelKey::Joint {
                 entity,
                 ..
@@ -523,7 +499,6 @@ impl AnimationTransitionProgram {
                 TransitionChannelKey::Property(identity) => {
                     transition_property_alive(identity, staged, storage)
                 }
-                #[cfg(feature = "skeletal-animation")]
                 TransitionChannelKey::Joint {
                     entity,
                     incarnation,
@@ -538,7 +513,6 @@ impl AnimationTransitionProgram {
                 TransitionChannelKey::Property(identity) => {
                     (identity.entity, identity.property.component_target())
                 }
-                #[cfg(feature = "skeletal-animation")]
                 TransitionChannelKey::Joint {
                     entity,
                     ..
@@ -565,7 +539,6 @@ pub(super) fn frozen_values_invalidated(
                 identity.property.component_target(),
                 transition_property_alive(identity, staged, storage),
             ),
-            #[cfg(feature = "skeletal-animation")]
             TransitionChannelKey::Joint {
                 entity,
                 incarnation,
@@ -583,7 +556,6 @@ pub(super) fn frozen_values_invalidated(
     })
 }
 
-#[cfg(feature = "skeletal-animation")]
 fn joint_local(
     storage: &ComponentStorage,
     entity: EntityId,
@@ -599,7 +571,6 @@ fn joint_local(
         .ok_or(ErrorReason::InvalidField)
 }
 
-#[cfg(feature = "skeletal-animation")]
 fn joint_local_mut(
     storage: &mut ComponentStorage,
     entity: EntityId,
@@ -626,7 +597,6 @@ fn frozen_value(
             identity.incarnation,
             identity.property.clone(),
         ),
-        #[cfg(feature = "skeletal-animation")]
         TransitionChannelKey::Joint {
             entity,
             incarnation,
@@ -668,7 +638,6 @@ fn transition_property_alive(
 }
 
 fn channel_value(value: &AnimationValue) -> Result<TransitionChannelValue, ErrorReason> {
-    #[cfg(feature = "skeletal-animation")]
     if let AnimationValue::Pose(values) = value {
         let [value] = values.as_slice() else {
             return Err(ErrorReason::InvalidField);
@@ -681,7 +650,6 @@ fn channel_value(value: &AnimationValue) -> Result<TransitionChannelValue, Error
 fn frozen_key(
     value: &AnimationRuntimeFrozenTransitionValue,
 ) -> Result<TransitionChannelKey, ErrorReason> {
-    #[cfg(feature = "skeletal-animation")]
     if let AnimationTrackTarget::Joints(joints) = &value.property {
         let [joint] = joints.as_slice() else {
             return Err(ErrorReason::InvalidField);
@@ -704,7 +672,6 @@ fn frozen_key(
 fn channel_animation_value(value: &TransitionChannelValue) -> AnimationValue {
     match value {
         TransitionChannelValue::Property(value) => value.clone(),
-        #[cfg(feature = "skeletal-animation")]
         TransitionChannelValue::Joint(value) => AnimationValue::Pose(vec![*value]),
     }
 }
@@ -731,7 +698,6 @@ fn collect_channels(
         } else {
             driver.template().clone()
         };
-        #[cfg(feature = "skeletal-animation")]
         if let AnimationTrackTarget::Joints(joints) = &driver.identity().property {
             for &joint in joints {
                 channels
@@ -768,7 +734,6 @@ fn operations(
         .iter()
         .enumerate()
         .map(|(driver_index, driver)| {
-            #[cfg(feature = "skeletal-animation")]
             if let AnimationTrackTarget::Joints(joints) = &driver.identity().property {
                 let indices: Vec<_> = joints
                     .iter()
@@ -805,7 +770,6 @@ fn evaluate_operations(
 ) -> Result<(), ErrorReason> {
     for operation in operations {
         match operation {
-            #[cfg(feature = "gui")]
             TransitionOperation::Constant {
                 channel,
                 value,
@@ -836,7 +800,6 @@ fn evaluate_operations(
                     channels[*channel].destination = value;
                 }
             }
-            #[cfg(feature = "skeletal-animation")]
             TransitionOperation::Pose {
                 driver,
                 channels: indices,

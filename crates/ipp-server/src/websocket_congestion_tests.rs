@@ -9,7 +9,7 @@ use std::thread::JoinHandle;
 /// maximum-size reply and its copy. Transport allocations can only use this share.
 const ORDINARY_OUTPUT_BYTES: usize = 8 * MAX_MESSAGE_BYTES - (2 * MAX_MESSAGE_BYTES + 2048);
 
-#[cfg(all(feature = "gui", target_os = "linux"))]
+#[cfg(target_os = "linux")]
 #[derive(Debug)]
 struct OutputSample {
     connection: u64,
@@ -23,11 +23,11 @@ struct Peers {
     sockets: Vec<tungstenite::WebSocket<TcpStream>>,
     stop: Arc<AtomicBool>,
     host: Option<JoinHandle<()>>,
-    #[cfg(all(feature = "gui", target_os = "linux"))]
+    #[cfg(target_os = "linux")]
     samples: SyncSender<SyncSender<Vec<OutputSample>>>,
-    #[cfg(all(feature = "gui", target_os = "linux"))]
+    #[cfg(target_os = "linux")]
     failures: Arc<Mutex<BTreeMap<u64, String>>>,
-    #[cfg(all(feature = "gui", target_os = "linux"))]
+    #[cfg(target_os = "linux")]
     addresses: Vec<(std::net::SocketAddr, std::net::SocketAddr)>,
 }
 
@@ -49,7 +49,7 @@ fn physical_output_credit_survives_channel_handoff_until_socket_completion() {
         released: Arc::new(AtomicBool::new(true)),
     });
     host.host
-        .receive_connection(1, &ipp_protocol::bootstrap())
+        .receive_connection(1, &ipp_protocol::HELLO)
         .unwrap();
     host.flush();
     let bytes = receiver.try_recv().unwrap();
@@ -86,7 +86,7 @@ impl Peers {
         fixture: impl FnOnce(&mut NativeConnectionHost<NativeHostServices>) -> Data + Send + 'static,
     ) -> (Self, Data) {
         let pairs: Vec<_> = (0..count).map(|_| socket_pair()).collect();
-        #[cfg(all(feature = "gui", target_os = "linux"))]
+        #[cfg(target_os = "linux")]
         let addresses = pairs
             .iter()
             .map(|(_, server)| (server.local_addr().unwrap(), server.peer_addr().unwrap()))
@@ -99,7 +99,7 @@ impl Peers {
         let stopping = stop.clone();
         let failures = Arc::new(Mutex::new(BTreeMap::new()));
         let recorded_failures = failures.clone();
-        #[cfg(all(feature = "gui", target_os = "linux"))]
+        #[cfg(target_os = "linux")]
         let (samples, measurements) = mpsc::sync_channel::<SyncSender<Vec<OutputSample>>>(1);
         let (ready, initialized) = mpsc::sync_channel(1);
         let host = std::thread::spawn(move || {
@@ -133,7 +133,7 @@ impl Peers {
                     last = now;
                 }
                 host.flush();
-                #[cfg(all(feature = "gui", target_os = "linux"))]
+                #[cfg(target_os = "linux")]
                 if let Ok(reply) = measurements.try_recv() {
                     let values = host
                         .outputs
@@ -169,18 +169,18 @@ impl Peers {
                 sockets,
                 stop,
                 host: Some(host),
-                #[cfg(all(feature = "gui", target_os = "linux"))]
+                #[cfg(target_os = "linux")]
                 samples,
-                #[cfg(all(feature = "gui", target_os = "linux"))]
+                #[cfg(target_os = "linux")]
                 failures,
-                #[cfg(all(feature = "gui", target_os = "linux"))]
+                #[cfg(target_os = "linux")]
                 addresses,
             },
             data,
         )
     }
 
-    #[cfg(all(feature = "gui", target_os = "linux"))]
+    #[cfg(target_os = "linux")]
     fn sample(&self) -> Vec<OutputSample> {
         let (reply, values) = mpsc::sync_channel(1);
         self.samples.send(reply).unwrap();
@@ -195,7 +195,7 @@ impl Peers {
         use ipp_protocol::host::*;
         let connection = index as u64 + 1;
         self.sockets[index]
-            .send(Message::Binary(ipp_protocol::bootstrap().to_vec().into()))
+            .send(Message::Binary(ipp_protocol::HELLO.to_vec().into()))
             .unwrap();
         let _ = self.read(index);
         let body = world.map_or_else(
@@ -254,7 +254,7 @@ impl Peers {
     }
 }
 
-#[cfg(all(feature = "gui", target_os = "linux"))]
+#[cfg(target_os = "linux")]
 fn remaining_output_bytes(host: &Host<NativeHostServices>, connection: u64) -> Option<usize> {
     drop(host.reserve_connection_output_bytes(connection, 0).ok()?);
     let mut lower = 0;
@@ -289,7 +289,7 @@ fn noisy_sender_and_stalled_reader_preserve_shared_world_peer_and_ordered_outcom
     let mut peers = Peers::start();
     let (noisy, world) = peers.initialize(0, None);
     let (healthy, _) = peers.initialize(1, Some(world));
-    // A third peer resets after its HTTP upgrade, before IPP bootstrap. This
+    // A third peer resets after its HTTP upgrade, before the IPP hello. This
     // setup failure must remain local while the two attached clients progress.
     peers.sockets[2].get_mut().shutdown(Shutdown::Both).unwrap();
     for request in 1u64..=200 {
@@ -339,7 +339,7 @@ fn noisy_sender_and_stalled_reader_preserve_shared_world_peer_and_ordered_outcom
     );
 }
 
-#[cfg(all(feature = "gui", target_os = "linux"))]
+#[cfg(target_os = "linux")]
 fn socket_queue(addresses: (std::net::SocketAddr, std::net::SocketAddr)) -> Option<(usize, usize)> {
     let encode = |address: std::net::SocketAddr| {
         let std::net::SocketAddr::V4(address) = address else {
@@ -367,7 +367,7 @@ fn socket_queue(addresses: (std::net::SocketAddr, std::net::SocketAddr)) -> Opti
     })
 }
 
-#[cfg(all(feature = "gui", target_os = "linux"))]
+#[cfg(target_os = "linux")]
 fn gui_send(peers: &mut Peers, index: usize, session: u64, request: u64, tag: u8, payload: &[u8]) {
     let mut bytes = session.to_le_bytes().to_vec();
     bytes.extend(request.to_le_bytes());
@@ -380,7 +380,7 @@ fn gui_send(peers: &mut Peers, index: usize, session: u64, request: u64, tag: u8
         .unwrap();
 }
 
-#[cfg(all(feature = "gui", target_os = "linux"))]
+#[cfg(target_os = "linux")]
 fn gui_reply(peers: &mut Peers, index: usize, request: u64, tag: u8) -> Vec<u8> {
     let deadline = Instant::now() + TEST_TIMEOUT;
     loop {
@@ -398,7 +398,7 @@ fn gui_reply(peers: &mut Peers, index: usize, request: u64, tag: u8) -> Vec<u8> 
     }
 }
 
-#[cfg(all(feature = "gui", target_os = "linux"))]
+#[cfg(target_os = "linux")]
 #[test]
 fn gui_os_stalled_receiver_retains_socket_credit_while_issuer_and_observer_progress() {
     use ipp_core::{Batch, Command, ComponentValue, EntityRef};
@@ -474,8 +474,8 @@ fn gui_os_stalled_receiver_retains_socket_credit_while_issuer_and_observer_progr
     let mut evidence = std::fs::File::create(&evidence_path).unwrap();
     writeln!(
         evidence,
-        "bootstrap={:?} addresses={:?}",
-        ipp_protocol::bootstrap(),
+        "hello={:?} addresses={:?}",
+        ipp_protocol::HELLO,
         peers.addresses
     )
     .unwrap();

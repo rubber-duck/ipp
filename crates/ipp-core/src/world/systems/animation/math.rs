@@ -98,7 +98,6 @@ pub(crate) fn mix(a: &AnimationValue, b: &AnimationValue, u: f64) -> AnimationVa
         (AnimationValue::Rotation(a), AnimationValue::Rotation(b)) => {
             AnimationValue::Rotation(slerp(*a, *b, u))
         }
-        #[cfg(feature = "skeletal-animation")]
         (AnimationValue::Pose(a), AnimationValue::Pose(b)) => {
             AnimationValue::Pose(super::pose::mix(a, b, u))
         }
@@ -270,7 +269,6 @@ pub(crate) fn additive(
                 slerp([0.0, 0.0, 0.0, 1.0], relative, weight),
             ))
         }
-        #[cfg(feature = "skeletal-animation")]
         (
             AnimationValue::Pose(base),
             AnimationValue::Pose(sample),

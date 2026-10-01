@@ -5,11 +5,8 @@ use crate::binary_reader::Reader;
 use crate::model::GuiPaintKey;
 use crate::typescript_names::{js_string, member_identifier};
 
-pub(super) fn read(reader: &mut Reader<'_>, gui: bool) -> Result<Vec<GuiPaintKey>, String> {
+pub(super) fn read(reader: &mut Reader<'_>) -> Result<Vec<GuiPaintKey>, String> {
     let count = reader.u16()?;
-    if (count != 0) != gui {
-        return Err("GUI paint key capability mismatch".into());
-    }
 
     let mut keys = Vec::with_capacity(usize::from(count));
     let mut indices = BTreeSet::new();

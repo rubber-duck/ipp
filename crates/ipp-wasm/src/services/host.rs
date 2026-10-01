@@ -9,7 +9,6 @@ use ipp_core::HostRuntime;
 use ipp_host_session::HostServices;
 
 pub(crate) struct WasmHostServices {
-    #[cfg(feature = "gui")]
     input: ipp_host_session::services::gui_input::GuiHostInputService,
     pending: VecDeque<ipp_core::AssetAcquisitionRequest>,
     outbox: VecDeque<Vec<u8>>,
@@ -37,37 +36,27 @@ impl WasmHostServices {
 impl HostServices for WasmHostServices {
     const NAME: &'static str = "wasm";
 
-    #[cfg(all(
-        feature = "gui",
-        feature = "diagnostics",
-        feature = "render",
-        target_arch = "wasm32"
-    ))]
+    #[cfg(all(feature = "render", target_arch = "wasm32"))]
     fn record_frame(&mut self, host: &mut HostRuntime, frame: &ipp_core::HostFrameReport) {
         self.presentation.record_frame(host, frame);
     }
 
-    fn initialize(_host: &mut HostRuntime) -> Result<Self, String> {
+    fn initialize(host: &mut HostRuntime) -> Result<Self, String> {
         for scheme in ["http", "https"] {
-            _host
-                .register_stream_resource_provider(scheme)
+            host.register_stream_resource_provider(scheme)
                 .map_err(|error| error.to_string())?;
         }
-        #[cfg(feature = "builtin-assets")]
-        _host
-            .register_stream_resource_provider("ipp")
+        host.register_stream_resource_provider("ipp")
             .map_err(|error| error.to_string())?;
         Ok(Self {
-            #[cfg(feature = "gui")]
             input: Default::default(),
             pending: VecDeque::new(),
             outbox: VecDeque::new(),
             #[cfg(all(feature = "render", target_arch = "wasm32"))]
-            presentation: render::RenderSurfaceService::new(_host),
+            presentation: render::RenderSurfaceService::new(host),
         })
     }
 
-    #[cfg(feature = "gui")]
     fn gui_input(
         &mut self,
     ) -> Option<&mut ipp_host_session::services::gui_input::GuiHostInputService> {
@@ -152,10 +141,7 @@ impl HostServices for WasmHostServices {
                     continue;
                 }
                 generated += 1;
-                #[cfg(feature = "builtin-assets")]
                 let result = ipp_host_session::builtin_resource(&request);
-                #[cfg(not(feature = "builtin-assets"))]
-                let result = Err("ipp resource provider is unavailable in this build".into());
                 ipp_host_session::deliver_resource(host, request.id, result);
             } else {
                 self.queue_resource(

@@ -8,27 +8,17 @@ publish.workspace = true
 
 [dependencies]
 ipp-schema-derive.workspace = true
-miniz_oxide = { workspace = true, optional = true }
 # Complete UAX #29 segmentation for preserved source text; see
-# world/systems/surface/text.rs. Optional so lean builds without `gui` keep
-# the dependency-free basic-LTR subset for plain Surface labels.
-unicode-segmentation = { workspace = true, optional = true }
+# world/systems/surface/text.rs.
+unicode-segmentation.workspace = true
 
 [dev-dependencies]
 ipp-core = { workspace = true, features = ["checked-invariants"] }
 
 [features]
-profiling = []
-mesh-poses = []
-particles = []
-surfaces = []
-gui = ["surfaces", "dep:unicode-segmentation"]
-default = ["builtin-assets"]
-diagnostics = []
-builtin-assets = []
-skeletal-animation = []
-zip-data-source = ["dep:miniz_oxide"]
-shadows = []
+default = []
+# Test-only controls and profiling hooks; see docs/architecture/rust-workspace.md.
+instrumentation = []
 # Test-only oracle: assert (panic) after each commit that every committed
 # component passes whole-component validation. It never changes a batch result.
 # Only the self dev-dependency below enables it, for ipp-core's own unit and
@@ -38,7 +28,3 @@ checked-invariants = []
 
 [lints]
 workspace = true
-
-[[example]]
-name = "export_builtin"
-required-features = ["builtin-assets"]

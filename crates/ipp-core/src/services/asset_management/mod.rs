@@ -246,10 +246,8 @@ pub mod mesh_metadata;
 
 pub mod texture;
 
-#[cfg(feature = "skeletal-animation")]
 pub mod skeleton;
 
-#[cfg(feature = "skeletal-animation")]
 pub mod skin_binding;
 
 pub mod service;

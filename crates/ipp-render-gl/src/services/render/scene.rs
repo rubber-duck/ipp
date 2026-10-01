@@ -24,7 +24,6 @@ pub struct RenderEntity {
     pub incarnation: u64,
 }
 
-#[cfg(feature = "surfaces")]
 #[derive(Clone)]
 pub(super) struct SceneOutputSurface {
     pub entity: RenderEntity,
@@ -37,7 +36,6 @@ pub(super) struct SceneOutputSurface {
     pub interaction_eligible: bool,
 }
 
-#[cfg(feature = "surfaces")]
 /// Current fault eligibility only, not routed-input authorization.
 pub(super) fn world_interaction_eligible(host: &HostRuntime, world: WorldRef) -> bool {
     host.world_fault(world) == Ok(None)
@@ -85,7 +83,6 @@ pub(super) struct RenderScene<'a> {
     pub debug: Vec<SceneDebug>,
     pub lights: Vec<(RenderEntity, [f32; 16], ipp_core::components::Light)>,
     pub geometry: BTreeMap<(WorldRef, EntityId), SceneGeometry<'a>>,
-    #[cfg(feature = "surfaces")]
     pub surfaces: Vec<SceneOutputSurface>,
     resources: BTreeMap<AssetKey, WorldPublicationId>,
 }
@@ -117,7 +114,6 @@ impl<'a> RenderScene<'a> {
             debug: Vec::new(),
             lights: Vec::new(),
             geometry: BTreeMap::new(),
-            #[cfg(feature = "surfaces")]
             surfaces: Vec::new(),
             resources: BTreeMap::new(),
         };
@@ -126,13 +122,11 @@ impl<'a> RenderScene<'a> {
             .map_err(|_| RenderError::UnavailableOutput)?
         {
             let publication = contribution.publication;
-            #[cfg(feature = "surfaces")]
             let interaction_eligible = world_interaction_eligible(host, publication.world)
                 && contribution
                     .path
                     .iter()
                     .all(|(world, _)| world_interaction_eligible(host, *world));
-            #[cfg(feature = "surfaces")]
             for edge in &publication.attachments {
                 if edge.mode == ipp_core::WorldAttachmentMode::Spatial
                     || edge
@@ -202,7 +196,6 @@ impl<'a> RenderScene<'a> {
                 let mut value = published.item;
                 value.model = compose_model(value.model, contribution.placement)?;
                 value.normal = compose_normal(value.normal, contribution.placement);
-                #[cfg(feature = "particles")]
                 if let Some(particle) = &mut value.particle {
                     particle.velocity = contribution
                         .placement

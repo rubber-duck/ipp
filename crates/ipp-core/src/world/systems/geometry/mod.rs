@@ -8,7 +8,6 @@ mod components;
 pub use components::{BoundingGeometry, PickingGeometry};
 
 mod enclosure;
-#[cfg(feature = "particles")]
 mod particle_bounds;
 mod program;
 pub use enclosure::GeometryEnclosure;

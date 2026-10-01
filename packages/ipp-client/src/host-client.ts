@@ -1,4 +1,5 @@
 import { isAssetSourceResponse } from "./asset-sources.js";
+import { acceptHostAnnouncement, hostHello } from "./host-contract.js";
 import { HostPhysicalInput } from "./host-input.js";
 import type {
   CameraOutputReference,
@@ -24,6 +25,7 @@ import {
   type ConnectOptions,
 } from "./client.js";
 import type { MessageTransport, TransportEvents } from "./transport.js";
+import { bindPresentation, presentationOf } from "./presentation.js";
 import { BatchIdentities } from "./command-pages.js";
 import {
   HostWireReader,
@@ -94,14 +96,19 @@ export abstract class HostClientBase<T extends Client> {
     protected readonly options: ConnectOptions = {},
   ) {
     this.timeoutMs = options.timeoutMs ?? 10_000;
+    // Statistics and testing controls reach the presentation through
+    // `@ipp/client/diagnostics` and `/testing`, not a member of this type.
+    bindPresentation(this, presentationOf(transport));
   }
 
   protected abstract hostTag(name: string): number;
   /** A named Host protocol bound of the connected target contract. */
   protected abstract hostLimit(name: string): number;
   protected abstract hostMagic(response: boolean): Uint8Array<ArrayBuffer>;
-  protected abstract bootstrap(): Uint8Array<ArrayBuffer>;
-  protected abstract acceptBootstrap(bytes: Uint8Array): bigint;
+  /** Compatibility hash of the contract this client was generated from. */
+  abstract readonly schemaHash: bigint;
+  /** Wire revision of the contract this client was generated from. */
+  protected abstract readonly protocolRevision: number;
   protected abstract createWorldClient(
     transport: MessageTransport,
     session: bigint,
@@ -116,10 +123,6 @@ export abstract class HostClientBase<T extends Client> {
         attachment.client ? [[id, attachment.client] as const] : [],
       ),
     );
-  }
-
-  get renderDiagnostics() {
-    return this.transport.renderDiagnostics;
   }
 
   protected async initialize(): Promise<this> {
@@ -142,14 +145,14 @@ export abstract class HostClientBase<T extends Client> {
         };
         const abort = () => fail(new Error("Host connection aborted"));
         const timer = setTimeout(
-          () => fail(new Error("Host bootstrap timed out")),
+          () => fail(new Error("Host hello timed out")),
           this.timeoutMs,
         );
         this.options.signal?.addEventListener("abort", abort, { once: true });
         this.transport.start({
           ready: () => {
             try {
-              this.transport.send(this.bootstrap());
+              this.transport.send(hostHello());
             } catch (error) {
               fail(asError(error));
             }
@@ -160,7 +163,15 @@ export abstract class HostClientBase<T extends Client> {
             if (this.stopped) return;
             try {
               if (this.connection === 0n) {
-                this.connection = this.acceptBootstrap(bytes);
+                // The Host checks no claim: this client refuses a Host whose
+                // contract differs from its own and sends nothing further.
+                const { connection, trailer } = acceptHostAnnouncement(bytes, {
+                  revision: this.protocolRevision,
+                  schemaHash: this.schemaHash,
+                });
+                if (trailer.length !== 0)
+                  throw new Error("Unexpected Host announcement trailer");
+                this.connection = connection;
                 finish();
               } else this.receive(bytes);
             } catch (error) {

@@ -1,4 +1,4 @@
-import type { RenderDiagnostics } from "./presentation.js";
+import { bindPresentation, type PresentationPort } from "./presentation.js";
 
 /** Allocates batch identities unique among a connection's open batches. */
 export interface BatchIdentitySource {
@@ -34,7 +34,6 @@ export interface MessageTransport {
   sendParts?(parts: Uint8Array<ArrayBuffer>[]): TransportSend | void;
   /** Batch identities shared by every World session on this connection. */
   readonly batchIdentities?: BatchIdentitySource;
-  readonly renderDiagnostics?: RenderDiagnostics;
   close(): Promise<void>;
 }
 
@@ -98,7 +97,6 @@ export function webSocketTransport(url: string): MessageTransport {
  * throttles this connection, messages wait here instead of in the worker.
  */
 export class PortTransport implements MessageTransport {
-  readonly renderDiagnostics?: RenderDiagnostics;
   private events: TransportEvents | undefined;
   private closing: Promise<void> | undefined;
   private finishClose: ((error?: Error) => void) | undefined;
@@ -121,7 +119,7 @@ export class PortTransport implements MessageTransport {
     private readonly port: MessagePort,
     private readonly connection: bigint,
     private readonly dispose: () => void = () => {},
-    renderDiagnostics?: RenderDiagnostics,
+    presentation?: PresentationPort,
     private readonly closeTimeoutMs = 10_000,
     /**
      * How long messages may wait while the worker returns no credit before the
@@ -139,7 +137,7 @@ export class PortTransport implements MessageTransport {
         throw new RangeError(`${name} must be in (0, 60000]`);
     if (connection <= 0n)
       throw new RangeError("Worker connection must be nonzero");
-    if (renderDiagnostics) this.renderDiagnostics = renderDiagnostics;
+    bindPresentation(this, presentation);
   }
 
   start(events: TransportEvents): void {

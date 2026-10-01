@@ -31,16 +31,13 @@ pub(super) fn builtin_config(item: &ipp_core::RenderItem, shadow: bool) -> Rende
     } else {
         config
     };
-    #[cfg(feature = "skeletal-animation")]
-    let config = config.with_skinning(item.skinned);
-    #[cfg(feature = "mesh-poses")]
-    let config = config.with_mesh_pose(item.pose.is_some());
-    #[cfg(feature = "particles")]
-    let config = config.with_particles(
-        item.particle.is_some(),
-        item.particle.is_some_and(|p| p.sprite),
-    );
     config
+        .with_skinning(item.skinned)
+        .with_mesh_pose(item.pose.is_some())
+        .with_particles(
+            item.particle.is_some(),
+            item.particle.is_some_and(|p| p.sprite),
+        )
 }
 
 fn material_key(
@@ -92,7 +89,7 @@ pub(super) fn prepare(
     draws: &mut Vec<RenderDraw>,
     items: &[RenderItem<'_>],
     debug: &[DebugRenderItem],
-    #[cfg(feature = "surfaces")] surfaces: &[super::scene::SceneOutputSurface],
+    surfaces: &[super::scene::SceneOutputSurface],
     customs: &BTreeMap<EntityId, PreparedCustomMaterial>,
     lighting: &PreparedLighting,
     view_projection: &[f32; 16],
@@ -102,13 +99,8 @@ pub(super) fn prepare(
     while index < items.len() {
         let item = &items[index];
         let custom = customs.get(&item.entity);
-        #[cfg(feature = "particles")]
         let sprite = item.particle.filter(|p| p.sprite);
-        #[cfg(feature = "particles")]
-        let transparent = sprite.is_some();
-        #[cfg(not(feature = "particles"))]
-        let transparent = false;
-        let transparent = transparent || custom.is_some_and(|c| c.material.alpha_mode == 2);
+        let transparent = sprite.is_some() || custom.is_some_and(|c| c.material.alpha_mode == 2);
         let material = if transparent {
             RenderMaterialKey::default()
         } else {
@@ -122,9 +114,7 @@ pub(super) fn prepare(
             )
         };
         let mut end = index + 1;
-        #[allow(unused_mut)] // Particle groups share a depth; ordinary builds keep it immutable.
         let mut z = depth(item, view_projection);
-        #[cfg(feature = "particles")]
         if !transparent && item.particle.is_some() {
             while end < items.len()
                 && items[end].entity == item.entity
@@ -134,9 +124,6 @@ pub(super) fn prepare(
                 end += 1;
             }
         }
-        #[cfg(not(feature = "particles"))]
-        let _ = &mut end;
-        #[cfg(feature = "particles")]
         if sprite.is_some_and(|p| p.additive) {
             z = f64::INFINITY;
         }
@@ -164,7 +151,6 @@ pub(super) fn prepare(
         depth: 0.0,
     }));
 
-    #[cfg(feature = "surfaces")]
     draws.extend(surfaces.iter().enumerate().map(|(index, item)| RenderDraw {
         index: RenderDrawIndex::Surface(index),
         key: (item.entity, 2),

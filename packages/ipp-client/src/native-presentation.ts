@@ -1,7 +1,12 @@
-/** Diagnostics-only companion to the ordinary native Host WebSocket. */
+/**
+ * Testing companion to the ordinary native Host WebSocket of the GLES test
+ * host: renderer statistics and, in its `instrumentation` build, testing
+ * controls. Frames and pixels use the ordinary Host protocol.
+ */
 import {
   PortRenderDiagnostics,
   SURFACE_CACHE_MODES,
+  bindPresentation,
   type RenderStatisticsSnapshot,
   type PresentationTestingMessage,
 } from "./presentation.js";
@@ -57,12 +62,19 @@ function decodeResponse(data: unknown): Record<string, unknown> {
           maxHeight: view.getUint32(5, true),
         },
       };
+    case 2:
+      if (data.byteLength !== 2 || view.getUint8(1) > 1)
+        throw new Error("Invalid presentation configuration");
+      return {
+        type: "presentation-configuration",
+        instrumentation: view.getUint8(1) === 1,
+      };
     case 4:
       throw new Error(text(1));
     case 5: {
       const id = view.getUint32(1, true);
       const statistics = JSON.parse(text(5)) as RenderStatisticsSnapshot;
-      for (const cache of statistics.surfaces?.surfaceCaches ?? []) {
+      for (const cache of statistics.surfaces.surfaceCaches) {
         cache.entity = BigInt(cache.entity);
         if (typeof cache.mode === "number")
           cache.mode = SURFACE_CACHE_MODES[cache.mode]!;
@@ -88,8 +100,7 @@ export function nativePresentationTransport(
   });
   const closed = () => new Error("Presentation channel closed");
 
-  return {
-    renderDiagnostics: presentation,
+  const transport: MessageTransport = {
     start(events) {
       let ippReady = false;
       let channelReady = false;
@@ -142,4 +153,5 @@ export function nativePresentationTransport(
       await ipp.close();
     },
   };
+  return bindPresentation(transport, presentation);
 }

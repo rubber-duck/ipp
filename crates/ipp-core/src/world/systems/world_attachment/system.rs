@@ -186,9 +186,8 @@ impl System for WorldAttachmentSystem {
         }
         value.validate()?;
         context.topology.preflight_token()?;
-        if value.mode != 0 {
-            #[cfg(feature = "surfaces")]
-            if context
+        if value.mode != 0
+            && context
                 .staged
                 .input_value(
                     &context.world_data.components,
@@ -196,11 +195,8 @@ impl System for WorldAttachmentSystem {
                     ComponentValue::SURFACE,
                 )
                 .is_none()
-            {
-                return Err(ErrorReason::MissingComponent);
-            }
-            #[cfg(not(feature = "surfaces"))]
-            return Err(ErrorReason::UnsupportedDependency);
+        {
+            return Err(ErrorReason::MissingComponent);
         }
         let anchor = AttachmentAnchor {
             world: context.world_data.id,

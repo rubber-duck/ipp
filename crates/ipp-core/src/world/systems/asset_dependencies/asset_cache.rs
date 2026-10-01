@@ -8,7 +8,7 @@ pub(in crate::world) fn source_key_from_fields(
     source: &str,
     variant: u32,
 ) -> Option<crate::services::asset_management::AssetKey> {
-    #[cfg(feature = "profiling")]
+    #[cfg(feature = "instrumentation")]
     let _allocation_scope = crate::profiling::AllocationScope::new(202, "assets.source_key");
 
     if let Some(key) = previous

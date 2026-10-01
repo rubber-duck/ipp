@@ -328,7 +328,6 @@ impl AnimationAccess<'_, '_> {
                         value,
                         crate::DynamicValue::Bool(_) | crate::DynamicValue::Asset(_)
                     ) => {}
-                #[cfg(feature = "skeletal-animation")]
                 AnimationValue::Pose(_) => {}
                 _ => return Err(ErrorReason::InvalidField),
             }
@@ -495,7 +494,7 @@ impl AnimationAccess<'_, '_> {
     /// on stop, removal, description change and invalidation. A subtraction the
     /// field rejects leaves the field as it is.
     pub(super) fn withdraw_controller(&mut self, id: AnimationControllerId) {
-        #[cfg(feature = "profiling")]
+        #[cfg(feature = "instrumentation")]
         let measurement =
             crate::profiling::Stage::fixed(crate::profiling::FixedStage::AnimationRestoreAndStage);
 
@@ -526,7 +525,7 @@ impl AnimationAccess<'_, '_> {
         }
         // Every bound driver must be visible to synchronous lifecycle callbacks
         // before the writes can replace another component's internal storage.
-        #[cfg(feature = "profiling")]
+        #[cfg(feature = "instrumentation")]
         drop(measurement);
 
         self.system.state.controllers.insert(id, controller);

@@ -371,7 +371,6 @@ pub fn serve_with<P: HostServices>(
     options: ServeOptions,
     ready: impl FnOnce(std::net::SocketAddr) -> io::Result<()>,
 ) -> io::Result<()> {
-    #[cfg(feature = "diagnostics")]
     let log_level = crate::diagnostics::level_from_env()?;
     if !listener.local_addr()?.ip().is_loopback() {
         return Err(io::Error::new(
@@ -402,7 +401,6 @@ pub fn serve_with<P: HostServices>(
             .asset_resources_mut()
             .set_idle_resident_bytes_target(bytes);
     }
-    #[cfg(feature = "diagnostics")]
     crate::diagnostics::install(log_level, 0);
     ready(listener.local_addr()?)?;
     let mut last_frame = Instant::now();
@@ -444,7 +442,6 @@ pub fn serve_with<P: HostServices>(
                 .name(format!("ipp-connection-{session_id}"))
                 .spawn(move || {
                     let _guard = guard;
-                    #[cfg(feature = "diagnostics")]
                     crate::diagnostics::install(log_level, session_id);
                     if let Err(error) = connection(stream, session_id, &events) {
                         diagnostic!(
@@ -453,8 +450,6 @@ pub fn serve_with<P: HostServices>(
                             session_id,
                             error
                         );
-                        #[cfg(not(feature = "diagnostics"))]
-                        eprintln!("session {session_id}: {error}");
                     }
                     let _ = events.send(HostConnectionEvent::Closed {
                         id: session_id,
@@ -618,7 +613,7 @@ fn connection(
 
         let now = Instant::now();
         if !ready && now.duration_since(connected_at) >= Duration::from_secs(10) {
-            return Err("IPP bootstrap timed out".into());
+            return Err("IPP hello timed out".into());
         }
         if now >= next_frame {
             next_frame = now + FRAME_INTERVAL;

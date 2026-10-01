@@ -4,10 +4,7 @@ import { pathToFileURL } from "node:url";
 import { resolve } from "node:path";
 import { encodeManifestLayout, manifestVariant } from "./generated-client.mjs";
 
-for (const directory of [
-  "target/gles-host/gles-gui",
-  "target/browser-build/headless-gui",
-]) {
+for (const directory of ["target/gles-host", "target/browser-build/render"]) {
   test(`complete physical subcodec agrees with executed target ${directory}`, async () => {
     const load = (name) => import(pathToFileURL(resolve(directory, name)).href);
     const codec = await load("generated.js");

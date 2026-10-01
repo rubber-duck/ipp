@@ -5,16 +5,13 @@ use super::*;
 /// Dimensions are positive finite local-space metres.
 /// Pills use total end-to-end height; outline stroke is a tube diameter.
 /// Unknown, unbounded or numerically collapsed recipes are rejected.
-#[cfg(feature = "builtin-assets")]
 pub fn mesh(uri: &str) -> Result<Vec<u8>, ErrorReason> {
-    #[cfg(feature = "skeletal-animation")]
     if uri == "ipp://mesh/rig-strip" {
         return rig(crate::MESH_TYPE, uri);
     }
     mesh_with_attributes(uri, false)
 }
 
-#[cfg(feature = "builtin-assets")]
 fn mesh_with_attributes(uri: &str, positions_only: bool) -> Result<Vec<u8>, ErrorReason> {
     if !uri.starts_with("ipp://mesh/cube?") {
         return shapes::mesh(uri, positions_only);
@@ -127,7 +124,6 @@ fn cube(half: [f32; 3], positions_only: bool) -> Vec<u8> {
 
 /// Generate a packed RGBA8 checker or orientation grid as IPPTv3.
 /// No I/O or global asset identities; dimensions divide evenly into cells.
-#[cfg(feature = "builtin-assets")]
 pub fn texture(uri: &str) -> Result<Vec<u8>, ErrorReason> {
     let uv_grid = uri.starts_with("ipp://texture/uv-grid?");
     let args = arguments(
@@ -185,7 +181,6 @@ pub fn texture(uri: &str) -> Result<Vec<u8>, ErrorReason> {
     Ok(bytes)
 }
 
-#[cfg(feature = "builtin-assets")]
 fn uv_grid_color(
     x: u32,
     y: u32,
@@ -241,7 +236,7 @@ pub fn debug_mesh(
     crate::MeshAsset::decode(&bytes)
 }
 
-#[cfg(all(test, feature = "builtin-assets"))]
+#[cfg(test)]
 mod tests {
     use super::*;
 

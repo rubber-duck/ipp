@@ -3,7 +3,6 @@
 
 #![allow(dead_code)]
 
-#[cfg(feature = "surfaces")]
 pub mod canvas;
 pub mod selection;
 
@@ -12,7 +11,6 @@ use ipp_core::{
     components::{Camera, Transform},
 };
 use ipp_render_gl::{RenderDevice, RenderError, RenderService};
-#[cfg(feature = "surfaces")]
 use std::cell::RefCell;
 use std::{cell::Cell, rc::Rc};
 
@@ -24,97 +22,57 @@ pub struct DeviceState {
     pub mesh_attempts: Cell<u32>,
     /// Mesh draw submissions.
     pub mesh_draws: Cell<u32>,
-    #[cfg(feature = "shadows")]
     pub fail_shadow_allocation: Cell<bool>,
-    #[cfg(feature = "shadows")]
     pub shadow_attempts: Cell<u32>,
     pub live_meshes: Cell<u32>,
     pub ended_frames: Cell<u32>,
-    #[cfg(feature = "surfaces")]
     pub context_lost: Cell<bool>,
-    #[cfg(feature = "surfaces")]
     pub surface_path_attempts: Cell<u32>,
-    #[cfg(feature = "surfaces")]
     pub surface_double_sided: Cell<bool>,
-    #[cfg(feature = "surfaces")]
     pub surface_state_changes: RefCell<Vec<bool>>,
-    #[cfg(feature = "surfaces")]
     pub fail_surface_draw: Cell<bool>,
-    #[cfg(feature = "surfaces")]
     pub fail_surface_state_start: Cell<bool>,
-    #[cfg(feature = "shadows")]
     pub live_shadow_maps: Cell<u32>,
-    #[cfg(feature = "shadows")]
     pub shadow_pass: Cell<bool>,
-    #[cfg(feature = "shadows")]
     pub fail_shadow_draw: Cell<bool>,
-    #[cfg(feature = "surfaces")]
     pub analytic_glyph_draws: Cell<u32>,
     /// Analytic instance streams created or replaced.
-    #[cfg(feature = "surfaces")]
     pub analytic_glyph_uploads: Cell<u32>,
     /// Analytic instance streams currently allocated.
-    #[cfg(feature = "surfaces")]
     pub live_analytic_streams: Cell<i32>,
     /// Retained GUI storage writes.
-    #[cfg(feature = "surfaces")]
     pub gui_batch_writes: Cell<u32>,
-    #[cfg(feature = "surfaces")]
     pub atlas_populations: Cell<u32>,
-    #[cfg(feature = "surfaces")]
     pub atlas_target_bound: Cell<bool>,
-    #[cfg(feature = "surfaces")]
     pub fail_atlas_begin: RefCell<Option<RenderError>>,
-    #[cfg(feature = "surfaces")]
     pub fail_atlas_end: RefCell<Option<RenderError>>,
-    #[cfg(feature = "surfaces")]
     pub atlas_restores: Cell<u32>,
-    #[cfg(feature = "surfaces")]
     pub atlas_pages_created: Cell<u32>,
-    #[cfg(feature = "surfaces")]
     pub fail_gui_batch_write: RefCell<Option<RenderError>>,
     /// Largest cache target dimension; zero (the default) disables caching.
-    #[cfg(feature = "surfaces")]
     pub cache_limit: Cell<u32>,
-    #[cfg(feature = "surfaces")]
     pub cache_targets_live: Cell<u32>,
-    #[cfg(feature = "surfaces")]
     pub cache_creates: Cell<u32>,
-    #[cfg(feature = "surfaces")]
     pub cache_deletes: Cell<u32>,
-    #[cfg(feature = "surfaces")]
     pub cache_resizes: Cell<u32>,
-    #[cfg(feature = "surfaces")]
     pub cache_begins: Cell<u32>,
-    #[cfg(feature = "surfaces")]
     pub cache_composites: Cell<u32>,
-    #[cfg(feature = "surfaces")]
     pub cache_target_bound: Cell<bool>,
-    #[cfg(feature = "surfaces")]
     pub bound_cache_target: Cell<Option<u32>>,
-    #[cfg(feature = "surfaces")]
     pub camera_target_bound: Cell<bool>,
-    #[cfg(feature = "surfaces")]
     pub fail_cache_create: RefCell<Option<RenderError>>,
-    #[cfg(feature = "surfaces")]
     pub fail_cache_begin: RefCell<Option<RenderError>>,
-    #[cfg(feature = "surfaces")]
     pub fail_cache_end: RefCell<Option<RenderError>>,
-    #[cfg(feature = "surfaces")]
     pub fail_cache_composite: RefCell<Option<RenderError>>,
     /// Curve-path draws, excluding analytic glyph instances.
-    #[cfg(feature = "surfaces")]
     pub surface_path_draws: Cell<u32>,
     /// Retained GUI draws sampling an atlas page.
-    #[cfg(feature = "surfaces")]
     pub glyph_batch_draws: Cell<u32>,
     /// Retained GUI draws of boxes only.
-    #[cfg(feature = "surfaces")]
     pub gui_batch_draws: Cell<u32>,
     /// Ordered Surface work: `B`/`E` begin and end a cache target, `C` composites,
     /// `P` draws paths, `G` analytic glyphs, `T` retained GUI work sampling atlas
     /// text, `X` retained GUI boxes only, `F` begins the frame.
-    #[cfg(feature = "surfaces")]
     pub surface_events: RefCell<String>,
 }
 
@@ -128,24 +86,17 @@ impl RenderDevice for TestDevice {
         })
     }
 
-    #[cfg(feature = "surfaces")]
     type SurfacePath = ();
-    #[cfg(feature = "surfaces")]
     type SurfaceCacheTarget = u32;
-    #[cfg(feature = "surfaces")]
     type SurfaceInstances = ();
     type Program = ();
     type Mesh = ();
     type Texture = ();
 
-    #[cfg(feature = "shadows")]
     type ShadowMap = ();
-    #[cfg(feature = "surfaces")]
     type GuiBatch = ();
-    #[cfg(feature = "surfaces")]
     type GlyphAtlasPage = ();
 
-    #[cfg(feature = "surfaces")]
     fn glyph_atlas_texture(page: &Self::GlyphAtlasPage) -> &Self::Texture {
         page
     }
@@ -161,7 +112,6 @@ impl RenderDevice for TestDevice {
         Ok(())
     }
 
-    #[cfg(feature = "surfaces")]
     fn set_surface_double_sided(&mut self, enabled: bool) -> Result<(), RenderError> {
         self.0.surface_double_sided.set(enabled);
         self.0.surface_state_changes.borrow_mut().push(enabled);
@@ -174,12 +124,10 @@ impl RenderDevice for TestDevice {
         }
     }
 
-    #[cfg(feature = "shadows")]
     fn shadow_map_limit(&self) -> u32 {
         4096
     }
 
-    #[cfg(feature = "shadows")]
     fn create_shadow_map(&mut self, _: u32) -> Result<(), RenderError> {
         self.0.shadow_attempts.set(self.0.shadow_attempts.get() + 1);
         if self.0.fail_shadow_allocation.get() {
@@ -193,19 +141,16 @@ impl RenderDevice for TestDevice {
         Ok(())
     }
 
-    #[cfg(feature = "shadows")]
     fn begin_shadow(&mut self, _: &(), _: u32, _: u32) -> Result<(), RenderError> {
         assert!(!self.0.shadow_pass.replace(true));
         Ok(())
     }
 
-    #[cfg(feature = "shadows")]
     fn end_shadow(&mut self) -> Result<(), RenderError> {
         assert!(self.0.shadow_pass.replace(false));
         Ok(())
     }
 
-    #[cfg(feature = "shadows")]
     fn bind_shadow(
         &mut self,
         _: &(),
@@ -215,7 +160,6 @@ impl RenderDevice for TestDevice {
         Ok(())
     }
 
-    #[cfg(feature = "shadows")]
     fn delete_shadow_map(&mut self, _: ()) {
         self.0
             .live_shadow_maps
@@ -265,7 +209,6 @@ impl RenderDevice for TestDevice {
         panic!("mesh-only scenarios never upload textures");
     }
 
-    #[cfg(feature = "surfaces")]
     fn create_surface_path(
         &mut self,
         _: &ipp_render_gl::SurfacePathTexels,
@@ -280,7 +223,6 @@ impl RenderDevice for TestDevice {
         }
     }
 
-    #[cfg(feature = "surfaces")]
     fn draw_surface_path(
         &mut self,
         _: &(),
@@ -300,12 +242,9 @@ impl RenderDevice for TestDevice {
         self.0
             .surface_path_draws
             .set(self.0.surface_path_draws.get() + 1);
-        #[cfg(feature = "surfaces")]
         if !self.0.atlas_target_bound.get() {
             self.0.surface_events.borrow_mut().push('P');
         }
-        #[cfg(not(feature = "surfaces"))]
-        self.0.surface_events.borrow_mut().push('P');
         if self.0.fail_surface_draw.get() {
             Err(RenderError::RenderDevice(
                 "injected Surface draw failure".into(),
@@ -315,7 +254,6 @@ impl RenderDevice for TestDevice {
         }
     }
 
-    #[cfg(feature = "surfaces")]
     fn create_surface_instances(
         &mut self,
         _: &(),
@@ -330,7 +268,6 @@ impl RenderDevice for TestDevice {
         Ok(())
     }
 
-    #[cfg(feature = "surfaces")]
     fn update_surface_instances(
         &mut self,
         _: &mut (),
@@ -343,14 +280,12 @@ impl RenderDevice for TestDevice {
         Ok(())
     }
 
-    #[cfg(feature = "surfaces")]
     fn delete_surface_instances(&mut self, _: ()) {
         self.0
             .live_analytic_streams
             .set(self.0.live_analytic_streams.get() - 1);
     }
 
-    #[cfg(feature = "surfaces")]
     fn draw_surface_instances(
         &mut self,
         _: &(),
@@ -360,7 +295,6 @@ impl RenderDevice for TestDevice {
         _: &[f32; 4],
         _: u32,
     ) -> Result<(), RenderError> {
-        #[cfg(feature = "surfaces")]
         assert!(
             !self.0.atlas_target_bound.get(),
             "the main pass never draws into an atlas page"
@@ -372,12 +306,10 @@ impl RenderDevice for TestDevice {
         Ok(())
     }
 
-    #[cfg(feature = "surfaces")]
     fn surface_cache_limit(&self) -> u32 {
         self.0.cache_limit.get()
     }
 
-    #[cfg(feature = "surfaces")]
     fn create_surface_cache_target(&mut self, width: u32, height: u32) -> Result<u32, RenderError> {
         let limit = self.0.cache_limit.get();
         assert!(
@@ -395,7 +327,6 @@ impl RenderDevice for TestDevice {
         Ok(self.0.cache_creates.get())
     }
 
-    #[cfg(feature = "surfaces")]
     fn resize_surface_cache_target(
         &mut self,
         _: &mut u32,
@@ -413,7 +344,6 @@ impl RenderDevice for TestDevice {
 
     /// Cache targets never nest or start inside atlas population; atlas
     /// population may nest inside one.
-    #[cfg(feature = "surfaces")]
     fn begin_camera_target(&mut self, target: &mut u32, _: &[f32; 4]) -> Result<(), RenderError> {
         assert!(!self.0.cache_target_bound.replace(true));
         self.0.bound_cache_target.set(Some(*target));
@@ -422,13 +352,11 @@ impl RenderDevice for TestDevice {
         Ok(())
     }
 
-    #[cfg(feature = "surfaces")]
     fn begin_surface_cache_target(&mut self, target: &u32) -> Result<(), RenderError> {
         assert!(
             !self.0.cache_target_bound.get(),
             "Surface cache targets never nest"
         );
-        #[cfg(feature = "surfaces")]
         assert!(
             !self.0.atlas_target_bound.get(),
             "Surface cache targets never begin inside atlas population"
@@ -448,7 +376,6 @@ impl RenderDevice for TestDevice {
         Ok(())
     }
 
-    #[cfg(feature = "surfaces")]
     fn end_surface_cache_target(&mut self) -> Result<(), RenderError> {
         self.0.cache_target_bound.set(false);
         self.0.bound_cache_target.set(None);
@@ -460,7 +387,6 @@ impl RenderDevice for TestDevice {
         }
     }
 
-    #[cfg(feature = "surfaces")]
     fn draw_surface_cache(
         &mut self,
         _: &(),
@@ -479,7 +405,6 @@ impl RenderDevice for TestDevice {
             Some(*target),
             "a composite cannot sample its bound target"
         );
-        #[cfg(feature = "surfaces")]
         assert!(
             !self.0.atlas_target_bound.get(),
             "the main pass never composites into an atlas page"
@@ -494,7 +419,6 @@ impl RenderDevice for TestDevice {
         }
     }
 
-    #[cfg(feature = "surfaces")]
     fn delete_surface_cache_target(&mut self, _: u32) {
         self.0.cache_deletes.set(self.0.cache_deletes.get() + 1);
         self.0
@@ -502,12 +426,10 @@ impl RenderDevice for TestDevice {
             .set(self.0.cache_targets_live.get() - 1);
     }
 
-    #[cfg(feature = "surfaces")]
     fn create_gui_batch(&mut self, _: usize) -> Result<(), RenderError> {
         Ok(())
     }
 
-    #[cfg(feature = "surfaces")]
     fn write_gui_batch(
         &mut self,
         _: &mut (),
@@ -523,7 +445,6 @@ impl RenderDevice for TestDevice {
         }
     }
 
-    #[cfg(feature = "surfaces")]
     fn draw_gui_batch(
         &mut self,
         _: &(),
@@ -549,7 +470,6 @@ impl RenderDevice for TestDevice {
         Ok(())
     }
 
-    #[cfg(feature = "surfaces")]
     fn create_glyph_atlas_page(&mut self, _: u32, _: u32) -> Result<(), RenderError> {
         self.0
             .atlas_pages_created
@@ -558,7 +478,6 @@ impl RenderDevice for TestDevice {
     }
 
     /// Consecutive begins switch pages; one end restores the host target.
-    #[cfg(feature = "surfaces")]
     fn begin_glyph_atlas_page(&mut self, _: &()) -> Result<(), RenderError> {
         self.0
             .atlas_populations
@@ -571,7 +490,6 @@ impl RenderDevice for TestDevice {
         Ok(())
     }
 
-    #[cfg(feature = "surfaces")]
     fn end_glyph_atlas_page(&mut self) -> Result<(), RenderError> {
         self.0.atlas_restores.set(self.0.atlas_restores.get() + 1);
         self.0.atlas_target_bound.set(false);
@@ -587,14 +505,11 @@ impl RenderDevice for TestDevice {
         _height: u32,
         _clear: &[f32; 4],
     ) -> Result<(), RenderError> {
-        #[cfg(feature = "surfaces")]
-        {
-            assert!(
-                !self.0.cache_target_bound.get(),
-                "the frame begins outside cache repaints"
-            );
-            self.0.surface_events.borrow_mut().push('F');
-        }
+        assert!(
+            !self.0.cache_target_bound.get(),
+            "the frame begins outside cache repaints"
+        );
+        self.0.surface_events.borrow_mut().push('F');
         Ok(())
     }
 
@@ -605,16 +520,14 @@ impl RenderDevice for TestDevice {
         _mesh: &(),
         _mvp: &[f32; 16],
         _material: &[f32; 3],
-        #[cfg(feature = "mesh-poses")] _pose: Option<(&Self::Mesh, f32)>,
+        _pose: Option<(&Self::Mesh, f32)>,
         _texture: Option<&()>,
     ) -> Result<(), RenderError> {
         self.0.mesh_draws.set(self.0.mesh_draws.get() + 1);
-        #[cfg(feature = "surfaces")]
         assert!(
             !self.0.surface_double_sided.get(),
             "Surface rasterization state leaked into a mesh draw"
         );
-        #[cfg(feature = "shadows")]
         if self.0.shadow_pass.get() && self.0.fail_shadow_draw.get() {
             return Err(RenderError::RenderDevice(
                 "injected shadow draw error".into(),
@@ -675,15 +588,12 @@ pub fn create(world: &mut WorldContext<'_>, values: Vec<ComponentValue>) -> Enti
 /// Systems a test registered on this Host beyond the compiled ones are selected
 /// too, so their hooks observe the scene.
 pub fn scene_systems(host: &ipp_core::HostRuntime) -> Vec<ipp_core::systems::SystemId> {
-    #[cfg(feature = "surfaces")]
     let parts = [
         selection::ATTACHMENTS,
         selection::CAMERA,
         selection::RENDER,
         selection::SURFACE,
     ];
-    #[cfg(not(feature = "surfaces"))]
-    let parts = [selection::CAMERA, selection::RENDER];
     let compiled: Vec<_> = ipp_core::systems::compiled_system_factories()
         .iter()
         .map(|factory| factory.id())
@@ -742,7 +652,6 @@ pub fn setup_with<'a>(
     (host.world_mut(id).unwrap(), renderer, state)
 }
 
-#[cfg(feature = "surfaces")]
 pub fn triangle_contour(bytes: &mut Vec<u8>) {
     for value in [0.0_f32, 0.0] {
         bytes.extend(value.to_le_bytes());
@@ -757,7 +666,6 @@ pub fn triangle_contour(bytes: &mut Vec<u8>) {
 }
 
 /// An IPPD drawing of one opaque white triangle layer over the unit square.
-#[cfg(feature = "surfaces")]
 pub fn surface_drawing() -> Vec<u8> {
     let mut bytes = b"IPPD".to_vec();
     bytes.extend(1_u32.to_le_bytes());
@@ -771,7 +679,6 @@ pub fn surface_drawing() -> Vec<u8> {
     bytes
 }
 
-#[cfg(feature = "surfaces")]
 pub fn surface_font() -> Vec<u8> {
     let mut bytes = b"IPPF".to_vec();
     bytes.extend(1_u32.to_le_bytes());
@@ -910,7 +817,6 @@ pub fn render_frame<D: RenderDevice>(
 }
 
 /// One text Surface in front of the default camera, with its font resolved.
-#[cfg(feature = "surfaces")]
 pub fn text_surface_scene(
     host: &mut ipp_core::HostRuntime,
 ) -> (
@@ -923,7 +829,6 @@ pub fn text_surface_scene(
 }
 
 /// A glyph run of `glyph_ids`, one centimetre apart, in the given font.
-#[cfg(feature = "surfaces")]
 pub fn text_run_scene(
     host: &mut ipp_core::HostRuntime,
     font: Vec<u8>,
@@ -939,7 +844,6 @@ pub fn text_run_scene(
 }
 
 /// [`text_run_scene`] with an explicit scene World selection.
-#[cfg(feature = "surfaces")]
 pub fn text_run_scene_with(
     host: &mut ipp_core::HostRuntime,
     font: Vec<u8>,
@@ -970,7 +874,6 @@ pub fn text_run_scene_with(
 }
 
 /// Complete font requests until the text Surface prepares its glyph run.
-#[cfg(feature = "surfaces")]
 pub fn resolve_text(host: &mut ipp_core::HostRuntime, world_id: ipp_core::WorldId, font: &[u8]) {
     assert!(host.world_ref(world_id).is_some());
     for _ in 0..16 {
@@ -993,7 +896,6 @@ pub fn resolve_text(host: &mut ipp_core::HostRuntime, world_id: ipp_core::WorldI
     panic!("text Surface font did not resolve");
 }
 
-#[cfg(feature = "surfaces")]
 pub fn place(world: &mut WorldContext<'_>, entity: EntityId, z: f32) {
     world
         .enqueue(Batch {
@@ -1011,7 +913,6 @@ pub fn place(world: &mut WorldContext<'_>, entity: EntityId, z: f32) {
 }
 
 /// An IPPF font of `count` identical triangle glyphs whose bounds span `extent` units.
-#[cfg(feature = "surfaces")]
 pub fn glyph_font(count: u32, units_per_em: u32, extent: f32) -> Vec<u8> {
     let mut bytes = b"IPPF".to_vec();
     bytes.extend(1_u32.to_le_bytes());
@@ -1033,7 +934,6 @@ pub fn glyph_font(count: u32, units_per_em: u32, extent: f32) -> Vec<u8> {
 }
 
 /// Host recovery after context loss: release context state, then restore resources.
-#[cfg(feature = "surfaces")]
 pub fn recover_context(
     renderer: &mut RenderService<TestDevice>,
     host: &mut ipp_core::HostRuntime,

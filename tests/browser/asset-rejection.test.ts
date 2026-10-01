@@ -23,7 +23,6 @@ test("browser asset rejection recovery", {
     name: "world-host",
     generatedModule: resolve(profile, "generated.js"),
     runtimeWasm: resolve(profile, "runtime.wasm"),
-    exportWasm: resolve(profile, "export.wasm"),
     contractArtifact: resolve(profile, "contract.bin"),
   };
   await runBrowserEnvironment(
@@ -31,7 +30,6 @@ test("browser asset rejection recovery", {
     {
       workspace,
       build,
-      mismatchBuild: build,
       operationTimeoutMs: 20_000,
     },
     context.signal,

@@ -405,7 +405,6 @@ fn selected_worlds_admit_only_supported_components_and_keep_selection_out_of_hin
     );
 }
 
-#[cfg(feature = "gui")]
 #[test]
 fn gui_domain_operation_does_not_imply_layout_or_physical_input() {
     use ipp_core::systems::{WorldOperation, gui::GuiSystem};
@@ -438,7 +437,6 @@ fn gui_domain_operation_does_not_imply_layout_or_physical_input() {
     assert!(!manifest.supports_component(ComponentValue::GUI_LAYOUT));
 }
 
-#[cfg(feature = "gui")]
 #[test]
 fn gui_operation_has_one_local_control_provider_in_minimal_and_full_compositions() {
     use ipp_core::systems::{WorldOperation, canvas::CanvasSystem, gui::GuiSystem};
@@ -498,31 +496,6 @@ fn gui_operation_has_one_local_control_provider_in_minimal_and_full_compositions
     );
 }
 
-#[cfg(not(feature = "gui"))]
-#[test]
-fn gui_operation_is_absent_when_gui_is_not_compiled() {
-    assert!(compiled_system_factories().iter().all(|factory| {
-        !factory.id().0.starts_with("ipp.gui")
-            && factory
-                .capabilities()
-                .operations
-                .iter()
-                .all(|capability| format!("{:?}", capability.value) != "Gui")
-    }));
-    let mut host = HostRuntime::new();
-    let everything: Vec<_> = host.system_ids().collect();
-    let world = host
-        .create_world(WorldLimits::default(), &everything)
-        .unwrap();
-    assert!(
-        host.world_manifest(world)
-            .unwrap()
-            .operations()
-            .all(|operation| format!("{operation:?}") != "Gui")
-    );
-}
-
-#[cfg(feature = "skeletal-animation")]
 #[test]
 fn joint_animation_and_parent_joint_require_their_selected_evaluators() {
     use ipp_core::systems::{WorldOperation, animation::AnimationSystem};

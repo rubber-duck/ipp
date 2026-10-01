@@ -1,4 +1,4 @@
-import type { RenderStatisticsSnapshot } from "@ipp/client";
+import type { RenderStatisticsSnapshot } from "@ipp/client/diagnostics";
 import { presentationTesting } from "../../packages/ipp-client/src/testing.js";
 import {
   createFixtureCamera,
@@ -116,7 +116,6 @@ interface GeneratedModule {
       },
     ): Promise<HostedWorldClient<Client>>;
   };
-  acceptBootstrap(bytes: Uint8Array): bigint;
   decodeResponse(
     bytes: Uint8Array,
     session: bigint,
@@ -268,15 +267,6 @@ export async function initializeTextures(
       timeoutMs: configuration.timeoutMs,
     });
     const producer = new AssetSourceFixture(client);
-    if (
-      !client.capabilities.spatial ||
-      !client.capabilities.textures ||
-      !client.capabilities.builtinAssets
-    ) {
-      throw new Error(
-        "texture fixture requires scene, textures, and builtin assets",
-      );
-    }
     if (contract.UnlitTexture.id !== 6) {
       throw new Error(
         `generated UnlitTexture id is ${contract.UnlitTexture.id}; expected 6`,

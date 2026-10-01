@@ -3,7 +3,12 @@
 // Uses an executed native contract, the production generator and client, and pinned tsc.
 import assert from "node:assert/strict";
 import test from "node:test";
-import { generateClient, replyToHostCreate } from "./generated-client.mjs";
+import {
+  generateClient,
+  HELLO,
+  hostAnnouncement,
+  replyToHostCreate,
+} from "./generated-client.mjs";
 
 const client = await generateClient("frames");
 const { codec, manifest, logging } = client;
@@ -62,9 +67,7 @@ async function connect(options = {}) {
         if (replyToHostCreate(bytes, events)) return;
         sent.push(bytes.slice());
         if (sent.length === 1) {
-          const reply = new Uint8Array(24);
-          reply.set(bytes);
-          new DataView(reply.buffer).setBigUint64(16, 7n, true);
+          const reply = hostAnnouncement(codec);
           events.message(reply);
         }
       },
@@ -86,7 +89,8 @@ async function connect(options = {}) {
 }
 
 function inspection(requestId, tick) {
-  const bytes = new Uint8Array(57);
+  // Empty entity, resource, diagnostic, controller and GUI lists; no Canvas.
+  const bytes = new Uint8Array(66);
   bytes.set(packet({ requestId, tick, tag: codec.WIRE.RESPONSE_INSPECT }));
   return bytes;
 }
@@ -104,14 +108,13 @@ function batchResponse(requestId, tick, batchId) {
 }
 
 test("generated codec reserves events and rejects retired tags, invalid times, and malformed frames", () => {
-  assert.equal(codec.PROTOCOL_VERSION, 2);
+  assert.equal(codec.PROTOCOL_VERSION, 3);
   assert.equal(typeof IppClient.connectWebSocket, "function");
   assert.equal("connect" in IppClient, false);
   assert.equal(codec.WIRE.RESPONSE_FRAME, 4);
   assert.equal(codec.WIRE.VALUE_BYTES, 6);
   assert.deepEqual(manifest.WIRE_TAG_LAYOUTS.RESPONSE_FRAME, {
     space: 5,
-    capability: "base",
     layout: "response-frame",
   });
   assert.equal("REQUEST_STEP" in codec.WIRE, false);
@@ -163,7 +166,7 @@ test("generated codec reserves events and rejects retired tags, invalid times, a
       );
 });
 
-test("minimal generated codec retains every generic field value encoding", () => {
+test("generated codec retains every generic field value encoding", () => {
   const payload = new Uint8Array([7, 8, 9]);
   const bytes = codec.encodeRequest({
     session: 7n,
@@ -189,21 +192,28 @@ test("minimal generated codec retains every generic field value encoding", () =>
   assert.deepEqual([...bytes.slice(43)], [...payload]);
 });
 
-test("generated client rejects a bootstrap mismatch and closes its transport", async () => {
-  let events;
-  let closes = 0;
-  await assert.rejects(
-    IppClient.connectTransport(
+for (const [difference, change] of [
+  ["hash", (view) => view.setBigUint64(8, codec.SCHEMA_HASH ^ 1n, true)],
+  [
+    "wire revision",
+    (view) => view.setUint32(4, codec.PROTOCOL_VERSION + 1, true),
+  ],
+])
+  test(`generated client refuses a Host whose ${difference} differs, sends nothing further and closes`, async () => {
+    let events;
+    let closes = 0;
+    const sent = [];
+    const reply = hostAnnouncement(codec);
+    change(new DataView(reply.buffer));
+    const hostHash = new DataView(reply.buffer).getBigUint64(8, true);
+    const refusal = await IppClient.connectTransport(
       {
         start(value) {
           events = value;
           events.ready();
         },
         send(bytes) {
-          const reply = new Uint8Array(24);
-          reply.set(bytes);
-          reply[8] ^= 1;
-          new DataView(reply.buffer).setBigUint64(16, 7n, true);
+          sent.push(bytes.slice());
           events.message(reply);
         },
         async close() {
@@ -211,11 +221,23 @@ test("generated client rejects a bootstrap mismatch and closes its transport", a
         },
       },
       { selectedSystems: [], timeoutMs: 1_000 },
-    ),
-    /bootstrap compatibility mismatch/,
-  );
-  assert.ok(closes > 0);
-});
+    ).then(
+      () => assert.fail("connected to a Host with another contract"),
+      (error) => error,
+    );
+    assert.ok(refusal instanceof codec.HostContractMismatchError);
+    assert.equal(refusal.name, "HostContractMismatchError");
+    assert.equal(refusal.host.schemaHash, hostHash);
+    assert.equal(refusal.client.schemaHash, codec.SCHEMA_HASH);
+    assert.equal(refusal.client.revision, codec.PROTOCOL_VERSION);
+    for (const hash of [hostHash, codec.SCHEMA_HASH])
+      assert.match(
+        refusal.message,
+        new RegExp(`0x${hash.toString(16).padStart(16, "0")}`),
+      );
+    assert.deepEqual(sent, [HELLO]);
+    assert.ok(closes > 0);
+  });
 
 test("frame waits send no data, explicit thresholds reuse latest, default waits for new progress", async () => {
   const { client, sent, emit } = await connect();

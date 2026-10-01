@@ -17,18 +17,14 @@ pub mod geometry;
 
 pub mod render;
 
-#[cfg(feature = "skeletal-animation")]
 pub mod skeleton;
 
-#[cfg(feature = "surfaces")]
 pub mod surface;
 
 pub mod canvas;
 
-#[cfg(feature = "gui")]
 pub mod gui;
 
-#[cfg(feature = "skeletal-animation")]
 pub mod skinning;
 
 mod contexts;
@@ -62,7 +58,6 @@ mod bindings;
 pub use bindings::*;
 pub use ipp_schema_derive::system_update;
 
-#[cfg(feature = "particles")]
 pub mod particles;
 
 mod entity_references;

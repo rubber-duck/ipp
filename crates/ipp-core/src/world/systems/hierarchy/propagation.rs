@@ -27,9 +27,7 @@ struct LocalTransformBinding {
 
 struct ParentTransformBinding {
     model: ObjectTransformBinding,
-    #[cfg(feature = "skeletal-animation")]
     bone: u32,
-    #[cfg(feature = "skeletal-animation")]
     skeleton: Option<ComponentBinding<crate::components::Skeleton>>,
 }
 
@@ -75,29 +73,23 @@ impl ParentTransformBinding {
         &self,
         world: &WorldSimulationState,
     ) -> Result<GeometryShapeTransform, ErrorReason> {
-        #[cfg(feature = "skeletal-animation")]
         let storage = &world.components;
         let object = self.model.evaluate(world)?;
-        #[cfg(feature = "skeletal-animation")]
-        {
-            if self.bone == u32::MAX {
-                return Ok(object);
-            }
-            // Pose payloads may suspend/reallocate independently of the stable
-            // Skeleton component. Borrow their current buffer only for this read.
-            let pose = self
-                .skeleton
-                .and_then(|s| s.get(storage).runtime.pose.as_ref())
-                .filter(|p| p.valid)
-                .ok_or(ErrorReason::InvalidAsset)?;
-            let joint = pose
-                .global
-                .get(self.bone as usize)
-                .ok_or(ErrorReason::InvalidValue)?;
-            GeometryShapeTransform::from_matrix(*joint)?.then(&object)
+        if self.bone == u32::MAX {
+            return Ok(object);
         }
-        #[cfg(not(feature = "skeletal-animation"))]
-        Ok(object)
+        // Pose payloads may suspend/reallocate independently of the stable
+        // Skeleton component. Borrow their current buffer only for this read.
+        let pose = self
+            .skeleton
+            .and_then(|s| s.get(storage).runtime.pose.as_ref())
+            .filter(|p| p.valid)
+            .ok_or(ErrorReason::InvalidAsset)?;
+        let joint = pose
+            .global
+            .get(self.bone as usize)
+            .ok_or(ErrorReason::InvalidValue)?;
+        GeometryShapeTransform::from_matrix(*joint)?.then(&object)
     }
 }
 
@@ -118,18 +110,15 @@ impl HierarchyPropagation {
                 self.aims.push(unsafe { ComponentBinding::new(pointer) });
             }
             let parent = world.state.links.parent(entity).map(|parent| {
-                #[cfg(feature = "skeletal-animation")]
                 let parent_index = parent.index() as usize;
                 // SAFETY: Before-commit invalidation clears cached readers before
                 // component removal/replacement; numeric writes preserve these slots.
                 unsafe {
                     ParentTransformBinding {
                         model: ObjectTransformBinding::bind(world, parent),
-                        #[cfg(feature = "skeletal-animation")]
                         bone: storage
                             .parent_joint(index)
                             .map_or(u32::MAX, |value| value.ordinal),
-                        #[cfg(feature = "skeletal-animation")]
                         skeleton: storage
                             .skeleton_ptr(parent_index)
                             .map(|p| ComponentBinding::new(p)),

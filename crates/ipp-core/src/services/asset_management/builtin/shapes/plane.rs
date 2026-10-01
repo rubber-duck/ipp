@@ -2,7 +2,6 @@
 
 use super::{BuiltinMesh, ErrorReason, Z, arrow, cylinder};
 
-#[cfg(feature = "builtin-assets")]
 pub(super) fn recipe(mesh: &mut BuiltinMesh, uri: &str, outline: bool) -> Result<(), ErrorReason> {
     let args = super::super::argument_values(
         uri,

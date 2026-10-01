@@ -2,11 +2,9 @@
 //! Hosts own transports and supply simulation time. Optional capabilities beyond
 //! the selected scalar, declaration and unlit scene capabilities remain omitted.
 
-#[cfg(feature = "diagnostics")]
 pub mod diagnostics;
 
-/// Filter before constructing arguments; lean builds erase every input token.
-#[cfg(feature = "diagnostics")]
+/// Filter before constructing arguments; a disabled level evaluates no argument.
 #[macro_export]
 macro_rules! diagnostic {
     ($level:ident, $($args:tt)*) => {{
@@ -14,13 +12,6 @@ macro_rules! diagnostic {
             $crate::diagnostics::emit($crate::diagnostics::Level::$level, format_args!($($args)*));
         }
     }};
-}
-
-/// Erase diagnostics, including argument evaluation and format strings.
-#[cfg(not(feature = "diagnostics"))]
-#[macro_export]
-macro_rules! diagnostic {
-    ($($args:tt)*) => {{}};
 }
 
 extern crate self as ipp_core;
@@ -58,7 +49,6 @@ pub use systems::canvas::canvas_state::{
 };
 pub use systems::render::render_state::{RenderState, RenderStateChange, RenderStatePatch};
 
-#[cfg(feature = "surfaces")]
 pub use systems::surface::{
     SEGMENTATION_SCOPE, Surface, SurfaceCache, SurfaceCachePolicy, TextCacheKey, TextCaret,
     TextFont, TextGlyph, TextLayout, TextLine, TextLinePolicy, TextMaxWidth, TextMeasureRequest,
@@ -66,7 +56,6 @@ pub use systems::surface::{
     is_grapheme_boundary, measure_text, utf8_to_utf16_offset, utf16_to_utf8_offset,
 };
 
-#[cfg(feature = "gui")]
 pub use systems::gui::{
     GuiLayoutSystem, GuiLayoutSystemFactory, GuiPrimitivePart, GuiSystem, GuiSystemFactory,
     MAX_GUI_TEXT_BYTES, MAX_LAYOUT_DEPTH,
@@ -93,12 +82,10 @@ pub use services::asset_management::service::{
     AssetAcquisitionRequest, AssetResourceKind, AssetResourceSnapshot, AssetResourceStatus,
 };
 
-#[cfg(feature = "skeletal-animation")]
 pub use services::asset_management::skeleton::{
     MAX_JOINTS, POSE_TYPE, PoseAsset, SKELETON_TYPE, SkeletonAsset,
 };
 
-#[cfg(feature = "skeletal-animation")]
 pub use services::asset_management::skin_binding::{SKIN_TYPE, SkinAsset};
 
 mod host;
@@ -117,5 +104,5 @@ pub use host::{ViewDescriptor, ViewPickHit, ViewQueryTarget};
 pub use host::{WorldAttachmentEffect, WorldAttachmentRetirement, WorldAttachmentToken};
 
 /// Opt-in stage timing and allocation counters; never enabled by default.
-#[cfg(feature = "profiling")]
+#[cfg(feature = "instrumentation")]
 pub mod profiling;

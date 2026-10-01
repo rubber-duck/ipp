@@ -11,13 +11,11 @@ fn item(id: u64, z: f32) -> RenderItem {
     }
     model[14] = z;
     RenderItem {
-        #[cfg(feature = "particles")]
         particle: None,
         solid_fallback: false,
         custom_material: false,
         normals: false,
         texture_weights: false,
-        #[cfg(feature = "skeletal-animation")]
         skinned: false,
         entity: EntityId::from_bits((1 << 32) | id),
         transform: Transform::default(),
@@ -29,7 +27,6 @@ fn item(id: u64, z: f32) -> RenderItem {
             asset: 1,
             variant: 0,
         },
-        #[cfg(feature = "mesh-poses")]
         pose: None,
         texture: None,
     }
@@ -42,7 +39,6 @@ fn ordered(items: &[RenderItem], customs: &BTreeMap<EntityId, PreparedCustomMate
             item: *item,
             incarnation: 1,
             custom: None,
-            #[cfg(feature = "skeletal-animation")]
             palette: None,
         })
         .collect();
@@ -68,7 +64,6 @@ fn ordered(items: &[RenderItem], customs: &BTreeMap<EntityId, PreparedCustomMate
         &mut draws,
         &items,
         &[],
-        #[cfg(feature = "surfaces")]
         &[],
         &customs,
         &PreparedLighting::default(),
@@ -142,7 +137,6 @@ fn material_keys_observe_values_textures_and_shader_variants() {
     assert!(original != material_key(&a, Some(&b), false));
 }
 
-#[cfg(feature = "particles")]
 #[test]
 fn opaque_particle_group_depth_preserves_instanced_submission() {
     let mut items = [

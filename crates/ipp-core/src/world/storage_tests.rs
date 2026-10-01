@@ -1,4 +1,4 @@
-//! Retention assertions exercise real lifecycle allocations, including lean builds.
+//! Retention assertions exercise real lifecycle allocations, in every build.
 
 use super::*;
 use crate::components::{CustomMaterial, dynamic_properties::clone_count};

@@ -3,20 +3,24 @@ import { resolve } from "node:path";
 import test from "node:test";
 import { verifyHardwareRenderer } from "#ipp-browser-options";
 import { runBrowserEnvironment } from "../browser/environment.js";
-import { startBlender } from "./blender-environment.js";
-import { invoke, recordCapture } from "./evidence.js";
+import {
+  BLENDER_FULL_CANVAS_PIXELS,
+  BLENDER_IMAGE_MEASUREMENTS,
+  confineBlenderViewerCanvas,
+  startBlender,
+} from "./blender-environment.js";
+import { measuredInvoke, recordCapture } from "./evidence.js";
 import type * as Fixture from "./blender-fixture.js";
 
 test("Blender streamed imports overlap extraction and preserve complete images and recovery", {
   timeout: 1_800_000,
 }, async (context) => {
   const workspace = resolve(process.cwd());
-  const profile = resolve(workspace, "target/browser-build/render-expanded");
+  const profile = resolve(workspace, "target/browser-build/render");
   const build = {
-    name: "render-expanded" as const,
+    name: "render" as const,
     generatedModule: resolve(profile, "generated.js"),
     runtimeWasm: resolve(profile, "runtime.wasm"),
-    exportWasm: resolve(profile, "export.wasm"),
     contractArtifact: resolve(profile, "contract.bin"),
   };
   await runBrowserEnvironment(
@@ -24,7 +28,6 @@ test("Blender streamed imports overlap extraction and preserve complete images a
     {
       workspace,
       build,
-      mismatchBuild: build,
       operationTimeoutMs: 900_000,
       closeTimeoutMs: 10_000,
       evidenceParent: resolve("target/integration-artifacts/blender-stream"),
@@ -46,8 +49,13 @@ test("Blender streamed imports overlap extraction and preserve complete images a
           : { fixture: "tests/blender/stream_fixture.py" },
       );
       const module = `${environment.urls.origin}/target/blender-test/blender-fixture.js`;
-      const call = <T>(name: string, args: unknown[] = []) =>
-        invoke<T>(page, module, name, args);
+      const call = measuredInvoke(
+        page,
+        module,
+        environment.evidence,
+        BLENDER_IMAGE_MEASUREMENTS,
+      );
+      await confineBlenderViewerCanvas(page);
       const open = async (size: number) => {
         // Navigation releases the preceding World and socket before the next export.
         await page.goto("about:blank");
@@ -240,7 +248,11 @@ test("Blender streamed imports overlap extraction and preserve complete images a
         assert.ok(boundary.openTick > boundary.evaluatedBefore);
         assert.equal(boundary.openDifference.changedPixels, 0);
         assert.ok(boundary.completeTick > boundary.openTick);
-        assert.ok(boundary.completedDifference.changedPixels > 100);
+        // More than 100 pixels of the full 960x540 canvas, as a share of it.
+        assert.ok(
+          boundary.completedDifference.changedFraction >
+            100 / BLENDER_FULL_CANVAS_PIXELS,
+        );
         assert.equal(boundary.restoredDifference.changedPixels, 0);
         await environment.evidence.writeJson(
           "command-batch-boundary.json",

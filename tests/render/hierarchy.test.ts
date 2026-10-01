@@ -4,7 +4,7 @@ import test from "node:test";
 import { runBrowserEnvironment } from "../browser/environment.js";
 import { invoke, writeDataUrl } from "./evidence.js";
 import type { run } from "./hierarchy-fixture.js";
-for (const name of ["render", "render-expanded"] as const) {
+for (const name of ["render"] as const) {
   test(`${name}: hierarchy and terminal aim match independent affine references, picking and restored frames`, {
     timeout: 90000,
   }, async (context) => {
@@ -14,7 +14,6 @@ for (const name of ["render", "render-expanded"] as const) {
       name,
       generatedModule: resolve(directory, "generated.js"),
       runtimeWasm: resolve(directory, "runtime.wasm"),
-      exportWasm: resolve(directory, "export.wasm"),
       contractArtifact: resolve(directory, "contract.bin"),
     };
     await runBrowserEnvironment(
@@ -22,7 +21,6 @@ for (const name of ["render", "render-expanded"] as const) {
       {
         workspace,
         build,
-        mismatchBuild: build,
         operationTimeoutMs: 60000,
         evidenceParent: resolve(
           workspace,

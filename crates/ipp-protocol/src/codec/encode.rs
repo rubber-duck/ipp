@@ -321,7 +321,6 @@ fn write_response(response: &Response, w: &mut Writer) -> Result<(), ProtocolErr
             | ResponseBody::Frame { .. }
             | ResponseBody::Resources { .. }
     );
-    #[cfg(feature = "gui")]
     let unsolicited = unsolicited
         || matches!(
             response.body,
@@ -337,7 +336,6 @@ fn write_response(response: &Response, w: &mut Writer) -> Result<(), ProtocolErr
     w.u64(response.request_id)?;
     w.u64(response.tick)?;
     match &response.body {
-        #[cfg(feature = "diagnostics")]
         ResponseBody::LifecycleDiagnostics(sample) => {
             if response.tick != 0
                 || sample.endpoint.world.id == 0
@@ -357,7 +355,6 @@ fn write_response(response: &Response, w: &mut Writer) -> Result<(), ProtocolErr
             w.u64(sample.traffic.queued_bytes)?;
             w.u8(u8::from(sample.traffic.saturated))?;
         }
-        #[cfg(feature = "gui")]
         ResponseBody::GuiObservation(record) => {
             if response.tick != 0 {
                 return Err(ProtocolError::Malformed("GUI observation outer tick"));
@@ -591,11 +588,8 @@ fn write_response(response: &Response, w: &mut Writer) -> Result<(), ProtocolErr
             entities,
             resources,
             render_diagnostics,
-            #[cfg(feature = "gui")]
             gui_focus,
-            #[cfg(feature = "gui")]
             gui_pointers,
-            #[cfg(feature = "surfaces")]
             canvas,
         } => {
             w.u8(RESPONSE_INSPECT)?;
@@ -632,28 +626,22 @@ fn write_response(response: &Response, w: &mut Writer) -> Result<(), ProtocolErr
                     w.controller(controller)?;
                 }
             }
-            #[cfg(feature = "gui")]
-            {
-                w.count(gui_focus.len(), crate::INSPECTION_PAGE_RECORDS)?;
-                for record in gui_focus {
-                    w.gui_focus_record(record)?;
-                }
-                w.count(gui_pointers.len(), crate::INSPECTION_PAGE_RECORDS)?;
-                for record in gui_pointers {
-                    w.gui_pointer_record(record)?;
-                }
+            w.count(gui_focus.len(), crate::INSPECTION_PAGE_RECORDS)?;
+            for record in gui_focus {
+                w.gui_focus_record(record)?;
             }
-            #[cfg(feature = "surfaces")]
-            {
-                w.u8(u8::from(canvas.is_some()))?;
-                if let Some(record) = canvas {
-                    w.canvas_state(&record.state)?;
-                    w.u8(u8::from(record.evaluated.is_some()))?;
-                    if let Some(evaluated) = record.evaluated {
-                        w.f32(evaluated.extent[0])?;
-                        w.f32(evaluated.extent[1])?;
-                        w.u64(evaluated.tick)?;
-                    }
+            w.count(gui_pointers.len(), crate::INSPECTION_PAGE_RECORDS)?;
+            for record in gui_pointers {
+                w.gui_pointer_record(record)?;
+            }
+            w.u8(u8::from(canvas.is_some()))?;
+            if let Some(record) = canvas {
+                w.canvas_state(&record.state)?;
+                w.u8(u8::from(record.evaluated.is_some()))?;
+                if let Some(evaluated) = record.evaluated {
+                    w.f32(evaluated.extent[0])?;
+                    w.f32(evaluated.extent[1])?;
+                    w.u64(evaluated.tick)?;
                 }
             }
         }

@@ -2,7 +2,6 @@
 //! real headless Host frames. Expected rectangles are hand-computed from the layout
 //! rules documented on `GuiLayout`; hit targets are controls because raw layout
 //! entities carry no control behavior.
-#![cfg(feature = "gui")]
 
 mod support;
 
@@ -717,7 +716,6 @@ fn apply_font(panel: &mut GuiPanel, entity: EntityId, source: &str) {
         .unwrap();
 }
 
-#[cfg(feature = "diagnostics")]
 #[test]
 fn written_text_reflows_its_input_once_then_reuses_the_measurement() {
     use ipp_core::systems::gui::layout::GuiEntityLayoutWork;
@@ -835,7 +833,6 @@ fn aligned_containers_move_whole_subtrees_with_text_origins_and_hits() {
     };
     assert_eq!(style.position, [150.0, 100.0]);
     assert!(Arc::ptr_eq(&before, &after));
-    #[cfg(feature = "diagnostics")]
     assert_eq!(panel.work().reflows, 0);
 }
 
@@ -1101,7 +1098,6 @@ fn visual_lanes_move_paint_and_hits_together_without_reflow() {
     assert_eq!(hit_at(&after, [50.0, 50.0]), None);
     assert_eq!(panel.layout(control).origin, [0.0, 0.0]);
     assert!(after.paint_revision > before.paint_revision);
-    #[cfg(feature = "diagnostics")]
     assert_eq!(panel.work().reflows, 0);
 }
 
@@ -1141,7 +1137,6 @@ fn disabled_controls_skip_hits_and_re_enable_without_reflow() {
     assert!(control_hit(&enabled, control).eligible);
     assert_eq!(hit_at(&enabled, [50.0, 50.0]), Some(control));
     assert_eq!(enabled.layout_revision, disabled.layout_revision);
-    #[cfg(feature = "diagnostics")]
     assert_eq!(panel.work().reflows, 0);
 }
 
@@ -1238,7 +1233,6 @@ fn theme_and_material_edits_repaint_referencing_controls_without_reflow() {
     let second = panel.output();
     assert!(second.paint_revision > first.paint_revision);
     assert_eq!(second.layout_revision, first.layout_revision);
-    #[cfg(feature = "diagnostics")]
     assert_eq!(panel.work().reflows, 0);
 
     // Editing a theme no control references leaves paint untouched.
@@ -1291,7 +1285,6 @@ fn theme_and_material_edits_repaint_referencing_controls_without_reflow() {
         let repainted = panel.output();
         assert!(repainted.paint_revision > revision, "{property:?}");
         assert_eq!(repainted.layout_revision, first.layout_revision);
-        #[cfg(feature = "diagnostics")]
         assert_eq!(panel.work().reflows, 0);
         revision = repainted.paint_revision;
     }

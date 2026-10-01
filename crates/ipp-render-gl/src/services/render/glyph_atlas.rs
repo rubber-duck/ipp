@@ -37,7 +37,6 @@ use crate::{RenderDevice, RenderError};
 pub const ATLAS_PAGE_SIZE: u32 = 512;
 
 /// Bytes per atlas texel: pages store single-channel R8 coverage.
-#[cfg(any(test, feature = "diagnostics"))]
 pub const ATLAS_BYTES_PER_TEXEL: usize = 1;
 
 /// Glyph coverage entries a frame populates whenever that many are missing, however
@@ -86,7 +85,7 @@ const MAX_BATCH_GLYPHS: usize = 256;
 ///
 /// Production uses [`Self::DEFAULT`]: GL exposes no memory size, and a 512-texel page
 /// fits every WebGL 2 and GLES 3 texture limit, so the page budget is a documented
-/// heuristic rather than a device query. Hosts do not configure it; `diagnostics`
+/// heuristic rather than a device query. Hosts do not configure it; `instrumentation`
 /// builds may override it for tests.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GlyphAtlasLimits {
@@ -313,9 +312,7 @@ pub struct GlyphAtlas<D: RenderDevice> {
     residency_generation: u64,
     needs_reclaim: bool,
     /// Pages holding a texture, maintained where textures are created and released.
-    #[cfg(any(test, feature = "diagnostics"))]
     resident_pages: u32,
-    #[cfg(any(test, feature = "diagnostics"))]
     retired_pages: u32,
     population_backoff: BTreeMap<GlyphKey, GlyphPopulationBackoff>,
 }
@@ -333,9 +330,7 @@ impl<D: RenderDevice> GlyphAtlas<D> {
             frame: 0,
             residency_generation: 0,
             needs_reclaim: false,
-            #[cfg(any(test, feature = "diagnostics"))]
             resident_pages: 0,
-            #[cfg(any(test, feature = "diagnostics"))]
             retired_pages: 0,
             population_backoff: BTreeMap::new(),
         }
@@ -343,7 +338,7 @@ impl<D: RenderDevice> GlyphAtlas<D> {
 
     /// Replace the renderer-owned atlas bounds for testing. A lowered page budget
     /// applies at the next publication.
-    #[cfg(any(test, feature = "diagnostics"))]
+    #[cfg(any(test, feature = "instrumentation"))]
     pub fn set_limits(&mut self, limits: GlyphAtlasLimits) {
         self.limits = GlyphAtlasLimits {
             max_pages: limits.max_pages.max(1),
@@ -359,10 +354,7 @@ impl<D: RenderDevice> GlyphAtlas<D> {
                 device.delete_glyph_atlas_page(handle);
             }
         }
-        #[cfg(any(test, feature = "diagnostics"))]
-        {
-            self.resident_pages = 0;
-        }
+        self.resident_pages = 0;
         self.entries.clear();
         self.demand.clear();
         self.population_backoff.clear();
@@ -381,10 +373,7 @@ impl<D: RenderDevice> GlyphAtlas<D> {
                 device.delete_glyph_atlas_page(handle);
             }
         }
-        #[cfg(any(test, feature = "diagnostics"))]
-        {
-            self.resident_pages = 0;
-        }
+        self.resident_pages = 0;
         for slot in self.entries.values_mut() {
             slot.populated = false;
         }
@@ -519,34 +508,25 @@ impl<D: RenderDevice> GlyphAtlas<D> {
 
         self.entries.retain(|_, slot| slot.entry.page_index != id);
         self.residency_generation = self.residency_generation.wrapping_add(1);
-        #[cfg(any(test, feature = "diagnostics"))]
-        {
-            self.retired_pages += 1;
-        }
+        self.retired_pages += 1;
         if let Some(handle) = page.handle {
-            #[cfg(any(test, feature = "diagnostics"))]
-            {
-                self.resident_pages -= 1;
-            }
+            self.resident_pages -= 1;
             self.device.borrow_mut().delete_glyph_atlas_page(handle);
         }
     }
 
     /// Number of atlas pages holding a resident texture.
-    #[cfg(any(test, feature = "diagnostics"))]
     pub fn page_count(&self) -> u32 {
         self.resident_pages
     }
 
     /// Total resident bytes occupied by atlas page textures (R8 coverage).
-    #[cfg(any(test, feature = "diagnostics"))]
     pub fn resident_bytes(&self) -> usize {
         self.page_count() as usize
             * (ATLAS_PAGE_SIZE as usize * ATLAS_PAGE_SIZE as usize * ATLAS_BYTES_PER_TEXEL)
     }
 
     /// Pages retired since the last call, by idle expiry, pressure or lost demand.
-    #[cfg(any(test, feature = "diagnostics"))]
     pub fn take_retired_pages(&mut self) -> u32 {
         std::mem::take(&mut self.retired_pages)
     }
@@ -675,10 +655,7 @@ impl<D: RenderDevice> GlyphAtlas<D> {
                     .device
                     .borrow_mut()
                     .create_glyph_atlas_page(ATLAS_PAGE_SIZE, ATLAS_PAGE_SIZE)?;
-                #[cfg(any(test, feature = "diagnostics"))]
-                {
-                    self.resident_pages += 1;
-                }
+                self.resident_pages += 1;
                 let index = self.next_page;
                 self.next_page += 1;
                 let page = self
@@ -737,10 +714,7 @@ impl<D: RenderDevice> GlyphAtlas<D> {
                     .borrow_mut()
                     .create_glyph_atlas_page(ATLAS_PAGE_SIZE, ATLAS_PAGE_SIZE)?,
             );
-            #[cfg(any(test, feature = "diagnostics"))]
-            {
-                self.resident_pages += 1;
-            }
+            self.resident_pages += 1;
         }
         Ok(())
     }
@@ -780,7 +754,7 @@ impl GlyphPopulationBudget {
 
     /// Replace the time budget; zero populates only the floor, and an infinite or
     /// non-finite budget populates up to the cap.
-    #[cfg(any(test, feature = "diagnostics"))]
+    #[cfg(any(test, feature = "instrumentation"))]
     pub fn set_budget_ms(&mut self, budget_ms: f64) {
         self.budget_ms = if budget_ms.is_nan() {
             f64::INFINITY
@@ -866,7 +840,6 @@ impl GlyphFrameWork {
     }
 
     /// Report this frame's work in the submission statistics.
-    #[cfg(any(test, feature = "diagnostics"))]
     pub fn publish(&self, statistics: &mut crate::RenderStatistics) {
         statistics.glyph_misses = self.misses;
         statistics.glyph_populates = self.populates;
@@ -1312,7 +1285,6 @@ struct PageBucket {
 /// Quads join the last batch of their page unless a later batch holds an overlapping quad
 /// of another colour. Same-colour coverage composites identically in either order, so a
 /// run of one colour needs one batch per page however its pages interleave.
-#[cfg_attr(not(any(test, feature = "diagnostics")), allow(unused_variables))]
 fn rebuild_batches<D: RenderDevice>(
     atlas: &GlyphAtlas<D>,
     record: &mut RetainedGlyphRun,
@@ -1425,10 +1397,7 @@ fn rebuild_batches<D: RenderDevice>(
             page_index: bucket.page_index,
             revision: *revision,
         });
-        #[cfg(any(test, feature = "diagnostics"))]
-        {
-            stats.statistics.gui_rebuilds += 1;
-        }
+        stats.statistics.gui_rebuilds += 1;
     }
 
     record.built_hash = Some(record.geometry_hash);

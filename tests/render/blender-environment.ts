@@ -2,7 +2,43 @@ import { spawn } from "node:child_process";
 import { access, readFile, rename, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import type { Page } from "playwright";
 import type { BrowserEnvironmentContext } from "../browser/environment.js";
+
+/**
+ * Share of the Blender viewer's canvas, per axis, that scenarios render into.
+ *
+ * Every rasterized and captured pixel costs CPU on a software renderer. At the
+ * default 1280x720 viewport the viewer presents a 960-pixel-wide canvas whose
+ * height its stylesheet limits to 75vh (960x540); scenarios render half of
+ * each axis (480x270) and state pixel thresholds as shares of the capture.
+ */
+export const BLENDER_CANVAS_SHARE = 0.5;
+
+/** Pixels of the viewer canvas at full size, the reference for thresholds. */
+export const BLENDER_FULL_CANVAS_PIXELS = 960 * 540;
+
+/**
+ * Confine the viewer's canvas to `share` of its presented size on every
+ * document the page loads. The canvas keeps following its CSS size and
+ * density; only its upper bounds change.
+ */
+export async function confineBlenderViewerCanvas(
+  page: Page,
+  share = BLENDER_CANVAS_SHARE,
+) {
+  await page.addInitScript((share) => {
+    const style = document.createElement("style");
+    style.textContent = `main canvas { max-width: ${960 * share}px; max-height: ${75 * share}vh; }`;
+    const install = () => document.head.append(style);
+    if (document.head) install();
+    else document.addEventListener("DOMContentLoaded", install, { once: true });
+  }, share);
+}
+
+/** Viewer fixture exports whose results are recorded as image measurements. */
+export const BLENDER_IMAGE_MEASUREMENTS =
+  /^(compare|colorCounts|captureCommandBatchBoundary)$/;
 
 export interface BlenderReadiness {
   origin: string;

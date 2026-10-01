@@ -1,4 +1,5 @@
-import type { RenderStatisticsSnapshot } from "@ipp/client";
+import type { RenderStatisticsSnapshot } from "@ipp/client/diagnostics";
+import { renderDiagnostics } from "../../packages/ipp-client/src/diagnostics.js";
 import {
   nativePresentationTransport,
   presentationTesting,
@@ -91,7 +92,7 @@ async function resizePresentation(
 }
 
 function rendererDiagnostics() {
-  const diagnostics = host.renderDiagnostics;
+  const diagnostics = renderDiagnostics(host);
   if (!diagnostics) throw new Error("Render diagnostics are unavailable");
   return diagnostics;
 }

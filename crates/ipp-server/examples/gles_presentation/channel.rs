@@ -1,4 +1,5 @@
-//! Diagnostics-only loopback channel. Frames and pixels use the common Host protocol.
+//! Loopback channel for renderer statistics and testing controls. Frames and
+//! pixels use the common Host protocol.
 
 use std::io;
 use std::net::{TcpListener, TcpStream};
@@ -13,12 +14,22 @@ const MAX_REQUEST_BYTES: usize = 9;
 /// Idle wait between socket reads, which bounds output latency.
 const POLL_INTERVAL: Duration = Duration::from_millis(1);
 
+/// Whether this build honours [`PresentationTesting`] controls.
+const INSTRUMENTATION: bool = cfg!(feature = "instrumentation");
+
 /// A decoded client request, applied by the Host at its next frame.
 #[derive(Debug, PartialEq)]
 pub(super) enum PresentationControl {
     Statistics {
         id: u32,
     },
+    Testing(PresentationTesting),
+}
+
+/// Controls of `@ipp/client/testing`; only an `instrumentation` build applies them.
+#[derive(Debug, PartialEq)]
+#[cfg_attr(not(feature = "instrumentation"), allow(dead_code))]
+pub(super) enum PresentationTesting {
     GlyphAtlasLimits {
         max_pages: u32,
         idle_page_frames: u32,
@@ -68,26 +79,32 @@ pub(super) fn decode(bytes: &[u8]) -> Result<PresentationControl, String> {
             5,
         ),
         Some(4) => (
-            PresentationControl::GlyphAtlasLimits {
+            PresentationControl::Testing(PresentationTesting::GlyphAtlasLimits {
                 max_pages: u32_at(1)?,
                 idle_page_frames: u32_at(5)?,
-            },
+            }),
             9,
         ),
         Some(5) => (
-            PresentationControl::SurfaceCacheBudget {
+            PresentationControl::Testing(PresentationTesting::SurfaceCacheBudget {
                 bytes: u32_at(1)?,
-            },
+            }),
             5,
         ),
         Some(6) => (
-            PresentationControl::ExhaustiveDrawChecks {
+            PresentationControl::Testing(PresentationTesting::ExhaustiveDrawChecks {
                 enabled: flag_at(1)?,
-            },
+            }),
             2,
         ),
-        Some(7) => (PresentationControl::ContextLoss, 1),
-        Some(8) => (PresentationControl::ContextRestore, 1),
+        Some(7) => (
+            PresentationControl::Testing(PresentationTesting::ContextLoss),
+            1,
+        ),
+        Some(8) => (
+            PresentationControl::Testing(PresentationTesting::ContextRestore),
+            1,
+        ),
         _ => return Err("unknown presentation request".to_owned()),
     };
     if bytes.len() != length {
@@ -184,6 +201,9 @@ fn client(
         .get_ref()
         .set_read_timeout(Some(POLL_INTERVAL))
         .map_err(|error| error.to_string())?;
+    // The build configuration comes first, so the client knows before any
+    // call whether this host honours testing controls.
+    send(&mut socket, vec![2, u8::from(INSTRUMENTATION)])?;
     if let Some(bytes) = limits.clone() {
         send(&mut socket, bytes)?;
     }

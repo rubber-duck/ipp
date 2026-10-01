@@ -1,10 +1,14 @@
 // Focused ownership, codec and correlation tests; no runtime/render integration claim.
 import assert from "node:assert/strict";
 import test from "node:test";
-import { generateClient, replyToHostCreate } from "./generated-client.mjs";
+import {
+  generateClient,
+  hostAnnouncement,
+  replyToHostCreate,
+} from "./generated-client.mjs";
 
-const { codec, source } = await generateClient("mesh", []);
-const minimal = await generateClient("mesh-minimal");
+const generated = await generateClient("mesh");
+const { codec, source } = generated;
 const key = { kind: 1, asset: 0x7fffffffffffffffn, variant: 3 };
 const stats = { sourceBytes: 664, residentBytes: 648 };
 
@@ -24,9 +28,7 @@ async function connect({
       if (replyToHostCreate(bytes, events)) return;
       sent.push([bytes]);
       if (sent.length === 1) {
-        const reply = new Uint8Array(24);
-        reply.set(bytes);
-        new DataView(reply.buffer).setBigUint64(16, 7n, true);
+        const reply = hostAnnouncement(selected);
         events.message(reply);
       }
     },
@@ -44,48 +46,12 @@ async function connect({
 }
 
 test("baseline generation exposes standard scene descriptors and codecs", () => {
-  assert.deepEqual(codec.CAPABILITIES, {
-    snapshot: true,
-    animation: true,
-    assets: true,
-    spatial: true,
-    textures: true,
-    builtinAssets: false,
-    picking: true,
-    debugGeometry: true,
-    pbr: true,
-    shadows: false,
-    skeletalAnimation: false,
-    meshPoses: false,
-    particles: false,
-    surfaces: false,
-    gui: false,
-  });
-  assert.deepEqual(minimal.codec.CAPABILITIES, {
-    snapshot: true,
-    animation: true,
-    assets: true,
-    spatial: true,
-    textures: true,
-    builtinAssets: false,
-    picking: true,
-    debugGeometry: true,
-    pbr: true,
-    shadows: false,
-    skeletalAnimation: false,
-    meshPoses: false,
-    particles: false,
-    surfaces: false,
-    gui: false,
-  });
   for (const name of ["Transform", "UnlitMaterial", "MeshInstance"])
-    assert.equal(name in minimal.codec, true);
+    assert.equal(name in codec, true);
   for (const method of ["registerAsset", "createAsset", "onResourceChange"]) {
     assert.equal(method in codec.IppClient.prototype, true);
-    assert.equal(method in minimal.codec.IppClient.prototype, true);
   }
-  for (const text of ["REQUEST_UPLOAD_ASSET"])
-    assert.equal(minimal.source.includes(text), false, text);
+  assert.equal(source.includes("REQUEST_UPLOAD_ASSET"), false);
   for (const name of [
     "VALUE_F32",
     "VALUE_ENTITY",
@@ -94,9 +60,8 @@ test("baseline generation exposes standard scene descriptors and codecs", () => 
     "VALUE_STRING",
     "VALUE_BYTES",
   ])
-    assert.equal(name in minimal.codec.WIRE, true, name);
-  assert.deepEqual(minimal.manifest.WIRE_LAYOUTS["value-bytes"], {
-    capability: "base",
+    assert.equal(name in codec.WIRE, true, name);
+  assert.deepEqual(generated.manifest.WIRE_LAYOUTS["value-bytes"], {
     fields: [
       { name: "tag", encoding: "variant", limit: 0, target: "value" },
       { name: "value", encoding: "bytes", limit: 65536, target: "" },
@@ -132,10 +97,6 @@ test("baseline generation exposes standard scene descriptors and codecs", () => 
     body: { kind: "submitBatch", batchId: 1, last: true, operations: [mesh] },
   };
   assert.ok(codec.encodeRequest(request).length > 0);
-  assert.ok(
-    minimal.codec.encodeRequest(request).length > 0,
-    "baseline field codecs use the same component contract",
-  );
   for (const value of [-1, 0x1_00000000, 1.5, NaN]) {
     request.body.operations = [
       codec.MeshInstance.setVariant(codec.Entity.alias(1), value),
@@ -201,6 +162,9 @@ test("inspection decodes typed scene fields by target offset without losing u64 
   u32(0);
   u32(0);
   u32(0); // Baseline animation controller snapshots.
+  u32(0); // GUI focus records.
+  u32(0); // GUI pointer records.
+  u8(0); // No Canvas state.
   const response = codec.decodeResponse(bytes.slice(0, at), 7n);
   assert.equal(response.body.kind, "inspect");
   const entity = response.body.entities[0];
@@ -340,6 +304,9 @@ test("resource inspection preserves typed status, stable handles and bounds", ()
       string(diagnostic.reason);
     }
     u32(0); // Baseline animation controller snapshots.
+    u32(0); // GUI focus records.
+    u32(0); // GUI pointer records.
+    u8(0); // No Canvas state.
     return bytes.slice(0, at);
   }
   const diagnostics = [{ entity: 0x100000001n, reason: "InvalidAsset" }];
@@ -349,12 +316,11 @@ test("resource inspection preserves typed status, stable handles and bounds", ()
     diagnostics,
   );
   assert.deepEqual(
-    minimal.codec.decodeResponse(encode([]), 7n).body.renderDiagnostics,
+    codec.decodeResponse(encode([]), 7n).body.renderDiagnostics,
     [],
   );
   assert.deepEqual(
-    minimal.codec.decodeResponse(encode([], diagnostics), 7n).body
-      .renderDiagnostics,
+    codec.decodeResponse(encode([], diagnostics), 7n).body.renderDiagnostics,
     diagnostics,
   );
   assert.throws(() =>
@@ -380,14 +346,8 @@ test("resource inspection preserves typed status, stable handles and bounds", ()
     () => codec.decodeResponse(encode([records[0], records[0]]), 7n),
     /resource identity/,
   );
-  assert.deepEqual(
-    minimal.codec.decodeResponse(bytes, 7n).body.resources,
-    records,
-  );
-  assert.deepEqual(
-    minimal.codec.decodeResponse(encode([]), 7n).body.resources,
-    [],
-  );
+  assert.deepEqual(codec.decodeResponse(bytes, 7n).body.resources, records);
+  assert.deepEqual(codec.decodeResponse(encode([]), 7n).body.resources, []);
   const oversized = encode([]);
   new DataView(oversized.buffer).setUint32(45, 257, true);
   assert.throws(() => codec.decodeResponse(oversized, 7n));
@@ -396,8 +356,8 @@ test("resource inspection preserves typed status, stable handles and bounds", ()
 test("resource event decoder validates event bounds, sessions and baseline resource support", async () => {
   assert.equal(codec.WIRE.RESPONSE_RESOURCES, 9);
   for (const symbol of ["RESPONSE_RESOURCES", "readResources"])
-    assert.equal(minimal.source.includes(symbol), true);
-  assert.equal(codec.SCHEMA_HASH, minimal.codec.SCHEMA_HASH);
+    assert.equal(source.includes(symbol), true);
+  assert.equal(codec.SCHEMA_HASH, codec.SCHEMA_HASH);
   const records = Array.from({ length: 16 }, (_, i) => ({
     ...failedResource,
     id: BigInt(i + 1),
@@ -429,10 +389,10 @@ test("resource event decoder validates event bounds, sessions and baseline resou
   );
   assert.throws(() => codec.decodeResponse(bytes, 8n));
   assert.deepEqual(
-    minimal.codec.decodeResponse(bytes, 7n),
+    codec.decodeResponse(bytes, 7n),
     codec.decodeResponse(bytes, 7n),
   );
-  const textures = await generateClient("resource-textures", []);
+  const textures = await generateClient("resource-textures");
   const texture = { ...failedResource, kind: 2 };
   assert.deepEqual(
     textures.codec.decodeResponse(resourceEvent([texture]), 7n).body.resources,
@@ -495,7 +455,7 @@ test("resource events log failures once without polling and isolate optional lis
       assert.equal((await waiting).tick, tick);
     }
     assert.equal(logs.length, 1);
-    assert.equal(h.sent.length, 1); // Only bootstrap; no application polling.
+    assert.equal(h.sent.length, 1); // Only the hello; no application polling.
     assert.deepEqual(seen, [failedResource, ready]);
     await h.client.close();
     h.emit(resourceEvent([{ ...failedResource, id: 3n }], { tick: 6n }));

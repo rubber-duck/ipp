@@ -299,7 +299,7 @@ impl LightSelectionState {
         frustum: &[ipp_core::systems::geometry::GeometryPlane; 6],
         shadow_capacity: usize,
     ) -> Result<PreparedLighting, RenderError> {
-        #[cfg(feature = "profiling")]
+        #[cfg(feature = "instrumentation")]
         let _allocation_scope = ipp_core::profiling::AllocationScope::new(225, "gl.light-prepare");
 
         let mut candidates = std::mem::take(&mut self.candidates);
@@ -336,7 +336,7 @@ impl LightSelectionState {
         self.frustums.push(*frustum);
         self.prepared.shadow_queries.clear();
         for (index, &(entity, model, light)) in candidates.iter().enumerate() {
-            if cfg!(feature = "shadows") && light.cast_shadows {
+            if light.cast_shadows {
                 let packed = self.packed[index]
                     .get_or_insert_with(|| PreparedLight::prepare(entity.entity, model, light));
                 // Preparation errors are observed only if a receiver selects this light.

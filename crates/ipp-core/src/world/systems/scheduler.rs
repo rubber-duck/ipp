@@ -489,7 +489,7 @@ impl SystemFactories {
 pub(in crate::world) struct SystemInstance {
     pub id: SystemId,
     pub system: Box<dyn System>,
-    #[cfg(feature = "profiling")]
+    #[cfg(feature = "instrumentation")]
     pub profile_slot: Option<usize>,
 }
 

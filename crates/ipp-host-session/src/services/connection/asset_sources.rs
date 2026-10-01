@@ -33,7 +33,16 @@ impl<P: HostServices> Host<P> {
                 .try_into()
                 .unwrap(),
         );
-        Self::require_session(state, session)?;
+        if !state.holds_session(session)? {
+            ipp_core::diagnostic!(
+                Debug,
+                "[IPP {}] session.stale connection={} session={}",
+                P::NAME,
+                connection,
+                session
+            );
+            return Ok(());
+        }
         if state.admitted_requests(&self.sessions) >= crate::MAX_PENDING {
             return Err("connection congestion: asset source reply capacity exhausted".into());
         }

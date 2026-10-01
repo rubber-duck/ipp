@@ -7,14 +7,11 @@ pub(crate) mod frame_stats;
 pub(crate) mod selection;
 pub(crate) mod world;
 
-#[cfg(feature = "surfaces")]
 #[allow(dead_code)]
 pub(crate) mod error_checks;
 pub(crate) mod shapes;
-#[cfg(feature = "surfaces")]
 #[allow(dead_code)]
 pub(crate) mod surface_cache_target;
-#[cfg(feature = "surfaces")]
 #[allow(dead_code)]
 pub(crate) mod surfaces;
 pub(crate) mod textures;
@@ -22,17 +19,14 @@ pub(crate) mod textures;
 pub(crate) mod debug_geometry;
 
 pub(crate) mod lighting;
-#[cfg(feature = "skeletal-animation")]
 #[allow(dead_code)]
 pub(crate) mod skinning;
 
-#[cfg(feature = "mesh-poses")]
 #[allow(dead_code)]
 pub(crate) mod mesh_poses;
 
 #[allow(dead_code)]
 pub(crate) mod custom_materials;
 
-#[cfg(feature = "particles")]
 #[allow(dead_code)]
 pub(crate) mod particles;

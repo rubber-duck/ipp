@@ -5,9 +5,6 @@ export function encodeAnimationClip(
   if (!Number.isFinite(clip.duration) || clip.duration <= 0)
     fail("animation duration");
   if (!clip.tracks.length) fail("animation track count");
-  const poses = clip.tracks.some((track) => track.joints !== undefined);
-  if (poses && !CAPABILITIES.skeletalAnimation)
-    fail("skeleton animation unavailable");
   const w = new Writer(Number.MAX_SAFE_INTEGER);
   for (const byte of [73, 80, 80, 65, 4, 0, 0, 0]) w.u8(byte);
   w.f64(clip.duration);
@@ -62,7 +59,6 @@ export function encodeAnimationClip(
         for (const slot of [v.value.parent, v.value.before])
           w.u32(slot === null ? 0xffff_ffff : uint(slot, 0xffff_fffe));
         break;
-      // #if skeletal-animation
       case "pose":
         if (!v.value.length || v.value.length > MAX_JOINTS)
           fail("animation pose count");
@@ -70,7 +66,6 @@ export function encodeAnimationClip(
         w.u32(v.value.length);
         for (const joint of v.value) writeJointTransform(w, joint);
         break;
-      // #endif
       default:
         fail("animation value kind");
     }
@@ -95,8 +90,6 @@ export function encodeAnimationClip(
       w.u16(track.property.component);
       w.string(track.property.name, 0xffff_ffff);
     } else if (track.joints !== undefined) {
-      if (!CAPABILITIES.skeletalAnimation) fail("animation joint target");
-      // #if skeletal-animation
       if (
         !track.joints.length ||
         track.joints.length > MAX_JOINTS ||
@@ -111,7 +104,6 @@ export function encodeAnimationClip(
         previous = joint;
         w.u32(joint);
       }
-      // #endif
     } else {
       const property = track.property;
       if (!property || property.offsets === undefined)

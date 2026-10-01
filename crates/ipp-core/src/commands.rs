@@ -211,7 +211,6 @@ pub enum Command {
     /// ([`ErrorReason::InvalidValue`]). Value actions write the control's fields
     /// like [`Command::SetField`]; press, submit, focus and blur record a
     /// momentary effect that the GUI System publishes in its frame phase.
-    #[cfg(feature = "gui")]
     GuiAction {
         /// Exact control lifetime the client observed.
         target: GuiActionTarget,
@@ -228,7 +227,6 @@ pub enum Command {
 
 /// The control a [`Command::GuiAction`] names: an entity and the exact
 /// lifetime of its control component.
-#[cfg(feature = "gui")]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GuiActionTarget {
     /// Control entity, by handle, batch alias or symbolic identifier.
@@ -328,7 +326,6 @@ impl Command {
                 name,
                 ..
             } => name.capacity().checked_add(entity_ref_heap_bytes(entity)),
-            #[cfg(feature = "gui")]
             Self::GuiAction {
                 target,
                 action,
@@ -446,7 +443,6 @@ impl Command {
                 field(&mut write.value, visit)?;
                 field(expected, visit)
             }
-            #[cfg(feature = "gui")]
             Self::GuiAction {
                 target,
                 ..

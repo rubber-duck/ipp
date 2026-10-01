@@ -64,9 +64,7 @@ fn ready() -> Host<CameraPlatform> {
     let mut host = Host::new().unwrap();
     host.open_session(7, crate::host::TEST_CAMERA_SYSTEMS)
         .unwrap();
-    host.test_session()
-        .receive(&ipp_protocol::bootstrap())
-        .unwrap();
+    host.test_session().receive(&ipp_protocol::HELLO).unwrap();
     host.test_session().take_response().unwrap();
     host
 }
@@ -435,9 +433,7 @@ fn failed_frame_completes_queries_once_without_losing_queued_batches_or_healthy_
         .concat(),
     )
     .unwrap();
-    host.test_session()
-        .receive(&ipp_protocol::bootstrap())
-        .unwrap();
+    host.test_session().receive(&ipp_protocol::HELLO).unwrap();
     host.test_session().take_response().unwrap();
     let output = camera(&mut host, 0.0);
     host.runtime_mut()
@@ -451,7 +447,7 @@ fn failed_frame_completes_queries_once_without_losing_queued_batches_or_healthy_
         .unwrap();
     host.session_mut(8)
         .unwrap()
-        .receive(&ipp_protocol::bootstrap())
+        .receive(&ipp_protocol::HELLO)
         .unwrap();
     host.session_mut(8).unwrap().take_response().unwrap();
     let create = |session: u64, request: u64| {
@@ -541,4 +537,64 @@ fn failed_frame_completes_queries_once_without_losing_queued_batches_or_healthy_
     );
     assert!(!session.session.prepared);
     assert!(session.session.request_origins.is_empty());
+}
+
+#[test]
+fn view_queries_reject_in_a_world_without_camera_and_geometry_systems() {
+    let mut host = Host::<CameraPlatform>::new().unwrap();
+    let world = host
+        .open_session(7, &[ipp_core::systems::hierarchy::HierarchySystem::ID])
+        .unwrap();
+    host.test_session().receive(&ipp_protocol::HELLO).unwrap();
+    host.test_session().take_response().unwrap();
+
+    // Every build decodes view queries; the World's System selection refuses them.
+    let world = host.runtime().world_ref(world).unwrap();
+    let query = |tag: u8, request_id: u64| {
+        let mut bytes = 7u64.to_le_bytes().to_vec();
+        bytes.extend(request_id.to_le_bytes());
+        bytes.extend([tag, 0]);
+        bytes.extend(world.id().0.to_le_bytes());
+        bytes.extend(world.incarnation().to_le_bytes());
+        bytes.push(1);
+        bytes.extend(1u64.to_le_bytes());
+        bytes.extend(1u64.to_le_bytes());
+        bytes.extend(viewport().width.to_le_bytes());
+        bytes.extend(viewport().height.to_le_bytes());
+        bytes.extend(viewport().device_pixel_ratio.to_le_bytes());
+        bytes.extend(0.5f32.to_le_bytes());
+        bytes.extend(0.5f32.to_le_bytes());
+        bytes
+    };
+    let mut pick = query(9, 71);
+    pick.push(0);
+    let mut projection = query(12, 72);
+    for value in [0.0f32, 0.0, 0.0, 0.0, 0.0, 1.0] {
+        projection.extend(value.to_le_bytes());
+    }
+    host.test_session().receive(&pick).unwrap();
+    host.test_session().receive(&projection).unwrap();
+    host.tick(0.0).unwrap();
+
+    let tick = host.test_session().world().tick();
+    let replies = responses(&mut host);
+    for (request_id, message) in [
+        (71, "Unsupported camera/geometry query for this World"),
+        (72, "Unsupported camera projection for this World"),
+    ] {
+        assert_eq!(
+            &*replies[&request_id],
+            ipp_protocol::encode_response(&Response {
+                session: 7,
+                request_id,
+                tick,
+                body: ResponseBody::Error {
+                    code: 1,
+                    message: message.into(),
+                },
+            })
+            .unwrap()
+            .as_slice()
+        );
+    }
 }

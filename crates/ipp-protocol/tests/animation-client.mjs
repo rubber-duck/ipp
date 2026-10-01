@@ -6,26 +6,19 @@ import {
   manifestVariant,
 } from "./generated-client.mjs";
 
-const client = await generateClient("animation", []);
+const client = await generateClient("animation");
 const { codec, manifest } = client;
-const { codec: lean } = await generateClient("animation-baseline");
 const layout = (name, values) => encodeManifestLayout(client, name, values);
 
-test("baseline contracts expose property animation and omit skeletal codecs", () => {
-  assert.equal(codec.CAPABILITIES.animation, true);
-  assert.equal(codec.CAPABILITIES.spatial, true);
-  assert.equal(codec.CAPABILITIES.assets, true);
-  assert.equal("Skeleton" in codec.components, false);
+test("contracts expose property animation", () => {
   assert.equal("Transform" in codec.components, true);
   assert.equal("request-upload-asset" in manifest.WIRE_LAYOUTS, false);
   assert.equal("uploadAsset" in codec.IppClient.prototype, false);
   assert.equal(manifest.ASSET_FORMATS.ASSET_ANIMATION.typeId, 10);
-  assert.equal("encodeAnimationClip" in lean, true);
-  assert.equal("playback" in lean.IppClient.prototype, true);
-  assert.equal("registerAsset" in lean.IppClient.prototype, true);
-  assert.equal("REQUEST_PLAYBACK" in lean.WIRE, true);
-  assert.equal("ANIMATION_TARGET_JOINTS" in lean.WIRE, false);
-  assert.equal("animation-target-joints" in manifest.WIRE_LAYOUTS, false);
+  assert.equal("encodeAnimationClip" in codec, true);
+  assert.equal("playback" in codec.IppClient.prototype, true);
+  assert.equal("registerAsset" in codec.IppClient.prototype, true);
+  assert.equal("REQUEST_PLAYBACK" in codec.WIRE, true);
 });
 
 test("every playback control agrees with the wire manifest and reserves identity zero", () => {
@@ -140,6 +133,9 @@ test("playback events and controller clocks decode from manifest bytes with stri
       request_id: 2n,
       tick: 50n,
       tag: manifestVariant(client, "RESPONSE_INSPECT"),
+      gui_focus: [],
+      gui_pointers: [],
+      canvas: null,
       time: 10,
       entities: [],
       resources: [],
@@ -439,6 +435,9 @@ test("controller descriptions encode indexed multi-entity drivers and correlated
     request_id: 19n,
     tick: 50n,
     tag: manifestVariant(client, "RESPONSE_INSPECT"),
+    gui_focus: [],
+    gui_pointers: [],
+    canvas: null,
     time: 10,
     entities: [],
     resources: [],
@@ -535,12 +534,12 @@ test("controller descriptions encode indexed multi-entity drivers and correlated
         body: { kind: "animationController", command },
       }),
     );
-  assert.equal("createAnimationController" in lean.IppClient.prototype, true);
+  assert.equal("createAnimationController" in codec.IppClient.prototype, true);
   assert.equal(
-    "transitionAnimationController" in lean.IppClient.prototype,
+    "transitionAnimationController" in codec.IppClient.prototype,
     true,
   );
-  assert.equal("REQUEST_CONTROLLER_CREATE" in lean.WIRE, true);
+  assert.equal("REQUEST_CONTROLLER_CREATE" in codec.WIRE, true);
 });
 
 test("structural clip slots reserve the null sentinel and reject invalid numbers", () => {
@@ -669,6 +668,9 @@ test("structural drivers preserve explicit empty and large clip-local binding ta
       request_id: 4n,
       tick: 5n,
       tag: manifestVariant(client, "RESPONSE_INSPECT"),
+      gui_focus: [],
+      gui_pointers: [],
+      canvas: null,
       time: 0,
       next: 0n,
       entities: [],

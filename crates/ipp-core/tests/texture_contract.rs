@@ -1,45 +1,10 @@
-//! Check the selected core capability contract independently of workspace unification.
+//! Check the core contract version and baseline texture registration.
 
 #[test]
-fn baseline_texture_registration_and_optional_feature_contract() {
+fn baseline_texture_registration_and_contract_version() {
     let mut bytes = vec![];
     ipp_core::components::registry::write_contract(&mut bytes);
-    assert_eq!(u16::from_le_bytes(bytes[..2].try_into().unwrap()), 6);
-
-    let mut cursor = 2;
-    for _ in 0..2 {
-        let length = u32::from_le_bytes(bytes[cursor..cursor + 4].try_into().unwrap()) as usize;
-        cursor += 4 + length;
-    }
-    cursor += 1;
-    let feature_count = bytes[cursor] as usize;
-    cursor += 1;
-    let mut features = std::collections::BTreeMap::new();
-    for _ in 0..feature_count {
-        let id = bytes[cursor];
-        let enabled = bytes[cursor + 1] == 1;
-        cursor += 2;
-        let length = u32::from_le_bytes(bytes[cursor..cursor + 4].try_into().unwrap()) as usize;
-        cursor += 4;
-        let name = std::str::from_utf8(&bytes[cursor..cursor + length]).unwrap();
-        cursor += length;
-        assert!(features.insert(name, (id, enabled)).is_none());
-    }
-    assert_eq!(features.len(), 7);
-    assert_eq!(features["surfaces"], (18, cfg!(feature = "surfaces")));
-    assert_eq!(features["gui"], (19, cfg!(feature = "gui")));
-    assert_eq!(features["particles"], (17, cfg!(feature = "particles")));
-    assert_eq!(
-        features["skeletal-animation"],
-        (16, cfg!(feature = "skeletal-animation"))
-    );
-    assert!(!features.contains_key("textures"));
-    assert!(!features.contains_key("skeleton"));
-    assert!(!features.contains_key("skinning"));
-    assert_eq!(
-        features["builtin-assets"],
-        (11, cfg!(feature = "builtin-assets"))
-    );
+    assert_eq!(u16::from_le_bytes(bytes[..2].try_into().unwrap()), 7);
 
     {
         use ipp_core::{ComponentValue, components::UnlitTexture, components::schema::FieldValue};

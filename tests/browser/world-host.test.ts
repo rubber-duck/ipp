@@ -1,5 +1,7 @@
+import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import test from "node:test";
+import { contractClientsServed } from "../integration/assertions.js";
 import { worldHostCases } from "../integration/world-host-cases.js";
 import {
   runBrowserEnvironment,
@@ -14,7 +16,6 @@ for (const scenario of worldHostCases) {
       name: "world-host",
       generatedModule: resolve(profile, "generated.js"),
       runtimeWasm: resolve(profile, "runtime.wasm"),
-      exportWasm: resolve(profile, "export.wasm"),
       contractArtifact: resolve(profile, "contract.bin"),
     };
     await runBrowserEnvironment(
@@ -22,7 +23,6 @@ for (const scenario of worldHostCases) {
       {
         workspace,
         build,
-        mismatchBuild: build,
         operationTimeoutMs: 20_000,
       },
       context.signal,
@@ -88,3 +88,81 @@ for (const scenario of worldHostCases) {
     );
   });
 }
+
+test("browser worker Host serves its contract and leaves compatibility to each client", {
+  timeout: 30_000,
+}, async (context) => {
+  const workspace = resolve(process.cwd());
+  const profile = resolve(workspace, "target/world-host-build/wasm");
+  const build: BrowserBuildConfiguration = {
+    name: "world-host",
+    generatedModule: resolve(profile, "generated.js"),
+    runtimeWasm: resolve(profile, "runtime.wasm"),
+    contractArtifact: resolve(profile, "contract.bin"),
+  };
+  const built = Array.from(await readFile(build.contractArtifact));
+  await runBrowserEnvironment(
+    "browser contract clients",
+    { workspace, build, operationTimeoutMs: 20_000 },
+    context.signal,
+    async (environment) => {
+      const observation = await environment.execute(
+        "clients with and without the Host's contract",
+        { contract: environment.urls.mismatchGenerated },
+        () =>
+          environment.page.evaluate(
+            async ({ urls, built }) => {
+              const packageUrl = `${urls.origin}/dist/packages/ipp-client/src`;
+              const { createWorkerHost } = await import(
+                `${packageUrl}/worker.js`
+              );
+              const { HOST_MESSAGE_BYTES } = await import(
+                `${packageUrl}/host-contract.js`
+              );
+              const { hostServesClientsWithAndWithoutItsContract } =
+                await import(
+                  `${urls.origin}/dist/tests/integration/scenarios/host-contract.js`
+                );
+              const { WORLD_HOST_SYSTEMS } = await import(
+                `${urls.origin}/dist/tests/integration/world-host-cases.js`
+              );
+              // One worker Host; each client opens its own connection to it.
+              const host = createWorkerHost(
+                urls.workerScript,
+                urls.wasm,
+                HOST_MESSAGE_BYTES,
+              );
+              try {
+                const observation =
+                  await hostServesClientsWithAndWithoutItsContract(
+                    () => host.connect(),
+                    built,
+                    await import(urls.generated),
+                    await import(urls.mismatchGenerated),
+                    WORLD_HOST_SYSTEMS,
+                    10_000,
+                  );
+                return {
+                  observation,
+                  hashes: {
+                    host: (await import(urls.generated)).SCHEMA_HASH.toString(),
+                    foreign: (
+                      await import(urls.mismatchGenerated)
+                    ).SCHEMA_HASH.toString(),
+                  },
+                };
+              } finally {
+                await host.close();
+              }
+            },
+            { urls: environment.urls, built },
+          ),
+      );
+      contractClientsServed(
+        observation.observation,
+        BigInt(observation.hashes.host),
+        BigInt(observation.hashes.foreign),
+      );
+    },
+  );
+});

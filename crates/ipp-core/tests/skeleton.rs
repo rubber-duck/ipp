@@ -1,5 +1,4 @@
 //! Rig decoding, instance lifetime, palette math and partial update failure.
-#![cfg(all(feature = "skeletal-animation", feature = "builtin-assets"))]
 
 mod support;
 use support::WorldTestDriver;

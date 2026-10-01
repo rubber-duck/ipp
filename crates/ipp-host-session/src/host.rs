@@ -85,7 +85,7 @@ impl<P: HostServices> Host<P> {
 
     /// Run a Host frame, preserving independent progress when one session fails.
     pub fn tick_worlds(&mut self, dt: f64) -> Result<Vec<(u64, String)>, String> {
-        #[cfg(feature = "profiling")]
+        #[cfg(feature = "instrumentation")]
         let _allocation_scope = ipp_core::profiling::AllocationScope::new(208, "host.tick");
 
         if !dt.is_finite() || dt < 0.0 {
@@ -118,7 +118,6 @@ impl<P: HostServices> Host<P> {
         }
         self.services.progress_assets(&mut self.runtime);
         let frame = self.runtime.frame(dt).map_err(|error| error.to_string())?;
-        #[cfg(feature = "diagnostics")]
         self.services.record_frame(&mut self.runtime, &frame);
         self.complete_view_queries(&frame);
         self.presentation_time = presentation_time;
@@ -229,7 +228,6 @@ impl<P: HostServices> Host<P> {
         }
         self.runtime.flush_resource_lifecycle();
         failures.extend(self.drain_lifecycle_watches());
-        #[cfg(feature = "gui")]
         failures.extend(self.drain_gui_observations());
         self.frame_scratch = scratch;
         Ok(failures)
@@ -332,9 +330,7 @@ impl<P: HostServices> Host<P> {
         self.close_session(id);
         self.open_session_with_limits(id, limits, &selected)
             .unwrap();
-        self.test_session()
-            .receive(&ipp_protocol::bootstrap())
-            .unwrap();
+        self.test_session().receive(&ipp_protocol::HELLO).unwrap();
         self.test_session().take_response().unwrap();
     }
 }
@@ -349,7 +345,6 @@ impl<P: HostServices> Host<P> {
         if session.private_world {
             session.reply_budget.0.close();
         }
-        #[cfg(feature = "gui")]
         if let Some(observations) = &session.gui_observations {
             observations.close();
         }

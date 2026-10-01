@@ -145,7 +145,6 @@ fn seek_and_play(world: &mut WorldContext<'_>, controller: AnimationControllerId
     world.update_for_test(0.0).unwrap();
 }
 
-#[allow(irrefutable_let_patterns)]
 /// The stored Scalar: authored, or sampled while a driver binds it.
 fn scalar(world: &WorldContext<'_>, target: EntityId) -> f32 {
     let snapshot = world.inspect(target).unwrap();

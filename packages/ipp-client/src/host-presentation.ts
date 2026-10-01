@@ -10,6 +10,16 @@ import type { OutputReference, PublicationReference } from "./types.js";
 /** `MAX_PRESENTATION_SOURCES` of `ipp-protocol` (`presentation.rs`), checked by `tools/check_repo.py`. */
 const maxPresentationSources = Math.floor((1_048_576 - 1024) / 65);
 
+/** Capture chunks are full `MAX_FIELD_BYTES` pages of `ipp-protocol` (`lib.rs`), checked by `tools/check_repo.py`. */
+const captureChunkBytes = 65_536;
+/**
+ * Capture reads in flight. The Host answers reads between its frames, so a busy
+ * Host answers about one window per frame; 16 chunks keep a 1714x1259 capture
+ * to nine windows while in-flight replies stay near 1 MiB of the connection's
+ * reliable output.
+ */
+const captureTransferWindow = 16;
+
 function outputKey(output: OutputReference): string {
   const producer = outputProducer(output);
   return `${output.world.id}:${output.world.incarnation}:${output.kind}:${producer?.entity ?? ""}:${producer?.incarnation ?? ""}`;
@@ -390,8 +400,8 @@ export class HostPresentation {
       )
         throw new Error("Invalid capture byte length");
       pixels = new Uint8Array(Number(total));
-      let offset = 0;
-      while (offset < pixels.length) {
+      const target = pixels;
+      const read = async (offset: number) => {
         const chunk = await this.request("READ_CAPTURE", "CHUNK", (writer) => {
           writer.u64(capture);
           writer.u64(BigInt(offset));
@@ -400,10 +410,30 @@ export class HostPresentation {
           throw new Error("Capture chunk identity mismatch");
         const bytes = chunk.bytes();
         chunk.end();
-        if (bytes.length === 0 || bytes.length > pixels.length - offset)
+        if (
+          bytes.length !== Math.min(captureChunkBytes, target.length - offset)
+        )
           throw new Error("Invalid capture chunk length");
-        pixels.set(bytes, offset);
-        offset += bytes.length;
+        target.set(bytes, offset);
+      };
+      // Every submitted read settles before release.
+      for (
+        let start = 0;
+        start < target.length;
+        start += captureChunkBytes * captureTransferWindow
+      ) {
+        const reads: Promise<void>[] = [];
+        for (let index = 0; index < captureTransferWindow; index++) {
+          const offset = start + index * captureChunkBytes;
+          if (offset >= target.length) break;
+          reads.push(read(offset));
+        }
+        const results = await Promise.allSettled(reads);
+        const rejected = results.find(
+          (result): result is PromiseRejectedResult =>
+            result.status === "rejected",
+        );
+        if (rejected) throw rejected.reason;
       }
     } catch (error) {
       failure = error;

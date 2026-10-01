@@ -9,7 +9,7 @@ use ipp_protocol::presentation::{PresentationError, PresentationSurface};
 use ipp_render_gl::{GlesRenderDevice, RenderError, RenderService};
 use ipp_server::services::NativeHostServices;
 
-use super::channel::{PresentationControl, PresentationOutput};
+use super::channel::{PresentationControl, PresentationOutput, PresentationTesting};
 use super::statistics::StatisticsTotals;
 use crate::egl::Context;
 
@@ -36,12 +36,10 @@ pub(crate) struct GlesHostServices {
 impl HostServices for GlesHostServices {
     const NAME: &'static str = "gles";
 
-    #[cfg(all(feature = "gui", feature = "diagnostics"))]
     fn record_frame(&mut self, host: &mut HostRuntime, frame: &ipp_core::HostFrameReport) {
         self.totals.record_frame(host, frame);
     }
 
-    #[cfg(feature = "gui")]
     fn gui_input(
         &mut self,
     ) -> Option<&mut ipp_host_session::services::gui_input::GuiHostInputService> {
@@ -245,37 +243,52 @@ impl GlesHostServices {
                     id,
                     snapshot: statistics,
                 });
+                Ok(())
             }
-            PresentationControl::GlyphAtlasLimits {
+            PresentationControl::Testing(control) => self.apply_testing(control, host),
+        }
+    }
+
+    #[cfg(not(feature = "instrumentation"))]
+    fn apply_testing(
+        &mut self,
+        _control: PresentationTesting,
+        _host: &mut HostRuntime,
+    ) -> Result<(), String> {
+        Err(
+            "presentation testing controls require an instrumentation build of the GLES test host"
+                .into(),
+        )
+    }
+
+    #[cfg(feature = "instrumentation")]
+    fn apply_testing(
+        &mut self,
+        control: PresentationTesting,
+        host: &mut HostRuntime,
+    ) -> Result<(), String> {
+        match control {
+            PresentationTesting::GlyphAtlasLimits {
                 max_pages,
                 idle_page_frames,
             } => {
-                #[cfg(feature = "gui")]
                 self.renderer
                     .set_glyph_atlas_limits(ipp_render_gl::GlyphAtlasLimits {
                         max_pages: max_pages as usize,
                         idle_page_frames: u64::from(idle_page_frames),
                     });
-
-                #[cfg(not(feature = "gui"))]
-                {
-                    let _ = (max_pages, idle_page_frames);
-                    return Err(
-                        "The glyph atlas limits testing override requires a GUI build".into(),
-                    );
-                }
             }
-            PresentationControl::SurfaceCacheBudget {
+            PresentationTesting::SurfaceCacheBudget {
                 bytes,
             } => {
                 self.renderer.set_surface_cache_budget(bytes as usize);
             }
-            PresentationControl::ExhaustiveDrawChecks {
+            PresentationTesting::ExhaustiveDrawChecks {
                 enabled,
             } => {
                 self.renderer.set_exhaustive_draw_checks(enabled);
             }
-            PresentationControl::ContextLoss => {
+            PresentationTesting::ContextLoss => {
                 if self.active {
                     // The same recovery path as the WASM detach export: context
                     // state goes, the Host and its Worlds keep their logical assets.
@@ -291,7 +304,7 @@ impl GlesHostServices {
                     self.rendered_output = None;
                 }
             }
-            PresentationControl::ContextRestore => {
+            PresentationTesting::ContextRestore => {
                 if !self.active {
                     self.generation = self
                         .generation

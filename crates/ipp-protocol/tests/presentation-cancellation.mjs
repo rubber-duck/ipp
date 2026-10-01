@@ -64,7 +64,6 @@ function buildHost() {
       "test",
       "-p",
       "ipp-host-session",
-      "--no-default-features",
       "--lib",
       "--no-run",
       "--locked",

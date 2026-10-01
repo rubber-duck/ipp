@@ -7,7 +7,6 @@ import type { GuiContract, GuiHost } from "./scenarios/gui-lifecycle.js";
 import { exerciseGuiReactRoot } from "./scenarios/gui-react-root.js";
 
 interface GeneratedHost extends GuiContract {
-  CAPABILITIES: { gui: boolean };
   IppHostClient: {
     connectWebSocket(
       url: string,
@@ -20,11 +19,12 @@ test("React ordinary GUI declarations mount, update and unmount over native", {
   timeout: 60_000,
 }, async (context) => {
   const workspace = process.cwd();
-  const profile = resolve(workspace, "target/gui-host");
+  const profile = resolve(workspace, "target/integration-artifacts/native");
   const contract = (await import(
-    pathToFileURL(resolve(profile, "generated.js")).href
+    pathToFileURL(
+      resolve(workspace, "target/integration-artifacts/client/generated.js"),
+    ).href
   )) as GeneratedHost;
-  assert.equal(contract.CAPABILITIES.gui, true);
   await runNativeEnvironment(
     "gui-react-root",
     {

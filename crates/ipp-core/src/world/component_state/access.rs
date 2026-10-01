@@ -70,7 +70,6 @@ impl WorldEntityState {
         }
     }
 
-    #[cfg(feature = "skeletal-animation")]
     pub(in crate::world) fn input_skeleton<'a>(
         &'a self,
         components: &'a registry::ComponentStorage,

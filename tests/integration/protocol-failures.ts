@@ -9,17 +9,6 @@ export interface ProtocolFailureContext {
   readonly evidence: EvidenceRecorder;
 }
 
-export async function schemaMismatchFailsDuringHandshake(
-  context: ProtocolFailureContext,
-): Promise<void> {
-  const result = await context.factory.rejectMismatchedSchema(context.url, {
-    signal: context.signal,
-    record: context.evidence.record.bind(context.evidence),
-  });
-  await context.evidence.record("schema_mismatch_result", result);
-  protocolRejected(result, "handshake");
-}
-
 export async function staleSessionFailsBeforeMutation(
   context: ProtocolFailureContext,
 ): Promise<void> {
@@ -35,7 +24,7 @@ export async function malformedRequestsFailExplicitly(
   context: ProtocolFailureContext,
 ): Promise<void> {
   const cases: readonly MalformedCase[] = [
-    "no-bootstrap",
+    "no-hello",
     "oversized-message",
     "trailing-bytes",
     "unknown-tag",
@@ -56,7 +45,7 @@ export async function malformedRequestsFailExplicitly(
     });
     protocolRejected(
       result,
-      malformedCase === "no-bootstrap" ? "handshake" : "request",
+      malformedCase === "no-hello" ? "handshake" : "request",
     );
   }
 }

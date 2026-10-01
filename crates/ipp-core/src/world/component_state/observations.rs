@@ -41,7 +41,6 @@ impl ComponentStagedWrite {
 }
 
 impl WorldMutationState {
-    #[cfg(feature = "diagnostics")]
     pub(in crate::world) fn record_entity_effect(&mut self, event: &'static str, entity: EntityId) {
         if crate::diagnostics::enabled(crate::diagnostics::Level::Debug) {
             self.entities_state.entity_effects.push((event, entity));

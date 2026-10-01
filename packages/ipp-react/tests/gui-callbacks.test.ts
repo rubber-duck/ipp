@@ -271,17 +271,6 @@ function valueWorld() {
     session: 1n,
     schemaHash: 1n,
     worldReference: { id: 1n, incarnation: 1n },
-    capabilities: {
-      spatial: false,
-      textures: false,
-      builtinAssets: false,
-      picking: false,
-      debugGeometry: false,
-      pbr: false,
-      shadows: false,
-      skeletalAnimation: false,
-      meshPoses: false,
-    },
     components: valueComponents,
     async batch(operations: Command[]): Promise<BatchOutcome> {
       return {

@@ -16,12 +16,11 @@ test("real Blender disk export saves and reloads reference-only hierarchy throug
   timeout: 240_000,
 }, async (context) => {
   const workspace = resolve(process.cwd());
-  const profile = resolve(workspace, "target/browser-build/render-expanded");
+  const profile = resolve(workspace, "target/browser-build/render");
   const build = {
-    name: "render-expanded" as const,
+    name: "render" as const,
     generatedModule: resolve(profile, "generated.js"),
     runtimeWasm: resolve(profile, "runtime.wasm"),
-    exportWasm: resolve(profile, "export.wasm"),
     contractArtifact: resolve(profile, "contract.bin"),
   };
   const evidenceParent = resolve(
@@ -110,7 +109,6 @@ test("real Blender disk export saves and reloads reference-only hierarchy throug
     {
       workspace,
       build,
-      mismatchBuild: build,
       rendering: false,
       operationTimeoutMs: 60_000,
       evidenceParent: resolve(

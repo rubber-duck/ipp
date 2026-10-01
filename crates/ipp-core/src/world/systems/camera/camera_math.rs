@@ -14,7 +14,6 @@ pub fn model_matrix(transform: &Transform) -> Result<[f32; 16], ErrorReason> {
 }
 
 /// Inverse authored model transform for mesh-to-skeleton space conversion.
-#[cfg(feature = "skeletal-animation")]
 pub fn inverse_model_matrix(transform: &Transform) -> Result<[f32; 16], ErrorReason> {
     matrix_f32(CameraAffineTransform::new(transform)?.inverse_matrix())
 }

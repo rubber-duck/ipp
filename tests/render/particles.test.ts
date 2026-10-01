@@ -8,12 +8,14 @@ test("particles batch thousands of sprites, preserve state through recovery and 
   timeout: 120000,
 }, async (context) => {
   const workspace = process.cwd(),
-    directory = resolve(workspace, "target/browser-build/render-particles");
+    directory = resolve(
+      workspace,
+      "target/browser-build/render-instrumentation",
+    );
   const build = {
-    name: "render-particles" as const,
+    name: "render-instrumentation" as const,
     generatedModule: resolve(directory, "generated.js"),
     runtimeWasm: resolve(directory, "runtime.wasm"),
-    exportWasm: resolve(directory, "export.wasm"),
     contractArtifact: resolve(directory, "contract.bin"),
   };
   await runBrowserEnvironment(
@@ -21,7 +23,6 @@ test("particles batch thousands of sprites, preserve state through recovery and 
     {
       workspace,
       build,
-      mismatchBuild: build,
       operationTimeoutMs: 20000,
       evidenceParent: resolve(
         workspace,

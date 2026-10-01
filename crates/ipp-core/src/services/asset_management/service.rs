@@ -144,7 +144,6 @@ pub(super) struct AssetConsumerState {
     demand: BTreeSet<AssetDemandSelection>,
     /// Independently replaced demand from each World System. A source remains
     /// in the aggregate until every local consumer releases it.
-    #[cfg(feature = "gui")]
     system_demand: BTreeMap<&'static str, BTreeSet<AssetDemandSelection>>,
     observations_dirty: bool,
     evaluation_meshes: BTreeSet<AssetDemandSelection>,
@@ -174,14 +173,12 @@ impl AssetManagementService {
     /// Construct the compiled loaders and Host input bridge.
     pub fn new() -> Self {
         let mut manager = Self::empty();
-        #[cfg(feature = "particles")]
         manager
             .register_loader(
                 crate::systems::particles::PARTICLE_SURFACE_TYPE,
                 crate::systems::particles::particle_surface_loader,
             )
             .expect("particle surface loader");
-        #[cfg(feature = "particles")]
         manager
             .register_loader(
                 crate::systems::particles::PARTICLE_CACHE_TYPE,
@@ -206,11 +203,9 @@ impl AssetManagementService {
                 crate::services::asset_management::texture::cpu_texture_loader,
             )
             .expect("compiled factory");
-        #[cfg(feature = "surfaces")]
         manager
             .register_loader(super::font::FONT_TYPE, super::font::cpu_font_loader)
             .expect("surface font loader");
-        #[cfg(feature = "surfaces")]
         manager
             .register_loader(
                 super::drawing::DRAWING_TYPE,
@@ -229,22 +224,18 @@ impl AssetManagementService {
                 crate::systems::animation::animation_asset_loader,
             )
             .expect("compiled factory");
-        #[cfg(feature = "skeletal-animation")]
-        {
-            manager
-                .register_loader(
-                    crate::SKELETON_TYPE,
-                    crate::services::asset_management::skeleton::skeleton_asset_loader,
-                )
-                .expect("compiled factory");
-            manager
-                .register_loader(
-                    crate::POSE_TYPE,
-                    crate::services::asset_management::skeleton::pose_asset_loader,
-                )
-                .expect("compiled factory");
-        }
-        #[cfg(feature = "skeletal-animation")]
+        manager
+            .register_loader(
+                crate::SKELETON_TYPE,
+                crate::services::asset_management::skeleton::skeleton_asset_loader,
+            )
+            .expect("compiled factory");
+        manager
+            .register_loader(
+                crate::POSE_TYPE,
+                crate::services::asset_management::skeleton::pose_asset_loader,
+            )
+            .expect("compiled factory");
         manager
             .register_loader(
                 crate::SKIN_TYPE,
@@ -409,34 +400,7 @@ impl AssetManagementService {
         }
     }
 
-    #[cfg(not(feature = "gui"))]
-    fn update_users(&mut self, world: crate::WorldId, demand: BTreeSet<AssetDemandSelection>) {
-        let next: BTreeSet<_> = demand
-            .iter()
-            .map(|selection| Self::scoped_selection(world, selection))
-            .collect();
-        let previous = self.consumers.get(&world).map(|consumer| &consumer.demand);
-        let mut changes = BTreeMap::new();
-        if let Some(previous) = previous {
-            changes.extend(
-                previous
-                    .difference(&next)
-                    .cloned()
-                    .map(|source| (source, false)),
-            );
-            changes.extend(
-                next.difference(previous)
-                    .cloned()
-                    .map(|source| (source, true)),
-            );
-        } else {
-            changes.extend(next.into_iter().map(|source| (source, true)));
-        }
-        self.update_user_deltas(world, changes);
-    }
-
     /// Replace one System's World-local demand without disturbing sibling consumers.
-    #[cfg(feature = "gui")]
     pub(crate) fn update_system_users(
         &mut self,
         world: crate::WorldId,
@@ -470,7 +434,6 @@ impl AssetManagementService {
         self.update_system_user_deltas(world, system, changes, true);
     }
 
-    #[cfg(feature = "gui")]
     pub(crate) fn update_user_deltas(
         &mut self,
         world: crate::WorldId,
@@ -479,7 +442,6 @@ impl AssetManagementService {
         self.update_system_user_deltas(world, "ipp.asset-dependencies", changes, false);
     }
 
-    #[cfg(feature = "gui")]
     fn update_system_user_deltas(
         &mut self,
         world: crate::WorldId,
@@ -526,27 +488,6 @@ impl AssetManagementService {
             consumer.system_demand.insert(system, system_demand);
         }
         self.apply_aggregate_user_deltas(world, consumer, aggregate_additions, aggregate_removals);
-    }
-
-    #[cfg(not(feature = "gui"))]
-    pub(crate) fn update_user_deltas(
-        &mut self,
-        world: crate::WorldId,
-        changes: BTreeMap<AssetDemandSelection, bool>,
-    ) {
-        if changes.is_empty() {
-            return;
-        }
-        let consumer = self.consumers.remove(&world).unwrap_or_default();
-        let additions = changes
-            .iter()
-            .filter(|(_, retained)| **retained)
-            .map(|(selection, _)| Self::scoped_selection(world, selection));
-        let removals = changes
-            .iter()
-            .filter(|(_, retained)| !**retained)
-            .map(|(selection, _)| Self::scoped_selection(world, selection));
-        self.apply_aggregate_user_deltas(world, consumer, additions, removals);
     }
 
     /// Apply already-aggregated World demand to observations and the catalog.
@@ -622,20 +563,15 @@ impl AssetManagementService {
 
     /// Release only a destroyed world's demand, producer content and event queue.
     pub(crate) fn release_world(&mut self, world: crate::WorldId) {
-        #[cfg(feature = "gui")]
-        {
-            let systems: Vec<_> = self
-                .consumers
-                .get(&world)
-                .into_iter()
-                .flat_map(|consumer| consumer.system_demand.keys().copied())
-                .collect();
-            for system in systems {
-                self.update_system_users(world, system, BTreeSet::new());
-            }
+        let systems: Vec<_> = self
+            .consumers
+            .get(&world)
+            .into_iter()
+            .flat_map(|consumer| consumer.system_demand.keys().copied())
+            .collect();
+        for system in systems {
+            self.update_system_users(world, system, BTreeSet::new());
         }
-        #[cfg(not(feature = "gui"))]
-        self.update_users(world, BTreeSet::new());
         if let Some(consumer) = self.consumers.remove(&world) {
             for key in consumer.owned {
                 if !self
@@ -681,7 +617,7 @@ impl AssetManagementService {
         world: crate::WorldId,
         demand: BTreeSet<AssetDemandSelection>,
     ) {
-        #[cfg(feature = "profiling")]
+        #[cfg(feature = "instrumentation")]
         let _allocation_scope =
             crate::profiling::AllocationScope::new(204, "assets.set_evaluation_meshes");
 
@@ -695,21 +631,21 @@ impl AssetManagementService {
         data.progress();
         let keys = self
             .iter()
-            .filter(|_asset| {
-                if self.graphics_loaders.contains(&_asset.source().kind) {
+            .filter(|asset| {
+                if self.graphics_loaders.contains(&asset.source().kind) {
                     return false;
                 }
-                if _asset.source().kind == crate::MESH_TYPE {
+                if asset.source().kind == crate::MESH_TYPE {
                     return self.consumers.values().any(|consumer| {
                         consumer.evaluation_meshes.iter().any(|selection| {
-                            let source = _asset.source();
+                            let source = asset.source();
                             selection.kind == source.kind
                                 && selection.variant == source.variant
                                 && same_text(&selection.source, &source.uri)
                         })
                     });
                 }
-                if _asset.source().kind == crate::TEXTURE_TYPE {
+                if asset.source().kind == crate::TEXTURE_TYPE {
                     return false;
                 }
                 true
@@ -864,7 +800,7 @@ impl AssetManagementService {
         &mut self,
         world: crate::WorldId,
     ) -> Result<Vec<AssetResourceSnapshot>, String> {
-        #[cfg(feature = "profiling")]
+        #[cfg(feature = "instrumentation")]
         let _allocation_scope =
             crate::profiling::AllocationScope::new(205, "assets.begin_reconcile");
 
@@ -872,7 +808,7 @@ impl AssetManagementService {
     }
 
     pub(crate) fn finish_reconcile(&mut self, world: crate::WorldId) -> Vec<AssetResourceSnapshot> {
-        #[cfg(feature = "profiling")]
+        #[cfg(feature = "instrumentation")]
         let _allocation_scope =
             crate::profiling::AllocationScope::new(206, "assets.finish_reconcile");
 
@@ -958,7 +894,6 @@ impl AssetManagementService {
     }
 }
 
-#[cfg(feature = "skeletal-animation")]
 impl AssetManagementService {
     /// Resolve immutable typed content through the owning World's resource namespace.
     pub(crate) fn source_data<T: 'static>(
@@ -968,7 +903,7 @@ impl AssetManagementService {
         source: &str,
         variant: u32,
     ) -> Option<(AssetKey, &T)> {
-        #[cfg(feature = "profiling")]
+        #[cfg(feature = "instrumentation")]
         let _allocation_scope = crate::profiling::AllocationScope::new(201, "assets.source_data");
 
         let key = self.find_source(world, kind, source, variant)?;

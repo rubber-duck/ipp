@@ -6,7 +6,6 @@ use ipp_protocol::host::{
 };
 
 struct Platform {
-    #[cfg(feature = "gui")]
     input: super::super::gui_input::GuiHostInputService,
     surface: PresentationSurface,
     draws: Vec<OutputRef>,
@@ -19,7 +18,6 @@ impl HostServices for Platform {
 
     fn initialize(_: &mut HostRuntime) -> Result<Self, String> {
         Ok(Self {
-            #[cfg(feature = "gui")]
             input: Default::default(),
             surface: PresentationSurface {
                 id: 1,
@@ -33,7 +31,6 @@ impl HostServices for Platform {
         })
     }
 
-    #[cfg(feature = "gui")]
     fn gui_input(&mut self) -> Option<&mut super::super::gui_input::GuiHostInputService> {
         Some(&mut self.input)
     }
@@ -88,7 +85,6 @@ impl HostServices for Platform {
     }
 }
 
-#[cfg(feature = "gui")]
 #[path = "gui_input_tests.rs"]
 mod gui_input_tests;
 
@@ -833,8 +829,7 @@ fn connected_surface() -> (crate::Host<Platform>, PresentationView, u64, WorldId
     let peer = root(host.runtime_mut());
     host.tick_worlds(0.0).unwrap();
     host.open_connection(7).unwrap();
-    host.receive_connection(7, &ipp_protocol::bootstrap())
-        .unwrap();
+    host.receive_connection(7, &ipp_protocol::HELLO).unwrap();
     host.take_connection_response(7).unwrap();
     control(
         &mut host,
@@ -998,6 +993,111 @@ fn connection_frame_and_capture_observe_current_publication_until_the_view_is_st
 }
 
 #[test]
+fn completed_capture_transfers_answer_at_ingress_without_waiting_for_host_frames() {
+    let (mut host, view, _, _) = connected_surface();
+    control_replies(&mut host);
+    control(
+        &mut host,
+        4,
+        HostRequestBody::Presentation(PresentationRequest::Frame {
+            view,
+            after_sequence: None,
+            publication: None,
+            capture: true,
+            after_outputs: Vec::new(),
+        }),
+    );
+    host.tick_worlds(0.0).unwrap();
+    let replies = control_replies(&mut host);
+    let HostResponseBody::Presentation(PresentationResponse::Capture {
+        capture,
+        bytes,
+        ..
+    }) = replies[0].body
+    else {
+        panic!("capture")
+    };
+    let read = |offset| {
+        HostRequestBody::Presentation(PresentationRequest::ReadCapture {
+            capture,
+            offset,
+        })
+    };
+
+    // Every chunk and the release answer at ingress, between Host frames.
+    let mut offset = 0;
+    let mut request = 5;
+    while offset < bytes {
+        control(&mut host, request, read(offset));
+        let replies = control_replies(&mut host);
+        let [
+            HostResponse {
+                request_id,
+                body:
+                    HostResponseBody::Presentation(PresentationResponse::Chunk {
+                        bytes,
+                        ..
+                    }),
+                ..
+            },
+        ] = replies.as_slice()
+        else {
+            panic!("immediate chunk")
+        };
+        assert_eq!(*request_id, request);
+        offset += bytes.len() as u64;
+        request += 1;
+    }
+    control(
+        &mut host,
+        request,
+        HostRequestBody::Presentation(PresentationRequest::ReleaseCapture(capture)),
+    );
+    assert_eq!(
+        control_replies(&mut host),
+        [HostResponse {
+            connection: 7,
+            request_id: request,
+            body: HostResponseBody::Presentation(PresentationResponse::Complete),
+        }]
+    );
+
+    // A transfer never waits behind control requests queued for the next frame.
+    control(
+        &mut host,
+        20,
+        HostRequestBody::Presentation(PresentationRequest::Frame {
+            view,
+            after_sequence: None,
+            publication: None,
+            capture: true,
+            after_outputs: Vec::new(),
+        }),
+    );
+    control(&mut host, 21, read(0));
+    assert_eq!(
+        control_replies(&mut host),
+        [HostResponse {
+            connection: 7,
+            request_id: 21,
+            body: HostResponseBody::Presentation(PresentationResponse::Error(
+                PresentationError::Unavailable
+            )),
+        }]
+    );
+    host.tick_worlds(0.0).unwrap();
+    assert!(matches!(
+        control_replies(&mut host).as_slice(),
+        [HostResponse {
+            request_id: 20,
+            body: HostResponseBody::Presentation(PresentationResponse::Capture { .. }),
+            ..
+        }]
+    ));
+    host.close_connection(7);
+}
+
+#[test]
 fn connection_frame_deadline_starts_at_ingress_even_before_dispatch() {
     for dispatch in [false, true] {
         let (mut host, view, _, _) = connected_surface();
@@ -1111,8 +1211,7 @@ fn terminal_wire(host: &mut crate::Host<Platform>, connection: u64, expected: &[
 
 fn peer_connection(host: &mut crate::Host<Platform>) {
     host.open_connection(8).unwrap();
-    host.receive_connection(8, &ipp_protocol::bootstrap())
-        .unwrap();
+    host.receive_connection(8, &ipp_protocol::HELLO).unwrap();
     drop(host.take_connection_response(8).unwrap());
 }
 

@@ -8,17 +8,13 @@ import {
 
 const workspace = process.cwd();
 const overlays = build("headless");
-const minimal = build("headless-builtins");
 
-function build(
-  name: "headless-builtins" | "headless",
-): BrowserBuildConfiguration {
+function build(name: "headless"): BrowserBuildConfiguration {
   const base = resolve(workspace, "target/browser-build", name);
   return {
     name,
     generatedModule: resolve(base, "generated.js"),
     runtimeWasm: resolve(base, "runtime.wasm"),
-    exportWasm: resolve(base, "export.wasm"),
     contractArtifact: resolve(base, "contract.bin"),
   };
 }
@@ -186,7 +182,6 @@ for (const variant of ["development", "production"] as const) {
         {
           workspace,
           build: overlays,
-          mismatchBuild: minimal,
           operationTimeoutMs:
             fixtureExport === "childrenHierarchy" ? 15_000 : 5_000,
         },

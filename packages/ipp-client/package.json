@@ -9,6 +9,10 @@
       "types": "./src/index.ts",
       "default": "./dist/index.js"
     },
+    "./diagnostics": {
+      "types": "./src/diagnostics.ts",
+      "default": "./dist/diagnostics.js"
+    },
     "./testing": {
       "types": "./src/testing.ts",
       "default": "./dist/testing.js"

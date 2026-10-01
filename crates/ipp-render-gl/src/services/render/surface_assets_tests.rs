@@ -18,14 +18,10 @@ impl RenderDevice for Device {
     type SurfacePath = ();
     type SurfaceCacheTarget = ();
     type SurfaceInstances = ();
-    #[cfg(feature = "shadows")]
     type ShadowMap = ();
-    #[cfg(feature = "surfaces")]
     type GuiBatch = ();
-    #[cfg(feature = "surfaces")]
     type GlyphAtlasPage = ();
 
-    #[cfg(feature = "surfaces")]
     fn glyph_atlas_texture(page: &Self::GlyphAtlasPage) -> &Self::Texture {
         page
     }
@@ -41,22 +37,18 @@ impl RenderDevice for Device {
         Ok(())
     }
 
-    #[cfg(feature = "shadows")]
     fn create_shadow_map(&mut self, _: u32) -> Result<(), crate::RenderError> {
         Ok(())
     }
 
-    #[cfg(feature = "shadows")]
     fn begin_shadow(&mut self, _: &(), _: u32, _: u32) -> Result<(), crate::RenderError> {
         Ok(())
     }
 
-    #[cfg(feature = "shadows")]
     fn end_shadow(&mut self) -> Result<(), crate::RenderError> {
         Ok(())
     }
 
-    #[cfg(feature = "shadows")]
     fn bind_shadow(
         &mut self,
         _: &(),
@@ -66,7 +58,6 @@ impl RenderDevice for Device {
         Ok(())
     }
 
-    #[cfg(feature = "shadows")]
     fn delete_shadow_map(&mut self, _: ()) {}
 
     fn create_program(&mut self, _: &str, _: &str) -> Result<(), crate::RenderError> {
@@ -118,7 +109,7 @@ impl RenderDevice for Device {
         _: &(),
         _: &[f32; 16],
         _: &[f32; 3],
-        #[cfg(feature = "mesh-poses")] _: Option<(&(), f32)>,
+        _: Option<(&(), f32)>,
         _: Option<&()>,
     ) -> Result<(), crate::RenderError> {
         Ok(())

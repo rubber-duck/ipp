@@ -1,9 +1,12 @@
-//! Optional, synchronous diagnostics. Configure each world-owning host thread.
+//! Synchronous diagnostics compiled into every build. Configure each world-owning
+//! host thread; core starts off with no sink.
 //! Sinks must consume borrowed arguments before returning and must not reenter
 //! world mutation. Recursive diagnostics are suppressed, including during format.
 
 use std::cell::Cell;
 use std::fmt;
+use std::panic::PanicHookInfo;
+use std::sync::Once;
 
 /// Ordered verbosity; Off never emits a record.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -102,5 +105,41 @@ pub fn emit(level: Level, arguments: fmt::Arguments<'_>) {
     let _guard = Emitting;
     if let Some(sink) = sink {
         sink(level, arguments);
+    }
+}
+
+/// Install a process panic hook that writes the panic message and source
+/// location to the panicking thread's sink at error level, then runs the
+/// previous hook. Hosts install it with their sink. The line needs no symbols,
+/// so a stripped `panic = "abort"` build reports it before aborting.
+pub fn install_panic_hook() {
+    static INSTALL: Once = Once::new();
+    INSTALL.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            log_panic(info);
+            previous(info);
+        }));
+    });
+}
+
+fn log_panic(info: &PanicHookInfo<'_>) {
+    // A panic during thread teardown finds no configuration to read.
+    if CONFIG.try_with(Cell::get).is_err() || EMITTING.try_with(Cell::get).is_err() {
+        return;
+    }
+
+    let message = info.payload_as_str().unwrap_or("non-string panic payload");
+    match info.location() {
+        Some(location) => emit(
+            Level::Error,
+            format_args!(
+                "panic at {}:{}:{}: {message}",
+                location.file(),
+                location.line(),
+                location.column()
+            ),
+        ),
+        None => emit(Level::Error, format_args!("panic: {message}")),
     }
 }

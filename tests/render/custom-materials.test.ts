@@ -9,12 +9,14 @@ test("custom materials use named instance values, property writes, fallback, lin
   timeout: 120000,
 }, async (context) => {
   const workspace = process.cwd(),
-    directory = resolve(workspace, "target/browser-build/render-expanded");
+    directory = resolve(
+      workspace,
+      "target/browser-build/render-instrumentation",
+    );
   const build = {
-    name: "render-expanded" as const,
+    name: "render-instrumentation" as const,
     generatedModule: resolve(directory, "generated.js"),
     runtimeWasm: resolve(directory, "runtime.wasm"),
-    exportWasm: resolve(directory, "export.wasm"),
     contractArtifact: resolve(directory, "contract.bin"),
   };
   await runBrowserEnvironment(
@@ -22,7 +24,6 @@ test("custom materials use named instance values, property writes, fallback, lin
     {
       workspace,
       build,
-      mismatchBuild: build,
       operationTimeoutMs: 20000,
       closeTimeoutMs: 5000,
       evidenceParent: resolve(

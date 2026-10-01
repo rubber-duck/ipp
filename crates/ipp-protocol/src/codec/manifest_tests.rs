@@ -10,7 +10,6 @@ mod attachment_tests;
 #[path = "lifecycle_watch_manifest_tests.rs"]
 mod lifecycle_watch_tests;
 
-#[cfg(feature = "diagnostics")]
 #[path = "lifecycle_diagnostics_tests.rs"]
 mod lifecycle_diagnostics_tests;
 
@@ -718,7 +717,6 @@ fn rust_request_decoder_conforms_to_every_enabled_manifest_branch() {
         ),
     ];
 
-    #[allow(unused_mut)]
     let mut encoded_operations = vec![
         manifest_command(
             "command-create",
@@ -802,7 +800,6 @@ fn rust_request_decoder_conforms_to_every_enabled_manifest_branch() {
             [("root", manifest_reference_alias(31))],
         ),
     ];
-    #[allow(unused_mut)]
     let mut operations = vec![
         Command::Create {
             alias: 1,
@@ -983,7 +980,6 @@ fn rust_request_decoder_conforms_to_every_enabled_manifest_branch() {
         component: 20,
         name: "old".into(),
     });
-    #[cfg(feature = "gui")]
     {
         use ipp_core::systems::gui::local::GuiLocalAction;
 
@@ -1142,11 +1138,8 @@ fn rust_request_decoder_conforms_to_every_enabled_manifest_branch() {
         (3, "INSPECT_CONTROLLERS"),
         (4, "INSPECT_RENDER_DIAGNOSTICS"),
         (5, "INSPECT_ENTITY_TREE"),
-        #[cfg(feature = "gui")]
         (6, "INSPECT_GUI_FOCUS"),
-        #[cfg(feature = "gui")]
         (7, "INSPECT_GUI_POINTERS"),
-        #[cfg(feature = "surfaces")]
         (8, "INSPECT_CANVAS"),
     ] {
         let inspect = ManifestFixture::new(
@@ -1369,7 +1362,6 @@ fn rust_request_decoder_conforms_to_every_enabled_manifest_branch() {
         );
     }
 
-    #[cfg(feature = "surfaces")]
     for (mask, extent, units_per_metre) in [
         (1, Some([640.0, 360.0]), None),
         (2, None, Some(400.0)),
@@ -1423,7 +1415,6 @@ fn rust_request_decoder_conforms_to_every_enabled_manifest_branch() {
     lifecycle_watch_tests::requests(&mut covered);
     attachment_tests::requests(&mut covered);
 
-    #[cfg(feature = "gui")]
     {
         let world = crate::references::WorldReference {
             id: 1,
@@ -1476,7 +1467,6 @@ fn rust_request_decoder_conforms_to_every_enabled_manifest_branch() {
         }
     }
 
-    #[cfg(feature = "diagnostics")]
     lifecycle_diagnostics_tests::requests(&mut covered);
 
     let expected = TAGS
@@ -1671,7 +1661,6 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
         );
     }
 
-    #[allow(unused_mut)]
     let mut success_values = vec![
         ("batch_id", ManifestValue::U64(27)),
         ("tick", ManifestValue::U64(37)),
@@ -2041,7 +2030,6 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
         )]),
     ));
     // In GUI builds the GUI System query collections follow the controllers.
-    #[cfg(feature = "gui")]
     let (gui_focus, gui_pointers) = {
         use ipp_core::systems::gui::local::{
             GuiEntityTarget, GuiFocusRecord, GuiInteractionFlags, GuiPointerRecord,
@@ -2125,7 +2113,6 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
         )
     };
     // In Surface builds the Canvas System query record follows.
-    #[cfg(feature = "surfaces")]
     let canvas = {
         let extent = |width, height| {
             manifest_layout(
@@ -2203,11 +2190,8 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
                 }],
                 resources: Vec::new(),
                 render_diagnostics: Vec::new(),
-                #[cfg(feature = "gui")]
                 gui_focus,
-                #[cfg(feature = "gui")]
                 gui_pointers,
-                #[cfg(feature = "surfaces")]
                 canvas,
             },
         },
@@ -2333,11 +2317,8 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
                 }],
                 resources: Vec::new(),
                 render_diagnostics: Vec::new(),
-                #[cfg(feature = "gui")]
                 gui_focus: Vec::new(),
-                #[cfg(feature = "gui")]
                 gui_pointers: Vec::new(),
-                #[cfg(feature = "surfaces")]
                 canvas: None,
             },
         },
@@ -2370,11 +2351,8 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
                 ("resources", ManifestValue::List(Vec::new())),
                 ("render_diagnostics", ManifestValue::List(Vec::new())),
                 ("controllers", ManifestValue::List(Vec::new())),
-                #[cfg(feature = "gui")]
                 ("gui_focus", ManifestValue::List(Vec::new())),
-                #[cfg(feature = "gui")]
                 ("gui_pointers", ManifestValue::List(Vec::new())),
-                #[cfg(feature = "surfaces")]
                 ("canvas", ManifestValue::None),
             ],
         ),
@@ -2555,14 +2533,10 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
 
     lifecycle_response_fixtures(&mut covered);
     lifecycle_watch_tests::responses(&mut covered);
-    #[cfg(feature = "diagnostics")]
     lifecycle_diagnostics_tests::responses(&mut covered);
     attachment_tests::responses(&mut covered);
 
-    #[cfg(feature = "gui")]
-    {
-        gui_observation_response_fixtures(&mut covered);
-    }
+    gui_observation_response_fixtures(&mut covered);
 
     for tag in TAGS.iter().filter(|tag| {
         matches!(
@@ -2675,7 +2649,6 @@ fn manifest_plane(plane: ipp_core::WorldPlane) -> ManifestValue {
 
 fn lifecycle_request_fixtures(covered: &mut BTreeSet<&'static str>) {
     use ipp_core::systems::lifecycle_publisher::{LifecycleFilter, LifecyclePublisherCommand};
-    #[allow(unused_mut)]
     let mut values = vec![
         ("session", ManifestValue::U64(7)),
         ("request_id", ManifestValue::U64(1)),
@@ -2914,7 +2887,6 @@ fn lifecycle_response_fixtures(covered: &mut BTreeSet<&'static str>) {
 }
 
 /// Registration results and applied effects of the GUI observation stream.
-#[cfg(feature = "gui")]
 fn gui_observation_response_fixtures(covered: &mut BTreeSet<&'static str>) {
     use ipp_core::systems::gui::local::{
         GuiEntityTarget, GuiLocalEffect, GuiLocalEffectKind, GuiLocalEffectSource,

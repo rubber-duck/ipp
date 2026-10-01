@@ -2,7 +2,6 @@
 
 use super::{BuiltinMesh, ErrorReason, TUBE_SIDES, Z, circle_sample, cylinder};
 
-#[cfg(feature = "builtin-assets")]
 pub(super) fn recipe(mesh: &mut BuiltinMesh, uri: &str) -> Result<(), ErrorReason> {
     let [length, stroke] = super::dimensions(uri, "ipp://mesh/arrow?", ["length", "stroke"])?;
     generate(mesh, length, stroke, 0.0)

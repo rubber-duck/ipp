@@ -23,22 +23,16 @@ impl RenderDevice for GlesRenderDevice {
 
     type Texture = u32;
 
-    #[cfg(feature = "surfaces")]
     type SurfacePath = super::GlesSurfacePath;
 
-    #[cfg(feature = "surfaces")]
     type SurfaceCacheTarget = super::GlesSurfaceCacheTarget;
 
-    #[cfg(feature = "surfaces")]
     type SurfaceInstances = super::GlesSurfaceInstances;
 
-    #[cfg(feature = "shadows")]
     type ShadowMap = lighting::GlesShadowMap;
 
-    #[cfg(feature = "surfaces")]
     type GuiBatch = super::GlesGuiBatch;
 
-    #[cfg(feature = "surfaces")]
     type GlyphAtlasPage = super::GlesGlyphAtlasPage;
 
     fn set_lighting(
@@ -52,19 +46,16 @@ impl RenderDevice for GlesRenderDevice {
         self.lighting_uniforms(program, model, normal, surface, frame)
     }
 
-    #[cfg(feature = "shadows")]
     fn shadow_map_limit(&self) -> u32 {
         self.max_texture_size
             .min(self.max_viewport[0] as u32)
             .min(self.max_viewport[1] as u32)
     }
 
-    #[cfg(feature = "shadows")]
     fn create_shadow_map(&mut self, size: u32) -> Result<Self::ShadowMap, RenderError> {
         self.allocate_shadow(size)
     }
 
-    #[cfg(feature = "shadows")]
     fn begin_shadow(
         &mut self,
         map: &Self::ShadowMap,
@@ -74,12 +65,10 @@ impl RenderDevice for GlesRenderDevice {
         self.start_shadow(map, slot, grid)
     }
 
-    #[cfg(feature = "shadows")]
     fn end_shadow(&mut self) -> Result<(), RenderError> {
         self.finish_shadow()
     }
 
-    #[cfg(feature = "shadows")]
     fn bind_shadow(
         &mut self,
         program: &GlesRenderProgram,
@@ -89,7 +78,6 @@ impl RenderDevice for GlesRenderDevice {
         self.shadow_uniforms(program, map, frame)
     }
 
-    #[cfg(feature = "shadows")]
     fn delete_shadow_map(&mut self, map: Self::ShadowMap) {
         self.free_shadow(map);
     }
@@ -118,7 +106,6 @@ impl RenderDevice for GlesRenderDevice {
         self.alpha_blend(enabled)
     }
 
-    #[cfg(feature = "surfaces")]
     fn set_surface_double_sided(&mut self, enabled: bool) -> Result<(), RenderError> {
         // SAFETY: This changes only scalar rasterization state in the current
         // context. Frame setup establishes BACK as the ordinary cull face.
@@ -133,7 +120,6 @@ impl RenderDevice for GlesRenderDevice {
         self.check_draw()
     }
 
-    #[cfg(feature = "surfaces")]
     fn create_surface_path(
         &mut self,
         texels: &crate::SurfacePathTexels,
@@ -141,7 +127,6 @@ impl RenderDevice for GlesRenderDevice {
         self.create_surface_path(texels)
     }
 
-    #[cfg(feature = "surfaces")]
     fn draw_surface_path(
         &mut self,
         program: &Self::Program,
@@ -159,12 +144,10 @@ impl RenderDevice for GlesRenderDevice {
         )
     }
 
-    #[cfg(feature = "surfaces")]
     fn delete_surface_path(&mut self, path: Self::SurfacePath) {
         self.delete_surface_path(path);
     }
 
-    #[cfg(feature = "surfaces")]
     fn create_surface_instances(
         &mut self,
         path: &Self::SurfacePath,
@@ -173,7 +156,6 @@ impl RenderDevice for GlesRenderDevice {
         self.create_surface_instances(path, instances)
     }
 
-    #[cfg(feature = "surfaces")]
     fn update_surface_instances(
         &mut self,
         stream: &mut Self::SurfaceInstances,
@@ -183,12 +165,10 @@ impl RenderDevice for GlesRenderDevice {
         self.update_surface_instances(stream, path, instances)
     }
 
-    #[cfg(feature = "surfaces")]
     fn delete_surface_instances(&mut self, stream: Self::SurfaceInstances) {
         self.delete_surface_instances(stream);
     }
 
-    #[cfg(feature = "surfaces")]
     fn draw_surface_instances(
         &mut self,
         program: &Self::Program,
@@ -201,7 +181,6 @@ impl RenderDevice for GlesRenderDevice {
         self.draw_surface_instances(program, path, stream, mvp, clip, fill_rule)
     }
 
-    #[cfg(feature = "surfaces")]
     fn draw_surface_bitmap(
         &mut self,
         program: &Self::Program,
@@ -214,12 +193,10 @@ impl RenderDevice for GlesRenderDevice {
         self.draw_surface_bitmap(program, texture, mvp, placement, clip, color)
     }
 
-    #[cfg(feature = "surfaces")]
     fn surface_cache_limit(&self) -> u32 {
         self.surface_cache_dimension_limit()
     }
 
-    #[cfg(feature = "surfaces")]
     fn create_surface_cache_target(
         &mut self,
         width: u32,
@@ -228,7 +205,6 @@ impl RenderDevice for GlesRenderDevice {
         self.create_surface_cache_target(width, height)
     }
 
-    #[cfg(feature = "surfaces")]
     fn resize_surface_cache_target(
         &mut self,
         target: &mut Self::SurfaceCacheTarget,
@@ -238,7 +214,6 @@ impl RenderDevice for GlesRenderDevice {
         self.resize_surface_cache_target(target, width, height)
     }
 
-    #[cfg(feature = "surfaces")]
     fn begin_surface_cache_target(
         &mut self,
         target: &Self::SurfaceCacheTarget,
@@ -246,12 +221,10 @@ impl RenderDevice for GlesRenderDevice {
         self.begin_surface_cache_target(target)
     }
 
-    #[cfg(feature = "surfaces")]
     fn end_surface_cache_target(&mut self) -> Result<(), RenderError> {
         self.end_surface_cache_target()
     }
 
-    #[cfg(feature = "surfaces")]
     fn draw_surface_cache(
         &mut self,
         program: &Self::Program,
@@ -264,17 +237,14 @@ impl RenderDevice for GlesRenderDevice {
         self.draw_surface_cache(program, target, mvp, size, clip, opacity)
     }
 
-    #[cfg(feature = "surfaces")]
     fn delete_surface_cache_target(&mut self, target: Self::SurfaceCacheTarget) {
         self.delete_surface_cache_target(target);
     }
 
-    #[cfg(feature = "surfaces")]
     fn create_gui_batch(&mut self, capacity: usize) -> Result<Self::GuiBatch, RenderError> {
         self.create_gui_batch(capacity)
     }
 
-    #[cfg(feature = "surfaces")]
     fn write_gui_batch(
         &mut self,
         batch: &mut Self::GuiBatch,
@@ -284,12 +254,10 @@ impl RenderDevice for GlesRenderDevice {
         self.write_gui_batch(batch, first, vertices)
     }
 
-    #[cfg(feature = "surfaces")]
     fn delete_gui_batch(&mut self, batch: Self::GuiBatch) {
         self.delete_gui_batch(batch);
     }
 
-    #[cfg(feature = "surfaces")]
     fn draw_gui_batch(
         &mut self,
         program: &Self::Program,
@@ -302,7 +270,6 @@ impl RenderDevice for GlesRenderDevice {
         self.draw_gui_batch(program, batch, atlas, mvp, first, count)
     }
 
-    #[cfg(feature = "surfaces")]
     fn create_glyph_atlas_page(
         &mut self,
         width: u32,
@@ -311,27 +278,22 @@ impl RenderDevice for GlesRenderDevice {
         self.create_glyph_atlas_page(width, height)
     }
 
-    #[cfg(feature = "surfaces")]
     fn delete_glyph_atlas_page(&mut self, page: Self::GlyphAtlasPage) {
         self.delete_glyph_atlas_page(page);
     }
 
-    #[cfg(feature = "surfaces")]
     fn begin_glyph_atlas_page(&mut self, page: &Self::GlyphAtlasPage) -> Result<(), RenderError> {
         self.begin_glyph_atlas_page(page)
     }
 
-    #[cfg(feature = "surfaces")]
     fn end_glyph_atlas_page(&mut self) -> Result<(), RenderError> {
         self.end_glyph_atlas_page()
     }
 
-    #[cfg(feature = "surfaces")]
     fn glyph_atlas_texture(page: &Self::GlyphAtlasPage) -> &Self::Texture {
         &page.texture
     }
 
-    #[cfg(feature = "particles")]
     fn set_instances(&mut self, instances: &[[f32; 20]]) -> Result<(), RenderError> {
         self.instance_count = i32::try_from(instances.len())
             .map_err(|_| RenderError::RenderDevice("Too many instances".into()))?;
@@ -364,7 +326,6 @@ impl RenderDevice for GlesRenderDevice {
         self.check_draw()
     }
 
-    #[cfg(feature = "particles")]
     fn set_additive(&mut self, enabled: bool) -> Result<(), RenderError> {
         if enabled && self.submission.blend.get() != Some(3) {
             self.submission.blend.set(Some(3));
@@ -437,9 +398,7 @@ impl RenderDevice for GlesRenderDevice {
                 lighting: lighting::GlesLightingLocations::load(&self.gl, id),
                 uniforms: Default::default(),
                 values: Default::default(),
-                #[cfg(feature = "skeletal-animation")]
                 joints: (self.gl.uniform_location)(id, c"u_joints[0]".as_ptr()),
-                #[cfg(feature = "mesh-poses")]
                 pose_weight: (self.gl.uniform_location)(id, c"u_pose_weight".as_ptr()),
                 texture,
             })
@@ -455,7 +414,6 @@ impl RenderDevice for GlesRenderDevice {
             indices: count,
             color: 0,
             normal: 0,
-            #[cfg(feature = "skeletal-animation")]
             skin: [0; 2],
             uv: 0,
             weight: 0,
@@ -506,7 +464,6 @@ impl RenderDevice for GlesRenderDevice {
                     mesh.weight = self.upload_attribute(3, 1, 0x1401, true, weights)?;
                 }
             }
-            #[cfg(feature = "skeletal-animation")]
             if let (Some(indices), Some(weights)) = (asset.joint_indices(), asset.joint_weights()) {
                 mesh.skin[0] = self.upload_attribute(5, 4, 0x1401, false, indices)?;
                 mesh.skin[1] = self.upload_attribute(6, 4, FLOAT, false, weights)?;
@@ -648,7 +605,6 @@ impl RenderDevice for GlesRenderDevice {
         self.check()
     }
 
-    #[cfg(feature = "surfaces")]
     fn begin_camera_target(
         &mut self,
         target: &mut Self::SurfaceCacheTarget,
@@ -672,10 +628,7 @@ impl RenderDevice for GlesRenderDevice {
         }
 
         self.submission.invalidate();
-        #[cfg(feature = "surfaces")]
-        {
-            self.surface_viewport = [width as f32, height as f32];
-        }
+        self.surface_viewport = [width as f32, height as f32];
         self.begin_linear_target(width, height)?;
         self.set_viewport([0, 0, width as i32, height as i32]);
         self.set_depth_mask(true);
@@ -704,7 +657,6 @@ impl RenderDevice for GlesRenderDevice {
         self.check_draw()
     }
 
-    #[cfg(feature = "skeletal-animation")]
     fn set_skin_palette(
         &mut self,
         program: &GlesRenderProgram,
@@ -738,7 +690,7 @@ impl RenderDevice for GlesRenderDevice {
         mesh: &GlesRenderMesh,
         mvp: &[f32; 16],
         material: &[f32; 3],
-        #[cfg(feature = "mesh-poses")] pose: Option<(&Self::Mesh, f32)>,
+        pose: Option<(&Self::Mesh, f32)>,
         texture: Option<&u32>,
     ) -> Result<(), RenderError> {
         // SAFETY: GlesRenderProgram/mesh names remain owned by this renderer/context.
@@ -759,7 +711,6 @@ impl RenderDevice for GlesRenderDevice {
                 self.program_int(program, program.texture, 0);
             }
             self.bind_vertex_array(mesh.vao);
-            #[cfg(feature = "mesh-poses")]
             if let Some((target, weight)) = pose {
                 (self.gl.uniform_float)(program.pose_weight, weight);
                 (self.gl.bind_buffer)(ARRAY_BUFFER, target.buffers[0]);
@@ -785,7 +736,6 @@ impl RenderDevice for GlesRenderDevice {
             if mesh.normal == 0 {
                 (self.gl.attrib_rgb)(4, 0.0, 0.0, 0.0);
             }
-            #[cfg(feature = "particles")]
             if self.instance_count > 0 {
                 (self.gl.bind_buffer)(ARRAY_BUFFER, self.instance_buffer);
                 for slot in 9..14 {
@@ -816,9 +766,6 @@ impl RenderDevice for GlesRenderDevice {
             } else {
                 (self.gl.draw_elements)(TRIANGLES, mesh.indices, UNSIGNED_SHORT, ptr::null());
             }
-            #[cfg(not(feature = "particles"))]
-            (self.gl.draw_elements)(TRIANGLES, mesh.indices, UNSIGNED_SHORT, ptr::null());
-            #[cfg(feature = "mesh-poses")]
             if pose.is_some() {
                 // Release VAO references to borrowed target buffers before their
                 // resource can unload. Disabling alone would retain GL storage.
@@ -840,17 +787,12 @@ impl RenderDevice for GlesRenderDevice {
         unsafe {
             self.bind_vertex_array(0);
             self.use_program(0);
-            #[cfg(feature = "shadows")]
-            {
-                (self.gl.active_texture)(0x84C1);
-                (self.gl.bind_texture)(0x0DE1, 0);
-                (self.gl.bind_sampler)(1, 0);
-            }
-            {
-                (self.gl.active_texture)(0x84C0);
-                (self.gl.bind_texture)(0x0DE1, 0);
-                (self.gl.bind_sampler)(0, 0);
-            }
+            (self.gl.active_texture)(0x84C1);
+            (self.gl.bind_texture)(0x0DE1, 0);
+            (self.gl.bind_sampler)(1, 0);
+            (self.gl.active_texture)(0x84C0);
+            (self.gl.bind_texture)(0x0DE1, 0);
+            (self.gl.bind_sampler)(0, 0);
         }
 
         let checked = self.check_frame_end();
@@ -868,7 +810,6 @@ impl RenderDevice for GlesRenderDevice {
             (self.gl.delete_buffers)(2, mesh.buffers.as_ptr());
             (self.gl.delete_buffers)(1, &mesh.color);
             (self.gl.delete_buffers)(1, &mesh.normal);
-            #[cfg(feature = "skeletal-animation")]
             (self.gl.delete_buffers)(2, mesh.skin.as_ptr());
             {
                 (self.gl.delete_buffers)(1, &mesh.uv);

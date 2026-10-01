@@ -8,12 +8,14 @@ test("Surface terminal renders crisp small text, drawings and RGBA through a gen
   timeout: 120000,
 }, async (context) => {
   const workspace = process.cwd(),
-    directory = resolve(workspace, "target/browser-build/render-surfaces");
+    directory = resolve(
+      workspace,
+      "target/browser-build/render-instrumentation",
+    );
   const build = {
-    name: "render-surfaces" as const,
+    name: "render-instrumentation" as const,
     generatedModule: resolve(directory, "generated.js"),
     runtimeWasm: resolve(directory, "runtime.wasm"),
-    exportWasm: resolve(directory, "export.wasm"),
     contractArtifact: resolve(directory, "contract.bin"),
   };
   await runBrowserEnvironment(
@@ -21,7 +23,6 @@ test("Surface terminal renders crisp small text, drawings and RGBA through a gen
     {
       workspace,
       build,
-      mismatchBuild: build,
       operationTimeoutMs: 30000,
       evidenceParent: resolve(
         workspace,

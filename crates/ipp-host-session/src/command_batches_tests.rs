@@ -68,7 +68,7 @@ fn connect(host: &mut Host<Platform>, connection: u64) -> u64 {
 /// Open a connection with one session on a fresh World of `systems`.
 fn connect_with(host: &mut Host<Platform>, connection: u64, systems: Vec<String>) -> u64 {
     host.open_connection(connection).unwrap();
-    host.receive_connection(connection, &ipp_protocol::bootstrap())
+    host.receive_connection(connection, &ipp_protocol::HELLO)
         .unwrap();
     host.take_connection_response(connection).unwrap();
     let HostResponseBody::Created {
@@ -655,7 +655,7 @@ fn a_session_without_a_connection_accepts_only_complete_batches() {
     let mut host = Host::<Platform>::new().unwrap();
     host.open_session(1, &[]).unwrap();
     let mut session = host.session_mut(1).unwrap();
-    session.receive(&ipp_protocol::bootstrap()).unwrap();
+    session.receive(&ipp_protocol::HELLO).unwrap();
     session.take_response().unwrap();
 
     assert!(

@@ -43,7 +43,6 @@ pub(super) struct GuiMotionAnimations {
     wake: BTreeSet<GuiMotionOwner>,
     refresh: BTreeSet<GuiMotionOwner>,
     demand_dirty: bool,
-    #[cfg(feature = "diagnostics")]
     pub statistics: crate::systems::gui::motion::GuiMotionSamplingWork,
 }
 
@@ -354,10 +353,7 @@ impl GuiMotionAnimations {
         dt: f64,
         changes: &[GuiMotionOwner],
     ) {
-        #[cfg(feature = "diagnostics")]
-        {
-            self.statistics = Default::default();
-        }
+        self.statistics = Default::default();
 
         let mut changes: BTreeSet<_> = changes.iter().copied().collect();
         changes.append(&mut self.refresh);
@@ -405,10 +401,7 @@ impl GuiMotionAnimations {
         let mut work = std::mem::take(&mut self.active);
         work.append(&mut self.wake);
         for owner in work {
-            #[cfg(feature = "diagnostics")]
-            {
-                self.statistics.owners += 1;
-            }
+            self.statistics.owners += 1;
 
             let Some(channels) = channels(context, owner) else {
                 continue;
@@ -426,10 +419,7 @@ impl GuiMotionAnimations {
                 .get(&owner)
                 .is_some_and(|binding| binding.prepared.is_none());
             if changed || suspended {
-                #[cfg(feature = "diagnostics")]
-                {
-                    self.statistics.bindings += 1;
-                }
+                self.statistics.bindings += 1;
 
                 let request = channels.request.clone();
                 let origin = match self.bindings.get(&owner) {
@@ -505,10 +495,7 @@ impl GuiMotionAnimations {
                 let Some((controller, program)) = &mut binding.prepared else {
                     continue;
                 };
-                #[cfg(feature = "diagnostics")]
-                {
-                    self.statistics.samples += 1;
-                }
+                self.statistics.samples += 1;
                 notify(context, owner);
                 if program
                     .evaluate(
@@ -703,7 +690,6 @@ fn build(
             source,
             clip.duration(),
             baseline.clone(),
-            #[cfg(feature = "skeletal-animation")]
             None,
         )?;
         driver.resolve_track(clip)?;

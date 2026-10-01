@@ -56,7 +56,7 @@ export function encodeBoundingShape(
         )
           fail("invalid pill");
         if (part.joints) {
-          if (!CAPABILITIES.skeletalAnimation || part.joints.length !== 2)
+          if (part.joints.length !== 2)
             fail("joint mapping requires skeletons");
           for (const value of [...start, ...end])
             if (value !== 0) fail("joint pairs define pill endpoints");

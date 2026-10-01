@@ -10,7 +10,6 @@ const SPATIAL_SYSTEMS: &[crate::systems::SystemId] = &[
 ];
 
 /// Skeleton joints under propagated transforms.
-#[cfg(all(feature = "skeletal-animation", feature = "builtin-assets"))]
 const SKELETON_AND_SPATIAL_SYSTEMS: &[crate::systems::SystemId] = &[
     crate::systems::animation::AnimationSystem::ID,
     crate::systems::asset_dependencies::AssetDependencySystem::ID,
@@ -494,7 +493,6 @@ fn snapshot_rejects_missing_parents_and_cycles_before_restore() {
     assert_eq!(host.world_mut(original).unwrap().entities().len(), 2);
 }
 
-#[cfg(all(feature = "skeletal-animation", feature = "builtin-assets"))]
 #[test]
 fn joint_selection_and_look_at_share_the_effective_parent_frame() {
     use crate::components::{LookAt, ParentJoint, Skeleton};

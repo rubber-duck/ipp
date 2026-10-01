@@ -248,8 +248,9 @@ test("skinned gallery picking and its selected pills follow both bone segments",
       await probe([-0.75, -0.65, 0], undefined);
       const bentOutline = await yellow("pills-bent");
       assert.ok(bentOutline.count > 20);
+      // Five pixels of the 857-pixel-wide canvas the shift was first set on.
       assert.ok(
-        restOutline.x - bentOutline.x > 5,
+        restOutline.x - bentOutline.x > 0.0058 * bent.frame.width,
         "the yellow contour moves left with the upper bone",
       );
 

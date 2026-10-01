@@ -109,7 +109,6 @@ impl System for GeometrySystem {
             .picking
             .before_commit(context, crate::ComponentValue::PICKING_GEOMETRY);
         self.refresh = true;
-        #[cfg(feature = "skeletal-animation")]
         self.before_geometry_commit(context);
     }
 
@@ -136,7 +135,6 @@ impl System for GeometrySystem {
             self.state.spatial_bounds.invalidate();
             self.state.spatial_picking.invalidate();
             self.invalidate_programs(context.world.world);
-            #[cfg(feature = "skeletal-animation")]
             self.before_geometry_asset_release(context, event);
         }
     }

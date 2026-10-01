@@ -133,7 +133,6 @@ pub(crate) struct GuiCommitScratch {
 
 impl<D: RenderDevice> GuiSurfaceStorage<D> {
     /// Allocated GPU bytes.
-    #[cfg(any(test, feature = "diagnostics"))]
     pub fn bytes(&self) -> usize {
         self.capacity * std::mem::size_of::<GuiVertex>()
     }
@@ -213,10 +212,7 @@ impl<D: RenderDevice> GuiSurfaceStorage<D> {
             .map(|slot| (slot.len / 3) as u32)
             .sum();
         stats.draw(triangles);
-        #[cfg(any(test, feature = "diagnostics"))]
-        {
-            stats.statistics.gui_batches += slots.len() as u32;
-        }
+        stats.statistics.gui_batches += slots.len() as u32;
         Ok(())
     }
 }
@@ -488,10 +484,7 @@ fn write_planned<D: RenderDevice>(
                     let before = scratch.vertices.len();
                     fill(piece, &mut scratch.vertices);
                     debug_assert_eq!(scratch.vertices.len() - before, pieces[piece].len);
-                    #[cfg(any(test, feature = "diagnostics"))]
-                    {
-                        stats.statistics.gui_allocations += 1;
-                    }
+                    stats.statistics.gui_allocations += 1;
                 }
                 GuiWrite::Clear {
                     len,

@@ -4,7 +4,7 @@
 
 ## Supported subset
 
-Enable `skeletal-animation` for skeleton/pose assets, joint playback, skin bindings/palettes and rendered deformation. Property animation is standard; no extra animation/skinning flags. See [joint targets](animation.md#joint-targets-and-pose-keyframes).
+Every build compiles skeleton/pose assets, joint playback, skin bindings/palettes and rendered deformation; a World selects the skinning Systems to use them. Property animation is standard; no extra animation/skinning flags. See [joint targets](animation.md#joint-targets-and-pose-keyframes).
 
 ```mermaid
 flowchart LR
@@ -23,7 +23,7 @@ flowchart LR
 
 ## Built-in fixture
 
-With `builtin-assets` and `skeletal-animation`:
+Every build provides:
 
 | Source | Content |
 | --- | --- |
@@ -34,7 +34,7 @@ With `builtin-assets` and `skeletal-animation`:
 
 The [built-in source](../../crates/ipp-core/src/services/asset_management/builtin) owns fixture geometry and weights. These URIs accept no parameters; variants do not change content.
 
-Use `target/browser-build/render-skeletal-animation`'s generated client:
+Use `target/browser-build/render`'s generated client:
 
 ```ts
 const entity = Entity.alias(0);
@@ -61,8 +61,8 @@ Joint streams add 20 decoded/upload bytes per vertex when supplied; rigid meshes
 ## Validation
 
 - `python tools/ipp.py test skinning`: generated client → worker/WASM/WebGL, independent instances, projected pixels, rejection and real context loss. Evidence: `target/integration-artifacts/browser`.
-- Expanded builds add pose keys, half-weight base/additive contributions, exact seeks and replacement invalidation; lean builds prove omitted helpers/providers/shader imports.
-- `cargo test -p ipp-core --all-features --test skeleton --locked`: hierarchy, bind-pose/space math, payloads, stable buffers, stale identities and partial-failure repair.
+- The same scenario covers pose keys, half-weight base/additive contributions, exact seeks and replacement invalidation.
+- `cargo test -p ipp-core --test skeleton --locked`: hierarchy, bind-pose/space math, payloads, stable buffers, stale identities and partial-failure repair.
 
 Actual Linux GLES:
 
@@ -81,4 +81,4 @@ The [gallery beam fixture](../../examples/world-gallery/worlds/lighting/animatio
 
 Forward PBR and spotlight depth use the same palette. Authored normals use inverse-transpose blended skin then model normal transforms; absent normals derive flat shading from deformed positions. `encodeSkinnedMesh` accepts optional `normals`. Rigid/skinned depth programs cache separately and release when shadow demand/context ends.
 
-The expanded suite compares GPU bending/smooth normals/shadows with an independently baked rigid reference, requires a measurable receiver shadow and restores after context loss. Native `egl_skinning` with `--features skeletal-animation,shadows` covers lit/depth composition and recovery; CI runs both native selections.
+The suite compares GPU bending/smooth normals/shadows with an independently baked rigid reference, requires a measurable receiver shadow and restores after context loss. Native `egl_skinning` covers lit/depth composition and recovery.

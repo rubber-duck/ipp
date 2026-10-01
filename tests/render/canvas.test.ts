@@ -23,8 +23,7 @@ import type {
 } from "./canvas-fixture.js";
 
 const workspace = resolve(process.cwd());
-const render = browserBuild("render-surfaces");
-const headless = browserBuild("headless");
+const render = browserBuild("render");
 
 for (const variant of ["development", "production"] as const) {
   test(`${variant}: nested scenes route to independent canvases and clean up`, {
@@ -36,7 +35,6 @@ for (const variant of ["development", "production"] as const) {
       {
         workspace,
         build: render,
-        mismatchBuild: headless,
         operationTimeoutMs: 12_000,
         closeTimeoutMs: 5_000,
         evidenceParent: resolve(
@@ -339,7 +337,6 @@ test("StrictMode unmount aborts a real worker during gated WASM startup", {
     {
       workspace,
       build: render,
-      mismatchBuild: headless,
       operationTimeoutMs: 12_000,
       closeTimeoutMs: 5_000,
       evidenceParent: resolve(
@@ -439,7 +436,6 @@ for (const variant of ["development", "production"] as const) {
       {
         workspace,
         build: render,
-        mismatchBuild: headless,
         operationTimeoutMs: 15000,
         closeTimeoutMs: 5000,
         evidenceParent: resolve(
@@ -583,7 +579,6 @@ test("saved World HTTP fetch aborts and closes its already connected Host", {
     {
       workspace,
       build: render,
-      mismatchBuild: headless,
       operationTimeoutMs: 12000,
       closeTimeoutMs: 5000,
       evidenceParent: resolve(
@@ -648,7 +643,6 @@ for (const variant of ["development", "production"] as const) {
       {
         workspace,
         build: render,
-        mismatchBuild: headless,
         operationTimeoutMs: 20_000,
       },
       context.signal,
@@ -690,15 +684,12 @@ for (const variant of ["development", "production"] as const) {
   });
 }
 
-function browserBuild(
-  name: "render-surfaces" | "headless",
-): BrowserBuildConfiguration {
+function browserBuild(name: "render"): BrowserBuildConfiguration {
   const directory = resolve(workspace, "target/browser-build", name);
   return {
     name,
     generatedModule: resolve(directory, "generated.js"),
     runtimeWasm: resolve(directory, "runtime.wasm"),
-    exportWasm: resolve(directory, "export.wasm"),
     contractArtifact: resolve(directory, "contract.bin"),
   };
 }
@@ -838,7 +829,6 @@ test("saved World HTTP assets fetch through connection mappings without changing
     {
       workspace,
       build: render,
-      mismatchBuild: headless,
       operationTimeoutMs: 15000,
       closeTimeoutMs: 5000,
       evidenceParent: resolve(

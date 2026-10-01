@@ -32,7 +32,10 @@ def development_python() -> str:
 
 
 def probe(
-    command: list[str], timeout: int = 30, cancel: threading.Event | None = None
+    command: list[str],
+    timeout: int = 30,
+    cancel: threading.Event | None = None,
+    environment: dict[str, str | None] | None = None,
 ) -> str:
     # Imported on execution to keep the environment/runner modules import-safe.
     from .runner import execute
@@ -44,6 +47,7 @@ def probe(
             Task("probe", "Inspect environment", tuple(command), timeout=timeout),
             log,
             event,
+            environment=environment,
         )
         output = log.read_text(errors="replace").strip()
         if event.is_set():
@@ -57,9 +61,12 @@ def inspect(
     requirements: set[str],
     egl_directory: str | None = None,
     cancel: threading.Event | None = None,
+    environment: dict[str, str | None] | None = None,
 ) -> list[Requirement]:
+    """Probe with the child environment the run will use, including its browser device."""
+
     def inspect_command(command: list[str], timeout: int = 30) -> str:
-        return probe(command, timeout, cancel)
+        return probe(command, timeout, cancel, environment)
 
     results = []
     for name in sorted(requirements | {"python"}):

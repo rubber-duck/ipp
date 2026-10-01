@@ -46,6 +46,20 @@ export { createWorkerHost, workerTransport } from "./worker.js";
 export type { WorkerHost, WorkerEndpoint } from "./worker.js";
 export { browserRuntime } from "./browser.js";
 
+export {
+  HOST_MESSAGE_BYTES,
+  HostContractMismatchError,
+  acceptHostAnnouncement,
+  contractIdentity,
+  hostContractRequest,
+  hostHello,
+  isHostContractReply,
+  readHostAnnouncement,
+  readHostContract,
+  readHostContractReply,
+} from "./host-contract.js";
+export type { ContractIdentity, HostAnnouncement } from "./host-contract.js";
+export { webSocketTransport } from "./transport.js";
 export { HostClientBase } from "./host-client.js";
 export { WorldSelectionRequiredError } from "./host-protocol.js";
 export { HostPhysicalInput, GuiPhysicalContext } from "./host-input.js";
@@ -77,10 +91,6 @@ export type {
   PresentationFailure,
 } from "./host-presentation.js";
 export type * from "./host-protocol.js";
-export type {
-  HostGuiLayoutStatistics,
-  GuiLayoutWorkStatistics,
-} from "./presentation.js";
 export {
   WorldPersistenceHostClient,
   WorldGraphLoadError,

@@ -48,14 +48,10 @@ impl WorldAttachmentSystem {
                     (None, placement)
                 }
             };
-            #[cfg(not(feature = "surfaces"))]
-            let surface_extent = None;
-            #[cfg(feature = "surfaces")]
             let surface_extent = (value.mode != 0)
                 .then(|| world.world.components.surface(entity.index() as usize))
                 .flatten()
                 .map(|surface| [f64::from(surface.width), f64::from(surface.height)]);
-            #[cfg(feature = "surfaces")]
             let surface_cache_policy = surface_extent
                 .and_then(|_| {
                     world
@@ -77,7 +73,6 @@ impl WorldAttachmentSystem {
                 placement_output,
                 placement,
                 surface_extent,
-                #[cfg(feature = "surfaces")]
                 surface_cache_policy,
                 publication: None,
             });

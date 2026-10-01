@@ -1,3 +1,4 @@
+import { renderDiagnostics } from "../../../packages/ipp-client/src/diagnostics.js";
 import type {
   AnimationWorldClient,
   Client,
@@ -70,7 +71,11 @@ export interface MotionEnvironment {
 }
 const width = 96;
 const height = 64;
-const transitionDuration = 2;
+// Interruption checks start near the transition midpoint, so they can only
+// tell continuity from restart while the Host-time envelope around a capture
+// stays below about 0.22 × this duration. Software rendering's capture round
+// trips take 0.4–0.6 s, beyond the 0.45 s that two seconds would allow.
+const transitionDuration = 4;
 
 function check(value: unknown, message: string): asserts value {
   if (!value) throw new Error(message);
@@ -678,7 +683,7 @@ export async function ordinarySkinMotion(
     await captureUntil("replacement-blue", (image) =>
       near(background(image), [0, 0, 255, 255]),
     );
-    check(host.renderDiagnostics, "Render diagnostics unavailable");
+    check(renderDiagnostics(host), "Render diagnostics unavailable");
 
     async function retained(label: string, mutate?: () => Promise<void>) {
       const firstFrame = await child.waitForFrame();
@@ -687,14 +692,14 @@ export async function ordinarySkinMotion(
         warmFrame = await child.waitForFrame(warmFrame.tick);
       await captureUntil("warm-settled", () => true, false);
       const deadline = performance.now() + 10_000;
-      let before = await host.renderDiagnostics!.statistics();
-      while (before.gui?.guiBatches !== 1 || before.frame.uploadedBytes !== 0) {
+      let before = await renderDiagnostics(host)!.statistics();
+      while (before.gui.guiBatches !== 1 || before.frame.uploadedBytes !== 0) {
         check(
           performance.now() < deadline,
           `${label} never coalesced its single compatible retained run`,
         );
         await captureUntil("warm-coalescing", () => true, false);
-        before = await host.renderDiagnostics!.statistics();
+        before = await renderDiagnostics(host)!.statistics();
       }
       await mutate?.();
       const frames = [];
@@ -702,7 +707,7 @@ export async function ordinarySkinMotion(
         frames.push(await child.waitForFrame());
         await captureUntil("unchanged-settled", () => true, false);
       }
-      const after = await host.renderDiagnostics!.statistics();
+      const after = await renderDiagnostics(host)!.statistics();
       check(
         before.gui && after.gui,
         "GUI retained rendering counters unavailable",

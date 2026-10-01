@@ -10,18 +10,12 @@ import shutil
 import time
 
 from .artifacts import source_identity, write_json
-from .builds import cargo, compile_client, product, target, wasm
+from .builds import cargo, compile_client, native_contract, product, wasm
+from .catalog import PROFILES
 from .model import ROOT, Task
 from .processes import blender, node, run
 
 
-FEATURES = [
-    "builtin-assets",
-    "shadows",
-    "skeletal-animation",
-    "mesh-poses",
-    "particles",
-]
 DIRECTORY = ROOT / "target/performance-build"
 # Blender stress-scene options that the retained GUI scene rejects explicitly.
 RETAINED_GUI_UNSUPPORTED = (
@@ -47,7 +41,8 @@ def digest(path: Path) -> str:
 
 
 def build_native(instrumented: bool) -> None:
-    features = [*FEATURES, *(["profiling"] if instrumented else [])]
+    # Timing runs measure the normal build; the instrumented mode adds profiling.
+    features = ["instrumentation"] if instrumented else []
     name = "native-instrumented" if instrumented else "native"
     with product(DIRECTORY / name) as directory:
         cargo(
@@ -59,8 +54,7 @@ def build_native(instrumented: bool) -> None:
             "ipp-server",
             "--example",
             "profile_scene",
-            "--features",
-            ",".join(["websocket", "diagnostics", *features]),
+            *(["--features", ",".join(features)] if features else []),
         )
         suffix = ".exe" if os.name == "nt" else ""
         for source, destination in (
@@ -68,25 +62,14 @@ def build_native(instrumented: bool) -> None:
             (f"examples/profile_scene{suffix}", f"profile_scene{suffix}"),
         ):
             shutil.copy2(ROOT / "target/release" / source, directory / destination)
-        cargo(
-            "run",
-            "--release",
-            "--quiet",
-            "-p",
-            "ipp-protocol",
-            "--example",
-            "export_contract",
-            "--features",
-            ",".join(["schema-export", *features]),
-            output=directory / "contract.bin",
-        )
+        native_contract(directory / "contract.bin", release=True)
         compile_client(directory, directory / "contract.bin")
         write_json(
             directory / "build-identity.json",
             {
                 "source": source_identity(ROOT),
                 "profile": "release",
-                "capabilities": features,
+                "features": features,
                 "instrumented": instrumented,
                 "executable": digest(directory / f"profile_scene{suffix}"),
                 "contract": digest(directory / "contract.bin"),
@@ -95,29 +78,22 @@ def build_native(instrumented: bool) -> None:
 
 
 def build_browser() -> None:
-    # Instrumentation is explicit and cannot change a normal distribution build.
+    """The instrumentation browser distribution whose profiler the browser stress
+    scene reads, built apart from the regression products."""
+    name = "render-instrumentation"
+    configuration = PROFILES["browser"][name]
     with product(DIRECTORY / "browser") as output:
-        for name in ("headless", "render-expanded"):
-            directory = output / name
-            directory.mkdir()
-            features = ["profiling"]
-            if name == "render-expanded":
-                features.extend(["render", "diagnostics", *FEATURES[1:]])
-            builtins = name == "render-expanded"
-            wasm(features, builtins, "release-small", directory)
-            compile_client(directory, directory / "contract.bin")
-            request = directory / "request.json"
-            write_json(
-                request,
-                {
-                    "configuration": name,
-                    "features": features,
-                    "builtins": builtins,
-                    "directory": str(directory),
-                },
-            )
-            run([node(), "tools/build/verify-browser.mjs", str(request)])
-            request.unlink()
+        directory = output / name
+        directory.mkdir()
+        wasm(configuration["features"], "release-small", directory)
+        compile_client(directory, directory / "contract.bin")
+        request = directory / "request.json"
+        write_json(
+            request,
+            {"configuration": name, **configuration, "directory": str(directory)},
+        )
+        run([node(), "tools/build/verify-browser.mjs", str(request)])
+        request.unlink()
 
 
 def register(tasks: dict[str, Task]) -> None:
@@ -163,11 +139,9 @@ def plan(args: argparse.Namespace, tasks: dict[str, Task]) -> list[str]:
         dependencies = (
             "build:gui-stress-fixtures",
             "build:surface-assets",
-            "build:browser:headless-gui"
-            if args.backend == "browser"
-            else "build:gles-hosts",
+            "build:browser:render" if args.backend == "browser" else "build:gles-host",
             *(
-                ["build:browser:gui-stress-profile"]
+                ["build:browser:render-instrumentation"]
                 if args.backend == "browser"
                 else []
             ),
@@ -216,8 +190,8 @@ def plan(args: argparse.Namespace, tasks: dict[str, Task]) -> list[str]:
         dependencies = (
             "build:typescript",
             "build:surface-gui-fixtures",
-            "build:browser:render-surfaces",
-            "build:browser:headless-gui",
+            # Both variants simulate context loss, a testing control.
+            "build:browser:render-instrumentation",
         )
         if args.build_only:
             return list(dependencies)
@@ -466,7 +440,9 @@ def browser_scene(config: dict, directory: Path, bundle: Path, output: Path) -> 
     if bundle != output / "bundle":
         raise ValueError("Browser benchmarks require --bundle-dir OUTPUT/bundle")
     env = {
-        "IPP_BROWSER_BUILD_DIR": config["host"],
+        "IPP_BROWSER_DISTRIBUTION": str(
+            Path(config["host"]) / "render-instrumentation"
+        ),
         "IPP_STRESS_DIR": str(output),
         "IPP_STRESS_FRAMES": str(config["frames"]),
         "IPP_STRESS_GROUP": str(config["group"]),

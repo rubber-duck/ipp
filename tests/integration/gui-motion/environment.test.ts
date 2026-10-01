@@ -26,15 +26,12 @@ for (const mode of ["development", "production", "native"] as const) {
     const native = mode === "native";
     const workspace = resolve(process.cwd());
     const directory = resolve(
-      native
-        ? "target/gles-host/gles-gui"
-        : "target/browser-build/headless-gui",
+      native ? "target/gles-host" : "target/browser-build/render",
     );
     const build: BrowserBuildConfiguration = {
-      name: native ? "gles-gui" : "headless-gui",
+      name: native ? "gles" : "render",
       generatedModule: resolve(directory, "generated.js"),
       runtimeWasm: resolve(directory, native ? "gles_host" : "runtime.wasm"),
-      exportWasm: resolve(directory, native ? "contract.bin" : "export.wasm"),
       contractArtifact: resolve(directory, "contract.bin"),
     };
 
@@ -55,7 +52,6 @@ for (const mode of ["development", "production", "native"] as const) {
         {
           workspace,
           build,
-          mismatchBuild: build,
           operationTimeoutMs: 120_000,
           rendering: !native,
           async beforeArtifactResponse(url, signal) {

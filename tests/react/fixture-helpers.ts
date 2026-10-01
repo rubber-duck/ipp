@@ -10,11 +10,10 @@ import type {
   Inspection,
   Response,
 } from "@ipp/client";
-import { reactRootSystems } from "../integration/system-selections.js";
+import { REACT_ROOT, selectSystems } from "../integration/system-selections.js";
 
 export interface GeneratedModule {
   readonly MAX_MESSAGE_BYTES: number;
-  readonly CAPABILITIES: { readonly surfaces: boolean };
   readonly IppClient: {
     connectWorker(
       workerUrl: string | URL,
@@ -72,7 +71,7 @@ export async function connect(
     configuration.workerScriptUrl,
     configuration.wasmUrl,
     {
-      selectedSystems: reactRootSystems(contract.CAPABILITIES),
+      selectedSystems: selectSystems(REACT_ROOT),
       timeoutMs: configuration.timeoutMs,
     },
   );

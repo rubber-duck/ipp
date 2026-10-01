@@ -1,7 +1,6 @@
 //! Ordinary ScrollView and VirtualList geometry through real headless Host frames:
 //! scroll bars against enclosing tracks, painter order, VirtualList extents and
 //! clips, scrolled paint of every leaf kind, and layout-sourced scroll changes.
-#![cfg(feature = "gui")]
 
 mod support;
 
@@ -511,11 +510,8 @@ fn scrolling_moves_every_leaf_kind_under_fixed_viewport_clips() {
     panel.act(inner, GuiLocalAction::ScrollTo([0.0, 240.0]));
     panel.frame();
     assert_eq!(position(&mut panel, inner).offset, [0.0, 240.0]);
-    #[cfg(feature = "diagnostics")]
-    {
-        let work = panel.work();
-        assert_eq!((work.reflows, work.text_measurements), (1, 0));
-    }
+    let work = panel.work();
+    assert_eq!((work.reflows, work.text_measurements), (1, 0));
     let after = panel.output();
     for &leaf in &leaves {
         let (old, new) = (content_entry(&before, leaf), content_entry(&after, leaf));
@@ -530,11 +526,8 @@ fn scrolling_moves_every_leaf_kind_under_fixed_viewport_clips() {
             &content_entry(&after, untouched)
         ));
     }
-    #[cfg(feature = "diagnostics")]
-    {
-        panel.frame();
-        assert_eq!(panel.work().reflows, 0);
-    }
+    panel.frame();
+    assert_eq!(panel.work().reflows, 0);
 }
 
 /// Layout writes a ScrollView's geometry fields whenever it settles the view to new
@@ -560,7 +553,6 @@ fn layout_sourced_scroll_changes_write_the_fields_once_per_geometry_change() {
             let current = panel.scroll(scroll);
             counts.push(u32::from(current != fields));
             fields = current;
-            #[cfg(feature = "diagnostics")]
             reflows.push(panel.work().reflows);
         }
         (counts, reflows)
@@ -583,7 +575,6 @@ fn layout_sourced_scroll_changes_write_the_fields_once_per_geometry_change() {
     set_height(&mut panel, content, 500.0);
     let (counts, _reflows) = emissions(&mut panel, 4);
     assert_eq!(counts, vec![1, 0, 0, 0]);
-    #[cfg(feature = "diagnostics")]
     assert_eq!(_reflows, vec![1, 0, 0, 0]);
     assert_eq!(position(&mut panel, scroll).offset, [0.0, 0.0]);
 

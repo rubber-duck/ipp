@@ -2,9 +2,9 @@ import type { MessageTransport, Response, TransportEvents } from "@ipp/client";
 import type { Client } from "@ipp/client";
 import { isAssetSourceResponse } from "../../packages/ipp-client/src/asset-sources.js";
 import {
-  lifecycleTesting,
+  lifecycleDiagnostics,
   type LifecycleDiagnosticSample,
-} from "../../packages/ipp-client/src/lifecycle-diagnostics.js";
+} from "../../packages/ipp-client/src/diagnostics.js";
 export { createWorkerHost } from "../../packages/ipp-client/src/worker.js";
 
 export interface LifecycleTransportProbe {
@@ -89,7 +89,7 @@ export function lifecycleTargetTransport(
   return {
     probe: {
       statistics(client, output) {
-        return lifecycleTesting(client).statistics(output);
+        return lifecycleDiagnostics(client).statistics(output);
       },
       records(session) {
         return { ...(totals.get(session) ?? { messages: 0, bytes: 0 }) };

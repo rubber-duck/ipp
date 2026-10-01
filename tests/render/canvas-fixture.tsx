@@ -461,9 +461,9 @@ export async function setCanvasContextLost(
 ): Promise<void> {
   const handle = requireHandle(id);
   const previous = handle.view?.surface.context;
-  if (lost) presentationTesting(handle.host.renderDiagnostics!).loseContext();
+  if (lost) presentationTesting(handle.host).loseContext();
   else {
-    presentationTesting(handle.host.renderDiagnostics!).restoreContext();
+    presentationTesting(handle.host).restoreContext();
     const deadline = performance.now() + OPERATION_TIMEOUT_MS;
     for (;;) {
       try {
@@ -1031,9 +1031,6 @@ async function prepareProducer(
   handle: IppCanvasHandle,
 ): Promise<void> {
   const client = handle.client;
-  if (!client.capabilities.spatial || !client.capabilities.builtinAssets) {
-    throw new Error("canvas fixture requires scene and built-in assets");
-  }
   const camera = await createFixtureCamera(client);
   const output = await handle.host.bindOutput(
     client.worldReference!,

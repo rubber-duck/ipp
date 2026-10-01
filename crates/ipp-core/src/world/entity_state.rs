@@ -170,7 +170,6 @@ impl WorldMutationState {
                 entity: id,
                 kind: systems::lifecycle_publisher::EntityLifecycleKind::Created,
             });
-        #[cfg(feature = "diagnostics")]
         self.record_entity_effect("entity.create", id);
         aliases.insert_created(alias, id);
         created.push((alias, id));
@@ -199,7 +198,6 @@ impl WorldMutationState {
                 entity: id,
                 kind: systems::lifecycle_publisher::EntityLifecycleKind::Deleted,
             });
-        #[cfg(feature = "diagnostics")]
         self.record_entity_effect("entity.delete", id);
     }
 }

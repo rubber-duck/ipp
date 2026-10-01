@@ -29,7 +29,7 @@ def handler(name: str, root: Path = ROOT) -> type[BaseHTTPRequestHandler]:
                 "examples/world-gallery",
                 "target/gallery-build",
                 "target/gallery-fixtures",
-                "target/browser-build/render-expanded",
+                "target/browser-build/render",
                 "target/gallery-gui-assets",
                 "target/gallery-platformer-assets",
                 "target/font-assets",

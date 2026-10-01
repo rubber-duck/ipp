@@ -17,7 +17,7 @@ type Declaration = Fixture.DebugDeclaration;
 const GLOBAL_COLOR = [0.25, 0.5, 1] as const;
 const SHAPES = ["box", "sphere", "pill"] as const;
 
-for (const name of ["render-baseline", "render"] as const) {
+for (const name of ["render-instrumentation"] as const) {
   test(`${name}: debug geometry uses private uniform WebGL draws`, {
     timeout: 90_000,
   }, async (context) => {
@@ -27,7 +27,6 @@ for (const name of ["render-baseline", "render"] as const) {
       name,
       generatedModule: resolve(directory, "generated.js"),
       runtimeWasm: resolve(directory, "runtime.wasm"),
-      exportWasm: resolve(directory, "export.wasm"),
       contractArtifact: resolve(directory, "contract.bin"),
     };
     await runBrowserEnvironment(
@@ -35,7 +34,6 @@ for (const name of ["render-baseline", "render"] as const) {
       {
         workspace,
         build,
-        mismatchBuild: build,
         operationTimeoutMs: 20_000,
         closeTimeoutMs: 5_000,
         evidenceParent: resolve(
@@ -114,7 +112,6 @@ for (const name of ["render-baseline", "render"] as const) {
               wasmUrl: environment.urls.wasm,
             },
           ]);
-          assert.equal(initialized.debugEnabled, true);
           assertPrivate(initialized);
           await patch({ debugGeometryColor: [...GLOBAL_COLOR] });
 

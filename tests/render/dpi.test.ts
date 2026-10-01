@@ -18,8 +18,7 @@ import type {
 } from "./canvas-fixture.js";
 
 const workspace = resolve(process.cwd());
-const render = browserBuild("render-surfaces");
-const headless = browserBuild("headless");
+const render = browserBuild("render-instrumentation");
 const fixtureModule = "/target/canvas-build/fixture.js";
 
 test("canvas follows CSS size and display density without replacing its runtime", {
@@ -31,7 +30,6 @@ test("canvas follows CSS size and display density without replacing its runtime"
     {
       workspace,
       build: render,
-      mismatchBuild: headless,
       deviceScaleFactor: 2,
       operationTimeoutMs: 12_000,
       closeTimeoutMs: 5_000,
@@ -207,14 +205,13 @@ test("canvas follows CSS size and display density without replacing its runtime"
 });
 
 function browserBuild(
-  name: "render-surfaces" | "headless",
+  name: "render-instrumentation",
 ): BrowserBuildConfiguration {
   const directory = resolve(workspace, "target/browser-build", name);
   return {
     name,
     generatedModule: resolve(directory, "generated.js"),
     runtimeWasm: resolve(directory, "runtime.wasm"),
-    exportWasm: resolve(directory, "export.wasm"),
     contractArtifact: resolve(directory, "contract.bin"),
   };
 }

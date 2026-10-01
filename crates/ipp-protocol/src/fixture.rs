@@ -1,4 +1,4 @@
-//! Target-executed layout and owned dispatch fixture; excluded without schema-export.
+//! Target-executed layout and owned dispatch fixture.
 
 use ipp_core::EntityId;
 use ipp_core::components::rows::Rows;
@@ -88,7 +88,6 @@ fn rows_example() -> Rows<FixtureRow> {
     rows
 }
 
-#[cfg(feature = "gui")]
 fn paint_example() -> Vec<u8> {
     use ipp_core::systems::gui::presentation::{GuiPaintPart, GuiTheme};
     use ipp_core::systems::gui::{GuiPartId, GuiPartVariant, GuiPrimitivePart, GuiSkinState};
@@ -272,10 +271,7 @@ pub fn export() -> Vec<u8> {
     let rows = rows_example().encode();
     bytes.write(&(rows.len() as u32).to_le_bytes());
     bytes.write(&rows);
-    #[cfg(feature = "gui")]
     let paint = paint_example();
-    #[cfg(not(feature = "gui"))]
-    let paint: Vec<u8> = Vec::new();
     bytes.write(&(paint.len() as u32).to_le_bytes());
     bytes.write(&paint);
     bytes

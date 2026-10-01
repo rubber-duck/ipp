@@ -25,14 +25,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         || context.device(),
         output,
     )?;
-    #[cfg(feature = "shadows")]
     smoke::lighting::run(
         &mut renderer,
         &std::fs::read(&args[1])?,
         || context.capture(),
         output,
     )?;
-    #[cfg(feature = "shadows")]
     smoke::lighting::run_custom(
         &mut renderer,
         &std::fs::read(&args[1])?,

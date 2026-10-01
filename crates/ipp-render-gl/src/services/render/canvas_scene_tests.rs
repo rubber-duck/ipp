@@ -33,9 +33,7 @@ const CANVAS_SYSTEMS: &[ipp_core::systems::SystemId] = &[
     ipp_core::systems::geometry::GeometrySystem::ID,
     ipp_core::systems::surface::SurfaceSystem::ID,
     ipp_core::systems::canvas::CanvasSystem::ID,
-    #[cfg(feature = "gui")]
     ipp_core::systems::gui::GuiSystem::ID,
-    #[cfg(feature = "gui")]
     ipp_core::systems::gui::GuiLayoutSystem::ID,
 ];
 
@@ -412,7 +410,6 @@ fn authored_canvas_mapping_and_camera_versions_invalidate_visual_stamps() {
     );
 }
 
-#[cfg(feature = "gui")]
 #[test]
 fn hit_and_pointer_only_publications_preserve_visual_content_stamp() {
     use ipp_core::components::{GuiBehavior, GuiButton, GuiLayout};
@@ -555,7 +552,6 @@ fn hit_and_pointer_only_publications_preserve_visual_content_stamp() {
     service.close_session(&session);
 }
 
-#[cfg(feature = "gui")]
 #[test]
 fn retained_publication_slot_cannot_resurrect_retired_write() {
     use ipp_core::components::{GuiButton, GuiLayout};

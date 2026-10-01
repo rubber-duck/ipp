@@ -1,4 +1,4 @@
-import type { RenderStatisticsSnapshot } from "@ipp/client";
+import type { RenderStatisticsSnapshot } from "@ipp/client/diagnostics";
 import assert from "node:assert/strict";
 import {
   compareFrames,
@@ -59,7 +59,7 @@ export interface RetainedGuiDriver {
   pixels(label: string): RgbaFrame;
 }
 
-/** Counters that only GUI-capable render builds export; others report them unavailable. */
+/** GUI render counters every diagnostics render build exports; layout counters need a laid-out GUI. */
 export const RETAINED_COUNTERS = [
   "guiBatches",
   "guiRebuilds",
@@ -193,9 +193,7 @@ export async function exerciseRetainedGui(
     for (const key of RETAINED_COUNTERS)
       assert.equal(
         typeof counters(frame)[key],
-        retained && (laidOut || !LAYOUT_COUNTERS.has(key))
-          ? "number"
-          : "undefined",
+        laidOut || !LAYOUT_COUNTERS.has(key) ? "number" : "undefined",
         `${label}: ${key}`,
       );
   };

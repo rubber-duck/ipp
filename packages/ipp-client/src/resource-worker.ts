@@ -14,8 +14,8 @@ export interface AssetHostExports {
   ipp_service_resources(): number;
   ipp_resource_poll(): number;
   ipp_asset_error_max_bytes(): number;
-  /** Exported only by `diagnostics` builds, for ingress statistics. */
-  ipp_resource_buffered_bytes?(): number;
+  /** Rust-owned source staging, for ingress statistics. */
+  ipp_resource_buffered_bytes(): number;
   ipp_resource_chunk(session: bigint, id: bigint, length: number): number;
   ipp_resource_end(
     session: bigint,
@@ -253,10 +253,10 @@ export class AssetWorkerService {
     );
   }
 
-  /** Diagnostics builds sample staging at each pump to record its peak. */
+  /** Presenting workers sample staging at each pump to record its peak. */
   private measureBuffers(statistics: IngressStatistics): void {
     statistics.sourceBufferedBytes =
-      this.bufferedBytes + (this.runtime.ipp_resource_buffered_bytes?.() ?? 0);
+      this.bufferedBytes + this.runtime.ipp_resource_buffered_bytes();
     statistics.sourcePeakBufferedBytes = Math.max(
       statistics.sourcePeakBufferedBytes,
       statistics.sourceBufferedBytes,

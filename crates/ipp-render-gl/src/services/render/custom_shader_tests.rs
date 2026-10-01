@@ -66,18 +66,14 @@ fn pose_and_skin_variants_keep_custom_vertex_and_shadow_entries() {
     };
     for shadow in [false, true] {
         let config = RenderShaderConfig::default().with_lighting(false, true);
-        #[cfg(feature = "mesh-poses")]
         let config = config.with_mesh_pose(true);
-        #[cfg(feature = "skeletal-animation")]
         let config = config.with_skinning(true);
         let (vertex, fragment) = sources(config, &definition, "", true, shadow).unwrap();
         assert!(vertex.starts_with("#version 300 es"));
         assert!(vertex.contains("void main() { materialVertex(); }"));
         assert!(fragment.contains("discard"));
         assert!(fragment.contains(&format!("#define IPP_PASS_SHADOW {}", u8::from(shadow))));
-        #[cfg(feature = "mesh-poses")]
         assert!(vertex.contains("mix(a_position, a_pose_position, u_pose_weight)"));
-        #[cfg(feature = "skeletal-animation")]
         assert!(vertex.contains("skinned_position(local_position)"));
     }
 }

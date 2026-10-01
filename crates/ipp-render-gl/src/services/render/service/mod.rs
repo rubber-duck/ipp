@@ -3,18 +3,13 @@
 //! The service boundary types live here; lifecycle, frame, surface and shadow
 //! submissions each own their implementation file.
 
-#[cfg(feature = "surfaces")]
 mod canvas_composition;
-#[cfg(feature = "surfaces")]
 mod composition;
 mod frame;
 mod inclusion;
 mod lifecycle;
-#[cfg(feature = "shadows")]
 mod shadow;
-#[cfg(feature = "surfaces")]
 mod surface;
-#[cfg(feature = "surfaces")]
 mod surface_cache;
 
 use std::fmt;
@@ -24,10 +19,8 @@ use std::{
     rc::Rc,
 };
 
-#[cfg(any(test, feature = "diagnostics"))]
 use super::custom_material::CustomMaterialFallback;
 
-#[cfg(feature = "particles")]
 use super::assets::GlMeshData;
 use super::frame_scratch::RenderFrameScratch;
 use super::shader::RenderShaderConfig;
@@ -92,82 +85,54 @@ pub struct RenderService<D: RenderDevice> {
     pub(super) custom_materials:
         BTreeMap<super::scene::RenderEntity, super::custom_material::PreparedCustomMaterial>,
     /// Retained custom-material fallbacks, so each changed reason is logged once.
-    #[cfg(any(test, feature = "diagnostics"))]
     pub(super) custom_fallbacks: BTreeMap<super::scene::RenderEntity, CustomMaterialFallback>,
     uploads: super::frame_statistics::RenderUploadCounter,
     /// Statistics of the last completed render.
-    #[cfg(any(test, feature = "diagnostics"))]
     statistics: super::frame_statistics::RenderStatistics,
     frame_scratch: RenderFrameScratch,
     pub(super) light_selections:
         BTreeMap<ipp_core::OutputRef, super::light_selection::LightSelectionState>,
-    #[cfg(feature = "shadows")]
     shadow_capacity_limit: usize,
-    #[cfg(feature = "particles")]
     particle_quad: Option<GlMeshData<D>>,
-    #[cfg(feature = "shadows")]
     shadow_map: Option<D::ShadowMap>,
-    #[cfg(feature = "shadows")]
     shadow_map_size: u32,
-    #[cfg(feature = "surfaces")]
     pub(super) camera_targets: BTreeMap<ipp_core::OutputRef, (D::SurfaceCacheTarget, [u32; 2])>,
-    #[cfg(feature = "surfaces")]
     pub(super) camera_completed: std::collections::BTreeSet<ipp_core::OutputRef>,
     debug: crate::services::render::debug_geometry::DebugGeometryRenderCache<D>,
-    #[cfg(feature = "surfaces")]
     pub(super) surface_program: Option<D::Program>,
-    #[cfg(feature = "surfaces")]
     surface_instance_program: Option<D::Program>,
-    #[cfg(feature = "surfaces")]
     surface_bitmap_program: Option<D::Program>,
-    #[cfg(feature = "surfaces")]
     surface_cache_program: Option<D::Program>,
     /// Whole-Surface cache images shared by every World on this context.
-    #[cfg(feature = "surfaces")]
     surface_cache: super::surface_cache::SurfaceTextureCache<D::SurfaceCacheTarget>,
-    #[cfg(feature = "surfaces")]
     canvas_caches: BTreeMap<ipp_core::OutputRef, surface_cache::CanvasCacheState>,
-    #[cfg(feature = "surfaces")]
     canvas_cache_frame: surface_cache::CanvasCacheFrame,
     /// Resources whose primitives the last Surface submission skipped because
     /// they were not resident; a cache repaint records them as incomplete.
-    #[cfg(feature = "surfaces")]
     surface_missing: Vec<ipp_core::services::asset_management::AssetKey>,
     /// The last Surface submission drew a text run analytically because its
     /// atlas entries were not all resident.
-    #[cfg(feature = "surfaces")]
     surface_analytic_text: bool,
     /// The last Surface submission had no usable retained GUI storage, so it
     /// skipped its boxes and drew its text analytically.
-    #[cfg(feature = "surfaces")]
     surface_gui_unretained: bool,
     /// Program drawing GUI boxes and atlas glyphs.
-    #[cfg(feature = "surfaces")]
     surface_gui_program: Option<D::Program>,
-    #[cfg(feature = "surfaces")]
     gui_batch_cache: BTreeMap<ipp_core::OutputRef, super::gui_batch::GuiBatchRenderCache<D>>,
-    #[cfg(feature = "surfaces")]
     pub(super) glyph_atlas: super::glyph_atlas::GlyphAtlas<D>,
-    #[cfg(feature = "surfaces")]
     glyph_batch_cache: BTreeMap<ipp_core::OutputRef, super::glyph_atlas::GlyphBatchRenderCache>,
     /// Painter-order work of the Surface being submitted.
-    #[cfg(feature = "surfaces")]
     surface_ops: Vec<surface::SurfaceOp>,
     /// Glyph misses, population queue and outcomes of the current World frame.
-    #[cfg(feature = "surfaces")]
     glyph_frame: super::glyph_atlas::GlyphFrameWork,
     /// Per-frame population allowance, shared by every World on this context.
-    #[cfg(feature = "surfaces")]
     glyph_population: super::glyph_atlas::GlyphPopulationBudget,
     /// Each World's last drawn Surface paint revisions and identity orders.
-    #[cfg(feature = "surfaces")]
     surface_paint: BTreeMap<ipp_core::OutputRef, super::retained_surfaces::SurfacePaintTracker>,
     /// Each World's retained analytic glyph instance streams.
-    #[cfg(feature = "surfaces")]
     analytic_glyphs: BTreeMap<ipp_core::OutputRef, super::analytic_glyphs::AnalyticGlyphCache<D>>,
 }
 fn prepared_normal(item: &ipp_core::RenderItem) -> Result<&[f32; 16], RenderError> {
-    #[cfg(feature = "particles")]
     if item.particle.is_some() {
         return Ok(&[
             1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
@@ -179,7 +144,6 @@ fn prepared_normal(item: &ipp_core::RenderItem) -> Result<&[f32; 16], RenderErro
 }
 
 fn prepared_model(item: &ipp_core::RenderItem) -> &[f32; 16] {
-    #[cfg(feature = "particles")]
     if item.particle.is_some() {
         return &[
             1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,

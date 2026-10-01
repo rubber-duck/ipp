@@ -12,10 +12,8 @@ macro_rules! embedded_shader {
 }
 pub(crate) use embedded_shader;
 
-#[cfg(feature = "surfaces")]
 mod analytic_glyphs;
 mod assets;
-#[cfg(feature = "surfaces")]
 mod canvas_scene;
 mod custom_material;
 mod custom_shader;
@@ -28,7 +26,6 @@ mod frame_statistics;
 mod light_selection;
 mod lighting;
 
-#[cfg(feature = "particles")]
 mod particles;
 
 mod program_assets;
@@ -37,41 +34,29 @@ pub use scene::RenderEntity;
 mod service;
 mod shader;
 mod shader_asset;
-#[cfg(feature = "surfaces")]
 mod surface_assets;
-#[cfg(feature = "surfaces")]
 mod surface_cache;
-#[cfg(feature = "surfaces")]
 mod surface_path;
 mod template;
 
-#[cfg(feature = "surfaces")]
 pub(crate) mod glyph_atlas;
-#[cfg(feature = "surfaces")]
 pub(crate) mod gui_batch;
-#[cfg(feature = "surfaces")]
 mod gui_storage;
-#[cfg(feature = "surfaces")]
 pub(crate) mod retained_surfaces;
 
-#[cfg(feature = "surfaces")]
 pub use device::SurfacePathDescriptor;
-#[cfg(feature = "surfaces")]
 pub use device::SurfacePathInstance;
 pub use device::{PlatformRenderDevice, RenderDevice, ViewportLimits};
 pub use frame_statistics::RenderFrameSummary;
-#[cfg(any(test, feature = "diagnostics"))]
 pub use frame_statistics::RenderStatistics;
-#[cfg(all(feature = "surfaces", any(test, feature = "diagnostics")))]
+#[cfg(any(test, feature = "instrumentation"))]
 pub use glyph_atlas::{GlyphAtlasLimits, MIN_POPULATES_PER_FRAME as GLYPH_MIN_POPULATES_PER_FRAME};
 /// Retained GUI vertices are the layout of the public [`RenderDevice`] GUI batch
 /// operations; device-level hosts generate box geometry and interpret its fill
 /// code through these.
-#[cfg(feature = "surfaces")]
 pub use gui_batch::{
     GUI_FILL_GLYPH, GuiVertex, generate_box_vertices as generate_gui_box_vertices,
 };
-#[cfg(feature = "surfaces")]
 pub use surface_path::{
     SurfaceBandTexels, SurfaceCurveTexels, SurfacePathAtlas, SurfacePathTexels, pack_surface_paths,
 };
@@ -82,11 +67,9 @@ pub use device::WebGlRenderDevice;
 #[cfg(not(target_arch = "wasm32"))]
 pub use device::GlesRenderDevice;
 
-#[cfg(any(test, feature = "diagnostics"))]
 pub use custom_material::CustomMaterialFallback;
 pub use lighting::RenderLightingFrame;
 pub use service::{RenderError, RenderService};
-#[cfg(all(feature = "surfaces", any(test, feature = "diagnostics")))]
 pub use surface_cache::{
     SURFACE_CACHE_ANIMATED_FRAMES, SURFACE_CACHE_BUDGET_BYTES, SURFACE_CACHE_SETTLE_FRAMES,
     SurfaceCacheDiagnostic, SurfaceCachePresentation,

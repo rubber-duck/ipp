@@ -61,7 +61,7 @@ pub fn run<D: RenderDevice>(
         intensity: 55.0,
         inner_cone: 0.45,
         outer_cone: 0.85,
-        cast_shadows: cfg!(feature = "shadows"),
+        cast_shadows: true,
         ..Light::default()
     };
     let spot = add(
@@ -80,11 +80,8 @@ pub fn run<D: RenderDevice>(
     deliver!(renderer, world_host, world, fixture, None)?;
     let stats = super::world::present_world!(renderer, world_host, world, WIDTH, HEIGHT)?;
     assert_eq!(stats.draw_calls, 2);
-    #[cfg(feature = "shadows")]
-    {
-        assert_eq!(stats.shadow_draw_calls, 1);
-        assert_eq!(stats.shadow_resident_bytes, 4 * 1024 * 1024);
-    }
+    assert_eq!(stats.shadow_draw_calls, 1);
+    assert_eq!(stats.shadow_resident_bytes, 4 * 1024 * 1024);
     let shadowed = capture()?;
     save(output, "lighting-shadowed", &shadowed)?;
     light.cast_shadows = false;
@@ -92,7 +89,6 @@ pub fn run<D: RenderDevice>(
     super::world::present_world!(renderer, world_host, world, WIDTH, HEIGHT)?;
     let lit = capture()?;
     save(output, "lighting-unshadowed", &lit)?;
-    #[cfg(feature = "shadows")]
     {
         let darkened = darkened(&lit, &shadowed);
         assert!(
@@ -177,7 +173,6 @@ pub fn run<D: RenderDevice>(
             "recovery restores depth pass and lit programs"
         );
     }
-    #[cfg(feature = "shadows")]
     {
         replace(
             &mut world,
@@ -369,7 +364,6 @@ fn changed(a: &[u8], b: &[u8]) -> usize {
         .count()
 }
 
-#[cfg(feature = "shadows")]
 fn darkened(a: &[u8], b: &[u8]) -> usize {
     a.as_chunks::<4>()
         .0
@@ -606,7 +600,6 @@ pub fn textures<D: RenderDevice>(
         "Textured PBR restores its immutable GPU inputs"
     );
 
-    #[cfg(feature = "shadows")]
     {
         replace(
             &mut world,
@@ -636,7 +629,6 @@ pub fn textures<D: RenderDevice>(
 }
 
 /// Exercise the same authored discard in both custom surface and shadow programs.
-#[cfg(feature = "shadows")]
 #[allow(dead_code)] // Shared fixture module is also compiled by the built-in smoke runner.
 pub fn run_custom<D: RenderDevice>(
     renderer: &mut RenderService<D>,

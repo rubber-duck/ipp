@@ -97,7 +97,6 @@ impl Iterator for EntityTreeCursor<'_, '_> {
 /// Trim a `GuiPointers` page at a whole target entity, so the entity cursor
 /// never skips a pointer of the last entity. A single entity with more
 /// records than a page stays whole.
-#[cfg(feature = "gui")]
 fn trim_pointer_page(
     records: &mut Vec<ipp_core::systems::gui::local::GuiPointerRecord>,
     limit: usize,
@@ -163,21 +162,18 @@ impl<P: HostServices> WorldSessionContext<'_, P> {
             } else {
                 vec![]
             },
-            #[cfg(feature = "gui")]
             gui_focus: if query.collection == 6 {
                 self.world
                     .gui_focus_page(query.after, query.target, count + 1)
             } else {
                 vec![]
             },
-            #[cfg(feature = "gui")]
             gui_pointers: if query.collection == 7 {
                 self.world
                     .gui_pointer_page(query.after, query.target, count + 1)
             } else {
                 vec![]
             },
-            #[cfg(feature = "surfaces")]
             canvas: if query.collection == 8 {
                 self.world.canvas_state().ok()
             } else {
@@ -192,9 +188,7 @@ impl<P: HostServices> WorldSessionContext<'_, P> {
                 resources,
                 controllers,
                 render_diagnostics,
-                #[cfg(feature = "gui")]
                 gui_focus,
-                #[cfg(feature = "gui")]
                 gui_pointers,
                 ..
             } = &mut body
@@ -213,11 +207,8 @@ impl<P: HostServices> WorldSessionContext<'_, P> {
             trim!(resources, |item| item.id);
             trim!(controllers, |item| item.id.to_bits());
             trim!(render_diagnostics, |item| item.entity.to_bits());
-            #[cfg(feature = "gui")]
-            {
-                trim!(gui_focus, |item| item.target.entity.to_bits());
-                trim_pointer_page(gui_pointers, limit, next);
-            }
+            trim!(gui_focus, |item| item.target.entity.to_bits());
+            trim_pointer_page(gui_pointers, limit, next);
             let response = Response {
                 session: self.session.id,
                 request_id,

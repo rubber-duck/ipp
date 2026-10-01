@@ -4,25 +4,20 @@
  *
  * Production presentation has no such controls: the renderer owns its GPU
  * budgets and real context loss comes from the browser. These helpers send
- * worker control messages that only `diagnostics` runtime builds honour; any
- * other build fails the connection with an explanatory error. The native GLES
+ * worker control messages that only `instrumentation` builds honour. Against
+ * any other build, each call throws before sending anything. The native GLES
  * testing host of `ipp-server` presents through `nativePresentationTransport`
- * and honours the same controls. Import them from
- * `@ipp/client/testing`, never from application code.
+ * and honours the same controls in its `instrumentation` build. Import them
+ * from `@ipp/client/testing`, never from application code; read-only
+ * statistics live in `@ipp/client/diagnostics`.
  */
 import {
-  testingChannel,
+  presentationOf,
   validateGlyphAtlasLimits,
   validateSurfaceCacheBudget,
-  type RenderDiagnostics,
   type GlyphAtlasLimits,
+  type PresentationTestingMessage,
 } from "./presentation.js";
-
-export { lifecycleTesting } from "./lifecycle-diagnostics.js";
-export type {
-  LifecycleDiagnosticSample,
-  LifecycleTesting,
-} from "./lifecycle-diagnostics.js";
 
 export type { GlyphAtlasLimits } from "./presentation.js";
 export { nativePresentationTransport } from "./native-presentation.js";
@@ -44,13 +39,24 @@ export interface PresentationTesting {
 }
 
 /**
- * Testing controls of one worker presentation. Overrides persist in the worker
- * for later World sessions and through context loss.
+ * Testing controls of the presentation linked to `target`: a Host client, its
+ * transport, or the object `renderDiagnostics` returned for either. Overrides
+ * persist in the worker for later World sessions and through context loss.
  */
-export function presentationTesting(
-  presentation: RenderDiagnostics,
-): PresentationTesting {
-  const send = testingChannel(presentation);
+export function presentationTesting(target: object): PresentationTesting {
+  const port = presentationOf(target);
+  if (!port) throw new TypeError("Expected an IPP worker presentation");
+  const send = (message: PresentationTestingMessage) => {
+    if (port.instrumentation === undefined)
+      throw new Error(
+        "Presentation testing controls are unavailable until the presentation reports its build configuration",
+      );
+    if (!port.instrumentation)
+      throw new Error(
+        "Presentation testing controls require an instrumentation build; this presentation runs a build without instrumentation",
+      );
+    port.post(message);
+  };
   return {
     loseContext: () => send({ type: "context-loss" }),
     restoreContext: () => send({ type: "context-restore" }),

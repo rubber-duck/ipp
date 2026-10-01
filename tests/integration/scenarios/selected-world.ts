@@ -104,7 +104,7 @@ export async function selectedWorldFoundation(host: Host) {
   const mesh = client.components.MeshInstance;
   check(
     scalar !== undefined && mesh !== undefined,
-    "Expanded compiled descriptors missing",
+    "Compiled descriptors missing",
   );
   check(
     client.manifest.components.includes(scalar.id),

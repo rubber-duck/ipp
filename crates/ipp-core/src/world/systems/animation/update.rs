@@ -70,7 +70,7 @@ impl AnimationAccess<'_, '_> {
         value: Option<ComponentValue>,
         properties: &super::component_values::PropertyScratch,
     ) -> Result<(), ErrorReason> {
-        #[cfg(feature = "profiling")]
+        #[cfg(feature = "instrumentation")]
         let _measurement =
             crate::profiling::Stage::fixed(crate::profiling::FixedStage::AnimationApplyComponent);
 
@@ -238,7 +238,6 @@ impl AnimationAccess<'_, '_> {
                     }
                     let mut ready_clip = None;
                     for driver in &mut controller.drivers {
-                        #[cfg(feature = "particles")]
                         if driver.identity().property.component_target()
                             == crate::ComponentValue::PARTICLE_PLAYBACK
                         {
@@ -274,7 +273,6 @@ impl AnimationAccess<'_, '_> {
                                 .clip_by_key(driver.clip())
                                 .ok_or(ErrorReason::InvalidAsset)?,
                         )?;
-                        #[cfg(feature = "skeletal-animation")]
                         if let Some(source) = driver.skeleton_source()
                             && !self
                                 .context
@@ -637,9 +635,9 @@ impl AnimationAccess<'_, '_> {
         super::component_values::AnimationComponentValues,
         Result<(), ErrorReason>,
     ) {
-        #[cfg(feature = "profiling")]
+        #[cfg(feature = "instrumentation")]
         let _allocation_scope = crate::profiling::AllocationScope::new(197, "animation.sample");
-        #[cfg(feature = "profiling")]
+        #[cfg(feature = "instrumentation")]
         let _measurement =
             crate::profiling::Stage::fixed(crate::profiling::FixedStage::AnimationSampleAndStage);
 
@@ -653,7 +651,6 @@ impl AnimationAccess<'_, '_> {
         let result = (|| {
             controller.contributions.begin();
             for (index, driver) in controller.drivers.iter().enumerate() {
-                #[cfg(feature = "skeletal-animation")]
                 if matches!(
                     driver.runtime_target(),
                     super::driver::AnimationRuntimeTarget::JointLocal { .. }
@@ -793,7 +790,6 @@ impl AnimationAccess<'_, '_> {
                 .ok_or(ErrorReason::MissingComponent)
         })?;
         result.write(property, value)?;
-        #[cfg(feature = "skeletal-animation")]
         if let ComponentValue::Skeleton(sampled) = value {
             let current = self
                 .context

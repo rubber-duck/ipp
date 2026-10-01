@@ -353,7 +353,6 @@ fn world_save_preserves_unavailable_resource_references_without_fetching_assets(
     assert_eq!(restored_snapshot, snapshot.nodes[0].world);
 }
 
-#[cfg(feature = "skeletal-animation")]
 #[test]
 fn typed_rig_writers_preserve_source_payloads_and_reject_small_budgets() {
     use ipp_core::services::asset_management::{
@@ -386,24 +385,21 @@ fn typed_rig_writers_preserve_source_payloads_and_reject_small_budgets() {
             .unwrap(),
         pose
     );
-    #[cfg(feature = "skeletal-animation")]
-    {
-        let mut skin = header(b"IPPB");
-        skin.extend(0u32.to_le_bytes());
-        for i in 0..16 {
-            skin.extend(
-                (if i % 5 == 0 {
-                    1.0f32
-                } else {
-                    0.0
-                })
-                .to_le_bytes(),
-            );
-        }
-        let asset =
-            ipp_core::services::asset_management::skin_binding::SkinAsset::decode(&skin).unwrap();
-        assert_eq!(asset.encode_asset(1024).unwrap(), skin);
+    let mut skin = header(b"IPPB");
+    skin.extend(0u32.to_le_bytes());
+    for i in 0..16 {
+        skin.extend(
+            (if i % 5 == 0 {
+                1.0f32
+            } else {
+                0.0
+            })
+            .to_le_bytes(),
+        );
     }
+    let asset =
+        ipp_core::services::asset_management::skin_binding::SkinAsset::decode(&skin).unwrap();
+    assert_eq!(asset.encode_asset(1024).unwrap(), skin);
 }
 
 #[test]

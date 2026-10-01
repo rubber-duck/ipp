@@ -5,9 +5,8 @@ export interface ViewportLimits {
 }
 
 /**
- * Optional statistics of a `diagnostics` runtime build, grouped by the
- * capability that produces them. A group is absent when its capability is
- * compiled out: absent counters are unavailable, never zero work. Per-frame
+ * Renderer statistics, grouped by the capability that produces them; every
+ * build compiles every group. Per-frame
  * counters describe the latest completed draw at observation, not a capture fence; `total*` counters accumulate in the
  * runtime over every rendered frame of this presentation, so compare two
  * observations to measure work between them.
@@ -16,11 +15,11 @@ export interface RenderStatisticsSnapshot {
   /** Platform time spent finishing GPU work and reading the most recent capture. */
   readbackMs: number;
   frame: FrameRenderStatistics;
-  shadows?: ShadowRenderStatistics;
-  gui?: GuiRenderStatistics;
+  shadows: ShadowRenderStatistics;
+  gui: GuiRenderStatistics;
   /** Ordinary-layout evaluation across the Host, not a selected-output or draw statistic. */
   guiLayout?: HostGuiLayoutStatistics | null;
-  surfaces?: SurfaceRenderStatistics;
+  surfaces: SurfaceRenderStatistics;
   /** Absent when the worker hosts no presentation ingress. */
   ingress?: IngressStatistics;
   device: RenderDeviceInfo;
@@ -161,7 +160,7 @@ export const SURFACE_CACHE_MODES: readonly SurfaceCacheMode[] = [
 
 /**
  * Read-only whole-Surface cache state of one opted-in Surface, reported by
- * `RenderStatisticsSnapshot.surfaces` in diagnostics render builds with Surfaces.
+ * `RenderStatisticsSnapshot.surfaces`.
  */
 export interface SurfaceCacheRecord {
   /** Generational entity identity within the captured World. */
@@ -181,12 +180,12 @@ export interface SurfaceCacheRecord {
   residentBytes: number;
 }
 
-/** Optional diagnostic observations; never a frame or capture fence. */
+/** Read-only renderer observations; never a frame or capture fence. */
 export interface RenderDiagnostics {
   statistics(): Promise<RenderStatisticsSnapshot>;
 }
 
-/** Worker control messages of `@ipp/client/testing`, honoured only by diagnostics builds. */
+/** Worker control messages of `@ipp/client/testing`, honoured only by instrumentation builds. */
 export type PresentationTestingMessage =
   | { type: "context-loss" }
   | { type: "context-restore" }
@@ -199,30 +198,43 @@ export type PresentationTestingMessage =
   | { type: "exhaustive-draw-checks"; enabled: boolean };
 
 /**
- * Registered symbol linking a presentation object to its worker control
- * channel. The testing entry point is bundled separately from generated
- * clients, so a registered symbol, not module state, carries the link.
+ * The statistics and control channel of one presentation, reached by
+ * `@ipp/client/diagnostics` and `@ipp/client/testing` rather than through a
+ * Host client member.
  */
-const TESTING_CHANNEL = Symbol.for("ipp.presentation.testing");
+export interface PresentationPort extends RenderDiagnostics {
+  /**
+   * Whether the presenting build is an `instrumentation` build that honours
+   * testing controls; undefined until the presentation reports its configuration.
+   */
+  readonly instrumentation: boolean | undefined;
+  /** Send a control message; throws once the presentation has failed or closed. */
+  post(message: PresentationTestingMessage): void;
+}
 
-type TestingChannel = (message: PresentationTestingMessage) => void;
+/**
+ * Registered symbol linking a Host client, transport or statistics object to
+ * its presentation port. Those entry points are bundled separately from
+ * generated clients, so a registered symbol, not module state, carries the link.
+ */
+const PRESENTATION = Symbol.for("ipp.presentation");
 
-/** Link `target` to the control channel that `@ipp/client/testing` uses. */
-export function bindTestingChannel<T extends object>(
+/** Link `target` to `port`, or leave it unlinked when there is none. */
+export function bindPresentation<T extends object>(
   target: T,
-  send: TestingChannel,
+  port: PresentationPort | undefined,
 ): T {
-  Object.defineProperty(target, TESTING_CHANNEL, { value: send });
+  if (port)
+    Object.defineProperty(target, PRESENTATION, {
+      value: port,
+      configurable: true,
+    });
   return target;
 }
 
-export function testingChannel(target: object): TestingChannel {
-  const send = (target as { [TESTING_CHANNEL]?: TestingChannel })[
-    TESTING_CHANNEL
-  ];
-  if (typeof send !== "function")
-    throw new TypeError("Expected an IPP worker presentation");
-  return send;
+/** The presentation port linked to `target`, if it presents. */
+export function presentationOf(target: object): PresentationPort | undefined {
+  return (target as { [PRESENTATION]?: PresentationPort })[PRESENTATION];
 }
 
 /**
@@ -305,9 +317,10 @@ export function validateViewportLimits(limits: unknown): ViewportLimits {
 }
 
 /** Diagnostic messages are independent of presentation completion and pixel transfers. */
-export class PortRenderDiagnostics implements RenderDiagnostics {
+export class PortRenderDiagnostics implements PresentationPort {
   private nextId = 1;
   private stopped: Error | undefined;
+  private configured: boolean | undefined;
   private readonly pending = new Map<
     number,
     {
@@ -318,10 +331,16 @@ export class PortRenderDiagnostics implements RenderDiagnostics {
   >();
 
   constructor(private readonly send: (message: unknown) => void) {
-    bindTestingChannel(this, (message) => {
-      if (this.stopped) throw this.stopped;
-      this.send(message);
-    });
+    bindPresentation(this, this);
+  }
+
+  get instrumentation(): boolean | undefined {
+    return this.configured;
+  }
+
+  post(message: PresentationTestingMessage): void {
+    if (this.stopped) throw this.stopped;
+    this.send(message);
   }
 
   statistics(): Promise<RenderStatisticsSnapshot> {
@@ -346,6 +365,12 @@ export class PortRenderDiagnostics implements RenderDiagnostics {
   receive(data: Record<string, unknown>): boolean {
     if (data.type === "viewport-limits") {
       validateViewportLimits(data.limits);
+      return true;
+    }
+    if (data.type === "presentation-configuration") {
+      if (typeof data.instrumentation !== "boolean")
+        throw new Error("Invalid presentation configuration");
+      this.configured = data.instrumentation;
       return true;
     }
     if (data.type !== "render-statistics") return false;

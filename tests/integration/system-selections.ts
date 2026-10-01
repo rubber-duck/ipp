@@ -80,16 +80,6 @@ export const REACT_CHILD = [
   ...LIFECYCLE,
 ] as const;
 
-/** {@link REACT_ROOT} for the build at hand: Surface anchors only where the
- * build compiles Surfaces. */
-export function reactRootSystems(capabilities: {
-  readonly surfaces: boolean;
-}): string[] {
-  return capabilities.surfaces
-    ? selectSystems(REACT_ROOT)
-    : selectSystems(SCENE, ATTACHMENTS, CONSTRAINTS, LIFECYCLE);
-}
-
 /** Union of the named parts without duplicates, in first-named order. */
 export function selectSystems(
   ...parts: readonly (readonly string[])[]

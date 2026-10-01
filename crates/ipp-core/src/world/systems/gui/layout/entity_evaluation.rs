@@ -62,7 +62,6 @@ pub(super) fn evaluate(
             control_labels: BTreeMap::new(),
             scrolls: BTreeMap::new(),
             diagnostics: Vec::new(),
-            #[cfg(any(test, feature = "diagnostics"))]
             work: super::entity_layout::GuiEntityLayoutWork {
                 reflows: 1,
                 ..Default::default()
@@ -153,10 +152,7 @@ impl Evaluator<'_, '_> {
     }
 
     fn visit(&mut self, entity: EntityId, constraints: Constraints, depth: usize) -> [f32; 2] {
-        #[cfg(any(test, feature = "diagnostics"))]
-        {
-            self.view.work.visited_entities += 1;
-        }
+        self.view.work.visited_entities += 1;
 
         if depth > MAX_LAYOUT_DEPTH {
             self.view
@@ -409,7 +405,7 @@ impl Evaluator<'_, '_> {
                     ]
                 });
         if let Some(gui) = self.gui
-            && let Some((label, _measured)) =
+            && let Some((label, measured)) =
                 super::super::presentation::measurement::measure_control(
                     self.context,
                     gui,
@@ -424,8 +420,7 @@ impl Evaluator<'_, '_> {
                 size[0].max(label.intrinsic[0]),
                 size[1].max(label.intrinsic[1]),
             ];
-            #[cfg(any(test, feature = "diagnostics"))]
-            if _measured {
+            if measured {
                 self.view.work.text_measurements += 1;
             } else if label.geometry.is_some() {
                 self.view.work.reused_texts += 1;
@@ -459,7 +454,6 @@ impl Evaluator<'_, '_> {
                 && !constraint_changed
                 && let Some(retained) = retained
             {
-                #[cfg(any(test, feature = "diagnostics"))]
                 if component == ComponentValue::CANVAS_TEXT && retained.is_some() {
                     self.view.work.reused_texts += 1;
                 }
@@ -475,7 +469,6 @@ impl Evaluator<'_, '_> {
                     },
                     max_width,
                 );
-                #[cfg(any(test, feature = "diagnostics"))]
                 if component == ComponentValue::CANVAS_TEXT && geometry.is_some() {
                     self.view.work.text_measurements += 1;
                 }

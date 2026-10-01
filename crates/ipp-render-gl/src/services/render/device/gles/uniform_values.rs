@@ -11,11 +11,8 @@ use super::{GlesRenderDevice, GlesRenderProgram};
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum GlesUniformValue {
     Int(i32),
-    #[cfg(feature = "surfaces")]
     Float(u32),
-    #[cfg(feature = "surfaces")]
     Vec4([u32; 4]),
-    #[cfg(feature = "surfaces")]
     Mat4([u32; 16]),
 }
 
@@ -61,7 +58,6 @@ impl GlesRenderDevice {
     }
 
     /// Set a float uniform of the current `program` if it changed.
-    #[cfg(feature = "surfaces")]
     pub(super) fn program_float(&self, program: &GlesRenderProgram, location: i32, value: f32) {
         let changed = program
             .values
@@ -75,7 +71,6 @@ impl GlesRenderDevice {
     }
 
     /// Set a vec4 uniform of the current `program` if it changed.
-    #[cfg(feature = "surfaces")]
     pub(super) fn program_vec4(
         &self,
         program: &GlesRenderProgram,
@@ -94,7 +89,6 @@ impl GlesRenderDevice {
     }
 
     /// Set a mat4 uniform of the current `program` if it changed.
-    #[cfg(feature = "surfaces")]
     pub(super) fn program_mat4(
         &self,
         program: &GlesRenderProgram,
@@ -134,7 +128,6 @@ mod tests {
         assert!(values.values.is_empty());
     }
 
-    #[cfg(feature = "surfaces")]
     #[test]
     fn values_compare_bitwise() {
         let mut values = GlesUniformValues::default();

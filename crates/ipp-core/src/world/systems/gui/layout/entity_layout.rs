@@ -39,7 +39,6 @@ pub enum GuiEntityLayoutDiagnostic {
 }
 
 /// Actual ordinary-layout work, excluding raw Canvas preparation.
-#[cfg(any(test, feature = "diagnostics"))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct GuiEntityLayoutWork {
     /// Canvas evaluations repeated because a layout, content, extent or resource input changed.
@@ -52,7 +51,6 @@ pub struct GuiEntityLayoutWork {
     pub reused_texts: u64,
 }
 
-#[cfg(any(test, feature = "diagnostics"))]
 impl GuiEntityLayoutWork {
     fn accumulate(&mut self, work: Self) {
         self.reflows += work.reflows;
@@ -63,7 +61,6 @@ impl GuiEntityLayoutWork {
 }
 
 /// Current-pass and cumulative ordinary-layout work counters.
-#[cfg(any(test, feature = "diagnostics"))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct GuiEntityLayoutStatistics {
     /// Work of the latest scheduled pass, zero on unchanged or visual-only passes.
@@ -84,7 +81,6 @@ pub(in crate::world::systems) struct GuiEntityLayoutView {
     /// Scroll geometry and normalized positions written to the controls' fields.
     pub scrolls: BTreeMap<EntityId, super::scroll_layout::GuiScrollLayout>,
     pub diagnostics: Vec<GuiEntityLayoutDiagnostic>,
-    #[cfg(any(test, feature = "diagnostics"))]
     pub work: GuiEntityLayoutWork,
 }
 
@@ -104,7 +100,6 @@ pub(super) struct GuiEntityLayoutState {
     native_entity: Option<EntityId>,
     /// Whether the latest pass evaluated the canvas, whose scroll fields are written.
     evaluated: bool,
-    #[cfg(any(test, feature = "diagnostics"))]
     statistics: GuiEntityLayoutStatistics,
 }
 
@@ -184,10 +179,7 @@ impl GuiEntityLayoutState {
         context: &SystemRuntimeAccess<'_>,
         gui: Option<&super::super::GuiSystem>,
     ) {
-        #[cfg(any(test, feature = "diagnostics"))]
-        {
-            self.statistics.latest = Default::default();
-        }
+        self.statistics.latest = Default::default();
 
         let world = &*context.world;
         let text_revision = gui.map_or(0, super::super::GuiSystem::local_text_revision);
@@ -244,11 +236,8 @@ impl GuiEntityLayoutState {
                         self.revision,
                         gui,
                     );
-                    #[cfg(any(test, feature = "diagnostics"))]
-                    {
-                        self.statistics.latest.accumulate(view.work);
-                        self.statistics.total.accumulate(view.work);
-                    }
+                    self.statistics.latest.accumulate(view.work);
+                    self.statistics.total.accumulate(view.work);
                     self.view = Some(Arc::new(view));
                     self.evaluated = true;
                 }
@@ -327,8 +316,7 @@ impl crate::WorldContext<'_> {
         )
     }
 
-    /// Actual constraint and text work; available in diagnostics builds without enabling hot-path logs.
-    #[cfg(feature = "diagnostics")]
+    /// Actual constraint and text work, read on demand without hot-path logs.
     pub fn gui_entity_layout_statistics(&self) -> Option<GuiEntityLayoutStatistics> {
         Some(
             self.system::<super::GuiLayoutSystem>(super::GuiLayoutSystem::ID)?

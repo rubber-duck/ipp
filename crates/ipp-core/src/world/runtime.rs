@@ -36,7 +36,6 @@ impl WorldContext<'_> {
             || (max_bytes != usize::MAX
                 && batch_bytes(&batch).is_none_or(|bytes| bytes > max_bytes))
         {
-            #[cfg(feature = "diagnostics")]
             if !batch.operations.is_empty() {
                 crate::diagnostic!(
                     Warn,
@@ -185,7 +184,7 @@ impl World {
                 Ok(system) => instances.push(systems::scheduler::SystemInstance {
                     id: registration.id,
                     system,
-                    #[cfg(feature = "profiling")]
+                    #[cfg(feature = "instrumentation")]
                     profile_slot: None,
                 }),
                 Err(error) => {
@@ -208,7 +207,7 @@ impl World {
                 error,
             });
         }
-        #[cfg(feature = "profiling")]
+        #[cfg(feature = "instrumentation")]
         for instance in &mut instances {
             instance.profile_slot = Some(crate::profiling::register_system(
                 instance.id.0,
@@ -327,7 +326,6 @@ impl World {
     }
 
     /// Exclusive access to one selected implementation, outside any evaluation.
-    #[cfg_attr(not(feature = "surfaces"), allow(dead_code))]
     pub(crate) fn system_mut<T: systems::System>(
         &mut self,
         id: systems::SystemId,

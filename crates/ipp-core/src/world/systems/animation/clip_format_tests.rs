@@ -51,7 +51,6 @@ fn v4_encoded_size_matches_each_target_and_mixed_tracks() {
     }
     let mixed = vec![static_track, dynamic_track, structural_track];
 
-    #[cfg(feature = "skeletal-animation")]
     let mixed = {
         let pose_track = track(
             AnimationTrackTarget::Joints(vec![0]),

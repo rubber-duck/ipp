@@ -1,9 +1,10 @@
+import type { RenderStatisticsSnapshot } from "@ipp/client/diagnostics";
+import { renderDiagnostics } from "../../packages/ipp-client/src/diagnostics.js";
 import type {
   Client,
   ComponentDescriptor,
   Inspection,
   PresentedCapture,
-  RenderStatisticsSnapshot,
 } from "@ipp/client";
 import type { IppCanvasHandle } from "@ipp/react/web";
 
@@ -33,6 +34,21 @@ export interface ViewerCapture extends ViewerObservation {
   readonly tick: bigint;
   /** Renderer statistics observed after the captured draw completed. */
   readonly statistics: RenderStatisticsSnapshot;
+  /** Host draws presented after the captured draw before its pixels arrived. */
+  readonly completionFrames: number;
+}
+
+/**
+ * Host draws a capture may take to arrive after the draw it returns. The Host
+ * answers chunk reads between frames; a worker that never idles, as on a
+ * software renderer, answers one window of reads per frame. The client reads
+ * windows of 16 chunks of 64 KiB (`host-presentation.ts`). Two draws per window
+ * and a few for completion allow a page thread slowed by machine load while
+ * the worker keeps drawing. Reading one chunk per Host frame took 150-230
+ * draws for a 1714x1259 capture of 132 chunks.
+ */
+function maxCompletionFrames(bytes: number): number {
+  return 2 * Math.ceil(bytes / (16 * 65_536)) + 6;
 }
 
 export async function observeViewer(
@@ -128,6 +144,18 @@ export async function captureViewer(
     frame = await captureSelected(handle);
     viewport = frame.view.binding.viewport;
   }
+  // The next completed draw after the pixels arrived bounds how many draws
+  // the Host presented while the capture completed and transferred.
+  const following = await handle.host.presentation.frame(frame.view, {
+    afterSequence: frame.sequence,
+  });
+  const completionFrames = Number(following.sequence - frame.sequence) - 1;
+  const allowedFrames = maxCompletionFrames(frame.pixels.byteLength);
+  if (completionFrames > allowedFrames) {
+    throw new Error(
+      `Capture of draw ${frame.sequence} arrived after ${completionFrames} further draws; at most ${allowedFrames} are expected`,
+    );
+  }
   const statistics = await requireDiagnostics(handle).statistics();
   if (frame.view.binding.output.world.id !== handle.client.worldReference?.id) {
     throw new Error("Captured frame belongs to another runtime World");
@@ -136,7 +164,13 @@ export async function captureViewer(
   if (!source || source.tick < observation.inspection.tick) {
     throw new Error("Captured frame predates the inspected scene state");
   }
-  return { ...observation, frame, tick: source.tick, statistics };
+  return {
+    ...observation,
+    frame,
+    tick: source.tick,
+    statistics,
+    completionFrames,
+  };
 }
 
 /** A completed draw including the selected output's content admitted before the request. */
@@ -147,7 +181,7 @@ function captureSelected(handle: IppCanvasHandle): Promise<PresentedCapture> {
 }
 
 function requireDiagnostics(handle: IppCanvasHandle) {
-  const diagnostics = handle.host.renderDiagnostics;
+  const diagnostics = renderDiagnostics(handle.host);
   if (!diagnostics)
     throw new Error("Viewer render diagnostics are unavailable");
   return diagnostics;

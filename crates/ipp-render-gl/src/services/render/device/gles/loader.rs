@@ -78,7 +78,6 @@ gl_functions! {
     tex_image: c"glTexImage2D"(u32, i32, i32, i32, i32, i32, u32, u32, *const c_void) -> ();
     tex_sub_image: c"glTexSubImage2D"(u32, i32, i32, i32, i32, i32, u32, u32, *const c_void) -> ();
     uniform_float: c"glUniform1f"(i32, f32) -> ();
-    #[cfg(any(feature = "mesh-poses", feature = "particles"))]
     disable_attrib: c"glDisableVertexAttribArray"(u32) -> ();
     uniform_int: c"glUniform1i"(i32, i32) -> ();
     uniform_vec4: c"glUniform4fv"(i32, i32, *const f32) -> ();
@@ -87,9 +86,7 @@ gl_functions! {
     bind_framebuffer: c"glBindFramebuffer"(u32, u32) -> ();
     framebuffer_texture: c"glFramebufferTexture2D"(u32, u32, u32, u32, i32) -> ();
     check_framebuffer: c"glCheckFramebufferStatus"(u32) -> u32;
-    #[cfg(feature = "shadows")]
     draw_buffers: c"glDrawBuffers"(i32, *const u32) -> ();
-    #[cfg(feature = "shadows")]
     read_buffer: c"glReadBuffer"(u32) -> ();
     uniform_block_index: c"glGetUniformBlockIndex"(u32, *const c_char) -> u32;
     uniform_block_binding: c"glUniformBlockBinding"(u32, u32, u32) -> ();
@@ -102,11 +99,8 @@ gl_functions! {
     framebuffer_renderbuffer: c"glFramebufferRenderbuffer"(u32, u32, u32, u32) -> ();
     delete_renderbuffers: c"glDeleteRenderbuffers"(i32, *const u32) -> ();
     draw_arrays: c"glDrawArrays"(u32, i32, i32) -> ();
-    #[cfg(feature = "particles")]
     draw_instances: c"glDrawElementsInstanced"(u32,i32,u32,*const c_void,i32) -> ();
-    #[cfg(any(feature = "particles", feature = "surfaces"))]
     attrib_divisor: c"glVertexAttribDivisor"(u32,u32) -> ();
-    #[cfg(feature = "surfaces")]
     draw_arrays_instances: c"glDrawArraysInstanced"(u32,i32,i32,i32) -> ();
     draw_elements: c"glDrawElements"(u32, i32, u32, *const c_void) -> ();
 }

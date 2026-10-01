@@ -144,9 +144,7 @@ impl Drop for GlesRenderDevice {
         // through device drop; this buffer is exclusively owned by the device.
         unsafe {
             (self.gl.delete_buffers)(1, &self.parameter_buffer);
-            #[cfg(feature = "surfaces")]
             (self.gl.delete_vertex_arrays)(1, &self.surface_quad_vao);
-            #[cfg(feature = "particles")]
             (self.gl.delete_buffers)(1, &self.instance_buffer);
         }
     }

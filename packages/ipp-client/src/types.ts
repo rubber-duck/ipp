@@ -655,19 +655,7 @@ export interface Response {
   body: ResponseBody;
 }
 
-export type {
-  RenderDiagnostics,
-  ViewportLimits,
-  RenderStatisticsSnapshot,
-  FrameRenderStatistics,
-  ShadowRenderStatistics,
-  GuiRenderStatistics,
-  SurfaceRenderStatistics,
-  IngressStatistics,
-  RenderDeviceInfo,
-  SurfaceCacheMode,
-  SurfaceCacheRecord,
-} from "./presentation.js";
+export type { ViewportLimits } from "./presentation.js";
 
 /** World-local controller state, observed at the inspection/event tick. */
 export interface AnimationControllerState {

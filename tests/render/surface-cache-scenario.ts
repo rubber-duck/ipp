@@ -1,10 +1,10 @@
+import type { RenderStatisticsSnapshot } from "@ipp/client/diagnostics";
 import assert from "node:assert/strict";
 import {
   compareFrames,
   type FrameDifference,
   type RgbaFrame,
 } from "./retained-gui-images.js";
-import type { RenderStatisticsSnapshot } from "@ipp/client";
 import { counters, SURFACE_CACHE_COUNTERS } from "./retained-gui-scenario.js";
 
 export interface CacheFrame {

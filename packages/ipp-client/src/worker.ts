@@ -3,7 +3,12 @@ import {
   type ResourceUrlMapping,
 } from "./resource-urls.js";
 import { PortTransport, type MessageTransport } from "./transport.js";
-import { PortRenderDiagnostics, validateViewport } from "./presentation.js";
+import {
+  PortRenderDiagnostics,
+  bindPresentation,
+  presentationOf,
+  validateViewport,
+} from "./presentation.js";
 import type { LogLevel } from "./logging.js";
 import { validateOptions } from "./client.js";
 
@@ -244,31 +249,31 @@ export function workerTransport(
 ): MessageTransport {
   const owner = createWorkerHost(workerUrl, wasmUrl, maxMessageBytes, options);
   const transport = owner.connect();
-  return {
-    ...(transport.renderDiagnostics
-      ? { renderDiagnostics: transport.renderDiagnostics }
-      : {}),
-    start(events) {
-      transport.start({
-        ...events,
-        error(error) {
-          events.error(error);
-          void owner.close().catch(() => {});
-        },
-        closed() {
-          events.closed();
-          void owner.close().catch(() => {});
-        },
-      });
-    },
-    send: (bytes) => transport.send(bytes),
-    sendParts: (parts) => transport.sendParts!(parts),
-    async close() {
-      try {
-        await transport.close();
-      } finally {
-        await owner.close();
-      }
-    },
-  };
+  return bindPresentation(
+    {
+      start(events) {
+        transport.start({
+          ...events,
+          error(error) {
+            events.error(error);
+            void owner.close().catch(() => {});
+          },
+          closed() {
+            events.closed();
+            void owner.close().catch(() => {});
+          },
+        });
+      },
+      send: (bytes) => transport.send(bytes),
+      sendParts: (parts) => transport.sendParts!(parts),
+      async close() {
+        try {
+          await transport.close();
+        } finally {
+          await owner.close();
+        }
+      },
+    } satisfies MessageTransport,
+    presentationOf(transport),
+  );
 }

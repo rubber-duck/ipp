@@ -24,7 +24,7 @@ from .catalog import (
 from .environment import inspect, records
 from .model import ROOT, Plan, Task, select
 from .processes import node
-from .runner import retry_ids, run_plan
+from .runner import BROWSER_DEVICES, device_environment, retry_ids, run_plan
 from .selection import affected, changed_files
 
 
@@ -60,10 +60,24 @@ def parser() -> argparse.ArgumentParser:
             "--fail-fast", action="store_true", help="stop after the first failed step"
         )
 
+    def hardware(command: argparse.ArgumentParser, default: str | None = None) -> None:
+        command.add_argument(
+            "--hardware",
+            choices=BROWSER_DEVICES[1:],
+            default=default,
+            help=(
+                f"run browser steps on this hardware ANGLE backend (default: {default})"
+                if default
+                else "run browser steps on this hardware ANGLE backend instead of software rendering"
+            ),
+        )
+
     for name in ("build", "test", "check"):
         command = commands.add_parser(name)
         command.add_argument("names", nargs="*")
         common(command)
+        if name != "build":
+            hardware(command)
         if name == "check":
             command.add_argument("--changed", action="store_true")
             command.add_argument(
@@ -75,6 +89,7 @@ def parser() -> argparse.ArgumentParser:
         help="run core regression, add on-demand groups, or select focused steps",
     )
     common(regression)
+    hardware(regression)
     regression.add_argument(
         "--full",
         action="store_true",
@@ -105,6 +120,7 @@ def parser() -> argparse.ArgumentParser:
         "retry", help="rerun unfinished steps with current prerequisites"
     )
     common(retry)
+    hardware(retry)
     retry.add_argument("report", type=Path)
     retry.add_argument("--only", action="append", default=[])
     retry.add_argument("--suite", action="append", default=[])
@@ -174,6 +190,8 @@ def parser() -> argparse.ArgumentParser:
         "benchmark", help="run opt-in scene performance experiments outside regression"
     )
     common(benchmarking)
+    # Performance claims need real hardware, so benchmarks never default to software.
+    hardware(benchmarking, BROWSER_DEVICES[1])
     benchmarking.add_argument("backend", choices=("native", "browser"))
     # Stress defaults are applied by the planner so other scenes can reject them.
     benchmarking.add_argument("--preset", choices=("smoke", "full"))
@@ -275,6 +293,10 @@ def make_plan(args: argparse.Namespace) -> Plan:
             if not args.egl_dir:
                 args.egl_dir = previous.get("eglDirectory")
                 tasks = catalog(args.egl_dir)
+            # A retry completes the earlier run on its device unless --hardware overrides it.
+            device = previous.get("browser", {}).get("device", "software")
+            if not args.hardware and device != "software":
+                args.hardware = device
             if previous.get("source") != source_identity(ROOT):
                 notes.append(
                     "Source differs from the previous run. Old passing steps are not revalidated; add affected --group/--only/--suite selections."
@@ -412,7 +434,7 @@ def make_plan(args: argparse.Namespace) -> Plan:
                 args.world,
                 *(["--clips-only"] if args.clips_only else []),
             ),
-            ("build:browser:render-expanded",),
+            ("build:browser:render",),
             ("node", "npm", "browser"),
         )
         requested = [id_]
@@ -519,7 +541,9 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 )
                 return 0
-            environment = inspect(requirements, args.egl_dir, cancel)
+            environment = inspect(
+                requirements, args.egl_dir, cancel, device_environment("software")
+            )
             if args.json:
                 print(json.dumps(records(environment), indent=2))
             else:
@@ -557,6 +581,7 @@ def main(argv: list[str] | None = None) -> int:
             fail_fast=args.fail_fast,
             live=args.live,
             cancel=cancel,
+            browser_device=getattr(args, "hardware", None) or "software",
         )
         if args.json:
             print(json.dumps(report, indent=2))

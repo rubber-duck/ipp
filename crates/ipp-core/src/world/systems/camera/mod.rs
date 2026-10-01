@@ -79,9 +79,7 @@ pub(in crate::world) use update::CameraReadAccess;
 
 mod camera_math;
 pub(crate) use camera_math::CameraAffineTransform;
-#[cfg(feature = "skeletal-animation")]
 pub use camera_math::inverse_model_matrix;
 pub use camera_math::{model_matrix, multiply, prepare, prepare_affine, prepare_affine_for_extent};
 
-#[cfg(feature = "skeletal-animation")]
 pub(crate) use camera_math::invertible;

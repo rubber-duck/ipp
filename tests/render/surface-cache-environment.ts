@@ -12,10 +12,10 @@ import {
   type SurfaceCacheReport,
 } from "./surface-cache-scenario.js";
 
-/** Raw Surfaces alone prove lean gating; the GUI build adds interaction priority. */
+/** Raw Surfaces alone, then the GUI fixture's interaction priority, on one build. */
 export const SURFACE_CACHE_BUILDS = [
-  { name: "render-surfaces", gui: false },
-  { name: "headless-gui", gui: true },
+  { name: "render-instrumentation", label: "surfaces", gui: false },
+  { name: "render-instrumentation", label: "gui", gui: true },
 ] as const;
 
 /** Playwright device scale factors of the cached versus direct density measurement. */
@@ -38,13 +38,12 @@ export async function runSurfaceCache(
 ): Promise<SurfaceCacheBuildReport[]> {
   const workspace = process.cwd();
   const reports: SurfaceCacheBuildReport[] = [];
-  for (const { name, gui } of builds) {
+  for (const { name, label: variant, gui } of builds) {
     const directory = resolve("target/browser-build", name);
     const build = {
       name,
       generatedModule: resolve(directory, "generated.js"),
       runtimeWasm: resolve(directory, "runtime.wasm"),
-      exportWasm: resolve(directory, "export.wasm"),
       contractArtifact: resolve(directory, "contract.bin"),
     };
     /** Run `scenario` in a fresh page at `deviceScaleFactor` with the shared driver. */
@@ -62,7 +61,6 @@ export async function runSurfaceCache(
         {
           workspace,
           build,
-          mismatchBuild: build,
           rendering: true,
           deviceScaleFactor,
           operationTimeoutMs: 30000,
@@ -133,7 +131,7 @@ export async function runSurfaceCache(
       ).then(({ value }) => value);
     };
     const { report, evidence, browser } = await session(
-      `surface-cache-${name}`,
+      `surface-cache-${variant}`,
       1,
       async (driver, page) => {
         const report = await exerciseSurfaceCache(driver);
@@ -148,7 +146,7 @@ export async function runSurfaceCache(
     for (const ratio of DENSITY_DEVICE_PIXEL_RATIOS)
       density.push(
         await session(
-          `surface-cache-${name}-dpr${ratio}`,
+          `surface-cache-${variant}-dpr${ratio}`,
           ratio,
           async (driver, { evidence }) => ({
             ...(await measureCacheDensity(driver)),
@@ -156,7 +154,7 @@ export async function runSurfaceCache(
           }),
         ),
       );
-    reports.push({ build: name, evidence, browser, report, density });
+    reports.push({ build: variant, evidence, browser, report, density });
   }
   await mkdir(output, { recursive: true });
   await writeFile(

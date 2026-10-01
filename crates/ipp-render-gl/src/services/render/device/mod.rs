@@ -1,12 +1,10 @@
 mod error_checks;
-#[cfg(feature = "surfaces")]
 mod retained_vertices;
 mod uniform_cache;
 
 use crate::RenderError;
 
 /// Renderer-private atlas ranges needed to draw one quadratic path.
-#[cfg(feature = "surfaces")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SurfacePathDescriptor {
     /// First curve texel and texel count, including contour terminators, in the shared atlas.
@@ -15,7 +13,6 @@ pub struct SurfacePathDescriptor {
     pub band_offset: u32,
 }
 
-#[cfg(feature = "surfaces")]
 impl SurfacePathDescriptor {
     /// Construct one validated-at-draw descriptor.
     pub fn new(curve_range: [u32; 2], band_offset: u32) -> Self {
@@ -27,7 +24,6 @@ impl SurfacePathDescriptor {
 }
 
 /// One glyph/path instance packed for a contiguous Surface draw.
-#[cfg(feature = "surfaces")]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SurfacePathInstance {
     /// Local path bounds.
@@ -40,7 +36,6 @@ pub struct SurfacePathInstance {
     pub descriptor: SurfacePathDescriptor,
 }
 
-#[cfg(feature = "surfaces")]
 pub(super) fn pack_surface_instances(
     instances: &[SurfacePathInstance],
     packed: &mut Vec<[f32; 16]>,
@@ -68,10 +63,8 @@ pub(super) fn pack_surface_instances(
     }));
 }
 
-#[cfg(feature = "surfaces")]
 pub use super::gui_batch::GuiVertex;
 
-#[cfg(feature = "surfaces")]
 pub(super) fn surface_instances_exact(instances: &[SurfacePathInstance]) -> bool {
     const MAX_EXACT_F32_INTEGER: u32 = 1 << 24;
     instances.iter().all(|instance| {
@@ -81,7 +74,7 @@ pub(super) fn surface_instances_exact(instances: &[SurfacePathInstance]) -> bool
     })
 }
 
-#[cfg(all(test, feature = "surfaces"))]
+#[cfg(test)]
 mod surface_instance_tests {
     use super::*;
 
@@ -171,29 +164,23 @@ pub trait RenderDevice: 'static {
     type Texture;
 
     /// Context-owned immutable quadratic path acceleration data.
-    #[cfg(feature = "surfaces")]
     type SurfacePath;
 
     /// Context-owned SRGB8_ALPHA8 texture and framebuffer holding one
     /// premultiplied whole-Surface image.
-    #[cfg(feature = "surfaces")]
     type SurfaceCacheTarget;
 
     /// Context-owned retained instance stream for one analytic path run.
-    #[cfg(feature = "surfaces")]
     type SurfaceInstances;
 
     /// Context-owned depth texture and framebuffer for the bounded spot shadow pass.
-    #[cfg(feature = "shadows")]
     type ShadowMap;
 
     /// Context-owned retained GUI vertex storage of one Surface: boxes and glyph
     /// quads in the [`GuiVertex`] layout.
-    #[cfg(feature = "surfaces")]
     type GuiBatch;
 
     /// Context-owned glyph atlas page texture and framebuffer target.
-    #[cfg(feature = "surfaces")]
     type GlyphAtlasPage;
 
     /// Enable exhaustive error polling for diagnostics: every draw, uniform,
@@ -222,17 +209,14 @@ pub trait RenderDevice: 'static {
     ) -> Result<(), RenderError>;
 
     /// Maximum square atlas dimension supported by this device and viewport.
-    #[cfg(feature = "shadows")]
     fn shadow_map_limit(&self) -> u32 {
         0
     }
 
     /// Allocate a depth-only 2D map, checking limits and framebuffer completeness.
-    #[cfg(feature = "shadows")]
     fn create_shadow_map(&mut self, size: u32) -> Result<Self::ShadowMap, RenderError>;
 
     /// Save the host target and render an atlas tile. Slot zero clears the atlas.
-    #[cfg(feature = "shadows")]
     fn begin_shadow(
         &mut self,
         map: &Self::ShadowMap,
@@ -241,11 +225,9 @@ pub trait RenderDevice: 'static {
     ) -> Result<(), RenderError>;
 
     /// Restore the host framebuffer/viewport even after an unsuccessful depth draw.
-    #[cfg(feature = "shadows")]
     fn end_shadow(&mut self) -> Result<(), RenderError>;
 
     /// Bind the completed map for sampling in a lit forward program.
-    #[cfg(feature = "shadows")]
     fn bind_shadow(
         &mut self,
         program: &Self::Program,
@@ -254,7 +236,6 @@ pub trait RenderDevice: 'static {
     ) -> Result<(), RenderError>;
 
     /// Release both map objects, tolerating invalid handles after context loss.
-    #[cfg(feature = "shadows")]
     fn delete_shadow_map(&mut self, map: Self::ShadowMap);
 
     /// Validate pass limits and reserve parameter storage without uploading draw values.
@@ -301,7 +282,6 @@ pub trait RenderDevice: 'static {
     ///
     /// Disabling this mode restores ordinary counter-clockwise front faces with
     /// back-face culling for mesh draws.
-    #[cfg(feature = "surfaces")]
     fn set_surface_double_sided(&mut self, _enabled: bool) -> Result<(), RenderError> {
         Err(RenderError::RenderDevice(
             "double-sided Surface rendering unavailable".into(),
@@ -309,7 +289,6 @@ pub trait RenderDevice: 'static {
     }
 
     /// Upload the textures of a packed path atlas; see [`crate::pack_surface_paths`].
-    #[cfg(feature = "surfaces")]
     fn create_surface_path(
         &mut self,
         _texels: &super::surface_path::SurfacePathTexels,
@@ -320,7 +299,6 @@ pub trait RenderDevice: 'static {
     }
 
     /// Draw one path in painter order with scene depth testing and no depth writes.
-    #[cfg(feature = "surfaces")]
     #[allow(clippy::too_many_arguments)]
     fn draw_surface_path(
         &mut self,
@@ -340,12 +318,10 @@ pub trait RenderDevice: 'static {
     }
 
     /// Release one context-owned path allocation.
-    #[cfg(feature = "surfaces")]
     fn delete_surface_path(&mut self, _path: Self::SurfacePath) {}
 
     /// Validate `instances` against `path` and upload them as a retained stream.
     /// `instances` is not empty.
-    #[cfg(feature = "surfaces")]
     fn create_surface_instances(
         &mut self,
         _path: &Self::SurfacePath,
@@ -360,7 +336,6 @@ pub trait RenderDevice: 'static {
     ///
     /// Queued draws keep the previous storage. On failure the contents are unknown
     /// and callers release the stream.
-    #[cfg(feature = "surfaces")]
     fn update_surface_instances(
         &mut self,
         _stream: &mut Self::SurfaceInstances,
@@ -373,11 +348,9 @@ pub trait RenderDevice: 'static {
     }
 
     /// Release a retained stream, tolerating handles invalidated by context loss.
-    #[cfg(feature = "surfaces")]
     fn delete_surface_instances(&mut self, _stream: Self::SurfaceInstances) {}
 
     /// Draw every instance of a retained stream against `path` in one submission.
-    #[cfg(feature = "surfaces")]
     fn draw_surface_instances(
         &mut self,
         _program: &Self::Program,
@@ -393,7 +366,6 @@ pub trait RenderDevice: 'static {
     }
 
     /// Draw one straight-alpha bitmap quad in painter order.
-    #[cfg(feature = "surfaces")]
     fn draw_surface_bitmap(
         &mut self,
         _program: &Self::Program,
@@ -410,14 +382,12 @@ pub trait RenderDevice: 'static {
 
     /// Largest Surface cache target dimension this context supports; zero
     /// makes every opted-in Surface present directly.
-    #[cfg(feature = "surfaces")]
     fn surface_cache_limit(&self) -> u32 {
         0
     }
 
     /// Bind a linear-color target with independent depth for a nested Camera.
     /// Ends through `end_surface_cache_target`, without display conversion.
-    #[cfg(feature = "surfaces")]
     fn begin_camera_target(
         &mut self,
         _target: &mut Self::SurfaceCacheTarget,
@@ -431,7 +401,6 @@ pub trait RenderDevice: 'static {
     /// Allocate a target cleared to transparent black, with linear filtering
     /// and edge clamping, and validate framebuffer completeness. Dimensions
     /// are positive and no larger than [`Self::surface_cache_limit`].
-    #[cfg(feature = "surfaces")]
     fn create_surface_cache_target(
         &mut self,
         _width: u32,
@@ -445,7 +414,6 @@ pub trait RenderDevice: 'static {
     /// Reallocate the target's storage in place with undefined contents.
     ///
     /// On failure the target is unusable and callers delete it.
-    #[cfg(feature = "surfaces")]
     fn resize_surface_cache_target(
         &mut self,
         _target: &mut Self::SurfaceCacheTarget,
@@ -464,7 +432,6 @@ pub trait RenderDevice: 'static {
     /// Surface draws until [`Self::end_surface_cache_target`] use the target's
     /// dimensions for antialiasing. Glyph atlas population may nest inside: its
     /// end restores this target rather than the host target.
-    #[cfg(feature = "surfaces")]
     fn begin_surface_cache_target(
         &mut self,
         _target: &Self::SurfaceCacheTarget,
@@ -477,7 +444,6 @@ pub trait RenderDevice: 'static {
     /// Restore the state saved by [`Self::begin_surface_cache_target`], also
     /// after failed draws, then check errors so a failed repaint is never kept
     /// as a complete image. Context loss reports [`RenderError::ContextLost`].
-    #[cfg(feature = "surfaces")]
     fn end_surface_cache_target(&mut self) -> Result<(), RenderError> {
         Err(RenderError::RenderDevice(
             "Surface cache targets unavailable".into(),
@@ -489,7 +455,6 @@ pub trait RenderDevice: 'static {
     /// depth testing and no depth writes. Callers select double-sided
     /// rasterization as for direct Surface draws. Canvas cache opacity is already
     /// baked per primitive and supplies one; Camera images supply their slot opacity.
-    #[cfg(feature = "surfaces")]
     fn draw_surface_cache(
         &mut self,
         _program: &Self::Program,
@@ -505,11 +470,9 @@ pub trait RenderDevice: 'static {
     }
 
     /// Release a target, tolerating invalid handles after context loss.
-    #[cfg(feature = "surfaces")]
     fn delete_surface_cache_target(&mut self, _target: Self::SurfaceCacheTarget) {}
 
     /// Allocate retained GUI vertex storage for `capacity` vertices, all zero.
-    #[cfg(feature = "surfaces")]
     fn create_gui_batch(&mut self, _capacity: usize) -> Result<Self::GuiBatch, RenderError> {
         Err(RenderError::RenderDevice("gui batches unavailable".into()))
     }
@@ -520,7 +483,6 @@ pub trait RenderDevice: 'static {
     /// provide that. On failure the contents are unknown and callers release the
     /// storage. GL errors surface here only in exhaustive mode, otherwise at this
     /// frame's end.
-    #[cfg(feature = "surfaces")]
     fn write_gui_batch(
         &mut self,
         _batch: &mut Self::GuiBatch,
@@ -531,13 +493,11 @@ pub trait RenderDevice: 'static {
     }
 
     /// Release one context-owned GUI storage allocation.
-    #[cfg(feature = "surfaces")]
     fn delete_gui_batch(&mut self, _batch: Self::GuiBatch) {}
 
     /// Draw `count` vertices from vertex `first` of retained GUI storage as triangles
     /// in painter order, each clipped by its own rectangle. `atlas` is bound for
     /// ranges containing glyph quads.
-    #[cfg(feature = "surfaces")]
     #[allow(clippy::too_many_arguments)]
     fn draw_gui_batch(
         &mut self,
@@ -553,7 +513,6 @@ pub trait RenderDevice: 'static {
 
     /// Allocate a single-channel R8 coverage page texture, cleared to zero, with
     /// linear filtering and a render target.
-    #[cfg(feature = "surfaces")]
     fn create_glyph_atlas_page(
         &mut self,
         _width: u32,
@@ -563,30 +522,25 @@ pub trait RenderDevice: 'static {
     }
 
     /// Release an atlas page allocation.
-    #[cfg(feature = "surfaces")]
     fn delete_glyph_atlas_page(&mut self, _page: Self::GlyphAtlasPage) {}
 
     /// Bind the atlas page framebuffer and viewport.
     ///
     /// The first begin saves the host draw target. Further begins before
     /// [`Self::end_glyph_atlas_page`] switch pages and keep that saved target.
-    #[cfg(feature = "surfaces")]
     fn begin_glyph_atlas_page(&mut self, _page: &Self::GlyphAtlasPage) -> Result<(), RenderError> {
         Err(RenderError::RenderDevice("glyph atlas unavailable".into()))
     }
 
     /// Restore the host draw target and viewport saved by the first begin.
-    #[cfg(feature = "surfaces")]
     fn end_glyph_atlas_page(&mut self) -> Result<(), RenderError> {
         Err(RenderError::RenderDevice("glyph atlas unavailable".into()))
     }
 
     /// Borrow the atlas page's underlying color texture for sampling.
-    #[cfg(feature = "surfaces")]
     fn glyph_atlas_texture(page: &Self::GlyphAtlasPage) -> &Self::Texture;
 
     /// Replace the transient instance stream; empty restores ordinary draws.
-    #[cfg(feature = "particles")]
     fn set_instances(&mut self, instances: &[[f32; 20]]) -> Result<(), RenderError> {
         if instances.is_empty() {
             Ok(())
@@ -596,7 +550,6 @@ pub trait RenderDevice: 'static {
     }
 
     /// Select additive sprite blending after enabling transparency.
-    #[cfg(feature = "particles")]
     fn set_additive(&mut self, enabled: bool) -> Result<(), RenderError> {
         if enabled {
             Err(RenderError::RenderDevice(
@@ -643,7 +596,6 @@ pub trait RenderDevice: 'static {
     -> Result<(), RenderError>;
 
     /// Upload one validated mesh-local joint palette before drawing its instance.
-    #[cfg(feature = "skeletal-animation")]
     fn set_skin_palette(
         &mut self,
         _program: &Self::Program,
@@ -662,7 +614,7 @@ pub trait RenderDevice: 'static {
         mesh: &Self::Mesh,
         mvp: &[f32; 16],
         material: &[f32; 3],
-        #[cfg(feature = "mesh-poses")] pose: Option<(&Self::Mesh, f32)>,
+        pose: Option<(&Self::Mesh, f32)>,
         texture: Option<&Self::Texture>,
     ) -> Result<(), RenderError>;
 

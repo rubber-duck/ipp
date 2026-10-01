@@ -1,3 +1,4 @@
+import { renderDiagnostics } from "../../packages/ipp-client/src/diagnostics.js";
 import {
   outputProducer,
   sameOutputReference,
@@ -989,14 +990,14 @@ export async function observeState() {
 }
 
 export async function capture() {
-  if (!host || !view || !host.renderDiagnostics)
+  if (!host || !view || !renderDiagnostics(host))
     throw new Error("Stress capture/diagnostics unavailable");
   const captured = await host.presentation.capture(view, {
     afterSequence: sequence,
     afterOutputs: outputs(),
   });
   sequence = captured.sequence;
-  const statistics = await host.renderDiagnostics.statistics();
+  const statistics = await renderDiagnostics(host)!.statistics();
   const bytes = new Uint8Array(captured.pixels);
   let binary = "";
   for (let offset = 0; offset < bytes.length; offset += 0x8000)
@@ -1034,9 +1035,9 @@ export async function capture() {
 }
 
 export async function layoutDiagnosticsProbe() {
-  if (!host?.renderDiagnostics || !client)
+  if (!host || !renderDiagnostics(host) || !client)
     throw new Error("Layout diagnostics require the live Host");
-  const diagnostics = host.renderDiagnostics;
+  const diagnostics = renderDiagnostics(host)!;
   const sample = async () => {
     await client!.waitForFrame();
     return (await diagnostics.statistics()).guiLayout;

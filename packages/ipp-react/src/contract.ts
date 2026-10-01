@@ -8,12 +8,7 @@ import type {
 /** Public metadata and asynchronous operations used by the renderer. */
 export type ReactWorldClient = Pick<
   Client,
-  | "session"
-  | "schemaHash"
-  | "capabilities"
-  | "components"
-  | "manifest"
-  | "batch"
+  "session" | "schemaHash" | "components" | "manifest" | "batch"
 > &
   Partial<
     Pick<

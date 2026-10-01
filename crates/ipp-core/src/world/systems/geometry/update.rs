@@ -15,14 +15,12 @@ use crate::{
     },
 };
 
-#[cfg(feature = "skeletal-animation")]
 use crate::ComponentValue;
 
 struct GeometryEvaluationInput<'a> {
     geometry: &'a [u8],
     source: &'a str,
     variant: u32,
-    #[cfg(feature = "skeletal-animation")]
     skeleton: EntityId,
 }
 
@@ -36,9 +34,7 @@ pub(crate) struct GeometryEvaluationState {
     pub(super) program: Option<super::program::GeometryProgram>,
     inline: Option<GeometryDefinition>,
     source_key: Option<AssetKey>,
-    #[cfg(feature = "skeletal-animation")]
     binding: Option<(EntityId, u64, AssetKey)>,
-    #[cfg(feature = "skeletal-animation")]
     invalidated: bool,
     pub(in crate::world) evaluated: Result<CompoundGeometryShape, ErrorReason>,
 }
@@ -48,7 +44,6 @@ impl GeometryEvaluationState {
     /// without moving the compound through the general evaluator. Lifecycle
     /// invalidation clears the program, so preparation still owns all rebinding.
     fn update_rigid(&mut self, world: &WorldSimulationState) -> bool {
-        #[cfg(feature = "skeletal-animation")]
         if self.invalidated {
             return false;
         }
@@ -88,7 +83,6 @@ impl GeometryEvaluationState {
     }
 
     pub(in crate::world) fn evaluated(&self) -> Result<&CompoundGeometryShape, ErrorReason> {
-        #[cfg(feature = "skeletal-animation")]
         if self.invalidated {
             return Err(ErrorReason::InvalidGeometry);
         }
@@ -107,9 +101,7 @@ impl Default for GeometryEvaluationState {
             program: None,
             inline: None,
             source_key: None,
-            #[cfg(feature = "skeletal-animation")]
             binding: None,
-            #[cfg(feature = "skeletal-animation")]
             invalidated: false,
             evaluated: Err(ErrorReason::GeometryUnavailable),
         }
@@ -167,7 +159,6 @@ impl GeometrySystem {
                         geometry: &value.geometry,
                         source: &value.source,
                         variant: value.variant,
-                        #[cfg(feature = "skeletal-animation")]
                         skeleton: value.skeleton,
                     };
                     state.evaluated = GeometryReadAccess::new(
@@ -256,21 +247,17 @@ impl<'a> GeometryReadAccess<'a> {
             unsafe { crate::systems::hierarchy::ObjectTransformBinding::bind(self.world, entity) };
         if input.geometry.is_empty() && input.source.is_empty() {
             let index = entity.index() as usize;
-            #[cfg(feature = "particles")]
             if self.world.components.particle_sprite(index).is_some()
                 || self.world.components.particle_mesh(index).is_some()
             {
                 return Ok(GeometryProgram::Dynamic);
             }
-            #[cfg(feature = "skeletal-animation")]
             if self.world.components.skin(index).is_some() {
                 return Ok(GeometryProgram::Dynamic);
             }
-            #[cfg(feature = "mesh-poses")]
             if self.world.components.mesh_pose(index).is_some() {
                 return Ok(GeometryProgram::Dynamic);
             }
-            #[cfg(feature = "surfaces")]
             if self.world.components.surface(index).is_some() {
                 return Ok(GeometryProgram::Dynamic);
             }
@@ -348,7 +335,6 @@ impl<'a> GeometryReadAccess<'a> {
         mut evaluated: CompoundGeometryShape,
     ) -> Result<CompoundGeometryShape, ErrorReason> {
         state.changed = true;
-        #[cfg(feature = "skeletal-animation")]
         if state.invalidated {
             return Err(ErrorReason::InvalidGeometry);
         }
@@ -410,71 +396,62 @@ impl<'a> GeometryReadAccess<'a> {
             let local =
                 GeometryShapeTransform::from_matrix(camera::model_matrix(&part.transform)?)?;
             if let Some(joints) = part.joints {
-                #[cfg(feature = "skeletal-animation")]
-                {
-                    let skeleton = if input.skeleton.to_bits() == 0 {
-                        self.world
-                            .components
-                            .skin(entity.index() as usize)
-                            .map_or(entity, |skin| skin.skeleton)
-                    } else {
-                        input.skeleton
-                    };
-                    let pose =
-                        crate::systems::skeleton::pose(self.world, &self.world.state, skeleton)
-                            .ok_or(ErrorReason::GeometryUnavailable)?;
-                    let incarnation = self
-                        .world
-                        .state
-                        .entities
-                        .get(&skeleton)
-                        .and_then(|record| record.input(ComponentValue::SKELETON))
-                        .ok_or(ErrorReason::GeometryUnavailable)?
-                        .incarnation;
-                    let binding = (skeleton, incarnation, pose.source);
-                    if state.binding.is_some_and(|previous| previous != binding) {
-                        return Err(ErrorReason::InvalidGeometry);
-                    }
-                    state.binding = Some(binding);
-                    let world = self.geometry_model(skeleton)?;
-                    let mut transforms = [GeometryShapeTransform::default(); 2];
-                    for endpoint in 0..2 {
-                        let matrix = *pose
-                            .global
-                            .get(joints[endpoint] as usize)
-                            .ok_or(ErrorReason::InvalidGeometry)?;
-                        transforms[endpoint] =
-                            GeometryShapeTransform::from_matrix(matrix)?.then(&world)?;
-                    }
-                    let GeometryShape::Pill {
-                        radius,
-                        ..
-                    } = part.shape
-                    else {
-                        return Err(ErrorReason::InvalidGeometry);
-                    };
-                    // Endpoint positions include full hierarchy and world transforms.
-                    // A conservative radius keeps the joint-mapped shape spherical
-                    // under independent nonuniform scaling/shear of its endpoints.
-                    let radius = radius
-                        * local.maximum_stretch()
-                        * transforms[0]
-                            .maximum_stretch()
-                            .max(transforms[1].maximum_stretch());
-                    parts.push(TransformedGeometryShape {
-                        shape: GeometryShape::Pill {
-                            start: transforms[0].point(local.point([0.0; 3])),
-                            end: transforms[1].point(local.point([0.0; 3])),
-                            radius,
-                        },
-                        transform: GeometryShapeTransform::default(),
-                    });
-                }
-                #[cfg(not(feature = "skeletal-animation"))]
-                {
-                    let _ = joints;
+                let skeleton = if input.skeleton.to_bits() == 0 {
+                    self.world
+                        .components
+                        .skin(entity.index() as usize)
+                        .map_or(entity, |skin| skin.skeleton)
+                } else {
+                    input.skeleton
+                };
+                let pose = crate::systems::skeleton::pose(self.world, &self.world.state, skeleton)
+                    .ok_or(ErrorReason::GeometryUnavailable)?;
+                let incarnation = self
+                    .world
+                    .state
+                    .entities
+                    .get(&skeleton)
+                    .and_then(|record| record.input(ComponentValue::SKELETON))
+                    .ok_or(ErrorReason::GeometryUnavailable)?
+                    .incarnation;
+                let binding = (skeleton, incarnation, pose.source);
+                if state.binding.is_some_and(|previous| previous != binding) {
                     return Err(ErrorReason::InvalidGeometry);
                 }
+                state.binding = Some(binding);
+                let world = self.geometry_model(skeleton)?;
+                let mut transforms = [GeometryShapeTransform::default(); 2];
+                for endpoint in 0..2 {
+                    let matrix = *pose
+                        .global
+                        .get(joints[endpoint] as usize)
+                        .ok_or(ErrorReason::InvalidGeometry)?;
+                    transforms[endpoint] =
+                        GeometryShapeTransform::from_matrix(matrix)?.then(&world)?;
+                }
+                let GeometryShape::Pill {
+                    radius,
+                    ..
+                } = part.shape
+                else {
+                    return Err(ErrorReason::InvalidGeometry);
+                };
+                // Endpoint positions include full hierarchy and world transforms.
+                // A conservative radius keeps the joint-mapped shape spherical
+                // under independent nonuniform scaling/shear of its endpoints.
+                let radius = radius
+                    * local.maximum_stretch()
+                    * transforms[0]
+                        .maximum_stretch()
+                        .max(transforms[1].maximum_stretch());
+                parts.push(TransformedGeometryShape {
+                    shape: GeometryShape::Pill {
+                        start: transforms[0].point(local.point([0.0; 3])),
+                        end: transforms[1].point(local.point([0.0; 3])),
+                        radius,
+                    },
+                    transform: GeometryShapeTransform::default(),
+                });
             } else {
                 parts.push(TransformedGeometryShape {
                     shape: part.shape,
@@ -524,9 +501,6 @@ impl<'a> GeometryReadAccess<'a> {
         entity: EntityId,
     ) -> Result<impl Iterator<Item = TransformedGeometryShape>, ErrorReason> {
         let index = entity.index() as usize;
-        #[cfg(not(feature = "surfaces"))]
-        let surface = None;
-        #[cfg(feature = "surfaces")]
         let surface = if let Some(surface) = self.world.components.surface(index) {
             Some(TransformedGeometryShape {
                 shape: surface.local_bounding_geometry(),
@@ -536,7 +510,6 @@ impl<'a> GeometryReadAccess<'a> {
             None
         };
         let has_mesh = self.world.components.mesh_instance(index).is_some();
-        #[cfg(feature = "particles")]
         let has_mesh = has_mesh
             || self.world.components.particle_sprite(index).is_some()
             || self.world.components.particle_mesh(index).is_some();
@@ -549,7 +522,6 @@ impl<'a> GeometryReadAccess<'a> {
 
     fn mesh_enclosure(&self, entity: EntityId) -> Result<TransformedGeometryShape, ErrorReason> {
         let index = entity.index() as usize;
-        #[cfg(feature = "particles")]
         if self.world.components.particle_sprite(index).is_some()
             || self.world.components.particle_mesh(index).is_some()
         {
@@ -575,7 +547,6 @@ impl<'a> GeometryReadAccess<'a> {
             .get_typed::<crate::services::asset_management::mesh_metadata::MeshMetadata>(key)
             .ok_or(ErrorReason::GeometryUnavailable)?;
         let model = self.geometry_model(entity)?;
-        #[cfg(feature = "mesh-poses")]
         let pose = crate::systems::render::mesh_pose(
             self.world,
             self.assets,
@@ -594,7 +565,6 @@ impl<'a> GeometryReadAccess<'a> {
                 weight,
             )
         });
-        #[cfg(feature = "mesh-poses")]
         let blend_bounds = |local: [[f32; 3]; 2]| -> [[f64; 3]; 2] {
             let local = local.map(|point| point.map(f64::from));
             let Some(((min, max), weight)) = pose else {
@@ -608,7 +578,6 @@ impl<'a> GeometryReadAccess<'a> {
                 })
             })
         };
-        #[cfg(feature = "skeletal-animation")]
         if self.world.components.skin(index).is_some() {
             let palette = crate::systems::skinning::palette(self.world, entity)
                 .ok_or(ErrorReason::GeometryUnavailable)?;
@@ -625,10 +594,7 @@ impl<'a> GeometryReadAccess<'a> {
                 // vertices influenced by this base-mesh palette slot. Blending
                 // its box with this slot's base box is conservative without
                 // requiring the target pose to duplicate joint streams.
-                #[cfg(feature = "mesh-poses")]
                 let local = blend_bounds(*local);
-                #[cfg(not(feature = "mesh-poses"))]
-                let local = local.map(|point| point.map(f64::from));
                 let shape = TransformedGeometryShape {
                     shape: GeometryShape::Box {
                         min: local[0],
@@ -656,10 +622,7 @@ impl<'a> GeometryReadAccess<'a> {
             });
         }
         let (min, max) = mesh.bounds();
-        #[cfg(feature = "mesh-poses")]
         let [min, max] = blend_bounds([min, max]);
-        #[cfg(not(feature = "mesh-poses"))]
-        let (min, max) = (min.map(f64::from), max.map(f64::from));
         Ok(TransformedGeometryShape {
             shape: GeometryShape::Box {
                 min,
@@ -764,11 +727,9 @@ fn visit_evaluation_meshes(
         if needs_mesh && let Some(mesh) = world.components.mesh_instance(index) {
             visit(&mesh.source, mesh.variant);
         }
-        #[cfg(feature = "particles")]
         if needs_mesh && let Some(mesh) = world.components.particle_mesh(index) {
             visit(&mesh.source, mesh.variant);
         }
-        #[cfg(feature = "mesh-poses")]
         if needs_mesh
             && let Some(pose) = world.components.mesh_pose(index)
             && !pose.source.is_empty()
@@ -893,7 +854,6 @@ impl crate::WorldContext<'_> {
     }
 }
 
-#[cfg(feature = "skeletal-animation")]
 impl GeometrySystem {
     pub(in crate::world) fn before_geometry_commit(
         &mut self,
@@ -941,7 +901,6 @@ impl GeometrySystem {
     }
 }
 
-#[cfg(feature = "skeletal-animation")]
 fn invalidate_skeleton_geometry(
     components: &mut crate::components::registry::ComponentStorage,
     authored: &crate::world::WorldEntityState,

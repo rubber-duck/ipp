@@ -8,11 +8,8 @@ pub(super) const AMBIENT: u32 = 2;
 pub(super) const SURFACE: u32 = 4;
 pub(super) const LIGHTS: u32 = 8;
 pub(super) const COUNT: u32 = 16;
-#[cfg(feature = "shadows")]
 pub(super) const SHADOW_MATRICES: u32 = 32;
-#[cfg(feature = "shadows")]
 pub(super) const SHADOW_SETTINGS: u32 = 64;
-#[cfg(feature = "shadows")]
 pub(super) const SHADOW_SAMPLER: u32 = 128;
 
 pub(super) struct RenderUniformCache {
@@ -23,11 +20,8 @@ pub(super) struct RenderUniformCache {
     surface: [f32; 3],
     lights: [f32; 128],
     count: i32,
-    #[cfg(feature = "shadows")]
     matrices: [f32; 128],
-    #[cfg(feature = "shadows")]
     settings: [f32; 32],
-    #[cfg(feature = "shadows")]
     shadow_length: usize,
 }
 
@@ -41,11 +35,8 @@ impl Default for RenderUniformCache {
             surface: [0.0; 3],
             lights: [0.0; 128],
             count: 0,
-            #[cfg(feature = "shadows")]
             matrices: [0.0; 128],
-            #[cfg(feature = "shadows")]
             settings: [0.0; 32],
-            #[cfg(feature = "shadows")]
             shadow_length: 0,
         }
     }
@@ -95,7 +86,6 @@ impl RenderUniformCache {
         changed
     }
 
-    #[cfg(feature = "shadows")]
     pub(super) fn shadows(&mut self, epoch: u64, frame: &RenderLightingFrame) -> u32 {
         self.begin(epoch);
         let mut changed = 0;

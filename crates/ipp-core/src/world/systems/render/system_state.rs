@@ -11,7 +11,6 @@ pub struct RenderSystemState {
     pub(super) entries_ready: bool,
     pub(super) compatibility_diagnostics: Vec<super::RenderDiagnostic>,
     pub(in crate::world) mesh_keys: AssetSourceKeyCache,
-    #[cfg(feature = "mesh-poses")]
     pub(in crate::world) pose_mesh_keys: AssetSourceKeyCache,
     pub(in crate::world) texture_keys: AssetSourceKeyCache,
     pub(in crate::world) items: Vec<super::RenderItem>,

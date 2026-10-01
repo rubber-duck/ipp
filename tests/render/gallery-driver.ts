@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { Inspection, EntitySnapshot } from "@ipp/client";
+import type { Page } from "playwright";
 import type { BrowserEnvironmentContext } from "../browser/environment.js";
 import { bigintJson, invoke, writeDataUrl } from "./evidence.js";
 import {
@@ -14,41 +15,90 @@ import type {
 } from "./viewer-browser-helper.js";
 import type { ImageDifference } from "./image-assertions.js";
 
-export const galleryBuild = (name: "render-expanded" | "headless") => {
+export const galleryBuild = (name: "render" | "headless") => {
   const directory = resolve("target/browser-build", name);
   return {
     name,
     generatedModule: join(directory, "generated.js"),
     runtimeWasm: join(directory, "runtime.wasm"),
-    exportWasm: join(directory, "export.wasm"),
     contractArtifact: join(directory, "contract.bin"),
   };
 };
 export const galleryEnvironment = {
   workspace: resolve(process.cwd()),
-  build: galleryBuild("render-expanded"),
-  mismatchBuild: galleryBuild("headless"),
+  build: galleryBuild("render"),
   operationTimeoutMs: 15_000,
   closeTimeoutMs: 5_000,
   evidenceParent: resolve("target/integration-artifacts/gallery-combined"),
 };
 
+/**
+ * Share of the gallery's canvas frame, per axis, that scenarios render into.
+ *
+ * Every rasterized and captured pixel costs CPU on a software renderer, so
+ * scenarios draw a canvas of half the width and half the height. A smaller
+ * viewport cannot do this: below 961 CSS pixels the gallery switches to its
+ * phone layout, where the controls become a modal sheet. Scenarios therefore
+ * keep the desktop layout and confine its canvas frame to this share of the
+ * showcase. A scenario whose canvas size is part of what it proves, such as
+ * the responsive layout scenario, opens the gallery with `canvasShare: 1`.
+ */
+export const GALLERY_CANVAS_SHARE = 0.5;
+
+/**
+ * Confine the gallery's canvas frame to `share` of its showcase on every
+ * document the page loads. The frame keeps its place in the desktop layout,
+ * and the canvas still fills the frame and follows its CSS size and density.
+ */
+export async function confineGalleryCanvas(page: Page, share: number) {
+  assert.ok(share > 0 && share <= 1, `canvas share ${share} is not in (0, 1]`);
+  if (share === 1) return;
+  await page.addInitScript((share) => {
+    const style = document.createElement("style");
+    style.textContent = `.viewer-shell .canvas-frame { width: ${share * 100}%; height: ${share * 100}%; }`;
+    const install = () => document.head.append(style);
+    if (document.head) install();
+    else document.addEventListener("DOMContentLoaded", install, { once: true });
+  }, share);
+}
+
 export async function openGallery(
   scenario: BrowserEnvironmentContext,
   options: GalleryServerOptions & {
     readonly initialPage?: "gui";
+    /** Share of the canvas frame per axis; `GALLERY_CANVAS_SHARE` by default. */
+    readonly canvasShare?: number;
   } = {},
 ) {
   const { page } = scenario;
-  const { initialPage, ...server } = options;
+  const {
+    initialPage,
+    canvasShare = GALLERY_CANVAS_SHARE,
+    ...server
+  } = options;
+  await confineGalleryCanvas(page, canvasShare);
   const origin = await startGalleryServer(process.cwd(), scenario, server);
   const helper = `${origin}/target/gallery-fixtures/viewer-browser-helper.js`;
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  const call = <T>(name: string, ...args: unknown[]) =>
-    invoke<T>(page, helper, name, args);
+  // Image measurements are evidence: their values show the margin of each
+  // pixel threshold at the canvas size the scenario rendered.
+  const measured = /^(compare|countViewerColors$|captureColorRegion$)/;
+  const call = async <T>(name: string, ...args: unknown[]) => {
+    const result = await invoke<T>(page, helper, name, args);
+    if (measured.test(name))
+      await scenario.evidence.record("image-measurement", {
+        name,
+        args,
+        result,
+      });
+    return result;
+  };
   const inspect = () => call<Inspection>("settleGalleryInput");
-  const settle = async () => {
+  // Wait for pending picks to answer. Callers then pass another ingress barrier
+  // (`inspect` includes one) so input and React commits the selection change
+  // caused are admitted.
+  const settleSelection = async () => {
     await call("awaitGalleryIngress");
     await page.waitForFunction(
       () =>
@@ -56,6 +106,9 @@ export async function openGallery(
         document.querySelector<HTMLElement>("#selection-status")!.dataset
           .pending === "0",
     );
+  };
+  const settle = async () => {
+    await settleSelection();
     return inspect();
   };
   const selectScene = async (
@@ -173,7 +226,10 @@ export async function openGallery(
     return waitFor(pausedAt(time));
   };
   const capture = async (label: string, waitForResources = true) => {
-    await settle();
+    // The capture's own inspection, after flushing React, is the read barrier
+    // and the inspected state; settling needs only the ingress barriers.
+    await settleSelection();
+    await call("awaitGalleryIngress");
     const frame = await call<ViewerBrowserCapture>(
       "captureViewer",
       label,

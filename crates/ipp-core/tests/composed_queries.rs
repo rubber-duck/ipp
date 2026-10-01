@@ -1,5 +1,4 @@
 //! Completed composed queries against real Camera, Canvas and spatial publications.
-#![cfg(feature = "gui")]
 
 mod support;
 

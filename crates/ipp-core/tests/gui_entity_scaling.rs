@@ -3,9 +3,8 @@
 //! control value, and removing half the tree or the whole scope through core
 //! lifecycle. Work counts are asserted exactly, so the steps stay linear in the
 //! entities they must visit; timings and their 1k-to-16k growth are printed for a
-//! quiet machine (`cargo test -p ipp-core --release --features
-//! gui,diagnostics --test gui_entity_scaling -- --nocapture`).
-#![cfg(all(feature = "gui", feature = "diagnostics"))]
+//! quiet machine (`cargo test -p ipp-core --release --test gui_entity_scaling --
+//! --nocapture`).
 
 mod support;
 

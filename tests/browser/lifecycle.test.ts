@@ -10,15 +10,12 @@ import {
 } from "./environment.js";
 
 const workspace = process.cwd();
-function build(
-  name: "headless" | "headless-builtins",
-): BrowserBuildConfiguration {
+function build(name: "headless"): BrowserBuildConfiguration {
   const base = resolve(workspace, "target/browser-build", name);
   return {
     name,
     generatedModule: resolve(base, "generated.js"),
     runtimeWasm: resolve(base, "runtime.wasm"),
-    exportWasm: resolve(base, "export.wasm"),
     contractArtifact: resolve(base, "contract.bin"),
   };
 }
@@ -71,7 +68,6 @@ test("worker progresses multi-megabyte HTTP assets while animation frames are wi
     {
       workspace,
       build: build("headless"),
-      mismatchBuild: build("headless-builtins"),
       operationTimeoutMs: 20_000,
     },
     testContext.signal,
@@ -153,7 +149,6 @@ for (const initiallyHidden of [false, true]) {
       {
         workspace,
         build: build("headless"),
-        mismatchBuild: build("headless-builtins"),
       },
       testContext.signal,
       async (context) => {
@@ -228,7 +223,6 @@ test("worker bounds undelivered output and fails a stalled receiver explicitly",
     {
       workspace,
       build: build("headless"),
-      mismatchBuild: build("headless-builtins"),
       operationTimeoutMs: 60_000,
     },
     testContext.signal,

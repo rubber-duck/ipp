@@ -22,7 +22,7 @@ fn ready(id: u64) -> Host<HeadlessPlatform> {
         .unwrap();
     session
         .test_session()
-        .receive(&ipp_protocol::bootstrap())
+        .receive(&ipp_protocol::HELLO)
         .unwrap();
     session.test_session().take_response().unwrap();
     session

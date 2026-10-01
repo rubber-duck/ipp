@@ -4,7 +4,7 @@ import { pathToFileURL } from "node:url";
 import test from "node:test";
 import type { Client } from "@ipp/client";
 import { runNativeEnvironment } from "../integration/environment.js";
-import { reactRootSystems } from "../integration/system-selections.js";
+import { REACT_ROOT, selectSystems } from "../integration/system-selections.js";
 
 test("React entity links reconcile through native WebSocket", {
   timeout: 60000,
@@ -31,7 +31,7 @@ test("React entity links reconcile through native WebSocket", {
     async (environment) => {
       const client = await environment.track<Client>(
         contract.IppClient.connectWebSocket(environment.url, {
-          selectedSystems: reactRootSystems(contract.CAPABILITIES),
+          selectedSystems: selectSystems(REACT_ROOT),
           signal: environment.signal,
         }),
       );

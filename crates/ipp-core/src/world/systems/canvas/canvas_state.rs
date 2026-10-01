@@ -85,13 +85,7 @@ pub(crate) fn validate_creation_state(
     selected: &[crate::systems::SystemId],
 ) -> Result<(), ErrorReason> {
     state.validate()?;
-    #[cfg(feature = "surfaces")]
     let selects_canvas = selected.contains(&super::CanvasSystem::ID);
-    #[cfg(not(feature = "surfaces"))]
-    let selects_canvas = {
-        let _ = selected;
-        false
-    };
     if !selects_canvas {
         return Err(ErrorReason::UnsupportedDependency);
     }
@@ -101,7 +95,6 @@ pub(crate) fn validate_creation_state(
 
 /// Encode the Canvas System's persistent payload: extent then density, as
 /// little-endian `f32` values.
-#[cfg(feature = "surfaces")]
 pub(super) fn encode_persistent(state: CanvasState) -> Vec<u8> {
     [state.extent[0], state.extent[1], state.units_per_metre]
         .iter()
@@ -110,7 +103,6 @@ pub(super) fn encode_persistent(state: CanvasState) -> Vec<u8> {
 }
 
 /// Decode a persistent payload; a wrong length or an invalid value fails the load.
-#[cfg(feature = "surfaces")]
 pub(super) fn decode_persistent(bytes: &[u8]) -> Result<CanvasState, String> {
     let bytes: &[u8; PERSISTENT_BYTES] = bytes
         .try_into()
@@ -128,10 +120,8 @@ pub(super) fn decode_persistent(bytes: &[u8]) -> Result<CanvasState, String> {
     .map_err(|_| "Invalid Canvas state value".into())
 }
 
-#[cfg(feature = "surfaces")]
 const PERSISTENT_BYTES: usize = 12;
 
-#[cfg(feature = "surfaces")]
 impl crate::WorldContext<'_> {
     /// Queue a sparse Canvas state update at the ordered mutation boundary.
     pub fn enqueue_canvas_state_update(
@@ -154,7 +144,6 @@ impl crate::WorldContext<'_> {
     }
 }
 
-#[cfg(feature = "surfaces")]
 impl crate::world::World {
     /// Seed an unpublished World's validated creation state.
     pub(crate) fn seed_canvas_state(&mut self, state: CanvasState) {
@@ -164,7 +153,6 @@ impl crate::world::World {
     }
 }
 
-#[cfg(feature = "gui")]
 impl crate::systems::SystemRuntimeAccess<'_> {
     /// Committed Canvas System state for GUI layout, which evaluates before the
     /// Canvas System it feeds. Only a command at the mutation boundary changes

@@ -1,3 +1,4 @@
+import { renderDiagnostics } from "../../../packages/ipp-client/src/diagnostics.js";
 import {
   canvasOutput,
   sameOutputReference,
@@ -216,7 +217,7 @@ export async function composedOutputInclusion(
     );
     const cached = await host.presentation.capture(view, { afterOutputs });
     pixel(cached, [0, 0, 255, 255]);
-    const diagnostics = host.renderDiagnostics;
+    const diagnostics = renderDiagnostics(host);
     check(diagnostics, "Real render diagnostics absent");
     const before = await diagnostics.statistics();
     const reused = await host.presentation.frame(view, { afterOutputs });

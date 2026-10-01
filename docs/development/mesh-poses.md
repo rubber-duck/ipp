@@ -40,7 +40,7 @@ await client.batch([
 | `MeshPose.setWeight(Entity.handle(id), weight)` | Direct weight update |
 | Property track | Target `MeshPose.fields.weight.offset`; ordinary controllers/binding invalidation |
 
-Activate a camera separately. Animation controllers keep only their own contributions and bind component incarnations, never vertex pointers; replacement needs explicit rebinding. `CAPABILITIES.meshPoses` reports support. Disabled builds omit component/GL imports/snippets, preserving ordinary mesh encoding.
+Activate a camera separately. Animation controllers keep only their own contributions and bind component incarnations, never vertex pointers; replacement needs explicit rebinding. Every build compiles mesh poses; a World without the pose Systems leaves ordinary mesh encoding untouched.
 
 ## Shading, geometry and lifecycle
 
@@ -65,17 +65,17 @@ Scope: pairwise poses only; no additive multi-targets or topology changes. The [
 ## Validation
 
 - `python tools/ipp.py test mesh-poses`: real client/uploads/clips → worker/WASM/WebGL. Independently baked endpoint/midpoint frames; weights, authored-state preservation, rejection, normal fallback, pending/alias sources, frustum entry, rebinding/deletion and actual context loss.
-- Expanded builds add skinning/PBR and measurable receiver-shadow differences. Evidence: `target/integration-artifacts/mesh-poses`.
-- `cargo test -p ipp-core --no-default-features --features mesh-poses --test mesh_poses --locked`: exact bounds/storage/topology, partial-failure repair and late loads.
+- The lit scene adds skinning/PBR and measurable receiver-shadow differences; the unlit scene adds textured deformation. Evidence: `target/integration-artifacts/mesh-poses`.
+- `cargo test -p ipp-core --test mesh_poses --locked`: exact bounds/storage/topology, partial-failure repair and late loads.
 
 The suite exports matching GLES fixtures. With [native context setup](../../crates/ipp-render-gl/README.md#native-host-binding-and-smoke-fixture):
 
 ```sh
 LIBGL_ALWAYS_SOFTWARE=1 cargo run -p ipp-render-gl --example egl_mesh_poses \
-  --no-default-features --features mesh-poses --locked -- \
+  --locked -- \
   /usr/lib/x86_64-linux-gnu target/mesh-pose-build target/integration-artifacts/mesh-poses-gles
 ```
 
-Add `shadows` for lit/depth composition. Compare completed framebuffers with baked references, retain PPM actual/expected/diff images and test replacement-device recovery. CI runs browser and both native selections. Software GL proves correctness, not hardware performance.
+Compare completed framebuffers with baked references, retain PPM actual/expected/diff images and test replacement-device recovery. CI runs the browser and native scenarios. Software GL proves correctness, not hardware performance.
 
-Shared fixtures independently bake affine positions and inverse-transpose normals. Browser/GLES cases compare midpoint poses under nonuniform parents and object LookAt with baked geometry. Expanded WebGL also compares joint deformation followed by aim and parent placement, covering surface/shadow paths together. Endpoint bytes stay immutable.
+Shared fixtures independently bake affine positions and inverse-transpose normals. Browser/GLES cases compare midpoint poses under nonuniform parents and object LookAt with baked geometry. The WebGL scenes also compare joint deformation followed by aim and parent placement, covering surface/shadow paths together. Endpoint bytes stay immutable.

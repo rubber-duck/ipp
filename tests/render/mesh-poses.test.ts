@@ -6,8 +6,9 @@ import { invoke, writeDataUrl } from "./evidence.js";
 import type { run } from "./mesh-poses-fixture.js";
 
 const workspace = resolve(process.cwd());
-for (const name of ["render-mesh-poses", "render-expanded"] as const) {
-  test(`${name}: corresponding positions match baked geometry through real assets and completed frames`, {
+const name = "render-instrumentation" as const;
+for (const scene of ["unlit", "lit"] as const) {
+  test(`${scene}: corresponding positions match baked geometry through real assets and completed frames`, {
     timeout: 90_000,
   }, async (context) => {
     const directory = resolve(workspace, "target/browser-build", name);
@@ -15,15 +16,13 @@ for (const name of ["render-mesh-poses", "render-expanded"] as const) {
       name,
       generatedModule: resolve(directory, "generated.js"),
       runtimeWasm: resolve(directory, "runtime.wasm"),
-      exportWasm: resolve(directory, "export.wasm"),
       contractArtifact: resolve(directory, "contract.bin"),
     };
     await runBrowserEnvironment(
-      name,
+      `mesh-poses-${scene}`,
       {
         workspace,
         build,
-        mismatchBuild: build,
         operationTimeoutMs: 60_000,
         evidenceParent: resolve(
           workspace,
@@ -53,7 +52,7 @@ for (const name of ["render-mesh-poses", "render-expanded"] as const) {
             environment.page,
             `${environment.urls.origin}/dist/tests/render/mesh-poses-fixture.js`,
             "run",
-            [environment.urls],
+            [environment.urls, scene],
           ),
         );
         assert.equal(result.independentInstances, 2);

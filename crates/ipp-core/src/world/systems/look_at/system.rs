@@ -28,14 +28,7 @@ fn changes_aim_frame(component: u16) -> bool {
     if component == ComponentValue::LOOK_AT {
         return true;
     }
-    #[cfg(feature = "skeletal-animation")]
-    {
-        component == ComponentValue::PARENT_JOINT
-    }
-    #[cfg(not(feature = "skeletal-animation"))]
-    {
-        false
-    }
+    component == ComponentValue::PARENT_JOINT
 }
 
 fn changed_dependencies(context: &systems::SystemCommitContext<'_>) -> BTreeSet<crate::EntityId> {

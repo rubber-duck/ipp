@@ -1,4 +1,4 @@
-//! Opt-in stage timing and allocation counters for profiling builds.
+//! Opt-in stage timing and allocation counters for `instrumentation` builds.
 //!
 //! Each (System, composition) key registered at World construction owns
 //! [`SYSTEM_PHASES`] stage slots, `system * SYSTEM_PHASES + phase`, with phases in

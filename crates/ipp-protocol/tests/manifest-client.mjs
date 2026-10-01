@@ -3,31 +3,27 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { executeCancellationConformance } from "./presentation-cancellation.mjs";
 import {
-  ROWS_FIXTURE_PROPERTIES,
   encodeManifestLayout,
   generateClient,
+  HELLO,
+  hostAnnouncement,
   manifestVariant,
-  nonemptyBytesDefaultContract,
   noncreatableContract,
+  nonemptyBytesDefaultContract,
+  ROWS_FIXTURE_PROPERTIES,
   rowsFieldContract,
 } from "./generated-client.mjs";
 
-const client = await generateClient("manifest", []);
+const client = await generateClient("manifest");
 const { codec, manifest, source } = client;
 const bytesDefault = await generateClient(
   "bytes-default",
-  [],
   nonemptyBytesDefaultContract,
-  noncreatableContract,
 );
 
-const noCreation = await generateClient(
-  "noncreatable",
-  [],
-  noncreatableContract,
-);
+const noCreation = await generateClient("noncreatable", noncreatableContract);
 
-const rows = await generateClient("rows", [], rowsFieldContract);
+const rows = await generateClient("rows", rowsFieldContract);
 
 /** Table bytes in the documented encoding; `rows` maps slot to present values. */
 function rowsTable(nextSlot, entries) {
@@ -317,6 +313,9 @@ test("schema rows fields generate typed row helpers and decode inspected tables"
       request_id: 20n,
       tick: 40n,
       tag: tag("RESPONSE_INSPECT"),
+      gui_focus: [],
+      gui_pointers: [],
+      canvas: null,
       next: 0n,
       time: 0,
       entities: [
@@ -390,20 +389,14 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", asy
   assert.throws(() => {
     bytesDefault.codec.components.Scalar.fields.value.default[0] = 9;
   }, TypeError);
-  assert.deepEqual(codec.TARGET.features["skeletal-animation"], {
-    id: 16,
-    enabled: false,
-  });
   assert.equal("request-upload-asset" in manifest.WIRE_LAYOUTS, false);
   assert.equal("uploadAsset" in codec.IppClient.prototype, false);
   assert.deepEqual(manifest.ASSET_FORMATS.ASSET_MESH, {
-    capability: "textures",
     typeId: codec.WIRE.ASSET_MESH,
     format: manifest.ASSET_FORMATS.ASSET_MESH.format,
   });
   for (const descriptor of [
     codec.TARGET,
-    codec.TARGET.features,
     codec.WIRE,
     manifest.WIRE_TAG_LAYOUTS,
     manifest.WIRE_LAYOUTS,
@@ -982,6 +975,9 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", asy
     request_id: 20n,
     tick: 40n,
     tag: tag("RESPONSE_INSPECT"),
+    gui_focus: [],
+    gui_pointers: [],
+    canvas: null,
     next: 0n,
     time: 2.25,
     entities: [entity],
@@ -1463,6 +1459,9 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", asy
       request_id: 28n,
       tick: 48n,
       tag: tag("RESPONSE_INSPECT"),
+      gui_focus: [],
+      gui_pointers: [],
+      canvas: null,
       next: 0n,
       time: 0,
       entities: [
@@ -1678,6 +1677,9 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", asy
       request_id: 999n,
       tick: 40n,
       tag: tag("RESPONSE_INSPECT"),
+      gui_focus: [],
+      gui_pointers: [],
+      canvas: null,
       next: 0n,
       time: 2.25,
       entities: [
@@ -1757,6 +1759,9 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", asy
       request_id: 1001n,
       tick: 40n,
       tag: tag("RESPONSE_INSPECT"),
+      gui_focus: [],
+      gui_pointers: [],
+      canvas: null,
       next: 0n,
       time: 2.25,
       entities: [
@@ -1804,6 +1809,9 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", asy
           request_id: 1000n,
           tick: 40n,
           tag: tag("RESPONSE_INSPECT"),
+          gui_focus: [],
+          gui_pointers: [],
+          canvas: null,
           next: 0n,
           time: 2.25,
           entities: [
@@ -2679,6 +2687,9 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", asy
         request_id: 34n,
         tick: 49n,
         tag: tag("RESPONSE_INSPECT"),
+        gui_focus: [],
+        gui_pointers: [],
+        canvas: null,
         next: 0n,
         time: 2.25,
         entities: [
@@ -2697,17 +2708,16 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", asy
       }).bytes,
       7n,
     ).body.entities[0];
-    for (const components of [inspected.components])
-      assert.deepEqual(components, [
-        {
-          component: attachment.id,
-          fields: Object.assign(Object.create(null), {
-            child,
-            output: selectedOutput,
-            mode: 0,
-          }),
-        },
-      ]);
+    assert.deepEqual(inspected.components, [
+      {
+        component: attachment.id,
+        fields: Object.assign(Object.create(null), {
+          child,
+          output: selectedOutput,
+          mode: 0,
+        }),
+      },
+    ]);
   }
 
   const presentationSurface = {
@@ -2862,7 +2872,7 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", asy
     );
   const exchanges = [];
   let transportEvents;
-  let bootstrapped = false;
+  let greeted = false;
   let nextRequest = 1n;
   let closes = 0;
   const host = await codec.IppHostClient.connectTransport({
@@ -2871,12 +2881,10 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", asy
       events.ready();
     },
     send(bytes) {
-      if (!bootstrapped) {
-        assert.deepEqual(bytes, codec.bootstrap());
-        const response = new Uint8Array(24);
-        response.set(bytes);
-        new DataView(response.buffer).setBigUint64(16, 7n, true);
-        bootstrapped = true;
+      if (!greeted) {
+        assert.deepEqual(bytes, HELLO);
+        const response = hostAnnouncement(codec);
+        greeted = true;
         transportEvents.message(response);
         return;
       }
@@ -3112,16 +3120,17 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", asy
 
   // Playback/controller branches are covered against this same manifest in animation-client.mjs.
   const animationTag = (name) =>
-    manifest.WIRE_TAG_LAYOUTS[name].capability === "animation";
+    /^(ANIMATION_|PLAYBACK_|(REQUEST|RESPONSE)_(CONTROLLER|PLAYBACK))/.test(
+      name,
+    );
   const unreachableSnapshotKinds = new Set([
     "SNAPSHOT_VALUE_U64",
-    "SNAPSHOT_VALUE_ROWS",
     "SNAPSHOT_VALUE_UNSET",
   ]);
-  // No component in this compiled target exposes resolved u64 or rows fields yet, and
+  // No component in this compiled target exposes resolved u64 fields yet, and
   // absence is never a field kind. Their authored encoders and Rust resolved writer
-  // remain covered (inspected rows tables by the synthetic rows contract below); a
-  // registered field makes this set drift.
+  // remain covered; a registered field makes this set drift. GUI rows fields make
+  // SNAPSHOT_VALUE_ROWS reachable; the synthetic rows contract below covers it.
   const compiledKinds = new Set(
     Object.values(codec.components).flatMap((component) =>
       Object.values(component.fields).map((field) => field.kind),
@@ -3135,6 +3144,12 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", asy
       .filter(
         (name) =>
           !unreachableSnapshotKinds.has(name) &&
+          name !== "SNAPSHOT_VALUE_ROWS" &&
+          // GUI, Canvas and lifecycle diagnostic codecs are covered by the
+          // gui-semantics, physical-input and lifecycle-diagnostics clients.
+          !/^(GUI_|COMMAND_GUI_ACTION$|INSPECT_GUI_|(REQUEST|RESPONSE)_GUI_OBSERVATION$|INSPECT_CANVAS$|REQUEST_CANVAS_STATE_UPDATE$|(REQUEST|RESPONSE)_LIFECYCLE_DIAGNOSTICS$)/.test(
+            name,
+          ) &&
           !animationTag(name) &&
           // Physical Host controls/selectors are exercised by the maintained
           // native and worker Host lifecycle/persistence suites, separately

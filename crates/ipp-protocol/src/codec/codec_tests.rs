@@ -344,11 +344,8 @@ fn inspection_encodes_current_resource_statuses_after_entities() {
         request_id: 1,
         tick: 9,
         body: ResponseBody::Inspect {
-            #[cfg(feature = "gui")]
             gui_focus: Vec::new(),
-            #[cfg(feature = "gui")]
             gui_pointers: Vec::new(),
-            #[cfg(feature = "surfaces")]
             canvas: None,
             next: 0,
             controllers: Vec::new(),
@@ -399,12 +396,10 @@ fn inspection_encodes_current_resource_statuses_after_entities() {
     assert_eq!(reader.string().unwrap(), "InvalidAsset");
     assert_eq!(reader.u32().unwrap(), 0);
     // GUI builds append the empty focus and pointer collections.
-    #[cfg(feature = "gui")]
     for _ in 0..2 {
         assert_eq!(reader.u32().unwrap(), 0);
     }
     // Surface builds append the absent Canvas System record.
-    #[cfg(feature = "surfaces")]
     assert_eq!(reader.u8().unwrap(), 0);
     assert_eq!(reader.at, bytes.len());
 }
@@ -433,11 +428,8 @@ fn inspection_encodes_dynamic_components_beyond_static_field_limits() {
         request_id: 1,
         tick: 9,
         body: ResponseBody::Inspect {
-            #[cfg(feature = "gui")]
             gui_focus: Vec::new(),
-            #[cfg(feature = "gui")]
             gui_pointers: Vec::new(),
-            #[cfg(feature = "surfaces")]
             canvas: None,
             next: 0,
             controllers: Vec::new(),
@@ -479,22 +471,6 @@ fn removed_builtin_requests_reject() {
             decode_request(&request(tag), 7),
             Err(ProtocolError::Unsupported(tag))
         );
-    }
-}
-
-#[test]
-fn omitted_asset_capabilities_reject_their_wire_tags() {
-    for (tag, enabled) in [
-        (5, true),
-        (6, cfg!(feature = "builtin-assets")),
-        (7, cfg!(feature = "builtin-assets")),
-    ] {
-        if !enabled {
-            assert_eq!(
-                decode_request(&request(tag), 7),
-                Err(ProtocolError::Unsupported(tag))
-            );
-        }
     }
 }
 
@@ -557,18 +533,6 @@ fn obsolete_implicit_camera_controls_are_not_protocol_operations() {
 }
 
 #[test]
-fn unavailable_transient_events_reject_before_payload_decode() {
-    for (tag, enabled) in [(8, true), (9, true), (10, true), (11, true)] {
-        if !enabled {
-            assert_eq!(
-                decode_request(&request(tag), 7),
-                Err(ProtocolError::Unsupported(tag))
-            );
-        }
-    }
-}
-
-#[test]
 fn geometry_pick_flags_require_a_canonical_boolean_and_exact_payload() {
     let mut bytes = request(REQUEST_GEOMETRY_PICK);
     bytes.extend(root_view_bytes());
@@ -593,16 +557,43 @@ fn geometry_pick_flags_require_a_canonical_boolean_and_exact_payload() {
 }
 
 #[test]
-fn bootstrap_rejects_before_schema_decode() {
-    let b = crate::bootstrap();
-    assert_eq!(crate::accept_bootstrap(&b, 7).unwrap().len(), 24);
-    let mut wrong = b;
-    wrong[8] ^= 1;
+fn hello_announces_revision_hash_and_connection_and_rejects_only_foreign_input() {
+    let reply = crate::accept_hello(&crate::HELLO, 7).unwrap();
+    assert_eq!(reply.len(), 24);
+    assert_eq!(&reply[..4], b"IPPB");
+    assert_eq!(reply[4..8], crate::VERSION.to_le_bytes());
+    assert_eq!(reply[8..16], crate::schema_hash().to_le_bytes());
+    assert_eq!(reply[16..], 7u64.to_le_bytes());
+
+    // A hello is not this protocol when its marker or length differs; a
+    // former bootstrap carrying a schema claim is rejected for its length.
+    let mut wrong = crate::HELLO;
+    wrong[3] ^= 1;
+    for foreign in [&wrong[..], &crate::HELLO[..3], &crate::announcement()[..]] {
+        assert!(matches!(
+            crate::accept_hello(foreign, 7),
+            Err(ProtocolError::Malformed(_))
+        ));
+    }
     assert_eq!(
-        crate::accept_bootstrap(&wrong, 7),
-        Err(ProtocolError::SchemaMismatch)
+        crate::accept_hello(&crate::HELLO, 0),
+        Err(ProtocolError::SessionMismatch)
     );
-    assert!(crate::accept_bootstrap(&b[..15], 7).is_err());
+}
+
+#[test]
+fn contract_reply_carries_the_exported_contract_headed_by_the_announcement() {
+    let reply = crate::contract_reply();
+    assert_eq!(&reply[..4], &crate::CONTRACT_REPLY_MAGIC);
+    assert_eq!(&reply[4..], crate::export_contract());
+    assert_eq!(reply.capacity(), reply.len());
+    assert!(reply.len() <= crate::MAX_MESSAGE_BYTES);
+
+    let contract = crate::export_contract();
+    assert_eq!(contract[..16], crate::announcement());
+    let mut hash = ipp_core::components::schema::ContractHash::default();
+    ipp_core::components::schema::ContractSink::write(&mut hash, &contract[16..]);
+    assert_eq!(hash.0, crate::schema_hash());
 }
 
 #[test]
@@ -713,11 +704,8 @@ fn frame_encoding_and_response_identity_are_fenced() {
             message: "rejected".into(),
         },
         ResponseBody::Inspect {
-            #[cfg(feature = "gui")]
             gui_focus: Vec::new(),
-            #[cfg(feature = "gui")]
             gui_pointers: Vec::new(),
-            #[cfg(feature = "surfaces")]
             canvas: None,
             next: 0,
             controllers: Vec::new(),
@@ -758,11 +746,8 @@ fn response_times_are_finite_and_nonnegative() {
             (
                 1,
                 ResponseBody::Inspect {
-                    #[cfg(feature = "gui")]
                     gui_focus: Vec::new(),
-                    #[cfg(feature = "gui")]
                     gui_pointers: Vec::new(),
-                    #[cfg(feature = "surfaces")]
                     canvas: None,
                     next: 0,
                     controllers: Vec::new(),

@@ -27,13 +27,9 @@ pub struct MeshUpload {
 pub struct MeshAsset {
     metadata: super::mesh_metadata::MeshMetadata,
     positions: Vec<[f32; 3]>,
-    #[cfg(feature = "skeletal-animation")]
     joint_indices: Option<Vec<[u8; 4]>>,
-    #[cfg(feature = "skeletal-animation")]
     max_joint_index: Option<u8>,
-    #[cfg(feature = "skeletal-animation")]
     joint_weights: Option<Vec<[f32; 4]>>,
-    #[cfg(feature = "skeletal-animation")]
     joint_bounds: Vec<Option<[[f32; 3]; 2]>>,
     bounds: [[f32; 3]; 2],
     colors: Option<Vec<[f32; 3]>>,
@@ -54,7 +50,6 @@ impl MeshAsset {
     }
 
     /// Mesh bind-space enclosure for every nonzero influence in palette order.
-    #[cfg(feature = "skeletal-animation")]
     pub fn joint_bounds(&self) -> &[Option<[[f32; 3]; 2]>] {
         &self.joint_bounds
     }
@@ -81,45 +76,31 @@ impl MeshAsset {
 
     /// CPU metadata for conservative deformation bounds, excluded from GPU streams.
     pub fn bounds_bytes(&self) -> usize {
-        #[cfg(feature = "skeletal-animation")]
-        {
-            std::mem::size_of_val(self.joint_bounds.as_slice())
-        }
-        #[cfg(not(feature = "skeletal-animation"))]
-        {
-            0
-        }
+        std::mem::size_of_val(self.joint_bounds.as_slice())
     }
 
     /// Retained vertex bytes, excluding metadata and absent attributes.
     pub fn vertex_bytes(&self) -> usize {
-        let bytes = std::mem::size_of_val(self.positions())
+        std::mem::size_of_val(self.positions())
             + self.colors().map_or(0, std::mem::size_of_val)
-            + self.normals().map_or(0, std::mem::size_of_val);
-        let bytes = bytes
+            + self.normals().map_or(0, std::mem::size_of_val)
             + self.uvs().map_or(0, std::mem::size_of_val)
-            + self.texture_weights().map_or(0, std::mem::size_of_val);
-        #[cfg(feature = "skeletal-animation")]
-        let bytes = bytes
+            + self.texture_weights().map_or(0, std::mem::size_of_val)
             + self.joint_indices().map_or(0, std::mem::size_of_val)
-            + self.joint_weights().map_or(0, std::mem::size_of_val);
-        bytes
+            + self.joint_weights().map_or(0, std::mem::size_of_val)
     }
 
     /// Four palette indices per vertex, absent on rigid geometry.
-    #[cfg(feature = "skeletal-animation")]
     pub fn joint_indices(&self) -> Option<&[[u8; 4]]> {
         self.joint_indices.as_deref()
     }
 
     /// Largest palette index, validated once without scanning vertices each frame.
-    #[cfg(feature = "skeletal-animation")]
     pub fn max_joint_index(&self) -> Option<u8> {
         self.max_joint_index
     }
 
     /// Four nonnegative weights normalized once at decode, absent on rigid geometry.
-    #[cfg(feature = "skeletal-animation")]
     pub fn joint_weights(&self) -> Option<&[[f32; 4]]> {
         self.joint_weights.as_deref()
     }
@@ -159,13 +140,9 @@ impl MeshAsset {
         let mut mesh = Self {
             metadata: Default::default(),
             positions: Vec::new(),
-            #[cfg(feature = "skeletal-animation")]
             joint_indices: None,
-            #[cfg(feature = "skeletal-animation")]
             max_joint_index: None,
-            #[cfg(feature = "skeletal-animation")]
             joint_weights: None,
-            #[cfg(feature = "skeletal-animation")]
             joint_bounds: Vec::new(),
             bounds: [[0.0; 3]; 2],
             colors: None,
@@ -191,7 +168,6 @@ impl MeshAsset {
             }
         }
 
-        #[cfg(feature = "skeletal-animation")]
         if let (Some(joints), Some(weights)) = (&mesh.joint_indices, &mesh.joint_weights) {
             mesh.joint_bounds = vec![None; usize::from(mesh.max_joint_index.unwrap()) + 1];
             for ((position, joints), weights) in mesh.positions.iter().zip(joints).zip(weights) {
@@ -297,9 +273,7 @@ impl MeshAsset {
                 0 | 1 | 4 => (1, 12),
                 2 => (2, 8),
                 3 => (3, 1),
-                #[cfg(feature = "skeletal-animation")]
                 5 => (4, 4),
-                #[cfg(feature = "skeletal-animation")]
                 6 => (5, 16),
                 _ => return Err(ErrorReason::InvalidAsset),
             };
@@ -347,7 +321,6 @@ impl MeshAsset {
                 .transpose()?;
             self.texture_weights = streams[3].map(<[u8]>::to_vec);
         }
-        #[cfg(feature = "skeletal-animation")]
         if let (Some(indices), Some(weights)) = (streams[5], streams[6]) {
             let indices: Vec<_> = indices.as_chunks::<4>().0.to_vec();
             if indices
@@ -475,14 +448,11 @@ impl super::writer::AssetEncoder for MeshAsset {
         if let Some(values) = &self.normals {
             streams.push((4, 1, floats(values.as_flattened())));
         }
-        #[cfg(feature = "skeletal-animation")]
-        {
-            if let Some(values) = &self.joint_indices {
-                streams.push((5, 4, values.as_flattened().to_vec()));
-            }
-            if let Some(values) = &self.joint_weights {
-                streams.push((6, 5, floats(values.as_flattened())));
-            }
+        if let Some(values) = &self.joint_indices {
+            streams.push((5, 4, values.as_flattened().to_vec()));
+        }
+        if let Some(values) = &self.joint_weights {
+            streams.push((6, 5, floats(values.as_flattened())));
         }
         let mut bytes = Vec::with_capacity(expected);
         bytes.extend_from_slice(b"IPPM");

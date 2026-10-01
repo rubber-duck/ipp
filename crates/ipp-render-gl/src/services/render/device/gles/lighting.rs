@@ -10,11 +10,8 @@ pub(super) struct GlesLightingLocations {
     surface: i32,
     lights: i32,
     count: i32,
-    #[cfg(feature = "shadows")]
     shadow_map: i32,
-    #[cfg(feature = "shadows")]
     shadow_matrix: i32,
-    #[cfg(feature = "shadows")]
     shadow_settings: i32,
 }
 
@@ -31,11 +28,8 @@ impl GlesLightingLocations {
                 surface: (gl.uniform_location)(id, c"u_surface".as_ptr()),
                 lights: (gl.uniform_location)(id, c"u_lights[0]".as_ptr()),
                 count: (gl.uniform_location)(id, c"u_light_count".as_ptr()),
-                #[cfg(feature = "shadows")]
                 shadow_map: (gl.uniform_location)(id, c"u_shadow_map".as_ptr()),
-                #[cfg(feature = "shadows")]
                 shadow_matrix: (gl.uniform_location)(id, c"u_shadow_matrix[0]".as_ptr()),
-                #[cfg(feature = "shadows")]
                 shadow_settings: (gl.uniform_location)(id, c"u_shadow_settings[0]".as_ptr()),
             }
         }
@@ -88,14 +82,12 @@ impl GlesRenderDevice {
 }
 
 /// One exclusively owned depth texture and framebuffer in the native context.
-#[cfg(feature = "shadows")]
 pub struct GlesShadowMap {
     texture: u32,
     framebuffer: u32,
     size: u32,
 }
 
-#[cfg(feature = "shadows")]
 impl GlesRenderDevice {
     pub(super) fn allocate_shadow(&self, size: u32) -> Result<GlesShadowMap, RenderError> {
         if size == 0

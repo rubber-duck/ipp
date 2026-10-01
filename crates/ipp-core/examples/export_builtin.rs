@@ -16,13 +16,10 @@ fn run() -> Result<(), String> {
 
     let bytes = match kind.as_str() {
         "mesh" => ipp_core::services::asset_management::builtin::mesh(&uri),
-        #[cfg(feature = "skeletal-animation")]
         "skeleton" => {
             ipp_core::services::asset_management::builtin::rig(ipp_core::SKELETON_TYPE, &uri)
         }
-        #[cfg(feature = "skeletal-animation")]
         "pose" => ipp_core::services::asset_management::builtin::rig(ipp_core::POSE_TYPE, &uri),
-        #[cfg(feature = "skeletal-animation")]
         "skin" => ipp_core::services::asset_management::builtin::rig(ipp_core::SKIN_TYPE, &uri),
         "texture" => ipp_core::services::asset_management::builtin::texture(&uri),
         _ => return Err("unsupported built-in asset kind".into()),

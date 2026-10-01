@@ -7,14 +7,12 @@ use super::scene::{RenderEntity, SceneDebug as DebugRenderItem, SceneItem as Ren
 pub(super) enum RenderDrawIndex {
     Visual(usize),
     Debug(usize),
-    #[cfg(feature = "surfaces")]
     Surface(usize),
 }
 
 pub(super) enum RenderDrawItem<'a> {
     Visual(&'a RenderItem<'a>),
     Debug(&'a DebugRenderItem),
-    #[cfg(feature = "surfaces")]
     Surface(&'a super::scene::SceneOutputSurface),
 }
 
@@ -23,12 +21,11 @@ impl RenderDrawIndex {
         self,
         items: &'a [RenderItem<'a>],
         debug: &'a [DebugRenderItem],
-        #[cfg(feature = "surfaces")] surfaces: &'a [super::scene::SceneOutputSurface],
+        surfaces: &'a [super::scene::SceneOutputSurface],
     ) -> RenderDrawItem<'a> {
         match self {
             Self::Visual(index) => RenderDrawItem::Visual(&items[index]),
             Self::Debug(index) => RenderDrawItem::Debug(&debug[index]),
-            #[cfg(feature = "surfaces")]
             Self::Surface(index) => RenderDrawItem::Surface(&surfaces[index]),
         }
     }
@@ -36,7 +33,6 @@ impl RenderDrawIndex {
     pub fn order(self) -> usize {
         match self {
             Self::Visual(index) | Self::Debug(index) => index,
-            #[cfg(feature = "surfaces")]
             Self::Surface(index) => index,
         }
     }
@@ -67,7 +63,6 @@ impl RenderDraw {
     }
 }
 
-#[cfg(feature = "shadows")]
 pub(super) struct RenderShadowCaster {
     pub item: usize,
     pub config: super::shader::RenderShaderConfig,
@@ -76,39 +71,26 @@ pub(super) struct RenderShadowCaster {
 #[derive(Default)]
 pub(super) struct RenderFrameScratch {
     pub draws: Vec<RenderDraw>,
-    #[cfg(feature = "shadows")]
     pub casters: Vec<RenderShadowCaster>,
-    #[cfg(feature = "shadows")]
     pub shadow_frusta: Vec<[ipp_core::systems::geometry::GeometryPlane; 6]>,
-    #[cfg(feature = "shadows")]
     pub shadow_visibility: Vec<bool>,
-    #[cfg(feature = "shadows")]
     pub shadow_queries: Vec<usize>,
-    #[cfg(feature = "particles")]
     pub instances: Vec<[f32; 20]>,
-    #[cfg(feature = "surfaces")]
     pub surface_instances: Vec<super::device::SurfacePathInstance>,
 }
 
 impl RenderFrameScratch {
     pub fn clear(&mut self) {
         self.draws.clear();
-        #[cfg(feature = "shadows")]
-        {
-            self.casters.clear();
-            self.shadow_frusta.clear();
-            self.shadow_visibility.clear();
-        }
-        #[cfg(feature = "particles")]
+        self.casters.clear();
+        self.shadow_frusta.clear();
+        self.shadow_visibility.clear();
         self.instances.clear();
-        #[cfg(feature = "surfaces")]
-        {
-            self.surface_instances.clear();
-        }
+        self.surface_instances.clear();
     }
 }
 
-#[cfg(all(test, feature = "surfaces"))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::services::render::device::{SurfacePathDescriptor, SurfacePathInstance};

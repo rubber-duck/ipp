@@ -242,6 +242,185 @@ fn realized_measurements_preserve_the_visible_anchor_and_use_explicit_indices() 
     );
 }
 
+/// Commands a client sends to declare the items `indices` of `list`, each
+/// measuring `extent` along the main axis.
+fn declare_items(
+    list: crate::EntityId,
+    indices: std::ops::Range<u32>,
+    extent: f32,
+) -> Vec<Command> {
+    indices
+        .enumerate()
+        .flat_map(|(slot, index)| {
+            let alias = slot as u32 + 1;
+            [
+                Command::Create {
+                    alias,
+                    metadata: Default::default(),
+                    adopt: false,
+                },
+                Command::insert_value(
+                    EntityRef::Alias(alias),
+                    ComponentValue::GuiVirtualItem(GuiVirtualItem {
+                        index,
+                    }),
+                ),
+                Command::insert_value(
+                    EntityRef::Alias(alias),
+                    ComponentValue::GuiLayout(GuiLayout {
+                        width: 90.0,
+                        height: extent,
+                        ..Default::default()
+                    }),
+                ),
+                Command::PlaceEntity {
+                    entity: EntityRef::Alias(alias),
+                    placement: EntityPlacementRef {
+                        parent: Some(EntityRef::Handle(list)),
+                        before: None,
+                    },
+                },
+            ]
+        })
+        .collect()
+}
+
+/// Mutation boundary at which a client's item change lands, relative to the
+/// boundary that applies the last thumb move.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Arrival {
+    Before,
+    WithTheMove,
+    After,
+}
+
+/// The order in which the client deletes the measured top items and declares
+/// the measured end items around the last thumb move.
+#[derive(Clone, Copy, Debug)]
+struct ItemOrdering {
+    top_deleted: Arrival,
+    end_declared: Arrival,
+}
+
+/// The last move of a thumb drag past the track end writes the capacity the
+/// router saw, which is an offset in the previous layout's item placement.
+/// Item changes landing at the same mutation boundary move that placement;
+/// read in the new placement the offset falls short of the end inside an
+/// earlier item, and the anchor then keeps that short in-item offset while
+/// later measurements arrive.
+#[test]
+fn a_thumb_dragged_to_the_end_settles_at_the_end_in_every_measurement_order() {
+    use super::input_test_support::GuiRoutedHost;
+    use crate::services::gui_input::router::{GuiPhysicalButton, GuiPhysicalInput};
+
+    use Arrival::*;
+
+    for ordering in [
+        (Before, Before),
+        (Before, WithTheMove),
+        (Before, After),
+        (WithTheMove, WithTheMove),
+        (WithTheMove, After),
+        (After, After),
+    ]
+    .map(|(top_deleted, end_declared)| ItemOrdering {
+        top_deleted,
+        end_declared,
+    }) {
+        // Twenty items estimated at 10 in a 30-high viewport. Measured items
+        // are shorter, so each declared window shortens the content.
+        let mut host = GuiRoutedHost::new();
+        let world = host.world.id();
+        let list = host.create(vec![
+            ComponentValue::GuiLayout(GuiLayout {
+                width: 100.0,
+                height: 30.0,
+                ..Default::default()
+            }),
+            ComponentValue::GuiVirtualList(GuiVirtualList {
+                item_count: 20,
+                item_extent: 10.0,
+                overscan: 1,
+                axis: 1,
+                ..Default::default()
+            }),
+        ]);
+
+        // The client has measured the seven top items: 28 shorter.
+        let top = apply(&mut host.gui, world, declare_items(list, 0..7, 6.0));
+        for _ in 0..3 {
+            host.frame();
+        }
+        assert_eq!(fields(&mut host.gui, world, list).capacity[1], 142.0);
+        let delete_top: Vec<_> = top
+            .iter()
+            .map(|&(_, entity)| Command::Delete {
+                entity: EntityRef::Handle(entity),
+            })
+            .collect();
+
+        // The seven end items measure 7: 21 shorter.
+        let declare_end = declare_items(list, 13..20, 7.0);
+        let end_capacity = 149.0;
+
+        // The thumb is pressed at the track start on the right edge; the last
+        // move passes the track end, so the router asks for the capacity the
+        // previous layout published.
+        host.route(GuiPhysicalInput::PointerDown {
+            pointer: 1,
+            point: host.point([99.25, 1.0]),
+            button: GuiPhysicalButton::Primary,
+        })
+        .unwrap();
+        let changes = |arrival| {
+            let mut operations = Vec::new();
+            if ordering.top_deleted == arrival {
+                operations.extend(delete_top.iter().cloned());
+            }
+            if ordering.end_declared == arrival {
+                operations.extend(declare_end.iter().cloned());
+            }
+            operations
+        };
+        let before = changes(Before);
+        if !before.is_empty() {
+            apply(&mut host.gui, world, before);
+        }
+        host.send(GuiPhysicalInput::PointerMove {
+            pointer: 1,
+            point: host.point([99.25, 60.0]),
+        })
+        .unwrap();
+        let with_the_move = changes(WithTheMove);
+        if with_the_move.is_empty() {
+            host.frame();
+        } else {
+            apply(&mut host.gui, world, with_the_move);
+        }
+        let after = changes(After);
+        if !after.is_empty() {
+            apply(&mut host.gui, world, after);
+        }
+        host.route(GuiPhysicalInput::PointerUp {
+            pointer: 1,
+            point: host.point([99.25, 60.0]),
+            button: GuiPhysicalButton::Primary,
+        })
+        .unwrap();
+        for _ in 0..3 {
+            host.frame();
+        }
+
+        let settled = fields(&mut host.gui, world, list);
+        assert_eq!(settled.capacity[1], end_capacity, "{ordering:?}");
+        assert_eq!(settled.range.1, 20, "{ordering:?}");
+        assert_eq!(
+            settled.offset[1], settled.capacity[1],
+            "{ordering:?}: the drag to the end stopped short: {settled:?}"
+        );
+    }
+}
+
 fn published(
     host: &crate::HostRuntime,
     world: crate::WorldId,

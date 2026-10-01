@@ -38,11 +38,8 @@ pub(super) struct RenderEntry {
     transform: ComponentBinding<Transform>,
     model: crate::systems::hierarchy::ObjectTransformBinding,
     material: MaterialBinding,
-    #[cfg(feature = "mesh-poses")]
     pose: Option<ComponentBinding<MeshPose>>,
-    #[cfg(feature = "skeletal-animation")]
     skin: Option<ComponentBinding<crate::components::Skin>>,
-    #[cfg(feature = "particles")]
     particles: bool,
 }
 
@@ -50,7 +47,6 @@ enum MaterialBinding {
     Fixed,
     Unlit(ComponentBinding<UnlitMaterial>),
     Pbr(ComponentBinding<PbrMaterial>),
-    #[cfg(feature = "particles")]
     Sprite(ComponentBinding<crate::components::ParticleSprite>),
 }
 
@@ -122,14 +118,11 @@ impl RenderReadAccess<'_> {
                 } else {
                     MaterialBinding::Fixed
                 };
-                #[cfg(feature = "particles")]
                 if !item.solid_fallback
                     && let Some(pointer) = storage.particle_sprite_ptr(index)
                 {
                     material = MaterialBinding::Sprite(ComponentBinding::new(pointer));
                 }
-                #[cfg(not(feature = "particles"))]
-                let _ = &mut material;
                 RenderEntry {
                     item,
                     transform: ComponentBinding::new(storage.transform_ptr(index).unwrap()),
@@ -137,14 +130,11 @@ impl RenderReadAccess<'_> {
                         self.world, entity,
                     ),
                     material,
-                    #[cfg(feature = "mesh-poses")]
                     pose: item
                         .pose
                         .and_then(|_| storage.mesh_pose_ptr(index))
                         .map(|p| ComponentBinding::new(p)),
-                    #[cfg(feature = "skeletal-animation")]
                     skin: storage.skin_ptr(index).map(|p| ComponentBinding::new(p)),
-                    #[cfg(feature = "particles")]
                     particles: storage.particle_emitter(index).is_some()
                         || storage.particle_playback(index).is_some(),
                 }
@@ -158,7 +148,6 @@ impl RenderReadAccess<'_> {
 impl RenderEntry {
     fn sample(&self, world: &WorldSimulationState, item: &mut RenderItem) -> Option<()> {
         let storage = &world.components;
-        #[cfg(feature = "skeletal-animation")]
         if self.skin.is_some_and(|s| {
             let s = s.get(storage);
             !s.runtime.valid || s.runtime.palette.is_none()
@@ -186,7 +175,6 @@ impl RenderEntry {
                 };
                 item.pbr = Some(pbr);
             }
-            #[cfg(feature = "particles")]
             MaterialBinding::Sprite(binding) => {
                 let sprite = binding.get(storage);
                 item.material = UnlitMaterial {
@@ -196,7 +184,6 @@ impl RenderEntry {
                 };
             }
         }
-        #[cfg(feature = "mesh-poses")]
         if let Some(pose) = self.pose {
             item.pose.as_mut().unwrap().1 = pose.get(storage).weight;
         }
@@ -209,7 +196,6 @@ impl RenderEntry {
         items: &mut Vec<RenderItem>,
         written: &mut usize,
     ) {
-        #[cfg(feature = "particles")]
         if self.particles {
             let mut item = self.item;
             if self.sample(world, &mut item).is_some() {

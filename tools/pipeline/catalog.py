@@ -49,6 +49,7 @@ REGRESSION_GROUPS = {
         ("browser",),
         (
             "test:presentation:webgl",
+            "test:presentation:webgl-production",
             "test:presentation:diagnostics",
             "test:gui-local:worker",
             "test:multiplex:worker-startup",
@@ -78,6 +79,7 @@ REGRESSION_GROUPS = {
             "test:canvas:controller-webgl",
             "test:react-gui-authoring:webgl",
             "test:presentation:webgl",
+            "test:presentation:webgl-production",
             "test:presentation:diagnostics",
         ),
     ),
@@ -119,17 +121,13 @@ REGRESSION_GROUPS = {
         ),
     ),
     "matrix": RegressionGroup(
-        "Minimal/expanded Rust, WASM builds, target contracts and browser distribution identities",
+        "All-features Rust and WASM builds, target contracts and browser distribution identities",
         ("contracts",),
         (
-            "test:rust:minimal",
-            "test:rust:expanded",
-            "check:clippy-minimal",
-            "check:clippy-expanded",
+            "test:rust:all-features",
+            "check:clippy-all-features",
             "check:wasm-default",
-            "check:wasm-minimal",
-            "check:wasm-expanded",
-            "check:wasm-size",
+            "check:wasm-all-features",
             "check:browser-identities",
         ),
     ),
@@ -157,6 +155,7 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
         outputs: tuple[str, ...],
         requirements: tuple[str, ...] = ("node", "npm", "rust"),
     ) -> None:
+        # The scheduler runs "rust" steps one at a time; builds without Cargo omit it.
         add(
             Task(
                 f"build:{name}",
@@ -196,6 +195,7 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
         "typescript",
         ("native", "client", "react-gui-authoring", "gui-stress-fixtures"),
         ("dist",),
+        ("node", "npm"),
     )
     build("headless-client", ("native",), ("target/headless-client",), ("node", "npm"))
     build(
@@ -213,7 +213,7 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
     )
     build(
         "react-gui-authoring",
-        ("react", "gui-host", "native"),
+        ("react", "native"),
         ("target/react-gui-authoring", "target/react-gui-contract"),
         ("node", "npm"),
     )
@@ -228,12 +228,6 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
     )
     build("scaling-host", (), ("target/scaling-host-build",))
     build(
-        "lifecycle-diagnostics-hosts",
-        (),
-        ("target/lifecycle-diagnostics-build",),
-        ("node", "npm", "rust", "wasm"),
-    )
-    build(
         "transport-fixtures", ("native",), ("target/multiplex-tests",), ("node", "npm")
     )
     build(
@@ -245,7 +239,7 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
     build("gui-motion-fixtures", (), ("target/gui-motion",), ("node", "npm"))
     build(
         "gui-stress-fixtures",
-        ("react", "gui-host", "native"),
+        ("react", "native"),
         ("target/gui-stress", "target/gui-stress-contract"),
         ("node", "npm"),
     )
@@ -267,13 +261,14 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
     build(
         "gallery",
         (
-            "browser:render-expanded",
+            "browser:render",
             "react",
             "builtin-exporter",
             "gallery-gui-assets",
             "gallery-platformer-assets",
         ),
         ("target/gallery-build",),
+        ("node", "npm"),
     )
     build(
         "gallery-site",
@@ -285,6 +280,7 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
         "gallery-fixtures",
         ("gallery", "browser:headless"),
         ("target/gallery-fixtures",),
+        ("node", "npm"),
     )
     build("react-fixtures", ("react",), ("target/react-build",), ("node", "npm"))
     build(
@@ -293,8 +289,18 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
         ("target/canvas-build",),
         ("node", "npm"),
     )
-    build("textures", ("react", "builtin-exporter"), ("target/texture-build",))
-    build("shapes", ("react", "builtin-exporter"), ("target/shapes-build",))
+    build(
+        "textures",
+        ("react", "builtin-exporter"),
+        ("target/texture-build",),
+        ("node", "npm"),
+    )
+    build(
+        "shapes",
+        ("react", "builtin-exporter"),
+        ("target/shapes-build",),
+        ("node", "npm"),
+    )
     build(
         "font-assets",
         (),
@@ -315,7 +321,7 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
     )
     build(
         "gallery-platformer-assets",
-        ("browser:render-expanded",),
+        ("browser:render",),
         ("target/gallery-platformer-assets",),
         ("python-tools", "blender", "node", "npm", "browser"),
     )
@@ -331,9 +337,8 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
         ("target/surface-gui-build",),
         ("node", "npm"),
     )
-    build("surface-host", (), ("target/surface-host",), ("node", "npm", "rust"))
-    build("gui-host", (), ("target/gui-host",), ("node", "npm", "rust"))
-    build("gles-hosts", (), ("target/gles-host",), ("node", "npm", "rust"))
+    for name in ("gles-host", "gles-host-instrumentation"):
+        build(name, (), (f"target/{name}",), ("node", "npm", "rust"))
     build("mesh-pose-fixtures", (), ("target/mesh-pose-build",), ("node", "npm"))
     build(
         "skinning-fixtures",
@@ -343,8 +348,17 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
     )
     build(
         "blender-viewer",
-        ("browser:render-expanded", "react"),
+        ("browser:render", "react"),
         ("target/blender-viewer",),
+        ("node", "npm"),
+    )
+    # Test-only: the same viewer on the instrumentation runtime, for scenarios
+    # that simulate context loss.
+    build(
+        "blender-viewer-instrumentation",
+        ("browser:render-instrumentation", "react"),
+        ("target/blender-viewer-instrumentation",),
+        ("node", "npm"),
     )
     build(
         "blender-fixtures",
@@ -402,11 +416,9 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
         check(
             f"format-{language}", operation("format", language, "check"), requirements
         )
-    for name, flags in (
-        ("default", ()),
-        ("minimal", ("--no-default-features",)),
-        ("expanded", ("--all-features",)),
-    ):
+    # Production is the workspace default; all-features adds every instrumentation
+    # axis, the WASM renderer and core's test-only oracle.
+    for name, flags in (("default", ()), ("all-features", ("--all-features",))):
         check(
             f"clippy-{name}",
             (
@@ -436,41 +448,22 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
             ),
             ("rust", "wasm"),
         )
-    check(
-        "wasm-size",
-        (
-            "cargo",
-            "build",
-            "-p",
-            "ipp-wasm",
-            "--target",
-            "wasm32-unknown-unknown",
-            "--profile",
-            "release-small",
-            "--no-default-features",
-            "--features",
-            "render",
-            "--locked",
-        ),
-        ("rust", "wasm"),
-    )
-    for profile in PROFILES["contracts"]:
-        check(
-            f"contracts:{profile}",
-            operation("contracts", profile),
-            ("node", "npm", "rust", "wasm"),
-        )
+    # One contract per host target; both come from the same compiled schema.
+    check("contracts", operation("contracts"), ("node", "npm", "rust", "wasm"))
     check(
         "browser-identities",
         operation("browser-identities"),
         (),
-        tuple(f"build:browser:{name}" for name in PROFILES["browser"]),
+        (
+            "check:contracts",
+            *(f"build:browser:{name}" for name in PROFILES["browser"]),
+        ),
     )
     check(
         "contract-identities",
         operation("contract-identities"),
-        (),
-        tuple(f"check:contracts:{name}" for name in PROFILES["contracts"]),
+        ("rust",),
+        ("check:contracts",),
     )
 
     for name, suite in SUITES.items():
@@ -514,8 +507,13 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
                 f"Native GLES {record['id'].removeprefix('check:gles-')}",
                 tuple(replacements.get(part, part) for part in record["command"]),
                 tuple(record["dependencies"]),
-                # Checks driving a generated client also declare its requirements.
-                ("rust", "gles", *record.get("requirements", [])),
+                # Cargo examples need Rust; checks driving a generated client
+                # through prepared hosts declare their own requirements instead.
+                (
+                    *(("rust",) if record["command"][0] == "cargo" else ()),
+                    "gles",
+                    *record.get("requirements", []),
+                ),
             )
         )
     select(tasks, [])
@@ -531,10 +529,7 @@ def suite_ids(names: list[str]) -> list[str]:
         if name not in SUITES:
             raise ValueError(f"Unknown suite: {name}. Use test --list.")
         if name == "contracts":
-            result.extend(
-                f"check:contracts:{profile}" for profile in PROFILES["contracts"]
-            )
-            result.append("check:contract-identities")
+            result.extend(("check:contracts", "check:contract-identities"))
         result.extend(
             f"test:{name}:{entry['name']}" for entry in SUITES[name].get("commands", [])
         )

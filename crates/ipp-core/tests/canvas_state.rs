@@ -1,7 +1,5 @@
 //! Canvas System state: creation seed, ordered System command, query and persistence.
 
-#![cfg(feature = "surfaces")]
-
 mod support;
 
 use ipp_core::services::world_serialization::{

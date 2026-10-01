@@ -11,12 +11,6 @@ mod memory;
 mod reader;
 mod writer;
 
-#[cfg(feature = "zip-data-source")]
-mod zip;
-
-#[cfg(feature = "zip-data-source")]
-pub use zip::ZipDataSource;
-
 pub use memory::MemoryDataSource;
 pub use reader::{DataReader, MemoryDataReader};
 pub use writer::{DataWriteJob, DataWriter, MemoryDataWriter};

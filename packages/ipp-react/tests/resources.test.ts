@@ -105,17 +105,6 @@ function recordingClient(
   const client: ReactWorldClient = {
     session: 1n,
     schemaHash: 1n,
-    capabilities: {
-      spatial: true,
-      textures: true,
-      builtinAssets: false,
-      picking: false,
-      debugGeometry: false,
-      pbr: false,
-      shadows: false,
-      skeletalAnimation: false,
-      meshPoses: false,
-    },
     components,
     async batch(operations) {
       calls.push(operations);

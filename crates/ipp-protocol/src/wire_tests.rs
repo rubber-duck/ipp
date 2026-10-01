@@ -3,24 +3,19 @@ use ipp_core::components::schema::ContractHash;
 use std::collections::BTreeSet;
 
 #[test]
-fn lifecycle_diagnostic_tags_and_layouts_are_omitted_without_diagnostics() {
+fn lifecycle_diagnostic_tags_and_layouts_are_declared_in_every_build() {
+    // Instrumentation never changes the contract, and every build answers.
     for name in [
         "REQUEST_LIFECYCLE_DIAGNOSTICS",
         "RESPONSE_LIFECYCLE_DIAGNOSTICS",
     ] {
-        assert_eq!(
-            TAGS.iter().any(|tag| tag.name == name),
-            cfg!(feature = "diagnostics")
-        );
+        assert!(TAGS.iter().any(|tag| tag.name == name));
     }
     for name in [
         "request-lifecycle-diagnostics",
         "response-lifecycle-diagnostics",
     ] {
-        assert_eq!(
-            LAYOUTS.iter().any(|layout| layout.name == name),
-            cfg!(feature = "diagnostics")
-        );
+        assert!(LAYOUTS.iter().any(|layout| layout.name == name));
     }
 }
 
@@ -299,7 +294,6 @@ fn nested_field_order_and_encoding_change_contract_hash() {
     const SECOND: WireField = field!("second", Bytes, 32);
     let original = WireLayout {
         name: "fixture",
-        capability: Capability::Base,
         fields: &[FIRST, SECOND],
     };
     let reordered = WireLayout {
@@ -324,7 +318,6 @@ fn nested_field_order_and_encoding_change_contract_hash() {
     assert!(!bytes.is_empty());
 }
 
-#[cfg(feature = "gui")]
 #[test]
 fn physical_input_subcodec_has_canonical_nested_layouts() {
     for name in [
@@ -342,25 +335,8 @@ fn physical_input_subcodec_has_canonical_nested_layouts() {
     }
 }
 
-#[cfg(not(feature = "gui"))]
 #[test]
-fn physical_input_subcodec_is_absent_without_gui() {
-    // Tag spaces 46-52 belong to the GUI physical input subcodec.
-    assert!(
-        TAGS.iter()
-            .all(|tag| !(46..=52).contains(&(tag.space as u16)))
-    );
-    assert!(
-        LAYOUTS
-            .iter()
-            .all(|layout| !layout.name.starts_with("gui-physical-")
-                && !layout.name.starts_with("gui-native-"))
-    );
-}
-
-#[cfg(feature = "gui")]
-#[test]
-fn physical_key_and_native_field_changes_require_a_new_bootstrap() {
+fn physical_key_and_native_field_changes_announce_a_new_hash() {
     let mut contract = Vec::new();
     crate::write_contract(&mut contract);
     let key = b"GUI_PHYSICAL_KEY_LEFT";
@@ -397,12 +373,6 @@ fn physical_key_and_native_field_changes_require_a_new_bootstrap() {
         let mut hash = ContractHash::default();
         hash.write(&changed);
         assert_ne!(hash.0, crate::schema_hash());
-        let mut bootstrap = crate::bootstrap();
-        bootstrap[8..].copy_from_slice(&hash.0.to_le_bytes());
-        assert!(matches!(
-            crate::accept_bootstrap(&bootstrap, 1),
-            Err(crate::ProtocolError::SchemaMismatch)
-        ));
     }
 }
 

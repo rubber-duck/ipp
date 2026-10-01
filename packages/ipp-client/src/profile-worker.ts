@@ -1,7 +1,8 @@
 /**
- * Benchmark profiler of `profiling` runtime builds. The worker imports this
- * module only when the runtime exports `ipp_profile_reset`; ordinary builds
- * never load it, and their frame loop carries no profiling branches.
+ * Benchmark profiler of `instrumentation` runtime builds. Only instrumentation
+ * distributions ship this module and their worker imports it by build
+ * configuration; ordinary distributions neither ship nor load it, and their
+ * frame loop carries no profiling branches.
  */
 
 /** Frame work the profiler times; it returns wrapped replacements. */

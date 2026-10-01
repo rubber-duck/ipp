@@ -68,12 +68,13 @@ export class BrowserDriverFactory implements HarnessDriverFactory {
     );
   }
 
-  async rejectMismatchedSchema(
-    _url: string,
+  /** Connect the client generated for the other host target, which must
+   * refuse this Host after reading its announcement. */
+  async refuseMismatchedHost(
     options: DriverConnectOptions,
   ): Promise<ProtocolRejection> {
     options.signal.throwIfAborted();
-    await options.record("browser_schema_mismatch_probe", {
+    await options.record("browser_contract_mismatch_probe", {
       contractModuleUrl: this.#mismatchConfiguration.contractModuleUrl,
       wasmUrl: this.#mismatchConfiguration.wasmUrl,
     });

@@ -160,9 +160,9 @@ V1 constraint direction is non-iterative scalar drivers, local copies/limits and
 
 ## Diagnostic logging
 
-Diagnostics are separate from outcomes/events and may compile out. Hosts select sinks/levels. Log lifecycle and command boundaries with identities and committed effects; filter before formatting. Frame/draw/evaluation hot paths stay quiet at every level. Never dump payloads or credentials. Render, resource and ingress statistics are optional diagnostics that may compile out, are read on demand, and never become a readiness or verification contract. [Host configuration](../development/building.md#diagnostic-output) owns setup.
+Logging and statistics are compiled into every build and stay separate from outcomes/events. Hosts select sinks/levels; a host's panic hook writes the message and source location to its sink before the abort. Log lifecycle and command boundaries with identities and committed effects; filter before formatting. Frame/draw/evaluation hot paths stay quiet at every level. Never dump payloads or credentials. Render, resource, ingress and lifecycle statistics are read on demand and never become a readiness or verification contract. Test controls and profiling are gated behind the [instrumentation build](rust-workspace.md#compile-time-composition). [Host configuration](../development/building.md#diagnostic-output) owns setup.
 
-Opt-in profiling attributes work by stable System, phase and World/composition identity. Different selected schedules must never aggregate unlike Systems through positional slot labels; implementation owns counter storage and export mapping.
+Profiling attributes work by stable System, phase and World/composition identity. Different selected schedules must never aggregate unlike Systems through positional slot labels; implementation owns counter storage and export mapping.
 
 ## Particles
 

@@ -15,7 +15,7 @@ fn local_pose_into(
     value: &Skeleton,
     mut local: Vec<Transform>,
 ) -> Result<Option<(AssetKey, Vec<Transform>)>, ErrorReason> {
-    #[cfg(feature = "profiling")]
+    #[cfg(feature = "instrumentation")]
     let _allocation_scope = crate::profiling::AllocationScope::new(207, "skeleton.local_pose");
 
     let Some((key, skeleton)) = assets.source_data::<SkeletonAsset>(

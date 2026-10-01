@@ -8,7 +8,6 @@ use ipp_core::{
 };
 use ipp_render_gl::{RenderError, RenderService};
 use std::rc::Rc;
-#[cfg(feature = "surfaces")]
 use support::selection::{ATTACHMENTS, CANVAS, SURFACE};
 use support::selection::{CAMERA, RENDER, select};
 use support::{DeviceState, TestDevice, create};
@@ -99,7 +98,6 @@ fn root_draw_rejects_cleared_reselected_and_superseded_publications() {
         .unwrap();
 }
 
-#[cfg(feature = "surfaces")]
 fn attach(host: &mut HostRuntime, parent: WorldId, output: OutputRef) -> ipp_core::EntityId {
     create(
         &mut host.world_mut(parent).unwrap(),
@@ -147,7 +145,6 @@ fn root_draw_rejects_viewport_dimensions_and_pixel_ratio_without_reselecting() {
         );
         assert_eq!(host.root_output(world), Some(root));
         assert_eq!(state.ended_frames.get(), ended);
-        #[cfg(feature = "surfaces")]
         assert_eq!(state.cache_creates.get(), 0);
     }
     renderer
@@ -171,7 +168,6 @@ fn root_draw_rejects_viewport_dimensions_and_pixel_ratio_without_reselecting() {
         .unwrap();
 }
 
-#[cfg(feature = "surfaces")]
 #[test]
 fn nested_output_is_not_an_independent_root_before_or_after_detach() {
     let mut host = HostRuntime::new();
@@ -230,7 +226,6 @@ fn nested_output_is_not_an_independent_root_before_or_after_detach() {
         .unwrap();
 }
 
-#[cfg(feature = "surfaces")]
 #[test]
 fn forgetting_world_releases_only_its_camera_target_without_prepare() {
     let mut host = HostRuntime::new();
@@ -290,19 +285,16 @@ fn forgetting_world_releases_only_its_camera_target_without_prepare() {
     assert_eq!(state.cache_deletes.get(), 2);
 }
 
-#[cfg(feature = "surfaces")]
 #[test]
 fn scoped_surface_is_presented_only_inside_its_owning_output() {
     assert_scoped_camera_branch(false);
 }
 
-#[cfg(feature = "surfaces")]
 #[test]
 fn scoped_spatial_branch_keeps_nested_camera_only_inside_its_owning_output() {
     assert_scoped_camera_branch(true);
 }
 
-#[cfg(feature = "surfaces")]
 fn assert_scoped_camera_branch(spatial: bool) {
     use ipp_core::systems::{
         System, SystemFactory, SystemId, SystemInitContext, SystemInitError,
@@ -467,7 +459,6 @@ fn assert_scoped_camera_branch(spatial: bool) {
     assert_eq!(state.cache_creates.get(), 1);
 }
 
-#[cfg(feature = "surfaces")]
 #[test]
 fn deep_canvas_chain_draws_on_a_bounded_native_stack() {
     std::thread::Builder::new()
@@ -517,7 +508,6 @@ fn deep_canvas_chain_draws_on_a_bounded_native_stack() {
         .unwrap();
 }
 
-#[cfg(feature = "surfaces")]
 #[test]
 fn forgotten_descendant_releases_canvas_image_without_another_prepare() {
     use ipp_core::{Batch, Command, EntityRef, components::SurfaceCache};

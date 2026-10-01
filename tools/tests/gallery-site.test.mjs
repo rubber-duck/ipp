@@ -160,6 +160,22 @@ test("the release gallery is complete and renders at root and project URLs", {
       const context = await browser.newContext({
         viewport: { width: 1280, height: 900 },
       });
+      // Rasterize half the canvas width and height, as the gallery scenarios
+      // do (`confineGalleryCanvas` in tests/render/gallery-driver.ts): the
+      // published desktop layout stays and its canvas frame takes half of the
+      // showcase per axis. This scenario proves the published files, not the
+      // canvas size.
+      await context.addInitScript(() => {
+        const style = document.createElement("style");
+        style.textContent =
+          ".viewer-shell .canvas-frame { width: 50%; height: 50%; }";
+        const install = () => document.head.append(style);
+        if (document.head) install();
+        else
+          document.addEventListener("DOMContentLoaded", install, {
+            once: true,
+          });
+      });
       const page = await context.newPage();
       page.setDefaultTimeout(60_000);
       const errors = [];

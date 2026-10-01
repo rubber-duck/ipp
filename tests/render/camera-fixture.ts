@@ -1,3 +1,4 @@
+import { renderDiagnostics } from "../../packages/ipp-client/src/diagnostics.js";
 import {
   outputProducer,
   sameOutputReference,
@@ -62,8 +63,8 @@ export async function initialize(configuration: {
       },
     );
   try {
-    if (!client.host.renderDiagnostics || !client.capabilities.picking) {
-      throw new Error("Camera render fixture requires WebGL and picking");
+    if (!renderDiagnostics(client.host)) {
+      throw new Error("Camera render fixture requires WebGL diagnostics");
     }
     const record = (
       globalThis as unknown as {
@@ -195,7 +196,7 @@ export async function observeGpuFailure() {
 export async function recoverGpuFailure() {
   const current = state();
   const before = frame("gpu-allocation-failed");
-  const diagnostics = current.fixture.host.renderDiagnostics!;
+  const diagnostics = renderDiagnostics(current.fixture.host)!;
   presentationTesting(diagnostics).loseContext();
   presentationTesting(diagnostics).restoreContext();
   const deadline = performance.now() + 10_000;
@@ -475,7 +476,7 @@ export async function capture(label: string, included = true) {
   current.captures.set(label, frame);
   return {
     ...captureMetadata(label),
-    statistics: await current.fixture.host.renderDiagnostics!.statistics(),
+    statistics: await renderDiagnostics(current.fixture.host)!.statistics(),
     summary: summarizeImage(capturedImage(frame)),
   };
 }

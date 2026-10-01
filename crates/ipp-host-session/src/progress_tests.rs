@@ -19,7 +19,7 @@ fn ready() -> Host<Platform> {
     let mut host = Host::new().unwrap();
     host.open_session(1, &[]).unwrap();
     let mut session = host.session_mut(1).unwrap();
-    session.receive(&ipp_protocol::bootstrap()).unwrap();
+    session.receive(&ipp_protocol::HELLO).unwrap();
     drop(session.take_response().unwrap());
     drop(session);
     host

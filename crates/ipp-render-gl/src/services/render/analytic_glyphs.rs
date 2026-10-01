@@ -1,7 +1,7 @@
 //! Retained instance streams for analytic Surface glyph runs.
 //!
-//! Text that the glyph atlas cannot serve (without the GUI capability, below or
-//! above the atlas band range, or while its entries are still populating) draws
+//! Text that the glyph atlas cannot serve (below or above the atlas band range,
+//! or while its entries are still populating) draws
 //! each glyph from its font's quadratic curves as one instance. RenderService keeps
 //! each run's packed instances resident between frames, keyed by World, Surface
 //! entity and primitive identity, and replaces them only when the run's inputs
@@ -95,7 +95,6 @@ pub struct AnalyticGlyphCache<D: RenderDevice> {
     device: Rc<RefCell<D>>,
     runs: BTreeMap<(EntityId, CanvasPrimitiveId), RetainedAnalyticRun<D>>,
     /// Sum of `bytes` over every retained stream.
-    #[cfg(any(test, feature = "diagnostics"))]
     resident: usize,
     frame: u64,
 }
@@ -106,14 +105,12 @@ impl<D: RenderDevice> AnalyticGlyphCache<D> {
         Self {
             device,
             runs: BTreeMap::new(),
-            #[cfg(any(test, feature = "diagnostics"))]
             resident: 0,
             frame: 0,
         }
     }
 
     /// Resident bytes of every retained instance stream.
-    #[cfg(any(test, feature = "diagnostics"))]
     pub fn resident_bytes(&self) -> usize {
         self.resident
     }
@@ -126,10 +123,7 @@ impl<D: RenderDevice> AnalyticGlyphCache<D> {
                 device.delete_surface_instances(stream);
             }
         }
-        #[cfg(any(test, feature = "diagnostics"))]
-        {
-            self.resident = 0;
-        }
+        self.resident = 0;
     }
 
     /// Draw one run from its retained stream, replacing the stream first when the
@@ -202,10 +196,7 @@ impl<D: RenderDevice> AnalyticGlyphCache<D> {
             bytes: 0,
             seen: self.frame,
         });
-        #[cfg(any(test, feature = "diagnostics"))]
-        {
-            self.resident -= retained.bytes;
-        }
+        self.resident -= retained.bytes;
         retained.bytes = 0;
         retained.instances = 0;
 
@@ -235,10 +226,7 @@ impl<D: RenderDevice> AnalyticGlyphCache<D> {
         let bytes = scratch.len() * ANALYTIC_INSTANCE_BYTES;
         retained.instances = scratch.len() as u32;
         retained.bytes = bytes;
-        #[cfg(any(test, feature = "diagnostics"))]
-        {
-            self.resident += bytes;
-        }
+        self.resident += bytes;
         stats.uploaded(bytes);
         Ok(())
     }
@@ -251,17 +239,13 @@ impl<D: RenderDevice> AnalyticGlyphCache<D> {
         if let Some(surfaces) = surfaces {
             let frame = self.frame;
             let mut device = self.device.borrow_mut();
-            #[cfg(any(test, feature = "diagnostics"))]
             let resident = &mut self.resident;
             self.runs.retain(|&(entity, _), run| {
                 if !surfaces.is_stale(entity, run.seen == frame) {
                     return true;
                 }
 
-                #[cfg(any(test, feature = "diagnostics"))]
-                {
-                    *resident -= run.bytes;
-                }
+                *resident -= run.bytes;
                 if let Some(stream) = run.stream.take() {
                     device.delete_surface_instances(stream);
                 }

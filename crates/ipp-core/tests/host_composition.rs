@@ -2,7 +2,6 @@
 
 mod support;
 
-#[cfg(feature = "surfaces")]
 use support::selection::SURFACE;
 use support::selection::{ATTACHMENTS, CAMERA, CONSTRAINTS, GEOMETRY, RENDER, SPATIAL, select};
 use support::world_failures::select_with_failures;
@@ -1583,10 +1582,7 @@ fn selected_root_context_requires_an_explicit_live_output_incarnation() {
 #[test]
 fn parent_context_is_current_and_detachment_clears_it() {
     let (mut host, observations) = observed_host();
-    #[cfg(feature = "surfaces")]
     let parent_parts = [ATTACHMENTS, CAMERA, SURFACE];
-    #[cfg(not(feature = "surfaces"))]
-    let parent_parts = [ATTACHMENTS, CAMERA];
     let child = host
         .create_world(Default::default(), &observed(&[]))
         .unwrap();
@@ -1596,7 +1592,6 @@ fn parent_context_is_current_and_detachment_clears_it() {
     let root = camera(&mut host, parent);
     host.set_root_output(root, viewport()).unwrap();
     let anchor = attach(&mut host, parent, child, 13.0);
-    #[cfg(feature = "surfaces")]
     apply(
         &mut host,
         parent,
@@ -1832,7 +1827,6 @@ fn custom_material_lights_unknown_bounds_and_unchanged_chunks_are_owned() {
     );
 }
 
-#[cfg(feature = "surfaces")]
 #[test]
 fn parent_surface_cache_policy_is_owned_validated_and_current() {
     use ipp_core::components::{Surface, SurfaceCache};
@@ -1952,7 +1946,6 @@ fn parent_surface_cache_policy_is_owned_validated_and_current() {
     assert_eq!(unavailable.publication, None);
 }
 
-#[cfg(feature = "surfaces")]
 #[test]
 fn surface_camera_mode_never_becomes_spatial_and_explicit_rebind_restores_availability() {
     let (mut host, observations) = observed_host();

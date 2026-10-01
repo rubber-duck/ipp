@@ -37,32 +37,18 @@ const DEFAULT_CLOSE_TIMEOUT_MS = 3_000;
 export interface BrowserBuildConfiguration {
   readonly name:
     | "headless"
-    | "headless-builtins"
-    | "headless-surfaces"
-    | "headless-gui"
-    | "semantic-gui"
-    | "gui-stress-profile"
-    | "render-baseline"
     | "render"
-    | "render-shadows"
-    | "render-expanded"
-    | "render-particles"
-    | "render-surfaces"
-    | "render-skeletal-animation"
-    | "render-mesh-poses"
+    | "render-instrumentation"
     | "world-host"
-    | "gles-surfaces"
-    | "gles-gui";
+    | "gles";
   readonly generatedModule: string;
   readonly runtimeWasm: string;
-  readonly exportWasm: string;
   readonly contractArtifact: string;
 }
 
 export interface BrowserHarnessConfiguration {
   readonly workspace: string;
   readonly build: BrowserBuildConfiguration;
-  readonly mismatchBuild: BrowserBuildConfiguration;
   readonly operationTimeoutMs?: number;
   readonly closeTimeoutMs?: number;
   readonly evidenceParent?: string;
@@ -95,10 +81,9 @@ export interface BrowserUrls {
   readonly workerScript: string;
   readonly transportModule: string;
   readonly wasm: string;
-  readonly mismatchWasm: string;
   readonly generated: string;
+  /** A client generated for the other host target, whose contract never matches. */
   readonly mismatchGenerated: string;
-  readonly nativeGenerated: string;
   readonly missingWasm: string;
   readonly invalidWasm: string;
 }
@@ -305,21 +290,26 @@ class BrowserEnvironment {
   readonly #server: LoopbackArtifactServer;
   readonly #drivers: Pick<HarnessDriver, "close">[] = [];
   readonly #browserLog: unknown[] = [];
+  readonly #onBrowserLost: (error: Error) => void;
   #browser: Browser | undefined;
   #context: BrowserContext | undefined;
   #page: Page | undefined;
   #launching: Promise<Browser> | undefined;
   #stopped = false;
   origin = "";
+  /** Set when Chromium disconnects before this environment stops. */
+  browserLost: Error | undefined;
 
   constructor(
     configuration: BrowserHarnessConfiguration,
     evidence: EvidenceRecorder,
+    onBrowserLost: (error: Error) => void,
   ) {
     this.#configuration = configuration;
     this.#rendering =
       configuration.rendering ?? configuration.build.name.startsWith("render");
     this.#evidence = evidence;
+    this.#onBrowserLost = onBrowserLost;
     this.#server = new LoopbackArtifactServer(
       configuration.workspace,
       evidence,
@@ -352,6 +342,9 @@ class BrowserEnvironment {
     this.#browser = browser;
     browser.on("disconnected", () => {
       this.#browserLog.push({ kind: "browser_disconnected" });
+      if (this.#stopped) return;
+      this.browserLost = new Error("Chromium disconnected during the scenario");
+      this.#onBrowserLost(this.browserLost);
     });
     checkActive();
     const context = await browser.newContext({
@@ -468,7 +461,7 @@ class BrowserEnvironment {
 
   #urls(origin: string): BrowserUrls {
     const build = this.#configuration.build;
-    const mismatchBuild = this.#configuration.mismatchBuild;
+    const nativeGenerated = `${origin}/dist/target/integration-artifacts/client/generated.js`;
     return {
       origin,
       runtimeModule: workspaceUrl(
@@ -497,22 +490,12 @@ class BrowserEnvironment {
         this.#configuration.workspace,
         build.runtimeWasm,
       ),
-      mismatchWasm: workspaceUrl(
-        origin,
-        this.#configuration.workspace,
-        mismatchBuild.runtimeWasm,
-      ),
       generated: workspaceUrl(
         origin,
         this.#configuration.workspace,
         build.generatedModule,
       ),
-      mismatchGenerated: workspaceUrl(
-        origin,
-        this.#configuration.workspace,
-        mismatchBuild.generatedModule,
-      ),
-      nativeGenerated: `${origin}/dist/target/integration-artifacts/client/generated.js`,
+      mismatchGenerated: nativeGenerated,
       missingWasm: `${origin}/target/browser-build/missing/runtime.wasm`,
       invalidWasm: `${origin}/__fixtures__/invalid.wasm`,
     };
@@ -520,15 +503,12 @@ class BrowserEnvironment {
 
   async #captureBuildIdentity(): Promise<void> {
     const builds = await Promise.all(
-      [this.#configuration.build, this.#configuration.mismatchBuild].map(
-        async (build) => ({
-          name: build.name,
-          generated: await fileIdentity(build.generatedModule),
-          runtime: await fileIdentity(build.runtimeWasm),
-          export: await fileIdentity(build.exportWasm),
-          contract: await fileIdentity(build.contractArtifact),
-        }),
-      ),
+      [this.#configuration.build].map(async (build) => ({
+        name: build.name,
+        generated: await fileIdentity(build.generatedModule),
+        runtime: await fileIdentity(build.runtimeWasm),
+        contract: await fileIdentity(build.contractArtifact),
+      })),
     );
     await this.#evidence.writeJson("build-identity.json", {
       node: process.version,
@@ -618,8 +598,11 @@ export async function runBrowserEnvironment<T>(
     join(evidenceParent, `ipp-browser-${safeName(name)}-`),
   );
   const evidence = await EvidenceRecorder.create(evidenceDirectory);
-  const environment = new BrowserEnvironment(configuration, evidence);
   const scenarioController = new AbortController();
+  // A lost browser cancels pending operations instead of leaving them to time out.
+  const environment = new BrowserEnvironment(configuration, evidence, (error) =>
+    scenarioController.abort(error),
+  );
   const operationTimeoutMs =
     configuration.operationTimeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS;
   const onParentAbort = (): void =>
@@ -675,10 +658,16 @@ export async function runBrowserEnvironment<T>(
     await evidence.record("browser_scenario_success", { name });
     result = { value, evidenceDirectory, origin };
   } catch (error) {
-    scenarioError = error;
+    scenarioError =
+      environment.browserLost === undefined || error === environment.browserLost
+        ? error
+        : new Error(environment.browserLost.message, { cause: error });
     try {
-      await evidence.record("browser_scenario_failure", { name, error });
-      await evidence.writeJson("failure.json", { name, error });
+      await evidence.record("browser_scenario_failure", {
+        name,
+        error: scenarioError,
+      });
+      await evidence.writeJson("failure.json", { name, error: scenarioError });
     } catch (evidenceError) {
       scenarioError = new AggregateError(
         [error, evidenceError],

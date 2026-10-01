@@ -16,6 +16,14 @@ import {
   type LogLevel,
 } from "./logging.js";
 
+/**
+ * Whether this distribution was assembled for an `instrumentation` runtime. The
+ * assembler defines it from the distribution's build configuration; only then
+ * does the distribution ship the profiler and the worker side of the testing
+ * controls, and only then are they loaded.
+ */
+declare const IPP_INSTRUMENTATION: boolean;
+
 /** Dedicated worker owns ingress, the frame clock, and optional presentation. */
 const FRAME_INTERVAL_MS = 1_000 / 60;
 const MAX_FRAME_DELTA_SECONDS = 0.25;
@@ -34,6 +42,7 @@ interface WasmHostExports extends WorkerConnectionExports {
   ipp_service_resources(): number;
   ipp_output_ptr(): number;
   ipp_output_len(): number;
+  ipp_diagnostics_set_level(level: number): number;
 }
 
 function runtimeExports(instance: WebAssembly.Instance): WasmHostExports {
@@ -68,6 +77,7 @@ function runtimeExports(instance: WebAssembly.Instance): WasmHostExports {
     "ipp_delivery_complete",
     "ipp_output_ptr",
     "ipp_output_len",
+    "ipp_diagnostics_set_level",
   ]) {
     if (typeof exports[name] !== "function") {
       throw new Error(`WASM runtime is missing ${name}`);
@@ -100,7 +110,7 @@ globalThis.onmessage = (event: MessageEvent<unknown>) => {
   let runtime: WasmHostExports | undefined;
   let presentation: RenderWorkerService | undefined;
   let resources: AssetWorkerService | undefined;
-  // Counted only by diagnostics render builds, which report them in captures.
+  // Counted by presenting workers, which report them with renderer statistics.
   let ingress: IngressStatistics | undefined;
   // The paired target contract's message budget arrives with init and is
   // validated before the runtime loads; nothing is accepted until then.
@@ -227,7 +237,7 @@ globalThis.onmessage = (event: MessageEvent<unknown>) => {
     resources?.pumpAfterFrame();
     publish();
   };
-  // Profiling builds replace both with timed steps; see profile-worker.ts.
+  // Instrumentation builds replace both with timed steps; see profile-worker.ts.
   let evaluate = evaluateFrame;
   let step = runFrame;
   const frame = () => {
@@ -379,6 +389,9 @@ globalThis.onmessage = (event: MessageEvent<unknown>) => {
         if (!(init.canvas instanceof OffscreenCanvas))
           throw new Error("Expected a transferred OffscreenCanvas");
         const { RenderWorkerService } = await import("./render-worker.js");
+        const testing = IPP_INSTRUMENTATION
+          ? await import("./render-testing.js")
+          : undefined;
         if (closed) return;
         const created = await RenderWorkerService.create(
           init.canvas,
@@ -386,6 +399,7 @@ globalThis.onmessage = (event: MessageEvent<unknown>) => {
           (message, transfer) => port.postMessage(message, transfer),
           finish,
           level as LogLevel,
+          testing,
         );
         if (closed) {
           created.close();
@@ -400,7 +414,9 @@ globalThis.onmessage = (event: MessageEvent<unknown>) => {
         await response.arrayBuffer(),
         {
           ...presentation?.imports,
-          ipp_profiling: { now: () => performance.now() },
+          ...(IPP_INSTRUMENTATION
+            ? { ipp_profiling: { now: () => performance.now() } }
+            : {}),
           ipp_diagnostics: {
             write(severity: number, pointer: number, length: number) {
               if (!runtime || severity === 0 || severity > threshold) return;
@@ -417,7 +433,7 @@ globalThis.onmessage = (event: MessageEvent<unknown>) => {
       );
       if (closed) return;
       runtime = runtimeExports(instance);
-      if (typeof instance.exports.ipp_profile_reset === "function") {
+      if (IPP_INSTRUMENTATION) {
         const { installProfiler } = await import("./profile-worker.js");
         if (closed) return;
         const timed = installProfiler(instance.exports, runtime.memory, {
@@ -427,7 +443,7 @@ globalThis.onmessage = (event: MessageEvent<unknown>) => {
         evaluate = timed.evaluate;
         step = timed.run;
       }
-      if (presentation?.reportsStatistics(instance.exports))
+      if (presentation)
         ingress = {
           messages: 0,
           wasmCopyBytes: 0,
@@ -437,10 +453,8 @@ globalThis.onmessage = (event: MessageEvent<unknown>) => {
           sourceBufferedBytes: 0,
           sourcePeakBufferedBytes: 0,
         };
-      const configure = instance.exports.ipp_diagnostics_set_level;
-      if (typeof configure === "function" && configure(threshold) !== 1) {
+      if (runtime.ipp_diagnostics_set_level(threshold) !== 1)
         throw new Error("WASM diagnostic level configuration failed");
-      }
       const session = freshSession();
       checkResult(runtime.ipp_host_open(session));
       if (assetCacheBytes !== undefined)
@@ -453,7 +467,8 @@ globalThis.onmessage = (event: MessageEvent<unknown>) => {
         if (
           typeof instance.exports.ipp_resource_chunk !== "function" ||
           typeof instance.exports.ipp_resource_end !== "function" ||
-          typeof instance.exports.ipp_resource_input_reserve !== "function"
+          typeof instance.exports.ipp_resource_input_reserve !== "function" ||
+          typeof instance.exports.ipp_resource_buffered_bytes !== "function"
         ) {
           throw new Error("WASM resource ingress exports are missing");
         }
@@ -481,10 +496,7 @@ globalThis.onmessage = (event: MessageEvent<unknown>) => {
       nextMaintenanceFrame = lastFrame + FRAME_INTERVAL_MS;
       initialized = true;
       scheduleFrame();
-      logger.log("info", "worker.ready", () => ({
-        session,
-        diagnostics: typeof configure === "function",
-      }));
+      logger.log("info", "worker.ready", () => ({ session }));
       port.postMessage({ type: "ready" });
     } catch (error) {
       finish(error instanceof Error ? error : new Error(String(error)));

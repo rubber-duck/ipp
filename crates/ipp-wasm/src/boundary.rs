@@ -45,7 +45,6 @@ impl WasmHostBoundary {
         }
 
         self.last_session = id;
-        #[cfg(feature = "diagnostics")]
         crate::diagnostics::set_session(id);
         match WasmHost::new() {
             Ok(session) => {
@@ -206,7 +205,6 @@ impl WasmHostBoundary {
         self.reserve_input(len, None)
     }
 
-    #[cfg(any(test, feature = "diagnostics"))]
     pub(crate) fn resource_buffered_bytes(&self) -> usize {
         self.host
             .as_ref()

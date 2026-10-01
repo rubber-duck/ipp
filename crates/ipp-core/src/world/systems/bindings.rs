@@ -299,9 +299,7 @@ macro_rules! system_update {
     };
 }
 
-#[cfg(feature = "skeletal-animation")]
 crate::system_parameter!(crate::systems::skeleton::SkeletonSystem);
-#[cfg(feature = "skeletal-animation")]
 crate::system_parameter!(crate::systems::skinning::SkinningSystem);
 crate::system_parameter!(crate::systems::animation::AnimationSystem);
 crate::system_parameter!(crate::systems::camera::CameraSystem);

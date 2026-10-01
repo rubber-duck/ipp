@@ -3,18 +3,34 @@ import { resolve } from "node:path";
 import test from "node:test";
 import type { EntitySnapshot, Inspection } from "@ipp/client";
 import { runBrowserEnvironment } from "../browser/environment.js";
-import { startBlender } from "./blender-environment.js";
-import { invoke, recordCapture } from "./evidence.js";
+import {
+  BLENDER_FULL_CANVAS_PIXELS,
+  BLENDER_IMAGE_MEASUREMENTS,
+  confineBlenderViewerCanvas,
+  startBlender,
+} from "./blender-environment.js";
+import { measuredInvoke, recordCapture } from "./evidence.js";
 import type * as Fixture from "./blender-fixture.js";
 
 const workspace = resolve(process.cwd());
-const profile = resolve(workspace, "target/browser-build/render-expanded");
-const build = {
-  name: "render-expanded" as const,
-  generatedModule: resolve(profile, "generated.js"),
-  runtimeWasm: resolve(profile, "runtime.wasm"),
-  exportWasm: resolve(profile, "export.wasm"),
-  contractArtifact: resolve(profile, "contract.bin"),
+function runtimeBuild(name: "render" | "render-instrumentation") {
+  const profile = resolve(workspace, "target/browser-build", name);
+  return {
+    name,
+    generatedModule: resolve(profile, "generated.js"),
+    runtimeWasm: resolve(profile, "runtime.wasm"),
+    contractArtifact: resolve(profile, "contract.bin"),
+  };
+}
+// Scenarios that simulate context loss run the test-only viewer product on
+// the instrumentation runtime; the others run the application viewer.
+const recovery = {
+  build: runtimeBuild("render-instrumentation"),
+  viewer: "target/blender-viewer-instrumentation",
+};
+const application = {
+  build: runtimeBuild("render"),
+  viewer: "target/blender-viewer",
 };
 
 test("Blender exports synchronize real resources, animation and React bindings through HTTPS/WSS and WebGL", {
@@ -24,8 +40,7 @@ test("Blender exports synchronize real resources, animation and React bindings t
     "blender authored fixture",
     {
       workspace,
-      build,
-      mismatchBuild: build,
+      build: recovery.build,
       operationTimeoutMs: 45_000,
       closeTimeoutMs: 10_000,
       evidenceParent: resolve(
@@ -48,13 +63,18 @@ test("Blender exports synchronize real resources, animation and React bindings t
         endpoint: blender.ready.origin,
         token: blender.ready.token,
       });
+      await confineBlenderViewerCanvas(environment.page);
       await environment.page.goto(
-        `${environment.urls.origin}/target/blender-viewer/index.html#${fragment}`,
+        `${environment.urls.origin}/${recovery.viewer}/index.html#${fragment}`,
       );
       const module = `${environment.urls.origin}/target/blender-test/blender-fixture.js`;
       const captured = new Set<string>();
-      const call = <T>(name: string, args: unknown[] = []) =>
-        invoke<T>(environment.page, module, name, args);
+      const call = measuredInvoke(
+        environment.page,
+        module,
+        environment.evidence,
+        BLENDER_IMAGE_MEASUREMENTS,
+      );
       const capture = async (label: string, revision = 0) => {
         const state = await call<Awaited<ReturnType<typeof Fixture.capture>>>(
           "capture",
@@ -423,8 +443,11 @@ test("Blender exports synchronize real resources, animation and React bindings t
           "colorCounts",
           ["textured-principled-dark"],
         );
+        // Fewer than 10 pixels of the full 960x540 canvas, as a share of it.
         assert.ok(
-          darkColors.red + darkColors.green + darkColors.blue < 10,
+          (darkColors.red + darkColors.green + darkColors.blue) /
+            darkColors.pixels <
+            10 / BLENDER_FULL_CANVAS_PIXELS,
           "The image panel must go dark without illumination, not remain unlit",
         );
         await capture(
@@ -494,8 +517,7 @@ test("Packed Fox combines vertex and skeletal animation with its original UV tex
     "blender packed fox",
     {
       workspace,
-      build,
-      mismatchBuild: build,
+      build: recovery.build,
       operationTimeoutMs: 45_000,
       closeTimeoutMs: 10_000,
       evidenceParent: resolve(
@@ -521,13 +543,18 @@ test("Packed Fox combines vertex and skeletal animation with its original UV tex
         endpoint: blender.ready.origin,
         token: blender.ready.token,
       });
+      await confineBlenderViewerCanvas(environment.page);
       await environment.page.goto(
-        `${environment.urls.origin}/target/blender-viewer/index.html#${fragment}`,
+        `${environment.urls.origin}/${recovery.viewer}/index.html#${fragment}`,
       );
       const module = `${environment.urls.origin}/target/blender-test/blender-fixture.js`;
       const captured = new Set<string>();
-      const call = <T>(name: string, args: unknown[] = []) =>
-        invoke<T>(environment.page, module, name, args);
+      const call = measuredInvoke(
+        environment.page,
+        module,
+        environment.evidence,
+        BLENDER_IMAGE_MEASUREMENTS,
+      );
       const capture = async (label: string, revision = 0) => {
         const state = await call<Awaited<ReturnType<typeof Fixture.capture>>>(
           "capture",
@@ -661,8 +688,9 @@ test("Packed Fox combines vertex and skeletal animation with its original UV tex
           "fox-baked-comparison.json",
           bakedDifference,
         );
+        // At most 50 pixels of the full 960x540 canvas, as a share of it.
         assert.ok(
-          bakedDifference.changedPixels < 50,
+          bakedDifference.changedFraction < 50 / BLENDER_FULL_CANVAS_PIXELS,
           `Combined runtime deformation differs from Blender's evaluated mesh: ${bakedDifference.changedPixels} pixels`,
         );
       } catch (error) {
@@ -684,8 +712,7 @@ test("Blender hierarchy and shape keyframes preserve poses through live edits an
     "blender hierarchy mesh poses",
     {
       workspace,
-      build,
-      mismatchBuild: build,
+      build: recovery.build,
       operationTimeoutMs: 45_000,
       closeTimeoutMs: 10_000,
       evidenceParent: resolve(
@@ -710,13 +737,18 @@ test("Blender hierarchy and shape keyframes preserve poses through live edits an
         endpoint: blender.ready.origin,
         token: blender.ready.token,
       });
+      await confineBlenderViewerCanvas(environment.page);
       await environment.page.goto(
-        `${environment.urls.origin}/target/blender-viewer/index.html#${fragment}`,
+        `${environment.urls.origin}/${recovery.viewer}/index.html#${fragment}`,
       );
       const module = `${environment.urls.origin}/target/blender-test/blender-fixture.js`;
       const captured = new Set<string>();
-      const call = <T>(name: string, args: unknown[] = []) =>
-        invoke<T>(environment.page, module, name, args);
+      const call = measuredInvoke(
+        environment.page,
+        module,
+        environment.evidence,
+        BLENDER_IMAGE_MEASUREMENTS,
+      );
       const capture = async (label: string, revision = 0) => {
         const state = await call<Awaited<ReturnType<typeof Fixture.capture>>>(
           "capture",
@@ -928,8 +960,7 @@ test("Blender preserves larger scenes, images and long actions through the real 
     "blender capacity fixture",
     {
       workspace,
-      build,
-      mismatchBuild: build,
+      build: application.build,
       operationTimeoutMs: 60_000,
       closeTimeoutMs: 10_000,
       evidenceParent: resolve(
@@ -955,12 +986,17 @@ test("Blender preserves larger scenes, images and long actions through the real 
           endpoint: blender.ready.origin,
           token: blender.ready.token,
         });
+        await confineBlenderViewerCanvas(environment.page);
         await environment.page.goto(
-          `${environment.urls.origin}/target/blender-viewer/index.html#${fragment}`,
+          `${environment.urls.origin}/${application.viewer}/index.html#${fragment}`,
         );
         const module = `${environment.urls.origin}/target/blender-test/blender-fixture.js`;
-        const call = <T>(name: string, args: unknown[] = []) =>
-          invoke<T>(environment.page, module, name, args);
+        const call = measuredInvoke(
+          environment.page,
+          module,
+          environment.evidence,
+          BLENDER_IMAGE_MEASUREMENTS,
+        );
         const initial = await call<Awaited<ReturnType<typeof Fixture.capture>>>(
           "capture",
           ["capacity-initial"],

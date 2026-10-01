@@ -38,7 +38,6 @@ impl SystemFactory for RenderSystemFactory {
                 crate::ComponentValue::LIGHT,
                 crate::ComponentValue::BASE_COLOR_TEXTURE,
                 crate::ComponentValue::CUSTOM_MATERIAL,
-                #[cfg(feature = "mesh-poses")]
                 crate::ComponentValue::MESH_POSE,
             ],
             [crate::systems::WorldOperation::Rendering],
@@ -99,7 +98,6 @@ impl System for RenderSystem {
             if item.mesh.asset == released {
                 return false;
             }
-            #[cfg(feature = "mesh-poses")]
             if item.pose.is_some_and(|(mesh, _)| mesh.asset == released) {
                 return false;
             }
@@ -126,7 +124,6 @@ impl System for RenderSystem {
         self.prepared_dirty = true;
     }
 
-    #[cfg(feature = "mesh-poses")]
     fn validate_commit(
         &self,
         context: &crate::systems::SystemCommitContext<'_>,
@@ -204,12 +201,8 @@ impl RenderSystem {
         &mut self,
         ecs: crate::systems::SystemEcsAccess<'_>,
         assets: &mut crate::services::asset_management::AssetManagementService,
-        #[cfg(feature = "skeletal-animation")] skeleton: Option<
-            &crate::systems::skeleton::SkeletonSystem,
-        >,
-        #[cfg(feature = "skeletal-animation")] skinning: Option<
-            &crate::systems::skinning::SkinningSystem,
-        >,
+        skeleton: Option<&crate::systems::skeleton::SkeletonSystem>,
+        skinning: Option<&crate::systems::skinning::SkinningSystem>,
         _dt: f64,
     ) {
         if !self.state.entries_ready {
@@ -233,11 +226,9 @@ impl RenderSystem {
         let debug_items = std::mem::take(&mut self.state.debug_items);
         let mut diagnostics = std::mem::take(&mut self.state.diagnostics);
         diagnostics.clear();
-        #[cfg(feature = "skeletal-animation")]
         if let Some(skeleton) = skeleton {
             diagnostics.extend(skeleton.state.skeleton_diagnostics.iter().cloned());
         }
-        #[cfg(feature = "skeletal-animation")]
         if let Some(skinning) = skinning {
             diagnostics.extend(skinning.state.diagnostics.iter().cloned());
         }

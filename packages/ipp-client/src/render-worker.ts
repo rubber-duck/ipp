@@ -1,11 +1,5 @@
-import {
-  SURFACE_CACHE_MODES,
-  validateGlyphAtlasLimits,
-  validateSurfaceCacheBudget,
-  validateViewport,
-} from "./presentation.js";
+import { SURFACE_CACHE_MODES, validateViewport } from "./presentation.js";
 import type {
-  GlyphAtlasLimits,
   IngressStatistics,
   RenderDeviceInfo,
   RenderStatisticsSnapshot,
@@ -14,6 +8,7 @@ import type {
   ViewportLimits,
 } from "./presentation.js";
 import { DiagnosticLogger, type LogLevel } from "./logging.js";
+import type { RenderTesting } from "./render-testing.js";
 
 /** Imported only by a worker initialized with an OffscreenCanvas. */
 interface WebGlHostExports {
@@ -28,32 +23,23 @@ interface WebGlHostExports {
   info(): Record<string, unknown>;
 }
 
+/** Presentation and statistics exports of every render build. */
 interface RenderHostExports {
   memory: WebAssembly.Memory;
   ipp_render_attach(width: number, height: number): number;
   ipp_render_detach(): number;
   ipp_render_max_viewport_width(): number;
   ipp_render_max_viewport_height(): number;
+  ipp_render_statistics_ptr(): number;
+  ipp_render_statistics_len(): number;
+  ipp_render_gui_layout_ptr(): number;
+  ipp_render_gui_layout_len(): number;
+  ipp_render_surface_cache_records_ptr(): number;
+  ipp_render_surface_cache_records_len(): number;
 }
 
-/**
- * Exports of a `diagnostics` render build. Each is optional: a missing export
- * disables its statistics or testing control and never fails initialization.
- */
-interface RenderDiagnosticsExports {
-  ipp_render_statistics_ptr?(): number;
-  ipp_render_statistics_len?(): number;
-  ipp_render_gui_layout_ptr?(): number;
-  ipp_render_gui_layout_len?(): number;
-  ipp_render_surface_cache_records_ptr?(): number;
-  ipp_render_surface_cache_records_len?(): number;
-  ipp_render_set_glyph_atlas_limits?(
-    maxPages: number,
-    idlePageFrames: number,
-  ): number;
-  ipp_render_set_surface_cache_budget?(bytes: number): number;
-  ipp_render_set_exhaustive_draw_checks?(enabled: number): number;
-}
+/** The worker-side testing module that instrumentation distributions ship. */
+type RenderTestingModule = typeof import("./render-testing.js");
 
 /**
  * Word offsets of the packed statistics record exported by `ipp-wasm`
@@ -104,12 +90,8 @@ const RECORD = {
 } as const;
 
 const RECORD_WORDS = 40;
-const RECORD_LAYOUT = 8;
-
-/** Capability groups compiled into the runtime, as bits of `RECORD.flags`. */
-const RECORD_SHADOWS = 1;
-const RECORD_GUI = 2;
-const RECORD_SURFACES = 4;
+/** Bit of `RECORD.flags`: the GUI layout words hold a Host sample. */
+const RECORD_LAYOUT = 1;
 
 /** Words per exported Surface cache record; see `ipp-wasm` `services/render.rs`. */
 const SURFACE_CACHE_RECORD_WORDS = 10;
@@ -125,21 +107,15 @@ function pick<K extends keyof typeof RECORD>(
 
 export class RenderWorkerService {
   readonly imports: WebAssembly.Imports;
-  private runtime: (RenderHostExports & RenderDiagnosticsExports) | undefined;
-  /** Present for `diagnostics` builds, which export the packed statistics record. */
+  private runtime: RenderHostExports | undefined;
   private ingress: IngressStatistics | undefined;
-  /** Latest testing atlas bounds, applied again for a later World session. */
-  private glyphAtlasLimits: GlyphAtlasLimits | undefined;
-  /** Latest testing cache image budget, applied again for a later World session. */
-  private surfaceCacheBudget: number | undefined;
-  private exhaustiveDrawChecks: boolean | undefined;
+  /** Testing controls; present only in instrumentation distributions. */
+  private readonly testing: RenderTesting | undefined;
   private session = 0n;
   private generation = 0;
   private attached = false;
   private closed = false;
   private lossObserved = false;
-  private restoreRequested = false;
-  private restoreTimer: ReturnType<typeof setTimeout> | undefined;
   private readbackMs = 0;
   private limits: ViewportLimits | undefined;
 
@@ -149,7 +125,29 @@ export class RenderWorkerService {
     private readonly post: (message: unknown, transfer: Transferable[]) => void,
     private readonly fail: (error: Error) => void,
     private readonly logger: DiagnosticLogger,
+    testing: RenderTestingModule | undefined,
   ) {
+    this.testing =
+      testing &&
+      new testing.RenderTesting({
+        logger,
+        session: () => this.session,
+        lossObserved: () => this.lossObserved,
+        isContextLost: () => device.isContextLost(),
+        loseContext: () => device.loseContext(),
+        restoreContext: () => device.restoreContext(),
+        suspend: () => this.suspend(),
+        fail,
+      });
+    // The build configuration comes first, so the client knows before any
+    // call whether this presentation honours testing controls.
+    post(
+      {
+        type: "presentation-configuration",
+        instrumentation: this.testing !== undefined,
+      },
+      [],
+    );
     this.imports = {
       ipp_gl: device.imports,
       ipp_presentation: {
@@ -196,10 +194,11 @@ export class RenderWorkerService {
     wasmUrl: string,
     post: (message: unknown, transfer: Transferable[]) => void,
     fail: (error: Error) => void,
-    logLevel: LogLevel = "info",
+    logLevel: LogLevel,
+    testing: RenderTestingModule | undefined,
   ): Promise<RenderWorkerService> {
     validateViewport(canvas.width, canvas.height);
-    // Only the render distribution ships this binding. The lean worker has no GL dependency.
+    // Only rendering distributions ship this binding; a headless worker has no GL dependency.
     const module = (await import(new URL("webgl.js", wasmUrl).href)) as {
       createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports;
     };
@@ -209,15 +208,7 @@ export class RenderWorkerService {
       post,
       fail,
       new DiagnosticLogger("renderer", logLevel),
-    );
-  }
-
-  /** Whether the runtime is a `diagnostics` build that reports statistics. */
-  reportsStatistics(exports: object): boolean {
-    const candidate = exports as Record<string, unknown>;
-    return (
-      typeof candidate.ipp_render_statistics_ptr === "function" &&
-      typeof candidate.ipp_render_statistics_len === "function"
+      testing,
     );
   }
 
@@ -232,75 +223,24 @@ export class RenderWorkerService {
       "ipp_render_detach",
       "ipp_render_max_viewport_width",
       "ipp_render_max_viewport_height",
+      "ipp_render_statistics_ptr",
+      "ipp_render_statistics_len",
+      "ipp_render_gui_layout_ptr",
+      "ipp_render_gui_layout_len",
+      "ipp_render_surface_cache_records_ptr",
+      "ipp_render_surface_cache_records_len",
     ]) {
       if (typeof candidate[name] !== "function")
         throw new Error(
           `WASM runtime is missing ${name}; select the render build`,
         );
     }
-    this.runtime = exports as RenderHostExports & RenderDiagnosticsExports;
+    this.runtime = exports as RenderHostExports;
     this.ingress = ingress;
     this.session = session;
     this.device.setMemory(this.runtime.memory);
-    this.applyTestingOverrides();
+    this.testing?.initialize(exports);
     if (!this.device.isContextLost()) this.attach();
-  }
-
-  /** The renderer keeps overrides through context loss; a later session receives them again. */
-  private applyTestingOverrides(): void {
-    const runtime = this.runtime;
-    if (!runtime) return;
-    const limits = this.glyphAtlasLimits;
-    if (limits) {
-      const apply = this.testingExport(
-        runtime.ipp_render_set_glyph_atlas_limits,
-        "glyph atlas limits",
-        "a GUI render build",
-      );
-      if (apply(limits.maxPages, limits.idlePageFrames) !== 1)
-        throw new Error("Rust renderer rejected the glyph atlas limits");
-      this.logger.log("debug", "renderer.glyph_atlas_limits", () => ({
-        session: this.session,
-        maxPages: limits.maxPages,
-        idlePageFrames: limits.idlePageFrames,
-      }));
-    }
-    const bytes = this.surfaceCacheBudget;
-    if (bytes !== undefined) {
-      const apply = this.testingExport(
-        runtime.ipp_render_set_surface_cache_budget,
-        "Surface cache budget",
-        "a render build with Surfaces",
-      );
-      if (apply(bytes >>> 0) !== 1)
-        throw new Error("Rust renderer rejected the Surface cache budget");
-      this.logger.log("debug", "renderer.surface_cache_budget", () => ({
-        session: this.session,
-        bytes,
-      }));
-    }
-    const enabled = this.exhaustiveDrawChecks;
-    if (enabled !== undefined) {
-      const apply = this.testingExport(
-        runtime.ipp_render_set_exhaustive_draw_checks,
-        "exhaustive draw checks",
-        "a render build",
-      );
-      if (apply(Number(enabled)) !== 1)
-        throw new Error("Rust renderer rejected exhaustive draw checks");
-    }
-  }
-
-  private testingExport<F extends (...args: never[]) => number>(
-    candidate: F | undefined,
-    control: string,
-    build: string,
-  ): F {
-    if (typeof candidate !== "function")
-      throw new Error(
-        `The ${control} testing override requires a diagnostics runtime of ${build}`,
-      );
-    return candidate.bind(this.runtime) as F;
   }
 
   /** Read the device limits, reporting a change to the presentation channel. */
@@ -350,7 +290,7 @@ export class RenderWorkerService {
       session: this.session,
       generation: this.generation,
     }));
-    this.restoreIfRequested();
+    this.testing?.lost();
   };
 
   private readonly restored = (): void => {
@@ -368,42 +308,16 @@ export class RenderWorkerService {
     this.attached = false;
   }
 
-  private restoreIfRequested(): void {
-    if (
-      !this.restoreRequested ||
-      !this.lossObserved ||
-      this.closed ||
-      this.restoreTimer !== undefined
-    )
-      return;
-    // WEBGL_lose_context permits restoration after the cancelled loss event has
-    // finished dispatching. The caller need not guess that event's timing.
-    this.restoreTimer = setTimeout(() => {
-      this.restoreTimer = undefined;
-      this.restoreRequested = false;
-      try {
-        this.device.restoreContext();
-      } catch (error) {
-        this.fail(asError(error));
-      }
-    }, 0);
-  }
-
   beforeFrame(): void {
     // Loss may become observable before the browser dispatches its event.
     if (this.device.isContextLost()) this.suspend();
   }
 
-  /** Read the packed record of a diagnostics build; only captures call this. */
+  /** Read the packed statistics record on request. */
   private statistics(
-    runtime: RenderHostExports & RenderDiagnosticsExports,
+    runtime: RenderHostExports,
     readbackMs: number,
-  ): RenderStatisticsSnapshot | undefined {
-    if (
-      !runtime.ipp_render_statistics_ptr ||
-      !runtime.ipp_render_statistics_len
-    )
-      return undefined;
+  ): RenderStatisticsSnapshot {
     const pointer = runtime.ipp_render_statistics_ptr() >>> 0;
     const length = runtime.ipp_render_statistics_len() >>> 0;
     if (pointer === 0 || length !== RECORD_WORDS)
@@ -416,91 +330,73 @@ export class RenderWorkerService {
       RECORD_WORDS,
     ).slice();
     const flags = words[RECORD.flags]!;
-    let guiLayout: HostGuiLayoutStatistics | null | undefined;
-    if (
-      runtime.ipp_render_gui_layout_ptr &&
-      runtime.ipp_render_gui_layout_len
-    ) {
-      const layoutPointer = runtime.ipp_render_gui_layout_ptr() >>> 0;
-      const layoutLength = runtime.ipp_render_gui_layout_len() >>> 0;
-      if (layoutPointer === 0 || layoutLength === 0)
-        throw new Error("GUI layout diagnostics unavailable");
-      guiLayout = JSON.parse(
-        new TextDecoder("utf-8", { fatal: true }).decode(
-          new Uint8Array(runtime.memory.buffer, layoutPointer, layoutLength),
-        ),
-      );
-    }
+    const layoutPointer = runtime.ipp_render_gui_layout_ptr() >>> 0;
+    const layoutLength = runtime.ipp_render_gui_layout_len() >>> 0;
+    if (layoutPointer === 0 || layoutLength === 0)
+      throw new Error("GUI layout diagnostics unavailable");
+    const guiLayout: HostGuiLayoutStatistics | null = JSON.parse(
+      new TextDecoder("utf-8", { fatal: true }).decode(
+        new Uint8Array(runtime.memory.buffer, layoutPointer, layoutLength),
+      ),
+    );
     if (flags & RECORD_LAYOUT && !guiLayout)
       throw new Error("GUI layout counters have no membership evidence");
     return {
       readbackMs,
-      ...(guiLayout === undefined ? {} : { guiLayout }),
+      guiLayout,
       frame: pick(words, [
         "uploadedBytes",
         "totalUploadedBytes",
         "unshadowedLights",
       ]),
-      ...(flags & RECORD_SHADOWS
-        ? {
-            shadows: pick(words, ["shadowDrawCalls", "shadowResidentBytes"]),
-          }
-        : {}),
-      ...(flags & RECORD_GUI
-        ? {
-            gui: {
-              ...pick(words, [
-                "guiBatches",
-                "guiRebuilds",
-                "guiAllocations",
-                "guiResidentBytes",
-                "glyphMisses",
-                "glyphPopulates",
-                "glyphPopulationFailures",
-                "glyphPageRetirements",
-                "glyphPages",
-                "glyphResidentBytes",
-                "totalGuiRebuilds",
-                "totalGuiAllocations",
-                "totalGlyphMisses",
-                "totalGlyphPopulates",
-                "totalGlyphPopulationFailures",
-                "totalGlyphPageRetirements",
-              ]),
-              ...(flags & RECORD_LAYOUT
-                ? pick(words, [
-                    "guiLayoutReflows",
-                    "guiTextMeasurements",
-                    "totalGuiLayoutReflows",
-                    "totalGuiTextMeasurements",
-                  ])
-                : {}),
-            },
-          }
-        : {}),
-      ...(flags & RECORD_SURFACES
-        ? {
-            surfaces: {
-              ...pick(words, [
-                "analyticGlyphResidentBytes",
-                "surfaceCacheRepaints",
-                "surfaceCacheReuses",
-                "surfaceCacheDirect",
-                "surfaceCacheFallbacks",
-                "surfaceCacheAnimated",
-                "surfaceCacheAllocations",
-                "surfaceCacheEntries",
-                "surfaceCacheResidentBytes",
-                "totalSurfaceCacheRepaints",
-                "totalSurfaceCacheReuses",
-                "totalSurfaceCacheDirect",
-                "totalSurfaceCacheFallbacks",
-                "totalSurfaceCacheAllocations",
-              ]),
-              surfaceCaches: this.surfaceCacheRecords(runtime),
-            },
-          }
-        : {}),
+      shadows: pick(words, ["shadowDrawCalls", "shadowResidentBytes"]),
+      gui: {
+        ...pick(words, [
+          "guiBatches",
+          "guiRebuilds",
+          "guiAllocations",
+          "guiResidentBytes",
+          "glyphMisses",
+          "glyphPopulates",
+          "glyphPopulationFailures",
+          "glyphPageRetirements",
+          "glyphPages",
+          "glyphResidentBytes",
+          "totalGuiRebuilds",
+          "totalGuiAllocations",
+          "totalGlyphMisses",
+          "totalGlyphPopulates",
+          "totalGlyphPopulationFailures",
+          "totalGlyphPageRetirements",
+        ]),
+        ...(flags & RECORD_LAYOUT
+          ? pick(words, [
+              "guiLayoutReflows",
+              "guiTextMeasurements",
+              "totalGuiLayoutReflows",
+              "totalGuiTextMeasurements",
+            ])
+          : {}),
+      },
+      surfaces: {
+        ...pick(words, [
+          "analyticGlyphResidentBytes",
+          "surfaceCacheRepaints",
+          "surfaceCacheReuses",
+          "surfaceCacheDirect",
+          "surfaceCacheFallbacks",
+          "surfaceCacheAnimated",
+          "surfaceCacheAllocations",
+          "surfaceCacheEntries",
+          "surfaceCacheResidentBytes",
+          "totalSurfaceCacheRepaints",
+          "totalSurfaceCacheReuses",
+          "totalSurfaceCacheDirect",
+          "totalSurfaceCacheFallbacks",
+          "totalSurfaceCacheAllocations",
+        ]),
+        surfaceCaches: this.surfaceCacheRecords(runtime),
+      },
       ...(this.ingress ? { ingress: { ...this.ingress } } : {}),
       device: this.device.info() as RenderDeviceInfo,
     };
@@ -508,15 +404,8 @@ export class RenderWorkerService {
 
   /** Records the runtime builds on demand for the last completed frame. */
   private surfaceCacheRecords(
-    runtime: RenderHostExports & RenderDiagnosticsExports,
+    runtime: RenderHostExports,
   ): SurfaceCacheRecord[] {
-    if (
-      !runtime.ipp_render_surface_cache_records_ptr ||
-      !runtime.ipp_render_surface_cache_records_len
-    )
-      throw new Error(
-        "WASM runtime reports Surface statistics without Surface cache records",
-      );
     // The pointer export builds the records; read the length after it.
     const pointer = runtime.ipp_render_surface_cache_records_ptr() >>> 0;
     const length = runtime.ipp_render_surface_cache_records_len() >>> 0;
@@ -549,8 +438,8 @@ export class RenderWorkerService {
   receive(data: Record<string, unknown>): boolean {
     if (data.type === "render-statistics") {
       const runtime = this.runtime;
-      if (!runtime || !this.reportsStatistics(runtime))
-        throw new Error("Render statistics require a diagnostics runtime");
+      if (!runtime)
+        throw new Error("Render statistics before the runtime loaded");
       this.post(
         {
           type: "render-statistics",
@@ -561,70 +450,13 @@ export class RenderWorkerService {
       );
       return true;
     }
-    return this.receiveTesting(data);
-  }
-
-  /**
-   * Controls of `@ipp/client/testing`. Each requires the matching diagnostics
-   * export; a build without it fails the connection with a clear error.
-   */
-  private receiveTesting(data: Record<string, unknown>): boolean {
-    if (data.type === "glyph-atlas-limits") {
-      const limits = {
-        maxPages: data.maxPages as number,
-        idlePageFrames: data.idlePageFrames as number,
-      };
-      validateGlyphAtlasLimits(limits);
-      this.glyphAtlasLimits = limits;
-      this.applyTestingOverrides();
-      return true;
-    }
-    if (data.type === "surface-cache-budget") {
-      const bytes = data.bytes as number;
-      validateSurfaceCacheBudget(bytes);
-      this.surfaceCacheBudget = bytes;
-      this.applyTestingOverrides();
-      return true;
-    }
-    if (data.type === "exhaustive-draw-checks") {
-      if (typeof data.enabled !== "boolean")
-        throw new Error("Invalid exhaustive draw check request");
-      this.exhaustiveDrawChecks = data.enabled;
-      this.applyTestingOverrides();
-      return true;
-    }
-    if (data.type === "context-loss") {
-      this.requireLossSimulation();
-      // Exists only for the simulated loss: stop Host graphics loading before
-      // the extension begins its asynchronous loss transition. Otherwise a
-      // resource upload can report context loss as a permanent resource
-      // failure while the device is being detached. A real loss is observed
-      // through beforeFrame and the webglcontextlost event instead.
-      this.suspend();
-      this.device.loseContext();
-      return true;
-    }
-    if (data.type === "context-restore") {
-      this.requireLossSimulation();
-      if (!this.device.isContextLost() && !this.lossObserved) return true;
-      this.restoreRequested = true;
-      this.restoreIfRequested();
-      return true;
-    }
-    return false;
-  }
-
-  private requireLossSimulation(): void {
-    if (!this.runtime || !this.reportsStatistics(this.runtime))
-      throw new Error(
-        "Context loss simulation requires a diagnostics render runtime",
-      );
+    return this.testing?.receive(data) ?? false;
   }
 
   close(): void {
     if (this.closed) return;
     this.closed = true;
-    clearTimeout(this.restoreTimer);
+    this.testing?.close();
     this.canvas.removeEventListener("webglcontextlost", this.lost);
     this.canvas.removeEventListener("webglcontextrestored", this.restored);
     this.suspend();

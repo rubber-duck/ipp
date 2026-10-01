@@ -6,12 +6,12 @@ import {
 } from "./surface-cache-environment.js";
 
 for (const build of SURFACE_CACHE_BUILDS)
-  test(`${build.name}: opted-in Surfaces reuse bounded cache images and fall back to current direct presentation`, {
+  test(`${build.label}: opted-in Surfaces reuse bounded cache images and fall back to current direct presentation`, {
     timeout: 900000,
   }, async (context) => {
     const reports = await runSurfaceCache(
       context.signal,
-      resolve("target/integration-artifacts/surface-cache", build.name),
+      resolve("target/integration-artifacts/surface-cache", build.label),
       [build],
     );
     for (const { build, report, density } of reports) {

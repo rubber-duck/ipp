@@ -4,7 +4,7 @@ This optional headless service owns input-session lifetimes, explicit root-conte
 
 ## Boundary for the local receiver
 
-`GuiSystemFactory` is the sole provider of `WorldOperation::Gui`: `GuiAction` commands need the local GUI System, not Canvas or layout. This manifest capability is not physical input readiness. Routed/native operations still require their selected producers, live root/context/path and owning input implementation. Omitting GUI from the selection or compiled feature set omits the operation.
+`GuiSystemFactory` is the sole provider of `WorldOperation::Gui`: `GuiAction` commands need the local GUI System, not Canvas or layout. This manifest capability is not physical input readiness. Routed/native operations still require their selected producers, live root/context/path and owning input implementation. Omitting GUI from the selection omits the operation.
 
 Adapters open a fresh internal session lifetime rather than reusing a wire session number. Root contexts bind the exact current `RootOutputBinding` and replace their generation even for equal values.
 

@@ -132,17 +132,6 @@ test("animation transition seek policy is captured at the commit boundary", () =
 class DeliveryBoundary implements ReactWorldClient {
   session = 1n;
   schemaHash = 123n;
-  capabilities = {
-    spatial: false,
-    textures: false,
-    builtinAssets: false,
-    picking: false,
-    debugGeometry: false,
-    pbr: false,
-    shadows: false,
-    skeletalAnimation: false,
-    meshPoses: false,
-  };
   components: ReactWorldClient["components"] = {
     Scalar: { id: 17, fields: { value: { offset: 12, kind: 1 } } },
   };
@@ -1101,7 +1090,6 @@ test("definitively unsent encoding failures allow a corrected commit", async () 
 
 test("world declarations retain typed target fields through acknowledgement, sparse update and prop removal", async () => {
   const client = new DeliveryBoundary();
-  client.capabilities.spatial = true;
   // Deliberately different IDs/offsets: the tree must use the connected contract.
   client.components = {
     ...client.components,
@@ -1224,7 +1212,6 @@ test("world components omitted from the target reject without sending declaratio
 
 test("texture declaration preserves source and integer fields and removal removes only its component", async () => {
   const client = new DeliveryBoundary();
-  client.capabilities.textures = true;
   client.components = {
     ...client.components,
     UnlitTexture: {

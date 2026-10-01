@@ -1,6 +1,6 @@
 import { createRef } from "react";
 import type { GuiWorldClient } from "@ipp/client";
-import { lifecycleTesting } from "@ipp/client/testing";
+import { lifecycleDiagnostics } from "@ipp/client/diagnostics";
 import { createRoot, Entity } from "@ipp/react";
 import { Checkbox, type GuiControlHandle } from "@ipp/react/gui";
 import { check, deferred, type GuiContract } from "./gui-authoring.js";
@@ -90,7 +90,7 @@ export async function controlRefScaling(
         "Large mount repeated healthy tracking or ref publications",
       );
       check(output !== undefined, "Diagnostic watch endpoint missing");
-      const before = await lifecycleTesting(client).statistics(output);
+      const before = await lifecycleDiagnostics(client).statistics(output);
       const beforeWire = probe.records(client.session);
       const initialEvents = events;
       check(
@@ -101,7 +101,7 @@ export async function controlRefScaling(
         ).ok,
         "Unrelated producer creation failed",
       );
-      const after = await lifecycleTesting(client).statistics(output);
+      const after = await lifecycleDiagnostics(client).statistics(output);
       const afterWire = probe.records(client.session);
       check(
         afterWire.messages === beforeWire.messages &&

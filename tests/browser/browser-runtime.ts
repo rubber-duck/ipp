@@ -16,6 +16,10 @@ import type {
 } from "../../target/integration-artifacts/client/generated.js";
 import type { Client, PortTransport } from "@ipp/client";
 import {
+  acceptHostAnnouncement,
+  hostHello,
+} from "../../packages/ipp-client/src/host-contract.js";
+import {
   HostWireReader,
   HostWireWriter,
 } from "../../packages/ipp-client/src/host-protocol.js";
@@ -344,7 +348,7 @@ export async function rejectStaleSession(
 export async function rejectMalformed(
   configuration: BrowserRuntimeConfiguration,
   malformedCase:
-    | "no-bootstrap"
+    | "no-hello"
     | "oversized-message"
     | "trailing-bytes"
     | "unknown-tag"
@@ -354,7 +358,7 @@ export async function rejectMalformed(
   const raw = await openRawWorker(configuration);
   try {
     await raw.ready;
-    if (malformedCase === "no-bootstrap") {
+    if (malformedCase === "no-hello") {
       const bytes = contract.encodeRequest({
         session: 1n,
         requestId: 1n,
@@ -452,10 +456,10 @@ export async function wasmSchemaHash(wasmUrl: string): Promise<bigint> {
       `WASM fetch failed: ${response.status} ${response.statusText}`,
     );
   }
-  const result = await WebAssembly.instantiate(
-    await response.arrayBuffer(),
-    {},
-  );
+  // Every build imports its log sink; reading the hash writes nothing.
+  const result = await WebAssembly.instantiate(await response.arrayBuffer(), {
+    ipp_diagnostics: { write: () => {} },
+  });
   const schemaHash = result.instance.exports.ipp_schema_hash;
   if (typeof schemaHash !== "function") {
     throw new Error("final WASM does not export ipp_schema_hash");
@@ -657,8 +661,8 @@ async function loadContract(url: string): Promise<GeneratedContract> {
     typeof value.SCHEMA_HASH !== "bigint" ||
     !("IppClient" in value) ||
     typeof value.IppClient !== "function" ||
-    !("bootstrap" in value) ||
-    typeof value.bootstrap !== "function" ||
+    !("PROTOCOL_VERSION" in value) ||
+    typeof value.PROTOCOL_VERSION !== "number" ||
     !("Scalar" in value) ||
     typeof value.Scalar !== "object" ||
     value.Scalar === null
@@ -786,12 +790,15 @@ async function rawHandshake(
   contract: GeneratedContract,
   configuration: BrowserRuntimeConfiguration,
 ): Promise<bigint> {
-  raw.transport.send(contract.bootstrap());
+  raw.transport.send(hostHello());
   const response = await raw.next(configuration.timeoutMs);
   if (response.kind !== "message") {
-    throw new Error(`bootstrap rejected: ${response.detail}`);
+    throw new Error(`hello rejected: ${response.detail}`);
   }
-  const connection = contract.acceptBootstrap(response.bytes);
+  const { connection } = acceptHostAnnouncement(response.bytes, {
+    revision: contract.PROTOCOL_VERSION,
+    schemaHash: contract.SCHEMA_HASH,
+  });
   const request = (requestId: bigint, tag: number): HostWireWriter => {
     const writer = new HostWireWriter();
     writer.raw(new Uint8Array([73, 80, 80, 72, 2, 0, 0, 0]));

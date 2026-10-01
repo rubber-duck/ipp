@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { generateClient, replyToHostCreate } from "./generated-client.mjs";
+import {
+  generateClient,
+  hostAnnouncement,
+  replyToHostCreate,
+} from "./generated-client.mjs";
 
 const { codec, hostProtocol, hostPresentation } =
   await generateClient("host-lifecycle");
@@ -45,10 +49,8 @@ function controlledTransport() {
       },
       send(bytes) {
         sent.push(bytes.slice());
-        if (bytes.length === 16) {
-          const response = new Uint8Array(24);
-          response.set(bytes);
-          new DataView(response.buffer).setBigUint64(16, 7n, true);
+        if (bytes.length === 4) {
+          const response = hostAnnouncement(codec);
           deliver(response);
         } else if (bytes[24] === codec.WIRE.HOST_REQUEST_RESOLVE_WORLD) {
           const response = new Uint8Array(41);

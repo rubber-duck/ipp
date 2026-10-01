@@ -10,72 +10,25 @@ publish.workspace = true
 ipp-core.workspace = true
 
 [features]
-surfaces = ["ipp-core/surfaces"]
-gui = ["ipp-core/gui", "surfaces"]
-profiling = ["ipp-core/profiling"]
-diagnostics = ["ipp-core/diagnostics"]
-mesh-poses = ["ipp-core/mesh-poses"]
-particles = ["ipp-core/particles"]
 default = []
-shadows = ["ipp-core/shadows"]
-skeletal-animation = ["ipp-core/skeletal-animation"]
+instrumentation = ["ipp-core/instrumentation"]
 
 [lints]
 workspace = true
 
-[[example]]
-name = "egl_smoke"
-required-features = ["diagnostics"]
-
+# Targets that set renderer testing overrides need `instrumentation`.
 [[example]]
 name = "egl_publications"
-required-features = ["diagnostics"]
-
-[[example]]
-name = "egl_custom_materials"
-required-features = ["diagnostics"]
-
-[[example]]
-name = "egl_skinning"
-required-features = ["skeletal-animation", "diagnostics"]
-
-[[example]]
-name = "egl_mesh_poses"
-required-features = ["mesh-poses", "diagnostics"]
-
-[[example]]
-name = "egl_particles"
-required-features = ["particles", "diagnostics"]
-
-[[example]]
-name = "egl_surfaces"
-required-features = ["surfaces", "diagnostics"]
-
-[[example]]
-name = "egl_gui_clips"
-required-features = ["gui", "diagnostics"]
-
-[[example]]
-name = "egl_gui_layout"
-required-features = ["gui", "diagnostics"]
+required-features = ["instrumentation"]
 
 [[example]]
 name = "egl_surface_cache"
-required-features = ["gui", "diagnostics"]
+required-features = ["instrumentation"]
 
-# Integration tests read renderer statistics and use its testing overrides.
 [[test]]
 name = "mesh_residency"
-required-features = ["diagnostics"]
-
-[[test]]
-name = "publication_rendering"
-required-features = ["diagnostics"]
-
-[[test]]
-name = "selected_preparation"
-required-features = ["diagnostics"]
+required-features = ["instrumentation"]
 
 [[test]]
 name = "surface_cache"
-required-features = ["diagnostics"]
+required-features = ["instrumentation"]

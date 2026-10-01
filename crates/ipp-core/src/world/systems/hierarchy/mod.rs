@@ -1,8 +1,6 @@
 //! Explicit object relationships and affine propagation. See README.md for contracts.
 
-#[cfg(feature = "skeletal-animation")]
 mod component;
-#[cfg(feature = "skeletal-animation")]
 pub use component::ParentJoint;
 
 use crate::systems::{self, camera::CameraAffineTransform, geometry::GeometryShapeTransform};

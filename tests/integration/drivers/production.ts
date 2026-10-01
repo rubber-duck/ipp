@@ -3,10 +3,9 @@ import {
   IppClient,
   LinearDriver,
   MAX_MESSAGE_BYTES,
+  PROTOCOL_VERSION,
   SCHEMA_HASH,
   Scalar,
-  acceptBootstrap,
-  bootstrap,
   components,
   encodeRequest,
   type BatchOutcome as SdkBatchOutcome,
@@ -14,6 +13,10 @@ import {
   type EntityRef as SdkEntityRef,
   type EntitySnapshot,
 } from "../../../target/integration-artifacts/client/generated.js";
+import {
+  acceptHostAnnouncement,
+  hostHello,
+} from "../../../packages/ipp-client/src/host-contract.js";
 import type {
   BatchOutcome,
   ConcurrentRpcCorrelation,
@@ -271,16 +274,6 @@ export class ProductionDriverFactory implements HarnessDriverFactory {
     }
   }
 
-  async rejectMismatchedSchema(
-    url: string,
-    options: DriverConnectOptions,
-  ): Promise<ProtocolRejection> {
-    const bytes = bootstrap().slice();
-    const finalByte = bytes.byteLength - 1;
-    bytes[finalByte] = (bytes[finalByte] ?? 0) ^ 1;
-    return await rejectionProbe(url, bytes, "handshake", options);
-  }
-
   async rejectStaleSession(
     url: string,
     options: DriverConnectOptions,
@@ -321,7 +314,7 @@ export class ProductionDriverFactory implements HarnessDriverFactory {
     malformedCase: MalformedCase,
     options: DriverConnectOptions,
   ): Promise<ProtocolRejection> {
-    if (malformedCase === "no-bootstrap") {
+    if (malformedCase === "no-hello") {
       const bytes = encodeRequest({
         session: 1n,
         requestId: 1n,
@@ -511,8 +504,11 @@ async function handshake(
   signal: AbortSignal,
 ): Promise<bigint> {
   const reply = receiveOne(socket, signal);
-  socket.send(bootstrap().slice().buffer);
-  return acceptBootstrap(await reply);
+  socket.send(hostHello().buffer);
+  return acceptHostAnnouncement(await reply, {
+    revision: PROTOCOL_VERSION,
+    schemaHash: SCHEMA_HASH,
+  }).connection;
 }
 
 async function openSocket(

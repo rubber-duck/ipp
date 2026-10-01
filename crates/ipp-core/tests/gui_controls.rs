@@ -1,5 +1,4 @@
 //! Real headless control paint and same-publication semantic/hit joins; no transport admission claim.
-#![cfg(feature = "gui")]
 
 mod support;
 
@@ -430,7 +429,6 @@ fn value_replacement_updates_visual_parts_and_input_revision_not_layout_or_prior
                     && primitive(entry).style().identity.part == CanvasPart::Icon
             )
     );
-    #[cfg(feature = "diagnostics")]
     assert_eq!(
         host.world_mut(world)
             .unwrap()
@@ -675,7 +673,6 @@ fn labels_use_ordinary_font_demand_and_retain_glyphs_across_visual_only_changes(
     assert!(Arc::ptr_eq(glyphs, after_glyphs));
     assert_eq!(after.hits[0].position, [9.0, 0.0]);
     assert_eq!(after.hits[0].scale, [2.0, 1.0]);
-    #[cfg(feature = "diagnostics")]
     assert_eq!(
         host.world_mut(world)
             .unwrap()

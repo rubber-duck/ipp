@@ -32,7 +32,7 @@ import {
   type EntityProps,
 } from "@ipp/react";
 import { workerTransport } from "@ipp/client";
-import { reactRootSystems } from "../integration/system-selections.js";
+import { REACT_ROOT, selectSystems } from "../integration/system-selections.js";
 
 interface DeliveryGateReport {
   readonly bufferedResponses: number;
@@ -456,7 +456,7 @@ export async function pendingUnmountUsesRealAcknowledgement(
   );
   const gate = new BatchDeliveryGate(transport);
   const client = await contract.IppClient.connectTransport(gate, {
-    selectedSystems: reactRootSystems(contract.CAPABILITIES),
+    selectedSystems: selectSystems(REACT_ROOT),
     timeoutMs: configuration.timeoutMs,
   });
   const root = createRoot(client);

@@ -111,17 +111,6 @@ class HarnessClient extends ClientBase {
   protected readonly commandPageLimits = PAGE_LIMITS;
   override readonly schemaHash = 1n;
   override readonly components = {};
-  override readonly capabilities = {
-    spatial: false,
-    textures: false,
-    builtinAssets: false,
-    picking: false,
-    debugGeometry: false,
-    pbr: false,
-    shadows: false,
-    skeletalAnimation: false,
-    meshPoses: false,
-  };
 
   constructor(transport: MessageTransport, session: bigint, timeoutMs = 2000) {
     super(transport, { timeoutMs, logLevel: "off" });
@@ -156,14 +145,6 @@ class HarnessClient extends ClientBase {
     options?: GuiObservationOptions,
   ) {
     return this.submitGuiSubscription(listener, options);
-  }
-
-  protected override bootstrap(): Uint8Array<ArrayBuffer> {
-    return new Uint8Array();
-  }
-
-  protected override acceptBootstrap(): bigint {
-    return 7n;
   }
 
   protected override encodeRequest(request: Request): Uint8Array<ArrayBuffer> {

@@ -177,7 +177,6 @@ pub(crate) struct WorldEntityState {
     allocator: Allocator,
     retired_entities: Vec<EntityId>,
     // Applied effects are drained even when a later operation fails.
-    #[cfg(feature = "diagnostics")]
     entity_effects: Vec<(&'static str, EntityId)>,
     pub(crate) entities: BTreeMap<EntityId, WorldEntityRecord>,
     symbols: BTreeMap<String, EntityId>,
@@ -325,7 +324,7 @@ impl WorldContext<'_> {
     }
 }
 
-#[cfg(all(test, feature = "diagnostics"))]
+#[cfg(test)]
 mod diagnostic_invariants {
     use super::*;
     use crate::diagnostics::{Level, configure};

@@ -9,12 +9,12 @@ Provide a directory containing `libEGL.so` / `libGLESv2.so` or their `.so.1` / `
 Export ordinary fixtures, then run against a system Mesa installation (replace the library directory for your system):
 
 ```sh
-cargo run -q -p ipp-core --features builtin-assets --example export_builtin --locked -- \
+cargo run -q -p ipp-core --example export_builtin --locked -- \
   mesh 'ipp://mesh/cube?width=2&height=2&length=2' > /tmp/cube.mesh
-cargo run -q -p ipp-core --features builtin-assets --example export_builtin --locked -- \
+cargo run -q -p ipp-core --example export_builtin --locked -- \
   texture 'ipp://texture/checkerboard?width=256&height=256&cellsX=8&cellsY=8' > /tmp/checker.texture
 LIBGL_ALWAYS_SOFTWARE=1 \
-  cargo run -p ipp-render-gl --example egl_smoke --features diagnostics --locked -- \
+  cargo run -p ipp-render-gl --example egl_smoke --locked -- \
   /usr/lib/x86_64-linux-gnu /tmp/cube.mesh \
   target/integration-artifacts/render/native /tmp/checker.texture
 ```
@@ -26,7 +26,7 @@ For shapes and spotlight shadows, build the maintained corpus and supply its dir
 ```sh
 node tools/build_shapes.mjs
 LIBGL_ALWAYS_SOFTWARE=1 \
-  cargo run -p ipp-render-gl --example egl_smoke --features shadows,diagnostics --locked -- \
+  cargo run -p ipp-render-gl --example egl_smoke --locked -- \
   /usr/lib/x86_64-linux-gnu target/shapes-build/cube.mesh \
   target/integration-artifacts/render/native-shapes \
   target/shapes-build/checker.texture target/shapes-build
@@ -34,9 +34,9 @@ LIBGL_ALWAYS_SOFTWARE=1 \
 
 `--lighting-only` before the positional arguments selects focused lighting scenarios. The [runner](../egl_smoke.rs) owns the complete CLI and scenario selection.
 
-The regression selections `check:gles-spatial` and `check:gles-custom-materials` build the shared gallery cube through `build:render-fixtures`, without compiling browser adapters. The fixture builder imports the maintained gallery asset generator rather than duplicating its mesh data. Publication composition captures use `check:gles-publications` and `check:gles-publications-expanded` with the same EGL driver. Run these selections through `python tools/ipp.py regression --only <selection>`; their direct-core/GLES scope does not establish transport coverage.
+The regression selections `check:gles-spatial` and `check:gles-custom-materials` build the shared gallery cube through `build:render-fixtures`, without compiling browser adapters. The fixture builder imports the maintained gallery asset generator rather than duplicating its mesh data. Publication composition captures use `check:gles-publications` with the same EGL driver. Run these selections through `python tools/ipp.py regression --only <selection>`; their direct-core/GLES scope does not establish transport coverage.
 
-`check:gles-publications-gui` adds the [ordinary layout scene](gui_publications.rs): parent and nested Canvas Worlds combine `GuiLayout`, boxes, converted-font text and a Surface attachment. Completed captures and headless geometry check padding, clipping, visual transforms and text changes; retained storage and work counters check warm reuse.
+`check:gles-publications` also runs the [ordinary layout scene](gui_publications.rs): parent and nested Canvas Worlds combine `GuiLayout`, boxes, converted-font text and a Surface attachment. Completed captures and headless geometry check padding, clipping, visual transforms and text changes; retained storage and work counters check warm reuse.
 
 The [ordinary control scene](gui_control_publications.rs) joins real `GuiCanvasPublication` observations to the same completed Canvas hits and paint. Independent geometry and pixel assertions cover checked/unchecked and tall checkboxes, an explicit unchecked theme indicator, slider rail/thumb placement, disabled/button paint and converted-font labels. Field writes change checkbox, slider and text values; unchanged glyphs/parts remain retained, boolean/scalar edits avoid reflow, and warm captures remain identical with no uploads. These scenes prove producer/renderer integration, not routed input, semantic action admission or platform adapters. Focus coverage is unfocused paint only until ordinary focus admission is available.
 

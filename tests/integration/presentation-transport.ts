@@ -1,3 +1,7 @@
+import {
+  bindPresentation,
+  presentationOf,
+} from "../../packages/ipp-client/src/presentation.js";
 import type { MessageTransport, TransportEvents } from "@ipp/client";
 export { workerTransport } from "../../packages/ipp-client/src/worker.js";
 
@@ -44,9 +48,6 @@ export function presentationTransport(
     },
   };
   const controlled: MessageTransport = {
-    ...(transport.renderDiagnostics
-      ? { renderDiagnostics: transport.renderDiagnostics }
-      : {}),
     start(value) {
       events = value;
       transport.start({
@@ -110,5 +111,7 @@ export function presentationTransport(
       return transport.close();
     },
   };
+  // Statistics and testing controls reach the wrapped presentation.
+  bindPresentation(controlled, presentationOf(transport));
   return { transport: controlled, probe };
 }

@@ -18,7 +18,7 @@ import {
   selectSystems,
 } from "../integration/system-selections.js";
 
-/** Same production assets/client path in a lean worker and a WebGL worker. */
+/** Same production assets/client path in a headless worker and a WebGL worker. */
 export async function run(
   configuration: { generated: string; workerScript: string; wasm: string },
   rendering: boolean,

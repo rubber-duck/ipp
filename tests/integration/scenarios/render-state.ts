@@ -166,7 +166,6 @@ export async function renderStatePreservesDeclarations(
     return {
       updates: events.length,
       component: component.id,
-      debugAssetsEnabled: client.capabilities.debugGeometry,
     };
   } finally {
     dispose();

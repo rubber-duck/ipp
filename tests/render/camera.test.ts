@@ -1,5 +1,5 @@
+import type { RenderStatisticsSnapshot } from "@ipp/client/diagnostics";
 import { outputProducer } from "../../packages/ipp-client/src/references.js";
-import type { RenderStatisticsSnapshot } from "@ipp/client";
 import assert from "node:assert/strict";
 import { copyFile, mkdir, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -24,14 +24,17 @@ import {
 } from "./image-assertions.js";
 
 const workspace = resolve(process.cwd());
-const directory = resolve(workspace, "target/browser-build/render");
-const build: BrowserBuildConfiguration = {
-  name: "render",
-  generatedModule: resolve(directory, "generated.js"),
-  runtimeWasm: resolve(directory, "runtime.wasm"),
-  exportWasm: resolve(directory, "export.wasm"),
-  contractArtifact: resolve(directory, "contract.bin"),
-};
+function browserBuild(
+  name: "render" | "render-instrumentation",
+): BrowserBuildConfiguration {
+  const directory = resolve(workspace, "target/browser-build", name);
+  return {
+    name,
+    generatedModule: resolve(directory, "generated.js"),
+    runtimeWasm: resolve(directory, "runtime.wasm"),
+    contractArtifact: resolve(directory, "contract.bin"),
+  };
+}
 
 interface CaptureReport {
   width: number;
@@ -56,6 +59,12 @@ for (const scenario of [
   test(`WebGL ${scenario} use real correlated picking and completed frames`, {
     timeout: 60_000,
   }, async (context) => {
+    // Only GPU allocation recovery simulates context loss, a testing control.
+    const build = browserBuild(
+      scenario === "GPU allocation failure"
+        ? "render-instrumentation"
+        : "render",
+    );
     const fixtureDirectory = resolve(workspace, "target/camera-fixtures");
     const fixturePath = "/target/camera-fixtures/picking-ring.geometry";
     await mkdir(fixtureDirectory, { recursive: true });
@@ -81,7 +90,7 @@ for (const scenario of [
       await writeFile(
         resolve(failingDirectory, "webgl.js"),
         `
-import { createWebGlDevice as createRealDevice } from "/target/browser-build/render/webgl.js";
+import { createWebGlDevice as createRealDevice } from "/target/browser-build/render-instrumentation/webgl.js";
 export function createWebGlDevice(canvas) {
   const device = createRealDevice(canvas);
   let attempts = 0;
@@ -115,7 +124,6 @@ export function createWebGlDevice(canvas) {
       {
         workspace,
         build,
-        mismatchBuild: build,
         operationTimeoutMs: 20_000,
         closeTimeoutMs: 5_000,
         beforeArtifactResponse: async (url) => {

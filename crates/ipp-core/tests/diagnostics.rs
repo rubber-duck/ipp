@@ -2,16 +2,6 @@
 
 mod support;
 
-#[cfg(not(feature = "diagnostics"))]
-#[test]
-fn disabled_macro_erases_arguments_and_does_not_require_them_to_typecheck() {
-    let calls = std::cell::Cell::new(0);
-    ipp_core::diagnostic!(Debug, "{}", calls.set(1));
-    ipp_core::diagnostic!(NotAnActualLevel, "{}", nonexistent_function());
-    assert_eq!(calls.get(), 0);
-}
-
-#[cfg(feature = "diagnostics")]
 mod enabled {
     use crate::support::WorldTestDriver;
 

@@ -334,7 +334,6 @@ fn encode_target(
                 writer.u32(*offset)?;
             }
         }
-        #[cfg(feature = "skeletal-animation")]
         AnimationTrackTarget::Joints(joints) => {
             writer.u8(1)?;
             writer.u16(0)?;
@@ -370,7 +369,6 @@ fn decode_target(reader: &mut WorldBinaryReader<'_>) -> Result<AnimationTrackTar
             component,
             offsets: indices,
         }),
-        #[cfg(feature = "skeletal-animation")]
         1 if component == 0 => AnimationTrackTarget::Joints(indices),
         2 if indices.is_empty() => AnimationTrackTarget::DynamicProperty {
             component,
@@ -392,7 +390,6 @@ fn encode_value(writer: &mut WorldBinaryWriter, value: &AnimationValue) -> Resul
                 writer.u32(value.to_bits())?;
             }
         }
-        #[cfg(feature = "skeletal-animation")]
         AnimationValue::Pose(values) => {
             writer.u8(2)?;
             writer.count(values.len())?;
@@ -425,7 +422,6 @@ fn decode_value(reader: &mut WorldBinaryReader<'_>) -> Result<AnimationValue, St
             f32::from_bits(reader.u32()?),
             f32::from_bits(reader.u32()?),
         ]),
-        #[cfg(feature = "skeletal-animation")]
         2 => {
             let count = bounded_count(reader, 40, 4096)?;
             reader
@@ -716,9 +712,9 @@ fn validate_controller(
     Ok(())
 }
 
-fn validate_target(target: &AnimationTrackTarget, _frozen: bool) -> Result<(), String> {
+fn validate_target(target: &AnimationTrackTarget, frozen: bool) -> Result<(), String> {
     if matches!(target, AnimationTrackTarget::EntityLink) {
-        return if !_frozen {
+        return if !frozen {
             Ok(())
         } else {
             Err("Invalid saved structural target".into())
@@ -741,9 +737,8 @@ fn validate_target(target: &AnimationTrackTarget, _frozen: bool) -> Result<(), S
             return Err("Invalid saved dynamic component".into());
         }
     }
-    #[cfg(feature = "skeletal-animation")]
     if let AnimationTrackTarget::Joints(joints) = target
-        && _frozen
+        && frozen
         && joints.len() != 1
     {
         return Err("Frozen transition joints must contain one ordinal".into());
@@ -755,7 +750,6 @@ fn validate_target(target: &AnimationTrackTarget, _frozen: bool) -> Result<(), S
 enum TargetKey<'a> {
     EntityLink,
     Property(u16, &'a [u32]),
-    #[cfg(feature = "skeletal-animation")]
     Joints(&'a [u32]),
     Dynamic(u16, &'a str),
 }
@@ -766,7 +760,6 @@ fn target_key(target: &AnimationTrackTarget) -> TargetKey<'_> {
         AnimationTrackTarget::AnimationProperty(property) => {
             TargetKey::Property(property.component, &property.offsets)
         }
-        #[cfg(feature = "skeletal-animation")]
         AnimationTrackTarget::Joints(joints) => TargetKey::Joints(joints),
         AnimationTrackTarget::DynamicProperty {
             component,
@@ -787,7 +780,6 @@ fn validate_frozen_value(value: &AnimationFrozenTransitionValue) -> Result<(), S
             AnimationValue::Field(crate::components::schema::FieldValue::Dynamic(value)) => {
                 dynamic_finite(value)
             }
-            #[cfg(feature = "skeletal-animation")]
             AnimationValue::Pose(values) => values.len() == 1 && transform_finite(&values[0]),
             _ => false,
         };
@@ -806,7 +798,6 @@ fn value_matches_target(target: &AnimationTrackTarget, value: &AnimationValue) -
             AnimationValue::Field(crate::components::schema::FieldValue::F32(_))
                 | AnimationValue::Rotation(_)
         ),
-        #[cfg(feature = "skeletal-animation")]
         AnimationTrackTarget::Joints(_) => matches!(value, AnimationValue::Pose(_)),
         AnimationTrackTarget::DynamicProperty {
             ..
@@ -832,7 +823,6 @@ fn dynamic_finite(value: &crate::DynamicValue) -> bool {
     }
 }
 
-#[cfg(feature = "skeletal-animation")]
 fn transform_finite(value: &crate::components::Transform) -> bool {
     [
         value.x, value.y, value.z, value.qx, value.qy, value.qz, value.qw, value.sx, value.sy,

@@ -89,14 +89,7 @@ pub(super) fn loader<D: RenderDevice>(
         let bits = u32::from_le_bytes(bytes.try_into().map_err(|_| "Invalid program recipe")?);
         let config = RenderShaderConfig::from_recipe_bits(bits);
         let sources = if bits & (1 << 9) != 0 {
-            #[cfg(feature = "shadows")]
-            {
-                config.shadow_sources()
-            }
-            #[cfg(not(feature = "shadows"))]
-            {
-                return Err("Shadow programs unavailable".into());
-            }
+            config.shadow_sources()
         } else {
             config.sources()
         };
@@ -165,19 +158,13 @@ impl<D: RenderDevice> RenderService<D> {
         let Some((selection, publication)) = selected else {
             return Ok(());
         };
-        if selection.kind() == OutputKind::Canvas && !cfg!(feature = "surfaces") {
-            return Err(RenderError::UnavailableOutput);
-        }
         if !host
             .root_output(selection.world().id())
             .is_some_and(|(current, _, completed)| current == selection && completed == publication)
         {
             return Err(RenderError::UnavailableOutput);
         }
-        #[cfg(feature = "surfaces")]
         let presentations = super::canvas_scene::output_order(host, selection, publication)?;
-        #[cfg(not(feature = "surfaces"))]
-        let presentations = vec![(selection, publication)];
         let mut recipes = std::mem::take(&mut self.recipe_scratch);
         recipes.clear();
         let mut outputs = std::collections::BTreeSet::new();
@@ -186,22 +173,17 @@ impl<D: RenderDevice> RenderService<D> {
                 outputs.insert(selection);
                 if selection.kind() == OutputKind::Camera {
                     let scene = super::scene::RenderScene::new(host, selection, publication)?;
-                    let shadows = cfg!(feature = "shadows")
-                        && scene.lights.iter().any(|light| light.2.cast_shadows);
+                    let shadows = scene.lights.iter().any(|light| light.2.cast_shadows);
                     for item in &scene.items {
                         let config = super::draw_order::builtin_config(item, shadows);
                         recipes.push((config, false));
                         if shadows && item.pbr.is_some() {
                             recipes.push((config.with_lighting(false, item.normals), false));
                         }
-                        #[cfg(feature = "shadows")]
                         if shadows && item.pbr.is_some_and(|material| material.cast_shadows) {
                             let config = RenderShaderConfig::default();
-                            #[cfg(feature = "skeletal-animation")]
                             let config = config.with_skinning(item.skinned);
-                            #[cfg(feature = "mesh-poses")]
                             let config = config.with_mesh_pose(item.pose.is_some());
-                            #[cfg(feature = "particles")]
                             let config = config.with_particles(item.particle.is_some(), false);
                             recipes.push((config, true));
                         }

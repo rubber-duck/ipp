@@ -182,7 +182,6 @@ export async function observe() {
   return {
     session: current.client.session,
     tick: inspection.tick,
-    debugEnabled: current.client.capabilities.debugGeometry,
     resources: inspection.resources,
     resourceEvents: [...current.resourceEvents],
     renderDiagnostics: inspection.renderDiagnostics,

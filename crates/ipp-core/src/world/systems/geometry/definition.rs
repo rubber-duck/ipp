@@ -177,8 +177,7 @@ impl GeometryDefinition {
                 &part.transform,
             )?)?;
             if let Some(joints) = part.joints
-                && (!cfg!(feature = "skeletal-animation")
-                    || joints[0] >= MAX_JOINTS as u32
+                && (joints[0] >= MAX_JOINTS as u32
                     || joints[1] >= MAX_JOINTS as u32
                     || !matches!(part.shape, GeometryShape::Pill { start, end, .. } if start == [0.0; 3] && end == [0.0; 3]))
             {

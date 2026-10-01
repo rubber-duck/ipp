@@ -11,9 +11,7 @@ use crate::systems::{
 #[derive(Default)]
 pub struct AnimationSystem {
     pub(in crate::world) state: AnimationSystemState,
-    #[cfg(feature = "gui")]
     motion: super::gui_motion::GuiMotionAnimations,
-    #[cfg(feature = "gui")]
     gui: Option<crate::systems::SystemDependencyBinding<crate::systems::gui::GuiSystem>>,
 }
 
@@ -21,7 +19,6 @@ impl AnimationSystem {
     /// Stable factory and instance identity.
     pub const ID: SystemId = SystemId("ipp.animation");
 
-    #[cfg(all(feature = "gui", feature = "diagnostics"))]
     pub(in crate::world) fn motion_work(
         &self,
     ) -> crate::systems::gui::motion::GuiMotionSamplingWork {
@@ -81,12 +78,10 @@ impl SystemFactory for AnimationSystemFactory {
     }
 
     fn capabilities(&self) -> crate::systems::SystemCapabilities {
-        #[allow(unused_mut)]
         let mut capabilities = crate::systems::SystemCapabilities::new(
             [],
             [crate::systems::WorldOperation::Animation],
         );
-        #[cfg(feature = "skeletal-animation")]
         capabilities
             .operations
             .push(crate::systems::SystemCapability::requiring(
@@ -100,7 +95,6 @@ impl SystemFactory for AnimationSystemFactory {
     fn dependencies(&self) -> &[SystemDependency] {
         &[
             SystemDependency::After(crate::systems::constraints::ConstraintSystem::ID),
-            #[cfg(feature = "gui")]
             SystemDependency::After(crate::systems::gui::GuiSystem::ID),
         ]
     }
@@ -111,11 +105,10 @@ impl SystemFactory for AnimationSystemFactory {
 
     fn create(
         &self,
-        _context: &mut SystemInitContext<'_>,
+        context: &mut SystemInitContext<'_>,
     ) -> Result<Box<dyn System>, SystemInitError> {
         Ok(Box::new(AnimationSystem {
-            #[cfg(feature = "gui")]
-            gui: _context
+            gui: context
                 .dependency::<crate::systems::gui::GuiSystem>(crate::systems::gui::GuiSystem::ID)
                 .ok(),
             ..Default::default()
@@ -176,12 +169,9 @@ impl System for AnimationSystem {
         context: &mut SystemAssetContext<'_>,
         event: &crate::services::asset_management::AssetLifecycleEvent,
     ) {
-        #[cfg(feature = "gui")]
-        {
-            self.motion
-                .reconcile_sources(&context.world, self.gui, event);
-            self.motion.release(&mut context.world, event);
-        }
+        self.motion
+            .reconcile_sources(&context.world, self.gui, event);
+        self.motion.release(&mut context.world, event);
         use crate::services::asset_management::AssetLifecycleKind;
         if event.kind == AssetLifecycleKind::StatusChanged {
             self.suspend_asset(
@@ -221,7 +211,6 @@ impl System for AnimationSystem {
         Ok(())
     }
 
-    #[cfg(feature = "gui")]
     fn asset_lifecycle(
         &mut self,
         context: &mut SystemAssetContext<'_>,
@@ -246,12 +235,10 @@ impl System for AnimationSystem {
     }
 
     fn before_commit(&mut self, context: &mut SystemCommitContext<'_>) {
-        #[cfg(feature = "gui")]
         self.motion.before_commit(context);
         self.invalidate_changes(context);
     }
 
-    #[cfg(feature = "gui")]
     fn after_commit(&mut self, context: &mut SystemCommitContext<'_>) {
         self.motion
             .flush_demand(context.world_data.id, context.assets);
@@ -299,22 +286,17 @@ impl System for AnimationSystem {
         self.state.controller_outcomes.clear();
         self.state.playback_events.clear();
         self.state.animation_sources.clear();
-        #[cfg(feature = "gui")]
-        {
-            self.motion = Default::default();
-        }
+        self.motion = Default::default();
     }
 
     fn update(&mut self, context: &mut SystemUpdateContext<'_, '_>) {
         let dt = context.dt();
-        #[cfg(feature = "gui")]
-        {
-            let changes = self
-                .gui
-                .and_then(|binding| context.dependency(binding))
-                .map_or_else(Vec::new, |gui| gui.motion_changes().to_vec());
-            self.motion.update(&mut context.world, dt, &changes);
-        }
+        let changes = self
+            .gui
+            .and_then(|binding| context.dependency(binding))
+            .map_or_else(Vec::new, |gui| gui.motion_changes().to_vec());
+        self.motion.update(&mut context.world, dt, &changes);
+
         super::AnimationAccess {
             system: self,
             context: &mut context.world,

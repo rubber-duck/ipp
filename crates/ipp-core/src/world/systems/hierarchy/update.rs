@@ -12,34 +12,28 @@ pub(crate) fn affine(transform: &Transform) -> Result<GeometryShapeTransform, Er
 /// Joint matrices are copied from component-owned pose data; no binding survives a call.
 pub(in crate::world) fn parent_affine(
     world: &WorldSimulationState,
-    _entity: EntityId,
+    entity: EntityId,
     parent: EntityId,
 ) -> Result<GeometryShapeTransform, ErrorReason> {
     let object = evaluated_affine(world, parent)?;
-    #[cfg(feature = "skeletal-animation")]
     let bone = world
         .components
-        .parent_joint(_entity.index() as usize)
+        .parent_joint(entity.index() as usize)
         .map_or(u32::MAX, |value| value.ordinal);
-    #[cfg(feature = "skeletal-animation")]
-    {
-        if bone == u32::MAX {
-            return Ok(object);
-        }
-        let pose = world
-            .components
-            .skeleton(parent.index() as usize)
-            .and_then(|skeleton| skeleton.runtime.pose.as_ref())
-            .filter(|pose| pose.valid)
-            .ok_or(ErrorReason::InvalidAsset)?;
-        let joint = pose
-            .global
-            .get(bone as usize)
-            .ok_or(ErrorReason::InvalidValue)?;
-        GeometryShapeTransform::from_matrix(*joint)?.then(&object)
+    if bone == u32::MAX {
+        return Ok(object);
     }
-    #[cfg(not(feature = "skeletal-animation"))]
-    Ok(object)
+    let pose = world
+        .components
+        .skeleton(parent.index() as usize)
+        .and_then(|skeleton| skeleton.runtime.pose.as_ref())
+        .filter(|pose| pose.valid)
+        .ok_or(ErrorReason::InvalidAsset)?;
+    let joint = pose
+        .global
+        .get(bone as usize)
+        .ok_or(ErrorReason::InvalidValue)?;
+    GeometryShapeTransform::from_matrix(*joint)?.then(&object)
 }
 
 /// Read the entity's final result from stable, lazily prepared spatial storage.

@@ -5,9 +5,7 @@ use std::f64::consts::{PI, TAU};
 use crate::ErrorReason;
 
 mod arrow;
-#[cfg(feature = "builtin-assets")]
 mod axis;
-#[cfg(feature = "builtin-assets")]
 mod cone;
 mod plane;
 
@@ -46,15 +44,9 @@ mod builder;
 use builder::circle_sample;
 use builder::cylinder;
 pub(super) use builder::debug_mesh;
-#[cfg(feature = "builtin-assets")]
 use builder::diameter;
-#[cfg(feature = "builtin-assets")]
 use builder::dimensions;
-#[cfg(feature = "builtin-assets")]
 pub(super) use builder::mesh;
-#[cfg(feature = "builtin-assets")]
 use builder::oriented_cylinder;
-#[cfg(feature = "builtin-assets")]
 use builder::ring_with_segments;
-#[cfg(feature = "builtin-assets")]
 use builder::validate_stroke;

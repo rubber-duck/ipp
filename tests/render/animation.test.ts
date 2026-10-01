@@ -16,7 +16,6 @@ for (const name of ["headless", "render"] as const) {
       name,
       generatedModule: resolve(directory, "generated.js"),
       runtimeWasm: resolve(directory, "runtime.wasm"),
-      exportWasm: resolve(directory, "export.wasm"),
       contractArtifact: resolve(directory, "contract.bin"),
     };
     await runBrowserEnvironment(
@@ -24,7 +23,6 @@ for (const name of ["headless", "render"] as const) {
       {
         workspace,
         build,
-        mismatchBuild: build,
         operationTimeoutMs: 25_000,
         closeTimeoutMs: 5_000,
         evidenceParent: resolve(

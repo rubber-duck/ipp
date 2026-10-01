@@ -1,5 +1,4 @@
 //! Resource release invalidates only draw rows that reference the released identity.
-#![cfg(feature = "builtin-assets")]
 
 mod support;
 

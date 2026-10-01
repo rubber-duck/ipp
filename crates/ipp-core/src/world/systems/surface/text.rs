@@ -60,11 +60,9 @@
 //!
 //! * Segmentation: complete UAX #29 extended grapheme clusters for the Unicode
 //!   version in [`UNICODE_VERSION`] (see [`SEGMENTATION_SCOPE`] and
-//!   [`is_grapheme_boundary`]) whenever the `gui` feature is enabled, via the
-//!   `unicode-segmentation` dependency justified below. Without `gui`,
-//!   measurement keeps the documented basic-LTR subset so simple Surface
-//!   labels work with no Unicode dependency. Either way, complex shaping,
-//!   bidi and emoji-presentation rendering stay out of scope: every scalar
+//!   [`is_grapheme_boundary`]), via the `unicode-segmentation` dependency
+//!   justified below. Complex shaping, bidi and emoji-presentation
+//!   rendering stay out of scope: every scalar
 //!   maps to at most one glyph, and missing glyphs never alter edit
 //!   boundaries.
 //! * Missing glyphs: substitute `.notdef` (original ID `0`), retain the source
@@ -81,10 +79,8 @@
 //!   glyph ID, including `.notdef` pairs (usually absent, contributing zero).
 //!   Kerning never crosses a line boundary.
 //! * Dependency cost: `unicode-segmentation` (established Unicode tables with
-//!   no transitive dependencies, used for segmentation only) is optional and
-//!   gated on the `gui` capability, the only configuration that edits text.
-//!   Surface labels without `gui` keep the dependency-free inline subset
-//!   tables, so lean builds omit the cost entirely.
+//!   no transitive dependencies, used for segmentation only) is linked into
+//!   every build; GUI text editing needs complete boundaries.
 //!
 //! ## Browser offset conversion
 //!
@@ -100,36 +96,18 @@ use crate::services::asset_management::{AssetKey, font::FontAsset};
 #[path = "text_tests.rs"]
 mod tests;
 
-/// Unicode version whose `GraphemeBreakProperty` semantics the `gui`
-/// segmentation follows. This is the table version exported by the selected
+/// Unicode version whose `GraphemeBreakProperty` semantics the segmentation
+/// follows. This is the table version exported by the selected
 /// `unicode-segmentation` dependency, so dependency updates cannot leave the
 /// runtime metadata stale.
-#[cfg(feature = "gui")]
 pub const UNICODE_VERSION: (u64, u64, u64) = unicode_segmentation::UNICODE_VERSION;
 
-/// Unicode version whose `GraphemeBreakProperty` semantics the dependency-free
-/// inline [`is_grapheme_boundary`] subset follows.
-#[cfg(not(feature = "gui"))]
-pub const UNICODE_VERSION: (u64, u64, u64) = (16, 0, 0);
-
-/// Segmentation scope owned by this module with the `gui` feature: complete
+/// Segmentation scope owned by this module: complete
 /// UAX #29 extended grapheme clusters. Rendering guarantees stay limited to
 /// basic LTR Latin; only edit boundaries are complete.
-#[cfg(feature = "gui")]
 pub const SEGMENTATION_SCOPE: &str = "uax29-extended";
 
-/// Segmentation scope owned by this module without the `gui` feature:
-/// basic-LTR subset, no shaping stack. Covers `CR`/`LF` control handling plus
-/// combining-mark blocks used with Latin, Greek, Cyrillic, Hebrew, Arabic and
-/// Syriac diacritics, `ZWJ` carry-through and variation selectors. Hangul
-/// jamo, Indic scripts outside the listed ranges, emoji `ZWJ`/
-/// regional-indicator sequences and `Prepend` characters fall back to
-/// per-scalar boundaries; full UAX #29 arrives with the `gui` feature above.
-#[cfg(not(feature = "gui"))]
-pub const SEGMENTATION_SCOPE: &str = "basic-ltr-subset";
-
 /// Extended grapheme segmentation for preserved source text.
-#[cfg(feature = "gui")]
 use unicode_segmentation::UnicodeSegmentation;
 
 /// Geometry unit used by every measurement result in this module.
@@ -831,52 +809,9 @@ fn push_wrapped_lines(
     line_top
 }
 
-/// True for the basic-LTR grapheme subset's no-break-before characters:
-/// combining marks in the covered blocks, `ZWJ` and variation selectors.
-/// Anything else (including deferred scripts and emoji) breaks per scalar.
-///
-/// Dependency-free subset only; the `gui` build answers the same question
-/// through complete UAX #29 boundaries instead.
-#[cfg(not(feature = "gui"))]
-fn is_extend(character: char) -> bool {
-    matches!(
-        character,
-        '\u{300}'..='\u{36f}'
-            | '\u{483}'..='\u{489}'
-            | '\u{591}'..='\u{5bd}'
-            | '\u{5bf}'
-            | '\u{5c1}'..='\u{5c2}'
-            | '\u{5c4}'..='\u{5c5}'
-            | '\u{5c7}'
-            | '\u{610}'..='\u{61a}'
-            | '\u{64b}'..='\u{65f}'
-            | '\u{670}'
-            | '\u{711}'
-            | '\u{730}'..='\u{74a}'
-            | '\u{1ab0}'..='\u{1aff}'
-            | '\u{1dc0}'..='\u{1dff}'
-            | '\u{200d}'
-            | '\u{20d0}'..='\u{20ff}'
-            | '\u{fe00}'..='\u{fe0f}'
-            | '\u{fe20}'..='\u{fe2f}'
-            | '\u{e0100}'..='\u{e01ef}'
-    )
-}
-
-/// True for line/paragraph separators that force a grapheme break after them
-/// even before an extend character.
-///
-/// Dependency-free subset only; unused when `gui` enables complete UAX #29
-/// boundaries.
-#[cfg(not(feature = "gui"))]
-fn is_break_mandatory(character: char) -> bool {
-    character.is_control() || character == '\u{2028}' || character == '\u{2029}'
-}
-
 /// Legal caret offsets for `text`: sorted UTF-8 byte offsets at complete UAX
 /// #29 extended grapheme edges ([`SEGMENTATION_SCOPE`]), always including `0`
 /// and the text length.
-#[cfg(feature = "gui")]
 pub fn grapheme_boundaries(text: &str) -> Vec<u32> {
     if text.is_empty() {
         return vec![0];
@@ -891,50 +826,8 @@ pub fn grapheme_boundaries(text: &str) -> Vec<u32> {
     boundaries
 }
 
-/// Legal caret offsets for `text`: sorted UTF-8 byte offsets at extended
-/// grapheme edges under the basic-LTR subset ([`SEGMENTATION_SCOPE`]),
-/// always including `0` and the text length.
-#[cfg(not(feature = "gui"))]
-pub fn grapheme_boundaries(text: &str) -> Vec<u32> {
-    if text.is_empty() {
-        return vec![0];
-    }
-
-    let mut boundaries = Vec::with_capacity(text.len() + 1);
-    boundaries.push(0);
-
-    let mut previous: Option<char> = None;
-
-    for (byte, character) in text.char_indices() {
-        let byte = byte as u32;
-
-        if byte != 0 {
-            let breaks = match previous {
-                // `CRLF` is one grapheme (GB3).
-                Some('\r') if character == '\n' => false,
-                // Break after controls (GB4/GB5) wins over extension.
-                Some(before) if is_break_mandatory(before) => true,
-                // Otherwise no break before extends/`ZWJ` (GB9/GB11 subset).
-                _ if is_extend(character) => false,
-                _ => true,
-            };
-
-            if breaks {
-                boundaries.push(byte);
-            }
-        }
-
-        previous = Some(character);
-    }
-
-    boundaries.push(text.len() as u32);
-
-    boundaries
-}
-
 /// True when `offset` is a legal caret position in `text`: a UTF-8 scalar
 /// boundary that does not split a complete UAX #29 extended grapheme.
-#[cfg(feature = "gui")]
 pub fn is_grapheme_boundary(text: &str, offset: u32) -> bool {
     let offset = offset as usize;
 
@@ -953,39 +846,8 @@ pub fn is_grapheme_boundary(text: &str, offset: u32) -> bool {
 /// `byte`. This is the full UAX #29 boundary in the same text revision, so
 /// flags, modifier sequences, Hangul syllables, `ZWJ` sequences and conjuncts
 /// never split across lines.
-#[cfg(feature = "gui")]
 fn may_hard_break_before(text: &str, byte: u32, _character: char) -> bool {
     is_grapheme_boundary(text, byte)
-}
-
-/// Whether a wrapping hard break may split before `character` under the
-/// basic-LTR subset: never before a covered combining mark.
-#[cfg(not(feature = "gui"))]
-fn may_hard_break_before(_text: &str, _byte: u32, character: char) -> bool {
-    !is_extend(character)
-}
-
-/// True when `offset` is a legal caret position in `text`: a UTF-8 scalar
-/// boundary that does not split a grapheme under the basic-LTR subset.
-#[cfg(not(feature = "gui"))]
-pub fn is_grapheme_boundary(text: &str, offset: u32) -> bool {
-    let offset = offset as usize;
-
-    if offset > text.len() || !text.is_char_boundary(offset) {
-        return false;
-    }
-
-    let (before, after) = text.split_at(offset);
-    let previous = before.chars().next_back();
-    let next = after.chars().next();
-
-    match (previous, next) {
-        (None, _) | (_, None) => true,
-        (Some('\r'), Some('\n')) => false,
-        (Some(before), _) if is_break_mandatory(before) => true,
-        (_, Some(next)) if is_extend(next) => false,
-        _ => true,
-    }
 }
 
 /// Convert a browser UTF-16 code-unit offset into a runtime UTF-8 byte offset

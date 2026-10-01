@@ -1,9 +1,10 @@
-import type { RenderStatisticsSnapshot } from "@ipp/client";
+import type { RenderStatisticsSnapshot } from "@ipp/client/diagnostics";
 import { invoke, writeDataUrl } from "./evidence.js";
 import assert from "node:assert/strict";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import type { ConsoleMessage, Page } from "playwright";
+import type { EvidenceRecorder } from "../integration/evidence.js";
 import {
   VIEWER_MESH_SOURCES,
   VIEWER_TEXTURE_SOURCE,
@@ -21,6 +22,10 @@ import {
   requireShiftedAndScaled,
   requireVisible,
 } from "./image-assertions.js";
+import {
+  confineGalleryCanvas,
+  GALLERY_CANVAS_SHARE,
+} from "./gallery-driver.js";
 import type { ViewerBrowserCapture } from "./viewer-browser-helper.js";
 import type {
   PlaneUvProbe,
@@ -40,6 +45,10 @@ interface PlanePixelEvidence {
 const UV_GRID_SIZE = 512;
 const UV_GRID_CELLS = 8;
 
+// Image measurements are evidence: their values show the margin of each pixel
+// threshold at the canvas size the scenario rendered.
+const measurementEvidence = new WeakMap<Page, EvidenceRecorder>();
+
 test("ReactDOM gallery controls drive the custom scene root and rendered pixels", {
   timeout: 60_000,
 }, async (context) => {
@@ -48,8 +57,7 @@ test("ReactDOM gallery controls drive the custom scene root and rendered pixels"
     "ReactDOM shape gallery controls",
     {
       workspace,
-      build: browserBuild("render-expanded"),
-      mismatchBuild: browserBuild("headless"),
+      build: browserBuild("render"),
       operationTimeoutMs: 12_000,
       closeTimeoutMs: 5_000,
       evidenceParent: resolve(
@@ -59,10 +67,12 @@ test("ReactDOM gallery controls drive the custom scene root and rendered pixels"
     },
     context.signal,
     async (scenario) => {
+      measurementEvidence.set(scenario.page, scenario.evidence);
       scenario.page.on("pageerror", (error) => errors.push(error.message));
       scenario.page.on("console", (message) =>
         recordConsoleError(message, errors),
       );
+      await confineGalleryCanvas(scenario.page, GALLERY_CANVAS_SHARE);
       await scenario.page.goto(
         `${scenario.url}/examples/world-gallery/index.html`,
         {
@@ -98,15 +108,14 @@ test("ReactDOM gallery controls drive the custom scene root and rendered pixels"
       );
       requireVisible(gallery.summary, "default shape gallery");
       assert.ok(gallery.summary.bounds);
-      const galleryMargin = 8;
-      assert.ok(gallery.summary.bounds.left > galleryMargin);
-      assert.ok(gallery.summary.bounds.top > galleryMargin);
-      assert.ok(
-        gallery.summary.bounds.right < gallery.frame.width - galleryMargin,
-      );
-      assert.ok(
-        gallery.summary.bounds.bottom < gallery.frame.height - galleryMargin,
-      );
+      // The gallery stays clear of every canvas edge by a share of the canvas:
+      // 1.3% is at least the 8 pixels once required of the full 857x629 canvas.
+      const marginX = 0.013 * gallery.frame.width;
+      const marginY = 0.013 * gallery.frame.height;
+      assert.ok(gallery.summary.bounds.left > marginX);
+      assert.ok(gallery.summary.bounds.top > marginY);
+      assert.ok(gallery.summary.bounds.right < gallery.frame.width - marginX);
+      assert.ok(gallery.summary.bounds.bottom < gallery.frame.height - marginY);
       assert.equal(gallery.frame.drawCalls, 12);
       assert.equal(gallery.frame.triangles, 11_246);
       assertViewerProgramCounts(gallery, 3, 3);
@@ -403,14 +412,11 @@ test("production declarative scene gallery owns controls and entity lifecycle", 
     "production declarative scene gallery",
     {
       workspace,
-      build: browserBuild("render-expanded"),
-      mismatchBuild: browserBuild("headless"),
+      build: browserBuild("render"),
       operationTimeoutMs: 12_000,
       closeTimeoutMs: 5_000,
       beforeArtifactResponse: async (url) => {
-        if (
-          url.pathname === "/target/browser-build/render-expanded/runtime.wasm"
-        ) {
+        if (url.pathname === "/target/browser-build/render/runtime.wasm") {
           await wasmGate;
         }
       },
@@ -421,6 +427,7 @@ test("production declarative scene gallery owns controls and entity lifecycle", 
     },
     context.signal,
     async (scenario) => {
+      measurementEvidence.set(scenario.page, scenario.evidence);
       scenario.page.on("pageerror", (error) => errors.push(error.message));
       scenario.page.on("console", (message) =>
         recordConsoleError(message, errors),
@@ -428,6 +435,7 @@ test("production declarative scene gallery owns controls and entity lifecycle", 
       const wasmRequest = scenario.page.waitForRequest(scenario.urls.wasm, {
         timeout: 5_000,
       });
+      await confineGalleryCanvas(scenario.page, GALLERY_CANVAS_SHARE);
       try {
         await scenario.page.goto(
           `${scenario.url}/examples/world-gallery/index.html`,
@@ -731,8 +739,7 @@ test("geometry dropdown edits every recipe and preserves independent mesh settin
     "editable geometry catalog",
     {
       workspace,
-      build: browserBuild("render-expanded"),
-      mismatchBuild: browserBuild("headless"),
+      build: browserBuild("render"),
       operationTimeoutMs: 12_000,
       closeTimeoutMs: 5_000,
       evidenceParent: resolve(
@@ -743,8 +750,10 @@ test("geometry dropdown edits every recipe and preserves independent mesh settin
     context.signal,
     async (scenario) => {
       const page = scenario.page;
+      measurementEvidence.set(page, scenario.evidence);
       page.on("pageerror", (error) => errors.push(error.message));
       page.on("console", (message) => recordConsoleError(message, errors));
+      await confineGalleryCanvas(page, GALLERY_CANVAS_SHARE);
       await page.goto(`${scenario.url}/examples/world-gallery/index.html`, {
         waitUntil: "load",
       });
@@ -926,14 +935,19 @@ test("geometry dropdown edits every recipe and preserves independent mesh settin
       assert.equal(axisQuery.get("xColor"), "1,0.215861,0");
       assert.equal(axisQuery.get("yColor"), "0.215861,0,1");
       assert.equal(axisQuery.get("zColor"), "0,1,0.215861");
-      const colors = await invoke<number[]>(page, helper, "countViewerColors", [
-        "axis-colors",
+      const colors = await measured<number[]>(
+        page,
+        helper,
+        "countViewerColors",
         [
-          [255, 128, 0],
-          [128, 0, 255],
-          [0, 255, 128],
+          "axis-colors",
+          [
+            [255, 128, 0],
+            [128, 0, 255],
+            [0, 255, 128],
+          ],
         ],
-      ]);
+      );
       assert.ok(
         colors.every((count) => count > 50),
         "all three edited axis colors reach rendered vertices",
@@ -1005,15 +1019,12 @@ test("geometry dropdown edits every recipe and preserves independent mesh settin
   await assertLoopbackClosed(result.origin);
 });
 
-function browserBuild(
-  name: "render-expanded" | "headless",
-): BrowserBuildConfiguration {
+function browserBuild(name: "render" | "headless"): BrowserBuildConfiguration {
   const directory = resolve(workspace, "target/browser-build", name);
   return {
     name,
     generatedModule: resolve(directory, "generated.js"),
     runtimeWasm: resolve(directory, "runtime.wasm"),
-    exportWasm: resolve(directory, "export.wasm"),
     contractArtifact: resolve(directory, "contract.bin"),
   };
 }
@@ -1158,7 +1169,7 @@ async function analyzePlanePixels(
   helperUrl: string,
   label: string,
 ): Promise<PlanePixelEvidence> {
-  return await invoke(page, helperUrl, "analyzePlaneCapture", [label]);
+  return await measured(page, helperUrl, "analyzePlaneCapture", [label]);
 }
 
 interface NamedUvGridProbe extends PlaneUvProbe {
@@ -1194,7 +1205,10 @@ async function samplePlaneUvPixels(
   label: string,
   probes: readonly PlaneUvProbe[],
 ): Promise<readonly PlaneUvProbeEvidence[]> {
-  return await invoke(page, helperUrl, "samplePlaneUvCapture", [label, probes]);
+  return await measured(page, helperUrl, "samplePlaneUvCapture", [
+    label,
+    probes,
+  ]);
 }
 
 function assertUvGridProbes(
@@ -1307,8 +1321,30 @@ async function capture(
     page
       .locator("#ipp-world-canvas")
       .screenshot({ path: join(evidenceDirectory, `${label}-canvas.png`) }),
+    measurementEvidence.get(page)?.record("image-measurement", {
+      name: "captureViewer",
+      args: [label],
+      result: {
+        width: captured.frame.width,
+        height: captured.frame.height,
+        summary: captured.summary,
+      },
+    }),
   ]);
   return captured;
+}
+
+async function measured<T>(
+  page: Page,
+  helperUrl: string,
+  name: string,
+  args: readonly unknown[],
+): Promise<T> {
+  const result = await invoke<T>(page, helperUrl, name, args);
+  await measurementEvidence
+    .get(page)
+    ?.record("image-measurement", { name, args, result });
+  return result;
 }
 
 async function compare(
@@ -1317,7 +1353,7 @@ async function compare(
   first: string,
   second: string,
 ): Promise<ImageDifference> {
-  return await invoke(page, helperUrl, "compareViewerCaptures", [
+  return await measured(page, helperUrl, "compareViewerCaptures", [
     first,
     second,
   ]);

@@ -1,6 +1,6 @@
 //! Native release benchmark using a target-correct saved Blender World and real GLES.
 
-#[cfg(feature = "profiling")]
+#[cfg(feature = "instrumentation")]
 #[global_allocator]
 static ALLOCATOR: ipp_core::profiling::CountingAllocator = ipp_core::profiling::CountingAllocator;
 

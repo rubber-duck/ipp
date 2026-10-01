@@ -305,7 +305,7 @@ pub(in crate::world) fn commit_components(
     assets: &mut crate::services::asset_management::AssetManagementService,
     evaluated: bool,
 ) -> Result<(), ErrorReason> {
-    #[cfg(feature = "profiling")]
+    #[cfg(feature = "instrumentation")]
     let _allocation_scope = crate::profiling::AllocationScope::new(200, "world.commit");
 
     let mut staged = WorldMutationState {
@@ -331,7 +331,7 @@ pub(in crate::world) fn commit_components(
         return Err(error);
     }
     let mut validation = Ok(());
-    #[cfg(feature = "profiling")]
+    #[cfg(feature = "instrumentation")]
     let measurement = crate::profiling::Stage::fixed(crate::profiling::FixedStage::CommitValidate);
 
     instances.visit(current.as_deref_mut(), |system| {
@@ -344,9 +344,9 @@ pub(in crate::world) fn commit_components(
         });
         validation = validation.and(result);
     });
-    #[cfg(feature = "profiling")]
+    #[cfg(feature = "instrumentation")]
     drop(measurement);
-    #[cfg(feature = "profiling")]
+    #[cfg(feature = "instrumentation")]
     let measurement = crate::profiling::Stage::fixed(crate::profiling::FixedStage::CommitBefore);
 
     let mut round = 0;
@@ -394,9 +394,9 @@ pub(in crate::world) fn commit_components(
             accept_component_cleanup = false;
         }
     }
-    #[cfg(feature = "profiling")]
+    #[cfg(feature = "instrumentation")]
     drop(measurement);
-    #[cfg(feature = "profiling")]
+    #[cfg(feature = "instrumentation")]
     let measurement = crate::profiling::Stage::fixed(crate::profiling::FixedStage::CommitStorage);
 
     for entity in std::mem::take(&mut staged.retired_entities) {
@@ -442,9 +442,9 @@ pub(in crate::world) fn commit_components(
     }
     staged.evaluated_target = None;
     staged.evaluated_properties.clear();
-    #[cfg(feature = "profiling")]
+    #[cfg(feature = "instrumentation")]
     drop(measurement);
-    #[cfg(feature = "profiling")]
+    #[cfg(feature = "instrumentation")]
     let _measurement = crate::profiling::Stage::fixed(crate::profiling::FixedStage::CommitAfter);
 
     instances.visit(current.as_deref_mut(), |system| {

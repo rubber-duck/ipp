@@ -2,7 +2,6 @@
 //! with shared GuiTheme paint-part rows as the real consumer: binding by row
 //! offset, sampling, per-driver invalidation, restoration and clip interchange.
 //! Transitions cannot target these rows while GuiTheme declares no numeric row properties.
-#![cfg(feature = "gui")]
 
 mod support;
 use support::WorldTestDriver;

@@ -64,36 +64,9 @@ pub(super) fn config(definition: &ShaderDefinition) -> Result<RenderShaderConfig
             "Unsupported shader backend".into(),
         ));
     }
-    #[cfg(not(feature = "skeletal-animation"))]
-    if flags & 2 != 0 {
-        return Err(RenderError::RenderDevice(
-            "Shader requires skinning support".into(),
-        ));
-    }
-    #[cfg(not(feature = "mesh-poses"))]
-    if flags & 4 != 0 {
-        return Err(RenderError::RenderDevice(
-            "Shader requires mesh-pose support".into(),
-        ));
-    }
-    #[cfg(not(feature = "shadows"))]
-    if flags & 16 != 0 {
-        return Err(RenderError::RenderDevice(
-            "Shader requires shadow support".into(),
-        ));
-    }
-    #[cfg(not(feature = "particles"))]
-    if flags & 32 != 0 {
-        return Err(RenderError::RenderDevice(
-            "Shader requires instancing support".into(),
-        ));
-    }
     let config = RenderShaderConfig::default().with_lighting(false, flags & 1 != 0);
-    #[cfg(feature = "skeletal-animation")]
     let config = config.with_skinning(flags & 2 != 0);
-    #[cfg(feature = "mesh-poses")]
     let config = config.with_mesh_pose(flags & 4 != 0);
-    #[cfg(feature = "particles")]
     let config = config.with_particles(flags & 32 != 0, false);
     Ok(config)
 }

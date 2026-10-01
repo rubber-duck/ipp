@@ -124,7 +124,6 @@ impl GlesRenderDevice {
     }
 
     /// Bind only the draw framebuffer, leaving the read binding unchanged.
-    #[cfg(feature = "shadows")]
     pub(super) fn bind_draw_framebuffer(&self, draw: u32) {
         if self.targets.draw.replace(Some(draw)) != Some(draw) {
             // SAFETY: A live framebuffer of this current context or a borrowed
@@ -148,7 +147,6 @@ impl GlesRenderDevice {
     }
 
     /// Rebind a target saved by [`Self::current_target`].
-    #[cfg(feature = "surfaces")]
     pub(super) fn restore_target(&self, target: GlesTarget) {
         self.bind_framebuffers(target.draw, target.read);
         self.set_viewport(target.viewport);

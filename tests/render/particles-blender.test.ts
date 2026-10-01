@@ -2,20 +2,22 @@ import assert from "node:assert/strict";
 import { resolve } from "node:path";
 import test from "node:test";
 import { runBrowserEnvironment } from "../browser/environment.js";
-import { startBlender } from "./blender-environment.js";
-import { invoke, recordCapture } from "./evidence.js";
+import {
+  BLENDER_IMAGE_MEASUREMENTS,
+  startBlender,
+} from "./blender-environment.js";
+import { measuredInvoke, recordCapture } from "./evidence.js";
 import type * as Fixture from "./blender-fixture.js";
 
 test("Blender native and baked particles travel through the addon, HTTPS/WSS, generated adapter and completed WebGL frames", {
   timeout: 180000,
 }, async (context) => {
   const workspace = process.cwd(),
-    directory = resolve(workspace, "target/browser-build/render-expanded");
+    directory = resolve(workspace, "target/browser-build/render");
   const build = {
-    name: "render-expanded" as const,
+    name: "render" as const,
     generatedModule: resolve(directory, "generated.js"),
     runtimeWasm: resolve(directory, "runtime.wasm"),
-    exportWasm: resolve(directory, "export.wasm"),
     contractArtifact: resolve(directory, "contract.bin"),
   };
   await runBrowserEnvironment(
@@ -23,7 +25,6 @@ test("Blender native and baked particles travel through the addon, HTTPS/WSS, ge
     {
       workspace,
       build,
-      mismatchBuild: build,
       operationTimeoutMs: 45000,
       evidenceParent: resolve(
         workspace,
@@ -49,8 +50,12 @@ test("Blender native and baked particles travel through the addon, HTTPS/WSS, ge
         `${env.urls.origin}/target/blender-viewer/index.html#${fragment}`,
       );
       const module = `${env.urls.origin}/target/blender-test/blender-fixture.js`;
-      const call = <T>(name: string, args: unknown[] = []) =>
-        invoke<T>(env.page, module, name, args);
+      const call = measuredInvoke(
+        env.page,
+        module,
+        env.evidence,
+        BLENDER_IMAGE_MEASUREMENTS,
+      );
       const captured = new Set<string>();
       const capture = async (label: string, revision = 0) => {
         const result = await call<Awaited<ReturnType<typeof Fixture.capture>>>(

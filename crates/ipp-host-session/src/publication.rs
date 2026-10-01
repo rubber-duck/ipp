@@ -132,13 +132,11 @@ impl<P: HostServices> WorldSessionContext<'_, P> {
                         }
                     }
                     WorldSessionReply::Batch {
-                        #[cfg(feature = "diagnostics")]
                         operations,
                     } => {
                         let outcome = outcomes.next().ok_or_else(|| {
                             "core did not publish the submitted batch outcome".to_owned()
                         })?;
-                        #[cfg(feature = "diagnostics")]
                         if operations != 0 {
                             if let Err(error) = &outcome.result {
                                 ipp_core::diagnostic!(
@@ -169,7 +167,6 @@ impl<P: HostServices> WorldSessionContext<'_, P> {
                     WorldSessionReply::Inspect(query) => {
                         self.inspection_page(query, request_id, report.tick, report.time)
                     }
-                    #[cfg(feature = "diagnostics")]
                     WorldSessionReply::LifecycleDiagnostics(query) => {
                         self.lifecycle_diagnostics(query)
                     }
@@ -292,7 +289,6 @@ impl<P: HostServices> WorldSessionContext<'_, P> {
             tick: self.world.tick(),
             body,
         };
-        #[cfg(feature = "diagnostics")]
         if matches!(response.body, ResponseBody::LifecycleDiagnostics(_)) {
             response.tick = 0;
         }

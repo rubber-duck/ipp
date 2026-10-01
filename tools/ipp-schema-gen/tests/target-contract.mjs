@@ -3,8 +3,7 @@
 import assert from "node:assert/strict";
 import { readFile, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-const [nativePath, fixturePath, wasmPath, out, minimalPath] =
-  process.argv.slice(2);
+const [nativePath, fixturePath, wasmPath, out] = process.argv.slice(2);
 if (!out)
   throw new Error(
     "usage: target-contract.mjs NATIVE.contract NATIVE.fixture HOST.wasm OUTPUT_DIR",
@@ -132,19 +131,16 @@ function rowsLayout(r) {
 function contract(bytes) {
   assert.equal(new TextDecoder().decode(bytes.slice(0, 4)), "IPPB");
   const r = reader(bytes.slice(4));
-  assert.equal(r.u32(), 2);
+  assert.equal(r.u32(), 3);
   const hash = r.u64();
   let actual = 0xcbf29ce484222325n;
   for (const b of bytes.slice(16))
     actual = BigInt.asUintN(64, (actual ^ BigInt(b)) * 0x100000001b3n);
   assert.equal(hash, actual);
-  assert.equal(r.u16(), 6);
+  assert.equal(r.u16(), 7);
   const arch = r.string(),
     os = r.string(),
     pointerBits = r.u8();
-  const features = [];
-  for (let i = 0, n = r.u8(); i < n; i++)
-    features.push({ id: r.u8(), enabled: r.u8() === 1, name: r.string() });
   const rowLimits = {
     regionSpan: r.u32(),
     fields: r.u8(),
@@ -167,10 +163,7 @@ function contract(bytes) {
       state: r.string() || null,
       variant: r.string() || null,
     });
-  assert.equal(r.u16(), 2);
-  const capabilities = [];
-  for (let i = 0, n = r.u8(); i < n; i++)
-    capabilities.push({ id: r.u8(), enabled: r.u8() === 1, name: r.string() });
+  assert.equal(r.u16(), 3);
   const conventions = [];
   for (let i = 0, n = r.u16(); i < n; i++)
     conventions.push([r.string(), r.string()]);
@@ -179,7 +172,6 @@ function contract(bytes) {
   const layouts = [];
   for (let i = 0, n = r.u16(); i < n; i++) {
     const name = r.string(),
-      capability = r.u8(),
       fields = [];
     for (let j = 0, count = r.u16(); j < count; j++)
       fields.push({
@@ -188,14 +180,13 @@ function contract(bytes) {
         limit: r.u32(),
         target: r.string(),
       });
-    layouts.push({ name, capability, fields });
+    layouts.push({ name, fields });
   }
   const tags = [];
   for (let i = 0, n = r.u16(); i < n; i++)
     tags.push({
       name: r.string(),
       space: r.u8(),
-      capability: r.u8(),
       value: r.u8(),
       layout: r.string(),
     });
@@ -203,7 +194,6 @@ function contract(bytes) {
   for (let i = 0, n = r.u16(); i < n; i++)
     assetFormats.push({
       name: r.string(),
-      capability: r.u8(),
       typeId: r.u16(),
       format: r.string(),
     });
@@ -215,11 +205,9 @@ function contract(bytes) {
     arch,
     os,
     pointerBits,
-    features,
     components,
     paintKeys,
     rowLimits,
-    capabilities,
     conventions,
     limits,
     layouts,
@@ -249,14 +237,12 @@ assert.equal(
   target.hash,
   "final host hash agrees with export",
 );
-assert.deepEqual(target.features, native.features);
 assert.notEqual(target.hash, native.hash);
 assert.deepEqual(
   target.components.map((c) => [c.id, c.name]),
   native.components.map((c) => [c.id, c.name]),
 );
 assert.deepEqual(target.tags, native.tags);
-assert.deepEqual(target.capabilities, native.capabilities);
 assert.deepEqual(target.conventions, native.conventions);
 assert.deepEqual(target.limits, native.limits);
 assert.deepEqual(target.rowLimits, native.rowLimits);
@@ -265,10 +251,7 @@ assert.deepEqual(target.assetFormats, native.assetFormats);
 assert.deepEqual(target.reasons, native.reasons);
 assert.deepEqual(target.paintKeys, native.paintKeys);
 for (const schema of [native, target]) {
-  const gui = schema.features.find(
-    (feature) => feature.name === "gui",
-  )?.enabled;
-  assert.equal(schema.paintKeys.length > 0, gui);
+  assert.ok(schema.paintKeys.length > 0);
   assert.equal(
     new Set(schema.paintKeys.map((key) => key.index)).size,
     schema.paintKeys.length,
@@ -276,17 +259,10 @@ for (const schema of [native, target]) {
   assert.ok(
     schema.paintKeys.every((key) => key.variant === null || key.state !== null),
   );
-  const skeletalAnimation = schema.features.find(
-    (feature) => feature.name === "skeletal-animation",
-  )?.enabled;
-  assert.equal(
+  assert.ok(
     schema.layouts.some((layout) => layout.name === "animation-target-joints"),
-    skeletalAnimation,
   );
-  assert.equal(
-    schema.tags.some((tag) => tag.name === "ANIMATION_TARGET_JOINTS"),
-    skeletalAnimation,
-  );
+  assert.ok(schema.tags.some((tag) => tag.name === "ANIMATION_TARGET_JOINTS"));
   for (const entry of schema.components) {
     assert.equal(entry.dynamicProperties, entry.name === "CustomMaterial");
     if (["ParticleEmitter", "ParticlePlayback"].includes(entry.name)) {
@@ -381,34 +357,6 @@ if (nf.pointerBits === 64) {
     nf.fields.label.size,
     wf.fields.label.size,
     "owned type sizes come from each target",
-  );
-}
-if (minimalPath) {
-  const minimal = contract(await readFile(minimalPath));
-  assert.notEqual(
-    minimal.hash,
-    native.hash,
-    "feature selection participates in compatibility",
-  );
-  assert.deepEqual(
-    minimal.features.find((feature) => feature.name === "skeletal-animation"),
-    { id: 16, enabled: false, name: "skeletal-animation" },
-  );
-  assert.deepEqual(
-    native.features.find((feature) => feature.name === "skeletal-animation"),
-    { id: 16, enabled: true, name: "skeletal-animation" },
-  );
-  assert.equal(
-    minimal.components.some((c) => c.name === "Skeleton"),
-    false,
-  );
-  assert.equal(
-    native.components.some((c) => c.name === "Skeleton"),
-    true,
-  );
-  assert.equal(
-    native.components.some((c) => c.name === "Skin"),
-    true,
   );
 }
 const report = { native, wasm: target, nativeFixture: nf, wasmFixture: wf };

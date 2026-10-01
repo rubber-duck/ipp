@@ -1,4 +1,7 @@
-import type { IngressStatistics, RenderStatisticsSnapshot } from "@ipp/client";
+import type {
+  IngressStatistics,
+  RenderStatisticsSnapshot,
+} from "@ipp/client/diagnostics";
 import { invoke, writeDataUrl, bigintJson, recordCapture } from "./evidence.js";
 import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
@@ -12,6 +15,7 @@ import {
   runBrowserEnvironment,
 } from "../browser/environment.js";
 import { requireVisible } from "./image-assertions.js";
+import { scaledArea, scaledLength } from "./shapes-oracle.js";
 import {
   ARROW_GEOMETRY_CASES,
   type analyzeArrowGeometryCapture,
@@ -29,8 +33,7 @@ import {
 } from "./shapes-fixture.js";
 
 const workspace = resolve(process.cwd());
-const render = browserBuild("render");
-const headless = browserBuild("headless");
+const render = browserBuild("render-instrumentation");
 const EXPECTED_GEOMETRY: Readonly<
   Record<
     ShapeId,
@@ -71,7 +74,6 @@ for (const variant of ["development", "production"] as const) {
       {
         workspace,
         build: render,
-        mismatchBuild: headless,
         operationTimeoutMs: 15_000,
         closeTimeoutMs: 5_000,
         evidenceParent: resolve(
@@ -657,11 +659,13 @@ function verifyPlaneDirections(
     rotated.normalOrigin,
   );
   assert.ok(
-    originalDirection[0] < -25 && originalDirection[1] > 12,
+    originalDirection[0] < -scaledLength(25) &&
+      originalDirection[1] > scaledLength(12),
     `+Z normal projected in unexpected direction ${originalDirection.join(",")}`,
   );
   assert.ok(
-    rotatedDirection[0] > 12 && rotatedDirection[1] > 15,
+    rotatedDirection[0] > scaledLength(12) &&
+      rotatedDirection[1] > scaledLength(15),
     `React-rotated normal did not follow +Y quaternion ${rotatedDirection.join(",")}`,
   );
 }
@@ -682,7 +686,7 @@ async function verifyShapeImage(
     assert.ok(capture.summary.bounds, `${shape} has no rendered bounds`);
     assert.ok(evidence.expectedBounds, `${shape} has no analytic bounds`);
     assert.ok(
-      evidence.foregroundPixels > 250,
+      evidence.foregroundPixels > scaledArea(250),
       `${shape} has too little visible geometry`,
     );
 
@@ -711,7 +715,7 @@ async function verifyShapeImage(
           0.985,
         `${shape} leaves holes inside its analytic solid projection`,
       );
-      assert.ok(evidence.analyticExteriorPixels > 20_000);
+      assert.ok(evidence.analyticExteriorPixels > scaledArea(20_000));
       assert.ok(
         evidence.analyticExteriorForegroundPixels /
           evidence.analyticExteriorPixels <
@@ -736,7 +740,7 @@ async function verifyShapeImage(
       assert.ok(
         capture.summary.coverage > 0.003 && capture.summary.coverage < 0.15,
       );
-      assert.ok(evidence.analyticInteriorPixels > 500);
+      assert.ok(evidence.analyticInteriorPixels > scaledArea(500));
       assert.ok(
         evidence.analyticInteriorForegroundPixels /
           evidence.analyticInteriorPixels <
@@ -773,12 +777,12 @@ function verifyPlaneImage(
   evidence: ShapeImageEvidence,
 ): void {
   assert.ok(evidence.normalOrigin && evidence.normalTip);
-  assert.ok(evidence.normalSamples > 10);
+  assert.ok(evidence.normalSamples > scaledLength(10));
   assert.ok(
     evidence.normalSampleHits / evidence.normalSamples > 0.82,
     `${shape} misses its analytically projected normal arrow`,
   );
-  assert.ok(evidence.planeSurfaceExpectedPixels > 5_000);
+  assert.ok(evidence.planeSurfaceExpectedPixels > scaledArea(5_000));
   assert.ok(capture.summary.bounds && evidence.expectedBounds);
   assertBoundsClose(capture.summary.bounds, evidence.expectedBounds, 4, shape);
 
@@ -802,7 +806,7 @@ function verifyPlaneImage(
       "plane does not match its checker square and solid white arrow",
     );
     assert.ok(
-      evidence.solidArrowPixels > 100,
+      evidence.solidArrowPixels > scaledArea(100),
       "plane normal does not remain solid white under the checker texture",
     );
     return;
@@ -812,7 +816,7 @@ function verifyPlaneImage(
   assert.ok(
     capture.summary.coverage > 0.003 && capture.summary.coverage < 0.08,
   );
-  assert.ok(evidence.planePerimeterSamples > 100);
+  assert.ok(evidence.planePerimeterSamples > scaledLength(100));
   assert.ok(
     evidence.planePerimeterSampleHits / evidence.planePerimeterSamples > 0.9,
     "plane outline misses its four expected perimeter edges",
@@ -860,13 +864,14 @@ function assertBoundsClose(
   }
 }
 
-function browserBuild(name: "render" | "headless"): BrowserBuildConfiguration {
+function browserBuild(
+  name: "render-instrumentation",
+): BrowserBuildConfiguration {
   const directory = resolve(workspace, "target/browser-build", name);
   return {
     name,
     generatedModule: resolve(directory, "generated.js"),
     runtimeWasm: resolve(directory, "runtime.wasm"),
-    exportWasm: resolve(directory, "export.wasm"),
     contractArtifact: resolve(directory, "contract.bin"),
   };
 }

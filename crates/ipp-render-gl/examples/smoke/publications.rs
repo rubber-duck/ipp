@@ -256,9 +256,7 @@ pub fn run<D: RenderDevice>(
     spatial_child_recovery(renderer, &mut capture, &mut replacement, output)?;
     containing_debug_policy(renderer, &mut capture, output)?;
     transparency(renderer, &mut capture, output)?;
-    #[cfg(feature = "shadows")]
     spatial_shadows(renderer, &mut capture, output)?;
-    #[cfg(feature = "surfaces")]
     nested(renderer, &mut capture, output)?;
     Ok(())
 }
@@ -760,7 +758,6 @@ fn transparency<D: RenderDevice>(
     Ok(())
 }
 
-#[cfg(feature = "shadows")]
 fn spatial_shadows<D: RenderDevice>(
     renderer: &mut RenderService<D>,
     capture: &mut impl FnMut() -> Result<Vec<u8>>,
@@ -863,7 +860,6 @@ fn spatial_shadows<D: RenderDevice>(
     Ok(())
 }
 
-#[cfg(feature = "surfaces")]
 fn nested<D: RenderDevice>(
     renderer: &mut RenderService<D>,
     capture: &mut impl FnMut() -> Result<Vec<u8>>,

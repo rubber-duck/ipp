@@ -1,6 +1,6 @@
 //! Device-level Surface cache target oracle shared by the native Surface and
 //! GUI runners: create, resize, repaint a translucent box (with glyph atlas
-//! population nested inside the repaint in GUI builds), composite front and
+//! population nested inside the repaint), composite front and
 //! mirrored views over an opaque background, then delete. Expected pixels are
 //! derived from linear premultiplied blending, independently of the device.
 
@@ -68,7 +68,6 @@ pub(crate) fn run(
 
     // Glyph atlas population nested inside a repaint must return to the cache
     // target and its viewport; otherwise the box lands elsewhere or nowhere.
-    #[cfg(feature = "gui")]
     {
         let page = device.create_glyph_atlas_page(256, 256)?;
         device.begin_glyph_atlas_page(&page)?;

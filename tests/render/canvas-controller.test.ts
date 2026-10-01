@@ -31,14 +31,13 @@ test(`React Canvas controller through ${native ? "native WebSocket/GLES" : "work
   const workspace = resolve(process.cwd());
   const directory = resolve(
     native
-      ? "target/gles-host/gles-surfaces"
-      : "target/browser-build/render-surfaces",
+      ? "target/gles-host-instrumentation"
+      : "target/browser-build/render-instrumentation",
   );
   const build: BrowserBuildConfiguration = {
-    name: native ? "gles-surfaces" : "render-surfaces",
+    name: native ? "gles" : "render-instrumentation",
     generatedModule: resolve(directory, "generated.js"),
     runtimeWasm: resolve(directory, native ? "gles_host" : "runtime.wasm"),
-    exportWasm: resolve(directory, native ? "contract.bin" : "export.wasm"),
     contractArtifact: resolve(directory, "contract.bin"),
   };
   async function browser(native?: { url: string; presentationUrl: string }) {
@@ -47,7 +46,6 @@ test(`React Canvas controller through ${native ? "native WebSocket/GLES" : "work
       {
         workspace,
         build,
-        mismatchBuild: build,
         rendering: !native,
         operationTimeoutMs: 90_000,
       },

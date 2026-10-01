@@ -30,7 +30,6 @@ pub(super) fn quad<D: RenderDevice>(
     GlMeshData::private_mesh(device, quad_asset())
 }
 
-#[cfg(feature = "shadows")]
 pub(super) fn identity() -> [f32; 16] {
     [
         1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.,
@@ -104,11 +103,9 @@ pub(super) fn visible(
     if shape.intersects_frustum(&planes.map(|plane| geometry.placement.local_plane(&plane))) {
         return true;
     }
-    #[cfg(feature = "mesh-poses")]
     if item.pose.is_some() {
         return true;
     }
-    #[cfg(feature = "skeletal-animation")]
     if item.skinned {
         return true;
     }

@@ -71,10 +71,7 @@ export async function run(configuration: {
     );
   const viewport = { width: canvas.width, height: canvas.height };
   const created = await host.createWorld({
-    // Skeletons and skins only exist in builds with skeletal animation.
-    selectedSystems: contract.CAPABILITIES.skeletalAnimation
-      ? selectSystems(SCENE, SKINNING, CONSTRAINTS, LIFECYCLE)
-      : selectSystems(SCENE, CONSTRAINTS, LIFECYCLE),
+    selectedSystems: selectSystems(SCENE, SKINNING, CONSTRAINTS, LIFECYCLE),
     symbolicId: "hierarchy-render",
   });
   const worlds: WorldReference[] = [created.reference];
@@ -290,7 +287,7 @@ export async function run(configuration: {
       "camera ignored parent",
     );
     await batch([place(camera, null)]);
-    if (contract.CAPABILITIES.skeletalAnimation) {
+    {
       await batch([...fixture.set(tracker, "Transform", { y: 0.35 })]);
       await batch([
         insertComponent(

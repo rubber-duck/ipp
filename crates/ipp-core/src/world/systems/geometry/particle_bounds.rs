@@ -11,11 +11,9 @@ impl GeometryReadAccess<'_> {
         entity: EntityId,
     ) -> Result<TransformedGeometryShape, ErrorReason> {
         let index = entity.index() as usize;
-        #[cfg(feature = "skeletal-animation")]
         if self.world.components.skin(index).is_some() {
             return Err(ErrorReason::GeometryUnavailable);
         }
-        #[cfg(feature = "mesh-poses")]
         if self.world.components.mesh_pose(index).is_some() {
             return Err(ErrorReason::GeometryUnavailable);
         }

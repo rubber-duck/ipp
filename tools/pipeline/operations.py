@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+from types import ModuleType
 
 from .builds import build, verify_browser_identities
 from .catalog import (
@@ -22,6 +23,7 @@ from .catalog import (
 from .environment import development_python
 from .model import ROOT, select
 from .processes import node, run
+from .product_reads import undeclared_product_reads
 
 
 def source_files(paths: list[str]) -> list[str]:
@@ -154,6 +156,16 @@ def validate_catalog() -> None:
             )
             if not (ROOT / source).is_file():
                 raise ValueError(f"Suite {name} references missing source: {source}")
+    excluded = {
+        f"test:{name}:{entry['name']}": tuple(entry.get("partitionExcludes", ()))
+        for name, suite in SUITES.items()
+        for entry in suite.get("commands", [])
+    }
+    undeclared = undeclared_product_reads(tasks, excluded)
+    if undeclared:
+        raise ValueError(
+            "Tests read build products they do not depend on:\n" + "\n".join(undeclared)
+        )
     workflow = (ROOT / ".github/workflows/gallery-pages.yml").read_text()
     # The Pages workflow uses explicit named invocations on single lines.
     import shlex
@@ -172,25 +184,26 @@ def validate_catalog() -> None:
         count += 1
     if count == 0:
         raise ValueError("CI must invoke the maintained Python pipeline")
-    # Feature records describe selection; manifest checks remain an independent oracle.
+    # Distributions vary only along the instrumentation and renderer axes.
     for name, profile in PROFILES["browser"].items():
-        if set(profile) != {"features", "builtins"} or not isinstance(
-            profile["builtins"], bool
-        ):
+        if set(profile) != {"features"} or not set(profile["features"]) <= {
+            "render",
+            "instrumentation",
+        }:
             raise ValueError(f"Invalid browser profile: {name}")
     print(
         f"Validated {len(tasks)} tasks, {len(SUITES)} suites and {count} CI invocations."
     )
 
 
-def contracts(profiles: list[str]) -> None:
+def contract_checks() -> ModuleType:
     spec = importlib.util.spec_from_file_location(
         "ipp_contract_checks", ROOT / "tools/check_contracts.py"
     )
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    module.main(profiles)
+    return module
 
 
 def main(args: list[str]) -> None:
@@ -227,26 +240,11 @@ def main(args: list[str]) -> None:
     elif operation == "catalog":
         validate_catalog()
     elif operation == "contracts":
-        contracts(remaining)
+        contract_checks().main()
     elif operation == "browser-identities":
         verify_browser_identities()
     elif operation == "contract-identities":
-        reports = [
-            json.loads(
-                (
-                    ROOT
-                    / "target/integration-artifacts/contracts"
-                    / name
-                    / "target-report.json"
-                ).read_text()
-            )
-            for name in PROFILES["contracts"]
-        ]
-        for target in ("native", "wasm"):
-            if len({report[target]["hash"] for report in reports}) != len(reports):
-                raise ValueError(
-                    f"{target}: distinct feature selections have equal contract identity"
-                )
+        contract_checks().identities()
     elif operation == "serve":
         from .server import serve
 

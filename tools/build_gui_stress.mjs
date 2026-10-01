@@ -23,7 +23,7 @@ execFileSync(
     "--emitDeclarationOnly",
     "--outDir",
     "target/gui-stress-contract",
-    "target/gui-host/generated.ts",
+    "target/integration-artifacts/client/generated.ts",
   ],
   { cwd: workspace, stdio: "inherit" },
 );

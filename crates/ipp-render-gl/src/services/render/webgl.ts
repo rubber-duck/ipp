@@ -1,11 +1,8 @@
-/** Optional shader paths match the selected Rust capabilities. */
-
-declare const IPP_SHADOWS: boolean;
-/** Replaced by the host bundler to match Rust skeletal-animation. */
-declare const IPP_SKELETAL_ANIMATION: boolean;
-declare const IPP_MESH_POSES: boolean;
-declare const IPP_PARTICLES: boolean;
-declare const IPP_SURFACES: boolean;
+/**
+ * Vertex attribute locations used by the widest built-in layout: instanced
+ * particles beside the position, normal, texture, weight, pose and skin streams.
+ */
+const REQUIRED_VERTEX_ATTRIBUTES = 14;
 
 /** Host bindings for the Rust GL device. No scene data or draw preparation lives here. */
 export interface WebGlHostExports {
@@ -93,14 +90,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     gl.isContextLost() ||
     !gl.getContextAttributes()?.depth ||
     gl.getParameter(gl.DEPTH_BITS) < 16 ||
-    gl.getParameter(gl.MAX_VERTEX_ATTRIBS) <
-      (IPP_PARTICLES
-        ? 14
-        : IPP_MESH_POSES
-          ? 9
-          : IPP_SKELETAL_ANIMATION
-            ? 7
-            : 5) ||
+    gl.getParameter(gl.MAX_VERTEX_ATTRIBS) < REQUIRED_VERTEX_ATTRIBUTES ||
     maxViewport[0]! <= 0 ||
     maxViewport[1]! <= 0
   ) {
@@ -242,43 +232,35 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
   >();
   let surfaceQuadVao: WebGLVertexArrayObject | null = null;
   /** Retained analytic instance streams, each with its own instanced vertex array. */
-  const surfaceInstanceStreams = IPP_SURFACES
-    ? new Map<
-        number,
-        { vao: WebGLVertexArrayObject; vbo: WebGLBuffer; count: number }
-      >()
-    : undefined;
-  const guiBatches = IPP_SURFACES
-    ? new Map<number, WebGlRetainedBatch>()
-    : undefined;
-  const glyphAtlasPages = IPP_SURFACES
-    ? new Map<
-        number,
-        {
-          texture: number;
-          framebuffer: WebGLFramebuffer;
-          width: number;
-          height: number;
-        }
-      >()
-    : undefined;
+  const surfaceInstanceStreams = new Map<
+    number,
+    { vao: WebGLVertexArrayObject; vbo: WebGLBuffer; count: number }
+  >();
+  const guiBatches = new Map<number, WebGlRetainedBatch>();
+  const glyphAtlasPages = new Map<
+    number,
+    {
+      texture: number;
+      framebuffer: WebGLFramebuffer;
+      width: number;
+      height: number;
+    }
+  >();
   /** The bound atlas page and the target saved by the first begin. */
   let glyphAtlasTarget:
     | { width: number; height: number; saved: WebGlTarget }
     | undefined;
   /** Whole-Surface cache images keyed by never-reused `id()` handles. */
-  const surfaceCacheTargets = IPP_SURFACES
-    ? new Map<
-        number,
-        {
-          texture: WebGLTexture;
-          framebuffer: WebGLFramebuffer;
-          depth?: WebGLRenderbuffer;
-          width: number;
-          height: number;
-        }
-      >()
-    : undefined;
+  const surfaceCacheTargets = new Map<
+    number,
+    {
+      texture: WebGLTexture;
+      framebuffer: WebGLFramebuffer;
+      depth?: WebGLRenderbuffer;
+      width: number;
+      height: number;
+    }
+  >();
   /** The bound cache target and the host state saved when it was bound. */
   let surfaceCacheTarget:
     | { handle: number; width: number; height: number; saved: WebGlTarget }
@@ -317,18 +299,16 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
 
   /** Antialiasing viewport of Surface draws: atlas page, then cache target, then drawing buffer. */
   function activeSurfaceViewport(): [number, number] {
-    if (IPP_SURFACES && glyphAtlasTarget)
+    if (glyphAtlasTarget)
       return [glyphAtlasTarget.width, glyphAtlasTarget.height];
-    if (IPP_SURFACES && surfaceCacheTarget)
+    if (surfaceCacheTarget)
       return [surfaceCacheTarget.width, surfaceCacheTarget.height];
     return [gl.drawingBufferWidth, gl.drawingBufferHeight];
   }
-  const shadows = IPP_SHADOWS
-    ? new Map<
-        number,
-        { texture: WebGLTexture; framebuffer: WebGLFramebuffer; size: number }
-      >()
-    : undefined;
+  const shadows = new Map<
+    number,
+    { texture: WebGLTexture; framebuffer: WebGLFramebuffer; size: number }
+  >();
   let shadowTarget: WebGlTarget | undefined;
   const decoder = new TextDecoder("utf-8", { fatal: true });
   const encoder = new TextEncoder();
@@ -668,77 +648,76 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
    * layout table: stride, attribute count, then location, components and offset per
    * attribute.
    */
-  const createRetainedBatch = IPP_SURFACES
-    ? (byteLength: number, layoutPointer: number): number => {
-        const header = words(layoutPointer, 2);
-        const stride = header[0]!;
-        const attributeCount = header[1]!;
-        const attributes = words(layoutPointer + 8, attributeCount * 3);
-        if (stride === 0 || stride % 4 !== 0 || byteLength % stride !== 0)
-          throw new Error("GUI batch length does not match its layout");
-        const vao = gl.createVertexArray();
-        const vbo = gl.createBuffer();
-        if (!vao || !vbo) {
-          if (vao) gl.deleteVertexArray(vao);
-          if (vbo) gl.deleteBuffer(vbo);
-          throw new Error("GUI batch allocation failed");
-        }
-        bindVertexArray(vao);
-        gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
-        // WebGL initializes new buffer storage to zero: degenerate vertices.
-        gl.bufferData(gl.ARRAY_BUFFER, byteLength, gl.DYNAMIC_DRAW);
-        for (let index = 0; index < attributeCount; index++) {
-          const location = attributes[index * 3]!;
-          gl.enableVertexAttribArray(location);
-          gl.vertexAttribPointer(
-            location,
-            attributes[index * 3 + 1]!,
-            gl.FLOAT,
-            false,
-            stride,
-            attributes[index * 3 + 2]!,
-          );
-        }
-        bindVertexArray(null);
-        gl.bindBuffer(gl.ARRAY_BUFFER, null);
+  const createRetainedBatch = (
+    byteLength: number,
+    layoutPointer: number,
+  ): number => {
+    const header = words(layoutPointer, 2);
+    const stride = header[0]!;
+    const attributeCount = header[1]!;
+    const attributes = words(layoutPointer + 8, attributeCount * 3);
+    if (stride === 0 || stride % 4 !== 0 || byteLength % stride !== 0)
+      throw new Error("GUI batch length does not match its layout");
+    const vao = gl.createVertexArray();
+    const vbo = gl.createBuffer();
+    if (!vao || !vbo) {
+      if (vao) gl.deleteVertexArray(vao);
+      if (vbo) gl.deleteBuffer(vbo);
+      throw new Error("GUI batch allocation failed");
+    }
+    bindVertexArray(vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+    // WebGL initializes new buffer storage to zero: degenerate vertices.
+    gl.bufferData(gl.ARRAY_BUFFER, byteLength, gl.DYNAMIC_DRAW);
+    for (let index = 0; index < attributeCount; index++) {
+      const location = attributes[index * 3]!;
+      gl.enableVertexAttribArray(location);
+      gl.vertexAttribPointer(
+        location,
+        attributes[index * 3 + 1]!,
+        gl.FLOAT,
+        false,
+        stride,
+        attributes[index * 3 + 2]!,
+      );
+    }
+    bindVertexArray(null);
+    gl.bindBuffer(gl.ARRAY_BUFFER, null);
 
-        try {
-          check();
-        } catch (error) {
-          gl.deleteVertexArray(vao);
-          gl.deleteBuffer(vbo);
-          throw error;
-        }
-        const handle = id();
-        guiBatches!.set(handle, { vao, vbo, stride, bytes: byteLength });
-        return handle;
-      }
-    : undefined;
+    try {
+      check();
+    } catch (error) {
+      gl.deleteVertexArray(vao);
+      gl.deleteBuffer(vbo);
+      throw error;
+    }
+    const handle = id();
+    guiBatches.set(handle, { vao, vbo, stride, bytes: byteLength });
+    return handle;
+  };
 
   /** Write whole vertices into retained storage at a vertex-aligned byte offset. */
-  const writeRetainedBatch = IPP_SURFACES
-    ? (
-        batch: WebGlRetainedBatch | undefined,
-        byteOffset: number,
-        vertexPointer: number,
-        byteLength: number,
-      ): void => {
-        if (!batch) throw new Error("Stale GUI batch handle");
-        if (
-          byteOffset % batch.stride !== 0 ||
-          byteLength % batch.stride !== 0 ||
-          byteOffset + byteLength > batch.bytes
-        )
-          throw new Error("GUI batch write does not match its storage");
-        const vertexData = floats(vertexPointer, byteLength / 4);
-        // GL keeps the previous contents for queued draws that read them.
-        gl.bindBuffer(gl.ARRAY_BUFFER, batch.vbo);
-        gl.bufferSubData(gl.ARRAY_BUFFER, byteOffset, vertexData);
-        gl.bindBuffer(gl.ARRAY_BUFFER, null);
-        // Outside exhaustive mode the device checks this frame's end instead.
-        checkDraw();
-      }
-    : undefined;
+  const writeRetainedBatch = (
+    batch: WebGlRetainedBatch | undefined,
+    byteOffset: number,
+    vertexPointer: number,
+    byteLength: number,
+  ): void => {
+    if (!batch) throw new Error("Stale GUI batch handle");
+    if (
+      byteOffset % batch.stride !== 0 ||
+      byteLength % batch.stride !== 0 ||
+      byteOffset + byteLength > batch.bytes
+    )
+      throw new Error("GUI batch write does not match its storage");
+    const vertexData = floats(vertexPointer, byteLength / 4);
+    // GL keeps the previous contents for queued draws that read them.
+    gl.bindBuffer(gl.ARRAY_BUFFER, batch.vbo);
+    gl.bufferSubData(gl.ARRAY_BUFFER, byteOffset, vertexData);
+    gl.bindBuffer(gl.ARRAY_BUFFER, null);
+    // Outside exhaustive mode the device checks this frame's end instead.
+    checkDraw();
+  };
 
   /** Header texels per packed path: an offset and count for 16 + 16 bands. */
   const SURFACE_BAND_HEADER_TEXELS = 64;
@@ -747,95 +726,91 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
    * Width and rows for `count` packed path texels within the texture size
    * limit, balancing rows so padding stays below one texel per row.
    */
-  const surfaceTexelLayout = IPP_SURFACES
-    ? (count: number): { width: number; rows: number } | undefined => {
-        if (count === 0) return undefined;
-        const rows = Math.ceil(count / maxTextureSize);
-        if (rows > maxTextureSize) return undefined;
-        return { width: Math.ceil(count / rows), rows };
-      }
-    : undefined;
+  const surfaceTexelLayout = (
+    count: number,
+  ): { width: number; rows: number } | undefined => {
+    if (count === 0) return undefined;
+    const rows = Math.ceil(count / maxTextureSize);
+    if (rows > maxTextureSize) return undefined;
+    return { width: Math.ceil(count / rows), rows };
+  };
 
   /**
    * Allocate the bound texture and copy `values` into it in row order, leaving
    * the unused end of the last row undefined, without a padded staging copy.
    */
-  const uploadSurfaceTexels = IPP_SURFACES
-    ? (
-        layout: { width: number; rows: number },
-        lanes: number,
-        internalFormat: number,
-        format: number,
-        type: number,
-        values: Int16Array | Int32Array | Uint16Array | Uint32Array,
-      ): void => {
-        const { width, rows } = layout;
-        const count = values.length / lanes;
-        const fullRows = Math.floor(count / width);
-        const remainder = count - fullRows * width;
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-        gl.texStorage2D(gl.TEXTURE_2D, 1, internalFormat, width, rows);
-        if (fullRows > 0)
-          gl.texSubImage2D(
-            gl.TEXTURE_2D,
-            0,
-            0,
-            0,
-            width,
-            fullRows,
-            format,
-            type,
-            values.subarray(0, fullRows * width * lanes),
-          );
-        if (remainder > 0)
-          gl.texSubImage2D(
-            gl.TEXTURE_2D,
-            0,
-            0,
-            fullRows,
-            remainder,
-            1,
-            format,
-            type,
-            values.subarray(fullRows * width * lanes),
-          );
-      }
-    : undefined;
+  const uploadSurfaceTexels = (
+    layout: { width: number; rows: number },
+    lanes: number,
+    internalFormat: number,
+    format: number,
+    type: number,
+    values: Int16Array | Int32Array | Uint16Array | Uint32Array,
+  ): void => {
+    const { width, rows } = layout;
+    const count = values.length / lanes;
+    const fullRows = Math.floor(count / width);
+    const remainder = count - fullRows * width;
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texStorage2D(gl.TEXTURE_2D, 1, internalFormat, width, rows);
+    if (fullRows > 0)
+      gl.texSubImage2D(
+        gl.TEXTURE_2D,
+        0,
+        0,
+        0,
+        width,
+        fullRows,
+        format,
+        type,
+        values.subarray(0, fullRows * width * lanes),
+      );
+    if (remainder > 0)
+      gl.texSubImage2D(
+        gl.TEXTURE_2D,
+        0,
+        0,
+        fullRows,
+        remainder,
+        1,
+        format,
+        type,
+        values.subarray(fullRows * width * lanes),
+      );
+  };
 
   /**
    * View a packed analytic instance stream of `count` sixteen-float instances after
    * validating each descriptor against the path's curve and band ranges.
    */
-  const surfaceInstanceValues = IPP_SURFACES
-    ? (
-        pathHandle: number,
-        instancePointer: number,
-        count: number,
-      ): Float32Array<ArrayBuffer> => {
-        const path = surfacePaths.get(pathHandle >>> 0);
-        count >>>= 0;
-        if (!path) throw new Error("Stale surface path handle");
-        if (count === 0) throw new Error("Empty surface instance stream");
-        const values = floats(instancePointer >>> 0, count * 16);
-        for (let index = 0; index < count; index += 1) {
-          const base = index * 16;
-          const curveStart = values[base + 12]!;
-          const curveCount = values[base + 13]!;
-          const bandOffset = values[base + 14]!;
-          if (
-            curveCount <= 0 ||
-            curveStart + curveCount > path.count ||
-            bandOffset < 0 ||
-            bandOffset + SURFACE_BAND_HEADER_TEXELS > path.bandCount
-          )
-            throw new Error("Invalid surface instance range");
-        }
-        return values;
-      }
-    : undefined;
+  const surfaceInstanceValues = (
+    pathHandle: number,
+    instancePointer: number,
+    count: number,
+  ): Float32Array<ArrayBuffer> => {
+    const path = surfacePaths.get(pathHandle >>> 0);
+    count >>>= 0;
+    if (!path) throw new Error("Stale surface path handle");
+    if (count === 0) throw new Error("Empty surface instance stream");
+    const values = floats(instancePointer >>> 0, count * 16);
+    for (let index = 0; index < count; index += 1) {
+      const base = index * 16;
+      const curveStart = values[base + 12]!;
+      const curveCount = values[base + 13]!;
+      const bandOffset = values[base + 14]!;
+      if (
+        curveCount <= 0 ||
+        curveStart + curveCount > path.count ||
+        bandOffset < 0 ||
+        bandOffset + SURFACE_BAND_HEADER_TEXELS > path.bandCount
+      )
+        throw new Error("Invalid surface instance range");
+    }
+    return values;
+  };
 
   function wholeFloats(
     pointer: number,
@@ -922,8 +897,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     gl.deleteBuffer(mesh.index);
     if (mesh.color) gl.deleteBuffer(mesh.color);
     if (mesh.normal) gl.deleteBuffer(mesh.normal);
-    if (IPP_SKELETAL_ANIMATION && mesh.skin)
-      for (const value of mesh.skin) gl.deleteBuffer(value);
+    if (mesh.skin) for (const value of mesh.skin) gl.deleteBuffer(value);
     if (mesh.weight) gl.deleteBuffer(mesh.weight);
     if (mesh.uv) gl.deleteBuffer(mesh.uv);
   }
@@ -955,32 +929,24 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     parameterBufferBound = false;
     parameterCapacity = 0;
     instanceCapacity = 0;
-    if (IPP_PARTICLES) {
-      instanceBuffer = null;
-      instanceCount = 0;
-    }
-    if (IPP_SURFACES) {
-      surfacePaths.clear();
-      surfaceQuadVao = null;
-      surfaceInstanceStreams!.clear();
-      surfaceCacheTargets!.clear();
-      surfaceCacheTarget = undefined;
-    }
-    if (IPP_SURFACES) {
-      guiBatches!.clear();
-      glyphAtlasPages!.clear();
-      glyphAtlasTarget = undefined;
-    }
+    instanceBuffer = null;
+    instanceCount = 0;
+    surfacePaths.clear();
+    surfaceQuadVao = null;
+    surfaceInstanceStreams.clear();
+    surfaceCacheTargets.clear();
+    surfaceCacheTarget = undefined;
+    guiBatches.clear();
+    glyphAtlasPages.clear();
+    glyphAtlasTarget = undefined;
 
     event.preventDefault();
     invalidateSubmission();
     programs.clear();
     meshes.clear();
     textures.clear();
-    if (IPP_SHADOWS) {
-      shadows!.clear();
-      shadowTarget = undefined;
-    }
+    shadows.clear();
+    shadowTarget = undefined;
   }
 
   function restored(): void {
@@ -994,22 +960,16 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     programs.clear();
     meshes.clear();
     textures.clear();
-    if (IPP_SURFACES) {
-      surfacePaths.clear();
-      surfaceQuadVao = null;
-      surfaceInstanceStreams!.clear();
-      surfaceCacheTargets!.clear();
-      surfaceCacheTarget = undefined;
-    }
-    if (IPP_SURFACES) {
-      guiBatches!.clear();
-      glyphAtlasPages!.clear();
-      glyphAtlasTarget = undefined;
-    }
-    if (IPP_SHADOWS) {
-      shadows!.clear();
-      shadowTarget = undefined;
-    }
+    surfacePaths.clear();
+    surfaceQuadVao = null;
+    surfaceInstanceStreams.clear();
+    surfaceCacheTargets.clear();
+    surfaceCacheTarget = undefined;
+    guiBatches.clear();
+    glyphAtlasPages.clear();
+    glyphAtlasTarget = undefined;
+    shadows.clear();
+    shadowTarget = undefined;
     gl.drawingBufferColorSpace = "srgb";
     maxViewport = gl.getParameter(gl.MAX_VIEWPORT_DIMS) as Int32Array;
     maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE) as number;
@@ -1196,13 +1156,12 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
         gl.bindTexture(gl.TEXTURE_2D, texture);
         programInt(program, program.texture, 0);
       }
-      const target =
-        IPP_MESH_POSES && poseId !== 0 ? meshes.get(poseId >>> 0) : undefined;
-      if (IPP_MESH_POSES && poseId !== 0 && !target)
+      const target = poseId !== 0 ? meshes.get(poseId >>> 0) : undefined;
+      if (poseId !== 0 && !target)
         throw new Error("WebGL mesh pose handle is stale");
       bindVertexArray(mesh.vao);
       try {
-        if (IPP_MESH_POSES && target) {
+        if (target) {
           gl.uniform1f(program.poseWeight!, poseWeight);
           gl.bindBuffer(gl.ARRAY_BUFFER, target.vertex);
           gl.enableVertexAttribArray(7);
@@ -1213,7 +1172,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
             gl.vertexAttribPointer(8, 3, gl.FLOAT, false, 0, 0);
           }
         }
-        if (IPP_PARTICLES && instanceCount > 0) {
+        if (instanceCount > 0) {
           gl.bindBuffer(gl.ARRAY_BUFFER, instanceBuffer);
           for (let slot = 9; slot < 14; slot++) {
             gl.enableVertexAttribArray(slot);
@@ -1244,7 +1203,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
           gl.drawElements(gl.TRIANGLES, mesh.count, gl.UNSIGNED_SHORT, 0);
         }
       } finally {
-        if (IPP_MESH_POSES && target) {
+        if (target) {
           // Disabling alone retains the target buffer in the VAO. Replace both
           // pointers before a target resource may unload or be replaced.
           gl.bindBuffer(gl.ARRAY_BUFFER, mesh.vertex);
@@ -1260,77 +1219,74 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     });
   }
 
-  const skinImports = IPP_SKELETAL_ANIMATION
-    ? {
-        mesh_skin(
-          meshId: number,
-          indicesPointer: number,
-          weightsPointer: number,
-          count: number,
-        ): number {
-          return status(() => {
-            const mesh = meshes.get(meshId >>> 0);
-            if (!mesh || mesh.skin)
-              throw new Error("Invalid mesh skin attachment");
-            const indices = gl.createBuffer();
-            const weights = gl.createBuffer();
-            let retained = false;
-            try {
-              if (!indices || !weights)
-                throw new Error("WebGL skin allocation failed");
-              bindVertexArray(mesh.vao);
-              gl.bindBuffer(gl.ARRAY_BUFFER, indices);
-              gl.bufferData(
-                gl.ARRAY_BUFFER,
-                new Uint8Array(
-                  buffer(indicesPointer >>> 0, (count >>> 0) * 4),
-                  indicesPointer >>> 0,
-                  (count >>> 0) * 4,
-                ),
-                gl.STATIC_DRAW,
-              );
-              gl.enableVertexAttribArray(5);
-              gl.vertexAttribPointer(5, 4, gl.UNSIGNED_BYTE, false, 0, 0);
-              gl.bindBuffer(gl.ARRAY_BUFFER, weights);
-              gl.bufferData(
-                gl.ARRAY_BUFFER,
-                floats(weightsPointer >>> 0, (count >>> 0) * 4),
-                gl.STATIC_DRAW,
-              );
-              gl.enableVertexAttribArray(6);
-              gl.vertexAttribPointer(6, 4, gl.FLOAT, false, 0, 0);
-              check();
-              mesh.skin = [indices, weights];
-              retained = true;
-              return 1;
-            } finally {
-              bindVertexArray(null);
-              gl.bindBuffer(gl.ARRAY_BUFFER, null);
-              if (!retained) {
-                gl.deleteBuffer(indices);
-                gl.deleteBuffer(weights);
-              }
-            }
-          });
-        },
-        set_skin_palette(
-          programId: number,
-          pointer: number,
-          count: number,
-        ): number {
-          return status(() => {
-            const program = programs.get(programId >>> 0);
-            if (!program || count < 1 || count > 32)
-              throw new Error("Invalid skin palette");
-            if (!program.joints) return 1;
-            useProgram(program.object);
-            matrixUniform(program.joints, pointer >>> 0, count * 16);
-            checkDraw();
-            return 1;
-          });
-        },
-      }
-    : {};
+  const skinImports = {
+    mesh_skin(
+      meshId: number,
+      indicesPointer: number,
+      weightsPointer: number,
+      count: number,
+    ): number {
+      return status(() => {
+        const mesh = meshes.get(meshId >>> 0);
+        if (!mesh || mesh.skin) throw new Error("Invalid mesh skin attachment");
+        const indices = gl.createBuffer();
+        const weights = gl.createBuffer();
+        let retained = false;
+        try {
+          if (!indices || !weights)
+            throw new Error("WebGL skin allocation failed");
+          bindVertexArray(mesh.vao);
+          gl.bindBuffer(gl.ARRAY_BUFFER, indices);
+          gl.bufferData(
+            gl.ARRAY_BUFFER,
+            new Uint8Array(
+              buffer(indicesPointer >>> 0, (count >>> 0) * 4),
+              indicesPointer >>> 0,
+              (count >>> 0) * 4,
+            ),
+            gl.STATIC_DRAW,
+          );
+          gl.enableVertexAttribArray(5);
+          gl.vertexAttribPointer(5, 4, gl.UNSIGNED_BYTE, false, 0, 0);
+          gl.bindBuffer(gl.ARRAY_BUFFER, weights);
+          gl.bufferData(
+            gl.ARRAY_BUFFER,
+            floats(weightsPointer >>> 0, (count >>> 0) * 4),
+            gl.STATIC_DRAW,
+          );
+          gl.enableVertexAttribArray(6);
+          gl.vertexAttribPointer(6, 4, gl.FLOAT, false, 0, 0);
+          check();
+          mesh.skin = [indices, weights];
+          retained = true;
+          return 1;
+        } finally {
+          bindVertexArray(null);
+          gl.bindBuffer(gl.ARRAY_BUFFER, null);
+          if (!retained) {
+            gl.deleteBuffer(indices);
+            gl.deleteBuffer(weights);
+          }
+        }
+      });
+    },
+    set_skin_palette(
+      programId: number,
+      pointer: number,
+      count: number,
+    ): number {
+      return status(() => {
+        const program = programs.get(programId >>> 0);
+        if (!program || count < 1 || count > 32)
+          throw new Error("Invalid skin palette");
+        if (!program.joints) return 1;
+        useProgram(program.object);
+        matrixUniform(program.joints, pointer >>> 0, count * 16);
+        checkDraw();
+        return 1;
+      });
+    },
+  };
 
   const imports: WebAssembly.Imports[string] = {
     set_draw_checks(enabled: number): void {
@@ -1453,934 +1409,894 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
         return 1;
       });
     },
-    ...(IPP_SURFACES
-      ? {
-          set_surface_double_sided(enabled: number): number {
-            return status(() => {
-              if (enabled !== 0) gl.disable(gl.CULL_FACE);
-              else {
-                gl.cullFace(gl.BACK);
-                gl.enable(gl.CULL_FACE);
-              }
-              checkDraw();
-              return 1;
-            });
-          },
-        }
-      : {}),
-    ...(IPP_SURFACES
-      ? {
-          create_surface_path(
-            curvePointer: number,
-            count: number,
-            curveBits: number,
-            scale: number,
-            bandPointer: number,
-            bandCount: number,
-            bandBits: number,
-          ): number {
-            return status(() => {
-              count >>>= 0;
-              bandCount >>>= 0;
-              curvePointer >>>= 0;
-              bandPointer >>>= 0;
-              const curveLayout = surfaceTexelLayout!(count);
-              const bandLayout = surfaceTexelLayout!(bandCount);
-              if (!curveLayout || !bandLayout || !(scale > 0))
-                throw new Error("Surface path exceeds device limits");
-              // Fixed-point curve texels hold four signed lanes; see surface_path.rs.
-              const curves =
-                curveBits === 16
-                  ? new Int16Array(
-                      buffer(curvePointer, count * 8, 2),
-                      curvePointer,
-                      count * 4,
-                    )
-                  : new Int32Array(
-                      buffer(curvePointer, count * 16, 4),
-                      curvePointer,
-                      count * 4,
-                    );
-              const bands =
-                bandBits === 16
-                  ? new Uint16Array(
-                      buffer(bandPointer, bandCount * 2, 2),
-                      bandPointer,
-                      bandCount,
-                    )
-                  : new Uint32Array(
-                      buffer(bandPointer, bandCount * 4, 4),
-                      bandPointer,
-                      bandCount,
-                    );
-              const texture = gl.createTexture();
-              const bandTexture = gl.createTexture();
-              const vao = gl.createVertexArray();
-              if (!texture || !bandTexture || !vao) {
-                if (texture) gl.deleteTexture(texture);
-                if (bandTexture) gl.deleteTexture(bandTexture);
-                if (vao) gl.deleteVertexArray(vao);
-                throw new Error("Surface path allocation failed");
-              }
-              let retained = false;
-              try {
-                gl.bindBuffer(gl.PIXEL_UNPACK_BUFFER, null);
-                gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-                gl.activeTexture(gl.TEXTURE0);
-                gl.bindTexture(gl.TEXTURE_2D, texture);
-                uploadSurfaceTexels!(
-                  curveLayout,
-                  4,
-                  curveBits === 16 ? gl.RGBA16I : gl.RGBA32I,
-                  gl.RGBA_INTEGER,
-                  curveBits === 16 ? gl.SHORT : gl.INT,
-                  curves,
-                );
-                gl.bindTexture(gl.TEXTURE_2D, bandTexture);
-                uploadSurfaceTexels!(
-                  bandLayout,
-                  1,
-                  bandBits === 16 ? gl.R16UI : gl.R32UI,
-                  gl.RED_INTEGER,
-                  bandBits === 16 ? gl.UNSIGNED_SHORT : gl.UNSIGNED_INT,
-                  bands,
-                );
-                gl.bindTexture(gl.TEXTURE_2D, null);
-                check();
-                const handle = id();
-                surfacePaths.set(handle, {
-                  texture,
-                  bandTexture,
-                  vao,
-                  count,
-                  width: curveLayout.width,
-                  scale,
-                  bandCount,
-                  bandWidth: bandLayout.width,
-                });
-                retained = true;
-                return handle;
-              } finally {
-                if (!retained) {
-                  gl.deleteTexture(texture);
-                  gl.deleteTexture(bandTexture);
-                  gl.deleteVertexArray(vao);
-                }
-              }
-            });
-          },
-          draw_surface_path(
-            programHandle: number,
-            pathHandle: number,
-            boundsPointer: number,
-            curveStart: number,
-            curveCount: number,
-            bandOffset: number,
-            mvpPointer: number,
-            placementPointer: number,
-            clipPointer: number,
-            colorPointer: number,
-            fillRule: number,
-          ): number {
-            return status(() => {
-              const program = programs.get(programHandle >>> 0);
-              const path = surfacePaths.get(pathHandle >>> 0);
-              if (!program || !path)
-                throw new Error("Stale surface program or path handle");
-              curveStart >>>= 0;
-              curveCount >>>= 0;
-              bandOffset >>>= 0;
-              if (curveCount === 0 || curveStart + curveCount > path.count)
-                throw new Error("Invalid surface curve range");
-              if (bandOffset + SURFACE_BAND_HEADER_TEXELS > path.bandCount)
-                throw new Error("Invalid surface band range");
-              if (blendMode !== 2) {
-                gl.enable(gl.BLEND);
-                gl.blendEquation(gl.FUNC_ADD);
-                gl.blendFuncSeparate(
-                  gl.SRC_ALPHA,
-                  gl.ONE_MINUS_SRC_ALPHA,
-                  gl.ONE,
-                  gl.ONE_MINUS_SRC_ALPHA,
-                );
-                setDepthMask(false);
-                blendMode = 2;
-              }
-              useProgram(program.object);
-              const uniform = (name: string) =>
-                parameterLocation(program, name);
-              programMatrixAt(program, program.mvp, mvpPointer >>> 0);
-              programVec4At(program, uniform("u_bounds"), boundsPointer >>> 0);
-              programVec4At(
-                program,
-                uniform("u_placement"),
-                placementPointer >>> 0,
-              );
-              programVec4At(program, uniform("u_clip"), clipPointer >>> 0);
-              programVec4At(program, uniform("u_color"), colorPointer >>> 0);
-              programInt(program, uniform("u_curves"), 0);
-              programFloat(program, uniform("u_curve_scale"), path.scale);
-              programInt(program, uniform("u_curve_start"), curveStart);
-              programInt(program, uniform("u_curve_width"), path.width);
-              programInt(program, uniform("u_fill_rule"), fillRule >>> 0);
-              programInt(program, uniform("u_bands"), 1);
-              programInt(program, uniform("u_band_offset"), bandOffset);
-              programInt(program, uniform("u_band_width"), path.bandWidth);
-              const [viewportWidth, viewportHeight] = activeSurfaceViewport();
-              programVec4(
-                program,
-                uniform("u_viewport"),
-                viewportWidth,
-                viewportHeight,
-                0,
-                0,
-              );
-              bindPathTextures(path);
-              bindVertexArray(path.vao);
-              gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-              releaseBandTexture();
-              checkDraw();
-              return 1;
-            });
-          },
-          delete_surface_path(handle: number): void {
-            const path = surfacePaths.get(handle >>> 0);
-            surfacePaths.delete(handle >>> 0);
-            if (path && !disposed && !gl.isContextLost()) {
-              gl.deleteTexture(path.texture);
-              gl.deleteTexture(path.bandTexture);
-              gl.deleteVertexArray(path.vao);
-            }
-          },
-          create_surface_instances(
-            pathHandle: number,
-            instancePointer: number,
-            count: number,
-          ): number {
-            return status(() => {
-              const values = surfaceInstanceValues!(
-                pathHandle,
-                instancePointer,
-                count,
-              );
-              const vao = gl.createVertexArray();
-              const vbo = gl.createBuffer();
-              if (!vao || !vbo) {
-                if (vao) gl.deleteVertexArray(vao);
-                if (vbo) gl.deleteBuffer(vbo);
-                throw new Error("Surface instance allocation failed");
-              }
-              bindVertexArray(vao);
-              gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
-              gl.bufferData(gl.ARRAY_BUFFER, values, gl.STATIC_DRAW);
-              for (let slot = 0; slot < 4; slot += 1) {
-                gl.enableVertexAttribArray(slot);
-                gl.vertexAttribPointer(slot, 4, gl.FLOAT, false, 64, slot * 16);
-                gl.vertexAttribDivisor(slot, 1);
-              }
-              bindVertexArray(null);
-              gl.bindBuffer(gl.ARRAY_BUFFER, null);
-              try {
-                check();
-              } catch (error) {
-                gl.deleteVertexArray(vao);
-                gl.deleteBuffer(vbo);
-                throw error;
-              }
-              const handle = id();
-              surfaceInstanceStreams!.set(handle, {
-                vao,
-                vbo,
-                count: count >>> 0,
-              });
-              return handle;
-            });
-          },
-          update_surface_instances(
-            streamHandle: number,
-            pathHandle: number,
-            instancePointer: number,
-            count: number,
-          ): number {
-            return status(() => {
-              const stream = surfaceInstanceStreams!.get(streamHandle >>> 0);
-              if (!stream) throw new Error("Stale surface instance handle");
-              const values = surfaceInstanceValues!(
-                pathHandle,
-                instancePointer,
-                count,
-              );
-              // Replace the complete store; queued draws keep the previous one.
-              gl.bindBuffer(gl.ARRAY_BUFFER, stream.vbo);
-              gl.bufferData(gl.ARRAY_BUFFER, values, gl.STATIC_DRAW);
-              gl.bindBuffer(gl.ARRAY_BUFFER, null);
-              // Outside exhaustive mode the device checks this frame's end instead.
-              checkDraw();
-              stream.count = count >>> 0;
-              return 1;
-            });
-          },
-          delete_surface_instances(streamHandle: number): void {
-            const stream = surfaceInstanceStreams!.get(streamHandle >>> 0);
-            surfaceInstanceStreams!.delete(streamHandle >>> 0);
-            if (stream && !disposed && !gl.isContextLost()) {
-              gl.deleteVertexArray(stream.vao);
-              gl.deleteBuffer(stream.vbo);
-            }
-          },
-          draw_surface_instances(
-            programHandle: number,
-            pathHandle: number,
-            streamHandle: number,
-            mvpPointer: number,
-            clipPointer: number,
-            fillRule: number,
-          ): number {
-            return status(() => {
-              const program = programs.get(programHandle >>> 0);
-              const path = surfacePaths.get(pathHandle >>> 0);
-              const stream = surfaceInstanceStreams!.get(streamHandle >>> 0);
-              if (!program || !path || !stream)
-                throw new Error("Stale surface instance handle");
-              if (stream.count === 0) return 1;
-              if (blendMode !== 2) {
-                gl.enable(gl.BLEND);
-                gl.blendEquation(gl.FUNC_ADD);
-                gl.blendFuncSeparate(
-                  gl.SRC_ALPHA,
-                  gl.ONE_MINUS_SRC_ALPHA,
-                  gl.ONE,
-                  gl.ONE_MINUS_SRC_ALPHA,
-                );
-                setDepthMask(false);
-                blendMode = 2;
-              }
-              useProgram(program.object);
-              const uniform = (name: string) =>
-                parameterLocation(program, name);
-              programMatrixAt(program, program.mvp, mvpPointer >>> 0);
-              programVec4At(program, uniform("u_clip"), clipPointer >>> 0);
-              programInt(program, uniform("u_curves"), 0);
-              programFloat(program, uniform("u_curve_scale"), path.scale);
-              programInt(program, uniform("u_curve_width"), path.width);
-              programInt(program, uniform("u_bands"), 1);
-              programInt(program, uniform("u_band_width"), path.bandWidth);
-              programInt(program, uniform("u_fill_rule"), fillRule >>> 0);
-              const [viewportWidth, viewportHeight] = activeSurfaceViewport();
-              programVec4(
-                program,
-                uniform("u_viewport"),
-                viewportWidth,
-                viewportHeight,
-                0,
-                0,
-              );
-              bindVertexArray(stream.vao);
-              bindPathTextures(path);
-              gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, stream.count);
-              releaseBandTexture();
-              checkDraw();
-              return 1;
-            });
-          },
-          draw_surface_bitmap(
-            programHandle: number,
-            textureHandle: number,
-            mvpPointer: number,
-            placementPointer: number,
-            clipPointer: number,
-            colorPointer: number,
-          ): number {
-            return status(() => {
-              const program = programs.get(programHandle >>> 0);
-              const texture = textures.get(textureHandle >>> 0);
-              if (!program || !texture)
-                throw new Error("Stale surface bitmap handle");
-              if (blendMode !== 2) {
-                gl.enable(gl.BLEND);
-                gl.blendEquation(gl.FUNC_ADD);
-                gl.blendFuncSeparate(
-                  gl.SRC_ALPHA,
-                  gl.ONE_MINUS_SRC_ALPHA,
-                  gl.ONE,
-                  gl.ONE_MINUS_SRC_ALPHA,
-                );
-                setDepthMask(false);
-                blendMode = 2;
-              }
-              if (!surfaceQuadVao) surfaceQuadVao = gl.createVertexArray();
-              if (!surfaceQuadVao)
-                throw new Error("Surface quad allocation failed");
-              useProgram(program.object);
-              const uniform = (name: string) =>
-                parameterLocation(program, name);
-              programMatrixAt(program, program.mvp, mvpPointer >>> 0);
-              programVec4At(
-                program,
-                uniform("u_placement"),
-                placementPointer >>> 0,
-              );
-              programVec4At(program, uniform("u_clip"), clipPointer >>> 0);
-              programVec4At(program, uniform("u_color"), colorPointer >>> 0);
-              programInt(program, uniform("u_texture"), 0);
-              // Unit 0 keeps the texture until the next draw that samples it.
-              gl.activeTexture(gl.TEXTURE0);
-              gl.bindTexture(gl.TEXTURE_2D, texture);
-              bindVertexArray(surfaceQuadVao);
-              gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-              checkDraw();
-              return 1;
-            });
-          },
-          surface_cache_limit(): number {
-            if (disposed || gl.isContextLost()) return 0;
-            return Math.min(maxTextureSize, maxViewport[0]!, maxViewport[1]!);
-          },
-          create_surface_cache_target(width: number, height: number): number {
-            return status(() => {
-              width >>>= 0;
-              height >>>= 0;
-              const limit = Math.min(
-                maxTextureSize,
-                maxViewport[0]!,
-                maxViewport[1]!,
-              );
-              if (
-                width === 0 ||
-                height === 0 ||
-                width > limit ||
-                height > limit
-              )
-                throw new Error("Invalid Surface cache target dimensions");
-              const texture = gl.createTexture();
-              const framebuffer = gl.createFramebuffer();
-              if (!texture || !framebuffer) {
-                if (texture) gl.deleteTexture(texture);
-                if (framebuffer) gl.deleteFramebuffer(framebuffer);
-                throw new Error("Surface cache target allocation failed");
-              }
-              gl.activeTexture(gl.TEXTURE0);
-              gl.bindTexture(gl.TEXTURE_2D, texture);
-              // Linear sRGB storage matches the main target: blending runs in
-              // linear space and sampling decodes before filtering.
-              gl.texImage2D(
-                gl.TEXTURE_2D,
-                0,
-                gl.SRGB8_ALPHA8,
-                width,
-                height,
-                0,
-                gl.RGBA,
-                gl.UNSIGNED_BYTE,
-                null,
-              );
-              gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-              gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-              gl.texParameteri(
-                gl.TEXTURE_2D,
-                gl.TEXTURE_WRAP_S,
-                gl.CLAMP_TO_EDGE,
-              );
-              gl.texParameteri(
-                gl.TEXTURE_2D,
-                gl.TEXTURE_WRAP_T,
-                gl.CLAMP_TO_EDGE,
-              );
-              gl.bindTexture(gl.TEXTURE_2D, null);
-              const previous = currentTarget();
-              bindFramebuffers(framebuffer, framebuffer);
-              gl.framebufferTexture2D(
-                gl.FRAMEBUFFER,
-                gl.COLOR_ATTACHMENT0,
-                gl.TEXTURE_2D,
-                texture,
-                0,
-              );
-              const complete =
-                gl.checkFramebufferStatus(gl.FRAMEBUFFER) ===
-                gl.FRAMEBUFFER_COMPLETE;
-              if (complete) {
-                setViewport([0, 0, width, height]);
-                gl.clearColor(0, 0, 0, 0);
-                gl.clear(gl.COLOR_BUFFER_BIT);
-              }
-              bindFramebuffers(previous.framebuffer, previous.readFramebuffer);
-              setViewport(previous.viewport);
-              try {
-                if (!complete)
-                  throw new Error("Surface cache framebuffer incomplete");
-                check();
-              } catch (error) {
-                gl.deleteTexture(texture);
-                gl.deleteFramebuffer(framebuffer);
-                throw error;
-              }
-              const handle = id();
-              surfaceCacheTargets!.set(handle, {
-                texture,
-                framebuffer,
-                width,
-                height,
-              });
-              return handle;
-            });
-          },
-          resize_surface_cache_target(
-            handle: number,
-            width: number,
-            height: number,
-          ): number {
-            return status(() => {
-              const target = surfaceCacheTargets!.get(handle >>> 0);
-              if (!target) throw new Error("Stale Surface cache target handle");
-              if (surfaceCacheTarget?.handle === handle >>> 0)
-                throw new Error("Cannot resize the bound Surface cache target");
-              width >>>= 0;
-              height >>>= 0;
-              const limit = Math.min(
-                maxTextureSize,
-                maxViewport[0]!,
-                maxViewport[1]!,
-              );
-              if (
-                width === 0 ||
-                height === 0 ||
-                width > limit ||
-                height > limit
-              )
-                throw new Error("Invalid Surface cache target dimensions");
-              // Respecifying the attached level keeps the attachment; contents
-              // are undefined until the next repaint clears them.
-              gl.activeTexture(gl.TEXTURE0);
-              gl.bindTexture(gl.TEXTURE_2D, target.texture);
-              gl.texImage2D(
-                gl.TEXTURE_2D,
-                0,
-                gl.SRGB8_ALPHA8,
-                width,
-                height,
-                0,
-                gl.RGBA,
-                gl.UNSIGNED_BYTE,
-                null,
-              );
-              gl.bindTexture(gl.TEXTURE_2D, null);
-              if (target.depth) {
-                gl.bindRenderbuffer(gl.RENDERBUFFER, target.depth);
-                gl.renderbufferStorage(
-                  gl.RENDERBUFFER,
-                  gl.DEPTH_COMPONENT24,
-                  width,
-                  height,
-                );
-                gl.bindRenderbuffer(gl.RENDERBUFFER, null);
-              }
-              target.width = width;
-              target.height = height;
-              check();
-              return 1;
-            });
-          },
-          begin_surface_cache_target(handle: number): number {
-            return status(() => {
-              const target = surfaceCacheTargets!.get(handle >>> 0);
-              if (!target) throw new Error("Stale Surface cache target handle");
-              if (surfaceCacheTarget)
-                throw new Error("Surface cache targets cannot nest");
-              if (IPP_SURFACES && glyphAtlasTarget)
-                throw new Error("Surface cache target inside atlas population");
-              surfaceCacheTarget = {
-                handle: handle >>> 0,
-                width: target.width,
-                height: target.height,
-                saved: currentTarget(),
-              };
-              bindFramebuffers(target.framebuffer, target.framebuffer);
-              setViewport([0, 0, target.width, target.height]);
-              gl.disable(gl.SCISSOR_TEST);
-              gl.disable(gl.STENCIL_TEST);
-              setDepthMask(false);
-              // Repaints run outside begin_frame: every draw reapplies its blending.
-              blendMode = undefined;
-              gl.clearColor(0, 0, 0, 0);
-              gl.clear(gl.COLOR_BUFFER_BIT);
-              // The end of the repaint checks the whole pass.
-              try {
-                checkDraw();
-              } catch (error) {
-                restoreSurfaceCacheTarget();
-                throw error;
-              }
-              return 1;
-            });
-          },
-          begin_camera_target(handle: number, clearPointer: number): number {
-            return status(() => {
-              const target = surfaceCacheTargets!.get(handle >>> 0);
-              if (
-                !target ||
-                surfaceCacheTarget ||
-                (IPP_SURFACES && glyphAtlasTarget)
-              )
-                throw new Error("Unavailable Camera target");
-              surfaceCacheTarget = {
-                handle: handle >>> 0,
-                width: target.width,
-                height: target.height,
-                saved: currentTarget(),
-              };
-              try {
-                invalidateSubmission();
-                bindFramebuffers(target.framebuffer, target.framebuffer);
-                setViewport([0, 0, target.width, target.height]);
-                if (!target.depth) {
-                  const depth = gl.createRenderbuffer();
-                  if (!depth) throw new Error("Camera depth allocation failed");
-                  target.depth = depth;
-                  gl.bindRenderbuffer(gl.RENDERBUFFER, depth);
-                  gl.renderbufferStorage(
-                    gl.RENDERBUFFER,
-                    gl.DEPTH_COMPONENT24,
-                    target.width,
-                    target.height,
-                  );
-                  gl.framebufferRenderbuffer(
-                    gl.FRAMEBUFFER,
-                    gl.DEPTH_ATTACHMENT,
-                    gl.RENDERBUFFER,
-                    depth,
-                  );
-                }
-                if (
-                  gl.checkFramebufferStatus(gl.FRAMEBUFFER) !==
-                  gl.FRAMEBUFFER_COMPLETE
+    ...{
+      set_surface_double_sided(enabled: number): number {
+        return status(() => {
+          if (enabled !== 0) gl.disable(gl.CULL_FACE);
+          else {
+            gl.cullFace(gl.BACK);
+            gl.enable(gl.CULL_FACE);
+          }
+          checkDraw();
+          return 1;
+        });
+      },
+    },
+    ...{
+      create_surface_path(
+        curvePointer: number,
+        count: number,
+        curveBits: number,
+        scale: number,
+        bandPointer: number,
+        bandCount: number,
+        bandBits: number,
+      ): number {
+        return status(() => {
+          count >>>= 0;
+          bandCount >>>= 0;
+          curvePointer >>>= 0;
+          bandPointer >>>= 0;
+          const curveLayout = surfaceTexelLayout(count);
+          const bandLayout = surfaceTexelLayout(bandCount);
+          if (!curveLayout || !bandLayout || !(scale > 0))
+            throw new Error("Surface path exceeds device limits");
+          // Fixed-point curve texels hold four signed lanes; see surface_path.rs.
+          const curves =
+            curveBits === 16
+              ? new Int16Array(
+                  buffer(curvePointer, count * 8, 2),
+                  curvePointer,
+                  count * 4,
                 )
-                  throw new Error("Camera target incomplete");
-                const clear = floats(clearPointer >>> 0, 4);
-                gl.enable(gl.DEPTH_TEST);
-                gl.enable(gl.CULL_FACE);
-                gl.disable(gl.BLEND);
-                gl.disable(gl.SCISSOR_TEST);
-                gl.disable(gl.DITHER);
-                gl.disable(gl.POLYGON_OFFSET_FILL);
-                gl.disable(gl.SAMPLE_ALPHA_TO_COVERAGE);
-                gl.disable(gl.SAMPLE_COVERAGE);
-                gl.disable(gl.RASTERIZER_DISCARD);
-                gl.disable(gl.STENCIL_TEST);
-                gl.depthFunc(gl.LESS);
-                setDepthMask(true);
-                gl.colorMask(true, true, true, true);
-                gl.frontFace(gl.CCW);
-                gl.cullFace(gl.BACK);
-                gl.clearColor(clear[0]!, clear[1]!, clear[2]!, clear[3]!);
-                gl.clearDepth(1);
-                gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-                check();
-                return 1;
-              } catch (error) {
-                restoreSurfaceCacheTarget();
-                throw error;
-              }
-            });
-          },
-          end_surface_cache_target(): number {
-            return status(() => {
-              restoreSurfaceCacheTarget();
-              // A failed repaint must not be kept as a complete image.
-              check();
-              return 1;
-            });
-          },
-          draw_surface_cache(
-            programHandle: number,
-            handle: number,
-            mvpPointer: number,
-            sizePointer: number,
-            clipPointer: number,
-            opacity: number,
-          ): number {
-            return status(() => {
-              const program = programs.get(programHandle >>> 0);
-              const target = surfaceCacheTargets!.get(handle >>> 0);
-              if (!program || !target)
-                throw new Error("Stale Surface cache handle");
-              if (surfaceCacheTarget?.handle === handle >>> 0)
-                throw new Error("Cannot sample the bound Surface cache target");
-              const size = floats(sizePointer >>> 0, 2);
-              const width = size[0]!;
-              const height = size[1]!;
-              if (!(width > 0 && height > 0))
-                throw new Error("Invalid Surface cache composite size");
-              if (blendMode !== 4) {
-                // Premultiplied colour: opacity was applied once when painting.
-                gl.enable(gl.BLEND);
-                gl.blendEquation(gl.FUNC_ADD);
-                gl.blendFuncSeparate(
-                  gl.ONE,
-                  gl.ONE_MINUS_SRC_ALPHA,
-                  gl.ONE,
-                  gl.ONE_MINUS_SRC_ALPHA,
+              : new Int32Array(
+                  buffer(curvePointer, count * 16, 4),
+                  curvePointer,
+                  count * 4,
                 );
-                setDepthMask(false);
-                blendMode = 4;
-              }
-              if (!surfaceQuadVao) surfaceQuadVao = gl.createVertexArray();
-              if (!surfaceQuadVao)
-                throw new Error("Surface quad allocation failed");
-              useProgram(program.object);
-              const uniform = (name: string) =>
-                parameterLocation(program, name);
-              programMatrixAt(program, program.mvp, mvpPointer >>> 0);
-              programVec4(program, uniform("u_placement"), 0, 0, width, height);
-              const clip = floats(clipPointer >>> 0, 4);
-              programVec4(
-                program,
-                uniform("u_clip"),
-                clip[0]!,
-                clip[1]!,
-                clip[2]!,
-                clip[3]!,
-              );
-              programFloat(program, uniform("u_opacity"), opacity);
-              programInt(program, uniform("u_surface_cache"), 0);
-              gl.activeTexture(gl.TEXTURE0);
-              gl.bindTexture(gl.TEXTURE_2D, target.texture);
-              bindVertexArray(surfaceQuadVao);
-              gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-              // A later repaint of this image never samples its own target.
-              gl.bindTexture(gl.TEXTURE_2D, null);
-              // Composites are routine draws; the frame end reports their errors.
-              checkDraw();
-              return 1;
-            });
-          },
-          delete_surface_cache_target(handle: number): void {
-            const target = surfaceCacheTargets!.get(handle >>> 0);
-            if (!target) return;
-            surfaceCacheTargets!.delete(handle >>> 0);
-            forgetFramebuffer(target.framebuffer);
-            if (!disposed && !gl.isContextLost()) {
-              gl.deleteFramebuffer(target.framebuffer);
-              gl.deleteTexture(target.texture);
-              if (target.depth) gl.deleteRenderbuffer(target.depth);
-            }
-          },
-        }
-      : {}),
-    // GUI boxes, retained batches and glyph atlases; omitted from non-GUI bridges.
-    ...(IPP_SURFACES
-      ? {
-          create_gui_batch(byteLength: number, layoutPointer: number): number {
-            return status(() =>
-              createRetainedBatch!(byteLength >>> 0, layoutPointer >>> 0),
+          const bands =
+            bandBits === 16
+              ? new Uint16Array(
+                  buffer(bandPointer, bandCount * 2, 2),
+                  bandPointer,
+                  bandCount,
+                )
+              : new Uint32Array(
+                  buffer(bandPointer, bandCount * 4, 4),
+                  bandPointer,
+                  bandCount,
+                );
+          const texture = gl.createTexture();
+          const bandTexture = gl.createTexture();
+          const vao = gl.createVertexArray();
+          if (!texture || !bandTexture || !vao) {
+            if (texture) gl.deleteTexture(texture);
+            if (bandTexture) gl.deleteTexture(bandTexture);
+            if (vao) gl.deleteVertexArray(vao);
+            throw new Error("Surface path allocation failed");
+          }
+          let retained = false;
+          try {
+            gl.bindBuffer(gl.PIXEL_UNPACK_BUFFER, null);
+            gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, texture);
+            uploadSurfaceTexels(
+              curveLayout,
+              4,
+              curveBits === 16 ? gl.RGBA16I : gl.RGBA32I,
+              gl.RGBA_INTEGER,
+              curveBits === 16 ? gl.SHORT : gl.INT,
+              curves,
             );
-          },
-          write_gui_batch(
-            batchHandle: number,
-            byteOffset: number,
-            vertexPointer: number,
-            byteLength: number,
-          ): number {
-            return status(() => {
-              writeRetainedBatch!(
-                guiBatches!.get(batchHandle >>> 0),
-                byteOffset >>> 0,
-                vertexPointer >>> 0,
-                byteLength >>> 0,
-              );
-              return 1;
+            gl.bindTexture(gl.TEXTURE_2D, bandTexture);
+            uploadSurfaceTexels(
+              bandLayout,
+              1,
+              bandBits === 16 ? gl.R16UI : gl.R32UI,
+              gl.RED_INTEGER,
+              bandBits === 16 ? gl.UNSIGNED_SHORT : gl.UNSIGNED_INT,
+              bands,
+            );
+            gl.bindTexture(gl.TEXTURE_2D, null);
+            check();
+            const handle = id();
+            surfacePaths.set(handle, {
+              texture,
+              bandTexture,
+              vao,
+              count,
+              width: curveLayout.width,
+              scale,
+              bandCount,
+              bandWidth: bandLayout.width,
             });
-          },
-          delete_gui_batch(batchHandle: number): void {
-            const batch = guiBatches!.get(batchHandle >>> 0);
-            if (batch) {
-              guiBatches!.delete(batchHandle >>> 0);
-              gl.deleteVertexArray(batch.vao);
-              gl.deleteBuffer(batch.vbo);
+            retained = true;
+            return handle;
+          } finally {
+            if (!retained) {
+              gl.deleteTexture(texture);
+              gl.deleteTexture(bandTexture);
+              gl.deleteVertexArray(vao);
             }
-          },
-          draw_gui_batch(
-            programHandle: number,
-            batchHandle: number,
-            atlasHandle: number,
-            mvpPointer: number,
-            first: number,
-            count: number,
-          ): number {
-            return status(() => {
-              const program = programs.get(programHandle >>> 0);
-              if (!program) throw new Error("Stale GUI batch program handle");
-              const batch = guiBatches!.get(batchHandle >>> 0);
-              if (!batch) throw new Error("Stale GUI batch handle");
-              first >>>= 0;
-              count >>>= 0;
-              if ((first + count) * batch.stride > batch.bytes)
-                throw new Error("GUI batch draw exceeds its storage");
-              let atlas: WebGLTexture | undefined;
-              if (atlasHandle >>> 0 !== 0) {
-                atlas = textures.get(atlasHandle >>> 0);
-                if (!atlas) throw new Error("Stale glyph atlas texture handle");
-              }
-              if (blendMode !== 2) {
-                gl.enable(gl.BLEND);
-                gl.blendEquation(gl.FUNC_ADD);
-                gl.blendFuncSeparate(
-                  gl.SRC_ALPHA,
-                  gl.ONE_MINUS_SRC_ALPHA,
-                  gl.ONE,
-                  gl.ONE_MINUS_SRC_ALPHA,
-                );
-                setDepthMask(false);
-                blendMode = 2;
-              }
-              useProgram(program.object);
-              programMatrixAt(program, program.mvp, mvpPointer >>> 0);
-              const [viewportWidth, viewportHeight] = activeSurfaceViewport();
-              programVec4(
-                program,
-                parameterLocation(program, "u_viewport"),
-                viewportWidth,
-                viewportHeight,
-                0,
-                0,
-              );
-              programInt(program, parameterLocation(program, "u_atlas"), 0);
-              // A glyph range binds its atlas. Box-only ranges never sample unit 0 but
-              // still clear it: WebGL rejects the draw when a leftover integer curve
-              // texture there mismatches the float u_atlas sampler.
-              gl.activeTexture(gl.TEXTURE0);
-              gl.bindTexture(gl.TEXTURE_2D, atlas ?? null);
-              bindVertexArray(batch.vao);
-              gl.drawArrays(gl.TRIANGLES, first, count);
-              checkDraw();
-              return 1;
-            });
-          },
-          create_glyph_atlas_page(width: number, height: number): number {
-            return status(() => {
-              width >>>= 0;
-              height >>>= 0;
-              const texture = gl.createTexture();
-              const framebuffer = gl.createFramebuffer();
-              if (!texture || !framebuffer) {
-                if (texture) gl.deleteTexture(texture);
-                if (framebuffer) gl.deleteFramebuffer(framebuffer);
-                throw new Error("Glyph atlas allocation failed");
-              }
-              gl.activeTexture(gl.TEXTURE0);
-              gl.bindTexture(gl.TEXTURE_2D, texture);
-              // Single-channel coverage; the text shader samples red.
-              gl.texImage2D(
-                gl.TEXTURE_2D,
-                0,
-                gl.R8,
-                width,
-                height,
-                0,
-                gl.RED,
-                gl.UNSIGNED_BYTE,
-                null,
-              );
-              gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-              gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-              gl.texParameteri(
-                gl.TEXTURE_2D,
-                gl.TEXTURE_WRAP_S,
-                gl.CLAMP_TO_EDGE,
-              );
-              gl.texParameteri(
-                gl.TEXTURE_2D,
-                gl.TEXTURE_WRAP_T,
-                gl.CLAMP_TO_EDGE,
-              );
-              const previous = currentTarget();
-              bindFramebuffers(framebuffer, framebuffer);
-              gl.framebufferTexture2D(
-                gl.FRAMEBUFFER,
-                gl.COLOR_ATTACHMENT0,
-                gl.TEXTURE_2D,
-                texture,
-                0,
-              );
-              const complete =
-                gl.checkFramebufferStatus(gl.FRAMEBUFFER) ===
-                gl.FRAMEBUFFER_COMPLETE;
-              setViewport([0, 0, width, height]);
-              gl.clearColor(0, 0, 0, 0);
-              gl.clear(gl.COLOR_BUFFER_BIT);
-              bindFramebuffers(previous.framebuffer, previous.readFramebuffer);
-              setViewport(previous.viewport);
-              try {
-                if (!complete)
-                  throw new Error("Glyph atlas framebuffer incomplete");
-                check();
-              } catch (error) {
-                gl.deleteTexture(texture);
-                gl.deleteFramebuffer(framebuffer);
-                throw error;
-              }
-              const textureHandle = id();
-              textures.set(textureHandle, texture);
-              const pageHandle = id();
-              glyphAtlasPages!.set(pageHandle, {
-                texture: textureHandle,
-                framebuffer,
-                width,
-                height,
-              });
-              return pageHandle;
-            });
-          },
-          delete_glyph_atlas_page(pageHandle: number): void {
-            const page = glyphAtlasPages!.get(pageHandle >>> 0);
-            if (page) {
-              glyphAtlasPages!.delete(pageHandle >>> 0);
-              forgetFramebuffer(page.framebuffer);
-              gl.deleteFramebuffer(page.framebuffer);
-              const tex = textures.get(page.texture);
-              if (tex) {
-                textures.delete(page.texture);
-                gl.deleteTexture(tex);
-              }
-            }
-          },
-          begin_glyph_atlas_page(pageHandle: number): number {
-            return status(() => {
-              const page = glyphAtlasPages!.get(pageHandle >>> 0);
-              if (!page) throw new Error("Stale glyph atlas page handle");
-              // Switching between pages keeps the target saved by the first
-              // begin: the host target, since population runs before any cache
-              // repaint and never inside one.
-              glyphAtlasTarget = {
-                width: page.width,
-                height: page.height,
-                saved: glyphAtlasTarget?.saved ?? currentTarget(),
-              };
-              bindFramebuffers(page.framebuffer, page.framebuffer);
-              setViewport([0, 0, page.width, page.height]);
-              return 1;
-            });
-          },
-          end_glyph_atlas_page(): number {
-            return status(() => {
-              if (glyphAtlasTarget) {
-                const { saved } = glyphAtlasTarget;
-                bindFramebuffers(saved.framebuffer, saved.readFramebuffer);
-                setViewport(saved.viewport);
-                glyphAtlasTarget = undefined;
-              }
-              // Atlas draws skip per-draw checks; a failed population must not be
-              // kept as populated coverage.
-              check();
-              return 1;
-            });
-          },
-          glyph_atlas_texture(pageHandle: number): number {
-            const page = glyphAtlasPages!.get(pageHandle >>> 0);
-            return page ? page.texture : 0;
-          },
+          }
+        });
+      },
+      draw_surface_path(
+        programHandle: number,
+        pathHandle: number,
+        boundsPointer: number,
+        curveStart: number,
+        curveCount: number,
+        bandOffset: number,
+        mvpPointer: number,
+        placementPointer: number,
+        clipPointer: number,
+        colorPointer: number,
+        fillRule: number,
+      ): number {
+        return status(() => {
+          const program = programs.get(programHandle >>> 0);
+          const path = surfacePaths.get(pathHandle >>> 0);
+          if (!program || !path)
+            throw new Error("Stale surface program or path handle");
+          curveStart >>>= 0;
+          curveCount >>>= 0;
+          bandOffset >>>= 0;
+          if (curveCount === 0 || curveStart + curveCount > path.count)
+            throw new Error("Invalid surface curve range");
+          if (bandOffset + SURFACE_BAND_HEADER_TEXELS > path.bandCount)
+            throw new Error("Invalid surface band range");
+          if (blendMode !== 2) {
+            gl.enable(gl.BLEND);
+            gl.blendEquation(gl.FUNC_ADD);
+            gl.blendFuncSeparate(
+              gl.SRC_ALPHA,
+              gl.ONE_MINUS_SRC_ALPHA,
+              gl.ONE,
+              gl.ONE_MINUS_SRC_ALPHA,
+            );
+            setDepthMask(false);
+            blendMode = 2;
+          }
+          useProgram(program.object);
+          const uniform = (name: string) => parameterLocation(program, name);
+          programMatrixAt(program, program.mvp, mvpPointer >>> 0);
+          programVec4At(program, uniform("u_bounds"), boundsPointer >>> 0);
+          programVec4At(
+            program,
+            uniform("u_placement"),
+            placementPointer >>> 0,
+          );
+          programVec4At(program, uniform("u_clip"), clipPointer >>> 0);
+          programVec4At(program, uniform("u_color"), colorPointer >>> 0);
+          programInt(program, uniform("u_curves"), 0);
+          programFloat(program, uniform("u_curve_scale"), path.scale);
+          programInt(program, uniform("u_curve_start"), curveStart);
+          programInt(program, uniform("u_curve_width"), path.width);
+          programInt(program, uniform("u_fill_rule"), fillRule >>> 0);
+          programInt(program, uniform("u_bands"), 1);
+          programInt(program, uniform("u_band_offset"), bandOffset);
+          programInt(program, uniform("u_band_width"), path.bandWidth);
+          const [viewportWidth, viewportHeight] = activeSurfaceViewport();
+          programVec4(
+            program,
+            uniform("u_viewport"),
+            viewportWidth,
+            viewportHeight,
+            0,
+            0,
+          );
+          bindPathTextures(path);
+          bindVertexArray(path.vao);
+          gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+          releaseBandTexture();
+          checkDraw();
+          return 1;
+        });
+      },
+      delete_surface_path(handle: number): void {
+        const path = surfacePaths.get(handle >>> 0);
+        surfacePaths.delete(handle >>> 0);
+        if (path && !disposed && !gl.isContextLost()) {
+          gl.deleteTexture(path.texture);
+          gl.deleteTexture(path.bandTexture);
+          gl.deleteVertexArray(path.vao);
         }
-      : {}),
+      },
+      create_surface_instances(
+        pathHandle: number,
+        instancePointer: number,
+        count: number,
+      ): number {
+        return status(() => {
+          const values = surfaceInstanceValues(
+            pathHandle,
+            instancePointer,
+            count,
+          );
+          const vao = gl.createVertexArray();
+          const vbo = gl.createBuffer();
+          if (!vao || !vbo) {
+            if (vao) gl.deleteVertexArray(vao);
+            if (vbo) gl.deleteBuffer(vbo);
+            throw new Error("Surface instance allocation failed");
+          }
+          bindVertexArray(vao);
+          gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+          gl.bufferData(gl.ARRAY_BUFFER, values, gl.STATIC_DRAW);
+          for (let slot = 0; slot < 4; slot += 1) {
+            gl.enableVertexAttribArray(slot);
+            gl.vertexAttribPointer(slot, 4, gl.FLOAT, false, 64, slot * 16);
+            gl.vertexAttribDivisor(slot, 1);
+          }
+          bindVertexArray(null);
+          gl.bindBuffer(gl.ARRAY_BUFFER, null);
+          try {
+            check();
+          } catch (error) {
+            gl.deleteVertexArray(vao);
+            gl.deleteBuffer(vbo);
+            throw error;
+          }
+          const handle = id();
+          surfaceInstanceStreams.set(handle, {
+            vao,
+            vbo,
+            count: count >>> 0,
+          });
+          return handle;
+        });
+      },
+      update_surface_instances(
+        streamHandle: number,
+        pathHandle: number,
+        instancePointer: number,
+        count: number,
+      ): number {
+        return status(() => {
+          const stream = surfaceInstanceStreams.get(streamHandle >>> 0);
+          if (!stream) throw new Error("Stale surface instance handle");
+          const values = surfaceInstanceValues(
+            pathHandle,
+            instancePointer,
+            count,
+          );
+          // Replace the complete store; queued draws keep the previous one.
+          gl.bindBuffer(gl.ARRAY_BUFFER, stream.vbo);
+          gl.bufferData(gl.ARRAY_BUFFER, values, gl.STATIC_DRAW);
+          gl.bindBuffer(gl.ARRAY_BUFFER, null);
+          // Outside exhaustive mode the device checks this frame's end instead.
+          checkDraw();
+          stream.count = count >>> 0;
+          return 1;
+        });
+      },
+      delete_surface_instances(streamHandle: number): void {
+        const stream = surfaceInstanceStreams.get(streamHandle >>> 0);
+        surfaceInstanceStreams.delete(streamHandle >>> 0);
+        if (stream && !disposed && !gl.isContextLost()) {
+          gl.deleteVertexArray(stream.vao);
+          gl.deleteBuffer(stream.vbo);
+        }
+      },
+      draw_surface_instances(
+        programHandle: number,
+        pathHandle: number,
+        streamHandle: number,
+        mvpPointer: number,
+        clipPointer: number,
+        fillRule: number,
+      ): number {
+        return status(() => {
+          const program = programs.get(programHandle >>> 0);
+          const path = surfacePaths.get(pathHandle >>> 0);
+          const stream = surfaceInstanceStreams.get(streamHandle >>> 0);
+          if (!program || !path || !stream)
+            throw new Error("Stale surface instance handle");
+          if (stream.count === 0) return 1;
+          if (blendMode !== 2) {
+            gl.enable(gl.BLEND);
+            gl.blendEquation(gl.FUNC_ADD);
+            gl.blendFuncSeparate(
+              gl.SRC_ALPHA,
+              gl.ONE_MINUS_SRC_ALPHA,
+              gl.ONE,
+              gl.ONE_MINUS_SRC_ALPHA,
+            );
+            setDepthMask(false);
+            blendMode = 2;
+          }
+          useProgram(program.object);
+          const uniform = (name: string) => parameterLocation(program, name);
+          programMatrixAt(program, program.mvp, mvpPointer >>> 0);
+          programVec4At(program, uniform("u_clip"), clipPointer >>> 0);
+          programInt(program, uniform("u_curves"), 0);
+          programFloat(program, uniform("u_curve_scale"), path.scale);
+          programInt(program, uniform("u_curve_width"), path.width);
+          programInt(program, uniform("u_bands"), 1);
+          programInt(program, uniform("u_band_width"), path.bandWidth);
+          programInt(program, uniform("u_fill_rule"), fillRule >>> 0);
+          const [viewportWidth, viewportHeight] = activeSurfaceViewport();
+          programVec4(
+            program,
+            uniform("u_viewport"),
+            viewportWidth,
+            viewportHeight,
+            0,
+            0,
+          );
+          bindVertexArray(stream.vao);
+          bindPathTextures(path);
+          gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, stream.count);
+          releaseBandTexture();
+          checkDraw();
+          return 1;
+        });
+      },
+      draw_surface_bitmap(
+        programHandle: number,
+        textureHandle: number,
+        mvpPointer: number,
+        placementPointer: number,
+        clipPointer: number,
+        colorPointer: number,
+      ): number {
+        return status(() => {
+          const program = programs.get(programHandle >>> 0);
+          const texture = textures.get(textureHandle >>> 0);
+          if (!program || !texture)
+            throw new Error("Stale surface bitmap handle");
+          if (blendMode !== 2) {
+            gl.enable(gl.BLEND);
+            gl.blendEquation(gl.FUNC_ADD);
+            gl.blendFuncSeparate(
+              gl.SRC_ALPHA,
+              gl.ONE_MINUS_SRC_ALPHA,
+              gl.ONE,
+              gl.ONE_MINUS_SRC_ALPHA,
+            );
+            setDepthMask(false);
+            blendMode = 2;
+          }
+          if (!surfaceQuadVao) surfaceQuadVao = gl.createVertexArray();
+          if (!surfaceQuadVao)
+            throw new Error("Surface quad allocation failed");
+          useProgram(program.object);
+          const uniform = (name: string) => parameterLocation(program, name);
+          programMatrixAt(program, program.mvp, mvpPointer >>> 0);
+          programVec4At(
+            program,
+            uniform("u_placement"),
+            placementPointer >>> 0,
+          );
+          programVec4At(program, uniform("u_clip"), clipPointer >>> 0);
+          programVec4At(program, uniform("u_color"), colorPointer >>> 0);
+          programInt(program, uniform("u_texture"), 0);
+          // Unit 0 keeps the texture until the next draw that samples it.
+          gl.activeTexture(gl.TEXTURE0);
+          gl.bindTexture(gl.TEXTURE_2D, texture);
+          bindVertexArray(surfaceQuadVao);
+          gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+          checkDraw();
+          return 1;
+        });
+      },
+      surface_cache_limit(): number {
+        if (disposed || gl.isContextLost()) return 0;
+        return Math.min(maxTextureSize, maxViewport[0]!, maxViewport[1]!);
+      },
+      create_surface_cache_target(width: number, height: number): number {
+        return status(() => {
+          width >>>= 0;
+          height >>>= 0;
+          const limit = Math.min(
+            maxTextureSize,
+            maxViewport[0]!,
+            maxViewport[1]!,
+          );
+          if (width === 0 || height === 0 || width > limit || height > limit)
+            throw new Error("Invalid Surface cache target dimensions");
+          const texture = gl.createTexture();
+          const framebuffer = gl.createFramebuffer();
+          if (!texture || !framebuffer) {
+            if (texture) gl.deleteTexture(texture);
+            if (framebuffer) gl.deleteFramebuffer(framebuffer);
+            throw new Error("Surface cache target allocation failed");
+          }
+          gl.activeTexture(gl.TEXTURE0);
+          gl.bindTexture(gl.TEXTURE_2D, texture);
+          // Linear sRGB storage matches the main target: blending runs in
+          // linear space and sampling decodes before filtering.
+          gl.texImage2D(
+            gl.TEXTURE_2D,
+            0,
+            gl.SRGB8_ALPHA8,
+            width,
+            height,
+            0,
+            gl.RGBA,
+            gl.UNSIGNED_BYTE,
+            null,
+          );
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+          gl.bindTexture(gl.TEXTURE_2D, null);
+          const previous = currentTarget();
+          bindFramebuffers(framebuffer, framebuffer);
+          gl.framebufferTexture2D(
+            gl.FRAMEBUFFER,
+            gl.COLOR_ATTACHMENT0,
+            gl.TEXTURE_2D,
+            texture,
+            0,
+          );
+          const complete =
+            gl.checkFramebufferStatus(gl.FRAMEBUFFER) ===
+            gl.FRAMEBUFFER_COMPLETE;
+          if (complete) {
+            setViewport([0, 0, width, height]);
+            gl.clearColor(0, 0, 0, 0);
+            gl.clear(gl.COLOR_BUFFER_BIT);
+          }
+          bindFramebuffers(previous.framebuffer, previous.readFramebuffer);
+          setViewport(previous.viewport);
+          try {
+            if (!complete)
+              throw new Error("Surface cache framebuffer incomplete");
+            check();
+          } catch (error) {
+            gl.deleteTexture(texture);
+            gl.deleteFramebuffer(framebuffer);
+            throw error;
+          }
+          const handle = id();
+          surfaceCacheTargets.set(handle, {
+            texture,
+            framebuffer,
+            width,
+            height,
+          });
+          return handle;
+        });
+      },
+      resize_surface_cache_target(
+        handle: number,
+        width: number,
+        height: number,
+      ): number {
+        return status(() => {
+          const target = surfaceCacheTargets.get(handle >>> 0);
+          if (!target) throw new Error("Stale Surface cache target handle");
+          if (surfaceCacheTarget?.handle === handle >>> 0)
+            throw new Error("Cannot resize the bound Surface cache target");
+          width >>>= 0;
+          height >>>= 0;
+          const limit = Math.min(
+            maxTextureSize,
+            maxViewport[0]!,
+            maxViewport[1]!,
+          );
+          if (width === 0 || height === 0 || width > limit || height > limit)
+            throw new Error("Invalid Surface cache target dimensions");
+          // Respecifying the attached level keeps the attachment; contents
+          // are undefined until the next repaint clears them.
+          gl.activeTexture(gl.TEXTURE0);
+          gl.bindTexture(gl.TEXTURE_2D, target.texture);
+          gl.texImage2D(
+            gl.TEXTURE_2D,
+            0,
+            gl.SRGB8_ALPHA8,
+            width,
+            height,
+            0,
+            gl.RGBA,
+            gl.UNSIGNED_BYTE,
+            null,
+          );
+          gl.bindTexture(gl.TEXTURE_2D, null);
+          if (target.depth) {
+            gl.bindRenderbuffer(gl.RENDERBUFFER, target.depth);
+            gl.renderbufferStorage(
+              gl.RENDERBUFFER,
+              gl.DEPTH_COMPONENT24,
+              width,
+              height,
+            );
+            gl.bindRenderbuffer(gl.RENDERBUFFER, null);
+          }
+          target.width = width;
+          target.height = height;
+          check();
+          return 1;
+        });
+      },
+      begin_surface_cache_target(handle: number): number {
+        return status(() => {
+          const target = surfaceCacheTargets.get(handle >>> 0);
+          if (!target) throw new Error("Stale Surface cache target handle");
+          if (surfaceCacheTarget)
+            throw new Error("Surface cache targets cannot nest");
+          if (glyphAtlasTarget)
+            throw new Error("Surface cache target inside atlas population");
+          surfaceCacheTarget = {
+            handle: handle >>> 0,
+            width: target.width,
+            height: target.height,
+            saved: currentTarget(),
+          };
+          bindFramebuffers(target.framebuffer, target.framebuffer);
+          setViewport([0, 0, target.width, target.height]);
+          gl.disable(gl.SCISSOR_TEST);
+          gl.disable(gl.STENCIL_TEST);
+          setDepthMask(false);
+          // Repaints run outside begin_frame: every draw reapplies its blending.
+          blendMode = undefined;
+          gl.clearColor(0, 0, 0, 0);
+          gl.clear(gl.COLOR_BUFFER_BIT);
+          // The end of the repaint checks the whole pass.
+          try {
+            checkDraw();
+          } catch (error) {
+            restoreSurfaceCacheTarget();
+            throw error;
+          }
+          return 1;
+        });
+      },
+      begin_camera_target(handle: number, clearPointer: number): number {
+        return status(() => {
+          const target = surfaceCacheTargets.get(handle >>> 0);
+          if (!target || surfaceCacheTarget || glyphAtlasTarget)
+            throw new Error("Unavailable Camera target");
+          surfaceCacheTarget = {
+            handle: handle >>> 0,
+            width: target.width,
+            height: target.height,
+            saved: currentTarget(),
+          };
+          try {
+            invalidateSubmission();
+            bindFramebuffers(target.framebuffer, target.framebuffer);
+            setViewport([0, 0, target.width, target.height]);
+            if (!target.depth) {
+              const depth = gl.createRenderbuffer();
+              if (!depth) throw new Error("Camera depth allocation failed");
+              target.depth = depth;
+              gl.bindRenderbuffer(gl.RENDERBUFFER, depth);
+              gl.renderbufferStorage(
+                gl.RENDERBUFFER,
+                gl.DEPTH_COMPONENT24,
+                target.width,
+                target.height,
+              );
+              gl.framebufferRenderbuffer(
+                gl.FRAMEBUFFER,
+                gl.DEPTH_ATTACHMENT,
+                gl.RENDERBUFFER,
+                depth,
+              );
+            }
+            if (
+              gl.checkFramebufferStatus(gl.FRAMEBUFFER) !==
+              gl.FRAMEBUFFER_COMPLETE
+            )
+              throw new Error("Camera target incomplete");
+            const clear = floats(clearPointer >>> 0, 4);
+            gl.enable(gl.DEPTH_TEST);
+            gl.enable(gl.CULL_FACE);
+            gl.disable(gl.BLEND);
+            gl.disable(gl.SCISSOR_TEST);
+            gl.disable(gl.DITHER);
+            gl.disable(gl.POLYGON_OFFSET_FILL);
+            gl.disable(gl.SAMPLE_ALPHA_TO_COVERAGE);
+            gl.disable(gl.SAMPLE_COVERAGE);
+            gl.disable(gl.RASTERIZER_DISCARD);
+            gl.disable(gl.STENCIL_TEST);
+            gl.depthFunc(gl.LESS);
+            setDepthMask(true);
+            gl.colorMask(true, true, true, true);
+            gl.frontFace(gl.CCW);
+            gl.cullFace(gl.BACK);
+            gl.clearColor(clear[0]!, clear[1]!, clear[2]!, clear[3]!);
+            gl.clearDepth(1);
+            gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+            check();
+            return 1;
+          } catch (error) {
+            restoreSurfaceCacheTarget();
+            throw error;
+          }
+        });
+      },
+      end_surface_cache_target(): number {
+        return status(() => {
+          restoreSurfaceCacheTarget();
+          // A failed repaint must not be kept as a complete image.
+          check();
+          return 1;
+        });
+      },
+      draw_surface_cache(
+        programHandle: number,
+        handle: number,
+        mvpPointer: number,
+        sizePointer: number,
+        clipPointer: number,
+        opacity: number,
+      ): number {
+        return status(() => {
+          const program = programs.get(programHandle >>> 0);
+          const target = surfaceCacheTargets.get(handle >>> 0);
+          if (!program || !target)
+            throw new Error("Stale Surface cache handle");
+          if (surfaceCacheTarget?.handle === handle >>> 0)
+            throw new Error("Cannot sample the bound Surface cache target");
+          const size = floats(sizePointer >>> 0, 2);
+          const width = size[0]!;
+          const height = size[1]!;
+          if (!(width > 0 && height > 0))
+            throw new Error("Invalid Surface cache composite size");
+          if (blendMode !== 4) {
+            // Premultiplied colour: opacity was applied once when painting.
+            gl.enable(gl.BLEND);
+            gl.blendEquation(gl.FUNC_ADD);
+            gl.blendFuncSeparate(
+              gl.ONE,
+              gl.ONE_MINUS_SRC_ALPHA,
+              gl.ONE,
+              gl.ONE_MINUS_SRC_ALPHA,
+            );
+            setDepthMask(false);
+            blendMode = 4;
+          }
+          if (!surfaceQuadVao) surfaceQuadVao = gl.createVertexArray();
+          if (!surfaceQuadVao)
+            throw new Error("Surface quad allocation failed");
+          useProgram(program.object);
+          const uniform = (name: string) => parameterLocation(program, name);
+          programMatrixAt(program, program.mvp, mvpPointer >>> 0);
+          programVec4(program, uniform("u_placement"), 0, 0, width, height);
+          const clip = floats(clipPointer >>> 0, 4);
+          programVec4(
+            program,
+            uniform("u_clip"),
+            clip[0]!,
+            clip[1]!,
+            clip[2]!,
+            clip[3]!,
+          );
+          programFloat(program, uniform("u_opacity"), opacity);
+          programInt(program, uniform("u_surface_cache"), 0);
+          gl.activeTexture(gl.TEXTURE0);
+          gl.bindTexture(gl.TEXTURE_2D, target.texture);
+          bindVertexArray(surfaceQuadVao);
+          gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+          // A later repaint of this image never samples its own target.
+          gl.bindTexture(gl.TEXTURE_2D, null);
+          // Composites are routine draws; the frame end reports their errors.
+          checkDraw();
+          return 1;
+        });
+      },
+      delete_surface_cache_target(handle: number): void {
+        const target = surfaceCacheTargets.get(handle >>> 0);
+        if (!target) return;
+        surfaceCacheTargets.delete(handle >>> 0);
+        forgetFramebuffer(target.framebuffer);
+        if (!disposed && !gl.isContextLost()) {
+          gl.deleteFramebuffer(target.framebuffer);
+          gl.deleteTexture(target.texture);
+          if (target.depth) gl.deleteRenderbuffer(target.depth);
+        }
+      },
+    },
+    // GUI boxes, retained batches and glyph atlases; omitted from non-GUI bridges.
+    ...{
+      create_gui_batch(byteLength: number, layoutPointer: number): number {
+        return status(() =>
+          createRetainedBatch(byteLength >>> 0, layoutPointer >>> 0),
+        );
+      },
+      write_gui_batch(
+        batchHandle: number,
+        byteOffset: number,
+        vertexPointer: number,
+        byteLength: number,
+      ): number {
+        return status(() => {
+          writeRetainedBatch(
+            guiBatches.get(batchHandle >>> 0),
+            byteOffset >>> 0,
+            vertexPointer >>> 0,
+            byteLength >>> 0,
+          );
+          return 1;
+        });
+      },
+      delete_gui_batch(batchHandle: number): void {
+        const batch = guiBatches.get(batchHandle >>> 0);
+        if (batch) {
+          guiBatches.delete(batchHandle >>> 0);
+          gl.deleteVertexArray(batch.vao);
+          gl.deleteBuffer(batch.vbo);
+        }
+      },
+      draw_gui_batch(
+        programHandle: number,
+        batchHandle: number,
+        atlasHandle: number,
+        mvpPointer: number,
+        first: number,
+        count: number,
+      ): number {
+        return status(() => {
+          const program = programs.get(programHandle >>> 0);
+          if (!program) throw new Error("Stale GUI batch program handle");
+          const batch = guiBatches.get(batchHandle >>> 0);
+          if (!batch) throw new Error("Stale GUI batch handle");
+          first >>>= 0;
+          count >>>= 0;
+          if ((first + count) * batch.stride > batch.bytes)
+            throw new Error("GUI batch draw exceeds its storage");
+          let atlas: WebGLTexture | undefined;
+          if (atlasHandle >>> 0 !== 0) {
+            atlas = textures.get(atlasHandle >>> 0);
+            if (!atlas) throw new Error("Stale glyph atlas texture handle");
+          }
+          if (blendMode !== 2) {
+            gl.enable(gl.BLEND);
+            gl.blendEquation(gl.FUNC_ADD);
+            gl.blendFuncSeparate(
+              gl.SRC_ALPHA,
+              gl.ONE_MINUS_SRC_ALPHA,
+              gl.ONE,
+              gl.ONE_MINUS_SRC_ALPHA,
+            );
+            setDepthMask(false);
+            blendMode = 2;
+          }
+          useProgram(program.object);
+          programMatrixAt(program, program.mvp, mvpPointer >>> 0);
+          const [viewportWidth, viewportHeight] = activeSurfaceViewport();
+          programVec4(
+            program,
+            parameterLocation(program, "u_viewport"),
+            viewportWidth,
+            viewportHeight,
+            0,
+            0,
+          );
+          programInt(program, parameterLocation(program, "u_atlas"), 0);
+          // A glyph range binds its atlas. Box-only ranges never sample unit 0 but
+          // still clear it: WebGL rejects the draw when a leftover integer curve
+          // texture there mismatches the float u_atlas sampler.
+          gl.activeTexture(gl.TEXTURE0);
+          gl.bindTexture(gl.TEXTURE_2D, atlas ?? null);
+          bindVertexArray(batch.vao);
+          gl.drawArrays(gl.TRIANGLES, first, count);
+          checkDraw();
+          return 1;
+        });
+      },
+      create_glyph_atlas_page(width: number, height: number): number {
+        return status(() => {
+          width >>>= 0;
+          height >>>= 0;
+          const texture = gl.createTexture();
+          const framebuffer = gl.createFramebuffer();
+          if (!texture || !framebuffer) {
+            if (texture) gl.deleteTexture(texture);
+            if (framebuffer) gl.deleteFramebuffer(framebuffer);
+            throw new Error("Glyph atlas allocation failed");
+          }
+          gl.activeTexture(gl.TEXTURE0);
+          gl.bindTexture(gl.TEXTURE_2D, texture);
+          // Single-channel coverage; the text shader samples red.
+          gl.texImage2D(
+            gl.TEXTURE_2D,
+            0,
+            gl.R8,
+            width,
+            height,
+            0,
+            gl.RED,
+            gl.UNSIGNED_BYTE,
+            null,
+          );
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+          const previous = currentTarget();
+          bindFramebuffers(framebuffer, framebuffer);
+          gl.framebufferTexture2D(
+            gl.FRAMEBUFFER,
+            gl.COLOR_ATTACHMENT0,
+            gl.TEXTURE_2D,
+            texture,
+            0,
+          );
+          const complete =
+            gl.checkFramebufferStatus(gl.FRAMEBUFFER) ===
+            gl.FRAMEBUFFER_COMPLETE;
+          setViewport([0, 0, width, height]);
+          gl.clearColor(0, 0, 0, 0);
+          gl.clear(gl.COLOR_BUFFER_BIT);
+          bindFramebuffers(previous.framebuffer, previous.readFramebuffer);
+          setViewport(previous.viewport);
+          try {
+            if (!complete)
+              throw new Error("Glyph atlas framebuffer incomplete");
+            check();
+          } catch (error) {
+            gl.deleteTexture(texture);
+            gl.deleteFramebuffer(framebuffer);
+            throw error;
+          }
+          const textureHandle = id();
+          textures.set(textureHandle, texture);
+          const pageHandle = id();
+          glyphAtlasPages.set(pageHandle, {
+            texture: textureHandle,
+            framebuffer,
+            width,
+            height,
+          });
+          return pageHandle;
+        });
+      },
+      delete_glyph_atlas_page(pageHandle: number): void {
+        const page = glyphAtlasPages.get(pageHandle >>> 0);
+        if (page) {
+          glyphAtlasPages.delete(pageHandle >>> 0);
+          forgetFramebuffer(page.framebuffer);
+          gl.deleteFramebuffer(page.framebuffer);
+          const tex = textures.get(page.texture);
+          if (tex) {
+            textures.delete(page.texture);
+            gl.deleteTexture(tex);
+          }
+        }
+      },
+      begin_glyph_atlas_page(pageHandle: number): number {
+        return status(() => {
+          const page = glyphAtlasPages.get(pageHandle >>> 0);
+          if (!page) throw new Error("Stale glyph atlas page handle");
+          // Switching between pages keeps the target saved by the first
+          // begin: the host target, since population runs before any cache
+          // repaint and never inside one.
+          glyphAtlasTarget = {
+            width: page.width,
+            height: page.height,
+            saved: glyphAtlasTarget?.saved ?? currentTarget(),
+          };
+          bindFramebuffers(page.framebuffer, page.framebuffer);
+          setViewport([0, 0, page.width, page.height]);
+          return 1;
+        });
+      },
+      end_glyph_atlas_page(): number {
+        return status(() => {
+          if (glyphAtlasTarget) {
+            const { saved } = glyphAtlasTarget;
+            bindFramebuffers(saved.framebuffer, saved.readFramebuffer);
+            setViewport(saved.viewport);
+            glyphAtlasTarget = undefined;
+          }
+          // Atlas draws skip per-draw checks; a failed population must not be
+          // kept as populated coverage.
+          check();
+          return 1;
+        });
+      },
+      glyph_atlas_texture(pageHandle: number): number {
+        const page = glyphAtlasPages.get(pageHandle >>> 0);
+        return page ? page.texture : 0;
+      },
+    },
     create_program(
       vptr: number,
       vlen: number,
@@ -2392,18 +2308,10 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
         // glyph atlas pages have no depth, and programs may be created lazily
         // while one is bound during a repaint.
         const offscreen =
-          (IPP_SURFACES && surfaceCacheTarget !== undefined) ||
-          (IPP_SURFACES && glyphAtlasTarget !== undefined);
+          surfaceCacheTarget !== undefined || glyphAtlasTarget !== undefined;
         if (
           (!offscreen && gl.getParameter(gl.DEPTH_BITS) < 16) ||
-          gl.getParameter(gl.MAX_VERTEX_ATTRIBS) <
-            (IPP_PARTICLES
-              ? 14
-              : IPP_MESH_POSES
-                ? 9
-                : IPP_SKELETAL_ANIMATION
-                  ? 7
-                  : 5)
+          gl.getParameter(gl.MAX_VERTEX_ATTRIBS) < REQUIRED_VERTEX_ATTRIBUTES
         ) {
           throw new Error(
             "Restored WebGL depth/attribute baseline unavailable",
@@ -2450,17 +2358,13 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
                 "u_surface",
                 "u_lights[0]",
                 "u_light_count",
-                ...(IPP_SHADOWS
-                  ? ["u_shadow_map", "u_shadow_matrix", "u_shadow_settings"]
-                  : []),
+                "u_shadow_map",
+                "u_shadow_matrix",
+                "u_shadow_settings",
               ].map((name) => [name, gl.getUniformLocation(object!, name)]),
             ),
-            ...(IPP_MESH_POSES
-              ? { poseWeight: gl.getUniformLocation(object, "u_pose_weight") }
-              : {}),
-            ...(IPP_SKELETAL_ANIMATION
-              ? { joints: gl.getUniformLocation(object, "u_joints[0]") }
-              : {}),
+            poseWeight: gl.getUniformLocation(object, "u_pose_weight"),
+            joints: gl.getUniformLocation(object, "u_joints[0]"),
             texture: gl.getUniformLocation(object, "u_texture"),
           });
           shaderProgramsCreated++;
@@ -2473,7 +2377,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
         }
       });
     },
-    ...(IPP_MESH_POSES ? { draw_pose: drawMesh } : {}),
+    draw_pose: drawMesh,
     create_mesh: createMesh,
     begin_frame(
       width: number,
@@ -2517,56 +2421,50 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
         return 1;
       });
     },
-    ...(IPP_PARTICLES
-      ? {
-          set_instances: (pointer: number, count: number) =>
-            status(() => {
-              pointer >>>= 0;
-              count >>>= 0;
-              instanceCount = count;
-              if (count === 0) {
-                checkDraw();
-                return 1;
-              }
-              if (count > 0) {
-                instanceBuffer ??= gl.createBuffer();
-                if (!instanceBuffer)
-                  throw new Error("Instance buffer allocation failed");
-                gl.bindBuffer(gl.ARRAY_BUFFER, instanceBuffer);
-                if (instanceCapacity < count * 80) {
-                  instanceCapacity = Math.max(
-                    count * 80,
-                    instanceCapacity * 2,
-                    1024,
-                  );
-                  gl.bufferData(
-                    gl.ARRAY_BUFFER,
-                    instanceCapacity,
-                    gl.STREAM_DRAW,
-                  );
-                }
-                gl.bufferSubData(
-                  gl.ARRAY_BUFFER,
-                  0,
-                  wholeFloats(pointer, count * 20),
-                  pointer / 4,
-                  count * 20,
-                );
-              }
-              checkDraw();
-              return 1;
-            }),
-          set_additive: (enabled: number) =>
-            status(() => {
-              if (enabled && blendMode !== 3) {
-                gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE, gl.ONE, gl.ONE);
-                blendMode = 3;
-              }
-              checkDraw();
-              return 1;
-            }),
-        }
-      : {}),
+    ...{
+      set_instances: (pointer: number, count: number) =>
+        status(() => {
+          pointer >>>= 0;
+          count >>>= 0;
+          instanceCount = count;
+          if (count === 0) {
+            checkDraw();
+            return 1;
+          }
+          if (count > 0) {
+            instanceBuffer ??= gl.createBuffer();
+            if (!instanceBuffer)
+              throw new Error("Instance buffer allocation failed");
+            gl.bindBuffer(gl.ARRAY_BUFFER, instanceBuffer);
+            if (instanceCapacity < count * 80) {
+              instanceCapacity = Math.max(
+                count * 80,
+                instanceCapacity * 2,
+                1024,
+              );
+              gl.bufferData(gl.ARRAY_BUFFER, instanceCapacity, gl.STREAM_DRAW);
+            }
+            gl.bufferSubData(
+              gl.ARRAY_BUFFER,
+              0,
+              wholeFloats(pointer, count * 20),
+              pointer / 4,
+              count * 20,
+            );
+          }
+          checkDraw();
+          return 1;
+        }),
+      set_additive: (enabled: number) =>
+        status(() => {
+          if (enabled && blendMode !== 3) {
+            gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE, gl.ONE, gl.ONE);
+            blendMode = 3;
+          }
+          checkDraw();
+          return 1;
+        }),
+    },
     draw: drawMesh,
     /**
      * Present, then poll the error state only when `poll` is set. Loss during
@@ -2577,12 +2475,10 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
         presentLinearTarget();
         bindVertexArray(null);
         useProgram(null);
-        if (IPP_SHADOWS) {
-          boundShadowMap = undefined;
-          gl.activeTexture(gl.TEXTURE1);
-          gl.bindTexture(gl.TEXTURE_2D, null);
-          gl.bindSampler(1, null);
-        }
+        boundShadowMap = undefined;
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_2D, null);
+        gl.bindSampler(1, null);
         {
           gl.activeTexture(gl.TEXTURE0);
           gl.bindTexture(gl.TEXTURE_2D, null);
@@ -2651,171 +2547,164 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
       });
   }
 
-  if (IPP_SHADOWS) {
-    imports.shadow_map_limit = (): number =>
-      Math.min(maxTextureSize, maxViewport[0]!, maxViewport[1]!);
-    imports.create_shadow_map = (size: number): number =>
-      status(() => {
-        size >>>= 0;
-        if (
-          !size ||
-          size > gl.getParameter(gl.MAX_TEXTURE_SIZE) ||
-          size > maxViewport[0]! ||
-          size > maxViewport[1]!
-        )
-          throw new Error("Shadow map exceeds WebGL limits");
-        const texture = gl.createTexture();
-        const framebuffer = gl.createFramebuffer();
-        const previous = currentTarget();
-        let retained = false;
-        try {
-          if (!texture || !framebuffer)
-            throw new Error("Shadow map allocation failed");
-          boundShadowMap = undefined;
-          gl.activeTexture(gl.TEXTURE1);
-          gl.bindTexture(gl.TEXTURE_2D, texture);
-          gl.bindBuffer(gl.PIXEL_UNPACK_BUFFER, null);
-          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAX_LEVEL, 0);
-          gl.texImage2D(
-            gl.TEXTURE_2D,
-            0,
-            gl.DEPTH_COMPONENT24,
-            size,
-            size,
-            0,
-            gl.DEPTH_COMPONENT,
-            gl.UNSIGNED_INT,
-            null,
-          );
-          bindFramebuffers(framebuffer, framebuffer);
-          gl.framebufferTexture2D(
-            gl.FRAMEBUFFER,
-            gl.DEPTH_ATTACHMENT,
-            gl.TEXTURE_2D,
-            texture,
-            0,
-          );
-          gl.drawBuffers([gl.NONE]);
-          gl.readBuffer(gl.NONE);
-          if (
-            gl.checkFramebufferStatus(gl.FRAMEBUFFER) !==
-            gl.FRAMEBUFFER_COMPLETE
-          )
-            throw new Error("WebGL depth framebuffer unavailable");
-          check();
-          const handle = id();
-          shadows!.set(handle, { texture, framebuffer, size });
-          retained = true;
-          return handle;
-        } finally {
-          bindFramebuffers(previous.framebuffer, previous.readFramebuffer);
-          gl.bindTexture(gl.TEXTURE_2D, null);
-          if (!retained) {
-            gl.deleteTexture(texture);
-            gl.deleteFramebuffer(framebuffer);
-          }
-        }
-      });
-    imports.begin_shadow = (
-      handle: number,
-      slot: number,
-      grid: number,
-    ): number =>
-      status(() => {
-        const map = shadows!.get(handle >>> 0);
-        if (!map) throw new Error("Stale shadow map");
-        shadowTarget = currentTarget();
+  imports.shadow_map_limit = (): number =>
+    Math.min(maxTextureSize, maxViewport[0]!, maxViewport[1]!);
+  imports.create_shadow_map = (size: number): number =>
+    status(() => {
+      size >>>= 0;
+      if (
+        !size ||
+        size > gl.getParameter(gl.MAX_TEXTURE_SIZE) ||
+        size > maxViewport[0]! ||
+        size > maxViewport[1]!
+      )
+        throw new Error("Shadow map exceeds WebGL limits");
+      const texture = gl.createTexture();
+      const framebuffer = gl.createFramebuffer();
+      const previous = currentTarget();
+      let retained = false;
+      try {
+        if (!texture || !framebuffer)
+          throw new Error("Shadow map allocation failed");
         boundShadowMap = undefined;
         gl.activeTexture(gl.TEXTURE1);
-        gl.bindTexture(gl.TEXTURE_2D, null);
-        bindFramebuffers(map.framebuffer, readFramebuffer);
-        const tile = map.size / grid;
-        setViewport([
-          (slot % grid) * tile,
-          Math.floor(slot / grid) * tile,
-          tile,
-          tile,
-        ]);
-        gl.colorMask(false, false, false, false);
-        if (slot === 0) {
-          blendMode = undefined;
-          setDepthMask(true);
-          gl.clearDepth(1);
-          gl.clear(gl.DEPTH_BUFFER_BIT);
-        }
-        check();
-        return 1;
-      });
-    imports.end_shadow = (): number =>
-      status(() => {
-        if (shadowTarget) {
-          const saved = shadowTarget;
-          shadowTarget = undefined;
-          bindFramebuffers(saved.framebuffer, saved.readFramebuffer);
-          setViewport(saved.viewport);
-          gl.colorMask(true, true, true, true);
-        }
-        check();
-        return 1;
-      });
-    imports.bind_shadow = (
-      handle: number,
-      mapId: number,
-      matrix: number,
-      settings: number,
-      count: number,
-      changed: number,
-    ): number =>
-      status(() => {
-        const program = programs.get(handle >>> 0);
-        const map = shadows!.get(mapId >>> 0);
-        if (!program?.lighting || !map) throw new Error("Stale shadow binding");
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.bindBuffer(gl.PIXEL_UNPACK_BUFFER, null);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAX_LEVEL, 0);
+        gl.texImage2D(
+          gl.TEXTURE_2D,
+          0,
+          gl.DEPTH_COMPONENT24,
+          size,
+          size,
+          0,
+          gl.DEPTH_COMPONENT,
+          gl.UNSIGNED_INT,
+          null,
+        );
+        bindFramebuffers(framebuffer, framebuffer);
+        gl.framebufferTexture2D(
+          gl.FRAMEBUFFER,
+          gl.DEPTH_ATTACHMENT,
+          gl.TEXTURE_2D,
+          texture,
+          0,
+        );
+        gl.drawBuffers([gl.NONE]);
+        gl.readBuffer(gl.NONE);
         if (
-          !program.lighting.u_shadow_map &&
-          !program.lighting.u_shadow_matrix &&
-          !program.lighting.u_shadow_settings
-        ) {
-          checkDraw();
-          return 1;
+          gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE
+        )
+          throw new Error("WebGL depth framebuffer unavailable");
+        check();
+        const handle = id();
+        shadows.set(handle, { texture, framebuffer, size });
+        retained = true;
+        return handle;
+      } finally {
+        bindFramebuffers(previous.framebuffer, previous.readFramebuffer);
+        gl.bindTexture(gl.TEXTURE_2D, null);
+        if (!retained) {
+          gl.deleteTexture(texture);
+          gl.deleteFramebuffer(framebuffer);
         }
-        useProgram(program.object);
-        if (boundShadowMap !== mapId) {
-          gl.activeTexture(gl.TEXTURE1);
-          gl.bindSampler(1, null);
-          gl.bindTexture(gl.TEXTURE_2D, map.texture);
-          boundShadowMap = mapId;
-        }
-        if (changed & 128) gl.uniform1i(program.lighting.u_shadow_map!, 1);
-        if (changed & 32 && count > 0)
-          matrixUniform(
-            program.lighting.u_shadow_matrix!,
-            matrix >>> 0,
-            count * 16,
-          );
-        if (changed & 64 && count > 0)
-          vector4Uniform(
-            program.lighting.u_shadow_settings!,
-            settings >>> 0,
-            count * 4,
-          );
+      }
+    });
+  imports.begin_shadow = (handle: number, slot: number, grid: number): number =>
+    status(() => {
+      const map = shadows.get(handle >>> 0);
+      if (!map) throw new Error("Stale shadow map");
+      shadowTarget = currentTarget();
+      boundShadowMap = undefined;
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, null);
+      bindFramebuffers(map.framebuffer, readFramebuffer);
+      const tile = map.size / grid;
+      setViewport([
+        (slot % grid) * tile,
+        Math.floor(slot / grid) * tile,
+        tile,
+        tile,
+      ]);
+      gl.colorMask(false, false, false, false);
+      if (slot === 0) {
+        blendMode = undefined;
+        setDepthMask(true);
+        gl.clearDepth(1);
+        gl.clear(gl.DEPTH_BUFFER_BIT);
+      }
+      check();
+      return 1;
+    });
+  imports.end_shadow = (): number =>
+    status(() => {
+      if (shadowTarget) {
+        const saved = shadowTarget;
+        shadowTarget = undefined;
+        bindFramebuffers(saved.framebuffer, saved.readFramebuffer);
+        setViewport(saved.viewport);
+        gl.colorMask(true, true, true, true);
+      }
+      check();
+      return 1;
+    });
+  imports.bind_shadow = (
+    handle: number,
+    mapId: number,
+    matrix: number,
+    settings: number,
+    count: number,
+    changed: number,
+  ): number =>
+    status(() => {
+      const program = programs.get(handle >>> 0);
+      const map = shadows.get(mapId >>> 0);
+      if (!program?.lighting || !map) throw new Error("Stale shadow binding");
+      if (
+        !program.lighting.u_shadow_map &&
+        !program.lighting.u_shadow_matrix &&
+        !program.lighting.u_shadow_settings
+      ) {
         checkDraw();
         return 1;
-      });
-    imports.delete_shadow_map = (handle: number): void => {
-      boundShadowMap = undefined;
-      const map = shadows!.get(handle >>> 0);
-      shadows!.delete(handle >>> 0);
-      if (map) forgetFramebuffer(map.framebuffer);
-      if (map && !disposed && !gl.isContextLost()) {
-        gl.deleteTexture(map.texture);
-        gl.deleteFramebuffer(map.framebuffer);
       }
-    };
-  }
+      useProgram(program.object);
+      if (boundShadowMap !== mapId) {
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindSampler(1, null);
+        gl.bindTexture(gl.TEXTURE_2D, map.texture);
+        boundShadowMap = mapId;
+      }
+      if (changed & 128) gl.uniform1i(program.lighting.u_shadow_map!, 1);
+      if (changed & 32 && count > 0)
+        matrixUniform(
+          program.lighting.u_shadow_matrix!,
+          matrix >>> 0,
+          count * 16,
+        );
+      if (changed & 64 && count > 0)
+        vector4Uniform(
+          program.lighting.u_shadow_settings!,
+          settings >>> 0,
+          count * 4,
+        );
+      checkDraw();
+      return 1;
+    });
+  imports.delete_shadow_map = (handle: number): void => {
+    boundShadowMap = undefined;
+    const map = shadows.get(handle >>> 0);
+    shadows.delete(handle >>> 0);
+    if (map) forgetFramebuffer(map.framebuffer);
+    if (map && !disposed && !gl.isContextLost()) {
+      gl.deleteTexture(map.texture);
+      gl.deleteFramebuffer(map.framebuffer);
+    }
+  };
 
   {
     imports.create_mesh_uv = createMesh;
@@ -2990,11 +2879,9 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     },
     isContextLost: () => disposed || gl.isContextLost(),
     dispose() {
-      if (IPP_PARTICLES) {
-        gl.deleteBuffer(instanceBuffer);
-        instanceBuffer = null;
-        instanceCount = 0;
-      }
+      gl.deleteBuffer(instanceBuffer);
+      instanceBuffer = null;
+      instanceCount = 0;
       if (disposed) return;
       canvas.removeEventListener("webglcontextlost", lost);
       canvas.removeEventListener("webglcontextrestored", restored);
@@ -3005,61 +2892,48 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
         parameterCapacity = 0;
         instanceCapacity = 0;
         for (const mesh of meshes.values()) deleteMesh(mesh);
-        if (IPP_SHADOWS)
-          for (const map of shadows!.values()) {
-            gl.deleteTexture(map.texture);
-            gl.deleteFramebuffer(map.framebuffer);
-          }
-        if (IPP_SHADOWS) shadows!.clear();
-        if (IPP_SURFACES) {
-          for (const batch of guiBatches!.values()) {
-            gl.deleteVertexArray(batch.vao);
-            gl.deleteBuffer(batch.vbo);
-          }
-          for (const page of glyphAtlasPages!.values())
-            gl.deleteFramebuffer(page.framebuffer);
+        for (const map of shadows.values()) {
+          gl.deleteTexture(map.texture);
+          gl.deleteFramebuffer(map.framebuffer);
         }
+        shadows.clear();
+        for (const batch of guiBatches.values()) {
+          gl.deleteVertexArray(batch.vao);
+          gl.deleteBuffer(batch.vbo);
+        }
+        for (const page of glyphAtlasPages.values())
+          gl.deleteFramebuffer(page.framebuffer);
         for (const texture of textures.values()) gl.deleteTexture(texture);
-        if (IPP_SURFACES) {
-          for (const path of surfacePaths.values()) {
-            gl.deleteTexture(path.texture);
-            gl.deleteTexture(path.bandTexture);
-            gl.deleteVertexArray(path.vao);
-          }
-          for (const target of surfaceCacheTargets!.values()) {
-            gl.deleteFramebuffer(target.framebuffer);
-            gl.deleteTexture(target.texture);
-            if (target.depth) gl.deleteRenderbuffer(target.depth);
-          }
+        for (const path of surfacePaths.values()) {
+          gl.deleteTexture(path.texture);
+          gl.deleteTexture(path.bandTexture);
+          gl.deleteVertexArray(path.vao);
+        }
+        for (const target of surfaceCacheTargets.values()) {
+          gl.deleteFramebuffer(target.framebuffer);
+          gl.deleteTexture(target.texture);
+          if (target.depth) gl.deleteRenderbuffer(target.depth);
         }
         surfacePaths.clear();
-        if (IPP_SURFACES) {
-          for (const stream of surfaceInstanceStreams!.values()) {
-            gl.deleteVertexArray(stream.vao);
-            gl.deleteBuffer(stream.vbo);
-          }
-          surfaceInstanceStreams!.clear();
+        for (const stream of surfaceInstanceStreams.values()) {
+          gl.deleteVertexArray(stream.vao);
+          gl.deleteBuffer(stream.vbo);
         }
+        surfaceInstanceStreams.clear();
         gl.deleteVertexArray(surfaceQuadVao);
         surfaceQuadVao = null;
         for (const program of programs.values())
           gl.deleteProgram(program.object);
       }
-      if (IPP_SURFACES) {
-        guiBatches!.clear();
-        glyphAtlasPages!.clear();
-        glyphAtlasTarget = undefined;
-      }
-      if (IPP_SURFACES) {
-        surfaceCacheTargets!.clear();
-        surfaceCacheTarget = undefined;
-      }
+      guiBatches.clear();
+      glyphAtlasPages.clear();
+      glyphAtlasTarget = undefined;
+      surfaceCacheTargets.clear();
+      surfaceCacheTarget = undefined;
       meshes.clear();
       textures.clear();
-      if (IPP_SHADOWS) {
-        shadows!.clear();
-        shadowTarget = undefined;
-      }
+      shadows.clear();
+      shadowTarget = undefined;
       programs.clear();
       memory = undefined;
       disposed = true;
@@ -3097,9 +2971,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
         maxVertexAttributes: gl.getParameter(gl.MAX_VERTEX_ATTRIBS),
         maxViewport: Array.from(maxViewport),
         maxTextureSize,
-        ...(IPP_SURFACES
-          ? { surfaceCacheTargetsLive: surfaceCacheTargets!.size }
-          : {}),
+        surfaceCacheTargetsLive: surfaceCacheTargets.size,
         depthBits: gl.getParameter(gl.DEPTH_BITS),
         contextAttributes: gl.getContextAttributes(),
         colorSpace: gl.drawingBufferColorSpace,

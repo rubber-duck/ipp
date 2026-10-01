@@ -2,7 +2,6 @@
 
 mod support;
 use support::WorldTestDriver;
-#[cfg(all(feature = "particles", feature = "mesh-poses"))]
 use support::selection::PARTICLES;
 use support::selection::{ASSETS, CONSTRAINTS, RENDER, SPATIAL, select};
 
@@ -162,7 +161,6 @@ fn player(
         .unwrap()
 }
 
-#[allow(irrefutable_let_patterns)]
 /// The stored Scalar: authored, or sampled while a driver binds it.
 fn scalar(world: &ipp_core::WorldContext<'_>, entity: EntityId) -> f32 {
     let snapshot = world.inspect(entity).unwrap();
@@ -2680,7 +2678,6 @@ fn compiled_numeric_frames_notify_once_per_batch_without_commit_hooks() {
 }
 
 #[test]
-#[cfg(all(feature = "particles", feature = "mesh-poses"))]
 fn resource_owning_numeric_lanes_preserve_state_without_commit_hooks() {
     use ipp_core::{components::*, systems::*};
     use std::sync::{

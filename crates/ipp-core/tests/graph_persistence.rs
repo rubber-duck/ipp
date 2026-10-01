@@ -3,7 +3,6 @@
 mod support;
 
 use support::selection::{ATTACHMENTS, CAMERA, CONSTRAINTS, select};
-#[cfg(feature = "surfaces")]
 use support::selection::{CANVAS, SURFACE};
 
 use ipp_core::components::{Camera, Scalar};
@@ -453,7 +452,6 @@ fn selected_none_world_survives_graph_load_without_extra_factories() {
     );
 }
 
-#[cfg(feature = "surfaces")]
 #[test]
 fn camera_output_references_remap_exact_producers_without_restoring_root_presentation() {
     let mut host = HostRuntime::new();
@@ -728,7 +726,6 @@ fn late_system_restore_failure_tears_down_all_private_worlds_without_publishing_
     assert_eq!(host.world_ids().len(), 4);
 }
 
-#[cfg(feature = "surfaces")]
 #[test]
 fn real_canvas_graph_restores_selected_outputs_density_paint_and_sparse_systems() {
     use ipp_core::components::Surface;

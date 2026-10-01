@@ -170,11 +170,8 @@ fn fixture() -> (
     }
     let mut host = HostRuntime::with_system_factories(factories).unwrap();
     // The parent also anchors Surfaces and joint-parented placements.
-    #[allow(unused_mut)]
     let mut parts = vec![ATTACHMENTS, CAMERA];
-    #[cfg(feature = "surfaces")]
     parts.push(support::selection::SURFACE);
-    #[cfg(feature = "skeletal-animation")]
     parts.push(support::selection::SKELETON);
     let parent = host
         .create_world(
@@ -740,7 +737,6 @@ fn active_attachment_recovers_from_invalid_placement_owner_without_retiring_its_
     );
 }
 
-#[cfg(feature = "surfaces")]
 #[test]
 fn surface_child_selection_and_physical_extent_remain_separate_from_placement_owner() {
     let (mut host, inputs, parent, child, anchor, owner) = fixture();
@@ -789,7 +785,6 @@ fn surface_child_selection_and_physical_extent_remain_separate_from_placement_ow
     assert_eq!(context.placement, placement);
 }
 
-#[cfg(feature = "skeletal-animation")]
 #[test]
 fn ready_placement_is_joined_before_unavailable_joint_hierarchy() {
     let (mut host, inputs, parent, _, anchor, owner) = fixture();

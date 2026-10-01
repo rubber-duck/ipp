@@ -27,7 +27,6 @@ for (const scenario of worldHostCases) {
       name: "world-host",
       generatedModule: resolve(profile, "generated.js"),
       runtimeWasm: resolve(profile, "runtime.wasm"),
-      exportWasm: resolve(profile, "export.wasm"),
       contractArtifact: resolve(profile, "contract.bin"),
     };
     await runBrowserEnvironment(
@@ -35,7 +34,6 @@ for (const scenario of worldHostCases) {
       {
         workspace,
         build,
-        mismatchBuild: build,
         operationTimeoutMs: 20_000,
       },
       context.signal,

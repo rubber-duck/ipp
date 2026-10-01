@@ -9,7 +9,7 @@ Crates enforce ownership/platform isolation. Related systems stay modules; share
 | Crate | Owns |
 | --- | --- |
 | `ipp-core` | Headless state, lifecycle, evaluation and logical assets |
-| `ipp-protocol` | Bootstrap, generated codecs and snapshot encoding |
+| `ipp-protocol` | Hello and contract exchange, generated codecs and snapshot encoding |
 | `ipp-host-session` | Shared queues, frame dispatch, correlation and responses |
 | `ipp-render-gl` | WebGL/GLES rendering and GPU resources |
 | `ipp-wasm`, `ipp-server` | Platform clocks, transport, I/O, contexts and presentation |
@@ -19,25 +19,33 @@ Hosts depend on session, protocol, optional renderer and core; session depends o
 
 ## Compile-time composition
 
-The headless baseline includes spatial state, property animation, constraints, persistence, material/texture/light declarations and geometry queries. Rendering includes unlit/PBR, textures and geometry visualization. Skeletal animation, mesh poses, particles, surfaces, shadows and built-ins are optional scene capabilities. Surface conversion dependencies stay in offline tooling; disabling surfaces omits their types, registrations and shaders.
+A build varies along three axes and nothing else:
 
-The optional [GUI capability](gui.md) depends on surfaces. Its layout and interaction remain headless; browser input services stay in client adapters. GUI-specific registrations, text-editing dependencies and rendering extensions are omitted when disabled, while ordinary Canvas text remains available. Target contracts advertise implemented operations only.
+| Axis | Choices | Decides |
+| --- | --- | --- |
+| Instrumentation | Production, instrumentation | Whether test controls and profiling hooks are compiled |
+| Rendering backend | None, WebGL 2, GLES 3 | The one renderer a host distribution links; never two, never an unused one |
+| Host target | Native, WASM | Platform clocks, transport, I/O and contexts |
 
-Compiled capabilities define the build's schema and available System factories. Each World chooses an immutable dependency-checked subset under the [runtime composition contract](runtime.md#system-composition), with a manifest for the operations it can evaluate. Selection does not register runtime types or change compiled field layouts; unused Systems and component pages need not allocate merely because their capability exists in the build.
+Every scene capability is compiled into every build: spatial state, property and skeletal animation, constraints, persistence, mesh poses, particles, Surfaces, GUI, shadows, built-ins, and material/texture/light declarations with geometry queries. A rendering build carries each capability's presentation path for its one backend. A capability is not a Cargo feature, and adding one does not add a build configuration.
 
-One skeletal selection covers pose evaluation, joint animation, skin bindings/palettes and deformation through separate ordered systems. Runtime demand selects work/resources within compiled capabilities. Disabled capabilities omit code, registrations, dispatch, assets and shaders; do not add placeholder flags.
+A World excludes capabilities at runtime. Each World chooses an immutable dependency-checked System selection under the [runtime composition contract](runtime.md#system-composition), with a manifest for the operations it can evaluate. Selection does not register runtime types or change compiled field layouts. A compiled capability that no World selects costs code size only: its Systems, component pages and renderer resources are created on demand. One skeletal selection covers pose evaluation, joint animation, skin bindings/palettes and deformation through separate ordered systems.
 
-Core/host defaults include built-ins; renderer/build-tool defaults are empty. Minimal builds retain baseline behavior. Rendering, WebSocket, ZIP, diagnostics and contract export stay at their owning boundaries. [Manifests/configurations](../development/building.md#crates-and-features) own forwarding details.
+Each host target has one compiled schema and one target contract. Instrumentation and the rendering backend never change schema identity, so a client generated for a target works with every build of that target.
+
+Cargo features exist only for the instrumentation axis (`instrumentation`), the WASM host's renderer (`render`) and core's test-only invariant oracle (`checked-invariants`). Every build logs, answers statistics requests and installs a panic hook that reports through its log sink, so a production fault is diagnosable; [diagnostic logging](runtime.md#diagnostic-logging) keeps that cost off hot paths. Every build carries its contract descriptors and can [serve them to a client](protocol-and-schema.md#build-compatibility). Platform dependencies follow the host target: the native server always includes its WebSocket transport. Do not add capability or placeholder flags. [GUI](gui.md) layout and interaction remain headless, browser input services stay in client adapters, and Surface conversion dependencies stay in offline tooling. [Manifests/configurations](../development/building.md#crates-and-features) own the declarations.
+
+Artifact size is a measured budget per host distribution, not a compile-time selection. Keep it down through shared implementation and demand-driven resources; a capability that cannot fit the budget needs an architecture review, not a feature flag.
 
 ## Compile-time generation
 
-Follow [target compatibility](protocol-and-schema.md#build-compatibility): explicit registry membership/identities, target-compiled derives and executed-target export. Discovery/macro/linker order never assigns identity; host macro execution never determines target layout. Diagnostics may compile out without changing schema identity. Compiler parsers, export/test tooling and native context shims stay outside runtime/browser dependencies as applicable.
+Follow [target compatibility](protocol-and-schema.md#build-compatibility): explicit registry membership/identities, target-compiled derives and executed-target export. Discovery/macro/linker order never assigns identity; host macro execution never determines target layout. Instrumentation never changes schema identity. Compiler parsers, generation/test tooling and native context shims stay outside runtime/browser dependencies as applicable.
 
 ## Third-party dependency policy
 
 Use pinned stable Rust, reserving dated nightly for specific verification or measured experiments. Justify production dependencies by purpose, enabled/transitive features, maintenance and artifact cost. Prefer std/small glue when sufficient; established libraries when correctness/interoperability warrants them.
 
-Own networking in hosts, graphics in renderers and conversion outside viewers. Keep runtime decoders optional, versions central and lockfiles retained. Build release artifacts by package/target/capability to avoid hidden workspace feature unification. Measure WASM, JavaScript, shaders and native shims separately; validate representative minimal/expanded builds through real integration. All-features compilation proves neither omission nor delivery.
+Own networking in hosts, graphics in renderers and conversion outside viewers. Keep a runtime decoder only in the host targets that use it, versions central and lockfiles retained. Build release artifacts by package, target and axis selection to avoid hidden workspace feature unification. Measure WASM, JavaScript, shaders and native shims separately against their size budgets; validate the production and instrumentation builds of each host distribution through real integration, with scenarios on the production build unless they need a test control or the profiler. Compilation alone does not prove delivery.
 
 ## Development tooling
 

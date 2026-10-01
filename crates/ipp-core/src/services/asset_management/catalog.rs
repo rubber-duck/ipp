@@ -430,7 +430,7 @@ impl AssetManagementService {
 
     /// Progress loading at the Host's selected phase with borrowed generic I/O.
     pub fn poll_loads(&mut self, sources: &mut DataSourceManagementService, cx: &mut Context<'_>) {
-        #[cfg(feature = "profiling")]
+        #[cfg(feature = "instrumentation")]
         let _allocation_scope = crate::profiling::AllocationScope::new(211, "assets.poll");
         // Polling cannot insert, remove or reuse catalog slots. Loader callbacks
         // receive only their resource and the I/O service; lifecycle work is queued.

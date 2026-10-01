@@ -192,7 +192,6 @@ for (const target of ["native", "wasm"]) {
     ]),
   };
   assert.throws(() => codec.encodeRowsTable(layout, huge));
-  const gui = codec.CAPABILITIES.gui;
   for (const [name, descriptor] of Object.entries(codec.components)) {
     for (const [field, value] of Object.entries(descriptor.fields)) {
       if (!value.rows || value.default === undefined) continue;
@@ -207,72 +206,65 @@ for (const target of ["native", "wasm"]) {
       assert.deepEqual(codec[name][`patch${title}Fields`](0, {}), []);
     }
   }
-  assert.equal("GUI_PAINT_PART_KEYS" in codec, gui);
-  assert.equal("guiPaintPartIndex" in codec, gui);
-  if (gui) {
-    assert.deepEqual(codec.GUI_PAINT_PART_KEYS, report[target].paintKeys);
-    for (const { index, part, state, variant } of codec.GUI_PAINT_PART_KEYS)
-      assert.equal(
-        codec.guiPaintPartIndex({
-          part,
-          ...(state === null ? {} : { state }),
-          ...(variant === null ? {} : { variant }),
-        }),
-        index,
-      );
-    assert.throws(() => codec.guiPaintPartIndex({ part: "caret" }));
-    assert.throws(() =>
-      codec.guiPaintPartIndex({ part: "fill", variant: "checked" }),
+  assert.deepEqual(codec.GUI_PAINT_PART_KEYS, report[target].paintKeys);
+  for (const { index, part, state, variant } of codec.GUI_PAINT_PART_KEYS)
+    assert.equal(
+      codec.guiPaintPartIndex({
+        part,
+        ...(state === null ? {} : { state }),
+        ...(variant === null ? {} : { variant }),
+      }),
+      index,
     );
-    const paint = {
-      nextSlot: 6,
-      rows: new Map([
-        [
-          5,
-          {
-            part: codec.guiPaintPartIndex({
-              part: "fill",
-              state: "pressed",
-              variant: "checked",
-            }),
-            opacity: 0.5,
-          },
-        ],
-        [
-          2,
-          {
-            part: codec.guiPaintPartIndex({ part: "background" }),
-            color: [0.25, 0.5, 0.75, 1],
-          },
-        ],
-      ]),
-    };
-    assert.deepEqual(
-      [...codec.GuiTheme.encodeParts(paint)],
-      fixture.paintExample,
-    );
-    assert.deepEqual(
-      codec.GuiSkin.encodeParts(paint),
-      codec.GuiTheme.encodeParts(paint),
-    );
-    assert.deepEqual(
-      codec.GuiTheme.patchPartsFields(2, { opacity: 0.25, color: null }),
-      codec.GuiTheme.patchParts(codec.Entity.handle(1n), 2, {
-        opacity: 0.25,
-        color: null,
-      }).map((command) => command.field),
-    );
-    assert.equal(Object.isFrozen(codec.GUI_PAINT_PART_KEYS), true);
-    assert.equal(Object.isFrozen(codec.GUI_PAINT_PART_KEYS[0]), true);
-  } else assert.deepEqual(fixture.paintExample, []);
+  assert.throws(() => codec.guiPaintPartIndex({ part: "caret" }));
+  assert.throws(() =>
+    codec.guiPaintPartIndex({ part: "fill", variant: "checked" }),
+  );
+  const paint = {
+    nextSlot: 6,
+    rows: new Map([
+      [
+        5,
+        {
+          part: codec.guiPaintPartIndex({
+            part: "fill",
+            state: "pressed",
+            variant: "checked",
+          }),
+          opacity: 0.5,
+        },
+      ],
+      [
+        2,
+        {
+          part: codec.guiPaintPartIndex({ part: "background" }),
+          color: [0.25, 0.5, 0.75, 1],
+        },
+      ],
+    ]),
+  };
+  assert.deepEqual(
+    [...codec.GuiTheme.encodeParts(paint)],
+    fixture.paintExample,
+  );
+  assert.deepEqual(
+    codec.GuiSkin.encodeParts(paint),
+    codec.GuiTheme.encodeParts(paint),
+  );
+  assert.deepEqual(
+    codec.GuiTheme.patchPartsFields(2, { opacity: 0.25, color: null }),
+    codec.GuiTheme.patchParts(codec.Entity.handle(1n), 2, {
+      opacity: 0.25,
+      color: null,
+    }).map((command) => command.field),
+  );
+  assert.equal(Object.isFrozen(codec.GUI_PAINT_PART_KEYS), true);
+  assert.equal(Object.isFrozen(codec.GUI_PAINT_PART_KEYS[0]), true);
   const types = `
-import { encodeRowsTable, rowPatchFields, ${gui ? "GuiTheme, GuiSkin, guiPaintPartIndex," : ""} type RowsInput ${gui ? ", type GuiThemePartsRow, type GuiThemePartsRowPatch, type GuiPaintPartKey, type GuiPaintBasePartKey" : ""} } from "./${target}.js";
+import { encodeRowsTable, rowPatchFields, GuiTheme, GuiSkin, guiPaintPartIndex, type RowsInput, type GuiThemePartsRow, type GuiThemePartsRowPatch, type GuiPaintPartKey, type GuiPaintBasePartKey } from "./${target}.js";
 type Assert<Actual extends true> = Actual;
 export type GenericCheck = Assert<{ readonly nextSlot: number; readonly rows: ReadonlyMap<number, Readonly<{ weight: number }>> } extends RowsInput<{ weight: number }> ? true : false>;
 export const helpers = [encodeRowsTable, rowPatchFields];
-${
-  gui
-    ? `
 export type GuiChecks = [
   Assert<{} extends GuiThemePartsRow ? false : true>,
   Assert<{ part: number; color: null } extends GuiThemePartsRow ? false : true>,
@@ -287,9 +279,6 @@ const parts: RowsInput<GuiThemePartsRow> = { nextSlot: 4, rows: new Map([[3, { p
 export const encoded = GuiTheme.encodeParts(parts);
 export const decoded = GuiTheme.decodeParts(encoded);
 export const patch = GuiSkin.patchPartsFields(3, { color: null, opacity: 0.5 });
-`
-    : ""
-}
 `;
   await writeFile(path.join(directory, `${target}-rows-types.ts`), types);
   results.push({

@@ -24,7 +24,7 @@ test("Surface Canvas entities, field writes, animation and graph snapshots cross
   timeout: 60000,
 }, async (context) => {
   const workspace = process.cwd();
-  const profile = resolve(workspace, "target/surface-host");
+  const profile = resolve(workspace, "target/world-host-build/native");
   const contract = await import(
     pathToFileURL(resolve(profile, "generated.js")).href
   );

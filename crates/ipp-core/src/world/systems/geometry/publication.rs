@@ -109,11 +109,8 @@ impl GeometrySystem {
                 ComponentValue::BOUNDING_GEOMETRY,
                 ComponentValue::PICKING_GEOMETRY,
                 ComponentValue::MESH_INSTANCE,
-                #[cfg(feature = "skeletal-animation")]
                 ComponentValue::SKELETON,
-                #[cfg(feature = "skeletal-animation")]
                 ComponentValue::SKIN,
-                #[cfg(feature = "mesh-poses")]
                 ComponentValue::MESH_POSE,
             ] {
                 if let Some(value) = world

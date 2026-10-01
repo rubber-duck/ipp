@@ -21,7 +21,6 @@ pub enum AnimationValue {
     /// Clip-local structural placement; slots resolve per controller.
     EntityPlacement(AnimationEntityPlacementKey),
     /// SkeletonJoint-local TRS samples in the pose track's joint order.
-    #[cfg(feature = "skeletal-animation")]
     Pose(Vec<crate::components::Transform>),
 }
 
@@ -89,7 +88,6 @@ pub enum AnimationTrackTarget {
     /// Target-generated component field offsets.
     AnimationProperty(AnimationProperty),
     /// Ascending skeleton joint ordinals, independent of CPU field layout.
-    #[cfg(feature = "skeletal-animation")]
     Joints(Vec<u32>),
 }
 
@@ -103,7 +101,6 @@ impl AnimationTrackTarget {
                 ..
             } => Some(*component),
             Self::AnimationProperty(property) => Some(property.component),
-            #[cfg(feature = "skeletal-animation")]
             Self::Joints(_) => Some(ComponentValue::SKELETON),
         }
     }
@@ -119,7 +116,6 @@ impl AnimationTrackTarget {
                 ..
             } => None,
             Self::AnimationProperty(property) => Some(property),
-            #[cfg(feature = "skeletal-animation")]
             Self::Joints(_) => None,
         }
     }
@@ -132,7 +128,6 @@ impl AnimationTrackTarget {
                 ..
             } => &[],
             Self::AnimationProperty(property) => &property.offsets,
-            #[cfg(feature = "skeletal-animation")]
             Self::Joints(joints) => joints,
         }
     }
@@ -145,7 +140,6 @@ impl AnimationTrackTarget {
                 ..
             } => name.capacity(),
             Self::AnimationProperty(property) => property.offsets.capacity() * 4,
-            #[cfg(feature = "skeletal-animation")]
             Self::Joints(joints) => joints.capacity() * 4,
         }
     }
@@ -157,7 +151,6 @@ impl AnimationTrackTarget {
                 ..
             }
             | Self::AnimationProperty(_) => false,
-            #[cfg(feature = "skeletal-animation")]
             Self::Joints(_) => true,
         }
     }
@@ -298,7 +291,6 @@ impl AnimationSample for [f32; 4] {
     }
 }
 
-#[cfg(feature = "skeletal-animation")]
 impl AnimationSample for Vec<crate::components::Transform> {
     fn from_value(value: AnimationValue) -> Result<Self, ErrorReason> {
         match value {
@@ -636,7 +628,6 @@ impl IntoAnimationTrack for AnimationTrack {
             7 => self.typed::<bool>(),
             8 => self.typed::<[f32; 4]>(),
             10 => self.typed::<AnimationEntityPlacementKey>(),
-            #[cfg(feature = "skeletal-animation")]
             9 => self.typed::<Vec<crate::components::Transform>>(),
             _ => Err(ErrorReason::InvalidAsset),
         }
@@ -719,7 +710,6 @@ impl AnimationClip {
                         return Err(ErrorReason::InvalidAsset);
                     }
                 }
-                #[cfg(feature = "skeletal-animation")]
                 AnimationTrackTarget::Joints(joints) => {
                     if joints.is_empty()
                         || joints.len() > crate::MAX_JOINTS
@@ -768,7 +758,6 @@ impl AnimationClip {
                             .ok_or(ErrorReason::Capacity)?,
                     )
                     .ok_or(ErrorReason::Capacity)?,
-                #[cfg(feature = "skeletal-animation")]
                 AnimationTrackTarget::Joints(joints) => 9usize
                     .checked_add(joints.len().checked_mul(4).ok_or(ErrorReason::Capacity)?)
                     .ok_or(ErrorReason::Capacity)?,
@@ -889,7 +878,6 @@ impl AnimationClip {
                     out.extend_from_slice(&property.component.to_le_bytes());
                     out.push(property.offsets.len() as u8);
                 }
-                #[cfg(feature = "skeletal-animation")]
                 AnimationTrackTarget::Joints(joints) => {
                     out.extend_from_slice(&(joints.len() as u32).to_le_bytes())
                 }
@@ -968,7 +956,6 @@ impl AnimationClip {
                         offsets,
                     })
                 }
-                #[cfg(feature = "skeletal-animation")]
                 1 => {
                     let n = r.u32()? as usize;
                     if n == 0 || n > crate::MAX_JOINTS {
@@ -1031,7 +1018,6 @@ impl AnimationValue {
             Self::Field(v) => v.kind() as u8,
             Self::Rotation(_) => 8,
             Self::EntityPlacement(_) => 10,
-            #[cfg(feature = "skeletal-animation")]
             Self::Pose(_) => 9,
         }
     }
@@ -1082,7 +1068,6 @@ impl AnimationValue {
             {
                 Err(ErrorReason::InvalidAsset)
             }
-            #[cfg(feature = "skeletal-animation")]
             Self::Pose(joints) => {
                 use crate::components::schema::ComponentLifecycle;
                 if joints.is_empty() || joints.len() > crate::MAX_JOINTS {
@@ -1104,7 +1089,7 @@ impl AnimationValue {
         property: &AnimationProperty,
         component: &mut ComponentValue,
     ) -> Result<(), ErrorReason> {
-        #[cfg(feature = "profiling")]
+        #[cfg(feature = "instrumentation")]
         let _allocation_scope = crate::profiling::AllocationScope::new(194, "animation.write");
 
         let mut write = |offset, value| {
@@ -1127,7 +1112,6 @@ impl AnimationValue {
                     write(offset, FieldValue::F32(value))?;
                 }
             }
-            #[cfg(feature = "skeletal-animation")]
             Self::Pose(_) => return Err(ErrorReason::InvalidField),
         }
         Ok(())
@@ -1137,7 +1121,7 @@ impl AnimationValue {
         property: &AnimationProperty,
         component: &ComponentValue,
     ) -> Result<Self, ErrorReason> {
-        #[cfg(feature = "profiling")]
+        #[cfg(feature = "instrumentation")]
         let _allocation_scope = crate::profiling::AllocationScope::new(193, "animation.read");
 
         Self::read_fields(property, |offset| component.field(offset).ok())
@@ -1204,7 +1188,6 @@ impl AnimationValue {
             }
             Self::Rotation(_) => 16,
             Self::EntityPlacement(_) => 8,
-            #[cfg(feature = "skeletal-animation")]
             Self::Pose(pose) => 4 + pose.len() * 40,
         }
     }
@@ -1242,7 +1225,6 @@ impl AnimationValue {
             ) => {
                 unreachable!("clip validation rejects row tables and absence")
             }
-            #[cfg(feature = "skeletal-animation")]
             Self::Pose(pose) => {
                 out.extend_from_slice(&(pose.len() as u32).to_le_bytes());
                 for joint in pose {
@@ -1343,7 +1325,6 @@ impl<'a> AnimationClipReader<'a> {
                     },
                 ));
             }
-            #[cfg(feature = "skeletal-animation")]
             9 => {
                 let count = self.u32()? as usize;
                 if count == 0 || count > crate::MAX_JOINTS {

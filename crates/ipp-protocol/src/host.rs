@@ -87,13 +87,9 @@ impl WorldManifest {
                     WorldOperation::Geometry => 6,
                     WorldOperation::Rendering => 7,
                     WorldOperation::Camera => 8,
-                    #[cfg(feature = "surfaces")]
                     WorldOperation::Surface => 9,
-                    #[cfg(feature = "gui")]
                     WorldOperation::Gui => 10,
-                    #[cfg(feature = "particles")]
                     WorldOperation::Particles => 11,
-                    #[cfg(feature = "surfaces")]
                     WorldOperation::Canvas => 12,
                 })
                 .collect(),
@@ -170,13 +166,13 @@ fn write_manifest(writer: &mut Writer, manifest: &WorldManifest) -> Result<(), P
     Ok(())
 }
 
-/// Accept a standalone World-session bootstrap and append that World's admission manifest.
-pub fn accept_world_bootstrap(
+/// Accept a standalone World session's hello and append that World's admission manifest.
+pub fn accept_world_hello(
     bytes: &[u8],
     session: u64,
     manifest: &ipp_core::systems::WorldManifest,
 ) -> Result<Vec<u8>, ProtocolError> {
-    let mut reply = crate::accept_bootstrap(bytes, session)?;
+    let mut reply = crate::accept_hello(bytes, session)?;
     let mut writer = Writer::new(Vec::new());
     write_manifest(&mut writer, &WorldManifest::from_core(manifest))?;
     reply.extend(writer.0);
@@ -238,7 +234,6 @@ pub enum HostRequestBody {
     /// Surface selection and actual completed presentation, independently of sessions.
     Presentation(PresentationRequest),
     /// Ordered physical input owned by an exact presentation context, not a World session.
-    #[cfg(feature = "gui")]
     GuiInput(crate::gui_input::GuiPhysicalRequest),
     /// Rename without invalidating runtime identity or current attachments.
     RenameWorld {
@@ -348,7 +343,6 @@ pub enum HostResponseBody {
     /// Surface-scoped presentation control or completion.
     Presentation(PresentationResponse),
     /// Physical input context or settled routing result; never a frame completion.
-    #[cfg(feature = "gui")]
     GuiInput(crate::gui_input::GuiPhysicalResponse),
     /// Creation succeeded independently of opening an authoring session.
     Created {
@@ -487,7 +481,6 @@ pub fn decode_host_request(bytes: &[u8], connection: u64) -> Result<HostRequest,
             HostRequestBody::GetRootOutputBinding(reader.world_reference()?)
         }
         HOST_REQUEST_PRESENTATION => HostRequestBody::Presentation(reader.presentation_request()?),
-        #[cfg(feature = "gui")]
         HOST_REQUEST_GUI_INPUT => HostRequestBody::GuiInput(reader.gui_physical_request()?),
         HOST_REQUEST_RENAME_WORLD => HostRequestBody::RenameWorld {
             world: read_selector(&mut reader)?,
@@ -654,7 +647,6 @@ pub fn encode_host_request(request: &HostRequest) -> Result<Vec<u8>, ProtocolErr
             writer.u8(HOST_REQUEST_PRESENTATION)?;
             writer.presentation_request(request)?;
         }
-        #[cfg(feature = "gui")]
         HostRequestBody::GuiInput(request) => {
             writer.u8(HOST_REQUEST_GUI_INPUT)?;
             writer.gui_physical_request(request)?;
@@ -808,7 +800,6 @@ fn write_host_response(response: &HostResponse, writer: &mut Writer) -> Result<(
             writer.u8(HOST_RESPONSE_PRESENTATION)?;
             writer.presentation_response(response)?;
         }
-        #[cfg(feature = "gui")]
         HostResponseBody::GuiInput(response) => {
             writer.u8(HOST_RESPONSE_GUI_INPUT)?;
             writer.gui_physical_response(response)?;
@@ -947,7 +938,6 @@ pub fn decode_host_response(bytes: &[u8], connection: u64) -> Result<HostRespons
         HOST_RESPONSE_PRESENTATION => {
             HostResponseBody::Presentation(reader.presentation_response()?)
         }
-        #[cfg(feature = "gui")]
         HOST_RESPONSE_GUI_INPUT => HostResponseBody::GuiInput(reader.gui_physical_response()?),
         HOST_RESPONSE_WORLDS => {
             let count = reader.count(32)?;

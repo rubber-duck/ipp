@@ -24,12 +24,7 @@ export function requireBlenderClient(
     "onPlaybackEvent",
     "sendCommand",
   ];
-  if (
-    !client.capabilities.animation ||
-    !client.capabilities.assets ||
-    !client.capabilities.spatial ||
-    methods.some((name) => typeof Reflect.get(client, name) !== "function")
-  )
+  if (methods.some((name) => typeof Reflect.get(client, name) !== "function"))
     throw new Error("Blender viewer requires the animation and spatial client");
 }
 

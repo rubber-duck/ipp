@@ -43,10 +43,7 @@ impl<D: RenderDevice> RenderService<D> {
             return Err(RenderError::InvalidViewport);
         }
 
-        #[cfg(any(test, feature = "diagnostics"))]
-        {
-            self.statistics = Default::default();
-        }
+        self.statistics = Default::default();
         self.device
             .borrow_mut()
             .begin_frame(viewport.width, viewport.height, &BACKGROUND)?;
@@ -83,15 +80,11 @@ impl<D: RenderDevice> RenderService<D> {
             return Err(RenderError::InvalidViewport);
         }
 
-        #[cfg(any(test, feature = "diagnostics"))]
-        {
-            self.statistics = Default::default();
-        }
+        self.statistics = Default::default();
         let available = root.ok_or(RenderError::UnavailableOutput).and_then(|_| {
             host.output(publication, selection)
                 .ok_or(RenderError::UnavailableOutput)
         });
-        #[cfg(feature = "surfaces")]
         let prepass = {
             self.camera_completed.clear();
             self.glyph_frame.clear();
@@ -110,13 +103,10 @@ impl<D: RenderDevice> RenderService<D> {
                 RenderFrameWork::default()
             }
         };
-        #[cfg(not(feature = "surfaces"))]
-        let prepass = RenderFrameWork::default();
         self.device
             .borrow_mut()
             .begin_frame(width, height, &BACKGROUND)?;
         let result = available.and_then(|_| {
-            #[cfg(feature = "surfaces")]
             if selection.kind() == ipp_core::OutputKind::Canvas {
                 let scene =
                     super::super::canvas_scene::CanvasScene::new(host, selection, publication)?;
@@ -140,26 +130,19 @@ impl<D: RenderDevice> RenderService<D> {
             self.draw_items(&scene, &scene.items, camera, prepass, viewport)
         });
         let finish = self.device.borrow_mut().end_frame();
-        #[cfg(feature = "surfaces")]
         self.finish_canvas_caches(result.is_ok() && finish.is_ok());
-        #[cfg_attr(not(any(test, feature = "diagnostics")), allow(unused_mut))]
         let mut work = result?;
         finish?;
         self.inclusions.record(selection, publication);
-        #[cfg(any(test, feature = "diagnostics"))]
-        {
-            work.statistics.uploaded_bytes = work
-                .statistics
-                .uploaded_bytes
-                .saturating_add(self.uploads.take());
-            #[cfg(feature = "surfaces")]
-            self.publish_retained_surface_statistics(&mut work.statistics);
-            self.statistics = work.statistics;
-        }
+        work.statistics.uploaded_bytes = work
+            .statistics
+            .uploaded_bytes
+            .saturating_add(self.uploads.take());
+        self.publish_retained_surface_statistics(&mut work.statistics);
+        self.statistics = work.statistics;
         Ok(work.summary)
     }
 
-    #[cfg(feature = "mesh-poses")]
     pub(super) fn pose_data<'a>(
         &self,
         world: &'a RenderScene<'_>,
@@ -183,7 +166,7 @@ impl<D: RenderDevice> RenderService<D> {
         prepass: RenderFrameWork,
         viewport: ipp_core::WorldViewport,
     ) -> Result<RenderFrameWork, RenderError> {
-        #[cfg(feature = "profiling")]
+        #[cfg(feature = "instrumentation")]
         let _allocation_scope = ipp_core::profiling::AllocationScope::new(210, "gl.draw");
 
         let mut scratch = std::mem::take(&mut self.frame_scratch);
@@ -204,11 +187,8 @@ impl<D: RenderDevice> RenderService<D> {
         viewport: ipp_core::WorldViewport,
         scratch: &mut RenderFrameScratch,
     ) -> Result<RenderFrameWork, RenderError> {
-        #[cfg(not(feature = "surfaces"))]
-        let _ = viewport;
         let view_projection = match camera {
             None => {
-                #[cfg(feature = "shadows")]
                 self.clear_shadows();
                 return Ok(RenderFrameWork::default());
             }
@@ -221,7 +201,6 @@ impl<D: RenderDevice> RenderService<D> {
                 return Ok(work);
             }
         };
-        #[cfg(feature = "particles")]
         if self.particle_quad.is_none()
             && items
                 .iter()
@@ -229,7 +208,6 @@ impl<D: RenderDevice> RenderService<D> {
         {
             self.particle_quad = Some(super::super::particles::quad(self.device.clone())?);
         }
-        #[cfg(feature = "particles")]
         let camera_model = world
             .camera
             .pose
@@ -239,35 +217,26 @@ impl<D: RenderDevice> RenderService<D> {
         // Cache repaints ran before `begin_frame`; their draws count here.
         let mut stats = prepass;
         let customs = self.prepare_custom_materials(world, items)?;
-        #[cfg(feature = "shadows")]
         let shadow_capacity = ((self.device.borrow().shadow_map_limit()
             / super::super::lighting::SHADOW_TILE_SIZE)
             .pow(2) as usize)
             .min(self.shadow_capacity_limit);
-        #[cfg(not(feature = "shadows"))]
-        let shadow_capacity = 0;
         let mut lighting = self
             .light_selections
             .entry(world.selection)
             .or_default()
             .prepare(world, items, &customs, &frustum, shadow_capacity)?;
         let result = (|| {
-            #[cfg(feature = "shadows")]
             self.prepare_shadow_storage(&mut lighting)?;
             self.light_selections
                 .get_mut(&world.selection)
                 .expect("prepared lighting")
                 .assign_shadows(&mut lighting);
-            #[cfg(any(test, feature = "diagnostics"))]
-            {
-                stats.statistics.unshadowed_lights =
-                    stats.statistics.unshadowed_lights.saturating_add(
-                        lighting
-                            .requested_shadows
-                            .saturating_sub(lighting.shadows.len()) as u32,
-                    );
-            }
-            #[cfg(feature = "shadows")]
+            stats.statistics.unshadowed_lights = stats.statistics.unshadowed_lights.saturating_add(
+                lighting
+                    .requested_shadows
+                    .saturating_sub(lighting.shadows.len()) as u32,
+            );
             if !lighting.shadows.is_empty() {
                 self.draw_shadow_map(world, items, &customs, &lighting, &mut stats, scratch)?;
             }
@@ -277,7 +246,6 @@ impl<D: RenderDevice> RenderService<D> {
                 &mut scratch.draws,
                 items,
                 debug,
-                #[cfg(feature = "surfaces")]
                 &world.surfaces,
                 &customs,
                 &lighting,
@@ -286,33 +254,22 @@ impl<D: RenderDevice> RenderService<D> {
             let mut draws = scratch
                 .draws
                 .iter()
-                .map(|draw| {
-                    draw.index.resolve(
-                        items,
-                        debug,
-                        #[cfg(feature = "surfaces")]
-                        &world.surfaces,
-                    )
-                })
+                .map(|draw| draw.index.resolve(items, debug, &world.surfaces))
                 .peekable();
-            // Particle batching consumes lookahead entries; lean builds retain the same loop.
-            #[cfg_attr(not(feature = "particles"), allow(clippy::while_let_on_iterator))]
+            // Particle batching consumes lookahead entries.
             while let Some(item) = draws.next() {
                 let item = match item {
                     Item::Visual(item) => item,
                     Item::Debug(item) => {
-                        #[cfg(feature = "particles")]
                         self.device.borrow_mut().set_instances(&[])?;
                         self.device.borrow_mut().set_alpha_blend(false)?;
                         self.draw_debug(world, item, view_projection, &mut stats)?;
                         continue;
                     }
-                    #[cfg(feature = "surfaces")]
                     Item::Surface(surface) => {
                         if !world.visible(surface.entity, &frustum) {
                             continue;
                         }
-                        #[cfg(feature = "particles")]
                         self.device.borrow_mut().set_instances(&[])?;
                         self.draw_output_surface(
                             world.host,
@@ -326,7 +283,6 @@ impl<D: RenderDevice> RenderService<D> {
                 };
                 let draw_lighting = lighting.draws.get(&item.entity);
                 let custom = customs.get(&item.entity);
-                #[cfg(feature = "particles")]
                 let instances = {
                     scratch.instances.clear();
                     if item.particle.is_some() {
@@ -345,31 +301,13 @@ impl<D: RenderDevice> RenderService<D> {
                     }
                     &scratch.instances
                 };
-                #[cfg(feature = "particles")]
                 self.device.borrow_mut().set_instances(instances)?;
                 let model = prepared_model(item);
-                #[cfg(feature = "particles")]
                 let instance_count = instances.len().max(1) as u32;
-                #[cfg(not(feature = "particles"))]
-                let instance_count = 1;
                 if !custom.is_some_and(|m| m.custom_vertex && !m.material.conservative_bounds) && {
-                    #[cfg(feature = "particles")]
                     if item.particle.is_some() {
                         !super::super::particles::visible(world, item, instances, &frustum)
                     } else {
-                        !draw_lighting.map_or_else(
-                            || {
-                                if lighting.batched {
-                                    lighting.visibility.matches(item.entity, 0)
-                                } else {
-                                    world.visible(item.entity, &frustum)
-                                }
-                            },
-                            |draw| draw.visible,
-                        )
-                    }
-                    #[cfg(not(feature = "particles"))]
-                    {
                         !draw_lighting.map_or_else(
                             || {
                                 if lighting.batched {
@@ -387,7 +325,6 @@ impl<D: RenderDevice> RenderService<D> {
                 let data = world
                     .resource(AssetKey::from_u64(item.mesh.asset))
                     .and_then(|r| r.data()?.as_any().downcast_ref::<GlMeshData<D>>());
-                #[cfg(feature = "particles")]
                 let data = if item.particle.is_some_and(|p| p.sprite) {
                     self.particle_quad.as_ref()
                 } else {
@@ -398,9 +335,7 @@ impl<D: RenderDevice> RenderService<D> {
                     continue;
                 };
                 let asset = &data.mesh;
-                #[cfg(feature = "mesh-poses")]
                 let target = self.pose_data(world, item)?;
-                #[cfg(feature = "mesh-poses")]
                 let target_gpu = match target {
                     Some(target) => {
                         let Some(gpu) = target.gpu()? else {
@@ -422,7 +357,6 @@ impl<D: RenderDevice> RenderService<D> {
                     self.device
                         .borrow_mut()
                         .set_alpha_blend(custom.material.alpha_mode == 2)?;
-                    #[cfg(feature = "skeletal-animation")]
                     if item.skinned
                         && let Some(palette) = item.published.palette.as_deref()
                     {
@@ -439,7 +373,6 @@ impl<D: RenderDevice> RenderService<D> {
                         &[0.0, 0.0, f32::from(custom.material.receives_shadows)],
                         frame,
                     )?;
-                    #[cfg(feature = "shadows")]
                     if custom.material.receives_light
                         && custom.material.receives_shadows
                         && let Some(map) = &self.shadow_map
@@ -451,7 +384,6 @@ impl<D: RenderDevice> RenderService<D> {
                         &gpu,
                         &camera::multiply(view_projection, *model),
                         &[1.0; 3],
-                        #[cfg(feature = "mesh-poses")]
                         target_gpu
                             .as_deref()
                             .zip(item.pose.map(|(_, weight)| weight)),
@@ -461,7 +393,6 @@ impl<D: RenderDevice> RenderService<D> {
                     continue;
                 }
                 self.device.borrow_mut().set_alpha_blend(false)?;
-                #[cfg(feature = "particles")]
                 if let Some(p) = item.particle.filter(|p| p.sprite) {
                     self.device.borrow_mut().set_alpha_blend(true)?;
                     self.device.borrow_mut().set_additive(p.additive)?;
@@ -491,7 +422,6 @@ impl<D: RenderDevice> RenderService<D> {
                     item,
                     draw_lighting.is_some_and(|draw| draw.frame.shadow_count > 0),
                 );
-                #[cfg(feature = "skeletal-animation")]
                 let palette = item
                     .skinned
                     .then_some(item.published.palette.as_deref())
@@ -501,7 +431,6 @@ impl<D: RenderDevice> RenderService<D> {
                     continue;
                 };
 
-                #[cfg(feature = "skeletal-animation")]
                 if let Some(palette) = palette {
                     self.device
                         .borrow_mut()
@@ -527,7 +456,6 @@ impl<D: RenderDevice> RenderService<D> {
                         ],
                         frame,
                     )?;
-                    #[cfg(feature = "shadows")]
                     if let Some(map) = self.shadow_map.as_ref() {
                         self.device.borrow_mut().bind_shadow(program, map, frame)?;
                     }
@@ -537,7 +465,6 @@ impl<D: RenderDevice> RenderService<D> {
                     &gpu,
                     &mvp,
                     &material,
-                    #[cfg(feature = "mesh-poses")]
                     target_gpu
                         .as_deref()
                         .zip(item.pose.map(|(_, weight)| weight)),
@@ -578,7 +505,6 @@ impl<D: RenderDevice> RenderService<D> {
             mesh.gpu.as_ref().expect("live private mesh"),
             &mvp,
             &item.color,
-            #[cfg(feature = "mesh-poses")]
             None,
             None,
         )?;

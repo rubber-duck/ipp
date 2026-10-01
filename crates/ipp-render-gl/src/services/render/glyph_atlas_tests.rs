@@ -48,7 +48,6 @@ impl RenderDevice for MockAtlasDevice {
     type SurfacePath = u32;
     type SurfaceCacheTarget = ();
     type SurfaceInstances = ();
-    #[cfg(feature = "shadows")]
     type ShadowMap = u32;
     type GuiBatch = MockBatch;
     type GlyphAtlasPage = u32;
@@ -64,12 +63,10 @@ impl RenderDevice for MockAtlasDevice {
         Ok(())
     }
 
-    #[cfg(feature = "shadows")]
     fn create_shadow_map(&mut self, _size: u32) -> Result<Self::ShadowMap, RenderError> {
         Ok(0)
     }
 
-    #[cfg(feature = "shadows")]
     fn begin_shadow(
         &mut self,
         _map: &Self::ShadowMap,
@@ -79,12 +76,10 @@ impl RenderDevice for MockAtlasDevice {
         Ok(())
     }
 
-    #[cfg(feature = "shadows")]
     fn end_shadow(&mut self) -> Result<(), RenderError> {
         Ok(())
     }
 
-    #[cfg(feature = "shadows")]
     fn bind_shadow(
         &mut self,
         _program: &Self::Program,
@@ -94,7 +89,6 @@ impl RenderDevice for MockAtlasDevice {
         Ok(())
     }
 
-    #[cfg(feature = "shadows")]
     fn delete_shadow_map(&mut self, _map: Self::ShadowMap) {}
 
     fn create_program(
@@ -156,7 +150,7 @@ impl RenderDevice for MockAtlasDevice {
         _mesh: &Self::Mesh,
         _mvp: &[f32; 16],
         _material: &[f32; 3],
-        #[cfg(feature = "mesh-poses")] _pose: Option<(&Self::Mesh, f32)>,
+        _pose: Option<(&Self::Mesh, f32)>,
         _texture: Option<&Self::Texture>,
     ) -> Result<(), RenderError> {
         Ok(())
@@ -721,7 +715,6 @@ fn runs_leaving_a_shown_surface_release_demand_and_batches() {
     assert_eq!(atlas.take_retired_pages(), 1);
 }
 
-#[cfg(feature = "surfaces")]
 #[test]
 fn committed_and_provisional_runs_of_one_node_keep_separate_batches() {
     use ipp_core::systems::canvas::CanvasPart;

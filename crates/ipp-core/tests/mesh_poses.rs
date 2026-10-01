@@ -1,5 +1,4 @@
 //! Pose compatibility, ordered mutation, immutable sharing and headless bounds.
-#![cfg(feature = "mesh-poses")]
 
 mod support;
 use support::selection::RENDER;

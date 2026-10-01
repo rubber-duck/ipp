@@ -3,10 +3,8 @@ use std::marker::PhantomData;
 use std::ptr;
 use std::rc::Rc;
 
-#[cfg(feature = "surfaces")]
 pub use super::GuiVertex;
 use super::RenderDevice;
-#[cfg(feature = "surfaces")]
 use super::{SurfacePathDescriptor, SurfacePathInstance};
 use crate::RenderError;
 
@@ -14,13 +12,10 @@ mod custom;
 mod lighting;
 mod linear_target;
 mod submission;
-#[cfg(feature = "surfaces")]
 mod surface;
-#[cfg(feature = "surfaces")]
 mod surface_cache;
 mod targets;
 mod uniform_values;
-#[cfg(feature = "surfaces")]
 pub use surface_cache::GlesSurfaceCacheTarget;
 
 const VERTEX_SHADER: u32 = 0x8B31;
@@ -31,7 +26,6 @@ const INFO_LOG_LENGTH: u32 = 0x8B84;
 const ARRAY_BUFFER: u32 = 0x8892;
 const ELEMENT_ARRAY_BUFFER: u32 = 0x8893;
 const STATIC_DRAW: u32 = 0x88E4;
-#[cfg(feature = "surfaces")]
 const DYNAMIC_DRAW: u32 = 0x88E8;
 const FLOAT: u32 = 0x1406;
 const UNSIGNED_SHORT: u32 = 0x1403;
@@ -52,11 +46,8 @@ pub struct GlesRenderDevice {
     max_parameter_bytes: usize,
     max_parameter_textures: usize,
     submission: submission::GlesSubmissionState,
-    #[cfg(feature = "particles")]
     instance_buffer: u32,
-    #[cfg(feature = "particles")]
     instance_capacity: usize,
-    #[cfg(feature = "particles")]
     instance_count: i32,
     linear_target: Option<linear_target::GlesLinearTarget>,
     presentation_target: Option<targets::GlesTarget>,
@@ -69,20 +60,14 @@ pub struct GlesRenderDevice {
     reset_status: Option<unsafe extern "system" fn() -> u32>,
     /// Framebuffer, viewport and depth-write state known to match the context.
     targets: targets::GlesTargetState,
-    #[cfg(feature = "surfaces")]
     surface_quad_vao: u32,
-    #[cfg(feature = "surfaces")]
     surface_instance_scratch: Vec<[f32; 16]>,
     /// Pixel size that Surface antialiasing derives from: the drawing buffer,
     /// a bound Surface cache target or a bound glyph atlas page.
-    #[cfg(feature = "surfaces")]
     surface_viewport: [f32; 2],
-    #[cfg(feature = "surfaces")]
     surface_cache_target: Option<surface_cache::GlesSurfaceCacheBinding>,
     _thread: PhantomData<Rc<()>>,
-    #[cfg(feature = "shadows")]
     shadow_target: Option<targets::GlesTarget>,
-    #[cfg(feature = "surfaces")]
     glyph_atlas_target: Option<(targets::GlesTarget, [f32; 2])>,
 }
 
@@ -99,9 +84,7 @@ pub struct GlesRenderProgram {
     uniforms: std::cell::RefCell<super::uniform_cache::RenderUniformCache>,
     /// Per-draw uniform values last uploaded to this program.
     values: std::cell::RefCell<uniform_values::GlesUniformValues>,
-    #[cfg(feature = "skeletal-animation")]
     joints: i32,
-    #[cfg(feature = "mesh-poses")]
     pose_weight: i32,
     texture: i32,
 }
@@ -113,14 +96,12 @@ pub struct GlesRenderMesh {
     indices: i32,
     color: u32,
     normal: u32,
-    #[cfg(feature = "skeletal-animation")]
     skin: [u32; 2],
     uv: u32,
     weight: u32,
 }
 
 /// Native vertex array and buffer holding one Surface's retained GUI vertices.
-#[cfg(feature = "surfaces")]
 pub struct GlesGuiBatch {
     pub(crate) vao: u32,
     pub(crate) vbo: u32,
@@ -129,7 +110,6 @@ pub struct GlesGuiBatch {
 }
 
 /// Native texture and framebuffer for one glyph atlas page.
-#[cfg(feature = "surfaces")]
 pub struct GlesGlyphAtlasPage {
     pub(crate) texture: u32,
     pub(crate) framebuffer: u32,
@@ -137,7 +117,6 @@ pub struct GlesGlyphAtlasPage {
     pub(crate) height: u32,
 }
 
-#[cfg(feature = "surfaces")]
 pub struct GlesSurfacePath {
     texture: u32,
     band_texture: u32,
@@ -150,7 +129,6 @@ pub struct GlesSurfacePath {
 }
 
 /// Native vertex array and buffer holding one retained analytic instance stream.
-#[cfg(feature = "surfaces")]
 pub struct GlesSurfaceInstances {
     vao: u32,
     vbo: u32,

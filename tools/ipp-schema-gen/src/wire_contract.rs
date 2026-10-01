@@ -1,62 +1,15 @@
 use crate::binary_reader::Reader;
 use crate::model::{
-    AssetFormat, Capabilities, Component, TargetFeature, WireContract, WireEncoding, WireField,
-    WireLayout, WireTag,
+    AssetFormat, Component, WireContract, WireEncoding, WireField, WireLayout, WireTag,
 };
 use crate::typescript_names::identifier;
 
 pub(super) fn read_wire_contract(
     r: &mut Reader<'_>,
     components: &[Component],
-    target_features: &[TargetFeature],
 ) -> Result<WireContract, String> {
-    if r.u16()? != 2 {
+    if r.u16()? != 3 {
         return Err("wire contract format".into());
-    }
-
-    let mut capabilities = Capabilities::default();
-    let mut capability_ids = std::collections::BTreeSet::new();
-    let mut capability_names = std::collections::BTreeSet::new();
-    for _ in 0..r.u8()? {
-        let id = r.u8()?;
-        let enabled = match r.u8()? {
-            0 => false,
-            1 => true,
-            _ => return Err("wire capability flag".into()),
-        };
-        let name = r.string()?;
-        if !capability_ids.insert(id) || !capability_names.insert(name.clone()) {
-            return Err("duplicate wire capability".into());
-        }
-        if name == "builtin-assets" {
-            if !target_features
-                .iter()
-                .any(|feature| feature.name == name && feature.enabled == enabled)
-            {
-                return Err("wire and target capability selection differ".into());
-            }
-        } else if !enabled {
-            return Err("baseline wire capability is disabled".into());
-        }
-        match (id, name.as_str()) {
-            (2, "spatial") => capabilities.spatial = enabled,
-            (3, "textures") => capabilities.textures = enabled,
-            (4, "builtin-assets") => capabilities.builtin_assets = enabled,
-            (5, "picking") => capabilities.picking = enabled,
-            (6, "debug-geometry") => capabilities.debug_geometry = enabled,
-            (7, "animation") => capabilities.animation = enabled,
-            (8, "assets") => capabilities.assets = enabled,
-            _ => return Err("unknown wire capability".into()),
-        }
-    }
-    if capability_ids != std::collections::BTreeSet::from([2, 3, 4, 5, 6, 7, 8])
-        || capabilities.assets != (capabilities.spatial || capabilities.animation)
-        || capabilities.debug_geometry && !capabilities.spatial
-        || capabilities.builtin_assets && !capabilities.textures
-        || capabilities.textures && !capabilities.spatial
-        || capabilities.picking && !capabilities.spatial
-    {
-        return Err("incomplete wire capabilities".into());
     }
 
     let mut conventions = Vec::new();
@@ -85,8 +38,6 @@ pub(super) fn read_wire_contract(
     let mut layout_names = std::collections::BTreeSet::new();
     for _ in 0..r.u16()? {
         let name = r.string()?;
-        let capability = r.u8()?;
-        validate_capability(capability, capabilities)?;
         if name.is_empty() || !layout_names.insert(name.clone()) {
             return Err("duplicate wire layout".into());
         }
@@ -113,7 +64,6 @@ pub(super) fn read_wire_contract(
         }
         layouts.push(WireLayout {
             name,
-            capability,
             fields,
         });
     }
@@ -154,8 +104,6 @@ pub(super) fn read_wire_contract(
         identifier(&name)?;
         let space = r.u8()?;
         tag_space_name(space)?;
-        let capability = r.u8()?;
-        validate_capability(capability, capabilities)?;
         let value = r.u8()?;
         let layout = r.string()?;
         if !tag_names.insert(name.clone()) || !tag_values.insert((space, value)) {
@@ -167,7 +115,6 @@ pub(super) fn read_wire_contract(
         tags.push(WireTag {
             name,
             space,
-            capability,
             value,
             layout,
         });
@@ -204,8 +151,6 @@ pub(super) fn read_wire_contract(
     for _ in 0..r.u16()? {
         let name = r.string()?;
         identifier(&name)?;
-        let capability = r.u8()?;
-        validate_capability(capability, capabilities)?;
         let type_id = r.u16()?;
         let format = r.string()?;
         if type_id == 0
@@ -219,7 +164,6 @@ pub(super) fn read_wire_contract(
         }
         asset_formats.push(AssetFormat {
             name,
-            capability,
             type_id,
             format,
         });
@@ -235,46 +179,12 @@ pub(super) fn read_wire_contract(
     }
 
     Ok(WireContract {
-        capabilities,
         conventions,
         limits,
         layouts,
         tags,
         asset_formats,
     })
-}
-
-fn validate_capability(id: u8, capabilities: Capabilities) -> Result<(), String> {
-    let enabled = match id {
-        0 => true,
-        2 => capabilities.spatial,
-        3 => capabilities.textures,
-        4 => capabilities.builtin_assets,
-        5 => capabilities.picking,
-        6 => capabilities.debug_geometry,
-        7 => capabilities.animation,
-        8 => capabilities.assets,
-        _ => return Err("unknown wire capability reference".into()),
-    };
-    if enabled {
-        Ok(())
-    } else {
-        Err("disabled capability leaked into wire contract".into())
-    }
-}
-
-pub(super) fn capability_name(id: u8) -> Result<&'static str, String> {
-    match id {
-        0 => Ok("base"),
-        2 => Ok("spatial"),
-        3 => Ok("textures"),
-        4 => Ok("builtin-assets"),
-        5 => Ok("picking"),
-        6 => Ok("debug-geometry"),
-        7 => Ok("animation"),
-        8 => Ok("assets"),
-        _ => Err("unknown wire capability reference".into()),
-    }
 }
 
 fn tag_space_name(id: u8) -> Result<&'static str, String> {

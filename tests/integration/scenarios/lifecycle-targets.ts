@@ -5,7 +5,7 @@ import type {
   WorldPersistenceHostClient,
 } from "@ipp/client";
 import type { LifecycleTransportProbe } from "../lifecycle-target-transport.js";
-import type { LifecycleDiagnosticSample } from "../../../packages/ipp-client/src/lifecycle-diagnostics.js";
+import type { LifecycleDiagnosticSample } from "../../../packages/ipp-client/src/diagnostics.js";
 import { lifecycleSubsets } from "./lifecycle-subsets.js";
 import { createEntity, successfulBatch } from "../camera-fixtures.js";
 

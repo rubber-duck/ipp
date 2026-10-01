@@ -1,7 +1,6 @@
 //! Which changes republish Canvas output (its paint, layout and resource revisions),
 //! intersected clips and leaf validation through real headless Host frames,
 //! including animation and World save/load.
-#![cfg(feature = "gui")]
 
 mod support;
 

@@ -128,7 +128,7 @@ export interface ProtocolRejection {
 }
 
 export type MalformedCase =
-  | "no-bootstrap"
+  | "no-hello"
   | "oversized-message"
   | "trailing-bytes"
   | "unknown-tag"
@@ -141,10 +141,6 @@ export interface DriverConnectOptions {
 
 export interface HarnessDriverFactory {
   connect(url: string, options: DriverConnectOptions): Promise<HarnessDriver>;
-  rejectMismatchedSchema(
-    url: string,
-    options: DriverConnectOptions,
-  ): Promise<ProtocolRejection>;
   rejectStaleSession(
     url: string,
     options: DriverConnectOptions,

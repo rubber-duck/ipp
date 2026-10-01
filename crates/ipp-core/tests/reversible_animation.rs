@@ -135,7 +135,6 @@ fn state(
     (state.time, state.state)
 }
 
-#[allow(irrefutable_let_patterns)]
 fn effective_scalar(world: &WorldContext<'_>, target: EntityId) -> f32 {
     world
         .inspect(target)

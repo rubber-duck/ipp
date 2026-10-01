@@ -122,7 +122,6 @@ pub(crate) fn sources(
             "shaders/custom-lighting.glsl"
         ));
     }
-    #[cfg(feature = "shadows")]
     if lit {
         fragment.push_str(crate::services::render::embedded_shader!(
             "shaders/shadow-sampling.glsl"
@@ -130,10 +129,7 @@ pub(crate) fn sources(
     }
     if lit {
         fragment.push_str("uniform vec3 u_surface;\n");
-        #[cfg(feature = "shadows")]
         fragment.push_str("float ippShadowVisibility(int index, float nl) { return u_surface.z > 0.5 ? visibility_from_shadow(index, nl, ippSurfaceNormal()) : 1.0; }\nfloat ippShadowVisibility(float nl) { for (int i = 0; i < u_light_count; ++i) { if (u_shadow_settings[i].x >= 0.0) return ippShadowVisibility(i, nl); } return 1.0; }\n");
-        #[cfg(not(feature = "shadows"))]
-        fragment.push_str("float ippShadowVisibility(int index, float nl) { return 1.0; }\nfloat ippShadowVisibility(float nl) { return 1.0; }\n");
     }
     fragment.push_str(&backend.fragment);
     fragment.push_str("\nvoid main() { vec4 color = materialFragment(); if (u_alpha_mode == 1 && color.a < u_alpha_cutoff) discard; out_color = vec4(clamp(color.rgb, 0.0, 1.0), u_alpha_mode == 2 ? clamp(color.a, 0.0, 1.0) : 1.0); }\n");

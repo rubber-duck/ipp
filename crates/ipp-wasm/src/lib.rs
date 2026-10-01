@@ -4,7 +4,8 @@
 //! concurrent or reentrant. The Host and each physical connection use distinct
 //! strictly increasing nonzero identities. Reserve input, reacquire `memory.buffer`, write only the reserved
 //! bytes, and calls receive with exactly that length. The first message is the
-//! production bootstrap; later messages use the negotiated binary contract.
+//! schema-independent hello; later messages use the binary contract the Host
+//! announces and serves.
 //!
 //! Input reservation pointers are valid only until the next open, close, reserve or
 //! receive, tick, resource progress, poll, resource poll or resource completion. Output pointers are read-only until the next such call;
@@ -15,7 +16,7 @@
 //!
 //! Receive only queues ingress. The worker owns an autonomous clock and calls
 //! `ipp_tick(dt)` once per frame, then fairly drains `ipp_connection_poll(id)`.
-//! Drain after receive as well because bootstrap replies are immediately queued.
+//! Drain after receive as well because hello and contract replies are queued immediately.
 //! Invalid connection ingress/output revokes only that connection and exposes a
 //! bounded UTF-8 diagnostic. An invalid Host frame faults the Host itself.
 //! Core semantic rejections and oversized observations use protocol responses.
@@ -23,17 +24,10 @@
 //! confirmed endpoint disposal. Host close requires disposal of its endpoints.
 //! Identity high-water marks survive close. See the crate README for ownership.
 
-#[cfg(feature = "diagnostics")]
 macro_rules! diagnostic {
     ($($args:tt)*) => { ipp_core::diagnostic!($($args)*); };
 }
 
-#[cfg(not(feature = "diagnostics"))]
-macro_rules! diagnostic {
-    ($($args:tt)*) => {{}};
-}
-
-#[cfg(feature = "diagnostics")]
 pub mod diagnostics;
 
 use std::cell::RefCell;
@@ -233,9 +227,8 @@ pub extern "C" fn ipp_resource_chunk(session: u64, id: u64, len: usize) -> u32 {
 }
 
 /// Application-owned source pipes retained in Rust, excluding decoder/GPU
-/// storage. An ingress statistic of `diagnostics` builds.
+/// storage. An ingress statistic, read on demand.
 // SAFETY: Unique symbol; scalar observation without borrowed storage escaping.
-#[cfg(feature = "diagnostics")]
 #[unsafe(no_mangle)]
 pub extern "C" fn ipp_resource_buffered_bytes() -> usize {
     BOUNDARY.with_borrow(|boundary| boundary.resource_buffered_bytes())
@@ -269,30 +262,29 @@ pub extern "C" fn ipp_output_len() -> usize {
     BOUNDARY.with_borrow(|boundary| boundary.output_len())
 }
 
-/// Compatibility identity of the actual runtime target and selected capabilities.
+/// Compatibility identity of the actual runtime target and its compiled contract.
 // SAFETY: Unique symbol; compatibility identity has no borrowed storage.
 #[unsafe(no_mangle)]
 pub extern "C" fn ipp_schema_hash() -> u64 {
     ipp_protocol::schema_hash()
 }
 
-#[cfg(feature = "schema-export")]
 mod contract {
     use std::sync::OnceLock;
 
-    static CONTRACT: OnceLock<Vec<u8>> = OnceLock::new();
     static FIXTURE: OnceLock<Vec<u8>> = OnceLock::new();
 
     fn contract() -> &'static [u8] {
-        CONTRACT.get_or_init(ipp_protocol::export_contract)
+        ipp_protocol::export_contract()
     }
 
     fn fixture() -> &'static [u8] {
         FIXTURE.get_or_init(ipp_protocol::export_layout_fixture)
     }
 
-    // SAFETY: Unique exported symbol; pointer refers to immutable OnceLock-owned
-    // bytes kept alive for the module lifetime. The host copies from linear memory.
+    // SAFETY: Unique exported symbol; pointer refers to the immutable contract that
+    // ipp-protocol's OnceLock keeps alive for the module lifetime. The host copies
+    // from linear memory.
     #[unsafe(no_mangle)]
     pub extern "C" fn ipp_contract_ptr() -> *const u8 {
         contract().as_ptr()
@@ -356,5 +348,5 @@ pub extern "C" fn ipp_accepts_input(connection: u64) -> u32 {
     BOUNDARY.with_borrow_mut(|boundary| u32::from(boundary.accepts_input(connection)))
 }
 
-#[cfg(feature = "profiling")]
+#[cfg(feature = "instrumentation")]
 mod profiling;

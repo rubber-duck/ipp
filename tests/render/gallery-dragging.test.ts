@@ -28,6 +28,19 @@ test("combined objects drag on the picked view plane and reject late or canceled
       await g.navigate("lighting");
       await g.seek(0);
       const camera = transform(await g.inspect());
+      const bounds = await g.page.locator("#ipp-world-canvas").boundingBox();
+      assert.ok(bounds);
+      // Pointer travel as a share of the canvas, so gestures keep their
+      // extent in the scene at any canvas size.
+      const across = (
+        point: { readonly clientX: number; readonly clientY: number },
+        dx: number,
+        dy = 0,
+      ) =>
+        [
+          point.clientX + bounds.width * dx,
+          point.clientY + bounds.height * dy,
+        ] as const;
       for (const id of [
         "lighting-cube",
         "lighting-sphere",
@@ -39,8 +52,6 @@ test("combined objects drag on the picked view plane and reject late or canceled
       ]) {
         const before = await g.capture(`${id}-before-drag`);
         const start = await g.locate(id);
-        const bounds = await g.page.locator("#ipp-world-canvas").boundingBox();
-        assert.ok(bounds);
         const dx = 0.045,
           dy = -0.025;
         const projection = await g.call<CameraProjectResultEvent>(
@@ -57,13 +68,7 @@ test("combined objects drag on the picked view plane and reject late or canceled
           (value, axis) =>
             value + projection.position![axis]! - start.hit.position[axis]!,
         );
-        await g.drag(
-          [start.clientX, start.clientY],
-          [
-            start.clientX + bounds.width * dx,
-            start.clientY + bounds.height * dy,
-          ],
-        );
+        await g.drag([start.clientX, start.clientY], across(start, dx, dy));
         const after = await g.capture(`${id}-after-drag`);
         assert.ok(
           distance(position(after.inspection, id), expected) < 0.02,
@@ -90,7 +95,7 @@ test("combined objects drag on the picked view plane and reject late or canceled
         const before = position(await g.inspect(), id);
         await g.drag(
           [point.clientX, point.clientY],
-          [point.clientX + 40, point.clientY - 10],
+          across(point, 0.047, -0.016),
         );
         await g.held();
         assert.deepEqual(position(await g.inspect(), id), before);
@@ -107,10 +112,7 @@ test("combined objects drag on the picked view plane and reject late or canceled
           point = await g.locate(id);
           const before = position(await g.inspect(), id);
           await g.call("delayNextCameraQuery", "CameraProjectQuery");
-          await g.drag(
-            [point.clientX, point.clientY],
-            [point.clientX + 30, point.clientY],
-          );
+          await g.drag([point.clientX, point.clientY], across(point, 0.035));
           await g.held();
           if (cancellation === "blur")
             await g.page.evaluate(() =>
@@ -160,7 +162,7 @@ test("combined objects drag on the picked view plane and reject late or canceled
           ) === true
         );
       });
-      await g.page.mouse.move(light.clientX + 35, light.clientY, { steps: 4 });
+      await g.page.mouse.move(...across(light, 0.041), { steps: 4 });
       await g.page.mouse.up();
       await g.settle();
       await g.waitFor(

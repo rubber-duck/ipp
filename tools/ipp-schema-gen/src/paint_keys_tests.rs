@@ -18,13 +18,10 @@ fn paint_keys_follow_compiled_indices_not_generator_arithmetic() {
         (45, "background", "", ""),
         (987, "fill", "pressed", "checked"),
     ]);
-    let keys = read(
-        &mut Reader {
-            bytes: &bytes,
-            at: 0,
-        },
-        true,
-    )
+    let keys = read(&mut Reader {
+        bytes: &bytes,
+        at: 0,
+    })
     .unwrap();
     assert_eq!(keys[0].index, 45);
     assert_eq!(keys[1].index, 987);
@@ -37,40 +34,7 @@ fn paint_keys_follow_compiled_indices_not_generator_arithmetic() {
 }
 
 #[test]
-fn paint_keys_are_capability_gated_and_unambiguous() {
-    let empty = export(&[]);
-    assert!(
-        read(
-            &mut Reader {
-                bytes: &empty,
-                at: 0
-            },
-            false
-        )
-        .unwrap()
-        .is_empty()
-    );
-    assert!(
-        read(
-            &mut Reader {
-                bytes: &empty,
-                at: 0
-            },
-            true
-        )
-        .is_err()
-    );
-    let valid = export(&[(8, "fill", "", "")]);
-    assert!(
-        read(
-            &mut Reader {
-                bytes: &valid,
-                at: 0
-            },
-            false
-        )
-        .is_err()
-    );
+fn paint_keys_are_unambiguous() {
     for invalid in [
         vec![(1, "fill", "", ""), (1, "background", "", "")],
         vec![(1, "fill", "", ""), (2, "fill", "", "")],
@@ -80,13 +44,10 @@ fn paint_keys_are_capability_gated_and_unambiguous() {
     ] {
         let bytes = export(&invalid);
         assert!(
-            read(
-                &mut Reader {
-                    bytes: &bytes,
-                    at: 0
-                },
-                true
-            )
+            read(&mut Reader {
+                bytes: &bytes,
+                at: 0
+            })
             .is_err()
         );
     }

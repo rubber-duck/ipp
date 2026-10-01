@@ -1,12 +1,13 @@
 // Focused ownership, codec and correlation tests; no runtime/render integration claim.
 import assert from "node:assert/strict";
 import test from "node:test";
-import { generateClient, replyToHostCreate } from "./generated-client.mjs";
+import {
+  generateClient,
+  hostAnnouncement,
+  replyToHostCreate,
+} from "./generated-client.mjs";
 
-const { codec, source, manifestSource } = await generateClient("texture", [
-  "builtin-assets",
-]);
-const minimal = await generateClient("texture-minimal");
+const { codec, source, manifestSource } = await generateClient("texture");
 const key = { kind: 2, asset: 0x7fffffffffffffffn, variant: 3 };
 const stats = { sourceBytes: 664, residentBytes: 648 };
 
@@ -26,9 +27,7 @@ async function connect({
       if (replyToHostCreate(bytes, events)) return;
       sent.push([bytes]);
       if (sent.length === 1) {
-        const reply = new Uint8Array(24);
-        reply.set(bytes);
-        new DataView(reply.buffer).setBigUint64(16, 7n, true);
+        const reply = hostAnnouncement(codec);
         events.message(reply);
       }
     },
@@ -45,24 +44,7 @@ async function connect({
   return { client, sent, emit: (bytes) => events.message(bytes) };
 }
 
-test("baseline texture contract retains component ID6 while built-in providers remain optional", () => {
-  assert.deepEqual(codec.CAPABILITIES, {
-    snapshot: true,
-    animation: true,
-    assets: true,
-    spatial: true,
-    textures: true,
-    builtinAssets: true,
-    picking: true,
-    debugGeometry: true,
-    pbr: true,
-    shadows: false,
-    skeletalAnimation: false,
-    meshPoses: false,
-    particles: false,
-    surfaces: false,
-    gui: false,
-  });
+test("texture contract retains component ID6", () => {
   assert.equal(codec.components.UnlitTexture.id, 6);
   assert.deepEqual(
     codec.UnlitTexture.insert(codec.Entity.alias(1), {
@@ -85,10 +67,7 @@ test("baseline texture contract retains component ID6 while built-in providers r
     ],
   );
   for (const text of ["UnlitTexture", "ASSET_TEXTURE"])
-    assert.equal(minimal.source.includes(text), true, text);
-  assert.equal(minimal.codec.CAPABILITIES.textures, true);
-  assert.equal(minimal.codec.CAPABILITIES.builtinAssets, false);
-  assert.notEqual(codec.SCHEMA_HASH, minimal.codec.SCHEMA_HASH);
+    assert.equal(source.includes(text), true, text);
   assert.match(manifestSource, /IPPT;version=3/);
   assert.match(manifestSource, /rgba8-srgb-linear-alpha/);
   assert.match(manifestSource, /exact-payload/);
@@ -138,7 +117,7 @@ test("texture resource events expose terminal state and log each failure exactly
     resources: [failed, ready],
   });
   for (const symbol of ["RESPONSE_RESOURCES", "readResources"])
-    assert.equal(minimal.source.includes(symbol), true, symbol);
+    assert.equal(source.includes(symbol), true, symbol);
 
   const fixture = await connect();
   const seen = [];
@@ -165,33 +144,31 @@ test("texture resource events expose terminal state and log each failure exactly
 });
 
 test("builtin request codecs and imperative consumer methods are absent", async () => {
-  for (const selected of [codec, minimal.codec]) {
-    const fixture = await connect({ selected });
-    try {
-      for (const name of [
-        "uploadMesh",
-        "uploadTexture",
-        "loadBuiltinMesh",
-        "loadBuiltinTexture",
-      ])
-        assert.equal(name in fixture.client, false);
-      for (const kind of ["loadBuiltinMesh", "loadBuiltinTexture"])
-        assert.throws(
-          () =>
-            selected.encodeRequest({
-              session: 7n,
-              requestId: 1n,
-              body: {
-                kind,
-                key,
-                uri: "ipp://mesh/cube?width=1&height=1&length=1",
-              },
-            }),
-          /unsupported request/,
-        );
-    } finally {
-      await fixture.client.close();
-    }
+  const fixture = await connect({ selected: codec });
+  try {
+    for (const name of [
+      "uploadMesh",
+      "uploadTexture",
+      "loadBuiltinMesh",
+      "loadBuiltinTexture",
+    ])
+      assert.equal(name in fixture.client, false);
+    for (const kind of ["loadBuiltinMesh", "loadBuiltinTexture"])
+      assert.throws(
+        () =>
+          codec.encodeRequest({
+            session: 7n,
+            requestId: 1n,
+            body: {
+              kind,
+              key,
+              uri: "ipp://mesh/cube?width=1&height=1&length=1",
+            },
+          }),
+        /unsupported request/,
+      );
+  } finally {
+    await fixture.client.close();
   }
 });
 

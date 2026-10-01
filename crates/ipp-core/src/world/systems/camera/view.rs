@@ -218,7 +218,6 @@ impl CameraNavigationCommand {
             if edge.placement_output.is_some_and(|owner| owner != output) {
                 return Err(ErrorReason::InvalidEntity);
             }
-            #[cfg(feature = "surfaces")]
             if edge.mode != WorldAttachmentMode::Spatial {
                 let parent = ingress
                     .world(publication.world)

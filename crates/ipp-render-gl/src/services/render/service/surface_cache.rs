@@ -3,7 +3,6 @@
 use super::super::canvas_scene::{CanvasScene, OutputContentStamp};
 use super::super::frame_statistics::RenderFrameWork;
 use super::super::retained_surfaces::CANVAS_SURFACE;
-#[cfg(any(test, feature = "diagnostics"))]
 use super::super::surface_cache::SurfaceCacheDiagnostic;
 use super::super::surface_cache::SurfaceCacheTargets;
 use super::super::surface_cache::{SurfaceCacheAction, SurfaceCacheInput};
@@ -465,7 +464,6 @@ impl<D: RenderDevice> RenderService<D> {
 
     /// Append the cache state of one World's opted-in Surfaces after the last
     /// completed frame, in entity order. Read-only; it never changes presentation.
-    #[cfg(any(test, feature = "diagnostics"))]
     pub fn surface_cache_diagnostics(
         &self,
         world: ipp_core::WorldId,
@@ -480,13 +478,13 @@ impl<D: RenderDevice> RenderService<D> {
     /// Images beyond the budget are evicted, least recently presented first,
     /// before new allocations; Surfaces that still do not fit present directly.
     /// Zero disables caching. The budget survives context loss.
-    #[cfg(any(test, feature = "diagnostics"))]
+    #[cfg(any(test, feature = "instrumentation"))]
     pub fn set_surface_cache_budget(&mut self, bytes: usize) {
         self.surface_cache.set_budget(bytes);
     }
 
     /// Current Surface cache image budget in bytes.
-    #[cfg(any(test, feature = "diagnostics"))]
+    #[cfg(any(test, feature = "instrumentation"))]
     pub fn surface_cache_budget(&self) -> usize {
         self.surface_cache.budget()
     }

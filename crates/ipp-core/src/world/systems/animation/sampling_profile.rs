@@ -45,7 +45,6 @@ impl WorldContext<'_> {
         let mut count = 0;
         for controller in animation.state.controllers.values() {
             for driver in &controller.drivers {
-                #[cfg(feature = "skeletal-animation")]
                 if matches!(
                     driver.runtime_target(),
                     super::driver::AnimationRuntimeTarget::JointLocal { .. }
@@ -79,7 +78,6 @@ impl WorldContext<'_> {
                 if description.additive || description.weight != 1.0 {
                     return Err(ErrorReason::InvalidValue);
                 }
-                #[cfg(feature = "skeletal-animation")]
                 if matches!(
                     driver.runtime_target(),
                     super::driver::AnimationRuntimeTarget::JointLocal { .. }

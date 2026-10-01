@@ -27,8 +27,15 @@ export function bundleBrowser(
     minify,
     legalComments: "none",
     conditions: ["browser", ...(minify ? [] : ["development"])],
-    define: { "process.env.NODE_ENV": JSON.stringify(environment) },
     ...options,
+    define: {
+      // A test bundle of the worker pairs with a normal runtime; assembled
+      // distributions define this from their own build configuration.
+      IPP_INSTRUMENTATION: "false",
+      ...(options.define ?? {
+        "process.env.NODE_ENV": JSON.stringify(environment),
+      }),
+    },
     loader: { ".glsl": "text", ...options.loader },
   });
 }

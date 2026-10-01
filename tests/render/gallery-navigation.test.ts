@@ -122,7 +122,10 @@ test("geometry and combined scenes orbit and zoom without pan and discard late c
         currentBounds.x + currentBounds.width * 0.04,
         currentBounds.y + currentBounds.height * 0.06,
       ] as const;
-      const end = [empty[0] + 70, empty[1] + 35] as const;
+      const end = [
+        empty[0] + currentBounds.width * 0.082,
+        empty[1] + currentBounds.height * 0.056,
+      ] as const;
       await g.call("delayNextCameraQuery");
       try {
         await g.drag(empty, end);
@@ -266,7 +269,9 @@ test("gallery fills desktop and phone viewports while picker and controls preser
         page.evaluate(() => window.ippWorldCanvas!.client.session.toString());
 
       await page.setViewportSize({ width: 1280, height: 800 });
-      const g = await openGallery(scenario);
+      // The layout under test is the application's own: the canvas fills
+      // the frame at each viewport this scenario sets.
+      const g = await openGallery(scenario, { canvasShare: 1 });
       const desktopLayout = await readLayout();
       assertCanvasFillsFrame(desktopLayout);
       assert.equal(desktopLayout.controlsOpen, true);

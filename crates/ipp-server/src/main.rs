@@ -42,7 +42,6 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     if !bind.ip().is_loopback() {
         return Err("the PoC host requires a loopback address".into());
     }
-    #[cfg(feature = "diagnostics")]
     ipp_server::diagnostics::level_from_env()?;
 
     let file_access = match (file_root, file_prefix) {

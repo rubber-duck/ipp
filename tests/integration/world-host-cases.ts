@@ -103,8 +103,6 @@ export const worldHostCases: ReadonlyArray<{
       record: DriverConnectOptions["record"],
       host: HostClientBase<Client>,
     ) => {
-      if (!client.capabilities.picking)
-        throw new Error("Camera scenarios require picking");
       return scenario.run(
         new CameraFixture(
           client as PickingWorldClient,

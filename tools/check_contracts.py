@@ -1,16 +1,63 @@
 #!/usr/bin/env python3
-"""Execute native/WASM exports and verify reproducible, feature-matched clients."""
+"""Execute the native and WASM target exports and verify reproducible matching clients."""
 
 import json
 from pathlib import Path
 import sys
 import subprocess
 
-from pipeline.catalog import PROFILES
 from pipeline.processes import node, run as execute
 
 ROOT = Path(__file__).resolve().parents[1]
 ARTIFACTS = ROOT / "target/integration-artifacts/contracts"
+TARGETS = ("native", "wasm")
+COMPONENTS = [
+    "Scalar",
+    "LinearDriver",
+    "Transform",
+    "UnlitMaterial",
+    "MeshInstance",
+    "UnlitTexture",
+    "Camera",
+    "PbrMaterial",
+    "Light",
+    "Skeleton",
+    "Skin",
+    "BoundingGeometry",
+    "PickingGeometry",
+    "MeshPose",
+    "ParentJoint",
+    "LookAt",
+    "BaseColorTexture",
+    "CustomMaterial",
+    "ParticleEmitter",
+    "ParticlePlayback",
+    "ParticleSprite",
+    "ParticleMesh",
+    "Surface",
+    "SurfaceCache",
+    "WorldAttachment",
+    "CanvasStyle",
+    "CanvasText",
+    "CanvasGlyphRun",
+    "CanvasDrawing",
+    "CanvasBitmap",
+    "CanvasBox",
+    "GuiBehavior",
+    "GuiButton",
+    "GuiCheckbox",
+    "GuiSlider",
+    "GuiTextInput",
+    "GuiLayout",
+    "GuiTheme",
+    "GuiSkin",
+    "GuiFont",
+    "GuiThemeMotion",
+    "GuiScrollView",
+    "GuiVirtualList",
+    "GuiVirtualItem",
+    "CanvasBounds",
+]
 
 
 def run(*args, output=None):
@@ -18,7 +65,7 @@ def run(*args, output=None):
     execute(command, output=output)
 
 
-def export(example, features, output):
+def export(example, output, *features):
     run(
         "cargo",
         "run",
@@ -26,181 +73,81 @@ def export(example, features, output):
         "-p",
         "ipp-protocol",
         "--locked",
-        "--no-default-features",
-        "--features",
-        features,
+        *(["--features", ",".join(features)] if features else []),
         "--example",
         example,
         output=output,
     )
 
 
-def main(selected_profiles=None):
-    reports = {}
-    generated = []
-    configurations = PROFILES["contracts"]
-    available = tuple(configurations)
-    selected = (
-        tuple(selected_profiles if selected_profiles is not None else sys.argv[1:])
-        or available
+def main():
+    """Verify the one contract of each host target and the clients generated from it."""
+    directory = ARTIFACTS
+    directory.mkdir(parents=True, exist_ok=True)
+    native = directory / "native.contract"
+    fixture = directory / "native.fixture"
+    repeated = directory / "repeated.contract"
+    export("export_contract", native)
+    export("export_contract", repeated)
+    if native.read_bytes() != repeated.read_bytes():
+        raise ValueError("native export is not reproducible")
+    export("export_fixture", fixture)
+    run(
+        "cargo",
+        "build",
+        "-p",
+        "ipp-wasm",
+        "--locked",
+        "--target",
+        "wasm32-unknown-unknown",
     )
-    if len(set(selected)) != len(selected) or any(
-        name not in available for name in selected
-    ):
-        raise ValueError(f"Select unique configurations from {', '.join(available)}")
-    for configuration in selected:
-        directory = ARTIFACTS / configuration
-        directory.mkdir(parents=True, exist_ok=True)
-        features = configurations[configuration]
-        protocol_features = ",".join(["schema-export", *features])
-        wasm_features = protocol_features
-        native = directory / "native.contract"
-        fixture = directory / "native.fixture"
-        repeated = directory / "repeated.contract"
-        export("export_contract", protocol_features, native)
-        export("export_contract", protocol_features, repeated)
-        if native.read_bytes() != repeated.read_bytes():
-            raise ValueError(f"{configuration}: native export is not reproducible")
-        export("export_fixture", protocol_features, fixture)
-        run(
-            "cargo",
-            "build",
-            "-p",
-            "ipp-wasm",
-            "--locked",
-            "--no-default-features",
-            "--target",
-            "wasm32-unknown-unknown",
-            "--features",
-            wasm_features,
-        )
-        run(
-            "node",
-            "tools/ipp-schema-gen/tests/target-contract.mjs",
-            str(native),
-            str(fixture),
-            "target/wasm32-unknown-unknown/debug/ipp_wasm.wasm",
-            str(directory),
-        )
-        report = json.loads((directory / "target-report.json").read_text())
-        names = [component["name"] for component in report["native"]["components"]]
-        expected = [
-            "Scalar",
-            "LinearDriver",
-            "Transform",
-            "UnlitMaterial",
-            "MeshInstance",
-            "UnlitTexture",
-            "Camera",
-            "PbrMaterial",
-            "Light",
-        ]
-        if "skeletal-animation" in features:
-            expected.extend(["Skeleton", "Skin"])
-        expected.extend(["BoundingGeometry", "PickingGeometry"])
-        if "mesh-poses" in features:
-            expected.append("MeshPose")
-        if "skeletal-animation" in features:
-            expected.append("ParentJoint")
-        expected.extend(["LookAt", "BaseColorTexture", "CustomMaterial"])
-        if "particles" in features:
-            expected.extend(
-                [
-                    "ParticleEmitter",
-                    "ParticlePlayback",
-                    "ParticleSprite",
-                    "ParticleMesh",
-                ]
+    run(
+        "node",
+        "tools/ipp-schema-gen/tests/target-contract.mjs",
+        str(native),
+        str(fixture),
+        "target/wasm32-unknown-unknown/debug/ipp_wasm.wasm",
+        str(directory),
+    )
+    report = json.loads((directory / "target-report.json").read_text())
+    names = [component["name"] for component in report["native"]["components"]]
+    if names != COMPONENTS:
+        raise ValueError(f"unexpected compiled registry {names}")
+    generated = []
+    for target in TARGETS:
+        source = directory / f"{target}.contract"
+        client = directory / f"{target}.ts"
+        duplicate = directory / f"{target}-repeat.ts"
+        for path in (client, duplicate):
+            run(
+                "cargo",
+                "run",
+                "--quiet",
+                "-p",
+                "ipp-schema-gen",
+                "--locked",
+                "--",
+                str(source),
+                str(path),
             )
-        if "surfaces" in features:
-            expected.append("Surface")
-        if "surfaces" in features:
-            expected.append("SurfaceCache")
-        expected.append("WorldAttachment")
-        if "surfaces" in features:
-            expected.extend(
-                [
-                    "CanvasStyle",
-                    "CanvasText",
-                    "CanvasGlyphRun",
-                    "CanvasDrawing",
-                    "CanvasBitmap",
-                    "CanvasBox",
-                ]
-            )
-        if "gui" in features:
-            expected.extend(
-                [
-                    "GuiBehavior",
-                    "GuiButton",
-                    "GuiCheckbox",
-                    "GuiSlider",
-                    "GuiTextInput",
-                    "GuiLayout",
-                    "GuiTheme",
-                    "GuiSkin",
-                    "GuiFont",
-                    "GuiThemeMotion",
-                    "GuiScrollView",
-                    "GuiVirtualList",
-                    "GuiVirtualItem",
-                    "CanvasBounds",
-                ]
-            )
-        if names != expected:
-            raise ValueError(f"{configuration}: unexpected compiled registry {names}")
-        reports[configuration] = report
-        for target in ("native", "wasm"):
-            source = directory / f"{target}.contract"
-            client = directory / f"{target}.ts"
-            duplicate = directory / f"{target}-repeat.ts"
-            for path in (client, duplicate):
-                run(
-                    "cargo",
-                    "run",
-                    "--quiet",
-                    "-p",
-                    "ipp-schema-gen",
-                    "--locked",
-                    "--",
-                    str(source),
-                    str(path),
-                )
-            if client.read_bytes() != duplicate.read_bytes():
-                raise ValueError(
-                    f"{configuration}/{target}: client generation is not reproducible"
-                )
-            if 'case "setFieldIf"' not in client.read_text():
-                raise ValueError(
-                    f"{configuration}/{target}: baseline command codecs missing"
-                )
-            generated.append(str(client))
-        run(
-            "node",
-            "--input-type=module",
-            "--eval",
-            "import { assembleClientSupport } from './packages/ipp-client/tools/assemble.mjs'; "
-            "assembleClientSupport(process.argv[1]);",
-            str(directory),
-        )
-        has_persistence = (directory / "world-persistence-client.ts").exists()
-        if not has_persistence:
-            raise ValueError(f"{configuration}: persistence support omission mismatch")
-        for target in ("native", "wasm"):
-            source = (directory / f"{target}.ts").read_text()
-            if ('from "./world-persistence-client.js"' in source) != has_persistence:
-                raise ValueError(
-                    f"{configuration}/{target}: persistence inheritance mismatch"
-                )
-        run("node", "tools/ipp-schema-gen/tests/rows-contract.mjs", str(directory))
-        generated.extend(
-            str(directory / f"{target}-rows-types.ts") for target in ("native", "wasm")
-        )
-    for target in ("native", "wasm"):
-        if len({report[target]["hash"] for report in reports.values()}) != len(reports):
-            raise ValueError(
-                f"{target}: capability selection did not change compatibility identity"
-            )
+        if client.read_bytes() != duplicate.read_bytes():
+            raise ValueError(f"{target}: client generation is not reproducible")
+        text = client.read_text()
+        if 'case "setFieldIf"' not in text:
+            raise ValueError(f"{target}: baseline command codecs missing")
+        if 'from "./world-persistence-client.js"' not in text:
+            raise ValueError(f"{target}: persistence client inheritance missing")
+        generated.append(str(client))
+    run(
+        "node",
+        "--input-type=module",
+        "--eval",
+        "import { assembleClientSupport } from './packages/ipp-client/tools/assemble.mjs'; "
+        "assembleClientSupport(process.argv[1]);",
+        str(directory),
+    )
+    run("node", "tools/ipp-schema-gen/tests/rows-contract.mjs", str(directory))
+    generated.extend(str(directory / f"{target}-rows-types.ts") for target in TARGETS)
     run(
         "node",
         "node_modules/typescript/bin/tsc",
@@ -218,8 +165,22 @@ def main(selected_profiles=None):
         *generated,
     )
     print(
-        f"Verified {len(reports)} reproducible native/WASM feature contracts and {len(generated)} generated TypeScript clients."
+        f"Verified reproducible native/WASM target contracts and {len(generated)} generated TypeScript clients."
     )
+
+
+def identities():
+    """Each host target has one contract identity, whatever its instrumentation."""
+    production = (ARTIFACTS / "native.contract").read_bytes()
+    for feature in ("instrumentation",):
+        output = ARTIFACTS / f"native-{feature}.contract"
+        export("export_contract", output, feature)
+        if output.read_bytes() != production:
+            raise ValueError(f"native: {feature} changed the target contract")
+    report = json.loads((ARTIFACTS / "target-report.json").read_text())
+    if report["native"]["hash"] == report["wasm"]["hash"]:
+        raise ValueError("native and WASM targets have equal contract identity")
+    print("Verified one contract identity per host target across instrumentation.")
 
 
 if __name__ == "__main__":

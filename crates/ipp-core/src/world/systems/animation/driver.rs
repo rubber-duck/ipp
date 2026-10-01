@@ -19,21 +19,18 @@ pub(in crate::world) struct AnimationTargetIdentity {
 /// Resolved runtime access is distinct from the serializable client declaration.
 /// Internal targets never call generated component fields or field setters.
 #[derive(Debug)]
-#[cfg(feature = "skeletal-animation")]
 pub(in crate::world) enum AnimationRuntimeTarget {
     Property,
-    #[cfg(feature = "skeletal-animation")]
     JointLocal {
         source: AssetKey,
         joints: Box<[u32]>,
     },
 }
 
-#[cfg(feature = "skeletal-animation")]
 impl AnimationRuntimeTarget {
     fn bind(
         property: &AnimationTrackTarget,
-        #[cfg(feature = "skeletal-animation")] source: Option<AssetKey>,
+        source: Option<AssetKey>,
     ) -> Result<Self, ErrorReason> {
         match property {
             AnimationTrackTarget::EntityLink => Err(ErrorReason::InvalidField),
@@ -41,7 +38,6 @@ impl AnimationRuntimeTarget {
                 ..
             }
             | AnimationTrackTarget::AnimationProperty(_) => Ok(Self::Property),
-            #[cfg(feature = "skeletal-animation")]
             AnimationTrackTarget::Joints(joints) => Ok(Self::JointLocal {
                 source: source.ok_or(ErrorReason::InvalidAsset)?,
                 joints: joints.clone().into_boxed_slice(),
@@ -73,7 +69,6 @@ pub struct AnimationDriver<T: AnimationSample> {
     cache_segment: bool,
     discrete: bool,
     discrete_interval: std::cell::Cell<Option<usize>>,
-    #[cfg(feature = "skeletal-animation")]
     pub(in crate::world) runtime_target: AnimationRuntimeTarget,
 }
 
@@ -81,7 +76,6 @@ pub struct AnimationDriver<T: AnimationSample> {
 /// its validated descriptor, or a row property kept by its offset.
 #[derive(Clone, Copy, Debug)]
 pub(in crate::world) enum DynamicValueDestination {
-    #[cfg(feature = "gui")]
     GuiSkin(crate::systems::gui::motion::GuiMotionDestination),
     CustomMaterial(
         crate::world::component_binding::ComponentBinding<crate::components::CustomMaterial>,
@@ -104,7 +98,6 @@ impl DynamicValueDestination {
         key: u32,
     ) -> Option<Self> {
         let index = entity.index() as usize;
-        #[cfg(feature = "gui")]
         if component == ComponentValue::GUI_SKIN && key >= 0xffff_0000 {
             // SAFETY: This binding's caller owns the same storage and invalidates before reuse.
             return unsafe {
@@ -149,7 +142,6 @@ impl DynamicValueDestination {
         value: crate::DynamicValue,
     ) -> Result<(), ErrorReason> {
         match self {
-            #[cfg(feature = "gui")]
             Self::GuiSkin(destination) => return destination.write(storage, value),
             Self::CustomMaterial(binding, descriptor) => binding
                 .get_mut(storage)
@@ -192,7 +184,7 @@ pub(in crate::world) trait AnimationDriverBinding: Debug {
 
     fn suspend_track(&mut self);
 
-    #[cfg(feature = "profiling")]
+    #[cfg(feature = "instrumentation")]
     fn segment_bytes(&self) -> usize;
 
     fn resolve_track(&mut self, clip: &AnimationClip) -> Result<(), ErrorReason>;
@@ -203,15 +195,12 @@ pub(in crate::world) trait AnimationDriverBinding: Debug {
     /// The weighted change from the reference sample to the sample at `time`.
     fn contribution(&self, time: f64) -> Result<AnimationValue, ErrorReason>;
 
-    #[cfg(feature = "skeletal-animation")]
     fn bound_pose_track(&self) -> &AnimationTrack<Vec<crate::components::Transform>>;
 
-    #[cfg(feature = "skeletal-animation")]
     fn runtime_target(&self) -> &AnimationRuntimeTarget;
 
     fn as_any(&self) -> &dyn Any;
 
-    #[cfg(feature = "skeletal-animation")]
     fn skeleton_source(&self) -> Option<AssetKey>;
 }
 
@@ -368,7 +357,6 @@ pub(super) fn frozen_transition_target_supported(
                     crate::DynamicValue::Bool(_) | crate::DynamicValue::Asset(_)
                 )
         }
-        #[cfg(feature = "skeletal-animation")]
         AnimationValue::Pose(values) => {
             matches!(target, AnimationTrackTarget::Joints(joints) if joints.len() == 1 && values.len() == 1)
         }
@@ -394,7 +382,6 @@ fn validate_transition_value(
         }
         AnimationValue::Field(crate::components::schema::FieldValue::Dynamic(value)) => {
             value.validate().map_err(|_| ErrorReason::InvalidValue)?;
-            #[cfg(feature = "gui")]
             if let Some(property) = identity.property.property()
                 && property.component == ComponentValue::GUI_SKIN
                 && let [offset] = property.offsets.as_slice()
@@ -512,7 +499,7 @@ impl<T: AnimationSample> AnimationDriverBinding for AnimationDriver<T> {
         *self.segment.get_mut() = None;
     }
 
-    #[cfg(feature = "profiling")]
+    #[cfg(feature = "instrumentation")]
     fn segment_bytes(&self) -> usize {
         if self.cache_segment {
             std::mem::size_of::<super::clip::AnimationSampleSegment<T>>()
@@ -560,14 +547,12 @@ impl<T: AnimationSample> AnimationDriverBinding for AnimationDriver<T> {
         )
     }
 
-    #[cfg(feature = "skeletal-animation")]
     fn bound_pose_track(&self) -> &AnimationTrack<Vec<crate::components::Transform>> {
         (self.track.as_deref().expect("prepared animation driver") as &dyn Any)
             .downcast_ref()
             .expect("bound joint driver")
     }
 
-    #[cfg(feature = "skeletal-animation")]
     fn runtime_target(&self) -> &AnimationRuntimeTarget {
         &self.runtime_target
     }
@@ -576,7 +561,6 @@ impl<T: AnimationSample> AnimationDriverBinding for AnimationDriver<T> {
         self
     }
 
-    #[cfg(feature = "skeletal-animation")]
     fn skeleton_source(&self) -> Option<AssetKey> {
         match &self.runtime_target {
             AnimationRuntimeTarget::JointLocal {
@@ -607,16 +591,13 @@ pub(in crate::world) fn make_driver(
     clip: AssetKey,
     duration: f64,
     template: AnimationValue,
-    #[cfg(feature = "skeletal-animation")] skeleton_source: Option<AssetKey>,
+    skeleton_source: Option<AssetKey>,
 ) -> Result<Box<dyn AnimationDriverBinding>, ErrorReason> {
     let contributes = super::contribution::contributes(&template);
     // Discrete resource fields write only when the selected key changes.
     // Pose-source writes rebase unkeyed joints at their declaration-order
     // position, so Skeleton drivers keep the skeletal evaluator's staging contract.
-    #[cfg(feature = "skeletal-animation")]
     let skeleton = resolved_property.component() == Some(ComponentValue::SKELETON);
-    #[cfg(not(feature = "skeletal-animation"))]
-    let skeleton = false;
     let discrete = !contributes
         && !skeleton
         && description.weight == 1.0
@@ -641,10 +622,8 @@ pub(in crate::world) fn make_driver(
                     incarnation,
                     property: resolved_property.clone(),
                 },
-                #[cfg(feature = "skeletal-animation")]
                 runtime_target: AnimationRuntimeTarget::bind(
                     &description.property,
-                    #[cfg(feature = "skeletal-animation")]
                     skeleton_source,
                 )?,
                 description,
@@ -673,7 +652,6 @@ pub(in crate::world) fn make_driver(
         6 => typed!(Vec<u8>),
         7 => typed!(bool),
         8 => typed!([f32; 4]),
-        #[cfg(feature = "skeletal-animation")]
         9 => typed!(Vec<crate::components::Transform>),
         _ => return Err(ErrorReason::InvalidField),
     })

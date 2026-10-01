@@ -28,7 +28,6 @@ export class AnimationFixture {
     readonly contract: AnimationContract,
     readonly record: AnimationRecord,
   ) {
-    check(client.capabilities.animation, "animation capability missing");
     client.onPlaybackEvent((event) => {
       this.events.push(event);
     });

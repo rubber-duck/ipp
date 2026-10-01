@@ -10,7 +10,6 @@ import type { NativeServerConfiguration } from "./environment.js";
 import { HarnessRunError, runNativeScenario } from "./environment.js";
 import {
   malformedRequestsFailExplicitly,
-  schemaMismatchFailsDuringHandshake,
   staleSessionFailsBeforeMutation,
 } from "./protocol-failures.js";
 import { ProductionDriverFactory } from "./drivers/production.js";
@@ -153,10 +152,6 @@ test("native WebSocket diagnostics report partial effects and off silence", {
 });
 
 const protocolScenarios = [
-  [
-    "schema mismatch fails during handshake",
-    schemaMismatchFailsDuringHandshake,
-  ],
   ["stale session fails before mutation", staleSessionFailsBeforeMutation],
   ["malformed requests fail explicitly", malformedRequestsFailExplicitly],
 ] as const;

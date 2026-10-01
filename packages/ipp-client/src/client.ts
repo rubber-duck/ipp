@@ -92,22 +92,6 @@ export interface Client {
   readonly manifest?: WorldManifest | undefined;
   readonly schemaHash: bigint;
   readonly components: Readonly<Record<string, ComponentDescriptor>>;
-  readonly capabilities: {
-    readonly animation?: boolean;
-    readonly assets?: boolean;
-    readonly spatial: boolean;
-    readonly textures: boolean;
-    readonly builtinAssets: boolean;
-    readonly picking: boolean;
-    readonly debugGeometry: boolean;
-    readonly pbr: boolean;
-    readonly shadows: boolean;
-    readonly skeletalAnimation: boolean;
-    readonly meshPoses: boolean;
-    readonly particles?: boolean;
-    readonly surfaces?: boolean;
-    readonly gui?: boolean;
-  };
   subscribeLifecycle(
     filter: LifecycleFilter,
     listener: (event: LifecycleNotification) => void,
@@ -294,8 +278,38 @@ interface FrameWaiter {
   timer: ReturnType<typeof setTimeout>;
 }
 
+let lifecycleStatisticsExchange: (
+  client: Client,
+  output: bigint,
+) => Promise<import("./lifecycle-diagnostics.js").LifecycleDiagnosticSample>;
+
+/**
+ * The lifecycle counter exchange of a generated client. Reached through
+ * `lifecycleDiagnostics` in `@ipp/client/diagnostics`; the package root and
+ * generated clients expose no method for it.
+ */
+export function requestLifecycleStatistics(
+  client: Client,
+  output: bigint,
+): Promise<import("./lifecycle-diagnostics.js").LifecycleDiagnosticSample> {
+  return lifecycleStatisticsExchange(client, output);
+}
+
 /** One fresh world session. Commands and responses are always session-fenced. */
 export abstract class ClientBase implements Client {
+  static {
+    // Generated clients load their own copy of this module, so the exchange
+    // is found by its member rather than by class identity.
+    lifecycleStatisticsExchange = (client, output) => {
+      const base = client as ClientBase;
+      if (typeof base.submitLifecycleStatistics !== "function")
+        throw new TypeError(
+          "Lifecycle diagnostics require a generated IPP client",
+        );
+      return base.submitLifecycleStatistics(output);
+    };
+  }
+
   private readonly batchFailures = new Set<
     (failure: { batchId: bigint; message: string; tick: bigint }) => void
   >();
@@ -328,22 +342,6 @@ export abstract class ClientBase implements Client {
 
   abstract readonly schemaHash: bigint;
   abstract readonly components: Readonly<Record<string, ComponentDescriptor>>;
-  abstract readonly capabilities: {
-    readonly animation?: boolean;
-    readonly assets?: boolean;
-    readonly spatial: boolean;
-    readonly textures: boolean;
-    readonly builtinAssets: boolean;
-    readonly picking: boolean;
-    readonly debugGeometry: boolean;
-    readonly pbr: boolean;
-    readonly shadows: boolean;
-    readonly skeletalAnimation: boolean;
-    readonly meshPoses: boolean;
-    readonly particles?: boolean;
-    readonly surfaces?: boolean;
-    readonly gui?: boolean;
-  };
   private sessionId = 0n;
   private readonly assetSources: ClientAssetSources;
   private worldDescriptor?: WorldDescriptor;
@@ -411,11 +409,9 @@ export abstract class ClientBase implements Client {
     );
   }
 
-  protected abstract bootstrap(): Uint8Array<ArrayBuffer>;
   protected abstract readonly lifecyclePageMembers: number;
   /** The target contract's batch page bounds. */
   protected abstract readonly commandPageLimits: CommandPageLimits;
-  protected abstract acceptBootstrap(bytes: Uint8Array): bigint;
   protected abstract encodeRequest(request: Request): Uint8Array<ArrayBuffer>;
   protected abstract decodeResponse(
     bytes: Uint8Array,
@@ -442,11 +438,7 @@ export abstract class ClientBase implements Client {
     return this.worldManifest;
   }
 
-  protected installWorldManifest(manifest: WorldManifest): void {
-    this.worldManifest = manifest;
-  }
-
-  /** A Host already negotiated compatibility and allocated this fresh World session. */
+  /** The Host connection accepted the Host's contract and opened this fresh World session. */
   protected initializeAttached(
     session: bigint,
     world: WorldDescriptor,
@@ -477,72 +469,6 @@ export abstract class ClientBase implements Client {
       session: this.sessionId,
     }));
     return this;
-  }
-
-  protected async initialize(options: ConnectOptions): Promise<this> {
-    const client = this;
-    const transport = this.transport;
-    const timeoutMs = this.timeoutMs;
-    try {
-      validateOptions(options);
-      await new Promise<void>((resolve, reject) => {
-        let settled = false;
-        const cleanup = () => {
-          clearTimeout(timer);
-          options.signal?.removeEventListener("abort", abort);
-        };
-        const failure = (error: Error, expected = false) => {
-          if (!settled) {
-            settled = true;
-            cleanup();
-            reject(error);
-          }
-          client.stop(error, expected);
-        };
-        const abort = () => failure(new Error("Connection aborted"), true);
-        const timer = setTimeout(
-          () => failure(new Error("Bootstrap timed out")),
-          timeoutMs,
-        );
-        options.signal?.addEventListener("abort", abort, { once: true });
-        try {
-          transport.start({
-            ready() {
-              try {
-                transport.send(client.bootstrap());
-              } catch (error) {
-                failure(asError(error));
-              }
-            },
-            error: failure,
-            closed: () => failure(new Error("Transport closed")),
-            message(bytes) {
-              if (client.stopped) return;
-              try {
-                if (client.sessionId === 0n) {
-                  client.sessionId = client.acceptBootstrap(bytes);
-                  client.logger.log("info", "session.connected", () => ({
-                    session: client.sessionId,
-                  }));
-                  settled = true;
-                  cleanup();
-                  resolve();
-                } else client.receive(bytes);
-              } catch (error) {
-                failure(asError(error));
-              }
-            },
-          });
-        } catch (error) {
-          failure(asError(error));
-        }
-      });
-      return client;
-    } catch (error) {
-      client.stop(asError(error));
-      await transport.close().catch(() => {});
-      throw error;
-    }
   }
 
   private receive(bytes: Uint8Array): void {
@@ -1285,7 +1211,7 @@ export abstract class ClientBase implements Client {
     );
   }
 
-  protected async submitLifecycleStatistics(
+  private async submitLifecycleStatistics(
     output: bigint,
   ): Promise<import("./lifecycle-diagnostics.js").LifecycleDiagnosticSample> {
     const world = this.worldReference;

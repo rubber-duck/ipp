@@ -50,17 +50,17 @@ python tools/ipp.py benchmark native --preset full --egl-dir /lib64 \
   --instrumented --reuse-scene --reuse-import --frames 30
 ```
 
-Ordinary native release timing and profiled allocation/stage timing are separate products. The `profiling` feature does not select different runtime paths. `--group` controls browser controller grouping. `IPP_STRESS_JS=1` adds a separate browser allocation sample. `--plan --json` shows prerequisites without executing them.
+Ordinary native release timing and profiled allocation/stage timing are separate products. The `instrumentation` feature does not select different runtime paths. `--group` controls browser controller grouping. `IPP_STRESS_JS=1` adds a separate browser allocation sample. `--plan --json` shows prerequisites without executing them.
 
 The standalone unit-weight curve microbenchmark is omitted when a scene contains weighted, additive or dynamic-property drivers. Its typed-reference comparison does not represent those operators. Full-frame and allocation measurements always retain every driver, including the new composed operators.
 
 ## Hardware WebGL and addon profiles
 
-Set `IPP_BROWSER_ANGLE=vulkan` or `IPP_BROWSER_ANGLE=gl-egl` to use full Chromium with the selected ANGLE backend. The environment probe and browser scenarios share these launch options. The probe rejects software or unavailable renderer identities; the stress scenario also checks the actual worker renderer on every completed capture. With the variable unset, correctness runs retain their software-capable default and make no hardware claim.
+`benchmark` runs full Chromium with a hardware ANGLE backend: `--hardware vulkan` by default or `--hardware gl-egl`. The pipeline sets `IPP_BROWSER_ANGLE` for its children and records the device in `summary.json`; a probe run directly with Node reads the variable itself. The environment probe and browser scenarios share these launch options. The probe rejects software or unavailable renderer identities; the stress scenario also checks the actual worker renderer on every completed capture. Correctness runs use software rendering unless `--hardware` is given and make no hardware claim.
 
 ```sh
 IPP_BROWSER_ANGLE=vulkan ipp-browser-env node tools/build/probe-browser.mjs
-IPP_BROWSER_ANGLE=vulkan IPP_STRESS_CPU=1 ipp-browser-env \
+IPP_STRESS_CPU=1 ipp-browser-env \
   python tools/ipp.py benchmark browser --preset full --frames 60 --reuse-scene
 ```
 

@@ -27,7 +27,7 @@ fn ready() -> Host<Platform> {
     .unwrap();
     host.session_mut(1)
         .unwrap()
-        .receive(&ipp_protocol::bootstrap())
+        .receive(&ipp_protocol::HELLO)
         .unwrap();
     host.session_mut(1).unwrap().take_response().unwrap();
     host
@@ -65,7 +65,7 @@ fn watch_without_the_publisher_is_rejected_with_its_reason_and_no_ack() {
         .unwrap();
     host.session_mut(1)
         .unwrap()
-        .receive(&ipp_protocol::bootstrap())
+        .receive(&ipp_protocol::HELLO)
         .unwrap();
     host.session_mut(1).unwrap().take_response().unwrap();
 
@@ -293,7 +293,7 @@ fn ready_peer(host: &mut Host<Platform>, session: u64) {
     .unwrap();
     host.session_mut(session)
         .unwrap()
-        .receive(&ipp_protocol::bootstrap())
+        .receive(&ipp_protocol::HELLO)
         .unwrap();
     host.session_mut(session).unwrap().take_response().unwrap();
 }
@@ -755,7 +755,6 @@ fn prepared_command_drop_has_only_cancelled_ack_and_no_generation_activation() {
     assert!(session.reply_reservations.is_empty());
 }
 
-#[cfg(feature = "diagnostics")]
 fn diagnostic_reply(
     host: &mut Host<Platform>,
     request: u64,
@@ -779,7 +778,6 @@ fn diagnostic_reply(
     reply
 }
 
-#[cfg(feature = "diagnostics")]
 #[test]
 fn diagnostic_query_requires_live_exact_world_session_endpoint_and_holds_delivery_credit() {
     let mut host = ready();

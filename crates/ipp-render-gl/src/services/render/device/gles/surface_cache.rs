@@ -248,7 +248,6 @@ impl GlesRenderDevice {
                 "Surface cache targets cannot nest".into(),
             ));
         }
-        #[cfg(feature = "surfaces")]
         if self.glyph_atlas_target.is_some() {
             return Err(RenderError::RenderDevice(
                 "Surface cache target inside glyph atlas population".into(),

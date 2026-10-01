@@ -1,18 +1,14 @@
 use super::RenderDevice;
-#[cfg(feature = "surfaces")]
 use super::retained_vertices::GUI_VERTEX_LAYOUT;
 use crate::RenderError;
 
 #[link(wasm_import_module = "ipp_gl")]
 unsafe extern "C" {
-    #[cfg(feature = "skeletal-animation")]
     fn mesh_skin(mesh: u32, indices: *const [u8; 4], weights: *const [f32; 4], count: usize)
     -> u32;
 
-    #[cfg(feature = "skeletal-animation")]
     fn set_skin_palette(program: u32, palette: *const [f32; 16], count: usize) -> u32;
 
-    #[cfg(feature = "mesh-poses")]
     fn draw_pose(
         program: u32,
         mesh: u32,
@@ -23,10 +19,8 @@ unsafe extern "C" {
         weight: f32,
     ) -> u32;
 
-    #[cfg(feature = "particles")]
     fn set_instances(pointer: *const f32, count: usize) -> u32;
 
-    #[cfg(feature = "particles")]
     fn set_additive(enabled: u32) -> u32;
 
     fn create_program(vptr: *const u8, vlen: usize, fptr: *const u8, flen: usize) -> u32;
@@ -84,19 +78,14 @@ unsafe extern "C" {
         changed: u32,
     ) -> u32;
 
-    #[cfg(feature = "shadows")]
     fn shadow_map_limit() -> u32;
 
-    #[cfg(feature = "shadows")]
     fn create_shadow_map(size: u32) -> u32;
 
-    #[cfg(feature = "shadows")]
     fn begin_shadow(map: u32, slot: u32, grid: u32) -> u32;
 
-    #[cfg(feature = "shadows")]
     fn end_shadow() -> u32;
 
-    #[cfg(feature = "shadows")]
     fn bind_shadow(
         program: u32,
         map: u32,
@@ -106,7 +95,6 @@ unsafe extern "C" {
         changed: u32,
     ) -> u32;
 
-    #[cfg(feature = "shadows")]
     fn delete_shadow_map(map: u32);
 
     fn begin_frame(
@@ -140,10 +128,8 @@ unsafe extern "C" {
 
     fn set_alpha_blend(enabled: u32) -> u32;
 
-    #[cfg(feature = "surfaces")]
     fn set_surface_double_sided(enabled: u32) -> u32;
 
-    #[cfg(feature = "surfaces")]
     fn create_surface_path(
         curves: *const u8,
         curve_count: usize,
@@ -154,7 +140,6 @@ unsafe extern "C" {
         band_bits: u32,
     ) -> u32;
 
-    #[cfg(feature = "surfaces")]
     fn draw_surface_path(
         program: u32,
         path: u32,
@@ -169,20 +154,15 @@ unsafe extern "C" {
         fill_rule: u32,
     ) -> u32;
 
-    #[cfg(feature = "surfaces")]
     fn delete_surface_path(path: u32);
 
-    #[cfg(feature = "surfaces")]
     fn create_surface_instances(path: u32, instances: *const f32, count: usize) -> u32;
 
-    #[cfg(feature = "surfaces")]
     fn update_surface_instances(stream: u32, path: u32, instances: *const f32, count: usize)
     -> u32;
 
-    #[cfg(feature = "surfaces")]
     fn delete_surface_instances(stream: u32);
 
-    #[cfg(feature = "surfaces")]
     fn draw_surface_instances(
         program: u32,
         path: u32,
@@ -192,7 +172,6 @@ unsafe extern "C" {
         fill_rule: u32,
     ) -> u32;
 
-    #[cfg(feature = "surfaces")]
     fn draw_surface_bitmap(
         program: u32,
         texture: u32,
@@ -202,25 +181,18 @@ unsafe extern "C" {
         color: *const f32,
     ) -> u32;
 
-    #[cfg(feature = "surfaces")]
     fn surface_cache_limit() -> u32;
 
-    #[cfg(feature = "surfaces")]
     fn create_surface_cache_target(width: u32, height: u32) -> u32;
 
-    #[cfg(feature = "surfaces")]
     fn resize_surface_cache_target(target: u32, width: u32, height: u32) -> u32;
 
-    #[cfg(feature = "surfaces")]
     fn begin_surface_cache_target(target: u32) -> u32;
 
-    #[cfg(feature = "surfaces")]
     fn begin_camera_target(target: u32, clear: *const f32) -> u32;
 
-    #[cfg(feature = "surfaces")]
     fn end_surface_cache_target() -> u32;
 
-    #[cfg(feature = "surfaces")]
     fn draw_surface_cache(
         program: u32,
         target: u32,
@@ -230,13 +202,10 @@ unsafe extern "C" {
         opacity: f32,
     ) -> u32;
 
-    #[cfg(feature = "surfaces")]
     fn delete_surface_cache_target(target: u32);
 
-    #[cfg(feature = "surfaces")]
     fn create_gui_batch(byte_length: u32, layout_ptr: *const u32) -> u32;
 
-    #[cfg(feature = "surfaces")]
     fn write_gui_batch(
         batch_handle: u32,
         byte_offset: u32,
@@ -244,10 +213,8 @@ unsafe extern "C" {
         byte_length: u32,
     ) -> u32;
 
-    #[cfg(feature = "surfaces")]
     fn delete_gui_batch(batch_handle: u32);
 
-    #[cfg(feature = "surfaces")]
     fn draw_gui_batch(
         program: u32,
         batch_handle: u32,
@@ -257,19 +224,14 @@ unsafe extern "C" {
         count: u32,
     ) -> u32;
 
-    #[cfg(feature = "surfaces")]
     fn create_glyph_atlas_page(width: u32, height: u32) -> u32;
 
-    #[cfg(feature = "surfaces")]
     fn delete_glyph_atlas_page(page_handle: u32);
 
-    #[cfg(feature = "surfaces")]
     fn begin_glyph_atlas_page(page_handle: u32) -> u32;
 
-    #[cfg(feature = "surfaces")]
     fn end_glyph_atlas_page() -> u32;
 
-    #[cfg(feature = "surfaces")]
     fn glyph_atlas_texture(page_handle: u32) -> u32;
 
     fn set_draw_checks(enabled: u32);
@@ -298,7 +260,6 @@ unsafe extern "C" {
 pub struct WebGlRenderDevice {
     uniform_epoch: u64,
     error_checks: super::error_checks::RenderDeviceErrorChecks,
-    #[cfg(feature = "surfaces")]
     surface_instance_scratch: Vec<[f32; 16]>,
 }
 
@@ -315,7 +276,6 @@ impl WebGlRenderDevice {
     }
 
     fn attach_skin(&mut self, id: u32, _asset: &ipp_core::MeshAsset) -> Result<u32, RenderError> {
-        #[cfg(feature = "skeletal-animation")]
         if let (Some(indices), Some(weights)) = (_asset.joint_indices(), _asset.joint_weights()) {
             // SAFETY: Validated equal-length arrays are copied synchronously;
             // the bridge retains GPU buffers only and cannot reenter Rust.
@@ -351,7 +311,6 @@ impl WebGlRenderDevice {
     }
 }
 
-#[cfg(feature = "surfaces")]
 impl WebGlRenderDevice {
     /// Pack `instances` into the reused scratch stream after checking that every
     /// descriptor survives the bridge's float encoding.
@@ -371,14 +330,12 @@ impl WebGlRenderDevice {
 }
 
 /// Context-local atlas target and its distinct sampleable texture handle.
-#[cfg(feature = "surfaces")]
 pub struct WebGlGlyphAtlasPage {
     target: u32,
     texture: u32,
 }
 
 /// Bytes of `vertices` retained GUI vertices, within the bridge's 32-bit offsets.
-#[cfg(feature = "surfaces")]
 fn gui_bytes(vertices: usize) -> Result<u32, RenderError> {
     vertices
         .checked_mul(std::mem::size_of::<super::GuiVertex>())
@@ -413,22 +370,16 @@ impl RenderDevice for WebGlRenderDevice {
 
     type Texture = u32;
 
-    #[cfg(feature = "surfaces")]
     type SurfacePath = u32;
 
-    #[cfg(feature = "surfaces")]
     type SurfaceCacheTarget = u32;
 
-    #[cfg(feature = "surfaces")]
     type SurfaceInstances = u32;
 
-    #[cfg(feature = "shadows")]
     type ShadowMap = u32;
 
-    #[cfg(feature = "surfaces")]
     type GuiBatch = u32;
 
-    #[cfg(feature = "surfaces")]
     type GlyphAtlasPage = WebGlGlyphAtlasPage;
 
     fn set_lighting(
@@ -460,13 +411,11 @@ impl RenderDevice for WebGlRenderDevice {
         })
     }
 
-    #[cfg(feature = "shadows")]
     fn shadow_map_limit(&self) -> u32 {
         // SAFETY: The context bridge returns scalar cached device limits and retains no references.
         unsafe { shadow_map_limit() }
     }
 
-    #[cfg(feature = "shadows")]
     fn create_shadow_map(&mut self, size: u32) -> Result<u32, RenderError> {
         // SAFETY: Only a scalar size is passed; the bridge owns allocation/validation.
         let id = unsafe { create_shadow_map(size) };
@@ -474,19 +423,16 @@ impl RenderDevice for WebGlRenderDevice {
         Ok(id)
     }
 
-    #[cfg(feature = "shadows")]
     fn begin_shadow(&mut self, map: &u32, slot: u32, grid: u32) -> Result<(), RenderError> {
         // SAFETY: The bridge validates its context-scoped handle, no CPU pointer passed.
         self.check(unsafe { begin_shadow(*map, slot, grid) })
     }
 
-    #[cfg(feature = "shadows")]
     fn end_shadow(&mut self) -> Result<(), RenderError> {
         // SAFETY: The bridge restores its saved target, no CPU data accessed.
         self.check(unsafe { end_shadow() })
     }
 
-    #[cfg(feature = "shadows")]
     fn bind_shadow(
         &mut self,
         program: &WebGlRenderProgram,
@@ -511,7 +457,6 @@ impl RenderDevice for WebGlRenderDevice {
         })
     }
 
-    #[cfg(feature = "shadows")]
     fn delete_shadow_map(&mut self, map: u32) {
         // SAFETY: Consumes this context's handle once; stale handles are harmless.
         unsafe { delete_shadow_map(map) };
@@ -563,13 +508,11 @@ impl RenderDevice for WebGlRenderDevice {
         self.check(unsafe { set_alpha_blend(u32::from(enabled)) })
     }
 
-    #[cfg(feature = "surfaces")]
     fn set_surface_double_sided(&mut self, enabled: bool) -> Result<(), RenderError> {
         // SAFETY: The import changes only the current context's scalar rasterization state.
         self.check(unsafe { set_surface_double_sided(u32::from(enabled)) })
     }
 
-    #[cfg(feature = "surfaces")]
     fn create_surface_path(
         &mut self,
         texels: &crate::SurfacePathTexels,
@@ -603,7 +546,6 @@ impl RenderDevice for WebGlRenderDevice {
         Ok(path)
     }
 
-    #[cfg(feature = "surfaces")]
     fn draw_surface_path(
         &mut self,
         program: &Self::Program,
@@ -635,13 +577,11 @@ impl RenderDevice for WebGlRenderDevice {
         })
     }
 
-    #[cfg(feature = "surfaces")]
     fn delete_surface_path(&mut self, path: u32) {
         // SAFETY: Consumes the context-owned handle once; stale context handles are harmless.
         unsafe { delete_surface_path(path) };
     }
 
-    #[cfg(feature = "surfaces")]
     fn create_surface_instances(
         &mut self,
         path: &u32,
@@ -661,7 +601,6 @@ impl RenderDevice for WebGlRenderDevice {
         Ok(stream)
     }
 
-    #[cfg(feature = "surfaces")]
     fn update_surface_instances(
         &mut self,
         stream: &mut u32,
@@ -682,13 +621,11 @@ impl RenderDevice for WebGlRenderDevice {
         Ok(())
     }
 
-    #[cfg(feature = "surfaces")]
     fn delete_surface_instances(&mut self, stream: u32) {
         // SAFETY: Consumes the context-owned handle once; stale context handles are harmless.
         unsafe { delete_surface_instances(stream) };
     }
 
-    #[cfg(feature = "surfaces")]
     fn draw_surface_instances(
         &mut self,
         program: &Self::Program,
@@ -712,7 +649,6 @@ impl RenderDevice for WebGlRenderDevice {
         })
     }
 
-    #[cfg(feature = "surfaces")]
     fn draw_surface_bitmap(
         &mut self,
         program: &Self::Program,
@@ -735,14 +671,12 @@ impl RenderDevice for WebGlRenderDevice {
         })
     }
 
-    #[cfg(feature = "surfaces")]
     fn surface_cache_limit(&self) -> u32 {
         // SAFETY: A scalar capability query; no Rust memory crosses the boundary and
         // the bridge cannot reenter Rust. A lost context reports zero.
         unsafe { surface_cache_limit() }
     }
 
-    #[cfg(feature = "surfaces")]
     fn create_surface_cache_target(
         &mut self,
         width: u32,
@@ -758,7 +692,6 @@ impl RenderDevice for WebGlRenderDevice {
         }
     }
 
-    #[cfg(feature = "surfaces")]
     fn resize_surface_cache_target(
         &mut self,
         target: &mut Self::SurfaceCacheTarget,
@@ -769,7 +702,6 @@ impl RenderDevice for WebGlRenderDevice {
         self.check(unsafe { resize_surface_cache_target(*target, width, height) })
     }
 
-    #[cfg(feature = "surfaces")]
     fn begin_surface_cache_target(
         &mut self,
         target: &Self::SurfaceCacheTarget,
@@ -778,13 +710,11 @@ impl RenderDevice for WebGlRenderDevice {
         self.check(unsafe { begin_surface_cache_target(*target) })
     }
 
-    #[cfg(feature = "surfaces")]
     fn end_surface_cache_target(&mut self) -> Result<(), RenderError> {
         // SAFETY: No arguments; the bridge restores its saved target and checks errors.
         self.check(unsafe { end_surface_cache_target() })
     }
 
-    #[cfg(feature = "surfaces")]
     fn begin_camera_target(
         &mut self,
         target: &mut Self::SurfaceCacheTarget,
@@ -796,7 +726,6 @@ impl RenderDevice for WebGlRenderDevice {
         self.check(unsafe { begin_camera_target(*target, clear.as_ptr()) })
     }
 
-    #[cfg(feature = "surfaces")]
     fn draw_surface_cache(
         &mut self,
         program: &Self::Program,
@@ -821,14 +750,12 @@ impl RenderDevice for WebGlRenderDevice {
         })
     }
 
-    #[cfg(feature = "surfaces")]
     fn delete_surface_cache_target(&mut self, target: Self::SurfaceCacheTarget) {
         // SAFETY: Only the scalar handle crosses the boundary; the bridge ignores
         // unknown handles, tolerates context loss and cannot reenter Rust.
         unsafe { delete_surface_cache_target(target) };
     }
 
-    #[cfg(feature = "surfaces")]
     fn create_gui_batch(&mut self, capacity: usize) -> Result<Self::GuiBatch, RenderError> {
         let bytes = gui_bytes(capacity)?;
         let layout: *const u32 = std::ptr::from_ref(&GUI_VERTEX_LAYOUT).cast();
@@ -843,7 +770,6 @@ impl RenderDevice for WebGlRenderDevice {
         }
     }
 
-    #[cfg(feature = "surfaces")]
     fn write_gui_batch(
         &mut self,
         batch: &mut Self::GuiBatch,
@@ -861,14 +787,12 @@ impl RenderDevice for WebGlRenderDevice {
         Ok(())
     }
 
-    #[cfg(feature = "surfaces")]
     fn delete_gui_batch(&mut self, batch: Self::GuiBatch) {
         // SAFETY: Only a scalar handle crosses the boundary; no Rust memory is borrowed.
         // The bridge ignores unknown handles and cannot reenter Rust.
         unsafe { delete_gui_batch(batch) };
     }
 
-    #[cfg(feature = "surfaces")]
     fn draw_gui_batch(
         &mut self,
         program: &Self::Program,
@@ -898,7 +822,6 @@ impl RenderDevice for WebGlRenderDevice {
         })
     }
 
-    #[cfg(feature = "surfaces")]
     fn create_glyph_atlas_page(
         &mut self,
         width: u32,
@@ -919,7 +842,6 @@ impl RenderDevice for WebGlRenderDevice {
         }
     }
 
-    #[cfg(feature = "surfaces")]
     fn delete_glyph_atlas_page(&mut self, page: Self::GlyphAtlasPage) {
         // SAFETY: Only the scalar target handle crosses the boundary; the bridge also
         // releases the page's texture handle, ignores unknown handles and cannot
@@ -927,33 +849,28 @@ impl RenderDevice for WebGlRenderDevice {
         unsafe { delete_glyph_atlas_page(page.target) };
     }
 
-    #[cfg(feature = "surfaces")]
     fn begin_glyph_atlas_page(&mut self, page: &Self::GlyphAtlasPage) -> Result<(), RenderError> {
         // SAFETY: Only the scalar target handle crosses the boundary; the bridge rejects
         // stale handles and cannot reenter Rust. No Rust memory is borrowed.
         self.check(unsafe { begin_glyph_atlas_page(page.target) })
     }
 
-    #[cfg(feature = "surfaces")]
     fn end_glyph_atlas_page(&mut self) -> Result<(), RenderError> {
         // SAFETY: The import takes no arguments and borrows no Rust memory; it restores
         // bridge-owned bindings, checks GL errors and cannot reenter Rust.
         self.check(unsafe { end_glyph_atlas_page() })
     }
 
-    #[cfg(feature = "surfaces")]
     fn glyph_atlas_texture(page: &Self::GlyphAtlasPage) -> &Self::Texture {
         &page.texture
     }
 
-    #[cfg(feature = "particles")]
     fn set_instances(&mut self, instances: &[[f32; 20]]) -> Result<(), RenderError> {
         // SAFETY: The host synchronously copies this live immutable WASM slice;
         // no pointer or alias is retained after the import returns.
         self.check(unsafe { set_instances(instances.as_ptr().cast(), instances.len()) })
     }
 
-    #[cfg(feature = "particles")]
     fn set_additive(&mut self, enabled: bool) -> Result<(), RenderError> {
         // SAFETY: Scalar host import with no borrowed memory.
         self.check(unsafe { set_additive(u32::from(enabled)) })
@@ -1096,7 +1013,6 @@ impl RenderDevice for WebGlRenderDevice {
         }
     }
 
-    #[cfg(feature = "skeletal-animation")]
     fn set_skin_palette(
         &mut self,
         program: &WebGlRenderProgram,
@@ -1114,10 +1030,9 @@ impl RenderDevice for WebGlRenderDevice {
         mesh: &u32,
         mvp: &[f32; 16],
         material: &[f32; 3],
-        #[cfg(feature = "mesh-poses")] pose: Option<(&Self::Mesh, f32)>,
+        pose: Option<(&Self::Mesh, f32)>,
         texture: Option<&u32>,
     ) -> Result<(), RenderError> {
-        #[cfg(feature = "mesh-poses")]
         if let Some((target, weight)) = pose {
             let texture = texture.copied().unwrap_or(0);
             // SAFETY: Uniform arrays are copied synchronously. Live GPU mesh

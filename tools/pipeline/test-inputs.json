@@ -24,7 +24,8 @@
     "builds": [
       "typescript",
       "gallery",
-      "react-fixtures"
+      "react-fixtures",
+      "browser:render-instrumentation"
     ],
     "requirements": [
       "node",
@@ -56,7 +57,8 @@
     ],
     "requirements": [
       "node",
-      "npm"
+      "npm",
+      "rust"
     ]
   },
   "crates/ipp-protocol/tests/host-client.mjs": {
@@ -73,7 +75,8 @@
     ],
     "requirements": [
       "node",
-      "npm"
+      "npm",
+      "rust"
     ]
   },
   "crates/ipp-protocol/tests/animation-client.mjs": {
@@ -82,7 +85,8 @@
     ],
     "requirements": [
       "node",
-      "npm"
+      "npm",
+      "rust"
     ]
   },
   "crates/ipp-protocol/tests/camera-client.mjs": {
@@ -91,7 +95,8 @@
     ],
     "requirements": [
       "node",
-      "npm"
+      "npm",
+      "rust"
     ]
   },
   "crates/ipp-protocol/tests/render-state-client.mjs": {
@@ -100,7 +105,8 @@
     ],
     "requirements": [
       "node",
-      "npm"
+      "npm",
+      "rust"
     ]
   },
   "crates/ipp-protocol/tests/manifest-client.mjs": {
@@ -120,7 +126,8 @@
     ],
     "requirements": [
       "node",
-      "npm"
+      "npm",
+      "rust"
     ]
   },
   "crates/ipp-protocol/tests/texture-client.mjs": {
@@ -129,7 +136,8 @@
     ],
     "requirements": [
       "node",
-      "npm"
+      "npm",
+      "rust"
     ]
   },
   "dist/tests/integration/file-access.test.js": {
@@ -155,7 +163,6 @@
     "builds": [
       "typescript",
       "browser:headless",
-      "browser:headless-builtins",
       "lifecycle-probes"
     ],
     "requirements": [
@@ -168,7 +175,6 @@
     "builds": [
       "typescript",
       "browser:headless",
-      "browser:headless-builtins",
       "lifecycle-probes"
     ],
     "requirements": [
@@ -201,7 +207,7 @@
   "dist/tests/render/world-persistence.test.js": {
     "builds": [
       "typescript",
-      "browser:render-expanded"
+      "browser:render-instrumentation"
     ],
     "requirements": [
       "node",
@@ -287,8 +293,7 @@
   "dist/tests/render/hierarchy.test.js": {
     "builds": [
       "typescript",
-      "browser:render",
-      "browser:render-expanded"
+      "browser:render"
     ],
     "requirements": [
       "node",
@@ -299,7 +304,8 @@
   "dist/tests/render/camera.test.js": {
     "builds": [
       "typescript",
-      "browser:render"
+      "browser:render",
+      "browser:render-instrumentation"
     ],
     "requirements": [
       "node",
@@ -343,8 +349,7 @@
   "dist/tests/render/debug-geometry.test.js": {
     "builds": [
       "typescript",
-      "browser:render",
-      "browser:render-baseline"
+      "browser:render-instrumentation"
     ],
     "requirements": [
       "node",
@@ -355,7 +360,7 @@
   "dist/tests/render/geometry.test.js": {
     "builds": [
       "typescript",
-      "browser:render-expanded"
+      "browser:render"
     ],
     "requirements": [
       "node",
@@ -371,8 +376,7 @@
     "builds": [
       "typescript",
       "react-fixtures",
-      "browser:headless",
-      "browser:headless-builtins"
+      "browser:headless"
     ],
     "requirements": [
       "node",
@@ -391,11 +395,13 @@
   },
   "dist/tests/react/gui-root.test.js": {
     "builds": [
-      "typescript"
+      "typescript",
+      "browser:render"
     ],
     "requirements": [
       "node",
-      "npm"
+      "npm",
+      "browser"
     ]
   },
   "dist/packages/ipp-react/tests/gui-clipboard.test.js": {
@@ -456,7 +462,8 @@
     "builds": [
       "typescript",
       "gallery-fixtures",
-      "browser:render"
+      "browser:render",
+      "browser:render-instrumentation"
     ],
     "requirements": [
       "node",
@@ -543,8 +550,8 @@
     "builds": [
       "typescript",
       "shapes",
-      "browser:render-shadows",
-      "gallery-fixtures"
+      "gallery-fixtures",
+      "browser:render-instrumentation"
     ],
     "requirements": [
       "node",
@@ -570,7 +577,7 @@
   "dist/tests/render/particles.test.js": {
     "builds": [
       "typescript",
-      "browser:render-particles"
+      "browser:render-instrumentation"
     ],
     "requirements": [
       "node",
@@ -582,9 +589,7 @@
     "builds": [
       "typescript",
       "mesh-pose-fixtures",
-      "browser:render-baseline",
-      "browser:render-mesh-poses",
-      "browser:render-expanded"
+      "browser:render-instrumentation"
     ],
     "requirements": [
       "node",
@@ -596,9 +601,7 @@
     "builds": [
       "typescript",
       "skinning-fixtures",
-      "browser:render",
-      "browser:render-skeletal-animation",
-      "browser:render-expanded"
+      "browser:render-instrumentation"
     ],
     "requirements": [
       "node",
@@ -611,7 +614,7 @@
       "typescript",
       "textures",
       "browser:headless",
-      "browser:render"
+      "browser:render-instrumentation"
     ],
     "requirements": [
       "node",
@@ -624,7 +627,7 @@
       "typescript",
       "shapes",
       "browser:headless",
-      "browser:render"
+      "browser:render-instrumentation"
     ],
     "requirements": [
       "node",
@@ -669,22 +672,18 @@
     ]
   },
   "crates/ipp-protocol/tests/gui-semantics-client.mjs": {
-    "builds": ["gui-host"],
-    "requirements": [
-      "node",
-      "npm",
-      "rust"
-    ]
+    "builds": ["native"],
+    "requirements": ["node", "npm"]
   },
   "crates/ipp-protocol/tests/gui-semantics-wasm-client.mjs": {
-    "builds": ["browser:semantic-gui"],
-    "requirements": ["node", "npm", "rust", "wasm"]
+    "builds": ["browser:headless"],
+    "requirements": ["node", "npm"]
   },
   "dist/tests/integration/gui.test.js": {
     "builds": [
       "typescript",
-      "gui-host",
-      "gles-hosts",
+      "native",
+      "gles-host",
       "font-assets"
     ],
     "requirements": [
@@ -696,7 +695,7 @@
   "dist/tests/integration/gui-react-root.test.js": {
     "builds": [
       "typescript",
-      "gui-host"
+      "native"
     ],
     "requirements": [
       "node",
@@ -708,7 +707,7 @@
       "typescript",
       "react-fixtures",
       "surface-assets",
-      "browser:headless-gui"
+      "browser:render"
     ],
     "requirements": [
       "node",

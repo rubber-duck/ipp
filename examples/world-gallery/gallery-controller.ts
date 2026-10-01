@@ -60,17 +60,6 @@ export function useGallery() {
 
   async function ready(handle: IppCanvasHandle) {
     const client = handle.client as GalleryClient;
-    if (
-      !client.capabilities.gui ||
-      !client.capabilities.surfaces ||
-      !client.capabilities.picking ||
-      !client.capabilities.skeletalAnimation ||
-      !client.capabilities.animation
-    ) {
-      throw new Error(
-        "The gallery requires GUI, picking, animation and skinning support",
-      );
-    }
     const world = client.worldReference;
     if (!world) throw new Error("The gallery requires an explicit World");
     let camera: bigint;

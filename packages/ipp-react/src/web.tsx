@@ -246,12 +246,10 @@ export function IppCanvas({
         lifetime = new CanvasLifetime(host, true);
         startup.signal.throwIfAborted();
         const client = await lifetime.open(source, startup.signal);
-        if (client.capabilities.gui) {
-          input = new CanvasGuiInput(surface.canvas, host.input, {
-            ...guiInput,
-            onError: report,
-          });
-        }
+        input = new CanvasGuiInput(surface.canvas, host.input, {
+          ...guiInput,
+          onError: report,
+        });
         session = new CanvasWorldSession(
           {
             host,

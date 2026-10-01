@@ -8,32 +8,27 @@ use ipp_host_session::HostServices;
 /// Identity namespace and built-in resource provider of the native Host.
 pub struct NativeHostServices {
     pending: VecDeque<ipp_core::AssetAcquisitionRequest>,
-    #[cfg(feature = "gui")]
     input: ipp_host_session::services::gui_input::GuiHostInputService,
 }
 
 impl HostServices for NativeHostServices {
     const NAME: &'static str = "server";
 
-    fn initialize(_host: &mut HostRuntime) -> Result<Self, String> {
+    fn initialize(host: &mut HostRuntime) -> Result<Self, String> {
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_err(|error| error.to_string())?
             .as_nanos() as u64;
         let namespace = timestamp ^ (u64::from(std::process::id()) << 32);
-        _host.set_identity_namespace(namespace.max(1))?;
-        #[cfg(feature = "builtin-assets")]
-        _host
-            .register_stream_resource_provider("ipp")
+        host.set_identity_namespace(namespace.max(1))?;
+        host.register_stream_resource_provider("ipp")
             .map_err(|error| error.to_string())?;
         Ok(Self {
             pending: VecDeque::new(),
-            #[cfg(feature = "gui")]
             input: Default::default(),
         })
     }
 
-    #[cfg(feature = "gui")]
     fn gui_input(
         &mut self,
     ) -> Option<&mut ipp_host_session::services::gui_input::GuiHostInputService> {
@@ -49,17 +44,14 @@ impl HostServices for NativeHostServices {
             let Some(request) = self.pending.pop_front() else {
                 break;
             };
-            #[cfg(feature = "builtin-assets")]
             let result = ipp_host_session::builtin_resource(&request);
-            #[cfg(not(feature = "builtin-assets"))]
-            let result = Err("resource provider is unavailable in this native host build".into());
             ipp_host_session::deliver_resource(host, request.id, result);
         }
         Ok(())
     }
 }
 
-#[cfg(all(test, feature = "builtin-assets"))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use ipp_core::{

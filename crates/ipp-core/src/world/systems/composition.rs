@@ -27,16 +27,12 @@ pub enum WorldOperation {
     Rendering,
     /// Camera selection and evaluation.
     Camera,
-    #[cfg(feature = "surfaces")]
     /// Surface and Surface cache declarations.
     Surface,
-    #[cfg(feature = "surfaces")]
     /// Ordinary entity Canvas output and raw content.
     Canvas,
-    #[cfg(feature = "gui")]
     /// GUI declarations and updates.
     Gui,
-    #[cfg(feature = "particles")]
     /// Particle producers and playback.
     Particles,
 }
@@ -167,7 +163,6 @@ impl WorldManifest {
                 value,
                 ..
             } => Some(crate::ComponentValue::type_id(value)),
-            #[cfg(feature = "gui")]
             Command::GuiAction {
                 target,
                 ..
@@ -265,24 +260,16 @@ pub(in crate::world) fn validate_authoring_instances(
                 any.is::<super::hierarchy::FinalPropagationSystem>()
             }
             super::geometry::GeometrySystem::ID => any.is::<super::geometry::GeometrySystem>(),
-            #[cfg(feature = "particles")]
             super::particles::ParticleSystem::ID => any.is::<super::particles::ParticleSystem>(),
-            #[cfg(feature = "surfaces")]
             super::surface::SurfaceSystem::ID => any.is::<super::surface::SurfaceSystem>(),
-            #[cfg(feature = "surfaces")]
             super::canvas::CanvasSystem::ID => any.is::<super::canvas::CanvasSystem>(),
-            #[cfg(feature = "gui")]
             super::gui::GuiSystem::ID => any.is::<super::gui::GuiSystem>(),
-            #[cfg(feature = "gui")]
             super::gui::GuiLayoutSystem::ID => any.is::<super::gui::GuiLayoutSystem>(),
             super::render::RenderSystem::ID => any.is::<super::render::RenderSystem>(),
-            #[cfg(feature = "skeletal-animation")]
             super::skeleton::SkeletonSystem::ID => any.is::<super::skeleton::SkeletonSystem>(),
-            #[cfg(feature = "skeletal-animation")]
             super::skinning::SkinningSystem::ID => any.is::<super::skinning::SkinningSystem>(),
             _ => {
-                #[allow(unused_mut)]
-                let mut builtin = any.is::<super::lifecycle_publisher::LifecyclePublisherSystem>()
+                let builtin = any.is::<super::lifecycle_publisher::LifecyclePublisherSystem>()
                     || any.is::<super::animation::AnimationSystem>()
                     || any.is::<super::asset_dependencies::AssetDependencySystem>()
                     || any.is::<super::camera::CameraSystem>()
@@ -291,26 +278,14 @@ pub(in crate::world) fn validate_authoring_instances(
                     || any.is::<super::look_at::LookAtSystem>()
                     || any.is::<super::hierarchy::FinalPropagationSystem>()
                     || any.is::<super::geometry::GeometrySystem>()
-                    || any.is::<super::render::RenderSystem>();
-                #[cfg(feature = "skeletal-animation")]
-                {
-                    builtin |= any.is::<super::skeleton::SkeletonSystem>()
-                        || any.is::<super::skinning::SkinningSystem>();
-                }
-                #[cfg(feature = "particles")]
-                {
-                    builtin |= any.is::<super::particles::ParticleSystem>();
-                }
-                #[cfg(feature = "surfaces")]
-                {
-                    builtin |= any.is::<super::surface::SurfaceSystem>();
-                    builtin |= any.is::<super::canvas::CanvasSystem>();
-                }
-                #[cfg(feature = "gui")]
-                {
-                    builtin |= any.is::<super::gui::GuiSystem>()
-                        || any.is::<super::gui::GuiLayoutSystem>();
-                }
+                    || any.is::<super::render::RenderSystem>()
+                    || any.is::<super::skeleton::SkeletonSystem>()
+                    || any.is::<super::skinning::SkinningSystem>()
+                    || any.is::<super::particles::ParticleSystem>()
+                    || any.is::<super::surface::SurfaceSystem>()
+                    || any.is::<super::canvas::CanvasSystem>()
+                    || any.is::<super::gui::GuiSystem>()
+                    || any.is::<super::gui::GuiLayoutSystem>();
                 !builtin
             }
         };
@@ -329,24 +304,17 @@ pub fn compiled_system_factories() -> Vec<Arc<dyn SystemFactory>> {
         Arc::new(super::animation::AnimationSystemFactory),
         Arc::new(super::constraints::ConstraintSystemFactory),
         Arc::new(super::asset_dependencies::AssetDependencySystemFactory),
-        #[cfg(feature = "skeletal-animation")]
         Arc::new(super::skeleton::SkeletonSystemFactory),
-        #[cfg(feature = "skeletal-animation")]
         Arc::new(super::skinning::SkinningSystemFactory),
         Arc::new(super::hierarchy::HierarchySystemFactory),
         Arc::new(super::look_at::LookAtSystemFactory),
         Arc::new(super::hierarchy::FinalPropagationSystemFactory),
         Arc::new(super::geometry::GeometrySystemFactory),
         Arc::new(super::camera::CameraSystemFactory),
-        #[cfg(feature = "particles")]
         Arc::new(super::particles::ParticleSystemFactory),
-        #[cfg(feature = "surfaces")]
         Arc::new(super::surface::SurfaceSystemFactory),
-        #[cfg(feature = "surfaces")]
         Arc::new(super::canvas::CanvasSystemFactory),
-        #[cfg(feature = "gui")]
         Arc::new(super::gui::GuiSystemFactory),
-        #[cfg(feature = "gui")]
         Arc::new(super::gui::GuiLayoutSystemFactory),
         Arc::new(super::render::RenderSystemFactory),
     ]

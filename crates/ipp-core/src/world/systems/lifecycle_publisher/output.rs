@@ -140,7 +140,6 @@ pub(super) struct LifecycleOutputState {
     retired: Cell<bool>,
     queue: RefCell<OutputQueue>,
     allocation: Rc<ReliableOutputLease>,
-    #[cfg(any(test, feature = "diagnostics"))]
     traffic: Cell<LifecycleWatchTraffic>,
 }
 
@@ -186,7 +185,6 @@ impl LifecycleWatchOutput {
             retired: Cell::new(false),
             queue: RefCell::default(),
             allocation: Rc::new(metadata),
-            #[cfg(any(test, feature = "diagnostics"))]
             traffic: Cell::default(),
         })))
     }
@@ -268,7 +266,6 @@ impl LifecycleWatchOutput {
 
     /// Cumulative event retention, excluding ACKs and failed retention.
     /// A closed or failed endpoint cannot supply a live diagnostic sample.
-    #[cfg(any(test, feature = "diagnostics"))]
     pub fn traffic(&self) -> Option<LifecycleWatchTraffic> {
         self.0.tracking().then(|| self.0.traffic.get())
     }
@@ -306,7 +303,6 @@ impl LifecycleOutputState {
             return;
         }
 
-        #[cfg(any(test, feature = "diagnostics"))]
         let event_bytes =
             matches!(&body, LifecycleWatchRecordBody::Event { .. }).then(|| lease.charge().bytes);
 
@@ -318,7 +314,6 @@ impl LifecycleOutputState {
             },
             lease,
         });
-        #[cfg(any(test, feature = "diagnostics"))]
         if let Some(bytes) = event_bytes {
             let mut traffic = self.traffic.get();
             traffic.record(bytes);

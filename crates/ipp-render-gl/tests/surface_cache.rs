@@ -3,19 +3,15 @@
 //! child Canvas paint/resource/interaction publications drive the retained images.
 //! The maintained GLES publication scenarios own real image evidence.
 
-#![cfg(feature = "surfaces")]
-
 mod support;
 
 use ipp_core::{
     Batch, Command, ComponentValue, EntityId, EntityRef, SurfaceCache, WorldContext, WorldId,
 };
-#[cfg(feature = "gui")]
 use ipp_core::{Surface, components::Transform};
 use ipp_render_gl::{RenderError, RenderService, SurfaceCacheDiagnostic, SurfaceCachePresentation};
 use support::canvas::{self, CanvasSurface};
 use support::selection::{ATTACHMENTS, CAMERA, RENDER, SURFACE, select};
-#[cfg(feature = "gui")]
 use support::selection::{CONSTRAINTS, GEOMETRY};
 use support::*;
 
@@ -533,11 +529,9 @@ fn resource_revisions_repaint_immediately() {
     assert_eq!(work(&stats), [1, 0, 0, 0, 0], "{stats:?}");
 }
 
-#[cfg(feature = "gui")]
 const GUI_SESSION: u64 = 7;
 
 /// The exact checkbox identity a Host names in GUI actions.
-#[cfg(feature = "gui")]
 fn checkbox_target(
     host: &mut ipp_core::HostRuntime,
     surface: CanvasSurface,
@@ -557,7 +551,6 @@ fn checkbox_target(
 }
 
 /// Queue one `GuiAction` command on the panel's checkbox; the next frame applies it.
-#[cfg(feature = "gui")]
 fn checkbox_action(
     host: &mut ipp_core::HostRuntime,
     surface: CanvasSurface,
@@ -582,7 +575,6 @@ fn checkbox_action(
 }
 
 /// Logical focus on the surface's control, through the `GuiFocus` System query.
-#[cfg(feature = "gui")]
 fn control_focused(host: &mut ipp_core::HostRuntime, surface: CanvasSurface) -> bool {
     host.world_mut(surface.output.world().id())
         .unwrap()
@@ -592,7 +584,6 @@ fn control_focused(host: &mut ipp_core::HostRuntime, surface: CanvasSurface) -> 
 }
 
 /// Pointer hover on the surface's control, through the `GuiPointers` System query.
-#[cfg(feature = "gui")]
 fn control_hovered(host: &mut ipp_core::HostRuntime, surface: CanvasSurface) -> bool {
     host.world_mut(surface.output.world().id())
         .unwrap()
@@ -601,7 +592,6 @@ fn control_hovered(host: &mut ipp_core::HostRuntime, surface: CanvasSurface) -> 
         .any(|record| record.state.hovered)
 }
 
-#[cfg(feature = "gui")]
 #[test]
 fn focus_takes_interaction_priority_until_the_control_is_disabled() {
     use ipp_core::components::{GuiBehavior, GuiCheckbox, GuiLayout};
@@ -649,31 +639,26 @@ fn focus_takes_interaction_priority_until_the_control_is_disabled() {
     assert!(!control_focused(&mut host, panel));
 }
 
-#[cfg(feature = "gui")]
 #[test]
 fn faulted_focused_canvas_cannot_retain_interaction_cache_priority() {
     faulted_focus(FaultLocation::Canvas);
 }
 
-#[cfg(feature = "gui")]
 #[test]
 fn faulted_containing_camera_cannot_retain_descendant_interaction_cache_priority() {
     faulted_focus(FaultLocation::RootCamera);
 }
 
-#[cfg(feature = "gui")]
 #[test]
 fn faulted_spatial_ancestor_preserves_only_healthy_sibling_interaction_priority() {
     faulted_focus(FaultLocation::SpatialAncestor);
 }
 
-#[cfg(feature = "gui")]
 #[test]
 fn faulted_nested_camera_preserves_only_healthy_sibling_interaction_priority() {
     faulted_focus(FaultLocation::NestedCamera);
 }
 
-#[cfg(feature = "gui")]
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum FaultLocation {
     Canvas,
@@ -682,7 +667,6 @@ enum FaultLocation {
     NestedCamera,
 }
 
-#[cfg(feature = "gui")]
 fn faulted_focus(location: FaultLocation) {
     use ipp_core::ErrorReason;
     use ipp_core::components::{GuiCheckbox, GuiLayout, Scalar};
@@ -934,7 +918,6 @@ fn faulted_focus(location: FaultLocation) {
     }
 }
 
-#[cfg(feature = "gui")]
 #[test]
 fn interaction_presents_directly_and_returns_only_to_current_images() {
     use ipp_core::components::{GuiCheckbox, GuiLayout};
@@ -1108,7 +1091,6 @@ fn interaction_presents_directly_and_returns_only_to_current_images() {
 /// Retained box batches of a directly presented panel whose paint revision is
 /// published rebuild exactly when its paint changes, although unchanged frames
 /// reuse their hashes instead of hashing every box.
-#[cfg(feature = "gui")]
 #[test]
 fn published_paint_revisions_rebuild_retained_boxes_exactly_when_paint_changes() {
     use ipp_core::components::{GuiCheckbox, GuiLayout};
@@ -1446,7 +1428,6 @@ fn context_loss_fails_the_frame_and_recovery_repaints() {
         let lost = try_frame(&mut renderer, &mut host, world_id, 0.1);
         assert_eq!(lost, Err(RenderError::ContextLost));
         assert!(!state.cache_target_bound.get());
-        #[cfg(feature = "gui")]
         assert!(!state.atlas_target_bound.get());
     }
 

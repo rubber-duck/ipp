@@ -26,7 +26,6 @@ impl<P: HostServices> WorldSessionContext<'_, P> {
                 break 'request;
             }
             let reply = match request.body {
-                #[cfg(feature = "gui")]
                 RequestBody::GuiObservation(control) => {
                     match self.prepare_gui_observation(request.request_id, control) {
                         Ok(()) => break 'request,
@@ -44,7 +43,6 @@ impl<P: HostServices> WorldSessionContext<'_, P> {
                         Err(error) => WorldSessionReply::Rejected(error),
                     }
                 }
-                #[cfg(feature = "diagnostics")]
                 RequestBody::LifecycleDiagnostics(query) => {
                     WorldSessionReply::LifecycleDiagnostics(query)
                 }
@@ -86,12 +84,8 @@ impl<P: HostServices> WorldSessionContext<'_, P> {
                         id: request.request_id,
                         operations: page.operations,
                     };
-                    // Unconditional: `diagnostic!` expands whenever `ipp-core`
-                    // diagnostics is enabled, which feature unification can do
-                    // without this crate's own `diagnostics` feature.
-                    let (_batch_id, _operations) = (page.batch_id, batch.operations.len());
-                    #[cfg(feature = "diagnostics")]
-                    if _operations != 0 {
+                    let (batch_id, operations) = (page.batch_id, batch.operations.len());
+                    if operations != 0 {
                         ipp_core::diagnostic!(
                             Debug,
                             "[IPP {}] buffer.processing session={} request={} batch={} operations={} client_batch={}",
@@ -99,8 +93,8 @@ impl<P: HostServices> WorldSessionContext<'_, P> {
                             self.session.id,
                             request.request_id,
                             request.request_id,
-                            _operations,
-                            _batch_id
+                            operations,
+                            batch_id
                         );
                     }
                     // Bound the outcome's symbol reports like its aliases, before
@@ -137,8 +131,7 @@ impl<P: HostServices> WorldSessionContext<'_, P> {
                     };
                     match result {
                         Ok(()) => WorldSessionReply::Batch {
-                            #[cfg(feature = "diagnostics")]
-                            operations: _operations,
+                            operations,
                         },
                         Err(error) => {
                             ipp_core::diagnostic!(
@@ -148,8 +141,8 @@ impl<P: HostServices> WorldSessionContext<'_, P> {
                                 self.session.id,
                                 request.request_id,
                                 request.request_id,
-                                _operations,
-                                _batch_id,
+                                operations,
+                                batch_id,
                                 error
                             );
                             WorldSessionReply::Rejected(error)
@@ -160,9 +153,7 @@ impl<P: HostServices> WorldSessionContext<'_, P> {
                     let required = match query.collection {
                         3 => Some(ipp_core::systems::WorldOperation::Animation),
                         4 => Some(ipp_core::systems::WorldOperation::Rendering),
-                        #[cfg(feature = "gui")]
                         6 | 7 => Some(ipp_core::systems::WorldOperation::Gui),
-                        #[cfg(feature = "surfaces")]
                         8 => Some(ipp_core::systems::WorldOperation::Canvas),
                         _ => None,
                     };
@@ -189,7 +180,6 @@ impl<P: HostServices> WorldSessionContext<'_, P> {
                     self.session.request_origins.remove(&request.request_id);
                     break 'request;
                 }
-                #[cfg(feature = "surfaces")]
                 RequestBody::CanvasStateUpdateCommand(update) => {
                     if let Err(_reason) = self.world.enqueue_canvas_state_update(update) {
                         ipp_core::diagnostic!(

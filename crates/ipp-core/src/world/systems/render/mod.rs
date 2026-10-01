@@ -9,13 +9,10 @@ pub use components::{BaseColorTexture, MeshInstance, UnlitMaterial, UnlitTexture
 mod lighting;
 pub use lighting::{Light, PbrMaterial};
 
-#[cfg(feature = "mesh-poses")]
 mod mesh_pose;
 
-#[cfg(feature = "mesh-poses")]
 pub use mesh_pose::MeshPose;
 
-#[cfg(feature = "mesh-poses")]
 pub(in crate::world) use mesh_pose::mesh_pose;
 
 mod settings;
@@ -35,7 +32,6 @@ use crate::services::asset_management::service::AssetResourceKind;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RenderItem {
     /// Per-particle presentation inputs; absent for ordinary geometry.
-    #[cfg(feature = "particles")]
     pub particle: Option<crate::systems::particles::ParticleRenderData>,
     /// Last-resort material ignores authored vertex colors and texture inputs.
     pub solid_fallback: bool,
@@ -46,7 +42,6 @@ pub struct RenderItem {
     /// The base mesh supplies texture blending weights.
     pub texture_weights: bool,
     /// This input has a valid evaluated skin palette; rigid draws need no palette lookup.
-    #[cfg(feature = "skeletal-animation")]
     pub skinned: bool,
     /// Live entity identity.
     pub entity: EntityId,
@@ -63,7 +58,6 @@ pub struct RenderItem {
     /// Final effective immutable mesh selection.
     pub mesh: MeshKey,
     /// Optional corresponding target mesh and final blend weight.
-    #[cfg(feature = "mesh-poses")]
     pub pose: Option<(MeshKey, f32)>,
     /// Optional exact immutable texture selection.
     pub texture: Option<crate::TextureKey>,

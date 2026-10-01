@@ -11,10 +11,8 @@ use crate::{AttachmentPlacement, ComponentValue, EntityId, ErrorReason, OutputKi
 #[derive(Default)]
 pub struct CanvasSystem {
     pub(super) state: CanvasSystemState,
-    #[cfg(feature = "gui")]
     pub(super) layout:
         Option<crate::systems::SystemDependencyBinding<crate::systems::gui::GuiLayoutSystem>>,
-    #[cfg(feature = "gui")]
     pub(super) gui: Option<crate::systems::SystemDependencyBinding<crate::systems::gui::GuiSystem>>,
 }
 
@@ -29,7 +27,6 @@ impl CanvasSystem {
 
     /// A GUI field change repaints the canvas; a theme change also repaints
     /// every retained control part.
-    #[cfg(feature = "gui")]
     fn gui_changed(&mut self, component: u16) {
         if component == ComponentValue::GUI_THEME {
             self.state.gui_dirty = true;
@@ -46,10 +43,7 @@ impl CanvasSystem {
         if event.kind == AssetLifecycleKind::GraphicsInvalidated {
             return;
         }
-        #[cfg(feature = "gui")]
-        {
-            self.state.gui_dirty = true;
-        }
+        self.state.gui_dirty = true;
 
         for (&(entity, component), leaf) in &self.state.leaves {
             if leaf
@@ -90,7 +84,6 @@ impl SystemFactory for CanvasSystemFactory {
             [
                 ComponentValue::CANVAS_STYLE,
                 ComponentValue::CANVAS_BOX,
-                #[cfg(feature = "gui")]
                 ComponentValue::CANVAS_BOUNDS,
             ],
             [crate::systems::WorldOperation::Canvas],
@@ -117,24 +110,20 @@ impl SystemFactory for CanvasSystemFactory {
         &[
             SystemDependency::After(crate::systems::animation::AnimationSystem::ID),
             SystemDependency::After(crate::systems::asset_dependencies::AssetDependencySystem::ID),
-            #[cfg(feature = "gui")]
             SystemDependency::After(crate::systems::gui::GuiLayoutSystem::ID),
-            #[cfg(feature = "gui")]
             SystemDependency::After(crate::systems::gui::GuiSystem::ID),
         ]
     }
 
     fn create(
         &self,
-        _context: &mut SystemInitContext<'_>,
+        context: &mut SystemInitContext<'_>,
     ) -> Result<Box<dyn System>, SystemInitError> {
         Ok(Box::new(CanvasSystem {
-            #[cfg(feature = "gui")]
-            gui: _context
+            gui: context
                 .dependency::<crate::systems::gui::GuiSystem>(crate::systems::gui::GuiSystem::ID)
                 .ok(),
-            #[cfg(feature = "gui")]
-            layout: _context
+            layout: context
                 .dependency::<crate::systems::gui::GuiLayoutSystem>(
                     crate::systems::gui::GuiLayoutSystem::ID,
                 )
@@ -255,7 +244,6 @@ impl System for CanvasSystem {
         world: &crate::WorldContext<'_>,
         output: &mut crate::host::WorldOutputBuilder<'_>,
     ) -> Result<(), ErrorReason> {
-        #[cfg(feature = "gui")]
         if self.gui.is_some() {
             output.chunk(Self::ID, self.state.gui.publication.clone());
         }
@@ -275,7 +263,6 @@ impl System for CanvasSystem {
 
     fn update(&mut self, context: &mut SystemUpdateContext<'_, '_>) {
         self.evaluate(&context.world);
-        #[cfg(feature = "gui")]
         for (entity, [x, y, width, height]) in std::mem::take(&mut self.state.bounds) {
             let Some(current) = context
                 .world
@@ -299,7 +286,6 @@ impl System for CanvasSystem {
 
     fn before_commit(&mut self, context: &mut SystemCommitContext<'_>) {
         for (entity, component) in context.changed_components() {
-            #[cfg(feature = "gui")]
             self.gui_changed(component);
             if input_component(component) {
                 self.state.dirty = true;
@@ -316,7 +302,6 @@ impl System for CanvasSystem {
 
     fn before_numeric_update(&mut self, context: &mut SystemNumericContext<'_>) {
         for &(entity, component) in context.changed_components() {
-            #[cfg(feature = "gui")]
             self.gui_changed(component);
             if input_component(component) {
                 self.state.dirty = true;
@@ -332,7 +317,6 @@ impl System for CanvasSystem {
     ) {
         if event.kind != AssetLifecycleKind::GraphicsInvalidated {
             self.invalidate_resource(context, event);
-            #[cfg(feature = "gui")]
             self.state.gui.invalidate_resource(event.key);
             if self.state.publication.as_ref().is_some_and(|publication| {
                 publication
@@ -367,7 +351,6 @@ fn input_component(component: u16) -> bool {
     )
 }
 
-#[cfg(feature = "gui")]
 fn gui_input_component(component: u16) -> bool {
     matches!(
         component,

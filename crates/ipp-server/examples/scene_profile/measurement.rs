@@ -92,7 +92,7 @@ pub(super) fn measure(
         validate(sample.stats)?;
         frames.push(sample);
     }
-    #[cfg(feature = "profiling")]
+    #[cfg(feature = "instrumentation")]
     {
         use ipp_core::profiling as profile;
         profile::reset(true);
@@ -395,7 +395,7 @@ pub(crate) fn run() -> Result<()> {
         );
         return Ok(());
     }
-    #[cfg(feature = "profiling")]
+    #[cfg(feature = "instrumentation")]
     {
         let mut world = scene.host.world_mut(scene.world).unwrap();
         let started = Instant::now();

@@ -1,3 +1,4 @@
+import { renderDiagnostics } from "../../packages/ipp-client/src/diagnostics.js";
 import { presentationTesting } from "../../packages/ipp-client/src/testing.js";
 import type { PresentedCapture } from "@ipp/client";
 import { createRoot, Entity, Transform, type ReactWorldRoot } from "@ipp/react";
@@ -212,7 +213,13 @@ export function compare(first: string, second: string) {
 
 export function colorCounts(label: string) {
   const pixels = new Uint8Array(requireCapture(label).pixels);
-  const counts = { red: 0, green: 0, blue: 0, yellow: 0 };
+  const counts = {
+    red: 0,
+    green: 0,
+    blue: 0,
+    yellow: 0,
+    pixels: pixels.length / 4,
+  };
   for (let index = 0; index < pixels.length; index += 4) {
     const r = pixels[index]!,
       g = pixels[index + 1]!,
@@ -262,7 +269,7 @@ export async function restoreContext() {
 }
 
 function diagnostics() {
-  const value = viewer().canvas.host.renderDiagnostics;
+  const value = renderDiagnostics(viewer().canvas.host);
   if (!value) throw new Error("Blender fixture requires render diagnostics");
   return value;
 }

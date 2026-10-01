@@ -1,7 +1,7 @@
-import type { Client } from "./client.js";
+import { type Client, requestLifecycleStatistics } from "./client.js";
 import type { WorldReference } from "./types.js";
 
-/** Diagnostic-build counters, never a lifecycle or completed-frame observation. */
+/** Lifecycle publisher counters, never a lifecycle or completed-frame observation. */
 export interface LifecycleDiagnosticSample {
   world: WorldReference;
   output: bigint;
@@ -14,19 +14,12 @@ export interface LifecycleDiagnosticQuery {
   output: bigint;
 }
 
-export interface LifecycleTesting {
+export interface LifecycleDiagnostics {
   /** Requires an acknowledged current endpoint. Saturated samples cannot prove deltas. */
   statistics(output: bigint): Promise<LifecycleDiagnosticSample>;
 }
 
-/** Diagnostic builds only; no fallback to wire counts or synthetic zero samples. */
-export function lifecycleTesting(client: Client): LifecycleTesting {
-  const diagnostic = client as Client & {
-    lifecycleStatistics?: (
-      output: bigint,
-    ) => Promise<LifecycleDiagnosticSample>;
-  };
-  if (typeof diagnostic.lifecycleStatistics !== "function")
-    throw new Error("Lifecycle diagnostics are not compiled in this contract");
-  return { statistics: (output) => diagnostic.lifecycleStatistics!(output) };
+/** Every Host answers; no fallback to wire counts or synthetic zero samples. */
+export function lifecycleDiagnostics(client: Client): LifecycleDiagnostics {
+  return { statistics: (output) => requestLifecycleStatistics(client, output) };
 }

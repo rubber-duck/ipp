@@ -30,7 +30,6 @@ pub(in crate::world::systems::gui) struct GuiMotionState {
     withdrawn: BTreeSet<EntityId>,
     paint_dirty: BTreeMap<EntityId, GuiMotionSkinTarget>,
     changed: Vec<GuiMotionOwner>,
-    #[cfg(feature = "diagnostics")]
     pub statistics: super::GuiMotionPreparationWork,
 }
 
@@ -286,10 +285,7 @@ impl GuiMotionState {
             }
         }
 
-        #[cfg(feature = "diagnostics")]
-        {
-            self.statistics = Default::default();
-        }
+        self.statistics = Default::default();
 
         if !self.initialized {
             self.membership.extend(
@@ -373,10 +369,7 @@ impl GuiMotionState {
             }
 
             let requests = if configured {
-                #[cfg(feature = "diagnostics")]
-                {
-                    self.statistics.snapshots += 1;
-                }
+                self.statistics.snapshots += 1;
                 GuiMotionControl::read(local, context.world, entity)
                     .and_then(|view| {
                         if !view.interaction.hovered
@@ -405,10 +398,7 @@ impl GuiMotionState {
                             GuiPrimitivePart::Icon,
                             GuiPrimitivePart::FocusRing,
                         ] {
-                            #[cfg(feature = "diagnostics")]
-                            {
-                                self.statistics.parts += 1;
-                            }
+                            self.statistics.parts += 1;
 
                             let owner = GuiMotionOwner {
                                 entity,

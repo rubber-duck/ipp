@@ -12,12 +12,11 @@ for (const deep of [false, true])
       name: "world-host" as const,
       generatedModule: resolve(profile, "generated.js"),
       runtimeWasm: resolve(profile, "runtime.wasm"),
-      exportWasm: resolve(profile, "export.wasm"),
       contractArtifact: resolve(profile, "contract.bin"),
     };
     await runBrowserEnvironment(
       `worker scaling ${deep}`,
-      { workspace, build, mismatchBuild: build, operationTimeoutMs: 60_000 },
+      { workspace, build, operationTimeoutMs: 60_000 },
       context.signal,
       async (environment) => {
         const result = await environment.execute(

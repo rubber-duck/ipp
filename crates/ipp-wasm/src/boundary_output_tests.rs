@@ -1,8 +1,8 @@
 use super::*;
 
-fn bootstrap(boundary: &mut WasmHostBoundary, connection: u64) {
+fn hello(boundary: &mut WasmHostBoundary, connection: u64) {
     assert!(boundary.connection_open(connection));
-    let bytes = ipp_protocol::bootstrap();
+    let bytes = ipp_protocol::HELLO;
     assert!(!boundary.reserve(bytes.len()).is_null());
     boundary.input_mut().copy_from_slice(&bytes);
     assert!(boundary.receive(connection, bytes.len()));
@@ -30,7 +30,7 @@ fn available(boundary: &WasmHostBoundary, connection: u64) -> usize {
 fn copied_wasm_output_keeps_credit_through_mutations_until_exact_completion() {
     let mut boundary = WasmHostBoundary::new();
     assert!(boundary.open(1));
-    bootstrap(&mut boundary, 1);
+    hello(&mut boundary, 1);
     let before = available(&boundary, 1);
     assert_eq!(boundary.poll(1), 1);
     let delivery = boundary.output_delivery_id();
@@ -48,7 +48,7 @@ fn copied_wasm_output_keeps_credit_through_mutations_until_exact_completion() {
     assert_eq!(boundary.connection_pending(1), 1);
     drop(bytes);
     assert!(boundary.delivery_complete(1, delivery));
-    assert!(available(&boundary, 1) >= retained + ipp_protocol::bootstrap().len());
+    assert!(available(&boundary, 1) >= retained + ipp_protocol::HELLO.len());
     assert_eq!(boundary.connection_pending(1), 0);
 }
 
@@ -125,7 +125,7 @@ fn attach(boundary: &mut WasmHostBoundary, connection: u64) {
 fn reply_copies_use_the_reply_reserve_when_ordinary_output_is_full() {
     let mut boundary = WasmHostBoundary::new();
     assert!(boundary.open(1));
-    bootstrap(&mut boundary, 1);
+    hello(&mut boundary, 1);
     let held = boundary
         .host
         .as_ref()
@@ -137,7 +137,7 @@ fn reply_copies_use_the_reply_reserve_when_ordinary_output_is_full() {
     let delivery = boundary.output_delivery_id();
     assert_eq!(
         boundary.output(),
-        ipp_protocol::accept_bootstrap(&ipp_protocol::bootstrap(), 1).unwrap()
+        ipp_protocol::accept_hello(&ipp_protocol::HELLO, 1).unwrap()
     );
     assert!(boundary.output_copied(1, delivery));
     assert!(boundary.delivery_complete(1, delivery));
@@ -149,8 +149,8 @@ fn reply_copies_use_the_reply_reserve_when_ordinary_output_is_full() {
 fn copy_peak_capacity_failure_is_connection_local_and_exposes_no_client_bytes() {
     let mut boundary = WasmHostBoundary::new();
     assert!(boundary.open(1));
-    bootstrap(&mut boundary, 1);
-    bootstrap(&mut boundary, 2);
+    hello(&mut boundary, 1);
+    hello(&mut boundary, 2);
     let delivery = {
         assert_eq!(boundary.poll(1), 1);
         boundary.output_delivery_id()
@@ -189,8 +189,8 @@ fn copy_peak_capacity_failure_is_connection_local_and_exposes_no_client_bytes() 
 fn duplicate_foreign_and_retired_acknowledgements_cannot_release_peer_credit() {
     let mut boundary = WasmHostBoundary::new();
     assert!(boundary.open(1));
-    bootstrap(&mut boundary, 1);
-    bootstrap(&mut boundary, 2);
+    hello(&mut boundary, 1);
+    hello(&mut boundary, 2);
     assert_eq!(boundary.poll(1), 1);
     let first = boundary.output_delivery_id();
     assert!(boundary.output_copied(1, first));
@@ -216,7 +216,7 @@ fn closed_unacknowledged_connections_bound_reconnect_churn_until_disposal() {
     let mut boundary = WasmHostBoundary::new();
     assert!(boundary.open(1));
     for connection in 1..=MAX_CONNECTIONS as u64 {
-        bootstrap(&mut boundary, connection);
+        hello(&mut boundary, connection);
         assert_eq!(boundary.poll(connection), 1);
         let delivery = boundary.output_delivery_id();
         assert!(boundary.output_copied(connection, delivery));
@@ -238,7 +238,7 @@ fn closed_unacknowledged_connections_bound_reconnect_churn_until_disposal() {
 fn host_reopen_cannot_discard_live_or_closing_delivery_accounts() {
     let mut boundary = WasmHostBoundary::new();
     assert!(boundary.open(1));
-    bootstrap(&mut boundary, 1);
+    hello(&mut boundary, 1);
     assert_eq!(boundary.poll(1), 1);
     let delivery = boundary.output_delivery_id();
     assert!(boundary.output_copied(1, delivery));

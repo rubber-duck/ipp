@@ -146,11 +146,8 @@ impl<'a> RenderReadAccess<'a> {
     /// Retry membership preparation while that exact input remains pending.
     pub(super) fn render_resources_pending(&self, entity: EntityId) -> bool {
         let index = entity.index() as usize;
-        #[cfg(feature = "particles")]
         let sprite = self.world.components.particle_sprite(index);
-        #[cfg(feature = "particles")]
         let particle_mesh = self.world.components.particle_mesh(index);
-        #[cfg(feature = "particles")]
         if ((sprite.is_some() || particle_mesh.is_some())
             && self.world.components.particle_emitter(index).is_none()
             && self.world.components.particle_playback(index).is_none())
@@ -161,20 +158,10 @@ impl<'a> RenderReadAccess<'a> {
         if self.world.components.unlit_material(index).is_none()
             && self.world.components.pbr_material(index).is_none()
             && self.world.components.custom_material(index).is_none()
-            && {
-                #[cfg(feature = "particles")]
-                {
-                    sprite.is_none()
-                }
-                #[cfg(not(feature = "particles"))]
-                {
-                    true
-                }
-            }
+            && { sprite.is_none() }
         {
             return false;
         }
-        #[cfg(feature = "particles")]
         let mesh_selection = if sprite.is_some() {
             None
         } else {
@@ -187,33 +174,23 @@ impl<'a> RenderReadAccess<'a> {
                         .map(|mesh| (&*mesh.source, mesh.variant))
                 })
         };
-        #[cfg(not(feature = "particles"))]
-        let mesh_selection = self
-            .world
-            .components
-            .mesh_instance(index)
-            .map(|mesh| (&*mesh.source, mesh.variant));
         if let Some((source, variant)) = mesh_selection
             && !source.is_empty()
             && self.unresolved_loading_asset(crate::MESH_TYPE, source, variant)
         {
             return true;
         }
-        #[cfg(feature = "mesh-poses")]
         if let Some(pose) = self.world.components.mesh_pose(index)
             && !pose.source.is_empty()
             && self.unresolved_loading_asset(crate::MESH_TYPE, &pose.source, pose.variant)
         {
             return true;
         }
-        #[cfg(feature = "particles")]
         let texture_selection = if let Some(sprite) = sprite {
             (!sprite.source.is_empty()).then_some((&*sprite.source, sprite.variant))
         } else {
             self.base_color_texture(index)
         };
-        #[cfg(not(feature = "particles"))]
-        let texture_selection = self.base_color_texture(index);
         if let Some((source, variant)) = texture_selection
             && !source.is_empty()
             && self.unresolved_loading_asset(crate::TEXTURE_TYPE, source, variant)
@@ -252,44 +229,38 @@ impl<'a> RenderReadAccess<'a> {
         &self,
         diagnostics: Vec<RenderDiagnostic>,
     ) -> Vec<RenderDiagnostic> {
-        let diagnostics = {
-            let mut diagnostics = diagnostics;
-            for &entity in self.world.state.entities.keys() {
-                let index = entity.index() as usize;
-                if self.world.components.transform(index).is_some()
-                    && (self.world.components.unlit_material(index).is_some()
-                        || self.world.components.pbr_material(index).is_some())
-                    && self.base_color_texture(index).is_some()
-                    && let Some(key) = self
-                        .world
-                        .components
-                        .mesh_instance(index)
-                        .and_then(|mesh| self.resolved_mesh(entity, &mesh.source, mesh.variant))
-                    && self.mesh_metadata(key).is_some_and(|mesh| !mesh.has_uvs())
-                {
-                    diagnostics.push(RenderDiagnostic {
-                        entity,
-                        reason: ErrorReason::InvalidAsset,
-                    });
-                }
+        let mut diagnostics = diagnostics;
+        for &entity in self.world.state.entities.keys() {
+            let index = entity.index() as usize;
+            if self.world.components.transform(index).is_some()
+                && (self.world.components.unlit_material(index).is_some()
+                    || self.world.components.pbr_material(index).is_some())
+                && self.base_color_texture(index).is_some()
+                && let Some(key) = self
+                    .world
+                    .components
+                    .mesh_instance(index)
+                    .and_then(|mesh| self.resolved_mesh(entity, &mesh.source, mesh.variant))
+                && self.mesh_metadata(key).is_some_and(|mesh| !mesh.has_uvs())
+            {
+                diagnostics.push(RenderDiagnostic {
+                    entity,
+                    reason: ErrorReason::InvalidAsset,
+                });
             }
-            diagnostics
-        };
-        #[cfg(feature = "mesh-poses")]
-        let diagnostics = {
-            let mut diagnostics = diagnostics;
-            for &entity in self.world.state.entities.keys() {
-                if let Err(reason) = self.mesh_pose(entity)
-                    && reason != ErrorReason::GeometryUnavailable
-                {
-                    diagnostics.push(RenderDiagnostic {
-                        entity,
-                        reason,
-                    });
-                }
+        }
+
+        for &entity in self.world.state.entities.keys() {
+            if let Err(reason) = self.mesh_pose(entity)
+                && reason != ErrorReason::GeometryUnavailable
+            {
+                diagnostics.push(RenderDiagnostic {
+                    entity,
+                    reason,
+                });
             }
-            diagnostics
-        };
+        }
+
         diagnostics
     }
 
@@ -404,35 +375,23 @@ impl<'a> RenderReadAccess<'a> {
         transform: Transform,
     ) -> Option<RenderItem> {
         let index = entity.index() as usize;
-        #[cfg(feature = "particles")]
         let sprite = self.world.components.particle_sprite(index);
-        #[cfg(feature = "particles")]
         let particle_mesh = self.world.components.particle_mesh(index);
-        #[cfg(feature = "particles")]
         if (sprite.is_some() || particle_mesh.is_some())
             && self.world.components.particle_emitter(index).is_none()
             && self.world.components.particle_playback(index).is_none()
         {
             return None;
         }
-        #[cfg(feature = "particles")]
         if sprite.is_some() && particle_mesh.is_some() {
             return None;
         }
-        #[cfg(feature = "particles")]
         let selection = particle_mesh.map(|m| (&*m.source, m.variant)).or_else(|| {
             self.world
                 .components
                 .mesh_instance(index)
                 .map(|m| (&*m.source, m.variant))
         });
-        #[cfg(not(feature = "particles"))]
-        let selection = self
-            .world
-            .components
-            .mesh_instance(index)
-            .map(|m| (&*m.source, m.variant));
-        #[cfg(feature = "particles")]
         let mesh = if sprite.is_some() {
             MeshKey {
                 asset: 0,
@@ -442,17 +401,11 @@ impl<'a> RenderReadAccess<'a> {
             let (source, variant) = selection?;
             self.resolved_mesh(entity, source, variant)?
         };
-        #[cfg(not(feature = "particles"))]
-        let mesh = {
-            let (source, variant) = selection?;
-            self.resolved_mesh(entity, source, variant)?
-        };
         let custom = self.world.components.custom_material(index).is_some();
         let mut solid_fallback = custom
             && self.world.components.pbr_material(index).is_none()
             && self.world.components.unlit_material(index).is_none();
         let mut pbr = self.world.components.pbr_material(index).copied();
-        #[allow(unused_mut)]
         let mut material = pbr
             .map(|p| UnlitMaterial {
                 r: p.r,
@@ -467,7 +420,6 @@ impl<'a> RenderReadAccess<'a> {
                     b: 0.0,
                 })
             });
-        #[cfg(feature = "particles")]
         if let Some(sprite) = sprite {
             material = Some(UnlitMaterial {
                 r: sprite.r,
@@ -479,7 +431,6 @@ impl<'a> RenderReadAccess<'a> {
         }
         let mut material = material?;
         let texture_selection = self.base_color_texture(index);
-        #[cfg(feature = "particles")]
         let texture_selection = if let Some(s) = sprite {
             (!s.source.is_empty()).then_some((&*s.source, s.variant))
         } else {
@@ -488,7 +439,6 @@ impl<'a> RenderReadAccess<'a> {
         let texture = match texture_selection {
             Some((source, variant)) => {
                 match self.resolved_texture(entity, source, variant).filter(|_| {
-                    #[cfg(feature = "particles")]
                     if sprite.is_some() {
                         return true;
                     }
@@ -512,19 +462,15 @@ impl<'a> RenderReadAccess<'a> {
         };
         let metadata = self.mesh_metadata(mesh);
         let normals = metadata.is_some_and(|m| m.has_normals());
-        #[cfg(feature = "mesh-poses")]
         let pose = self.mesh_pose(entity).ok()?;
-        #[cfg(feature = "mesh-poses")]
         let normals = normals
             && pose.is_none_or(|(key, _)| self.mesh_metadata(key).is_some_and(|m| m.has_normals()));
         Some(RenderItem {
-            #[cfg(feature = "particles")]
             particle: None,
             solid_fallback,
             custom_material: custom,
             normals,
             texture_weights: metadata.is_some_and(|m| m.has_texture_weights()),
-            #[cfg(feature = "skeletal-animation")]
             skinned: self.world.components.skin(index).is_some(),
             entity,
             transform,
@@ -533,7 +479,6 @@ impl<'a> RenderReadAccess<'a> {
             material,
             pbr,
             mesh,
-            #[cfg(feature = "mesh-poses")]
             pose,
             texture,
         })

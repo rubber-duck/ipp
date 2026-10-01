@@ -160,8 +160,7 @@ impl PreparedLight {
             light.shadow_near,
             light.range,
         ];
-        let casts_shadow = cfg!(feature = "shadows") && light.cast_shadows;
-        let shadow_matrix = if casts_shadow {
+        let shadow_matrix = if light.cast_shadows {
             camera::prepare_affine(
                 entity,
                 &Camera {
@@ -186,7 +185,7 @@ impl PreparedLight {
             record,
             shadow_matrix,
             shadow_bias: light.shadow_bias,
-            casts_shadow,
+            casts_shadow: light.cast_shadows,
         })
     }
 }

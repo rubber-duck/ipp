@@ -1,5 +1,9 @@
 import { PortTransport, type Client, type WorldReference } from "@ipp/client";
 import {
+  acceptHostAnnouncement,
+  hostHello,
+} from "../../packages/ipp-client/src/host-contract.js";
+import {
   HostWireReader,
   HostWireWriter,
 } from "../../packages/ipp-client/src/host-protocol.js";
@@ -450,7 +454,7 @@ export async function observeStalledReceiver(
           if (data.connection !== endpoint)
             throw new Error("Foreign stalled receiver envelope");
           if (data.type === "ready") {
-            send(contract.bootstrap());
+            send(hostHello());
           } else if (data.type === "data") {
             if (
               typeof data.delivery !== "bigint" ||
@@ -461,7 +465,10 @@ export async function observeStalledReceiver(
             lastDelivery = data.delivery;
             const bytes = new Uint8Array(data.bytes);
             if (connection === undefined) {
-              connection = contract.acceptBootstrap(bytes);
+              connection = acceptHostAnnouncement(bytes, {
+                revision: contract.PROTOCOL_VERSION,
+                schemaHash: contract.SCHEMA_HASH,
+              }).connection;
               channel.port1.postMessage({
                 type: "ack",
                 connection: endpoint,

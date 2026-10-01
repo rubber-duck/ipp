@@ -1,5 +1,4 @@
 //! The production executable validates explicit filesystem configuration before startup.
-#![cfg(feature = "websocket")]
 use std::process::Command;
 
 #[test]

@@ -11,7 +11,7 @@ impl<'a, P: HostServices> WorldSessionContext<'a, P> {
                 ipp_protocol::MAX_MESSAGE_BYTES,
             )
             .map_err(|error| error.to_string())?;
-            let reply = ipp_protocol::host::accept_world_bootstrap(
+            let reply = ipp_protocol::host::accept_world_hello(
                 bytes,
                 self.session.id,
                 self.world.manifest(),
@@ -19,7 +19,7 @@ impl<'a, P: HostServices> WorldSessionContext<'a, P> {
             .map_err(|error| {
                 ipp_core::diagnostic!(
                     Warn,
-                    "[IPP {}] session.reject session={} reason=bootstrap",
+                    "[IPP {}] session.reject session={} reason=hello",
                     P::NAME,
                     self.session.id
                 );
@@ -33,7 +33,7 @@ impl<'a, P: HostServices> WorldSessionContext<'a, P> {
             self.session.ready = true;
             ipp_core::diagnostic!(
                 Info,
-                "[IPP {}] session.bootstrap session={}",
+                "[IPP {}] session.hello session={}",
                 P::NAME,
                 self.session.id
             );
@@ -130,7 +130,6 @@ impl<'a, P: HostServices> WorldSessionContext<'a, P> {
         // Batch diagnostics name the core batch identity, which is the internal
         // request identity, so Host and core lines of one batch correlate; the
         // client's reusable page identity follows as `client_batch`.
-        #[cfg(feature = "diagnostics")]
         if let RequestBody::SubmitBatch(page) = &request.body {
             ipp_core::diagnostic!(
                 Debug,
@@ -156,7 +155,6 @@ impl<'a, P: HostServices> WorldSessionContext<'a, P> {
             self.session.batch_leases.insert(request.request_id, lease);
         }
         self.session.pending.push_back(request);
-        #[cfg(feature = "diagnostics")]
         if let Some(Request {
             request_id,
             body: RequestBody::SubmitBatch(page),
@@ -182,7 +180,7 @@ impl<'a, P: HostServices> WorldSessionContext<'a, P> {
         self.session.take_response()
     }
 
-    /// Whether bootstrap compatibility has been accepted.
+    /// Whether the session's hello has been accepted.
     pub fn is_ready(&self) -> bool {
         self.session.ready
     }
@@ -249,7 +247,6 @@ impl WorldSession {
             progress: None,
             receipts: Default::default(),
             lifecycle_watch: None,
-            #[cfg(feature = "gui")]
             gui_observations: None,
             reply_budget: Default::default(),
             reply_reservations: Default::default(),

@@ -16,11 +16,8 @@ for (const diagnostics of [false, true]) {
     : "native lifecycle target membership and bulk delivery within the default budget", {
     timeout: 90_000,
   }, async (context) => {
-    const profile = resolve(
-      diagnostics
-        ? "target/lifecycle-diagnostics-build/native"
-        : "target/world-host-build/native",
-    );
+    // Every Host answers lifecycle statistics; the diagnostic variant reads them.
+    const profile = resolve("target/world-host-build/native");
     const contract = await import(
       pathToFileURL(resolve(profile, "generated.js")).href
     );
@@ -74,16 +71,11 @@ for (const diagnostics of [false, true]) {
       : `${mode} worker lifecycle targets through executed WASM`, {
       timeout: 90_000,
     }, async (context) => {
-      const profile = resolve(
-        diagnostics
-          ? "target/lifecycle-diagnostics-build/wasm"
-          : "target/world-host-build/wasm",
-      );
+      const profile = resolve("target/world-host-build/wasm");
       const build: BrowserBuildConfiguration = {
         name: "world-host",
         generatedModule: resolve(profile, "generated.js"),
         runtimeWasm: resolve(profile, "runtime.wasm"),
-        exportWasm: resolve(profile, "export.wasm"),
         contractArtifact: resolve(profile, "contract.bin"),
       };
       await runBrowserEnvironment(
@@ -91,7 +83,6 @@ for (const diagnostics of [false, true]) {
         {
           workspace: process.cwd(),
           build,
-          mismatchBuild: build,
           operationTimeoutMs: 60_000,
         },
         context.signal,

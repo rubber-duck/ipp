@@ -78,12 +78,11 @@ test("browser worker multiplex sessions, exact references and open-batch fairnes
     name: "world-host",
     generatedModule: resolve(profile, "generated.js"),
     runtimeWasm: resolve(profile, "runtime.wasm"),
-    exportWasm: resolve(profile, "export.wasm"),
     contractArtifact: resolve(profile, "contract.bin"),
   };
   await runBrowserEnvironment(
     "multiplex-worker",
-    { workspace, build, mismatchBuild: build, operationTimeoutMs: 20_000 },
+    { workspace, build, operationTimeoutMs: 20_000 },
     context.signal,
     async (environment) =>
       environment.execute("multiplex", {}, () =>

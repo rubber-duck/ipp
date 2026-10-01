@@ -25,8 +25,8 @@ const platformerAssets = resolve(workspace, "target/gallery-platformer-assets");
 const platformerWorld = resolve(platformerAssets, "platformer.ipp");
 const renderContract = resolve(
   workspace,
-  process.env.IPP_BROWSER_BUILD_DIR ?? "target/browser-build",
-  "render-expanded/contract.bin",
+  process.env.IPP_BROWSER_DISTRIBUTION ?? "target/browser-build/render",
+  "contract.bin",
 );
 
 async function validateWorldContract(path, label, contract) {
@@ -98,11 +98,9 @@ async function validateSavedWorldContracts() {
   if (
     contract.byteLength < 16 ||
     contract.toString("ascii", 0, 4) !== "IPPB" ||
-    contract.readUInt32LE(4) !== 2
+    contract.readUInt32LE(4) !== 3
   ) {
-    throw new Error(
-      "Render-expanded target contract is not a valid IPPB export",
-    );
+    throw new Error("Render target contract is not a valid IPPB export");
   }
   await Promise.all([
     validateWorldContract(

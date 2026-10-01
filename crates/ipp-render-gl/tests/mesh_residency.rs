@@ -4,7 +4,6 @@ mod support;
 #[path = "support/world_presentation.rs"]
 mod world_presentation;
 
-#[cfg(feature = "shadows")]
 use ipp_core::{Batch, Command, EntityRef};
 use ipp_core::{
     ComponentValue, EntityId, MeshAsset, MeshKey, MeshUpload, WorldContext,
@@ -13,7 +12,6 @@ use ipp_core::{
         Asset, AssetLoadStatus, AssetTypeId, AssetUploadIdentity, BufferedAssetLoader,
     },
 };
-#[cfg(feature = "gui")]
 use ipp_render_gl::RenderError;
 use ipp_render_gl::{RenderDevice, RenderService};
 use std::{any::Any, rc::Rc};
@@ -340,7 +338,6 @@ fn detached_demanded_mesh_publishes_cpu_metadata_and_requeues_gpu_recovery() {
     assert_eq!(resource.representation().graphics_ready, Some(true));
 }
 
-#[cfg(feature = "surfaces")]
 #[test]
 fn detached_progress_defers_pending_font_and_drawing_gpu_preparation() {
     use ipp_core::services::asset_management::{
@@ -407,7 +404,6 @@ fn detached_progress_defers_pending_font_and_drawing_gpu_preparation() {
     );
 }
 
-#[cfg(feature = "surfaces")]
 #[test]
 fn surface_draw_failure_restores_mesh_culling_state() {
     use ipp_core::components::CanvasDrawing;
@@ -472,7 +468,6 @@ fn surface_draw_failure_restores_mesh_culling_state() {
     assert!(!state.surface_double_sided.get());
 }
 
-#[cfg(feature = "shadows")]
 #[test]
 fn shadow_pass_restores_target_after_error_reuses_storage_and_releases_on_unload() {
     use ipp_core::components::{Light, PbrMaterial};
@@ -705,7 +700,6 @@ fn graphics_loss_and_failed_recovery_keep_cpu_picking_and_metadata_available() {
     );
 }
 
-#[cfg(feature = "shadows")]
 #[test]
 fn atlas_allocation_failure_keeps_lighting_and_does_not_retry_every_frame() {
     use ipp_core::components::{Light, PbrMaterial};
@@ -761,7 +755,6 @@ fn atlas_allocation_failure_keeps_lighting_and_does_not_retry_every_frame() {
     assert_eq!(state.live_shadow_maps.get(), 0);
 }
 
-#[cfg(feature = "gui")]
 #[test]
 fn culled_text_surface_reuses_retained_glyphs_when_visible_again() {
     let mut host = ipp_core::HostRuntime::new();
@@ -818,7 +811,6 @@ fn culled_text_surface_reuses_retained_glyphs_when_visible_again() {
     assert_eq!(state.atlas_populations.get(), populations);
 }
 
-#[cfg(feature = "gui")]
 #[test]
 fn recoverable_glyph_population_failure_keeps_analytic_text_and_backs_off() {
     let mut host = ipp_core::HostRuntime::new();
@@ -854,7 +846,6 @@ fn recoverable_glyph_population_failure_keeps_analytic_text_and_backs_off() {
     assert_eq!(state.atlas_populations.get(), 2);
 }
 
-#[cfg(feature = "gui")]
 #[test]
 fn glyph_population_context_loss_and_restore_failures_fail_the_frame() {
     let mut host = ipp_core::HostRuntime::new();
@@ -882,7 +873,6 @@ fn glyph_population_context_loss_and_restore_failures_fail_the_frame() {
     assert_eq!(state.atlas_populations.get(), attempts + 1);
 }
 
-#[cfg(feature = "gui")]
 #[test]
 fn cold_glyph_population_binds_each_atlas_page_once_and_restores_once() {
     let mut host = ipp_core::HostRuntime::new();
@@ -919,7 +909,6 @@ fn cold_glyph_population_binds_each_atlas_page_once_and_restores_once() {
     assert_eq!(state.atlas_restores.get(), 1);
 }
 
-#[cfg(feature = "gui")]
 #[test]
 fn population_budget_defers_misses_and_resumes_next_frame() {
     let floor = ipp_render_gl::GLYPH_MIN_POPULATES_PER_FRAME as u32;
@@ -949,7 +938,6 @@ fn population_budget_defers_misses_and_resumes_next_frame() {
     assert_eq!(warm.uploaded_bytes, 0);
 }
 
-#[cfg(feature = "gui")]
 #[test]
 fn cold_text_within_the_time_budget_reaches_the_atlas_in_one_frame() {
     // More glyphs than the per-frame floor; the scene's Surface shows up to 50.
@@ -969,7 +957,6 @@ fn cold_text_within_the_time_budget_reaches_the_atlas_in_one_frame() {
     assert_eq!(state.atlas_restores.get(), 1);
 }
 
-#[cfg(feature = "gui")]
 #[test]
 fn context_loss_during_glyph_population_reaches_recovery_and_repopulates() {
     let mut host = ipp_core::HostRuntime::new();
@@ -1010,7 +997,6 @@ fn context_loss_during_glyph_population_reaches_recovery_and_repopulates() {
     assert_eq!(state.analytic_glyph_draws.get(), 0);
 }
 
-#[cfg(feature = "gui")]
 #[test]
 fn context_loss_during_gui_storage_write_reaches_recovery() {
     let mut host = ipp_core::HostRuntime::new();
@@ -1043,7 +1029,6 @@ fn context_loss_during_gui_storage_write_reaches_recovery() {
     assert_eq!((warm.uploaded_bytes, warm.gui_batches), (0, 1));
 }
 
-#[cfg(feature = "gui")]
 #[test]
 fn recoverable_gui_storage_failure_skips_only_its_surface_and_backs_off() {
     let mut host = ipp_core::HostRuntime::new();
@@ -1124,11 +1109,9 @@ fn recoverable_gui_storage_failure_skips_only_its_surface_and_backs_off() {
     assert_eq!(state.analytic_glyph_draws.get(), analytic);
 }
 
-/// Glyphs projected far above the atlas bands draw analytically in every build.
-#[cfg(feature = "surfaces")]
+/// Glyphs projected far above the atlas bands draw analytically.
 const ANALYTIC_VIEWPORT: u32 = 1000;
 
-#[cfg(feature = "surfaces")]
 #[test]
 fn analytic_text_uploads_its_instances_once_and_draws_them_every_frame() {
     let ids: Vec<u32> = (0..4).collect();
@@ -1170,7 +1153,6 @@ fn analytic_text_uploads_its_instances_once_and_draws_them_every_frame() {
     assert_eq!(state.live_analytic_streams.get(), 1);
 }
 
-#[cfg(feature = "surfaces")]
 #[test]
 fn analytic_text_streams_release_with_their_surface_world_and_context() {
     let ids: Vec<u32> = (0..4).collect();

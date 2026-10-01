@@ -897,7 +897,6 @@ impl<D: RenderDevice> RenderService<D> {
         }
     }
 
-    #[cfg(any(test, feature = "diagnostics"))]
     pub(super) fn publish_retained_surface_statistics(
         &mut self,
         statistics: &mut crate::RenderStatistics,

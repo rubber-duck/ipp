@@ -1,4 +1,7 @@
-import type { IngressStatistics, RenderStatisticsSnapshot } from "@ipp/client";
+import type {
+  IngressStatistics,
+  RenderStatisticsSnapshot,
+} from "@ipp/client/diagnostics";
 import { responseGate } from "../browser/response-gate.js";
 import { invoke, writeDataUrl, recordCapture } from "./evidence.js";
 import assert from "node:assert/strict";
@@ -19,7 +22,8 @@ import {
 
 const workspace = resolve(process.cwd());
 const render = browserBuild("render");
-const headless = browserBuild("headless");
+// Only the recovery scenario simulates context loss, a testing control.
+const instrumented = browserBuild("render-instrumentation");
 
 for (const variant of ["development", "production"] as const) {
   test(`${variant}: React scene preserves ownership cleanup and WebGL recovery`, {
@@ -29,8 +33,7 @@ for (const variant of ["development", "production"] as const) {
       `${variant} react wasm unlit cube`,
       {
         workspace,
-        build: render,
-        mismatchBuild: headless,
+        build: instrumented,
         operationTimeoutMs: 12_000,
         closeTimeoutMs: 5_000,
         evidenceParent: resolve(
@@ -554,7 +557,6 @@ test("render worker diagnostics honor levels, partial batch effects, and idle si
       {
         workspace,
         build: render,
-        mismatchBuild: headless,
         operationTimeoutMs: 12_000,
         closeTimeoutMs: 5_000,
         evidenceParent: resolve(
@@ -573,6 +575,23 @@ test("render worker diagnostics honor levels, partial batch effects, and idle si
           timeoutMs: 10_000,
           logLevel,
         };
+        // Page and worker console lines reach the harness separately, so a
+        // step's worker lines can still be in flight when the client resolves.
+        const workerLineDelivered = (from: number, event: string) =>
+          logLevel !== "debug"
+            ? Promise.resolve()
+            : scenario.execute(
+                `worker ${event} delivered`,
+                { from },
+                async () => {
+                  while (
+                    !diagnosticLines(scenario.browserLog())
+                      .slice(from)
+                      .some((line) => diagnosticEvent(line) === event)
+                  )
+                    await new Promise((done) => setTimeout(done, 10));
+                },
+              );
         try {
           await invoke<AssetSetupReport>(
             scenario.page,
@@ -596,6 +615,7 @@ test("render worker diagnostics honor levels, partial batch effects, and idle si
             moduleUrl,
             "createDiagnosticEntity",
           );
+          await workerLineDelivered(createdAt, "buffer.complete");
           const afterCreate = diagnosticLines(scenario.browserLog());
 
           const rejectedAt = afterCreate.length;
@@ -605,6 +625,7 @@ test("render worker diagnostics honor levels, partial batch effects, and idle si
           }>(scenario.page, moduleUrl, "rejectDiagnosticEntityMutation");
           assert.equal(rejected.ok, false);
           assert.equal(rejected.error?.operation, 2);
+          await workerLineDelivered(rejectedAt, "buffer.reject");
           const afterReject = diagnosticLines(scenario.browserLog());
 
           const idleAt = afterReject.length;
@@ -621,6 +642,7 @@ test("render worker diagnostics honor levels, partial batch effects, and idle si
 
           const deletedAt = afterIdle.length;
           await invoke(scenario.page, moduleUrl, "deleteDiagnosticEntity");
+          await workerLineDelivered(deletedAt, "buffer.complete");
           const afterDelete = diagnosticLines(scenario.browserLog());
 
           await invoke(scenario.page, moduleUrl, "closeCube");
@@ -816,7 +838,6 @@ test("HTTP resources remain declarative across pending, failure, cancellation, a
     {
       workspace,
       build: render,
-      mismatchBuild: headless,
       operationTimeoutMs: 12_000,
       closeTimeoutMs: 5_000,
       evidenceParent: resolve(
@@ -1098,14 +1119,15 @@ test("HTTP resources remain declarative across pending, failure, cancellation, a
   await assertLoopbackClosed(result.origin);
 });
 
-function browserBuild(name: "render" | "headless"): BrowserBuildConfiguration {
+function browserBuild(
+  name: "render" | "render-instrumentation",
+): BrowserBuildConfiguration {
   const directory = resolve(workspace, "target/browser-build", name);
   return {
     // Parent extends the shared browser profile union with render.
     name: name as BrowserBuildConfiguration["name"],
     generatedModule: resolve(directory, "generated.js"),
     runtimeWasm: resolve(directory, "runtime.wasm"),
-    exportWasm: resolve(directory, "export.wasm"),
     contractArtifact: resolve(directory, "contract.bin"),
   };
 }

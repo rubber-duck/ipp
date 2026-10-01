@@ -1,6 +1,5 @@
 use super::*;
 
-#[cfg(feature = "builtin-assets")]
 pub(in crate::services::asset_management::builtin) fn mesh(
     uri: &str,
     positions_only: bool,
@@ -119,7 +118,6 @@ pub(in crate::services::asset_management::builtin) fn debug_mesh(
     mesh.encode_positions()
 }
 
-#[cfg(feature = "builtin-assets")]
 pub(super) fn dimensions<const N: usize>(
     uri: &str,
     prefix: &str,
@@ -260,17 +258,14 @@ impl BuiltinMesh {
         Ok(bytes)
     }
 
-    #[cfg(feature = "builtin-assets")]
     pub(super) fn encode_weighted(self, weights: &[u8]) -> Result<Vec<u8>, ErrorReason> {
         self.encode_streams(Some(weights))
     }
 
-    #[cfg(feature = "builtin-assets")]
     pub(super) fn encode(self) -> Result<Vec<u8>, ErrorReason> {
         self.encode_streams(None)
     }
 
-    #[cfg(feature = "builtin-assets")]
     pub(super) fn encode_streams(self, weights: Option<&[u8]>) -> Result<Vec<u8>, ErrorReason> {
         let count = 4 + usize::from(weights.is_some());
         let stride = 44 + usize::from(weights.is_some());

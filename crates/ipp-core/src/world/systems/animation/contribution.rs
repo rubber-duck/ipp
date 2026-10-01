@@ -19,7 +19,6 @@ pub(in crate::world) fn contributes(value: &AnimationValue) -> bool {
     match value {
         AnimationValue::Field(FieldValue::F32(_)) | AnimationValue::Rotation(_) => true,
         AnimationValue::Field(FieldValue::Dynamic(value)) => value.floats().is_some(),
-        #[cfg(feature = "skeletal-animation")]
         AnimationValue::Pose(_) => true,
         _ => false,
     }
@@ -35,7 +34,6 @@ pub(in crate::world) fn identity_value(value: &AnimationValue) -> AnimationValue
                 crate::DynamicValue::weighted(&[value], &[0.0]).unwrap_or_else(|_| value.clone()),
             ))
         }
-        #[cfg(feature = "skeletal-animation")]
         AnimationValue::Pose(values) => AnimationValue::Pose(vec![IDENTITY_JOINT; values.len()]),
         value => value.clone(),
     }
@@ -50,7 +48,6 @@ const IDENTITY_ROTATION: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
 
 /// Joint contribution that adds nothing: zero translation and scale change,
 /// identity rotation.
-#[cfg(feature = "skeletal-animation")]
 pub(in crate::world) const IDENTITY_JOINT: crate::components::Transform =
     crate::components::Transform {
         x: 0.0,
@@ -93,7 +90,6 @@ pub(in crate::world) fn compose(
             crate::DynamicValue::weighted(&[a, b], &[1.0, 1.0])
                 .map_err(|_| ErrorReason::InvalidValue)?,
         )),
-        #[cfg(feature = "skeletal-animation")]
         (AnimationValue::Pose(a), AnimationValue::Pose(b)) if a.len() == b.len() => {
             AnimationValue::Pose(a.iter().zip(b).map(|(a, b)| compose_joint(a, b)).collect())
         }
@@ -140,7 +136,6 @@ fn inverse([x, y, z, w]: [f32; 4]) -> [f32; 4] {
 }
 
 /// A joint's local transform with `contribution` applied.
-#[cfg(feature = "skeletal-animation")]
 pub(in crate::world) fn compose_joint(
     current: &crate::components::Transform,
     contribution: &crate::components::Transform,

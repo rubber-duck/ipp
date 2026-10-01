@@ -3,7 +3,6 @@
 //!
 //! Expectations are hand-computed from the skin rules in `docs/architecture/gui.md`
 //! and the control geometry constants, never read back from the implementation.
-#![cfg(feature = "gui")]
 
 mod support;
 
@@ -593,7 +592,6 @@ fn glow_paints_beyond_the_box_without_widening_the_hit_target_or_reflowing() {
     assert_eq!(painted.position, [0.0, 0.0]);
     assert!(glowing.paint_revision > plain.paint_revision);
     assert_eq!(glowing.layout_revision, plain.layout_revision);
-    #[cfg(feature = "diagnostics")]
     assert_eq!(
         panel
             .host

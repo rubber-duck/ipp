@@ -356,7 +356,6 @@ fn combining_marks_share_a_grapheme_and_survive_wrapping() {
     assert_eq!(wrapped.lines[1].source_range, [3, 4]);
 }
 
-#[cfg(feature = "gui")]
 #[test]
 fn regional_indicator_pairs_form_flag_graphemes() {
     // U+1F1EB U+1F1F7 (FR): 4 bytes each, one grapheme (GB12/GB13).
@@ -374,7 +373,6 @@ fn regional_indicator_pairs_form_flag_graphemes() {
     assert!(!is_grapheme_boundary(odd, 4));
 }
 
-#[cfg(feature = "gui")]
 #[test]
 fn emoji_modifier_sequences_stay_together() {
     // Thumbs up plus medium skin tone: one grapheme (the modifier is Extend).
@@ -383,7 +381,6 @@ fn emoji_modifier_sequences_stay_together() {
     assert!(!is_grapheme_boundary(text, 4));
 }
 
-#[cfg(feature = "gui")]
 #[test]
 fn hangul_jamo_and_syllables_cluster() {
     // Precomposed LV syllable: one scalar, one grapheme.
@@ -398,7 +395,6 @@ fn hangul_jamo_and_syllables_cluster() {
     assert!(!is_grapheme_boundary(chain, 6));
 }
 
-#[cfg(feature = "gui")]
 #[test]
 fn zwj_emoji_sequences_form_one_grapheme() {
     // Man plus ZWJ plus woman (GB11): 4 plus 3 plus 4 bytes, one grapheme.
@@ -408,7 +404,6 @@ fn zwj_emoji_sequences_form_one_grapheme() {
     assert!(!is_grapheme_boundary(text, 7));
 }
 
-#[cfg(feature = "gui")]
 #[test]
 fn indic_virama_stays_with_its_consonant() {
     // Ka plus virama plus ssa: the virama (Extend) never splits from its
@@ -427,7 +422,6 @@ fn indic_virama_stays_with_its_consonant() {
     }
 }
 
-#[cfg(feature = "gui")]
 #[test]
 fn caret_selection_and_deletion_follow_full_graphemes() {
     let font = test_font();
@@ -464,7 +458,6 @@ fn caret_selection_and_deletion_follow_full_graphemes() {
     assert_eq!(&text[forward as usize..], "");
 }
 
-#[cfg(feature = "gui")]
 #[test]
 fn deletion_removes_modifier_and_hangul_graphemes_whole() {
     let text = "\u{1f44d}\u{1f3fd}\u{d55c}";
@@ -477,7 +470,6 @@ fn deletion_removes_modifier_and_hangul_graphemes_whole() {
     assert_eq!(prev, 0);
 }
 
-#[cfg(feature = "gui")]
 #[test]
 fn wrapping_keeps_flag_graphemes_on_one_line() {
     let font = test_font();
@@ -757,14 +749,6 @@ fn utf16_and_utf8_offsets_convert_flag_sequences() {
 
 #[test]
 fn unicode_version_and_scope_are_recorded() {
-    #[cfg(feature = "gui")]
-    {
-        assert_eq!(UNICODE_VERSION, unicode_segmentation::UNICODE_VERSION);
-        assert_eq!(SEGMENTATION_SCOPE, "uax29-extended");
-    }
-    #[cfg(not(feature = "gui"))]
-    {
-        assert_eq!(UNICODE_VERSION, (16, 0, 0));
-        assert_eq!(SEGMENTATION_SCOPE, "basic-ltr-subset");
-    }
+    assert_eq!(UNICODE_VERSION, unicode_segmentation::UNICODE_VERSION);
+    assert_eq!(SEGMENTATION_SCOPE, "uax29-extended");
 }

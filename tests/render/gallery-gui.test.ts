@@ -1,9 +1,8 @@
 import type {
-  AnimationControllerSnapshot,
-  Inspection,
   RenderStatisticsSnapshot,
   SurfaceCacheRecord,
-} from "@ipp/client";
+} from "@ipp/client/diagnostics";
+import type { AnimationControllerSnapshot, Inspection } from "@ipp/client";
 import assert from "node:assert/strict";
 import { join, resolve } from "node:path";
 import { writeFile } from "node:fs/promises";
@@ -120,6 +119,18 @@ const guiEnvironment = {
   ...galleryEnvironment,
   evidenceParent: resolve("target/integration-artifacts/gallery-gui"),
 };
+
+/**
+ * These scenarios keep the gallery's full canvas: their image assertions
+ * measure the panel's on-screen pixel coverage, which half the canvas does
+ * not give them. Measured on SwiftShader at half the canvas, the pulse
+ * baseline sample of a thin waveform stroke falls to 149 of a required 150,
+ * Surface cache text agreement to 0.65 (0.84 at full size, 0.85 required),
+ * the shield glass change precision to 0.92 of a required 0.95, and scroll
+ * bar thumbs narrow to one or two pixels (outer thumb mask overlap 0.97 at
+ * full size, 0.67 at half against a required 0.5; inner thumb 6 pixels).
+ */
+const PIXEL_COVERAGE_CANVAS_SHARE = 1;
 
 function guiEntity(inspection: Inspection) {
   return inspection.entities.find(
@@ -242,6 +253,7 @@ test("Gallery runs a real GUI demo and cleans it up", {
     async (scenario) => {
       const g = await openGallery(scenario, {
         initialPage: "gui",
+        canvasShare: PIXEL_COVERAGE_CANVAS_SHARE,
         beforeResponse: async (url, signal) => {
           requests.push({ mode: responseMode, path: url.pathname });
           const font = url.pathname.endsWith("/shure-tech-mono.ippf");
@@ -2405,7 +2417,10 @@ test("Gallery GUI panel caches distant presentation within direct-rendering tole
     context.signal,
     async (scenario) => {
       const started = performance.now();
-      const g = await openGallery(scenario, { initialPage: "gui" });
+      const g = await openGallery(scenario, {
+        initialPage: "gui",
+        canvasShare: PIXEL_COVERAGE_CANVAS_SHARE,
+      });
       await g.page.waitForFunction(
         () =>
           document.querySelector<HTMLOutputElement>("#status")?.dataset
@@ -3110,7 +3125,10 @@ function settingsPanel(part: "scrolling" | "shield") {
       },
       context.signal,
       async (scenario) => {
-        const g = await openGallery(scenario, { initialPage: "gui" });
+        const g = await openGallery(scenario, {
+          initialPage: "gui",
+          canvasShare: PIXEL_COVERAGE_CANVAS_SHARE,
+        });
         await g.page.waitForFunction(
           () =>
             document.querySelector<HTMLOutputElement>("#status")?.dataset

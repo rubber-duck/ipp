@@ -1,4 +1,4 @@
-import type { RenderStatisticsSnapshot } from "@ipp/client";
+import type { RenderStatisticsSnapshot } from "@ipp/client/diagnostics";
 import { presentationTesting } from "../../packages/ipp-client/src/testing.js";
 import {
   createFixtureCamera,
@@ -28,7 +28,6 @@ import {
   type ImageDifference,
   type ImageSummary,
   summarizeImage,
-  VIEWPORT,
 } from "./image-assertions.js";
 import {
   RootPresentation,
@@ -59,6 +58,8 @@ import {
   maximumDifference,
   linearToSrgb8,
   projectedVisibleLongitudeSeam,
+  SHAPES_VIEWPORT,
+  scaledLength,
 } from "./shapes-oracle.js";
 
 export const SHAPE_IDS = [
@@ -333,10 +334,10 @@ export async function initializeShapes(
   await closeShapes();
   const canvas = document.createElement("canvas");
   canvas.id = "ipp-shapes-canvas";
-  canvas.width = VIEWPORT.width;
-  canvas.height = VIEWPORT.height;
-  canvas.style.width = `${VIEWPORT.width}px`;
-  canvas.style.height = `${VIEWPORT.height}px`;
+  canvas.width = SHAPES_VIEWPORT.width;
+  canvas.height = SHAPES_VIEWPORT.height;
+  canvas.style.width = `${SHAPES_VIEWPORT.width}px`;
+  canvas.style.height = `${SHAPES_VIEWPORT.height}px`;
   canvas.style.display = "block";
   document.body.replaceChildren(canvas);
   if (typeof canvas.transferControlToOffscreen !== "function") {
@@ -359,20 +360,11 @@ export async function initializeShapes(
         canvas: canvas.transferControlToOffscreen(),
       },
     );
-    if (
-      !client.capabilities.spatial ||
-      !client.capabilities.textures ||
-      !client.capabilities.builtinAssets
-    ) {
-      throw new Error(
-        "shape fixture requires scene, textures, and built-in assets",
-      );
-    }
     const presentation = await RootPresentation.camera(
       client.host,
       worldReference(client),
       await createFixtureCamera(client),
-      VIEWPORT,
+      SHAPES_VIEWPORT,
     );
     root = createRoot(client);
     active = {
@@ -540,7 +532,7 @@ export async function captureShapeFrame(
     throw new Error("shape capture predates the inspected core tick");
   }
   const { width, height } = frame.view.binding.viewport;
-  if (width !== VIEWPORT.width || height !== VIEWPORT.height) {
+  if (width !== SHAPES_VIEWPORT.width || height !== SHAPES_VIEWPORT.height) {
     throw new Error(`unexpected capture size ${width}x${height}`);
   }
   state.captures.set(label, { ...frame, pixels: frame.pixels.slice(0) });
@@ -626,7 +618,10 @@ export function analyzeShapeCapture(
       const contourDistance = definition.outline
         ? distanceToPolylines([x + 0.5, y + 0.5], contours)
         : Number.POSITIVE_INFINITY;
-      if (stableInside && (!definition.outline || contourDistance > 8)) {
+      if (
+        stableInside &&
+        (!definition.outline || contourDistance > scaledLength(8))
+      ) {
         analyticInteriorPixels += 1;
         if (foreground[index]) analyticInteriorForegroundPixels += 1;
       }

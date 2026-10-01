@@ -962,7 +962,6 @@ mod world {
             .unwrap()
     }
 
-    #[cfg(feature = "gui")]
     #[test]
     fn private_row_assignments_validate_only_the_final_table() {
         use crate::components::Scalar;

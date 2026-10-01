@@ -44,7 +44,6 @@ pub struct PublishedRenderItem {
     pub incarnation: u64,
     /// Owned custom policy and resolved property values.
     pub custom: Option<PublishedCustomMaterial>,
-    #[cfg(feature = "skeletal-animation")]
     /// Owned final skin palette, independent of later pose evaluation.
     pub palette: Option<Vec<[f32; 16]>>,
 }
@@ -92,7 +91,6 @@ impl RenderSystem {
         for item in &self.state.items {
             let record = &world.world.state.entities[&item.entity];
             let component = ComponentValue::MESH_INSTANCE;
-            #[cfg(feature = "particles")]
             let component = if let Some(particle) = item.particle {
                 if particle.sprite {
                     ComponentValue::PARTICLE_SPRITE
@@ -112,7 +110,6 @@ impl RenderSystem {
             if let Some(texture) = item.texture {
                 output.retain(AssetKey::from_u64(texture.asset));
             }
-            #[cfg(feature = "mesh-poses")]
             if let Some((pose, _)) = item.pose {
                 output.retain(AssetKey::from_u64(pose.asset));
             }
@@ -158,7 +155,6 @@ impl RenderSystem {
                 item: *item,
                 incarnation,
                 custom,
-                #[cfg(feature = "skeletal-animation")]
                 palette: world.skin_palette(item.entity).map(<[_]>::to_vec),
             });
         }

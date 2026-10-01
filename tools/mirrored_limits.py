@@ -67,8 +67,8 @@ RUST_DEFINITION = re.compile(
 # (file, pattern, Rust file, Rust pattern); each pattern captures one numeric expression.
 VERIFIED_COPIES = (
     (
-        "packages/ipp-client/src/host-protocol.ts",
-        r"const HOST_MESSAGE_BYTES = ([\d_]+);",
+        "packages/ipp-client/src/host-contract.ts",
+        r"export const HOST_MESSAGE_BYTES = ([\d_]+);",
         "crates/ipp-protocol/src/lib.rs",
         r"pub const MAX_MESSAGE_BYTES: usize = ([\d_]+);",
     ),
@@ -89,6 +89,12 @@ VERIFIED_COPIES = (
         r"const maxPresentationSources = Math\.floor\(([^;]+)\);",
         "crates/ipp-protocol/src/presentation.rs",
         r"pub const MAX_PRESENTATION_SOURCES: usize = ([^;]+);",
+    ),
+    (
+        "packages/ipp-client/src/host-presentation.ts",
+        r"const captureChunkBytes = ([\d_]+);",
+        "crates/ipp-protocol/src/lib.rs",
+        r"pub const MAX_FIELD_BYTES: usize = ([\d_]+);",
     ),
     (
         "packages/ipp-client/src/world-persistence-client.ts",

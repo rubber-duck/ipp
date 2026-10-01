@@ -5,7 +5,6 @@ use super::super::frame_scratch::RenderFrameScratch;
 use super::super::frame_statistics::RenderFrameWork;
 use super::super::scene::{RenderEntity, RenderScene, SceneItem};
 use super::super::shader::RenderShaderConfig;
-#[cfg(feature = "particles")]
 use super::prepared_model;
 use super::{RenderError, RenderService, prepared_normal};
 use crate::RenderDevice;
@@ -20,7 +19,6 @@ impl<D: RenderDevice> RenderService<D> {
         }
     }
 
-    #[cfg(feature = "shadows")]
     pub(super) fn prepare_shadow_storage(
         &mut self,
         lighting: &mut super::super::light_selection::PreparedLighting,
@@ -52,7 +50,6 @@ impl<D: RenderDevice> RenderService<D> {
         Ok(())
     }
 
-    #[cfg(feature = "shadows")]
     pub(super) fn draw_shadow_map(
         &mut self,
         world: &RenderScene<'_>,
@@ -62,16 +59,13 @@ impl<D: RenderDevice> RenderService<D> {
         stats: &mut RenderFrameWork,
         scratch: &mut RenderFrameScratch,
     ) -> Result<(), RenderError> {
-        #[cfg(feature = "profiling")]
+        #[cfg(feature = "instrumentation")]
         let _allocation_scope = ipp_core::profiling::AllocationScope::new(226, "gl.shadow-pass");
 
-        #[cfg(any(test, feature = "diagnostics"))]
-        {
-            stats.statistics.shadow_resident_bytes = self
-                .shadow_map_size
-                .saturating_mul(self.shadow_map_size)
-                .saturating_mul(4);
-        }
+        stats.statistics.shadow_resident_bytes = self
+            .shadow_map_size
+            .saturating_mul(self.shadow_map_size)
+            .saturating_mul(4);
 
         let frames = &lighting.shadows;
         scratch.shadow_queries.clear();
@@ -110,7 +104,6 @@ impl<D: RenderDevice> RenderService<D> {
             }
             let unbounded =
                 custom.is_some_and(|m| m.custom_vertex && !m.material.conservative_bounds);
-            #[cfg(feature = "particles")]
             if item.particle.is_some() {
                 for (view, frustum) in scratch.shadow_frusta.iter().enumerate() {
                     scratch.shadow_visibility[view * items.len() + item_index] = unbounded
@@ -141,7 +134,6 @@ impl<D: RenderDevice> RenderService<D> {
         Ok(())
     }
 
-    #[cfg(feature = "shadows")]
     fn draw_shadow_view(
         &mut self,
         world: &RenderScene<'_>,
@@ -172,7 +164,6 @@ impl<D: RenderDevice> RenderService<D> {
                 stats.failed_draw();
                 continue;
             };
-            #[cfg(feature = "mesh-poses")]
             let _target = match self.pose_data(world, item)? {
                 Some(target) => {
                     let Some(gpu) = target.gpu()? else {
@@ -184,11 +175,8 @@ impl<D: RenderDevice> RenderService<D> {
                 None => None,
             };
             let config = RenderShaderConfig::default();
-            #[cfg(feature = "skeletal-animation")]
             let config = config.with_skinning(item.skinned);
-            #[cfg(feature = "mesh-poses")]
             let config = config.with_mesh_pose(item.pose.is_some());
-            #[cfg(feature = "particles")]
             let config = config.with_particles(item.particle.is_some(), false);
             if custom.is_none() && self.builtin_program(world, config, true).is_none() {
                 continue;
@@ -207,7 +195,6 @@ impl<D: RenderDevice> RenderService<D> {
         );
         let result = begin.and_then(|()| {
             let mut casters = scratch.casters.iter().peekable();
-            #[cfg_attr(not(feature = "particles"), allow(clippy::while_let_on_iterator))]
             while let Some(caster) = casters.next() {
                 let item = &items[caster.item];
                 let config = caster.config;
@@ -218,14 +205,11 @@ impl<D: RenderDevice> RenderService<D> {
                     .and_then(|r| r.data()?.as_any().downcast_ref::<GlMeshData<D>>())
                     .ok_or(RenderError::MissingMesh)?;
                 let gpu = data.gpu()?.ok_or(RenderError::MissingMesh)?;
-                #[cfg(feature = "mesh-poses")]
                 let target = self.pose_data(world, item)?;
-                #[cfg(feature = "mesh-poses")]
                 let target = match target {
                     Some(target) => Some(target.gpu()?.ok_or(RenderError::MissingMesh)?),
                     None => None,
                 };
-                #[cfg(feature = "particles")]
                 let model = {
                     if item.particle.is_some() {
                         scratch.instances.clear();
@@ -251,8 +235,6 @@ impl<D: RenderDevice> RenderService<D> {
                     }
                     prepared_model(item)
                 };
-                #[cfg(not(feature = "particles"))]
-                let model = &item.model;
                 let custom = customs.get(&item.entity);
                 let program = if let Some(custom) = custom {
                     self.upload_custom_material(world, custom, true)?;
@@ -272,7 +254,6 @@ impl<D: RenderDevice> RenderService<D> {
                     )?;
                     let _ = custom;
                 }
-                #[cfg(feature = "skeletal-animation")]
                 if item.skinned
                     && let Some(palette) = item.published.palette.as_deref()
                 {
@@ -285,14 +266,10 @@ impl<D: RenderDevice> RenderService<D> {
                     &gpu,
                     &camera::multiply(matrix, *model),
                     &[1.0; 3],
-                    #[cfg(feature = "mesh-poses")]
                     target.as_deref().zip(item.pose.map(|(_, weight)| weight)),
                     None,
                 )?;
-                #[cfg(any(test, feature = "diagnostics"))]
-                {
-                    stats.statistics.shadow_draw_calls += 1;
-                }
+                stats.statistics.shadow_draw_calls += 1;
             }
             Ok(())
         });

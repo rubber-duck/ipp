@@ -6,7 +6,6 @@ use std::cell::Cell;
 #[derive(Default)]
 pub(super) struct GlesSubmissionState {
     pub epoch: Cell<u64>,
-    #[cfg(feature = "shadows")]
     pub shadow_texture: Cell<Option<u32>>,
     program: Cell<Option<u32>>,
     vertex_array: Cell<Option<u32>>,
@@ -18,7 +17,6 @@ pub(super) struct GlesSubmissionState {
 impl GlesSubmissionState {
     pub(super) fn invalidate(&self) {
         self.epoch.set(self.epoch.get().wrapping_add(1));
-        #[cfg(feature = "shadows")]
         self.shadow_texture.set(None);
         self.program.set(None);
         self.vertex_array.set(None);

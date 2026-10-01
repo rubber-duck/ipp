@@ -40,11 +40,11 @@
       {
         "name": "native",
         "command": ["@node", "--test", "target/composed-queries/composed-queries.test.js"],
-        "builds": ["composed-query-fixtures"], "requirements": ["node", "npm", "rust"]
+        "builds": ["composed-query-fixtures"], "requirements": ["node", "npm"]
       },
       {
         "name": "navigation",
-        "command": ["cargo", "test", "-p", "ipp-host-session", "-p", "ipp-protocol", "--no-default-features", "--lib", "--locked", "camera"],
+        "command": ["cargo", "test", "-p", "ipp-host-session", "-p", "ipp-protocol", "--lib", "--locked", "camera"],
         "builds": [], "requirements": ["rust"]
       },
       {
@@ -54,17 +54,17 @@
       },
       {
         "name": "core",
-        "command": ["cargo", "test", "-p", "ipp-core", "--no-default-features", "--features", "gui", "--test", "composed_queries", "--test", "view_queries", "--test", "camera_publication", "--locked"],
+        "command": ["cargo", "test", "-p", "ipp-core", "--test", "composed_queries", "--test", "view_queries", "--test", "camera_publication", "--locked"],
         "builds": [], "requirements": ["rust"]
       },
       {
         "name": "lint",
-        "command": ["cargo", "clippy", "-p", "ipp-core", "--no-default-features", "--features", "gui", "--lib", "--test", "composed_queries", "--locked", "--", "-D", "warnings"],
+        "command": ["cargo", "clippy", "-p", "ipp-core", "--lib", "--test", "composed_queries", "--locked", "--", "-D", "warnings"],
         "builds": [], "requirements": ["rust"]
       },
       {
-        "name": "lean-lint",
-        "command": ["cargo", "clippy", "-p", "ipp-core", "-p", "ipp-host-session", "-p", "ipp-protocol", "-p", "ipp-render-gl", "--no-default-features", "--lib", "--locked", "--", "-D", "warnings"],
+        "name": "lint-libraries",
+        "command": ["cargo", "clippy", "-p", "ipp-core", "-p", "ipp-host-session", "-p", "ipp-protocol", "-p", "ipp-render-gl", "--lib", "--locked", "--", "-D", "warnings"],
         "builds": [], "requirements": ["rust"]
       }
     ]
@@ -87,34 +87,13 @@
     ],
     "commands": [
       {
-        "name": "lean",
+        "name": "lib",
         "command": [
           "cargo",
           "test",
           "-p",
           "ipp-render-gl",
           "--lib",
-          "--no-default-features",
-          "--features",
-          "diagnostics",
-          "--locked"
-        ],
-        "builds": [],
-        "requirements": [
-          "rust"
-        ]
-      },
-      {
-        "name": "expanded",
-        "command": [
-          "cargo",
-          "test",
-          "-p",
-          "ipp-render-gl",
-          "--lib",
-          "--no-default-features",
-          "--features",
-          "gui,shadows,skeletal-animation,mesh-poses,particles,diagnostics",
           "--locked"
         ],
         "builds": [],
@@ -132,18 +111,16 @@
           "--lib",
           "--target",
           "wasm32-unknown-unknown",
-          "--no-default-features",
-          "--features",
-          "gui,shadows,skeletal-animation,mesh-poses,particles,diagnostics",
           "--locked"
         ],
         "builds": [],
         "requirements": [
-          "rust"
+          "rust",
+          "wasm"
         ]
       },
       {
-        "name": "root-lean",
+        "name": "root",
         "command": [
           "cargo",
           "test",
@@ -151,28 +128,6 @@
           "ipp-render-gl",
           "--test",
           "publication_rendering",
-          "--no-default-features",
-          "--features",
-          "diagnostics",
-          "--locked"
-        ],
-        "builds": [],
-        "requirements": [
-          "rust"
-        ]
-      },
-      {
-        "name": "root-expanded",
-        "command": [
-          "cargo",
-          "test",
-          "-p",
-          "ipp-render-gl",
-          "--test",
-          "publication_rendering",
-          "--no-default-features",
-          "--features",
-          "gui,shadows,skeletal-animation,mesh-poses,particles,diagnostics",
           "--locked"
         ],
         "builds": [],
@@ -189,9 +144,8 @@
           "ipp-render-gl",
           "--test",
           "mesh_residency",
-          "--no-default-features",
           "--features",
-          "shadows,diagnostics",
+          "instrumentation",
           "--locked"
         ],
         "builds": [],
@@ -200,16 +154,15 @@
         ]
       },
       {
-        "name": "targets-lean",
+        "name": "targets",
         "command": [
           "cargo",
           "check",
           "-p",
           "ipp-render-gl",
           "--all-targets",
-          "--no-default-features",
           "--features",
-          "diagnostics",
+          "instrumentation",
           "--locked"
         ],
         "builds": [],
@@ -218,52 +171,15 @@
         ]
       },
       {
-        "name": "targets-expanded",
-        "command": [
-          "cargo",
-          "check",
-          "-p",
-          "ipp-render-gl",
-          "--all-targets",
-          "--no-default-features",
-          "--features",
-          "gui,shadows,skeletal-animation,mesh-poses,particles,diagnostics",
-          "--locked"
-        ],
-        "builds": [],
-        "requirements": [
-          "rust"
-        ]
-      },
-      {
-        "name": "clippy-lean",
+        "name": "clippy",
         "command": [
           "cargo",
           "clippy",
           "-p",
           "ipp-render-gl",
           "--all-targets",
-          "--no-default-features",
           "--features",
-          "diagnostics",
-          "--locked"
-        ],
-        "builds": [],
-        "requirements": [
-          "rust"
-        ]
-      },
-      {
-        "name": "clippy-expanded",
-        "command": [
-          "cargo",
-          "clippy",
-          "-p",
-          "ipp-render-gl",
-          "--all-targets",
-          "--no-default-features",
-          "--features",
-          "gui,shadows,skeletal-animation,mesh-poses,particles,diagnostics",
+          "instrumentation",
           "--locked"
         ],
         "builds": [],
@@ -280,7 +196,6 @@
           "ipp-core",
           "--test",
           "debug_geometry",
-          "--no-default-features",
           "--locked"
         ],
         "builds": [],
@@ -299,9 +214,6 @@
           "geometry_runtime",
           "--test",
           "skeleton",
-          "--no-default-features",
-          "--features",
-          "skeletal-animation,builtin-assets",
           "--locked"
         ],
         "builds": [],
@@ -318,7 +230,6 @@
           "ipp-core",
           "--test",
           "debug_geometry",
-          "--no-default-features",
           "--locked",
           "--",
           "-D",
@@ -330,7 +241,7 @@
         ]
       },
       {
-        "name": "scene-core-lean",
+        "name": "scene-core",
         "command": [
           "cargo",
           "test",
@@ -340,28 +251,6 @@
           "attachment_placement",
           "--test",
           "host_composition",
-          "--no-default-features",
-          "--locked"
-        ],
-        "builds": [],
-        "requirements": [
-          "rust"
-        ]
-      },
-      {
-        "name": "scene-core-surfaces",
-        "command": [
-          "cargo",
-          "test",
-          "-p",
-          "ipp-core",
-          "--test",
-          "attachment_placement",
-          "--test",
-          "host_composition",
-          "--no-default-features",
-          "--features",
-          "surfaces",
           "--locked"
         ],
         "builds": [],
@@ -378,9 +267,6 @@
           "ipp-core",
           "--test",
           "attachment_placement",
-          "--no-default-features",
-          "--features",
-          "surfaces",
           "--locked",
           "--",
           "-D",
@@ -400,9 +286,6 @@
           "ipp-render-gl",
           "--lib",
           "canvas_scene::tests",
-          "--no-default-features",
-          "--features",
-          "surfaces,diagnostics",
           "--locked"
         ],
         "builds": [],
@@ -472,8 +355,6 @@
           "-p",
           "ipp-core",
           "--release",
-          "--features",
-          "gui,diagnostics",
           "--test",
           "gui_entity_scaling",
           "--locked",
@@ -583,7 +464,7 @@
       {
         "name": "viewer",
         "command": ["@node", "--test", "--test-concurrency=1", "target/blender-test/blender.test.js"],
-        "builds": ["blender-viewer", "blender-addon", "blender-fixtures"],
+        "builds": ["blender-viewer", "blender-viewer-instrumentation", "blender-addon", "blender-fixtures"],
         "requirements": ["node", "npm", "browser", "blender", "certificates"]
       },
       {
@@ -619,7 +500,7 @@
     "commands": [{
       "name": "transports",
       "command": ["@node", "--test", "target/blender-headless/blender-headless.test.js"],
-      "builds": ["world-hosts", "browser:render-expanded", "blender-headless-fixtures"],
+      "builds": ["world-hosts", "browser:render", "blender-headless-fixtures"],
       "requirements": ["node", "npm", "browser"]
     }]
   },
@@ -629,7 +510,7 @@
     "commands": [{
       "name": "disk",
       "command": ["@node", "--test", "target/blender-headless/blender-disk-headless.test.js"],
-      "builds": ["browser:render-expanded", "blender-headless-fixtures"],
+      "builds": ["browser:render", "blender-headless-fixtures"],
       "requirements": ["node", "npm", "browser", "blender"]
     }]
   },
@@ -654,7 +535,7 @@
     ]
   },
   "rust": {
-    "description": "Default, minimal and expanded Rust workspace tests",
+    "description": "Production and all-features Rust workspace tests",
     "commands": [
       {
         "name": "default",
@@ -671,22 +552,7 @@
         ]
       },
       {
-        "name": "minimal",
-        "command": [
-          "cargo",
-          "test",
-          "--workspace",
-          "--no-default-features",
-          "--no-fail-fast",
-          "--locked"
-        ],
-        "builds": [],
-        "requirements": [
-          "rust"
-        ]
-      },
-      {
-        "name": "expanded",
+        "name": "all-features",
         "command": [
           "cargo",
           "test",
@@ -745,19 +611,19 @@
       },
       {
         "name": "rows",
-        "command": ["cargo", "test", "-p", "ipp-core", "--no-default-features", "--test", "schema_rows", "--locked"],
+        "command": ["cargo", "test", "-p", "ipp-core", "--test", "schema_rows", "--locked"],
         "builds": [],
         "requirements": ["rust"]
       },
       {
         "name": "row-lifetimes",
-        "command": ["cargo", "test", "-p", "ipp-core", "--no-default-features", "--lib", "components::rows::", "--locked"],
+        "command": ["cargo", "test", "-p", "ipp-core", "--lib", "components::rows::", "--locked"],
         "builds": [],
         "requirements": ["rust"]
       },
       {
         "name": "lint",
-        "command": ["cargo", "clippy", "-p", "ipp-schema-gen", "-p", "ipp-protocol", "--all-targets", "--no-default-features", "--features", "schema-export,gui", "--locked", "--", "-D", "warnings"],
+        "command": ["cargo", "clippy", "-p", "ipp-schema-gen", "-p", "ipp-protocol", "--all-targets", "--locked", "--", "-D", "warnings"],
         "builds": [],
         "requirements": ["rust"]
       }
@@ -801,8 +667,6 @@
           "test",
           "-p",
           "ipp-core",
-          "--features",
-          "gui,skeletal-animation",
           "--test",
           "world_persistence",
           "--locked"
@@ -819,8 +683,6 @@
           "test",
           "-p",
           "ipp-core",
-          "--features",
-          "gui,skeletal-animation",
           "--lib",
           "services::world_serialization::",
           "--locked"
@@ -893,7 +755,7 @@
     "commands": [
       {
         "name": "host-wire",
-        "command": ["cargo", "test", "-p", "ipp-host-session", "--no-default-features", "--lib", "--locked", "services::presentation::tests::"],
+        "command": ["cargo", "test", "-p", "ipp-host-session", "--lib", "--locked", "services::presentation::tests::"],
         "builds": [],
         "requirements": ["rust"]
       },
@@ -907,9 +769,30 @@
           "target/multiplex-tests/presentation.test.js"
         ],
         "builds": [
-          "browser:render-surfaces",
+          "browser:render-instrumentation",
           "transport-fixtures"
         ],
+        "partitionExcludes": ["target/browser-build/render", "target/gles-host-instrumentation"],
+        "requirements": [
+          "node",
+          "npm",
+          "browser"
+        ]
+      },
+      {
+        "name": "webgl-production",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "production WebGL render distribution",
+          "target/multiplex-tests/presentation.test.js"
+        ],
+        "builds": [
+          "browser:render",
+          "transport-fixtures"
+        ],
+        "partitionExcludes": ["target/browser-build/render-instrumentation", "target/gles-host-instrumentation"],
         "requirements": [
           "node",
           "npm",
@@ -926,9 +809,10 @@
           "target/multiplex-tests/presentation.test.js"
         ],
         "builds": [
-          "gles-hosts",
+          "gles-host-instrumentation",
           "transport-fixtures"
         ],
+        "partitionExcludes": ["target/browser-build/render", "target/browser-build/render-instrumentation"],
         "requirements": [
           "node",
           "npm",
@@ -959,26 +843,29 @@
     "commands": [
       {
         "name": "lint",
-        "command": ["cargo", "clippy", "-p", "ipp-render-gl", "--no-default-features", "--features", "gui,diagnostics", "--lib", "--test", "publication_rendering", "--test", "surface_cache", "--locked", "--", "-D", "warnings"],
+        "command": ["cargo", "clippy", "-p", "ipp-render-gl", "--features", "instrumentation", "--lib", "--test", "publication_rendering", "--test", "surface_cache", "--locked", "--", "-D", "warnings"],
         "builds": [],
         "requirements": ["rust"]
       },
       {
         "name": "development",
         "command": ["@node", "--test", "--test-name-pattern", "development", "target/multiplex-tests/output-inclusion.test.js"],
-        "builds": ["browser:headless-gui", "transport-fixtures"],
+        "builds": ["browser:render", "transport-fixtures"],
+        "partitionExcludes": ["target/gles-host"],
         "requirements": ["node", "npm", "browser"]
       },
       {
         "name": "production",
         "command": ["@node", "--test", "--test-name-pattern", "production", "target/multiplex-tests/output-inclusion.test.js"],
-        "builds": ["browser:headless-gui", "transport-fixtures"],
+        "builds": ["browser:render", "transport-fixtures"],
+        "partitionExcludes": ["target/gles-host"],
         "requirements": ["node", "npm", "browser"]
       },
       {
         "name": "native",
         "command": ["@node", "--test", "--test-name-pattern", "native", "target/multiplex-tests/output-inclusion.test.js"],
-        "builds": ["gles-hosts", "transport-fixtures"],
+        "builds": ["gles-host", "transport-fixtures"],
+        "partitionExcludes": ["target/browser-build/render"],
         "requirements": ["node", "npm", "browser", "gles"]
       }
     ]
@@ -994,19 +881,22 @@
       {
         "name": "development",
         "command": ["@node", "--test", "--test-name-pattern", "development", "target/gui-motion/environment.test.js"],
-        "builds": ["browser:headless-gui", "gui-motion-fixtures"],
+        "builds": ["browser:render", "gui-motion-fixtures"],
+        "partitionExcludes": ["target/gles-host"],
         "requirements": ["node", "npm", "browser"]
       },
       {
         "name": "production",
         "command": ["@node", "--test", "--test-name-pattern", "production", "target/gui-motion/environment.test.js"],
-        "builds": ["browser:headless-gui", "gui-motion-fixtures"],
+        "builds": ["browser:render", "gui-motion-fixtures"],
+        "partitionExcludes": ["target/gles-host"],
         "requirements": ["node", "npm", "browser"]
       },
       {
         "name": "native",
         "command": ["@node", "--test", "--test-name-pattern", "native", "target/gui-motion/environment.test.js"],
-        "builds": ["gles-hosts", "gui-motion-fixtures"],
+        "builds": ["gles-host", "gui-motion-fixtures"],
+        "partitionExcludes": ["target/browser-build/render"],
         "requirements": ["node", "npm", "browser", "gles"]
       }
     ]
@@ -1051,31 +941,31 @@
     "commands": [
       {
         "name": "lint-native",
-        "command": ["cargo", "clippy", "-p", "ipp-core", "-p", "ipp-protocol", "-p", "ipp-host-session", "-p", "ipp-server", "--no-default-features", "--features", "ipp-server/websocket,ipp-server/gui", "--lib", "--locked", "--", "-D", "warnings"],
+        "command": ["cargo", "clippy", "-p", "ipp-core", "-p", "ipp-protocol", "-p", "ipp-host-session", "-p", "ipp-server", "--lib", "--locked", "--", "-D", "warnings"],
         "builds": [],
         "requirements": ["rust"]
       },
       {
         "name": "lint-wasm",
-        "command": ["cargo", "clippy", "-p", "ipp-wasm", "--no-default-features", "--features", "gui", "--target", "wasm32-unknown-unknown", "--lib", "--locked", "--", "-D", "warnings"],
+        "command": ["cargo", "clippy", "-p", "ipp-wasm", "--target", "wasm32-unknown-unknown", "--lib", "--locked", "--", "-D", "warnings"],
         "builds": [],
         "requirements": ["rust", "wasm"]
       },
       {
         "name": "native-output",
-        "command": ["cargo", "test", "-p", "ipp-server", "--no-default-features", "--features", "websocket,gui", "--lib", "--locked", "websocket::"],
+        "command": ["cargo", "test", "-p", "ipp-server", "--lib", "--locked", "websocket::"],
         "builds": [],
         "requirements": ["rust"]
       },
       {
         "name": "wasm-output",
-        "command": ["cargo", "test", "-p", "ipp-wasm", "--no-default-features", "--features", "gui", "--lib", "--locked", "--", "boundary::output_tests::", "wasm_host_tests::"],
+        "command": ["cargo", "test", "-p", "ipp-wasm", "--lib", "--locked", "--", "boundary::output_tests::", "wasm_host_tests::"],
         "builds": [],
         "requirements": ["rust"]
       },
       {
         "name": "host",
-        "command": ["cargo", "test", "-p", "ipp-host-session", "--no-default-features", "--features", "gui", "--lib", "--locked"],
+        "command": ["cargo", "test", "-p", "ipp-host-session", "--lib", "--locked"],
         "builds": [],
         "requirements": ["rust"]
       },
@@ -1101,9 +991,10 @@
           "target/multiplex-tests/gui-local.test.js"
         ],
         "builds": [
-          "gui-host",
+          "native",
           "transport-fixtures"
         ],
+        "partitionExcludes": ["target/browser-build/headless"],
         "requirements": [
           "node",
           "npm"
@@ -1119,7 +1010,7 @@
           "target/multiplex-tests/gui-local.test.js"
         ],
         "builds": [
-          "browser:semantic-gui",
+          "browser:headless",
           "transport-fixtures"
         ],
         "requirements": [
@@ -1131,13 +1022,14 @@
       {
         "name": "control-persistence-native",
         "command": ["@node", "--test", "--test-name-pattern", "native", "target/multiplex-tests/gui-control-persistence.test.js"],
-        "builds": ["gui-host", "transport-fixtures"],
+        "builds": ["native", "transport-fixtures"],
+        "partitionExcludes": ["target/browser-build/headless"],
         "requirements": ["node", "npm"]
       },
       {
         "name": "control-persistence-worker",
         "command": ["@node", "--test", "--test-name-pattern", "worker", "target/multiplex-tests/gui-control-persistence.test.js"],
-        "builds": ["browser:semantic-gui", "transport-fixtures"],
+        "builds": ["browser:headless", "transport-fixtures"],
         "requirements": ["node", "npm", "browser"]
       }
     ]
@@ -1172,59 +1064,35 @@
         "name": "targets-native",
         "command": ["@node", "--test", "--test-name-pattern=native lifecycle target", "target/multiplex-tests/lifecycle-targets.test.js"],
         "builds": ["world-hosts", "transport-fixtures"],
-        "requirements": ["node", "npm", "rust", "wasm"]
+        "requirements": ["node", "npm"]
       },
       {
         "name": "targets-worker",
         "command": ["@node", "--test", "--test-name-pattern=worker lifecycle targets", "target/multiplex-tests/lifecycle-targets.test.js"],
         "builds": ["world-hosts", "transport-fixtures"],
-        "requirements": ["node", "npm", "rust", "wasm", "browser"]
+        "requirements": ["node", "npm", "browser"]
       },
       {
         "name": "host-accounting",
-        "command": ["cargo", "test", "-p", "ipp-host-session", "--no-default-features", "--lib", "--locked", "lifecycle_watch::tests::", "--", "--show-output"],
-        "builds": [],
-        "requirements": ["rust"]
-      },
-      {
-        "name": "diagnostics-host",
-        "command": ["cargo", "test", "-p", "ipp-host-session", "--no-default-features", "--features", "diagnostics", "--lib", "--locked", "lifecycle_watch::tests::", "--", "--show-output"],
-        "builds": [],
-        "requirements": ["rust"]
-      },
-      {
-        "name": "diagnostics-protocol",
-        "command": ["cargo", "test", "-p", "ipp-protocol", "--no-default-features", "--features", "diagnostics", "--lib", "--locked"],
+        "command": ["cargo", "test", "-p", "ipp-host-session", "--lib", "--locked", "lifecycle_watch::tests::", "--", "--show-output"],
         "builds": [],
         "requirements": ["rust"]
       },
       {
         "name": "diagnostics-transports",
         "command": ["@node", "--test", "--test-name-pattern=diagnostic lifecycle", "target/multiplex-tests/lifecycle-targets.test.js"],
-        "builds": ["lifecycle-diagnostics-hosts", "transport-fixtures"],
-        "requirements": ["node", "npm", "rust", "wasm", "browser"]
+        "builds": ["world-hosts", "transport-fixtures"],
+        "requirements": ["node", "npm", "browser"]
       },
       {
         "name": "diagnostics-codecs",
         "command": ["@node", "--test", "crates/ipp-protocol/tests/lifecycle-diagnostics-client.mjs"],
-        "builds": ["lifecycle-diagnostics-hosts", "world-hosts"],
-        "requirements": ["node", "npm", "rust", "wasm"]
+        "builds": ["world-hosts"],
+        "requirements": ["node", "npm"]
       },
       {
-        "name": "diagnostics-lint-native",
-        "command": ["cargo", "clippy", "-p", "ipp-host-session", "-p", "ipp-protocol", "-p", "ipp-schema-gen", "--all-targets", "--no-default-features", "--features", "ipp-host-session/diagnostics,ipp-protocol/diagnostics", "--locked", "--", "-D", "warnings"],
-        "builds": [],
-        "requirements": ["rust"]
-      },
-      {
-        "name": "diagnostics-lint-wasm",
-        "command": ["cargo", "clippy", "-p", "ipp-wasm", "--lib", "--target", "wasm32-unknown-unknown", "--no-default-features", "--features", "diagnostics", "--locked", "--", "-D", "warnings"],
-        "builds": [],
-        "requirements": ["rust", "wasm"]
-      },
-      {
-        "name": "protocol-lean",
-        "command": ["cargo", "test", "-p", "ipp-protocol", "--no-default-features", "--lib", "--locked"],
+        "name": "protocol",
+        "command": ["cargo", "test", "-p", "ipp-protocol", "--lib", "--locked"],
         "builds": [],
         "requirements": ["rust"]
       },
@@ -1232,7 +1100,7 @@
         "name": "target-codecs",
         "command": ["@node", "--test", "crates/ipp-protocol/tests/lifecycle-target-client.mjs"],
         "builds": ["world-hosts"],
-        "requirements": ["node", "npm", "rust", "wasm"]
+        "requirements": ["node", "npm"]
       },
       {
         "name": "manifest-codec",
@@ -1247,25 +1115,25 @@
         "requirements": ["node", "npm"]
       },
       {
-        "name": "core-lean",
-        "command": ["cargo", "test", "-p", "ipp-core", "--no-default-features", "--lib", "--locked", "--", "world::systems::lifecycle_publisher::"],
+        "name": "core",
+        "command": ["cargo", "test", "-p", "ipp-core", "--lib", "--locked", "--", "world::systems::lifecycle_publisher::"],
         "builds": [],
         "requirements": ["rust"]
       },
       {
-        "name": "core-expanded",
+        "name": "core-all-features",
         "command": ["cargo", "test", "-p", "ipp-core", "--all-features", "--lib", "--locked", "--", "world::systems::lifecycle_publisher::"],
         "builds": [],
         "requirements": ["rust"]
       },
       {
-        "name": "lint-lean",
-        "command": ["cargo", "clippy", "-p", "ipp-core", "--all-targets", "--no-default-features", "--locked", "--", "-D", "warnings"],
+        "name": "lint",
+        "command": ["cargo", "clippy", "-p", "ipp-core", "--all-targets", "--locked", "--", "-D", "warnings"],
         "builds": [],
         "requirements": ["rust"]
       },
       {
-        "name": "lint-expanded",
+        "name": "lint-all-features",
         "command": ["cargo", "clippy", "-p", "ipp-core", "--all-targets", "--all-features", "--locked", "--", "-D", "warnings"],
         "builds": [],
         "requirements": ["rust"]
@@ -1284,7 +1152,7 @@
       },
       {
         "name": "asset-reference-fields",
-        "command": ["cargo", "test", "-p", "ipp-core", "--no-default-features", "--lib", "components::", "--locked"],
+        "command": ["cargo", "test", "-p", "ipp-core", "--lib", "components::", "--locked"],
         "builds": [],
         "requirements": ["rust"]
       },
@@ -1361,8 +1229,6 @@
           "test",
           "-p",
           "ipp-core",
-          "--features",
-          "gui",
           "--test",
           "animation_row_properties",
           "--locked"
@@ -1429,19 +1295,21 @@
       {
         "name": "worker",
         "command": ["@node", "--test", "--test-name-pattern=through worker WASM", "target/react-gui-authoring/gui-authoring.test.js"],
-        "builds": ["react-gui-authoring", "browser:headless-gui"],
+        "builds": ["react-gui-authoring", "browser:render"],
         "requirements": ["node", "npm", "browser"]
       },
       {
         "name": "webgl",
         "command": ["@node", "target/react-gui-authoring/gui-paint.test.js", "--backend", "webgl"],
-        "builds": ["react-gui-authoring", "browser:headless-gui", "surface-assets"],
+        "builds": ["react-gui-authoring", "browser:render", "surface-assets"],
+        "partitionExcludes": ["target/gles-host"],
         "requirements": ["node", "npm", "browser"]
       },
       {
         "name": "gles",
         "command": ["@node", "target/react-gui-authoring/gui-paint.test.js", "--backend", "gles", "--egl-dir", "@egl"],
-        "builds": ["react-gui-authoring", "gles-hosts", "surface-assets"],
+        "builds": ["react-gui-authoring", "gles-host", "surface-assets"],
+        "partitionExcludes": ["target/browser-build/render"],
         "requirements": ["node", "npm", "browser", "gles"]
       }
     ]
@@ -1465,7 +1333,7 @@
       {
         "name": "transports",
         "command": ["@node", "--test", "target/react-attached/attached-world.test.js"],
-        "builds": ["react-attached", "surface-host", "browser:headless-surfaces"],
+        "builds": ["react-attached", "world-hosts", "browser:headless"],
         "requirements": ["node", "npm", "browser"]
       }
     ]
@@ -1491,19 +1359,19 @@
       {
         "name": "dom",
         "command": ["@node", "--test", "target/canvas-build/canvas.test.js", "target/canvas-build/dpi.test.js"],
-        "builds": ["canvas-fixtures", "browser:headless", "browser:render-surfaces"],
+        "builds": ["canvas-fixtures", "browser:headless", "browser:render", "browser:render-instrumentation"],
         "requirements": ["node", "npm", "browser"]
       },
       {
         "name": "controller-webgl",
         "command": ["@node", "target/canvas-build/canvas-controller.test.js", "--backend", "webgl"],
-        "builds": ["canvas-fixtures", "browser:render-surfaces"],
+        "builds": ["canvas-fixtures", "browser:render-instrumentation"],
         "requirements": ["node", "npm", "browser"]
       },
       {
         "name": "controller-gles",
         "command": ["@node", "target/canvas-build/canvas-controller.test.js", "--backend", "gles", "--egl-dir", "@egl"],
-        "builds": ["canvas-fixtures", "gles-hosts"],
+        "builds": ["canvas-fixtures", "gles-host-instrumentation"],
         "requirements": ["node", "npm", "browser", "gles"]
       }
     ]
@@ -1557,18 +1425,9 @@
           "--python",
           "tests/blender/particles_check.py"
         ],
-        "builds": [
-          "typescript",
-          "blender-viewer",
-          "blender-addon",
-          "blender-fixtures"
-        ],
+        "builds": [],
         "requirements": [
-          "node",
-          "npm",
-          "browser",
-          "blender",
-          "certificates"
+          "blender"
         ]
       }
     ],
@@ -1661,8 +1520,6 @@
           "test",
           "-p",
           "ipp-core",
-          "--features",
-          "skeletal-animation",
           "--test",
           "skeleton",
           "--test",
@@ -1781,13 +1638,13 @@
       {
         "name": "native",
         "command": ["@node", "--test", "target/surface-build/lifecycle.test.js"],
-        "builds": ["surface-fixtures", "surface-host"],
+        "builds": ["surface-fixtures", "world-hosts"],
         "requirements": ["node", "npm"]
       },
       {
         "name": "browser",
         "command": ["@node", "--test", "target/surface-build/surface.test.js"],
-        "builds": ["surface-fixtures", "browser:render-surfaces"],
+        "builds": ["surface-fixtures", "browser:render-instrumentation"],
         "requirements": ["node", "npm", "browser"]
       }
     ]
@@ -1816,9 +1673,6 @@
           "test",
           "-p",
           "ipp-core",
-          "--no-default-features",
-          "--features",
-          "gui,diagnostics",
           "--test",
           "gui_skin_motion",
           "--locked"
@@ -1833,8 +1687,6 @@
           "test",
           "-p",
           "ipp-core",
-          "--features",
-          "gui,diagnostics",
           "--test",
           "gui_skin_paint",
           "--locked"
@@ -1849,8 +1701,6 @@
           "test",
           "-p",
           "ipp-core",
-          "--features",
-          "gui",
           "--test",
           "host_systems",
           "--locked",
@@ -1863,32 +1713,12 @@
         ]
       },
       {
-        "name": "manifest-lean",
+        "name": "reliable-output",
         "command": [
           "cargo",
           "test",
           "-p",
           "ipp-core",
-          "--no-default-features",
-          "--test",
-          "host_systems",
-          "--locked",
-          "--",
-          "gui_"
-        ],
-        "builds": [],
-        "requirements": [
-          "rust"
-        ]
-      },
-      {
-        "name": "reliable-output-lean",
-        "command": [
-          "cargo",
-          "test",
-          "-p",
-          "ipp-core",
-          "--no-default-features",
           "--lib",
           "--locked",
           "--",
@@ -1906,9 +1736,6 @@
           "test",
           "-p",
           "ipp-core",
-          "--no-default-features",
-          "--features",
-          "gui",
           "--lib",
           "--locked",
           "--",
@@ -1927,32 +1754,26 @@
       },
       {
         "name": "input-wire",
-        "command": ["cargo", "test", "-p", "ipp-protocol", "--features", "gui", "--lib", "--locked", "wire::tests::"],
+        "command": ["cargo", "test", "-p", "ipp-protocol", "--lib", "--locked", "wire::tests::"],
         "builds": [],
         "requirements": ["rust"]
       },
       {
         "name": "input-codec",
         "command": ["@node", "--experimental-strip-types", "--test", "crates/ipp-protocol/tests/physical-input-client.mjs"],
-        "builds": ["browser:headless-gui", "gles-hosts"],
-        "requirements": ["node", "npm", "rust", "wasm"]
-      },
-      {
-        "name": "input-wire-lean",
-        "command": ["cargo", "test", "-p", "ipp-protocol", "--no-default-features", "--lib", "--locked", "wire::tests::"],
-        "builds": [],
-        "requirements": ["rust"]
+        "builds": ["browser:render", "gles-host"],
+        "requirements": ["node", "npm", "rust"]
       },
       {
         "name": "physical-webgl",
         "command": ["@node", "--test", "--test-name-pattern", "worker WASM/WebGL", "target/multiplex-tests/physical-input.test.js"],
-        "builds": ["browser:headless-gui", "transport-fixtures", "font-assets"],
+        "builds": ["browser:render", "transport-fixtures", "font-assets"],
         "requirements": ["node", "npm", "browser"]
       },
       {
         "name": "physical-gles",
         "command": ["@node", "--test", "--test-name-pattern", "native WebSocket/GLES", "target/multiplex-tests/physical-input.test.js"],
-        "builds": ["gles-hosts", "transport-fixtures", "font-assets"],
+        "builds": ["gles-host", "transport-fixtures", "font-assets"],
         "requirements": ["node", "npm", "browser", "gles"]
       },
       {
@@ -1962,9 +1783,6 @@
           "clippy",
           "-p",
           "ipp-core",
-          "--no-default-features",
-          "--features",
-          "gui",
           "--lib",
           "--locked",
           "--",
@@ -1977,13 +1795,12 @@
         ]
       },
       {
-        "name": "input-foundation-lean",
+        "name": "input-foundation-check",
         "command": [
           "cargo",
           "check",
           "-p",
           "ipp-core",
-          "--no-default-features",
           "--lib",
           "--locked"
         ],
@@ -1999,8 +1816,6 @@
           "test",
           "-p",
           "ipp-core",
-          "--features",
-          "gui,diagnostics",
           "--test",
           "gui_entities",
           "--test",
@@ -2029,8 +1844,6 @@
           "test",
           "-p",
           "ipp-core",
-          "--features",
-          "gui",
           "--lib",
           "--locked",
           "--",
@@ -2051,8 +1864,6 @@
           "test",
           "-p",
           "ipp-protocol",
-          "--features",
-          "gui",
           "--lib",
           "gui::tests::",
           "--locked"
@@ -2130,7 +1941,8 @@
       {
         "name": "browser",
         "command": ["@node", "--test", "target/surface-gui-build/retained-gui.test.js"],
-        "builds": ["surface-gui-fixtures", "browser:render-surfaces", "browser:headless-gui"],
+        "builds": ["surface-gui-fixtures", "browser:render-instrumentation"],
+        "partitionExcludes": ["target/gles-host-instrumentation"],
         "requirements": ["node", "npm", "browser"]
       }
     ]
@@ -2157,38 +1969,38 @@
     "commands": [
       {
         "name": "layout-host",
-        "command": ["cargo", "test", "-p", "ipp-host-session", "--no-default-features", "--features", "gui,diagnostics", "--lib", "--locked", "gui_layout_statistics"],
+        "command": ["cargo", "test", "-p", "ipp-host-session", "--lib", "--locked", "gui_layout_statistics"],
         "builds": [],
         "requirements": ["rust"]
       },
       {
         "name": "layout-wasm-record",
-        "command": ["cargo", "test", "-p", "ipp-wasm", "--no-default-features", "--features", "render,gui,diagnostics", "--lib", "--locked", "services::render_statistics"],
+        "command": ["cargo", "test", "-p", "ipp-wasm", "--features", "render", "--lib", "--locked", "services::render_statistics"],
         "builds": [],
         "requirements": ["rust"]
       },
       {
         "name": "layout-lint-native",
-        "command": ["cargo", "clippy", "-p", "ipp-host-session", "-p", "ipp-server", "--all-targets", "--no-default-features", "--features", "ipp-server/websocket,ipp-server/gui,ipp-server/diagnostics", "--locked", "--", "-D", "warnings"],
+        "command": ["cargo", "clippy", "-p", "ipp-host-session", "-p", "ipp-server", "--all-targets", "--locked", "--", "-D", "warnings"],
         "builds": [],
         "requirements": ["rust"]
       },
       {
         "name": "layout-lint-wasm",
-        "command": ["cargo", "clippy", "-p", "ipp-wasm", "--lib", "--target", "wasm32-unknown-unknown", "--no-default-features", "--features", "render,gui,diagnostics", "--locked", "--", "-D", "warnings"],
+        "command": ["cargo", "clippy", "-p", "ipp-wasm", "--lib", "--target", "wasm32-unknown-unknown", "--features", "render", "--locked", "--", "-D", "warnings"],
         "builds": [],
         "requirements": ["rust", "wasm"]
       },
       {
         "name": "browser",
         "command": ["@node", "--test", "--test-name-pattern=cycles|through browser", "target/gui-stress/gui-stress.test.js"],
-        "builds": ["gui-stress-fixtures", "surface-assets", "browser:headless-gui"],
+        "builds": ["gui-stress-fixtures", "surface-assets", "browser:render"],
         "requirements": ["node", "npm", "browser"]
       },
       {
         "name": "native",
         "command": ["@node", "--test", "--test-name-pattern=through native-gles", "target/gui-stress/gui-stress.test.js"],
-        "builds": ["gui-stress-fixtures", "surface-assets", "gles-hosts"],
+        "builds": ["gui-stress-fixtures", "surface-assets", "gles-host"],
         "requirements": ["node", "npm", "browser", "gles"]
       }
     ]
@@ -2231,8 +2043,6 @@
           "test",
           "-p",
           "ipp-render-gl",
-          "--features",
-          "gui",
           "--lib",
           "surface_cache",
           "--locked"
@@ -2250,26 +2060,7 @@
           "-p",
           "ipp-render-gl",
           "--features",
-          "gui,diagnostics",
-          "--test",
-          "surface_cache",
-          "--locked"
-        ],
-        "builds": [],
-        "requirements": [
-          "rust"
-        ]
-      },
-      {
-        "name": "service-surfaces",
-        "command": [
-          "cargo",
-          "test",
-          "-p",
-          "ipp-render-gl",
-          "--no-default-features",
-          "--features",
-          "surfaces,diagnostics",
+          "instrumentation",
           "--test",
           "surface_cache",
           "--locked"
@@ -2281,14 +2072,14 @@
       },
       {
         "name": "browser-surfaces",
-        "command": ["@node", "--test", "--test-name-pattern=render-surfaces", "target/surface-build/surface-cache.test.js"],
-        "builds": ["surface-fixtures", "browser:render-surfaces"],
+        "command": ["@node", "--test", "--test-name-pattern=^surfaces:", "target/surface-build/surface-cache.test.js"],
+        "builds": ["surface-fixtures", "browser:render-instrumentation"],
         "requirements": ["node", "npm", "browser"]
       },
       {
         "name": "browser-gui",
-        "command": ["@node", "--test", "--test-name-pattern=headless-gui", "target/surface-build/surface-cache.test.js"],
-        "builds": ["surface-gui-fixtures", "browser:headless-gui"],
+        "command": ["@node", "--test", "--test-name-pattern=^gui:", "target/surface-build/surface-cache.test.js"],
+        "builds": ["surface-gui-fixtures", "browser:render-instrumentation"],
         "requirements": ["node", "npm", "browser"]
       }
     ]
@@ -2309,7 +2100,7 @@
           "-p",
           "ipp-render-gl",
           "--features",
-          "gui,shadows,diagnostics",
+          "instrumentation",
           "--test",
           "mesh_residency",
           "--locked"

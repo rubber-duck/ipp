@@ -22,7 +22,7 @@ Start with each world file; neighboring controls implement its HTML inspector.
 | Particles | [world.tsx](worlds/particles/world.tsx) | Live emission, sprite/mesh presentation, appearance changes and lifetime drain |
 | GUI Demo | [scene.tsx](worlds/gui/scene.tsx) | React GUI settings panel in an attached Canvas World: controls, wrapped text, nested scrolling with scroll bars, a virtual event log, an input shield, vector assets and animated skins on a Surface |
 
-[main.tsx](main.tsx) composes worlds and inspectors with `IppCanvas`. Geometry, lighting, particles and the GUI demo share the expanded-render session; changing to or from the saved platformer scene creates a fresh session. Controls retain ordinary React state across navigation. [gallery-controller.ts](gallery-controller.ts) coordinates presentation and camera controls.
+[main.tsx](main.tsx) composes worlds and inspectors with `IppCanvas`. Geometry, lighting, particles and the GUI demo share one render session; changing to or from the saved platformer scene creates a fresh session. Controls retain ordinary React state across navigation. [gallery-controller.ts](gallery-controller.ts) coordinates presentation and camera controls.
 
 The compact toolbar opens a searchable scene picker backed by [scene-catalog.ts](scene-catalog.ts). On wide screens, the current scene controls remain in a collapsible dock. On smaller screens, the Controls button below the canvas opens those same controls in a scrollable modal sheet, preserving their state as the layout changes.
 

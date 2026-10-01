@@ -203,7 +203,6 @@ fn owns_plain_data(command: &Command) -> bool {
         | Command::RemoveComponent {
             ..
         } => true,
-        #[cfg(feature = "gui")]
         Command::GuiAction {
             ..
         } => true,

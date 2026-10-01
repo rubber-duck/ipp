@@ -161,7 +161,6 @@ pub(super) fn render(
     out: &mut String,
     wire: &WireContract,
     rows: &RowLimits,
-    gui: bool,
 ) -> Result<(), String> {
     let message = convention(wire, "max-message-bytes")?
         .parse::<u32>()
@@ -210,12 +209,7 @@ pub(super) fn render(
         "export const COMMAND_PAGE_LIMITS = {{ commands: {page_commands}, bytes: {page_bytes} }} as const;"
     )
     .unwrap();
-    let gui_limits = if gui {
-        GUI_FIELD_LIMITS
-    } else {
-        &[]
-    };
-    for &(name, layout, field, exported) in FIELD_LIMITS.iter().chain(gui_limits) {
+    for &(name, layout, field, exported) in FIELD_LIMITS.iter().chain(GUI_FIELD_LIMITS) {
         let limit = field_limit(wire, layout, field)?;
         let export = if exported {
             "export "
@@ -239,10 +233,8 @@ pub(super) fn render(
 
     out.push_str("/** Host protocol bounds the maintained Host client reads by name. */\n");
     out.push_str("const HOST_LIMITS: Readonly<Record<string, number>> = Object.freeze({");
-    if gui {
-        for &(name, layout, field) in HOST_LIMITS {
-            write!(out, " {name}: {},", field_limit(wire, layout, field)?).unwrap();
-        }
+    for &(name, layout, field) in HOST_LIMITS {
+        write!(out, " {name}: {},", field_limit(wire, layout, field)?).unwrap();
     }
     out.push_str(" });\n");
     Ok(())
@@ -298,7 +290,7 @@ fn magic(hex: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Capabilities, WireEncoding, WireField, WireLayout};
+    use crate::model::{WireEncoding, WireField, WireLayout};
 
     const ROWS: RowLimits = RowLimits {
         region_span: 0x1000_0000,
@@ -318,12 +310,10 @@ mod tests {
         }
 
         let mut wire = WireContract {
-            capabilities: Capabilities::default(),
             conventions: vec![("max-message-bytes".into(), "1048576".into())],
             limits: Vec::new(),
             layouts: vec![WireLayout {
                 name: "value-rows".into(),
-                capability: 0,
                 fields: vec![WireField {
                     name: "value".into(),
                     encoding: WireEncoding::Bytes,
@@ -338,19 +328,18 @@ mod tests {
         assert!(field_limit(&wire, "value-rows", "other").is_err());
         assert!(field_limit(&wire, "snapshot-value-rows", "value").is_err());
         assert_eq!(
-            render(&mut String::new(), &wire, &ROWS, false).unwrap_err(),
+            render(&mut String::new(), &wire, &ROWS).unwrap_err(),
             "target contract omits the lifecycle-preferred-page-members convention"
         );
 
         wire.conventions
             .push(("lifecycle-preferred-page-members".into(), "2".into()));
         assert_eq!(
-            render(&mut String::new(), &wire, &ROWS, false).unwrap_err(),
+            render(&mut String::new(), &wire, &ROWS).unwrap_err(),
             "target contract declares an invalid lifecycle page budget"
         );
         wire.layouts.push(WireLayout {
             name: "lifecycle-watch-add".into(),
-            capability: 0,
             fields: vec![WireField {
                 name: "members".into(),
                 encoding: WireEncoding::List,
@@ -361,14 +350,14 @@ mod tests {
         for invalid in ["0", "3", "invalid"] {
             wire.conventions[1].1 = invalid.into();
             assert_eq!(
-                render(&mut String::new(), &wire, &ROWS, false).unwrap_err(),
+                render(&mut String::new(), &wire, &ROWS).unwrap_err(),
                 "target contract declares an invalid lifecycle page budget"
             );
         }
 
         wire.conventions[1].1 = "2".into();
         assert_eq!(
-            render(&mut String::new(), &wire, &ROWS, false).unwrap_err(),
+            render(&mut String::new(), &wire, &ROWS).unwrap_err(),
             "target contract omits the host-request-magic convention"
         );
 
@@ -377,23 +366,22 @@ mod tests {
             ("host-response-magic".into(), "4950504802000000".into()),
         ]);
         assert_eq!(
-            render(&mut String::new(), &wire, &ROWS, false).unwrap_err(),
+            render(&mut String::new(), &wire, &ROWS).unwrap_err(),
             "target contract omits the command-page-bytes convention"
         );
         wire.conventions
             .push(("command-page-bytes".into(), "2097152".into()));
         assert_eq!(
-            render(&mut String::new(), &wire, &ROWS, false).unwrap_err(),
+            render(&mut String::new(), &wire, &ROWS).unwrap_err(),
             "target contract declares an invalid command page byte limit"
         );
         wire.conventions.last_mut().unwrap().1 = "262144".into();
         assert_eq!(
-            render(&mut String::new(), &wire, &ROWS, false).unwrap_err(),
+            render(&mut String::new(), &wire, &ROWS).unwrap_err(),
             "target contract omits the request-submit-batch.operations bound"
         );
         wire.layouts.push(WireLayout {
             name: "request-submit-batch".into(),
-            capability: 0,
             fields: vec![WireField {
                 name: "operations".into(),
                 encoding: WireEncoding::List,
@@ -402,13 +390,13 @@ mod tests {
             }],
         });
         assert_eq!(
-            render(&mut String::new(), &wire, &ROWS, false).unwrap_err(),
+            render(&mut String::new(), &wire, &ROWS).unwrap_err(),
             "target contract omits the batch-outcome-aliases convention"
         );
 
         wire.conventions[0].1 = "0".into();
         assert_eq!(
-            render(&mut String::new(), &wire, &ROWS, false).unwrap_err(),
+            render(&mut String::new(), &wire, &ROWS).unwrap_err(),
             "target contract declares an invalid message budget"
         );
     }

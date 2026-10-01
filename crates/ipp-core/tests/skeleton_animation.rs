@@ -1,5 +1,4 @@
 //! SkeletonJoint clips share property-player clocks, ordered layers and strict target lifetimes.
-#![cfg(all(feature = "skeletal-animation", feature = "builtin-assets"))]
 
 mod support;
 use support::WorldTestDriver;

@@ -15,10 +15,6 @@ use ipp_core::{
 /// Explicit wire rejection, before any core mutation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProtocolError {
-    /// Fixed protocol version differs.
-    VersionMismatch,
-    /// Target registry/defaults/features/wire identity differs.
-    SchemaMismatch,
     /// Request belongs to another connection.
     SessionMismatch,
     /// A transported World or output token no longer names its exact live lifetime.
@@ -59,7 +55,6 @@ impl Writer {
         self.1.unwrap_or(self.0.len())
     }
 
-    #[cfg(feature = "gui")]
     pub(crate) fn framed(
         &mut self,
         write: impl Fn(&mut Self) -> Result<(), ProtocolError>,

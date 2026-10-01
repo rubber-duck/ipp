@@ -321,12 +321,12 @@ fn attach(boundary: &mut WasmHostBoundary, connection: u64) -> u64 {
 
 fn connect(boundary: &mut WasmHostBoundary, id: u64) -> u64 {
     assert!(boundary.open(id));
-    assert!(send(boundary, &ipp_protocol::bootstrap()));
+    assert!(send(boundary, &ipp_protocol::HELLO));
     assert_eq!(boundary.output_len(), 0);
     assert!(boundary.poll());
     assert_eq!(
         boundary.output(),
-        ipp_protocol::accept_bootstrap(&ipp_protocol::bootstrap(), id).unwrap()
+        ipp_protocol::accept_hello(&ipp_protocol::HELLO, id).unwrap()
     );
     assert!(!boundary.poll());
     assert!(boundary.output_ptr().is_null());
@@ -403,29 +403,28 @@ fn reservation_bounds_exact_lengths_and_single_consumption() {
     assert!(boundary.tick(0.0));
 
     connect(&mut boundary, 2);
-    assert!(!boundary.receive(16)); // Bootstrap reservation was already consumed.
+    assert!(!boundary.receive(16)); // The hello's reservation was already consumed.
     assert!(!boundary.accepts_input());
     assert!(boundary.tick(0.0));
 }
 
 #[test]
-fn bootstrap_and_invalid_wire_fail_closed() {
+fn missing_hello_and_invalid_wire_fail_closed() {
     let mut boundary = WasmHostBoundary::new();
     assert!(boundary.open(1));
-    assert!(boundary.tick(0.1)); // No frame publication before bootstrap.
+    assert!(boundary.tick(0.1)); // No frame publication before the hello.
     assert!(!boundary.poll());
     assert!(!send(&mut boundary, &request(1, 3)));
     assert!(!boundary.accepts_input());
     assert!(boundary.tick(0.0));
 
     assert!(boundary.open(2));
-    let mut mismatch = ipp_protocol::bootstrap();
-    mismatch[8] ^= 1;
-    assert!(!send(&mut boundary, &mismatch));
+    // A schema claim is not this protocol's hello, whatever hash it names.
+    assert!(!send(&mut boundary, &ipp_protocol::announcement()));
     assert!(
         std::str::from_utf8(boundary.output())
             .unwrap()
-            .contains("SchemaMismatch")
+            .contains("hello length")
     );
 
     connect(&mut boundary, 3);
@@ -451,6 +450,32 @@ fn bootstrap_and_invalid_wire_fail_closed() {
 }
 
 #[test]
+fn any_connection_pulls_the_contract_after_its_hello() {
+    let mut boundary = WasmHostBoundary::new();
+    assert!(boundary.open(1));
+    assert!(!send(&mut boundary, &ipp_protocol::CONTRACT_REQUEST));
+    assert!(
+        std::str::from_utf8(boundary.output())
+            .unwrap()
+            .contains("hello magic")
+    );
+
+    assert!(boundary.open(2));
+    assert!(send(&mut boundary, &ipp_protocol::HELLO));
+    assert!(boundary.poll());
+    assert_eq!(&boundary.output()[..16], &ipp_protocol::announcement());
+    for _ in 0..2 {
+        assert!(send(&mut boundary, &ipp_protocol::CONTRACT_REQUEST));
+        assert!(boundary.poll());
+        assert_eq!(boundary.output(), ipp_protocol::contract_reply());
+    }
+    assert!(!boundary.poll());
+
+    // The connection stays usable for ordinary Host and World requests.
+    attach(&mut boundary, 2);
+}
+
+#[test]
 fn replacement_clears_world_pending_output_and_buffers() {
     let mut boundary = WasmHostBoundary::new();
     connect(&mut boundary, 1);
@@ -464,7 +489,7 @@ fn replacement_clears_world_pending_output_and_buffers() {
     assert_eq!(boundary.output_len(), 0);
     assert!(boundary.input_mut().is_empty());
     assert!(!boundary.poll());
-    assert!(send(&mut boundary, &ipp_protocol::bootstrap()));
+    assert!(send(&mut boundary, &ipp_protocol::HELLO));
     assert!(boundary.poll());
     assert!(!boundary.poll());
     let baseline = attach(&mut boundary, 2);

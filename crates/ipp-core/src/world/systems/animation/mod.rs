@@ -6,7 +6,6 @@ mod component_values;
 mod contribution;
 mod controller_commands;
 mod driver;
-#[cfg(feature = "gui")]
 mod gui_motion;
 mod lifecycle;
 mod math;
@@ -21,10 +20,9 @@ mod update;
 mod world_api;
 pub(in crate::world) use update::{AnimationAccess, AnimationReadAccess};
 
-#[cfg(feature = "profiling")]
+#[cfg(feature = "instrumentation")]
 mod sampling_profile;
 
-#[cfg(feature = "skeletal-animation")]
 mod pose;
 
 pub(crate) use clip::animation_asset_loader;

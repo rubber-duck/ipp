@@ -3,21 +3,12 @@ use crate::services::reliable_output::*;
 use crate::{Batch, Command, ComponentValue, EntityMetadata, EntityRef, HostRuntime, WorldId};
 
 /// Watched Worlds hold Scalars, drivers, Transforms and, with GUI, controls.
-#[cfg(feature = "gui")]
 const FIXTURE_SYSTEMS: &[crate::systems::SystemId] = &[
     LifecyclePublisherSystem::ID,
     crate::systems::constraints::ConstraintSystem::ID,
     crate::systems::hierarchy::HierarchySystem::ID,
     crate::systems::canvas::CanvasSystem::ID,
     crate::systems::gui::GuiSystem::ID,
-];
-
-/// Watched Worlds hold Scalars, drivers and Transforms.
-#[cfg(not(feature = "gui"))]
-const FIXTURE_SYSTEMS: &[crate::systems::SystemId] = &[
-    LifecyclePublisherSystem::ID,
-    crate::systems::constraints::ConstraintSystem::ID,
-    crate::systems::hierarchy::HierarchySystem::ID,
 ];
 
 fn fixture(session: u64) -> (HostRuntime, WorldId, LifecycleWatchOutput) {
@@ -537,10 +528,7 @@ fn real_ingress_freezes_baseline_before_later_replacement_and_fences_world_and_s
     let other = host
         .create_world(Default::default(), FIXTURE_SYSTEMS)
         .unwrap();
-    #[cfg(feature = "gui")]
     let value = ComponentValue::GuiButton(Default::default());
-    #[cfg(not(feature = "gui"))]
-    let value = ComponentValue::Transform(Default::default());
     let component = value.type_id();
 
     let mut world = host.world_mut(world_id).unwrap();
@@ -597,7 +585,6 @@ fn real_ingress_freezes_baseline_before_later_replacement_and_fences_world_and_s
         .unwrap()
         .incarnation;
     assert_ne!(initial, replacement);
-    #[cfg(feature = "gui")]
     assert!(
         world.inspect(entity).unwrap().components.iter().any(
             |value| matches!(value, ComponentValue::GuiBehavior(behavior) if behavior.available)

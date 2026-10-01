@@ -10,17 +10,8 @@ publish.workspace = true
 ipp-core.workspace = true
 
 [features]
-surfaces = ["ipp-core/surfaces"]
-gui = ["surfaces", "ipp-core/gui"]
-profiling = ["ipp-core/profiling"]
-mesh-poses = ["ipp-core/mesh-poses"]
-particles = ["ipp-core/particles"]
-default = ["builtin-assets"]
-diagnostics = ["ipp-core/diagnostics"]
-builtin-assets = ["ipp-core/builtin-assets"]
-schema-export = []
-skeletal-animation = ["ipp-core/skeletal-animation"]
-shadows = ["ipp-core/shadows"]
+default = []
+instrumentation = ["ipp-core/instrumentation"]
 
 [lints]
 workspace = true

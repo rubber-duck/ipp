@@ -258,7 +258,6 @@ impl WorldContext<'_> {
     }
 
     /// The World canvas output, for the System that supplies it.
-    #[cfg(feature = "surfaces")]
     pub(crate) fn canvas_output(&self) -> crate::OutputRef {
         crate::OutputRef::canvas(self.world_ref())
     }

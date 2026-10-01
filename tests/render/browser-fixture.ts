@@ -1,4 +1,4 @@
-import type { RenderStatisticsSnapshot } from "@ipp/client";
+import type { RenderStatisticsSnapshot } from "@ipp/client/diagnostics";
 import { presentationTesting } from "../../packages/ipp-client/src/testing.js";
 import {
   createFixtureCamera,
@@ -188,9 +188,6 @@ export async function initializeCube(
   }
   let root: ReactWorldRoot | undefined;
   try {
-    if (!client.capabilities.spatial) {
-      throw new Error("render fixture requires the scene capability");
-    }
     const scenario = configuration.providerScenario;
     const selectedTransform = scenario
       ? { x: 0.55, sx: 0.46, sy: 0.46, sz: 0.46 }

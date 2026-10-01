@@ -9,12 +9,14 @@ import { requireVisible } from "./image-assertions.js";
 import type * as Fixture from "./world-persistence-fixture.js";
 
 const workspace = resolve(process.cwd());
-const profile = resolve(workspace, "target/browser-build/render-expanded");
+const profile = resolve(
+  workspace,
+  "target/browser-build/render-instrumentation",
+);
 const build = {
-  name: "render-expanded" as const,
+  name: "render-instrumentation" as const,
   generatedModule: resolve(profile, "generated.js"),
   runtimeWasm: resolve(profile, "runtime.wasm"),
-  exportWasm: resolve(profile, "export.wasm"),
   contractArtifact: resolve(profile, "contract.bin"),
 };
 
@@ -50,7 +52,6 @@ test("World references and multi-entity controller state survive fresh-worker re
       {
         workspace,
         build,
-        mismatchBuild: build,
         operationTimeoutMs: 30_000,
         evidenceParent: resolve(
           workspace,
@@ -62,7 +63,7 @@ test("World references and multi-entity controller state survive fresh-worker re
         const module = `${environment.urls.origin}/dist/tests/render/world-persistence-fixture.js`;
         const call = <T>(name: string, args: unknown[] = []) =>
           invoke<T>(environment.page, module, name, args);
-        const source = `${environment.urls.origin}/target/browser-build/render-expanded/persistence-external.ippa?revision=1`;
+        const source = `${environment.urls.origin}/target/browser-build/render-instrumentation/persistence-external.ippa?revision=1`;
         try {
           const saved = await call<Awaited<ReturnType<typeof Fixture.prepare>>>(
             "prepare",

@@ -28,7 +28,6 @@ pub(super) fn validate_target_support(
             if !manifest.supports_component(target.component_target()) {
                 return Err(ErrorReason::UnsupportedDependency);
             }
-            #[cfg(feature = "skeletal-animation")]
             if matches!(target, AnimationTrackTarget::Joints(_))
                 && !manifest.supports_operation(WorldOperation::JointAnimation)
             {
@@ -61,7 +60,6 @@ impl<'a> AnimationReadAccess<'a> {
         self.asset_acquisition
     }
 
-    #[cfg(feature = "skeletal-animation")]
     pub(super) fn source_data<T: 'static>(
         &self,
         kind: crate::services::asset_management::AssetTypeId,
@@ -134,7 +132,7 @@ impl<'a> AnimationReadAccess<'a> {
         replace: Option<(AnimationControllerId, &AnimationControllerDescription)>,
         remove: Option<AnimationControllerId>,
     ) -> Result<BTreeSet<AssetDemandSelection>, ErrorReason> {
-        #[cfg(feature = "profiling")]
+        #[cfg(feature = "instrumentation")]
         let _allocation_scope = crate::profiling::AllocationScope::new(198, "animation.demand");
 
         let mut demand = BTreeSet::new();
@@ -280,7 +278,6 @@ impl<'a> AnimationReadAccess<'a> {
             }
             let current = match self.read_animation_target(&driver.property, &value) {
                 Ok(value) => Some(value),
-                #[cfg(feature = "skeletal-animation")]
                 Err(ErrorReason::InvalidAsset)
                     if matches!(driver.property, AnimationTrackTarget::Joints(_)) =>
                 {
@@ -378,7 +375,6 @@ impl<'a> AnimationReadAccess<'a> {
         if !self.animation_target_alive(driver.identity(), state) {
             return false;
         }
-        #[cfg(feature = "skeletal-animation")]
         if let Some(source) = driver.skeleton_source() {
             let Some(skeleton) =
                 state.input_skeleton(&self.world.components, driver.identity().entity)
@@ -419,7 +415,6 @@ impl<'a> AnimationReadAccess<'a> {
         if driver.clip() == key {
             return true;
         }
-        #[cfg(feature = "particles")]
         if driver.identity().property.component_target() == ComponentValue::PARTICLE_PLAYBACK
             && let Some(playback) = self
                 .world
@@ -434,7 +429,6 @@ impl<'a> AnimationReadAccess<'a> {
         {
             return true;
         }
-        #[cfg(feature = "skeletal-animation")]
         if let Some(source) = driver.skeleton_source() {
             if source == key {
                 return true;
@@ -503,7 +497,6 @@ impl<'a> AnimationReadAccess<'a> {
             {
                 Ok(current) => current,
                 // Joint targets wait for the Skeleton's assets.
-                #[cfg(feature = "skeletal-animation")]
                 Err(ErrorReason::InvalidAsset)
                     if matches!(description.property, AnimationTrackTarget::Joints(_)) =>
                 {
@@ -521,7 +514,6 @@ impl<'a> AnimationReadAccess<'a> {
             if f64::from(description.reference_time) > clip.duration() {
                 return Err(ErrorReason::InvalidValue);
             }
-            #[cfg(feature = "skeletal-animation")]
             let skeleton_source = if let AnimationTrackTarget::Joints(_) = &description.property {
                 let Some(ComponentValue::Skeleton(skeleton)) = self.state.input_value(
                     &self.world.components,
@@ -549,14 +541,12 @@ impl<'a> AnimationReadAccess<'a> {
                 key,
                 clip.duration(),
                 template,
-                #[cfg(feature = "skeletal-animation")]
                 skeleton_source,
             )?);
         }
         Ok(Some(drivers))
     }
 
-    #[cfg(feature = "skeletal-animation")]
     pub(super) fn bound_skeleton_matches(
         &self,
         key: AssetKey,
@@ -580,7 +570,6 @@ impl<'a> AnimationReadAccess<'a> {
         matches && source.kind == crate::SKELETON_TYPE && source.variant == value.variant
     }
 
-    #[cfg(feature = "skeletal-animation")]
     pub(super) fn bound_skeleton_data(
         &self,
         key: AssetKey,
@@ -599,7 +588,6 @@ impl<'a> AnimationReadAccess<'a> {
         self.read_animation_target_from_source(
             &driver.identity().property,
             value,
-            #[cfg(feature = "skeletal-animation")]
             driver.skeleton_source(),
         )
     }
@@ -609,19 +597,14 @@ impl<'a> AnimationReadAccess<'a> {
         target: &AnimationTrackTarget,
         value: &ComponentValue,
     ) -> Result<AnimationValue, ErrorReason> {
-        self.read_animation_target_from_source(
-            target,
-            value,
-            #[cfg(feature = "skeletal-animation")]
-            None,
-        )
+        self.read_animation_target_from_source(target, value, None)
     }
 
     pub(super) fn read_animation_target_from_source(
         &self,
         target: &AnimationTrackTarget,
         value: &ComponentValue,
-        #[cfg(feature = "skeletal-animation")] skeleton_source: Option<AssetKey>,
+        skeleton_source: Option<AssetKey>,
     ) -> Result<AnimationValue, ErrorReason> {
         match target {
             AnimationTrackTarget::EntityLink => Err(ErrorReason::InvalidField),
@@ -643,7 +626,6 @@ impl<'a> AnimationReadAccess<'a> {
             AnimationTrackTarget::AnimationProperty(property) => {
                 AnimationValue::read(property, value)
             }
-            #[cfg(feature = "skeletal-animation")]
             AnimationTrackTarget::Joints(joints) => {
                 if joints.is_empty()
                     || joints.len() > crate::MAX_JOINTS
@@ -716,7 +698,6 @@ impl<'a> AnimationReadAccess<'a> {
         {
             return false;
         }
-        #[cfg(feature = "skeletal-animation")]
         if key.1 == ComponentValue::SKELETON {
             return false;
         }
@@ -734,9 +715,9 @@ impl<'a> AnimationReadAccess<'a> {
         &self,
         staged: &WorldMutationState,
     ) -> Result<(), ErrorReason> {
-        #[cfg(feature = "profiling")]
+        #[cfg(feature = "instrumentation")]
         let _allocation_scope = crate::profiling::AllocationScope::new(195, "animation.validate");
-        #[cfg(feature = "profiling")]
+        #[cfg(feature = "instrumentation")]
         let _measurement =
             crate::profiling::Stage::fixed(crate::profiling::FixedStage::AnimationValidate);
 
@@ -791,7 +772,6 @@ impl<'a> AnimationReadAccess<'a> {
                 identity.property.component_target(),
             )
             .ok_or(ErrorReason::MissingComponent)?;
-        #[cfg(feature = "skeletal-animation")]
         if let Some(source) = driver.skeleton_source()
             && let ComponentValue::Skeleton(skeleton) = &value
             && (self.bound_skeleton_data(source, skeleton).is_none()

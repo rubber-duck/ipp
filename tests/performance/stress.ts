@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import type { EntitySnapshot } from "@ipp/client";
 import test from "node:test";
 import { readFile, writeFile } from "node:fs/promises";
-import { resolve, join, relative } from "node:path";
+import { basename, resolve, join, relative } from "node:path";
 import { runBrowserEnvironment } from "../browser/environment.js";
 import { galleryEnvironment } from "../render/gallery-driver.js";
 import { invoke, writeDataUrl } from "../render/evidence.js";
@@ -48,25 +48,20 @@ test("Blender stress benchmark covers deformation, materials, constraints, geome
   const fixture = JSON.parse(
     await readFile(join(directory, "fixture.json"), "utf8"),
   );
-  const build = (name: "render-expanded" | "headless") => {
-    const root = resolve(
-      process.env.IPP_BROWSER_BUILD_DIR ?? "target/browser-build",
-      name,
-    );
-    return {
-      name,
-      generatedModule: join(root, "generated.js"),
-      runtimeWasm: join(root, "runtime.wasm"),
-      exportWasm: join(root, "export.wasm"),
-      contractArtifact: join(root, "contract.bin"),
-    };
-  };
+  const root = resolve(
+    process.env.IPP_BROWSER_DISTRIBUTION ??
+      "target/browser-build/render-instrumentation",
+  );
   const result = await runBrowserEnvironment(
     "Blender stress benchmark",
     {
       ...galleryEnvironment,
-      build: build("render-expanded"),
-      mismatchBuild: build("headless"),
+      build: {
+        name: basename(root) as "render-instrumentation",
+        generatedModule: join(root, "generated.js"),
+        runtimeWasm: join(root, "runtime.wasm"),
+        contractArtifact: join(root, "contract.bin"),
+      },
       operationTimeoutMs: 900000,
       evidenceParent: resolve("target/integration-artifacts/stress"),
     },

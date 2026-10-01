@@ -1,4 +1,7 @@
-import type { IngressStatistics, RenderStatisticsSnapshot } from "@ipp/client";
+import type {
+  IngressStatistics,
+  RenderStatisticsSnapshot,
+} from "@ipp/client/diagnostics";
 import { invoke, writeDataUrl, recordCapture } from "./evidence.js";
 import assert from "node:assert/strict";
 import { join, resolve } from "node:path";
@@ -30,8 +33,7 @@ import {
 import { requireVisible } from "./image-assertions.js";
 
 const workspace = resolve(process.cwd());
-const render = browserBuild("render");
-const headless = browserBuild("headless");
+const render = browserBuild("render-instrumentation");
 
 for (const variant of ["development", "production"] as const) {
   test(`${variant}: textured React scenes preserve exact sampling and retained recovery`, {
@@ -44,7 +46,6 @@ for (const variant of ["development", "production"] as const) {
       {
         workspace,
         build: render,
-        mismatchBuild: headless,
         operationTimeoutMs: 12_000,
         closeTimeoutMs: 5_000,
         evidenceParent: resolve(
@@ -657,7 +658,6 @@ test("changed HTTP content cannot refresh an unloaded resource", {
     {
       workspace,
       build: render,
-      mismatchBuild: headless,
       operationTimeoutMs: 12_000,
       evidenceParent: resolve(
         workspace,
@@ -834,13 +834,14 @@ function assertProgramCounts(
   assert.equal(deviceNumber(statistics, "shaderProgramsLive"), live);
 }
 
-function browserBuild(name: "render" | "headless"): BrowserBuildConfiguration {
+function browserBuild(
+  name: "render-instrumentation",
+): BrowserBuildConfiguration {
   const directory = resolve(workspace, "target/browser-build", name);
   return {
     name,
     generatedModule: resolve(directory, "generated.js"),
     runtimeWasm: resolve(directory, "runtime.wasm"),
-    exportWasm: resolve(directory, "export.wasm"),
     contractArtifact: resolve(directory, "contract.bin"),
   };
 }

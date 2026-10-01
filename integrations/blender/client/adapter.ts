@@ -1013,10 +1013,6 @@ export class BlenderAdapter {
     }
     if (entity.transform) result.set("Transform", { ...entity.transform });
     if (entity.parent_bone !== undefined) {
-      if (!this.client.components.ParentJoint)
-        throw new Error(
-          "ParentJoint requires the skeletal animation capability",
-        );
       result.set("ParentJoint", { ordinal: entity.parent_bone });
     }
     if (entity.mesh)

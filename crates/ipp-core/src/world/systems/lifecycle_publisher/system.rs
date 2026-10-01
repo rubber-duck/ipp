@@ -26,7 +26,6 @@ impl LifecyclePublisherSystem {
     pub const ID: SystemId = SystemId("ipp.lifecycle-publisher");
 
     /// Copy cumulative index work without visiting members or observing World time.
-    #[cfg(any(test, feature = "diagnostics"))]
     pub fn target_work(&self) -> LifecycleTargetWork {
         self.targets.work
     }

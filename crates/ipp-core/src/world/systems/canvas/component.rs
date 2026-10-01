@@ -99,7 +99,6 @@ impl ComponentLifecycle for CanvasStyle {
 /// Evaluated Canvas-local logical bounds of one laid-out entity, after visual
 /// transforms and scrolling. The Canvas System writes them each pass for every
 /// entity GUI layout places; GUI controls and Canvas leaves require them.
-#[cfg(feature = "gui")]
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, SchemaComponent)]
 pub struct CanvasBounds {
@@ -113,7 +112,6 @@ pub struct CanvasBounds {
     pub height: f32,
 }
 
-#[cfg(feature = "gui")]
 impl ComponentLifecycle for CanvasBounds {
     fn validate_field(&self, _offset: u32) -> Result<(), ErrorReason> {
         self.validate()
@@ -129,10 +127,7 @@ impl ComponentLifecycle for CanvasBounds {
 }
 
 /// Components every Canvas leaf requires; missing ones are inserted with defaults.
-const LEAF_REQUIREMENTS: &[u16] = &[
-    #[cfg(feature = "gui")]
-    crate::ComponentValue::CANVAS_BOUNDS,
-];
+const LEAF_REQUIREMENTS: &[u16] = &[crate::ComponentValue::CANVAS_BOUNDS];
 
 /// Headlessly measured basic text on an ordinary Canvas entity.
 #[repr(C)]

@@ -82,7 +82,6 @@ impl GuiSystem {
         super::motion::GuiMotionState::request_source(&self.local, world, owner)
     }
 
-    #[cfg(feature = "diagnostics")]
     pub(in crate::world) fn motion_work(&self) -> super::motion::GuiMotionPreparationWork {
         self.motion.statistics
     }

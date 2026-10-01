@@ -43,7 +43,7 @@ fn resource_progress_does_not_admit_commands_or_step_worlds() {
     host.open_session(1, &[]).unwrap();
     host.session_mut(1)
         .unwrap()
-        .receive(&ipp_protocol::bootstrap())
+        .receive(&ipp_protocol::HELLO)
         .unwrap();
     host.session_mut(1).unwrap().take_response().unwrap();
     host.session_mut(1)
@@ -71,7 +71,7 @@ fn ready(id: u64) -> Host<TestPlatform> {
     assert!(!session.test_session().is_ready());
     session
         .test_session()
-        .receive(&ipp_protocol::bootstrap())
+        .receive(&ipp_protocol::HELLO)
         .unwrap();
     assert!(session.test_session().is_ready());
     session.test_session().take_response().unwrap();
@@ -168,7 +168,7 @@ fn bootstrap_and_request_sessions_are_isolated() {
     session.open_session(2, &[]).unwrap();
     session
         .test_session()
-        .receive(&ipp_protocol::bootstrap())
+        .receive(&ipp_protocol::HELLO)
         .unwrap();
     session.test_session().take_response().unwrap();
     assert!(session.test_session().receive(&request(1, 1, 3)).is_err());
@@ -274,7 +274,7 @@ fn scoped_platform_failure_preserves_outcomes(input_failure: bool) {
         host.open_session(id, crate::host::TEST_CAMERA_SYSTEMS)
             .unwrap();
         let mut session = host.session_mut(id).unwrap();
-        session.receive(&ipp_protocol::bootstrap()).unwrap();
+        session.receive(&ipp_protocol::HELLO).unwrap();
         session.take_response().unwrap();
         session.receive(&batch(id, 11, 1)).unwrap();
     }
@@ -423,7 +423,7 @@ fn retained_responses_preserve_credit_exclusivity_and_session_fences() {
     host.open_session(2, &[]).unwrap();
     host.session_mut(2)
         .unwrap()
-        .receive(&ipp_protocol::bootstrap())
+        .receive(&ipp_protocol::HELLO)
         .unwrap();
     drop(host.session_mut(2).unwrap().take_response().unwrap());
     host.tick(0.0).unwrap();

@@ -1,3 +1,4 @@
+import { renderDiagnostics } from "../../packages/ipp-client/src/diagnostics.js";
 import {
   createContext,
   createRef,
@@ -366,7 +367,7 @@ export async function canvasController(host: HostClientBase<Client>) {
         failures.every((error) => error === cleanup),
       "Unexpected controller errors",
     );
-    const diagnostics = await host.renderDiagnostics?.statistics();
+    const diagnostics = await renderDiagnostics(host)?.statistics();
     return {
       images,
       parent: parent.reference,
@@ -591,10 +592,10 @@ async function internalStateBarriers(session: CanvasWorldSession) {
 async function recoverySelectionRetry(session: CanvasWorldSession) {
   const host = session.host;
   check(
-    host.renderDiagnostics,
+    renderDiagnostics(host),
     "Context recovery requires renderer diagnostics",
   );
-  const testing = presentationTesting(host.renderDiagnostics);
+  const testing = presentationTesting(host);
   const report = [];
   for (const retry of ["recover", "select"] as const) {
     const previous = session.view!;

@@ -91,6 +91,6 @@ Validate redirect, page/worker fetch, WSS, ETag/If-Match access and certificate 
 
 The [opt-in performance scene](../../tests/performance/stress.md) combines baked rigid bodies, Rigify walking, parented lights and live/baked particles. Generate and profile it with `python tools/ipp.py benchmark`; it is excluded from regression runs.
 
-For hardware WebGL on this VM, select `IPP_BROWSER_ANGLE=vulkan` (ANGLE/RADV) or `IPP_BROWSER_ANGLE=gl-egl` (ANGLE/radeonsi) with the `ipp-browser-env` wrapper. Both have been verified on the Radeon RX 9070 XT. Follow the [hardware profiling commands](../../tests/performance/stress.md#hardware-webgl-and-addon-profiles) to repeat the renderer check; a successful default headless launch alone can still use SwiftShader.
+For hardware WebGL on this VM, pass `--hardware vulkan` (ANGLE/RADV) or `--hardware gl-egl` (ANGLE/radeonsi) to the pipeline command and run it with the `ipp-browser-env` wrapper; pipeline runs otherwise use software rendering. Node commands run outside the pipeline read `IPP_BROWSER_ANGLE` directly. Both have been verified on the Radeon RX 9070 XT. Follow the [hardware profiling commands](../../tests/performance/stress.md#hardware-webgl-and-addon-profiles) to repeat the renderer check; a successful default headless launch alone can still use SwiftShader.
 
 The [streaming performance harness](../../tests/performance/blender-stream.md) exercises the opt-in fresh-import path and compares full and streamed timing and images. Ordinary live updates continue to use full revisions.

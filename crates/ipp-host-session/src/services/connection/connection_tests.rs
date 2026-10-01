@@ -1,23 +1,22 @@
 use super::*;
 
+#[path = "ended_session_tests.rs"]
+mod ended_sessions;
+
 #[path = "graph_transfer_tests.rs"]
 mod graph_transfers;
 
-#[cfg(feature = "gui")]
 #[path = "gui_admission_tests.rs"]
 mod gui_admission;
-#[cfg(feature = "gui")]
 #[path = "gui_observations_tests.rs"]
 mod gui_observations;
 
-#[cfg(feature = "gui")]
 #[path = "gui_output_pressure_tests.rs"]
 mod gui_output_pressure;
 
 struct TestHostServices;
 
 /// Exact action target of one control component, as a client learns it.
-#[cfg(feature = "gui")]
 fn gui_target(
     host: &mut Host<TestHostServices>,
     world: ipp_core::WorldId,
@@ -34,7 +33,6 @@ fn gui_target(
 }
 
 /// Length-prefixed `request-gui-action` payload for a fixed-size action.
-#[cfg(feature = "gui")]
 fn gui_action_payload(
     target: &ipp_core::systems::gui::local::GuiEntityTarget,
     operation: u8,
@@ -66,8 +64,7 @@ impl HostServices for TestHostServices {
 
 fn open(host: &mut Host<TestHostServices>, id: u64) {
     host.open_connection(id).unwrap();
-    host.receive_connection(id, &ipp_protocol::bootstrap())
-        .unwrap();
+    host.receive_connection(id, &ipp_protocol::HELLO).unwrap();
     host.take_connection_response(id).unwrap();
 }
 
@@ -175,6 +172,55 @@ fn closing_peer_session_preserves_originating_save_and_world_lifetime() {
     assert!(host.connections.states[&1].transfer.is_none());
     assert!(host.runtime().world_ref(WorldId(reference.id)).is_some());
     assert_eq!(host.connections.persistence.reserved, 0);
+}
+
+#[test]
+fn contract_requests_follow_the_hello_and_are_charged_as_replies_until_delivered() {
+    let mut host = Host::<TestHostServices>::new().unwrap();
+    host.open_connection(1).unwrap();
+    assert!(
+        host.receive_connection(1, &ipp_protocol::CONTRACT_REQUEST)
+            .unwrap_err()
+            .contains("hello magic")
+    );
+    host.close_connection(1);
+
+    open(&mut host, 2);
+    let idle = host.connections.states[&2].reply_budget.0.usage().bytes;
+    let mut admitted = 0;
+    let refusal = loop {
+        match host.receive_connection(2, &ipp_protocol::CONTRACT_REQUEST) {
+            Ok(()) => admitted += 1,
+            Err(error) => break error,
+        }
+    };
+    assert!(refusal.contains("congestion"), "{refusal}");
+    assert!((1..=crate::MAX_PENDING).contains(&admitted));
+    assert_eq!(host.connections.states[&2].reply_entries(), admitted);
+    assert!(
+        host.connections.states[&2].reply_budget.0.usage().bytes
+            >= idle + admitted * ipp_protocol::export_contract().len()
+    );
+
+    // Each reply stays charged until the transport drops it after delivery.
+    let replies: Vec<_> = std::iter::from_fn(|| host.take_connection_response(2)).collect();
+    assert_eq!(replies.len(), admitted);
+    assert!(
+        replies
+            .iter()
+            .all(|reply| reply.bytes == ipp_protocol::contract_reply())
+    );
+    assert!(
+        host.receive_connection(2, &ipp_protocol::CONTRACT_REQUEST)
+            .is_err()
+    );
+    drop(replies);
+    assert_eq!(
+        host.connections.states[&2].reply_budget.0.usage().bytes,
+        idle
+    );
+    host.receive_connection(2, &ipp_protocol::CONTRACT_REQUEST)
+        .unwrap();
 }
 
 #[test]

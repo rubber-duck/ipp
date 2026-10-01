@@ -468,7 +468,6 @@ impl GuiPanel {
     }
 
     /// Latest ordinary layout work of this panel's World.
-    #[cfg(feature = "diagnostics")]
     pub fn work(&mut self) -> ipp_core::systems::gui::layout::GuiEntityLayoutWork {
         self.host
             .world_mut(self.world)

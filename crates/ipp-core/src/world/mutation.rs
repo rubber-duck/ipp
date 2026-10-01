@@ -285,7 +285,6 @@ impl WorldContext<'_> {
                 effects: Vec::new(),
             };
         }
-        #[cfg(feature = "diagnostics")]
         if !batch.operations.is_empty() {
             crate::diagnostic!(
                 Debug,
@@ -355,7 +354,6 @@ impl WorldContext<'_> {
             }
         }
         let validation = self.commit_pending_changes();
-        #[cfg(feature = "diagnostics")]
         for (event, entity) in std::mem::take(&mut self.world.state.entity_effects) {
             crate::diagnostic!(
                 Debug,
@@ -382,7 +380,6 @@ impl WorldContext<'_> {
                 Err(error)
             }
         };
-        #[cfg(feature = "diagnostics")]
         if !batch.operations.is_empty() {
             match &result {
                 Ok(_) => crate::diagnostic!(
@@ -469,7 +466,7 @@ impl WorldContext<'_> {
                 dt: &dt,
                 dependent: index,
             };
-            #[cfg(feature = "profiling")]
+            #[cfg(feature = "instrumentation")]
             let _measurement = crate::profiling::Stage::system(
                 current_system.profile_slot,
                 phase as usize,

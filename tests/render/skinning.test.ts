@@ -8,16 +8,12 @@ import {
 import { invoke, recordCapture } from "./evidence.js";
 
 const workspace = resolve(process.cwd());
-for (const configuration of [
-  "render-skeletal-animation",
-  "render-expanded",
-] as const) {
+for (const configuration of ["render-instrumentation"] as const) {
   const directory = resolve(workspace, "target/browser-build", configuration);
   const build: BrowserBuildConfiguration = {
     name: configuration,
     generatedModule: resolve(directory, "generated.js"),
     runtimeWasm: resolve(directory, "runtime.wasm"),
-    exportWasm: resolve(directory, "export.wasm"),
     contractArtifact: resolve(directory, "contract.bin"),
   };
 
@@ -29,26 +25,6 @@ for (const configuration of [
       {
         workspace,
         build,
-        mismatchBuild: {
-          ...build,
-          name: "render",
-          generatedModule: resolve(
-            workspace,
-            "target/browser-build/render/generated.js",
-          ),
-          runtimeWasm: resolve(
-            workspace,
-            "target/browser-build/render/runtime.wasm",
-          ),
-          exportWasm: resolve(
-            workspace,
-            "target/browser-build/render/export.wasm",
-          ),
-          contractArtifact: resolve(
-            workspace,
-            "target/browser-build/render/contract.bin",
-          ),
-        },
       },
       context.signal,
       async (environment) => {
@@ -191,7 +167,7 @@ for (const configuration of [
             0,
             "withdrawal restores rest pose exactly",
           );
-          if (configuration === "render-expanded") {
+          if (configuration === "render-instrumentation") {
             const state = await call<{
               controllers: { time: number; state: string }[];
             }>("animationScene");
@@ -421,7 +397,7 @@ for (const configuration of [
               "replacement withdraws playback and exposes the replacement rest pose",
             );
           }
-          if (configuration === "render-expanded") {
+          if (configuration === "render-instrumentation") {
             await call("authoredNormals");
             await call("pose", [0, "bent"]);
             await call("lightingScene");

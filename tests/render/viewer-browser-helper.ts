@@ -1,3 +1,5 @@
+import type { RenderStatisticsSnapshot } from "@ipp/client/diagnostics";
+import { renderDiagnostics } from "../../packages/ipp-client/src/diagnostics.js";
 import type {
   AnimationControllerSnapshot,
   AnimationPlaybackControl,
@@ -17,7 +19,6 @@ import type {
   PickingWorldClient,
   PresentedCapture,
   PresentedFrame,
-  RenderStatisticsSnapshot,
   SystemQuery,
   WorldReference,
 } from "@ipp/client";
@@ -665,8 +666,7 @@ interface GalleryPaintKeys {
   }): number;
 }
 
-const GALLERY_GENERATED_MODULE =
-  "/target/browser-build/render-expanded/generated.js";
+const GALLERY_GENERATED_MODULE = "/target/browser-build/render/generated.js";
 
 /**
  * One authored row of the theme a control's skin references, selected by
@@ -1809,7 +1809,7 @@ export async function captureUnflushedViewer(label: string) {
   const frame = viewerFrame(
     captured,
     source.tick,
-    await handle.host.renderDiagnostics?.statistics(),
+    await renderDiagnostics(handle.host)?.statistics(),
   );
   captures.set(label, { ...frame, pixels: frame.pixels.slice(0) });
   const { pixels: _pixels, ...metadata } = frame;

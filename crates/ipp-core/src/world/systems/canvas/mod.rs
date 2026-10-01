@@ -21,41 +21,30 @@
 //! state, semantics, compact parts and interaction priority through this same paint
 //! boundary; it does not write a parallel Surface item list.
 //!
-//! [`canvas_state`] declares the canvas state in every build, so World creation and
-//! the protocol name it without the `surfaces` feature; only a World selecting this
-//! System accepts it, and the System saves it through its persistence hook.
+//! [`canvas_state`] declares the canvas state for every World, so World creation and
+//! the protocol always name it; only a World selecting this System accepts it, and
+//! the System saves it through its persistence hook.
 
 pub mod canvas_state;
 
 pub use canvas_state::{CanvasEvaluatedExtent, CanvasState, CanvasStateRecord, CanvasStateUpdate};
-#[cfg(feature = "surfaces")]
 mod component;
-#[cfg(feature = "surfaces")]
 mod publication;
-#[cfg(feature = "surfaces")]
 mod system;
-#[cfg(feature = "surfaces")]
 mod system_state;
-#[cfg(all(test, feature = "gui"))]
+#[cfg(test)]
 pub(crate) mod test_support;
-#[cfg(feature = "surfaces")]
 mod update;
 
-#[cfg(feature = "gui")]
 pub use component::CanvasBounds;
-#[cfg(feature = "surfaces")]
 pub use component::{
     CanvasBitmap, CanvasBox, CanvasDrawing, CanvasGlyphRow, CanvasGlyphRun, CanvasStyle, CanvasText,
 };
-#[cfg(feature = "surfaces")]
 pub use publication::{
     CanvasAttachmentSlot, CanvasAxis, CanvasClip, CanvasGlyph, CanvasHit, CanvasHitKind,
     CanvasInteractionPriority, CanvasPaintEntry, CanvasPart, CanvasPrimitive, CanvasPrimitiveId,
     CanvasPrimitiveStyle, CanvasPublication, CanvasShapeFill, CanvasShapeGlow, CanvasTarget,
 };
-#[cfg(feature = "surfaces")]
 pub use system::{CanvasSystem, CanvasSystemFactory};
-#[cfg(feature = "gui")]
 pub(in crate::world::systems) use system_state::CanvasGeometry;
-#[cfg(feature = "gui")]
 pub(in crate::world::systems) use update::{logical_extent, prepare_constrained_geometry};

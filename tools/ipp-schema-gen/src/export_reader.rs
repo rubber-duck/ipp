@@ -1,5 +1,5 @@
 use crate::binary_reader::Reader;
-use crate::model::{Component, Export, Field, RowLimits, RowProperty, RowsLayout, TargetFeature};
+use crate::model::{Component, Export, Field, RowLimits, RowProperty, RowsLayout};
 use crate::typescript_names::{identifier, js_string, member_identifier};
 use crate::wire_contract;
 
@@ -7,8 +7,11 @@ pub(super) fn read_export(bytes: &[u8]) -> Result<Export, String> {
     if bytes.len() < 16 || bytes.len() > 1_048_576 {
         return Err("export size".into());
     }
-    if &bytes[..4] != b"IPPB" || bytes[4..8] != 2u32.to_le_bytes() {
-        return Err("export bootstrap".into());
+    if &bytes[..4] != b"IPPB" {
+        return Err("export marker".into());
+    }
+    if bytes[4..8] != crate::WIRE_REVISION.to_le_bytes() {
+        return Err("export wire revision".into());
     }
 
     let expected = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
@@ -23,7 +26,7 @@ pub(super) fn read_export(bytes: &[u8]) -> Result<Export, String> {
         bytes: &bytes[16..],
         at: 0,
     };
-    if r.u16()? != 6 {
+    if r.u16()? != 7 {
         return Err("export format".into());
     }
 
@@ -33,7 +36,6 @@ pub(super) fn read_export(bytes: &[u8]) -> Result<Export, String> {
     if ![32, 64].contains(&pointer) {
         return Err("target pointer width".into());
     }
-    let features = read_target_features(&mut r)?;
     let row_limits = read_row_limits(&mut r)?;
 
     let n = r.u16()?;
@@ -156,13 +158,8 @@ pub(super) fn read_export(bytes: &[u8]) -> Result<Export, String> {
         });
     }
 
-    let paint_keys = crate::paint_keys::read(
-        &mut r,
-        features
-            .iter()
-            .any(|feature| feature.name == "gui" && feature.enabled),
-    )?;
-    let wire = wire_contract::read_wire_contract(&mut r, &components, &features)?;
+    let paint_keys = crate::paint_keys::read(&mut r)?;
+    let wire = wire_contract::read_wire_contract(&mut r, &components)?;
 
     if !r.is_complete() {
         return Err("trailing export bytes".into());
@@ -173,7 +170,6 @@ pub(super) fn read_export(bytes: &[u8]) -> Result<Export, String> {
         arch,
         os,
         pointer,
-        features,
         components,
         paint_keys,
         row_limits,
@@ -277,32 +273,4 @@ pub(super) fn read_rows_layout(
         region_base,
         properties,
     })
-}
-
-pub(super) fn read_target_features(r: &mut Reader<'_>) -> Result<Vec<TargetFeature>, String> {
-    let count = r.u8()? as usize;
-    if count == 0 {
-        return Err("incomplete target features".into());
-    }
-    let mut features = Vec::with_capacity(count);
-    let mut ids = std::collections::BTreeSet::new();
-    let mut names = std::collections::BTreeSet::new();
-    for _ in 0..count {
-        let id = r.u8()?;
-        let enabled = match r.u8()? {
-            0 => false,
-            1 => true,
-            _ => return Err("target feature flag".into()),
-        };
-        let name = r.string()?;
-        if id == 0 || name.is_empty() || !ids.insert(id) || !names.insert(name.clone()) {
-            return Err("target feature identity".into());
-        }
-        features.push(TargetFeature {
-            id,
-            name,
-            enabled,
-        });
-    }
-    Ok(features)
 }

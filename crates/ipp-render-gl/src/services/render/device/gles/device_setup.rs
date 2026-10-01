@@ -1,5 +1,9 @@
 use super::*;
 
+/// Vertex attribute locations used by the widest built-in layout: instanced
+/// particles beside the position, normal, texture, weight, pose and skin streams.
+const REQUIRED_VERTEX_ATTRIBUTES: i32 = 14;
+
 impl GlesRenderDevice {
     /// Load the required GLES entry points and validate the unlit baseline.
     ///
@@ -42,16 +46,7 @@ impl GlesRenderDevice {
             (gl.get_integer)(0x0D56, &mut depth);
             (gl.get_integer)(0x0D3A, max_viewport.as_mut_ptr());
         }
-        let required_attributes = if cfg!(feature = "particles") {
-            14
-        } else if cfg!(feature = "mesh-poses") {
-            9
-        } else if cfg!(feature = "skeletal-animation") {
-            7
-        } else {
-            5
-        };
-        if attributes < required_attributes
+        if attributes < REQUIRED_VERTEX_ATTRIBUTES
             || depth < 16
             || max_viewport.iter().any(|value| *value <= 0)
         {
@@ -106,11 +101,8 @@ impl GlesRenderDevice {
             max_parameter_bytes: max_parameter_bytes.max(0) as usize,
             max_parameter_textures: vertex_units.min(fragment_units).max(0) as usize,
             submission: Default::default(),
-            #[cfg(feature = "particles")]
             instance_buffer: 0,
-            #[cfg(feature = "particles")]
             instance_capacity: 0,
-            #[cfg(feature = "particles")]
             instance_count: 0,
             linear_target: None,
             presentation_target: None,
@@ -122,17 +114,11 @@ impl GlesRenderDevice {
             ),
             reset_status,
             targets: Default::default(),
-            #[cfg(feature = "surfaces")]
             surface_quad_vao: 0,
-            #[cfg(feature = "surfaces")]
             glyph_atlas_target: None,
-            #[cfg(feature = "surfaces")]
             surface_instance_scratch: Vec::new(),
-            #[cfg(feature = "surfaces")]
             surface_viewport: [1.0, 1.0],
-            #[cfg(feature = "surfaces")]
             surface_cache_target: None,
-            #[cfg(feature = "shadows")]
             shadow_target: None,
             _thread: PhantomData,
         };

@@ -27,7 +27,6 @@ import {
   readOutputReference,
   writeOutputReference,
 } from "./references.js";
-import { HostWireReader } from "./host-protocol.js";
 import { WorldPersistenceHostClient } from "./world-persistence-client.js";
 export type {
   WorldLoadOptions,
@@ -36,6 +35,7 @@ export type {
   WorldGraphLoadResult,
 } from "./world-persistence-client.js";
 export { WorldGraphLoadError } from "./world-persistence-client.js";
+export { HostContractMismatchError } from "./host-contract.js";
 export { BatchIdentities } from "./command-pages.js";
 export {
   HostPresentation,
@@ -482,7 +482,6 @@ export const Entity = {
   ): Command {
     return { kind: "setFieldIf", entity, component, field, expected };
   },
-  // #if gui
   /**
    * Apply a semantic action to the control component at `incarnation`. The
    * batch stops without effect with `StaleTarget`, `Unavailable`,
@@ -508,7 +507,6 @@ export const Entity = {
       action,
     };
   },
-  // #endif
   delete(entity: EntityRef): Command {
     return { kind: "delete", entity };
   },
@@ -684,45 +682,6 @@ class Reader {
     if (this.at !== this.bytes.length) fail("trailing bytes");
   }
 }
-export function bootstrap(): Uint8Array<ArrayBuffer> {
-  const w = new Writer();
-  w.raw(new Uint8Array([73, 80, 80, 66]));
-  w.u32(PROTOCOL_VERSION);
-  w.u64(SCHEMA_HASH);
-  return w.finish();
-}
-export function acceptBootstrap(bytes: Uint8Array): bigint {
-  if (bytes.length !== 24) fail("bootstrap reply length");
-  const expected = bootstrap();
-  for (let i = 0; i < 16; i++)
-    if (bytes[i] !== expected[i]) fail("bootstrap compatibility mismatch");
-  const session = new DataView(
-    bytes.buffer,
-    bytes.byteOffset + 16,
-    8,
-  ).getBigUint64(0, true);
-  if (session === 0n) fail("invalid session");
-  return session;
-}
-export function acceptWorldBootstrap(bytes: Uint8Array): {
-  session: bigint;
-  manifest: WorldManifest;
-} {
-  if (bytes.length < 24) fail("World bootstrap reply length");
-  const expected = bootstrap();
-  for (let i = 0; i < 16; i++)
-    if (bytes[i] !== expected[i]) fail("bootstrap compatibility mismatch");
-  const session = new DataView(
-    bytes.buffer,
-    bytes.byteOffset + 16,
-    8,
-  ).getBigUint64(0, true);
-  if (session === 0n) fail("invalid session");
-  const reader = new HostWireReader(bytes.subarray(24));
-  const manifest = reader.manifest();
-  reader.end();
-  return { session, manifest };
-}
 function writeRef(w: Writer, entity: EntityRef): void {
   switch (entity.kind) {
     case "handle":
@@ -893,7 +852,6 @@ function writeCommand(w: Writer, c: Command): void {
       writeRef(w, c.entity);
       w.u16(c.component);
       break;
-    // #if gui
     case "guiAction":
       w.u8(WIRE.COMMAND_GUI_ACTION);
       writeRef(w, c.entity);
@@ -901,7 +859,6 @@ function writeCommand(w: Writer, c: Command): void {
       w.u64(c.incarnation);
       writeGuiAction(w, c.action);
       break;
-    // #endif
     default:
       fail("unsupported command");
   }
@@ -923,7 +880,6 @@ export function encodeRequest(request: Request): Uint8Array<ArrayBuffer> {
   w.u64(request.requestId);
   const body = request.body;
   switch (body.kind) {
-    // #if gui
     case "guiObservation": {
       w.u8(WIRE.REQUEST_GUI_OBSERVATION);
       const inner = new Writer();
@@ -933,7 +889,6 @@ export function encodeRequest(request: Request): Uint8Array<ArrayBuffer> {
       w.raw(bytes);
       break;
     }
-    // #endif
     case "submitBatch":
       if (!Number.isInteger(body.batchId) || body.batchId < 0)
         fail("invalid batch identity");
@@ -1006,7 +961,6 @@ export function encodeRequest(request: Request): Uint8Array<ArrayBuffer> {
       }
       break;
     }
-    // #if lifecycle-diagnostics
     case "lifecycleDiagnostics": {
       w.u8(WIRE.REQUEST_LIFECYCLE_DIAGNOSTICS);
       writeWorldReference(w, body.query.world);
@@ -1019,7 +973,6 @@ export function encodeRequest(request: Request): Uint8Array<ArrayBuffer> {
       w.u64(body.query.output);
       break;
     }
-    // #endif
     case "subscribeLifecycle": {
       if (body.subscription === 0n) fail("zero lifecycle subscription");
       exactFields(body.filter, [
@@ -1077,13 +1030,9 @@ export function encodeRequest(request: Request): Uint8Array<ArrayBuffer> {
             resources: WIRE.INSPECT_RESOURCES,
             controllers: WIRE.INSPECT_CONTROLLERS,
             renderDiagnostics: WIRE.INSPECT_RENDER_DIAGNOSTICS,
-            // #if gui
             guiFocus: WIRE.INSPECT_GUI_FOCUS,
             guiPointers: WIRE.INSPECT_GUI_POINTERS,
-            // #endif
-            // #if surfaces
             canvas: WIRE.INSPECT_CANVAS,
-            // #endif
           } as Partial<Record<typeof body.collection, number>>
         )[body.collection] ?? fail("inspection collection"),
       );
@@ -1191,7 +1140,6 @@ export function encodeRequest(request: Request): Uint8Array<ArrayBuffer> {
         writeRenderStatePatch(w, command.changes);
         break;
       }
-      // #if surfaces
       if (command.type === "CanvasStateUpdateCommand") {
         exactFields(command, ["type", "extent", "unitsPerMetre"]);
         const extent = command.extent;
@@ -1207,7 +1155,6 @@ export function encodeRequest(request: Request): Uint8Array<ArrayBuffer> {
         if (density !== undefined) w.f32(density);
         break;
       }
-      // #endif
       fail("unsupported command");
     }
     case "query": {
@@ -1687,7 +1634,6 @@ function writeRenderStatePatch(w: Writer, patch: RenderStatePatch): void {
     }
   }
 }
-// #if surfaces
 function readCanvasStateRecord(
   r: Reader,
 ): import("./types.js").CanvasStateRecord {
@@ -1702,7 +1648,6 @@ function readCanvasStateRecord(
       : null,
   };
 }
-// #endif
 function readRenderStatePatch(r: Reader): RenderStatePatch {
   const mask = r.u16();
   if ((mask & ~7) !== 0) fail("render state mask");
@@ -2052,9 +1997,7 @@ export function decodeResponse(
   if (tag === WIRE.RESPONSE_PLAYBACK) unsolicited = true;
   if (tag === WIRE.RESPONSE_BATCH_ABORTED) unsolicited = true;
   if (tag === WIRE.RESPONSE_LIFECYCLE_WATCH) unsolicited = requestId === 0n;
-  // #if gui
   if (tag === WIRE.RESPONSE_GUI_OBSERVATION) unsolicited = requestId === 0n;
-  // #endif
   if (unsolicited !== (requestId === 0n)) fail("reserved response identity");
   let body: ResponseBody;
   if (tag === WIRE.RESPONSE_LIFECYCLE_WATCH) {
@@ -2064,7 +2007,6 @@ export function decodeResponse(
     body = { kind: "lifecycleWatch", record };
   } else if (tag === WIRE.RESPONSE_LIFECYCLE_SUBSCRIPTION)
     body = { kind: "lifecycleSubscription" };
-  // #if lifecycle-diagnostics
   else if (tag === WIRE.RESPONSE_LIFECYCLE_DIAGNOSTICS) {
     if (tick !== 0n) fail("lifecycle diagnostic tick");
     const world = readWorldReference(r);
@@ -2085,19 +2027,14 @@ export function decodeResponse(
       kind: "lifecycleDiagnostics",
       sample: { world, output, work, traffic },
     };
-  }
-  // #endif
-  // #if gui
-  else if (tag === WIRE.RESPONSE_GUI_OBSERVATION) {
+  } else if (tag === WIRE.RESPONSE_GUI_OBSERVATION) {
     const inner = new Reader(r.raw(r.count(GUI_OBSERVATION_BYTES)));
     const record = readGuiObservation(inner);
     inner.done();
     if (tick !== 0n || (record.kind === "effect") !== (requestId === 0n))
       fail("GUI observation envelope");
     body = { kind: "guiObservation", record };
-  }
-  // #endif
-  else if (tag === WIRE.RESPONSE_LIFECYCLE_EVENTS)
+  } else if (tag === WIRE.RESPONSE_LIFECYCLE_EVENTS)
     body = { kind: "lifecycleEvents", events: readLifecycleEvents(r, tick) };
   else if (tag === WIRE.RESPONSE_BATCH)
     body = { kind: "batch", outcome: readOutcome(r) };
@@ -2218,11 +2155,11 @@ export function decodeResponse(
         components.push(readComponent(r));
       entities.push({ id, metadata, link, components });
     }
-    const count = r.count(CAPABILITIES.assets ? INSPECTION_PAGE : 0);
+    const count = r.count(INSPECTION_PAGE);
     const resources: AssetResourceSnapshot[] = [];
     resources.push(...readResources(r, count));
     if (count !== resources.length) fail("resource count");
-    const diagnosticCount = r.count(CAPABILITIES.spatial ? INSPECTION_PAGE : 0);
+    const diagnosticCount = r.count(INSPECTION_PAGE);
     const renderDiagnostics: RenderDiagnostic[] = [];
     for (let i = 0; i < diagnosticCount; i++) {
       const entity = r.u64();
@@ -2248,7 +2185,6 @@ export function decodeResponse(
         ...readControllerTransitionState(r),
       });
     body.controllers = controllers;
-    // #if gui
     const focusCount = r.count(INSPECTION_PAGE);
     const guiFocus: GuiFocusRecord[] = [];
     for (let i = 0; i < focusCount; i++)
@@ -2267,10 +2203,7 @@ export function decodeResponse(
         },
       });
     body.guiPointers = guiPointers;
-    // #endif
-    // #if surfaces
     body.canvas = r.boolean() ? readCanvasStateRecord(r) : null;
-    // #endif
   } else if (tag === WIRE.RESPONSE_ERROR)
     body = { kind: "error", code: r.u16(), message: r.string() };
   else return fail("unsupported response");
@@ -2278,16 +2211,8 @@ export function decodeResponse(
   return { session, requestId, tick, body };
 }
 
-/** A concrete client for this generated target and capability selection. */
+/** A concrete client for this generated target. */
 export class IppClient extends ClientBase {
-  // #if lifecycle-diagnostics
-  /** Diagnostic-only exact-endpoint counters, not a frame or subscription cut. */
-  lifecycleStatistics(
-    output: bigint,
-  ): Promise<import("./lifecycle-diagnostics.js").LifecycleDiagnosticSample> {
-    return this.submitLifecycleStatistics(output);
-  }
-  // #endif
   protected readonly lifecyclePageMembers = LIFECYCLE_PREFERRED_PAGE_MEMBERS;
   protected readonly commandPageLimits = COMMAND_PAGE_LIMITS;
   private hostConnection!: IppHostClient;
@@ -2298,7 +2223,6 @@ export class IppClient extends ClientBase {
 
   override readonly schemaHash = SCHEMA_HASH;
   override readonly components = components;
-  override readonly capabilities = CAPABILITIES;
 
   /** Submit an ordered system action without allocating a reply waiter. */
   sendCommand(command: SystemCommand): void {
@@ -2350,14 +2274,12 @@ export class IppClient extends ClientBase {
     return encodeAnimationClip(clip);
   }
 
-  // #if gui
   subscribeGuiEffects(
     listener: (effect: GuiObservedEffect) => void,
     options: GuiObservationOptions = {},
   ): Promise<GuiEffectSubscription> {
     return this.submitGuiSubscription(listener, options);
   }
-  // #endif
 
   async createAnimationController(
     description: AnimationControllerDescription,
@@ -2471,7 +2393,7 @@ export class IppClient extends ClientBase {
     );
   }
 
-  /** Construct the World client after Host attachment, without another bootstrap. */
+  /** Construct the World client after Host attachment, without another hello. */
   static attachTransport(
     transport: MessageTransport,
     session: bigint,
@@ -2484,16 +2406,6 @@ export class IppClient extends ClientBase {
     const client = new IppClient(transport, options);
     client.hostConnection = host;
     return client.initializeAttached(session, world, manifest, reference);
-  }
-
-  protected override bootstrap(): Uint8Array<ArrayBuffer> {
-    return bootstrap();
-  }
-
-  protected override acceptBootstrap(bytes: Uint8Array): bigint {
-    const { session, manifest } = acceptWorldBootstrap(bytes);
-    this.installWorldManifest(manifest);
-    return session;
   }
 
   protected override encodeRequest(request: Request): Uint8Array<ArrayBuffer> {
@@ -2575,12 +2487,9 @@ function writeControllerDescription(
       w.string(property.name);
     } else if (property.joints !== undefined) {
       exactFields(property, ["joints"]);
-      if (!CAPABILITIES.skeletalAnimation) fail("unsupported joint target");
-      // #if skeletal-animation
       w.u8(WIRE.ANIMATION_TARGET_JOINTS);
       w.count(property.joints.length, ANIMATION_TARGET_INDICES);
       for (const index of property.joints) w.u32(index);
-      // #endif
     } else {
       exactFields(property, ["component", "offsets"]);
       w.u8(WIRE.ANIMATION_TARGET_PROPERTY);
@@ -2652,19 +2561,12 @@ function readControllerDescription(r: Reader): AnimationControllerDescription {
       const offsets: number[] = [];
       for (let j = 0; j < count; j++) offsets.push(r.u32());
       property = { component, offsets };
-    }
-    // #if skeletal-animation
-    else if (
-      kind === WIRE.ANIMATION_TARGET_JOINTS &&
-      CAPABILITIES.skeletalAnimation
-    ) {
+    } else if (kind === WIRE.ANIMATION_TARGET_JOINTS) {
       const count = r.count(ANIMATION_TARGET_INDICES);
       const joints: number[] = [];
       for (let j = 0; j < count; j++) joints.push(r.u32());
       property = { joints };
-    }
-    // #endif
-    else return fail("animation target kind");
+    } else return fail("animation target kind");
     const bindingCount = r.count(MAX_MESSAGE_BYTES / 8);
     const entityBindings: bigint[] = [];
     for (let j = 0; j < bindingCount; j++) entityBindings.push(r.u64());
@@ -2746,8 +2648,8 @@ export class IppHostClient extends GeneratedHostClientBase<IppClient> {
   protected hostMagic(response: boolean): Uint8Array<ArrayBuffer> {
     return new Uint8Array(response ? HOST_RESPONSE_MAGIC : HOST_REQUEST_MAGIC);
   }
-  readonly schemaHash = SCHEMA_HASH;
-  readonly capabilities = CAPABILITIES;
+  override readonly schemaHash = SCHEMA_HASH;
+  protected override readonly protocolRevision = PROTOCOL_VERSION;
 
   static connectWebSocket(
     url: string,
@@ -2774,14 +2676,6 @@ export class IppHostClient extends GeneratedHostClientBase<IppClient> {
       workerTransport(workerUrl, wasmUrl, MAX_MESSAGE_BYTES, options),
       options,
     );
-  }
-
-  protected override bootstrap(): Uint8Array<ArrayBuffer> {
-    return bootstrap();
-  }
-
-  protected override acceptBootstrap(bytes: Uint8Array): bigint {
-    return acceptBootstrap(bytes);
   }
 
   protected override createWorldClient(

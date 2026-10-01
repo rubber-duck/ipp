@@ -811,14 +811,6 @@ export function useGuiScene(
     sequence.current = INITIAL_EVENTS.length;
     controlValues.current = INITIAL_CONTROL_VALUES;
     const client = canvas.client as AnimationWorldClient;
-    if (
-      !client.capabilities.gui ||
-      !client.capabilities.surfaces ||
-      !client.capabilities.animation
-    ) {
-      setError("This gallery runtime does not include the GUI demo");
-      return;
-    }
     let disposed = false;
     const controller = new AbortController();
     let owned: MotionOwnership | undefined;

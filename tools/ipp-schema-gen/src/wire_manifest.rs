@@ -4,7 +4,6 @@ use std::fmt::Write as _;
 
 use crate::model::Export;
 use crate::typescript_names::js_string;
-use crate::wire_contract;
 
 /// Render every exported convention, layout, tag layout and asset format.
 ///
@@ -29,10 +28,9 @@ function freezeContract<T>(value: T): T {\n\
     for tag in &wire.tags {
         writeln!(
             out,
-            "  {}: {{ space: {}, capability: {}, layout: {} }},",
+            "  {}: {{ space: {}, layout: {} }},",
             tag.name,
             tag.space,
-            js_string(wire_contract::capability_name(tag.capability).unwrap()),
             js_string(&tag.layout),
         )
         .unwrap();
@@ -47,13 +45,7 @@ function freezeContract<T>(value: T): T {\n\
 
     out.push_str("export const WIRE_LAYOUTS = freezeContract({\n");
     for layout in &wire.layouts {
-        writeln!(
-            out,
-            "  {}: {{ capability: {}, fields: [",
-            js_string(&layout.name),
-            js_string(wire_contract::capability_name(layout.capability).unwrap()),
-        )
-        .unwrap();
+        writeln!(out, "  {}: {{ fields: [", js_string(&layout.name),).unwrap();
         for field in &layout.fields {
             writeln!(
                 out,
@@ -73,9 +65,8 @@ function freezeContract<T>(value: T): T {\n\
     for format in &wire.asset_formats {
         writeln!(
             out,
-            "  {}: {{ capability: {}, typeId: {}, format: {} }},",
+            "  {}: {{ typeId: {}, format: {} }},",
             format.name,
-            js_string(wire_contract::capability_name(format.capability).unwrap()),
             format.type_id,
             js_string(&format.format),
         )

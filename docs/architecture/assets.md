@@ -26,7 +26,7 @@ DataSourceManagementService independently supplies listing and capability-checke
 
 Register opaque, non-overlapping string prefixes; reject duplicates and overlap in either direction. Route literally and forward the complete identifier unchanged. Sources validate syntax; generic routing never parses, normalizes or decodes identifiers.
 
-Requests and registrations carry producer/resource/session scope. Cancellation and replacement fence stale completions; references contain no process pointers. Adapters never reenter Worlds or call graphics APIs. [Data-source implementation](../../crates/ipp-core/src/services/data_source) owns buffering and adapters. Optional [built-ins](../../crates/ipp-core/src/services/asset_management/builtin) use the same loading/recovery path without special World or renderer behavior.
+Requests and registrations carry producer/resource/session scope. Cancellation and replacement fence stale completions; references contain no process pointers. Adapters never reenter Worlds or call graphics APIs. [Data-source implementation](../../crates/ipp-core/src/services/data_source) owns buffering and adapters. [Built-ins](../../crates/ipp-core/src/services/asset_management/builtin) use the same loading/recovery path without special World or renderer behavior.
 
 ## Shader recipes and graphics loading
 
@@ -44,7 +44,7 @@ Authored/generated immutable [bounding and picking definitions](rendering.md#bou
 
 ## Surface resources
 
-The optional Surface capability consumes immutable font and drawing assets with shared quadratic contour data. Fonts preserve glyph identities and headless layout metrics; drawings preserve ordered painted paths and fill rules. Conversion owns source-format interpretation and approximation, while the renderer owns acceleration structures, curve textures and device-specific packing. Curve textures keep contour coordinates exact, using the narrowest [fixed-point texel format](../../crates/ipp-render-gl/src/services/render/surface_path.rs) that represents them. Bitmap resources preserve colour and coverage alpha independently, with explicit colour conversion under the rendering contract.
+Surfaces consume immutable font and drawing assets with shared quadratic contour data. Fonts preserve glyph identities and headless layout metrics; drawings preserve ordered painted paths and fill rules. Conversion owns source-format interpretation and approximation, while the renderer owns acceleration structures, curve textures and device-specific packing. Curve textures keep contour coordinates exact, using the narrowest [fixed-point texel format](../../crates/ipp-render-gl/src/services/render/surface_path.rs) that represents them. Bitmap resources preserve colour and coverage alpha independently, with explicit colour conversion under the rendering contract.
 
 [GUI text and skins](gui.md#text-and-skins) consume these same resources and ordinary animation clips. GUI adds no separate loading or asset-identity system; font measurement remains headless, and skin values stay independent of immutable resource content.
 

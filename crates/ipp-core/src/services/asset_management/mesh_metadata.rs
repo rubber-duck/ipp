@@ -9,11 +9,8 @@ pub struct MeshMetadata {
     vertices: usize,
     indices: usize,
     attributes: u32,
-    #[cfg(feature = "mesh-poses")]
     topology: Vec<u16>,
-    #[cfg(feature = "skeletal-animation")]
     joint_bounds: Vec<Option<[[f32; 3]; 2]>>,
-    #[cfg(feature = "skeletal-animation")]
     maximum_joint: Option<u8>,
 }
 
@@ -28,11 +25,8 @@ impl MeshMetadata {
                 | (u32::from(mesh.uvs().is_some()) << 1)
                 | (u32::from(mesh.normals().is_some()) << 2)
                 | (u32::from(mesh.texture_weights().is_some()) << 3),
-            #[cfg(feature = "mesh-poses")]
             topology: mesh.indices().to_vec(),
-            #[cfg(feature = "skeletal-animation")]
             joint_bounds: mesh.joint_bounds().to_vec(),
-            #[cfg(feature = "skeletal-animation")]
             maximum_joint: mesh.max_joint_index(),
         }
     }
@@ -77,19 +71,16 @@ impl MeshMetadata {
         self.attributes & 8 != 0
     }
 
-    #[cfg(feature = "mesh-poses")]
     /// Exact ordered topology for pose compatibility.
     pub fn topology(&self) -> &[u16] {
         &self.topology
     }
 
-    #[cfg(feature = "skeletal-animation")]
     /// Conservative bind-space joint enclosures.
     pub fn joint_bounds(&self) -> &[Option<[[f32; 3]; 2]>] {
         &self.joint_bounds
     }
 
-    #[cfg(feature = "skeletal-animation")]
     /// Highest palette index referenced by any vertex.
     pub fn max_joint_index(&self) -> Option<u8> {
         self.maximum_joint
@@ -97,11 +88,8 @@ impl MeshMetadata {
 
     /// Retained CPU metadata allocation estimate.
     pub fn resident_bytes(&self) -> usize {
-        let bytes = std::mem::size_of::<Self>();
-        #[cfg(feature = "mesh-poses")]
-        let bytes = bytes + std::mem::size_of_val(self.topology.as_slice());
-        #[cfg(feature = "skeletal-animation")]
-        let bytes = bytes + std::mem::size_of_val(self.joint_bounds.as_slice());
-        bytes
+        std::mem::size_of::<Self>()
+            + std::mem::size_of_val(self.topology.as_slice())
+            + std::mem::size_of_val(self.joint_bounds.as_slice())
     }
 }

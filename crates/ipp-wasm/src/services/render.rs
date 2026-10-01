@@ -24,27 +24,21 @@ pub(crate) struct RenderSurfaceService {
     height: u32,
     context: u64,
     /// Packed record export and the totals it accumulates across renders.
-    #[cfg(feature = "diagnostics")]
     statistics: super::render_statistics::RenderStatisticsRecord,
     /// World of the last completed render, whose records a capture reads.
-    #[cfg(all(feature = "surfaces", feature = "diagnostics"))]
     rendered_world: Option<ipp_core::WorldId>,
     /// Reused scratch for the records export.
-    #[cfg(all(feature = "surfaces", feature = "diagnostics"))]
     surface_cache_diagnostics: Vec<ipp_render_gl::SurfaceCacheDiagnostic>,
     /// Packed [`SURFACE_CACHE_RECORD_WORDS`]-word records, built when read.
-    #[cfg(all(feature = "surfaces", feature = "diagnostics"))]
     surface_cache_records: Vec<u32>,
 }
 
 /// Words per exported Surface cache record: entity low and high words,
 /// presentation code, band, width, height, repaints, reuses, World time of the
 /// last repaint in milliseconds, and resident bytes.
-#[cfg(all(feature = "surfaces", feature = "diagnostics"))]
 const SURFACE_CACHE_RECORD_WORDS: usize = 10;
 
 impl RenderSurfaceService {
-    #[cfg(all(feature = "gui", feature = "diagnostics"))]
     pub(crate) fn record_frame(
         &mut self,
         host: &mut HostRuntime,
@@ -65,13 +59,9 @@ impl RenderSurfaceService {
             width: 1,
             height: 1,
             context: 0,
-            #[cfg(feature = "diagnostics")]
             statistics: super::render_statistics::RenderStatisticsRecord::new(),
-            #[cfg(all(feature = "surfaces", feature = "diagnostics"))]
             rendered_world: None,
-            #[cfg(all(feature = "surfaces", feature = "diagnostics"))]
             surface_cache_diagnostics: Vec::new(),
-            #[cfg(all(feature = "surfaces", feature = "diagnostics"))]
             surface_cache_records: Vec::new(),
         }
     }
@@ -160,15 +150,11 @@ impl RenderSurfaceService {
         self.renderer.set_asset_context_active(false);
         host.flush_resource_lifecycle();
         self.active = false;
-        #[cfg(all(feature = "surfaces", feature = "diagnostics"))]
-        {
-            self.rendered_world = None;
-        }
+        self.rendered_world = None;
         Ok(())
     }
 
     /// Build the records export for the World of the last completed render.
-    #[cfg(all(feature = "surfaces", feature = "diagnostics"))]
     fn surface_cache_records(&mut self) -> &[u32] {
         self.surface_cache_records.clear();
         let Some(world) = self.rendered_world else {
@@ -251,12 +237,8 @@ impl RenderSurfaceService {
                 message: "selected camera is invalid".into(),
             });
         }
-        #[cfg(feature = "diagnostics")]
         self.statistics.accumulate(self.renderer.statistics());
-        #[cfg(all(feature = "surfaces", feature = "diagnostics"))]
-        {
-            self.rendered_world = Some(output.world().id());
-        }
+        self.rendered_world = Some(output.world().id());
         if let Some(pixels) = pixels {
             // SAFETY: The exclusive slice stays live for this synchronous import.
             // The worker copies exactly length bytes, retains no pointer and must
@@ -349,18 +331,10 @@ pub extern "C" fn ipp_render_detach() -> u32 {
 
 /// Shadow submissions for the opt-in benchmark, separate from main-pass draws.
 // SAFETY: Unique diagnostic symbol; owned scalar under exclusive Host access.
-#[cfg(all(feature = "profiling", feature = "diagnostics"))]
+#[cfg(feature = "instrumentation")]
 #[unsafe(no_mangle)]
 pub extern "C" fn ipp_profile_shadow_draw_calls() -> u32 {
-    #[cfg(feature = "shadows")]
-    {
-        read(|presentation| presentation.renderer.statistics().shadow_draw_calls)
-    }
-
-    #[cfg(not(feature = "shadows"))]
-    {
-        0
-    }
+    read(|presentation| presentation.renderer.statistics().shadow_draw_calls)
 }
 
 /// Fill the packed statistics record of the last completed render and return
@@ -369,7 +343,6 @@ pub extern "C" fn ipp_profile_shadow_draw_calls() -> u32 {
 // SAFETY: Unique symbol; the pointer refers to presentation-owned storage that
 // stays valid and unaliased by Rust until the next call of this export or the
 // session closes. The caller copies it synchronously.
-#[cfg(feature = "diagnostics")]
 #[unsafe(no_mangle)]
 pub extern "C" fn ipp_render_statistics_ptr() -> *const u32 {
     BOUNDARY.with_borrow_mut(|boundary| {
@@ -384,7 +357,6 @@ pub extern "C" fn ipp_render_statistics_ptr() -> *const u32 {
 
 /// Words in the record at [`ipp_render_statistics_ptr`].
 // SAFETY: Unique symbol; returns a constant scalar.
-#[cfg(feature = "diagnostics")]
 #[unsafe(no_mangle)]
 pub extern "C" fn ipp_render_statistics_len() -> u32 {
     super::render_statistics::RECORD_WORDS as u32
@@ -393,7 +365,6 @@ pub extern "C" fn ipp_render_statistics_len() -> u32 {
 /// Whole-Host ordinary-layout membership JSON, copied synchronously by the worker.
 // SAFETY: Unique diagnostic symbol. Exclusive boundary access fills owned storage;
 // the returned bytes remain valid until the next call or Host destruction, without Rust aliases.
-#[cfg(all(feature = "gui", feature = "diagnostics"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn ipp_render_gui_layout_ptr() -> *const u8 {
     BOUNDARY.with_borrow_mut(|boundary| {
@@ -407,7 +378,6 @@ pub extern "C" fn ipp_render_gui_layout_ptr() -> *const u8 {
 
 /// Bytes at the last pointer returned by `ipp_render_gui_layout_ptr`.
 // SAFETY: Unique diagnostic symbol. Exclusive boundary access returns only an owned scalar.
-#[cfg(all(feature = "gui", feature = "diagnostics"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn ipp_render_gui_layout_len() -> u32 {
     read(|presentation| presentation.statistics.layout_json_len() as u32)
@@ -420,7 +390,6 @@ pub extern "C" fn ipp_render_gui_layout_len() -> u32 {
 // SAFETY: Unique symbol; the pointer refers to presentation-owned storage that
 // stays valid and unaliased by Rust until the next call of this export, a
 // render, or the session closes. The caller copies it synchronously.
-#[cfg(all(feature = "surfaces", feature = "diagnostics"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn ipp_render_surface_cache_records_ptr() -> *const u32 {
     BOUNDARY.with_borrow_mut(|boundary| {
@@ -440,7 +409,6 @@ pub extern "C" fn ipp_render_surface_cache_records_ptr() -> *const u32 {
 /// Length in `u32` words of the records the last
 /// [`ipp_render_surface_cache_records_ptr`] call built.
 // SAFETY: Unique symbol; returns a length without retaining a reference.
-#[cfg(all(feature = "surfaces", feature = "diagnostics"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn ipp_render_surface_cache_records_len() -> u32 {
     read(|presentation| presentation.surface_cache_records.len() as u32)
@@ -450,7 +418,7 @@ pub extern "C" fn ipp_render_surface_cache_records_len() -> u32 {
 /// resident page budget and the Host frames a page without demand stays
 /// resident. Limits survive context loss.
 // SAFETY: Unique symbol; scalar arguments and exclusive access to owned renderer state.
-#[cfg(all(feature = "gui", feature = "diagnostics"))]
+#[cfg(feature = "instrumentation")]
 #[unsafe(no_mangle)]
 pub extern "C" fn ipp_render_set_glyph_atlas_limits(max_pages: u32, idle_page_frames: u32) -> u32 {
     update(|presentation, _host| {
@@ -467,7 +435,7 @@ pub extern "C" fn ipp_render_set_glyph_atlas_limits(max_pages: u32, idle_page_fr
 /// Testing override of the renderer-owned Surface cache image budget on this
 /// context. Zero disables caching; the budget survives context loss.
 // SAFETY: Unique symbol; scalar argument and exclusive access to owned renderer state.
-#[cfg(all(feature = "surfaces", feature = "diagnostics"))]
+#[cfg(feature = "instrumentation")]
 #[unsafe(no_mangle)]
 pub extern "C" fn ipp_render_set_surface_cache_budget(bytes: u32) -> u32 {
     update(|presentation, _host| {
@@ -481,7 +449,7 @@ pub extern "C" fn ipp_render_set_surface_cache_budget(bytes: u32) -> u32 {
 /// Testing mode attributing each GL error to its failing call instead of the
 /// sampled pass-boundary checks.
 // SAFETY: Unique symbol; scalar argument and exclusive access to owned renderer state.
-#[cfg(feature = "diagnostics")]
+#[cfg(feature = "instrumentation")]
 #[unsafe(no_mangle)]
 pub extern "C" fn ipp_render_set_exhaustive_draw_checks(enabled: u32) -> u32 {
     update(|presentation, _host| {

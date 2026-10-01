@@ -135,16 +135,8 @@ pub fn set_viewport(host: &mut HostRuntime, world: WorldId, width: u32, height: 
 }
 
 /// A presented panel World: Canvas content with asset-backed text, Surface
-/// slots for nested panels and, with GUI, controls and entity layout.
+/// slots for nested panels, controls and entity layout.
 pub fn panel_systems() -> Vec<ipp_core::systems::SystemId> {
-    use super::selection::{ATTACHMENTS, CANVAS_CONTENT, SURFACE, select};
-    #[cfg(feature = "gui")]
-    return select(&[
-        ATTACHMENTS,
-        CANVAS_CONTENT,
-        super::selection::GUI_LAYOUT,
-        SURFACE,
-    ]);
-    #[cfg(not(feature = "gui"))]
-    select(&[ATTACHMENTS, CANVAS_CONTENT, SURFACE])
+    use super::selection::{ATTACHMENTS, CANVAS_CONTENT, GUI_LAYOUT, SURFACE, select};
+    select(&[ATTACHMENTS, CANVAS_CONTENT, GUI_LAYOUT, SURFACE])
 }

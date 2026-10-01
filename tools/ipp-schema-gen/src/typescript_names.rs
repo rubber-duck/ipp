@@ -125,7 +125,6 @@ const RESERVED: &[&str] = &[
     "PROTOCOL_VERSION",
     "components",
     "WIRE",
-    "CAPABILITIES",
     "SCHEMA_HASH",
     "GUI_PAINT_PART_KEYS",
     "Entity",

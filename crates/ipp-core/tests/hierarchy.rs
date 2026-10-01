@@ -7,7 +7,6 @@ use ipp_core::{
 };
 use support::WorldTestDriver;
 use support::selection::SPATIAL;
-#[cfg(all(feature = "skeletal-animation", feature = "builtin-assets"))]
 use support::selection::{SKELETON, select};
 
 fn run(world: &mut WorldContext<'_>, operations: Vec<Command>) -> ipp_core::WorldUpdateReport {
@@ -446,7 +445,6 @@ fn deferred_parent_and_target_removal_refreshes_surviving_final_placement() {
     assert_eq!(world.entity_link(tracker).unwrap().parent, None);
 }
 
-#[cfg(all(feature = "skeletal-animation", feature = "builtin-assets"))]
 #[test]
 fn bone_parent_composes_pose_and_offset_and_recovers_without_object_fallback() {
     use ipp_core::{

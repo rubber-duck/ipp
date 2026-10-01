@@ -51,12 +51,11 @@ test("Blender links, ParentJoint and held-ACK cleanup over worker WASM", {
   timeout: 90_000,
 }, async (context) => {
   const workspace = resolve(process.cwd());
-  const profile = resolve(workspace, "target/browser-build/render-expanded");
+  const profile = resolve(workspace, "target/browser-build/render");
   const build = {
-    name: "render-expanded" as const,
+    name: "render" as const,
     generatedModule: resolve(profile, "generated.js"),
     runtimeWasm: resolve(profile, "runtime.wasm"),
-    exportWasm: resolve(profile, "export.wasm"),
     contractArtifact: resolve(profile, "contract.bin"),
   };
   await runBrowserEnvironment(
@@ -64,7 +63,6 @@ test("Blender links, ParentJoint and held-ACK cleanup over worker WASM", {
     {
       workspace,
       build,
-      mismatchBuild: build,
       rendering: false,
       operationTimeoutMs: 25_000,
       evidenceParent: resolve("target/integration-artifacts/blender-headless"),

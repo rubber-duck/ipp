@@ -43,17 +43,6 @@ class FakeWorldClient {
   readonly commands: SystemCommand[] = [];
   closure: undefined | { reason: Error } = undefined;
   closedCount = 0;
-  readonly capabilities = {
-    spatial: false,
-    textures: false,
-    builtinAssets: false,
-    picking: false,
-    debugGeometry: false,
-    pbr: false,
-    shadows: false,
-    skeletalAnimation: false,
-    meshPoses: false,
-  };
   readonly components = {};
   readonly schemaHash = 1n;
   readonly closed = new Promise<never>(() => {});

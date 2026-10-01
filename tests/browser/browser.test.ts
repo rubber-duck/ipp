@@ -3,10 +3,12 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import test from "node:test";
-import { protocolRejected } from "../integration/assertions.js";
+import {
+  contractRefused,
+  protocolRejected,
+} from "../integration/assertions.js";
 import {
   malformedRequestsFailExplicitly,
-  schemaMismatchFailsDuringHandshake,
   staleSessionFailsBeforeMutation,
 } from "../integration/protocol-failures.js";
 import {
@@ -23,6 +25,7 @@ import {
   type BrowserBuildConfiguration,
   type BrowserHarnessConfiguration,
   BrowserHarnessRunError,
+  runBrowserEnvironment,
   runBrowserScenario,
   runtimeConfigurationFor,
 } from "./environment.js";
@@ -38,8 +41,7 @@ if (
   );
 }
 
-const minimal = browserBuild("headless");
-const constraints = browserBuild("headless-builtins");
+const headless = browserBuild("headless");
 const cancellation = new AbortController();
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.once(signal, () =>
@@ -53,39 +55,37 @@ const commonScenarios = [
   ["reconnect starts with empty world", reconnectStartsWithEmptyWorld],
 ] as const;
 
-test("constraints: autonomous frames advance without client requests", {
+test("headless: autonomous frames advance without client requests", {
   timeout: 30_000,
 }, async (context) => {
   await runBrowserScenario(
-    "constraints autonomous frames",
-    configuration(constraints),
+    "headless autonomous frames",
+    configuration(headless),
     AbortSignal.any([cancellation.signal, context.signal]),
     autonomousFramesAdvance,
   );
 });
 
-test("constraints: 64 concurrent RPC responses stay correlated", {
+test("headless: 64 concurrent RPC responses stay correlated", {
   timeout: 30_000,
 }, async (context) => {
   await runBrowserScenario(
-    "constraints concurrent RPC correlation",
-    configuration(constraints),
+    "headless concurrent RPC correlation",
+    configuration(headless),
     AbortSignal.any([cancellation.signal, context.signal]),
     concurrentRpcResponsesStayCorrelated,
   );
 });
 
-for (const build of [minimal, constraints]) {
-  for (const [name, scenario] of commonScenarios) {
-    test(`${build.name}: ${name}`, { timeout: 30_000 }, async (context) => {
-      await runBrowserScenario(
-        `${build.name} ${name}`,
-        configuration(build),
-        AbortSignal.any([cancellation.signal, context.signal]),
-        scenario,
-      );
-    });
-  }
+for (const [name, scenario] of commonScenarios) {
+  test(`headless: ${name}`, { timeout: 30_000 }, async (context) => {
+    await runBrowserScenario(
+      `headless ${name}`,
+      configuration(headless),
+      AbortSignal.any([cancellation.signal, context.signal]),
+      scenario,
+    );
+  });
 }
 
 for (const [name, scenario] of [
@@ -95,81 +95,58 @@ for (const [name, scenario] of [
   test(`constraints: ${name}`, { timeout: 30_000 }, async (context) => {
     await runBrowserScenario(
       `constraints ${name}`,
-      configuration(constraints),
+      configuration(headless),
       AbortSignal.any([cancellation.signal, context.signal]),
       scenario,
     );
   });
 }
 
-test("constraints: owned UTF-8 metadata survives WASM allocation growth", {
+test("headless: owned UTF-8 metadata survives WASM allocation growth", {
   timeout: 30_000,
 }, async (context) => {
   await runBrowserScenario(
-    "constraints owned metadata wasm growth",
-    configuration(constraints),
+    "headless owned metadata wasm growth",
+    configuration(headless),
     AbortSignal.any([cancellation.signal, context.signal]),
     ownedMetadataSurvivesWasmGrowth,
   );
 });
 
-test("feature mismatch fails during worker bootstrap and cleans up", {
+test("a client generated for another target refuses the worker Host, which keeps serving", {
   timeout: 30_000,
 }, async (context) => {
   const result = await runBrowserScenario(
-    "feature mismatch cleanup",
-    configuration(constraints),
+    "contract refusal",
+    configuration(headless),
     AbortSignal.any([cancellation.signal, context.signal]),
     async (scenarioContext) => {
-      await scenarioContext.execute(
-        "reject minimal generated contract",
-        {},
+      const { factory, signal, urls } = scenarioContext;
+      const hostHash = await factory.contractHash(urls.generated, signal);
+      const clientHash = await factory.contractHash(
+        urls.mismatchGenerated,
+        signal,
+      );
+      const refusal = await scenarioContext.execute(
+        "refuse the worker Host",
+        { contract: urls.mismatchGenerated },
         () =>
-          schemaMismatchFailsDuringHandshake({
-            factory: scenarioContext.factory,
-            url: scenarioContext.url,
-            signal: scenarioContext.signal,
-            evidence: scenarioContext.evidence,
+          factory.refuseMismatchedHost({
+            signal,
+            record: scenarioContext.evidence.record.bind(
+              scenarioContext.evidence,
+            ),
           }),
       );
+      contractRefused(refusal, hostHash, clientHash);
       await scenarioContext.execute(
-        "use matching client after mismatch",
+        "use matching client after refusal",
         0,
-        () =>
-          scenarioContext.driver.waitForFrame(undefined, {
-            signal: scenarioContext.signal,
-          }),
+        () => scenarioContext.driver.waitForFrame(undefined, { signal }),
       );
     },
   );
   await assertLoopbackClosed(result.origin);
-});
-
-test("native generated contract fails against the constraints WASM runtime", {
-  timeout: 30_000,
-}, async (context) => {
-  await runBrowserScenario(
-    "native target mismatch",
-    configuration(constraints),
-    AbortSignal.any([cancellation.signal, context.signal]),
-    async (scenarioContext) => {
-      const result = await scenarioContext.execute(
-        "reject native generated contract",
-        { contract: scenarioContext.urls.nativeGenerated },
-        () =>
-          scenarioContext.factory.rejectConnection(
-            runtimeConfigurationFor(
-              scenarioContext.urls,
-              scenarioContext.urls.nativeGenerated,
-              scenarioContext.urls.wasm,
-            ),
-            scenarioContext.signal,
-          ),
-      );
-      protocolRejected(result, "handshake");
-      assert.match(result.detail, /schema|mismatch/i);
-    },
-  );
 });
 
 test("stale worker session fails before mutation", {
@@ -177,7 +154,7 @@ test("stale worker session fails before mutation", {
 }, async (context) => {
   await runBrowserScenario(
     "stale worker session",
-    configuration(constraints),
+    configuration(headless),
     AbortSignal.any([cancellation.signal, context.signal]),
     async (scenarioContext) =>
       scenarioContext.execute("reject stale worker session", {}, () =>
@@ -196,7 +173,7 @@ test("malformed worker requests fail explicitly", {
 }, async (context) => {
   await runBrowserScenario(
     "malformed worker requests",
-    configuration(constraints),
+    configuration(headless),
     AbortSignal.any([cancellation.signal, context.signal]),
     async (scenarioContext) =>
       scenarioContext.execute("reject malformed worker requests", {}, () =>
@@ -225,7 +202,7 @@ for (const [name, selectWasm] of [
   }, async (context) => {
     await runBrowserScenario(
       name,
-      configuration(constraints),
+      configuration(headless),
       AbortSignal.any([cancellation.signal, context.signal]),
       async (scenarioContext) => {
         const result = await scenarioContext.execute(name, {}, () =>
@@ -257,7 +234,7 @@ test("a terminated real worker rejects requests", {
 }, async (context) => {
   await runBrowserScenario(
     "terminated worker request",
-    configuration(constraints),
+    configuration(headless),
     AbortSignal.any([cancellation.signal, context.signal]),
     async (scenarioContext) => {
       const result = await scenarioContext.execute(
@@ -279,7 +256,7 @@ test("worker transport close rejects an error envelope and disposes once", {
 }, async (context) => {
   await runBrowserScenario(
     "worker transport close error",
-    configuration(minimal),
+    configuration(headless),
     AbortSignal.any([cancellation.signal, context.signal]),
     async (scenarioContext) => {
       const result = await scenarioContext.execute(
@@ -295,63 +272,42 @@ test("worker transport close rejects an error envelope and disposes once", {
   );
 });
 
-test("final minimal and constraints WASM omit export-only symbols", {
+test("final WASM ships its contract and matches only its own target client", {
   timeout: 30_000,
 }, async (context) => {
   await runBrowserScenario(
     "final wasm exports",
-    configuration(constraints),
+    configuration(headless),
     AbortSignal.any([cancellation.signal, context.signal]),
     async (scenarioContext) => {
-      const identities: bigint[] = [];
-      for (const [name, wasmUrl, generatedUrl] of [
-        [
-          "headless-builtins",
-          scenarioContext.urls.wasm,
-          scenarioContext.urls.generated,
-        ],
-        [
-          "headless",
-          scenarioContext.urls.mismatchWasm,
-          scenarioContext.urls.mismatchGenerated,
-        ],
-      ] as const) {
-        const generatedHash = await scenarioContext.factory.contractHash(
-          generatedUrl,
+      const { wasm, generated, mismatchGenerated } = scenarioContext.urls;
+      const generatedHash = await scenarioContext.factory.contractHash(
+        generated,
+        scenarioContext.signal,
+      );
+      const runtimeHash = await scenarioContext.factory.wasmSchemaHash(
+        wasm,
+        scenarioContext.signal,
+      );
+      assert.equal(runtimeHash, generatedHash);
+      assert.notEqual(
+        await scenarioContext.factory.contractHash(
+          mismatchGenerated,
           scenarioContext.signal,
-        );
-        const runtimeHash = await scenarioContext.factory.wasmSchemaHash(
-          wasmUrl,
-          scenarioContext.signal,
-        );
-        assert.equal(runtimeHash, generatedHash);
-        identities.push(generatedHash);
-        const exports = await scenarioContext.execute(
-          `inspect ${name} WASM exports`,
-          { wasmUrl },
-          () =>
-            scenarioContext.factory.wasmExports(
-              wasmUrl,
-              scenarioContext.signal,
-            ),
-        );
-        assert.ok(exports.length > 0, `${name} WASM exports are empty`);
-        assert.ok(exports.includes("ipp_schema_hash"));
-        for (const forbidden of [
-          "ipp_contract_ptr",
-          "ipp_contract_len",
-          "ipp_fixture_ptr",
-          "ipp_fixture_len",
-          "ipp_fixture_check",
-        ]) {
-          assert.equal(
-            exports.includes(forbidden),
-            false,
-            `${name} final WASM exports ${forbidden}`,
-          );
-        }
-      }
-      assert.notEqual(identities[0], identities[1]);
+        ),
+        runtimeHash,
+      );
+      const exports = await scenarioContext.execute(
+        "inspect final WASM exports",
+        { wasmUrl: wasm },
+        () => scenarioContext.factory.wasmExports(wasm, scenarioContext.signal),
+      );
+      for (const required of [
+        "ipp_schema_hash",
+        "ipp_contract_ptr",
+        "ipp_contract_len",
+      ])
+        assert.ok(exports.includes(required), `final WASM lacks ${required}`);
     },
   );
 });
@@ -363,7 +319,7 @@ test("accepted client hash and cleanup evidence survive scenario failure", {
   await assert.rejects(
     runBrowserScenario(
       "expected browser scenario failure",
-      configuration(minimal),
+      configuration(headless),
       AbortSignal.any([cancellation.signal, context.signal]),
       async (scenarioContext) => {
         await scenarioContext.driver.waitForFrame(undefined, {
@@ -399,7 +355,6 @@ function browserBuild(
     name,
     generatedModule: resolve(directory, "generated.js"),
     runtimeWasm: resolve(directory, "runtime.wasm"),
-    exportWasm: resolve(directory, "export.wasm"),
     contractArtifact: resolve(directory, "contract.bin"),
   };
 }
@@ -410,7 +365,6 @@ function configuration(
   return {
     workspace,
     build,
-    mismatchBuild: build.name === "headless" ? constraints : minimal,
     evidenceParent: resolve(workspace, "target/integration-artifacts/browser"),
   };
 }
@@ -427,7 +381,7 @@ for (const abortStage of ["server-ready", "browser-launching"] as const) {
       runBrowserScenario(
         `cancel ${abortStage}`,
         {
-          ...configuration(minimal),
+          ...configuration(headless),
           onStartup(stage, endpoint) {
             if (stage === abortStage) {
               origin = endpoint;
@@ -464,3 +418,40 @@ for (const abortStage of ["server-ready", "browser-launching"] as const) {
     }
   });
 }
+
+test("a Chromium that dies fails the running scenario promptly and clearly", {
+  timeout: 30_000,
+}, async (context) => {
+  let failure: BrowserHarnessRunError | undefined;
+  let crashedAt = 0;
+  await assert.rejects(
+    runBrowserEnvironment(
+      "browser dies during scenario",
+      { ...configuration(headless), operationTimeoutMs: 20_000 },
+      AbortSignal.any([cancellation.signal, context.signal]),
+      async (environment) => {
+        const cdp = await environment.page
+          .context()
+          .newCDPSession(environment.page);
+        crashedAt = performance.now();
+        void cdp.send("Browser.crash").catch(() => undefined);
+        await environment.execute("wait on a page whose browser dies", {}, () =>
+          environment.page.waitForFunction(() => false, undefined, {
+            timeout: 0,
+          }),
+        );
+      },
+    ),
+    (error: unknown) => {
+      assert.ok(error instanceof BrowserHarnessRunError);
+      failure = error;
+      return true;
+    },
+  );
+  // Well before the 20 s operation timeout the scenario would otherwise wait for.
+  assert.ok(performance.now() - crashedAt < 5_000);
+  assert.match(
+    String((failure?.cause as Error | undefined)?.message),
+    /Chromium disconnected during the scenario/,
+  );
+});

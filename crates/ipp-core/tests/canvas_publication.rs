@@ -1,7 +1,5 @@
 //! Real headless Canvas production through Host composition; no transport or GPU claim.
 
-#![cfg(feature = "surfaces")]
-
 mod support;
 
 use ipp_core::components::{Surface, Transform};

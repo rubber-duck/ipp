@@ -175,8 +175,10 @@ export async function exerciseEntityLinks(
         Entity,
         { id: "react-references" },
         React.createElement(EntityLink, { parent: target }),
-        client.components.ParentJoint &&
-          React.createElement(ParentJoint, { ordinal: 0xffffffff }),
+        // Joint parents need a World that selects the skinning Systems.
+        client.manifest?.components.includes(
+          client.components.ParentJoint!.id,
+        ) && React.createElement(ParentJoint, { ordinal: 0xffffffff }),
         React.createElement(LookAt, { target }),
       );
     await root.render(references(parentA));

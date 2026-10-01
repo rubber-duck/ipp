@@ -24,7 +24,7 @@ test("React AttachedWorld lifecycle through native WebSocket", {
   const { exerciseAttachedWorldRecovery } = await import(
     "./attached-world-recovery.js"
   );
-  const profile = resolve(workspace, "target/surface-host");
+  const profile = resolve(workspace, "target/world-host-build/native");
   const contract = await import(
     pathToFileURL(resolve(profile, "generated.js")).href
   );
@@ -88,7 +88,7 @@ test("React CanvasWorld through native WebSocket", {
   process.env.NODE_ENV = "production";
   const { exerciseCanvasWorlds } = await import("./canvas-world-case.js");
   const workspace = process.cwd();
-  const profile = resolve(workspace, "target/surface-host");
+  const profile = resolve(workspace, "target/world-host-build/native");
   const contract = await import(
     pathToFileURL(resolve(profile, "generated.js")).href
   );
@@ -124,15 +124,11 @@ for (const variant of ["development", "production"] as const) {
     timeout: 90_000,
   }, async (context) => {
     const workspace = process.cwd();
-    const profile = resolve(
-      workspace,
-      "target/browser-build/headless-surfaces",
-    );
+    const profile = resolve(workspace, "target/browser-build/headless");
     const build: BrowserBuildConfiguration = {
-      name: "headless-surfaces",
+      name: "headless",
       generatedModule: resolve(profile, "generated.js"),
       runtimeWasm: resolve(profile, "runtime.wasm"),
-      exportWasm: resolve(profile, "export.wasm"),
       contractArtifact: resolve(profile, "contract.bin"),
     };
     await runBrowserEnvironment(
@@ -140,7 +136,6 @@ for (const variant of ["development", "production"] as const) {
       {
         workspace,
         build,
-        mismatchBuild: build,
         operationTimeoutMs: 30_000,
       },
       context.signal,
@@ -183,15 +178,11 @@ for (const variant of ["development", "production"] as const) {
     timeout: 90_000,
   }, async (context) => {
     const workspace = process.cwd();
-    const profile = resolve(
-      workspace,
-      "target/browser-build/headless-surfaces",
-    );
+    const profile = resolve(workspace, "target/browser-build/headless");
     const build: BrowserBuildConfiguration = {
-      name: "headless-surfaces",
+      name: "headless",
       generatedModule: resolve(profile, "generated.js"),
       runtimeWasm: resolve(profile, "runtime.wasm"),
-      exportWasm: resolve(profile, "export.wasm"),
       contractArtifact: resolve(profile, "contract.bin"),
     };
     await runBrowserEnvironment(
@@ -199,7 +190,6 @@ for (const variant of ["development", "production"] as const) {
       {
         workspace,
         build,
-        mismatchBuild: build,
         operationTimeoutMs: 30_000,
       },
       context.signal,

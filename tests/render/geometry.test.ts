@@ -10,17 +10,16 @@ test("joint geometry queries, visualization and conservative culling agree throu
   timeout: 60_000,
 }, async (context) => {
   const workspace = resolve(process.cwd());
-  const directory = resolve(workspace, "target/browser-build/render-expanded");
+  const directory = resolve(workspace, "target/browser-build/render");
   const build = {
-    name: "render-expanded" as const,
+    name: "render" as const,
     generatedModule: resolve(directory, "generated.js"),
     runtimeWasm: resolve(directory, "runtime.wasm"),
-    exportWasm: resolve(directory, "export.wasm"),
     contractArtifact: resolve(directory, "contract.bin"),
   };
   await runBrowserEnvironment(
     "shared geometry",
-    { workspace, build, mismatchBuild: build },
+    { workspace, build },
     context.signal,
     async (environment) => {
       const module = `${environment.urls.origin}/dist/tests/render/skinning-fixture.js`;

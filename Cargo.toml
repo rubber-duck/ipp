@@ -28,12 +28,11 @@ tungstenite = { version = "=0.30.0", default-features = false, features = ["hand
 proc-macro2 = { version = "=1.0.107", default-features = false, features = ["proc-macro"] }
 quote = { version = "=1.0.47", default-features = false, features = ["proc-macro"] }
 syn = { version = "=3.0.5", default-features = false, features = ["derive", "parsing", "printing", "proc-macro"] }
-miniz_oxide = { version = "=0.9.1", default-features = false, features = ["with-alloc"] }
 # Complete UAX #29 grapheme segmentation for GUI text editing. Purpose: hand
 # tables cannot cover flags, modifiers, Hangul, ZWJ sequences and conjuncts
 # correctly. No features enabled; the crate has no transitive dependencies.
 # Maintained by unicode-rs with a stable API. Cost: small segmentation tables
-# linked only into `gui`-enabled builds (see ipp-core); lean builds omit it.
+# linked into every build through ipp-core.
 unicode-segmentation = { version = "=1.12.0", default-features = false }
 
 [workspace.lints.rust]
@@ -54,3 +53,10 @@ lto = "thin"
 codegen-units = 1
 strip = "symbols"
 panic = "abort"
+
+# WASM World test hosts: dev builds keep debug assertions and overflow checks
+# on the 32-bit target but carry no DWARF, which no browser reads and which
+# made each worker start fetch over 200 MB.
+[profile.wasm-dev]
+inherits = "dev"
+debug = false

@@ -1,8 +1,11 @@
-import type { RenderStatisticsSnapshot } from "@ipp/client";
+import type {
+  RenderStatisticsSnapshot,
+  SurfaceCacheRecord,
+} from "@ipp/client/diagnostics";
 import assert from "node:assert/strict";
 import { resolve } from "node:path";
 import test from "node:test";
-import type { Inspection, SurfaceCacheRecord } from "@ipp/client";
+import type { Inspection } from "@ipp/client";
 import { runBrowserEnvironment } from "../browser/environment.js";
 import {
   galleryEnvironment,
@@ -76,6 +79,11 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
       );
       await g.call("galleryGuiState");
       await g.page.locator("#ipp-world-canvas").scrollIntoViewIfNeeded();
+      const canvas = await g.page.locator("#ipp-world-canvas").boundingBox();
+      assert.ok(canvas);
+      // Pointer distances as a share of the canvas width, so gestures keep
+      // their extent in the scene at any canvas size.
+      const span = (share: number) => canvas.width * share;
 
       const point = (
         role: GalleryGuiSelector["role"],
@@ -156,15 +164,19 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
         });
         candidates.sort((a, b) => b.room - a.room);
         const edge = candidates[0]!;
-        assert.ok(edge.room > 30, "GUI demo leaves no camera drag area");
+        assert.ok(
+          edge.room > span(0.035),
+          "GUI demo leaves no camera drag area",
+        );
+        const margin = span(0.016);
         return {
           outside: [
-            edge.midpoint[0] + edge.outward[0] * 14,
-            edge.midpoint[1] + edge.outward[1] * 14,
+            edge.midpoint[0] + edge.outward[0] * margin,
+            edge.midpoint[1] + edge.outward[1] * margin,
           ] as [number, number],
           inside: [
-            edge.midpoint[0] - edge.outward[0] * 14,
-            edge.midpoint[1] - edge.outward[1] * 14,
+            edge.midpoint[0] - edge.outward[0] * margin,
+            edge.midpoint[1] - edge.outward[1] * margin,
           ] as [number, number],
           tangent: edge.tangent,
         };
@@ -257,8 +269,8 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
       edge = await panelEdge();
       const beforeOrbit = transform(await g.inspect());
       await g.drag(edge.outside, [
-        edge.outside[0] + edge.tangent[0] * 60,
-        edge.outside[1] + edge.tangent[1] * 60,
+        edge.outside[0] + edge.tangent[0] * span(0.07),
+        edge.outside[1] + edge.tangent[1] * span(0.07),
       ]);
       await g.waitFor((inspection) => cameraChanged(beforeOrbit, inspection));
       const orbited = await cacheState("camera-cache-orbited");
@@ -468,14 +480,14 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
 
       const input = await point("text", "CALLSIGN");
       await unchangedAfterDrag(
-        [input.clientX - 12, input.clientY],
-        [input.clientX + 28, input.clientY],
+        [input.clientX - span(0.014), input.clientY],
+        [input.clientX + span(0.033), input.clientY],
       );
 
       const beforeQuickDrag = transform(await g.inspect());
       await g.drag(edge.outside, [
-        edge.outside[0] + edge.tangent[0] * 34,
-        edge.outside[1] + edge.tangent[1] * 34,
+        edge.outside[0] + edge.tangent[0] * span(0.04),
+        edge.outside[1] + edge.tangent[1] * span(0.04),
       ]);
       await g.waitFor((inspection) =>
         cameraChanged(beforeQuickDrag, inspection),
@@ -624,7 +636,10 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
           document.querySelector<HTMLElement>(".viewer-shell")?.dataset.page ===
           "shapes",
       );
-      await g.page.mouse.move(edge.outside[0] + 90, edge.outside[1] + 40);
+      await g.page.mouse.move(
+        edge.outside[0] + span(0.105),
+        edge.outside[1] + span(0.047),
+      );
       await g.page.mouse.up();
       const afterNavigation = transform(await g.settle());
       await new Promise((resolve) => setTimeout(resolve, 50));

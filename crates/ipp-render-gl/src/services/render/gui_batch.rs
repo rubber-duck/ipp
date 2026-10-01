@@ -180,7 +180,6 @@ pub struct GuiBatchRenderCache<D: RenderDevice> {
     /// Surfaces waiting to retry after a recoverable storage failure.
     backoff: BTreeMap<ipp_core::EntityId, StorageBackoff>,
     /// Sum of allocated bytes over `storage`.
-    #[cfg(any(test, feature = "diagnostics"))]
     resident: usize,
     /// Surface whose pieces are being collected.
     entity: ipp_core::EntityId,
@@ -201,7 +200,6 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
             cpu_primitives: BTreeMap::new(),
             storage: BTreeMap::new(),
             backoff: BTreeMap::new(),
-            #[cfg(any(test, feature = "diagnostics"))]
             resident: 0,
             entity: ipp_core::EntityId::from_bits(0),
             pieces: Vec::new(),
@@ -220,17 +218,13 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
         }
         self.cpu_primitives.clear();
         self.backoff.clear();
-        #[cfg(any(test, feature = "diagnostics"))]
-        {
-            self.resident = 0;
-        }
+        self.resident = 0;
         self.pieces.clear();
         self.piece_boxes.clear();
         self.run_boxes.clear();
     }
 
     /// Total resident bytes occupied by retained GPU storage.
-    #[cfg(any(test, feature = "diagnostics"))]
     pub fn resident_bytes(&self) -> usize {
         self.resident
     }
@@ -253,7 +247,6 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
     /// Stable boxes split at identity-selected boundaries; volatile boxes form their own
     /// small batches. Boxes whose retained hash was computed under the Surface's reusable
     /// `paint` revision are not hashed again.
-    #[cfg_attr(not(any(test, feature = "diagnostics")), allow(unused_variables))]
     pub fn push_boxes(
         &mut self,
         paint: SurfacePaint,
@@ -316,20 +309,14 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
                             cached.hash = hash;
                             cached.vertices = generate();
                             cached.volatile_until = self.frame + VOLATILE_FRAMES;
-                            #[cfg(any(test, feature = "diagnostics"))]
-                            {
-                                stats.statistics.gui_rebuilds += 1;
-                            }
+                            stats.statistics.gui_rebuilds += 1;
                         }
                         cached.revision = paint.revision;
                     }
                     cached
                 }
                 Entry::Vacant(entry) => {
-                    #[cfg(any(test, feature = "diagnostics"))]
-                    {
-                        stats.statistics.gui_rebuilds += 1;
-                    }
+                    stats.statistics.gui_rebuilds += 1;
                     entry.insert(CachedPrimitiveGeometry {
                         hash: hash(),
                         revision: paint.revision,
@@ -433,7 +420,6 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
         }
 
         let mut storage = self.storage.remove(&entity);
-        #[cfg(any(test, feature = "diagnostics"))]
         let before = storage.as_ref().map_or(0, GuiSurfaceStorage::bytes);
         let cpu_primitives = &self.cpu_primitives;
         let piece_boxes = &self.piece_boxes;
@@ -463,11 +449,8 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
             stats,
         );
 
-        #[cfg(any(test, feature = "diagnostics"))]
-        {
-            let after = storage.as_ref().map_or(0, GuiSurfaceStorage::bytes);
-            self.resident = self.resident - before + after;
-        }
+        let after = storage.as_ref().map_or(0, GuiSurfaceStorage::bytes);
+        self.resident = self.resident - before + after;
         if let Some(mut storage) = storage {
             storage.seen = self.frame;
             self.storage.insert(entity, storage);
@@ -541,10 +524,7 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
             let mut device = self.device.borrow_mut();
             for entity in stale {
                 if let Some(storage) = self.storage.remove(&entity) {
-                    #[cfg(any(test, feature = "diagnostics"))]
-                    {
-                        self.resident -= storage.bytes();
-                    }
+                    self.resident -= storage.bytes();
                     storage.delete(&mut device);
                 }
             }

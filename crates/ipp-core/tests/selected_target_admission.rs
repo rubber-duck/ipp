@@ -141,7 +141,6 @@ fn selected_animation_rejects_unsupported_targets_before_resource_readiness() {
             name: "value".into(),
         },
     ];
-    #[cfg(feature = "skeletal-animation")]
     unsupported.push(AnimationTrackTarget::Joints(vec![0]));
     unsupported.push(property(ComponentValue::LOOK_AT));
     for target_property in unsupported {
@@ -447,7 +446,6 @@ fn selected_animation_snapshot_rebuilds_bindings_and_rejects_missing_target_eval
     assert_eq!(world.animation_controller(controller), Some(snapshot));
 }
 
-#[cfg(feature = "skeletal-animation")]
 #[test]
 fn joint_targets_require_joint_animation_and_parent_joint_requires_hierarchy() {
     use ipp_core::systems::{asset_dependencies::AssetDependencySystem, skeleton::SkeletonSystem};

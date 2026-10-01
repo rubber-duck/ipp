@@ -12,12 +12,14 @@ test("direct lights and spotlight depth maps follow authored state and recover i
   timeout: 90000,
 }, async (context) => {
   const workspace = resolve(process.cwd());
-  const directory = resolve(workspace, "target/browser-build/render-shadows");
+  const directory = resolve(
+    workspace,
+    "target/browser-build/render-instrumentation",
+  );
   const build: BrowserBuildConfiguration = {
-    name: "render-shadows",
+    name: "render-instrumentation",
     generatedModule: resolve(directory, "generated.js"),
     runtimeWasm: resolve(directory, "runtime.wasm"),
-    exportWasm: resolve(directory, "export.wasm"),
     contractArtifact: resolve(directory, "contract.bin"),
   };
   await runBrowserEnvironment(
@@ -25,7 +27,6 @@ test("direct lights and spotlight depth maps follow authored state and recover i
     {
       workspace,
       build,
-      mismatchBuild: build,
       operationTimeoutMs: 20000,
       closeTimeoutMs: 5000,
       evidenceParent: resolve(
@@ -78,6 +79,12 @@ test("direct lights and spotlight depth maps follow authored state and recover i
           },
         ]);
         const initial = await capture("shadowed");
+        // Pixel thresholds below are stated for the 480x360 canvas they were
+        // set on: counts scale with the rendered area and distances with its
+        // linear size, so each keeps its strength at the rendered size.
+        const areaShare = (initial.width * initial.height) / (480 * 360);
+        const atArea = (pixels: number) => pixels * areaShare;
+        const atLength = (pixels: number) => pixels * Math.sqrt(areaShare);
         const bounds =
           await call<Awaited<ReturnType<typeof Fixture.automaticBounds>>>(
             "automaticBounds",
@@ -93,18 +100,22 @@ test("direct lights and spotlight depth maps follow authored state and recover i
         assert.deepEqual(bounds.restored, bounds.before);
         await capture("bounds-restored");
         assert.ok(
-          (await difference("shadowed", "bounds-restored")).changedPixels < 5,
+          (await difference("shadowed", "bounds-restored")).changedPixels <
+            atArea(5),
         );
         await update("spot", "Light", { cast_shadows: false });
         await capture("unshadowed");
         const shadow = await shadowDifference("unshadowed", "shadowed");
         environment.evidence.record("shadow_measurement", shadow);
         assert.ok(
-          shadow.darkened > 180,
+          shadow.darkened > atArea(180),
           `The caster must darken a measurable receiver region: ${JSON.stringify(shadow)}`,
         );
         assert.equal(shadow.brightened, 0, "Occlusion cannot add illumination");
-        assert.ok(shadow.sentinel > 100, "Unlit sentinel remains visible");
+        assert.ok(
+          shadow.sentinel > atArea(100),
+          "Unlit sentinel remains visible",
+        );
         assert.equal(
           shadow.changedSentinel,
           0,
@@ -126,11 +137,11 @@ test("direct lights and spotlight depth maps follow authored state and recover i
         >("softShadowDifference", ["unshadowed", "shadowed", "large-emitter"]);
         environment.evidence.record("soft_shadow_edges", { small, soft });
         assert.ok(
-          soft.softened > 100,
+          soft.softened > atArea(100),
           "A finite emitter lightens the inner shadow edge",
         );
         assert.ok(
-          soft.spread > small.spread + 30,
+          soft.spread > small.spread + atArea(30),
           "A larger emitter widens the penumbra",
         );
         assert.equal(soft.brightened, 0, "Soft shadows never add light");
@@ -138,7 +149,7 @@ test("direct lights and spotlight depth maps follow authored state and recover i
         await capture("soft-shadow-restored");
         assert.ok(
           (await difference("large-emitter", "soft-shadow-restored"))
-            .changedPixels < 5,
+            .changedPixels < atArea(5),
         );
         await update("spot", "Light", {
           shadow_radius: 0,
@@ -169,12 +180,12 @@ test("direct lights and spotlight depth maps follow authored state and recover i
           "light-moved-lit",
           "light-moved-shadowed",
         );
-        assert.ok(moved.darkened > 180);
+        assert.ok(moved.darkened > atArea(180));
         assert.ok(
           Math.hypot(
             moved.centroid[0]! - shadow.centroid[0]!,
             moved.centroid[1]! - shadow.centroid[1]!,
-          ) > 20,
+          ) > atLength(20),
           "The shadow must move with the light",
         );
         await update("cube", "Transform", { x: 0.9 });
@@ -185,12 +196,12 @@ test("direct lights and spotlight depth maps follow authored state and recover i
           "caster-moved-lit",
           "caster-moved-shadowed",
         );
-        assert.ok(caster.darkened > 100);
+        assert.ok(caster.darkened > atArea(100));
         assert.ok(
           Math.hypot(
             caster.centroid[0]! - moved.centroid[0]!,
             caster.centroid[1]! - moved.centroid[1]!,
-          ) > 15,
+          ) > atLength(15),
         );
 
         const partial =
@@ -255,7 +266,7 @@ test("direct lights and spotlight depth maps follow authored state and recover i
         const facets = await difference("normals-smooth", "normals-flat");
         environment.evidence.record("normal_shading_difference", facets);
         assert.ok(
-          facets.changedPixels > 300,
+          facets.changedPixels > atArea(300),
           "Supplied normals must smooth the same sphere triangles",
         );
         assert.equal(
@@ -287,7 +298,7 @@ test("direct lights and spotlight depth maps follow authored state and recover i
         const textured = await capture("textured-pbr");
         assert.ok(
           (await difference("normals-restored", "textured-pbr")).changedPixels >
-            300,
+            atArea(300),
           "Base-color sampling must visibly modulate lit geometry",
         );
         await update("spot", "Light", { intensity: 0 });
@@ -295,14 +306,14 @@ test("direct lights and spotlight depth maps follow authored state and recover i
         await capture("textured-pbr-dark");
         assert.ok(
           (await difference("textured-pbr", "textured-pbr-dark"))
-            .changedPixels > 300,
+            .changedPixels > atArea(300),
           "Textured PBR must respond to authored lights",
         );
         await call("ambientLight", [[0.25, 0.5, 0.75]]);
         await capture("textured-pbr-ambient");
         assert.ok(
           (await difference("textured-pbr-dark", "textured-pbr-ambient"))
-            .changedPixels > 300,
+            .changedPixels > atArea(300),
           "Ambient fill must illuminate textured PBR with punctual lights off",
         );
         assert.equal(
@@ -352,7 +363,7 @@ test("direct lights and spotlight depth maps follow authored state and recover i
           "textured-pbr-shadowed",
         );
         assert.ok(
-          texturedShadow.darkened > 100,
+          texturedShadow.darkened > atArea(100),
           "Textured PBR and the spotlight shadow sampler must work together",
         );
         assert.equal(texturedShadow.brightened, 0);
@@ -387,7 +398,7 @@ test("direct lights and spotlight depth maps follow authored state and recover i
             contribution,
           );
           assert.ok(
-            contribution.darkened > 40,
+            contribution.darkened > atArea(40),
             `Shadow source ${index} must independently occlude the receiver`,
           );
           assert.equal(
@@ -401,7 +412,7 @@ test("direct lights and spotlight depth maps follow authored state and recover i
         await capture("four-shadows-restored");
         assert.ok(
           (await difference("four-shadows", "four-shadows-restored"))
-            .changedPixels < 5,
+            .changedPixels < atArea(5),
         );
         await call("initialize", [
           {
@@ -416,7 +427,7 @@ test("direct lights and spotlight depth maps follow authored state and recover i
         await capture("without-eighth-shadow");
         assert.ok(
           (await shadowDifference("without-eighth-shadow", "eight-shadows"))
-            .darkened > 20,
+            .darkened > atArea(20),
           "The eighth source renders and samples the third atlas row",
         );
         const worker = environment.page.workers()[0]!;
@@ -448,7 +459,7 @@ test("direct lights and spotlight depth maps follow authored state and recover i
                 "shadow-allocation-fallback",
                 "without-eighth-shadow",
               )
-            ).darkened > 20,
+            ).darkened > atArea(20),
             "exhausted shadow slots leave lights illuminating",
           );
           const again = await capture("shadow-allocation-fallback-stable");
@@ -459,7 +470,7 @@ test("direct lights and spotlight depth maps follow authored state and recover i
                 "shadow-allocation-fallback",
                 "shadow-allocation-fallback-stable",
               )
-            ).changedPixels < 5,
+            ).changedPixels < atArea(5),
           );
         } finally {
           await worker.evaluate(() => {
@@ -479,7 +490,7 @@ test("direct lights and spotlight depth maps follow authored state and recover i
               "without-eighth-shadow",
               "shadow-capacity-recovered",
             )
-          ).changedPixels < 5,
+          ).changedPixels < atArea(5),
         );
 
         await call("initialize", [
@@ -510,7 +521,7 @@ test("direct lights and spotlight depth maps follow authored state and recover i
               "sixteen-lights-separated",
               "sixteen-lights-recovered",
             )
-          ).changedPixels < 5,
+          ).changedPixels < atArea(5),
         );
         await call("initialize", [
           {

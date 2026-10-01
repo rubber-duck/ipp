@@ -112,7 +112,6 @@ impl HostRuntime {
             &mut self.data_sources,
         )
         .map(|mut world| {
-            #[cfg(feature = "surfaces")]
             if let Some(canvas) = options.canvas {
                 world.seed_canvas_state(canvas);
             }

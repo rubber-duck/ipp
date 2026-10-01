@@ -20,11 +20,9 @@ pub(crate) const MATERIAL: [f32; 3] = [0.25, 0.5, 0.75];
 const BACKGROUND: [u8; 4] = [10, 14, 20, 255];
 
 /// The shared fixture scene: a camera over rendered content, Surface anchors
-/// for attached Worlds when compiled, and particle producers when compiled.
+/// for attached Worlds and particle producers.
 fn fixture_systems() -> Vec<ipp_core::systems::SystemId> {
-    #[allow(unused_mut)]
     let mut selected = super::selection::scene();
-    #[cfg(feature = "particles")]
     selected.extend(super::selection::select(&[super::selection::PARTICLES]));
     selected.sort_by_key(|id| id.0);
     selected.dedup();
@@ -349,8 +347,8 @@ pub fn run<D: RenderDevice>(
     save(output, "low-linear", &low)?;
     assert_colors(&low, &colors, [0.001, MATERIAL[1], MATERIAL[2]]);
 
-    // Keep position-only rendering in the lean world harness as well as the
-    // expanded texture corpus. The upload fixture owns exact V3 wire bytes.
+    // Cover position-only rendering here as well as in the texture corpus. The
+    // upload fixture owns exact V3 wire bytes.
     let source = &mesh_asset;
     let mut bytes = b"IPPM".to_vec();
     for value in [

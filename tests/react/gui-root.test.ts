@@ -11,9 +11,10 @@ test("ordinary React GUI through native WebSocket", {
   process.env.NODE_ENV = "production";
   const { guiAuthoring, reactLifecycleTransport, webSocketTransport } =
     await import("./gui-authoring.js");
-  const directory = resolve("target/gui-host");
+  const directory = resolve("target/integration-artifacts/native");
   const contract = await import(
-    pathToFileURL(resolve(directory, "generated.js")).href
+    pathToFileURL(resolve("target/integration-artifacts/client/generated.js"))
+      .href
   );
   await runNativeEnvironment(
     "react-gui-authoring-native",
@@ -56,12 +57,11 @@ for (const variant of ["development", "production"] as const) {
   test(`ordinary React GUI through worker WASM ${variant}`, {
     timeout: 90_000,
   }, async (context) => {
-    const directory = resolve("target/browser-build/headless-gui");
+    const directory = resolve("target/browser-build/render");
     const build = {
-      name: "headless-gui" as const,
+      name: "render" as const,
       generatedModule: resolve(directory, "generated.js"),
       runtimeWasm: resolve(directory, "runtime.wasm"),
-      exportWasm: resolve(directory, "export.wasm"),
       contractArtifact: resolve(directory, "contract.bin"),
     };
     await runBrowserEnvironment(
@@ -69,7 +69,6 @@ for (const variant of ["development", "production"] as const) {
       {
         workspace: process.cwd(),
         build,
-        mismatchBuild: build,
         rendering: true,
         operationTimeoutMs: 60_000,
       },

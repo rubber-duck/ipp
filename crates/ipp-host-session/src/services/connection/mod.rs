@@ -32,6 +32,9 @@ pub(crate) struct HostConnectionState {
     /// The Host withholds this connection's input until admission recovers.
     pub(crate) throttled: bool,
     sessions: BTreeSet<u64>,
+    /// Sessions this connection held that detach or World destruction ended. The
+    /// client may still send on one until it reads that end; such messages are stale.
+    ended_sessions: BTreeSet<u64>,
     last_output_session: u64,
     last_progress_session: u64,
     progress_turn: bool,
@@ -72,6 +75,30 @@ impl HostConnectionState {
                 .filter_map(|id| sessions.get(id))
                 .map(|session| session.pending.len())
                 .sum::<usize>()
+    }
+
+    /// Whether a World message naming `session` is live work of this connection.
+    ///
+    /// A session the connection held and has ended answers `Ok(false)`: the message
+    /// was sent before the client read that end, and the end already settled the
+    /// session's work, so it is fenced without a reply and the connection stays
+    /// usable. A session the connection never held fails the connection.
+    pub(crate) fn holds_session(&self, session: u64) -> Result<bool, String> {
+        if self.sessions.contains(&session) {
+            Ok(true)
+        } else if self.ended_sessions.contains(&session) {
+            Ok(false)
+        } else {
+            Err("SessionMismatch".into())
+        }
+    }
+
+    /// End a session of this connection; its later messages are stale.
+    fn end_session(&mut self, session: u64) {
+        if self.sessions.remove(&session) {
+            self.ended_sessions.insert(session);
+        }
+        self.batches.release_session(session);
     }
 
     /// Client-controlled request count: queued requests, or admitted correlated requests whose

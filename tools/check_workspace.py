@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check crate boundaries and representative feature graphs using actual Cargo resolution."""
+"""Check crate boundaries and the build-axis feature graphs using actual Cargo resolution."""
 
 import json
 from pathlib import Path
@@ -14,7 +14,22 @@ RENDER = "ipp-render-gl"
 HOST_SESSION = "ipp-host-session"
 MACROS = "ipp-schema-derive"
 HOSTS = ("ipp-server", "ipp-wasm")
-BUILTIN_DEFAULTS = {CORE, "ipp-protocol", HOST_SESSION, *HOSTS}
+INSTRUMENTATION = "instrumentation"
+# Logging and statistics are compiled into every build; `instrumentation` adds the
+# test-only controls and profiling hooks. Builds vary only by instrumentation,
+# rendering backend and host target. A World excludes a capability through its
+# System selection, never through a feature.
+FEATURES = {
+    CORE: {"default", INSTRUMENTATION, "checked-invariants"},
+    "ipp-protocol": {"default", INSTRUMENTATION},
+    HOST_SESSION: {"default", INSTRUMENTATION},
+    RENDER: {"default", INSTRUMENTATION},
+    "ipp-server": {"default", INSTRUMENTATION},
+    # The WASM host links its one renderer only with `render`.
+    "ipp-wasm": {"default", INSTRUMENTATION, "render"},
+    MACROS: {"default"},
+    "ipp-schema-gen": {"default"},
+}
 EDGES = {
     CORE: {MACROS},
     "ipp-protocol": {CORE},
@@ -49,38 +64,16 @@ def check_manifests():
         packages.keys() == EDGES.keys(),
         "Update the reviewed crate policy when changing workspace membership",
     )
-    allowed = {
-        "default",
-        "builtin-assets",
-        "skeletal-animation",
-        "mesh-poses",
-        "particles",
-        "surfaces",
-        "gui",
-        "shadows",
-        "render",
-        "websocket",
-        "zip-data-source",
-        "diagnostics",
-        "schema-export",
-        # Opt-in profiling instrumentation; never included in a runtime default.
-        "profiling",
-        # Dev-only core oracle, enabled solely through ipp-core's self
-        # dev-dependency and never in a build profile.
-        "checked-invariants",
-    }
-    declared = {
-        feature for package in packages.values() for feature in package["features"]
-    }
-    require(
-        declared == allowed,
-        f"Unexpected workspace feature surface: {declared ^ allowed}",
-    )
     for name, package in packages.items():
+        declared = set(package["features"])
         require(
-            package["features"].get("default")
-            == (["builtin-assets"] if name in BUILTIN_DEFAULTS else []),
-            f"{name}: default capabilities differ from the architecture",
+            declared == FEATURES[name],
+            f"{name}: unexpected features {sorted(declared ^ FEATURES[name])}; "
+            "capabilities are always compiled and selected per World",
+        )
+        require(
+            package["features"].get("default") == [],
+            f"{name}: default features must be empty",
         )
         # A package's dev-dependency on itself only enables test features.
         internal = {
@@ -132,11 +125,11 @@ def check_manifests():
             for d in packages["ipp-server"]["dependencies"]
             if d["name"] == RENDER
         ),
-        "ipp-server: the renderer serves only its profiling example",
+        "ipp-server: the renderer serves only its testing examples",
     )
 
 
-def graph(package, target, features, default_features=False):
+def graph(package, target, features):
     command = [
         "cargo",
         "tree",
@@ -152,9 +145,8 @@ def graph(package, target, features, default_features=False):
         "--format",
         "{p}|{f}",
         "--no-dedupe",
+        "--no-default-features",
     ]
-    if not default_features:
-        command += ["--no-default-features"]
     if features:
         command += ["--features", ",".join(features)]
     resolved = {}
@@ -166,18 +158,9 @@ def graph(package, target, features, default_features=False):
     return resolved
 
 
-def check_graph(
-    package,
-    target,
-    features,
-    core_features,
-    renderer_features=None,
-    *,
-    default_features=False,
-):
-    resolved = graph(package, target, features, default_features)
-    selection = ["default", *features] if default_features else features
-    label = f"{package} [{','.join(selection) or 'minimal'}] on {target}"
+def check_graph(package, target, features, core_features, renderer_features=None):
+    resolved = graph(package, target, features)
+    label = f"{package} [{','.join(features) or 'production'}] on {target}"
     require(
         resolved.get(CORE) == set(core_features),
         f"{label}: unexpected core features: {resolved.get(CORE)}",
@@ -207,14 +190,14 @@ def check_graph(
         set(resolved) & EDGES.keys() == expected,
         f"{label}: unexpected internal dependency",
     )
-    websocket = package == "ipp-server" and "websocket" in features
+    require(
+        "unicode-segmentation" in resolved,
+        f"{label}: core text segmentation must be linked into every build",
+    )
+    websocket = package == "ipp-server"
     require(
         ("tungstenite" in resolved) == websocket,
-        f"{label}: WebSocket dependencies must be isolated to the selected native transport",
-    )
-    require(
-        ("miniz_oxide" in resolved) == ("zip-data-source" in features),
-        f"{label}: ZIP decoder dependencies must remain optional",
+        f"{label}: WebSocket dependencies belong only to the native server",
     )
     if websocket:
         require(
@@ -232,96 +215,28 @@ def main():
         if line.startswith("host: ")
     )
     count = 0
-    scene = [
-        "builtin-assets",
-        "skeletal-animation",
-        "mesh-poses",
-        "shadows",
-        "particles",
-        "surfaces",
-    ]
+    selections = ([], [INSTRUMENTATION])
     for target in (native, "wasm32-unknown-unknown"):
         for package in (CORE, "ipp-protocol", HOST_SESSION):
-            check_graph(package, target, [], [])
-            check_graph(
-                package,
-                target,
-                [],
-                ["builtin-assets"] + (["default"] if package == CORE else []),
-                default_features=True,
-            )
-            count += 2
-            for feature in scene:
-                check_graph(package, target, [feature], [feature])
+            for features in selections:
+                check_graph(package, target, features, features)
                 count += 1
-        check_graph(CORE, target, ["zip-data-source"], ["zip-data-source"])
-        check_graph("ipp-protocol", target, ["schema-export"], [])
-        check_graph(RENDER, target, [], [], [])
-        check_graph(RENDER, target, ["diagnostics"], ["diagnostics"], ["diagnostics"])
+        for features in selections:
+            check_graph(RENDER, target, features, features, features)
+            count += 1
+    for features in selections:
+        # The native server has no render feature; its renderer is a
+        # dev-dependency of its testing examples.
+        check_graph("ipp-server", native, features, features)
+        check_graph("ipp-wasm", "wasm32-unknown-unknown", features, features)
         check_graph(
-            RENDER,
-            target,
-            ["skeletal-animation", "mesh-poses", "shadows", "particles", "surfaces"],
-            ["skeletal-animation", "mesh-poses", "shadows", "particles", "surfaces"],
-            ["skeletal-animation", "mesh-poses", "shadows", "particles", "surfaces"],
+            "ipp-wasm",
+            "wasm32-unknown-unknown",
+            ["render", *features],
+            features,
+            features,
         )
-        count += 5
-    for host, target in zip(HOSTS, (native, "wasm32-unknown-unknown")):
-        for features, core, renderer in (
-            ([], [], None),
-            (["render"], [], []),
-            (["diagnostics"], ["diagnostics"], None),
-            (["builtin-assets"], ["builtin-assets"], None),
-            (["skeletal-animation"], ["skeletal-animation"], None),
-            (["mesh-poses"], ["mesh-poses"], None),
-            (["surfaces"], ["surfaces"], None),
-            (["gui"], ["gui", "surfaces"], None),
-            (["shadows"], ["shadows"], ["shadows"]),
-            (
-                ["render", "skeletal-animation"],
-                ["skeletal-animation"],
-                ["skeletal-animation"],
-            ),
-            (["render", "mesh-poses"], ["mesh-poses"], ["mesh-poses"]),
-            (["render", "surfaces"], ["surfaces"], ["surfaces"]),
-            (
-                ["render", "gui"],
-                ["gui", "surfaces"],
-                ["gui", "surfaces"],
-            ),
-            (
-                ["render", "diagnostics", *scene],
-                ["diagnostics", *scene],
-                [
-                    # The WASM host forwards diagnostics to its renderer statistics.
-                    *(["diagnostics"] if host == "ipp-wasm" else []),
-                    "skeletal-animation",
-                    "mesh-poses",
-                    "shadows",
-                    "particles",
-                    "surfaces",
-                ],
-            ),
-        ):
-            if host == "ipp-server":
-                # The native server has no render feature; its renderer is a
-                # dev-dependency of the profiling example.
-                if features == ["render"]:
-                    continue
-                features = [feature for feature in features if feature != "render"]
-                renderer = None
-            check_graph(host, target, features, core, renderer)
-            count += 1
-        check_graph(host, target, [], ["builtin-assets"], default_features=True)
-        count += 1
-        if host == "ipp-wasm":
-            check_graph(
-                host, target, ["render"], ["builtin-assets"], [], default_features=True
-            )
-            count += 1
-    check_graph("ipp-server", native, ["websocket"], [])
-    check_graph("ipp-wasm", "wasm32-unknown-unknown", ["schema-export"], [])
-    count += 2
+        count += 3
     print(
         f"Checked eight crate boundaries and {count} resolved native/WASM feature graphs."
     )

@@ -13,12 +13,11 @@ test("standard Blender disk export imports a reusable action library and renders
   timeout: 120000,
 }, async (context) => {
   const workspace = process.cwd(),
-    directory = resolve(workspace, "target/browser-build/render-expanded");
+    directory = resolve(workspace, "target/browser-build/render");
   const build = {
-    name: "render-expanded" as const,
+    name: "render" as const,
     generatedModule: resolve(directory, "generated.js"),
     runtimeWasm: resolve(directory, "runtime.wasm"),
-    exportWasm: resolve(directory, "export.wasm"),
     contractArtifact: resolve(directory, "contract.bin"),
   };
   await runBrowserEnvironment(
@@ -26,7 +25,6 @@ test("standard Blender disk export imports a reusable action library and renders
     {
       workspace,
       build,
-      mismatchBuild: build,
       operationTimeoutMs: 45000,
       evidenceParent: resolve(
         workspace,

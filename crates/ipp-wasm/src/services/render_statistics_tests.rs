@@ -97,12 +97,7 @@ fn totals_accumulate_every_completed_render() {
     assert_eq!(words[UPLOADED_BYTES], 2);
     assert_eq!(words[TOTAL_UPLOADED_BYTES], 42);
     assert_eq!(words[UNSHADOWED_LIGHTS], 0);
-    assert_eq!(words[FLAGS] & FLAG_GUI != 0, cfg!(feature = "gui"));
-    assert_eq!(
-        words[FLAGS] & FLAG_SURFACES != 0,
-        cfg!(feature = "surfaces")
-    );
-    assert_eq!(words[FLAGS] & FLAG_SHADOWS != 0, cfg!(feature = "shadows"));
+    assert_eq!(words[FLAGS], 0);
 }
 
 #[test]
@@ -118,7 +113,6 @@ fn totals_saturate() {
     assert_eq!(record.fill(&large)[TOTAL_UPLOADED_BYTES], u32::MAX);
 }
 
-#[cfg(feature = "gui")]
 #[test]
 fn layout_words_require_a_supported_host_sample() {
     let mut record = RenderStatisticsRecord::new();
@@ -138,7 +132,6 @@ fn layout_words_require_a_supported_host_sample() {
     assert_eq!(record.fill(&statistics)[FLAGS] & FLAG_LAYOUT, 0);
 }
 
-#[cfg(feature = "gui")]
 #[test]
 fn host_layout_membership_and_words_share_the_same_sample() {
     let mut record = RenderStatisticsRecord::new();

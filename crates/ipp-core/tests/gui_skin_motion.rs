@@ -1,5 +1,4 @@
 //! Ordinary skin motion through real Host mutation, asset demand and retained Canvas output.
-#![cfg(feature = "gui")]
 
 mod support;
 
@@ -396,7 +395,6 @@ fn four_controls_sample_once_before_paint_without_reflow_and_reuse_settled_chunk
         let mut fixture = Fixture::new(control);
         assert_eq!(fixture.status(), Some(GuiSkinMotionStatus::Ready));
         assert_eq!(fixture.color(), RED);
-        #[cfg(feature = "diagnostics")]
         let measured = fixture
             .host
             .world_mut(fixture.world)
@@ -409,7 +407,6 @@ fn four_controls_sample_once_before_paint_without_reflow_and_reuse_settled_chunk
         assert_eq!(fixture.color(), [0.75, 0.0, 0.25, 1.0]);
         fixture.frame(0.25);
         assert_eq!(fixture.color(), [0.5, 0.0, 0.5, 1.0]);
-        #[cfg(feature = "diagnostics")]
         assert_eq!(
             fixture
                 .host
@@ -1145,7 +1142,6 @@ fn committed_retarget_round_trip_rearms_the_unchanged_request() {
                 _ => [0.75, 0.0, 0.25, 1.0],
             }
         );
-        #[cfg(feature = "diagnostics")]
         if stage != "pending" {
             let (_, sampling) = fixture
                 .host
@@ -1563,7 +1559,6 @@ fn focus_and_blur_use_separate_continuous_motion_with_interruption() {
     fixture.frame(0.0);
     assert_eq!(focus_opacity(&fixture), 0.0);
     let committed = fixture.read(fixture.control).unwrap().value;
-    #[cfg(feature = "diagnostics")]
     let layout = fixture
         .host
         .world_mut(fixture.world)
@@ -1588,7 +1583,6 @@ fn focus_and_blur_use_separate_continuous_motion_with_interruption() {
     assert_eq!(focus_opacity(&fixture), 0.0);
     let snapshot = fixture.read(fixture.control).unwrap();
     assert!(committed == snapshot.value);
-    #[cfg(feature = "diagnostics")]
     assert_eq!(
         fixture
             .host
@@ -1914,7 +1908,6 @@ fn sparse_ancestry_rebinds_after_reparent_cycle_and_correction() {
     .unwrap();
     fixture.frame(0.5);
     assert_eq!(fixture.color(), RED);
-    #[cfg(feature = "diagnostics")]
     assert_eq!(
         fixture
             .host
@@ -1927,7 +1920,6 @@ fn sparse_ancestry_rebinds_after_reparent_cycle_and_correction() {
     );
 }
 
-#[cfg(feature = "diagnostics")]
 #[test]
 fn motion_work_is_sparse_in_large_static_and_settled_worlds() {
     for animated in [false, true] {

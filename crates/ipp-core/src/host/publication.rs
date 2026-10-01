@@ -64,7 +64,6 @@ pub struct PublishedWorldAttachment {
     pub placement: [f64; 16],
     /// Physical Surface dimensions, never child Canvas logical units.
     pub surface_extent: Option<[f64; 2]>,
-    #[cfg(feature = "surfaces")]
     /// Validated effective parent Surface policy, independent of child paint.
     /// Only optional Canvas caching consumes this policy, not Camera target selection.
     pub surface_cache_policy: Option<crate::systems::surface::SurfaceCachePolicy>,
@@ -161,7 +160,6 @@ pub(crate) struct RetainedPublication {
     pub readers: std::rc::Rc<()>,
 }
 
-#[cfg_attr(not(feature = "gui"), expect(dead_code))]
 pub(crate) struct PublicationReadLease {
     _reader: std::rc::Rc<()>,
 }
@@ -376,7 +374,6 @@ impl super::HostRuntime {
         self.topology.retire_detaches(&published);
     }
 
-    #[cfg_attr(not(feature = "gui"), expect(dead_code))]
     pub(crate) fn retain_publication_read(
         &self,
         id: WorldPublicationId,

@@ -183,9 +183,7 @@ impl Default for Skeleton {
 pub struct SkeletonRuntimeState {
     /// Evaluated pose, absent until the rig's assets resolve. Boxed because it
     /// is runtime state no command or snapshot carries: inline it would add
-    /// 72 bytes to every Skeleton cell and, in builds without `gui`, make
-    /// Skeleton the largest `ComponentValue` variant (152 to 200 bytes on
-    /// 64-bit targets).
+    /// 72 bytes to every Skeleton cell.
     pub(crate) pose: Option<Box<SkeletonPoseState>>,
 }
 

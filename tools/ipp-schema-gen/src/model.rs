@@ -1,5 +1,4 @@
 pub(super) struct WireContract {
-    pub(super) capabilities: Capabilities,
     pub(super) conventions: Vec<(String, String)>,
     /// Named numeric bounds that no layout field carries.
     pub(super) limits: Vec<(String, u32)>,
@@ -11,14 +10,12 @@ pub(super) struct WireContract {
 pub(super) struct WireTag {
     pub(super) name: String,
     pub(super) space: u8,
-    pub(super) capability: u8,
     pub(super) value: u8,
     pub(super) layout: String,
 }
 
 pub(super) struct WireLayout {
     pub(super) name: String,
-    pub(super) capability: u8,
     pub(super) fields: Vec<WireField>,
 }
 
@@ -50,30 +47,8 @@ pub(super) enum WireEncoding {
 
 pub(super) struct AssetFormat {
     pub(super) name: String,
-    pub(super) capability: u8,
     pub(super) type_id: u16,
     pub(super) format: String,
-}
-
-pub(super) struct TargetFeature {
-    pub(super) id: u8,
-    pub(super) name: String,
-    pub(super) enabled: bool,
-}
-
-#[derive(Clone, Copy, Default)]
-pub(super) struct Capabilities {
-    pub(super) lifecycle_diagnostics: bool,
-    pub(super) surfaces: bool,
-    pub(super) gui: bool,
-    pub(super) animation: bool,
-    pub(super) skeletal_animation: bool,
-    pub(super) assets: bool,
-    pub(super) spatial: bool,
-    pub(super) textures: bool,
-    pub(super) builtin_assets: bool,
-    pub(super) picking: bool,
-    pub(super) debug_geometry: bool,
 }
 
 pub(super) struct Component {
@@ -130,7 +105,6 @@ pub(super) struct Export {
     pub(super) arch: String,
     pub(super) os: String,
     pub(super) pointer: u8,
-    pub(super) features: Vec<TargetFeature>,
     pub(super) components: Vec<Component>,
     pub(super) paint_keys: Vec<GuiPaintKey>,
     pub(super) row_limits: RowLimits,

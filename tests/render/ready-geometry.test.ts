@@ -27,8 +27,7 @@ for (const mode of ["development", "production"] as const) {
       `${mode} prepared geometry`,
       {
         workspace,
-        build: build("render-expanded"),
-        mismatchBuild: build("headless"),
+        build: build("render"),
         operationTimeoutMs: 12_000,
         closeTimeoutMs: 5_000,
         evidenceParent: resolve(
@@ -175,15 +174,12 @@ for (const mode of ["development", "production"] as const) {
   });
 }
 
-function build(
-  name: "render-expanded" | "headless",
-): BrowserBuildConfiguration {
+function build(name: "render" | "headless"): BrowserBuildConfiguration {
   const directory = resolve(workspace, "target/browser-build", name);
   return {
     name,
     generatedModule: resolve(directory, "generated.js"),
     runtimeWasm: resolve(directory, "runtime.wasm"),
-    exportWasm: resolve(directory, "export.wasm"),
     contractArtifact: resolve(directory, "contract.bin"),
   };
 }

@@ -1,11 +1,11 @@
-//! Bounded binary bootstrap and owned codecs for the headless host contract.
+//! Schema-independent connection opening and contract retrieval, and bounded
+//! owned codecs for the headless host contract.
 
 mod codec;
 
 pub mod asset_source;
 pub mod attachment_receipts;
 pub mod host;
-#[cfg(feature = "diagnostics")]
 pub mod lifecycle_diagnostics;
 pub mod lifecycle_watch;
 pub mod presentation;
@@ -13,12 +13,9 @@ pub mod presentation;
 pub mod references;
 pub mod views;
 
-#[cfg(feature = "schema-export")]
 mod fixture;
 
-#[cfg(feature = "gui")]
 pub mod gui;
-#[cfg(feature = "gui")]
 pub mod gui_input;
 mod wire;
 pub use codec::{
@@ -26,20 +23,29 @@ pub use codec::{
     decode_request_with_buffer, decode_world_request, encode_response, encode_response_into,
     encoded_response_size, is_batch_page,
 };
-#[cfg(feature = "schema-export")]
 pub use fixture::{check as check_layout_fixture, export as export_layout_fixture};
 
 use ipp_core::EntitySnapshot;
 /// Runtime trait path used by target fixture derives.
-#[cfg(feature = "schema-export")]
 pub use ipp_core::components::schema;
 use ipp_core::components::schema::{ContractHash, ContractSink};
 
-/// Fixed schema-independent bootstrap marker.
+/// Fixed schema-independent marker that starts the hello, the Host's
+/// announcement and every exported contract.
 pub const MAGIC: [u8; 4] = *b"IPPB";
 
-/// Bootstrap and wire revision.
-pub const VERSION: u32 = 2;
+/// Wire revision, announced by the Host and recorded in its contract.
+pub const VERSION: u32 = 3;
+
+/// The first message of every connection. It carries no claim, so any client
+/// can open a connection and read the Host's [`announcement`].
+pub const HELLO: [u8; 4] = MAGIC;
+
+/// Schema-independent request for the Host's full contract.
+pub const CONTRACT_REQUEST: [u8; 4] = *b"IPCQ";
+
+/// Marker of the reply to [`CONTRACT_REQUEST`]; the contract follows it.
+pub const CONTRACT_REPLY_MAGIC: [u8; 4] = *b"IPCR";
 
 /// Maximum complete application message, before decoding or allocation.
 pub const MAX_MESSAGE_BYTES: usize = 1_048_576;
@@ -191,14 +197,12 @@ pub enum RequestBody {
         release: bool,
     },
     /// Ordered independent applied-effect observation registration.
-    #[cfg(feature = "gui")]
     GuiObservation(gui::GuiObservationRequest),
     /// Ordered World/session lifecycle subscription control.
     LifecycleSubscription(ipp_core::systems::lifecycle_publisher::LifecyclePublisherCommand),
     /// Ordered exact-target memberships with a sole owned typed acknowledgement.
     LifecycleWatch(lifecycle_watch::LifecycleWatchRequest),
     /// Diagnostic-only read fenced to one already acknowledged endpoint.
-    #[cfg(feature = "diagnostics")]
     LifecycleDiagnostics(lifecycle_diagnostics::LifecycleDiagnosticQuery),
     /// Control a World-owned animation controller without a reply.
     AnimationPlaybackCommand {
@@ -222,7 +226,6 @@ pub enum RequestBody {
     RenderStateUpdateCommand(ipp_core::RenderStatePatch),
     /// Sparse Canvas System state update at the ordered mutation boundary;
     /// uncorrelated, and a rejected update is reported only as a diagnostic.
-    #[cfg(feature = "surfaces")]
     CanvasStateUpdateCommand(ipp_core::CanvasStateUpdate),
     /// Read committed world state at the next host frame.
     Inspect(InspectionQuery),
@@ -292,10 +295,8 @@ pub enum ResponseBody {
     /// Camera navigation committed at the reported World mutation tick.
     CameraNavigated,
     /// Constant-size diagnostic sample, not a completed frame or applied effect.
-    #[cfg(feature = "diagnostics")]
     LifecycleDiagnostics(lifecycle_diagnostics::LifecycleDiagnosticSample),
     /// Ordered registration marker or immutable applied observation; outer tick is zero.
-    #[cfg(feature = "gui")]
     GuiObservation(ipp_core::systems::gui::observations::GuiObservationRecord),
     /// Recoverable execution diagnostic, independent of command outcomes.
     RuntimeFailure {
@@ -363,13 +364,10 @@ pub enum ResponseBody {
         /// Per-entity render compatibility failures.
         render_diagnostics: Vec<ipp_core::RenderDiagnostic>,
         /// GUI System query: logical focus.
-        #[cfg(feature = "gui")]
         gui_focus: Vec<ipp_core::systems::gui::local::GuiFocusRecord>,
         /// GUI System query: live pointer feedback, by target entity then pointer.
-        #[cfg(feature = "gui")]
         gui_pointers: Vec<ipp_core::systems::gui::local::GuiPointerRecord>,
         /// Canvas System query: the World canvas's state and last evaluated extent.
-        #[cfg(feature = "surfaces")]
         canvas: Option<ipp_core::CanvasStateRecord>,
     },
     /// Bounded hierarchy in depth-first sibling order.
@@ -428,8 +426,12 @@ pub fn schema_hash() -> u64 {
     hash.0
 }
 
-/// Fixed 16-byte bootstrap, always checked before schema-dependent decoding.
-pub fn bootstrap() -> [u8; 16] {
+/// The Host's 16-byte announcement: [`MAGIC`], the little-endian [`VERSION`]
+/// and the little-endian [`schema_hash`]. It also heads the exported contract.
+///
+/// The Host makes no compatibility decision: clients compare the announcement
+/// with the contract they were generated from, or read the contract.
+pub fn announcement() -> [u8; 16] {
     let mut bytes = [0u8; 16];
     bytes[..4].copy_from_slice(&MAGIC);
     bytes[4..8].copy_from_slice(&VERSION.to_le_bytes());
@@ -437,32 +439,47 @@ pub fn bootstrap() -> [u8; 16] {
     bytes
 }
 
-/// Validate the exact bootstrap and append the host's fresh session identity.
-pub fn accept_bootstrap(bytes: &[u8], session: u64) -> Result<Vec<u8>, ProtocolError> {
-    if bytes.len() != 16 {
-        return Err(ProtocolError::Malformed("bootstrap length"));
+/// Accept the [`HELLO`] and reply with the [`announcement`] followed by the
+/// connection's fresh little-endian identity.
+///
+/// Only a message that is not this protocol's hello is rejected; the hello
+/// carries no claim to check.
+pub fn accept_hello(bytes: &[u8], connection: u64) -> Result<Vec<u8>, ProtocolError> {
+    if bytes.len() != HELLO.len() {
+        return Err(ProtocolError::Malformed("hello length"));
     }
-    if bytes[..4] != MAGIC {
-        return Err(ProtocolError::Malformed("bootstrap magic"));
+    if bytes != HELLO {
+        return Err(ProtocolError::Malformed("hello magic"));
     }
-    if bytes[4..8] != VERSION.to_le_bytes() {
-        return Err(ProtocolError::VersionMismatch);
-    }
-    if bytes[8..16] != schema_hash().to_le_bytes() {
-        return Err(ProtocolError::SchemaMismatch);
-    }
-    if session == 0 {
+    if connection == 0 {
         return Err(ProtocolError::SessionMismatch);
     }
-    let mut reply = bytes.to_vec();
-    reply.extend_from_slice(&session.to_le_bytes());
+    let mut reply = Vec::with_capacity(24);
+    reply.extend_from_slice(&announcement());
+    reply.extend_from_slice(&connection.to_le_bytes());
     Ok(reply)
 }
 
-/// Optional binary descriptors, executed in the same target/feature build as the host.
-#[cfg(feature = "schema-export")]
-pub fn export_contract() -> Vec<u8> {
-    let mut bytes = bootstrap().to_vec();
-    write_contract(&mut bytes);
-    bytes
+/// Binary contract descriptors, executed in the same target build as the
+/// Host and headed by its [`announcement`]: the bytes the generator consumes.
+///
+/// The contract is fixed for a compiled build, so it is built once per process.
+pub fn export_contract() -> &'static [u8] {
+    static CONTRACT: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+
+    CONTRACT.get_or_init(|| {
+        let mut bytes = announcement().to_vec();
+        write_contract(&mut bytes);
+        bytes
+    })
+}
+
+/// The reply to [`CONTRACT_REQUEST`]: [`CONTRACT_REPLY_MAGIC`] followed by
+/// the whole [`export_contract`], allocated exactly.
+pub fn contract_reply() -> Vec<u8> {
+    let contract = export_contract();
+    let mut reply = Vec::with_capacity(CONTRACT_REPLY_MAGIC.len() + contract.len());
+    reply.extend_from_slice(&CONTRACT_REPLY_MAGIC);
+    reply.extend_from_slice(contract);
+    reply
 }

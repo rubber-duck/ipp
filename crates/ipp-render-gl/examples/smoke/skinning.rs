@@ -148,7 +148,7 @@ pub fn run<D: RenderDevice>(
                     intensity: 40.0,
                     inner_cone: 0.5,
                     outer_cone: 0.9,
-                    cast_shadows: cfg!(feature = "shadows"),
+                    cast_shadows: true,
                     ..Default::default()
                 }),
             ),
@@ -275,7 +275,6 @@ fn ready<D: RenderDevice>(
     for _ in 0..12 {
         let stats = super::world::render_host_frame(renderer, host, id, WIDTH, HEIGHT)?;
         if stats.draw_calls == 2 {
-            #[cfg(feature = "shadows")]
             assert_eq!(stats.shadow_draw_calls, 2);
             return Ok(());
         }

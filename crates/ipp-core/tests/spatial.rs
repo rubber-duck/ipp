@@ -519,18 +519,6 @@ fn generated_registry_ids_and_field_types_match_exact_target_offsets() {
             ),
         ]
     );
-    let mut bytes = vec![];
-    ipp_core::components::registry::write_contract(&mut bytes);
-    let mut cursor = 2;
-    for _ in 0..2 {
-        let length = u32::from_le_bytes(bytes[cursor..cursor + 4].try_into().unwrap()) as usize;
-        cursor += 4 + length;
-    }
-    cursor += 1;
-    assert_ne!(
-        u64::from_le_bytes(bytes[cursor..cursor + 8].try_into().unwrap()) & (1 << 8),
-        0
-    );
 }
 
 #[test]

@@ -179,9 +179,7 @@ mod target_index;
 mod targets;
 mod value_observation;
 
-#[cfg(any(test, feature = "diagnostics"))]
 mod diagnostics;
-#[cfg(any(test, feature = "diagnostics"))]
 pub use diagnostics::{LifecycleTargetWork, LifecycleWatchTraffic};
 
 pub use membership::{

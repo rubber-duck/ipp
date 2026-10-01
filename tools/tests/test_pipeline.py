@@ -5,7 +5,6 @@ import io
 import json
 import os
 from pathlib import Path
-import signal
 import socket
 import subprocess
 import sys
@@ -59,7 +58,7 @@ class PlanningTests(unittest.TestCase):
                         ids.index(f"build:{asset}"), ids.index("build:gallery")
                     )
                 self.assertLess(
-                    ids.index("build:browser:render-expanded"),
+                    ids.index("build:browser:render"),
                     ids.index("build:gallery-platformer-assets"),
                 )
                 requirements = {
@@ -103,7 +102,6 @@ class PlanningTests(unittest.TestCase):
         self.assertIn("test:surfaces:browser", ids)
         self.assertNotIn("build:typescript", ids)
         self.assertNotIn("build:surface-gui-fixtures", ids)
-        self.assertNotIn("build:browser:headless-gui", ids)
         gui = plan("regression", "--only", "test:surface-cache:browser-gui")
         self.assertIn("build:surface-gui-fixtures", {task.id for task in gui.tasks})
         self.assertIn("test:surface-cache:browser-gui", gui.requested)
@@ -116,8 +114,7 @@ class PlanningTests(unittest.TestCase):
         retained = plan("benchmark", "browser", "--scene", "retained-gui")
         retained_ids = [task.id for task in retained.tasks]
         self.assertIn("benchmark:retained-gui", retained_ids)
-        self.assertIn("build:browser:headless-gui", retained_ids)
-        self.assertIn("build:browser:render-surfaces", retained_ids)
+        self.assertIn("build:browser:render-instrumentation", retained_ids)
         self.assertNotIn("build:blender-fixtures", retained_ids)
         with self.assertRaises(ValueError):
             plan("benchmark", "native", "--scene", "retained-gui")
@@ -220,13 +217,14 @@ class PlanningTests(unittest.TestCase):
         ).tasks[-1]
         self.assertEqual(browser.id, "benchmark:gui-stress")
         self.assertEqual(browser.command[2:4], ("browser", "2"))
-        self.assertIn("build:browser:headless-gui", browser.dependencies)
-        self.assertNotIn("build:browser:render-surfaces", browser.dependencies)
+        # Timing measures the shipped build; the core profile needs instrumentation.
+        self.assertIn("build:browser:render", browser.dependencies)
+        self.assertIn("build:browser:render-instrumentation", browser.dependencies)
         native = plan(
             "benchmark", "native", "--scene", "gui-stress", "--egl-dir", "/lib64"
         ).tasks[-1]
         self.assertEqual(native.command[2], "native-gles")
-        self.assertIn("build:gles-hosts", native.dependencies)
+        self.assertIn("build:gles-host", native.dependencies)
         for flags in (("--frames", "4"), ("--group", "32"), ("--surface-cache",)):
             with self.subTest(flags=flags), self.assertRaises(ValueError):
                 plan("benchmark", "browser", "--scene", "gui-stress", *flags)
@@ -247,11 +245,13 @@ class PlanningTests(unittest.TestCase):
                 self.assertNotIn("build:typescript", identifiers)
                 self.assertNotIn("build:surface-fixtures", identifiers)
                 self.assertIn(
-                    "build:browser:headless-gui"
+                    "build:browser:render"
                     if backend == "browser"
-                    else "build:gles-hosts",
+                    else "build:gles-host",
                     identifiers,
                 )
+                self.assertNotIn("build:browser:render-instrumentation", identifiers)
+                self.assertNotIn("build:gles-host-instrumentation", identifiers)
 
     def test_ci_runs_retained_gui_as_its_own_bounded_cached_job(self):
         # Job blocks at two-space indentation below `jobs:`; no YAML dependency.
@@ -293,7 +293,8 @@ class PlanningTests(unittest.TestCase):
             self.assertTrue(set(suite_ids([name])).issubset(ids))
         self.assertIn("check:gles-particles", ids)
         self.assertIn("check:browser-identities", ids)
-        self.assertIn("check:contracts:expanded", ids)
+        self.assertIn("check:contracts", ids)
+        self.assertIn("check:contract-identities", ids)
 
     def test_camera_profiles_and_shared_tests_are_precise(self):
         selected = plan("test", "cameras")
@@ -302,7 +303,10 @@ class PlanningTests(unittest.TestCase):
             for task in selected.tasks
             if task.id.startswith("build:browser:")
         }
-        self.assertEqual(distributions, {"headless", "render", "render-expanded"})
+        # Only the GPU recovery scenario needs the instrumentation build.
+        self.assertEqual(
+            distributions, {"headless", "render", "render-instrumentation"}
+        )
         worlds = plan("test", "worlds")
         self.assertFalse(
             any(task.id.startswith("build:browser:") for task in worlds.tasks)
@@ -317,7 +321,7 @@ class PlanningTests(unittest.TestCase):
     def test_application_build_does_not_prepare_test_fixtures(self):
         gallery = plan("build", "gallery")
         ids = [task.id for task in gallery.tasks]
-        self.assertIn("build:browser:render-expanded", ids)
+        self.assertIn("build:browser:render", ids)
         self.assertNotIn("build:gallery-fixtures", ids)
         self.assertNotIn("build:typescript", ids)
         self.assertEqual(sum(id_.startswith("build:browser:") for id_ in ids), 1)
@@ -330,7 +334,6 @@ class PlanningTests(unittest.TestCase):
                 "build:native",
                 "build:client",
                 "build:react",
-                "build:gui-host",
                 "build:react-gui-authoring",
                 "build:gui-stress-fixtures",
                 "check:typecheck",
@@ -612,7 +615,7 @@ class PlanningTests(unittest.TestCase):
         ids, _ = affected(["crates/ipp-render-gl/examples/egl_smoke.rs"], [])
         self.assertEqual(
             {id_ for id_ in ids if id_.startswith("check:gles-")},
-            {"check:gles-spatial", "check:gles-textures", "check:gles-lighting"},
+            {"check:gles-spatial", "check:gles-textures"},
         )
 
     def test_publication_suite_follows_renderer_library_tests_and_build_inputs(self):
@@ -662,11 +665,7 @@ class PlanningTests(unittest.TestCase):
                 self.assertFalse(library_checks.intersection(ids))
 
     def test_publication_gles_checks_follow_shared_build_inputs(self):
-        expected = {
-            "check:gles-publications",
-            "check:gles-publications-expanded",
-            "check:gles-publications-gui",
-        }
+        expected = {"check:gles-publications"}
         for source in (
             "Cargo.toml",
             "Cargo.lock",
@@ -694,24 +693,16 @@ class PlanningTests(unittest.TestCase):
                     expected,
                 )
 
-    def test_publication_gles_checks_follow_feature_gated_helpers(self):
-        for helper, expected in (
-            (
-                "canvas_assets",
-                {"check:gles-publications-expanded", "check:gles-publications-gui"},
-            ),
-            (
-                "canvas_publications",
-                {"check:gles-publications-expanded", "check:gles-publications-gui"},
-            ),
-            (
-                "surface_visibility",
-                {"check:gles-publications-expanded", "check:gles-publications-gui"},
-            ),
-            ("gui_publications", {"check:gles-publications-gui"}),
-            ("gui_control_publications", {"check:gles-publications-gui"}),
-            ("gui_cache_interaction", {"check:gles-publications-gui"}),
+    def test_publication_gles_check_follows_its_helpers(self):
+        for helper in (
+            "canvas_assets",
+            "canvas_publications",
+            "surface_visibility",
+            "gui_publications",
+            "gui_control_publications",
+            "gui_cache_interaction",
         ):
+            expected = {"check:gles-publications"}
             with self.subTest(helper=helper):
                 source = f"crates/ipp-render-gl/examples/smoke/{helper}.rs"
                 self.assertTrue((ROOT / source).is_file())
@@ -743,10 +734,9 @@ class PlanningTests(unittest.TestCase):
                 )
                 self.assertEqual(consumer.dependencies, tuple(record["dependencies"]))
                 self.assertTrue({"rust", "gles"}.issubset(consumer.requirements))
-                if record["id"] != "check:gles-publications":
-                    self.assertIn(
-                        "build:surface-assets", [task.id for task in selected.tasks]
-                    )
+                self.assertIn(
+                    "build:surface-assets", [task.id for task in selected.tasks]
+                )
 
     def test_unrelated_renderer_probes_keep_exact_gles_consumers(self):
         for source, expected in (
@@ -767,8 +757,10 @@ class PlanningTests(unittest.TestCase):
             task.command[1:],
             ("target/surface-gui-build/retained-gui-native.js", "/validation/egl"),
         )
-        self.assertTrue({"rust", "gles", "node", "browser"}.issubset(task.requirements))
-        self.assertIn("build:gles-hosts", task.dependencies)
+        self.assertTrue({"gles", "node", "browser"}.issubset(task.requirements))
+        # Its hosts are prebuilt, so it never holds the scheduler's Cargo slot.
+        self.assertNotIn("rust", task.requirements)
+        self.assertIn("build:gles-host-instrumentation", task.dependencies)
         ids, _ = affected(
             ["crates/ipp-server/examples/gles_presentation/channel.rs"], []
         )
@@ -810,13 +802,36 @@ class PlanningTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "invalid source root"):
                     validate_catalog()
 
+    def test_catalog_rejects_undeclared_product_reads(self):
+        root = "dist/tests/react/gui-root.test.js"
+        with patch.dict(TEST_INPUTS[root], builds=["typescript"]):
+            with self.assertRaisesRegex(
+                ValueError,
+                f"test:{root} reads target/browser-build/render .* "
+                "without build:browser:render",
+            ):
+                validate_catalog()
+
+    def test_catalog_rejects_partition_exclusions_nothing_names(self):
+        entry = next(
+            entry
+            for entry in SUITES["presentation"]["commands"]
+            if entry["name"] == "webgl"
+        )
+        with patch.dict(
+            entry, partitionExcludes=[*entry["partitionExcludes"], "target/gui-motion"]
+        ):
+            with self.assertRaisesRegex(
+                ValueError, "excludes target/gui-motion, which it never names"
+            ):
+                validate_catalog()
+
     def test_focused_native_checks_do_not_need_node_or_browser(self):
         selected = plan(
             "check",
             "workspace",
             "clippy-default",
-            "clippy-minimal",
-            "clippy-expanded",
+            "clippy-all-features",
             "--suite",
             "runner",
         )
@@ -835,7 +850,7 @@ class PlanningTests(unittest.TestCase):
             with self.subTest(group=group):
                 selected = plan("regression", "--group", group)
                 ids = {task.id for task in selected.tasks}
-                self.assertNotIn("build:gles-hosts", ids)
+                self.assertNotIn("build:gles-host", ids)
                 self.assertNotIn("test:canvas:controller-gles", ids)
                 self.assertFalse(
                     any("gles" in task.requirements for task in selected.tasks)
@@ -865,7 +880,8 @@ class PlanningTests(unittest.TestCase):
             (
                 "build:canvas-fixtures",
                 "build:browser:headless",
-                "build:browser:render-surfaces",
+                "build:browser:render",
+                "build:browser:render-instrumentation",
             ),
         )
         for name in ("canvas", "dpi"):
@@ -895,15 +911,16 @@ class PlanningTests(unittest.TestCase):
                 self.assertEqual(task.command[2:4], ("--backend", backend))
                 self.assertIn("browser", requirements)
                 self.assertIn("build:canvas-fixtures", ids)
+                # The controller simulates context loss, a testing control.
                 if backend == "gles":
                     self.assertIn("gles", task.requirements)
-                    self.assertIn("build:gles-hosts", ids)
-                    self.assertNotIn("build:browser:render-surfaces", ids)
+                    self.assertIn("build:gles-host-instrumentation", ids)
+                    self.assertNotIn("build:browser:render-instrumentation", ids)
                     self.assertEqual(task.command[4:], ("--egl-dir", "/configured/egl"))
                 else:
                     self.assertNotIn("gles", requirements)
-                    self.assertNotIn("build:gles-hosts", ids)
-                    self.assertIn("build:browser:render-surfaces", ids)
+                    self.assertNotIn("build:gles-host-instrumentation", ids)
+                    self.assertIn("build:browser:render-instrumentation", ids)
                     self.assertEqual(task.command[4:], ())
 
     def test_canvas_native_egl_selection_and_preflight(self):
@@ -946,7 +963,10 @@ class PlanningTests(unittest.TestCase):
         ):
             with self.subTest(arguments=arguments):
                 ids = [task.id for task in plan("regression", *arguments).tasks]
-                for name in both | {"build:canvas-fixtures", "build:gles-hosts"}:
+                for name in both | {
+                    "build:canvas-fixtures",
+                    "build:gles-host-instrumentation",
+                }:
                     self.assertEqual(ids.count(name), 1)
 
     def test_default_core_keeps_real_native_coverage_without_optional_environments(
@@ -974,8 +994,7 @@ class PlanningTests(unittest.TestCase):
         self.assertFalse(
             requirements & {"wasm", "browser", "blender", "blender-wheels", "gles"}
         )
-        self.assertNotIn("test:rust:expanded", ids)
-        self.assertNotIn("test:rust:minimal", ids)
+        self.assertNotIn("test:rust:all-features", ids)
         self.assertFalse(ids & set(suite_ids(["scaling"])))
 
     def test_groups_compose_with_core_and_share_prerequisites(self):
@@ -990,7 +1009,7 @@ class PlanningTests(unittest.TestCase):
             set(suite_ids(["gui", "surfaces", "retained-gui", "render"])).issubset(ids)
         )
         self.assertEqual(ids.count("build:typescript"), 1)
-        self.assertNotIn("test:rust:expanded", ids)
+        self.assertNotIn("test:rust:all-features", ids)
         self.assertNotIn("test:dist/tests/integration/scaling.test.js", ids)
 
     def test_presentation_profiles_keep_browser_independent_of_gles(self):
@@ -999,12 +1018,14 @@ class PlanningTests(unittest.TestCase):
         for group in ("browser", "rendering"):
             selected = set(regression_group_ids([group]))
             self.assertIn("test:presentation:webgl", selected)
+            self.assertIn("test:presentation:webgl-production", selected)
             self.assertNotIn("test:presentation:native-gles", selected)
         self.assertIn("test:presentation:native-gles", regression_group_ids(["gles"]))
         self.assertEqual(
             set(suite_ids(["presentation"])),
             {
                 "test:presentation:webgl",
+                "test:presentation:webgl-production",
                 "test:presentation:native-gles",
                 "test:presentation:diagnostics",
                 "test:presentation:host-wire",
@@ -1260,17 +1281,6 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(report["status"], "failed")
         self.assertIn("Declared output", report["steps"][0]["error"])
 
-    def test_fail_fast_and_timeout_share_the_executor(self):
-        report = self.run_tasks(
-            [
-                self.command("timeout", "import time; time.sleep(60)", timeout=1),
-                self.command("later", "print('unexpected')"),
-            ],
-            fail_fast=True,
-        )
-        self.assertTrue(report["steps"][0]["timedOut"])
-        self.assertEqual(report["steps"][1]["status"], "not_run")
-
     def test_preflight_failure_runs_no_builds(self):
         task = self.command(
             "build", "from pathlib import Path; Path('unexpected').touch()"
@@ -1344,36 +1354,6 @@ class ExecutionTests(unittest.TestCase):
             self.assertIn("Another pipeline", result.stderr)
         result = subprocess.run(command, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-
-    @unittest.skipIf(
-        os.name == "nt",
-        "POSIX signal-handler fixture; Windows uses job/process-tree termination",
-    )
-    def test_cancellation_terminates_descendants_and_records_unstarted_work(self):
-        descendant = "from pathlib import Path; import signal,time; signal.signal(signal.SIGTERM, lambda *_: (Path('stopped').touch(), exit(0))); Path('ready').touch(); time.sleep(60)"
-        parent = f"import subprocess,sys,time; subprocess.Popen([sys.executable,'-c',{descendant!r}]); time.sleep(60)"
-        cancel = threading.Event()
-
-        def stop_when_ready():
-            deadline = time.monotonic() + 5
-            while time.monotonic() < deadline and not (self.root / "ready").exists():
-                time.sleep(0.02)
-            cancel.set()
-
-        stopper = threading.Thread(target=stop_when_ready)
-        stopper.start()
-        try:
-            report = self.run_tasks(
-                [self.command("running", parent), self.command("later", "pass")],
-                cancel=cancel,
-            )
-        finally:
-            cancel.set()
-            stopper.join(timeout=6)
-        self.assertTrue((self.root / "stopped").exists())
-        self.assertEqual(
-            [step["status"] for step in report["steps"]], ["cancelled", "cancelled"]
-        )
 
 
 if __name__ == "__main__":

@@ -1,3 +1,5 @@
+import type { RenderDiagnostics } from "@ipp/client/diagnostics";
+import { renderDiagnostics } from "../../packages/ipp-client/src/diagnostics.js";
 import { sameOutputReference } from "../../packages/ipp-client/src/references.js";
 /**
  * Explicit root Camera presentation for browser render fixtures.
@@ -15,7 +17,6 @@ import type {
   PresentationView,
   PresentedCapture,
   PresentedFrame,
-  RenderDiagnostics,
   RootBinding,
   WorldReference,
 } from "@ipp/client";
@@ -92,7 +93,7 @@ export class RootPresentation {
   }
 
   get diagnostics(): RenderDiagnostics {
-    const diagnostics = this.host.renderDiagnostics;
+    const diagnostics = renderDiagnostics(this.host);
     if (!diagnostics) throw new Error("Render diagnostics are unavailable");
     return diagnostics;
   }

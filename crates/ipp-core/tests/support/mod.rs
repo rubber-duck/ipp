@@ -8,11 +8,9 @@ pub mod world_failures;
 
 use ipp_core::{ErrorReason, WorldContext, WorldUpdateReport};
 
-#[cfg(feature = "gui")]
 pub mod gui_panel;
 
 /// Select a World's canvas with its stored extent and density.
-#[cfg(feature = "surfaces")]
 pub trait CanvasTestHost {
     /// Queue the canvas state for the next mutation boundary and return the
     /// World's canvas output.
@@ -24,7 +22,6 @@ pub trait CanvasTestHost {
     ) -> ipp_core::OutputRef;
 }
 
-#[cfg(feature = "surfaces")]
 impl CanvasTestHost for ipp_core::HostRuntime {
     fn canvas_output(
         &mut self,
@@ -124,14 +121,10 @@ impl HostWorldTestDriver for ipp_core::HostRuntime {
 }
 
 /// Compact CPU metadata retained for these unskinned fixture meshes, separate
-/// from vertex/index streams. Mesh-pose builds also retain topology for matching.
+/// from vertex/index streams, including the topology retained for pose matching.
 pub fn unskinned_mesh_metadata_bytes(index_count: usize) -> usize {
     std::mem::size_of::<ipp_core::services::asset_management::mesh_metadata::MeshMetadata>()
-        + if cfg!(feature = "mesh-poses") {
-            index_count * 2
-        } else {
-            0
-        }
+        + index_count * 2
 }
 
 /// Minimal immutable font: fallback and A, with independently known advance metrics.

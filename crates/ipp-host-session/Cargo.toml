@@ -11,16 +11,8 @@ ipp-core.workspace = true
 ipp-protocol.workspace = true
 
 [features]
-gui = ["surfaces", "ipp-core/gui", "ipp-protocol/gui"]
-surfaces = ["ipp-protocol/surfaces"]
-profiling = ["ipp-core/profiling"]
-mesh-poses = ["ipp-protocol/mesh-poses"]
-particles = ["ipp-protocol/particles"]
-default = ["builtin-assets"]
-diagnostics = ["ipp-core/diagnostics", "ipp-protocol/diagnostics"]
-builtin-assets = ["ipp-protocol/builtin-assets"]
-skeletal-animation = ["ipp-protocol/skeletal-animation"]
-shadows = ["ipp-core/shadows", "ipp-protocol/shadows"]
+default = []
+instrumentation = ["ipp-core/instrumentation"]
 
 [lints]
 workspace = true

@@ -1,5 +1,4 @@
 //! Ordinary entity layout and Canvas production through real headless Host frames.
-#![cfg(feature = "gui")]
 
 mod support;
 
@@ -1018,7 +1017,6 @@ fn excessive_managed_layout_depth_is_observable_and_recovers_after_core_reparent
     );
 }
 
-#[cfg(feature = "diagnostics")]
 #[test]
 fn counters_identify_full_dirty_reflow_and_retain_text_runs() {
     use ipp_core::systems::gui::layout::GuiEntityLayoutWork;

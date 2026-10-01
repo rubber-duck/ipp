@@ -26,7 +26,6 @@ fn only_changed_active_values_upload_and_epochs_invalidate() {
     );
 }
 
-#[cfg(feature = "shadows")]
 #[test]
 fn shadow_changes_cover_active_indices_and_disabled_then_reenabled_slots() {
     let mut cache = RenderUniformCache::default();

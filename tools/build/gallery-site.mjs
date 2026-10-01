@@ -7,7 +7,7 @@ import { artifact, bundleBrowser, workspace } from "./helpers.mjs";
 // Development paths stay in the examples. The published entry module lives next
 // to index.html, so these URLs work unchanged at /, /ipp/ or a custom subdirectory.
 const locations = [
-  ["/target/browser-build/render-expanded/", "./runtime/"],
+  ["/target/browser-build/render/", "./runtime/"],
   ["/target/gallery-build/", "./assets/"],
   ["/target/gallery-gui-assets/", "./assets/gui/"],
   ["/target/font-assets/", "./assets/shared/"],
@@ -68,7 +68,7 @@ export async function buildGallerySite(output) {
   await writeFile(resolve(output, "index.html"), html);
   await writeFile(resolve(output, ".nojekyll"), "");
 
-  const runtime = "target/browser-build/render-expanded";
+  const runtime = "target/browser-build/render";
   await mkdir(resolve(output, "runtime"), { recursive: true });
   for (const name of await readdir(resolve(workspace, runtime))) {
     if (name.endsWith(".js")) {
@@ -153,7 +153,7 @@ export async function buildGallerySite(output) {
     resolve(output, "build-report.json"),
     `${JSON.stringify(
       {
-        profile: "render-expanded",
+        profile: "render",
         compression:
           "Uncompressed files; the static host negotiates HTTP compression",
         bytes: artifacts.reduce((sum, entry) => sum + entry.bytes, 0),

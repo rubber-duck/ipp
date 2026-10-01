@@ -18,7 +18,6 @@ import { exerciseGuiInput } from "./scenarios/gui-input.js";
 import { exerciseGuiVirtualList } from "./scenarios/gui-virtual-list.js";
 
 interface GeneratedHost extends GuiContract {
-  CAPABILITIES: { gui: boolean };
   IppHostClient: {
     connectWebSocket(
       url: string,
@@ -31,7 +30,6 @@ async function generated(directory: string): Promise<GeneratedHost> {
   const contract = (await import(
     pathToFileURL(resolve(directory, "generated.js")).href
   )) as GeneratedHost;
-  assert.equal(contract.CAPABILITIES.gui, true);
   return contract;
 }
 
@@ -56,8 +54,10 @@ async function headless(
   ) => Promise<void>,
 ) {
   const workspace = process.cwd();
-  const profile = resolve(workspace, "target/gui-host");
-  const contract = await generated(profile);
+  const profile = resolve(workspace, "target/integration-artifacts/native");
+  const contract = await generated(
+    resolve(workspace, "target/integration-artifacts/client"),
+  );
   await runNativeEnvironment(
     name,
     {
@@ -97,7 +97,7 @@ async function presented(
   ) => Promise<void>,
 ) {
   const workspace = process.cwd();
-  const profile = resolve(workspace, "target/gles-host/gles-gui");
+  const profile = resolve(workspace, "target/gles-host");
   const contract = await generated(profile);
   await runNativeEnvironment(
     name,

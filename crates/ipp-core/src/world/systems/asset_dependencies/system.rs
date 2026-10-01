@@ -44,19 +44,16 @@ impl SystemFactory for AssetDependencySystemFactory {
 
 impl System for AssetDependencySystem {
     fn after_commit(&mut self, context: &mut crate::systems::SystemCommitContext<'_>) {
-        if context
-            .changed_components()
-            .any(|(_, component)| match component {
+        if context.changed_components().any(|(_, component)| {
+            matches!(
+                component,
                 crate::ComponentValue::BOUNDING_GEOMETRY
-                | crate::ComponentValue::PICKING_GEOMETRY
-                | crate::ComponentValue::MESH_INSTANCE => true,
-                #[cfg(feature = "mesh-poses")]
-                crate::ComponentValue::MESH_POSE => true,
-                #[cfg(feature = "particles")]
-                crate::ComponentValue::PARTICLE_MESH => true,
-                _ => false,
-            })
-        {
+                    | crate::ComponentValue::PICKING_GEOMETRY
+                    | crate::ComponentValue::MESH_INSTANCE
+                    | crate::ComponentValue::MESH_POSE
+                    | crate::ComponentValue::PARTICLE_MESH
+            )
+        }) {
             self.state.evaluation_meshes_initialized = false;
         }
     }

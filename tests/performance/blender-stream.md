@@ -7,7 +7,7 @@ The maintained [stream scenario](../render/blender-stream.test.ts) compares a re
 Run the standard suite to build all prerequisites and verify correctness:
 
 ```sh
-IPP_BROWSER_ANGLE=vulkan ipp-browser-env python tools/ipp.py test blender
+ipp-browser-env python tools/ipp.py test blender --hardware vulkan
 ```
 
 For the animated 900-cube workload, generate the maintained stress scene and repeat only the scenario after building those prerequisites:

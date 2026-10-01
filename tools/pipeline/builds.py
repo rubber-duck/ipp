@@ -23,9 +23,7 @@ def target(action: str, *args: str | Path) -> None:
     run([node(), "tools/build/target.mjs", action, *(str(arg) for arg in args)])
 
 
-def compile_client(
-    directory: Path, contract: Path, *, compile_types: bool = True
-) -> None:
+def compile_client(directory: Path, contract: Path) -> None:
     source = directory / "generated.ts"
     run(
         [
@@ -41,24 +39,23 @@ def compile_client(
         ]
     )
     target("support", directory)
-    if compile_types:
-        run(
-            [
-                node(),
-                "node_modules/typescript/bin/tsc",
-                "--ignoreConfig",
-                "--strict",
-                "--target",
-                "ES2023",
-                "--module",
-                "NodeNext",
-                "--moduleResolution",
-                "NodeNext",
-                "--lib",
-                "ES2023,DOM",
-                str(source),
-            ]
-        )
+    run(
+        [
+            node(),
+            "node_modules/typescript/bin/tsc",
+            "--ignoreConfig",
+            "--strict",
+            "--target",
+            "ES2023",
+            "--module",
+            "NodeNext",
+            "--moduleResolution",
+            "NodeNext",
+            "--lib",
+            "ES2023,DOM",
+            str(source),
+        ]
+    )
 
 
 @contextmanager
@@ -110,38 +107,29 @@ def product(destination: Path) -> Iterator[Path]:
             shutil.rmtree(temporary)
 
 
-def wasm(features: list[str], builtins: bool, profile: str, directory: Path) -> None:
-    profile_flags = [] if profile == "debug" else ["--profile", profile]
-    flags = [] if builtins else ["--no-default-features"]
-    for export, name in ((True, "export.wasm"), (False, "runtime.wasm")):
-        selection = [*features, *(["schema-export"] if export else [])]
-        cargo(
-            "build",
-            "-p",
-            "ipp-wasm",
-            "--target",
-            "wasm32-unknown-unknown",
-            *profile_flags,
-            *flags,
-            *(["--features", ",".join(selection)] if selection else []),
-        )
-        shutil.copy2(
-            ROOT / "target/wasm32-unknown-unknown" / profile / "ipp_wasm.wasm",
-            directory / name,
-        )
-        if export:
-            target("export", directory / name, directory / "contract.bin")
+def wasm(features: list[str], profile: str, directory: Path) -> None:
+    """Compile the shipped runtime once and read its contract from that module."""
+    cargo(
+        "build",
+        "-p",
+        "ipp-wasm",
+        "--target",
+        "wasm32-unknown-unknown",
+        "--profile",
+        profile,
+        *(["--features", ",".join(features)] if features else []),
+    )
+    shutil.copy2(
+        ROOT / "target/wasm32-unknown-unknown" / profile / "ipp_wasm.wasm",
+        directory / "runtime.wasm",
+    )
+    target("export", directory / "runtime.wasm", directory / "contract.bin")
 
 
 def browser(name: str) -> None:
     configuration = PROFILES["browser"][name]
     with product(ROOT / "target/browser-build" / name) as directory:
-        wasm(
-            configuration["features"],
-            configuration["builtins"],
-            "release-small",
-            directory,
-        )
+        wasm(configuration["features"], "release-small", directory)
         compile_client(directory, directory / "contract.bin")
         request = directory / "request.json"
         write_json(
@@ -152,15 +140,27 @@ def browser(name: str) -> None:
         request.unlink()
 
 
+def native_contract(output: Path, *, release: bool = False) -> None:
+    """Export the native target contract; instrumentation never changes it."""
+    cargo(
+        "run",
+        "--quiet",
+        "-p",
+        "ipp-protocol",
+        "--example",
+        "export_contract",
+        *(["--release"] if release else []),
+        output=output,
+    )
+
+
 def native_host(directory: Path, features: list[str], *, release: bool = False) -> None:
     flags = ["--release"] if release else []
     cargo(
         "build",
         "-p",
         "ipp-server",
-        "--no-default-features",
-        "--features",
-        ",".join(["websocket", *features]),
+        *(["--features", ",".join(features)] if features else []),
         *flags,
     )
     executable = "ipp-server.exe" if os.name == "nt" else "ipp-server"
@@ -168,63 +168,40 @@ def native_host(directory: Path, features: list[str], *, release: bool = False) 
         ROOT / "target" / ("release" if release else "debug") / executable,
         directory / executable,
     )
-    cargo(
-        "run",
-        "--quiet",
-        "-p",
-        "ipp-protocol",
-        "--example",
-        "export_contract",
-        "--no-default-features",
-        "--features",
-        ",".join(["schema-export", *features]),
-        *flags,
-        output=directory / "contract.bin",
-    )
+    native_contract(directory / "contract.bin", release=release)
 
 
-def gles_host(directory: Path, features: list[str]) -> None:
-    """The presenting GLES testing host of ipp-server, its contract and client."""
+def gles_host(directory: Path, instrumentation: bool) -> None:
+    """The presenting GLES testing host of ipp-server, its contract and client.
+
+    The instrumentation build honours the testing controls; the normal one is the
+    build timing runs measure.
+    """
     cargo(
         "build",
         "-p",
         "ipp-server",
         "--example",
         "gles_host",
-        "--no-default-features",
-        "--features",
-        ",".join(["websocket", "diagnostics", *features]),
+        *(["--features", "instrumentation"] if instrumentation else []),
     )
     shutil.copy2(ROOT / "target/debug/examples/gles_host", directory / "gles_host")
-    cargo(
-        "run",
-        "--quiet",
-        "-p",
-        "ipp-protocol",
-        "--example",
-        "export_contract",
-        "--no-default-features",
-        "--features",
-        ",".join(["schema-export", "diagnostics", *features]),
-        output=directory / "contract.bin",
-    )
+    native_contract(directory / "contract.bin")
     compile_client(directory, directory / "contract.bin")
 
 
 def baseline_native() -> None:
     artifacts = ROOT / "target/integration-artifacts"
     with product(artifacts / "native") as native:
-        native_host(native, ["diagnostics"])
+        native_host(native, [])
         with product(artifacts / "client") as client:
-            compile_client(client, native / "contract.bin", compile_types=False)
+            compile_client(client, native / "contract.bin")
         shutil.copy2(native / "contract.bin", artifacts / "native.contract")
 
 
-def world_hosts(release: bool = False, diagnostics: bool = False) -> None:
+def world_hosts(release: bool = False) -> None:
     destination = "target/scaling-host-build" if release else "target/world-host-build"
-    if diagnostics:
-        destination = "target/lifecycle-diagnostics-build"
-    features = ["builtin-assets", *(["diagnostics"] if diagnostics else [])]
+    features: list[str] = []
     with product(ROOT / destination) as output:
         for name in ["native"] if release else ["native", "wasm"]:
             directory = output / name
@@ -232,7 +209,9 @@ def world_hosts(release: bool = False, diagnostics: bool = False) -> None:
             if name == "native":
                 native_host(directory, features, release=release)
             else:
-                wasm(features, False, "debug", directory)
+                # Tests start this runtime in many workers: keep debug
+                # assertions and overflow checks, drop the unused debuginfo.
+                wasm(features, "wasm-dev", directory)
             compile_client(directory, directory / "contract.bin")
             target("world", directory, name)
 
@@ -244,8 +223,6 @@ def builtin_exporter() -> None:
         "ipp-core",
         "--example",
         "export_builtin",
-        "--features",
-        "builtin-assets,skeletal-animation",
     )
     executable = "export_builtin.exe" if os.name == "nt" else "export_builtin"
     with product(ROOT / "target/builtin-exporter") as directory:
@@ -324,23 +301,9 @@ def build(name: str) -> None:
         baseline_native()
     elif name == "headless-client":
         node_product("tools/build_headless_client.mjs", "target/headless-client")
-    elif name == "surface-host":
-        with product(ROOT / "target/surface-host") as directory:
-            native_host(directory, ["surfaces"])
-            compile_client(directory, directory / "contract.bin")
-    elif name == "gui-host":
-        with product(ROOT / "target/gui-host") as directory:
-            native_host(directory, ["surfaces", "gui", "diagnostics"])
-            compile_client(directory, directory / "contract.bin")
-    elif name == "gles-hosts":
-        # The analytic and retained builds of the native retained GUI check.
-        with product(ROOT / "target/gles-host") as output:
-            for host, features in (
-                ("gles-surfaces", ["surfaces", "builtin-assets"]),
-                ("gles-gui", ["gui"]),
-            ):
-                (output / host).mkdir()
-                gles_host(output / host, features)
+    elif name in ("gles-host", "gles-host-instrumentation"):
+        with product(ROOT / "target" / name) as directory:
+            gles_host(directory, name == "gles-host-instrumentation")
     elif name == "font-assets":
         with product(ROOT / "target/font-assets") as directory:
             run([development_python(), "tools/build_font_assets.py", str(directory)])
@@ -377,8 +340,6 @@ def build(name: str) -> None:
         gallery_platformer_assets()
     elif name in ("world-hosts", "scaling-host"):
         world_hosts(name == "scaling-host")
-    elif name == "lifecycle-diagnostics-hosts":
-        world_hosts(diagnostics=True)
     elif name == "builtin-exporter":
         builtin_exporter()
     elif name == "skinning-fixtures":
@@ -460,6 +421,12 @@ def build(name: str) -> None:
         )
     elif name == "blender-fixtures":
         node_product("tools/build_blender_fixtures.mjs", "target/blender-test")
+    elif name == "blender-viewer-instrumentation":
+        node_product(
+            "tools/build_blender_viewer.mjs",
+            "target/blender-viewer-instrumentation",
+            "render-instrumentation",
+        )
     elif name == "gallery-site":
         node_product("tools/build_gallery.mjs", "target/gallery-site", "site")
     elif name in ("gallery", "gallery-fixtures"):
@@ -497,33 +464,18 @@ def build(name: str) -> None:
 
 
 def verify_browser_identities() -> None:
-    hashes: dict[str, str] = {}
-    for name, profile in PROFILES["browser"].items():
-        report = json.loads(
+    """Instrumentation and the renderer never change the WASM target contract."""
+    hashes = {
+        name: json.loads(
             (ROOT / "target/browser-build" / name / "build-report.json").read_text()
-        )
-        key = json.dumps(
-            [
-                profile["builtins"],
-                *[
-                    f in profile["features"]
-                    for f in (
-                        "skeletal-animation",
-                        "mesh-poses",
-                        "shadows",
-                        "particles",
-                        "surfaces",
-                        "gui",
-                        "diagnostics",
-                    )
-                ],
-            ]
-        )
-        value = report["schemaHash"]
-        if key in hashes and hashes[key] != value:
+        )["schemaHash"]
+        for name in PROFILES["browser"]
+    }
+    contract = json.loads(
+        (ROOT / "target/integration-artifacts/contracts/target-report.json").read_text()
+    )["wasm"]["hash"]
+    for name, value in hashes.items():
+        if value != contract:
             raise ValueError(
-                f"GPU-only selection changed the compiled contract: {name}"
+                f"Browser distribution {name} changed the WASM target contract"
             )
-        hashes[key] = value
-    if len(set(hashes.values())) != len(hashes):
-        raise ValueError("Distinct scene capabilities have equal schema identities")

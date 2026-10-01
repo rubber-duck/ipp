@@ -39,10 +39,6 @@ export async function streamedWorldCommands(
   };
   try {
     client = await host.openWorld(owned.reference);
-    check(
-      client.capabilities.animation,
-      "streaming asset fixture requires animation",
-    );
     await commandBatches(client, record);
     await byteLimitedCommandBuffers(client, contract.encodeRequest, record);
     await assetSourceDuringBatch(

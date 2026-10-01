@@ -14,18 +14,17 @@ import type {
   BlenderSnapshot,
 } from "../../integrations/blender/client/types.js";
 
-/** The adapter's Systems the Host build offers. The lean native World Host
- * has no skeletal animation or particles; the scene then authors no joints. */
-const OPTIONAL_SYSTEMS = new Set([
+/** Skeletal and particle Systems, selected only by a World whose scene authors joints. */
+const JOINT_SYSTEMS = new Set([
   "ipp.skeleton",
   "ipp.skinning",
   "ipp.particles",
 ]);
 
-function blenderSystems(expanded: boolean): readonly string[] {
-  return expanded
+function blenderSystems(joints: boolean): readonly string[] {
+  return joints
     ? BLENDER_SYSTEMS
-    : BLENDER_SYSTEMS.filter((system) => !OPTIONAL_SYSTEMS.has(system));
+    : BLENDER_SYSTEMS.filter((system) => !JOINT_SYSTEMS.has(system));
 }
 
 function check(value: unknown, message: string): asserts value {

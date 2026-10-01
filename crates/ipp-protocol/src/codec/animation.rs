@@ -62,7 +62,6 @@ impl Reader<'_> {
                         offsets,
                     })
                 }
-                #[cfg(feature = "skeletal-animation")]
                 ANIMATION_TARGET_JOINTS => {
                     let count = self.count(crate::MAX_ANIMATION_TARGET_INDICES)?;
                     let indices = (0..count).map(|_| self.u32()).collect::<Result<_, _>>()?;
@@ -199,7 +198,6 @@ impl Writer {
                         self.u32(*index)?;
                     }
                 }
-                #[cfg(feature = "skeletal-animation")]
                 AnimationTrackTarget::Joints(indices) => {
                     self.u8(ANIMATION_TARGET_JOINTS)?;
                     self.count(indices.len(), crate::MAX_ANIMATION_TARGET_INDICES)?;

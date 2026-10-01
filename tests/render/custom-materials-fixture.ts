@@ -1,11 +1,11 @@
 /** Backend-independent material scenarios driven through the generated worker client. */
+import type { RenderStatisticsSnapshot } from "@ipp/client/diagnostics";
 import { presentationTesting } from "../../packages/ipp-client/src/testing.js";
 import type {
   RenderWorldClient,
   AnimationWorldClient,
   PresentedCapture,
   DynamicValue,
-  RenderStatisticsSnapshot,
   WorldPersistenceHostClient,
   ShaderDefinition,
 } from "@ipp/client";
@@ -87,10 +87,7 @@ export async function initialize(configuration: {
     { canvas: canvas.transferControlToOffscreen(), timeoutMs: 10000 },
   );
   const created = await host.createWorld({
-    // Skeletons and skins only exist in builds with skeletal animation.
-    selectedSystems: contract.CAPABILITIES.skeletalAnimation
-      ? selectSystems(SCENE, SKINNING)
-      : selectSystems(SCENE),
+    selectedSystems: selectSystems(SCENE, SKINNING),
     symbolicId: "custom-materials",
   });
   client = await host.openWorld(created.reference);

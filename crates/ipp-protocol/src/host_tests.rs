@@ -15,14 +15,14 @@ fn descriptor() -> WorldDescriptor {
 }
 
 #[test]
-fn world_bootstrap_carries_selected_manifest_but_connection_bootstrap_does_not() {
+fn world_hello_carries_selected_manifest_but_connection_hello_does_not() {
     let mut runtime = ipp_core::HostRuntime::new();
     let world = runtime.create_world(Default::default(), &[]).unwrap();
     let selected = runtime.world_manifest(world).unwrap();
-    let request = crate::bootstrap();
-    let connection = crate::accept_bootstrap(&request, 7).unwrap();
+    let connection = crate::accept_hello(&crate::HELLO, 7).unwrap();
     assert_eq!(connection.len(), 24);
-    let reply = accept_world_bootstrap(&request, 7, selected).unwrap();
+    let reply = accept_world_hello(&crate::HELLO, 7, selected).unwrap();
+    assert_eq!(reply[..24], connection);
     let mut reader = Reader {
         bytes: &reply,
         at: 24,

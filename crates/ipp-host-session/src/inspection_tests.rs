@@ -140,7 +140,6 @@ fn oversized_entity_record_is_an_explicit_error_not_a_truncation() {
     assert_eq!(entities[0].id, entity);
 }
 
-#[cfg(feature = "surfaces")]
 #[test]
 fn canvas_collection_reports_the_committed_state_and_the_last_evaluated_extent() {
     let mut host = Host::<Platform>::new().unwrap();

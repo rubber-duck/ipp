@@ -17,7 +17,6 @@ pub fn deliver_resource(
 }
 
 /// Generate a compiled built-in source through the ordinary provider contract.
-#[cfg(feature = "builtin-assets")]
 pub fn builtin_resource(request: &ipp_core::AssetAcquisitionRequest) -> Result<Vec<u8>, String> {
     let result = match request.kind {
         ipp_core::AssetResourceKind::Mesh => {
@@ -26,11 +25,9 @@ pub fn builtin_resource(request: &ipp_core::AssetAcquisitionRequest) -> Result<V
         ipp_core::AssetResourceKind::Texture => {
             ipp_core::services::asset_management::builtin::texture(&request.source)
         }
-        #[cfg(feature = "skeletal-animation")]
         kind if kind == ipp_core::SKELETON_TYPE || kind == ipp_core::POSE_TYPE => {
             ipp_core::services::asset_management::builtin::rig(kind, &request.source)
         }
-        #[cfg(feature = "skeletal-animation")]
         ipp_core::SKIN_TYPE => {
             ipp_core::services::asset_management::builtin::rig(request.kind, &request.source)
         }

@@ -6,11 +6,9 @@ use std::mem::offset_of;
 #[derive(Clone, Copy)]
 pub(super) enum AnimationNumericRange {
     Finite,
-    #[cfg(feature = "particles")]
     Nonnegative,
     Positive,
     Unit,
-    #[cfg(feature = "particles")]
     Angle,
 }
 
@@ -19,11 +17,9 @@ impl AnimationNumericRange {
         value.is_finite()
             && match self {
                 Self::Finite => true,
-                #[cfg(feature = "particles")]
                 Self::Nonnegative => value >= 0.0,
                 Self::Positive => value > 0.0,
                 Self::Unit => (0.0..=1.0).contains(&value),
-                #[cfg(feature = "particles")]
                 Self::Angle => (0.0..=std::f32::consts::PI).contains(&value),
             }
     }
@@ -60,9 +56,7 @@ pub(super) fn range(component: u16, offset: u32) -> Option<AnimationNumericRange
                 None
             }
         }
-        #[cfg(feature = "mesh-poses")]
         ComponentValue::MESH_POSE if fields!(MeshPose; weight) => Some(Unit),
-        #[cfg(feature = "particles")]
         ComponentValue::PARTICLE_EMITTER => {
             if fields!(ParticleEmitter; rate, duration, delay, extent_x, extent_y, extent_z,
                 speed, rotation_random, drag)
@@ -81,7 +75,6 @@ pub(super) fn range(component: u16, offset: u32) -> Option<AnimationNumericRange
                 None
             }
         }
-        #[cfg(feature = "particles")]
         ComponentValue::PARTICLE_SPRITE => {
             if fields!(ParticleSprite; r, g, b, opacity, end_opacity) {
                 Some(Unit)

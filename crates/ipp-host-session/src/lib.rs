@@ -21,7 +21,6 @@ pub use services::presentation::{PresentationCompletion, PresentationDrawSummary
 
 pub use services::asset_provider::deliver_resource;
 
-#[cfg(feature = "builtin-assets")]
 pub use services::asset_provider::builtin_resource;
 
 /// Requests a connection may queue, and a session may hold admitted but unanswered, before the
@@ -50,7 +49,6 @@ pub trait HostServices {
     }
 
     /// Observe the completed Host evaluation boundary without advancing or mutating Worlds.
-    #[cfg(feature = "diagnostics")]
     fn record_frame(
         &mut self,
         _host: &mut ipp_core::HostRuntime,
@@ -61,21 +59,18 @@ pub trait HostServices {
     /// Admit composed input, continuing healthy roots and returning scoped failures.
     fn route_input(
         &mut self,
-        _host: &mut ipp_core::HostRuntime,
+        host: &mut ipp_core::HostRuntime,
         _frame: &ipp_core::HostFrameReport,
     ) -> Vec<HostInputFailure> {
-        #[cfg(feature = "gui")]
-        {
-            let surface = self.presentation_surface().ok();
-            if let Some(input) = self.gui_input() {
-                input.route(_host, surface);
-            }
+        let surface = self.presentation_surface().ok();
+        if let Some(input) = self.gui_input() {
+            input.route(host, surface);
         }
+
         Vec::new()
     }
 
     /// Optional physical GUI adapter. Headless semantic commands do not use this owner.
-    #[cfg(feature = "gui")]
     fn gui_input(&mut self) -> Option<&mut services::gui_input::GuiHostInputService> {
         None
     }
@@ -83,12 +78,11 @@ pub trait HostServices {
     /// Physical selection lifetime hook, independent of authoring sessions.
     fn presentation_selection(
         &mut self,
-        _host: &mut ipp_core::HostRuntime,
-        _selection: Option<ipp_protocol::presentation::PresentationView>,
+        host: &mut ipp_core::HostRuntime,
+        selection: Option<ipp_protocol::presentation::PresentationView>,
     ) {
-        #[cfg(feature = "gui")]
         if let Some(input) = self.gui_input() {
-            input.selection(_host, _selection);
+            input.selection(host, selection);
         }
     }
 
@@ -168,7 +162,6 @@ pub struct WorldSession {
     progress: Option<progress::WorldProgress>,
     receipts: attachment_receipts::SharedReceipts,
     lifecycle_watch: Option<lifecycle_watch::SessionLifecycleWatch>,
-    #[cfg(feature = "gui")]
     gui_observations: Option<gui_observations::SessionObservations>,
     reply_budget: attachment_receipts::SharedReplyBudget,
     reply_reservations:
@@ -194,10 +187,8 @@ pub use reliable_output::{PreparedOutputCopy, ReliableResponse, ResponseLease};
 enum WorldSessionReply {
     CameraNavigate,
     LifecycleSubscription,
-    #[cfg(feature = "diagnostics")]
     LifecycleDiagnostics(ipp_protocol::lifecycle_diagnostics::LifecycleDiagnosticQuery),
     Batch {
-        #[cfg(feature = "diagnostics")]
         operations: usize,
     },
     AnimationController,
@@ -253,5 +244,4 @@ mod render_state_tests;
 
 #[cfg(test)]
 mod command_batches_tests;
-#[cfg(feature = "gui")]
 mod gui_observations;

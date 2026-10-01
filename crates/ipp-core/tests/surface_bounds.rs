@@ -1,5 +1,4 @@
 //! Surface rectangles participate in visual bounds without enabling picking.
-#![cfg(feature = "surfaces")]
 
 mod support;
 use support::WorldTestDriver;

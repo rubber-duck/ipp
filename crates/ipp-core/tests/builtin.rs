@@ -1,5 +1,4 @@
 //! Pure recipe output is accepted through ordinary owned asset publication.
-#![cfg(feature = "builtin-assets")]
 
 mod support;
 use support::WorldTestDriver;

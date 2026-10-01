@@ -242,12 +242,11 @@ test("GUI roots, node identity and committed values cross a real worker connecti
   timeout: 60000,
 }, async (context) => {
   const workspace = resolve(process.cwd());
-  const profile = resolve(workspace, "target/browser-build/headless-gui");
+  const profile = resolve(workspace, "target/browser-build/render");
   const build: BrowserBuildConfiguration = {
-    name: "headless-gui",
+    name: "render",
     generatedModule: resolve(profile, "generated.js"),
     runtimeWasm: resolve(profile, "runtime.wasm"),
-    exportWasm: resolve(profile, "export.wasm"),
     contractArtifact: resolve(profile, "contract.bin"),
   };
   await runBrowserEnvironment(
@@ -255,7 +254,6 @@ test("GUI roots, node identity and committed values cross a real worker connecti
     {
       workspace,
       build,
-      mismatchBuild: build,
       operationTimeoutMs: 20000,
       evidenceParent: resolve(
         workspace,
@@ -327,12 +325,11 @@ test("a 100000-item VirtualList scrolls, clips and restores through a real worke
   timeout: 60000,
 }, async (context) => {
   const workspace = resolve(process.cwd());
-  const profile = resolve(workspace, "target/browser-build/headless-gui");
+  const profile = resolve(workspace, "target/browser-build/render");
   const build: BrowserBuildConfiguration = {
-    name: "headless-gui",
+    name: "render",
     generatedModule: resolve(profile, "generated.js"),
     runtimeWasm: resolve(profile, "runtime.wasm"),
-    exportWasm: resolve(profile, "export.wasm"),
     contractArtifact: resolve(profile, "contract.bin"),
   };
   await runBrowserEnvironment(
@@ -340,7 +337,6 @@ test("a 100000-item VirtualList scrolls, clips and restores through a real worke
     {
       workspace,
       build,
-      mismatchBuild: build,
       operationTimeoutMs: 20000,
       evidenceParent: resolve(
         workspace,
@@ -381,12 +377,11 @@ test("GUI pointer, keyboard and text input routes through a real worker connecti
   timeout: 60000,
 }, async (context) => {
   const workspace = resolve(process.cwd());
-  const profile = resolve(workspace, "target/browser-build/headless-gui");
+  const profile = resolve(workspace, "target/browser-build/render");
   const build: BrowserBuildConfiguration = {
-    name: "headless-gui",
+    name: "render",
     generatedModule: resolve(profile, "generated.js"),
     runtimeWasm: resolve(profile, "runtime.wasm"),
-    exportWasm: resolve(profile, "export.wasm"),
     contractArtifact: resolve(profile, "contract.bin"),
   };
   await runBrowserEnvironment(
@@ -394,7 +389,6 @@ test("GUI pointer, keyboard and text input routes through a real worker connecti
     {
       workspace,
       build,
-      mismatchBuild: build,
       operationTimeoutMs: 20000,
       evidenceParent: resolve(
         workspace,
@@ -438,12 +432,11 @@ test("mounted IppCanvas owns trusted text, IME, selection and clipboard lifecycl
   timeout: 60000,
 }, async (context) => {
   const workspace = resolve(process.cwd());
-  const profile = resolve(workspace, "target/browser-build/headless-gui");
+  const profile = resolve(workspace, "target/browser-build/render");
   const build: BrowserBuildConfiguration = {
-    name: "headless-gui",
+    name: "render",
     generatedModule: resolve(profile, "generated.js"),
     runtimeWasm: resolve(profile, "runtime.wasm"),
-    exportWasm: resolve(profile, "export.wasm"),
     contractArtifact: resolve(profile, "contract.bin"),
   };
   await runBrowserEnvironment(
@@ -451,7 +444,6 @@ test("mounted IppCanvas owns trusted text, IME, selection and clipboard lifecycl
     {
       workspace,
       build,
-      mismatchBuild: build,
       operationTimeoutMs: 20000,
       evidenceParent: resolve(
         workspace,
@@ -752,9 +744,10 @@ test("mounted IppCanvas owns trusted text, IME, selection and clipboard lifecycl
       await env.page.waitForFunction(
         () => document.activeElement !== document.querySelector("textarea"),
       );
-      const afterButton = await env.page.evaluate(
-        async (url) => (await import(url)).observation(),
-        fixture,
+      // DOM focus leaves before the runtime reports the press to React.
+      const afterButton = await waitForObservation(
+        (value) => value.presses > 0,
+        "the non-text control click did not press the button",
       );
       assert.equal(afterButton.text, "ext!");
       assert.equal(afterButton.presses, 1);
@@ -917,12 +910,11 @@ test("mounted IppCanvas operates text, checkbox, slider and button by keyboard o
   timeout: 60000,
 }, async (context) => {
   const workspace = resolve(process.cwd());
-  const profile = resolve(workspace, "target/browser-build/headless-gui");
+  const profile = resolve(workspace, "target/browser-build/render");
   const build: BrowserBuildConfiguration = {
-    name: "headless-gui",
+    name: "render",
     generatedModule: resolve(profile, "generated.js"),
     runtimeWasm: resolve(profile, "runtime.wasm"),
-    exportWasm: resolve(profile, "export.wasm"),
     contractArtifact: resolve(profile, "contract.bin"),
   };
   await runBrowserEnvironment(
@@ -930,7 +922,6 @@ test("mounted IppCanvas operates text, checkbox, slider and button by keyboard o
     {
       workspace,
       build,
-      mismatchBuild: build,
       operationTimeoutMs: 20000,
       evidenceParent: resolve(
         workspace,
@@ -1092,12 +1083,11 @@ test("mounted nested ScrollViews drag, wheel and clip in completed WebGL frames"
   timeout: 60000,
 }, async (context) => {
   const workspace = resolve(process.cwd());
-  const profile = resolve(workspace, "target/browser-build/headless-gui");
+  const profile = resolve(workspace, "target/browser-build/render");
   const build: BrowserBuildConfiguration = {
-    name: "headless-gui",
+    name: "render",
     generatedModule: resolve(profile, "generated.js"),
     runtimeWasm: resolve(profile, "runtime.wasm"),
-    exportWasm: resolve(profile, "export.wasm"),
     contractArtifact: resolve(profile, "contract.bin"),
   };
   await runBrowserEnvironment(
@@ -1105,7 +1095,6 @@ test("mounted nested ScrollViews drag, wheel and clip in completed WebGL frames"
     {
       workspace,
       build,
-      mismatchBuild: build,
       operationTimeoutMs: 20000,
       evidenceParent: resolve(
         workspace,
@@ -1418,12 +1407,11 @@ test("a mounted React VirtualList declares its wanted range and scrolls in compl
   timeout: 60000,
 }, async (context) => {
   const workspace = resolve(process.cwd());
-  const profile = resolve(workspace, "target/browser-build/headless-gui");
+  const profile = resolve(workspace, "target/browser-build/render");
   const build: BrowserBuildConfiguration = {
-    name: "headless-gui",
+    name: "render",
     generatedModule: resolve(profile, "generated.js"),
     runtimeWasm: resolve(profile, "runtime.wasm"),
-    exportWasm: resolve(profile, "export.wasm"),
     contractArtifact: resolve(profile, "contract.bin"),
   };
   await runBrowserEnvironment(
@@ -1431,7 +1419,6 @@ test("a mounted React VirtualList declares its wanted range and scrolls in compl
     {
       workspace,
       build,
-      mismatchBuild: build,
       operationTimeoutMs: 20000,
       evidenceParent: resolve(
         workspace,

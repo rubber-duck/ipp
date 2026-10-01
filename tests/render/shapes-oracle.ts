@@ -7,6 +7,30 @@ import {
 } from "./image-assertions.js";
 import type { ShapeDefinition } from "./shapes-fixture.js";
 
+/**
+ * The shapes canvas: half the shared render viewport per axis, because this
+ * scenario's cost follows its pixel count (dozens of captures, each saved and
+ * analysed per pixel). Size thresholds were calibrated at the 320 x 240
+ * viewport; {@link scaledLength} and {@link scaledArea} carry them to this
+ * canvas. Rasterization tolerances (bounds, contour corridors, neighbourhoods)
+ * stay in pixels.
+ */
+export const SHAPES_VIEWPORT = Object.freeze({
+  width: VIEWPORT.width / 2,
+  height: VIEWPORT.height / 2,
+});
+const CALIBRATION_SCALE = SHAPES_VIEWPORT.width / VIEWPORT.width;
+
+/** A length in pixels calibrated on the 320 x 240 viewport, on the shapes canvas. */
+export function scaledLength(pixels: number): number {
+  return pixels * CALIBRATION_SCALE;
+}
+
+/** A pixel count calibrated on the 320 x 240 viewport, on the shapes canvas. */
+export function scaledArea(pixels: number): number {
+  return pixels * CALIBRATION_SCALE ** 2;
+}
+
 export type Vec3 = readonly [number, number, number];
 export type Point = readonly [number, number];
 export type BaseShape = "cube" | "sphere" | "pill" | "plane" | "cone";
@@ -513,11 +537,11 @@ export function projectPoint(point: Vec3): Point {
   const ndcX =
     dot(RIGHT, relative) /
     depth /
-    (FIELD_TANGENT * (VIEWPORT.width / VIEWPORT.height));
+    (FIELD_TANGENT * (SHAPES_VIEWPORT.width / SHAPES_VIEWPORT.height));
   const ndcY = dot(UP, relative) / depth / FIELD_TANGENT;
   return [
-    ((ndcX + 1) * VIEWPORT.width) / 2,
-    ((1 - ndcY) * VIEWPORT.height) / 2,
+    ((ndcX + 1) * SHAPES_VIEWPORT.width) / 2,
+    ((1 - ndcY) * SHAPES_VIEWPORT.height) / 2,
   ];
 }
 

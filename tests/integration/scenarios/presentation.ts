@@ -1,3 +1,4 @@
+import { renderDiagnostics } from "../../../packages/ipp-client/src/diagnostics.js";
 import type {
   Client,
   HostClientBase,
@@ -113,9 +114,28 @@ export async function connectionPresentationLifetime(
   }
 }
 
+function capturedImage(image: PresentedCapture) {
+  return {
+    width: image.view.binding.viewport.width,
+    height: image.view.binding.viewport.height,
+    pixels: Array.from(new Uint8Array(image.pixels)),
+    frame: {
+      view: image.view,
+      sequence: image.sequence,
+      publication: image.publication,
+    },
+  };
+}
+
+/**
+ * Selection, completed captures and their fences through the production
+ * presentation protocol; an instrumentation build continues with context
+ * loss, held capture transfers and render statistics through the testing channel.
+ */
 export async function explicitPresentation(
   host: HostClientBase<Client>,
   probe: PresentationTransferProbe,
+  instrumentation = true,
 ) {
   const surface = await host.presentation.surface();
   const viewport = { width: 96, height: 64, devicePixelRatio: 1 };
@@ -294,9 +314,39 @@ export async function explicitPresentation(
   await clearWait;
   await rejected(host.presentation.frame(view), ["staleView"]);
   view = await host.presentation.select(surface, resized);
-  const diagnostics = host.renderDiagnostics;
-  check(diagnostics, "Real renderer lacks test diagnostics channel");
-  const testing = presentationTesting(diagnostics);
+  async function close() {
+    for (const client of clients) await client.close();
+    for (const world of worlds) await host.destroyWorld(world.reference);
+  }
+  if (!instrumentation) {
+    // Statistics answer in every build; a testing control fails at the call.
+    check(
+      (await renderDiagnostics(host)?.statistics())?.frame,
+      "The production render build answers renderer statistics",
+    );
+    let refused: unknown;
+    try {
+      presentationTesting(host).loseContext();
+    } catch (error) {
+      refused = error;
+    }
+    check(
+      refused instanceof Error &&
+        /require an instrumentation build/.test(refused.message),
+      `A testing control must fail at the call against the production build: ${String(refused)}`,
+    );
+    const report = {
+      surface,
+      first: { sequence: first.sequence, publication: first.publication },
+      second: { sequence: second.sequence, publication: second.publication },
+      images: [first, second, resizedCapture].map(capturedImage),
+    };
+    await close();
+    return report;
+  }
+  const renderer = renderDiagnostics(host);
+  check(renderer, "Real renderer lacks test diagnostics channel");
+  const testing = presentationTesting(host);
   const lossWait = rejected(
     host.presentation.capture(view, { afterSequence: 0xffff_ffff_ffff_ffffn }),
     ["unavailable", "staleView", "drawFailed"],
@@ -459,19 +509,9 @@ export async function explicitPresentation(
       chunks: probe.reads(captureId),
       releases: probe.releases(captureId),
     },
-    images: [first, second, completed, blank].map((image) => ({
-      width: image.view.binding.viewport.width,
-      height: image.view.binding.viewport.height,
-      pixels: Array.from(new Uint8Array(image.pixels)),
-      frame: {
-        view: image.view,
-        sequence: image.sequence,
-        publication: image.publication,
-      },
-    })),
-    statistics: await diagnostics.statistics(),
+    images: [first, second, completed, blank].map(capturedImage),
+    statistics: await renderer.statistics(),
   };
-  for (const client of clients) await client.close();
-  for (const world of worlds) await host.destroyWorld(world.reference);
+  await close();
   return report;
 }

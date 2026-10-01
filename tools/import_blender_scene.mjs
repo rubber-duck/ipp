@@ -54,8 +54,7 @@ await bundleBrowser(
 );
 const runtime = resolve(
   workspace,
-  process.env.IPP_BROWSER_BUILD_DIR ?? "target/browser-build",
-  "render-expanded",
+  process.env.IPP_BROWSER_DISTRIBUTION ?? "target/browser-build/render",
 );
 const type = {
   ".js": "text/javascript",

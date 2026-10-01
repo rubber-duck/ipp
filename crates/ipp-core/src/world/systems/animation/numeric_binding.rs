@@ -36,13 +36,9 @@ pub(super) fn bind_frozen_f32(
         ComponentValue::LINEAR_DRIVER => storage.linear_driver_ptr(index)?.cast::<u8>(),
         ComponentValue::BOUNDING_GEOMETRY => storage.bounding_geometry_ptr(index)?.cast::<u8>(),
         ComponentValue::PICKING_GEOMETRY => storage.picking_geometry_ptr(index)?.cast::<u8>(),
-        #[cfg(feature = "mesh-poses")]
         ComponentValue::MESH_POSE => storage.mesh_pose_ptr(index)?.cast::<u8>(),
-        #[cfg(feature = "particles")]
         ComponentValue::PARTICLE_EMITTER => storage.particle_emitter_ptr(index)?.cast::<u8>(),
-        #[cfg(feature = "particles")]
         ComponentValue::PARTICLE_SPRITE => storage.particle_sprite_ptr(index)?.cast::<u8>(),
-        #[cfg(feature = "particles")]
         ComponentValue::PARTICLE_PLAYBACK => storage.particle_playback_ptr(index)?.cast::<u8>(),
         _ => return None,
     };
@@ -76,13 +72,10 @@ pub(super) fn frozen_f32_field_supported(component: u16, offset: u32) -> bool {
         | ComponentValue::PICKING_GEOMETRY => {
             super::numeric_fields::range(component, offset).is_some()
         }
-        #[cfg(feature = "mesh-poses")]
         ComponentValue::MESH_POSE => super::numeric_fields::range(component, offset).is_some(),
-        #[cfg(feature = "particles")]
         ComponentValue::PARTICLE_EMITTER | ComponentValue::PARTICLE_SPRITE => {
             super::numeric_fields::range(component, offset).is_some()
         }
-        #[cfg(feature = "particles")]
         ComponentValue::PARTICLE_PLAYBACK => {
             offset == offset_of!(crate::components::ParticlePlayback, time) as u32
         }

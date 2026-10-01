@@ -290,7 +290,6 @@ fn destroyed_selected_world_then_none_releases_metadata_for_repeated_catalog_reu
     assert_eq!(state.program_deletes.get(), 32);
 }
 
-#[cfg(feature = "surfaces")]
 #[test]
 fn nested_camera_demand_and_targets_follow_only_the_selected_root() {
     let (mut host, mut renderer, state) = fixture();

@@ -20,9 +20,10 @@ import {
 test("ordinary GUI native WebSocket terminal delivery", {
   timeout: 90_000,
 }, async (context) => {
-  const profile = resolve("target/gui-host");
+  const profile = resolve("target/integration-artifacts/native");
   const contract = await import(
-    pathToFileURL(resolve(profile, "generated.js")).href
+    pathToFileURL(resolve("target/integration-artifacts/client/generated.js"))
+      .href
   );
   await runNativeEnvironment(
     "gui-local-native",
@@ -84,12 +85,11 @@ test("ordinary GUI native WebSocket terminal delivery", {
 test("ordinary GUI worker WASM terminal delivery", {
   timeout: 90_000,
 }, async (context) => {
-  const profile = resolve("target/browser-build/semantic-gui");
+  const profile = resolve("target/browser-build/headless");
   const build: BrowserBuildConfiguration = {
-    name: "semantic-gui",
+    name: "headless",
     generatedModule: resolve(profile, "generated.js"),
     runtimeWasm: resolve(profile, "runtime.wasm"),
-    exportWasm: resolve(profile, "export.wasm"),
     contractArtifact: resolve(profile, "contract.bin"),
   };
   await runBrowserEnvironment(
@@ -97,7 +97,6 @@ test("ordinary GUI worker WASM terminal delivery", {
     {
       workspace: process.cwd(),
       build,
-      mismatchBuild: build,
       operationTimeoutMs: 60_000,
     },
     context.signal,

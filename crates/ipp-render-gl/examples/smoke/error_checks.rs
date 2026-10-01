@@ -3,8 +3,8 @@
 //! A GL error raised in the middle of a frame is not reported by the routine
 //! draws or Surface cache composites that follow it outside exhaustive mode; a
 //! sampled frame end reports it instead. A Surface cache repaint's end, not its
-//! begin, rejects an image whose pass raised an error. In GUI builds, replacing
-//! retained storage makes that frame's end check. Exhaustive mode reports the
+//! begin, rejects an image whose pass raised an error. Replacing retained
+//! storage makes that frame's end check. Exhaustive mode reports the
 //! error at the next routine call.
 
 use ipp_render_gl::{GlesRenderDevice, RenderDevice, RenderError};
@@ -118,7 +118,6 @@ pub(crate) fn run(context: &super::egl::Context, evidence: &std::path::Path) -> 
     ));
 
     // Writing retained storage checks the same frame's end.
-    #[cfg(feature = "gui")]
     {
         let vertex = ipp_render_gl::GuiVertex::EMPTY;
         let mut batch = device.create_gui_batch(6)?;

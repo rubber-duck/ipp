@@ -72,7 +72,6 @@ impl SessionOutbox {
         drop(responses);
     }
 
-    #[cfg(feature = "gui")]
     pub(crate) fn reserve(&self) -> Result<ReplySlot, ipp_core::ErrorReason> {
         let mut state = self.0.borrow_mut();
         if !state.live {
@@ -83,10 +82,8 @@ impl SessionOutbox {
     }
 }
 
-#[cfg(feature = "gui")]
 pub(crate) struct ReplySlot(SessionOutbox);
 
-#[cfg(feature = "gui")]
 impl ReplySlot {
     pub(crate) fn is_live(&self) -> bool {
         self.0.is_live()
@@ -99,7 +96,6 @@ impl ReplySlot {
     }
 }
 
-#[cfg(feature = "gui")]
 impl Drop for ReplySlot {
     fn drop(&mut self) {
         self.0.0.borrow_mut().reserved -= 1;

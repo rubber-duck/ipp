@@ -14,7 +14,7 @@ World frame notifications report supersedable completed tick/time progress, not 
 
 ```mermaid
 flowchart LR
-    connect["Connect / verify contract"] --> host["Host connection"]
+    connect["Connect / read contract"] --> host["Host connection"]
     host -->|"Open / close independently"| sessions["World sessions"]
     host -->|"Bind explicit output"| view["Root presentation"]
 ```
@@ -57,7 +57,9 @@ Native and protocol writes share validation/lifecycle rules. Real-time numeric e
 
 ## Build compatibility
 
-Export and generate Host/SDK contracts from the actual target with the final build's capability selection. The compatibility hash covers layout, defaults, operations, events and encoding, rejecting mismatches before normal decoding. Host layouts never substitute for WASM. CPU layout, wire encoding and GPU packing remain distinct; codecs share a target-independent transport/session interface. [Generation tooling](../../tools/ipp-schema-gen/README.md) owns export mechanics.
+Export and generate Host/SDK contracts from the actual target; each host target has [one contract](rust-workspace.md#compile-time-composition). The compatibility hash covers layout, defaults, operations, events and encoding. Host layouts never substitute for WASM. CPU layout, wire encoding and GPU packing remain distinct; codecs share a target-independent transport/session interface. [Generation tooling](../../tools/ipp-schema-gen/README.md) owns export mechanics.
+
+Compatibility is the client's decision. On connection the Host announces its wire revision and compatibility hash through a schema-independent exchange and serves its full contract on request; it checks no claim from the client. Generated SDKs refuse a Host whose hash differs from the contract they were generated from. A client without a matching SDK, such as an agent inspecting or debugging the protocol, reads the contract and applies its own rule. The Host stays consistent either way, because it [validates every operation it decodes](#generated-field-access). Generation reads the contract from the runtime that ships.
 
 Before stabilization there is no portable ABI or backward-compatibility promise. Change contracts, assets, SDKs and saved Worlds together; regenerate clients/fixtures rather than adding legacy formats, adapters or migrations unless explicitly requested.
 

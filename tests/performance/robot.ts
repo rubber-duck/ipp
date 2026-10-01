@@ -60,7 +60,7 @@ test("platformer profiling preserves state and completed frames", {
       const worker = g.page.workers().at(-1)!;
       assert.ok(
         await worker.evaluate(() => "ippProfile" in globalThis),
-        "Build with the profiling feature",
+        "Build with the instrumentation feature",
       );
       const playing = process.env.IPP_PROFILE_PLAYING === "1";
       const rows: unknown[] = [];

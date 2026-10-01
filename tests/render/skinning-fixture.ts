@@ -1,3 +1,4 @@
+import type { RenderStatisticsSnapshot } from "@ipp/client/diagnostics";
 import { presentationTesting } from "../../packages/ipp-client/src/testing.js";
 import { settledAsset } from "../integration/asset-fixtures.js";
 import { clientAssetSource } from "../../packages/ipp-client/src/asset-sources.js";
@@ -5,7 +6,6 @@ import type {
   AnimationWorldClient,
   PickingWorldClient,
   PresentedCapture,
-  RenderStatisticsSnapshot,
 } from "@ipp/client";
 import { AnimationFixture, check } from "../integration/animation-fixtures.js";
 import type { HostedWorldClient } from "../integration/camera-fixtures.js";
@@ -102,7 +102,6 @@ export async function initialize(configuration: {
   return {
     session: c.session,
     schemaHash: c.schemaHash,
-    capabilities: contract.CAPABILITIES,
   };
 }
 

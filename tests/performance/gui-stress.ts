@@ -1,4 +1,5 @@
 /** Runs the fixed React GUI stress workload once and writes its report. */
+import type { HostGuiLayoutStatistics } from "@ipp/client/diagnostics";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -16,7 +17,6 @@ import { encodePng } from "../render/retained-gui-images.js";
 import { GUI_STRESS_WORKLOAD } from "../../examples/gui-stress/workload.js";
 import { sampleWorkerAllocations } from "./worker-profiling.js";
 import { verifyHardwareRenderer } from "#ipp-browser-options";
-import type { HostGuiLayoutStatistics } from "@ipp/client";
 
 type Arrangement = "browser" | "native-gles";
 type FixtureCapture = {
@@ -864,7 +864,7 @@ async function exerciseCoreProfile(env: BrowserEnvironmentContext) {
     return {
       evidence: env.evidence.directory,
       artifact: "core-profile.json",
-      build: "gui-stress-profile",
+      build: "render-instrumentation",
       cpu: cpuSummary(cpu),
       allocations: allocationSummary(allocations),
       idleSweeps: idleSweeps.map((profile) => ({
@@ -902,10 +902,12 @@ export async function runGuiStress(
   await mkdir(output, { recursive: true });
   const workspace = process.cwd();
   const startedAt = new Date().toISOString();
-  const buildName = arrangement === "browser" ? "headless-gui" : "gles-gui";
+  // Timing runs measure the normal build each backend ships.
+  const buildName = arrangement === "browser" ? "render" : "gles";
   const directory = resolve(
-    arrangement === "browser" ? "target/browser-build" : "target/gles-host",
-    buildName,
+    arrangement === "browser"
+      ? "target/browser-build/render"
+      : "target/gles-host",
   );
   const build: BrowserBuildConfiguration = {
     name: buildName,
@@ -914,16 +916,11 @@ export async function runGuiStress(
       directory,
       arrangement === "browser" ? "runtime.wasm" : "gles_host",
     ),
-    exportWasm: resolve(
-      directory,
-      arrangement === "browser" ? "export.wasm" : "contract.bin",
-    ),
     contractArtifact: resolve(directory, "contract.bin"),
   };
   const browserConfig = {
     workspace,
     build,
-    mismatchBuild: build,
     rendering: arrangement === "browser",
     deviceScaleFactor: GUI_STRESS_WORKLOAD.viewport.dpr,
     operationTimeoutMs: 60_000,
@@ -993,17 +990,18 @@ export async function runGuiStress(
   if (withCoreProfile) {
     if (arrangement !== "browser")
       throw new Error("Core GUI profile currently requires a browser worker");
-    const profileDirectory = resolve("target/browser-build/gui-stress-profile");
+    const profileDirectory = resolve(
+      "target/browser-build/render-instrumentation",
+    );
     const profileBuild: BrowserBuildConfiguration = {
-      name: "gui-stress-profile",
+      name: "render-instrumentation",
       generatedModule: resolve(profileDirectory, "generated.js"),
       runtimeWasm: resolve(profileDirectory, "runtime.wasm"),
-      exportWasm: resolve(profileDirectory, "export.wasm"),
       contractArtifact: resolve(profileDirectory, "contract.bin"),
     };
     const profiled = await runBrowserEnvironment(
       "gui-stress-core-profile",
-      { ...browserConfig, build: profileBuild, mismatchBuild: profileBuild },
+      { ...browserConfig, build: profileBuild },
       signal,
       exerciseCoreProfile,
     );

@@ -175,10 +175,10 @@ impl RunningConnection {
         };
         running
             .client
-            .send(Message::Binary(ipp_protocol::bootstrap().to_vec().into()))
+            .send(Message::Binary(ipp_protocol::HELLO.to_vec().into()))
             .unwrap();
         let reply = running.response();
-        assert_eq!(&reply[..16], &ipp_protocol::bootstrap());
+        assert_eq!(&reply[..16], &ipp_protocol::announcement());
         assert_eq!(&reply[16..], &7u64.to_le_bytes());
         let create = ipp_protocol::host::encode_host_request(&ipp_protocol::host::HostRequest {
             connection: 7,

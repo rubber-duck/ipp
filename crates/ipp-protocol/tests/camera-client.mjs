@@ -4,11 +4,12 @@ import test from "node:test";
 import {
   encodeManifestLayout,
   generateClient,
-  replyToHostCreate,
+  hostAnnouncement,
   manifestVariant,
+  replyToHostCreate,
 } from "./generated-client.mjs";
 
-const client = await generateClient("camera-picking", []);
+const client = await generateClient("camera-picking");
 const { codec, manifest } = client;
 const layout = (name, fields) => encodeManifestLayout(client, name, fields);
 const tag = (name) => manifestVariant(client, name);
@@ -214,9 +215,7 @@ async function connect(sendFailure) {
           throw new Error("transport unavailable");
         sent.push(bytes.slice());
         if (sent.length === 1) {
-          const reply = new Uint8Array(24);
-          reply.set(bytes);
-          new DataView(reply.buffer).setBigUint64(16, 7n, true);
+          const reply = hostAnnouncement(codec);
           events.message(reply);
         }
       },

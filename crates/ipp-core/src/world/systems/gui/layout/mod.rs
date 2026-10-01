@@ -13,7 +13,6 @@ mod entity_layout;
 mod geometry;
 pub use component::GuiLayout;
 pub use entity_layout::{GuiEntityLayout, GuiEntityLayoutDiagnostic};
-#[cfg(feature = "diagnostics")]
 pub use entity_layout::{GuiEntityLayoutStatistics, GuiEntityLayoutWork};
 pub(crate) mod scroll_bars;
 mod scroll_layout;

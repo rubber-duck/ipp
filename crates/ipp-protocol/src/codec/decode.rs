@@ -64,7 +64,6 @@ impl<'a> Reader<'a> {
         })
     }
 
-    #[cfg(feature = "surfaces")]
     pub(super) fn canvas_state_update(
         &mut self,
     ) -> Result<ipp_core::CanvasStateUpdate, ProtocolError> {
@@ -332,7 +331,6 @@ impl<'a> Reader<'a> {
                 entity: self.entity()?,
                 component: self.u16()?,
             },
-            #[cfg(feature = "gui")]
             COMMAND_GUI_ACTION => Command::GuiAction {
                 target: ipp_core::GuiActionTarget {
                     entity: self.entity()?,
@@ -347,7 +345,7 @@ impl<'a> Reader<'a> {
 }
 
 /// Decode one bounded complete message into owned core commands.
-/// Call only after `accept_bootstrap` succeeds for this connection.
+/// Call only after `accept_hello` succeeds for this connection.
 pub fn decode_request(bytes: &[u8], expected_session: u64) -> Result<Request, ProtocolError> {
     decode_request_with_buffer(bytes, expected_session, &mut Vec::new())
 }
@@ -433,7 +431,6 @@ pub fn decode_world_request(
     let request_id = r.u64()?;
 
     let body = match r.u8()? {
-        #[cfg(feature = "gui")]
         REQUEST_GUI_OBSERVATION => RequestBody::GuiObservation(r.gui_observation_request()?),
         REQUEST_ATTACHMENT_RECEIPT => RequestBody::AttachmentReceipt {
             receipt: r.u64()?,
@@ -482,14 +479,8 @@ pub fn decode_world_request(
             let target = r.u64()?;
             let limit = r.u16()?;
             let max_depth = r.u16()?;
-            #[cfg(feature = "gui")]
             let gui_collection = matches!(collection, INSPECT_GUI_FOCUS | INSPECT_GUI_POINTERS);
-            #[cfg(not(feature = "gui"))]
-            let gui_collection = false;
-            #[cfg(feature = "surfaces")]
             let canvas_collection = collection == INSPECT_CANVAS;
-            #[cfg(not(feature = "surfaces"))]
-            let canvas_collection = false;
             if !(collection <= INSPECT_ENTITY_TREE || gui_collection || canvas_collection)
                 || limit == 0
                 || usize::from(limit) > crate::INSPECTION_PAGE_RECORDS
@@ -507,7 +498,6 @@ pub fn decode_world_request(
             })
         }
         REQUEST_LIFECYCLE_WATCH => RequestBody::LifecycleWatch(r.lifecycle_watch_request()?),
-        #[cfg(feature = "diagnostics")]
         REQUEST_LIFECYCLE_DIAGNOSTICS => {
             let world = r.world_reference()?;
             let output = r.u64()?;
@@ -567,7 +557,6 @@ pub fn decode_world_request(
         REQUEST_RENDER_STATE_UPDATE => {
             RequestBody::RenderStateUpdateCommand(r.render_state_patch()?)
         }
-        #[cfg(feature = "surfaces")]
         REQUEST_CANVAS_STATE_UPDATE => {
             RequestBody::CanvasStateUpdateCommand(r.canvas_state_update()?)
         }
@@ -623,7 +612,6 @@ pub fn decode_world_request(
         body,
         RequestBody::AnimationPlaybackCommand { .. } | RequestBody::RenderStateUpdateCommand(_)
     );
-    #[cfg(feature = "surfaces")]
     let command = command || matches!(body, RequestBody::CanvasStateUpdateCommand(_));
     if command != (request_id == 0) {
         return Err(ProtocolError::Malformed("reserved request identity").into());

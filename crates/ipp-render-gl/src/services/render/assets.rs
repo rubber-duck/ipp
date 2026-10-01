@@ -19,7 +19,6 @@ pub(crate) struct GlMeshData<D: RenderDevice> {
 }
 
 impl<D: RenderDevice> GlMeshData<D> {
-    #[cfg(feature = "particles")]
     pub(super) fn private_mesh(
         device: SharedRenderDevice<D>,
         mesh: MeshAsset,

@@ -10,7 +10,7 @@ Asset source strings, types and variants remain unchanged. Missing resources do 
 
 ## Compatibility and publication
 
-Files require the exact compiled target contract, including selected capabilities and field layouts. Native and WASM files are not interchangeable merely because their container version matches. The checksum detects corruption, not authenticity. [Container encoding](container.rs) owns format details; [World capture/restoration](../../world/serialization.rs) coordinates System validation.
+Files require the exact compiled target contract, including its registered components and field layouts. Native and WASM files are not interchangeable merely because their container version matches. The checksum detects corruption, not authenticity. [Container encoding](container.rs) owns format details; [World capture/restoration](../../world/serialization.rs) coordinates System validation.
 
 Capture, encoding and restoration are synchronous whole-candidate operations and can pause other Worlds. Transfer backpressure does not make those operations incremental. [Host connection transfer policy](../../../../ipp-host-session/src) separately controls admission, retained buffers, cancellation and expiry. Later edits cannot change a completed capture; cancelled or detached originating sessions discard unpublished transfers. [Data writers](../data_source/README.md) own destination publication guarantees.
 

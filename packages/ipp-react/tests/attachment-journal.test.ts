@@ -48,17 +48,6 @@ function clientWith(batch: ReactWorldClient["batch"]): ReactWorldClient {
   return {
     session: 1n,
     schemaHash: 1n,
-    capabilities: {
-      spatial: false,
-      textures: false,
-      builtinAssets: false,
-      picking: false,
-      debugGeometry: false,
-      pbr: false,
-      shadows: false,
-      skeletalAnimation: false,
-      meshPoses: false,
-    },
     components: {},
     batch,
   };

@@ -2,14 +2,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  generateClient,
-  replyToHostCreate,
   encodeManifestLayout,
+  generateClient,
+  hostAnnouncement,
   manifestVariant,
+  replyToHostCreate,
 } from "./generated-client.mjs";
 
-const minimal = await generateClient("render-state-minimal");
-const client = await generateClient("render-state", []);
+const client = await generateClient("render-state");
 const { codec, source } = client;
 const layout = (name, values) => encodeManifestLayout(client, name, values);
 const tag = (name) => manifestVariant(client, name);
@@ -64,9 +64,7 @@ async function connect() {
         if (replyToHostCreate(bytes, handler)) return;
         sent.push(bytes.slice());
         if (sent.length === 1) {
-          const reply = new Uint8Array(24);
-          reply.set(bytes);
-          new DataView(reply.buffer).setBigUint64(16, 7n, true);
+          const reply = hostAnnouncement(codec);
           handler.message(reply);
         }
       },
@@ -78,8 +76,6 @@ async function connect() {
 }
 
 test("scene schemas retain render-state commands independently of debug rendering", () => {
-  assert.equal(codec.CAPABILITIES.debugGeometry, true);
-  assert.equal(codec.CAPABILITIES.spatial, true);
   assert.equal(codec.BoundingGeometry.fields.is_rendered.kind, 7);
   assert.equal(codec.BoundingGeometry.fields.is_rendered.default, false);
   assert.ok(source.includes("is_rendered?: boolean"));
@@ -87,14 +83,10 @@ test("scene schemas retain render-state commands independently of debug renderin
     "REQUEST_RENDER_STATE_UPDATE",
     "RESPONSE_RENDER_STATE_UPDATED",
   ])
-    assert.equal(name in minimal.codec.WIRE, true);
-  assert.equal("BoundingGeometry" in minimal.codec.components, true);
-  assert.equal(
-    "onRenderStateUpdated" in minimal.codec.IppClient.prototype,
-    true,
-  );
-  assert.equal(minimal.source.includes("function readRenderStatePatch"), true);
-  assert.equal(codec.SCHEMA_HASH, minimal.codec.SCHEMA_HASH);
+    assert.equal(name in codec.WIRE, true);
+  assert.equal("BoundingGeometry" in codec.components, true);
+  assert.equal("onRenderStateUpdated" in codec.IppClient.prototype, true);
+  assert.equal(source.includes("function readRenderStatePatch"), true);
 });
 
 test("sparse commands conform to the manifest and notifications carry changed fields only", () => {

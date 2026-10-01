@@ -20,31 +20,25 @@ pub(super) enum AnimationNumericOutput {
     LinearDriver(ComponentBinding<LinearDriver>),
     BoundingGeometry(ComponentBinding<BoundingGeometry>),
     PickingGeometry(ComponentBinding<PickingGeometry>),
-    #[cfg(feature = "mesh-poses")]
     MeshPose(ComponentBinding<MeshPose>),
-    #[cfg(feature = "particles")]
     ParticleEmitter(ComponentBinding<ParticleEmitter>),
-    #[cfg(feature = "particles")]
     ParticleSprite(ComponentBinding<ParticleSprite>),
-    #[cfg(feature = "particles")]
     ParticlePlayback(ComponentBinding<ParticlePlayback>),
 }
 
 impl AnimationNumericOutput {
     pub(super) fn patch_only(component: u16) -> bool {
-        match component {
+        matches!(
+            component,
             ComponentValue::CUSTOM_MATERIAL
-            | ComponentValue::LINEAR_DRIVER
-            | ComponentValue::BOUNDING_GEOMETRY
-            | ComponentValue::PICKING_GEOMETRY => true,
-            #[cfg(feature = "mesh-poses")]
-            ComponentValue::MESH_POSE => true,
-            #[cfg(feature = "particles")]
-            ComponentValue::PARTICLE_EMITTER
-            | ComponentValue::PARTICLE_SPRITE
-            | ComponentValue::PARTICLE_PLAYBACK => true,
-            _ => false,
-        }
+                | ComponentValue::LINEAR_DRIVER
+                | ComponentValue::BOUNDING_GEOMETRY
+                | ComponentValue::PICKING_GEOMETRY
+                | ComponentValue::MESH_POSE
+                | ComponentValue::PARTICLE_EMITTER
+                | ComponentValue::PARTICLE_SPRITE
+                | ComponentValue::PARTICLE_PLAYBACK
+        )
     }
 
     pub(super) fn bind(
@@ -87,19 +81,15 @@ impl AnimationNumericOutput {
                 ComponentValue::PICKING_GEOMETRY => Self::PickingGeometry(ComponentBinding::new(
                     storage.picking_geometry_ptr(index)?,
                 )),
-                #[cfg(feature = "mesh-poses")]
                 ComponentValue::MESH_POSE => {
                     Self::MeshPose(ComponentBinding::new(storage.mesh_pose_ptr(index)?))
                 }
-                #[cfg(feature = "particles")]
                 ComponentValue::PARTICLE_EMITTER => Self::ParticleEmitter(ComponentBinding::new(
                     storage.particle_emitter_ptr(index)?,
                 )),
-                #[cfg(feature = "particles")]
                 ComponentValue::PARTICLE_SPRITE => {
                     Self::ParticleSprite(ComponentBinding::new(storage.particle_sprite_ptr(index)?))
                 }
-                #[cfg(feature = "particles")]
                 ComponentValue::PARTICLE_PLAYBACK => Self::ParticlePlayback(ComponentBinding::new(
                     storage.particle_playback_ptr(index)?,
                 )),
@@ -138,13 +128,9 @@ impl AnimationNumericOutput {
             Self::LinearDriver(binding) => write_numeric_fields!(binding),
             Self::BoundingGeometry(binding) => write_numeric_fields!(binding),
             Self::PickingGeometry(binding) => write_numeric_fields!(binding),
-            #[cfg(feature = "mesh-poses")]
             Self::MeshPose(binding) => write_numeric_fields!(binding),
-            #[cfg(feature = "particles")]
             Self::ParticleEmitter(binding) => write_numeric_fields!(binding),
-            #[cfg(feature = "particles")]
             Self::ParticleSprite(binding) => write_numeric_fields!(binding),
-            #[cfg(feature = "particles")]
             Self::ParticlePlayback(binding) => {
                 let mut time = binding.get(storage).time;
                 for ((_, offset), value) in fields() {

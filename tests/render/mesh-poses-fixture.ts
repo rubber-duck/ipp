@@ -48,24 +48,41 @@ function png(frame: FramePixels) {
   return imageCanvas.toDataURL("image/png");
 }
 
-/** Scenario intent stays independent of worker startup and artifact persistence. */
-export async function run(configuration: {
-  generated: string;
-  workerScript: string;
-  wasm: string;
-}) {
+/**
+ * The canvas is 200 x 150: every check compares whole frames or canvas-relative
+ * regions, and a smaller canvas shortens each capture and comparison.
+ */
+const VIEW = Object.freeze({ width: 200, height: 150 });
+
+/** The right instance's columns start at 225 of 400: past the left instance. */
+const RIGHT_INSTANCE_START = 0.5625;
+
+/**
+ * Scenario intent stays independent of worker startup and artifact persistence.
+ * The lit scene adds shadows and skinned poses through its World's Systems; the
+ * unlit scene exercises standard unlit and textured deformation without them.
+ */
+export async function run(
+  configuration: {
+    generated: string;
+    workerScript: string;
+    wasm: string;
+  },
+  scene: "unlit" | "lit" = "lit",
+) {
+  const lit = scene === "lit";
+  const skin = lit;
   const contract = await import(configuration.generated);
   const canvas = document.createElement("canvas");
-  canvas.width = 400;
-  canvas.height = 300;
+  canvas.width = VIEW.width;
+  canvas.height = VIEW.height;
   document.body.replaceChildren(canvas);
   const client: HostedWorldClient<AnimationWorldClient> =
     await contract.IppClient.connectWorker(
       configuration.workerScript,
       configuration.wasm,
       {
-        // Skinned poses only exist in builds with skeletal animation.
-        selectedSystems: contract.CAPABILITIES.skeletalAnimation
+        selectedSystems: lit
           ? selectSystems(SCENE, SKINNING)
           : selectSystems(SCENE),
         canvas: canvas.transferControlToOffscreen(),
@@ -92,11 +109,6 @@ export async function run(configuration: {
     typeof compareImages
   >)[] = [];
   try {
-    check(client.capabilities.meshPoses, "mesh pose renderer missing");
-    // Select the lit/shadow scene only for the expanded distribution; the other
-    // scene exercises standard unlit and textured deformation without shadows.
-    const lit = client.capabilities.shadows;
-    const skin = client.capabilities.skeletalAnimation;
     const batch = async (operations: Command[]) => {
       const outcome = await client.batch(operations);
       await record("batch", outcome);
@@ -301,9 +313,13 @@ export async function run(configuration: {
     const last = new Uint8Array(frames.get("pose-1")!.pixels);
     // Compare the right instance, excluding the receiver's changing shadow.
     if (!lit)
-      for (let y = 0; y < 300; y++)
-        for (let x = 225; x < 400; x++) {
-          const offset = (y * 400 + x) * 4;
+      for (let y = 0; y < VIEW.height; y++)
+        for (
+          let x = Math.ceil(VIEW.width * RIGHT_INSTANCE_START);
+          x < VIEW.width;
+          x++
+        ) {
+          const offset = (y * VIEW.width + x) * 4;
           check(
             first[offset] === last[offset] &&
               first[offset + 1] === last[offset + 1] &&

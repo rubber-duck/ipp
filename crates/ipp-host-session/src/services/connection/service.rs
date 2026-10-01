@@ -75,6 +75,7 @@ impl<P: HostServices> Host<P> {
                 ready: false,
                 throttled: false,
                 sessions: BTreeSet::new(),
+                ended_sessions: BTreeSet::new(),
                 last_output_session: 0,
                 last_progress_session: 0,
                 progress_turn: true,
@@ -148,8 +149,7 @@ impl<P: HostServices> Host<P> {
             .ok_or("Connection is closed")?;
         if !connection.ready {
             let reservation = connection.reserve_reply(256)?;
-            let reply =
-                ipp_protocol::accept_bootstrap(bytes, id).map_err(|error| error.to_string())?;
+            let reply = ipp_protocol::accept_hello(bytes, id).map_err(|error| error.to_string())?;
             reservation.borrow_mut().encoded(reply.capacity());
             connection.outbox.push_back(ReliableResponse {
                 bytes: reply,
@@ -166,6 +166,27 @@ impl<P: HostServices> Host<P> {
         }
         // Batch pages are admitted by their batch: only a page that opens one counts.
         let congested = connection.admitted_requests(&self.sessions) >= crate::MAX_PENDING;
+        if bytes == ipp_protocol::CONTRACT_REQUEST {
+            // An admitted request whose reply is charged until physical delivery.
+            if congested {
+                return Err(CONGESTED.into());
+            }
+            let reply = ipp_protocol::contract_reply();
+            let reservation = connection.reserve_reply(reply.capacity())?;
+            reservation.borrow_mut().encoded(reply.capacity());
+            ipp_core::diagnostic!(
+                Info,
+                "[IPP {}] connection.contract connection={} bytes={}",
+                P::NAME,
+                id,
+                reply.len()
+            );
+            connection.outbox.push_back(ReliableResponse {
+                bytes: reply,
+                reservation,
+            });
+            return Ok(());
+        }
         if bytes.starts_with(host::HOST_REQUEST_MAGIC) {
             if congested {
                 return Err(CONGESTED.into());
@@ -194,6 +215,30 @@ impl<P: HostServices> Host<P> {
             connection
                 .reply_reservations
                 .insert(request.request_id, reservation);
+            // A completed capture is an immutable snapshot: reading or releasing it needs no
+            // frame boundary, like asset source transfers. Transfers answer at ingress, so they
+            // keep their arrival order and never wait behind requests queued for the next frame.
+            if let HostRequestBody::Presentation(
+                body @ (ipp_protocol::presentation::PresentationRequest::ReadCapture {
+                    ..
+                }
+                | ipp_protocol::presentation::PresentationRequest::ReleaseCapture(_)),
+            ) = request.body
+            {
+                let response = self
+                    .presentation
+                    .request(
+                        &mut self.runtime,
+                        &mut self.services,
+                        id,
+                        request.request_id,
+                        body,
+                        self.connections.now,
+                    )
+                    .expect("capture transfers complete immediately");
+                return connection
+                    .reply(request.request_id, HostResponseBody::Presentation(response));
+            }
             connection
                 .pending
                 .push_back(HostConnectionIngress::Control {
@@ -208,8 +253,15 @@ impl<P: HostServices> Host<P> {
                     .try_into()
                     .unwrap(),
             );
-            if !connection.sessions.contains(&session) {
-                return Err("SessionMismatch".into());
+            if !connection.holds_session(session)? {
+                ipp_core::diagnostic!(
+                    Debug,
+                    "[IPP {}] session.stale connection={} session={}",
+                    P::NAME,
+                    id,
+                    session
+                );
+                return Ok(());
             }
             let world_id = self
                 .sessions
@@ -252,10 +304,17 @@ impl<P: HostServices> Host<P> {
             .get(&id)
             .ok_or("Connection is closed")?;
         if !connection.ready {
-            return Err("IPP bootstrap must precede World requests".into());
+            return Err("IPP hello must precede World requests".into());
         }
-        if !connection.sessions.contains(&page.session) {
-            return Err("SessionMismatch".into());
+        if !connection.holds_session(page.session)? {
+            ipp_core::diagnostic!(
+                Debug,
+                "[IPP {}] session.stale connection={} session={}",
+                P::NAME,
+                id,
+                page.session
+            );
+            return Ok(());
         }
         self.receive_world_request(
             id,
@@ -366,7 +425,6 @@ impl<P: HostServices> Host<P> {
             return false;
         };
         connection.outbox.close();
-        #[cfg(feature = "gui")]
         if let Some(input) = self.services.gui_input() {
             input.close_connection(&mut self.runtime, id);
         }
@@ -503,7 +561,6 @@ impl<P: HostServices> Host<P> {
                     }
                     continue;
                 }
-                #[cfg(feature = "gui")]
                 if let HostRequestBody::GuiInput(body) = request.body {
                     let reservation = connection
                         .reply_reservations
@@ -581,7 +638,6 @@ impl<P: HostServices> Host<P> {
         connection: &HostConnectionState,
         request: &HostRequest,
     ) -> Result<(), String> {
-        #[cfg(feature = "gui")]
         if matches!(request.body, HostRequestBody::GuiInput(_)) {
             return connection
                 .reply_reservations
@@ -620,7 +676,6 @@ impl<P: HostServices> Host<P> {
         request: HostRequestBody,
     ) -> Result<HostResponseBody, String> {
         match request {
-            #[cfg(feature = "gui")]
             HostRequestBody::GuiInput(_) => {
                 Err("physical input request requires correlation".into())
             }
@@ -790,8 +845,7 @@ impl<P: HostServices> Host<P> {
                         .persistence
                         .release(connection.transfer.take());
                 }
-                connection.sessions.remove(&session);
-                connection.batches.release_session(session);
+                connection.end_session(session);
                 self.detach_world_session(session);
                 Ok(HostResponseBody::Complete)
             }
@@ -889,8 +943,7 @@ impl<P: HostServices> Host<P> {
                 .copied()
                 .collect::<Vec<_>>()
             {
-                connection.sessions.remove(&session);
-                connection.batches.release_session(session);
+                connection.end_session(session);
                 if let Err(error) = connection.reply(
                     0,
                     HostResponseBody::Detached {
@@ -972,7 +1025,6 @@ impl<P: HostServices> Host<P> {
             | HostRequestBody::GetRootOutputBinding(world) => Some(WorldId(world.id)),
             HostRequestBody::ClearRootOutput(binding) => Some(WorldId(binding.output.world.id)),
             HostRequestBody::Presentation(_) => None,
-            #[cfg(feature = "gui")]
             HostRequestBody::GuiInput(_) => None,
             HostRequestBody::SetRootOutput {
                 output,

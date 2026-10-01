@@ -8,30 +8,60 @@ import {
   type BrowserBuildConfiguration,
 } from "../browser/environment.js";
 
-for (const native of [false, true]) {
-  test(`explicit physical presentation through ${native ? "native WebSocket/GLES" : "worker WASM/WebGL"}`, {
+/**
+ * Each presenting distribution. Only instrumentation builds honour the testing
+ * controls; the production render build refuses them at the call.
+ */
+const presentations = [
+  {
+    title: "worker WASM/WebGL",
+    native: false,
+    instrumentation: true,
+    directory: "target/browser-build/render-instrumentation",
+    name: "render-instrumentation",
+    scenario: "presentation-webgl",
+  },
+  {
+    title: "the production WebGL render distribution",
+    native: false,
+    instrumentation: false,
+    directory: "target/browser-build/render",
+    name: "render",
+    scenario: "presentation-webgl-production",
+  },
+  {
+    title: "native WebSocket/GLES",
+    native: true,
+    instrumentation: true,
+    directory: "target/gles-host-instrumentation",
+    name: "gles",
+    scenario: "presentation-gles",
+  },
+] as const;
+
+for (const {
+  title,
+  native,
+  instrumentation,
+  ...distribution
+} of presentations) {
+  test(`explicit physical presentation through ${title}`, {
     timeout: 120_000,
   }, async (context) => {
     const workspace = resolve(process.cwd());
-    const directory = resolve(
-      native
-        ? "target/gles-host/gles-surfaces"
-        : "target/browser-build/render-surfaces",
-    );
+    const directory = resolve(distribution.directory);
     const build: BrowserBuildConfiguration = {
-      name: native ? "gles-surfaces" : "render-surfaces",
+      name: distribution.name,
       generatedModule: resolve(directory, "generated.js"),
       runtimeWasm: resolve(directory, native ? "gles_host" : "runtime.wasm"),
-      exportWasm: resolve(directory, native ? "contract.bin" : "export.wasm"),
       contractArtifact: resolve(directory, "contract.bin"),
     };
     async function browser(urls?: { url: string; presentationUrl: string }) {
       const result = await runBrowserEnvironment(
-        native ? "presentation-gles" : "presentation-webgl",
+        distribution.scenario,
         {
           workspace,
           build,
-          mismatchBuild: build,
           operationTimeoutMs: 60_000,
           rendering: !native,
         },
@@ -39,7 +69,7 @@ for (const native of [false, true]) {
         async (environment) =>
           environment.execute("explicit-presentation", {}, () =>
             environment.page.evaluate(
-              async ({ urls, native }) => {
+              async ({ urls, native, instrumentation }) => {
                 const contract = await import(urls.generated);
                 const scenario = await import(
                   `${urls.origin}/target/multiplex-tests/presentation.js`
@@ -73,6 +103,7 @@ for (const native of [false, true]) {
                   const presentation = await scenario.explicitPresentation(
                     host,
                     controlled.probe,
+                    instrumentation,
                   );
                   const connectionLifetime = native
                     ? await scenario.connectionPresentationLifetime(() =>
@@ -84,7 +115,7 @@ for (const native of [false, true]) {
                   await host.close();
                 }
               },
-              { urls: environment.urls, native: urls },
+              { urls: environment.urls, native: urls, instrumentation },
             ),
           ),
       );

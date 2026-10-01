@@ -7,17 +7,12 @@ pub(super) const PROGRAM_RECIPE_COUNT: usize = 1 << 12;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct RenderShaderConfig {
-    #[cfg(feature = "mesh-poses")]
     posed: bool,
-    #[cfg(feature = "particles")]
     instanced: bool,
-    #[cfg(feature = "particles")]
     sprite: bool,
     lit: bool,
     normals: bool,
-    #[cfg(feature = "shadows")]
     shadow: bool,
-    #[cfg(feature = "skeletal-animation")]
     skinned: bool,
     debug_geometry: bool,
     solid: bool,
@@ -25,8 +20,6 @@ pub(crate) struct RenderShaderConfig {
     weighted: bool,
 }
 
-// Optional fields disappear independently in lean feature combinations.
-#[allow(clippy::needless_update)]
 impl RenderShaderConfig {
     pub(super) fn recipe_bits(self) -> u32 {
         let mut bits = u32::from(self.lit);
@@ -35,31 +28,17 @@ impl RenderShaderConfig {
         bits |= u32::from(self.solid) << 3;
         bits |= u32::from(self.textured) << 4;
         bits |= u32::from(self.weighted) << 5;
-        #[cfg(feature = "mesh-poses")]
-        {
-            bits |= u32::from(self.posed) << 6;
-        }
-        #[cfg(feature = "skeletal-animation")]
-        {
-            bits |= u32::from(self.skinned) << 7;
-        }
-        #[cfg(feature = "shadows")]
-        {
-            bits |= u32::from(self.shadow) << 8;
-        }
-        #[cfg(feature = "particles")]
-        {
-            bits |= u32::from(self.instanced) << 10;
-            bits |= u32::from(self.sprite) << 11;
-        }
+        bits |= u32::from(self.posed) << 6;
+        bits |= u32::from(self.skinned) << 7;
+        bits |= u32::from(self.shadow) << 8;
+        bits |= u32::from(self.instanced) << 10;
+        bits |= u32::from(self.sprite) << 11;
         bits
     }
 
     pub(super) fn from_recipe_bits(bits: u32) -> Self {
         Self {
-            #[cfg(feature = "particles")]
             instanced: bits & (1 << 10) != 0,
-            #[cfg(feature = "particles")]
             sprite: bits & (1 << 11) != 0,
             lit: bits & (1 << 0) != 0,
             normals: bits & (1 << 1) != 0,
@@ -67,16 +46,12 @@ impl RenderShaderConfig {
             solid: bits & (1 << 3) != 0,
             textured: bits & (1 << 4) != 0,
             weighted: bits & (1 << 5) != 0,
-            #[cfg(feature = "mesh-poses")]
             posed: bits & (1 << 6) != 0,
-            #[cfg(feature = "skeletal-animation")]
             skinned: bits & (1 << 7) != 0,
-            #[cfg(feature = "shadows")]
             shadow: bits & (1 << 8) != 0,
         }
     }
 
-    #[cfg(feature = "particles")]
     pub(crate) fn with_particles(mut self, instanced: bool, sprite: bool) -> Self {
         self.instanced = instanced;
         self.sprite = sprite;
@@ -108,23 +83,19 @@ impl RenderShaderConfig {
     }
 
     pub(crate) fn with_lighting(self, shadow: bool, normals: bool) -> Self {
-        let _ = shadow;
         Self {
             lit: true,
             normals,
-            #[cfg(feature = "shadows")]
             shadow,
             ..self
         }
     }
 
-    #[cfg(feature = "skeletal-animation")]
     pub(crate) fn with_skinning(mut self, skinned: bool) -> Self {
         self.skinned = skinned;
         self
     }
 
-    #[cfg(feature = "mesh-poses")]
     pub(crate) fn with_mesh_pose(mut self, posed: bool) -> Self {
         self.posed = posed;
         self
@@ -138,8 +109,7 @@ impl RenderShaderConfig {
             ));
         }
 
-        #[allow(unused_mut)]
-        let mut values = vec![
+        let values = [
             (
                 "texture_declarations",
                 crate::services::render::embedded_shader!("shaders/texture-fragment.glsl"),
@@ -153,10 +123,6 @@ impl RenderShaderConfig {
                 "weight_body",
                 "sampled = mix(vec3(1.0), sampled, v_weight);",
             ),
-        ];
-        // Feature-specific snippets are absent from lean renderer artifacts.
-        #[cfg(feature = "shadows")]
-        values.extend([
             (
                 "shadow_declarations",
                 crate::services::render::embedded_shader!("shaders/shadow-sampling.glsl"),
@@ -165,17 +131,13 @@ impl RenderShaderConfig {
                 "shadow_body",
                 "if (u_surface.z > 0.5) shadow = visibility_from_shadow(i, nl, n);",
             ),
-        ]);
-        #[cfg(feature = "shadows")]
-        let shadow = self.shadow;
-        #[cfg(not(feature = "shadows"))]
-        let shadow = false;
+        ];
         let conditions = [
             ("solid", self.solid),
             ("vertex_color", !self.solid),
             ("texture", self.textured),
             ("weight", self.weighted),
-            ("shadow", shadow),
+            ("shadow", self.shadow),
             ("normals", self.normals),
             ("flat_normals", !self.normals),
         ];
@@ -199,12 +161,10 @@ impl RenderShaderConfig {
             template::evaluate(source, values, &conditions)
                 .map_err(|error| RenderError::RenderDevice(error.0))
         };
-        #[allow(unused_mut)]
         let mut fragment = expand(
             crate::services::render::embedded_shader!("unlit.frag"),
             &values,
         )?;
-        #[cfg(feature = "particles")]
         if self.sprite {
             fragment = fragment.replace("out vec4 out_color;", "in vec2 v_particle_uv;\nin float v_particle_opacity;\nout vec4 out_color;")
                 .replace("vec4(linear_rgb, 1.0)", "vec4(linear_rgb, v_particle_opacity * (1.0 - smoothstep(0.35, 0.5, length(v_particle_uv - vec2(0.5)))))");
@@ -217,7 +177,6 @@ impl RenderShaderConfig {
         ))
     }
 
-    #[cfg(feature = "shadows")]
     pub(crate) fn shadow_sources(self) -> Result<(String, String), RenderError> {
         Ok((
             with_limit_definitions(self.vertex_source(
@@ -232,45 +191,31 @@ impl RenderShaderConfig {
     }
 
     fn vertex_source(self, source: &str) -> Result<String, RenderError> {
-        let conditions = [("texture", self.textured), ("weight", self.weighted)];
-        #[cfg(feature = "skeletal-animation")]
-        let skinned = self.skinned;
-        #[cfg(not(feature = "skeletal-animation"))]
-        let skinned = false;
-        #[cfg(feature = "mesh-poses")]
-        let posed = self.posed;
-        #[cfg(not(feature = "mesh-poses"))]
-        let posed = false;
         let conditions = [
-            ("pose", posed),
+            ("pose", self.posed),
             ("normals", self.normals),
-            conditions[0],
-            conditions[1],
-            ("skin", skinned),
-            ("rigid", !skinned),
+            ("texture", self.textured),
+            ("weight", self.weighted),
+            ("skin", self.skinned),
+            ("rigid", !self.skinned),
         ];
         let vertex = [
-            #[cfg(feature = "mesh-poses")]
             (
                 "pose_declarations",
                 crate::services::render::embedded_shader!("shaders/pose-vertex.glsl"),
             ),
-            #[cfg(feature = "mesh-poses")]
             (
                 "pose_body",
                 "local_position = mix(a_position, a_pose_position, u_pose_weight);",
             ),
-            #[cfg(feature = "mesh-poses")]
             (
                 "pose_normal_declaration",
                 "layout(location = 8) in vec3 a_pose_normal;",
             ),
-            #[cfg(feature = "mesh-poses")]
             (
                 "pose_normal_body",
                 crate::services::render::embedded_shader!("shaders/pose-normal.glsl"),
             ),
-            #[cfg(feature = "skeletal-animation")]
             (
                 "skin_declarations",
                 crate::services::render::embedded_shader!("shaders/skin-vertex.glsl"),
@@ -288,7 +233,6 @@ impl RenderShaderConfig {
         ];
         let result = template::evaluate(source, &vertex, &conditions)
             .map_err(|error| RenderError::RenderDevice(error.0))?;
-        #[cfg(feature = "particles")]
         if self.instanced {
             let declarations = "layout(location = 9) in mat4 a_instance_model;\nlayout(location = 13) in vec4 a_instance_data;\n#define IPP_INSTANCED 1\nmat4 ippInstanceModel() { return a_instance_model; }\nmat3 ippInstanceNormal() { return transpose(inverse(mat3(a_instance_model))); }\n";
             let result = result
@@ -325,18 +269,15 @@ impl RenderShaderConfig {
 
 /// Preprocessor definitions of the array bounds shader declarations share with their
 /// Rust uploaders, so each bound has one Rust source: [`MAX_LIGHTS`] punctual lights
-/// per draw and, with skeletal animation, [`ipp_core::MAX_JOINTS`] joint matrices.
+/// per draw and [`ipp_core::MAX_JOINTS`] joint matrices.
 ///
 /// [`MAX_LIGHTS`]: super::lighting::MAX_LIGHTS
 pub(super) fn limit_definitions() -> String {
-    #[allow(unused_mut)]
-    let mut definitions = format!("#define IPP_MAX_LIGHTS {}\n", super::lighting::MAX_LIGHTS);
-    #[cfg(feature = "skeletal-animation")]
-    definitions.push_str(&format!(
-        "#define IPP_MAX_JOINTS {}\n",
+    format!(
+        "#define IPP_MAX_LIGHTS {}\n#define IPP_MAX_JOINTS {}\n",
+        super::lighting::MAX_LIGHTS,
         ipp_core::MAX_JOINTS
-    ));
-    definitions
+    )
 }
 
 /// Place [`limit_definitions`] directly after a composed program's `#version` line.
@@ -357,7 +298,6 @@ mod tests {
     #[test]
     fn composed_programs_define_their_array_bounds_after_the_version() {
         let config = RenderShaderConfig::new(true, true).with_lighting(true, true);
-        #[cfg(feature = "skeletal-animation")]
         let config = config.with_skinning(true);
         let (vertex, fragment) = config.sources().unwrap();
         let definitions = super::limit_definitions();
@@ -365,7 +305,6 @@ mod tests {
             assert!(source.starts_with(&format!("#version 300 es\n{definitions}")));
         }
         assert!(fragment.contains("u_lights[IPP_MAX_LIGHTS * 4]"));
-        #[cfg(feature = "skeletal-animation")]
         assert!(vertex.contains("u_joints[IPP_MAX_JOINTS]"));
     }
 
@@ -373,9 +312,7 @@ mod tests {
     fn lighting_composes_texture_weights_normals_and_deformation() {
         for normals in [false, true] {
             let config = RenderShaderConfig::new(true, true).with_lighting(true, normals);
-            #[cfg(feature = "skeletal-animation")]
             let config = config.with_skinning(true);
-            #[cfg(feature = "mesh-poses")]
             let config = config.with_mesh_pose(true);
             let (vertex, fragment) = config.sources().unwrap();
             assert!(vertex.contains("v_uv = a_uv"));
@@ -384,9 +321,7 @@ mod tests {
             assert!(fragment.contains("texture(u_texture, v_uv)"));
             assert!(fragment.contains("mix(vec3(1.0), sampled, v_weight)"));
             assert_eq!(vertex.contains("in vec3 a_normal"), normals);
-            #[cfg(feature = "skeletal-animation")]
             assert!(vertex.contains("skinned_position(local_position)"));
-            #[cfg(feature = "mesh-poses")]
             assert!(vertex.contains("mix(a_position, a_pose_position, u_pose_weight)"));
         }
     }

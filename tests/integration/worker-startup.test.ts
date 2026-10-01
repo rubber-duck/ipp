@@ -11,7 +11,6 @@ const build: BrowserBuildConfiguration = {
   name: "headless",
   generatedModule: resolve(profile, "generated.js"),
   runtimeWasm: resolve(profile, "runtime.wasm"),
-  exportWasm: resolve(profile, "export.wasm"),
   contractArtifact: resolve(profile, "contract.bin"),
 };
 
@@ -25,7 +24,6 @@ for (const mode of ["development", "production"]) {
         {
           workspace: process.cwd(),
           build,
-          mismatchBuild: build,
           operationTimeoutMs: 5_000,
         },
         context.signal,

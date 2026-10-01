@@ -9,8 +9,13 @@
 //! change. Whichever of offset and anchor was written since the last layout
 //! wins: an anchor write moves the offset to the anchored item, an offset
 //! write re-anchors at the new offset, and when neither changed the anchor is
-//! kept. Before the first layout of a control lifetime a non-default anchor
-//! wins, so restored positions keep their anchored item.
+//! kept. A written offset addresses the content its writer saw published, so
+//! it anchors under the previous layout's item placement before the current
+//! placement maps it back to an offset: item changes that land at the same
+//! mutation boundary move it like any other anchor, and a write at the
+//! published end stays at the end when the measured content shortens.
+//! Before the first layout of a control lifetime a non-default anchor wins,
+//! so restored positions keep their anchored item.
 
 use super::virtual_list::GuiVirtualListLayout;
 use crate::components::registry::ComponentStorage;
@@ -146,8 +151,20 @@ impl GuiScrollLayout {
             None => (anchor != (0, 0.0), true),
         };
         let main = items.axis;
+
+        // A written offset addresses the content the writer saw published,
+        // so it anchors under the previous placement; item changes landing
+        // at the same boundary then move it like any other anchor.
+        let anchor = if anchor_written || !offset_written {
+            Some(anchor)
+        } else {
+            previous
+                .and_then(|previous| previous.list.as_ref())
+                .filter(|list| list.items.axis == main)
+                .map(|list| list.items.anchor(stored.offset[main]))
+        };
         let mut offset = stored.offset;
-        if anchor_written || !offset_written {
+        if let Some(anchor) = anchor {
             let index = anchor.0.min(items.item_count - 1);
             let within = if anchor.1.is_finite() {
                 anchor.1.max(0.0)

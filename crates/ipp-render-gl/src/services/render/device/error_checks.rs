@@ -49,13 +49,12 @@ impl RenderDeviceErrorChecks {
 
     /// Whether routine draw, uniform and stream operations check individually.
     /// The WebGL bridge keeps its own copy of this setting.
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(any(test, not(target_arch = "wasm32")))]
     pub(super) fn exhaustive(&self) -> bool {
         self.exhaustive
     }
 
     /// Record a retained-storage replacement whose own check was deferred.
-    #[cfg(any(feature = "surfaces", test))]
     pub(super) fn note_retained_upload(&mut self) {
         self.retained_upload = true;
     }

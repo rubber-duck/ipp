@@ -172,7 +172,6 @@ fn stale_tokens_do_not_bypass_complete_message_syntax_validation() {
     ));
 }
 
-#[cfg(feature = "surfaces")]
 #[test]
 fn world_canvas_references_resolve_by_world_lifetime_and_canvas_selection() {
     use crate::references::OutputReference;

@@ -14,73 +14,43 @@ ipp_schema_derive::component_registry! {
         Camera = 7,
         PbrMaterial = 10,
         Light = 11,
-        #[cfg(feature = "skeletal-animation")]
         Skeleton = 12,
-        #[cfg(feature = "skeletal-animation")]
         Skin = 13,
         BoundingGeometry = 14,
         PickingGeometry = 15,
-        #[cfg(feature = "mesh-poses")]
         MeshPose = 16,
-        #[cfg(feature = "skeletal-animation")]
         ParentJoint = 17,
         LookAt = 18,
         BaseColorTexture = 19,
         CustomMaterial = 20,
-        #[cfg(feature = "particles")]
         ParticleEmitter = 21,
-        #[cfg(feature = "particles")]
         ParticlePlayback = 22,
-        #[cfg(feature = "particles")]
         ParticleSprite = 23,
-        #[cfg(feature = "particles")]
         ParticleMesh = 24,
-        #[cfg(feature = "surfaces")]
         Surface = 25,
         // 26 was GuiRoot; retired identities are never reused.
-        #[cfg(feature = "surfaces")]
         SurfaceCache = 27,
         WorldAttachment = 28,
         // 29 was Canvas; a World's canvas is Canvas System state.
-        #[cfg(feature = "surfaces")]
         CanvasStyle = 30,
-        #[cfg(feature = "surfaces")]
         CanvasText = 31,
-        #[cfg(feature = "surfaces")]
         CanvasGlyphRun = 32,
-        #[cfg(feature = "surfaces")]
         CanvasDrawing = 33,
-        #[cfg(feature = "surfaces")]
         CanvasBitmap = 34,
-        #[cfg(feature = "surfaces")]
         CanvasBox = 35,
-        #[cfg(feature = "gui")]
         GuiBehavior = 36,
-        #[cfg(feature = "gui")]
         GuiButton = 37,
-        #[cfg(feature = "gui")]
         GuiCheckbox = 38,
-        #[cfg(feature = "gui")]
         GuiSlider = 39,
-        #[cfg(feature = "gui")]
         GuiTextInput = 40,
-        #[cfg(feature = "gui")]
         GuiLayout = 41,
-        #[cfg(feature = "gui")]
         GuiTheme = 42,
-        #[cfg(feature = "gui")]
         GuiSkin = 43,
-        #[cfg(feature = "gui")]
         GuiFont = 44,
-        #[cfg(feature = "gui")]
         GuiThemeMotion = 45,
-        #[cfg(feature = "gui")]
         GuiScrollView = 46,
-        #[cfg(feature = "gui")]
         GuiVirtualList = 47,
-        #[cfg(feature = "gui")]
         GuiVirtualItem = 48,
-        #[cfg(feature = "gui")]
         CanvasBounds = 49,
     }
 }
@@ -101,31 +71,12 @@ pub(crate) trait ComponentCellVisitor {
             + 'static;
 }
 
-/// Streams target/build identity and the feature-conditioned compiled registry.
+/// Streams target/build identity and the compiled registry.
 pub fn write_contract(sink: &mut impl ContractSink) {
-    sink.write(&6u16.to_le_bytes());
+    sink.write(&7u16.to_le_bytes());
     write_string(sink, std::env::consts::ARCH);
     write_string(sink, std::env::consts::OS);
     sink.write(&[usize::BITS as u8]);
-    // Feature identities are stable; retired baseline and split-rig IDs are not reused.
-    let features = [
-        (11, "builtin-assets", cfg!(feature = "builtin-assets")),
-        (13, "shadows", cfg!(feature = "shadows")),
-        (15, "mesh-poses", cfg!(feature = "mesh-poses")),
-        (
-            16,
-            "skeletal-animation",
-            cfg!(feature = "skeletal-animation"),
-        ),
-        (17, "particles", cfg!(feature = "particles")),
-        (18, "surfaces", cfg!(feature = "surfaces")),
-        (19, "gui", cfg!(feature = "gui")),
-    ];
-    sink.write(&[features.len() as u8]);
-    for (id, name, enabled) in features {
-        sink.write(&[id, u8::from(enabled)]);
-        write_string(sink, name);
-    }
     // Rows addressing and size bounds, so generated codecs and the generator's export
     // validation read them instead of repeating them.
     sink.write(&super::rows::ROW_REGION_SPAN.to_le_bytes());
@@ -133,10 +84,7 @@ pub fn write_contract(sink: &mut impl ContractSink) {
     sink.write(&(super::rows::MAX_ROW_PROPERTIES as u16).to_le_bytes());
     sink.write(&super::rows::MAX_ROW_TEXT_BYTES.to_le_bytes());
     ComponentValue::write_contract(sink);
-    #[cfg(feature = "gui")]
     crate::systems::gui::presentation::write_paint_contract(sink);
-    #[cfg(not(feature = "gui"))]
-    sink.write(&0u16.to_le_bytes());
 }
 
 /// Create a producer component using the compiled factory.

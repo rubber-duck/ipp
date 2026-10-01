@@ -1,19 +1,14 @@
-//! Geometry construction shared by private debug meshes and optional `ipp://` sources.
-//! URI parsing and public recipes compile only with `builtin-assets`.
+//! Geometry construction shared by private debug meshes and public `ipp://` sources.
 
 use crate::ErrorReason;
-#[cfg(feature = "builtin-assets")]
 use std::borrow::Cow;
 
 mod shapes;
 
-#[cfg(all(feature = "builtin-assets", feature = "skeletal-animation"))]
 mod rig;
 
-#[cfg(all(feature = "builtin-assets", feature = "skeletal-animation"))]
 pub use rig::rig;
 
-#[cfg(feature = "builtin-assets")]
 fn arguments<'a, const N: usize>(
     uri: &'a str,
     prefix: &str,
@@ -23,7 +18,6 @@ fn arguments<'a, const N: usize>(
 }
 
 // Trailing optional parameters remain empty until the recipe applies its defaults.
-#[cfg(feature = "builtin-assets")]
 fn argument_values<'a, const N: usize>(
     uri: &'a str,
     prefix: &str,
@@ -57,7 +51,6 @@ fn argument_values<'a, const N: usize>(
 
 // The query contains only ASCII parameter names and numeric literals.
 // Ordinary unescaped values borrow the URI; decode only when needed.
-#[cfg(feature = "builtin-assets")]
 fn query_value(value: &str) -> Result<Cow<'_, str>, ErrorReason> {
     if !value.contains(['%', '+']) {
         return Ok(Cow::Borrowed(value));
@@ -92,5 +85,4 @@ fn query_value(value: &str) -> Result<Cow<'_, str>, ErrorReason> {
 
 mod resources;
 pub use resources::debug_mesh;
-#[cfg(feature = "builtin-assets")]
 pub use resources::{mesh, texture};

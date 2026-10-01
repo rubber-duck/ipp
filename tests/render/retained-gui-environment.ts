@@ -37,33 +37,19 @@ export type RetainedGuiArrangement =
   | { readonly kind: "native-gles"; readonly eglDirectory: string };
 
 /**
- * Both builds of an arrangement render; only the GUI build presents text
- * through retained batches. `features` records each build's configuration.
+ * Both variants of an arrangement render through the same instrumentation
+ * build: each simulates context loss, and the retained variant also bounds the
+ * glyph atlas. Only the retained variant's fixture presents text through
+ * retained GUI batches.
  */
 const BUILDS = {
   worker: [
-    {
-      name: "render-surfaces",
-      retained: false,
-      features: ["render", "diagnostics", "surfaces", "builtin-assets"],
-    },
-    {
-      name: "headless-gui",
-      retained: true,
-      features: ["render", "diagnostics", "surfaces", "gui"],
-    },
+    { name: "render-instrumentation", variant: "analytic", retained: false },
+    { name: "render-instrumentation", variant: "retained", retained: true },
   ],
   "native-gles": [
-    {
-      name: "gles-surfaces",
-      retained: false,
-      features: ["websocket", "diagnostics", "surfaces", "builtin-assets"],
-    },
-    {
-      name: "gles-gui",
-      retained: true,
-      features: ["websocket", "diagnostics", "surfaces", "gui"],
-    },
+    { name: "gles", variant: "analytic", retained: false },
+    { name: "gles", variant: "retained", retained: true },
   ],
 } as const;
 
@@ -122,7 +108,7 @@ export async function runRetainedGui(
   const reports: Array<
     {
       build: string;
-      features: readonly string[];
+      variant: string;
       /** Whether the device identity names a CPU rasterizer. */
       softwareRenderer: boolean;
       evidence: string;
@@ -132,9 +118,9 @@ export async function runRetainedGui(
     } & RetainedGuiReport
   > = [];
   const frames = new Map<string, Map<string, RgbaFrame>>();
-  for (const { name, retained, features } of builds) {
+  for (const { name, variant, retained } of builds) {
     const captured = new Map<string, RgbaFrame>();
-    frames.set(name, captured);
+    frames.set(variant, captured);
     const exercise = async (
       env: BrowserEnvironmentContext,
       connection: Record<string, unknown>,
@@ -191,7 +177,7 @@ export async function runRetainedGui(
         );
         reports.push({
           build: name,
-          features,
+          variant,
           softwareRenderer: Object.values(device).some((value) =>
             SOFTWARE_RENDERERS.test(String(value)),
           ),
@@ -212,7 +198,6 @@ export async function runRetainedGui(
     const browser = (build: BrowserBuildConfiguration, rendering: boolean) => ({
       workspace,
       build,
-      mismatchBuild: build,
       rendering,
       deviceScaleFactor: 1,
       operationTimeoutMs: 30000,
@@ -224,11 +209,10 @@ export async function runRetainedGui(
         name,
         generatedModule: resolve(directory, "generated.js"),
         runtimeWasm: resolve(directory, "runtime.wasm"),
-        exportWasm: resolve(directory, "export.wasm"),
         contractArtifact: resolve(directory, "contract.bin"),
       };
       await runBrowserEnvironment(
-        `retained-gui-${name}`,
+        `retained-gui-${variant}`,
         browser(build, true),
         signal,
         (env) =>
@@ -241,17 +225,16 @@ export async function runRetainedGui(
     }
 
     // The page only runs the fixture; the native host renders and captures.
-    const directory = resolve("target/gles-host", name);
+    const directory = resolve("target/gles-host-instrumentation");
     const executable = resolve(directory, "gles_host");
     const build = {
       name,
       generatedModule: resolve(directory, "generated.js"),
       runtimeWasm: executable,
-      exportWasm: resolve(directory, "contract.bin"),
       contractArtifact: resolve(directory, "contract.bin"),
     };
     const result = await runNativeEnvironment(
-      `retained-gui-${name}`,
+      `retained-gui-${variant}`,
       {
         executable,
         schemaArtifact: build.contractArtifact,
@@ -267,7 +250,7 @@ export async function runRetainedGui(
         if (!presentationUrl)
           throw new Error("The GLES host named no presentation channel");
         await runBrowserEnvironment(
-          `retained-gui-${name}-client`,
+          `retained-gui-${variant}-client`,
           browser(build, false),
           native.signal,
           (env) =>
@@ -278,7 +261,7 @@ export async function runRetainedGui(
     reports.at(-1)!.hostEvidence = result.evidenceDirectory;
   }
 
-  const [analyticBuild, retainedBuild] = builds.map(({ name }) => name);
+  const [analyticBuild, retainedBuild] = builds.map(({ variant }) => variant);
   // Every label both builds captured is compared, with review artifacts kept
   // for passing and failing labels alike.
   const comparisons = compareBuildFrames(
@@ -326,15 +309,20 @@ export async function runRetainedGui(
         },
         tolerance: COMPARISON_TOLERANCE,
         // Streamed-update timings per build; definitions beside them.
-        timings: reports.map(({ build, timings }) => ({ build, ...timings })),
+        timings: reports.map(({ build, variant, timings }) => ({
+          build,
+          variant,
+          ...timings,
+        })),
         timingDefinitions: TIMING_DEFINITIONS,
         timingScope:
           "Latencies through client, transport, scheduling and readback, never frame rates; builds whose softwareRenderer is true establish correctness only.",
         // Seven per-frame cache counters of each build's warm frame, running
         // totals after the last sample, and the warm frame's cache records.
         surfaceCache: options.surfaceCache
-          ? reports.map(({ build, surfaceCache }) => ({
+          ? reports.map(({ build, variant, surfaceCache }) => ({
               build,
+              variant,
               ...surfaceCache,
             }))
           : null,

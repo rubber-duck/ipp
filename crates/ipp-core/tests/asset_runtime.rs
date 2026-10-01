@@ -530,7 +530,6 @@ fn committed_pending_demand_shares_work_and_becomes_drawable_only_at_boundary() 
     assert!(fixture_host.world_mut(world).unwrap().mesh(key).is_none());
 }
 
-#[cfg(feature = "builtin-assets")]
 #[test]
 fn builtin_query_sources_keep_exact_identity_and_publish_through_resource_manager() {
     let mut fixture_host = ipp_core::HostRuntime::new();
@@ -594,7 +593,6 @@ fn builtin_query_sources_keep_exact_identity_and_publish_through_resource_manage
     );
 }
 
-#[cfg(feature = "builtin-assets")]
 #[test]
 fn structurally_valid_encoded_nul_reaches_builtin_provider_failure() {
     let uri = "ipp://mesh/sphere?radius=%00";

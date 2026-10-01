@@ -6,7 +6,7 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { assembleClientSupport } from "../../../packages/ipp-client/tools/assemble.mjs";
 
-export async function generateClient(name, features = [], transformContract) {
+export async function generateClient(name, transformContract) {
   const root = resolve(import.meta.dirname, "../../..");
   const output = resolve(root, "target/protocol-client-tests", name);
   mkdirSync(output, { recursive: true });
@@ -20,9 +20,6 @@ export async function generateClient(name, features = [], transformContract) {
       "ipp-protocol",
       "--example",
       "export_contract",
-      "--no-default-features",
-      "--features",
-      ["schema-export", ...features].join(","),
       "--locked",
     ],
     { cwd: root, timeout: 180_000 },
@@ -107,15 +104,10 @@ function scalarFieldContract(input) {
     return value;
   };
 
-  assertContract(u16() === 6, "target contract version");
+  assertContract(u16() === 7, "target contract version");
   string();
   string();
   u8();
-  for (let index = 0, count = u8(); index < count; index++) {
-    u8();
-    u8();
-    string();
-  }
   // Rows bounds: region span, row fields, row properties, row text bytes.
   u32();
   u8();
@@ -402,6 +394,21 @@ function concatenate(chunks) {
 }
 
 /** Controlled Host attachment for focused World-codec tests; real Hosts have separate suites. */
+/** The Host's reply to the hello: the contract's own revision and hash and
+ * the connection identity, as a matching Host announces them. */
+export function hostAnnouncement(codec, connection = 7n) {
+  const reply = new Uint8Array(24);
+  reply.set([73, 80, 80, 66]);
+  const view = new DataView(reply.buffer);
+  view.setUint32(4, codec.PROTOCOL_VERSION, true);
+  view.setBigUint64(8, codec.SCHEMA_HASH, true);
+  view.setBigUint64(16, connection, true);
+  return reply;
+}
+
+/** The hello every connection opens with. */
+export const HELLO = Uint8Array.of(73, 80, 80, 66);
+
 export function replyToHostCreate(bytes, events, session = 7n) {
   if (String.fromCharCode(...bytes.subarray(0, 4)) !== "IPPH") return false;
   const requestTag = bytes[24];

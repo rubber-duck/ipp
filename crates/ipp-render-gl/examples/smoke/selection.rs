@@ -67,7 +67,6 @@ pub const RENDER: &[SystemId] = &[
 ];
 
 /// Surface anchors, which require evaluated transforms and bounds.
-#[cfg(feature = "surfaces")]
 pub const SURFACE: &[SystemId] = &[
     AnimationSystem::ID,
     AssetDependencySystem::ID,
@@ -79,11 +78,9 @@ pub const SURFACE: &[SystemId] = &[
 ];
 
 /// Canvas outputs with styles and boxes.
-#[cfg(feature = "surfaces")]
 pub const CANVAS: &[SystemId] = &[ipp_core::systems::canvas::CanvasSystem::ID];
 
 /// Canvas outputs with asset-backed text, glyph runs, drawings and bitmaps.
-#[cfg(feature = "surfaces")]
 pub const CANVAS_CONTENT: &[SystemId] = &[
     AnimationSystem::ID,
     AssetDependencySystem::ID,
@@ -91,14 +88,12 @@ pub const CANVAS_CONTENT: &[SystemId] = &[
 ];
 
 /// GUI controls painted on a Canvas.
-#[cfg(feature = "gui")]
 pub const GUI: &[SystemId] = &[
     ipp_core::systems::canvas::CanvasSystem::ID,
     ipp_core::systems::gui::GuiSystem::ID,
 ];
 
 /// GUI controls with entity layout.
-#[cfg(feature = "gui")]
 pub const GUI_LAYOUT: &[SystemId] = &[
     ipp_core::systems::canvas::CanvasSystem::ID,
     ipp_core::systems::gui::GuiSystem::ID,
@@ -106,7 +101,6 @@ pub const GUI_LAYOUT: &[SystemId] = &[
 ];
 
 /// Skeleton poses and joint parenting.
-#[cfg(feature = "skeletal-animation")]
 pub const SKELETON: &[SystemId] = &[
     AnimationSystem::ID,
     AssetDependencySystem::ID,
@@ -114,7 +108,6 @@ pub const SKELETON: &[SystemId] = &[
 ];
 
 /// Skinned deformation over skeleton poses and final transforms.
-#[cfg(feature = "skeletal-animation")]
 pub const SKINNING: &[SystemId] = &[
     AnimationSystem::ID,
     AssetDependencySystem::ID,
@@ -126,7 +119,6 @@ pub const SKINNING: &[SystemId] = &[
 ];
 
 /// Particle producers, which require evaluated transforms and bounds.
-#[cfg(feature = "particles")]
 pub const PARTICLES: &[SystemId] = &[
     AnimationSystem::ID,
     AssetDependencySystem::ID,
@@ -170,21 +162,14 @@ pub fn with_fixtures(host: &ipp_core::HostRuntime, mut selected: Vec<SystemId>) 
     selected
 }
 
-/// A camera World over rendered content that, with Surfaces, presents attached
-/// child Worlds on Surface anchors.
+/// A camera World over rendered content that presents attached child Worlds on
+/// Surface anchors.
 pub fn scene() -> Vec<SystemId> {
-    #[cfg(feature = "surfaces")]
-    return select(&[ATTACHMENTS, CAMERA, RENDER, SURFACE]);
-    #[cfg(not(feature = "surfaces"))]
-    select(&[ATTACHMENTS, CAMERA, RENDER])
+    select(&[ATTACHMENTS, CAMERA, RENDER, SURFACE])
 }
 
-/// A Canvas World with asset-backed content, GUI controls and layout when
-/// compiled, and Surface slots presenting attached child Worlds.
-#[cfg(feature = "surfaces")]
+/// A Canvas World with asset-backed content, GUI controls and layout, and
+/// Surface slots presenting attached child Worlds.
 pub fn panel() -> Vec<SystemId> {
-    #[cfg(feature = "gui")]
-    return select(&[ATTACHMENTS, CANVAS_CONTENT, GUI_LAYOUT, SURFACE]);
-    #[cfg(not(feature = "gui"))]
-    select(&[ATTACHMENTS, CANVAS_CONTENT, SURFACE])
+    select(&[ATTACHMENTS, CANVAS_CONTENT, GUI_LAYOUT, SURFACE])
 }

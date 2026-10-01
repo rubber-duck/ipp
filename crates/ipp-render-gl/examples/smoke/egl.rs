@@ -275,7 +275,6 @@ impl Context {
 
     /// Record GL_INVALID_ENUM in the current context, as a failed call would.
     /// Only the error-check scenarios call it, which not every example runs.
-    #[cfg(feature = "surfaces")]
     #[allow(dead_code)]
     pub fn raise_gl_error(&self) -> Result<()> {
         let enable = entry!(self.gl(c"glEnable"), unsafe extern "system" fn(u32));

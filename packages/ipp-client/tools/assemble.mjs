@@ -14,6 +14,7 @@ export const CLIENT_SUPPORT_MODULES = [
   "lifecycle-watches.ts",
   "lifecycle-diagnostics.ts",
   "host-client.ts",
+  "host-contract.ts",
   "host-protocol.ts",
   "host-presentation.ts",
   "host-input.ts",
@@ -38,45 +39,47 @@ export function assembleClientSupport(destination) {
   }
 }
 
-/** Assemble a self-contained host next to a matching generated client and WASM. */
+/**
+ * Assemble a self-contained host next to a matching generated client and WASM.
+ * `rendering` and `instrumentation` follow the runtime's build configuration:
+ * only an instrumentation distribution ships the profiler and the worker side
+ * of the testing controls, and its worker loads them because the bundler
+ * defines `IPP_INSTRUMENTATION`, never by probing the runtime's exports.
+ */
 export async function assembleBrowserHost(
   destination,
-  {
-    rendering = false,
-    shadows = false,
-    skeletalAnimation = false,
-    meshPoses = false,
-    particles = false,
-    surfaces = false,
-    gui = false,
-  } = {},
+  { rendering = false, instrumentation = false } = {},
 ) {
-  if (shadows && !rendering)
-    throw new Error("Shadows require a rendered browser host");
-  // GUI presentation extends Surface rendering; its bridge assumes Surface imports.
-  if (gui && !surfaces) throw new Error("GUI requires the Surface capability");
-  // Reusing an output directory without rendering must remove its GPU bridge.
-  if (!rendering)
-    for (const name of ["render-worker.js", "webgl.js"])
-      await rm(resolve(destination, name), { force: true });
-  const surfaceNotice = resolve(destination, "SLUG-NOTICE");
-  if (rendering && surfaces)
-    copyFileSync(
-      resolve(source, "../../../crates/ipp-render-gl/SLUG-NOTICE"),
-      surfaceNotice,
-    );
-  else await rm(surfaceNotice, { force: true });
   const modules = [
     "wasm-worker.ts",
     "worker-connections.ts",
     "logging.ts",
     "resource-worker.ts",
-    // Loaded only when a profiling runtime exports its benchmark hooks.
-    "profile-worker.ts",
     "source-availability.ts",
     "resource-urls.ts",
     ...(rendering ? ["render-worker.ts", "presentation.ts"] : []),
+    ...(instrumentation ? ["profile-worker.ts"] : []),
+    ...(rendering && instrumentation ? ["render-testing.ts"] : []),
   ];
+  // Reusing an output directory must remove worker modules this configuration
+  // omits; the client support modules beside it stay.
+  for (const name of [
+    "render-worker.ts",
+    "profile-worker.ts",
+    "render-testing.ts",
+  ])
+    if (!modules.includes(name))
+      await rm(resolve(destination, name.replace(/\.ts$/, ".js")), {
+        force: true,
+      });
+  if (!rendering) await rm(resolve(destination, "webgl.js"), { force: true });
+  const surfaceNotice = resolve(destination, "SLUG-NOTICE");
+  if (rendering)
+    copyFileSync(
+      resolve(source, "../../../crates/ipp-render-gl/SLUG-NOTICE"),
+      surfaceNotice,
+    );
+  else await rm(surfaceNotice, { force: true });
   await build({
     entryPoints: modules.map((name) => resolve(source, name)),
     outdir: destination,
@@ -85,6 +88,7 @@ export async function assembleBrowserHost(
     platform: "browser",
     target: "es2023",
     legalComments: "none",
+    define: { IPP_INSTRUMENTATION: String(instrumentation) },
   });
   if (rendering)
     await build({
@@ -99,21 +103,12 @@ export async function assembleBrowserHost(
       format: "esm",
       platform: "browser",
       target: "es2023",
-      define: {
-        IPP_SHADOWS: String(shadows),
-        IPP_SKELETAL_ANIMATION: String(skeletalAnimation),
-        IPP_MESH_POSES: String(meshPoses),
-        IPP_PARTICLES: String(particles),
-        IPP_SURFACES: String(surfaces),
-        IPP_GUI: String(gui),
-      },
       minifySyntax: true,
     });
   return [
     ...modules.map((name) =>
       resolve(destination, name.replace(/\.ts$/, ".js")),
     ),
-    ...(rendering ? [resolve(destination, "webgl.js")] : []),
-    ...(rendering && surfaces ? [surfaceNotice] : []),
+    ...(rendering ? [resolve(destination, "webgl.js"), surfaceNotice] : []),
   ];
 }

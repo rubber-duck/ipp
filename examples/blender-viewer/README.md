@@ -33,7 +33,7 @@ Run the same exporter and adapter without a live addon connection:
 ```sh
 blender -b SCENE.blend --python-exit-code 1 \
   --python integrations/blender/export_scene.py -- EXPORT_DIR
-python tools/ipp.py build browser:render-expanded
+python tools/ipp.py build browser:render
 python tools/ipp.py import-blender EXPORT_DIR OUTPUT_DIR --namespace NAME
 ```
 

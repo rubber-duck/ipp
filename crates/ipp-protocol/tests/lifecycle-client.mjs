@@ -2,15 +2,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  generateClient,
   encodeManifestLayout,
+  generateClient,
+  hostAnnouncement,
   manifestVariant,
   replyToHostCreate,
 } from "./generated-client.mjs";
 
-const client = await generateClient("lifecycle-minimal");
+const client = await generateClient("lifecycle");
 const { codec } = client;
-const spatial = await generateClient("lifecycle-assets", []);
 const layout = (name, values) => encodeManifestLayout(client, name, values);
 const tag = (name) => manifestVariant(client, name);
 
@@ -52,9 +52,7 @@ async function connect() {
         if (replyToHostCreate(bytes, handler)) return;
         sent.push(bytes.slice());
         if (sent.length === 1) {
-          const reply = new Uint8Array(24);
-          reply.set(bytes);
-          new DataView(reply.buffer).setBigUint64(16, 7n, true);
+          const reply = hostAnnouncement(codec);
           handler.message(reply);
         }
       },
@@ -91,7 +89,7 @@ test("baseline contracts expose entity, component and asset subscription domains
     }).bytes,
   );
   assert.equal("LIFECYCLE_ASSET_STATUS_CHANGED" in codec.WIRE, true);
-  assert.equal("LIFECYCLE_ASSET_REMOVED" in spatial.codec.WIRE, true);
+  assert.equal("LIFECYCLE_ASSET_REMOVED" in codec.WIRE, true);
   assert.doesNotThrow(() =>
     codec.encodeRequest({
       session: 7n,

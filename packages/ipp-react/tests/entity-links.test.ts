@@ -35,17 +35,6 @@ class LinkBoundary implements ReactWorldClient {
   session = 1n;
   schemaHash = 1n;
   manifest: WorldManifest | undefined;
-  capabilities = {
-    spatial: false,
-    textures: false,
-    builtinAssets: false,
-    picking: false,
-    debugGeometry: false,
-    pbr: false,
-    shadows: false,
-    skeletalAnimation: false,
-    meshPoses: false,
-  };
   components: ReactWorldClient["components"] = {
     Scalar: { id: 17, fields: { value: { offset: 0, kind: 1 } } },
     ParentJoint: { id: 18, fields: { ordinal: { offset: 0, kind: 3 } } },

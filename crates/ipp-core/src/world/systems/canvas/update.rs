@@ -32,7 +32,6 @@ struct Placement {
     enabled: bool,
 }
 
-#[cfg(feature = "gui")]
 struct GuiPaintScope {
     entity: EntityId,
     placement: Placement,
@@ -152,7 +151,6 @@ impl CanvasSystem {
         if structure_changed {
             self.rebuild_order(world);
         }
-        #[cfg(feature = "gui")]
         let controls_changed = {
             let revision = self
                 .gui
@@ -165,8 +163,6 @@ impl CanvasSystem {
             self.state.gui_revision = revision;
             changed
         };
-        #[cfg(not(feature = "gui"))]
-        let controls_changed = false;
         let selection = OutputRef::canvas(WorldRef {
             id: world.id,
             incarnation: world.identity,
@@ -179,7 +175,6 @@ impl CanvasSystem {
                     extent,
                     tick: world.tick.saturating_add(1),
                 });
-                #[cfg(feature = "gui")]
                 let gui_changed = {
                     let revision = self
                         .layout
@@ -188,8 +183,6 @@ impl CanvasSystem {
                         .map_or(0, |view| view.revision);
                     std::mem::replace(&mut self.state.layout_revision, revision) != revision
                 };
-                #[cfg(not(feature = "gui"))]
-                let gui_changed = false;
                 let changed_extent = self.state.publication.as_ref().is_none_or(|output| {
                     output.logical_extent != extent
                         || output.units_per_metre != canvas.units_per_metre
@@ -214,11 +207,8 @@ impl CanvasSystem {
         self.state.geometry_dirty.clear();
         self.state.tree_dirty = false;
         self.state.initialized = true;
-        #[cfg(feature = "gui")]
-        {
-            self.state.gui.complete(self.state.publication.as_ref());
-            self.state.gui_dirty = false;
-        }
+        self.state.gui.complete(self.state.publication.as_ref());
+        self.state.gui_dirty = false;
     }
 
     /// Painter order: depth-first pre-order over the top-level entities in
@@ -253,7 +243,6 @@ impl CanvasSystem {
     ) {
         let world = &*context.world;
         let assets = context.asset_resources();
-        #[cfg(feature = "gui")]
         let layout = self
             .layout
             .and_then(|binding| context.dependency(binding))
@@ -263,17 +252,12 @@ impl CanvasSystem {
         let mut placements = BTreeMap::new();
         let mut entries = Vec::new();
         let mut hits = Vec::new();
-        #[cfg(feature = "gui")]
         let mut gui_scopes: Vec<GuiPaintScope> = Vec::new();
-        #[cfg(feature = "gui")]
         let gui = self.gui.and_then(|binding| context.dependency(binding));
-        #[cfg(feature = "gui")]
         let mut controls = Vec::new();
         // Entities from the top level to the current one, each with the
         // nearest focus scope at or above it; scopes end at the World boundary.
-        #[cfg(feature = "gui")]
         let mut path: Vec<(EntityId, Option<EntityId>)> = Vec::new();
-        #[allow(unused_mut)]
         let mut interaction = CanvasInteractionPriority::default();
         for &entity in &order {
             let parent = world
@@ -281,7 +265,6 @@ impl CanvasSystem {
                 .links
                 .effective(entity)
                 .and_then(|link| link.parent);
-            #[cfg(feature = "gui")]
             {
                 while path
                     .last()
@@ -303,7 +286,6 @@ impl CanvasSystem {
                     },
                 ));
             }
-            #[cfg(feature = "gui")]
             while gui_scopes
                 .last()
                 .is_some_and(|scope| Some(scope.entity) != parent)
@@ -322,24 +304,19 @@ impl CanvasSystem {
                     entries.push(self.state.gui.primitive(primitive));
                 }
             }
-            #[allow(unused_mut)]
             let mut inherited = parent
                 .and_then(|parent| placements.get(&parent).copied())
                 .unwrap_or_else(|| Placement::root(extent));
-            #[cfg(feature = "gui")]
             let mapping = layout
                 .as_ref()
                 .and_then(|view| view.placements.get(&entity));
-            #[cfg(feature = "gui")]
             if let Some(mapping) = mapping {
                 inherited.position[0] += mapping.origin[0] * inherited.scale[0];
                 inherited.position[1] += mapping.origin[1] * inherited.scale[1];
                 inherited.available &= mapping.available;
             }
-            #[allow(unused_mut)]
             let mut placed =
                 inherited.child(world.components.canvas_style(entity.index() as usize));
-            #[cfg(feature = "gui")]
             if gui.is_some()
                 && let Some(behavior) = world.components.gui_behavior(entity.index() as usize)
             {
@@ -348,32 +325,22 @@ impl CanvasSystem {
                     placed.opacity = 0.0;
                 }
             }
-            #[cfg(feature = "gui")]
             if let Some(mapping) = mapping.filter(|mapping| mapping.clip) {
                 placed.clip = intersect(
                     placed.clip,
                     placed.bounds([0.0, 0.0, mapping.size[0], mapping.size[1]]),
                 );
             }
-            #[cfg(feature = "gui")]
             let layout_size = mapping.map(|mapping| mapping.size);
-            #[cfg(not(feature = "gui"))]
-            let layout_size = None;
             placements.insert(entity, placed);
-            #[allow(unused_mut)]
             let mut content_placement = placed;
-            #[cfg(feature = "gui")]
             let mut deferred_paint = Vec::new();
-            #[cfg(feature = "gui")]
             let mut scroll_bars = Vec::new();
-            #[cfg(feature = "gui")]
             let mut observation = None;
-            #[cfg(feature = "gui")]
             if let Some(mapping) = mapping {
                 content_placement.position[0] += mapping.content_offset[0] * placed.scale[0];
                 content_placement.position[1] += mapping.content_offset[1] * placed.scale[1];
             }
-            #[cfg(feature = "gui")]
             if let Some(mapping) = mapping
                 && world
                     .components
@@ -391,7 +358,6 @@ impl CanvasSystem {
                     ],
                 ));
             }
-            #[cfg(feature = "gui")]
             if let Some(gui) = gui
                 && let Some(mapping) = mapping
                 && let Some(control) =
@@ -594,12 +560,9 @@ impl CanvasSystem {
                     || previous
                         .as_ref()
                         .is_none_or(|leaf| leaf.incarnation != lifetime);
-                #[cfg(feature = "gui")]
                 let override_geometry = layout
                     .as_ref()
                     .and_then(|view| view.geometry.get(&(entity, component)));
-                #[cfg(not(feature = "gui"))]
-                let override_geometry: Option<&Option<CanvasGeometry>> = None;
                 let mut geometry = if let Some(geometry) = override_geometry {
                     geometry.clone()
                 } else if rebuild_geometry {
@@ -684,10 +647,7 @@ impl CanvasSystem {
                     }
                     *entry = Arc::new(CanvasPaintEntry::Attachment(slot.clone()));
                 }
-                #[cfg(feature = "gui")]
                 let ancestry: Vec<_> = path.iter().map(|(entity, _)| *entity).collect();
-                #[cfg(not(feature = "gui"))]
-                let ancestry = slot_ancestry(world, entity, parent);
                 hits.push(CanvasHit {
                     target: CanvasTarget {
                         entity,
@@ -722,7 +682,6 @@ impl CanvasSystem {
             } else {
                 layout_changed |= self.state.slots.remove(&entity).is_some();
             }
-            #[cfg(feature = "gui")]
             gui_scopes.push(GuiPaintScope {
                 entity,
                 placement: placed,
@@ -731,7 +690,6 @@ impl CanvasSystem {
                 observation,
             });
         }
-        #[cfg(feature = "gui")]
         while let Some(GuiPaintScope {
             paint: primitives,
             observation,
@@ -773,20 +731,15 @@ impl CanvasSystem {
         let changed_resources = previous
             .as_ref()
             .is_none_or(|previous| previous.resources != resources);
-        #[allow(unused_mut)]
         let mut changed_input = previous
             .as_ref()
             .is_none_or(|previous| previous.hits.as_ref() != hits);
-        #[cfg(feature = "gui")]
-        {
-            changed_input |= self.state.gui.differs(&controls);
-        }
+        changed_input |= self.state.gui.differs(&controls);
         let revision = if layout_changed || changed_paint || changed_resources || changed_input {
             self.state.next_revision()
         } else {
             previous.as_ref().unwrap().paint_revision
         };
-        #[cfg(feature = "gui")]
         self.state.gui.finish(
             selection,
             if changed_input {
@@ -841,32 +794,7 @@ impl CanvasSystem {
     }
 }
 
-/// Top-level-first ancestry of an attachment slot within the World canvas.
-#[cfg(not(feature = "gui"))]
-fn slot_ancestry(
-    world: &WorldSimulationState,
-    entity: EntityId,
-    parent: Option<EntityId>,
-) -> Vec<EntityId> {
-    let mut ancestry = vec![entity];
-    let mut ancestor = parent;
-    while let Some(current) = ancestor {
-        if ancestry.len() > world.state.entities.len() {
-            break;
-        }
-        ancestry.push(current);
-        ancestor = world
-            .state
-            .links
-            .effective(current)
-            .and_then(|link| link.parent);
-    }
-    ancestry.reverse();
-    ancestry
-}
-
 /// Scroll geometry and offset from a scrolling control's layout fields.
-#[cfg(feature = "gui")]
 fn scroll_fields(
     world: &WorldSimulationState,
     entity: EntityId,

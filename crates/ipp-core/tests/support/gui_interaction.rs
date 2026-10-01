@@ -58,7 +58,6 @@ fn public_feedback_queue_publishes_all_priorities_without_reflow_or_repainting_i
     let target = read_control(&mut host, world, entity).unwrap().target;
     let mut lease = None;
     let before = output(&host, root).0;
-    #[cfg(feature = "diagnostics")]
     let statistics = host
         .world_mut(world)
         .unwrap()
@@ -91,7 +90,6 @@ fn public_feedback_queue_publishes_all_priorities_without_reflow_or_repainting_i
         assert_eq!(after.paint_revision, before.paint_revision);
         assert_eq!(after.layout_revision, before.layout_revision);
         assert!(Arc::ptr_eq(&after.entries, &before.entries));
-        #[cfg(feature = "diagnostics")]
         assert_eq!(
             host.world_mut(world)
                 .unwrap()

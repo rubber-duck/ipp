@@ -80,13 +80,14 @@ impl CanvasSystem {
             layout: self.layout,
             gui: self.gui,
         };
-        match self.patch_walk(context, &roots, extent, density) {
-            Ok(output) => self.publish_patch(context, selection, extent, density, output),
+        let output = match self.patch_walk(context, &roots, extent, density) {
+            Ok(output) => output,
             Err(layout_changed) => {
                 self.evaluate_canvas(context, selection, extent, density, layout_changed);
                 return;
             }
-        }
+        };
+        self.publish_patch(context, selection, extent, density, output);
         #[cfg(feature = "checked-invariants")]
         self.check_patch(whole, context, selection, extent, density);
     }

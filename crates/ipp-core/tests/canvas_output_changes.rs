@@ -74,6 +74,7 @@ fn surface_resize_advances_the_presented_canvas_revisions_and_identical_rewrites
     let surface = Surface {
         width: 2.0,
         height: 1.0,
+        ..Default::default()
     };
     let anchor = create(
         &mut host,
@@ -378,7 +379,7 @@ fn scroll_theme_and_focus_changes_advance_the_canvas_paint_revision() {
     assert_eq!(scrolled.resource_revision, initial.resource_revision);
 
     // Programmatic focus paints the focus ring and asks for direct presentation.
-    panel.act(control, GuiLocalAction::Focus);
+    panel.act(control, GuiLocalAction::Focus(0));
     panel.frame();
     let focused = panel.output();
     assert!(focused.paint_revision > scrolled.paint_revision);

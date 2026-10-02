@@ -18,6 +18,7 @@ fn rows(parts: impl IntoIterator<Item = GuiPaintPart>) -> Rows<GuiPaintPart> {
 fn theme(parts: impl IntoIterator<Item = GuiPaintPart>) -> Result<(), ErrorReason> {
     GuiTheme {
         parts: rows(parts),
+        ..Default::default()
     }
     .validate()
 }
@@ -41,11 +42,8 @@ fn asset(kind: crate::services::asset_management::AssetTypeId) -> Option<AssetSo
 #[test]
 fn paint_rows_expose_the_appearance_properties_in_part_property_order_then_the_key() {
     let layout = GuiPaintPart::LAYOUT;
-    let appearance: Vec<_> = GuiPartProperty::ALL
-        .into_iter()
-        .filter(|property| property.appearance())
-        .collect();
-    assert_eq!(appearance.len(), 18);
+    let appearance = GuiPartProperty::ALL;
+    assert_eq!(appearance.len(), 32);
     assert_eq!(layout.property_count(), appearance.len() as u32 + 1);
     for property in appearance {
         let lane = &layout.properties[property.index() as usize];
@@ -53,7 +51,7 @@ fn paint_rows_expose_the_appearance_properties_in_part_property_order_then_the_k
         assert_eq!(lane.kind, property.kind());
         assert!(lane.optional, "{property:?}");
     }
-    let key = &layout.properties[18];
+    let key = &layout.properties[32];
     assert_eq!(key.name, "part");
     assert!(!key.optional);
 }
@@ -76,11 +74,16 @@ fn themes_and_skins_reject_duplicate_and_unknown_part_identities() {
     };
     assert_eq!(theme([unknown.clone()]), Err(ErrorReason::InvalidValue));
     assert_eq!(skin([unknown]), Err(ErrorReason::InvalidValue));
-    // Text-input overlays are paint identities, not skin parts: their rows
-    // resolve through the Label they annotate.
+    // The caret and selection are skin parts of their own; the provisional
+    // composition underline resolves through the Label it underlines.
+    let label = row(GuiPartId::base(GuiPrimitivePart::Label)).part;
+    for part in [GuiPrimitivePart::Caret, GuiPrimitivePart::Selection] {
+        assert_ne!(row(GuiPartId::base(part)).part, label);
+        assert_eq!(theme([row(GuiPartId::base(part))]), Ok(()));
+    }
     assert_eq!(
-        row(GuiPartId::base(GuiPrimitivePart::Caret)).part,
-        row(GuiPartId::base(GuiPrimitivePart::Label)).part
+        row(GuiPartId::base(GuiPrimitivePart::Composition)).part,
+        label
     );
 }
 
@@ -143,7 +146,7 @@ fn skin_assets_must_be_drawings_or_textures_on_shape_parts() {
 #[test]
 fn every_appearance_lane_is_range_checked_in_themes_and_skins() {
     let background = GuiPartId::base(GuiPrimitivePart::Background);
-    let invalid: [fn(&mut GuiPaintPart); 13] = [
+    let invalid: [fn(&mut GuiPaintPart); 27] = [
         |part| part.color = Some([1.5, 0.0, 0.0, 1.0]),
         |part| part.opacity = Some(-0.1),
         |part| part.scale = Some([f32::NAN, 1.0]),
@@ -151,12 +154,26 @@ fn every_appearance_lane_is_range_checked_in_themes_and_skins() {
         |part| part.corner_radius = Some([-1.0, 0.0]),
         |part| part.border_width = Some(-1.0),
         |part| part.border_color = Some([0.0, 0.0, 0.0, 2.0]),
-        |part| part.fill_mode = Some(3.0),
+        |part| part.fill_mode = Some(5.0),
         |part| part.gradient_color0 = Some([-0.5, 0.0, 0.0, 1.0]),
         |part| part.gradient_radius = Some(-1.0),
         |part| part.glow_intensity = Some(-1.0),
         |part| part.glow_radius = Some(f32::NAN),
         |part| part.glow_falloff = Some(-1.0),
+        |part| part.glow_inner_radius = Some(-1.0),
+        |part| part.corner_cut = Some([0.0, f32::NAN, 0.0, 0.0]),
+        |part| part.corner_accent = Some([0.0, 0.0, -2.0, 0.0]),
+        |part| part.corner_accent_width = Some(-0.5),
+        |part| part.shape = Some(3.0),
+        |part| part.stroke_a = Some([0.0, 0.0, 1.0, 2.0]),
+        |part| part.stroke_b = Some([-1.0, 0.0, 1.0, 1.0]),
+        |part| part.arc_start = Some(f32::NAN),
+        |part| part.arc_sweep = Some(f32::NEG_INFINITY),
+        |part| part.arc_dashes = Some([12.0, 1.25]),
+        |part| part.fill_hue = Some(f32::INFINITY),
+        |part| part.checker_size = Some(-4.0),
+        |part| part.checker_color0 = Some([0.5, 0.5, 0.5, 1.5]),
+        |part| part.checker_color1 = Some([0.5, f32::NAN, 0.5, 1.0]),
     ];
     for (index, write) in invalid.into_iter().enumerate() {
         let mut part = row(background);
@@ -175,12 +192,26 @@ fn every_appearance_lane_is_range_checked_in_themes_and_skins() {
         align_x: Some(4.0),
         corner_radius: Some([3.0, 0.0]),
         border_width: Some(0.0),
-        fill_mode: Some(2.0),
+        fill_mode: Some(4.0),
         gradient_start: Some([-5.0, 5.0]),
         gradient_radius: Some(0.0),
         glow_intensity: Some(0.0),
         glow_radius: Some(8.0),
         glow_falloff: Some(0.0),
+        glow_inner_radius: Some(6.0),
+        corner_cut: Some([4.0, 0.0, 4.0, 0.0]),
+        corner_accent: Some([0.0, 10.0, 0.0, 10.0]),
+        corner_accent_width: Some(0.0),
+        shape: Some(2.0),
+        stroke_a: Some([0.0, 0.0, 1.0, 1.0]),
+        stroke_b: Some([0.5, 0.5, 0.5, 0.5]),
+        arc_start: Some(-3.5),
+        arc_sweep: Some(-0.75),
+        arc_dashes: Some([48.0, 0.0]),
+        fill_hue: Some(-7.75),
+        checker_size: Some(0.0),
+        checker_color0: Some([1.0, 1.0, 1.0, 0.0]),
+        checker_color1: Some([0.0, 0.0, 0.0, 1.0]),
         ..row(background)
     };
     assert_eq!(theme([valid.clone()]), Ok(()));

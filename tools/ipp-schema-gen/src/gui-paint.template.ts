@@ -31,3 +31,38 @@ export function guiPaintPartIndex(key: GuiPaintPartKey): number {
   if (!entry) throw new Error("Invalid GUI paint part key");
   return entry.index;
 }
+
+/** Names of the built-in skin looks. */
+export type GuiSkinLookName = keyof typeof GUI_SKIN_LOOKS;
+
+/**
+ * A built-in look's rows as a `GuiTheme.parts` table. An ordinary theme entity
+ * takes them with the look's `em`, so its lengths follow the font of each
+ * control it skins: `GuiTheme.encodeParts(guiSkinLookTable("switch"))` and
+ * `GUI_SKIN_LOOKS.switch.em`. A control paints its kind's default look without
+ * a theme; a look used as a theme still sits on that default property by
+ * property.
+ */
+export function guiSkinLookTable(name: GuiSkinLookName) {
+  const rows = GUI_SKIN_LOOKS[name].parts;
+  return {
+    nextSlot: rows.length,
+    rows: new Map(rows.map((row, slot) => [slot, row] as const)),
+  };
+}
+
+/**
+ * A built-in look's transition timing as a `GuiThemeMotion.parts` table, for
+ * the same theme entity as its `guiSkinLookTable` rows:
+ * `GuiThemeMotion.encodeParts(guiSkinLookMotionTable("switch"))`. A theme
+ * with these rows moves between interaction states as the look does in a
+ * World that selects animation; its kind's default look times what they
+ * leave out.
+ */
+export function guiSkinLookMotionTable(name: GuiSkinLookName) {
+  const rows = GUI_SKIN_LOOKS[name].motion;
+  return {
+    nextSlot: rows.length,
+    rows: new Map(rows.map((row, slot) => [slot, row] as const)),
+  };
+}

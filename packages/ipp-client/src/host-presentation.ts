@@ -266,6 +266,29 @@ export class HostPresentation {
     return view;
   }
 
+  /**
+   * Resize the selected view's root in one request: the Host rebinds the same
+   * output with `viewport` (a fresh root generation) and selects it, answering
+   * the new view. No draw falls between the two, so the renderer keeps the
+   * output's retained state. `view` must be the current selection on an
+   * unchanged context; otherwise, or for an undrawable extent, it fails and
+   * the current binding and selection stay.
+   */
+  async resize(
+    view: PresentationView,
+    viewport: PresentationViewport,
+  ): Promise<PresentationView> {
+    const reader = await this.request("RESIZE", "VIEW", (writer) => {
+      writeView(writer, view);
+      writer.u32(viewport.width);
+      writer.u32(viewport.height);
+      writer.f64(viewport.devicePixelRatio);
+    });
+    const resized = readView(reader);
+    reader.end();
+    return resized;
+  }
+
   /** Compare-and-clear. A stale view never clears a replacement selection. */
   async clear(expected: PresentationView): Promise<void> {
     (

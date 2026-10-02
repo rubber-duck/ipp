@@ -1,5 +1,6 @@
 import type {
   GuiTarget,
+  GuiActiveItemRecord,
   GuiFocusRecord,
   GuiPointerRecord,
   GuiCommittedEffect,
@@ -47,6 +48,7 @@ function writeGuiAction(writer: Writer, action: GuiAction): void {
       break;
     case "focus":
       writer.u8(WIRE.GUI_ACTION_FOCUS);
+      writer.u32(action.part ?? 0);
       break;
     case "blur":
       writer.u8(WIRE.GUI_ACTION_BLUR);
@@ -68,6 +70,10 @@ function writeGuiAction(writer: Writer, action: GuiAction): void {
       writer.u8(WIRE.GUI_ACTION_SCROLL_TO_INDEX);
       writer.u32(action.index);
       writer.f32(action.offset ?? 0);
+      break;
+    case "color":
+      writer.u8(WIRE.GUI_ACTION_SET_COLOR);
+      for (const channel of action.value) writer.f32(channel);
       break;
     default:
       fail("GUI action");
@@ -125,6 +131,36 @@ function readGuiEffect(reader: Reader): GuiCommittedEffect {
         ancestry,
         effect: { kind: "submitted", text: reader.string() },
       };
+    case 7:
+      return {
+        id,
+        target,
+        source,
+        tick,
+        ancestry,
+        effect: { kind: "rejected", text: reader.string() },
+      };
+    case 8:
+      return {
+        id,
+        target,
+        source,
+        tick,
+        ancestry,
+        effect: { kind: "discarded", text: reader.string() },
+      };
+    case 6:
+      return {
+        id,
+        target,
+        source,
+        tick,
+        ancestry,
+        effect: {
+          kind: "contextRequested",
+          point: [reader.f32(), reader.f32()],
+        },
+      };
     case 1:
       return {
         id,
@@ -136,6 +172,7 @@ function readGuiEffect(reader: Reader): GuiCommittedEffect {
           kind: "focusChanged",
           focused: reader.boolean(),
           changed: reader.boolean(),
+          part: reader.u32(),
         },
       };
     case 3:

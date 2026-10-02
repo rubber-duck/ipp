@@ -365,7 +365,7 @@ test("malformed GUI observation provenance, ordinal and outer clock fence only t
     ],
     [
       observation(2n, {
-        effect: { kind: "focusChanged", focused: true, changed: true },
+        effect: { kind: "focusChanged", focused: true, changed: true, part: 0 },
       }),
       0n,
     ],

@@ -14,7 +14,7 @@ export const componentContract = {
   ...guiComponentContract,
   Surface: {
     host: "ipp-surface",
-    fields: { width: "number", height: "number" },
+    fields: { width: "number", height: "number", layer_spacing: "number" },
   },
   SurfaceCache: {
     host: "ipp-surface-cache",

@@ -7,5 +7,5 @@
       "@ipp/gui-authoring-contract": ["../../target/react-gui-contract/generated.d.ts"]
     }
   },
-  "include": ["gui-authoring.tsx", "gui-root.test.ts", "gui-paint.tsx", "gui-paint.test.ts", "../../packages/ipp-react/tests/gui-declaration.test.ts", "../../packages/ipp-react/tests/control-refs.test.ts", "../../packages/ipp-react/tests/gui-callbacks.test.ts"]
+  "include": ["gui-authoring.tsx", "gui-root.test.ts", "gui-paint.tsx", "gui-layers.tsx", "gui-paint.test.ts", "../../packages/ipp-react/tests/gui-declaration.test.ts", "../../packages/ipp-react/tests/control-refs.test.ts", "../../packages/ipp-react/tests/gui-callbacks.test.ts"]
 }

@@ -164,7 +164,9 @@ test("inspection decodes typed scene fields by target offset without losing u64 
   u32(0); // Baseline animation controller snapshots.
   u32(0); // GUI focus records.
   u32(0); // GUI pointer records.
+  u32(0); // GUI active item records.
   u8(0); // No Canvas state.
+  u8(0); // No GUI preferences.
   const response = codec.decodeResponse(bytes.slice(0, at), 7n);
   assert.equal(response.body.kind, "inspect");
   const entity = response.body.entities[0];
@@ -306,7 +308,9 @@ test("resource inspection preserves typed status, stable handles and bounds", ()
     u32(0); // Baseline animation controller snapshots.
     u32(0); // GUI focus records.
     u32(0); // GUI pointer records.
+    u32(0); // GUI active item records.
     u8(0); // No Canvas state.
+    u8(0); // No GUI preferences.
     return bytes.slice(0, at);
   }
   const diagnostics = [{ entity: 0x100000001n, reason: "InvalidAsset" }];

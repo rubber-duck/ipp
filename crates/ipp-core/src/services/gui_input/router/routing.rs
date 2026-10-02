@@ -8,11 +8,14 @@ use crate::services::gui_input::{
 };
 use crate::systems::canvas::{CanvasAxis, CanvasHitKind, CanvasSystem};
 use crate::systems::gui::GuiSystem;
+use crate::systems::gui::local::slider::GuiDialDrag;
 use crate::systems::gui::local::{
     GuiControlKind, GuiInteractionPart, GuiInteractionUpdate, GuiLocalAction, GuiLocalCommand,
-    GuiScrollChain,
+    GuiNumberStep, GuiScrollChain, GuiTextEdit,
 };
-use crate::systems::gui::presentation::{GuiCanvasPublication, GuiControlObservation};
+use crate::systems::gui::presentation::{
+    GuiCanvasPublication, GuiCanvasSemanticView, GuiControlObservation,
+};
 use crate::{
     HostRuntime, ViewDescriptor, ViewQueryTarget, WorldAttachmentToken, WorldPublicationId,
 };
@@ -27,6 +30,29 @@ pub(super) struct Target {
     pub(super) path: Vec<WorldAttachmentToken>,
     pub(super) source: WorldPublicationId,
     pub(super) part: CanvasHitKind,
+    /// The focus part of a control with several, such as a range's thumb,
+    /// that this target names: the focused one, or the one a pointer is
+    /// over, presses or drags. None for a control with one part, whose focus
+    /// names part 0, and for a pointer over none of a control's parts.
+    pub(super) focus_part: Option<u32>,
+    /// The step part of a numeric text input a pointer is over or holds;
+    /// step parts are no focus parts.
+    pub(super) step: Option<GuiNumberStep>,
+}
+
+impl Target {
+    /// The focus part this target names; 0 for a control with one.
+    pub(super) fn focus_part(&self) -> u32 {
+        self.focus_part.unwrap_or(0)
+    }
+
+    /// Whether `other` names the same control through the same path and the
+    /// same focus part.
+    pub(super) fn same_stop(&self, other: &Target) -> bool {
+        self.control.record.target == other.control.record.target
+            && self.path == other.path
+            && self.focus_part() == other.focus_part()
+    }
 }
 
 #[derive(Clone)]
@@ -39,6 +65,10 @@ enum Drag {
         active: bool,
     },
     Slider(f32),
+    /// A dial's relative drag.
+    Dial(GuiDialDrag),
+    /// A drag on a colour control's surface, the focus part it set.
+    Color(u32),
     Scroll {
         axis: usize,
         grab: f32,
@@ -58,19 +88,47 @@ struct Pointer {
 /// No authored values or GUI tree are mirrored here.
 pub struct GuiRoutingContext {
     session: GuiInputSession,
-    context: GuiInputContext,
+    pub(super) context: GuiInputContext,
     pointers: BTreeMap<u64, Pointer>,
-    focus: Option<Target>,
+    /// The keyboard target: the logical focus of the Worlds this context
+    /// presents, however it was set.
+    pub(super) focus: Option<Target>,
+    /// The item this context last made its group's active item, until its
+    /// World settles this context's routed work; the GUI System holds the
+    /// active item.
+    pub(super) active: Option<Target>,
+    /// Whether this context routed an edit of the focused numeric text
+    /// input's text since it last committed, discarded or left it: Escape's
+    /// guide while its World has not applied this context's work, after
+    /// which the GUI System's own record decides.
+    pub(super) number_edit: bool,
     scroll: Option<GuiScrollChain>,
     blockers: Vec<super::super::query::GuiPickingBlocker>,
-    queue_owner: u64,
-    queued_worlds: Rc<RefCell<BTreeMap<crate::WorldRef, usize>>>,
+    pub(super) queue_owner: u64,
+    /// Routed commands not yet settled, by target World.
+    pub(super) queued_worlds: Rc<RefCell<BTreeMap<crate::WorldRef, usize>>>,
+}
+
+impl GuiRoutingContext {
+    /// The explicit picking blockers this context routes against.
+    pub(super) fn blockers(&self) -> &[super::super::query::GuiPickingBlocker] {
+        &self.blockers
+    }
+
+    /// The attachment path of a control a pointer of this context hovers.
+    pub(super) fn hovered_path(&self) -> Option<Vec<WorldAttachmentToken>> {
+        self.pointers
+            .values()
+            .find(|active| !active.pressed)
+            .or_else(|| self.pointers.values().next())
+            .map(|active| active.target.path.clone())
+    }
 }
 
 /// Host-owned router shared by physical adapters, not a World evaluator.
 #[derive(Default)]
 pub struct GuiInputRouter {
-    service: GuiInputService,
+    pub(super) service: GuiInputService,
     next_request: u64,
 }
 
@@ -94,12 +152,14 @@ impl GuiInputRouter {
         inspect(world.gui_native_text(focus.control.record.target, context.session.id()))
     }
 
-    /// Cancel stale physical ownership after the Host frame, including idle input.
-    /// Completed policy plus the current scheduling domain determine eligibility;
-    /// no local control mutation or extra World evaluation occurs here.
+    /// Cancel stale physical ownership after the Host frame, including idle
+    /// input, and make logical focus a client command set in a presented World
+    /// this context's keyboard target. Completed policy plus the current
+    /// scheduling domain determine eligibility; adopting focus queues ordinary
+    /// routed commands, and no extra World evaluation occurs here.
     pub fn synchronize(
-        &self,
-        host: &HostRuntime,
+        &mut self,
+        host: &mut HostRuntime,
         context: &mut GuiRoutingContext,
         view: Option<ViewDescriptor>,
     ) -> GuiRoutingCancellation {
@@ -128,6 +188,26 @@ impl GuiInputRouter {
                 context.focus = None;
             }
         }
+        if let Some(view) = view
+            && self.follow_logical_focus(host, context, view).is_err()
+        {
+            context.focus = None;
+        }
+        if context.focus.is_none() && context.context.0.native.borrow().focus.is_some() {
+            cancelled.focus = true;
+            let _ = self.service.set_native_focus(&context.context, None);
+        }
+
+        // Once its World settled this context's work, the publication names
+        // the active item.
+        if context.active.as_ref().is_some_and(|active| {
+            !context
+                .queued_worlds
+                .borrow()
+                .contains_key(&active.control.record.target.world)
+        }) {
+            context.active = None;
+        }
         cancelled
     }
 
@@ -153,6 +233,8 @@ impl GuiInputRouter {
                 context: binding.context,
                 pointers: BTreeMap::new(),
                 focus: None,
+                active: None,
+                number_edit: false,
                 scroll: None,
                 blockers,
                 queue_owner,
@@ -288,6 +370,7 @@ impl GuiInputRouter {
                 self.service.cancel_pointer_lease(&active.lease)?;
             }
             context.focus = None;
+            context.active = None;
             let _ = self.service.set_native_focus(&context.context, None);
         }
         result
@@ -314,9 +397,23 @@ impl GuiInputRouter {
         };
         host.resolve_view(query)
             .map_err(|_| GuiInputError::StaleContext)?;
+
+        // A press of any button outside an open light overlay closes it and
+        // is swallowed, wherever it lands.
+        if let GuiPhysicalInput::PointerDown {
+            point,
+            ..
+        } = &input
+            && self.dismiss_outside(host, context, view, query, *point)?
+        {
+            return Ok(GuiRoutingDisposition::Blocked);
+        }
         if picking_blocked(host, query, &input, context)? {
             return Ok(GuiRoutingDisposition::Blocked);
         }
+
+        // A secondary press is a context request, routed below; other presses
+        // and releases of non-primary buttons only report what they hit.
         if let GuiPhysicalInput::PointerDown {
             point,
             button,
@@ -328,6 +425,13 @@ impl GuiInputRouter {
             ..
         } = &input
             && *button != GuiPhysicalButton::Primary
+            && !matches!(
+                input,
+                GuiPhysicalInput::PointerDown {
+                    button: GuiPhysicalButton::Secondary,
+                    ..
+                }
+            )
         {
             let result = query_composed_input(
                 host,
@@ -363,6 +467,34 @@ impl GuiInputRouter {
                     .clone()
                     .filter(|target| target.control.record.target == fence.target)
                     .ok_or(GuiInputError::Unavailable)?;
+                if super::overlay::under_modal(host, view, &target)? {
+                    return Ok(GuiRoutingDisposition::Blocked);
+                }
+
+                // Enter activates the active item of the group the input drives.
+                if matches!(edit, crate::systems::gui::local::GuiTextEdit::Submit)
+                    && let Some(disposition) = self.group_key(
+                        host,
+                        context,
+                        view,
+                        &target,
+                        GuiPhysicalKey::Enter,
+                        delivery,
+                    )?
+                {
+                    return Ok(disposition);
+                }
+                if target.control.number.is_some()
+                    && matches!(
+                        edit,
+                        GuiTextEdit::Insert(_)
+                            | GuiTextEdit::Backspace
+                            | GuiTextEdit::Delete
+                            | GuiTextEdit::CommitComposition
+                    )
+                {
+                    context.number_edit = true;
+                }
                 let input = self.input(host, context, &target, delivery)?;
                 enqueue(
                     host,
@@ -374,6 +506,11 @@ impl GuiInputRouter {
                     target: fence.target,
                 })
             }
+            GuiPhysicalInput::PointerDown {
+                point,
+                button: GuiPhysicalButton::Secondary,
+                ..
+            } => self.pointer_context(host, context, query, point, delivery),
             GuiPhysicalInput::PointerDown {
                 pointer,
                 point,
@@ -387,6 +524,8 @@ impl GuiInputRouter {
                     Located::Panel => return Ok(GuiRoutingDisposition::Blocked),
                     Located::Miss => return Ok(GuiRoutingDisposition::Miss),
                 };
+                // A press on a range takes one thumb, which it focuses and drags.
+                let target = self.pointed_part(host, context, query, target, point, true)?;
                 if context.pointers.len() >= GUI_INPUT_MAX_POINTERS {
                     return Err(GuiInputError::Capacity);
                 }
@@ -398,10 +537,16 @@ impl GuiInputRouter {
                 {
                     return Ok(GuiRoutingDisposition::Blocked);
                 }
-                if !matches!(
-                    target.control.record.kind,
-                    GuiControlKind::ScrollView | GuiControlKind::VirtualList
-                ) {
+                // A press on a control that does not take focus leaves focus,
+                // including a focused text input's, where it is, and so does
+                // a press on a colour control's swatch, which is no part.
+                if target.control.record.focusable
+                    && !matches!(
+                        target.control.record.kind,
+                        GuiControlKind::ScrollView | GuiControlKind::VirtualList
+                    )
+                    && (target.control.color.is_none() || target.focus_part.is_some())
+                {
                     self.focus(host, context, target.clone(), false, delivery)?;
                 }
                 let (command, lease) = self.feedback(
@@ -413,6 +558,7 @@ impl GuiInputRouter {
                     GuiInteractionUpdate::Hover(true),
                     delivery,
                 )?;
+                super::group::note_hover(context, &target);
                 context.pointers.insert(
                     pointer,
                     Pointer {
@@ -536,6 +682,27 @@ impl GuiInputRouter {
                                 offset,
                                 delivery,
                             )?,
+                            Some(Drag::Color(part)) => self.pick(
+                                host,
+                                context,
+                                &active.target,
+                                query,
+                                point,
+                                part,
+                                delivery,
+                            )?,
+                            Some(Drag::Dial(drag)) => {
+                                let turned = self.turn(
+                                    host,
+                                    context,
+                                    &active.target,
+                                    query,
+                                    point,
+                                    drag,
+                                    delivery,
+                                )?;
+                                active.drag = Some(Drag::Dial(turned));
+                            }
                             Some(Drag::Scroll {
                                 axis,
                                 grab,
@@ -583,7 +750,9 @@ impl GuiInputRouter {
                     }
                     context.pointers.insert(pointer, active);
                 }
-                let target = hit(host, query, point, &context.blockers)?;
+                let target = hit(host, query, point, &context.blockers)?
+                    .map(|target| self.pointed_part(host, context, query, target, point, false))
+                    .transpose()?;
                 if context
                     .pointers
                     .get(&pointer)
@@ -605,6 +774,7 @@ impl GuiInputRouter {
                             GuiInteractionUpdate::Hover(true),
                             delivery,
                         )?;
+                        super::group::note_hover(context, &target);
                         context.pointers.insert(
                             pointer,
                             Pointer {
@@ -622,10 +792,11 @@ impl GuiInputRouter {
                     }
                 } else if let Some(target) = target
                     && let Some(active) = context.pointers.get(&pointer).cloned()
-                    && interaction_part(&active.target.part) != interaction_part(&target.part)
+                    && interaction_part(&active.target) != interaction_part(&target)
                 {
-                    // Moving between a control's body and its scroll bar parts keeps
-                    // the hover and names the part now under the pointer.
+                    // Moving between a control's body, its scroll bar parts and
+                    // its focus parts keeps the hover and names the part now
+                    // under the pointer.
                     let identity = target.control.record.target;
                     let (command, _) = self.feedback(
                         host,
@@ -706,12 +877,36 @@ impl GuiInputRouter {
             GuiPhysicalInput::Blur
             | GuiPhysicalInput::Key {
                 key: GuiPhysicalKey::Escape,
+                ..
             } => {
+                // Escape first discards a pending numeric edit, then closes
+                // the topmost overlay that is not manual, and only then blurs.
+                if matches!(input, GuiPhysicalInput::Key { .. }) {
+                    if let Some(focus) = context.focus.clone()
+                        && self.number_edit_pending(host, context, &focus)
+                    {
+                        self.focus(host, context, focus.clone(), true, delivery)?;
+                        let input = self.input(host, context, &focus, delivery)?;
+                        enqueue(
+                            host,
+                            context.queue_owner,
+                            focus.control.record.target,
+                            GuiLocalCommand::number_discard(input)?,
+                        )?;
+                        context.number_edit = false;
+                        return Ok(GuiRoutingDisposition::Routed {
+                            target: focus.control.record.target,
+                        });
+                    }
+                    if let Some(disposition) = self.escape_overlay(host, context, view, delivery)? {
+                        return Ok(disposition);
+                    }
+                }
                 while let Some(pointer) = context.pointers.keys().next().copied() {
                     self.cancel_pointer(host, context, pointer, delivery)?;
                 }
                 if let Some(focus) = context.focus.take() {
-                    self.action(host, context, &focus, GuiLocalAction::Blur, delivery)?;
+                    self.blur(host, context, &focus, delivery)?;
                 }
                 self.service.set_native_focus(&context.context, None)?;
                 Ok(GuiRoutingDisposition::Unhandled)
@@ -719,7 +914,51 @@ impl GuiInputRouter {
             GuiPhysicalInput::Wheel {
                 point,
                 delta,
+                shift,
             } => {
+                // Over the focused value control the wheel steps its value,
+                // so an unfocused one never takes the wheel from scrolling:
+                // a slider's anywhere over it, a colour control's focused
+                // rail only over that rail. Anything else, including a failed
+                // hit, scrolls as before.
+                if let Some(focus) = context
+                    .focus
+                    .clone()
+                    .filter(|focus| focus.control.color.is_some() && focus.focus_part() > 0)
+                    && let Some(steps) = wheel_steps(delta)
+                    && let Some(over) = hit(host, query, point, &context.blockers).ok().flatten()
+                    && over.control.record.target == focus.control.record.target
+                    && over.path == focus.path
+                    && self
+                        .pointed_part(host, context, query, over, point, false)
+                        .ok()
+                        .and_then(|over| over.focus_part)
+                        == Some(focus.focus_part())
+                {
+                    let channel = color_rail_channel(focus.focus_part());
+                    self.color_step(host, context, &focus, channel, steps, shift, delivery)?;
+                    return Ok(GuiRoutingDisposition::Routed {
+                        target: focus.control.record.target,
+                    });
+                }
+                if let Some(focus) = context
+                    .focus
+                    .clone()
+                    .filter(|focus| focus.control.steps_value())
+                    && let Some(steps) = wheel_steps(delta)
+                    && hit(host, query, point, &context.blockers)
+                        .ok()
+                        .flatten()
+                        .is_some_and(|target| {
+                            target.control.record.target == focus.control.record.target
+                                && target.path == focus.path
+                        })
+                {
+                    self.step_value(host, context, &focus, steps, shift, delivery)?;
+                    return Ok(GuiRoutingDisposition::Routed {
+                        target: focus.control.record.target,
+                    });
+                }
                 let targets = scroll_targets(host, query, point, &context.blockers)?;
                 let Some(first) = targets.first() else {
                     return Ok(GuiRoutingDisposition::Unhandled);
@@ -732,17 +971,24 @@ impl GuiInputRouter {
             }
             GuiPhysicalInput::Key {
                 key,
+                shift,
             } => {
+                let key = match key {
+                    GuiPhysicalKey::Tab if shift => GuiPhysicalKey::BackTab,
+                    key => key,
+                };
                 if matches!(key, GuiPhysicalKey::Tab | GuiPhysicalKey::BackTab) {
-                    let candidates = super::keyboard::targets(host, view, context.focus.as_ref())?;
+                    let candidates = super::group::tab_stops(
+                        super::keyboard::targets(host, view, context.focus.as_ref())?,
+                        context.focus.as_ref(),
+                    );
                     if candidates.is_empty() {
                         return Ok(GuiRoutingDisposition::Unhandled);
                     }
                     let current = context.focus.as_ref().and_then(|focus| {
-                        candidates.iter().position(|candidate| {
-                            candidate.control.record.target == focus.control.record.target
-                                && candidate.path == focus.path
-                        })
+                        candidates
+                            .iter()
+                            .position(|candidate| candidate.same_stop(focus))
                     });
                     let index = match (current, key) {
                         (Some(index), GuiPhysicalKey::BackTab) => {
@@ -768,11 +1014,37 @@ impl GuiInputRouter {
                 let Some(target) = context.focus.clone() else {
                     return Ok(GuiRoutingDisposition::Unhandled);
                 };
+
+                // An open modal overlay blocks keys to what lies under it.
+                if super::overlay::under_modal(host, view, &target)? {
+                    return Ok(GuiRoutingDisposition::Blocked);
+                }
                 self.focus(host, context, target.clone(), true, delivery)?;
-                if target.control.record.kind == GuiControlKind::Slider
+                // The Menu key and Shift+F10 request a context at the
+                // bottom-left corner of the focused control's visible box.
+                if key == GuiPhysicalKey::ContextMenu || (key == GuiPhysicalKey::F10 && shift) {
+                    let hit = &target.control.hit;
+                    let corner = [
+                        hit.bounds[0].max(hit.clip[0]),
+                        hit.bounds[3].min(hit.clip[3]),
+                    ];
+                    self.request_context(host, context, &target, corner, delivery)?;
+                    return Ok(GuiRoutingDisposition::Routed {
+                        target: target.control.record.target,
+                    });
+                }
+                if let Some(disposition) =
+                    self.group_key(host, context, view, &target, key, delivery)?
+                {
+                    return Ok(disposition);
+                }
+                // Up and Down step a numeric text input, by the fine step
+                // with Shift, after committing its edit; Left and Right stay
+                // with its text.
+                if target.control.number.is_some()
                     && let Some(steps) = match key {
-                        GuiPhysicalKey::Left | GuiPhysicalKey::Down => Some(-1.0),
-                        GuiPhysicalKey::Right | GuiPhysicalKey::Up => Some(1.0),
+                        GuiPhysicalKey::Down => Some(-1.0),
+                        GuiPhysicalKey::Up => Some(1.0),
                         _ => None,
                     }
                 {
@@ -781,8 +1053,44 @@ impl GuiInputRouter {
                         host,
                         context.queue_owner,
                         target.control.record.target,
-                        GuiLocalCommand::slider_step(input, steps)?,
+                        GuiLocalCommand::number_step(input, steps, shift)?,
                     )?;
+                    return Ok(GuiRoutingDisposition::Routed {
+                        target: target.control.record.target,
+                    });
+                }
+                if target.control.color.is_some()
+                    && let Some(disposition) =
+                        self.color_key(host, context, &target, key, shift, delivery)?
+                {
+                    return Ok(disposition);
+                }
+                // In either orientation, Right and Up increase a value and
+                // Left and Down decrease it, by the fine step with Shift.
+                if target.control.steps_value()
+                    && let Some(steps) = match key {
+                        GuiPhysicalKey::Left | GuiPhysicalKey::Down => Some(-1.0),
+                        GuiPhysicalKey::Right | GuiPhysicalKey::Up => Some(1.0),
+                        _ => None,
+                    }
+                {
+                    self.step_value(host, context, &target, steps, shift, delivery)?;
+                    return Ok(GuiRoutingDisposition::Routed {
+                        target: target.control.record.target,
+                    });
+                }
+                // Home and End move the focused thumb to its legal bound: the
+                // range's end, or a range's other thumb.
+                if target.control.record.kind == GuiControlKind::Slider
+                    && matches!(key, GuiPhysicalKey::Home | GuiPhysicalKey::End)
+                {
+                    let slider = target.control.slider.ok_or(GuiInputError::Unavailable)?;
+                    let bound = if key == GuiPhysicalKey::Home {
+                        slider.min
+                    } else {
+                        slider.max
+                    };
+                    self.move_thumb(host, context, &target, bound, delivery)?;
                     return Ok(GuiRoutingDisposition::Routed {
                         target: target.control.record.target,
                     });
@@ -793,12 +1101,6 @@ impl GuiInputRouter {
                     }
                     (GuiPhysicalKey::Space, GuiControlKind::Checkbox) => GuiLocalAction::Toggle,
                     (GuiPhysicalKey::Enter, GuiControlKind::TextInput) => GuiLocalAction::Submit,
-                    (GuiPhysicalKey::Home, GuiControlKind::Slider) => GuiLocalAction::SetScalar(
-                        target.control.slider.ok_or(GuiInputError::Unavailable)?.min,
-                    ),
-                    (GuiPhysicalKey::End, GuiControlKind::Slider) => GuiLocalAction::SetScalar(
-                        target.control.slider.ok_or(GuiInputError::Unavailable)?.max,
-                    ),
                     _ => return Ok(GuiRoutingDisposition::Unhandled),
                 };
                 self.action(host, context, &target, action, delivery)?;
@@ -885,7 +1187,7 @@ impl GuiInputRouter {
         Ok(())
     }
 
-    fn input(
+    pub(super) fn input(
         &mut self,
         host: &HostRuntime,
         context: &mut GuiRoutingContext,
@@ -925,7 +1227,7 @@ impl GuiInputRouter {
             })
     }
 
-    fn action(
+    pub(super) fn action(
         &mut self,
         host: &mut HostRuntime,
         context: &mut GuiRoutingContext,
@@ -942,7 +1244,59 @@ impl GuiInputRouter {
         )
     }
 
-    fn focus(
+    /// A secondary press on a control focuses it as a primary press does and
+    /// requests a context at the press point in its canvas. Panel content
+    /// without an eligible control is blocked, as for any press.
+    fn pointer_context(
+        &mut self,
+        host: &mut HostRuntime,
+        context: &mut GuiRoutingContext,
+        query: ViewQueryTarget,
+        point: [f32; 2],
+        delivery: &mut dyn GuiRoutingDelivery,
+    ) -> Result<GuiRoutingDisposition, GuiInputError> {
+        let target = match locate(host, query, point, &context.blockers)? {
+            Located::Target(target) => target,
+            Located::Panel => return Ok(GuiRoutingDisposition::Blocked),
+            Located::Miss => return Ok(GuiRoutingDisposition::Miss),
+        };
+        if target.control.record.focusable
+            && !matches!(
+                target.control.record.kind,
+                GuiControlKind::ScrollView | GuiControlKind::VirtualList
+            )
+        {
+            self.focus(host, context, target.clone(), false, delivery)?;
+        }
+        // The press point on the plane of the target's own layer.
+        let layer = target.control.hit.layer;
+        let canvas = project_composed_point(host, query, &target.path, point, true, layer)
+            .map_err(|_| GuiInputError::StalePath)?
+            .ok_or(GuiInputError::Unavailable)?;
+        self.request_context(host, context, &target, canvas.point, delivery)?;
+        Ok(GuiRoutingDisposition::Routed {
+            target: target.control.record.target,
+        })
+    }
+
+    fn request_context(
+        &mut self,
+        host: &mut HostRuntime,
+        context: &mut GuiRoutingContext,
+        target: &Target,
+        point: [f32; 2],
+        delivery: &mut dyn GuiRoutingDelivery,
+    ) -> Result<(), GuiInputError> {
+        let input = self.input(host, context, target, delivery)?;
+        enqueue(
+            host,
+            context.queue_owner,
+            target.control.record.target,
+            GuiLocalCommand::context(input, point)?,
+        )
+    }
+
+    pub(super) fn focus(
         &mut self,
         host: &mut HostRuntime,
         context: &mut GuiRoutingContext,
@@ -956,14 +1310,14 @@ impl GuiInputRouter {
             .is_some_and(|focus| focus.control.record.target != target.control.record.target)
         {
             let previous = context.focus.take().expect("previous focus");
-            self.action(host, context, &previous, GuiLocalAction::Blur, delivery)?;
+            self.blur(host, context, &previous, delivery)?;
         }
         let input = self.input(host, context, &target, delivery)?;
         enqueue(
             host,
             context.queue_owner,
             target.control.record.target,
-            GuiLocalCommand::focus(input, visible)?,
+            GuiLocalCommand::focus(input, target.focus_part(), visible)?,
         )?;
         context.focus = Some(target);
         self.service.set_native_focus(
@@ -997,7 +1351,7 @@ impl GuiInputRouter {
                 input,
                 lease.clone(),
                 update,
-                interaction_part(&target.part),
+                interaction_part(target),
             )?,
             lease,
         ))
@@ -1074,17 +1428,59 @@ impl GuiInputRouter {
         delivery: &mut dyn GuiRoutingDelivery,
     ) -> Result<Option<Drag>, GuiInputError> {
         let local = local_point(host, query, target, point)?;
-        if target.control.record.kind == GuiControlKind::TextInput {
+        // A press on a numeric input's step part steps it and holds the
+        // part, which repeats on the World's clock until released.
+        if let Some(step) = target.step {
+            let input = self.input(host, context, target, delivery)?;
+            enqueue(
+                host,
+                context.queue_owner,
+                target.control.record.target,
+                GuiLocalCommand::number_part(input, step)?,
+            )?;
+            return Ok(None);
+        }
+        // Placing a caret needs the input's focus.
+        if target.control.record.kind == GuiControlKind::TextInput
+            && target.control.record.focusable
+        {
             self.caret(host, context, target, query, point, false, delivery)?;
             return Ok(Some(Drag::Text));
         }
+        // A press on a colour control's surface sets that surface's
+        // channels at the pointer and drags them; the swatch takes none.
+        if target.control.color.is_some() {
+            let Some(part) = target.focus_part else {
+                return Ok(None);
+            };
+            self.pick(host, context, target, query, point, part, delivery)?;
+            return Ok(Some(Drag::Color(part)));
+        }
+        // A press on the thumb keeps its grab offset along the rail; a press
+        // elsewhere on the control jumps the thumb to the pointer. A press on
+        // a dial leaves its value and starts a relative drag from there.
         if target.control.record.kind == GuiControlKind::Slider {
             let slider = target.control.slider.ok_or(GuiInputError::Unavailable)?;
-            let rect = slider.thumb_rect;
+            if slider.dial_travel.is_some() {
+                let crate::systems::gui::presentation::GuiRoutingValue::Scalar(current) =
+                    target.control.record.value
+                else {
+                    return Err(GuiInputError::Unavailable);
+                };
+                return Ok(Some(Drag::Dial(GuiDialDrag {
+                    origin: local[1],
+                    start: slider.fraction(current),
+                })));
+            }
+            let rect = match (slider.range, target.focus_part) {
+                (Some(range), Some(part)) => range.thumb_rects[part.min(1) as usize],
+                _ => slider.thumb_rect,
+            };
             let grabbing = (0..2)
                 .all(|axis| local[axis] >= rect[axis] && local[axis] < rect[axis] + rect[axis + 2]);
+            let axis = slider.axis;
             let offset = if grabbing {
-                local[0] - rect[0] - rect[2] * 0.5
+                local[axis] - rect[axis] - rect[axis + 2] * 0.5
             } else {
                 0.0
             };
@@ -1213,13 +1609,116 @@ impl GuiInputRouter {
         delivery: &mut dyn GuiRoutingDelivery,
     ) -> Result<(), GuiInputError> {
         let slider = target.control.slider.ok_or(GuiInputError::Unavailable)?;
-        let local = local_point(host, query, target, point)?[0] - offset;
-        let span = slider.thumb_centers[1] - slider.thumb_centers[0];
-        let fraction = if span > 0.0 {
-            ((local - slider.thumb_centers[0]) / span).clamp(0.0, 1.0)
-        } else {
-            0.0
+        let mut local = local_point(host, query, target, point)?;
+        local[slider.axis] -= offset;
+        let fraction = slider.fraction_at(local);
+        let crate::systems::gui::presentation::GuiRoutingValue::Scalar(lower) =
+            target.control.record.value
+        else {
+            return Err(GuiInputError::Unavailable);
         };
+        let current = match (slider.range, target.focus_part) {
+            (Some(range), Some(part)) => range.values[part.min(1) as usize],
+            _ => lower,
+        };
+        let value = crate::systems::gui::local::slider::value_at(
+            slider.min,
+            slider.max,
+            slider.step,
+            fraction,
+            current,
+        )
+        .ok_or(GuiInputError::Unavailable)?;
+        self.move_thumb(host, context, target, value, delivery)
+    }
+
+    /// Move the slider thumb `target` names towards `value`; the World clamps
+    /// it to the range and stops it at a range's other thumb.
+    fn move_thumb(
+        &mut self,
+        host: &mut HostRuntime,
+        context: &mut GuiRoutingContext,
+        target: &Target,
+        value: f32,
+        delivery: &mut dyn GuiRoutingDelivery,
+    ) -> Result<(), GuiInputError> {
+        let input = self.input(host, context, target, delivery)?;
+        enqueue(
+            host,
+            context.queue_owner,
+            target.control.record.target,
+            GuiLocalCommand::slider_thumb(input, target.focus_part(), value)?,
+        )
+    }
+
+    /// `target` naming the thumb of a range slider that a pointer at `point`
+    /// takes ([`range_thumb`]), the step part of a numeric text input it is
+    /// over, or the colour control's surface under it; other controls name no
+    /// part. A hover over a range's track names none and a press there takes
+    /// the nearer thumb; a colour control's swatch names none.
+    #[allow(clippy::too_many_arguments)]
+    fn pointed_part(
+        &self,
+        host: &HostRuntime,
+        context: &GuiRoutingContext,
+        query: ViewQueryTarget,
+        mut target: Target,
+        point: [f32; 2],
+        press: bool,
+    ) -> Result<Target, GuiInputError> {
+        if let Some(number) = target
+            .control
+            .number
+            .filter(|number| number.steps.is_some())
+        {
+            let local = local_point(host, query, &target, point)?;
+            target.step = number.step_at(local);
+            return Ok(target);
+        }
+        if let Some(layout) = target.control.color {
+            let local = local_point(host, query, &target, point)?;
+            target.focus_part = layout.part_at(local);
+            return Ok(target);
+        }
+        let Some(slider) = target
+            .control
+            .slider
+            .filter(|slider| slider.range.is_some())
+        else {
+            return Ok(target);
+        };
+        let local = local_point(host, query, &target, point)?;
+        let focused = context
+            .focus
+            .as_ref()
+            .filter(|focus| {
+                focus.control.record.target == target.control.record.target
+                    && focus.path == target.path
+            })
+            .map(Target::focus_part);
+        target.focus_part = range_thumb(&slider, local, focused, press);
+        Ok(target)
+    }
+
+    /// Turn a dial by its drag to `point` and return the drag that continues
+    /// from there; the value snaps to the step as a rail drag's does.
+    #[allow(clippy::too_many_arguments)]
+    fn turn(
+        &mut self,
+        host: &mut HostRuntime,
+        context: &mut GuiRoutingContext,
+        target: &Target,
+        query: ViewQueryTarget,
+        point: [f32; 2],
+        drag: GuiDialDrag,
+        delivery: &mut dyn GuiRoutingDelivery,
+    ) -> Result<GuiDialDrag, GuiInputError> {
+        let slider = target.control.slider.ok_or(GuiInputError::Unavailable)?;
+        let travel = slider.dial_travel.ok_or(GuiInputError::Unavailable)?;
+        let local = local_point(host, query, target, point)?;
+        let (fraction, drag) = drag
+            .turned(local[1], travel)
+            .ok_or(GuiInputError::Unavailable)?;
         let crate::systems::gui::presentation::GuiRoutingValue::Scalar(current) =
             target.control.record.value
         else {
@@ -1239,8 +1738,249 @@ impl GuiInputRouter {
             target,
             GuiLocalAction::SetScalar(value),
             delivery,
+        )?;
+        Ok(drag)
+    }
+
+    /// Blur the context's keyboard target, committing a numeric text input's
+    /// pending edit first, as blur does.
+    pub(super) fn blur(
+        &mut self,
+        host: &mut HostRuntime,
+        context: &mut GuiRoutingContext,
+        target: &Target,
+        delivery: &mut dyn GuiRoutingDelivery,
+    ) -> Result<(), GuiInputError> {
+        if target.control.number.is_some() {
+            let input = self.input(host, context, target, delivery)?;
+            enqueue(
+                host,
+                context.queue_owner,
+                target.control.record.target,
+                GuiLocalCommand::number_commit(input)?,
+            )?;
+        }
+        context.number_edit = false;
+        self.action(host, context, target, GuiLocalAction::Blur, delivery)
+    }
+
+    /// Whether the focused numeric text input `focus` holds a pending edit
+    /// for Escape to discard: the GUI System's record once its World applied
+    /// this context's work, else whether this context routed an edit since.
+    fn number_edit_pending(
+        &self,
+        host: &mut HostRuntime,
+        context: &GuiRoutingContext,
+        focus: &Target,
+    ) -> bool {
+        if focus.control.number.is_none() {
+            return false;
+        }
+        let target = focus.control.record.target;
+        if context.queued_worlds.borrow().contains_key(&target.world) {
+            return context.number_edit;
+        }
+        host.world_mut(target.world.id())
+            .is_some_and(|world| world.gui_number_edit(target, context.session.id()))
+    }
+
+    /// Step a value control by `steps` of its step, or of its fine step when
+    /// `fine`: arrow keys on the focused control and the wheel over it.
+    #[allow(clippy::too_many_arguments)]
+    fn step_value(
+        &mut self,
+        host: &mut HostRuntime,
+        context: &mut GuiRoutingContext,
+        target: &Target,
+        steps: f32,
+        fine: bool,
+        delivery: &mut dyn GuiRoutingDelivery,
+    ) -> Result<(), GuiInputError> {
+        let input = self.input(host, context, target, delivery)?;
+        enqueue(
+            host,
+            context.queue_owner,
+            target.control.record.target,
+            GuiLocalCommand::slider_thumb_step(input, target.focus_part(), steps, fine)?,
         )
     }
+
+    /// Set the channels of colour control part `part` at the pointer: the
+    /// field's saturation and value, or a rail's hue or alpha.
+    #[allow(clippy::too_many_arguments)]
+    fn pick(
+        &mut self,
+        host: &mut HostRuntime,
+        context: &mut GuiRoutingContext,
+        target: &Target,
+        query: ViewQueryTarget,
+        point: [f32; 2],
+        part: u32,
+        delivery: &mut dyn GuiRoutingDelivery,
+    ) -> Result<(), GuiInputError> {
+        let layout = target.control.color.ok_or(GuiInputError::Unavailable)?;
+        let local = local_point(host, query, target, point)?;
+        self.color_channels(
+            host,
+            context,
+            target,
+            layout.channels_at(part, local),
+            delivery,
+        )
+    }
+
+    fn color_channels(
+        &mut self,
+        host: &mut HostRuntime,
+        context: &mut GuiRoutingContext,
+        target: &Target,
+        channels: [Option<f32>; 4],
+        delivery: &mut dyn GuiRoutingDelivery,
+    ) -> Result<(), GuiInputError> {
+        let input = self.input(host, context, target, delivery)?;
+        enqueue(
+            host,
+            context.queue_owner,
+            target.control.record.target,
+            GuiLocalCommand::color_channels(input, channels)?,
+        )
+    }
+
+    /// Step colour channel `channel` by `steps` of the colour step, or of the
+    /// fine step when `fine`.
+    #[allow(clippy::too_many_arguments)]
+    fn color_step(
+        &mut self,
+        host: &mut HostRuntime,
+        context: &mut GuiRoutingContext,
+        target: &Target,
+        channel: usize,
+        steps: f32,
+        fine: bool,
+        delivery: &mut dyn GuiRoutingDelivery,
+    ) -> Result<(), GuiInputError> {
+        let input = self.input(host, context, target, delivery)?;
+        enqueue(
+            host,
+            context.queue_owner,
+            target.control.record.target,
+            GuiLocalCommand::color_step(input, channel, steps, fine)?,
+        )
+    }
+
+    /// A key on the focused part of a colour control: on the field, Left
+    /// and Right step the saturation and Down and Up the value, and Home and
+    /// End take the saturation to its bounds; on a rail, Right and Up raise
+    /// its channel and Left and Down lower it, and Home and End take it to
+    /// its bounds. Shift steps finely. Other keys are left to the caller.
+    #[allow(clippy::too_many_arguments)]
+    fn color_key(
+        &mut self,
+        host: &mut HostRuntime,
+        context: &mut GuiRoutingContext,
+        target: &Target,
+        key: GuiPhysicalKey,
+        fine: bool,
+        delivery: &mut dyn GuiRoutingDelivery,
+    ) -> Result<Option<GuiRoutingDisposition>, GuiInputError> {
+        use crate::systems::gui::local::color::{SATURATION, VALUE};
+
+        let part = target.focus_part();
+        let channel = |vertical: bool| match (part, vertical) {
+            (0, false) => SATURATION,
+            (0, true) => VALUE,
+            _ => color_rail_channel(part),
+        };
+        let routed = Some(GuiRoutingDisposition::Routed {
+            target: target.control.record.target,
+        });
+        let (channel, steps) = match key {
+            GuiPhysicalKey::Left => (channel(false), -1.0),
+            GuiPhysicalKey::Right => (channel(false), 1.0),
+            GuiPhysicalKey::Down => (channel(true), -1.0),
+            GuiPhysicalKey::Up => (channel(true), 1.0),
+            GuiPhysicalKey::Home | GuiPhysicalKey::End => {
+                let mut channels = [None; 4];
+                channels[channel(false)] = Some(f32::from(u8::from(key == GuiPhysicalKey::End)));
+                self.color_channels(host, context, target, channels, delivery)?;
+                return Ok(routed);
+            }
+            _ => return Ok(None),
+        };
+        self.color_step(host, context, target, channel, steps, fine, delivery)?;
+        Ok(routed)
+    }
+}
+
+/// The channel a colour control's rail `part` holds: hue for 1, alpha for 2.
+fn color_rail_channel(part: u32) -> usize {
+    use crate::systems::gui::local::color::{ALPHA, HUE};
+
+    if part == 2 {
+        ALPHA
+    } else {
+        HUE
+    }
+}
+
+/// The thumb of a range a pointer at control-local `local` takes: the one
+/// under it, or for a press on the track the nearer one. Where both thumbs
+/// are under it, or a track press is as near to both, it takes the one that
+/// can move when both sit at one end of the range, else the last active one,
+/// the thumb `focused` while the slider holds focus, else the one on the
+/// pointer's side: the upper towards the maximum. A hover over the track
+/// takes none.
+fn range_thumb(
+    slider: &crate::systems::gui::presentation::GuiSliderGeometry,
+    local: [f32; 2],
+    focused: Option<u32>,
+    press: bool,
+) -> Option<u32> {
+    let range = slider.range?;
+    let axis = slider.axis;
+    let over = range.thumb_rects.map(|rect| {
+        (0..2).all(|axis| local[axis] >= rect[axis] && local[axis] < rect[axis] + rect[axis + 2])
+    });
+    match over {
+        [true, false] => return Some(0),
+        [false, true] => return Some(1),
+        [false, false] if !press => return None,
+        _ => {}
+    }
+    let centre = |rect: [f32; 4]| rect[axis] + rect[axis + 2] * 0.5;
+    let distance = range
+        .thumb_rects
+        .map(|rect| (local[axis] - centre(rect)).abs());
+    if over == [false, false] && distance[0] != distance[1] {
+        return Some(u32::from(distance[1] < distance[0]));
+    }
+    let [lower, upper] = range.values;
+    if lower == upper && lower >= slider.max {
+        return Some(0);
+    }
+    if lower == upper && upper <= slider.min {
+        return Some(1);
+    }
+    if let Some(part) = focused {
+        return Some(part.min(1));
+    }
+    let towards_max = slider.thumb_centers[1] - slider.thumb_centers[0];
+    Some(u32::from(
+        (local[axis] - centre(range.thumb_rects[0])) * towards_max > 0.0,
+    ))
+}
+
+/// The value steps one wheel event makes: one, along its larger component,
+/// up increasing and down decreasing. A horizontal component counts as a
+/// vertical one turned to the right, since browsers deliver Shift with the
+/// wheel, the fine step, as horizontal movement. None for no movement.
+fn wheel_steps(delta: [f32; 2]) -> Option<f32> {
+    let along = if delta[1].abs() >= delta[0].abs() {
+        delta[1]
+    } else {
+        delta[0]
+    };
+    (along.is_finite() && along != 0.0).then(|| -along.signum())
 }
 
 pub(super) fn live(host: &HostRuntime, world: crate::WorldRef) -> Result<(), GuiInputError> {
@@ -1251,7 +1991,7 @@ pub(super) fn live(host: &HostRuntime, world: crate::WorldRef) -> Result<(), Gui
     }
 }
 
-fn enqueue(
+pub(super) fn enqueue(
     host: &mut HostRuntime,
     owner: u64,
     target: GuiEntityTarget,
@@ -1309,16 +2049,61 @@ impl Drop for DispatchPermit {
     }
 }
 
-fn refresh(
+pub(super) fn refresh(
     host: &HostRuntime,
     view: ViewDescriptor,
     target: &Target,
 ) -> Result<Target, GuiInputError> {
+    let control = locate_control(host, view, &target.path, target.control.record.target)?;
+    // A control that lost the named part, as a range made a single slider,
+    // keeps its last part, or names none.
+    let parts = control.record.focus_parts;
+    let focus_part = target
+        .focus_part
+        .filter(|_| parts > 1)
+        .map(|part| part.min(parts - 1));
+    // A control that lost its step parts names none.
+    let step = target
+        .step
+        .filter(|_| control.number.is_some_and(|number| number.steps.is_some()));
+    Ok(Target {
+        control,
+        path: target.path.clone(),
+        source: view.publication,
+        part: target.part.clone(),
+        focus_part,
+        step,
+    })
+}
+
+/// The completed observation of control `target` through attachment `path`
+/// of `view`.
+pub(super) fn locate_control(
+    host: &HostRuntime,
+    view: ViewDescriptor,
+    path: &[WorldAttachmentToken],
+    target: crate::systems::gui::local::GuiEntityTarget,
+) -> Result<Arc<GuiControlObservation>, GuiInputError> {
+    semantic_view(host, view, path)?
+        .controls
+        .iter()
+        .find(|control| control.record.target == target)
+        .cloned()
+        .ok_or(GuiInputError::Unavailable)
+}
+
+/// The completed control observations of the canvas reached through
+/// attachment `path` of `view`.
+pub(super) fn semantic_view(
+    host: &HostRuntime,
+    view: ViewDescriptor,
+    path: &[WorldAttachmentToken],
+) -> Result<Arc<GuiCanvasSemanticView>, GuiInputError> {
     let mut publication = host
         .publication(view.publication)
         .ok_or(GuiInputError::StalePath)?;
     let mut output = view.output;
-    for token in &target.path {
+    for token in path {
         let edge = publication
             .attachments
             .iter()
@@ -1333,25 +2118,15 @@ fn refresh(
     }
     // The path is still live, so a missing Canvas scope or control means the
     // target itself was removed: its input is reported unavailable (gui.md).
-    let control = publication
+    publication
         .chunk(CanvasSystem::ID)
         .and_then(|chunk| chunk.data::<GuiCanvasPublication>())
         .and_then(|gui| gui.views.get(&output))
-        .and_then(|view| {
-            view.controls
-                .iter()
-                .find(|control| control.record.target == target.control.record.target)
-        })
-        .ok_or(GuiInputError::Unavailable)?;
-    Ok(Target {
-        control: control.clone(),
-        path: target.path.clone(),
-        source: view.publication,
-        part: target.part.clone(),
-    })
+        .cloned()
+        .ok_or(GuiInputError::Unavailable)
 }
 
-fn current_target(
+pub(super) fn current_target(
     host: &HostRuntime,
     view: ViewDescriptor,
     target: &Target,
@@ -1470,6 +2245,9 @@ fn locate(
     )
     .map_err(|_| GuiInputError::StaleContext)?;
     match result.outcome {
+        // An open light or modal overlay takes the press from what lies
+        // beneath and selects no control.
+        GuiQueryOutcome::Hit(hit) if hit.hit.kind == CanvasHitKind::Overlay => Ok(Located::Panel),
         GuiQueryOutcome::Hit(hit) => {
             let publication = host
                 .publication(hit.publication)
@@ -1493,6 +2271,8 @@ fn locate(
                     path: hit.path.iter().map(|step| step.token.clone()).collect(),
                     source: result.view.publication,
                     part: hit.hit.kind.clone(),
+                    focus_part: None,
+                    step: None,
                 }),
                 // An ineligible control on a panel is still panel content.
                 None if hit.path.iter().any(|step| step.distance.is_some()) => Located::Panel,
@@ -1542,7 +2322,7 @@ fn scroll_targets(
     };
     let mut targets = Vec::new();
     let mut path: Vec<_> = hit.path.iter().map(|step| step.token.clone()).collect();
-    append_scroll_targets(
+    if append_scroll_targets(
         host,
         hit.publication,
         hit.output,
@@ -1550,7 +2330,9 @@ fn scroll_targets(
         &path,
         result.view.publication,
         &mut targets,
-    );
+    ) {
+        return Ok(targets);
+    }
     for step in hit.path.iter().rev() {
         path.pop();
         let publication = host
@@ -1563,13 +2345,17 @@ fn scroll_targets(
             .ok_or(GuiInputError::StalePath)?;
         if let Some(output) = edge.placement_output
             && let Some(canvas) = publication.output(output).and_then(|chunk| chunk.data::<crate::systems::canvas::CanvasPublication>())
-            && let Some(anchor) = canvas.hits.iter().find(|hit| matches!(&hit.kind, crate::systems::canvas::CanvasHitKind::Attachment { token, .. } if *token == edge.token)) {
-            append_scroll_targets(host, publication.id, output, &anchor.ancestry, &path, result.view.publication, &mut targets);
+            && let Some(anchor) = canvas.hits.iter().find(|hit| matches!(&hit.kind, crate::systems::canvas::CanvasHitKind::Attachment { token, .. } if *token == edge.token))
+            && append_scroll_targets(host, publication.id, output, &anchor.ancestry, &path, result.view.publication, &mut targets) {
+            break;
         }
     }
     Ok(targets)
 }
 
+/// Append the scroll views and virtual lists of `ancestry`, innermost first,
+/// up to the first open overlay: the wheel's scroll chain ends at an overlay.
+/// Returns whether it reached one.
 #[allow(clippy::too_many_arguments)]
 fn append_scroll_targets(
     host: &HostRuntime,
@@ -1579,14 +2365,14 @@ fn append_scroll_targets(
     path: &[WorldAttachmentToken],
     root: WorldPublicationId,
     targets: &mut Vec<Target>,
-) {
+) -> bool {
     let Some(gui) = host
         .publication(source)
         .and_then(|publication| publication.chunk(CanvasSystem::ID))
         .and_then(|chunk| chunk.data::<GuiCanvasPublication>())
         .and_then(|gui| gui.views.get(&output))
     else {
-        return;
+        return false;
     };
     for entity in ancestry.iter().rev() {
         if let Some(control) = gui.controls.iter().find(|control| {
@@ -1603,15 +2389,32 @@ fn append_scroll_targets(
                 path: path.to_vec(),
                 source: root,
                 part: CanvasHitKind::Entity,
+                focus_part: None,
+                step: None,
             });
         }
+        if gui
+            .overlays
+            .iter()
+            .any(|overlay| overlay.target.entity == *entity)
+        {
+            return true;
+        }
     }
+    false
 }
 
-/// The control part a pointer names for skin feedback.
-fn interaction_part(part: &CanvasHitKind) -> GuiInteractionPart {
+/// The control part a pointer names for skin feedback: a focus part of a
+/// control with several, a numeric input's step part, else the hit part.
+fn interaction_part(target: &Target) -> GuiInteractionPart {
+    if let Some(part) = target.focus_part {
+        return GuiInteractionPart::FocusPart(part);
+    }
+    if let Some(step) = target.step {
+        return GuiInteractionPart::Step(step);
+    }
     let axis = |axis: &CanvasAxis| usize::from(*axis == CanvasAxis::Vertical);
-    match part {
+    match &target.part {
         CanvasHitKind::ScrollTrack {
             axis: bar,
         } => GuiInteractionPart::ScrollTrack(axis(bar)),
@@ -1647,10 +2450,11 @@ fn local_point(
     target: &Target,
     point: [f32; 2],
 ) -> Result<[f32; 2], GuiInputError> {
-    let projected = project_composed_point(host, query, &target.path, point, true)
+    let hit = &target.control.hit;
+    // Captured input keeps projecting onto the plane of the captured target's layer.
+    let projected = project_composed_point(host, query, &target.path, point, true, hit.layer)
         .map_err(|_| GuiInputError::StalePath)?
         .ok_or(GuiInputError::Unavailable)?;
-    let hit = &target.control.hit;
     Ok(std::array::from_fn(|axis| {
         (projected.point[axis] - hit.position[axis]) / hit.scale[axis]
     }))

@@ -11,8 +11,10 @@ import type {
 export type * from "./lifecycle-types.js";
 import type {
   GuiAction,
+  GuiActiveItemRecord,
   GuiFocusRecord,
   GuiPointerRecord,
+  GuiPreferencesRecord,
   GuiObservationRequest,
   GuiObservationRecord,
 } from "./gui-types.js";
@@ -381,10 +383,18 @@ export interface CanvasStateRecord {
   /** Last evaluated logical extent and its tick; null before the first evaluation. */
   evaluated: { extent: readonly [number, number]; tick: bigint } | null;
 }
+/** Sparse GUI preferences update. Omitted preferences keep their current
+ * values. With `reducedMotion`, every skin transition, including one under
+ * way, snaps to its destination. */
+export interface GuiPreferencesUpdateCommand {
+  type: "GuiPreferencesUpdateCommand";
+  reducedMotion?: boolean;
+}
 export type SystemCommand =
   | AnimationPlaybackCommand
   | RenderStateUpdateCommand
-  | CanvasStateUpdateCommand;
+  | CanvasStateUpdateCommand
+  | GuiPreferencesUpdateCommand;
 export interface EventEnvelope {
   session: bigint;
   requestId: bigint;
@@ -545,8 +555,9 @@ export interface RenderDiagnostic {
   reason: string;
 }
 export interface InspectionQuery {
-  /** `guiFocus` and `guiPointers` are GUI System queries, present in GUI
-   * builds; `canvas` is the Canvas System query, present in Surface builds. */
+  /** `guiFocus`, `guiPointers`, `guiActiveItems` and `guiPreferences` are GUI
+   * System queries, present in GUI builds, `guiActiveItems` paged by group
+   * entity; `canvas` is the Canvas System query, present in Surface builds. */
   collection:
     | "summary"
     | "entities"
@@ -555,6 +566,8 @@ export interface InspectionQuery {
     | "renderDiagnostics"
     | "guiFocus"
     | "guiPointers"
+    | "guiActiveItems"
+    | "guiPreferences"
     | "canvas";
   after?: bigint;
   target?: bigint;
@@ -594,8 +607,12 @@ export interface Inspection {
   guiFocus?: readonly GuiFocusRecord[];
   /** GUI builds: live pointer feedback. */
   guiPointers?: readonly GuiPointerRecord[];
+  /** GUI builds: groups' active items. */
+  guiActiveItems?: readonly GuiActiveItemRecord[];
   /** Surface builds: the World canvas's state, when the query read it. */
   canvas?: CanvasStateRecord | null;
+  /** GUI builds: the World's GUI preferences, when the query read them. */
+  guiPreferences?: GuiPreferencesRecord | null;
 }
 export interface RuntimeFailure {
   scope: "draw" | "resource" | "context" | "world";
@@ -639,7 +656,9 @@ export type ResponseBody =
       controllers?: readonly AnimationControllerSnapshot[];
       guiFocus?: readonly GuiFocusRecord[];
       guiPointers?: readonly GuiPointerRecord[];
+      guiActiveItems?: readonly GuiActiveItemRecord[];
       canvas?: CanvasStateRecord | null;
+      guiPreferences?: GuiPreferencesRecord | null;
     }
   | {
       kind: "entityTree";

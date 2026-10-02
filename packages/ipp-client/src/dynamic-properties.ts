@@ -351,12 +351,28 @@ export interface ShaderRecipe {
 export interface ShaderDefinition {
   recipe?: ShaderRecipe;
   parameters: Record<string, ShaderParameterKind>;
-  backends: Record<string, { vertex?: string; fragment?: string }>;
+  /**
+   * Backend source. A material has `vertex` and `fragment` bodies; a canvas paint
+   * has only a `paint` body, the statements of one function returning straight
+   * linear RGBA, with float scalar or vector parameters and no recipe flags or
+   * required streams.
+   */
+  backends: Record<
+    string,
+    { vertex?: string; fragment?: string; paint?: string }
+  >;
   /** Bit 0 color, bit 1 UV, bit 2 normal, bit 3 texture weight. */
   requiredAttributes?: number;
 }
 
-/** Encode immutable IPPH v2 source for the ordinary owned asset data plane. */
+const paintKinds: readonly ShaderParameterKind[] = [
+  "f32",
+  "vec2",
+  "vec3",
+  "vec4",
+];
+
+/** Encode immutable IPPH v3 source for the ordinary owned asset data plane. */
 export function encodeShaderDefinition(
   definition: ShaderDefinition,
 ): Uint8Array<ArrayBuffer> {
@@ -371,8 +387,35 @@ export function encodeShaderDefinition(
     u32(bytes.length);
     chunks.push(bytes);
   };
+  const blank = (body?: string) => (body ?? "").trim() === "";
+  const sources = Object.values(definition.backends);
+  if (sources.some((source) => !blank(source.paint))) {
+    const recipeFlags = definition.recipe ?? {};
+    if (
+      sources.some((source) => !blank(source.vertex) || !blank(source.fragment))
+    )
+      throw new Error("A paint definition has no material stages");
+    if (
+      (definition.requiredAttributes ?? 0) !== 0 ||
+      [
+        recipeFlags.normals,
+        recipeFlags.skinning,
+        recipeFlags.meshPose,
+        recipeFlags.lighting,
+        recipeFlags.shadowPass,
+        recipeFlags.instancing,
+      ].some(Boolean)
+    )
+      throw new Error("A paint definition has no recipe flags or streams");
+    if (
+      Object.values(definition.parameters).some(
+        (kind) => !paintKinds.includes(kind),
+      )
+    )
+      throw new Error("Paint parameters are float scalars or vectors");
+  }
   chunks.push(new Uint8Array([73, 80, 80, 72]));
-  u32(2);
+  u32(3);
   const recipe = definition.recipe ?? {};
   const flags = [
     recipe.normals,
@@ -410,6 +453,7 @@ export function encodeShaderDefinition(
     text(name);
     text(source.vertex ?? "");
     text(source.fragment ?? "");
+    text(source.paint ?? "");
   }
   const bytes = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0));
   let offset = 0;

@@ -32,6 +32,7 @@ pub fn run<D: RenderDevice>(
     let surface = Surface {
         width: 10_000_000.0,
         height: 1.0,
+        ..Default::default()
     };
     place(
         &mut host,
@@ -62,6 +63,7 @@ pub fn run<D: RenderDevice>(
     let surface = Surface {
         width: 2_000_000.0,
         height: 2.0,
+        ..Default::default()
     };
     create(
         &mut host,
@@ -129,7 +131,8 @@ pub fn run<D: RenderDevice>(
     assert!((hit.point[0] / 200_000_000.0 - 0.5).abs() < 1e-4);
     assert!((hit.point[1] - 100.0).abs() < 1e-4);
     let path: Vec<_> = hit.path.iter().map(|step| step.token.clone()).collect();
-    let projected = project_composed_point(&host, view, &path, point, true)?.unwrap();
+    let projected =
+        project_composed_point(&host, view, &path, point, true, hit.hit.layer)?.unwrap();
     assert_eq!(projected.output, panel);
     assert_eq!(projected.point, hit.point);
     let camera_path = &path[..1];

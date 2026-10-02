@@ -264,6 +264,8 @@ pub(super) struct OutputNodeStamp {
 pub(super) enum OutputVisualStamp {
     Canvas {
         paint_revision: u64,
+        /// Custom paint inputs, which change without changing the paint entries.
+        paints_revision: u64,
         resource_revision: u64,
         logical_extent: [f32; 2],
         units_per_metre: f32,
@@ -277,6 +279,7 @@ impl From<&CanvasPublication> for OutputVisualStamp {
     fn from(canvas: &CanvasPublication) -> Self {
         Self::Canvas {
             paint_revision: canvas.paint_revision,
+            paints_revision: canvas.paints_revision,
             resource_revision: canvas.resource_revision,
             logical_extent: canvas.logical_extent,
             units_per_metre: canvas.units_per_metre,

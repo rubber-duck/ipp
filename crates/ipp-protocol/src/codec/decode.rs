@@ -64,6 +64,22 @@ impl<'a> Reader<'a> {
         })
     }
 
+    pub(super) fn gui_preferences_update(
+        &mut self,
+    ) -> Result<ipp_core::systems::gui::GuiPreferencesUpdate, ProtocolError> {
+        let mask = self.u16()?;
+        if mask & !1 != 0 {
+            return Err(ProtocolError::Malformed("GUI preferences mask"));
+        }
+        Ok(ipp_core::systems::gui::GuiPreferencesUpdate {
+            reduced_motion: if mask & 1 != 0 {
+                Some(self.boolean()?)
+            } else {
+                None
+            },
+        })
+    }
+
     pub(super) fn canvas_state_update(
         &mut self,
     ) -> Result<ipp_core::CanvasStateUpdate, ProtocolError> {
@@ -479,7 +495,13 @@ pub fn decode_world_request(
             let target = r.u64()?;
             let limit = r.u16()?;
             let max_depth = r.u16()?;
-            let gui_collection = matches!(collection, INSPECT_GUI_FOCUS | INSPECT_GUI_POINTERS);
+            let gui_collection = matches!(
+                collection,
+                INSPECT_GUI_FOCUS
+                    | INSPECT_GUI_POINTERS
+                    | INSPECT_GUI_ACTIVE_ITEMS
+                    | INSPECT_GUI_PREFERENCES
+            );
             let canvas_collection = collection == INSPECT_CANVAS;
             if !(collection <= INSPECT_ENTITY_TREE || gui_collection || canvas_collection)
                 || limit == 0
@@ -560,6 +582,9 @@ pub fn decode_world_request(
         REQUEST_CANVAS_STATE_UPDATE => {
             RequestBody::CanvasStateUpdateCommand(r.canvas_state_update()?)
         }
+        REQUEST_GUI_PREFERENCES_UPDATE => {
+            RequestBody::GuiPreferencesUpdateCommand(r.gui_preferences_update()?)
+        }
         REQUEST_GEOMETRY_PICK => RequestBody::GeometryPickQuery(crate::views::GeometryPickQuery {
             view: r.view_target()?,
             x: r.f32()?,
@@ -612,7 +637,11 @@ pub fn decode_world_request(
         body,
         RequestBody::AnimationPlaybackCommand { .. } | RequestBody::RenderStateUpdateCommand(_)
     );
-    let command = command || matches!(body, RequestBody::CanvasStateUpdateCommand(_));
+    let command = command
+        || matches!(
+            body,
+            RequestBody::CanvasStateUpdateCommand(_) | RequestBody::GuiPreferencesUpdateCommand(_)
+        );
     if command != (request_id == 0) {
         return Err(ProtocolError::Malformed("reserved request identity").into());
     }

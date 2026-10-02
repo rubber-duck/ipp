@@ -58,6 +58,8 @@ export async function guiCallbacks(
   const scalars: number[] = [];
   const texts: string[] = [];
   const submits: string[] = [];
+  /** Value actions the button's own element received, by phase. */
+  const buttonValues: string[] = [];
   let valueSignal = deferred<void>();
   const button = createRef<GuiControlHandle>();
   const checkbox = createRef<GuiControlHandle>();
@@ -178,8 +180,20 @@ export async function guiCallbacks(
       />
       <Entity
         id="callback-button"
-        onActionCapture={() => order.push("target-capture")}
-        onAction={() => order.push("target-bubble")}
+        onActionCapture={(event) => {
+          // A Button's selection is a value like any other control's, and
+          // bubbles through the element tree; presses are recorded in order.
+          if (event.kind === "value") {
+            buttonValues.push(`capture:${JSON.stringify(event.value)}`);
+            valueSignal.resolve();
+          } else order.push("target-capture");
+        }}
+        onAction={(event) => {
+          if (event.kind === "value") {
+            buttonValues.push(`bubble:${JSON.stringify(event.value)}`);
+            valueSignal.resolve();
+          } else order.push("target-bubble");
+        }}
       >
         <EntityLink parent={parent} />
         <Button
@@ -251,8 +265,17 @@ export async function guiCallbacks(
     await wait(root.render(tree()), "initial render");
     // Value callbacks report each control's current value first.
     await until(
-      () => toggles.length > 0 && scalars.length > 0 && texts.length > 0,
+      () =>
+        toggles.length > 0 &&
+        scalars.length > 0 &&
+        texts.length > 0 &&
+        buttonValues.length > 1,
       "current values",
+    );
+    const unselected = JSON.stringify({ kind: "selected", value: false });
+    check(
+      buttonValues.join() === `capture:${unselected},bubble:${unselected}`,
+      `Button selection actions: ${buttonValues}`,
     );
     check(
       JSON.stringify([toggles, scalars, texts]) ===

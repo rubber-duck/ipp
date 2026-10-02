@@ -50,7 +50,7 @@ Select custom, PBR, then unlit from the same entity, with solid unlit red as the
 
 ## Assets and validation
 
-The [shader asset codec](../../../../ipp-core/src/services/asset_management/shader.rs) owns recipes, backend bodies and parameter requirements. Use the matching generated encoder instead of constructing binary tags or component offsets. [Dynamic values](../../../../ipp-core/src/components/dynamic_properties/mod.rs) participate in ordinary animation and persistence; World snapshots retain stored properties without fetching shader definitions.
+The [shader asset codec](../../../../ipp-core/src/services/asset_management/shader.rs) owns recipes, backend bodies and parameter requirements. A definition with a paint body is a [canvas paint](CANVAS_PAINTS.md), never a usable material. Use the matching generated encoder instead of constructing binary tags or component offsets. [Dynamic values](../../../../ipp-core/src/components/dynamic_properties/mod.rs) participate in ordinary animation and persistence; World snapshots retain stored properties without fetching shader definitions.
 
 Run `python tools/ipp.py test custom-materials` for generated worker/WASM/WebGL evidence. The native `egl_custom_materials` example accepts an EGL library directory, cube mesh fixture and artifact directory. Scenarios retain captures and environment records under `target/integration-artifacts/custom-materials`. Core property/animation/persistence tests and renderer packing tests supplement the real frame scenarios.
 

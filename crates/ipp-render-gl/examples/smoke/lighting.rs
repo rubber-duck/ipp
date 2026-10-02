@@ -715,6 +715,7 @@ pub fn run_custom<D: RenderDevice>(
             ShaderBackendSource {
                 vertex: "void materialVertex() { ippDefaultVertex(); }".into(),
                 fragment: "vec4 materialFragment() { return vec4(0,1,0,p_coverage); }".into(),
+                ..Default::default()
             },
         )]),
         ..Default::default()

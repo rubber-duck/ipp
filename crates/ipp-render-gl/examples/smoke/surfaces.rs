@@ -200,6 +200,7 @@ pub(crate) fn run<D: RenderDevice>(
     let surface = Surface {
         width: EXTENT[0],
         height: EXTENT[1],
+        ..Default::default()
     };
     let entity = create(
         &mut host,

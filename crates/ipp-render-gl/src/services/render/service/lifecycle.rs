@@ -27,7 +27,9 @@ impl<D: RenderDevice> RenderService<D> {
             surface_missing: Vec::new(),
             surface_analytic_text: false,
             surface_gui_unretained: false,
-            surface_gui_program: None,
+            canvas_paints: Default::default(),
+            gui_glyph_program: None,
+            canvas_paint_fallbacks: BTreeMap::new(),
             gui_batch_cache: BTreeMap::new(),
             surface_ops: Vec::new(),
             glyph_atlas: super::super::glyph_atlas::GlyphAtlas::new(device.clone()),
@@ -165,14 +167,17 @@ impl<D: RenderDevice> RenderService<D> {
         if let Some(program) = self.surface_bitmap_program.take() {
             self.device.borrow_mut().delete_program(program);
         }
+        if let Some(program) = self.gui_glyph_program.take() {
+            self.device.borrow_mut().delete_program(program);
+        }
         // Cache images are rebuilt from current evaluated inputs; the budget survives.
         self.clear_surface_caches();
         for cache in self.analytic_glyphs.values_mut() {
             cache.clear();
         }
-        if let Some(program) = self.surface_gui_program.take() {
-            self.device.borrow_mut().delete_program(program);
-        }
+        // Paints are admitted again and the canvas program rebuilt on next use.
+        self.canvas_paints.clear(&mut self.device.borrow_mut());
+        self.canvas_paint_fallbacks.clear();
         self.gui_batch_cache.clear();
         // Glyph atlas layout, demand and run bands survive, so recovered text
         // repopulates its original slots.
@@ -266,6 +271,8 @@ impl<D: RenderDevice> RenderService<D> {
         }
         self.gui_batch_cache
             .retain(|output, _| output.world().id() != world);
+        self.canvas_paint_fallbacks
+            .retain(|(output, _), _| output.world().id() != world);
         self.glyph_batch_cache.retain(|output, cache| {
             if output.world().id() == world {
                 cache.release_demand(&mut self.glyph_atlas);
@@ -288,6 +295,8 @@ impl<D: RenderDevice> RenderService<D> {
             .retain(|selection, _| outputs.contains(selection));
         self.gui_batch_cache
             .retain(|selection, _| outputs.contains(selection));
+        self.canvas_paint_fallbacks
+            .retain(|(selection, _), _| outputs.contains(selection));
         self.glyph_batch_cache.retain(|selection, cache| {
             let live = outputs.contains(selection);
             if !live {

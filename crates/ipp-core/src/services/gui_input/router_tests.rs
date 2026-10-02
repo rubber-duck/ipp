@@ -133,6 +133,7 @@ fn overlapping_scroll_samples(drag: bool) {
             GuiPhysicalInput::Wheel {
                 point: [0.5, 0.5],
                 delta: [0.0, 20.0],
+                shift: false,
             }
         }
     };
@@ -306,6 +307,7 @@ fn cross_world_scroll_parks_outer_fifo_and_retains_original_publication() {
                         GuiPhysicalInput::Wheel {
                             point: [0.5, 0.5],
                             delta: [0.0, 20.0],
+                            shift: false,
                         }
                     },
                     &mut delivery,
@@ -398,6 +400,7 @@ fn parked_scroll_drains_and_terminal_failures_release_all_tickets() {
                 GuiPhysicalInput::Wheel {
                     point: [0.5, 0.5],
                     delta: [0.0, 20.0],
+                    shift: false,
                 },
                 &mut DeliveryFactory(scene.ledger.clone()),
             )
@@ -443,6 +446,7 @@ fn parked_scroll_drains_and_terminal_failures_release_all_tickets() {
                 GuiPhysicalInput::Wheel {
                     point: [0.5, 0.5],
                     delta: [0.0, 20.0],
+                    shift: false,
                 },
                 &mut DeliveryFactory(scene.ledger.clone()),
             )
@@ -510,6 +514,7 @@ fn native_edits_preserve_graphemes_provisional_text_and_exact_replacement_fences
             view,
             GuiPhysicalInput::Key {
                 key: GuiPhysicalKey::Tab,
+                shift: false,
             },
             &mut delivery,
         )
@@ -634,6 +639,7 @@ fn native_edits_preserve_graphemes_provisional_text_and_exact_replacement_fences
             view,
             GuiPhysicalInput::Key {
                 key: GuiPhysicalKey::Escape,
+                shift: false,
             },
             &mut delivery,
         )
@@ -690,6 +696,7 @@ fn rejected_stale_native_edit_keeps_focus_for_the_next_tab() {
     };
     let tab = || GuiPhysicalInput::Key {
         key: GuiPhysicalKey::Tab,
+        shift: false,
     };
     route(&mut host, &mut context, tab());
     let original = GuiInputRouter::default()
@@ -781,6 +788,7 @@ fn native_edit_for_an_earlier_focus_is_rejected_without_moving_focus() {
     let mut delivery = DeliveryFactory(ledger.clone());
     let tab = GuiPhysicalInput::Key {
         key: GuiPhysicalKey::Tab,
+        shift: false,
     };
     let view = host.resolve_view(query).unwrap();
     router
@@ -939,7 +947,7 @@ fn failed_pointer_release_revokes_the_active_lease_without_another_frame() {
         ),
         Err(GuiInputError::Capacity)
     );
-    let cancelled = router.synchronize(&scene.host, &mut context, Some(view));
+    let cancelled = router.synchronize(&mut scene.host, &mut context, Some(view));
     assert_eq!(cancelled.pointers(), &[3]);
     let snapshot = crate::systems::gui::test_support::read_control(
         &scene.host.world_mut(scene.child.world().id()).unwrap(),
@@ -1006,6 +1014,7 @@ fn pointer_focus_omits_ring_and_keyboard_focus_reveals_it_without_value_change()
         (
             GuiPhysicalInput::Key {
                 key: GuiPhysicalKey::Tab,
+                shift: false,
             },
             true,
         ),
@@ -1078,11 +1087,11 @@ fn unavailable_view_cancels_idle_capture_once_without_advancing_worlds() {
         .unwrap();
     scene.host.frame(0.0).unwrap();
     let published = scene.host.resolve_view(query).unwrap().publication;
-    let cancelled = router.synchronize(&scene.host, &mut context, None);
+    let cancelled = router.synchronize(&mut scene.host, &mut context, None);
     assert_eq!(cancelled.pointers(), &[3]);
     assert!(
         router
-            .synchronize(&scene.host, &mut context, None)
+            .synchronize(&mut scene.host, &mut context, None)
             .is_empty()
     );
     assert_eq!(
@@ -1451,6 +1460,7 @@ fn wheel_burst_consumes_current_offsets_at_each_ordered_mutation() {
                 GuiPhysicalInput::Wheel {
                     point: [0.5, 0.5],
                     delta: [0.0, 20.0],
+                    shift: false,
                 },
                 &mut DeliveryFactory(ledger.clone()),
             )
@@ -1492,6 +1502,7 @@ fn focused_pending_and_applied_receipts_continue_across_publications() {
                 max: 10.0,
                 step: 1.0,
                 value: 0.0,
+                ..Default::default()
             }),
         ],
         Some(scene.anchor),
@@ -1518,6 +1529,7 @@ fn focused_pending_and_applied_receipts_continue_across_publications() {
             GuiPhysicalInput::Wheel {
                 point: [0.5, 0.5],
                 delta: [0.0, 20.0],
+                shift: false,
             },
             &mut DeliveryFactory(scene.ledger.clone()),
         )
@@ -1528,7 +1540,7 @@ fn focused_pending_and_applied_receipts_continue_across_publications() {
             &mut scene.host,
             &mut context,
             view,
-            GuiPhysicalInput::Key { key: GuiPhysicalKey::Tab },
+            GuiPhysicalInput::Key { key: GuiPhysicalKey::Tab, shift: false },
             &mut DeliveryFactory(focus.clone()),
         ).unwrap(),
         GuiRoutingDisposition::Routed { target } if target.entity == entity
@@ -1548,6 +1560,7 @@ fn focused_pending_and_applied_receipts_continue_across_publications() {
                 view,
                 GuiPhysicalInput::Key {
                     key: GuiPhysicalKey::Right,
+                    shift: false,
                 },
                 &mut DeliveryFactory(ledger.clone()),
             )
@@ -1610,6 +1623,7 @@ fn slider_key_burst_uses_each_applied_predecessor_without_predicted_values() {
                 max: 10.0,
                 step: 1.0,
                 value: 0.0,
+                ..Default::default()
             }),
         ],
         None,
@@ -1645,6 +1659,7 @@ fn slider_key_burst_uses_each_applied_predecessor_without_predicted_values() {
                 view,
                 GuiPhysicalInput::Key {
                     key,
+                    shift: false,
                 },
                 &mut delivery,
             )
@@ -1686,6 +1701,9 @@ fn ordinary_scroll_thumb_uses_published_geometry_and_preserves_grab_offset() {
                 item_extent: 10.0,
                 axis: 1,
                 overscan: 0,
+                bar_thickness: 2.5,
+                bar_inset: 0.0,
+                bar_end_inset: 0.0,
                 ..Default::default()
             }),
         ],
@@ -1743,7 +1761,13 @@ fn ordinary_scroll_thumb_uses_published_geometry_and_preserves_grab_offset() {
     let crate::systems::gui::test_support::GuiTestValue::Scroll(offset) = snapshot.value else {
         panic!("scroll value");
     };
-    assert!((offset[1] - 30.0).abs() < 0.001, "{offset:?}");
+    // The flush 2.5-unit bar leaves 47.5 units between its pointed ends; the
+    // thumb shows half of them, so 15 units of drag move it 15 of its 23.75
+    // units of travel over the capacity of 50.
+    assert!(
+        (offset[1] - 15.0 / 23.75 * 50.0).abs() < 0.001,
+        "{offset:?}"
+    );
     assert!(terminals(&ledger).iter().all(|terminal| matches!(
         terminal,
         GuiDeliveryTerminal::Applied(_) | GuiDeliveryTerminal::Written { .. }
@@ -1800,7 +1824,7 @@ fn tab_enters_published_tree_order_then_wraps_inside_exact_focus_scope() {
             })
             .unwrap();
         assert!(
-            matches!(router.route(&mut host, &mut context, view, GuiPhysicalInput::Key { key: GuiPhysicalKey::Tab }, &mut DeliveryFactory(ledger.clone())).unwrap(), GuiRoutingDisposition::Routed { target } if target.entity == expected)
+            matches!(router.route(&mut host, &mut context, view, GuiPhysicalInput::Key { key: GuiPhysicalKey::Tab, shift: false }, &mut DeliveryFactory(ledger.clone())).unwrap(), GuiRoutingDisposition::Routed { target } if target.entity == expected)
         );
         host.frame(0.0).unwrap();
     }

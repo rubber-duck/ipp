@@ -26,6 +26,8 @@ pub(super) struct CanvasCacheRequest {
     pub opacity: f32,
     pub visible: bool,
     pub interaction: bool,
+    /// The Surface separates its canvas's layers, which a flat image cannot show.
+    pub layered: bool,
 }
 
 pub(super) struct CanvasCacheState {
@@ -187,6 +189,7 @@ impl<D: RenderDevice> RenderService<D> {
                     paint_revision: state.paint_revision,
                     resource_revision: state.resource_revision,
                     interaction: request.interaction,
+                    layered: request.layered,
                     missing_resident: false,
                     text_populated: self.glyph_batch_cache.get(selection).is_some_and(|cache| {
                         cache.unpopulated_runs(CANVAS_SURFACE, &self.glyph_atlas)
@@ -264,6 +267,7 @@ impl<D: RenderDevice> RenderService<D> {
                         mvp,
                         request.clip,
                         request.opacity,
+                        super::canvas_composition::CanvasLayering::FLAT,
                         WorldViewport {
                             width: size[0],
                             height: size[1],

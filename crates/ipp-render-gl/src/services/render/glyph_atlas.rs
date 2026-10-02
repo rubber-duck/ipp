@@ -27,7 +27,8 @@ use std::rc::Rc;
 use ipp_core::services::asset_management::AssetKey;
 use ipp_core::systems::canvas::{CanvasClip, CanvasGlyph, CanvasPrimitiveId, CanvasPrimitiveStyle};
 
-use super::gui_batch::{GUI_FILL_GLYPH, GuiVertex};
+use super::gui_batch::clipped_bounds;
+use super::gui_records::GuiGlyphRecord;
 use super::gui_storage::{GuiPiece, GuiPieceKey, GuiPieceSource};
 use super::retained_surfaces::SurfacePaint;
 use crate::services::render::frame_statistics::RenderFrameWork;
@@ -867,7 +868,7 @@ pub struct TextRun<'a> {
 }
 
 impl TextRun<'_> {
-    /// Hash the inputs that select demanded entries, then every input shaping vertices.
+    /// Hash the inputs that select demanded entries, then every input shaping records.
     fn hashes(&self, band: Option<u16>) -> (u64, u64) {
         let mut demand = std::collections::hash_map::DefaultHasher::new();
         let mut paint = std::collections::hash_map::DefaultHasher::new();
@@ -912,7 +913,10 @@ impl TextRun<'_> {
 
 /// Retained glyph quads of one text run sampling one atlas page, in painter order.
 struct RetainedGlyphBatch {
-    vertices: Vec<GuiVertex>,
+    records: Vec<GuiGlyphRecord>,
+    /// Union of the quads within the run's clip, grown by one atlas texel for the
+    /// [draw order](super::gui_draw_order); `None` when none is visible.
+    bounds: Option<[f32; 4]>,
     page_index: usize,
     /// Cache-unique identity of this content, changed by every rebuild.
     revision: u64,
@@ -946,7 +950,7 @@ struct RetainedGlyphSurface {
 }
 
 /// Renderer-owned retained text runs of one World: bands, atlas demand and the glyph
-/// quads their Surfaces' [GUI storage](super::gui_storage) draws.
+/// records their Surfaces' [GUI glyph storage](super::gui_storage) draws.
 #[derive(Default)]
 pub struct GlyphBatchRenderCache {
     surfaces: BTreeMap<ipp_core::EntityId, RetainedGlyphSurface>,
@@ -1230,22 +1234,23 @@ impl GlyphBatchRenderCache {
             .map(move |(index, batch)| GuiPiece {
                 key: GuiPieceKey::Glyphs(identity, index as u32),
                 hash: batch.revision,
-                len: batch.vertices.len(),
+                len: batch.records.len(),
                 page: Some(batch.page_index),
+                bounds: batch.bounds,
                 source: GuiPieceSource::Glyphs(identity, index as u32),
             })
     }
 
-    /// Vertices of retained batch `index` of a run; empty when it does not exist.
-    pub fn batch_vertices(
+    /// Records of retained batch `index` of a run; empty when it does not exist.
+    pub fn batch_records(
         &self,
         entity: ipp_core::EntityId,
         identity: CanvasPrimitiveId,
         index: u32,
-    ) -> &[GuiVertex] {
+    ) -> &[GuiGlyphRecord] {
         self.run(entity, identity)
             .and_then(|run| run.batches.get(index as usize))
-            .map_or(&[], |batch| &batch.vertices)
+            .map_or(&[], |batch| &batch.records)
     }
 
     fn run(
@@ -1275,7 +1280,9 @@ fn empty_run() -> RetainedGlyphRun {
 /// Glyph quads of one atlas page, in the order they paint.
 struct PageBucket {
     page_index: usize,
-    vertices: Vec<GuiVertex>,
+    records: Vec<GuiGlyphRecord>,
+    /// Union of the quads' bounds.
+    bounds: [f32; 4],
     /// Quad bounds and colours, kept only when the run mixes colours.
     quads: Vec<([f32; 4], [f32; 4])>,
 }
@@ -1341,7 +1348,7 @@ fn rebuild_batches<D: RenderDevice>(
         let target = buckets
             .iter()
             .rposition(|bucket| bucket.page_index == entry.page_index)
-            .filter(|&index| buckets[index].vertices.len() < MAX_BATCH_GLYPHS * 6)
+            .filter(|&index| buckets[index].records.len() < MAX_BATCH_GLYPHS)
             .filter(|&index| {
                 uniform
                     || !buckets[index + 1..]
@@ -1360,40 +1367,51 @@ fn rebuild_batches<D: RenderDevice>(
             None => {
                 buckets.push(PageBucket {
                     page_index: entry.page_index,
-                    vertices: Vec::new(),
+                    records: Vec::new(),
+                    bounds,
                     quads: Vec::new(),
                 });
                 buckets.last_mut().expect("pushed bucket")
             }
         };
 
-        let [u0, v0, u1, v1] = entry.uv;
-        let clip = run.clip;
-        let vertex = |position, [u, v]: [f32; 2]| GuiVertex {
-            position,
-            color0: color,
-            gradient_coords: [u, v, 0.0, 0.0],
-            material_params: [GUI_FILL_GLYPH, 0.0, 0.0, 1.0],
-            clip,
-            ..GuiVertex::EMPTY
-        };
-        let tl = vertex([x0, y0], [u0, v0]);
-        let bl = vertex([x0, y1], [u0, v1]);
-        let br = vertex([x1, y1], [u1, v1]);
-        let tr = vertex([x1, y0], [u1, v0]);
-
-        // Emit 6 vertices: CCW front face [TL, BL, BR, TL, BR, TR]
-        bucket.vertices.extend_from_slice(&[tl, bl, br, tl, br, tr]);
+        // The corner at [x0, y0] samples [u0, v0] and the one at [x1, y1] samples
+        // [u1, v1], so a mirrored run mirrors its glyphs.
+        bucket.records.push(GuiGlyphRecord {
+            rect: [x0, y0, x1, y1],
+            uv: entry.uv,
+            color,
+            clip: run.clip,
+        });
+        bucket.bounds = [
+            bucket.bounds[0].min(bounds[0]),
+            bucket.bounds[1].min(bounds[1]),
+            bucket.bounds[2].max(bounds[2]),
+            bucket.bounds[3].max(bounds[3]),
+        ];
         if !uniform {
             bucket.quads.push((bounds, color));
         }
     }
 
+    // One texel of the band in logical units along each axis: about a projected pixel.
+    let texel = [
+        run.font_size * style.scale[0].abs() / f32::from(band),
+        run.font_size * style.scale[1].abs() / f32::from(band),
+    ];
     record.batches.clear();
     for bucket in buckets {
         *revision += 1;
         record.batches.push(RetainedGlyphBatch {
-            vertices: bucket.vertices,
+            records: bucket.records,
+            bounds: clipped_bounds(bucket.bounds, run.clip).map(|bounds| {
+                [
+                    bounds[0] - texel[0],
+                    bounds[1] - texel[1],
+                    bounds[2] + texel[0],
+                    bounds[3] + texel[1],
+                ]
+            }),
             page_index: bucket.page_index,
             revision: *revision,
         });

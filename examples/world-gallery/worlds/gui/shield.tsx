@@ -9,11 +9,12 @@ import {
   assetRef,
 } from "@ipp/react";
 import { GALLERY_RUNTIME } from "../../shared/runtime.js";
+import { SHIELD_CONTENT_RECT } from "./dashboard.js";
 import {
-  SHIELD_CONTENT_RECT,
-  SURFACE_HEIGHT,
-  SURFACE_WIDTH,
-} from "./dashboard.js";
+  CANVAS_HEIGHT,
+  CANVAS_WIDTH,
+  UNITS_PER_METRE,
+} from "./presentation.js";
 import { PANEL_SCALE, placedOnPanel } from "./projector.js";
 
 const { encodeBoundingShape }: { encodeBoundingShape: GeometryEncoder } =
@@ -24,10 +25,10 @@ export const SHIELD_ENTITY = "gui-input-shield";
 
 export const SHIELD_MESH = "ipp://mesh/cube?width=1&height=1&length=1";
 
-/** Gap between the panel's front face and the shield's back face, and the
- * shield thickness, in metres. The gap keeps the glass clear of the panel's
- * depth while the parallax at the authored camera stays inside the shield's
- * 0.1 margin around PURGE. */
+/** Gap between the panel and the shield's back face, and the shield
+ * thickness, in metres. The gap keeps the glass clear of the panel's depth
+ * while the parallax at the authored camera stays inside the shield's margin
+ * around PURGE. */
 const SHIELD_GAP = 0.08;
 const SHIELD_THICKNESS = 0.02;
 
@@ -44,7 +45,9 @@ const SHIELD_PICKING: BoundingShape = {
  * entity to `IppCanvas.guiInput.blockers` while armed, so pointer and wheel
  * input whose camera ray meets the glass before the panel is blocked.
  * Lifting the shield keeps the glass in place and only stops marking it,
- * because visual occlusion alone never blocks GUI input.
+ * because visual occlusion alone never blocks GUI input. PURGE lies on the
+ * panel's base plane with the rest of its panel, so the shield stays where
+ * it is when the panel explodes.
  */
 export function InputShield({
   armed,
@@ -54,11 +57,12 @@ export function InputShield({
   stagingX: number;
 }) {
   const [x, y, width, height] = SHIELD_CONTENT_RECT;
-  const size = [width * PANEL_SCALE, height * PANEL_SCALE] as const;
+  const metres = PANEL_SCALE / UNITS_PER_METRE;
+  const size = [width * metres, height * metres] as const;
   const placement = placedOnPanel(
     [
-      (x + width / 2 - SURFACE_WIDTH / 2) * PANEL_SCALE,
-      (SURFACE_HEIGHT / 2 - y - height / 2) * PANEL_SCALE,
+      (x + width / 2 - CANVAS_WIDTH / 2) * metres,
+      (CANVAS_HEIGHT / 2 - y - height / 2) * metres,
       SHIELD_GAP + SHIELD_THICKNESS / 2,
     ],
     stagingX,

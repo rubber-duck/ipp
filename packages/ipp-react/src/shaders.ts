@@ -7,12 +7,17 @@ import {
 
 export const VERTEX_SHADER_HOST_TYPE = "ipp-vertex-shader";
 export const FRAGMENT_SHADER_HOST_TYPE = "ipp-fragment-shader";
+export const PAINT_SHADER_HOST_TYPE = "ipp-paint-shader";
 export type ShaderHostType =
   | typeof VERTEX_SHADER_HOST_TYPE
-  | typeof FRAGMENT_SHADER_HOST_TYPE;
+  | typeof FRAGMENT_SHADER_HOST_TYPE
+  | typeof PAINT_SHADER_HOST_TYPE;
 
 export interface ShaderProps {
-  /** Backend-specific source, including the materialVertex/materialFragment entry. */
+  /**
+   * Backend-specific source: a material stage with its materialVertex or
+   * materialFragment entry, or a canvas paint's function body.
+   */
   children: string;
   /** Comma-separated material property names, or a list of names. */
   references?: string | readonly string[];
@@ -30,8 +35,22 @@ export function FragmentShader(props: ShaderProps) {
   return createElement(FRAGMENT_SHADER_HOST_TYPE, props);
 }
 
+/**
+ * The body of a canvas paint function for a `Paint`: statements returning the
+ * fill's straight linear RGBA from `position`, `size`, `color` and `edge`. A
+ * ShaderAsset holding it is a paint, with an empty recipe and float scalar or
+ * vector parameters.
+ */
+export function PaintShader(props: ShaderProps) {
+  return createElement(PAINT_SHADER_HOST_TYPE, props);
+}
+
 export function isShader(type: string): type is ShaderHostType {
-  return type === VERTEX_SHADER_HOST_TYPE || type === FRAGMENT_SHADER_HOST_TYPE;
+  return (
+    type === VERTEX_SHADER_HOST_TYPE ||
+    type === FRAGMENT_SHADER_HOST_TYPE ||
+    type === PAINT_SHADER_HOST_TYPE
+  );
 }
 
 export function shaderProps(
@@ -84,7 +103,12 @@ export function describeShader(
   };
   for (const { type, props } of stages) {
     const backend = props.backend ?? "glsl-es-300";
-    const stage = type === VERTEX_SHADER_HOST_TYPE ? "vertex" : "fragment";
+    const stage =
+      type === VERTEX_SHADER_HOST_TYPE
+        ? "vertex"
+        : type === PAINT_SHADER_HOST_TYPE
+          ? "paint"
+          : "fragment";
     const implementation = (definition.backends[backend] ??= {});
     if (implementation[stage] !== undefined)
       throw new Error(`Duplicate ${stage} shader for ${backend}`);

@@ -161,6 +161,7 @@ pub fn run<D: RenderDevice>(
             ShaderBackendSource {
                 vertex: "void materialVertex() { ippDefaultVertex(); }".into(),
                 fragment: "vec4 materialFragment() { return vec4(0,0,1,1); }".into(),
+                ..Default::default()
             },
         )]),
         ..Default::default()

@@ -77,11 +77,18 @@ for (const variant of native ? ["production"] : ["development", "production"]) {
                         await fetch(`${urls.origin}/${path}`)
                       ).arrayBuffer(),
                     );
-                  return await scenario.guiPaint(host, contract, {
+                  const paint = await scenario.guiPaint(host, contract, {
                     font: await load("target/font-assets/shure-tech-mono.ippf"),
                     drawing: await load("target/surface-assets/icon.ippd"),
                     bitmap: await load("target/surface-assets/badge.ippt"),
                   });
+                  const layers = paint.failure
+                    ? null
+                    : await scenario.guiLayers(host, contract);
+                  const overlays = layers?.failure
+                    ? null
+                    : await scenario.guiOverlays(host, contract);
+                  return { ...paint, layers, overlays };
                 } finally {
                   await host.close();
                 }
@@ -92,13 +99,26 @@ for (const variant of native ? ["production"] : ["development", "production"]) {
       );
       const captures = resolve(result.evidenceDirectory, "captures");
       await mkdir(captures);
-      for (const image of result.value.images)
+      for (const image of [
+        ...result.value.images,
+        ...(result.value.layers?.images ?? []),
+        ...(result.value.overlays?.images ?? []),
+      ])
         await writeFile(
           resolve(captures, `${image.label}.png`),
           encodePng({ ...image, pixels: Uint8Array.from(image.pixels) }),
         );
+      if (result.value.colourErrors)
+        await writeFile(
+          resolve(captures, "colour-fill-errors.json"),
+          `${JSON.stringify(result.value.colourErrors, null, 2)}\n`,
+        );
       assert.equal(result.value.failure, null);
-      assert.equal(result.value.images.length, 9);
+      assert.equal(result.value.images.length, 13);
+      assert.equal(result.value.layers?.failure, null);
+      assert.equal(result.value.layers?.images.length, 6);
+      assert.equal(result.value.overlays?.failure, null);
+      assert.equal(result.value.overlays?.images.length, 2);
     }
     if (native)
       await runNativeEnvironment(

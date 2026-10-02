@@ -1017,8 +1017,8 @@ fn rust_request_decoder_conforms_to_every_enabled_manifest_branch() {
             (
                 "gui-action-focus",
                 "GUI_ACTION_FOCUS",
-                vec![],
-                GuiLocalAction::Focus,
+                vec![("part", ManifestValue::U32(1))],
+                GuiLocalAction::Focus(1),
             ),
             (
                 "gui-action-blur",
@@ -1055,6 +1055,17 @@ fn rust_request_decoder_conforms_to_every_enabled_manifest_branch() {
                     index: 40,
                     offset: 2.0,
                 },
+            ),
+            (
+                "gui-action-set-color",
+                "GUI_ACTION_SET_COLOR",
+                vec![
+                    ("hue", ManifestValue::F32(0.5)),
+                    ("saturation", ManifestValue::F32(0.25)),
+                    ("value", ManifestValue::F32(1.0)),
+                    ("alpha", ManifestValue::F32(0.75)),
+                ],
+                GuiLocalAction::SetColor([0.5, 0.25, 1.0, 0.75]),
             ),
         ] {
             encoded_operations.push(manifest_command(
@@ -1141,6 +1152,8 @@ fn rust_request_decoder_conforms_to_every_enabled_manifest_branch() {
         (6, "INSPECT_GUI_FOCUS"),
         (7, "INSPECT_GUI_POINTERS"),
         (8, "INSPECT_CANVAS"),
+        (9, "INSPECT_GUI_ACTIVE_ITEMS"),
+        (10, "INSPECT_GUI_PREFERENCES"),
     ] {
         let inspect = ManifestFixture::new(
             "request-inspect",
@@ -1408,6 +1421,40 @@ fn rust_request_decoder_conforms_to_every_enabled_manifest_branch() {
                 extent,
                 units_per_metre,
             })
+        );
+    }
+
+    for reduced_motion in [None, Some(false), Some(true)] {
+        let update = [
+            (
+                "mask",
+                ManifestValue::U16(u16::from(reduced_motion.is_some())),
+            ),
+            (
+                "reducedMotion",
+                reduced_motion.map_or(ManifestValue::None, |value| {
+                    ManifestValue::Some(Box::new(ManifestValue::Bool(value)))
+                }),
+            ),
+        ];
+        let request = ManifestFixture::new(
+            "request-gui-preferences-update",
+            [
+                ("session", ManifestValue::U64(7)),
+                ("request_id", ManifestValue::U64(0)),
+                ("tag", ManifestValue::Tag("REQUEST_GUI_PREFERENCES_UPDATE")),
+                ("update", manifest_layout("gui-preferences-update", update)),
+            ],
+        );
+        assert_eq!(
+            decode_request(&encode_manifest_fixture(&request, &mut covered), 7)
+                .unwrap()
+                .body,
+            RequestBody::GuiPreferencesUpdateCommand(
+                ipp_core::systems::gui::GuiPreferencesUpdate {
+                    reduced_motion,
+                }
+            )
         );
     }
 
@@ -2030,9 +2077,10 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
         )]),
     ));
     // In GUI builds the GUI System query collections follow the controllers.
-    let (gui_focus, gui_pointers) = {
+    let (gui_focus, gui_pointers, gui_active_items) = {
         use ipp_core::systems::gui::local::{
-            GuiEntityTarget, GuiFocusRecord, GuiInteractionFlags, GuiPointerRecord,
+            GuiActiveItemRecord, GuiEntityTarget, GuiFocusRecord, GuiInteractionFlags,
+            GuiPointerRecord,
         };
         let mut host = ipp_core::HostRuntime::new();
         let world = host.create_world(Default::default(), &[]).unwrap();
@@ -2070,6 +2118,7 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
                 [
                     ("target", manifest_target()),
                     ("visible", ManifestValue::Bool(true)),
+                    ("part", ManifestValue::U32(1)),
                 ],
             )]),
         ));
@@ -2093,10 +2142,21 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
                     .collect(),
             ),
         ));
+        inspect_values.push((
+            "gui_active_items",
+            ManifestValue::List(vec![manifest_layout(
+                "gui-active-item",
+                [
+                    ("group", ManifestValue::U64(entity.to_bits())),
+                    ("target", manifest_target()),
+                ],
+            )]),
+        ));
         (
             vec![GuiFocusRecord {
                 target,
                 visible: true,
+                part: 1,
             }],
             [(3, true, false, true), (4, false, true, false)]
                 .into_iter()
@@ -2110,6 +2170,10 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
                     },
                 })
                 .collect::<Vec<_>>(),
+            vec![GuiActiveItemRecord {
+                group: entity,
+                target,
+            }],
         )
     };
     // In Surface builds the Canvas System query record follows.
@@ -2168,6 +2232,14 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
             }),
         })
     };
+    // In GUI builds the GUI System preferences record follows.
+    inspect_values.push((
+        "gui_preferences",
+        ManifestValue::Some(Box::new(manifest_layout(
+            "gui-preferences",
+            [("reduced_motion", ManifestValue::Bool(true))],
+        ))),
+    ));
     inspect_values.shrink_to_fit();
 
     assert_manifest_response(
@@ -2192,7 +2264,11 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
                 render_diagnostics: Vec::new(),
                 gui_focus,
                 gui_pointers,
+                gui_active_items,
                 canvas,
+                gui_preferences: Some(ipp_core::systems::gui::GuiPreferences {
+                    reduced_motion: true,
+                }),
             },
         },
         ManifestFixture::new("response-inspect", inspect_values),
@@ -2319,7 +2395,9 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
                 render_diagnostics: Vec::new(),
                 gui_focus: Vec::new(),
                 gui_pointers: Vec::new(),
+                gui_active_items: Vec::new(),
                 canvas: None,
+                gui_preferences: None,
             },
         },
         ManifestFixture::new(
@@ -2353,7 +2431,9 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
                 ("controllers", ManifestValue::List(Vec::new())),
                 ("gui_focus", ManifestValue::List(Vec::new())),
                 ("gui_pointers", ManifestValue::List(Vec::new())),
+                ("gui_active_items", ManifestValue::List(Vec::new())),
                 ("canvas", ManifestValue::None),
+                ("gui_preferences", ManifestValue::None),
             ],
         ),
         &mut covered,

@@ -5,9 +5,10 @@
 //! without `GuiBehavior` contributes the defaults. `available` holds the
 //! entity's structural validity and, for a control, that it has exactly one
 //! control component. The GUI System refreshes the subtrees whose inputs
-//! changed, in tree order, and writes only fields whose values differ. An
-//! invalid (cyclic) link is refreshed like any other: each entity is visited
-//! once, so a cycle ends the walk instead of repeating it.
+//! changed, in tree order, writes only fields whose values differ and reports
+//! the entities whose fields it wrote. An invalid (cyclic) link is refreshed
+//! like any other: each entity is visited once, so a cycle ends the walk
+//! instead of repeating it.
 
 use super::control::control_components;
 use crate::EntityId;
@@ -18,11 +19,13 @@ use std::collections::BTreeSet;
 /// Inherited `(enabled, visible)` passed from a parent to its children.
 type Inherited = (bool, bool);
 
-/// Refresh the eligibility of every subtree rooted at one of `roots`.
+/// Refresh the eligibility of every subtree rooted at one of `roots`, adding
+/// each entity whose eligibility fields changed to `changed`.
 pub(in crate::world::systems::gui) fn refresh_eligibility(
     components: &mut ComponentStorage,
     state: &WorldEntityState,
     roots: &BTreeSet<EntityId>,
+    changed: &mut BTreeSet<EntityId>,
 ) {
     let mut visited = BTreeSet::new();
     for &top in roots {
@@ -42,12 +45,15 @@ pub(in crate::world::systems::gui) fn refresh_eligibility(
                         && control_components(state, entity) <= 1;
                     if behavior.effective_enabled != effective.0 {
                         behavior.effective_enabled = effective.0;
+                        changed.insert(entity);
                     }
                     if behavior.effective_visible != effective.1 {
                         behavior.effective_visible = effective.1;
+                        changed.insert(entity);
                     }
                     if behavior.available != available {
                         behavior.available = available;
+                        changed.insert(entity);
                     }
                     effective
                 }

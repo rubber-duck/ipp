@@ -51,6 +51,8 @@ pub enum GuiControlKind {
     ScrollView,
     /// Scrolling viewport with sparsely realized indexed items.
     VirtualList,
+    /// One HSVA colour in `hue`, `saturation`, `value` and `alpha` fields.
+    Color,
 }
 
 impl GuiControlKind {
@@ -63,6 +65,7 @@ impl GuiControlKind {
             ComponentValue::GUI_TEXT_INPUT => Self::TextInput,
             ComponentValue::GUI_SCROLL_VIEW => Self::ScrollView,
             ComponentValue::GUI_VIRTUAL_LIST => Self::VirtualList,
+            ComponentValue::GUI_COLOR => Self::Color,
             _ => return None,
         })
     }
@@ -81,6 +84,9 @@ pub enum GuiLocalAction {
     SetScalar(f32),
     /// Replace a text input's single-line `text` field.
     SetText(Arc<str>),
+    /// Set a colour control's hue, saturation, value and alpha, each in
+    /// `0..=1`.
+    SetColor([f32; 4]),
     /// Submit the current text without changing it or focus.
     Submit,
     /// Move to a logical offset, clamped to the capacity of the last layout.
@@ -94,8 +100,11 @@ pub enum GuiLocalAction {
         /// Nonnegative logical offset into the item.
         offset: f32,
     },
-    /// Move logical focus without requiring native presentation.
-    Focus,
+    /// Move logical focus to a focus part of the control without requiring
+    /// native presentation: part 0 for a control with one, a range's upper
+    /// thumb 1, a colour control's hue rail 1 or alpha rail 2. A part the
+    /// control does not have is unsupported.
+    Focus(u32),
     /// Release this session's logical focus on the exact target.
     Blur,
 }
@@ -103,8 +112,9 @@ pub enum GuiLocalAction {
 /// Provenance of an applied local effect, not an ingress permission token.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GuiLocalEffectSource {
-    /// A [`Command::GuiAction`](crate::Command::GuiAction), valid without a
-    /// presented root or native input context.
+    /// A [`Command::GuiAction`](crate::Command::GuiAction), or the GUI
+    /// System's own change such as an overlay moving focus in or back; valid
+    /// without a presented root or native input context.
     Semantic,
     /// Host-routed input validated against this completed source publication.
     Routed {
@@ -132,14 +142,37 @@ pub enum GuiLocalActionError {
 pub enum GuiLocalEffectKind {
     /// Momentary button press; no value or focus transition.
     Pressed,
-    /// Submitted text, retained at the application boundary.
+    /// Submitted text, retained at the application boundary: a numeric
+    /// input's committed number as it shows it.
     Submitted(Arc<str>),
-    /// Resulting logical focus on the target; ownership changes count as changes too.
+    /// Text a numeric input refused to commit because it does not parse; its
+    /// number is unchanged. Clients show an error beside the field.
+    Rejected(Arc<str>),
+    /// A numeric input's pending edit ended without being committed or
+    /// refused, such as by Escape, carrying the discarded text; its number is
+    /// unchanged and it shows it formatted. Clients clear what they showed
+    /// for the edit.
+    Discarded(Arc<str>),
+    /// Momentary context request from a secondary press, the Menu key or
+    /// Shift+F10; the client decides what opens. No value or focus change is
+    /// implied: routed input focuses the target before requesting.
+    ContextRequested {
+        /// Canvas logical point of the request in the target's canvas: the
+        /// press point, or the bottom-left corner of the control's visible
+        /// box for a key.
+        point: [f32; 2],
+    },
+    /// Resulting logical focus on the target; ownership and focus part changes
+    /// count as changes too.
     FocusChanged {
         /// Whether the effect target is logically focused after this operation.
         focused: bool,
-        /// Whether this operation changes focus or its input-session ownership.
+        /// Whether this operation changes focus, its focus part or its
+        /// input-session ownership.
         changed: bool,
+        /// The focus part focus names after this operation, or the part a
+        /// blurred target held; 0 for a control with one part.
+        part: u32,
     },
     /// Transient ordinary pointer feedback; no value or focus action is implicit.
     InteractionChanged(super::GuiInteractionEffect),

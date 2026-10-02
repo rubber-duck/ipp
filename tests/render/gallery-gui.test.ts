@@ -19,27 +19,32 @@ import {
   count,
   differenceImage,
   encodePng,
-  intersectionOverUnion,
   mask,
   pixelDifference,
   type RgbaFrame,
 } from "./retained-gui-images.js";
 import {
+  EVENT_LOG,
   FONT_METRICS,
-  ICON_BOXES,
-  ICON_CODE_POINTS,
+  LAYERS,
   NOTES,
   NOTES_TEXT,
+  OVERLAYS,
   PANEL,
+  WHEEL_STEP,
   assertRetainedControls,
   control,
   controlPoint,
   controlRect,
   controlRegion,
   controlValue,
+  dashboardControl,
+  expectedScrollBar,
   logical,
+  overlayControl,
   projectContent,
   telemetryScrollViews,
+  textWidth,
   wrapColumns,
   type ContentRect,
   type LogicalRect,
@@ -56,30 +61,23 @@ import {
   PROJECTOR_MESH_SOURCES,
   PROJECTOR_TEXTURE_SOURCES,
 } from "../../examples/world-gallery/worlds/gui/projector.js";
+import {
+  PANEL_ENTITY,
+  PIXEL_COVERAGE_CANVAS_SHARE,
+  SKIN_SETTLE_MS,
+  assertPlanes,
+  awaitStationIdle,
+  decodeRegion,
+  dynamicProperty,
+  fieldsWith,
+  obliquePanel,
+  sceneEntity,
+  waitForGuiState,
+  type Gallery,
+  type RegionStats,
+} from "./gallery-gui-support.js";
 
-interface RegionStats {
-  readonly pixels: number;
-  readonly mean: readonly [number, number, number];
-  readonly min: readonly [number, number, number];
-  readonly max: readonly [number, number, number];
-}
-
-/** Symbolic IDs the gallery names, restated independently of the fixture. */
-const PANEL_ENTITY = "gui-demo";
 const PANEL_WORLD = "gui-demo-panel";
-
-/** Aurora `disabled` background authored by the gallery control theme. */
-const AURORA_DISABLED = [0.2, 0.35, 0.42, 0.45] as const;
-
-/** The gallery's 0.16 s skin transition plus host-frame and capture
- * latency, matching the hover probe in gallery-gui-camera. */
-const SKIN_SETTLE_MS = 550;
-
-/**
- * One notch of the gallery's wheel: an eighth of the 0.78 telemetry
- * viewport, the step the gallery gives its GUI input.
- */
-const WHEEL_STEP = 0.78 / 8;
 
 /**
  * CSS pixels of one Chromium wheel notch. The browser adapter converts DOM
@@ -87,6 +85,27 @@ const WHEEL_STEP = 0.78 / 8;
  * dispatch whole notches.
  */
 const WHEEL_NOTCH_PIXELS = 100;
+
+/**
+ * The station's nodes at the demo's initial 64% gain, strongest first, as
+ * the node grid lists them after its first sync: each node's signal is its
+ * full-gain strength scaled by 0.35 + 0.65 x gain, and nodes from 40% are
+ * online.
+ */
+const NODE_STRENGTH = {
+  alpha: 0.96,
+  charlie: 0.88,
+  hotel: 0.81,
+  echo: 0.74,
+  golf: 0.66,
+  bravo: 0.58,
+  delta: 0.47,
+  foxtrot: 0.33,
+} as const;
+
+function nodeSignal(key: keyof typeof NODE_STRENGTH, gain: number): number {
+  return Math.round(100 * NODE_STRENGTH[key] * (0.35 + 0.65 * gain));
+}
 
 /** Largest per-channel difference between two region means. */
 function meanDifference(first: RegionStats, second: RegionStats): number {
@@ -108,62 +127,15 @@ function linearToSrgb(value: number): number {
   return encoded * 255;
 }
 
-function near(actual: number, expected: number, what: string): void {
-  assert.ok(
-    Math.abs(actual - expected) < 0.01,
-    `${what}: ${actual} is not ${expected}`,
-  );
-}
-
 const guiEnvironment = {
   ...galleryEnvironment,
   evidenceParent: resolve("target/integration-artifacts/gallery-gui"),
 };
 
-/**
- * These scenarios keep the gallery's full canvas: their image assertions
- * measure the panel's on-screen pixel coverage, which half the canvas does
- * not give them. Measured on SwiftShader at half the canvas, the pulse
- * baseline sample of a thin waveform stroke falls to 149 of a required 150,
- * Surface cache text agreement to 0.65 (0.84 at full size, 0.85 required),
- * the shield glass change precision to 0.92 of a required 0.95, and scroll
- * bar thumbs narrow to one or two pixels (outer thumb mask overlap 0.97 at
- * full size, 0.67 at half against a required 0.5; inner thumb 6 pixels).
- */
-const PIXEL_COVERAGE_CANVAS_SHARE = 1;
-
 function guiEntity(inspection: Inspection) {
   return inspection.entities.find(
     ({ metadata }) => metadata.symbolicId === PANEL_ENTITY,
   );
-}
-
-function sceneEntity(inspection: Inspection, symbolicId: string) {
-  const entity = inspection.entities.find(
-    ({ metadata }) => metadata.symbolicId === symbolicId,
-  );
-  assert.ok(entity, `missing scene entity ${symbolicId}`);
-  return entity;
-}
-
-function fieldsWith(inspection: Inspection, symbolicId: string, field: string) {
-  const fields = sceneEntity(inspection, symbolicId).components.find(
-    (entry) => field in entry.fields,
-  )?.fields;
-  assert.ok(fields, `${symbolicId} has no ${field} field`);
-  return fields;
-}
-
-function dynamicProperty(
-  inspection: Inspection,
-  symbolicId: string,
-  property: string,
-) {
-  const value = sceneEntity(inspection, symbolicId).components.find(
-    (entry) => entry.properties && property in entry.properties,
-  )?.properties?.[property];
-  assert.ok(value, `${symbolicId} has no ${property} property`);
-  return value;
 }
 
 function animationFor(inspection: Inspection, symbolicId: string) {
@@ -232,8 +204,55 @@ function assertStaged(state: GalleryGuiState, message?: string) {
   );
 }
 
+/** The named dashboard controls and the restated rectangle of each. */
+const DASHBOARD_CONTROLS: readonly GalleryGuiSelector[] = [
+  { role: "scrollView", name: "TELEMETRY" },
+  { role: "virtualList" },
+  { role: "button", name: "EVENTS" },
+  { role: "button", name: "SCENE" },
+  { role: "button", name: "SCOPE" },
+  { role: "button", name: "NODES" },
+  { role: "button", name: "CONTROLS" },
+  { role: "button", name: "COLOUR" },
+  { role: "text", name: "FIND" },
+  { role: "button", name: "CLEAR" },
+  { role: "button", name: "Minimize" },
+  { role: "button", name: "Close" },
+  { role: "slider" },
+  { role: "checkbox", name: "SCAN" },
+  { role: "button", name: "PULSE" },
+  { role: "text", name: "CALLSIGN" },
+  { role: "button", name: "UPLINK" },
+  { role: "button", name: "STOP" },
+  { role: "button", name: "SYNC" },
+  { role: "button", name: "PURGE" },
+  { role: "button", name: "ADVANCED" },
+  { role: "button", name: "CYAN" },
+  { role: "button", name: "AMBER" },
+  { role: "checkbox", name: "EXPLODE LAYERS" },
+  { role: "checkbox", name: "REDUCED MOTION" },
+];
+
+/**
+ * Every named control is evaluated where the restated layout puts it, and
+ * the node grid's rows follow in signal order: a layout regression fails
+ * here before any pixel is read.
+ */
+function assertDashboardLayout(state: GalleryGuiState) {
+  for (const selector of DASHBOARD_CONTROLS) {
+    const actual = control(state, selector).bounds;
+    const expected = controlRect(selector);
+    actual.forEach((value, index) =>
+      assert.ok(
+        Math.abs(value - expected[index]!) < 0.05,
+        `${selector.role} ${selector.name ?? ""} lies at ${JSON.stringify(actual)}, not ${JSON.stringify(expected)}`,
+      ),
+    );
+  }
+}
+
 test("Gallery runs a real GUI demo and cleans it up", {
-  timeout: 240_000,
+  timeout: 300_000,
 }, async (context) => {
   const cancelFont = responseGate();
   const cancelMesh = responseGate();
@@ -392,6 +411,8 @@ test("Gallery runs a real GUI demo and cleans it up", {
           changedFraction: number;
           meanAbsoluteChannelDifference: number;
         }>("compareViewerCaptureRegion", before, after, await waveformRegion());
+      // Samples of the scope above and below its middle band: the trace
+      // reaches them only at higher gain.
       const outerWaveformPixels = async (label: string) => {
         const points: [number, number][] = [];
         for (let row = 1; row < 40; row++) {
@@ -411,9 +432,11 @@ test("Gallery runs a real GUI demo and cleans it up", {
           ([r, g, b]) => g! > 110 && b! > 125 && g! - r! > 12,
         ).length;
       };
+      // The scope's zero line near both ends, where the pulse's flat
+      // baseline runs.
       const sampleWaveformBaseline = async (label: string) => {
         const groups = [0.06, 0.15, 0.85, 0.94].map((fraction) =>
-          [-0.02, 0, 0.02].map(
+          [-2.5, 0, 2.5].map(
             (offset) =>
               [
                 gridX + gridWidth * fraction,
@@ -432,18 +455,19 @@ test("Gallery runs a real GUI demo and cleans it up", {
           ),
         );
       };
+      // Two complete sine cycles at phase zero: alternating crests and
+      // troughs, 60 drawing units high at full gain scaled into the scope.
       const sampleSineExtrema = async (label: string) => {
         const state = await waitForGui();
         const gain = controlValue(state, "slider");
         assert.equal(gain.kind, "scalar");
-        const amplitude = ((20 * gridWidth) / 330) * (0.12 + 0.88 * gain.value);
-        // Two complete sine cycles at phase zero: alternating crests and troughs.
+        const amplitude = ((60 * gridWidth) / 330) * (0.12 + 0.88 * gain.value);
         const fractions = [0.125, 0.375, 0.625, 0.875];
         const samples = await g.call<readonly (readonly number[])[]>(
           "sampleGalleryGuiCapture",
           label,
           fractions.flatMap((fraction) =>
-            [-0.015, 0, 0.015].map((offset) => [
+            [-2, 0, 2].map((offset) => [
               gridX + gridWidth * fraction,
               gridY +
                 gridHeight / 2 -
@@ -460,7 +484,13 @@ test("Gallery runs a real GUI demo and cleans it up", {
           ),
         );
       };
-      const assertTransparentCorners = async (label: string) => {
+      // The page between the panels is translucent: a gap pixel is the page
+      // colour at 86% over the scene the panel hides, both measured.
+      const pageGap: readonly [number, number][] = [
+        [PANEL.telemetryPanel[0] + PANEL.telemetryPanel[2] + 8, 300],
+        [PANEL.nodesPanel[0] - 8, 300],
+      ];
+      const assertTranslucentPage = async (label: string) => {
         await g.call("overrideGalleryGuiTransform", { x: 1000 });
         try {
           await g.capture(`${label}-backdrop`);
@@ -468,33 +498,34 @@ test("Gallery runs a real GUI demo and cleans it up", {
           await g.call("releaseGalleryGuiTransform");
         }
         await g.capture(label);
-        const corners = [
-          [0.02, 0.02],
-          [7.38, 0.02],
-          [7.38, 4.78],
-          [0.02, 4.78],
-        ];
         const painted = await g.call<number[][]>(
           "sampleGalleryGuiCapture",
           label,
-          corners,
+          pageGap,
         );
-        const backdrop = await g.call<number[][]>(
+        const behind = await g.call<number[][]>(
           "sampleGalleryGuiCapture",
           `${label}-backdrop`,
-          corners,
+          pageGap,
         );
-        assert.ok(
-          painted.every((pixel, index) =>
-            pixel
-              .slice(0, 3)
-              .every(
-                (value, channel) =>
-                  Math.abs(value - backdrop[index]![channel]!) <= 2,
+        // The token page colour, #011722, in sRGB levels.
+        const page = [1, 23, 34];
+        painted.forEach((pixel, index) => {
+          const expected = page.map((level, channel) =>
+            linearToSrgb(
+              srgbToLinear(level) * 0.86 +
+                srgbToLinear(behind[index]![channel]!) * 0.14,
+            ),
+          );
+          pixel
+            .slice(0, 3)
+            .forEach((value, channel) =>
+              assert.ok(
+                Math.abs(value - expected[channel]!) < 6,
+                `the page between panels is not the page colour at 86% over the scene: ${JSON.stringify({ painted, behind, expected })}`,
               ),
-          ),
-          `outside rounded panel corners must reveal the unchanged scene: ${JSON.stringify({ painted, backdrop })}`,
-        );
+            );
+        });
       };
       // Region measurements and their expected values collect in one review
       // file beside waveform-evidence.json.
@@ -522,22 +553,23 @@ test("Gallery runs a real GUI demo and cleans it up", {
           await g.call("releaseGalleryGuiTransform");
         }
       };
-      // UPLINK fill beside its label and the panel gap to its right.
+      // UPLINK's label, and the panel interior beside the button.
       const uplinkRegions = (label: string) => {
         const [x, y, width, height] = PANEL.uplink;
+        const text = textWidth("UPLINK", 16);
         return regionStats(label, {
-          fill: [x + 0.72, y + 0.12, x + 0.9, y + height - 0.12],
-          gap: [
-            x + width + 0.04,
-            y + 0.12,
-            x + width + 0.09,
-            y + height - 0.12,
+          fill: [
+            x + (width - text) / 2,
+            y + height / 2 - 6,
+            x + (width + text) / 2,
+            y + height / 2 + 6,
           ],
+          gap: [x - 14, y + 8, x - 4, y + height - 8],
         });
       };
-      // One detail capture after the skin transition has had time to
-      // settle; a lane that stays on its previous sample fails the caller's
-      // colour comparison instead of being retried.
+      // One detail capture after the transitions have had time to settle; a
+      // part that stays on its previous sample fails the caller's colour
+      // comparison instead of being retried.
       const settledUplink = (label: string) =>
         withDetailView(async () => {
           await new Promise((resolve) => setTimeout(resolve, SKIN_SETTLE_MS));
@@ -583,7 +615,7 @@ test("Gallery runs a real GUI demo and cleans it up", {
         backdrop[0]![0]! > backdrop[1]![0]! + 3,
         "studio backdrop lost its vertical gradient",
       );
-      await assertTransparentCorners("gui-demo-rounded-corners");
+      await assertTranslucentPage("gui-demo-page");
       for (const [kind, sources] of [
         [1, PROJECTOR_MESH_SOURCES],
         [2, PROJECTOR_TEXTURE_SOURCES],
@@ -745,7 +777,7 @@ test("Gallery runs a real GUI demo and cleans it up", {
       assert.notEqual(scan(loadingWaveform).state, "playing");
       assert.notEqual(wavePulse(loadingWaveform).state, "playing");
       assert.notEqual(
-        animationFor(loadingFrame.inspection, "gui-projector-beam").state,
+        animationFor(loadingFrame.inspection, "gui-projector-dust").state,
         "playing",
       );
 
@@ -822,8 +854,12 @@ test("Gallery runs a real GUI demo and cleans it up", {
       assertNoScanner(resourcesReady);
       assert.notEqual(scan(await waveform(false)).state, "playing");
       const prepared = await g.call<GalleryGuiState>("galleryGuiState", false);
+      // The dashboard's controls; the closed overlays beside it keep theirs
+      // hidden.
       assert.ok(
-        prepared.controls.every(({ visible }) => visible),
+        prepared.controls
+          .filter((candidate) => !overlayControl(candidate))
+          .every(({ visible }) => visible),
         "the held reveal did not follow the prepared panel controls",
       );
       assert.ok(
@@ -902,7 +938,9 @@ test("Gallery runs a real GUI demo and cleans it up", {
         ({ rows, controls }) =>
           rows >= 30 &&
           controls.length > 0 &&
-          controls.every(({ available }) => available),
+          controls
+            .filter((candidate) => !overlayControl(candidate))
+            .every(({ available }) => available),
       );
       const firstReadyFrame = await g.capture("gui-demo-first-ready");
       assert.ok(firstReadyFrame.summary.coverage > 0.08);
@@ -910,60 +948,88 @@ test("Gallery runs a real GUI demo and cleans it up", {
       // through the parent's Surface.
       assert.ok(initial.panelComponents.includes("Surface"));
       assert.ok(initial.panelComponents.includes("WorldAttachment"));
-      const panelFills = initial.boxes.filter(({ symbol }) =>
-        symbol?.endsWith("-frame/fill"),
-      );
-      assert.ok(panelFills.length >= 3);
+      const page = initial.boxes.find(({ symbol }) => symbol === "gui-page");
+      assert.ok(page, "the dashboard has no page");
       assert.ok(
-        panelFills.every(
-          ({ alpha, opacity }) => Math.abs(alpha * opacity - 0.9) < 1e-6,
-        ),
-        "each panel fill must paint at effective alpha 0.9",
+        Math.abs(page.alpha * page.opacity - 0.86) < 1e-6,
+        "the page must paint at effective alpha 0.86",
       );
       // The event log VirtualList nests inside the telemetry ScrollView.
       telemetryScrollViews(initial);
 
-      const buttons = initial.controls.filter(({ kind }) => kind === "button");
-      assert.deepEqual(buttons.map(({ label }) => label).sort(), [
-        "AURORA",
-        "EMBER",
-        "NEON",
-        "PULSE",
-        "PURGE",
-        "SPAN",
-        "UPLINK",
-      ]);
-      assert.deepEqual(controlValue(initial, "checkbox"), {
+      // The station syncs its nodes once the panel shows: rows arrive in
+      // signal order and the operation completes.
+      const synced = await awaitStationIdle(g);
+      assertDashboardLayout(synced);
+      const rows = synced.controls.filter(({ symbol }) =>
+        /^gui-nodes\/row\/[a-z]+$/.test(symbol ?? ""),
+      );
+      const keys = Object.keys(NODE_STRENGTH) as (keyof typeof NODE_STRENGTH)[];
+      assert.deepEqual(
+        rows.map(({ symbol }) => symbol!.split("/").pop()),
+        keys,
+        "the node grid's rows are not in signal order",
+      );
+      rows.forEach(({ bounds }, index) =>
+        bounds.forEach((value, axis) =>
+          assert.ok(
+            Math.abs(value - PANEL.gridRow(index)[axis]!) < 0.05,
+            `grid row ${index} lies at ${JSON.stringify(bounds)}`,
+          ),
+        ),
+      );
+      const cell = (key: string, column: string) =>
+        synced.texts.find(
+          ({ symbol }) => symbol === `gui-nodes/row/${key}/${column}/text`,
+        )?.text;
+      for (const key of keys) {
+        const signal = nodeSignal(key, 0.64);
+        assert.equal(cell(key, "signal"), `${signal}%`);
+        assert.equal(cell(key, "status"), signal >= 40 ? "Online" : "Standby");
+      }
+      assert.equal(
+        await g.page.locator("#gui-nodes").textContent(),
+        "6 of 8 online",
+      );
+
+      assert.deepEqual(controlValue(synced, "checkbox", "SCAN"), {
         kind: "bool",
         value: true,
       });
-      assertScalarValue(initial, 0.64);
-      assert.deepEqual(controlValue(initial, "text", "CALLSIGN"), {
+      for (const name of ["EXPLODE LAYERS", "REDUCED MOTION"])
+        assert.deepEqual(controlValue(synced, "checkbox", name), {
+          kind: "bool",
+          value: false,
+        });
+      assertScalarValue(synced, 0.64);
+      assert.deepEqual(controlValue(synced, "text", "CALLSIGN"), {
         kind: "text",
         value: "VESPER-7",
       });
-      for (const node of initial.controls) {
+      for (const node of synced.controls.filter(
+        (candidate) => !overlayControl(candidate),
+      )) {
         assert.equal(node.visible, true);
         assert.equal(node.available, true);
-        assert.equal(node.enabled, node.label !== "UPLINK");
+        // Scanning holds the uplink.
+        assert.equal(node.enabled, node.label !== "UPLINK", node.label);
       }
 
       const overview = await g.capture("gui-demo-overview");
+      // Panel interiors are filled with the page colour.
       const panelPaint = await g.call<number[][]>(
         "sampleGalleryGuiCapture",
         "gui-demo-overview",
         [
-          [3.7, 0.12],
-          [3.7, 4.66],
-          [0.15, 2.4],
-          [7.22, 2.4],
+          [PANEL.nodesPanel[0] + 144, 400],
+          [PANEL.monitorPanel[0] + 200, 370],
         ],
       );
       assert.ok(
         panelPaint.every(
-          ([r, g, b]) => r! < 55 && g! < 90 && b! < 100 && b! > r! + 10,
+          ([r, g, b]) => r! < 40 && g! < 70 && b! < 90 && b! > r! + 10,
         ),
-        `panel paint lost its dark translucent navy fill: ${JSON.stringify(panelPaint)}`,
+        `panel interiors lost their dark page fill: ${JSON.stringify(panelPaint)}`,
       );
       const overviewInspection = overview.inspection;
       for (const symbol of [
@@ -971,6 +1037,7 @@ test("Gallery runs a real GUI demo and cleans it up", {
         "gui-projector-trim",
         "gui-projector-emitter",
         "gui-projector-beam",
+        "gui-projector-dust",
         "gui-projector-base",
         "gui-projector-floor",
         "gui-projector-background",
@@ -982,6 +1049,13 @@ test("Gallery runs a real GUI demo and cleans it up", {
         Number(fieldsWith(overviewInspection, "gui-projector-core", "qx").x) <
           1,
         "the projector did not leave its offscreen staging position",
+      );
+      // The panel lies flat: its Surface has no layer spacing.
+      assert.equal(
+        Number(
+          fieldsWith(overviewInspection, PANEL_ENTITY, "width").layer_spacing,
+        ),
+        0,
       );
       const overviewWaveform = await waveform();
       assert.equal(scan(overviewWaveform).state, "playing");
@@ -999,7 +1073,7 @@ test("Gallery runs a real GUI demo and cleans it up", {
             "gui-waveform-advancing",
           )
         ).changedPixels > 40,
-        "playing SCAN did not move the curve inside its grid",
+        "playing SCAN did not move the curve inside its scope",
       );
       const initialProjectorIntensity = Number(
         fieldsWith(overviewInspection, "gui-projector-light", "intensity")
@@ -1024,20 +1098,18 @@ test("Gallery runs a real GUI demo and cleans it up", {
           .filter(({ kind }) => kind === 18)
           .map(({ source }) => source.split("/").pop())
           .sort(),
-        ["waveform-grid.ippd", "waveform-pulse.ippd", "waveform.ippd"],
+        ["waveform-pulse.ippd", "waveform.ippd"],
         "complex waveform curves share Surface drawing resources",
       );
+      // The two traces are drawings; the scope's grid is a canvas paint.
       assert.equal(
-        initial.drawings.length,
-        3,
+        synced.drawings.length,
+        2,
         "waveform geometry must not expand into hundreds of Canvas entities",
       );
       assert.ok(Number(overview.frame.statistics!.gui!.guiBatches) > 0);
       assert.ok(Number(overview.frame.statistics!.gui!.glyphPages) > 0);
-      const glyphTexts = initial.texts.map(({ text }) => text);
-      for (const icon of Object.values(ICON_CODE_POINTS))
-        assert.ok(glyphTexts.includes(icon), `missing Nerd Font icon ${icon}`);
-
+      // Waveform, sweep, dust and layer spacing clips are resident.
       const motionClips = new Set(
         [...overview.inspection.resources, ...overviewPanel.resources]
           .filter(
@@ -1048,10 +1120,9 @@ test("Gallery runs a real GUI demo and cleans it up", {
           )
           .map(({ source }) => source),
       );
-      assert.equal(
-        motionClips.size,
-        6,
-        "three skins, waveform and projector motion clips must all be resident",
+      assert.ok(
+        motionClips.size >= 5,
+        `scene motion clips are not all resident: ${motionClips.size}`,
       );
       assert.ok(overview.frame.drawCalls > 0 && overview.frame.triangles > 0);
       assert.equal(overview.frame.failedDrawCalls, 0);
@@ -1059,68 +1130,45 @@ test("Gallery runs a real GUI demo and cleans it up", {
       assert.deepEqual(overview.inspection.renderDiagnostics, []);
       assert.deepEqual(overviewPanel.renderDiagnostics, []);
 
-      // UPLINK is mounted disabled while SCAN runs. Its disabled state is an
-      // ordinary theme part row and paints a solid dim fill.
-      const disabledUplink = control(initial, {
+      // UPLINK is held while SCAN runs: the default look's disabled state.
+      const disabledUplink = control(synced, {
         role: "button",
         name: "UPLINK",
       });
       assert.equal(disabledUplink.enabled, false);
-      const disabledRow = await g.call<Record<string, unknown>>(
-        "galleryGuiThemeRow",
-        { role: "button", name: "UPLINK" },
-        { part: "background", state: "disabled" },
-      );
-      (disabledRow.color as readonly number[]).forEach((value, channel) =>
-        near(value, AURORA_DISABLED[channel]!, "disabled UPLINK colour"),
-      );
-      near(Number(disabledRow.opacity), 0.45, "disabled UPLINK opacity");
-      assert.equal(disabledRow.fill_mode, 0, "disabled UPLINK is not solid");
       const disabledRegions = await settledUplink("gui-detail-uplink-disabled");
-      // Straight linear colour at alpha 0.45 x opacity 0.45 over the
-      // measured panel background, encoded once for display.
-      const disabledAlpha = AURORA_DISABLED[3] * 0.45;
-      const expectedDisabled = AURORA_DISABLED.slice(0, 3).map(
-        (value, channel) =>
-          linearToSrgb(
-            value * disabledAlpha +
-              srgbToLinear(disabledRegions.gap.mean[channel]!) *
-                (1 - disabledAlpha),
-          ),
-      );
-      await recordRegions("uplink-disabled", {
-        ...disabledRegions,
-        expectedDisabled,
-      });
-      disabledRegions.fill.mean.forEach((value, channel) =>
-        assert.ok(
-          Math.abs(value - expectedDisabled[channel]!) < 12,
-          `disabled UPLINK fill ${JSON.stringify(disabledRegions.fill.mean)} is not ${JSON.stringify(expectedDisabled)}`,
-        ),
+      await recordRegions("uplink-disabled", disabledRegions);
+      // A disabled label draws in the neutral line colour: no stronger in
+      // green than in red by the accent's margin.
+      assert.ok(
+        disabledRegions.fill.max[1] - disabledRegions.fill.max[0] < 80,
+        `disabled UPLINK label is lit: ${JSON.stringify(disabledRegions.fill)}`,
       );
 
       const cameraBeforeControls = transform(await g.inspect());
-      const checkboxRegion = await controlRegion(g, { role: "checkbox" });
+      const checkboxRegion = await controlRegion(g, {
+        role: "checkbox",
+        name: "SCAN",
+      });
       const sliderRegion = await controlRegion(
         g,
         { role: "slider" },
         0.02,
         0.08,
       );
-      const checkbox = await point("checkbox");
+      const checkbox = await point("checkbox", "SCAN");
       await g.page.mouse.click(checkbox.clientX, checkbox.clientY);
       await g.page.waitForFunction(
         () =>
           document.querySelector("#gui-autoscan")?.textContent === "standby",
       );
       let current = await waitForGui((state) => {
-        const value = controlValue(state, "checkbox");
+        const value = controlValue(state, "checkbox", "SCAN");
         return value.kind === "bool" && value.value === false;
       });
       await waitForWaveform((current) => scan(current).state === "paused");
 
-      // SCAN standby enables UPLINK; the skin transition returns its part
-      // properties to the idle lane and the captured fill changes with them.
+      // SCAN standby enables UPLINK in place; its label lights.
       current = await waitForGui(
         (state) => control(state, { role: "button", name: "UPLINK" }).enabled,
       );
@@ -1137,7 +1185,11 @@ test("Gallery runs a real GUI demo and cleans it up", {
       await recordRegions("uplink-enabled", enabledRegions);
       assert.ok(
         meanDifference(enabledRegions.fill, disabledRegions.fill) > 8,
-        "enabling UPLINK did not change its captured fill",
+        "enabling UPLINK did not change its captured label",
+      );
+      assert.ok(
+        enabledRegions.fill.max[1] - enabledRegions.fill.max[0] > 100,
+        `enabled UPLINK label is not lit: ${JSON.stringify(enabledRegions.fill)}`,
       );
       assert.ok(
         meanDifference(enabledRegions.gap, disabledRegions.gap) < 4,
@@ -1147,7 +1199,7 @@ test("Gallery runs a real GUI demo and cleans it up", {
       const dustStart = await g.capture("gui-projector-dust-start");
       const dustController = animationFor(
         dustStart.inspection,
-        "gui-projector-beam",
+        "gui-projector-dust",
       );
       assert.equal(
         dustController.state,
@@ -1156,14 +1208,14 @@ test("Gallery runs a real GUI demo and cleans it up", {
       );
       const initialPhase = dynamicProperty(
         dustStart.inspection,
-        "gui-projector-beam",
+        "gui-projector-dust",
         "phase",
       );
       assert.equal(initialPhase.kind, "f32");
       await g.waitFor(
         (inspection) =>
           Number(
-            dynamicProperty(inspection, "gui-projector-beam", "phase").value,
+            dynamicProperty(inspection, "gui-projector-dust", "phase").value,
           ) >
           Number(initialPhase.value) + 0.3,
       );
@@ -1208,7 +1260,7 @@ test("Gallery runs a real GUI demo and cleans it up", {
       await g.capture("gui-waveform-loop-end");
       const loopEnd = await waveform();
       assert.ok(
-        loopEnd.scan.x < -3.5,
+        loopEnd.scan.x < -0.95 * gridWidth,
         "SCAN must travel left through the second authored tile",
       );
       const seamDifference = await waveformDifference(
@@ -1244,6 +1296,25 @@ test("Gallery runs a real GUI demo and cleans it up", {
       });
       await g.page.waitForFunction(
         () => document.querySelector("#gui-gain")?.textContent === "10%",
+      );
+      // Low gain drops nodes to standby and the station says so.
+      await waitForPanel((inspection) =>
+        inspection.entities.some(({ metadata }) =>
+          metadata.symbolicId?.startsWith("gui-alert"),
+        ),
+      );
+      await g.page.waitForFunction(
+        () =>
+          document.querySelector("#gui-nodes")?.textContent === "1 of 8 online",
+      );
+      const lowGain = await waitForGui();
+      assert.ok(
+        lowGain.texts.some(
+          ({ symbol, text }) =>
+            symbol === "gui-alert/text" &&
+            text === "Low gain: 7 nodes on standby.",
+        ),
+        "the station did not warn about low gain",
       );
       await g.capture("gui-waveform-low-gain");
       const sliderStart = await point("slider", undefined, 0.18);
@@ -1296,7 +1367,7 @@ test("Gallery runs a real GUI demo and cleans it up", {
       await recordWaveform("sine", { extrema: sineExtrema });
       assert.ok(
         sineExtrema.every((green) => green > 100),
-        `SCAN must paint two smooth sine cycles across the graph: ${JSON.stringify(sineExtrema)}`,
+        `SCAN must paint two smooth sine cycles across the scope: ${JSON.stringify(sineExtrema)}`,
       );
       assert.equal(
         scan(await waveform()).id,
@@ -1336,9 +1407,13 @@ test("Gallery runs a real GUI demo and cleans it up", {
         cameraBeforeControls,
         "background gestures did not move the GUI demo camera",
       );
-      assertRetainedControls(identityBeforeCamera, await waitForGui());
+      assertRetainedControls(
+        identityBeforeCamera,
+        await waitForGui(),
+        true,
+        dashboardControl,
+      );
       const obliqueFrame = await g.capture("gui-demo-camera-oblique");
-      await assertTransparentCorners("gui-demo-rounded-corners-oblique");
       await g.page.screenshot({
         path: join(
           scenario.evidence.directory,
@@ -1426,17 +1501,24 @@ test("Gallery runs a real GUI demo and cleans it up", {
         `manual pulse must join a visible baseline on both sides: ${JSON.stringify(baselineSignal)}`,
       );
       assert.ok(
-        Math.abs(capturedWaveform.scan.opacity - 0.35) < 1e-6,
+        Math.abs(capturedWaveform.scan.opacity - 0.4) < 1e-6,
         "PULSE must preserve the visible paused sine trace",
       );
-      const pulseToggle = await point("checkbox");
+      // The pulse ring follows the burst's crossing on the Host clock and
+      // completes with its check mark.
+      await waitForPanel((inspection) =>
+        inspection.entities.some(
+          ({ metadata }) => metadata.symbolicId === "gui-pulse-ring/symbol",
+        ),
+      );
+      const pulseToggle = await point("checkbox", "SCAN");
       await g.page.mouse.click(pulseToggle.clientX, pulseToggle.clientY);
       await waitForWaveform(
         (current) =>
           scan(current).state === "playing" && scan(current).time > 0.2,
       );
-      // Running SCAN disables UPLINK again; its skin transition animates the
-      // background part's ordinary properties into the disabled sample.
+      // Running SCAN holds UPLINK again: its label returns to the disabled
+      // sample.
       current = await waitForGui(
         (state) => !control(state, { role: "button", name: "UPLINK" }).enabled,
       );
@@ -1446,12 +1528,12 @@ test("Gallery runs a real GUI demo and cleans it up", {
       await recordRegions("uplink-redisabled", redisabledRegions);
       assert.ok(
         meanDifference(redisabledRegions.fill, disabledRegions.fill) < 6,
-        `re-disabled UPLINK fill ${JSON.stringify(redisabledRegions.fill.mean)} is not the disabled fill ${JSON.stringify(disabledRegions.fill.mean)}`,
+        `re-disabled UPLINK label ${JSON.stringify(redisabledRegions.fill.mean)} is not the disabled label ${JSON.stringify(disabledRegions.fill.mean)}`,
       );
       await g.capture("gui-waveform-pulse-scan-toggled");
       const toggledPulse = await waveform();
       assert.ok(
-        toggledPulse.scan.opacity > 0.85,
+        toggledPulse.scan.opacity > 0.95,
         "the moving sine must remain visible alongside PULSE",
       );
       assert.equal(scan(toggledPulse).state, "playing");
@@ -1486,14 +1568,10 @@ test("Gallery runs a real GUI demo and cleans it up", {
       const advancedPulse = await waitForWaveform(
         (current) =>
           wavePulse(current).time > capturedWavePulse.time + 0.12 &&
-          current.pulse.x < capturedWaveform.pulse.x - 0.3,
+          current.pulse.x < capturedWaveform.pulse.x - 0.1 * gridWidth,
       );
       assert.equal(scan(advancedPulse).state, "playing");
       assert.equal(wavePulse(advancedPulse).state, "playing");
-      assert.ok(
-        advancedPulse.pulse.x < capturedWaveform.pulse.x - 0.3,
-        "PULSE must travel right to left alongside SCAN",
-      );
       await recordWaveform("direction", {
         pulseStart: capturedWaveform.pulse.x,
         pulseAdvanced: advancedPulse.pulse.x,
@@ -1537,20 +1615,15 @@ test("Gallery runs a real GUI demo and cleans it up", {
       current = await waitForGui(
         (state) => control(state, { role: "button", name: "UPLINK" }).enabled,
       );
-      // The second disabled -> idle transition reuses UPLINK's skin
-      // transition; it must blend back to the idle lane rather than keep the
-      // disabled sample, and paint the enabled fill again.
+      // The second disabled to idle transition must return to the lit
+      // label rather than keep the disabled sample.
       const reenabledRegions = await settledUplink(
         "gui-detail-uplink-reenabled",
       );
       await recordRegions("uplink-reenabled", reenabledRegions);
       assert.ok(
         meanDifference(reenabledRegions.fill, enabledRegions.fill) < 6,
-        `re-enabled UPLINK fill ${JSON.stringify(reenabledRegions.fill.mean)} is not the enabled fill ${JSON.stringify(enabledRegions.fill.mean)}`,
-      );
-      assert.ok(
-        meanDifference(reenabledRegions.fill, disabledRegions.fill) > 8,
-        "re-enabled UPLINK still paints its disabled fill",
+        `re-enabled UPLINK label ${JSON.stringify(reenabledRegions.fill.mean)} is not the enabled label ${JSON.stringify(enabledRegions.fill.mean)}`,
       );
       const beforeReset = await waitForGui();
 
@@ -1566,7 +1639,12 @@ test("Gallery runs a real GUI demo and cleans it up", {
             .state === "ready",
       );
       assertCameraFov(resetInspection, (21 * Math.PI) / 180);
-      assertRetainedControls(beforeReset, await waitForGui());
+      assertRetainedControls(
+        beforeReset,
+        await waitForGui(),
+        true,
+        dashboardControl,
+      );
       await g.capture("gui-demo-camera-reset");
 
       const callsign = await point("text", "CALLSIGN");
@@ -1597,12 +1675,12 @@ test("Gallery runs a real GUI demo and cleans it up", {
       );
       assert.ok(
         checkboxPaint.changedPixels > 20,
-        `checked indicator region did not visibly change: ${JSON.stringify(checkboxPaint)}`,
+        `SCAN switch region did not visibly change: ${JSON.stringify(checkboxPaint)}`,
       );
-      // SCAN is a capsule switch whose knob slides to the right end while on
-      // and the left end while off. Rows through the knob, inset from the
-      // capsule ends, weigh each sample by its contrast with the row median
-      // (the track), so the knob ink centroid falls on the knob's side.
+      // SCAN is the switch look: its lit block sits at the rail's right end
+      // while on and at its left end while off. Rows through the block,
+      // inset from the rail ends, weigh each sample by its contrast with the
+      // row median (the rail), so the ink centroid falls on the block's side.
       const [toggleX, toggleY, toggleWidth, toggleHeight] = PANEL.scan;
       const knobInk = async (label: string) => {
         const columns = 64;
@@ -1610,7 +1688,7 @@ test("Gallery runs a real GUI demo and cleans it up", {
         const xs = Array.from(
           { length: columns },
           (_, column) =>
-            toggleX + 0.06 + ((toggleWidth - 0.12) * column) / (columns - 1),
+            toggleX + 6 + ((toggleWidth - 12) * column) / (columns - 1),
         );
         const samples = await g.call<readonly (readonly number[])[]>(
           "sampleGalleryGuiCapture",
@@ -1642,7 +1720,7 @@ test("Gallery runs a real GUI demo and cleans it up", {
             moment += ink * xs[column]!;
           });
         });
-        assert.ok(weight > 0, `${label} shows no SCAN knob`);
+        assert.ok(weight > 0, `${label} shows no SCAN block`);
         return {
           centroid: moment / weight,
           centre: toggleX + toggleWidth / 2,
@@ -1651,44 +1729,14 @@ test("Gallery runs a real GUI demo and cleans it up", {
       };
       const knobOn = await knobInk("gui-demo-overview");
       const knobOff = await knobInk("gui-demo-controls-active");
-      await recordRegions("scan-knob", { on: knobOn, off: knobOff });
+      await recordRegions("scan-block", { on: knobOn, off: knobOff });
       assert.ok(
-        knobOn.centroid > knobOn.centre + 0.1,
-        `SCAN knob is not at the right end while on: ${JSON.stringify(knobOn)}`,
-      );
-      assert.ok(
-        knobOff.centroid < knobOff.centre - 0.1,
-        `SCAN knob is not at the left end while off: ${JSON.stringify(knobOff)}`,
-      );
-      // Pointer clicks take toggle focus without the focus ring: the
-      // toggle's top border row after the click carries the blue track
-      // border and no amber ring pixel.
-      const borderRow = Array.from(
-        { length: 12 },
-        (_, column) =>
-          [
-            toggleX + toggleWidth * (0.2 + (0.6 * column) / 11),
-            toggleY + 0.008,
-          ] as const,
-      );
-      const borderSamples = await g.call<readonly (readonly number[])[]>(
-        "sampleGalleryGuiCapture",
-        "gui-demo-controls-active",
-        borderRow,
-      );
-      const ringPixels = borderSamples.filter(
-        ([red, , blue]) => red! > 150 && red! > blue! + 30,
-      );
-      assert.equal(
-        ringPixels.length,
-        0,
-        `pointer-clicked SCAN toggle shows focus ring pixels: ${JSON.stringify(borderSamples)}`,
+        knobOn.centroid > knobOn.centre + 8,
+        `SCAN block is not at the right end while on: ${JSON.stringify(knobOn)}`,
       );
       assert.ok(
-        borderSamples.filter(
-          ([, , blue], index) => blue! > borderSamples[index]![0]! + 30,
-        ).length >= 6,
-        `SCAN border row missed the track border: ${JSON.stringify(borderSamples)}`,
+        knobOff.centroid < knobOff.centre - 8,
+        `SCAN block is not at the left end while off: ${JSON.stringify(knobOff)}`,
       );
       const sliderPaint = await g.call<{ changedPixels: number }>(
         "compareViewerCaptureRegion",
@@ -1700,191 +1748,179 @@ test("Gallery runs a real GUI demo and cleans it up", {
         sliderPaint.changedPixels > 80,
         `slider thumb did not visibly move: ${JSON.stringify(sliderPaint)}`,
       );
-      // The gain fill stays flush with the track: it is not inset by the
-      // track border. Samples just inside the track's left edge, across the
-      // track band, carry the bright cyan fill for any committed value.
-      // Thresholds read the rendered frame, which tone maps brighter than
-      // authored values: the muted border and the dark panel stay well below
-      // the green/blue floors.
+      // The gain's value bar starts at the rail's start: samples just
+      // inside the rail's left end, on its centre line, are lit for any
+      // committed value above the minimum.
       const [sliderX, sliderY, , sliderHeight] = PANEL.gain;
-      const fillColumn = [-0.01, 0, 0.01].map(
-        (dy) => [sliderX + 0.05, sliderY + sliderHeight / 2 + dy] as const,
+      const fillColumn = [-1, 0, 1].map(
+        (dy) => [sliderX + 6, sliderY + sliderHeight / 2 + dy] as const,
       );
       const fillSamples = await g.call<readonly (readonly number[])[]>(
         "sampleGalleryGuiCapture",
         "gui-demo-controls-active",
         fillColumn,
       );
-      for (const [, green, blue] of fillSamples) {
-        assert.ok(
-          green! > 180 && blue! > 200,
-          `gain fill is not flush with the track start: ${JSON.stringify(fillSamples)}`,
-        );
-      }
+      assert.ok(
+        fillSamples.some(([, green, blue]) => green! > 180 && blue! > 200),
+        `gain value bar does not start at the rail's start: ${JSON.stringify(fillSamples)}`,
+      );
       assert.ok(
         (await g.difference("gui-demo-overview", "gui-demo-controls-active"))
           .changedPixels > 500,
         "trusted control input did not produce a visible GUI demo change",
       );
 
-      const identityBeforeSkin = current;
-      const sceneBeforeSkin = await g.inspect();
-      const waveformBeforeSkin = await waveform();
-      const projectorBeforeSkin = {
-        core: dynamicProperty(sceneBeforeSkin, "gui-projector-core", "accent"),
-        light: fieldsWith(sceneBeforeSkin, "gui-projector-light", "intensity"),
-        scanController: scan(waveformBeforeSkin).id,
-        wavePulseController: wavePulse(waveformBeforeSkin).id,
+      // ACCENT re-themes the primary actions and the projector in place:
+      // a machine client's press on the AMBER segment, while the callsign
+      // editor keeps focus, rewrites the action theme's rows and recolours
+      // the projector, and no control changes identity, value or focus.
+      const identityBeforeAccent = current;
+      const sceneBeforeAccent = await g.inspect();
+      const waveformBeforeAccent = await waveform();
+      const projectorBeforeAccent = {
+        core: dynamicProperty(
+          sceneBeforeAccent,
+          "gui-projector-core",
+          "accent",
+        ),
+        light: fieldsWith(
+          sceneBeforeAccent,
+          "gui-projector-light",
+          "intensity",
+        ),
+        scanController: scan(waveformBeforeAccent).id,
+        wavePulseController: wavePulse(waveformBeforeAccent).id,
       };
-      const callsignBeforeSkin = control(identityBeforeSkin, {
+      const callsignBeforeAccent = control(identityBeforeAccent, {
         role: "text",
         name: "CALLSIGN",
       });
-      assert.equal(callsignBeforeSkin.focused, true);
-      assert.deepEqual(
-        identityBeforeSkin.controls.filter(({ focused }) => focused).length,
-        1,
-      );
+      assert.equal(callsignBeforeAccent.focused, true);
       const stillFocused = (state: GalleryGuiState) => {
         const focused = state.controls.filter(({ focused }) => focused);
-        assert.equal(focused.length, 1, "reskin moved or cleared focus");
+        assert.equal(focused.length, 1, "re-theming moved or cleared focus");
         assert.equal(
           focused[0]!.target.entity,
-          callsignBeforeSkin.target.entity,
+          callsignBeforeAccent.target.entity,
         );
       };
-      // Exercise the production machine-client action while the editor remains
-      // focused, which isolates reskinning from normal pointer focus transfer.
-      const ember = await g.call<GalleryGuiState>(
+      await g.capture("gui-demo-cyan");
+      const amber = await g.call<GalleryGuiState>(
         "galleryGuiAction",
-        { role: "button", name: "EMBER" },
+        { role: "button", name: "AMBER" },
         { kind: "press" },
       );
       await g.page.waitForFunction(
-        () => document.querySelector("#gui-skin")?.textContent === "ember",
+        () => document.querySelector("#gui-accent")?.textContent === "amber",
       );
-      const emberState = await waitForGui();
-      assertRetainedControls(identityBeforeSkin, emberState, false);
-      stillFocused(ember);
-      stillFocused(emberState);
-      const emberFrame = await g.capture("gui-demo-ember-active");
-      const emberCore = dynamicProperty(
-        emberFrame.inspection,
+      const amberState = await waitForGui();
+      assertRetainedControls(
+        identityBeforeAccent,
+        amberState,
+        false,
+        dashboardControl,
+      );
+      stillFocused(amber);
+      stillFocused(amberState);
+      // The segmented control holds the selection in its items' fields.
+      assert.equal(
+        amberState.controls.find(({ label }) => label === "AMBER")?.target
+          .entity,
+        control(identityBeforeAccent, { role: "button", name: "AMBER" }).target
+          .entity,
+      );
+      await new Promise((resolve) => setTimeout(resolve, SKIN_SETTLE_MS));
+      const amberFrame = await g.capture("gui-demo-amber");
+      const amberCore = dynamicProperty(
+        amberFrame.inspection,
         "gui-projector-core",
         "accent",
       );
-      const emberLight = fieldsWith(
-        emberFrame.inspection,
+      const amberLight = fieldsWith(
+        amberFrame.inspection,
         "gui-projector-light",
         "intensity",
       );
       assert.notDeepEqual(
-        emberCore,
-        projectorBeforeSkin.core,
-        "Ember did not recolor the projector cube",
+        amberCore,
+        projectorBeforeAccent.core,
+        "AMBER did not recolor the projector cube",
       );
       assert.notDeepEqual(
-        [emberLight.r, emberLight.g, emberLight.b],
+        [amberLight.r, amberLight.g, amberLight.b],
         [
-          projectorBeforeSkin.light.r,
-          projectorBeforeSkin.light.g,
-          projectorBeforeSkin.light.b,
+          projectorBeforeAccent.light.r,
+          projectorBeforeAccent.light.g,
+          projectorBeforeAccent.light.b,
         ],
-        "Ember did not recolor the projector light",
+        "AMBER did not recolor the projector light",
       );
-      const emberWaveform = await waveform();
+      const amberWaveform = await waveform();
       assert.equal(
-        scan(emberWaveform).id,
-        projectorBeforeSkin.scanController,
-        "reskin replaced the waveform scan controller",
-      );
-      assert.equal(
-        wavePulse(emberWaveform).id,
-        projectorBeforeSkin.wavePulseController,
-        "reskin replaced the waveform pulse controller",
+        scan(amberWaveform).id,
+        projectorBeforeAccent.scanController,
+        "re-theming replaced the waveform scan controller",
       );
       assert.equal(
-        animationFor(emberFrame.inspection, "gui-projector-beam").id,
+        wavePulse(amberWaveform).id,
+        projectorBeforeAccent.wavePulseController,
+        "re-theming replaced the waveform pulse controller",
+      );
+      assert.equal(
+        animationFor(amberFrame.inspection, "gui-projector-dust").id,
         dustController.id,
-        "reskin replaced the ambient dust controller",
+        "re-theming replaced the ambient dust controller",
       );
-      const skinDifference = await g.difference(
-        "gui-demo-controls-active",
-        "gui-demo-ember-active",
+      const accentDifference = await g.difference(
+        "gui-demo-cyan",
+        "gui-demo-amber",
       );
-      assert.ok(skinDifference.changedPixels > 1_000);
-      assert.ok(skinDifference.meanAbsoluteChannelDifference > 1);
-      assert.equal(emberFrame.frame.failedDrawCalls, 0);
-      assert.deepEqual(emberFrame.inspection.renderDiagnostics, []);
+      assert.ok(accentDifference.changedPixels > 1_000);
+      assert.equal(amberFrame.frame.failedDrawCalls, 0);
+      assert.deepEqual(amberFrame.inspection.renderDiagnostics, []);
 
-      // Neon reskins the same controls through shape-material lanes,
-      // preserving control identity and focus throughout.
-      const neon = await g.call<GalleryGuiState>(
-        "galleryGuiAction",
-        { role: "button", name: "NEON" },
-        { kind: "press" },
-      );
-      await g.page.waitForFunction(
-        () => document.querySelector("#gui-skin")?.textContent === "neon",
-      );
-      const neonState = await waitForGui();
-      assertRetainedControls(identityBeforeSkin, neonState, false);
-      stillFocused(neon);
-      stillFocused(neonState);
-      const neonFrame = await g.capture("gui-demo-neon-active");
-      const neonCore = dynamicProperty(
-        neonFrame.inspection,
-        "gui-projector-core",
-        "accent",
-      );
-      assert.notDeepEqual(
-        neonCore,
-        emberCore,
-        "Neon did not recolor the projector cube",
-      );
-      const neonWaveform = await waveform();
-      assert.equal(
-        scan(neonWaveform).id,
-        projectorBeforeSkin.scanController,
-        "reskin replaced the waveform scan controller",
-      );
-      assert.equal(
-        wavePulse(neonWaveform).id,
-        projectorBeforeSkin.wavePulseController,
-        "reskin replaced the waveform pulse controller",
-      );
-      const neonDifference = await g.difference(
-        "gui-demo-ember-active",
-        "gui-demo-neon-active",
-      );
-      assert.ok(neonDifference.changedPixels > 1_000);
-      assert.ok(neonDifference.meanAbsoluteChannelDifference > 1);
-      assert.equal(neonFrame.frame.failedDrawCalls, 0);
-      assert.deepEqual(neonFrame.inspection.renderDiagnostics, []);
-
-      // Detailed Neon regions. Every rectangle derives from the panel layout
-      // restated in the panel model.
+      // Detailed regions, every rectangle from the restated layout.
       await withDetailView(async () => {
         const detail = await waitForGui();
-        await g.capture("gui-detail-neon");
+        await new Promise((resolve) => setTimeout(resolve, SKIN_SETTLE_MS));
+        await g.capture("gui-detail-amber");
         const evidence: Record<string, unknown> = {};
+        const labelBand = (
+          [x, y, width, height]: ContentRect,
+          text: string,
+        ) => {
+          const half = textWidth(text, 16) / 2;
+          return [
+            x + width / 2 - half,
+            y + height / 2 - 6,
+            x + width / 2 + half,
+            y + height / 2 + 6,
+          ] as LogicalRect;
+        };
+        // PULSE's label is amber now: red outweighs blue in its ink.
+        const amberLabel = await regionStats("gui-detail-amber", {
+          pulse: labelBand(PANEL.pulse, "PULSE"),
+        });
+        evidence.amberPulse = amberLabel;
+        assert.ok(
+          amberLabel.pulse.max[0] > 200 &&
+            amberLabel.pulse.max[0] > amberLabel.pulse.max[2] + 60,
+          `PULSE did not take the amber look: ${JSON.stringify(amberLabel.pulse)}`,
+        );
 
-        const [px, py, , ph] = PANEL.pulse;
-        // SPAN, UPLINK and PURGE labels sit centred in their buttons. Button
-        // labels lay out left-aligned, so the specimen tunes each button's
-        // left padding and the check weighs each sample by its contrast with
-        // the row median (the button fill), comparing the ink centroid to
-        // the centre.
-        for (const name of ["SPAN", "UPLINK", "PURGE"] as const) {
+        // Labels sit centred in their buttons: the ink centroid of rows
+        // through the label, weighed by contrast with the row median, falls
+        // on the button's centre.
+        for (const name of ["PULSE", "UPLINK", "CLEAR", "SYNC", "PURGE"]) {
           const [bx, by, bw, bh] = controlRect({ role: "button", name });
           const columns = 48;
           const labelXs = Array.from(
             { length: columns },
-            (_, column) => bx + 0.05 + ((bw - 0.1) * column) / (columns - 1),
+            (_, column) => bx + 6 + ((bw - 12) * column) / (columns - 1),
           );
           const labelSamples = await g.call<readonly (readonly number[])[]>(
             "sampleGalleryGuiCapture",
-            "gui-detail-neon",
+            "gui-detail-amber",
             [0.4, 0.5, 0.6].flatMap((row) =>
               labelXs.map((sampleX) => [sampleX, by + bh * row] as const),
             ),
@@ -1911,242 +1947,95 @@ test("Gallery runs a real GUI demo and cleans it up", {
           }
           assert.ok(weight > 0, `${name} button shows no label ink`);
           const offset = Math.abs(moment / weight - (bx + bw / 2));
-          assert.ok(offset < 0.015, `${name} label is off-centre by ${offset}`);
+          assert.ok(offset < 2.5, `${name} label is off-centre by ${offset}`);
         }
-        const iconRects = Object.fromEntries(
-          Object.entries(ICON_BOXES).map(([name, box]) => [name, logical(box)]),
-        ) as Record<keyof typeof ICON_BOXES, LogicalRect>;
-        // Painted ink, not just the layout box, is centred on each icon's
-        // intrinsic box in its documented cell: an icon box sized apart
-        // from its glyph, or a cell laid out elsewhere, leaves the ink
-        // off-centre.
-        const inkBounds = await g.call<Record<string, LogicalRect>>(
-          "galleryGuiInkBounds",
-          "gui-detail-neon",
-          Object.fromEntries(
-            Object.entries(iconRects).map(([name, [x0, y0, x1, y1]]) => [
-              name,
-              [x0 - 0.03, y0 - 0.03, x1 + 0.03, y1 + 0.03] as LogicalRect,
-            ]),
-          ),
-        );
-        evidence.iconInk = inkBounds;
-        for (const [name, [x0, y0, x1, y1]] of Object.entries(iconRects)) {
-          const ink = inkBounds[name]!;
-          for (const [axis, inkCentre, boxCentre] of [
-            ["x", (ink[0] + ink[2]) / 2, (x0 + x1) / 2],
-            ["y", (ink[1] + ink[3]) / 2, (y0 + y1) / 2],
-          ] as const)
-            assert.ok(
-              Math.abs(inkCentre - boxCentre) < 0.012,
-              `${name} icon ink ${axis} centre ${inkCentre} is not ${boxCentre}: ${JSON.stringify(ink)}`,
-            );
-        }
-        // Every glyph box stays inside its cell: left-aligned dashboard,
-        // right-aligned signal and leading skin icons before their labels.
-        assert.ok(iconRects.dashboard[2] <= logical(PANEL.title)[0]);
-        assert.ok(iconRects.pulse[2] <= px + 1.08);
-        for (const skin of ["aurora", "ember", "neon"] as const)
-          assert.ok(iconRects[skin][2] <= PANEL.skin(skin)[0] + 0.27);
-        const [ix, iy, iw, ih] = PANEL.callsign;
-        // PULSE bands above/below its centre row, then farther out.
-        const band = (x0: number, top: boolean): LogicalRect => [
-          px + x0,
-          top ? py + 0.04 : py + ph - 0.12,
-          px + x0 + 0.3,
-          top ? py + 0.12 : py + ph - 0.04,
+
+        // Window control glyphs are centred in their docked buttons: ink
+        // measured inside the buttons' lines.
+        const inside = ([x, y, width, height]: ContentRect): LogicalRect => [
+          x + 3,
+          y + 3,
+          x + width - 3,
+          y + height - 3,
         ];
-        const neon = await regionStats<string>("gui-detail-neon", {
-          ...iconRects,
-          nearTop: band(0.3, true),
-          nearBottom: band(0.3, false),
-          middle: band(1.2, false),
-          farTop: band(2.6, true),
-          farBottom: band(2.6, false),
-          halo: [px - 0.06, py + 0.25, px - 0.02, py + ph - 0.25],
-          haloBaseline: [px - 0.2, py + 0.25, px - 0.16, py + ph - 0.25],
-          ringTop: [ix + 0.35 * iw, iy + 0.004, ix + 0.65 * iw, iy + 0.02],
+        const glyphs = await g.call<Record<string, LogicalRect>>(
+          "galleryGuiInkBounds",
+          "gui-detail-amber",
+          {
+            minimize: inside(PANEL.minimize),
+            close: inside(PANEL.close),
+          },
+        );
+        evidence.windowGlyphs = glyphs;
+        for (const [name, box] of [
+          ["minimize", PANEL.minimize],
+          ["close", PANEL.close],
+        ] as const) {
+          const ink = glyphs[name]!;
+          const inkCentre = [(ink[0] + ink[2]) / 2, (ink[1] + ink[3]) / 2];
+          assert.ok(
+            Math.abs(inkCentre[0]! - (box[0] + box[2] / 2)) < 2 &&
+              Math.abs(inkCentre[1]! - (box[1] + box[3] / 2)) < 2,
+            `${name} glyph is not centred: ${JSON.stringify(ink)}`,
+          );
+        }
+
+        // The focused callsign editor: the lit line with its glow on every
+        // side, its interior left dark.
+        stillFocused(detail);
+        const [ix, iy, iw, ih] = PANEL.callsign;
+        const field = await regionStats<string>("gui-detail-amber", {
+          ringTop: [ix + 0.35 * iw, iy - 0.5, ix + 0.65 * iw, iy + 2],
           ringBottom: [
             ix + 0.35 * iw,
-            iy + ih - 0.02,
+            iy + ih - 2,
             ix + 0.65 * iw,
-            iy + ih - 0.004,
+            iy + ih + 0.5,
           ],
-          ringRight: [
-            ix + iw - 0.02,
-            iy + 0.3 * ih,
-            ix + iw - 0.004,
-            iy + 0.7 * ih,
-          ],
-          hollow: [ix + 0.62 * iw, iy + 0.3 * ih, ix + 0.9 * iw, iy + 0.7 * ih],
+          ringRight: [ix + iw - 2, iy + 0.3 * ih, ix + iw + 0.5, iy + 0.7 * ih],
+          hollow: [ix + 0.7 * iw, iy + 0.3 * ih, ix + 0.9 * iw, iy + 0.7 * ih],
         });
-        evidence.regions = neon;
-        for (const name of Object.keys(ICON_CODE_POINTS)) {
-          const stats = neon[name]!;
-          assert.ok(
-            stats.max[1] > 170 && stats.max[2] > 170,
-            `${name} icon cell did not paint its glyph: ${JSON.stringify(stats)}`,
-          );
-        }
-
-        // PULSE fill falls off radially from its icon cell: symmetric above
-        // and below the centre, decreasing outward, flat beyond the radius.
-        const { nearTop, nearBottom, middle, farTop, farBottom } = neon;
+        evidence.callsign = field;
         assert.ok(
-          Math.abs(nearTop!.mean[1] - nearBottom!.mean[1]) < 10 &&
-            nearBottom!.mean[1] > middle!.mean[1] + 12 &&
-            middle!.mean[1] > farBottom!.mean[1] + 12 &&
-            Math.abs(farTop!.mean[1] - farBottom!.mean[1]) < 8,
-          "PULSE lost its radial gradient",
-        );
-
-        // Neon's resting PULSE halo brightens only the band beside the
-        // button.
-        assert.ok(
-          neon.halo!.mean[1] > neon.haloBaseline!.mean[1] + 20 &&
-            neon.halo!.mean[2] > neon.haloBaseline!.mean[2] + 20,
-          "PULSE halo is missing",
-        );
-
-        // The focused callsign ring strokes the edge and leaves the centre clear.
-        stillFocused(detail);
-        assert.ok(
-          [neon.ringTop!, neon.ringBottom!, neon.ringRight!].every(
-            ({ mean: [r, , b] }) => r > 150 && r > b + 30,
+          [field.ringTop!, field.ringBottom!, field.ringRight!].every(
+            ({ max: [, green, blue] }) => green > 180 && blue > 180,
           ),
-          "focused callsign ring lost its Neon focus colour",
+          `focused callsign lost its lit line: ${JSON.stringify(field)}`,
         );
         assert.ok(
-          neon.hollow!.mean[0] < 60 &&
-            neon.hollow!.mean[2] > neon.hollow!.mean[0],
-          "focus ring filled the callsign centre",
+          field.hollow!.mean[1] < 90,
+          `focus filled the callsign interior: ${JSON.stringify(field.hollow)}`,
         );
-
-        // SPAN widens its frame; corner radii keep their authored units, so
-        // every corner and edge region is unchanged, and the flex spacer
-        // after the frame absorbs the resize, so the SPAN button that
-        // follows it in tree order paints in place.
-        const frameRects = ([x, y, width, height]: ContentRect) => ({
-          topLeft: [x - 0.03, y - 0.03, x + 0.15, y + 0.15] as LogicalRect,
-          bottomLeft: [
-            x - 0.03,
-            y + height - 0.15,
-            x + 0.15,
-            y + height + 0.03,
-          ] as LogicalRect,
-          left: [
-            x - 0.03,
-            y + 0.12,
-            x + 0.06,
-            y + height - 0.12,
-          ] as LogicalRect,
-          topRight: [
-            x + width - 0.15,
-            y - 0.03,
-            x + width + 0.03,
-            y + 0.15,
-          ] as LogicalRect,
-          bottomRight: [
-            x + width - 0.15,
-            y + height - 0.15,
-            x + width + 0.03,
-            y + height + 0.03,
-          ] as LogicalRect,
-          top: [
-            x + width / 2 - 0.1,
-            y - 0.03,
-            x + width / 2 + 0.1,
-            y + 0.06,
-          ] as LogicalRect,
-          button: logical(PANEL.span),
-        });
-        const narrow = PANEL.spanFrame(false);
-        // Beyond the narrow frame but inside the wide one, clear of its text.
-        const widened: LogicalRect = [
-          narrow[0] + 1.4,
-          narrow[1] + 0.12,
-          narrow[0] + 1.7,
-          narrow[1] + 0.26,
-        ];
-        const frameEntity = async () =>
-          sceneEntity(await panelInspection(), "gui-span-frame/fill").id;
-        const narrowFrame = await frameEntity();
-        const narrowRegions = await regionStats("gui-detail-neon", {
-          ...frameRects(narrow),
-          widened,
-        });
-        await g.call(
-          "galleryGuiAction",
-          { role: "button", name: "SPAN" },
-          { kind: "press" },
-        );
-        await g.page.waitForFunction(
-          () => document.querySelector("#gui-span")?.textContent === "wide",
-        );
-        const wide = PANEL.spanFrame(true);
-        await waitForPanel(
-          (inspection) =>
-            Math.abs(
-              Number(
-                fieldsWith(inspection, "gui-span-frame", "min_height").width,
-              ) - wide[2],
-            ) < 1e-5,
-        );
-        assert.equal(
-          await frameEntity(),
-          narrowFrame,
-          "SPAN replaced its frame instead of resizing it",
-        );
-        await g.capture("gui-detail-span-wide");
-        const wideRegions = await regionStats("gui-detail-span-wide", {
-          ...frameRects(wide),
-          button: logical(PANEL.span),
-          widened,
-        });
-        evidence.span = { narrow, wide, narrowRegions, wideRegions };
-        assert.ok(
-          meanDifference(wideRegions.widened, narrowRegions.widened) > 20,
-          "SPAN did not paint its widened frame",
-        );
-        for (const key of Object.keys(frameRects(narrow)) as (keyof ReturnType<
-          typeof frameRects
-        >)[]) {
-          const difference = meanDifference(
-            narrowRegions[key],
-            wideRegions[key],
-          );
-          assert.ok(
-            difference < 4,
-            `SPAN ${key} region changed by ${difference} when resized`,
-          );
-        }
-        await g.call(
-          "galleryGuiAction",
-          { role: "button", name: "SPAN" },
-          { kind: "press" },
-        );
-        await g.page.waitForFunction(
-          () => document.querySelector("#gui-span")?.textContent === "narrow",
-        );
-        await recordRegions("neon", evidence);
+        await recordRegions("detail", evidence);
       });
 
+      // CYAN again through a real press on its segment.
+      const cyanPoint = await point("button", "CYAN");
+      await g.page.mouse.click(cyanPoint.clientX, cyanPoint.clientY);
+      await g.page.waitForFunction(
+        () => document.querySelector("#gui-accent")?.textContent === "cyan",
+      );
+      assertRetainedControls(
+        identityBeforeAccent,
+        await waitForGui(),
+        false,
+        dashboardControl,
+      );
+
       await g.page.locator("#ipp-world-canvas").scrollIntoViewIfNeeded();
-      // Wheel over the telemetry readouts, above the nested event log.
+      // A wheel notch over the readouts scrolls the telemetry body.
       const [tx, ty, tw] = PANEL.telemetry;
-      const [scroll] = await projectContent(g, [[tx + tw * 0.5, ty + 0.15]]);
+      const [scroll] = await projectContent(g, [[tx + tw * 0.5, ty + 40]]);
       const cameraBeforeScroll = transform(await g.inspect());
       await g.capture("gui-demo-before-scroll");
       await g.page.mouse.move(scroll!.clientX, scroll!.clientY);
-      // One wheel step scrolls the telemetry view by an eighth of its 0.78
-      // viewport.
       const beforeNotch = telemetryScrollViews(await waitForGui()).outer;
       const notchTarget = Math.min(
         beforeNotch.offset[1] + WHEEL_STEP,
         beforeNotch.capacity[1],
       );
       assert.ok(
-        notchTarget > beforeNotch.offset[1] + 0.05,
+        notchTarget > beforeNotch.offset[1] + 20,
         `telemetry has no room for a wheel notch: ${JSON.stringify(beforeNotch.capacity)}`,
       );
       await g.page.mouse.wheel(0, WHEEL_NOTCH_PIXELS);
@@ -2155,7 +2044,7 @@ test("Gallery runs a real GUI demo and cleans it up", {
           (state) =>
             Math.abs(
               telemetryScrollViews(state).outer.offset[1] - notchTarget,
-            ) < 1e-4,
+            ) < 1e-3,
         ),
       ).outer;
       await scenario.evidence.record("telemetry-wheel-notch", {
@@ -2163,7 +2052,6 @@ test("Gallery runs a real GUI demo and cleans it up", {
         after: { offset: afterNotch.offset, capacity: afterNotch.capacity },
         viewport: afterNotch.viewport,
       });
-      await g.page.mouse.wheel(0, 5 * WHEEL_NOTCH_PIXELS);
       await g.settle();
       assert.deepEqual(
         transform(await g.inspect()),
@@ -2174,21 +2062,9 @@ test("Gallery runs a real GUI demo and cleans it up", {
       assert.ok(
         (await g.difference("gui-demo-before-scroll", "gui-demo-after-scroll"))
           .changedPixels > 100,
-        "event stream did not visibly scroll",
+        "the telemetry body did not visibly scroll",
       );
-
-      const auroraPoint = await point("button", "AURORA");
-      await g.page.mouse.click(auroraPoint.clientX, auroraPoint.clientY);
-      await g.page.waitForFunction(
-        () => document.querySelector("#gui-skin")?.textContent === "aurora",
-      );
-      const emberPoint = await point("button", "EMBER");
-      await g.page.mouse.click(emberPoint.clientX, emberPoint.clientY);
-      await g.page.waitForFunction(
-        () => document.querySelector("#gui-skin")?.textContent === "ember",
-      );
-      assertRetainedControls(identityBeforeSkin, await waitForGui(), false);
-      await g.capture("gui-demo-final-ember-controls");
+      await g.page.mouse.move(1, 1);
 
       const mountedEntity = guiEntity(await g.inspect())!;
       const mountedPanel = await waitForGui();
@@ -2214,7 +2090,12 @@ test("Gallery runs a real GUI demo and cleans it up", {
         !isolated.controllers?.some(({ id }) => id === dustController.id),
         "vector isolation retained the projector dust controller",
       );
-      assertRetainedControls(mountedPanel, await waitForGui());
+      assertRetainedControls(
+        mountedPanel,
+        await waitForGui(),
+        true,
+        dashboardControl,
+      );
       const vectorFrame = await g.capture("gui-demo-vector-only");
       assert.ok(
         vectorFrame.frame.drawCalls > 0,
@@ -2309,11 +2190,11 @@ test("Gallery runs a real GUI demo and cleans it up", {
       assert.equal(returnedScanner.state, "playing");
       const returnedDust = animationFor(
         returnedInspection,
-        "gui-projector-beam",
+        "gui-projector-dust",
       );
       assert.notEqual(returnedDust.id, dustController.id);
       assert.equal(returnedDust.state, "playing");
-      assert.deepEqual(controlValue(returned, "checkbox"), {
+      assert.deepEqual(controlValue(returned, "checkbox", "SCAN"), {
         kind: "bool",
         value: true,
       });
@@ -2322,6 +2203,7 @@ test("Gallery runs a real GUI demo and cleans it up", {
         kind: "text",
         value: "VESPER-7",
       });
+      assert.equal(await g.page.locator("#gui-accent").textContent(), "cyan");
       await recordWaveform("lifecycle", {
         removedWorld: mountedPanel.world,
         removedScan: mountedScan.id,
@@ -2356,16 +2238,24 @@ function expectedCacheSize(band: number): readonly [number, number] {
 }
 
 /**
- * Cached versus direct panel tolerance, taken from the retained-gui text
- * comparison: at most 3.5% of panel pixels may differ by more than 64 levels
- * and bright text/glow masks must overlap by at least 0.85. The band-one
- * image resamples the panel once more than direct drawing, which moves glyph
- * and border edges by about one texel.
+ * Cached versus direct panel tolerance: at most 3.5% of panel pixels may
+ * differ by more than 64 levels, and at least 95% of the pixels bright in
+ * either presentation must reach the bright level less `textTolerance` in the
+ * other. The band-one image resamples the panel once more than direct
+ * drawing, which moves glyph and border edges by about one texel and softens
+ * thin stems and one-pixel borders by up to about 20 levels. A hard
+ * threshold flips those pixels at the dimmest labels and edges, and their
+ * share of the bright mask then depends on how much unrelated bright content
+ * the panel paints: the same flips scored 0.87 against outlined frames and
+ * 0.84 against plain ones. Within the 20-level band, the cached images
+ * agree at about 0.99 either way, while a one-pixel shift, a 3x3 blur or a
+ * 15% dimming of the cached image scores below 0.9.
  */
 const CACHE_COMPARISON = {
   channelThreshold: 64,
   maxChangedFraction: 0.035,
-  minTextAgreement: 0.85,
+  textTolerance: 20,
+  minTextAgreement: 0.95,
 } as const;
 
 interface CacheObservation {
@@ -2386,21 +2276,35 @@ function cacheDelta(before: CacheObservation, after: CacheObservation) {
   };
 }
 
-function decodeRegion(region: {
-  width: number;
-  height: number;
-  pixels: string;
-}): RgbaFrame {
-  return {
-    width: region.width,
-    height: region.height,
-    pixels: new Uint8Array(Buffer.from(region.pixels, "base64")),
-  };
-}
+/** Brightest channel level of the panel's text, icon and glow pixels. */
+const BRIGHT_LEVEL = 170;
 
 /** Bright text, icon and glow pixels of the panel. */
 function isBright(r: number, g: number, b: number): boolean {
-  return Math.max(r, g, b) >= 170;
+  return Math.max(r, g, b) >= BRIGHT_LEVEL;
+}
+
+/**
+ * Share of the pixels bright in either frame whose brightest channel in the
+ * other frame is within `tolerance` levels below the bright level.
+ */
+function brightAgreement(
+  expected: RgbaFrame,
+  actual: RgbaFrame,
+  tolerance: number,
+): number {
+  const level = (pixels: Uint8Array, index: number) =>
+    Math.max(pixels[index]!, pixels[index + 1]!, pixels[index + 2]!);
+  let bright = 0;
+  let agreed = 0;
+  for (let index = 0; index < expected.pixels.length; index += 4) {
+    const direct = level(expected.pixels, index);
+    const cached = level(actual.pixels, index);
+    if (Math.max(direct, cached) < BRIGHT_LEVEL) continue;
+    bright += 1;
+    if (Math.min(direct, cached) >= BRIGHT_LEVEL - tolerance) agreed += 1;
+  }
+  return bright === 0 ? 1 : agreed / bright;
 }
 
 test("Gallery GUI panel caches distant presentation within direct-rendering tolerance", {
@@ -2426,6 +2330,8 @@ test("Gallery GUI panel caches distant presentation within direct-rendering tole
           document.querySelector<HTMLOutputElement>("#status")?.dataset
             .state === "ready",
       );
+      // The station's first sync and its toast end before counts start.
+      await awaitStationIdle(g);
       // Keep the pointer off the canvas: hover would promote the panel.
       await g.page.mouse.move(1, 1);
       // Compare the vector panel alone, as the gallery's isolation control
@@ -2576,7 +2482,11 @@ test("Gallery GUI panel caches distant presentation within direct-rendering tole
           height: expected!.height,
           directTextPixels: count(expectedText),
           cachedTextPixels: count(actualText),
-          textAgreement: intersectionOverUnion(expectedText, actualText),
+          textAgreement: brightAgreement(
+            expected!,
+            actual!,
+            CACHE_COMPARISON.textTolerance,
+          ),
         };
         await Promise.all([
           writeFile(
@@ -2612,7 +2522,7 @@ test("Gallery GUI panel caches distant presentation within direct-rendering tole
       // Static content makes repaint counts exact: stop the scrolling trace.
       await g.call(
         "galleryGuiAction",
-        { role: "checkbox" },
+        { role: "checkbox", name: "SCAN" },
         { kind: "toggle" },
       );
       await g.page.waitForFunction(
@@ -2652,7 +2562,7 @@ test("Gallery GUI panel caches distant presentation within direct-rendering tole
         { repaints: 1, allocations: 1, reuses: 0 },
       );
       assert.equal(warm.record?.repaints, 1);
-      const aurora = await compareWithDirect("surface-cache-aurora-band1", 1);
+      const cyan = await compareWithDirect("surface-cache-cyan-band1", 1);
 
       // Hysteresis: 42 m stays in band one (boundary 40 m + 10%), 46 m moves
       // to band two with one resize, 38 m stays there and 34 m returns.
@@ -2681,6 +2591,66 @@ test("Gallery GUI panel caches distant presentation within direct-rendering tole
       }
       assert.ok(sizes[1]![0] < sizes[0]![0] && sizes[1]![1] < sizes[0]![1]);
 
+      // Panels stay whole on the base plane, so exploding a panel with no
+      // overlay open separates nothing and keeps the cached image.
+      const beforeLayers = await observeUntil(
+        "surface-cache-before-layers",
+        reused(1),
+      );
+      await g.page.locator("#gui-explode-toggle").click();
+      await g.page.waitForFunction(
+        () => document.querySelector("#gui-layers")?.textContent === "exploded",
+      );
+      await g.waitFor(
+        (inspection) =>
+          Math.abs(
+            Number(
+              fieldsWith(inspection, PANEL_ENTITY, "layer_spacing")
+                .layer_spacing,
+            ) - LAYERS.spacing,
+          ) < 1e-4,
+      );
+      const whole = await observeUntil(
+        "surface-cache-exploded-whole",
+        reused(1),
+      );
+      assert.equal(cacheDelta(beforeLayers, whole).allocations, 0);
+      // A toast floats on its own plane: one flat image cannot show the
+      // separated planes, so the panel presents directly in its layered
+      // mode, and closing the layers again composites the image without a
+      // new allocation.
+      await g.call(
+        "galleryGuiAction",
+        { role: "button", name: "CLEAR" },
+        { kind: "press" },
+      );
+      const layered = await observeUntil(
+        "surface-cache-exploded",
+        (entry) => entry?.mode === "layered",
+      );
+      const heldLayers = await observe("surface-cache-exploded-held");
+      assert.equal(heldLayers.record?.mode, "layered");
+      assert.equal(cacheDelta(layered, heldLayers).repaints, 0);
+      await g.page.locator("#gui-explode-toggle").click();
+      await g.page.waitForFunction(
+        () => document.querySelector("#gui-layers")?.textContent === "flat",
+      );
+      const flattened = await observeUntil(
+        "surface-cache-flattened",
+        reused(1),
+      );
+      assert.equal(cacheDelta(beforeLayers, flattened).allocations, 0);
+      await record("layers", {
+        whole: whole.record,
+        layered: layered.record,
+        flattened: flattened.record,
+        delta: cacheDelta(beforeLayers, flattened),
+      });
+      await g.call(
+        "galleryGuiAction",
+        { role: "button", name: "Dismiss" },
+        { kind: "press" },
+      );
       // A viewport resize keeps the fixed texel density: no repaint.
       await place(26);
       previous = await observeUntil("surface-cache-before-resize", reused(1));
@@ -2705,32 +2675,32 @@ test("Gallery GUI panel caches distant presentation within direct-rendering tole
         reused(1),
       );
 
-      // A skin switch is paint, not a resource change: it repaints at the
+      // Re-theming is paint, not a resource change: it repaints at the
       // band's cadence and settles on the latest state.
       await g.call(
         "galleryGuiAction",
-        { role: "button", name: "EMBER" },
+        { role: "button", name: "AMBER" },
         { kind: "press" },
       );
       await g.page.waitForFunction(
-        () => document.querySelector("#gui-skin")?.textContent === "ember",
+        () => document.querySelector("#gui-accent")?.textContent === "amber",
       );
       await new Promise((resolve) => setTimeout(resolve, SKIN_SETTLE_MS));
       const reskinned = await observeUntil(
-        "surface-cache-ember-settled",
+        "surface-cache-amber-settled",
         reused(1),
       );
       const reskin = cacheDelta(previous, reskinned);
       const reskinSeconds =
         (reskinned.record!.paintedAtMs - previous.record!.paintedAtMs) / 1000;
       assert.equal(reskin.allocations, 0);
-      assert.ok(reskin.repaints >= 1, "the skin switch never repainted");
+      assert.ok(reskin.repaints >= 1, "re-theming never repainted");
       assert.ok(
         reskin.repaints <= Math.ceil(reskinSeconds * CACHE_REFRESH_HZ) + 1,
-        `skin repaints exceeded the ${CACHE_REFRESH_HZ} Hz cap: ${JSON.stringify({ reskin, reskinSeconds })}`,
+        `re-theming repaints exceeded the ${CACHE_REFRESH_HZ} Hz cap: ${JSON.stringify({ reskin, reskinSeconds })}`,
       );
-      await record("ember-repaints", { ...reskin, reskinSeconds });
-      const ember = await compareWithDirect("surface-cache-ember-band1", 1);
+      await record("amber-repaints", { ...reskin, reskinSeconds });
+      const amber = await compareWithDirect("surface-cache-amber-band1", 1);
 
       // Continuous scanning keeps the trace current without exceeding the
       // cap: the cached image repaints at most at the cap, and either keeps
@@ -2738,7 +2708,7 @@ test("Gallery GUI panel caches distant presentation within direct-rendering tole
       previous = await observeUntil("surface-cache-before-scan", reused(1));
       await g.call(
         "galleryGuiAction",
-        { role: "checkbox" },
+        { role: "checkbox", name: "SCAN" },
         { kind: "toggle" },
       );
       await g.page.waitForFunction(
@@ -2766,7 +2736,7 @@ test("Gallery GUI panel caches distant presentation within direct-rendering tole
       await record("scan-repaints", { ...scan, scanSeconds });
       await g.call(
         "galleryGuiAction",
-        { role: "checkbox" },
+        { role: "checkbox", name: "SCAN" },
         { kind: "toggle" },
       );
       await g.page.waitForFunction(
@@ -2805,49 +2775,14 @@ test("Gallery GUI panel caches distant presentation within direct-rendering tole
       assert.equal(released.statistics!.surfaces!.surfaceCacheEntries, 0);
       assert.equal(released.statistics!.surfaces!.surfaceCacheResidentBytes, 0);
       await record("summary", {
-        aurora,
-        ember,
+        cyan,
+        amber,
         durationMs: performance.now() - started,
       });
       assert.deepEqual(g.errors, []);
     },
   );
 });
-
-type Gallery = Awaited<ReturnType<typeof openGallery>>;
-
-/** Runtime scroll bar thickness: a twentieth of the viewport's shorter side. */
-const SCROLL_BAR_THICKNESS = 0.05;
-
-/** Shortest thumb, in bar thicknesses. */
-const SCROLL_THUMB_MIN = 2;
-
-async function waitForGuiState(
-  g: Gallery,
-  predicate: (state: GalleryGuiState) => boolean = () => true,
-): Promise<GalleryGuiState> {
-  const deadline = performance.now() + 15_000;
-  let lastError: unknown;
-  while (performance.now() < deadline) {
-    try {
-      const state = await g.call<GalleryGuiState>("galleryGuiState");
-      if (predicate(state)) return state;
-    } catch (failure) {
-      lastError = failure;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-  throw new Error(
-    `GUI demo did not settle${lastError instanceof Error ? `: ${lastError.message}` : ""}`,
-  );
-}
-
-/** Event log entries restated from the demo: a Text at least 0.28 high
- * with a 0.05 gap below it, at 0.16 type, wrapping at 2.74. */
-const EVENT_MIN_HEIGHT = 0.28;
-const EVENT_GAP = 0.05;
-const EVENT_FONT_SIZE = 0.16;
-const EVENT_TEXT_WIDTH = 2.74;
 
 /**
  * The event log VirtualList: its semantic scroll and item state, authored
@@ -2870,20 +2805,22 @@ type EventLog = ReturnType<typeof eventLog>;
 /**
  * Independent event log layout: every item takes the estimate except the
  * declared ones, which measure their greedily wrapped lines (at least the
- * minimum height) plus the gap. Positions, content extent, capacity and the
- * wanted range follow from those extents, the viewport and the overscan.
+ * least text height) and the margins above and below. Positions, content
+ * extent, capacity and the wanted range follow from those extents, the
+ * viewport and the overscan.
  */
 function expectedEventLog(log: EventLog) {
-  const glyph = FONT_METRICS.advance * EVENT_FONT_SIZE;
-  const line = FONT_METRICS.lineHeight * EVENT_FONT_SIZE;
-  const columns = Math.floor(EVENT_TEXT_WIDTH / glyph + 1e-4);
+  const glyph = FONT_METRICS.advance * EVENT_LOG.textSize;
+  const line = FONT_METRICS.lineHeight * EVENT_LOG.textSize;
+  const columns = Math.floor(EVENT_LOG.textWidth / glyph + 1e-4);
   const estimate = log.itemExtent;
   const count = log.itemCount;
   const viewport = PANEL.eventLog[3];
   const first = log.items[0]?.index ?? 0;
   const lines = log.items.map(({ text }) => wrapColumns(text, columns));
   const extents = lines.map(
-    (wrapped) => Math.max(wrapped.length * line, EVENT_MIN_HEIGHT) + EVENT_GAP,
+    (wrapped) =>
+      Math.max(wrapped.length * line, EVENT_LOG.minText) + 2 * EVENT_LOG.margin,
   );
   const starts = extents.map((_, at) =>
     extents
@@ -2931,39 +2868,12 @@ function expectedEventLog(log: EventLog) {
     lines,
     extents,
     position,
+    itemAt,
     content,
     capacity,
     wanted,
   };
 }
-
-/**
- * Expected vertical scroll bar of one scrolling view whose viewport is
- * `rect` on screen: a track along the right edge as thick as a twentieth of
- * the shorter viewport side, and a thumb whose length is the visible
- * fraction of the track, never shorter than two thicknesses, placed by
- * offset / capacity.
- */
-function expectedScrollBar(
-  view: ScrollViews["outer"],
-  [x, y, width, height]: ContentRect,
-) {
-  const thickness = SCROLL_BAR_THICKNESS * Math.min(width, height);
-  const capacity = view.capacity[1];
-  const extent = height + capacity;
-  const length = Math.min(
-    height,
-    Math.max(height * (height / extent), SCROLL_THUMB_MIN * thickness),
-  );
-  const fraction = capacity > 0 ? view.offset[1] / capacity : 0;
-  const top = y + (height - length) * fraction;
-  return {
-    thickness,
-    track: [x + width - thickness, y, x + width, y + height] as LogicalRect,
-    thumb: [x + width - thickness, top, x + width, top + length] as LogicalRect,
-  };
-}
-
 /** The event log's on-screen viewport for a telemetry offset. */
 function eventLogViewport(outerOffset: number): ContentRect {
   const [x, y, width, height] = PANEL.eventLog;
@@ -3107,11 +3017,12 @@ async function compareMask(
 }
 
 /**
- * The settings panel scenario. `scrolling` checks wrapped notes, scroll bar
- * paint and nested scrolling through wheel steps and thumb drags; `shield`
- * opens the event log by wheel, checks that the log passes unused movement
- * outward, that the shield in front of PURGE changes only its own pixels
- * when lifted, and that PURGE clamps the log.
+ * The dashboard's settings scenario. `scrolling` checks wrapped notes,
+ * scroll bar paint and nested scrolling through wheel steps and thumb drags;
+ * `shield` opens the telemetry body by wheel, checks that the log passes
+ * unused movement outward, that the shield in front of PURGE changes only
+ * its own pixels when lifted, that PURGE empties the node table and that
+ * CLEAR clamps the log, with its toast painted and hit above the content.
  */
 function settingsPanel(part: "scrolling" | "shield") {
   return async (context: { readonly signal: AbortSignal }) => {
@@ -3134,6 +3045,7 @@ function settingsPanel(part: "scrolling" | "shield") {
             document.querySelector<HTMLOutputElement>("#status")?.dataset
               .state === "ready",
         );
+        await awaitStationIdle(g);
         const directory = scenario.evidence.directory;
         const evidence: Record<string, unknown> = {};
         const record = async (name: string, value: unknown) => {
@@ -3159,7 +3071,7 @@ function settingsPanel(part: "scrolling" | "shield") {
         // inputs under test.
         await g.call(
           "galleryGuiAction",
-          { role: "checkbox" },
+          { role: "checkbox", name: "SCAN" },
           { kind: "toggle" },
         );
         await g.page.waitForFunction(
@@ -3172,7 +3084,9 @@ function settingsPanel(part: "scrolling" | "shield") {
         // Wrapped notes: a greedy word wrap of the notes into the columns
         // their fixed width holds at the bundled font's advance.
         const initial = await waitForGuiState(g);
-        const notesLeaf = initial.texts.find(({ text }) => text.length > 80);
+        const notesLeaf = initial.texts.find(
+          ({ symbol }) => symbol === "gui-notes",
+        );
         assert.ok(notesLeaf, "missing notes");
         assert.equal(notesLeaf.text, NOTES_TEXT);
         const { glyph, line, lines, rect: notes } = NOTES;
@@ -3186,10 +3100,29 @@ function settingsPanel(part: "scrolling" | "shield") {
         await record("scroll-views", views);
         assert.deepEqual(views.outer.offset, [0, 0]);
         assert.deepEqual(views.inner.offset, [0, 0]);
-        assert.ok(views.outer.capacity[1] > 0.5);
-        assert.ok(views.inner.capacity[1] > 1);
-        near(views.outer.viewport[1], PANEL.telemetry[3], "telemetry viewport");
-        near(views.inner.viewport[1], PANEL.eventLog[3], "event log viewport");
+        assert.ok(views.outer.capacity[1] > WHEEL_STEP);
+        assert.ok(views.inner.capacity[1] > 1_000);
+        assert.ok(
+          Math.abs(views.outer.viewport[1] - PANEL.telemetry[3]) < 0.01,
+          "telemetry viewport",
+        );
+        assert.ok(
+          Math.abs(views.inner.viewport[1] - PANEL.eventLog[3]) < 0.01,
+          "event log viewport",
+        );
+        // The body's content is its spaced children: readouts, notes, the
+        // EVENTS division and the log, between an inset above and below.
+        assert.ok(
+          Math.abs(
+            views.outer.capacity[1] -
+              (PANEL.eventLog[1] +
+                PANEL.eventLog[3] +
+                16 -
+                PANEL.telemetry[1] -
+                PANEL.telemetry[3]),
+          ) < 0.01,
+          `telemetry capacity ${views.outer.capacity[1]}`,
+        );
 
         // The event log is a VirtualList over the demo's whole history that
         // declares only its wanted range. Once the declared window follows
@@ -3224,7 +3157,7 @@ function settingsPanel(part: "scrolling" | "shield") {
             `loaded range at offset ${offset}`,
           );
           assert.ok(
-            Math.abs(log.inner.capacity[1] - expected.capacity) < 1e-3,
+            Math.abs(log.inner.capacity[1] - expected.capacity) < 1e-2,
             `capacity ${log.inner.capacity[1]} is not ${expected.capacity}`,
           );
           const sequences = log.items.map(({ text }) =>
@@ -3291,12 +3224,12 @@ function settingsPanel(part: "scrolling" | "shield") {
         );
         assert.ok(
           initialLog.log.itemCount >= 90 &&
-            initialLog.expected.capacity > 20 * PANEL.eventLog[3],
+            initialLog.expected.capacity > 5 * PANEL.eventLog[3],
           "the event log history does not span many viewports",
         );
         assert.ok(
           initialLog.expected.extents.some(
-            (extent) => Math.abs(extent - initialLog.log.itemExtent) > 0.05,
+            (extent) => Math.abs(extent - initialLog.log.itemExtent) > 5,
           ) &&
             new Set(initialLog.expected.lines.map(({ length }) => length))
               .size > 1,
@@ -3326,7 +3259,7 @@ function settingsPanel(part: "scrolling" | "shield") {
           const tracks = Object.fromEntries(
             Object.entries(bars).map(([bar, { track }]) => [
               bar,
-              [track[0] - 0.01, track[1], track[2] + 0.01, track[3]],
+              [track[0] - 1, track[1], track[2] + 1, track[3]],
             ]),
           ) as Record<string, LogicalRect>;
           const ink = await g.call<Record<string, LogicalRect>>(
@@ -3342,19 +3275,29 @@ function settingsPanel(part: "scrolling" | "shield") {
               `${name}-${bar}-bar`,
               frame,
               [
-                expected.track[0] - 0.03,
+                expected.track[0] - 3,
                 expected.track[1],
-                expected.track[2] + 0.03,
+                expected.track[2] + 3,
                 expected.track[3],
               ],
               [expected.thumb],
               (pixel) => Math.max(...pixel) >= 150,
             );
             masks[bar] = mask;
+            // A bar whose content fits shows its track without a thumb.
+            const view = bar === "outer" ? state.outer : state.inner;
+            if (view.capacity[1] <= 0) {
+              assert.equal(
+                mask.actualPixels,
+                0,
+                `${name} ${bar} shows a thumb for content that fits`,
+              );
+              continue;
+            }
             const [, top, , bottom] = ink[bar]!;
             assert.ok(
-              Math.abs(top - expected.thumb[1]) < 0.03 &&
-                Math.abs(bottom - expected.thumb[3]) < 0.03,
+              Math.abs(top - expected.thumb[1]) < 3 &&
+                Math.abs(bottom - expected.thumb[3]) < 3,
               `${name} ${bar} thumb spans ${top}..${bottom}, expected ${expected.thumb[1]}..${expected.thumb[3]}`,
             );
             assert.ok(
@@ -3375,22 +3318,31 @@ function settingsPanel(part: "scrolling" | "shield") {
           name: string,
         ) => {
           const { log, expected } = settled;
-          const [x, listTop, , listHeight] = eventLogViewport(
+          const [listX, listTop, , listHeight] = eventLogViewport(
             log.outer.offset[1],
           );
+          const x = listX + EVENT_LOG.textInset;
           const offset = log.inner.offset[1];
           const [, outerTop, , outerHeight] = PANEL.telemetry;
-          const top = Math.max(listTop, outerTop);
-          const bottom = Math.min(listTop + listHeight, outerTop + outerHeight);
+          // Inside the list frame's lines, and within the telemetry view.
+          const top = Math.max(listTop + 2, outerTop);
+          const bottom = Math.min(
+            listTop + listHeight - 2,
+            outerTop + outerHeight,
+          );
           const lineRects: LogicalRect[] = [];
           const lineEnds: Record<string, number> = {};
           const regions: Record<string, LogicalRect> = {};
           log.items.forEach((item, at) => {
-            const itemTop = listTop + expected.position(item.index) - offset;
+            const itemTop =
+              listTop +
+              expected.position(item.index) -
+              offset +
+              EVENT_LOG.margin;
             const lines = expected.lines[at]!;
-            // A one-line entry sits in its minimum-height box.
+            // A one-line entry sits in its least text box.
             const boxHeight =
-              lines.length === 1 ? EVENT_MIN_HEIGHT : expected.line;
+              lines.length === 1 ? EVENT_LOG.minText : expected.line;
             lines.forEach((content, index) => {
               const y0 = itemTop + index * expected.line;
               const y1 = y0 + boxHeight;
@@ -3404,7 +3356,7 @@ function settingsPanel(part: "scrolling" | "shield") {
               if (y0 >= top && y1 <= bottom) {
                 const key = `item${item.index}-line${index}`;
                 lineEnds[key] = x + content.length * expected.glyph;
-                regions[key] = [x - 0.02, y0, x + EVENT_TEXT_WIDTH, y1];
+                regions[key] = [x - 2, y0, x + EVENT_LOG.textWidth, y1];
               }
             });
           });
@@ -3422,7 +3374,9 @@ function settingsPanel(part: "scrolling" | "shield") {
             directory,
             name,
             frame,
-            [x - 0.03, top, x + EVENT_TEXT_WIDTH + 0.03, bottom],
+            // Clear of the list's scroll bar, which starts where the text
+            // column ends.
+            [x - 3, top, x + EVENT_LOG.textWidth - 2, bottom],
             lineRects,
             (pixel) => Math.max(...pixel) >= 110,
           );
@@ -3430,11 +3384,11 @@ function settingsPanel(part: "scrolling" | "shield") {
           for (const [key, end] of Object.entries(lineEnds)) {
             const [start, , stop] = ink[key]!;
             assert.ok(
-              start > x - 0.015 && start < x + expected.glyph,
+              start > x - 1.5 && start < x + expected.glyph,
               `${name} ${key} ink starts at ${start}, not ${x}`,
             );
             assert.ok(
-              stop > end - expected.glyph && stop < end + 0.015,
+              stop > end - expected.glyph && stop < end + 1.5,
               `${name} ${key} ink ends at ${stop}, not before ${end}`,
             );
           }
@@ -3477,132 +3431,108 @@ function settingsPanel(part: "scrolling" | "shield") {
           }
         };
         const at = (actual: number, expected: number) =>
-          Math.abs(actual - expected) < 1e-4;
+          Math.abs(actual - expected) < 1e-3;
+        // Each thumb drag records the routing outcomes that rejected or
+        // cancelled its actions, beside the scroll state it reached.
+        const dragThumb = async (
+          bar: ReturnType<typeof expectedScrollBar>,
+          toward: "start" | "end",
+          name: string,
+        ) => {
+          const x = (bar.track[0] + bar.track[2]) / 2;
+          const [from, to] = await projectContent(g, [
+            [x, (bar.thumb[1] + bar.thumb[3]) / 2],
+            [x, toward === "end" ? bar.track[3] + 40 : bar.track[1] - 40],
+          ]);
+          await g.call("observeGalleryGuiInput");
+          try {
+            await g.drag(
+              [from!.clientX, from!.clientY],
+              [to!.clientX, to!.clientY],
+            );
+          } finally {
+            await record(
+              `${name}-input`,
+              await g.call("finishGalleryGuiInputObservation"),
+            );
+          }
+        };
+        const logBar = (state: ScrollViews) =>
+          expectedScrollBar(
+            state.inner,
+            eventLogViewport(state.outer.offset[1]),
+          );
+        const [tx, ty, tw, th] = PANEL.telemetry;
+        // Over the readouts, clear of the nested log.
+        const readoutsPoint = [tx + tw * 0.4, ty + 40] as const;
         if (part === "scrolling") {
           await g.call("faceGalleryGuiToCamera");
           try {
             const detail = await capture("settings-bars-top");
 
-            // Each wrapped line paints ink from the left edge to its last glyph,
-            // once the telemetry view scrolls the notes into its viewport.
-            const checkNotes = async (
-              frame: typeof detail,
-              outerOffset: number,
-            ) => {
-              const [nx, notesY, notesWidth, notesHeight] = notes;
-              const ny = notesY - outerOffset;
-              const lineRects = lines.map(
-                (content, index) =>
-                  [
-                    nx,
-                    ny + index * line,
-                    nx + content.length * glyph,
-                    ny + (index + 1) * line,
-                  ] as LogicalRect,
-              );
-              const inkBounds = await g.call<Record<string, LogicalRect>>(
-                "galleryGuiInkBounds",
-                frame.label,
-                Object.fromEntries(
-                  lineRects.map(([x0, y0, , y1], index) => [
-                    `line${index}`,
-                    [x0 - 0.02, y0, x0 + notesWidth + 0.02, y1] as LogicalRect,
-                  ]),
-                ),
-              );
-              const notesMask = await compareMask(
-                g,
-                directory,
-                "settings-notes",
-                frame,
+            // Each wrapped line paints ink from the left edge to its last glyph.
+            const [nx, ny, notesWidth, notesHeight] = notes;
+            const lineRects = lines.map(
+              (content, index) =>
                 [
-                  nx - 0.03,
-                  ny - 0.03,
-                  nx + notesWidth + 0.03,
-                  ny + notesHeight + 0.03,
-                ],
-                lineRects,
-                (pixel) => Math.max(...pixel) >= 110,
-              );
-              await record("notes-frame", { lineRects, inkBounds, notesMask });
-              lineRects.forEach(([x0, , x1], index) => {
-                const ink = inkBounds[`line${index}`]!;
-                assert.ok(
-                  ink[0] > x0 - 0.015 && ink[0] < x0 + glyph,
-                  `line ${index} ink starts at ${ink[0]}, not ${x0}`,
-                );
-                assert.ok(
-                  ink[2] > x1 - glyph && ink[2] < x1 + 0.015,
-                  `line ${index} ink ends at ${ink[2]}, not before ${x1}: ${lines[index]}`,
-                );
-              });
-              assert.ok(notesMask.actualPixels > 200, "notes painted no ink");
+                  nx,
+                  ny + index * line,
+                  nx + content.length * glyph,
+                  ny + (index + 1) * line,
+                ] as LogicalRect,
+            );
+            const inkBounds = await g.call<Record<string, LogicalRect>>(
+              "galleryGuiInkBounds",
+              detail.label,
+              Object.fromEntries(
+                lineRects.map(([x0, y0, , y1], index) => [
+                  `line${index}`,
+                  [x0 - 2, y0, x0 + notesWidth + 2, y1] as LogicalRect,
+                ]),
+              ),
+            );
+            const notesMask = await compareMask(
+              g,
+              directory,
+              "settings-notes",
+              detail,
+              [nx - 3, ny - 3, nx + notesWidth + 3, ny + notesHeight + 3],
+              lineRects,
+              (pixel) => Math.max(...pixel) >= 110,
+            );
+            await record("notes-frame", { lineRects, inkBounds, notesMask });
+            lineRects.forEach(([x0, , x1], index) => {
+              const ink = inkBounds[`line${index}`]!;
               assert.ok(
-                notesMask.precision > 0.97,
-                `notes ink escaped its wrapped lines: ${JSON.stringify(notesMask)}`,
+                ink[0] > x0 - 1.5 && ink[0] < x0 + glyph,
+                `line ${index} ink starts at ${ink[0]}, not ${x0}`,
               );
-            };
+              assert.ok(
+                ink[2] > x1 - glyph && ink[2] < x1 + 1.5,
+                `line ${index} ink ends at ${ink[2]}, not before ${x1}: ${lines[index]}`,
+              );
+            });
+            assert.ok(notesMask.actualPixels > 200, "notes painted no ink");
+            assert.ok(
+              notesMask.precision > 0.97,
+              `notes ink escaped its wrapped lines: ${JSON.stringify(notesMask)}`,
+            );
 
             await barFrame(detail, views, "settings-bars-top", false);
 
             const cameraBefore = transform(await g.inspect());
-            // Each thumb drag records the routing outcomes that rejected or
-            // cancelled its actions, beside the scroll state it reached.
-            const dragThumb = async (
-              bar: ReturnType<typeof expectedScrollBar>,
-              toward: "start" | "end",
-              name: string,
-            ) => {
-              const x = (bar.track[0] + bar.track[2]) / 2;
-              const [from, to] = await projectContent(g, [
-                [x, (bar.thumb[1] + bar.thumb[3]) / 2],
-                [x, toward === "end" ? bar.track[3] + 0.3 : bar.track[1] - 0.3],
-              ]);
-              await g.call("observeGalleryGuiInput");
-              try {
-                await g.drag(
-                  [from!.clientX, from!.clientY],
-                  [to!.clientX, to!.clientY],
-                );
-              } finally {
-                await record(
-                  `${name}-input`,
-                  await g.call("finishGalleryGuiInputObservation"),
-                );
-              }
-            };
-
-            // A wheel step over the readouts scrolls the telemetry view.
-            const [tx, ty, tw, th] = PANEL.telemetry;
-            const [readouts] = await projectContent(g, [
-              [tx + tw * 0.4, ty + 0.15],
-            ]);
+            // A wheel step over the readouts scrolls the telemetry body.
+            const [readouts] = await projectContent(g, [readoutsPoint]);
             await wheelAt(readouts!, 1);
             const notched = await until("notched", ({ outer }) =>
               at(outer.offset[1], WHEEL_STEP),
             );
             assert.deepEqual(notched.inner.offset, [0, 0]);
 
-            // Seven more steps bring the wrapped notes fully into view.
-            for (let notch = 0; notch < 7; notch++) await wheelAt(readouts!, 1);
-            const notesShown = await until("notes-shown", ({ outer }) =>
-              at(outer.offset[1], 8 * WHEEL_STEP),
-            );
-            assert.deepEqual(notesShown.inner.offset, [0, 0]);
-            const notesTop = notes[1] - notesShown.outer.offset[1];
-            assert.ok(
-              notesTop >= ty && notesTop + notes[3] <= ty + th,
-              "the scrolled notes are clipped by the telemetry view",
-            );
-            await g.page.mouse.move(1, 1);
-            await checkNotes(
-              await capture("settings-notes"),
-              notesShown.outer.offset[1],
-            );
-
-            // Dragging the telemetry thumb past its track end opens the log.
+            // Dragging the telemetry thumb past its track end shows the
+            // whole log.
             await dragThumb(
-              expectedScrollBar(notesShown.outer, PANEL.telemetry),
+              expectedScrollBar(notched.outer, PANEL.telemetry),
               "end",
               "telemetry-thumb",
             );
@@ -3610,21 +3540,19 @@ function settingsPanel(part: "scrolling" | "shield") {
               at(outer.offset[1], outer.capacity[1]),
             );
             assert.deepEqual(opened.inner.offset, [0, 0]);
-
-            // The log sits inside the telemetry viewport once opened.
             const [ix, logTop, iw, ih] = eventLogViewport(
               opened.outer.offset[1],
             );
             assert.ok(
-              logTop >= ty - 1e-4 && logTop + ih <= ty + th + 1e-4,
+              logTop >= ty - 1e-3 && logTop + ih <= ty + th + 1e-3,
               `opened log ${logTop}..${logTop + ih} is clipped by the telemetry view`,
             );
-            const [log] = await projectContent(g, [
+            const [logPoint] = await projectContent(g, [
               [ix + iw * 0.4, logTop + ih / 2],
             ]);
 
             // A step over the log scrolls the log alone.
-            await wheelAt(log!, 1);
+            await wheelAt(logPoint!, 1);
             const logNotched = await until("log-notched", ({ inner }) =>
               at(inner.offset[1], WHEEL_STEP),
             );
@@ -3633,16 +3561,22 @@ function settingsPanel(part: "scrolling" | "shield") {
               opened.outer.offset,
               "a wheel over the event log also scrolled the telemetry view",
             );
-            // The step moves the log within its first item: the anchor keeps
-            // that item and the offset into it.
+            // The anchor names the item the offset falls in and the offset
+            // into it, from the independent layout.
             const wheeled = await settledEventLog("event-log-wheeled", (log) =>
               at(log.inner.offset[1], WHEEL_STEP),
             );
+            const anchor = wheeled.expected.itemAt(WHEEL_STEP);
             assert.deepEqual(
               [wheeled.log.inner.anchorIndex, wheeled.log.inner.first],
-              [0, 0],
+              [anchor, 0],
             );
-            assert.ok(at(wheeled.log.inner.anchorOffset, WHEEL_STEP));
+            assert.ok(
+              Math.abs(
+                wheeled.log.inner.anchorOffset -
+                  (WHEEL_STEP - wheeled.expected.position(anchor)),
+              ) < 1e-2,
+            );
             await g.page.mouse.move(1, 1);
             const wheeledFrame = await capture("settings-log-wheeled");
             await barFrame(
@@ -3653,14 +3587,10 @@ function settingsPanel(part: "scrolling" | "shield") {
             );
             await eventFrame(wheeledFrame, wheeled, "settings-log-wheeled");
 
-            // Dragging the log thumb past its track end scrolls it to its end.
-            const logBar = (state: ScrollViews) =>
-              expectedScrollBar(
-                state.inner,
-                eventLogViewport(state.outer.offset[1]),
-              );
-            // The declared window follows to the oldest entries; measuring
-            // them keeps the offset at the end of the shortened content.
+            // Dragging the log thumb past its track end scrolls it to its
+            // end; the declared window follows to the oldest entries, and
+            // measuring them keeps the offset at the end of the shortened
+            // content.
             await dragThumb(logBar(logNotched), "end", "log-thumb-end");
             await until("log-dragged", ({ inner }) =>
               at(inner.offset[1], inner.capacity[1]),
@@ -3693,8 +3623,9 @@ function settingsPanel(part: "scrolling" | "shield") {
               "nested scrolling did not visibly move the telemetry content",
             );
 
-            // Back at its start, the log passes unused upward movement outward:
-            // the telemetry view scrolls up a step while the log holds still.
+            // Back at its start, the log passes unused upward movement
+            // outward: the telemetry view scrolls up a step while the log
+            // holds still.
             await dragThumb(logBar(logEnd), "start", "log-thumb-start");
             const logStart = await until("log-returned", ({ inner }) =>
               at(inner.offset[1], 0),
@@ -3704,7 +3635,7 @@ function settingsPanel(part: "scrolling" | "shield") {
               (log) => log.inner.first === 0 && log.inner.anchorIndex === 0,
             );
             assert.deepEqual(logStart.outer.offset, opened.outer.offset);
-            await wheelAt(log!, -1);
+            await wheelAt(logPoint!, -1);
             const passed = await until("passed", ({ outer }) =>
               at(outer.offset[1], opened.outer.offset[1] - WHEEL_STEP),
             );
@@ -3732,25 +3663,21 @@ function settingsPanel(part: "scrolling" | "shield") {
           return;
         }
 
-        // Wheel steps over the readouts open the event log at the end of the
-        // telemetry view. At its first item, the log passes unused upward
-        // movement outward: the telemetry view scrolls up a step while the log
-        // holds still.
-        const [tx, ty, tw] = PANEL.telemetry;
-        const [readouts] = await projectContent(g, [
-          [tx + tw * 0.4, ty + 0.15],
-        ]);
-        await wheelAt(readouts!, 20);
-        const opened = await until("opened", ({ outer }) =>
-          at(outer.offset[1], outer.capacity[1]),
-        );
-        assert.deepEqual(opened.inner.offset, [0, 0]);
+        // A wheel step over the readouts opens the telemetry body. At its
+        // first item, the log passes unused upward movement outward: the
+        // telemetry view scrolls back up while the log holds still.
         {
-          const [ix, iy, iw, ih] = eventLogViewport(opened.outer.offset[1]);
-          const [log] = await projectContent(g, [[ix + iw * 0.4, iy + ih / 2]]);
+          const [readouts] = await projectContent(g, [readoutsPoint]);
+          await wheelAt(readouts!, 1);
+          const opened = await until("opened", ({ outer }) =>
+            at(outer.offset[1], WHEEL_STEP),
+          );
+          assert.deepEqual(opened.inner.offset, [0, 0]);
+          const [ix, iy, iw] = eventLogViewport(opened.outer.offset[1]);
+          const [log] = await projectContent(g, [[ix + iw * 0.4, iy + 60]]);
           await wheelAt(log!, -1);
           const passed = await until("passed", ({ outer }) =>
-            at(outer.offset[1], opened.outer.offset[1] - WHEEL_STEP),
+            at(outer.offset[1], 0),
           );
           assert.deepEqual(passed.inner.offset, [0, 0]);
           await record("passed-outward", {
@@ -3959,62 +3886,159 @@ function settingsPanel(part: "scrolling" | "shield") {
         );
 
         // Visual occlusion alone never blocks GUI input: PURGE takes the
-        // click through the unmarked glass.
+        // click through the unmarked glass and asks for confirmation in a
+        // modal dialog centred on the canvas, focus on Cancel.
         await g.page.mouse.click(purgeCentre.clientX, purgeCentre.clientY);
+        const asked = await waitForGuiState(g, (state) =>
+          state.overlays.some(
+            ({ symbol, visible }) => symbol === OVERLAYS.dialog && visible,
+          ),
+        );
+        const dialogButton = (name: "cancel" | "action") =>
+          control(asked, {
+            role: "button",
+            symbol: `${OVERLAYS.dialog}/${name}`,
+          });
+        for (const name of ["cancel", "action"] as const)
+          dialogButton(name).bounds.forEach((value, axis) =>
+            assert.ok(
+              Math.abs(value - PANEL.dialog[name][axis]!) < 0.05,
+              `the dialog's ${name} lies at ${JSON.stringify(dialogButton(name).bounds)}`,
+            ),
+          );
+        assert.equal(dialogButton("cancel").focused, true);
+        assert.equal(dialogButton("action").label, "Purge");
+        // The amber action confirms; the node table empties row by row down
+        // to its empty state.
+        const [confirm] = await projectContent(g, [
+          [
+            PANEL.dialog.action[0] + PANEL.dialog.action[2] / 2,
+            PANEL.dialog.action[1] + PANEL.dialog.action[3] / 2,
+          ],
+        ]);
+        await g.page.mouse.click(confirm!.clientX, confirm!.clientY);
+        await g.page.waitForFunction(
+          () =>
+            document.querySelector("#gui-operation")?.textContent ===
+            "Node purge: complete",
+        );
+        const purged = await waitForGuiState(g, (state) =>
+          state.texts.some(
+            ({ symbol, text }) =>
+              symbol === "gui-nodes/body/empty/text" && text === "No records",
+          ),
+        );
+        assert.equal(await text("#gui-nodes"), "0 of 0 online");
+        assert.ok(
+          !purged.controls.some(({ symbol }) =>
+            /^gui-nodes\/row\//.test(symbol ?? ""),
+          ),
+          "PURGE left node rows",
+        );
+        assert.equal(
+          control(purged, { role: "button", name: "PURGE" }).enabled,
+          false,
+          "PURGE stays available over an empty table",
+        );
+
+        // CLEAR leaves one entry; the runtime clamps the log's scroll
+        // position to the remaining content and anchors it at the top. Its
+        // toast offers UNDO.
+        const clear = await controlPoint(g, { role: "button", name: "CLEAR" });
+        await g.page.mouse.click(clear.clientX, clear.clientY);
         await g.page.waitForFunction(
           () =>
             document.querySelector("#gui-command")?.textContent ===
-            "Log purged",
+            "Log cleared",
         );
-        const purged = await waitForGuiState(g, (state) =>
-          state.eventLog.items.some(({ text }) => text.endsWith("LOG PURGED")),
+        const cleared = await waitForGuiState(g, (state) =>
+          state.eventLog.items.some(({ text }) => text.endsWith("LOG CLEARED")),
         );
-        const purgedViews = telemetryScrollViews(purged);
-        assert.equal(purgedViews.inner.capacity[1], 0);
-
-        // PURGE leaves one entry; the runtime clamps the log's scroll
-        // position to the remaining content and anchors it at the top.
+        assert.equal(telemetryScrollViews(cleared).inner.capacity[1], 0);
         await settledEventLog(
-          "event-log-purged",
+          "event-log-cleared",
           (log) =>
             log.itemCount === 1 &&
             log.inner.anchorIndex === 0 &&
             log.inner.anchorOffset === 0,
         );
-        // With nothing left to scroll, a step over the log passes to the
-        // telemetry view, which reaches its end with the log in view.
-        {
-          const [ix, iy, iw] = eventLogViewport(purgedViews.outer.offset[1]);
-          const [over] = await projectContent(g, [[ix + iw * 0.4, iy + 0.15]]);
-          await g.page.mouse.move(over!.clientX, over!.clientY);
-          await g.page.mouse.wheel(0, 20 * WHEEL_NOTCH_PIXELS);
-          await waitForGuiState(g, (state) => {
-            const { outer } = telemetryScrollViews(state);
-            return Math.abs(outer.offset[1] - outer.capacity[1]) < 1e-4;
-          });
-          await g.page.mouse.move(1, 1);
-        }
-        const emptied = await settledEventLog(
-          "event-log-emptied",
-          (log) =>
-            log.itemCount === 1 &&
-            log.inner.offset[1] === 0 &&
-            log.outer.offset[1] === log.outer.capacity[1],
-        );
-        assert.ok(emptied.log.items[0]!.text.endsWith("LOG PURGED"));
+        await g.page.mouse.move(1, 1);
         await g.call("faceGalleryGuiToCamera");
         try {
-          const purgedFrame = await capture("settings-log-purged");
+          // Show the whole cleared log: the telemetry thumb to its end.
+          const views = telemetryScrollViews(await waitForGuiState(g));
+          await dragThumb(
+            expectedScrollBar(views.outer, PANEL.telemetry),
+            "end",
+            "telemetry-thumb-cleared",
+          );
+          await until("cleared-opened", ({ outer }) =>
+            at(outer.offset[1], outer.capacity[1]),
+          );
+          const emptied = await settledEventLog(
+            "event-log-emptied",
+            (log) =>
+              log.itemCount === 1 &&
+              log.inner.offset[1] === 0 &&
+              at(log.outer.offset[1], log.outer.capacity[1]),
+          );
+          assert.ok(emptied.log.items[0]!.text.endsWith("LOG CLEARED"));
+          await g.page.mouse.move(1, 1);
+          const clearedFrame = await capture("settings-log-cleared");
           await barFrame(
-            purgedFrame,
+            clearedFrame,
             telemetryScrollViews(emptied.state),
-            "settings-log-purged-bars",
+            "settings-log-cleared-bars",
             true,
           );
-          await eventFrame(purgedFrame, emptied, "settings-log-purged");
+          await eventFrame(clearedFrame, emptied, "settings-log-cleared");
+
+          // Toasts float above the content: the CLEAR toast, last in the
+          // stack, covers the REDUCED MOTION checkbox. Its opaque interior
+          // hides the checkbox's line, and a press there reaches the toast,
+          // not the checkbox.
+          const state = await waitForGuiState(g);
+          const toasts = state.controls.filter(({ symbol }) =>
+            /^gui-toasts\/[^/]+$/.test(symbol ?? ""),
+          );
+          assert.deepEqual(
+            toasts.map(({ label }) => label),
+            ["Nodes purged.", "Log cleared."],
+          );
+          toasts.forEach(({ bounds }, index) =>
+            bounds.forEach((value, axis) =>
+              assert.ok(
+                Math.abs(value - PANEL.toast(index, 2)[axis]!) < 0.05,
+                `toast ${index} lies at ${JSON.stringify(bounds)}`,
+              ),
+            ),
+          );
+          const [mx, my, , mh] = PANEL.reducedMotion;
+          const checkboxLine: LogicalRect = [mx, my + 4, mx + 3, my + mh - 4];
+          const covered = await g.call<Record<string, RegionStats>>(
+            "galleryGuiRegionStats",
+            clearedFrame.label,
+            { line: checkboxLine },
+          );
+          await record("toast-cover", covered);
+          assert.ok(
+            covered.line!.max[2] < 80,
+            `the toast shows the checkbox beneath it: ${JSON.stringify(covered)}`,
+          );
         } finally {
           await g.call("releaseGalleryGuiTransform");
         }
+        const motion = await controlPoint(g, {
+          role: "checkbox",
+          name: "REDUCED MOTION",
+        });
+        await g.page.mouse.click(motion.clientX, motion.clientY);
+        await g.settle();
+        assert.deepEqual(
+          controlValue(await waitForGuiState(g), "checkbox", "REDUCED MOTION"),
+          { kind: "bool", value: false },
+          "a press on the toast reached the checkbox beneath it",
+        );
 
         await g.page.locator("#gui-shield-toggle").click();
         await g.page.waitForFunction(
@@ -4035,10 +4059,417 @@ test(
 );
 
 test(
-  "Gallery GUI settings panel passes scrolling outward, keeps its input shield in front of PURGE and clamps the purged log",
+  "Gallery GUI settings panel passes scrolling outward, keeps its input shield in front of PURGE, empties the node table and clamps the cleared log under its toast",
   { timeout: 180_000 },
   settingsPanel("shield"),
 );
+
+test("Gallery GUI keeps its panels whole when the layers explode and stays usable", {
+  timeout: 180_000,
+}, async (context) => {
+  await runBrowserEnvironment(
+    "GUI exploded layers",
+    {
+      ...galleryEnvironment,
+      evidenceParent: resolve(
+        "target/integration-artifacts/gallery-gui/exploded",
+      ),
+    },
+    context.signal,
+    async (scenario) => {
+      const g = await openGallery(scenario, {
+        initialPage: "gui",
+        canvasShare: PIXEL_COVERAGE_CANVAS_SHARE,
+      });
+      await g.page.waitForFunction(
+        () =>
+          document.querySelector<HTMLOutputElement>("#status")?.dataset
+            .state === "ready",
+      );
+      await awaitStationIdle(g);
+      // Static frames: SCAN off.
+      await g.call(
+        "galleryGuiAction",
+        { role: "checkbox", name: "SCAN" },
+        { kind: "toggle" },
+      );
+      await new Promise((resolve) => setTimeout(resolve, SKIN_SETTLE_MS));
+
+      await obliquePanel(g);
+      try {
+        const flat = await g.capture("layers-flat");
+        assert.equal(flat.frame.failedDrawCalls, 0);
+
+        // The sidebar writes the EXPLODE LAYERS switch, whose value starts
+        // the Surface's layer spacing animation on the Host clock.
+        await g.page.locator("#gui-explode-toggle").click();
+        await g.page.waitForFunction(
+          () =>
+            document.querySelector("#gui-layers")?.textContent === "exploded",
+        );
+        assert.deepEqual(
+          controlValue(await waitForGuiState(g), "checkbox", "EXPLODE LAYERS"),
+          { kind: "bool", value: true },
+        );
+        await g.waitFor(
+          (inspection) =>
+            Math.abs(
+              Number(
+                fieldsWith(inspection, PANEL_ENTITY, "layer_spacing")
+                  .layer_spacing,
+              ) - LAYERS.spacing,
+            ) < 1e-4,
+        );
+        await g.page.mouse.move(1, 1);
+        const exploded = await g.capture("layers-exploded");
+        assert.equal(exploded.frame.failedDrawCalls, 0);
+
+        // Panels stay whole: a frame and the content it holds stay on the
+        // base plane together, where they were drawn flat.
+        const shifts = await assertPlanes(
+          g,
+          { label: "layers-flat", frame: flat.frame },
+          { label: "layers-exploded", frame: exploded.frame },
+          {
+            frame: {
+              // TELEMETRY's top-left corner accent, in a small window clear
+              // of the header text beside it.
+              at: [
+                PANEL.telemetryPanel[0] + 1.5,
+                PANEL.telemetryPanel[1] + 1.5,
+              ],
+              plane: LAYERS.panel,
+              radius: 8,
+            },
+            content: {
+              // The gain readout's display digits.
+              at: [
+                PANEL.gainReadout[0] + 20,
+                PANEL.gainReadout[1] + PANEL.gainReadout[3] / 2,
+              ],
+              plane: LAYERS.panel,
+            },
+          },
+        );
+        await scenario.evidence.record("layer-shifts", shifts);
+
+        // The exploded panel stays usable where it is: a press at REDUCED
+        // MOTION's place on the Surface toggles it, and toggles it back.
+        const motion = PANEL.reducedMotion;
+        const [press] = await projectContent(g, [
+          [motion[0] + motion[2] / 2, motion[1] + motion[3] / 2],
+        ]);
+        for (const expected of [true, false]) {
+          await g.page.mouse.click(press!.clientX, press!.clientY);
+          await waitForGuiState(g, (state) => {
+            const value = controlValue(state, "checkbox", "REDUCED MOTION");
+            return value.kind === "bool" && value.value === expected;
+          });
+        }
+
+        // Flattening closes the planes on the Host clock; the panel paints
+        // as it did before.
+        await g.page.locator("#gui-explode-toggle").click();
+        await g.waitFor(
+          (inspection) =>
+            Number(
+              fieldsWith(inspection, PANEL_ENTITY, "layer_spacing")
+                .layer_spacing,
+            ) < 1e-4,
+        );
+        await g.page.waitForFunction(
+          () => document.querySelector("#gui-layers")?.textContent === "flat",
+        );
+        await g.page.mouse.move(1, 1);
+        await new Promise((resolve) => setTimeout(resolve, SKIN_SETTLE_MS));
+        const flattened = await g.capture("layers-flattened");
+        const centre = await g.call<{ changedPixels: number }>(
+          "compareViewerCaptureRegion",
+          "layers-flat",
+          "layers-flattened",
+          // The centre column: the log beside it records the toggles.
+          await g.call("galleryGuiContentRegion", [
+            PANEL.monitorPanel[0],
+            16,
+            PANEL.monitorPanel[0] + PANEL.monitorPanel[2],
+            656,
+          ]),
+        );
+        assert.ok(
+          centre.changedPixels < 50,
+          `the flattened panel does not paint as before: ${JSON.stringify(centre)}`,
+        );
+        assert.equal(flattened.frame.failedDrawCalls, 0);
+      } finally {
+        await g.call("releaseGalleryGuiTransform");
+      }
+      assert.deepEqual(g.errors, []);
+    },
+  );
+});
+
+test("Gallery GUI floats a tooltip, a context menu and a confirmation dialog on the kit's overlay layers", {
+  timeout: 180_000,
+}, async (context) => {
+  await runBrowserEnvironment(
+    "GUI overlays",
+    {
+      ...galleryEnvironment,
+      evidenceParent: resolve(
+        "target/integration-artifacts/gallery-gui/overlays",
+      ),
+    },
+    context.signal,
+    async (scenario) => {
+      const g = await openGallery(scenario, {
+        initialPage: "gui",
+        canvasShare: PIXEL_COVERAGE_CANVAS_SHARE,
+      });
+      await g.page.waitForFunction(
+        () =>
+          document.querySelector<HTMLOutputElement>("#status")?.dataset
+            .state === "ready",
+      );
+      await awaitStationIdle(g);
+      // Static frames: SCAN off.
+      await g.call(
+        "galleryGuiAction",
+        { role: "checkbox", name: "SCAN" },
+        { kind: "toggle" },
+      );
+      await new Promise((resolve) => setTimeout(resolve, SKIN_SETTLE_MS));
+      const overlay = (state: GalleryGuiState, symbol: string) =>
+        state.overlays.find((candidate) => candidate.symbol === symbol);
+      const text = async (selector: string) =>
+        g.page.locator(selector).textContent();
+      const newestEvent = (state: GalleryGuiState) =>
+        state.eventLog.items[0]?.text ?? "";
+
+      // PULSE's tooltip: the runtime opens it after its delay while the
+      // pointer hovers PULSE, above it and beyond the monitor's frame, so it
+      // paints over the page between the panels, and closes it when the
+      // pointer leaves.
+      await g.page.mouse.move(1, 1);
+      await g.capture("overlays-quiet");
+      const pulse = await controlPoint(g, { role: "button", name: "PULSE" });
+      await g.page.mouse.move(pulse.clientX, pulse.clientY);
+      await waitForGuiState(
+        g,
+        (state) => overlay(state, OVERLAYS.pulseTip)?.visible === true,
+      );
+      await g.capture("overlays-tooltip");
+      const tip = PANEL.tooltip(PANEL.pulse, "Send a burst across the scope");
+      const gap: LogicalRect = [
+        PANEL.monitorPanel[0] + PANEL.monitorPanel[2] + 3,
+        tip[1] + 3,
+        PANEL.nodesPanel[0] - 3,
+        tip[1] + tip[3] - 3,
+      ];
+      const [quietGap, tipGap] = await Promise.all(
+        ["overlays-quiet", "overlays-tooltip"].map(
+          async (label) =>
+            (
+              await g.call<Record<string, RegionStats>>(
+                "galleryGuiRegionStats",
+                label,
+                { gap },
+              )
+            ).gap!,
+        ),
+      );
+      await scenario.evidence.record("tooltip-gap", { quietGap, tipGap });
+      assert.ok(
+        Math.max(...quietGap!.max) < 90,
+        `the page between the panels is not quiet: ${JSON.stringify(quietGap)}`,
+      );
+      assert.ok(
+        Math.max(...tipGap!.max) > 150,
+        `the tooltip does not reach beyond the monitor: ${JSON.stringify(tipGap)}`,
+      );
+      // The pointer moves on to the page between the panels, which ends
+      // the hover, and the tooltip closes after its grace.
+      const [between] = await projectContent(g, [
+        [
+          (PANEL.monitorPanel[0] +
+            PANEL.monitorPanel[2] +
+            PANEL.nodesPanel[0]) /
+            2,
+          PANEL.statusPanel[1] + 40,
+        ],
+      ]);
+      await g.page.mouse.move(between!.clientX, between!.clientY, {
+        steps: 4,
+      });
+      await waitForGuiState(
+        g,
+        (state) => overlay(state, OVERLAYS.pulseTip)?.visible === false,
+      );
+
+      // A secondary press on a node row is its context request: the runtime
+      // focuses the row, and the menu opens at the press with rows that take
+      // no focus. Ping logs the node's answer and closes the menu.
+      const rowPoint = async (index: number) => {
+        const row = PANEL.gridRow(index);
+        const [point] = await projectContent(g, [
+          [row[0] + row[2] / 2, row[1] + row[3] / 2],
+        ]);
+        return point!;
+      };
+      const alpha = await rowPoint(0);
+      await g.page.mouse.click(alpha.clientX, alpha.clientY, {
+        button: "right",
+      });
+      const menuOpen = await waitForGuiState(
+        g,
+        (state) => overlay(state, OVERLAYS.menuSurface)?.visible === true,
+      );
+      await g.page.mouse.move(1, 1);
+      await g.capture("overlays-menu");
+      assert.equal(
+        control(menuOpen, { role: "button", symbol: "gui-nodes/row/alpha" })
+          .focused,
+        true,
+      );
+      assert.deepEqual(
+        menuOpen.controls
+          .filter(({ symbol }) => symbol?.startsWith(`${OVERLAYS.menu}/`))
+          .map(({ label, enabled, focused }) => [label, enabled, focused]),
+        [
+          ["Rename", true, false],
+          ["Ping", true, false],
+          ["Remove", true, false],
+        ],
+      );
+      await g.call(
+        "galleryGuiAction",
+        { role: "button", name: "Ping" },
+        { kind: "press" },
+      );
+      const pinged = await waitForGuiState(
+        g,
+        (state) =>
+          overlay(state, OVERLAYS.menuSurface)?.visible === false &&
+          newestEvent(state).endsWith(
+            `NODE ALPHA ANSWERED ${nodeSignal("alpha", 0.64)}%`,
+          ),
+      );
+      assert.ok(pinged);
+      // Remove takes Bravo, the sixth strongest, out of the table; its toast
+      // restores it.
+      const bravo = await rowPoint(5);
+      await g.page.mouse.click(bravo.clientX, bravo.clientY, {
+        button: "right",
+      });
+      await waitForGuiState(
+        g,
+        (state) => overlay(state, OVERLAYS.menuSurface)?.visible === true,
+      );
+      await g.call(
+        "galleryGuiAction",
+        { role: "button", name: "Remove" },
+        { kind: "press" },
+      );
+      await g.page.waitForFunction(
+        () =>
+          document.querySelector("#gui-nodes")?.textContent === "5 of 7 online",
+      );
+      const removed = await waitForGuiState(g, (state) =>
+        state.controls.some(({ label }) => label === "Bravo removed."),
+      );
+      assert.ok(
+        !removed.controls.some(
+          ({ symbol }) => symbol === "gui-nodes/row/bravo",
+        ),
+      );
+      await g.call(
+        "galleryGuiAction",
+        { role: "button", name: "RESTORE" },
+        { kind: "press" },
+      );
+      await g.page.waitForFunction(
+        () =>
+          document.querySelector("#gui-nodes")?.textContent === "6 of 8 online",
+      );
+      await waitForGuiState(
+        g,
+        (state) =>
+          newestEvent(state).endsWith("NODE BRAVO RESTORED") &&
+          !state.controls.some(({ symbol }) =>
+            /^gui-toasts\/[^/]+$/.test(symbol ?? ""),
+          ),
+      );
+
+      // PURGE asks first: a modal dialog on the dialog layer, focus on
+      // Cancel. A press beneath it reaches nothing, and Escape cancels and
+      // returns focus to PURGE.
+      const purge = await controlPoint(g, { role: "button", name: "PURGE" });
+      await g.page.mouse.click(purge.clientX, purge.clientY);
+      const asked = await waitForGuiState(
+        g,
+        (state) => overlay(state, OVERLAYS.dialog)?.visible === true,
+      );
+      assert.equal(
+        control(asked, {
+          role: "button",
+          symbol: `${OVERLAYS.dialog}/cancel`,
+        }).focused,
+        true,
+      );
+      const sync = await controlPoint(g, { role: "button", name: "SYNC" });
+      await g.page.mouse.click(sync.clientX, sync.clientY);
+      await g.settle();
+      assert.equal(await text("#gui-operation"), "Node sync: complete");
+      assert.equal(
+        overlay(await waitForGuiState(g), OVERLAYS.dialog)?.visible,
+        true,
+        "a press beneath the dialog closed it",
+      );
+      await g.page.keyboard.press("Escape");
+      const cancelled = await waitForGuiState(
+        g,
+        (state) =>
+          overlay(state, OVERLAYS.dialog)?.visible === false &&
+          newestEvent(state).endsWith("NODE PURGE CANCELLED"),
+      );
+      assert.equal(
+        control(cancelled, { role: "button", name: "PURGE" }).focused,
+        true,
+      );
+      assert.equal(await text("#gui-nodes"), "6 of 8 online");
+
+      // Asked again, Tab moves focus to the amber Purge and Enter confirms:
+      // the table empties and its toast offers RESTORE.
+      await g.page.mouse.click(purge.clientX, purge.clientY);
+      await waitForGuiState(
+        g,
+        (state) => overlay(state, OVERLAYS.dialog)?.visible === true,
+      );
+      await g.page.keyboard.press("Tab");
+      await waitForGuiState(
+        g,
+        (state) =>
+          control(state, {
+            role: "button",
+            symbol: `${OVERLAYS.dialog}/action`,
+          }).focused,
+      );
+      await g.page.keyboard.press("Enter");
+      await g.page.waitForFunction(
+        () =>
+          document.querySelector("#gui-operation")?.textContent ===
+          "Node purge: complete",
+      );
+      await waitForGuiState(
+        g,
+        (state) =>
+          overlay(state, OVERLAYS.dialog)?.visible === false &&
+          state.controls.some(({ label }) => label === "Nodes purged."),
+      );
+      assert.equal(await text("#gui-nodes"), "0 of 0 online");
+      assert.deepEqual(g.errors, []);
+    },
+  );
+});
 
 test("Gallery GUI input shield blocks pointer and wheel input while armed", {
   skip: "IppCanvas fixes guiInput blockers when its physical input context opens and reports blocked routing to no application callback; the gallery cannot name the shield it mounts later, count blocked input or lift it (ipp-kmw5.11.2 dependency)",

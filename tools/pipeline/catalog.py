@@ -88,8 +88,10 @@ REGRESSION_GROUPS = {
         (
             "surfaces",
             "gui",
+            "gui-composites",
             "gui-local",
             "gui-motion",
+            "gui-default-skin",
             "output-inclusion",
             "react-gui-authoring",
             "retained-gui",
@@ -237,6 +239,20 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
         ("node", "npm"),
     )
     build("gui-motion-fixtures", (), ("target/gui-motion",), ("node", "npm"))
+    # The harness's Node side is typed by the native build's generated client.
+    build(
+        "gui-composites-fixtures",
+        ("native",),
+        ("target/gui-composites",),
+        ("node", "npm"),
+    )
+    # The skin lab's tokens are typed by the generated contract declarations.
+    build(
+        "gui-default-skin-fixtures",
+        ("react-gui-authoring",),
+        ("target/gui-default-skin",),
+        ("node", "npm"),
+    )
     build(
         "gui-stress-fixtures",
         ("react", "native"),
@@ -339,6 +355,8 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
     )
     for name in ("gles-host", "gles-host-instrumentation"):
         build(name, (), (f"target/{name}",), ("node", "npm", "rust"))
+    # The shared development Host command; `host start` builds gles-host itself.
+    build("shared-host", (), ("target/shared-host",), ("node", "npm"))
     build("mesh-pose-fixtures", (), ("target/mesh-pose-build",), ("node", "npm"))
     build(
         "skinning-fixtures",

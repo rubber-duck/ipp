@@ -39,7 +39,7 @@ fn gui_action_command_syntax_is_complete_before_admission() {
             GuiLocalAction::SetScalar(0.5),
         ),
         (3, vec![0, 0, 0, 0], GuiLocalAction::SetText("".into())),
-        (4, vec![], GuiLocalAction::Focus),
+        (4, 1u32.to_le_bytes().to_vec(), GuiLocalAction::Focus(1)),
         (6, vec![], GuiLocalAction::Blur),
         (7, vec![], GuiLocalAction::Submit),
         (
@@ -59,6 +59,11 @@ fn gui_action_command_syntax_is_complete_before_admission() {
                 index: 40,
                 offset: 2.0,
             },
+        ),
+        (
+            11,
+            [0.5f32, 0.25, 1.0, 0.75].map(f32::to_le_bytes).concat(),
+            GuiLocalAction::SetColor([0.5, 0.25, 1.0, 0.75]),
         ),
     ] {
         let bytes = action(tag, &payload);
@@ -151,17 +156,21 @@ fn effect(target: GuiEntityTarget, kind: GuiLocalEffectKind) -> GuiLocalEffect {
 }
 
 #[test]
-fn focus_effect_encodes_result_and_change_without_a_value_revision() {
+fn focus_effect_encodes_result_change_and_part_without_a_value_revision() {
     let target = effect_target();
-    for focused in [false, true] {
+    for (focused, part) in [(false, 0u32), (true, 1)] {
         let bytes = observed(effect(
             target,
             GuiLocalEffectKind::FocusChanged {
                 focused,
                 changed: true,
+                part,
             },
         ));
-        assert_eq!(&bytes[bytes.len() - 3..], &[1, u8::from(focused), 1]);
+        assert_eq!(
+            &bytes[bytes.len() - 7..],
+            &[[1, u8::from(focused), 1].as_slice(), &part.to_le_bytes()].concat()[..]
+        );
     }
 }
 
@@ -176,6 +185,31 @@ fn press_and_submission_effects_encode_their_payloads() {
     assert_eq!(submitted[kind], 4);
     assert_eq!(&submitted[kind + 1..kind + 5], &4u32.to_le_bytes());
     assert_eq!(&submitted[kind + 5..], b"sent");
+    let rejected = observed(effect(target, GuiLocalEffectKind::Rejected("1,5".into())));
+    assert_eq!(rejected.len(), pressed.len() + 4 + 3);
+    assert_eq!(rejected[kind], 7);
+    assert_eq!(&rejected[kind + 1..kind + 5], &3u32.to_le_bytes());
+    assert_eq!(&rejected[kind + 5..], b"1,5");
+    let discarded = observed(effect(target, GuiLocalEffectKind::Discarded("1,5".into())));
+    assert_eq!(discarded[kind], 8);
+    assert_eq!(&discarded[kind + 5..], b"1,5");
+}
+
+#[test]
+fn context_request_effect_encodes_its_canvas_point() {
+    let target = effect_target();
+    let pressed = observed(effect(target, GuiLocalEffectKind::Pressed));
+    let context = observed(effect(
+        target,
+        GuiLocalEffectKind::ContextRequested {
+            point: [1.5, -2.25],
+        },
+    ));
+    let kind = pressed.len() - 1;
+    assert_eq!(context.len(), pressed.len() + 8);
+    assert_eq!(context[kind], 6);
+    assert_eq!(&context[kind + 1..kind + 5], &1.5f32.to_le_bytes());
+    assert_eq!(&context[kind + 5..], &(-2.25f32).to_le_bytes());
 }
 
 #[test]
@@ -316,6 +350,7 @@ fn routed_observation_fits_the_reserved_wire_bound() {
         kind: GuiLocalEffectKind::FocusChanged {
             focused: true,
             changed: true,
+            part: 0,
         },
     };
     let response = crate::Response {
@@ -332,15 +367,17 @@ fn routed_observation_fits_the_reserved_wire_bound() {
     };
     let bytes = crate::encode_response(&response).unwrap();
     // Envelope and framing 29, subscription and record kind 17, identity 25,
-    // target 34, routed source 17, tick 8, one ancestor 12 and the focus payload 3.
-    assert_eq!(bytes.len(), 145);
+    // target 34, routed source 17, tick 8, one ancestor 12 and the focus
+    // payload 7: its kind, two flags and the part.
+    assert_eq!(bytes.len(), 149);
     assert_eq!(
         crate::encoded_response_size(&response).unwrap(),
         bytes.len()
     );
-    // The largest fixed payload replaces the two focus flags within the same bound.
+    // The largest fixed payload replaces the focus flags and part within the
+    // same bound.
     assert!(
-        bytes.len() - 2 + GUI_EFFECT_PAYLOAD_BYTES
+        bytes.len() - 6 + GUI_EFFECT_PAYLOAD_BYTES
             <= GUI_OBSERVATION_ENCODING.effect_bytes
                 + GUI_OBSERVATION_ENCODING.ancestry_entry_bytes
     );

@@ -590,7 +590,9 @@ fn write_response(response: &Response, w: &mut Writer) -> Result<(), ProtocolErr
             render_diagnostics,
             gui_focus,
             gui_pointers,
+            gui_active_items,
             canvas,
+            gui_preferences,
         } => {
             w.u8(RESPONSE_INSPECT)?;
             w.f64(*time)?;
@@ -634,6 +636,10 @@ fn write_response(response: &Response, w: &mut Writer) -> Result<(), ProtocolErr
             for record in gui_pointers {
                 w.gui_pointer_record(record)?;
             }
+            w.count(gui_active_items.len(), crate::INSPECTION_PAGE_RECORDS)?;
+            for record in gui_active_items {
+                w.gui_active_item_record(record)?;
+            }
             w.u8(u8::from(canvas.is_some()))?;
             if let Some(record) = canvas {
                 w.canvas_state(&record.state)?;
@@ -643,6 +649,10 @@ fn write_response(response: &Response, w: &mut Writer) -> Result<(), ProtocolErr
                     w.f32(evaluated.extent[1])?;
                     w.u64(evaluated.tick)?;
                 }
+            }
+            w.u8(u8::from(gui_preferences.is_some()))?;
+            if let Some(preferences) = gui_preferences {
+                w.u8(u8::from(preferences.reduced_motion))?;
             }
         }
         ResponseBody::Error {

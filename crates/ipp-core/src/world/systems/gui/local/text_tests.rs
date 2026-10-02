@@ -20,6 +20,22 @@ const UNMAPPED: f32 = 0.5 * ROUTED_FONT_SIZE;
 /// Ascent 0.8, descent 0.2 and line gap 0.2 em.
 const LINE: f32 = 1.2 * ROUTED_FONT_SIZE;
 
+/// The marks on a text line, a sixteenth of an em thick: the caret's width
+/// and the composition underline along the line's bottom.
+const TEXT_MARK: f32 = ROUTED_FONT_SIZE / 16.0;
+
+/// Height of the fixture's text inputs.
+const INPUT_HEIGHT: f32 = 20.0;
+
+/// The label line's origin in an input: one em in from the left, centred
+/// vertically. The caret, selection and pointer text hits share it.
+const ORIGIN: [f32; 2] = [ROUTED_FONT_SIZE, (INPUT_HEIGHT - LINE) * 0.5];
+
+/// A rectangle given relative to the label line, in input coordinates.
+fn placed([x, y, width, height]: [f32; 4]) -> [f32; 4] {
+    [ORIGIN[0] + x, ORIGIN[1] + y, width, height]
+}
+
 /// Fixture glyph identities.
 const GLYPH_A: u32 = 3;
 const GLYPH_E: u32 = 5;
@@ -30,10 +46,11 @@ fn text_input(host: &mut GuiRoutedHost, text: &str) -> EntityId {
         ComponentValue::GuiTextInput(GuiTextInput {
             text: text.into(),
             placeholder: Arc::default(),
+            ..Default::default()
         }),
         ComponentValue::GuiLayout(GuiLayout {
             width: ROUTED_EXTENT,
-            height: 20.0,
+            height: INPUT_HEIGHT,
             ..Default::default()
         }),
     ])
@@ -45,6 +62,7 @@ fn focused(text: &str) -> (GuiRoutedHost, EntityId) {
     let entity = text_input(&mut host, text);
     host.route(GuiPhysicalInput::Key {
         key: GuiPhysicalKey::Tab,
+        shift: false,
     })
     .unwrap();
     let native = host
@@ -182,7 +200,7 @@ fn typed_edits_write_the_text_field_in_order_and_remeasure_the_label() {
     assert_eq!(label(&host, entity).0, [GLYPH_A, GLYPH_E]);
     assert_close(
         rect(&host, entity, CanvasPart::Caret).unwrap(),
-        [2.0 * A, 0.0, 0.6, LINE],
+        placed([2.0 * A, 0.0, TEXT_MARK, LINE]),
     );
 
     let deleted = edit(&mut host, GuiTextEdit::Backspace);
@@ -191,7 +209,7 @@ fn typed_edits_write_the_text_field_in_order_and_remeasure_the_label() {
     assert_eq!(label(&host, entity).0, [GLYPH_A]);
     assert_close(
         rect(&host, entity, CanvasPart::Caret).unwrap(),
-        [A, 0.0, 0.6, LINE],
+        placed([A, 0.0, TEXT_MARK, LINE]),
     );
     assert_eq!(&*stored(&mut host, entity), "a");
 }
@@ -278,7 +296,7 @@ fn caret_and_selection_paint_follow_the_measured_label() {
     edit(&mut host, GuiTextEdit::Selection([1, 1]));
     assert_close(
         rect(&host, entity, CanvasPart::Caret).unwrap(),
-        [A, 0.0, 0.6, LINE],
+        placed([A, 0.0, TEXT_MARK, LINE]),
     );
     assert!(rect(&host, entity, CanvasPart::Selection).is_none());
 
@@ -286,11 +304,11 @@ fn caret_and_selection_paint_follow_the_measured_label() {
     edit(&mut host, GuiTextEdit::Selection([0, 2]));
     assert_close(
         rect(&host, entity, CanvasPart::Selection).unwrap(),
-        [0.0, 0.0, 2.0 * A, LINE],
+        placed([0.0, 0.0, 2.0 * A, LINE]),
     );
     assert_close(
         rect(&host, entity, CanvasPart::Caret).unwrap(),
-        [2.0 * A, 0.0, 0.6, LINE],
+        placed([2.0 * A, 0.0, TEXT_MARK, LINE]),
     );
 
     // A backward range keeps its anchor and caret: the same highlight, with
@@ -299,13 +317,105 @@ fn caret_and_selection_paint_follow_the_measured_label() {
     assert_eq!(backward.selection, [2, 0]);
     assert_close(
         rect(&host, entity, CanvasPart::Selection).unwrap(),
-        [0.0, 0.0, 2.0 * A, LINE],
+        placed([0.0, 0.0, 2.0 * A, LINE]),
     );
     assert_close(
         rect(&host, entity, CanvasPart::Caret).unwrap(),
-        [0.0, 0.0, 0.6, LINE],
+        placed([0.0, 0.0, TEXT_MARK, LINE]),
     );
     assert_eq!(&*stored(&mut host, entity), "ae");
+}
+
+#[test]
+fn caret_and_selection_resolve_their_own_skin_rows() {
+    use crate::components::rows::Rows;
+    use crate::systems::canvas::CanvasShapeFill;
+    use crate::systems::gui::presentation::{GuiPaintPart, GuiSkin, GuiTheme};
+    use crate::systems::gui::{GuiPartId, GuiPrimitivePart};
+
+    const LABEL: [f32; 4] = [0.9, 0.8, 0.7, 1.0];
+    const CARET: [f32; 4] = [0.1, 0.9, 0.9, 1.0];
+    const SELECTION: [f32; 4] = [0.1, 0.4, 0.8, 1.0];
+    let (mut host, entity) = focused("ae");
+    let mut parts = Rows::new();
+    for (part, color) in [
+        (GuiPrimitivePart::Label, LABEL),
+        (GuiPrimitivePart::Caret, CARET),
+        (GuiPrimitivePart::Selection, SELECTION),
+    ] {
+        parts
+            .push(GuiPaintPart {
+                color: Some(color),
+                ..GuiPaintPart::keyed(GuiPartId::base(part)).unwrap()
+            })
+            .unwrap();
+    }
+    let theme = host.create(vec![ComponentValue::GuiTheme(GuiTheme {
+        parts,
+        ..Default::default()
+    })]);
+    host.apply(vec![Command::insert_value(
+        EntityRef::Handle(entity),
+        ComponentValue::GuiSkin(GuiSkin {
+            theme,
+            ..Default::default()
+        }),
+    )]);
+    edit(&mut host, GuiTextEdit::Selection([0, 1]));
+
+    // Each part paints its own colour: the highlight no longer borrows the
+    // label's, and the glyphs keep theirs.
+    let fill = |part| match part_of_host(&host, entity, part) {
+        CanvasPrimitive::Box {
+            fill: CanvasShapeFill::Solid(color),
+            ..
+        } => color,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(fill(CanvasPart::Selection), SELECTION);
+    assert_eq!(fill(CanvasPart::Caret), CARET);
+    assert_eq!(
+        part_of_host(&host, entity, CanvasPart::Label).style().color,
+        LABEL
+    );
+}
+
+#[test]
+fn an_unthemed_text_input_paints_the_reference_text_caret_and_selection() {
+    use crate::systems::canvas::CanvasShapeFill;
+
+    /// Linear RGBA of an sRGB `0xrrggbb` sample.
+    fn srgb(hex: u32) -> [f32; 4] {
+        let linear = |byte: u32| {
+            let value = f64::from(byte & 0xff) / 255.0;
+            (if value <= 0.04045 {
+                value / 12.92
+            } else {
+                ((value + 0.055) / 1.055).powf(2.4)
+            }) as f32
+        };
+        [linear(hex >> 16), linear(hex >> 8), linear(hex), 1.0]
+    }
+
+    let (mut host, entity) = focused("ae");
+    edit(&mut host, GuiTextEdit::Selection([0, 1]));
+    let fill = |part| match part_of_host(&host, entity, part) {
+        CanvasPrimitive::Box {
+            fill: CanvasShapeFill::Solid(color),
+            ..
+        } => color,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(fill(CanvasPart::Selection), srgb(0x0b6fc0));
+    assert_eq!(fill(CanvasPart::Caret), srgb(0x00f4fb));
+    assert_eq!(
+        part_of_host(&host, entity, CanvasPart::Label).style().color,
+        srgb(0xe5f5f7)
+    );
+}
+
+fn part_of_host(host: &GuiRoutedHost, entity: EntityId, wanted: CanvasPart) -> CanvasPrimitive {
+    part(host, entity, wanted).unwrap_or_else(|| panic!("{wanted:?} must paint"))
 }
 
 #[test]
@@ -317,11 +427,11 @@ fn backward_multibyte_selection_keeps_its_utf8_anchor_and_caret() {
     assert_eq!(backward.selection, [5, 1]);
     assert_close(
         rect(&host, entity, CanvasPart::Selection).unwrap(),
-        [A, 0.0, UNMAPPED, LINE],
+        placed([A, 0.0, UNMAPPED, LINE]),
     );
     assert_close(
         rect(&host, entity, CanvasPart::Caret).unwrap(),
-        [A, 0.0, 0.6, LINE],
+        placed([A, 0.0, TEXT_MARK, LINE]),
     );
 
     // Extending from that anchor keeps it while the caret moves.
@@ -334,7 +444,8 @@ fn backward_multibyte_selection_keeps_its_utf8_anchor_and_caret() {
 fn pointer_drag_selects_through_each_routed_caret_change() {
     let mut host = GuiRoutedHost::new();
     let entity = text_input(&mut host, "ae");
-    let point = |host: &GuiRoutedHost, x: f32| host.point([x, 10.0]);
+    // Pointer positions along the label line.
+    let point = |host: &GuiRoutedHost, x: f32| host.point([ORIGIN[0] + x, 10.0]);
 
     let down = point(&host, 0.5);
     host.route(GuiPhysicalInput::PointerDown {
@@ -376,7 +487,7 @@ fn pointer_drag_selects_through_each_routed_caret_change() {
     assert_eq!(released.selection, [0, 2]);
     assert_close(
         rect(&host, entity, CanvasPart::Selection).unwrap(),
-        [0.0, 0.0, 2.0 * A, LINE],
+        placed([0.0, 0.0, 2.0 * A, LINE]),
     );
     assert_eq!(&*stored(&mut host, entity), "ae");
 }
@@ -399,15 +510,15 @@ fn composition_paints_its_own_part_and_leaves_with_cancel_commit_or_focus_loss()
     assert_eq!(label(&host, entity).0, [GLYPH_A, GLYPH_E, GLYPH_E, GLYPH_E]);
     assert_close(
         rect(&host, entity, CanvasPart::Composition).unwrap(),
-        [2.0 * A, LINE - 1.0, 2.0 * A, 1.0],
+        placed([2.0 * A, LINE - TEXT_MARK, 2.0 * A, TEXT_MARK]),
     );
     assert_close(
         rect(&host, entity, CanvasPart::Selection).unwrap(),
-        [2.0 * A, 0.0, A, LINE],
+        placed([2.0 * A, 0.0, A, LINE]),
     );
     assert_close(
         rect(&host, entity, CanvasPart::Caret).unwrap(),
-        [3.0 * A, 0.0, 0.6, LINE],
+        placed([3.0 * A, 0.0, TEXT_MARK, LINE]),
     );
     let identities: std::collections::BTreeSet<_> = parts(&host, entity)
         .iter()
@@ -437,7 +548,7 @@ fn composition_paints_its_own_part_and_leaves_with_cancel_commit_or_focus_loss()
     assert_eq!(label(&host, entity).0, [GLYPH_A, GLYPH_E, GLYPH_V]);
     assert_close(
         rect(&host, entity, CanvasPart::Caret).unwrap(),
-        [2.0 * A + V, 0.0, 0.6, LINE],
+        placed([2.0 * A + V, 0.0, TEXT_MARK, LINE]),
     );
 
     // Losing focus drops an open provisional run from paint, and its later
@@ -452,6 +563,7 @@ fn composition_paints_its_own_part_and_leaves_with_cancel_commit_or_focus_loss()
     .fence;
     host.route(GuiPhysicalInput::Key {
         key: GuiPhysicalKey::Escape,
+        shift: false,
     })
     .unwrap();
     assert!(host.native().is_none());
@@ -589,7 +701,7 @@ fn programmatic_focus_keeps_native_ownership_and_blur_fences_old_edits() {
     // A command focusing the focused control changes nothing: the physical
     // session keeps its native record and provisional run.
     let target = host.snapshot(entity).target;
-    action(&mut host.gui, world, target, GuiLocalAction::Focus);
+    action(&mut host.gui, world, target, GuiLocalAction::Focus(0));
     host.frame();
     assert_eq!(host.native().unwrap().composition, composing.composition);
 
@@ -608,6 +720,49 @@ fn programmatic_focus_keeps_native_ownership_and_blur_fences_old_edits() {
         GuiInputError::Unavailable
     );
     assert_eq!(&*stored(&mut host, entity), "ae");
+}
+
+#[test]
+fn client_focus_on_a_text_input_gives_the_presenting_context_its_native_record() {
+    let mut host = GuiRoutedHost::new();
+    let entity = text_input(&mut host, "ab");
+    let target = host.snapshot(entity).target;
+    let world = host.world.id();
+
+    // A command focuses the input without an owning session or native record.
+    action(&mut host.gui, world, target, GuiLocalAction::Focus(0));
+    host.frame();
+    assert!(host.snapshot(entity).focused);
+    assert!(host.native().is_none());
+
+    // The presenting context adopts it at its routing boundary, and typing
+    // reaches it.
+    host.synchronize();
+    host.frame();
+    assert_eq!(host.native().unwrap().fence.target, target);
+    assert_eq!(
+        &*edit(&mut host, GuiTextEdit::Insert("c".into())).text,
+        "abc"
+    );
+    assert_eq!(&*stored(&mut host, entity), "abc");
+
+    // The focus stays the command's: replacing the input context keeps it and
+    // ends the old native record, and the next context installs its own.
+    let old = host.native().unwrap().fence;
+    host.rebind();
+    host.frame();
+    assert!(host.snapshot(entity).focused);
+    assert!(host.native().is_none());
+    host.synchronize();
+    host.frame();
+    assert_eq!(
+        refused(&mut host, old, GuiTextEdit::Insert("x".into())),
+        GuiInputError::Unavailable
+    );
+    assert_eq!(
+        &*edit(&mut host, GuiTextEdit::Insert("d".into())).text,
+        "abcd"
+    );
 }
 
 /// Submitted text among routed terminals.
@@ -637,6 +792,7 @@ fn pipelined_enter_submits_the_typed_text_once() {
     .unwrap();
     host.send(GuiPhysicalInput::Key {
         key: GuiPhysicalKey::Enter,
+        shift: false,
     })
     .unwrap();
     host.frame();
@@ -673,6 +829,7 @@ fn enter_during_composition_submits_nothing_and_keeps_the_provisional_run() {
     );
     host.route(GuiPhysicalInput::Key {
         key: GuiPhysicalKey::Enter,
+        shift: false,
     })
     .unwrap();
     let terminals = host.terminals();
@@ -684,6 +841,7 @@ fn enter_during_composition_submits_nothing_and_keeps_the_provisional_run() {
     edit(&mut host, GuiTextEdit::CommitComposition);
     host.route(GuiPhysicalInput::Key {
         key: GuiPhysicalKey::Enter,
+        shift: false,
     })
     .unwrap();
     assert_eq!(submissions(&host.terminals()), [Arc::<str>::from("aV")]);

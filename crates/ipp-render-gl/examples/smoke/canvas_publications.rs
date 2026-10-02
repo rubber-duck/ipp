@@ -71,6 +71,7 @@ pub(super) fn attach(
     let surface = Surface {
         width: extent[0],
         height: extent[1],
+        ..Default::default()
     };
     place(
         host,
@@ -224,6 +225,7 @@ pub fn run<D: RenderDevice>(
     let surface = Surface {
         width: 1.28,
         height: 1.28,
+        ..Default::default()
     };
     create(
         &mut host,

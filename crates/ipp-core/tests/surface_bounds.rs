@@ -63,6 +63,7 @@ fn surface_bounds_follow_transform_and_dimension_changes_without_picking() {
     let surface = Surface {
         width: 4.0,
         height: 2.0,
+        ..Default::default()
     };
     apply(
         &mut world,

@@ -34,9 +34,13 @@ impl GuiEffectPublisher {
 
     fn class(kind: &GuiLocalEffectKind) -> Option<GuiObservationClasses> {
         match kind {
-            GuiLocalEffectKind::Pressed | GuiLocalEffectKind::Submitted(_) => {
-                Some(GuiObservationClasses::Application)
-            }
+            GuiLocalEffectKind::Pressed
+            | GuiLocalEffectKind::Submitted(_)
+            | GuiLocalEffectKind::Rejected(_)
+            | GuiLocalEffectKind::Discarded(_)
+            | GuiLocalEffectKind::ContextRequested {
+                ..
+            } => Some(GuiObservationClasses::Application),
             GuiLocalEffectKind::FocusChanged {
                 changed: true,
                 ..

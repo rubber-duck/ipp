@@ -38,12 +38,16 @@ type WebGlRenderProgram = {
   poseWeight?: WebGLUniformLocation | null;
 };
 
-/** Retained GUI vertex storage laid out by a Rust-owned attribute table. */
+/** Retained GUI record storage laid out by a Rust-owned attribute table. */
 type WebGlRetainedBatch = {
   vao: WebGLVertexArrayObject;
   vbo: WebGLBuffer;
   stride: number;
   bytes: number;
+  /** Location, components and byte offset of each per-instance attribute. */
+  attributes: readonly (readonly [number, number, number])[];
+  /** First record the attribute pointers address; draws from another repoint them. */
+  based: number;
 };
 
 type WebGlRenderMesh = {
@@ -643,10 +647,28 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     return new Uint32Array(buffer(pointer, count * 4, 4), pointer, count);
   }
 
+  /** Point every attribute of `batch` at record `first`, advancing per instance. */
+  const pointRetainedBatch = (batch: WebGlRetainedBatch, first: number) => {
+    const base = first * batch.stride;
+    for (const [location, components, offset] of batch.attributes) {
+      gl.enableVertexAttribArray(location);
+      gl.vertexAttribPointer(
+        location,
+        components,
+        gl.FLOAT,
+        false,
+        batch.stride,
+        base + offset,
+      );
+      gl.vertexAttribDivisor(location, 1);
+    }
+    batch.based = first;
+  };
+
   /**
-   * Allocate zeroed retained vertex storage described by a Rust-owned `#[repr(C)]`
+   * Allocate zeroed retained record storage described by a Rust-owned `#[repr(C)]`
    * layout table: stride, attribute count, then location, components and offset per
-   * attribute.
+   * attribute. Every attribute advances once per instance: a record is one quad.
    */
   const createRetainedBatch = (
     byteLength: number,
@@ -655,7 +677,16 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     const header = words(layoutPointer, 2);
     const stride = header[0]!;
     const attributeCount = header[1]!;
-    const attributes = words(layoutPointer + 8, attributeCount * 3);
+    const table = words(layoutPointer + 8, attributeCount * 3);
+    const attributes = Array.from(
+      { length: attributeCount },
+      (_, index) =>
+        [
+          table[index * 3]!,
+          table[index * 3 + 1]!,
+          table[index * 3 + 2]!,
+        ] as const,
+    );
     if (stride === 0 || stride % 4 !== 0 || byteLength % stride !== 0)
       throw new Error("GUI batch length does not match its layout");
     const vao = gl.createVertexArray();
@@ -665,22 +696,19 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
       if (vbo) gl.deleteBuffer(vbo);
       throw new Error("GUI batch allocation failed");
     }
+    const batch: WebGlRetainedBatch = {
+      vao,
+      vbo,
+      stride,
+      bytes: byteLength,
+      attributes,
+      based: 0,
+    };
     bindVertexArray(vao);
     gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
-    // WebGL initializes new buffer storage to zero: degenerate vertices.
+    // WebGL initializes new buffer storage to zero: empty records.
     gl.bufferData(gl.ARRAY_BUFFER, byteLength, gl.DYNAMIC_DRAW);
-    for (let index = 0; index < attributeCount; index++) {
-      const location = attributes[index * 3]!;
-      gl.enableVertexAttribArray(location);
-      gl.vertexAttribPointer(
-        location,
-        attributes[index * 3 + 1]!,
-        gl.FLOAT,
-        false,
-        stride,
-        attributes[index * 3 + 2]!,
-      );
-    }
+    pointRetainedBatch(batch, 0);
     bindVertexArray(null);
     gl.bindBuffer(gl.ARRAY_BUFFER, null);
 
@@ -692,15 +720,15 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
       throw error;
     }
     const handle = id();
-    guiBatches.set(handle, { vao, vbo, stride, bytes: byteLength });
+    guiBatches.set(handle, batch);
     return handle;
   };
 
-  /** Write whole vertices into retained storage at a vertex-aligned byte offset. */
+  /** Write whole records into retained storage at a record-aligned byte offset. */
   const writeRetainedBatch = (
     batch: WebGlRetainedBatch | undefined,
     byteOffset: number,
-    vertexPointer: number,
+    recordPointer: number,
     byteLength: number,
   ): void => {
     if (!batch) throw new Error("Stale GUI batch handle");
@@ -710,10 +738,10 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
       byteOffset + byteLength > batch.bytes
     )
       throw new Error("GUI batch write does not match its storage");
-    const vertexData = floats(vertexPointer, byteLength / 4);
+    const recordData = floats(recordPointer, byteLength / 4);
     // GL keeps the previous contents for queued draws that read them.
     gl.bindBuffer(gl.ARRAY_BUFFER, batch.vbo);
-    gl.bufferSubData(gl.ARRAY_BUFFER, byteOffset, vertexData);
+    gl.bufferSubData(gl.ARRAY_BUFFER, byteOffset, recordData);
     gl.bindBuffer(gl.ARRAY_BUFFER, null);
     // Outside exhaustive mode the device checks this frame's end instead.
     checkDraw();
@@ -2124,6 +2152,31 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
           gl.deleteBuffer(batch.vbo);
         }
       },
+      set_gui_paint_blocks(
+        programHandle: number,
+        pointer: number,
+        count: number,
+      ): number {
+        return status(() => {
+          const program = programs.get(programHandle >>> 0);
+          if (!program) throw new Error("Stale canvas program handle");
+          pointer >>>= 0;
+          count >>>= 0;
+          if (count === 0) return 1;
+          const location = parameterLocation(program, "u_paint_blocks");
+          if (location) {
+            useProgram(program.object);
+            gl.uniform4fv(
+              location,
+              wholeFloats(pointer, count * 4),
+              pointer / 4,
+              count * 4,
+            );
+          }
+          checkDraw();
+          return 1;
+        });
+      },
       draw_gui_batch(
         programHandle: number,
         batchHandle: number,
@@ -2170,13 +2223,19 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
             0,
           );
           programInt(program, parameterLocation(program, "u_atlas"), 0);
-          // A glyph range binds its atlas. Box-only ranges never sample unit 0 but
-          // still clear it: WebGL rejects the draw when a leftover integer curve
-          // texture there mismatches the float u_atlas sampler.
+          // A glyph range binds its atlas. Shape ranges never sample unit 0 but
+          // still clear it, so no leftover integer curve texture stays bound there.
           gl.activeTexture(gl.TEXTURE0);
           gl.bindTexture(gl.TEXTURE_2D, atlas ?? null);
           bindVertexArray(batch.vao);
-          gl.drawArrays(gl.TRIANGLES, first, count);
+          // Instanced draws have no base instance: a draw from another first
+          // record repoints the attributes at it.
+          if (batch.based !== first) {
+            gl.bindBuffer(gl.ARRAY_BUFFER, batch.vbo);
+            pointRetainedBatch(batch, first);
+            gl.bindBuffer(gl.ARRAY_BUFFER, null);
+          }
+          gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, count);
           checkDraw();
           return 1;
         });

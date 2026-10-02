@@ -1,5 +1,5 @@
 mod error_checks;
-mod retained_vertices;
+mod retained_records;
 mod uniform_cache;
 
 use crate::RenderError;
@@ -63,7 +63,7 @@ pub(super) fn pack_surface_instances(
     }));
 }
 
-pub use super::gui_batch::GuiVertex;
+pub use super::gui_records::{GuiRecord, GuiRecordKind};
 
 pub(super) fn surface_instances_exact(instances: &[SurfacePathInstance]) -> bool {
     const MAX_EXACT_F32_INTEGER: u32 = 1 << 24;
@@ -176,8 +176,8 @@ pub trait RenderDevice: 'static {
     /// Context-owned depth texture and framebuffer for the bounded spot shadow pass.
     type ShadowMap;
 
-    /// Context-owned retained GUI vertex storage of one Surface: boxes and glyph
-    /// quads in the [`GuiVertex`] layout.
+    /// Context-owned retained GUI storage of one Surface: shape or glyph records,
+    /// one per instanced quad ([`GuiRecordKind`]).
     type GuiBatch;
 
     /// Context-owned glyph atlas page texture and framebuffer target.
@@ -472,22 +472,27 @@ pub trait RenderDevice: 'static {
     /// Release a target, tolerating invalid handles after context loss.
     fn delete_surface_cache_target(&mut self, _target: Self::SurfaceCacheTarget) {}
 
-    /// Allocate retained GUI vertex storage for `capacity` vertices, all zero.
-    fn create_gui_batch(&mut self, _capacity: usize) -> Result<Self::GuiBatch, RenderError> {
+    /// Allocate retained GUI storage for `capacity` records of `kind`, all zero.
+    fn create_gui_batch(
+        &mut self,
+        _kind: GuiRecordKind,
+        _capacity: usize,
+    ) -> Result<Self::GuiBatch, RenderError> {
         Err(RenderError::RenderDevice("gui batches unavailable".into()))
     }
 
-    /// Write `vertices` into the storage starting at vertex `first`.
+    /// Write `records` into the storage starting at record `first`. The storage
+    /// was created for records of their kind.
     ///
     /// Queued draws keep reading the previous contents; GL may copy or wait to
     /// provide that. On failure the contents are unknown and callers release the
     /// storage. GL errors surface here only in exhaustive mode, otherwise at this
     /// frame's end.
-    fn write_gui_batch(
+    fn write_gui_batch<R: GuiRecord>(
         &mut self,
         _batch: &mut Self::GuiBatch,
         _first: usize,
-        _vertices: &[GuiVertex],
+        _records: &[R],
     ) -> Result<(), RenderError> {
         Err(RenderError::RenderDevice("gui batches unavailable".into()))
     }
@@ -495,9 +500,10 @@ pub trait RenderDevice: 'static {
     /// Release one context-owned GUI storage allocation.
     fn delete_gui_batch(&mut self, _batch: Self::GuiBatch) {}
 
-    /// Draw `count` vertices from vertex `first` of retained GUI storage as triangles
-    /// in painter order, each clipped by its own rectangle. `atlas` is bound for
-    /// ranges containing glyph quads.
+    /// Draw `count` records from record `first` of retained GUI storage as instanced
+    /// quads of six vertices each, in record order, each clipped by its own
+    /// rectangle. `program` is the canvas program for shape storage and the glyph
+    /// program, sampling `atlas`, for glyph storage.
     #[allow(clippy::too_many_arguments)]
     fn draw_gui_batch(
         &mut self,
@@ -509,6 +515,25 @@ pub trait RenderDevice: 'static {
         _count: usize,
     ) -> Result<(), RenderError> {
         Err(RenderError::RenderDevice("gui batches unavailable".into()))
+    }
+
+    /// Upload `blocks` into `program`'s `u_paint_blocks` array from its first
+    /// vector: the custom paint parameters of the canvas whose GUI batches it
+    /// draws next. Callers pass at most
+    /// [`CANVAS_PAINT_VECTORS`](crate::CANVAS_PAINT_VECTORS) vectors and only to a
+    /// canvas program with paints.
+    fn set_gui_paint_blocks(
+        &mut self,
+        _program: &Self::Program,
+        blocks: &[[f32; 4]],
+    ) -> Result<(), RenderError> {
+        if blocks.is_empty() {
+            Ok(())
+        } else {
+            Err(RenderError::RenderDevice(
+                "canvas paints unavailable".into(),
+            ))
+        }
     }
 
     /// Allocate a single-channel R8 coverage page texture, cleared to zero, with

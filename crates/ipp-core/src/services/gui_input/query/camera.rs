@@ -118,39 +118,49 @@ impl<'a> QueryWalk<'a, '_> {
                 if local.direction[2] >= 0.0 {
                     continue;
                 }
-                let distance = -local.origin[2] / local.direction[2];
-                if !distance.is_finite() || distance < ray.near || distance > ray.far {
-                    continue;
-                }
-                let point = [
-                    (local.origin[0] + distance * local.direction[0]) / extent[0] + 0.5,
-                    0.5 - (local.origin[1] + distance * local.direction[1]) / extent[1],
-                ];
-                if !point.iter().all(|value| (0.0..1.0).contains(value)) {
-                    continue;
-                }
-                child_path.last_mut().expect("Surface step").distance = Some(distance);
                 let child = self.host.attached_publication(edge);
-                let task = match (branch_block, child, edge.output) {
-                    (None, Some(child), Some(output)) => QueryTask::View(QueryView {
-                        output,
-                        publication: child.id,
-                        point: point.map(|value| value as f32),
-                        extent,
-                        path: child_path,
-                    }),
-                    (reason, _, _) => QueryTask::Outcome(GuiQueryOutcome::Blocked {
-                        reason: reason.unwrap_or(GuiQueryBlockReason::Unavailable),
-                        path: child_path,
-                    }),
-                };
-                candidates.push(Candidate {
-                    distance,
-                    blocker: false,
-                    world: publication.world,
-                    entity: edge.anchor,
-                    task,
-                });
+                // A Surface separating its canvas's layers offers one plane per
+                // layer in use, at its id times the spacing, each holding only
+                // that layer's targets; candidates then meet the planes nearest
+                // first and fall through empty ones.
+                let layers = layer_planes(self.host, edge, child);
+                for &layer in layers {
+                    let plane = f64::from(layer) * f64::from(edge.layer_spacing);
+                    let distance = (plane - local.origin[2]) / local.direction[2];
+                    if !distance.is_finite() || distance < ray.near || distance > ray.far {
+                        continue;
+                    }
+                    let point = [
+                        (local.origin[0] + distance * local.direction[0]) / extent[0] + 0.5,
+                        0.5 - (local.origin[1] + distance * local.direction[1]) / extent[1],
+                    ];
+                    if !point.iter().all(|value| (0.0..1.0).contains(value)) {
+                        continue;
+                    }
+                    let mut path = child_path.clone();
+                    path.last_mut().expect("Surface step").distance = Some(distance);
+                    let task = match (branch_block, child, edge.output) {
+                        (None, Some(child), Some(output)) => QueryTask::View(QueryView {
+                            output,
+                            publication: child.id,
+                            point: point.map(|value| value as f32),
+                            extent,
+                            path,
+                            layer: (layers.len() > 1).then_some(layer),
+                        }),
+                        (reason, _, _) => QueryTask::Outcome(GuiQueryOutcome::Blocked {
+                            reason: reason.unwrap_or(GuiQueryBlockReason::Unavailable),
+                            path,
+                        }),
+                    };
+                    candidates.push(Candidate {
+                        distance,
+                        blocker: false,
+                        world: publication.world,
+                        entity: edge.anchor,
+                        task,
+                    });
+                }
             }
         }
         candidates.sort_by(|left, right| {
@@ -164,4 +174,22 @@ impl<'a> QueryWalk<'a, '_> {
             .extend(candidates.into_iter().rev().map(|candidate| candidate.task));
         Ok(())
     }
+}
+
+/// Layers whose planes a Surface edge in a camera's domain presents: those its
+/// canvas uses when its layer spacing separates them, otherwise the base plane.
+pub(super) fn layer_planes<'a>(
+    host: &'a crate::HostRuntime,
+    edge: &crate::PublishedWorldAttachment,
+    child: Option<&crate::WorldPublication>,
+) -> &'a [u32] {
+    const BASE: &[u32] = &[0];
+    if edge.layer_spacing == 0.0 {
+        return BASE;
+    }
+    child
+        .zip(edge.output)
+        .and_then(|(child, output)| host.output(child.id, output))
+        .and_then(|chunk| chunk.data::<crate::systems::canvas::CanvasPublication>())
+        .map_or(BASE, |canvas| &canvas.layers)
 }

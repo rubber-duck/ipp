@@ -32,12 +32,13 @@ fn slider(min: f32, max: f32, step: f32, value: f32) -> ComponentValue {
         min,
         max,
         step,
+        ..Default::default()
     })
 }
 
 /// Painted thumb centre of a slider laid out at `rect`, at a value fraction.
 fn thumb_centre(rect: [f32; 4], fraction: f32) -> [f32; 2] {
-    let thumb = slider_rail(rect).unwrap().thumb_rect(fraction).unwrap();
+    let thumb = slider_rail(rect, 0).unwrap().thumb_rect(fraction).unwrap();
     [thumb[0] + thumb[2] * 0.5, thumb[1] + thumb[3] * 0.5]
 }
 

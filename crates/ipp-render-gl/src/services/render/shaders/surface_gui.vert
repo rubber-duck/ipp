@@ -1,10 +1,11 @@
 #version 300 es
 // SPDX-License-Identifier: MIT OR Apache-2.0
-// GUI-only triangle list of parameterized boxes and atlas glyph quads sharing one
-// vertex layout, so consecutive boxes and text of a Surface draw together in painter
-// order. Box placement carries the scaled position and size in Surface metres; corner
-// and border dimensions arrive per-vertex so resizing the box never stretches its
-// corners. Every vertex carries its primitive's clip rectangle.
+// Instanced quads of parameterized boxes, strokes and arcs: one record per quad, six
+// vertices from gl_VertexID, so painter order within a draw is record order. Box
+// placement carries the scaled position and size in logical units; corner, cut,
+// accent and border dimensions arrive per record so resizing the box never stretches
+// its corners. A stroke's or arc's placement is its own tight bounds. Every record
+// carries its primitive's clip rectangle. Glyphs draw with surface_glyph.vert.
 precision highp float;
 
 uniform mat4 u_mvp;
@@ -21,24 +22,25 @@ const float ANTIALIAS_PIXELS = 1.5;
 const float MAX_PAD_PIXELS = 4.0;
 const float DEPTH_PAD_FRACTION = 0.25;
 const float SIZE_PAD_FACTOR = 2.0;
-// Fill type of glyph quads. Equal to GUI_FILL_GLYPH in gui_batch.rs; a Rust unit test
-// compares them. Boxes use 0 (solid), 1 (linear) and 2 (radial).
-const float GUI_FILL_GLYPH = 3.0;
 
-layout(location = 0) in vec2 a_position;
+layout(location = 0) in vec4 a_rect; // covered rectangle: top-left and bottom-right corners
 layout(location = 1) in vec4 a_placement; // position.xy, size.xy
-layout(location = 2) in vec4 a_shape; // corner_rx, corner_ry, border_width, reserved
-layout(location = 3) in vec4 a_color0; // fill linear RGBA (solid or gradient start)
-layout(location = 4) in vec4 a_color1; // fill linear RGBA (gradient end)
-layout(location = 5) in vec4 a_border_color; // border linear RGBA
-layout(location = 6) in vec4 a_gradient_coords; // linear: [start.xy, end.xy], radial: [center.xy, radius, 0.0], glyph: [u, v, 0.0, 0.0]
-layout(location = 7) in vec4 a_material_params; // fill_type, glow_intensity, glow_radius, glow_falloff
-layout(location = 8) in vec4 a_glow_color; // glow linear RGBA
-layout(location = 9) in vec4 a_clip; // min.xy, max.xy in Surface metres
+layout(location = 2) in vec4 a_shape; // box: corner_rx, corner_ry, border_width, accent_width; arc: radius, half sweep, thickness, duty
+layout(location = 3) in vec4 a_corner_cut; // box: cut per corner; stroke: first segment; arc: centre, middle direction
+layout(location = 4) in vec4 a_corner_accent; // box: accent span per corner or checker; stroke: second segment; arc: half-sweep sine and cosine, dashes
+layout(location = 5) in vec4 a_color0; // fill linear RGBA (solid or gradient start; colour fields: tint)
+layout(location = 6) in vec4 a_color1; // fill linear RGBA (gradient end; saturation-value: hue)
+layout(location = 7) in vec4 a_border_color; // border linear RGBA
+layout(location = 8) in vec4 a_gradient_coords; // linear and hue: [start.xy, end.xy], radial: [center.xy, radius, 0.0], saturation-value: [min.xy, max.xy]
+layout(location = 9) in vec4 a_material_params; // paint, glow_inner_radius, glow_radius, glow_falloff
+layout(location = 10) in vec4 a_glow_color; // glow linear RGB, alpha times intensity
+layout(location = 11) in vec4 a_clip; // min.xy, max.xy
 
 out vec2 v_surface_position;
 flat out vec4 v_placement;
 flat out vec4 v_shape;
+flat out vec4 v_corner_cut;
+flat out vec4 v_corner_accent;
 flat out vec4 v_color0;
 flat out vec4 v_color1;
 flat out vec4 v_border_color;
@@ -46,7 +48,17 @@ flat out vec4 v_gradient_coords;
 flat out vec4 v_material_params;
 flat out vec4 v_glow_color;
 flat out vec4 v_clip;
-out vec2 v_uv;
+
+// Whether each of the six vertices takes the rectangle's right and bottom edge: the
+// triangles [TL, BL, BR] and [TL, BR, TR].
+const bvec2 CORNERS[6] = bvec2[6](
+    bvec2(false, false),
+    bvec2(false, true),
+    bvec2(true, true),
+    bvec2(false, false),
+    bvec2(true, true),
+    bvec2(true, false)
+);
 
 // Surface-metre padding placing ANTIALIAS_PIXELS of geometry beyond each contour.
 //
@@ -80,26 +92,28 @@ vec2 antialias_pad(vec4 projected) {
 }
 
 void main() {
+    // Corners are selected, not interpolated, so they equal the record's lanes
+    // exactly and quads sharing an edge keep sharing it.
+    bvec2 far_corner = CORNERS[gl_VertexID];
+    vec2 corner = vec2(far_corner.x ? a_rect.z : a_rect.x, far_corner.y ? a_rect.w : a_rect.y);
+    vec2 position = corner;
+    vec4 projected = u_mvp * vec4(position, 0.0, 1.0);
     // Local geometry remains retained across camera motion, including sparse strips,
     // so the projected antialias footprint is applied here.
-    vec2 position = a_position;
-    vec4 projected = u_mvp * vec4(position, 0.0, 1.0);
-    // Glyph quads already include an antialias texel of coverage.
-    bool glyph = a_material_params.x > GUI_FILL_GLYPH - 0.5;
-    if (projected.w > 0.0 && !glyph) {
+    if (projected.w > 0.0) {
         vec2 pad = antialias_pad(projected);
         vec2 lo = min(a_placement.xy, a_placement.xy + a_placement.zw);
         vec2 hi = max(a_placement.xy, a_placement.xy + a_placement.zw);
-        vec2 exterior_low = vec2(lessThan(a_position, lo));
-        vec2 exterior_high = vec2(greaterThan(a_position, hi));
-        vec2 interior = vec2(greaterThanEqual(a_position, lo)) * vec2(lessThanEqual(a_position, hi));
+        vec2 exterior_low = vec2(lessThan(corner, lo));
+        vec2 exterior_high = vec2(greaterThan(corner, hi));
+        vec2 interior = vec2(greaterThanEqual(corner, lo)) * vec2(lessThanEqual(corner, hi));
 
-        // Exterior vertices already carry the generated margin. Interior vertices of
+        // Exterior corners already carry the generated margin. Interior corners of
         // sparse strips lie on the inner contour without one, so they move inward by
         // the whole footprint: shared seams move together and an undersized hole
         // collapses to the centre.
         vec2 exterior_pad = max(pad - vec2(GUI_BOX_ANTIALIAS_PAD), vec2(0.0));
-        vec2 center_delta = (lo + hi) * 0.5 - a_position;
+        vec2 center_delta = (lo + hi) * 0.5 - corner;
         position += interior * sign(center_delta) * min(pad, abs(center_delta));
         position -= exterior_low * exterior_pad;
         position += exterior_high * exterior_pad;
@@ -107,6 +121,8 @@ void main() {
     v_surface_position = position;
     v_placement = a_placement;
     v_shape = a_shape;
+    v_corner_cut = a_corner_cut;
+    v_corner_accent = a_corner_accent;
     v_color0 = a_color0;
     v_color1 = a_color1;
     v_border_color = a_border_color;
@@ -114,6 +130,5 @@ void main() {
     v_material_params = a_material_params;
     v_glow_color = a_glow_color;
     v_clip = a_clip;
-    v_uv = a_gradient_coords.xy;
     gl_Position = u_mvp * vec4(position, 0.0, 1.0);
 }

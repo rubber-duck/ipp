@@ -1,13 +1,20 @@
 //! ScrollView scroll bar geometry shared by control paint and input routing.
 //!
-//! A ScrollView shows one track and one thumb per axis whose content
-//! overflows its viewport. The vertical track runs along the viewport's
-//! right edge and the horizontal track along its bottom edge; when both show,
-//! each stops short of the shared corner. Track thickness is a fraction of
-//! the viewport's shorter side. The thumb length is the track length times
-//! the visible fraction of the content, never shorter than a few
-//! thicknesses, and the thumb travels the rest of the track in proportion to
-//! the committed offset over the scroll capacity.
+//! A ScrollView shows one track and one thumb per axis it scrolls, and on any
+//! other axis whose content overflows its viewport; a bar whose content fits
+//! cannot scroll and takes no input. Its control fields author the bars in
+//! logical units: the track's thickness, its inset from the control's far side
+//! (the right edge for the vertical track, the bottom edge for the horizontal
+//! one) and its inset from the control's ends. Fields left at their default
+//! follow one rule: a bar is half the control's inherited font size thick,
+//! and sits one thickness in from the far side and half a thickness in from
+//! the ends. When both tracks show, each stops where the
+//! crossing track starts. The track's ends point over half its thickness, so
+//! the thumb travels the track without those ends. The thumb length is that
+//! travel times the visible fraction of the content, never shorter than two
+//! thicknesses, and the thumb moves through the rest of the travel in
+//! proportion to the committed offset over the scroll capacity. Paint and hit
+//! testing use the same rectangles.
 //!
 //! Nested ScrollViews keep their bars visible: a track that would lie under
 //! or run into an enclosing ScrollView's track moves to that track's inner
@@ -15,11 +22,44 @@
 
 use crate::systems::gui::GuiPrimitivePart;
 
-/// Track thickness as a fraction of the viewport's shorter side.
-const SCROLL_BAR_THICKNESS: f32 = 0.05;
-
 /// Shortest thumb, in track thicknesses.
 const SCROLL_THUMB_MIN_LENGTH: f32 = 2.0;
+
+/// Default bar thickness in ems of the control's inherited font.
+pub(crate) const GUI_SCROLL_BAR_EMS: f32 = 0.5;
+
+/// Authored bar geometry of one scrolling control, in logical units.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct GuiScrollBarStyle {
+    /// Track thickness across its axis.
+    pub(crate) thickness: f32,
+    /// From the control's far side to the track's outer edge.
+    pub(crate) inset: f32,
+    /// From each of the control's ends to the track's tips.
+    pub(crate) end_inset: f32,
+}
+
+impl GuiScrollBarStyle {
+    /// The control's `bar_` fields `[thickness, inset, end_inset]` for an
+    /// inherited font of `font_size`. A negative thickness takes
+    /// [`GUI_SCROLL_BAR_EMS`] of the font; a negative inset takes the
+    /// thickness, and a negative end inset half of it.
+    pub(crate) fn from_fields(fields: [f32; 3], font_size: f32) -> Self {
+        let authored = |field: f32, default: f32| {
+            if field < 0.0 {
+                default
+            } else {
+                field
+            }
+        };
+        let thickness = authored(fields[0], GUI_SCROLL_BAR_EMS * font_size);
+        Self {
+            thickness,
+            inset: authored(fields[1], thickness),
+            end_inset: authored(fields[2], thickness * 0.5),
+        }
+    }
+}
 
 /// Track and thumb parts of one axis: 0 horizontal, 1 vertical.
 pub(crate) const fn scroll_bar_parts(axis: usize) -> (GuiPrimitivePart, GuiPrimitivePart) {
@@ -36,8 +76,8 @@ pub(crate) const fn scroll_bar_parts(axis: usize) -> (GuiPrimitivePart, GuiPrimi
     }
 }
 
-/// One axis of a ScrollView's scroll bar in final logical units at zero
-/// ancestor scroll.
+/// One axis of a ScrollView's scroll bar in the control's local logical units
+/// at zero ancestor scroll.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct GuiScrollBar {
     /// 0 horizontal, 1 vertical.
@@ -46,6 +86,9 @@ pub(crate) struct GuiScrollBar {
     pub(crate) track: [f32; 4],
     /// Thumb rectangle within the track.
     pub(crate) thumb: [f32; 4],
+    /// Start and length along the axis of the stretch the thumb moves in: the
+    /// track without its pointed ends.
+    pub(crate) rail: [f32; 2],
     /// Scroll capacity on this axis in local logical units.
     pub(crate) capacity: f32,
     /// Viewport extent on this axis in local logical units; one page.
@@ -53,19 +96,14 @@ pub(crate) struct GuiScrollBar {
 }
 
 impl GuiScrollBar {
-    /// Track start along the bar's axis.
-    pub(crate) fn track_start(&self) -> f32 {
-        self.track[self.axis]
-    }
-
     /// Thumb start along the bar's axis.
     pub(crate) fn thumb_start(&self) -> f32 {
         self.thumb[self.axis]
     }
 
-    /// Distance the thumb can travel along the track.
+    /// Distance the thumb can travel along the rail.
     pub(crate) fn travel(&self) -> f32 {
-        (self.track[self.axis + 2] - self.thumb[self.axis + 2]).max(0.0)
+        (self.rail[1] - self.thumb[self.axis + 2]).max(0.0)
     }
 
     /// Offset that places the thumb start at `thumb_start` along the axis,
@@ -75,18 +113,20 @@ impl GuiScrollBar {
         if travel <= 0.0 || self.capacity <= 0.0 {
             return 0.0;
         }
-        ((thumb_start - self.track_start()) / travel).clamp(0.0, 1.0) * self.capacity
+        ((thumb_start - self.rail[0]) / travel).clamp(0.0, 1.0) * self.capacity
     }
 
-    /// Whether the bar can scroll; a bar shown only by its theme never takes input.
+    /// Whether the bar can scroll; a bar whose content fits never takes input.
     pub(crate) fn enabled(&self) -> bool {
         self.capacity > 0.0
     }
 }
 
-/// Scroll geometry of one ScrollView or VirtualList from its layout fields.
+/// Scroll geometry of one ScrollView or VirtualList from its fields.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct GuiScrollExtent {
+    /// Axes the control scrolls, from its `axis` field.
+    pub(crate) axes: [bool; 2],
     /// Local viewport size.
     pub(crate) viewport: [f32; 2],
     /// Logical content extent.
@@ -95,15 +135,15 @@ pub(crate) struct GuiScrollExtent {
     pub(crate) capacity: [f32; 2],
 }
 
-/// Usable viewport of one ScrollView and its track thickness.
+/// The box one ScrollView's bars sit in and their authored geometry.
 #[derive(Clone, Copy, Debug)]
 struct GuiScrollBarFrame {
-    /// Viewport `[min_x, min_y, max_x, max_y]` in final logical units.
-    viewport: [f32; 4],
+    /// Control box `[min_x, min_y, max_x, max_y]` in local logical units.
+    control: [f32; 4],
     /// Scroll content extents in local logical units.
     extent: [f32; 2],
-    /// Track thickness in final logical units.
-    thickness: f32,
+    /// Authored thickness and insets.
+    style: GuiScrollBarStyle,
 }
 
 /// Where one ScrollView's tracks sit: `edge[0]` is the right edge of the
@@ -117,24 +157,28 @@ struct GuiScrollBarBounds {
 }
 
 impl GuiScrollBarFrame {
-    /// Tracks along the viewport's right and bottom edges.
+    /// Tracks inset from the control's right and bottom sides and its ends.
     fn bounds(&self) -> GuiScrollBarBounds {
-        let far = [self.viewport[2], self.viewport[3]];
+        let GuiScrollBarStyle {
+            inset,
+            end_inset,
+            ..
+        } = self.style;
         GuiScrollBarBounds {
-            edge: far,
-            end: far,
+            edge: [self.control[2] - inset, self.control[3] - inset],
+            end: [self.control[2] - end_inset, self.control[3] - end_inset],
         }
     }
 
     /// Track rectangle along `axis` within `bounds`, stopping short of the
     /// crossing track when that axis shows too; None when nothing is left.
     fn track(&self, axis: usize, shown: [bool; 2], bounds: GuiScrollBarBounds) -> Option<[f32; 4]> {
-        let thickness = self.thickness;
+        let thickness = self.style.thickness;
         let mut end = bounds.end[axis];
         if shown[1 - axis] {
             end = end.min(bounds.edge[axis] - thickness);
         }
-        let start = self.viewport[axis];
+        let start = self.control[axis] + self.style.end_inset;
         let length = end - start;
         if !length.is_finite() || length <= 0.0 {
             return None;
@@ -149,13 +193,13 @@ impl GuiScrollBarFrame {
 
     /// Bounds that keep this ScrollView's shown tracks clear of
     /// `obstacles`, enclosing tracks in this frame. Parallel tracks move
-    /// first, never past the viewport's start; tracks then end before any
+    /// first, never past the control's start; tracks then end before any
     /// crossing track they would still run into.
     fn clear_of(&self, shown: [bool; 2], obstacles: &[GuiScrollBar]) -> GuiScrollBarBounds {
         let mut bounds = self.bounds();
         for axis in (0..2).filter(|&axis| shown[axis]) {
             let cross = 1 - axis;
-            let floor = self.viewport[cross] + self.thickness;
+            let floor = self.control[cross] + self.style.thickness;
 
             // Each move only decreases the edge, so this settles within one
             // pass per obstacle.
@@ -200,27 +244,32 @@ impl GuiScrollBarFrame {
                 return None;
             }
             let track = self.track(axis, shown, bounds)?;
-            let length = track[axis + 2];
+            let thickness = self.style.thickness;
+
+            // The thumb stays off the pointed ends, half a thickness at each.
+            let tip = (thickness * 0.5).min(track[axis + 2] * 0.5);
+            let rail = [track[axis] + tip, track[axis + 2] - 2.0 * tip];
             let visible = if self.extent[axis] > 0.0 {
                 (page[axis] / self.extent[axis]).clamp(0.0, 1.0)
             } else {
                 1.0
             };
-            let thumb_length = (length * visible)
-                .max(self.thickness * SCROLL_THUMB_MIN_LENGTH)
-                .min(length);
+            let thumb_length = (rail[1] * visible)
+                .max(thickness * SCROLL_THUMB_MIN_LENGTH)
+                .min(rail[1]);
             let fraction = if capacity[axis] > 0.0 {
                 (offset[axis] / capacity[axis]).clamp(0.0, 1.0)
             } else {
                 0.0
             };
             let mut thumb = track;
-            thumb[axis] += (length - thumb_length) * fraction;
+            thumb[axis] = rail[0] + (rail[1] - thumb_length) * fraction;
             thumb[axis + 2] = thumb_length;
             Some(GuiScrollBar {
                 axis,
                 track,
                 thumb,
+                rail,
                 capacity: capacity[axis],
                 page: page[axis],
             })
@@ -229,24 +278,26 @@ impl GuiScrollBarFrame {
     }
 }
 
-/// Bars of one ordinary ScrollView: an axis shows its bar while its content
-/// overflows, or while `kept` because its theme styles the disabled track.
+/// Bars of one ordinary ScrollView of local `size`, in its local logical
+/// units: an axis shows its bar while the control scrolls it or its content
+/// overflows.
 pub(crate) fn ordinary_scroll_bars(
     extent: &GuiScrollExtent,
+    size: [f32; 2],
+    style: GuiScrollBarStyle,
     offset: [f32; 2],
     obstacles: &[GuiScrollBar],
-    kept: [bool; 2],
 ) -> Vec<GuiScrollBar> {
     let [width, height] = extent.viewport;
-    if width <= 0.0 || height <= 0.0 {
+    if width <= 0.0 || height <= 0.0 || size.iter().any(|side| *side <= 0.0) {
         return Vec::new();
     }
     let frame = GuiScrollBarFrame {
-        viewport: [0.0, 0.0, width, height],
+        control: [0.0, 0.0, size[0], size[1]],
         extent: extent.content,
-        thickness: width.min(height) * SCROLL_BAR_THICKNESS,
+        style,
     };
-    let shown = std::array::from_fn(|axis| extent.capacity[axis] > 0.0 || kept[axis]);
+    let shown = std::array::from_fn(|axis| extent.capacity[axis] > 0.0 || extent.axes[axis]);
     frame
         .metric_bars(
             extent.capacity,

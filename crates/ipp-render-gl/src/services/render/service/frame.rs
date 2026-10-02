@@ -91,6 +91,7 @@ impl<D: RenderDevice> RenderService<D> {
             // One Host frame ages the shared atlas once, before every Canvas it presents
             // publishes demand.
             self.glyph_atlas.begin_frame();
+            self.canvas_paints.begin_frame();
             if available.is_ok() {
                 self.prepare_camera_children(
                     host,
@@ -116,7 +117,15 @@ impl<D: RenderDevice> RenderService<D> {
                     [2.0 / f64::from(width), -2.0 / f64::from(height)],
                 )?;
                 let mut work = prepass;
-                self.draw_canvas(&scene, mvp, scene.root_clip(), 1.0, viewport, &mut work)?;
+                self.draw_canvas(
+                    &scene,
+                    mvp,
+                    scene.root_clip(),
+                    1.0,
+                    super::canvas_composition::CanvasLayering::FLAT,
+                    viewport,
+                    &mut work,
+                )?;
                 return Ok(work);
             }
             let scene = RenderScene::new(host, selection, publication)?;
@@ -267,13 +276,14 @@ impl<D: RenderDevice> RenderService<D> {
                         continue;
                     }
                     Item::Surface(surface) => {
-                        if !world.visible(surface.entity, &frustum) {
+                        if !world.surface_visible(surface, &frustum) {
                             continue;
                         }
                         self.device.borrow_mut().set_instances(&[])?;
                         self.draw_output_surface(
                             world.host,
                             surface,
+                            world.camera,
                             view_projection,
                             viewport,
                             &mut stats,

@@ -101,9 +101,22 @@ export class CanvasPresentation {
       const surface = await this.host.presentation.surface();
       if (!current()) return;
       const viewport = canvasViewport(dimensions, surface);
+      // Only the viewport of the selected output changes: one Host request
+      // rebinds and reselects it, so no draw sees the root unselected.
+      const selected = this.view;
+      const resizing =
+        !!selected &&
+        !!this.current &&
+        this.current.key !== key &&
+        !this.current.recovering &&
+        attachmentIdentity(selected.binding) ===
+          attachmentIdentity(this.current.binding) &&
+        attachmentIdentity(selected.binding.output) ===
+          attachmentIdentity(target);
       if (
         this.current &&
         (this.current.key === key ||
+          resizing ||
           attachmentIdentity(previousOutput) === attachmentIdentity(target))
       ) {
         await this.requireCurrentBinding();
@@ -116,6 +129,10 @@ export class CanvasPresentation {
           );
       }
       if (!current()) return;
+      if (resizing) {
+        await this.resize(selected!, viewport, key, current);
+        return;
+      }
       const binding =
         this.current?.key === key
           ? this.current.binding
@@ -243,6 +260,41 @@ export class CanvasPresentation {
         this.desired = "";
     });
     return work;
+  }
+
+  /** Rebind the selected root at `viewport` and select it in one Host request. */
+  private async resize(
+    selected: PresentationView,
+    viewport: PresentationViewport,
+    key: string,
+    current: () => boolean,
+  ): Promise<void> {
+    const previous = this.current!;
+    if (
+      attachmentIdentity(viewport) ===
+      attachmentIdentity(selected.binding.viewport)
+    ) {
+      // A CSS change that rounds to the same pixels and ratio changes nothing.
+      previous.key = key;
+      return;
+    }
+    const view = await this.mutation(() =>
+      this.host.presentation.resize(selected, viewport),
+    );
+    freezeIdentity(view);
+    this.views.add(view);
+    this.bindings.add(view.binding);
+    // The Host replaced the previous binding and view in that one step, and
+    // neither can become current again, so neither needs cleanup.
+    this.views.delete(selected);
+    this.bindings.delete(previous.binding);
+    this.current = { binding: view.binding, surface: view.surface, key };
+    if (this.closing) return;
+    // The new view is the Host's selection even when a later request has
+    // superseded this one; that request resizes or replaces it in turn.
+    this.view = view;
+    this.changed(view);
+    if (current()) await this.release(view, view.binding);
   }
 
   private async requireCurrentBinding(): Promise<void> {

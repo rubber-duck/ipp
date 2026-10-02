@@ -79,10 +79,13 @@ export async function preparePhysicalBlockers(
                 rows: new Map([
                   [
                     0,
+                    // A plain red box: no line and none of the default
+                    // look's corner cuts, so the tested ray meets its fill.
                     {
                       part: contract.guiPaintPartIndex({ part: "background" }),
                       color: [1, 0, 0, 1],
                       corner_radius: [0, 0],
+                      corner_cut: [0, 0, 0, 0],
                       border_width: 0,
                     },
                   ],
@@ -303,9 +306,10 @@ export async function preparePhysicalBlockers(
         );
       const capture = await host.presentation.capture(view);
       const pixels = new Uint8Array(capture.pixels);
+      const ray = (32 * 96 + 48) * 4;
       check(
-        pixels[(32 * 96 + 48) * 4]! > 200,
-        "Expected rendered child panel at the tested physical ray",
+        pixels[ray]! > 200,
+        `Expected rendered child panel at the tested physical ray: ${[...pixels.subarray(ray, ray + 4)]}`,
       );
       return {
         result,

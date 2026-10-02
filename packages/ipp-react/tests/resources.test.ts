@@ -205,15 +205,27 @@ test("bound debug declarations write only declared fields and never clear remove
       color: [1, 0, 0],
     }).props;
     await commits.capture(tree.describe());
+    // Several changed fields are one write, validated together.
     assert.deepEqual(calls.at(-1), [
-      setField(fields.geometry.offset, {
-        kind: "bytes",
-        value: new Uint8Array([1, 2, 3]),
-      }),
-      setField(fields.has_color_override.offset, { kind: "bool", value: true }),
-      setField(fields.r.offset, { kind: "f32", value: 1 }),
-      setField(fields.g.offset, { kind: "f32", value: 0 }),
-      setField(fields.b.offset, { kind: "f32", value: 0 }),
+      {
+        kind: "insertComponent",
+        entity: sphere,
+        component: 9,
+        fields: [
+          {
+            offset: fields.geometry.offset,
+            value: { kind: "bytes", value: new Uint8Array([1, 2, 3]) },
+          },
+          {
+            offset: fields.has_color_override.offset,
+            value: { kind: "bool", value: true },
+          },
+          { offset: fields.r.offset, value: { kind: "f32", value: 1 } },
+          { offset: fields.g.offset, value: { kind: "f32", value: 0 } },
+          { offset: fields.b.offset, value: { kind: "f32", value: 0 } },
+        ],
+        adopt: true,
+      },
     ]);
 
     debug.props = BoundingGeometry({ is_rendered: false }).props;

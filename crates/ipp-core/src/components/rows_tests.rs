@@ -979,22 +979,19 @@ mod world {
                 ],
             )
             .unwrap();
-        let table = |uri: &str| {
+        let table = |easing: u32| {
             let mut parts = Rows::new();
             parts
                 .push(GuiMotionPart {
-                    source: Some(AssetSource {
-                        kind: crate::systems::animation::ANIMATION_TYPE,
-                        uri: uri.into(),
-                        variant: 0,
-                    }),
+                    duration: Some(0.1),
+                    easing: Some(easing),
                     ..Default::default()
                 })
                 .unwrap();
             parts
         };
-        let invalid = table("asset://ordinary-motion-A");
-        let valid = table("asset://10/42");
+        let invalid = table(7);
+        let valid = table(2);
         let field = |parts: &Rows<GuiMotionPart>| crate::FieldWrite {
             offset: offset_of!(GuiThemeMotion, parts) as u32,
             value: crate::FieldValue::Rows(parts.encode()),
@@ -1077,7 +1074,6 @@ mod world {
                 .components
                 .contains(&expected)
         );
-        assert_eq!(host.world_mut(world).unwrap().resource_snapshots().len(), 1);
         assert!(run(&mut host, world, vec![write(&valid)]).result.is_ok());
     }
 

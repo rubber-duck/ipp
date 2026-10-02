@@ -1032,6 +1032,8 @@ export function encodeRequest(request: Request): Uint8Array<ArrayBuffer> {
             renderDiagnostics: WIRE.INSPECT_RENDER_DIAGNOSTICS,
             guiFocus: WIRE.INSPECT_GUI_FOCUS,
             guiPointers: WIRE.INSPECT_GUI_POINTERS,
+            guiActiveItems: WIRE.INSPECT_GUI_ACTIVE_ITEMS,
+            guiPreferences: WIRE.INSPECT_GUI_PREFERENCES,
             canvas: WIRE.INSPECT_CANVAS,
           } as Partial<Record<typeof body.collection, number>>
         )[body.collection] ?? fail("inspection collection"),
@@ -1153,6 +1155,18 @@ export function encodeRequest(request: Request): Uint8Array<ArrayBuffer> {
           w.f32(extent[1]);
         }
         if (density !== undefined) w.f32(density);
+        break;
+      }
+      if (command.type === "GuiPreferencesUpdateCommand") {
+        exactFields(command, ["type", "reducedMotion"]);
+        const reduced = command.reducedMotion;
+        w.u8(WIRE.REQUEST_GUI_PREFERENCES_UPDATE);
+        w.u16(reduced !== undefined ? 1 : 0);
+        if (reduced !== undefined) {
+          if (typeof reduced !== "boolean")
+            fail("reduced motion must be a boolean");
+          w.boolean(reduced);
+        }
         break;
       }
       fail("unsupported command");
@@ -2188,7 +2202,11 @@ export function decodeResponse(
     const focusCount = r.count(INSPECTION_PAGE);
     const guiFocus: GuiFocusRecord[] = [];
     for (let i = 0; i < focusCount; i++)
-      guiFocus.push({ target: readGuiTarget(r), visible: r.boolean() });
+      guiFocus.push({
+        target: readGuiTarget(r),
+        visible: r.boolean(),
+        part: r.u32(),
+      });
     body.guiFocus = guiFocus;
     const pointerCount = r.count(INSPECTION_PAGE);
     const guiPointers: GuiPointerRecord[] = [];
@@ -2203,7 +2221,13 @@ export function decodeResponse(
         },
       });
     body.guiPointers = guiPointers;
+    const activeCount = r.count(INSPECTION_PAGE);
+    const guiActiveItems: GuiActiveItemRecord[] = [];
+    for (let i = 0; i < activeCount; i++)
+      guiActiveItems.push({ group: r.u64(), target: readGuiTarget(r) });
+    body.guiActiveItems = guiActiveItems;
     body.canvas = r.boolean() ? readCanvasStateRecord(r) : null;
+    body.guiPreferences = r.boolean() ? { reducedMotion: r.boolean() } : null;
   } else if (tag === WIRE.RESPONSE_ERROR)
     body = { kind: "error", code: r.u16(), message: r.string() };
   else return fail("unsupported response");

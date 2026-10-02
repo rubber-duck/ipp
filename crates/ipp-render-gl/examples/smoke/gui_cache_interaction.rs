@@ -286,6 +286,7 @@ fn theme(color: [f32; 3]) -> Result<GuiTheme> {
     }
     Ok(GuiTheme {
         parts,
+        ..Default::default()
     })
 }
 
@@ -300,6 +301,7 @@ fn surface(
     let surface = Surface {
         width: extent,
         height: extent,
+        ..Default::default()
     };
     let mut values = vec![
         ComponentValue::Transform(Transform {
@@ -569,7 +571,7 @@ fn focus_return<D: RenderDevice>(
     let mut input = Input::new(&scene.host, scene.root)?;
     let initial = capture()?;
     scene.image(&initial, RED);
-    input.action(&mut scene.host, scene.left, GuiLocalAction::Focus)?;
+    input.action(&mut scene.host, scene.left, GuiLocalAction::Focus(0))?;
     let (focused, _) = scene.draw(renderer)?;
     assert_eq!(focused.surface_cache_direct, 1);
     assert_eq!(focused.surface_cache_entries, 2);
@@ -616,10 +618,15 @@ fn focus_return<D: RenderDevice>(
     assert_eq!((warm.uploaded_bytes, warm.gui_rebuilds), (0, 0));
     assert_eq!(capture()?, cached);
     evidence.push_str(&format!("focus: {focused:?}\nfocus edit: {edited:?}\nblur current: {blurred:?}\nblur warm: {warm:?}\n"));
+    // Override rows win in every state: a plain box without the default
+    // look's border or glow, so hover leaves the paint unchanged.
     let mut parts = Rows::new();
     parts
         .push(GuiPaintPart {
             color: Some([YELLOW[0], YELLOW[1], YELLOW[2], 1.0]),
+            border_width: Some(0.0),
+            border_color: Some([0.0; 4]),
+            glow_intensity: Some(0.0),
             ..GuiPaintPart::keyed(GuiPartId::base(GuiPrimitivePart::Background))?
         })
         .unwrap();
@@ -634,7 +641,6 @@ fn focus_return<D: RenderDevice>(
                 ComponentValue::GuiSkin(GuiSkin {
                     theme: scene.left.theme,
                     parts,
-                    ..Default::default()
                 }),
             )],
         })?;
@@ -802,8 +808,8 @@ pub fn run<D: RenderDevice>(
             scene.draw(renderer)?;
         }
         let mut input = Input::new(&scene.host, scene.root)?;
-        input.action(&mut scene.host, scene.left, GuiLocalAction::Focus)?;
-        input.action(&mut scene.host, scene.right, GuiLocalAction::Focus)?;
+        input.action(&mut scene.host, scene.left, GuiLocalAction::Focus(0))?;
+        input.action(&mut scene.host, scene.right, GuiLocalAction::Focus(0))?;
         let (focused, _) = scene.draw(renderer)?;
         input.settled();
         assert_eq!(focused.surface_cache_direct, 2);

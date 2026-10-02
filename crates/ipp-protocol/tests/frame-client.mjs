@@ -89,8 +89,9 @@ async function connect(options = {}) {
 }
 
 function inspection(requestId, tick) {
-  // Empty entity, resource, diagnostic, controller and GUI lists; no Canvas.
-  const bytes = new Uint8Array(66);
+  // Empty entity, resource, diagnostic, controller, GUI focus, pointer and
+  // active item lists; no Canvas or GUI preferences.
+  const bytes = new Uint8Array(71);
   bytes.set(packet({ requestId, tick, tag: codec.WIRE.RESPONSE_INSPECT }));
   return bytes;
 }

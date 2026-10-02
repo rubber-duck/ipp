@@ -193,30 +193,56 @@ export async function committedRevision(): Promise<unknown> {
 /** Encoded part tables by tone and indicator; unchanged props keep bytes. */
 const encodedThemes = new Map<string, Uint8Array<ArrayBuffer>>();
 
-/** Theme part rows at one background tone, optionally with a drawing-backed
- * indicator icon. */
-function themeParts(tone: number, indicator?: ClientAssetSource) {
-  const key = `${tone}:${indicator?.source ?? ""}`;
+/**
+ * Theme part rows at one background tone for flat controls: plain boxes
+ * without the default look's line, corner cuts or glow, a white label and
+ * caret, a translucent blue selection and a plain focus ring. `thumb` adds
+ * the slider's white thumb; `indicator` the checkbox's untinted drawing.
+ */
+function themeParts(
+  tone: number,
+  indicator?: ClientAssetSource,
+  thumb = false,
+) {
+  const key = `${tone}:${indicator?.source ?? ""}:${thumb}`;
   const cached = encodedThemes.get(key);
   if (cached) return cached;
+  const plain = {
+    border_width: 0,
+    corner_cut: [0, 0, 0, 0],
+    glow_intensity: 0,
+  };
   const parts: [string, string | undefined, Record<string, unknown>][] = [
     [
       "background",
       undefined,
-      { color: TONES[tone]!, opacity: 1, scale: [1, 1] },
+      { color: TONES[tone]!, opacity: 1, scale: [1, 1], ...plain },
     ],
     ["background", "hovered", { color: [0.14, 0.32, 0.7, 1] }],
     ["background", "pressed", { color: [0.04, 0.1, 0.28, 1] }],
-    ["fill", undefined, { color: [0.15, 0.9, 0.55, 1] }],
+    ["fill", undefined, { color: [0.15, 0.9, 0.55, 1], glow_intensity: 0 }],
     ["label", undefined, { color: [0.96, 0.98, 1, 1] }],
-    ["focusRing", undefined, { color: [1, 0.72, 0.08, 1], opacity: 1 }],
+    ["caret", undefined, { color: [1, 1, 1, 1] }],
+    ["selection", undefined, { color: [0.2, 0.45, 0.85, 0.5] }],
+    [
+      "focusRing",
+      undefined,
+      {
+        color: [1, 0.72, 0.08, 1],
+        opacity: 1,
+        corner_cut: [0, 0, 0, 0],
+        glow_intensity: 0,
+      },
+    ],
   ];
+  if (thumb) parts.push(["icon", undefined, { color: [1, 1, 1, 1], ...plain }]);
   if (indicator)
     parts.push([
       "icon",
       undefined,
       {
         asset: { kind: 18, source: indicator.source },
+        color: [1, 1, 1, 1],
         opacity: 1,
         scale: [1, 1],
       },
@@ -289,6 +315,9 @@ function PanelTheme({
     <>
       <Entity id="mounted-controls">
         <Theme parts={themeParts(tone)} />
+      </Entity>
+      <Entity id="slider-controls">
+        <Theme parts={themeParts(tone, undefined, true)} />
       </Entity>
       {indicator ? (
         <Entity id="indicator-controls">
@@ -426,7 +455,7 @@ function Application({
                     </Entity>
                     <Entity id="slider">
                       <Layout width={135} height={30} />
-                      <Skin theme="mounted-controls" />
+                      <Skin theme="slider-controls" />
                       <Slider ref={sliderRef} value={0.2} min={0} max={1} />
                     </Entity>
                   </Children>
@@ -880,6 +909,9 @@ export async function observation(): Promise<{
   };
 }
 
+/** Frames a focus read across Worlds may take to settle. */
+const FOCUS_REREADS = 5;
+
 /** Runtime keyboard focus, DOM key ownership and control outcomes for
  * keyboard-only operation. */
 export async function keyboardObservation(): Promise<{
@@ -902,17 +934,32 @@ export async function keyboardObservation(): Promise<{
     throw new Error("GUI keyboard fixture is not ready");
   await current.flush();
   // Focus may sit in any attached panel World; each World's focus query
-  // reports its own.
-  const focusedNames = await Promise.all(
-    Object.entries(controls).map(async ([name, control]) =>
-      control !== null && (await controlFocused({ current: control }))
-        ? name
-        : null,
-    ),
-  );
-  const focused = focusedNames.filter((name) => name !== null);
-  if (focused.length > 1)
-    throw new Error(`Several controls report focus: ${focused}`);
+  // reports its own. Each World answers at its own boundary, so the reads can
+  // fall on either side of the frame that moves focus between Worlds: two
+  // focused controls are read again once each of their Worlds completes a
+  // frame, and fail only when they persist over several frames.
+  let focused: string[] = [];
+  for (let attempt = 0; ; attempt++) {
+    const focusedNames = await Promise.all(
+      Object.entries(controls).map(async ([name, control]) =>
+        control !== null && (await controlFocused({ current: control }))
+          ? name
+          : null,
+      ),
+    );
+    focused = focusedNames.filter((name) => name !== null);
+    if (focused.length <= 1) break;
+    if (attempt === FOCUS_REREADS)
+      throw new Error(`Several controls report focus: ${focused}`);
+    await Promise.all(
+      focused.map((name) =>
+        attachedSession(
+          current,
+          controls[name as keyof typeof controls]!.target.world,
+        ).waitForFrame(),
+      ),
+    );
+  }
   const text = (await controls.text.read()).text;
   if (typeof text !== "string")
     throw new Error("mounted text input disappeared");

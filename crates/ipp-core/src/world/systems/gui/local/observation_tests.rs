@@ -198,8 +198,8 @@ fn application_and_feedback_classes_share_ordinals_but_noops_publish_nothing() {
     let _feedback_subscription =
         subscribed(&mut host, world, &feedback, GuiObservationClasses::Feedback);
     for operation in [
-        GuiLocalAction::Focus,
-        GuiLocalAction::Focus,
+        GuiLocalAction::Focus(0),
+        GuiLocalAction::Focus(0),
         GuiLocalAction::Press,
         GuiLocalAction::Blur,
         GuiLocalAction::Blur,
@@ -633,7 +633,7 @@ fn refused_actions_consume_no_ordinal_and_lifetime_replacement_never_resets_it()
         incarnation: target.incarnation + 1,
         ..target
     };
-    action(&mut host, world, stale, GuiLocalAction::Focus);
+    action(&mut host, world, stale, GuiLocalAction::Focus(0));
     action(&mut host, world, stale, GuiLocalAction::Press);
     frame(&mut host);
     assert!(!snapshot(&mut host, world, entity).focused);
@@ -801,4 +801,113 @@ fn routed_pointer_feedback_observes_only_changed_records_without_application_cal
     let terminals = outcomes(&mut host, world);
     assert_eq!(terminals.len(), 5);
     assert!(terminals[1].effect().id.is_none());
+}
+
+#[test]
+fn focus_an_overlay_moves_in_and_back_publishes_feedback_for_both_controls() {
+    let mut host = super::input_test_support::GuiTestHost::default();
+    let world = host
+        .create_world(
+            Default::default(),
+            &super::local_tests::PRESENTED_GUI_SYSTEMS,
+        )
+        .unwrap();
+    let opener = create(
+        &mut host,
+        world,
+        ComponentValue::GuiButton(GuiButton::default()),
+    );
+    let overlay = apply(
+        &mut host,
+        world,
+        vec![
+            Command::Create {
+                alias: 1,
+                metadata: Default::default(),
+                adopt: false,
+            },
+            Command::insert_value(
+                EntityRef::Alias(1),
+                ComponentValue::GuiOverlay(crate::components::GuiOverlay {
+                    mode: crate::components::GuiOverlay::MODE_LIGHT,
+                    ..Default::default()
+                }),
+            ),
+            Command::insert_value(
+                EntityRef::Alias(1),
+                ComponentValue::GuiBehavior(GuiBehavior {
+                    visible: false,
+                    ..Default::default()
+                }),
+            ),
+            Command::PlaceEntity {
+                entity: EntityRef::Alias(1),
+                placement: EntityPlacementRef {
+                    parent: Some(EntityRef::Handle(opener)),
+                    before: None,
+                },
+            },
+        ],
+    )[0]
+    .1;
+    let inside = create(
+        &mut host,
+        world,
+        ComponentValue::GuiButton(GuiButton::default()),
+    );
+    apply(
+        &mut host,
+        world,
+        vec![Command::PlaceEntity {
+            entity: EntityRef::Handle(inside),
+            placement: EntityPlacementRef {
+                parent: Some(EntityRef::Handle(overlay)),
+                before: None,
+            },
+        }],
+    );
+    let feedback = output();
+    let _subscription = subscribed(&mut host, world, &feedback, GuiObservationClasses::Feedback);
+    let target = snapshot(&mut host, world, opener).target;
+    action(&mut host, world, target, GuiLocalAction::Focus(0));
+    frame(&mut host);
+    outcomes(&mut host, world);
+    records(&feedback);
+    let visible = |open: bool| Command::SetField {
+        entity: EntityRef::Handle(overlay),
+        component: ComponentValue::GUI_BEHAVIOR,
+        field: crate::FieldWrite {
+            offset: std::mem::offset_of!(GuiBehavior, visible) as u32,
+            value: crate::FieldValue::Bool(open),
+        },
+    };
+    let focus_changes = |feedback: &GuiObservationOutput| -> Vec<(crate::EntityId, bool)> {
+        records(feedback)
+            .into_iter()
+            .filter_map(|record| match record {
+                GuiObservationRecord::Effect {
+                    effect,
+                    ..
+                } => match effect.kind {
+                    GuiLocalEffectKind::FocusChanged {
+                        focused,
+                        ..
+                    } => Some((effect.target.entity, focused)),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect()
+    };
+
+    // Opening moves focus in: the opener loses it and the button inside
+    // takes it, each with its own feedback.
+    apply(&mut host, world, vec![visible(true)]);
+    assert!(snapshot(&mut host, world, inside).focused);
+    assert_eq!(focus_changes(&feedback), [(opener, false), (inside, true)]);
+
+    // Closing returns it, again with feedback on both sides.
+    apply(&mut host, world, vec![visible(false)]);
+    assert!(snapshot(&mut host, world, opener).focused);
+    assert_eq!(focus_changes(&feedback), [(inside, false), (opener, true)]);
 }

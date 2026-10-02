@@ -201,11 +201,15 @@ export async function exerciseGuiVirtualList(host: GuiHost) {
         }),
         place(alias(2), alias(1)),
         createEntity(3, "gui-virtual-list"),
+        // A 0.1-unit bar flush with the list's right side and ends.
         insertComponent(client, "GuiVirtualList", alias(3), {
           item_count: COUNT,
           item_extent: ESTIMATE,
           overscan: OVERSCAN,
           axis: 1,
+          bar_thickness: 0.1,
+          bar_inset: 0,
+          bar_end_inset: 0,
         }),
         insertComponent(client, "GuiLayout", alias(3), {
           width: 4,
@@ -372,13 +376,14 @@ export async function exerciseGuiVirtualList(host: GuiHost) {
     );
 
     // Frames: the header never shows list content, the list shows scrolled
-    // items, and the thumb moved from the top of the track to its middle.
+    // items, and the thumb moved from the top of its travel, below the
+    // track's pointed end, to its middle.
     const middleFrame = await p.settled();
     const header = changedIn(p, topFrame, middleFrame, [0.1, 0.1, 3.8, 0.9]);
     const content = changedPixels(topFrame, middleFrame);
     const thumbTop = [
-      luminance(p, topFrame, [3.95, 1.05]),
-      luminance(p, middleFrame, [3.95, 1.05]),
+      luminance(p, topFrame, [3.95, 1.15]),
+      luminance(p, middleFrame, [3.95, 1.15]),
     ];
     const thumbMiddle = [
       luminance(p, topFrame, [3.95, 2]),

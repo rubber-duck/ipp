@@ -37,7 +37,7 @@ fn removing_a_container_subtree_retires_its_descendant_controls() {
     );
     let checkbox_target = snapshot(&mut host, world, checkbox).target;
     let text_target = snapshot(&mut host, world, text).target;
-    action(&mut host, world, text_target, GuiLocalAction::Focus);
+    action(&mut host, world, text_target, GuiLocalAction::Focus(0));
     action(&mut host, world, checkbox_target, GuiLocalAction::Toggle);
     frame(&mut host);
     outcomes(&mut host, world);

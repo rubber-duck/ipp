@@ -3,8 +3,7 @@
 //! A controller crossfade blends contributions: each side evaluates what its
 //! drivers add, the blend moves every field by the change of the blended total,
 //! and the destination controller remembers what it applied. A frozen side is a
-//! captured contribution that fades out. GUI skin motion uses the same program
-//! with absolute channels that fade from a captured value to the clip's value.
+//! captured contribution that fades out.
 
 use super::{
     contribution::AnimationContributions, driver::AnimationDriverBinding,
@@ -41,7 +40,7 @@ enum TransitionChannelValue {
 #[derive(Debug)]
 struct TransitionChannel {
     key: TransitionChannelKey,
-    /// Where each side starts: the empty contribution, or GUI motion's value.
+    /// Where each side starts: the empty contribution.
     baseline: TransitionChannelValue,
     source: TransitionChannelValue,
     destination: TransitionChannelValue,
@@ -53,10 +52,6 @@ enum TransitionOperation {
     Property {
         driver: usize,
         channel: usize,
-    },
-    Constant {
-        channel: usize,
-        value: AnimationValue,
     },
     Pose {
         driver: usize,
@@ -74,61 +69,17 @@ pub(super) struct AnimationTransitionProgram {
     destination_operations: Vec<TransitionOperation>,
     numeric_targets: Vec<(EntityId, u16)>,
     frozen_source: bool,
-    /// Channels carry contributions rather than absolute values.
-    contributions: bool,
     /// Per-channel values staged by one evaluation before any is written, with
     /// the value a contributed field held before.
     staged: Vec<(TransitionChannelValue, Option<AnimationValue>)>,
 }
 
 impl AnimationTransitionProgram {
-    pub(super) fn set_constant_destination(
-        &mut self,
-        entity: EntityId,
-        incarnation: u64,
-        property: AnimationTrackTarget,
-        value: AnimationValue,
-    ) -> Result<(), ErrorReason> {
-        let key = TransitionChannelKey::Property(super::driver::AnimationTargetIdentity {
-            entity,
-            incarnation,
-            property,
-        });
-        let index = self
-            .channels
-            .iter()
-            .position(|channel| channel.key == key)
-            .ok_or(ErrorReason::InvalidField)?;
-        let TransitionOutput::Value(output) = &self.channels[index].output else {
-            return Err(ErrorReason::InvalidField);
-        };
-        output.validate(&value)?;
-
-        let operation = self.destination_operations.iter_mut().find(|operation| {
-            matches!(operation, TransitionOperation::Property { channel, .. } if *channel == index)
-        }).ok_or(ErrorReason::InvalidField)?;
-        *operation = TransitionOperation::Constant {
-            channel: index,
-            value,
-        };
-
-        Ok(())
-    }
-
     /// Crossfade between two controllers' contributions.
     pub(super) fn bind(
         source: Option<&mut AnimationController>,
         destination: &mut AnimationController,
         storage: &ComponentStorage,
-    ) -> Result<Self, ErrorReason> {
-        Self::bind_sides(source, destination, storage, true)
-    }
-
-    fn bind_sides(
-        source: Option<&mut AnimationController>,
-        destination: &mut AnimationController,
-        storage: &ComponentStorage,
-        contributions: bool,
     ) -> Result<Self, ErrorReason> {
         if let Some(source) = source.as_ref() {
             validate_drivers(&source.drivers)?;
@@ -138,9 +89,9 @@ impl AnimationTransitionProgram {
         let mut keys =
             BTreeMap::<TransitionChannelKey, (TransitionChannelValue, TransitionOutput)>::new();
         if let Some(source) = source.as_deref() {
-            collect_channels(&source.drivers, storage, contributions, &mut keys)?;
+            collect_channels(&source.drivers, storage, &mut keys)?;
         }
-        collect_channels(&destination.drivers, storage, contributions, &mut keys)?;
+        collect_channels(&destination.drivers, storage, &mut keys)?;
         let key_indices: BTreeMap<_, _> = keys
             .keys()
             .cloned()
@@ -167,7 +118,6 @@ impl AnimationTransitionProgram {
             destination_operations,
             numeric_targets: Vec::new(),
             frozen_source: false,
-            contributions,
             staged: Vec::new(),
         };
         program.refresh_numeric_targets();
@@ -181,18 +131,7 @@ impl AnimationTransitionProgram {
         frozen: &[AnimationRuntimeFrozenTransitionValue],
         storage: &ComponentStorage,
     ) -> Result<Self, ErrorReason> {
-        Self::bind_frozen_values(destination, frozen, storage, true)
-    }
-
-    /// Fade from frozen values to the destination. With `contributions`, the
-    /// values are contributions; otherwise they are absolute (GUI motion).
-    pub(super) fn bind_frozen_values(
-        destination: &mut AnimationController,
-        frozen: &[AnimationRuntimeFrozenTransitionValue],
-        storage: &ComponentStorage,
-        contributions: bool,
-    ) -> Result<Self, ErrorReason> {
-        let mut program = Self::bind_sides(None, destination, storage, contributions)?;
+        let mut program = Self::bind(None, destination, storage)?;
         program.source_operations.clear();
         program.frozen_source = true;
         for value in frozen {
@@ -249,12 +188,7 @@ impl AnimationTransitionProgram {
     ) -> Result<Self, ErrorReason> {
         validate_drivers(&destination.drivers)?;
         let mut additions = BTreeMap::new();
-        collect_channels(
-            &destination.drivers,
-            storage,
-            self.contributions,
-            &mut additions,
-        )?;
+        collect_channels(&destination.drivers, storage, &mut additions)?;
         for (key, (baseline, output)) in additions {
             if let Some(channel) = self.channels.iter_mut().find(|channel| channel.key == key) {
                 channel.destination = baseline;
@@ -321,14 +255,10 @@ impl AnimationTransitionProgram {
             .iter()
             .map(|channel| {
                 let value = match (&channel.key, applied) {
-                    (TransitionChannelKey::Property(identity), Some(applied))
-                        if self.contributions =>
-                    {
-                        applied
-                            .get(identity)
-                            .map(super::contribution::AnimationApplied::value)
-                            .unwrap_or_else(|| channel_animation_value(&channel.baseline))
-                    }
+                    (TransitionChannelKey::Property(identity), Some(applied)) => applied
+                        .get(identity)
+                        .map(super::contribution::AnimationApplied::value)
+                        .unwrap_or_else(|| channel_animation_value(&channel.baseline)),
                     _ => channel_animation_value(&channel.destination),
                 };
                 Ok(frozen_value(
@@ -379,7 +309,6 @@ impl AnimationTransitionProgram {
                 &source.drivers,
                 source.snapshot.time,
                 true,
-                self.contributions,
             )?;
         }
         evaluate_operations(
@@ -388,7 +317,6 @@ impl AnimationTransitionProgram {
             destination_drivers,
             destination_time,
             false,
-            self.contributions,
         )?;
         for channel in &mut self.channels {
             channel.destination = match (&channel.source, &channel.destination) {
@@ -415,34 +343,25 @@ impl AnimationTransitionProgram {
         for channel in &self.channels {
             let staged = match (&channel.destination, &channel.output) {
                 (TransitionChannelValue::Property(value), TransitionOutput::Value(output)) => {
-                    if self.contributions {
-                        let TransitionChannelKey::Property(identity) = &channel.key else {
-                            return Err(ErrorReason::InvalidField);
-                        };
-                        let current = output.read(storage)?;
-                        let next = match applied.get(identity) {
-                            Some(previous) => previous.moved(&current, value)?,
-                            None => super::contribution::AnimationApplied::new(
-                                channel_animation_value(&channel.baseline),
-                            )
-                            .moved(&current, value)?,
-                        };
-                        output.validate(&next)?;
-                        (TransitionChannelValue::Property(next), Some(current))
-                    } else {
-                        output.validate(value)?;
-                        (TransitionChannelValue::Property(value.clone()), None)
-                    }
+                    let TransitionChannelKey::Property(identity) = &channel.key else {
+                        return Err(ErrorReason::InvalidField);
+                    };
+                    let current = output.read(storage)?;
+                    let next = match applied.get(identity) {
+                        Some(previous) => previous.moved(&current, value)?,
+                        None => super::contribution::AnimationApplied::new(
+                            channel_animation_value(&channel.baseline),
+                        )
+                        .moved(&current, value)?,
+                    };
+                    output.validate(&next)?;
+                    (TransitionChannelValue::Property(next), Some(current))
                 }
                 (TransitionChannelValue::Joint(value), TransitionOutput::Joint(entity, joint)) => {
-                    let value = if self.contributions {
-                        super::contribution::compose_joint(
-                            joint_local(storage, *entity, *joint)?,
-                            value,
-                        )
-                    } else {
-                        *value
-                    };
+                    let value = super::contribution::compose_joint(
+                        joint_local(storage, *entity, *joint)?,
+                        value,
+                    );
                     value.validate()?;
                     (TransitionChannelValue::Joint(value), None)
                 }
@@ -685,19 +604,14 @@ fn validate_drivers(drivers: &[Box<dyn AnimationDriverBinding>]) -> Result<(), E
 }
 
 /// One channel per driven property or joint, starting from the empty
-/// contribution, or from the driver's template value for absolute channels.
+/// contribution.
 fn collect_channels(
     drivers: &[Box<dyn AnimationDriverBinding>],
     storage: &ComponentStorage,
-    contributions: bool,
     channels: &mut BTreeMap<TransitionChannelKey, (TransitionChannelValue, TransitionOutput)>,
 ) -> Result<(), ErrorReason> {
     for driver in drivers {
-        let baseline = if contributions {
-            super::contribution::identity_value(driver.template())
-        } else {
-            driver.template().clone()
-        };
+        let baseline = super::contribution::identity_value(driver.template());
         if let AnimationTrackTarget::Joints(joints) = &driver.identity().property {
             for &joint in joints {
                 channels
@@ -766,16 +680,9 @@ fn evaluate_operations(
     drivers: &[Box<dyn AnimationDriverBinding>],
     time: f64,
     source_side: bool,
-    contributions: bool,
 ) -> Result<(), ErrorReason> {
     for operation in operations {
         match operation {
-            TransitionOperation::Constant {
-                channel,
-                value,
-            } => {
-                channels[*channel].destination = TransitionChannelValue::Property(value.clone());
-            }
             TransitionOperation::Property {
                 driver,
                 channel,
@@ -789,11 +696,10 @@ fn evaluate_operations(
                     return Err(ErrorReason::InvalidField);
                 };
                 let driver = &drivers[*driver];
-                let value = TransitionChannelValue::Property(if contributions {
-                    super::contribution::compose(current, &driver.contribution(time)?)?
-                } else {
-                    driver.sample(time)
-                });
+                let value = TransitionChannelValue::Property(super::contribution::compose(
+                    current,
+                    &driver.contribution(time)?,
+                )?);
                 if source_side {
                     channels[*channel].source = value;
                 } else {

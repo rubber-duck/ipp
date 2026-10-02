@@ -32,6 +32,20 @@ pub struct GuiPaintPart {
     pub glow_intensity: Option<f32>,
     pub glow_radius: Option<f32>,
     pub glow_falloff: Option<f32>,
+    pub glow_inner_radius: Option<f32>,
+    pub corner_cut: Option<[f32; 4]>,
+    pub corner_accent: Option<[f32; 4]>,
+    pub corner_accent_width: Option<f32>,
+    pub shape: Option<f32>,
+    pub stroke_a: Option<[f32; 4]>,
+    pub stroke_b: Option<[f32; 4]>,
+    pub arc_start: Option<f32>,
+    pub arc_sweep: Option<f32>,
+    pub arc_dashes: Option<[f32; 2]>,
+    pub fill_hue: Option<f32>,
+    pub checker_size: Option<f32>,
+    pub checker_color0: Option<[f32; 4]>,
+    pub checker_color1: Option<[f32; 4]>,
     pub part: u32,
 }
 
@@ -42,6 +56,15 @@ impl GuiPaintPart {
             part: part.index().ok_or(ErrorReason::InvalidValue)?,
             ..Self::default()
         })
+    }
+
+    /// The row's properties with every length drawn `scale` times larger.
+    pub(super) fn scaled_style(&self, scale: f32) -> GuiPartStyle {
+        let mut style = self.style();
+        if scale != 1.0 {
+            style.scale_lengths(scale);
+        }
+        style
     }
 
     pub(super) fn style(&self) -> GuiPartStyle {
@@ -64,6 +87,20 @@ impl GuiPaintPart {
             glow_intensity: self.glow_intensity,
             glow_radius: self.glow_radius,
             glow_falloff: self.glow_falloff,
+            glow_inner_radius: self.glow_inner_radius,
+            corner_cut: self.corner_cut,
+            corner_accent: self.corner_accent,
+            corner_accent_width: self.corner_accent_width,
+            shape: self.shape,
+            stroke_a: self.stroke_a,
+            stroke_b: self.stroke_b,
+            arc_start: self.arc_start,
+            arc_sweep: self.arc_sweep,
+            arc_dashes: self.arc_dashes,
+            fill_hue: self.fill_hue,
+            checker_size: self.checker_size,
+            checker_color0: self.checker_color0,
+            checker_color1: self.checker_color1,
         }
     }
 }
@@ -87,10 +124,7 @@ fn validate_parts(parts: &Rows<GuiPaintPart>, overrides: bool) -> Result<(), Err
         }) {
             return Err(ErrorReason::InvalidValue);
         }
-        for property in GuiPartProperty::ALL
-            .into_iter()
-            .filter(|property| property.appearance())
-        {
+        for property in GuiPartProperty::ALL {
             if let Some(value) = row
                 .property(property.index())
                 .map_err(|_| ErrorReason::InvalidField)?
@@ -110,13 +144,42 @@ fn demand_parts(parts: &Rows<GuiPaintPart>, demand: &mut BTreeSet<AssetDemandSel
     }
 }
 
+/// Label font size, in logical units per em, of an entity that inherits no
+/// [`GuiFont`].
+pub const GUI_DEFAULT_FONT_SIZE: f32 = 14.0;
+
 /// A shared ordinary theme entity. Controls borrow its sparse qualified part rows.
+///
+/// With a zero `em` the rows' lengths are logical units. With a positive `em`
+/// they were designed at that font size: every length property of the rows
+/// (widths, radii, cuts, accents, glow reaches and gradient geometry) is drawn
+/// `font_size / em` times larger, where `font_size` is the painted entity's
+/// inherited [`GuiFont`] size, so the theme keeps its proportions to the text
+/// in a World of any unit scale.
 #[repr(C)]
 #[derive(Clone, Debug, Default, PartialEq, SchemaComponent)]
 pub struct GuiTheme {
     /// Base/state/variant appearance rows; no entity structure or control values.
     #[schema(rows)]
     pub parts: Rows<GuiPaintPart>,
+    /// Font size the rows' lengths were designed at; zero keeps them absolute.
+    pub em: f32,
+}
+
+impl GuiTheme {
+    /// Factor applied to the rows' lengths at `font_size`.
+    pub(in crate::world::systems::gui) fn length_scale(&self, font_size: f32) -> f32 {
+        em_scale(self.em, font_size)
+    }
+}
+
+/// Lengths designed at `em` drawn at `font_size`; a zero `em` keeps them absolute.
+pub(in crate::world::systems::gui) fn em_scale(em: f32, font_size: f32) -> f32 {
+    if em > 0.0 {
+        font_size / em
+    } else {
+        1.0
+    }
 }
 
 impl ComponentLifecycle for GuiTheme {
@@ -127,6 +190,9 @@ impl ComponentLifecycle for GuiTheme {
     }
 
     fn validate(&self) -> Result<(), ErrorReason> {
+        if !self.em.is_finite() || self.em < 0.0 {
+            return Err(ErrorReason::InvalidValue);
+        }
         validate_parts(&self.parts, false)
     }
 
@@ -135,18 +201,24 @@ impl ComponentLifecycle for GuiTheme {
     }
 }
 
-/// One control's shared-theme reference and sparse appearance overrides.
+/// One entity's shared-theme reference and sparse appearance overrides.
+///
+/// A control resolves every part through its interaction states, property by
+/// property from the override row, then the theme's rows, then the default look
+/// of its kind. Any other entity with layout bounds or a `CanvasBox` paints only
+/// its Background part over that box, before its content and children, from the
+/// override row and the theme's unqualified base row; it gains no state, focus or
+/// hit target.
 #[repr(C)]
 #[derive(Clone, Debug, Default, PartialEq, SchemaComponent)]
 pub struct GuiSkin {
-    /// Ordinary same-World generational theme entity; zero selects control defaults.
+    /// Ordinary same-World generational theme entity; zero leaves a control on
+    /// its default look, and an entity that is not a control on the override
+    /// rows alone.
     pub theme: EntityId,
     /// Unqualified part overrides win over every theme state and variant.
     #[schema(rows)]
     pub parts: Rows<GuiPaintPart>,
-    /// Sparse internal transition channels, excluded from authoring and persistence.
-    #[schema(ignore)]
-    pub runtime: super::super::motion::GuiSkinRuntime,
 }
 
 impl ComponentLifecycle for GuiSkin {
@@ -186,7 +258,7 @@ impl Default for GuiFont {
         Self {
             source: Arc::default(),
             variant: 0,
-            font_size: 14.0,
+            font_size: GUI_DEFAULT_FONT_SIZE,
         }
     }
 }

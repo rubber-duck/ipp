@@ -149,6 +149,18 @@ fn paint(part: GuiPartId, color: [f32; 3]) -> Result<GuiPaintPart> {
     })
 }
 
+/// A flat box of one colour: the row states away the default look's line, cut
+/// corners, glow and check mark, which it would otherwise sit on.
+fn plain(part: GuiPartId, color: [f32; 3]) -> Result<GuiPaintPart> {
+    Ok(GuiPaintPart {
+        border_width: Some(0.0),
+        corner_cut: Some([0.0; 4]),
+        glow_intensity: Some(0.0),
+        shape: Some(0.0),
+        ..paint(part, color)?
+    })
+}
+
 fn parts(values: impl IntoIterator<Item = GuiPaintPart>) -> Rows<GuiPaintPart> {
     let mut rows = Rows::default();
 
@@ -351,8 +363,8 @@ pub fn run<D: RenderDevice>(
     )?;
 
     let checkbox_parts = parts([
-        paint(GuiPartId::base(GuiPrimitivePart::Background), GREY)?,
-        paint(GuiPartId::base(GuiPrimitivePart::Icon), GREEN)?,
+        plain(GuiPartId::base(GuiPrimitivePart::Background), GREY)?,
+        plain(GuiPartId::base(GuiPrimitivePart::Icon), GREEN)?,
     ]);
 
     let theme = create(
@@ -360,6 +372,7 @@ pub fn run<D: RenderDevice>(
         world,
         vec![ComponentValue::GuiTheme(GuiTheme {
             parts: checkbox_parts.clone(),
+            ..Default::default()
         })],
     )?;
 
@@ -402,6 +415,7 @@ pub fn run<D: RenderDevice>(
         world,
         vec![ComponentValue::GuiTheme(GuiTheme {
             parts: explicit_parts,
+            ..Default::default()
         })],
     )?;
     let explicit = control(
@@ -425,13 +439,14 @@ pub fn run<D: RenderDevice>(
             min: -2.0,
             max: 6.0,
             step: 0.5,
+            ..Default::default()
         }),
         [16.0, 88.0, 144.0, 24.0],
         GuiSkin {
             parts: parts([
-                paint(GuiPartId::base(GuiPrimitivePart::Background), GREY)?,
-                paint(GuiPartId::base(GuiPrimitivePart::Fill), [0.0, 0.0, 0.75])?,
-                paint(GuiPartId::base(GuiPrimitivePart::Icon), YELLOW)?,
+                plain(GuiPartId::base(GuiPrimitivePart::Background), GREY)?,
+                plain(GuiPartId::base(GuiPrimitivePart::Fill), [0.0, 0.0, 0.75])?,
+                plain(GuiPartId::base(GuiPrimitivePart::Icon), YELLOW)?,
             ]),
             ..Default::default()
         },
@@ -442,7 +457,7 @@ pub fn run<D: RenderDevice>(
         world,
         vec![ComponentValue::GuiTheme(GuiTheme {
             parts: parts([
-                paint(
+                plain(
                     GuiPartId::base(GuiPrimitivePart::Background),
                     [0.0, 0.0, 0.5],
                 )?,
@@ -456,6 +471,7 @@ pub fn run<D: RenderDevice>(
                     [0.75, 0.0, 0.75],
                 )?,
             ]),
+            ..Default::default()
         })],
     )?;
 
@@ -465,6 +481,7 @@ pub fn run<D: RenderDevice>(
         panel,
         ComponentValue::GuiButton(GuiButton {
             label: "GO".into(),
+            ..Default::default()
         }),
         [16.0, 144.0, 96.0, 32.0],
         GuiSkin {
@@ -479,6 +496,7 @@ pub fn run<D: RenderDevice>(
         panel,
         ComponentValue::GuiButton(GuiButton {
             label: "NO".into(),
+            ..Default::default()
         }),
         [16.0, 200.0, 96.0, 24.0],
         GuiSkin {
@@ -505,11 +523,12 @@ pub fn run<D: RenderDevice>(
         ComponentValue::GuiTextInput(GuiTextInput {
             text: "OO".into(),
             placeholder: "idle".into(),
+            ..Default::default()
         }),
         [128.0, 144.0, 112.0, 32.0],
         GuiSkin {
             parts: parts([
-                paint(
+                plain(
                     GuiPartId::base(GuiPrimitivePart::Background),
                     [0.0, 0.125, 0.0],
                 )?,
@@ -640,8 +659,9 @@ pub fn run<D: RenderDevice>(
     assert_eq!([rail.min, rail.max, rail.step], [-2.0, 6.0, 0.5]);
     assert_eq!(rail.thumb_centers, [9.0, 135.0]);
     assert_eq!(rail.thumb_rect, [31.5, 3.0, 18.0, 18.0]);
-    initial.shape(slider, CanvasPart::Background, [16.0, 97.0, 144.0, 6.0]);
-    initial.shape(slider, CanvasPart::Fill, [16.0, 97.0, 40.5, 6.0]);
+    // The rail is one scroll bar thick, half the panel's 16-unit font, centred.
+    initial.shape(slider, CanvasPart::Background, [16.0, 96.0, 144.0, 8.0]);
+    initial.shape(slider, CanvasPart::Fill, [16.0, 96.0, 40.5, 8.0]);
     initial.shape(slider, CanvasPart::Icon, [47.5, 91.0, 18.0, 18.0]);
     assert_eq!(initial.glyphs(button).len(), 2);
     assert_eq!(initial.glyphs(text).len(), 2);
@@ -663,7 +683,7 @@ pub fn run<D: RenderDevice>(
         ([56, 94], YELLOW),
         ([24, 100], [0.0, 0.0, 0.75]),
         ([140, 100], GREY),
-        ([80, 94], [0.0; 3]),
+        ([80, 92], [0.0; 3]),
         ([165, 100], [0.0; 3]),
         ([108, 172], [0.0, 0.0, 0.5]),
         ([14, 160], [0.0; 3]),
@@ -735,7 +755,7 @@ pub fn run<D: RenderDevice>(
         changed.observation(slider).slider.unwrap().thumb_rect,
         [94.5, 3.0, 18.0, 18.0]
     );
-    changed.shape(slider, CanvasPart::Fill, [16.0, 97.0, 103.5, 6.0]);
+    changed.shape(slider, CanvasPart::Fill, [16.0, 96.0, 103.5, 8.0]);
     changed.shape(slider, CanvasPart::Icon, [110.5, 91.0, 18.0, 18.0]);
 
     assert_eq!(
@@ -761,7 +781,7 @@ pub fn run<D: RenderDevice>(
         ([122, 40], GREY),
         ([158, 40], GREEN),
         ([119, 94], YELLOW),
-        ([56, 94], [0.0; 3]),
+        ([56, 92], [0.0; 3]),
         ([96, 100], [0.0, 0.0, 0.75]),
         ([140, 100], GREY),
         ([204, 32], RED),

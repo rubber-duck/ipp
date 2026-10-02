@@ -291,7 +291,7 @@ export {
 } from "@ipp/client";
 export type { DynamicPropertyInput } from "@ipp/client";
 
-export { VertexShader, FragmentShader } from "./shaders.js";
+export { VertexShader, FragmentShader, PaintShader } from "./shaders.js";
 export type { ShaderProps } from "./shaders.js";
 
 export {

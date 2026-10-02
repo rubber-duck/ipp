@@ -68,6 +68,7 @@ fn input(index: u64, distance: f32, paint: u64, resource: u64) -> SurfaceCacheIn
         text_populated: false,
         visible: true,
         distance,
+        layered: false,
     }
 }
 

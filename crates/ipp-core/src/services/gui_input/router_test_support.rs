@@ -123,7 +123,7 @@ impl Rig {
     pub(super) fn synchronize(&mut self) -> GuiRoutingCancellation {
         let view = self.host.resolve_view(self.query()).ok();
         self.router
-            .synchronize(&self.host, self.context.as_mut().unwrap(), view)
+            .synchronize(&mut self.host, self.context.as_mut().unwrap(), view)
     }
 
     pub(super) fn wheel_remainder(&self) -> [f32; 2] {
@@ -279,12 +279,22 @@ pub(super) fn wheel(point: [f32; 2], delta: [f32; 2]) -> GuiPhysicalInput {
     GuiPhysicalInput::Wheel {
         point,
         delta,
+        shift: false,
     }
 }
 
 pub(super) fn key(key: GuiPhysicalKey) -> GuiPhysicalInput {
     GuiPhysicalInput::Key {
         key,
+        shift: false,
+    }
+}
+
+/// The key with Shift held.
+pub(super) fn shifted(key: GuiPhysicalKey) -> GuiPhysicalInput {
+    GuiPhysicalInput::Key {
+        key,
+        shift: true,
     }
 }
 
@@ -437,6 +447,7 @@ pub(super) fn attach(
     let surface = Surface {
         width: extent[0],
         height: extent[1],
+        ..Default::default()
     };
     create(
         host,

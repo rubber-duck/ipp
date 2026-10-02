@@ -25,21 +25,38 @@ import {
 export type GuiViewportPoint = readonly [number, number];
 export type BrowserGuiInputCommand = (
   | GuiNativeEdit
-  | { kind: "key"; key: GuiPhysicalKey }
+  | { kind: "key"; key: GuiPhysicalKey; shift?: boolean }
   | { kind: "blur" }
 ) & { readonly fence?: GuiTextFence };
 export interface GuiInputSink {
   send(command: BrowserGuiInputCommand): void;
 }
 
+/**
+ * The GUI key of a DOM `KeyboardEvent.key`, or null for keys the GUI leaves to
+ * the browser. F10 is a GUI key only with Shift, as a context request.
+ */
 export function keyboardKeyToGuiKey(
   key: string,
   shift = false,
 ): GuiPhysicalKey | "backspace" | "delete" | null {
   if (key === "Backspace") return "backspace";
   if (key === "Delete") return "delete";
+  if (key === "F10" && !shift) return null;
   return key === "Tab" && shift ? "backTab" : (keys[key] ?? null);
 }
+
+/** Physical keys sent as routed input rather than native text edits. */
+const routedKeys: ReadonlySet<string> = new Set([
+  "tab",
+  "backTab",
+  "escape",
+  "up",
+  "down",
+  "space",
+  "contextMenu",
+  "f10",
+]);
 
 export interface CanvasGuiInputOptions extends GuiPhysicalContextOptions {
   readonly unhandledInputGate?: GuiUnhandledInputGate;
@@ -108,6 +125,8 @@ const keys: Readonly<Record<string, GuiPhysicalKey>> = {
   ArrowDown: "down",
   Home: "home",
   End: "end",
+  ContextMenu: "contextMenu",
+  F10: "f10",
 };
 
 /** DOM order enters one Host-owned physical context. Local capture only keeps
@@ -147,10 +166,7 @@ export function attachCanvasGuiInput(
         const command = entry.command;
         if (
           command.kind === "blur" ||
-          (command.kind === "key" &&
-            ["tab", "backTab", "escape", "up", "down", "space"].includes(
-              command.key,
-            ))
+          (command.kind === "key" && routedKeys.has(command.key))
         ) {
           await context.send(command as GuiPhysicalInput);
           continue;
@@ -347,18 +363,22 @@ export function attachCanvasGuiInput(
       kind: "wheel",
       point: point(event),
       delta: [x, y],
+      ...(event.shiftKey ? { shift: true } : {}),
     });
     event.preventDefault();
   };
   const key = (event: KeyboardEvent) => {
     if (event.isComposing || event.ctrlKey || event.metaKey || event.altKey)
       return;
-    const key =
-      event.key === "Tab" && event.shiftKey ? "backTab" : keys[event.key];
-    if (!key) return;
-    send({ kind: "key", key });
+    const key = keyboardKeyToGuiKey(event.key, event.shiftKey);
+    if (!key || key === "backspace" || key === "delete") return;
+    send({ kind: "key", key, ...(event.shiftKey ? { shift: true } : {}) });
     event.preventDefault();
   };
+  // Context requests go to the runtime, so the browser's own menu never opens
+  // over the canvas or its native text buffer; the decision cannot wait for
+  // the asynchronous routing outcome.
+  const contextMenu = (event: Event) => event.preventDefault();
   const blur = () => {
     send({ kind: "blur" });
     for (const pointer of [...captures]) release(pointer);
@@ -373,6 +393,8 @@ export function attachCanvasGuiInput(
     }
   };
   bridge.element.addEventListener("keydown", bridgeKey);
+  bridge.element.addEventListener("contextmenu", contextMenu);
+  canvas.addEventListener("contextmenu", contextMenu);
   canvas.addEventListener("pointerdown", down);
   canvas.addEventListener("pointermove", move);
   canvas.addEventListener("pointerup", up);
@@ -390,6 +412,8 @@ export function attachCanvasGuiInput(
     nativePending.length = 0;
     textSubscription();
     bridge.element.removeEventListener("keydown", bridgeKey);
+    bridge.element.removeEventListener("contextmenu", contextMenu);
+    canvas.removeEventListener("contextmenu", contextMenu);
     bridge.dispose();
     for (const pointer of [...captures]) release(pointer);
     canvas.removeEventListener("pointerdown", down);

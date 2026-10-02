@@ -36,6 +36,11 @@ pub enum GuiEntityLayoutDiagnostic {
         /// The excluded child, still present in the authoritative core tree.
         entity: EntityId,
     },
+    /// An open overlay has no nonzero `CanvasStyle.layer`; it is not shown.
+    OverlayNotRaised {
+        /// The overlay entity.
+        entity: EntityId,
+    },
 }
 
 /// Actual ordinary-layout work, excluding raw Canvas preparation.
@@ -80,6 +85,8 @@ pub(in crate::world::systems) struct GuiEntityLayoutView {
         BTreeMap<EntityId, super::super::presentation::measurement::GuiControlLabel>,
     /// Scroll geometry and normalized positions written to the controls' fields.
     pub scrolls: BTreeMap<EntityId, super::scroll_layout::GuiScrollLayout>,
+    /// Every overlay the pass found, shown or not, with its placement inputs.
+    pub overlays: Vec<super::overlay_placement::GuiOverlayLayout>,
     pub diagnostics: Vec<GuiEntityLayoutDiagnostic>,
     pub work: GuiEntityLayoutWork,
 }
@@ -88,8 +95,8 @@ pub(in crate::world::systems) struct GuiEntityLayoutView {
 pub(super) struct GuiEntityLayoutState {
     pub view: Option<Arc<GuiEntityLayoutView>>,
     dirty: BTreeSet<EntityId>,
-    /// Controls whose fields changed; their scope reflows only if the
-    /// measured label text changed.
+    /// Controls whose fields changed; their scope reflows only if what their
+    /// measurement reads changed.
     label_dirty: BTreeSet<EntityId>,
     geometry_dirty: BTreeSet<EntityId>,
     structure_dirty: bool,
@@ -117,15 +124,18 @@ pub(in crate::world::systems::gui) fn entity_layout_input(component: u16) -> boo
             | ComponentValue::GUI_CHECKBOX
             | ComponentValue::GUI_SLIDER
             | ComponentValue::GUI_TEXT_INPUT
+            | ComponentValue::GUI_COLOR
             | ComponentValue::GUI_FONT
             | ComponentValue::GUI_SCROLL_VIEW
             | ComponentValue::GUI_VIRTUAL_LIST
             | ComponentValue::GUI_VIRTUAL_ITEM
+            | ComponentValue::GUI_OVERLAY
     )
 }
 
-/// Control components whose value fields do not affect layout; only a label
-/// change reflows their scope.
+/// Control components whose value fields do not affect layout; only a change
+/// of what their measurement reads, the label or the presentation (a slider's
+/// axis, a colour control's alpha rail), reflows their scope.
 fn label_input(component: u16) -> bool {
     matches!(
         component,
@@ -133,6 +143,7 @@ fn label_input(component: u16) -> bool {
             | ComponentValue::GUI_CHECKBOX
             | ComponentValue::GUI_SLIDER
             | ComponentValue::GUI_TEXT_INPUT
+            | ComponentValue::GUI_COLOR
     )
 }
 
@@ -199,8 +210,15 @@ impl GuiEntityLayoutState {
                 self.dirty.insert(entity);
             }
         }
-        let dirty = self.structure_dirty || !self.dirty.is_empty();
+        // Focus that moved into a scroll view at this frame's mutation
+        // boundary reveals its control in this pass.
+        let reveal = gui
+            .and_then(super::super::GuiSystem::reveal_target)
+            .filter(|target| world.state.entities.contains_key(target))
+            .and_then(|target| super::reveal::GuiReveal::new(world, target));
+        let dirty = self.structure_dirty || !self.dirty.is_empty() || reveal.is_some();
         self.evaluated = false;
+        let overlays_moved = !dirty && self.overlays_moved(context);
         // The layout reads the canvas state the Canvas System committed at the
         // mutation boundary; the canvas evaluates after this pass.
         let selection = OutputRef::canvas(WorldRef {
@@ -220,6 +238,7 @@ impl GuiEntityLayoutState {
                 if initial
                     || self.resources_dirty
                     || dirty
+                    || overlays_moved
                     || previous.is_none_or(|view| view.extent != extent || view.density != density)
                 {
                     self.revision = self
@@ -235,6 +254,7 @@ impl GuiEntityLayoutState {
                         self.resources_dirty,
                         self.revision,
                         gui,
+                        reveal.as_ref(),
                     );
                     self.statistics.latest.accumulate(view.work);
                     self.statistics.total.accumulate(view.work);
@@ -250,6 +270,23 @@ impl GuiEntityLayoutState {
         self.initialized = true;
     }
 
+    /// Whether an overlay's placement inputs changed since the last pass: it
+    /// opened, closed or was raised or lowered, or the box it is placed
+    /// against moved in the canvas. Only canvases with overlays check.
+    fn overlays_moved(&self, context: &SystemRuntimeAccess<'_>) -> bool {
+        self.view.as_ref().is_some_and(|view| {
+            view.overlays.iter().any(|overlay| {
+                super::overlay_placement::GuiOverlayInputs::read(
+                    context.world,
+                    &view.placements,
+                    view.extent,
+                    overlay.entity,
+                    overlay.parent,
+                ) != overlay.inputs
+            })
+        })
+    }
+
     /// Whether a control's label text differs from its last measurement.
     fn label_changed(
         &self,
@@ -260,13 +297,13 @@ impl GuiEntityLayoutState {
         let Some(gui) = gui else {
             return false;
         };
-        let current = super::super::presentation::measurement::label_text(context, gui, entity);
+        let current = super::super::presentation::measurement::label_inputs(context, gui, entity);
         let previous = self
             .view
             .as_ref()
             .and_then(|view| view.control_labels.get(&entity));
         match (current, previous) {
-            (Some(current), Some(previous)) => !previous.measures(&current),
+            (Some((text, axis, steps)), Some(previous)) => !previous.measures(&text, axis, steps),
             (None, None) => false,
             _ => true,
         }

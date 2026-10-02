@@ -10,6 +10,16 @@ pub struct Surface {
     pub width: f32,
     /// Centred clipping height in metres.
     pub height: f32,
+    /// Metres between consecutive layer plane ids of a presented canvas along
+    /// the local +Z normal; zero keeps every layer on one plane. Layer `n`
+    /// presents `n * layer_spacing` in front of the plane, for an exploded
+    /// view, whatever other layers are in use.
+    ///
+    /// Only a Surface placed in a camera's 3D domain separates layers; a
+    /// Surface that is a slot of another canvas presents its canvas on its
+    /// slot's plane. Changing the spacing moves presentation and input planes
+    /// without repainting the canvas.
+    pub layer_spacing: f32,
 }
 
 impl Default for Surface {
@@ -17,6 +27,7 @@ impl Default for Surface {
         Self {
             width: 1.0,
             height: 1.0,
+            layer_spacing: 0.0,
         }
     }
 }
@@ -76,6 +87,7 @@ impl ComponentLifecycle for Surface {
             || !self.height.is_finite()
             || self.width <= 0.0
             || self.height <= 0.0
+            || !self.layer_spacing.is_finite()
         {
             return Err(ErrorReason::InvalidValue);
         }
@@ -132,6 +144,7 @@ mod tests {
         let surface = Surface {
             width: 4.0,
             height: 2.0,
+            ..Default::default()
         };
 
         // Origin (top-left) in content coords is (-w/2, +h/2) in entity local coords

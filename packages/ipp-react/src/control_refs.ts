@@ -137,7 +137,10 @@ function controlFieldValue(
 }
 
 /**
- * Control refs and value observation of one root's GUI control declarations.
+ * Control refs and value observation of one root's GUI control declarations,
+ * and of its Behaviors, whose open state `onVisibleChange` and action
+ * listeners observe; they are tracked as controls are but never publish a
+ * handle to a ref.
  * Each tracked control holds one shared lifecycle tracking of its component;
  * a binding (and its ref handle) exists while that tracking shows the entity
  * live with a component incarnation, and a new incarnation publishes a new
@@ -298,7 +301,8 @@ export class ReactControlRefs {
     );
     const desired = new Map<number, ControlDeclaration>();
     for (const component of description.components) {
-      if (!component.control) continue;
+      // Controls, and Behaviors, whose open state values observe.
+      if (!component.control && !component.controlListeners) continue;
       const observes =
         !!description.guiActions ||
         controlValueCallbackNames.some(

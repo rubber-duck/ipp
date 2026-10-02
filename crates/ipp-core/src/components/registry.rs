@@ -52,6 +52,10 @@ ipp_schema_derive::component_registry! {
         GuiVirtualList = 47,
         GuiVirtualItem = 48,
         CanvasBounds = 49,
+        GuiOverlay = 50,
+        GuiGroup = 51,
+        CanvasPaint = 52,
+        GuiColor = 53,
     }
 }
 
@@ -73,7 +77,7 @@ pub(crate) trait ComponentCellVisitor {
 
 /// Streams target/build identity and the compiled registry.
 pub fn write_contract(sink: &mut impl ContractSink) {
-    sink.write(&7u16.to_le_bytes());
+    sink.write(&10u16.to_le_bytes());
     write_string(sink, std::env::consts::ARCH);
     write_string(sink, std::env::consts::OS);
     sink.write(&[usize::BITS as u8]);

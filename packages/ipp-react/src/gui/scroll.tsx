@@ -17,16 +17,20 @@ import {
 } from "../components.js";
 import type { GuiControlRef } from "./control-ref.js";
 import type {
+  GuiContextMenuListener,
+  GuiFeedbackListeners,
   GuiRangeChangeListener,
   GuiScrollListener,
   GuiVirtualRange,
 } from "./callbacks.js";
 
 export type ScrollViewProps = ComponentProps &
-  ComponentFields<"GuiScrollView"> & {
+  ComponentFields<"GuiScrollView"> &
+  GuiFeedbackListeners & {
     ref?: GuiControlRef;
     onScroll?: GuiScrollListener;
     onRangeChange?: GuiRangeChangeListener;
+    onContextMenu?: GuiContextMenuListener;
   };
 
 export function ScrollView({ ref, ...props }: ScrollViewProps) {
@@ -44,11 +48,13 @@ export function VirtualItem(props: VirtualItemProps) {
 }
 
 export type VirtualListProps = ComponentProps &
-  ComponentFields<"GuiVirtualList"> & {
+  ComponentFields<"GuiVirtualList"> &
+  GuiFeedbackListeners & {
     ref?: GuiControlRef;
     renderItem: (index: number) => ReactNode;
     onRangeChange?: GuiRangeChangeListener;
     onScroll?: GuiScrollListener;
+    onContextMenu?: GuiContextMenuListener;
   };
 
 export function VirtualList({

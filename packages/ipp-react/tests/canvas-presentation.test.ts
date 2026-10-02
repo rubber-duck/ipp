@@ -70,6 +70,27 @@ function boundary() {
         };
         return selected;
       },
+      resize: async (view: PresentationView, viewport: typeof size) => {
+        calls.push("resize");
+        if (
+          selected?.selection !== view.selection ||
+          binding?.generation.serial !== view.binding.generation.serial ||
+          view.surface.id !== surface.id ||
+          view.surface.context !== surface.context
+        )
+          throw new PresentationError("staleView");
+        binding = {
+          output: view.binding.output,
+          viewport,
+          generation: { host: 10n, serial: ++serial },
+        };
+        selected = {
+          surface: { ...surface },
+          binding: structuredClone(binding),
+          selection: ++serial,
+        };
+        return selected;
+      },
       clear: async (expected: PresentationView) => {
         calls.push("clear-view");
         if (selected?.selection === expected.selection) selected = null;
@@ -111,6 +132,97 @@ test("Canvas negotiates density before root binding and equal values produce no 
     { width: 200, height: 100, devicePixelRatio: 0.5 },
   );
   await value.controller.close();
+});
+
+test("a viewport change of the selected output resizes it in one request", async () => {
+  const value = boundary();
+  await value.controller.select(first, size);
+  const initial = value.controller.view!;
+  await value.controller.select(first, { ...size, width: 90 });
+  await value.controller.select(first, {
+    ...size,
+    width: 90,
+    devicePixelRatio: 1,
+  });
+  assert.deepEqual(value.calls, ["bind", "select", "resize", "resize"]);
+  const view = value.controller.view!;
+  assert.deepEqual(view.binding.viewport, {
+    width: 90,
+    height: 60,
+    devicePixelRatio: 1,
+  });
+  assert.equal(view.selection, value.selected()!.selection);
+  assert.equal(view.binding.generation.serial, value.root()!.generation.serial);
+  assert.ok(view.selection > initial.selection);
+  assert.equal(value.changed.length, 3);
+  assert.equal(value.changed[0], initial);
+  assert.equal(value.changed[2], view);
+  assert.deepEqual(value.controller.journal.views, [view]);
+  assert.deepEqual(value.controller.journal.bindings, [view.binding]);
+  // A CSS change rounding to the same pixels and ratio sends nothing.
+  await value.controller.select(first, {
+    ...size,
+    width: 90.2,
+    devicePixelRatio: 1,
+  });
+  assert.equal(value.calls.length, 4);
+  // Another output still binds and selects it, then releases the old root.
+  await value.controller.select(second, size);
+  assert.deepEqual(value.calls.slice(4), [
+    "bind",
+    "select",
+    "clear-view",
+    "clear-root",
+  ]);
+  await value.controller.close();
+  assert.equal(value.selected(), null);
+  assert.equal(value.root(), null);
+});
+
+test("a superseded resize keeps the Host's selection for the next resize", async () => {
+  const value = boundary();
+  await value.controller.select(first, size);
+  const arrived = gate();
+  const release = gate();
+  const original = value.host.presentation.resize;
+  value.host.presentation.resize = async (...args) => {
+    const view = await original(...args);
+    arrived.resolve();
+    await release.promise;
+    return view;
+  };
+  const superseded = value.controller.select(first, { ...size, width: 90 });
+  await arrived.promise;
+  value.host.presentation.resize = original;
+  const latest = value.controller.select(first, { ...size, width: 70 });
+  release.resolve();
+  await Promise.all([superseded, latest]);
+  assert.deepEqual(value.calls, ["bind", "select", "resize", "resize"]);
+  assert.equal(value.controller.view!.binding.viewport.width, 140);
+  assert.equal(value.controller.view!.selection, value.selected()!.selection);
+  assert.equal(value.controller.journal.views.length, 1);
+  assert.equal(value.controller.journal.bindings.length, 1);
+  await value.controller.close();
+  assert.equal(value.selected(), null);
+  assert.equal(value.root(), null);
+});
+
+test("a stale resize leaves the selection and needs no cleanup of its own", async () => {
+  const value = boundary();
+  await value.controller.select(first, size);
+  const foreign = await value.host.presentation.select(
+    value.surface,
+    value.root()!,
+  );
+  await assert.rejects(
+    value.controller.select(first, { ...size, width: 90 }),
+    /staleView/,
+  );
+  assert.equal(value.selected(), foreign);
+  assert.equal(value.controller.journal.unknownMutations.length, 0);
+  assert.equal(value.controller.journal.bindings.length, 1);
+  await value.controller.close();
+  assert.equal(value.selected(), foreign);
 });
 
 test("late root receipt is cleaned without selecting after supersession", async () => {

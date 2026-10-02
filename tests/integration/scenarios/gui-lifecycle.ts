@@ -240,16 +240,18 @@ export async function controlState(
       ? { kind: "bool", value: fields.checked === true }
       : kind === "slider"
         ? { kind: "scalar", value: number("value") }
-        : kind === "text"
-          ? { kind: "text", value: String(fields.text ?? "") }
-          : kind === "scrollView" || kind === "virtualList"
-            ? {
-                kind: "scroll",
-                offset: pair("offset"),
-                anchorIndex: number("anchor_index"),
-                anchorOffset: number("anchor_offset"),
-              }
-            : { kind: "none" };
+        : kind === "text" && fields.numeric === true
+          ? { kind: "scalar", value: number("value") }
+          : kind === "text"
+            ? { kind: "text", value: String(fields.text ?? "") }
+            : kind === "scrollView" || kind === "virtualList"
+              ? {
+                  kind: "scroll",
+                  offset: pair("offset"),
+                  anchorIndex: number("anchor_index"),
+                  anchorOffset: number("anchor_offset"),
+                }
+              : { kind: "none" };
   const behavior = fieldsNamed("GuiBehavior") ?? {};
   const bounds = fieldsNamed("CanvasBounds") ?? {};
   const focus = await client.inspectPage({
@@ -736,6 +738,7 @@ export async function exerciseGuiLifecycle(
       clip_min_y: 0,
       clip_max_x: 0,
       clip_max_y: 0,
+      layer: 1,
     } as const;
     const denseOutcome = successfulBatch(
       await client.batch(
@@ -1107,10 +1110,13 @@ function redTheme(
               rows: new Map([
                 [
                   0,
+                  // A plain box: no line and none of the default look's
+                  // corner cuts, which would cut away much of a small button.
                   {
                     part: background(),
                     color: [1, 0, 0, 1],
                     corner_radius: [0, 0],
+                    corner_cut: [0, 0, 0, 0],
                     border_width: 0,
                   },
                 ],

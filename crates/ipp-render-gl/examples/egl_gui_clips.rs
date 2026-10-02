@@ -2,10 +2,13 @@
 //!
 //! Device-level counterpart to the raw Surface scenes in `egl_surfaces`: nested
 //! clip intersections, scrolled curves/text-proxies/bitmaps, parameterized
-//! rounded boxes drawn as one-box retained batches with explicit per-axis
+//! rounded boxes drawn as instanced retained shape records with explicit per-axis
 //! corner/border dimensions, empty-clip suppression, painter-order overlap, box
 //! coverage ramps at close range and clip edges, premultiplied gradients, glow
-//! falloff, tilted, grazing and perspective views, Surface cache targets with
+//! falloff, cut corners, corner accents, inner glow, strokes, ring arcs with their
+//! ends, dashes and glow, hue and saturation-value colour fields, a checker under an
+//! alpha ramp, minified and on a tilted Surface, tilted, grazing
+//! and perspective views, Surface cache targets with
 //! nested atlas population and device replacement. All fixtures are synthetic
 //! and local; assertions compare completed-frame pixels against values derived
 //! independently from the scene layout and projection below.
@@ -16,8 +19,8 @@ mod smoke;
 
 #[cfg(target_os = "linux")]
 use ipp_core::systems::canvas::{
-    CanvasPart, CanvasPrimitiveId, CanvasPrimitiveStyle, CanvasShapeFill, CanvasShapeGlow,
-    CanvasTarget,
+    CanvasBoxShape, CanvasPart, CanvasPrimitiveId, CanvasPrimitiveStyle, CanvasShapeChecker,
+    CanvasShapeFill, CanvasShapeGlow, CanvasTarget,
 };
 
 /// Surface content space: 4 x 3 metres at 80 pixels per metre on 320 x 240.
@@ -77,12 +80,22 @@ struct ProbeBox {
 
 #[cfg(target_os = "linux")]
 impl ProbeBox {
-    /// Production retained-batch vertices for this box with any fill and glow.
-    fn vertices_with(
+    /// Production retained shape records for this box with any fill and glow.
+    fn records_with(
         &self,
         fill: CanvasShapeFill,
         glow: Option<&CanvasShapeGlow>,
-    ) -> Vec<ipp_render_gl::GuiVertex> {
+    ) -> Vec<ipp_render_gl::GuiShapeRecord> {
+        self.records_shaped(fill, glow, CanvasBoxShape::RECT)
+    }
+
+    /// Production retained shape records for this box with any fill, glow and shape.
+    fn records_shaped(
+        &self,
+        fill: CanvasShapeFill,
+        glow: Option<&CanvasShapeGlow>,
+        shape: CanvasBoxShape,
+    ) -> Vec<ipp_render_gl::GuiShapeRecord> {
         let style = CanvasPrimitiveStyle {
             identity: CanvasPrimitiveId {
                 target: CanvasTarget {
@@ -97,8 +110,9 @@ impl ProbeBox {
             color: [1.0; 4],
             opacity: 1.0,
             clip: ROOT,
+            layer: 0,
         };
-        ipp_render_gl::generate_gui_box_vertices(
+        ipp_render_gl::generate_gui_box_records(
             &style,
             &[self.placement[2], self.placement[3]],
             &self.corner,
@@ -106,62 +120,71 @@ impl ProbeBox {
             &self.border_color,
             &fill,
             glow,
+            &shape,
             ROOT,
         )
     }
 
-    fn vertices(&self) -> Vec<ipp_render_gl::GuiVertex> {
-        self.vertices_with(CanvasShapeFill::Solid(self.fill), None)
+    fn records(&self) -> Vec<ipp_render_gl::GuiShapeRecord> {
+        self.records_with(CanvasShapeFill::Solid(self.fill), None)
     }
 }
 
-/// Upload `vertices`, each clipped by `clip`, into new retained GUI storage.
+/// Upload `records` into new retained GUI storage of their kind.
 #[cfg(target_os = "linux")]
-fn upload<D: ipp_render_gl::RenderDevice>(
+fn upload_records<D: ipp_render_gl::RenderDevice, R: ipp_render_gl::GuiRecord>(
     device: &mut D,
-    vertices: &[ipp_render_gl::GuiVertex],
-    clip: &[f32; 4],
+    records: &[R],
 ) -> Result<D::GuiBatch, Box<dyn std::error::Error>> {
-    let clipped: Vec<_> = vertices
-        .iter()
-        .map(|vertex| ipp_render_gl::GuiVertex {
-            clip: *clip,
-            ..*vertex
-        })
-        .collect();
-    let mut batch = device.create_gui_batch(clipped.len())?;
-    if let Err(error) = device.write_gui_batch(&mut batch, 0, &clipped) {
+    let mut batch = device.create_gui_batch(R::KIND, records.len())?;
+    if let Err(error) = device.write_gui_batch(&mut batch, 0, records) {
         device.delete_gui_batch(batch);
         return Err(error.into());
     }
     Ok(batch)
 }
 
-/// Draw `vertices` as one retained batch: allocate, draw once and release.
+/// Upload shape `records`, each clipped by `clip`, into new retained GUI storage.
+#[cfg(target_os = "linux")]
+fn upload<D: ipp_render_gl::RenderDevice>(
+    device: &mut D,
+    records: &[ipp_render_gl::GuiShapeRecord],
+    clip: &[f32; 4],
+) -> Result<D::GuiBatch, Box<dyn std::error::Error>> {
+    let clipped: Vec<_> = records
+        .iter()
+        .map(|record| ipp_render_gl::GuiShapeRecord {
+            clip: *clip,
+            ..*record
+        })
+        .collect();
+    upload_records(device, &clipped)
+}
+
+/// Draw shape `records` as one retained batch: allocate, draw once and release.
 #[cfg(target_os = "linux")]
 fn draw_batch<D: ipp_render_gl::RenderDevice>(
     device: &mut D,
     program: &D::Program,
-    vertices: &[ipp_render_gl::GuiVertex],
+    records: &[ipp_render_gl::GuiShapeRecord],
     mvp: &[f32; 16],
     clip: &[f32; 4],
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let batch = upload(device, vertices, clip)?;
-    let drawn = device.draw_gui_batch(program, &batch, None, mvp, 0, vertices.len());
+    let batch = upload(device, records, clip)?;
+    let drawn = device.draw_gui_batch(program, &batch, None, mvp, 0, records.len());
     device.delete_gui_batch(batch);
     Ok(drawn?)
 }
 
-/// Atlas glyph quad corner in the shared GUI vertex layout, clipped by `ROOT`.
+/// Atlas glyph quad from `rect`'s first corner to its second, sampling `uv`'s
+/// corners, clipped by `ROOT`.
 #[cfg(target_os = "linux")]
-fn glyph_vertex(position: [f32; 2], uv: [f32; 2], color: [f32; 4]) -> ipp_render_gl::GuiVertex {
-    ipp_render_gl::GuiVertex {
-        position,
-        color0: color,
-        gradient_coords: [uv[0], uv[1], 0.0, 0.0],
-        material_params: [ipp_render_gl::GUI_FILL_GLYPH, 0.0, 0.0, 1.0],
+fn glyph_record(rect: [f32; 4], uv: [f32; 4], color: [f32; 4]) -> ipp_render_gl::GuiGlyphRecord {
+    ipp_render_gl::GuiGlyphRecord {
+        rect,
+        uv,
+        color,
         clip: ROOT,
-        ..ipp_render_gl::GuiVertex::EMPTY
     }
 }
 
@@ -210,7 +233,7 @@ fn draw_boxes<D: ipp_render_gl::RenderDevice>(
         &[0.0, 0.0, 0.0, 1.0],
     )?;
     for probe in REFERENCE_BOXES {
-        draw_batch(device, box_program, &probe.vertices(), &MVP, &ROOT)?;
+        draw_batch(device, box_program, &probe.records(), &MVP, &ROOT)?;
     }
     Ok(())
 }
@@ -608,7 +631,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     draw_batch(
         &mut device,
         &box_program,
-        &suppressed_box.vertices(),
+        &suppressed_box.records(),
         &MVP,
         &empty,
     )?;
@@ -685,7 +708,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         draw_batch(
             &mut device,
             &box_program,
-            &resized_box.vertices(),
+            &resized_box.records(),
             &MVP,
             &ROOT,
         )?;
@@ -722,7 +745,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let paint = |device: &mut ipp_render_gl::GlesRenderDevice, order: [ProbeBox; 2]| {
         device.begin_frame(WIDTH, HEIGHT, &[0.0, 0.0, 0.0, 1.0])?;
         for entry in order {
-            draw_batch(device, &box_program, &entry.vertices(), &MVP, &ROOT)?;
+            draw_batch(device, &box_program, &entry.records(), &MVP, &ROOT)?;
         }
         Ok::<_, Box<dyn std::error::Error>>(())
     };
@@ -779,7 +802,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     draw_batch(
         &mut device,
         &box_program,
-        &tilted_box.vertices(),
+        &tilted_box.records(),
         &tilted,
         &ROOT,
     )?;
@@ -839,6 +862,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         color: [1.0, 1.0, 1.0, 1.0],
         opacity: 1.0,
         clip: ROOT,
+        layer: 0,
     };
     let linear_fill = ipp_core::systems::canvas::CanvasShapeFill::LinearGradient {
         start: [0.0, 0.0],
@@ -846,8 +870,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         start_color: [1.0, 0.0, 0.0, 1.0],
         end_color: [0.0, 0.0, 1.0, 1.0],
     };
-    let mut batch_vertices = Vec::new();
-    batch_vertices.extend_from_slice(&ipp_render_gl::generate_gui_box_vertices(
+    let mut batch_records = Vec::new();
+    batch_records.extend_from_slice(&ipp_render_gl::generate_gui_box_records(
         &linear_style,
         &[1.0, 1.0],
         &[0.1, 0.1],
@@ -855,6 +879,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &[0.0; 4],
         &linear_fill,
         None,
+        &CanvasBoxShape::RECT,
         ROOT,
     ));
 
@@ -872,6 +897,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         color: [1.0, 1.0, 1.0, 1.0],
         opacity: 1.0,
         clip: ROOT,
+        layer: 0,
     };
     let radial_fill = ipp_core::systems::canvas::CanvasShapeFill::RadialGradient {
         center: [0.5, 0.5],
@@ -879,7 +905,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         start_color: [1.0, 1.0, 0.0, 1.0],
         end_color: [0.5, 0.0, 0.5, 1.0],
     };
-    batch_vertices.extend_from_slice(&ipp_render_gl::generate_gui_box_vertices(
+    batch_records.extend_from_slice(&ipp_render_gl::generate_gui_box_records(
         &radial_style,
         &[1.0, 1.0],
         &[0.35, 0.12],
@@ -887,6 +913,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &[0.0; 4],
         &radial_fill,
         None,
+        &CanvasBoxShape::RECT,
         ROOT,
     ));
 
@@ -904,14 +931,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         color: [1.0; 4],
         opacity: 1.0,
         clip: ROOT,
+        layer: 0,
     };
     let glow = ipp_core::systems::canvas::CanvasShapeGlow {
         color: [0.0, 1.0, 0.0, 1.0],
         intensity: 1.0,
         radius: 0.15,
+        inner_radius: 0.0,
         falloff: 1.5,
     };
-    batch_vertices.extend_from_slice(&ipp_render_gl::generate_gui_box_vertices(
+    batch_records.extend_from_slice(&ipp_render_gl::generate_gui_box_records(
         &glow_style,
         &[1.0, 0.75],
         &[0.1, 0.1],
@@ -919,6 +948,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &[0.0; 4],
         &ipp_core::systems::canvas::CanvasShapeFill::Solid([0.0, 1.0, 1.0, 1.0]),
         Some(&glow),
+        &CanvasBoxShape::RECT,
         ROOT,
     ));
 
@@ -936,8 +966,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         color: [1.0; 4],
         opacity: 1.0,
         clip: ROOT,
+        layer: 0,
     };
-    let border_verts = ipp_render_gl::generate_gui_box_vertices(
+    let border_records = ipp_render_gl::generate_gui_box_records(
         &border_style,
         &[1.0, 0.75],
         &[0.1, 0.1],
@@ -945,14 +976,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &[1.0, 0.5, 0.0, 1.0],
         &ipp_core::systems::canvas::CanvasShapeFill::Solid([0.0; 4]),
         None,
+        &CanvasBoxShape::RECT,
         ROOT,
     );
     assert_eq!(
-        border_verts.len(),
-        24,
-        "border-only must use 4 edge strips (24 vertices)"
+        border_records.len(),
+        4,
+        "border-only must use 4 edge strips"
     );
-    batch_vertices.extend_from_slice(&border_verts);
+    batch_records.extend_from_slice(&border_records);
 
     // A small glowing outline uses a full quad, so the shader must keep its
     // hollow center clear independently of the sparse-outline optimization.
@@ -960,7 +992,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         position: [3.4, 1.75],
         ..border_style
     };
-    let hollow_vertices = ipp_render_gl::generate_gui_box_vertices(
+    let hollow_records = ipp_render_gl::generate_gui_box_records(
         &hollow_style,
         &[0.4, 0.4],
         &[0.05, 0.05],
@@ -968,14 +1000,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &[1.0, 0.5, 0.0, 1.0],
         &ipp_core::systems::canvas::CanvasShapeFill::Solid([0.0; 4]),
         Some(&glow),
+        &CanvasBoxShape::RECT,
         ROOT,
     );
-    assert_eq!(hollow_vertices.len(), 6);
-    batch_vertices.extend_from_slice(&hollow_vertices);
+    assert_eq!(hollow_records.len(), 1);
+    batch_records.extend_from_slice(&hollow_records);
 
-    let batch = upload(&mut device, &batch_vertices, &ROOT)?;
+    let batch = upload(&mut device, &batch_records, &ROOT)?;
     device.begin_frame(WIDTH, HEIGHT, &[0.0, 0.0, 0.0, 1.0])?;
-    device.draw_gui_batch(&box_program, &batch, None, &MVP, 0, batch_vertices.len())?;
+    device.draw_gui_batch(&box_program, &batch, None, &MVP, 0, batch_records.len())?;
     let materials_frame = capture(&mut device, "boxes-materials")?;
     check(
         &materials_frame,
@@ -1036,7 +1069,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         position: [0.5, 0.5],
         ..glow_style
     };
-    let rail = ipp_render_gl::generate_gui_box_vertices(
+    let rail = ipp_render_gl::generate_gui_box_records(
         &rail_style,
         &[1.0, 0.0125],
         &[0.0, 0.0],
@@ -1044,13 +1077,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &[0.0; 4],
         &ipp_core::systems::canvas::CanvasShapeFill::Solid([1.0; 4]),
         Some(&glow),
+        &CanvasBoxShape::RECT,
         ROOT,
     );
     let outline_style = ipp_core::systems::canvas::CanvasPrimitiveStyle {
         position: [2.0, 0.5],
         ..rail_style
     };
-    let outline = ipp_render_gl::generate_gui_box_vertices(
+    let outline = ipp_render_gl::generate_gui_box_records(
         &outline_style,
         &[1.0, 0.5],
         &[0.0, 0.0],
@@ -1058,10 +1092,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &[1.0; 4],
         &ipp_core::systems::canvas::CanvasShapeFill::Solid([0.0; 4]),
         Some(&glow),
+        &CanvasBoxShape::RECT,
         ROOT,
     );
-    let sharp_vertices = [rail, outline].concat();
-    let sharp_batch = upload(&mut device, &sharp_vertices, &ROOT)?;
+    let sharp_records = [rail, outline].concat();
+    let sharp_batch = upload(&mut device, &sharp_records, &ROOT)?;
     device.begin_frame(WIDTH, HEIGHT, &[0.0, 0.0, 0.0, 1.0])?;
     device.draw_gui_batch(
         &box_program,
@@ -1069,7 +1104,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         None,
         &MVP,
         0,
-        sharp_vertices.len(),
+        sharp_records.len(),
     )?;
     let sharp = capture(&mut device, "boxes-sharp-edges-and-glow")?;
     check(&sharp, 80, 40, [255; 4], 4, "one-pixel rail stays opaque")?;
@@ -1114,10 +1149,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         corner: [0.0, 0.0],
         border: 0.004,
     };
-    let hollow_vertices = hollow.vertices();
+    let hollow_records = hollow.records();
     assert_eq!(
-        hollow_vertices.len(),
-        24,
+        hollow_records.len(),
+        4,
         "hollow border must use sparse strips"
     );
 
@@ -1125,7 +1160,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     draw_batch(
         &mut device,
         &box_program,
-        &hollow_vertices,
+        &hollow_records,
         &CLOSE_MVP,
         &ROOT,
     )?;
@@ -1178,7 +1213,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     draw_batch(
         &mut device,
         &box_program,
-        &clipped_box.vertices(),
+        &clipped_box.records(),
         &MVP,
         &[120.5 / 80.0, 0.0, 200.25 / 80.0, 3.0],
     )?;
@@ -1222,7 +1257,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     draw_batch(
         &mut device,
         &box_program,
-        &gradient_box.vertices_with(fading, None),
+        &gradient_box.records_with(fading, None),
         &MVP,
         &ROOT,
     )?;
@@ -1255,13 +1290,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         color: [0.0, 1.0, 0.0, 1.0],
         intensity: 1.0,
         radius: 0.25,
+        inner_radius: 0.0,
         falloff: 2.0,
     };
     device.begin_frame(WIDTH, HEIGHT, &[0.0, 0.0, 0.0, 1.0])?;
     draw_batch(
         &mut device,
         &box_program,
-        &glowing.vertices_with(CanvasShapeFill::Solid(glowing.fill), Some(&falloff_glow)),
+        &glowing.records_with(CanvasShapeFill::Solid(glowing.fill), Some(&falloff_glow)),
         &MVP,
         &ROOT,
     )?;
@@ -1296,6 +1332,964 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )?;
     }
 
+    // Per-corner shapes and strokes keep the box's one-pixel ramps. At 80 pixels per
+    // metre, pixel (x, y) covers content [x, x + 1] / 80 m; distances below are in
+    // pixels from pixel centres, positive outside a contour.
+    let px = |pixels: f32| pixels / 80.0;
+    let white = [1.0; 4];
+    let grey = |coverage: f32| {
+        let level = srgb(coverage);
+        [level, level, level, 255]
+    };
+    let rect_shape = |cut: [f32; 4], accent: [f32; 4], accent_width: f32| CanvasBoxShape::Rect {
+        corner_cut: cut.map(|length| length / 80.0),
+        corner_accent: accent.map(|length| length / 80.0),
+        corner_accent_width: accent_width / 80.0,
+        checker: None,
+    };
+    let centre = |index: u32| index as f32 + 0.5;
+
+    // A 20-pixel top-left cut of an 80-pixel box at (left, 80) runs along
+    // x + y = left + 100 between (left + 20, 80) and (left, 100).
+    let cut_outside = |left: f32, x: u32, y: u32| {
+        (left + 100.0 - centre(x) - centre(y)) / std::f32::consts::SQRT_2
+    };
+    let cut = rect_shape([20.0, 0.0, 0.0, 0.0], [0.0; 4], 0.0);
+    let cut_box = ProbeBox {
+        placement: [px(80.0), px(80.0), px(80.0), px(80.0)],
+        fill: white,
+        border_color: white,
+        corner: [0.0, 0.0],
+        border: 0.0,
+    };
+    // A half-pixel border along the same contour, drawn as sparse corner squares and
+    // edge strips because its fill is transparent.
+    let ring_box = ProbeBox {
+        placement: [px(180.0), px(80.0), px(80.0), px(80.0)],
+        fill: [0.0; 4],
+        border: px(0.5),
+        ..cut_box
+    };
+    let ring_records = ring_box.records_shaped(CanvasShapeFill::Solid([0.0; 4]), None, cut);
+    assert_eq!(
+        ring_records.len(),
+        8,
+        "hollow cut box must use sparse corners and strips"
+    );
+    device.begin_frame(WIDTH, HEIGHT, &[0.0, 0.0, 0.0, 1.0])?;
+    draw_batch(
+        &mut device,
+        &box_program,
+        &cut_box.records_shaped(CanvasShapeFill::Solid(white), None, cut),
+        &MVP,
+        &ROOT,
+    )?;
+    draw_batch(&mut device, &box_program, &ring_records, &MVP, &ROOT)?;
+    let cut_frame = capture(&mut device, "shapes-cut-corner")?;
+
+    let ring = |outside: f32| ramp(outside) - ramp(outside).min(ramp(outside + 0.5));
+    for column in 84..=93 {
+        let outside = cut_outside(80.0, column, 90);
+        check(
+            &cut_frame,
+            column,
+            90,
+            grey(ramp(outside)),
+            6,
+            "cut corner diagonal ramp",
+        )?;
+        let outside = cut_outside(180.0, column + 100, 90);
+        check(
+            &cut_frame,
+            column + 100,
+            90,
+            grey(ring(outside)),
+            6,
+            "sub-pixel border ramp along a cut",
+        )?;
+    }
+    for row in 79..=81 {
+        check(
+            &cut_frame,
+            220,
+            row,
+            grey(ring(80.0 - centre(row))),
+            6,
+            "sub-pixel border ramp beside a cut",
+        )?;
+    }
+    check(&cut_frame, 82, 82, BLACK, 0, "cut removes its corner")?;
+    check(
+        &cut_frame,
+        220,
+        120,
+        BLACK,
+        0,
+        "hollow cut box centre stays clear",
+    )?;
+
+    // Glow beyond a cut follows the exact distance to the cut contour: past the cut's
+    // end it rounds around the end point instead of continuing the mitred planes.
+    let cut_glow = CanvasShapeGlow {
+        color: [0.0, 1.0, 0.0, 1.0],
+        intensity: 1.0,
+        radius: px(20.0),
+        inner_radius: 0.0,
+        falloff: 1.0,
+    };
+    device.begin_frame(WIDTH, HEIGHT, &[0.0, 0.0, 0.0, 1.0])?;
+    draw_batch(
+        &mut device,
+        &box_program,
+        &cut_box.records_shaped(
+            CanvasShapeFill::Solid([0.0, 0.0, 1.0, 1.0]),
+            Some(&cut_glow),
+            cut,
+        ),
+        &MVP,
+        &ROOT,
+    )?;
+    let cut_glow_frame = capture(&mut device, "shapes-cut-glow")?;
+    for (x, y, distance, label) in [
+        (
+            95,
+            68,
+            (centre(95) - 100.0).hypot(centre(68) - 80.0),
+            "glow rounds the cut's end",
+        ),
+        (120, 68, 80.0 - centre(68), "glow beside the top edge"),
+        (82, 82, cut_outside(80.0, 82, 82), "glow beyond the cut"),
+    ] {
+        check(
+            &cut_glow_frame,
+            x,
+            y,
+            [0, srgb(1.0 - distance / 20.0), 0, 255],
+            4,
+            label,
+        )?;
+    }
+
+    // Inner glow falls inward from the outer contour beneath a 2-pixel border, over
+    // a transparent fill, for 16 pixels.
+    let inner_glow = CanvasShapeGlow {
+        radius: 0.0,
+        inner_radius: px(16.0),
+        ..cut_glow
+    };
+    let framed = ProbeBox {
+        placement: [px(80.0), px(80.0), px(80.0), px(80.0)],
+        fill: [0.0; 4],
+        border_color: white,
+        corner: [0.0, 0.0],
+        border: px(2.0),
+    };
+    device.begin_frame(WIDTH, HEIGHT, &[0.0, 0.0, 0.0, 1.0])?;
+    draw_batch(
+        &mut device,
+        &box_program,
+        &framed.records_with(CanvasShapeFill::Solid([0.0; 4]), Some(&inner_glow)),
+        &MVP,
+        &ROOT,
+    )?;
+    let inner_frame = capture(&mut device, "shapes-inner-glow")?;
+    for column in 79..=100 {
+        let depth = centre(column) - 80.0;
+        let shape = ramp(-depth);
+        let fill = shape.min(ramp(2.0 - depth));
+        let glow = (1.0 - depth.max(0.0) / 16.0).clamp(0.0, 1.0);
+        let border = srgb(shape - fill);
+        check(
+            &inner_frame,
+            column,
+            120,
+            [border, srgb(shape - fill + glow * fill), border, 255],
+            6,
+            "inner glow beneath the border",
+        )?;
+    }
+    check(
+        &inner_frame,
+        120,
+        120,
+        BLACK,
+        0,
+        "inner glow ends before the centre",
+    )?;
+
+    // Corner accents thicken a 1-pixel border to 4 pixels within 20.5 pixels of each
+    // corner, ending mid-pixel; without the border they are brackets alone.
+    let accents = rect_shape([0.0; 4], [20.5; 4], 4.0);
+    let frame_box = ProbeBox {
+        placement: [px(20.0), px(20.0), px(120.0), px(80.0)],
+        fill: [0.0; 4],
+        border_color: white,
+        corner: [0.0, 0.0],
+        border: px(1.0),
+    };
+    let brackets_box = ProbeBox {
+        placement: [px(180.0), px(20.0), px(120.0), px(80.0)],
+        border: 0.0,
+        ..frame_box
+    };
+    let frame_records = frame_box.records_shaped(CanvasShapeFill::Solid([0.0; 4]), None, accents);
+    let bracket_records =
+        brackets_box.records_shaped(CanvasShapeFill::Solid([0.0; 4]), None, accents);
+    assert_eq!(frame_records.len(), 8, "accented frame uses corner squares");
+    assert_eq!(
+        bracket_records.len(),
+        4,
+        "brackets alone cover only their corners"
+    );
+    device.begin_frame(WIDTH, HEIGHT, &[0.0, 0.0, 0.0, 1.0])?;
+    draw_batch(&mut device, &box_program, &frame_records, &MVP, &ROOT)?;
+    draw_batch(&mut device, &box_program, &bracket_records, &MVP, &ROOT)?;
+    let accent_frame = capture(&mut device, "shapes-corner-accents")?;
+    let band = |width: f32, row: u32| {
+        let depth = centre(row) - 20.0;
+        ramp(-depth) - ramp(-depth).min(ramp(width - depth))
+    };
+    for (left, border) in [(20, 1.0), (180, 0.0)] {
+        for row in 19..=25 {
+            check(
+                &accent_frame,
+                left + 10,
+                row,
+                grey(band(4.0, row)),
+                6,
+                "accent span is thick",
+            )?;
+            check(
+                &accent_frame,
+                left + 60,
+                row,
+                grey(band(border, row)),
+                6,
+                "border between spans",
+            )?;
+        }
+        // Row 22 lies inside the accent only; its butt end crosses column 40's centre.
+        for (offset, coverage) in [(19, 1.0), (20, 0.5), (21, 0.0)] {
+            check(
+                &accent_frame,
+                left + offset,
+                22,
+                grey(coverage),
+                6,
+                "accent butt end ramp",
+            )?;
+        }
+        check(
+            &accent_frame,
+            left + 2,
+            30,
+            [255; 4],
+            0,
+            "accent along the left edge",
+        )?;
+        check(
+            &accent_frame,
+            left + 2,
+            60,
+            BLACK,
+            0,
+            "left edge between spans",
+        )?;
+    }
+
+    // Strokes: a half-pixel line keeps half coverage instead of a full ramp's
+    // contrast, butt ends ramp over one pixel, and two crossing translucent segments
+    // blend once where they overlap.
+    let stroke = |placement: [f32; 4], fill: [f32; 4], thickness: f32, segments| {
+        ProbeBox {
+            placement: placement.map(|length| length / 80.0),
+            fill,
+            border_color: [0.0; 4],
+            corner: [0.0, 0.0],
+            border: thickness / 80.0,
+        }
+        .records_shaped(
+            CanvasShapeFill::Solid(fill),
+            None,
+            CanvasBoxShape::Stroke {
+                segments,
+            },
+        )
+    };
+    let horizontal = [[0.0, 0.5, 1.0, 0.5], [0.0; 4]];
+    let cross = [[0.0, 0.0, 1.0, 1.0], [0.0, 1.0, 1.0, 0.0]];
+    let stroke_records = [
+        stroke([20.0, 140.0, 100.0, 1.0], white, 0.5, horizontal),
+        stroke([20.0, 160.0, 100.5, 4.0], white, 4.0, horizontal),
+        stroke([180.0, 130.0, 60.0, 60.0], [1.0, 1.0, 1.0, 0.5], 6.0, cross),
+    ]
+    .concat();
+    assert_eq!(stroke_records.len(), 3, "each stroke is one quad");
+    device.begin_frame(WIDTH, HEIGHT, &[0.0, 0.0, 0.0, 1.0])?;
+    draw_batch(&mut device, &box_program, &stroke_records, &MVP, &ROOT)?;
+    let stroke_frame = capture(&mut device, "shapes-strokes")?;
+    for column in [40, 60, 80] {
+        check(
+            &stroke_frame,
+            column,
+            140,
+            grey(0.5),
+            6,
+            "half-pixel stroke keeps its area",
+        )?;
+        check(&stroke_frame, column, 139, BLACK, 0, "above a thin stroke")?;
+        check(&stroke_frame, column, 141, BLACK, 0, "below a thin stroke")?;
+    }
+    for (column, coverage) in [(119, 1.0), (120, 0.5), (121, 0.0)] {
+        check(
+            &stroke_frame,
+            column,
+            161,
+            grey(coverage),
+            6,
+            "stroke butt end ramp",
+        )?;
+    }
+    for (x, y, expected, label) in [
+        (209, 159, grey(0.5), "crossing segments blend once"),
+        (190, 140, grey(0.5), "one segment's arm"),
+        (200, 140, BLACK, "between the arms"),
+    ] {
+        check(&stroke_frame, x, y, expected, 6, label)?;
+    }
+
+    // Arcs: rings of 40-pixel outer radius, their sectors in turns clockwise from
+    // twelve o'clock. Centres sit on pixel corners or centres so that contours
+    // cross pixel centres where a ramp is checked.
+    let arc_part = |left: f32, top: f32, thickness: f32, fill: [f32; 4], shape| {
+        ProbeBox {
+            placement: [px(left), px(top), px(80.0), px(80.0)],
+            fill,
+            border_color: [0.0; 4],
+            corner: [0.0, 0.0],
+            border: px(thickness),
+        }
+        .records_shaped(CanvasShapeFill::Solid(fill), None, shape)
+    };
+    let arc = |start: f32, sweep: f32, dashes: f32, dash_duty: f32| CanvasBoxShape::Arc {
+        start,
+        sweep,
+        dashes,
+        dash_duty,
+    };
+    let linear = |frame: &[u8], x: u32, y: u32, channel: usize| {
+        let encoded = f32::from(pixel(frame, x, y)[channel]) / 255.0;
+        if encoded <= 0.040_45 {
+            encoded / 12.92
+        } else {
+            ((encoded + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let arc_records = [
+        // A half-pixel whole ring centred on (60, 60).
+        arc_part(20.0, 20.0, 0.5, white, arc(0.3, 1.0, 0.0, 1.0)),
+        // A quarter from three to six o'clock, 8 pixels thick, centred on
+        // (180.5, 60.5): its ends cross the centres of row 60 and column 180.
+        arc_part(140.5, 20.5, 8.0, white, arc(0.25, 0.25, 0.0, 1.0)),
+        // Eight dashes of half a cell on a whole ring centred on (60, 180), the
+        // gaps centred on twelve, three, six and nine o'clock.
+        arc_part(20.0, 140.0, 8.0, white, arc(0.0, 1.0, 8.0, 0.5)),
+        // 360 dashes a quarter of a cell wide, 0.63 pixels a cell at the mean
+        // radius: finer than the pixels, centred on (180, 180).
+        arc_part(140.0, 140.0, 8.0, white, arc(0.0, 1.0, 360.0, 0.25)),
+        // A sweep across twelve o'clock and a zero sweep, centred on (280, 60).
+        arc_part(240.0, 20.0, 8.0, white, arc(0.9, 0.2, 0.0, 1.0)),
+        arc_part(240.0, 140.0, 8.0, white, arc(0.4, 0.0, 0.0, 1.0)),
+    ]
+    .concat();
+    device.begin_frame(WIDTH, HEIGHT, &[0.0, 0.0, 0.0, 1.0])?;
+    draw_batch(&mut device, &box_program, &arc_records, &MVP, &ROOT)?;
+    let arc_frame = capture(&mut device, "shapes-arcs")?;
+    // The half-pixel ring's band [99.5, 100] lies in column 99's right half and
+    // [20, 20.5] in row 20's top half: half coverage, its area kept.
+    for (x, y, expected, label) in [
+        (
+            99,
+            60,
+            grey(0.5),
+            "half-pixel ring keeps its area at three o'clock",
+        ),
+        (98, 60, BLACK, "inside a half-pixel ring"),
+        (100, 60, BLACK, "outside a half-pixel ring"),
+        (
+            60,
+            20,
+            grey(0.5),
+            "half-pixel ring keeps its area at twelve o'clock",
+        ),
+        (60, 60, BLACK, "the ring's centre stays clear"),
+    ] {
+        check(&arc_frame, x, y, expected, 6, label)?;
+    }
+    // Butt ends ramp over one pixel across their radial lines.
+    for (x, y, coverage, label) in [
+        (216, 59, 0.0, "beyond the three o'clock end"),
+        (216, 60, 0.5, "three o'clock end ramp"),
+        (216, 61, 1.0, "inside the three o'clock end"),
+        (179, 96, 0.0, "beyond the six o'clock end"),
+        (180, 96, 0.5, "six o'clock end ramp"),
+        (181, 96, 1.0, "inside the six o'clock end"),
+        (180 + 25, 60 + 25, 1.0, "quarter body"),
+        (180 - 25, 60 + 25, 0.0, "outside the quarter's sweep"),
+        (180 + 18, 60 + 18, 0.0, "the quarter's hollow"),
+    ] {
+        check(&arc_frame, x, y, grey(coverage), 6, label)?;
+    }
+    // Dashes centred on 22.5 degrees and gaps on twelve and three o'clock, 36
+    // pixels out.
+    let on_ring = |center: [f32; 2], radius: f32, turns: f32| {
+        let angle = turns * std::f32::consts::TAU;
+        (
+            (center[0] + radius * angle.sin()) as u32,
+            (center[1] - radius * angle.cos()) as u32,
+        )
+    };
+    for (turns, expected, label) in [
+        (1.0 / 16.0, [255; 4], "on a dash"),
+        (3.0 / 16.0, [255; 4], "on the next dash"),
+        (0.0, BLACK, "in the gap at twelve o'clock"),
+        (0.25, BLACK, "in the gap at three o'clock"),
+    ] {
+        let (x, y) = on_ring([60.0, 180.0], 36.0, turns);
+        check(&arc_frame, x, y, expected, 6, label)?;
+    }
+    // Every pixel well inside the fine dashes' band, 1.6 cells across, shows their
+    // duty instead of aliasing to dash or gap or beating between neighbours.
+    let mut fine_dashes = 0;
+    for y in 136..224 {
+        for x in 136..224 {
+            let radius = (x as f32 + 0.5 - 180.0).hypot(y as f32 + 0.5 - 180.0);
+            if (radius - 36.0).abs() > 2.5 {
+                continue;
+            }
+            let coverage = linear(&arc_frame, x, y, 0);
+            if !(0.23..=0.27).contains(&coverage) {
+                return Err(format!(
+                    "fine dashes alias at ({x},{y}): coverage {coverage:.3}, duty 0.25"
+                )
+                .into());
+            }
+            fine_dashes += 1;
+        }
+    }
+    if fine_dashes < 400 {
+        return Err(format!("only {fine_dashes} fine dash samples").into());
+    }
+    // The sweep from 0.9 over twelve o'clock to 0.1 paints across the wrap; the zero
+    // sweep paints nothing.
+    for (turns, coverage, label) in [
+        (0.0, 1.0, "across the wrap at twelve o'clock"),
+        (0.95, 1.0, "before the wrap"),
+        (0.05, 1.0, "after the wrap"),
+        (0.15, 0.0, "beyond the wrapped sweep"),
+    ] {
+        let (x, y) = on_ring([280.0, 60.0], 36.0, turns);
+        check(&arc_frame, x, y, grey(coverage), 6, label)?;
+    }
+    for turns in [0.0, 0.4, 0.75] {
+        let (x, y) = on_ring([280.0, 180.0], 36.0, turns);
+        check(&arc_frame, x, y, BLACK, 0, "a zero sweep paints nothing")?;
+    }
+
+    // Glow around an arc follows its exact distance: across a butt end, round the
+    // end's outer corner, and into the hole beside the inner circle.
+    device.begin_frame(WIDTH, HEIGHT, &[0.0, 0.0, 0.0, 1.0])?;
+    draw_batch(
+        &mut device,
+        &box_program,
+        &ProbeBox {
+            placement: [px(140.5), px(20.5), px(80.0), px(80.0)],
+            fill: [0.0, 0.0, 1.0, 1.0],
+            border_color: [0.0; 4],
+            corner: [0.0, 0.0],
+            border: px(8.0),
+        }
+        .records_shaped(
+            CanvasShapeFill::Solid([0.0, 0.0, 1.0, 1.0]),
+            Some(&CanvasShapeGlow {
+                color: [0.0, 1.0, 0.0, 1.0],
+                intensity: 1.0,
+                radius: px(20.0),
+                inner_radius: 0.0,
+                falloff: 1.0,
+            }),
+            arc(0.25, 0.25, 0.0, 1.0),
+        ),
+        &MVP,
+        &ROOT,
+    )?;
+    let arc_glow_frame = capture(&mut device, "shapes-arc-glow")?;
+    let from_center = |x: u32, y: u32| (centre(x) - 180.5).hypot(centre(y) - 60.5);
+    for (x, y, distance, label) in [
+        (
+            216,
+            50,
+            60.5 - centre(50),
+            "glow beyond the three o'clock end",
+        ),
+        (
+            226,
+            55,
+            (centre(226) - 220.5).hypot(centre(55) - 60.5),
+            "glow rounds the end's outer corner",
+        ),
+        (200, 80, 32.0 - from_center(200, 80), "glow into the hollow"),
+        (
+            212,
+            92,
+            from_center(212, 92) - 40.0,
+            "glow beyond the outer circle",
+        ),
+    ] {
+        check(
+            &arc_glow_frame,
+            x,
+            y,
+            [0, srgb(1.0 - distance / 20.0), 0, 255],
+            4,
+            label,
+        )?;
+    }
+
+    // Oblique perspective: covered areas follow the independently projected cut
+    // polygon, stroke rectangle and ring sector.
+    let oblique_shapes = view::surface(
+        &view::multiply(&view::rotation_y(0.6), &view::rotation_x(-0.35)),
+        4.5,
+    );
+    let red_cut = ProbeBox {
+        placement: [0.4, 0.4, 1.4, 1.0],
+        fill: [1.0, 0.0, 0.0, 1.0],
+        border_color: [0.0; 4],
+        corner: [0.0, 0.0],
+        border: 0.0,
+    };
+    let oblique_cut = CanvasBoxShape::Rect {
+        corner_cut: [0.3, 0.0, 0.3, 0.0],
+        corner_accent: [0.0; 4],
+        corner_accent_width: 0.0,
+        checker: None,
+    };
+    let green_stroke = ProbeBox {
+        placement: [2.2, 0.4, 1.4, 1.0],
+        fill: [0.0, 1.0, 0.0, 1.0],
+        border: 0.12,
+        ..red_cut
+    };
+    let diagonal = [[0.1, 0.2, 0.9, 0.8], [0.0; 4]];
+    // A knob's 270-degree track centred on (2, 2.2), 0.6 out and 0.15 thick.
+    let blue_arc = ProbeBox {
+        placement: [1.4, 1.6, 1.2, 1.2],
+        fill: [0.0, 0.0, 1.0, 1.0],
+        border: 0.15,
+        ..red_cut
+    };
+    let oblique_records = [
+        red_cut.records_shaped(CanvasShapeFill::Solid(red_cut.fill), None, oblique_cut),
+        green_stroke.records_shaped(
+            CanvasShapeFill::Solid(green_stroke.fill),
+            None,
+            CanvasBoxShape::Stroke {
+                segments: diagonal,
+            },
+        ),
+        blue_arc.records_shaped(
+            CanvasShapeFill::Solid(blue_arc.fill),
+            None,
+            arc(0.625, 0.75, 0.0, 1.0),
+        ),
+    ]
+    .concat();
+    device.begin_frame(WIDTH, HEIGHT, &[0.0, 0.0, 0.0, 1.0])?;
+    draw_batch(
+        &mut device,
+        &box_program,
+        &oblique_records,
+        &oblique_shapes,
+        &ROOT,
+    )?;
+    let oblique_frame = capture(&mut device, "shapes-perspective")?;
+    let projected = |points: &[[f32; 2]]| {
+        view::area(
+            &points
+                .iter()
+                .map(|point| view::project(&oblique_shapes, *point).0)
+                .collect::<Vec<_>>(),
+        )
+    };
+    let cut_area = projected(&[
+        [0.7, 0.4],
+        [1.8, 0.4],
+        [1.8, 1.1],
+        [1.5, 1.4],
+        [0.4, 1.4],
+        [0.4, 0.7],
+    ]);
+    let [start, end] = [[2.34_f32, 0.6_f32], [3.46, 1.2]];
+    let axis = [end[0] - start[0], end[1] - start[1]];
+    let length = axis[0].hypot(axis[1]);
+    let normal = [-axis[1] / length * 0.06, axis[0] / length * 0.06];
+    let stroke_area = projected(&[
+        [start[0] + normal[0], start[1] + normal[1]],
+        [end[0] + normal[0], end[1] + normal[1]],
+        [end[0] - normal[0], end[1] - normal[1]],
+        [start[0] - normal[0], start[1] - normal[1]],
+    ]);
+    // Summed linear coverage measures area including antialiased edge pixels, which
+    // a threshold count would overstate for a stroke a few pixels wide.
+    let covered = |channel: usize| {
+        (0..HEIGHT)
+            .flat_map(|y| (0..WIDTH).map(move |x| (x, y)))
+            .map(|(x, y)| {
+                let encoded = f32::from(pixel(&oblique_frame, x, y)[channel]) / 255.0;
+                if encoded <= 0.040_45 {
+                    encoded / 12.92
+                } else {
+                    ((encoded + 0.055) / 1.055).powf(2.4)
+                }
+            })
+            .sum::<f32>()
+    };
+    // The sector's outline as a fine polygon: the outer circle forward over the
+    // sweep, then the inner circle back.
+    let sector: Vec<[f32; 2]> = [0.6_f32, 0.45]
+        .into_iter()
+        .enumerate()
+        .flat_map(|(side, radius)| {
+            (0..=96).map(move |step| {
+                let step = if side == 0 {
+                    step
+                } else {
+                    96 - step
+                };
+                let angle = (0.625 + 0.75 * step as f32 / 96.0) * std::f32::consts::TAU;
+                [2.0 + radius * angle.sin(), 2.2 - radius * angle.cos()]
+            })
+        })
+        .collect();
+    let shape_regions = [
+        ("cut", covered(0), cut_area),
+        ("stroke", covered(1), stroke_area),
+        ("arc", covered(2), projected(&sector)),
+    ];
+    for (label, covered, expected) in shape_regions {
+        if (covered - expected).abs() > 0.05 * expected {
+            return Err(format!(
+                "perspective {label} region covers {covered:.1} px, expected {expected:.1}"
+            )
+            .into());
+        }
+    }
+
+    // Colour fields and the checker. Expected colours come from the textbook HSV
+    // model in sRGB levels at each pixel's centre and from linear-light composition
+    // of the authored colours, encoded by the sRGB transfer function.
+    let hsv = |hue: f32, saturation: f32, value: f32| -> [f32; 3] {
+        let sector = hue.rem_euclid(1.0) * 6.0;
+        let index = sector.floor();
+        let f = sector - index;
+        let p = value * (1.0 - saturation);
+        let q = value * (1.0 - saturation * f);
+        let t = value * (1.0 - saturation * (1.0 - f));
+        let rgb = match index as u32 % 6 {
+            0 => [value, t, p],
+            1 => [q, value, p],
+            2 => [p, value, t],
+            3 => [p, q, value],
+            4 => [t, p, value],
+            _ => [value, p, q],
+        };
+        rgb.map(|channel| channel * 255.0)
+    };
+    let level = |linear: f32| {
+        (if linear <= 0.003_130_8 {
+            12.92 * linear
+        } else {
+            1.055 * linear.powf(1.0 / 2.4) - 0.055
+        }) * 255.0
+    };
+    let level_error = |frame: &[u8], x: u32, y: u32, expected: [f32; 3]| {
+        let actual = pixel(frame, x, y);
+        (0..3)
+            .map(|channel| (f32::from(actual[channel]) - expected[channel]).abs())
+            .fold(0.0, f32::max)
+    };
+    let field_part = |placement: [f32; 4], fill: CanvasShapeFill, shape: CanvasBoxShape| {
+        ProbeBox {
+            placement,
+            fill: [0.0; 4],
+            border_color: [0.0; 4],
+            corner: [0.0, 0.0],
+            border: 0.0,
+        }
+        .records_shaped(fill, None, shape)
+    };
+    let checkered = |size: f32, colors: [[f32; 4]; 2]| CanvasBoxShape::Rect {
+        corner_cut: [0.0; 4],
+        corner_accent: [0.0; 4],
+        corner_accent_width: 0.0,
+        checker: Some(CanvasShapeChecker {
+            size,
+            colors,
+        }),
+    };
+    let clear = CanvasShapeFill::Solid([0.0; 4]);
+    let light = [0.6, 0.6, 0.6, 1.0];
+    let dark = [0.1, 0.1, 0.1, 1.0];
+    let black_white = [[1.0; 4], [0.0, 0.0, 0.0, 1.0]];
+    let cyan = [0.1, 0.9, 1.0];
+    let field_records = [
+        field_part(
+            [px(20.0), px(20.0), px(80.0), px(80.0)],
+            CanvasShapeFill::SaturationValue {
+                hue: 0.55,
+            },
+            CanvasBoxShape::RECT,
+        ),
+        // Red at its bottom, rising upward.
+        field_part(
+            [px(120.0), px(20.0), px(16.0), px(80.0)],
+            CanvasShapeFill::Hue {
+                start: [0.0, px(80.0)],
+                end: [0.0, 0.0],
+            },
+            CanvasBoxShape::RECT,
+        ),
+        field_part(
+            [px(150.0), px(20.0), px(48.0), px(48.0)],
+            clear,
+            checkered(px(8.0), [light, dark]),
+        ),
+        // Cells of 0.4 pixels.
+        field_part(
+            [px(210.0), px(20.0), px(40.0), px(40.0)],
+            clear,
+            checkered(px(0.4), black_white),
+        ),
+        // An alpha ramp of one colour, transparent at its left, over 8-pixel cells.
+        field_part(
+            [px(20.0), px(120.0), px(160.0), px(32.0)],
+            CanvasShapeFill::LinearGradient {
+                start: [0.0, 0.0],
+                end: [px(160.0), 0.0],
+                start_color: [cyan[0], cyan[1], cyan[2], 0.0],
+                end_color: [cyan[0], cyan[1], cyan[2], 1.0],
+            },
+            checkered(px(8.0), [light, dark]),
+        ),
+    ]
+    .concat();
+    device.begin_frame(WIDTH, HEIGHT, &[0.0, 0.0, 0.0, 1.0])?;
+    draw_batch(&mut device, &box_program, &field_records, &MVP, &ROOT)?;
+    let field_frame = capture(&mut device, "colour-fields")?;
+    let mut field_error = 0.0f32;
+    let mut rail_error = 0.0f32;
+    for y in 21..99 {
+        for x in 21..99 {
+            let expected = hsv(
+                0.55,
+                (centre(x) - 20.0) / 80.0,
+                1.0 - (centre(y) - 20.0) / 80.0,
+            );
+            field_error = field_error.max(level_error(&field_frame, x, y, expected));
+        }
+        for x in 121..135 {
+            let expected = hsv((100.0 - centre(y)) / 80.0, 1.0, 1.0);
+            rail_error = rail_error.max(level_error(&field_frame, x, y, expected));
+        }
+    }
+    let mut checker_error = 0.0f32;
+    let cell_colour = |origin: [f32; 2], cell: f32, colors: [[f32; 4]; 2], x: f32, y: f32| {
+        colors[(((x - origin[0]) / cell).floor() + ((y - origin[1]) / cell).floor()).rem_euclid(2.0)
+            as usize]
+    };
+    for row in 0..6 {
+        for column in 0..6 {
+            let [x, y] = [150 + column * 8 + 4, 20 + row * 8 + 4];
+            let color = cell_colour([150.0, 20.0], 8.0, [light, dark], centre(x), centre(y));
+            checker_error =
+                checker_error.max(level_error(&field_frame, x, y, [level(color[0]); 3]));
+        }
+    }
+    let mut fine_error = 0.0f32;
+    for y in 21..59 {
+        for x in 211..249 {
+            fine_error = fine_error.max(level_error(&field_frame, x, y, [level(0.5); 3]));
+        }
+    }
+    let mut alpha_error = 0.0f32;
+    for row in 0..4 {
+        for column in 0..20 {
+            let [x, y] = [20 + column * 8 + 4, 120 + row * 8 + 4];
+            let alpha = (centre(x) - 20.0) / 160.0;
+            let under = cell_colour([20.0, 120.0], 8.0, [light, dark], centre(x), centre(y));
+            let expected = std::array::from_fn(|channel| {
+                level(cyan[channel] * alpha + under[channel] * (1.0 - alpha))
+            });
+            alpha_error = alpha_error.max(level_error(&field_frame, x, y, expected));
+        }
+    }
+    println!(
+        "colour fields: largest error in sRGB levels: saturation-value {field_error:.2}, hue {rail_error:.2}, checker cells {checker_error:.2}, sub-pixel checker {fine_error:.2}, alpha over checker {alpha_error:.2}"
+    );
+    for (label, error) in [
+        ("saturation-value field", field_error),
+        ("hue rail", rail_error),
+        ("checker cells", checker_error),
+        ("sub-pixel checker mean", fine_error),
+        ("alpha ramp over the checker", alpha_error),
+    ] {
+        if error > 1.5 {
+            return Err(format!("{label} differs from its model by {error:.2} sRGB levels").into());
+        }
+    }
+
+    // On a steeply tilted Surface the checker filters by each pixel's footprint: where
+    // it spans a cell or more along either axis the pixel shows the colours' mean,
+    // never a cell or a beat between neighbours, and where cells span several pixels
+    // their colours stay. The oracle inverts the projection to find each pixel's
+    // Surface point and footprint.
+    let tilted = view::surface(&view::rotation_x(-1.1), 3.4);
+    let checker_boxes = [
+        ([0.2, 0.2, 1.7, 2.6], 0.25, [light, dark]),
+        ([2.1, 0.2, 1.7, 2.6], 0.02, black_white),
+    ];
+    let checker_records: Vec<_> = checker_boxes
+        .iter()
+        .flat_map(|(placement, cell, colors)| {
+            field_part(*placement, clear, checkered(*cell, *colors))
+        })
+        .collect();
+    device.begin_frame(WIDTH, HEIGHT, &[0.0, 0.0, 0.0, 1.0])?;
+    draw_batch(&mut device, &box_program, &checker_records, &tilted, &ROOT)?;
+    let tilted_frame = capture(&mut device, "checker-perspective")?;
+    // Pixel (px, py) times w is a projective map of Surface (x, y, 1); its inverse
+    // takes a pixel centre back to the Surface.
+    let [width, height] = [WIDTH as f32, HEIGHT as f32];
+    let m = tilted;
+    let forward = [
+        [
+            (m[0] + m[3]) * width / 2.0,
+            (m[4] + m[7]) * width / 2.0,
+            (m[12] + m[15]) * width / 2.0,
+        ],
+        [
+            (m[3] - m[1]) * height / 2.0,
+            (m[7] - m[5]) * height / 2.0,
+            (m[15] - m[13]) * height / 2.0,
+        ],
+        [m[3], m[7], m[15]],
+    ];
+    let inverse = {
+        let a = forward.map(|row| row.map(f64::from));
+        let cofactor = |r0: usize, r1: usize, c0: usize, c1: usize| {
+            a[r0][c0] * a[r1][c1] - a[r0][c1] * a[r1][c0]
+        };
+        let adjugate = [
+            [
+                cofactor(1, 2, 1, 2),
+                -cofactor(0, 2, 1, 2),
+                cofactor(0, 1, 1, 2),
+            ],
+            [
+                -cofactor(1, 2, 0, 2),
+                cofactor(0, 2, 0, 2),
+                -cofactor(0, 1, 0, 2),
+            ],
+            [
+                cofactor(1, 2, 0, 1),
+                -cofactor(0, 2, 0, 1),
+                cofactor(0, 1, 0, 1),
+            ],
+        ];
+        let determinant: f64 = (0..3)
+            .map(|column| a[0][column] * adjugate[column][0])
+            .sum();
+        adjugate.map(|row| row.map(|value| value / determinant))
+    };
+    let surface_point = |x: f64, y: f64| {
+        let [u, v, w] = inverse.map(|row| row[0] * x + row[1] * y + row[2]);
+        [u / w, v / w]
+    };
+    // The forward projection agrees with the oracle's own.
+    let probe = view::project(&tilted, [1.0, 1.0]).0;
+    let back = surface_point(f64::from(probe[0]), f64::from(probe[1]));
+    if (back[0] - 1.0).abs() > 1e-3 || (back[1] - 1.0).abs() > 1e-3 {
+        return Err(format!("checker oracle inverse projection is {back:?}").into());
+    }
+    let (mut minified, mut magnified, mut tilted_error) = (0u32, 0u32, 0.0f32);
+    for y in 0..HEIGHT {
+        for x in 0..WIDTH {
+            let center = [f64::from(x) + 0.5, f64::from(y) + 0.5];
+            let point = surface_point(center[0], center[1]);
+            let right = surface_point(center[0] + 1.0, center[1]);
+            let down = surface_point(center[0], center[1] + 1.0);
+            let footprint = [0, 1]
+                .map(|axis| (right[axis] - point[axis]).abs() + (down[axis] - point[axis]).abs());
+            for ([left, top, box_width, box_height], cell, colors) in checker_boxes {
+                let origin = [f64::from(left), f64::from(top)];
+                let extent = [f64::from(box_width), f64::from(box_height)];
+                // Clear of the box's antialiased edges.
+                let inside = (0..2).all(|axis| {
+                    let offset = point[axis] - origin[axis];
+                    offset > 3.0 * footprint[axis] && offset < extent[axis] - 3.0 * footprint[axis]
+                });
+                if !inside {
+                    continue;
+                }
+                let cell = f64::from(cell);
+                let widths = footprint.map(|extent| extent / cell);
+                let expected = if widths[0].max(widths[1]) >= 1.25 {
+                    minified += 1;
+                    std::array::from_fn(|channel| {
+                        level((colors[0][channel] + colors[1][channel]) * 0.5)
+                    })
+                } else if widths[0].max(widths[1]) <= 0.25
+                    && (0..2).all(|axis| {
+                        let offset = (point[axis] - origin[axis]) / cell;
+                        let to_edge = (offset - offset.round()).abs();
+                        to_edge > widths[axis]
+                    })
+                {
+                    magnified += 1;
+                    let color = cell_colour(
+                        [0.0, 0.0],
+                        cell as f32,
+                        colors,
+                        (point[0] - origin[0]) as f32,
+                        (point[1] - origin[1]) as f32,
+                    );
+                    std::array::from_fn(|channel| level(color[channel]))
+                } else {
+                    continue;
+                };
+                let error = level_error(&tilted_frame, x, y, expected);
+                if error > 1.5 {
+                    return Err(format!(
+                        "tilted checker at ({x},{y}), footprint {widths:?} cells: {:?}, expected {expected:?}",
+                        pixel(&tilted_frame, x, y)
+                    )
+                    .into());
+                }
+                tilted_error = tilted_error.max(error);
+            }
+        }
+    }
+    println!(
+        "tilted checker: {minified} minified pixels at the mean, {magnified} magnified cell pixels, largest error {tilted_error:.2} sRGB levels"
+    );
+    if minified < 500 || magnified < 500 {
+        return Err(format!(
+            "tilted checker classified only {minified} minified and {magnified} magnified pixels"
+        )
+        .into());
+    }
+
     // Grazing views: nearly edge-on, the padded geometry of filled and sparse boxes
     // stays within a few pixels of the box silhouette instead of stretching toward
     // the camera, and the visible sliver keeps continuous coverage.
@@ -1315,7 +2309,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         border: 0.1,
         ..grazing_fill
     };
-    assert_eq!(grazing_ring.vertices().len(), 24);
+    assert_eq!(grazing_ring.records().len(), 4);
 
     let mut grazing_report = Vec::new();
     for degrees in [88.0_f32, 89.5, 89.9] {
@@ -1327,7 +2321,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             draw_batch(
                 &mut device,
                 &footprint_program,
-                &probe.vertices(),
+                &probe.records(),
                 &mvp,
                 &ROOT,
             )?;
@@ -1367,7 +2361,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     draw_batch(
         &mut device,
         &box_program,
-        &grazing_fill.vertices(),
+        &grazing_fill.records(),
         &sliver_mvp,
         &ROOT,
     )?;
@@ -1398,8 +2392,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (square, square_descriptor) = unit_square(&mut device)?;
 
     let text_program = device.create_program(
-        include_str!("../src/services/render/shaders/surface_gui.vert"),
-        include_str!("../src/services/render/shaders/surface_gui.frag"),
+        include_str!("../src/services/render/shaders/surface_glyph.vert"),
+        include_str!("../src/services/render/shaders/surface_glyph.frag"),
     )?;
     let page = device.create_glyph_atlas_page(512, 512)?;
 
@@ -1446,16 +2440,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let u1 = 31.0 / 512.0;
     let v1 = 1.0 - 31.0 / 512.0;
     let cyan = [0.0, 1.0, 1.0, 1.0];
-    let tl = glyph_vertex([1.0, 1.0], [u0, v0], cyan);
-    let bl = glyph_vertex([1.0, 2.0], [u0, v1], cyan);
-    let br = glyph_vertex([2.0, 2.0], [u1, v1], cyan);
-    let tr = glyph_vertex([2.0, 1.0], [u1, v0], cyan);
-    let glyph_vertices = [tl, bl, br, tl, br, tr];
-    let mut glyph_batch = upload(&mut device, &glyph_vertices, &ROOT)?;
+    let glyph_records = [glyph_record([1.0, 1.0, 2.0, 2.0], [u0, v0, u1, v1], cyan)];
+    let mut glyph_batch = upload_records(&mut device, &glyph_records)?;
 
     device.begin_frame(WIDTH, HEIGHT, &[0.0, 0.0, 0.0, 1.0])?;
     let atlas_tex = *ipp_render_gl::GlesRenderDevice::glyph_atlas_texture(&page);
-    device.draw_gui_batch(&text_program, &glyph_batch, Some(&atlas_tex), &MVP, 0, 6)?;
+    device.draw_gui_batch(&text_program, &glyph_batch, Some(&atlas_tex), &MVP, 0, 1)?;
     let text_batch_frame = capture(&mut device, "glyph-batch")?;
     check(
         &text_batch_frame,
@@ -1468,15 +2458,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Rewrite the stored quad with a yellow tint
     let yellow = [1.0, 1.0, 0.0, 1.0];
-    let tl_y = glyph_vertex([1.0, 1.0], [u0, v0], yellow);
-    let bl_y = glyph_vertex([1.0, 2.0], [u0, v1], yellow);
-    let br_y = glyph_vertex([2.0, 2.0], [u1, v1], yellow);
-    let tr_y = glyph_vertex([2.0, 1.0], [u1, v0], yellow);
-    let updated_vertices = [tl_y, bl_y, br_y, tl_y, br_y, tr_y];
-    device.write_gui_batch(&mut glyph_batch, 0, &updated_vertices)?;
+    let updated_records = [glyph_record([1.0, 1.0, 2.0, 2.0], [u0, v0, u1, v1], yellow)];
+    device.write_gui_batch(&mut glyph_batch, 0, &updated_records)?;
 
     device.begin_frame(WIDTH, HEIGHT, &[0.0, 0.0, 0.0, 1.0])?;
-    device.draw_gui_batch(&text_program, &glyph_batch, Some(&atlas_tex), &MVP, 0, 6)?;
+    device.draw_gui_batch(&text_program, &glyph_batch, Some(&atlas_tex), &MVP, 0, 1)?;
     let updated_batch_frame = capture(&mut device, "glyph-batch-updated")?;
     check(
         &updated_batch_frame,
@@ -1487,8 +2473,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "retained glyph batch updated yellow tint",
     )?;
 
-    // One draw of boxes and glyphs whose vertices carry different clips: the box
-    // keeps only its left part and the glyph quad only its lower half.
+    // A shape and a glyph whose records carry different clips: the box keeps only its
+    // left part and the glyph quad only its lower half.
     let clipped_box = ProbeBox {
         placement: [2.25, 0.25, 1.5, 1.0],
         fill: [1.0, 0.0, 0.0, 1.0],
@@ -1498,35 +2484,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let box_clip = [2.25, 0.0, 3.0, 3.0];
     let glyph_clip = [0.0, 1.5, 4.0, 3.0];
-    let mixed_vertices: Vec<_> = clipped_box
-        .vertices()
-        .into_iter()
-        .map(|vertex| ipp_render_gl::GuiVertex {
-            clip: box_clip,
-            ..vertex
-        })
-        .chain(
-            glyph_vertices
-                .iter()
-                .map(|vertex| ipp_render_gl::GuiVertex {
-                    clip: glyph_clip,
-                    ..*vertex
-                }),
-        )
-        .collect();
-    let mut mixed_batch = device.create_gui_batch(mixed_vertices.len())?;
-    device.write_gui_batch(&mut mixed_batch, 0, &mixed_vertices)?;
+    let clipped_shapes = clipped_box.records();
+    let clipped_glyphs = [ipp_render_gl::GuiGlyphRecord {
+        clip: glyph_clip,
+        ..glyph_records[0]
+    }];
+    let shape_batch = upload(&mut device, &clipped_shapes, &box_clip)?;
+    let text_batch = upload_records(&mut device, &clipped_glyphs)?;
     device.begin_frame(WIDTH, HEIGHT, &[0.0, 0.0, 0.0, 1.0])?;
     device.draw_gui_batch(
         &box_program,
-        &mixed_batch,
-        Some(&atlas_tex),
+        &shape_batch,
+        None,
         &MVP,
         0,
-        mixed_vertices.len(),
+        clipped_shapes.len(),
     )?;
-    let mixed = capture(&mut device, "mixed-clips-one-draw")?;
-    device.delete_gui_batch(mixed_batch);
+    device.draw_gui_batch(&text_program, &text_batch, Some(&atlas_tex), &MVP, 0, 1)?;
+    let mixed = capture(&mut device, "mixed-clips")?;
+    device.delete_gui_batch(shape_batch);
+    device.delete_gui_batch(text_batch);
     for (x, y, expected, label) in [
         (208, 60, [255, 0, 0, 255], "box inside its clip"),
         (272, 60, [0, 0, 0, 255], "box beyond its clip"),
@@ -1567,8 +2544,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         corner: [0.0, 0.0],
         border: 0.12,
     };
-    let outline_vertices = outline.vertices();
-    assert_eq!(outline_vertices.len(), 24);
+    let outline_records = outline.records();
+    assert_eq!(outline_records.len(), 4);
 
     let glyph_rectangle = [0.6, 1.8, 1.0, 0.8];
     let [left, top, right, bottom] = [
@@ -1577,30 +2554,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         glyph_rectangle[0] + glyph_rectangle[2],
         glyph_rectangle[1] + glyph_rectangle[3],
     ];
-    let glyph_corner = |position: [f32; 2], uv: [f32; 2]| glyph_vertex(position, uv, cyan);
-    let [glyph_tl, glyph_bl, glyph_br, glyph_tr] = [
-        glyph_corner([left, top], [u0, v0]),
-        glyph_corner([left, bottom], [u0, v1]),
-        glyph_corner([right, bottom], [u1, v1]),
-        glyph_corner([right, top], [u1, v0]),
-    ];
-    // Boxes and the glyph quad share one storage and draw as one range.
-    let perspective_vertices = [
-        filled.vertices(),
-        outline_vertices,
-        vec![glyph_tl, glyph_bl, glyph_br, glyph_tl, glyph_br, glyph_tr],
-    ]
-    .concat();
-    let perspective_batch = upload(&mut device, &perspective_vertices, &ROOT)?;
+    let perspective_glyph = [glyph_record(
+        [left, top, right, bottom],
+        [u0, v0, u1, v1],
+        cyan,
+    )];
+    // The boxes share one shape storage and draw as one range, then the glyph quad.
+    let perspective_records = [filled.records(), outline_records].concat();
+    let perspective_batch = upload(&mut device, &perspective_records, &ROOT)?;
+    let perspective_text = upload_records(&mut device, &perspective_glyph)?;
 
     device.begin_frame(WIDTH, HEIGHT, &[0.0, 0.0, 0.0, 1.0])?;
     device.draw_gui_batch(
         &box_program,
         &perspective_batch,
+        None,
+        &oblique,
+        0,
+        perspective_records.len(),
+    )?;
+    device.draw_gui_batch(
+        &text_program,
+        &perspective_text,
         Some(&atlas_tex),
         &oblique,
         0,
-        perspective_vertices.len(),
+        1,
     )?;
     let perspective = capture(&mut device, "retained-perspective")?;
 
@@ -1686,7 +2665,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::fs::write(
         evidence.join("gui-clips.txt"),
         format!(
-            "nested=[{:?} {:?} {:?}]\ntext=[{:?} {:?}]\nbitmap=[{:?} {:?}]\ntilted_green={green_count}\nclose_border_profile={close_profile:?}\ngrazing=[{}]\nperspective_w=[{nearest:.3} {farthest:.3}]\nperspective_regions=[{}]\n{}\n",
+            "nested=[{:?} {:?} {:?}]\ntext=[{:?} {:?}]\nbitmap=[{:?} {:?}]\ntilted_green={green_count}\nclose_border_profile={close_profile:?}\ngrazing=[{}]\nperspective_w=[{nearest:.3} {farthest:.3}]\nperspective_regions=[{}]\nperspective_shapes=[{}]\n{}\n",
             pixel(&nested, 120, 120),
             pixel(&nested, 60, 60),
             pixel(&nested, 240, 40),
@@ -1698,11 +2677,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             perspective_regions
                 .map(|(label, counted, expected, _)| format!("{label}={counted}/{expected:.0}"))
                 .join(" "),
+            shape_regions
+                .map(|(label, covered, expected)| format!("{label}={covered:.1}/{expected:.1}"))
+                .join(" "),
             context.info().unwrap_or_else(|_| "no device info".into()),
         ),
     )?;
     println!(
-        "PASS: nested clips, scrolled primitives, boxes, order, coverage ramps, glow, grazing and perspective views, Surface cache targets and recovery"
+        "PASS: nested clips, scrolled primitives, boxes, order, coverage ramps, glow, cut corners, corner accents, inner glow, strokes, arcs, dashes, grazing and perspective views, Surface cache targets and recovery"
     );
     Ok(())
 }

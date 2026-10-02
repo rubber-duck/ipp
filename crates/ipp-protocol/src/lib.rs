@@ -227,6 +227,9 @@ pub enum RequestBody {
     /// Sparse Canvas System state update at the ordered mutation boundary;
     /// uncorrelated, and a rejected update is reported only as a diagnostic.
     CanvasStateUpdateCommand(ipp_core::CanvasStateUpdate),
+    /// Sparse GUI preferences update at the ordered mutation boundary;
+    /// uncorrelated, and a rejected update is reported only as a diagnostic.
+    GuiPreferencesUpdateCommand(ipp_core::systems::gui::GuiPreferencesUpdate),
     /// Read committed world state at the next host frame.
     Inspect(InspectionQuery),
 }
@@ -235,10 +238,12 @@ pub enum RequestBody {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct InspectionQuery {
     /// Summary=0, entities=1, resources=2, controllers=3, render diagnostics=4,
-    /// tree=5; in GUI builds also the GUI System queries GuiFocus=6 and
-    /// GuiPointers=7, whose identity cursor and target are entity identities;
-    /// in Surface builds also the Canvas System query Canvas=8, one record
-    /// without cursor or target.
+    /// tree=5; in GUI builds also the GUI System queries GuiFocus=6,
+    /// GuiPointers=7 and GuiActiveItems=9, whose identity cursor and target
+    /// are entity identities, the group's for GuiActiveItems;
+    /// in Surface builds also the Canvas System query Canvas=8, and in GUI
+    /// builds the GUI System query GuiPreferences=10, each one record without
+    /// cursor or target.
     pub collection: u8,
     /// Exclusive identity cursor, zero for the first page.
     pub after: u64,
@@ -367,8 +372,12 @@ pub enum ResponseBody {
         gui_focus: Vec<ipp_core::systems::gui::local::GuiFocusRecord>,
         /// GUI System query: live pointer feedback, by target entity then pointer.
         gui_pointers: Vec<ipp_core::systems::gui::local::GuiPointerRecord>,
+        /// GUI System query: groups' active items, by group entity.
+        gui_active_items: Vec<ipp_core::systems::gui::local::GuiActiveItemRecord>,
         /// Canvas System query: the World canvas's state and last evaluated extent.
         canvas: Option<ipp_core::CanvasStateRecord>,
+        /// GUI System query: the World's GUI presentation preferences.
+        gui_preferences: Option<ipp_core::systems::gui::GuiPreferences>,
     },
     /// Bounded hierarchy in depth-first sibling order.
     EntityTree {

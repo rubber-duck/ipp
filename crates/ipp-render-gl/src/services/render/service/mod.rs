@@ -116,8 +116,17 @@ pub struct RenderService<D: RenderDevice> {
     /// The last Surface submission had no usable retained GUI storage, so it
     /// skipped its boxes and drew its text analytically.
     surface_gui_unretained: bool,
-    /// Program drawing GUI boxes and atlas glyphs.
-    surface_gui_program: Option<D::Program>,
+    /// The canvas program drawing GUI boxes, strokes and arcs with their custom
+    /// paints, and the paints it holds.
+    canvas_paints: super::canvas_paint::CanvasPaintPrograms<D>,
+    /// The static program drawing retained atlas glyphs.
+    gui_glyph_program: Option<D::Program>,
+    /// Canvas entities whose paint draws their colour, with the reason; a changed
+    /// reason is logged once.
+    canvas_paint_fallbacks: BTreeMap<
+        (ipp_core::OutputRef, ipp_core::EntityId),
+        super::canvas_paint::CanvasPaintFallback,
+    >,
     gui_batch_cache: BTreeMap<ipp_core::OutputRef, super::gui_batch::GuiBatchRenderCache<D>>,
     pub(super) glyph_atlas: super::glyph_atlas::GlyphAtlas<D>,
     glyph_batch_cache: BTreeMap<ipp_core::OutputRef, super::glyph_atlas::GlyphBatchRenderCache>,

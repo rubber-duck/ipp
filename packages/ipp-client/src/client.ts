@@ -68,7 +68,8 @@ export interface GuiWorldClient extends CanvasWorldClient {
 }
 
 /** A World that selects the Canvas System takes `CanvasStateUpdateCommand`s:
- * sparse, uncorrelated updates of its canvas extent and density. */
+ * sparse, uncorrelated updates of its canvas extent and density; one that
+ * selects GUI also takes `GuiPreferencesUpdateCommand`s. */
 export interface CanvasWorldClient extends Client {
   sendCommand(command: SystemCommand): void;
 }
@@ -1061,8 +1062,14 @@ export abstract class ClientBase implements Client {
       ...(response.body.guiPointers
         ? { guiPointers: response.body.guiPointers }
         : {}),
+      ...(response.body.guiActiveItems
+        ? { guiActiveItems: response.body.guiActiveItems }
+        : {}),
       ...(response.body.canvas !== undefined
         ? { canvas: response.body.canvas }
+        : {}),
+      ...(response.body.guiPreferences !== undefined
+        ? { guiPreferences: response.body.guiPreferences }
         : {}),
     };
   }

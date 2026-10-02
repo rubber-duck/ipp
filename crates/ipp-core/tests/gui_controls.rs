@@ -438,7 +438,27 @@ fn value_replacement_updates_visual_parts_and_input_revision_not_layout_or_prior
             .reflows,
         0
     );
-    assert!(Arc::ptr_eq(&before.entries[0], &after.entries[0]));
+    // The checked box repaints its default look's checked fill; the slider's
+    // rail, unchanged by its value, keeps its shared entry.
+    let entry = |publication: &CanvasPublication, entity, part| {
+        publication
+            .entries
+            .iter()
+            .find(|entry| {
+                primitive(entry).style().identity.target.entity == entity
+                    && primitive(entry).style().identity.part == part
+            })
+            .unwrap()
+            .clone()
+    };
+    assert!(!Arc::ptr_eq(
+        &entry(&before, checkbox, CanvasPart::Background),
+        &entry(&after, checkbox, CanvasPart::Background)
+    ));
+    assert!(Arc::ptr_eq(
+        &entry(&before, slider, CanvasPart::Background),
+        &entry(&after, slider, CanvasPart::Background)
+    ));
 }
 
 fn part(identity: GuiPartId, color: [f32; 4]) -> GuiPaintPart {
@@ -473,6 +493,7 @@ fn shared_theme_variants_and_sparse_overrides_preserve_control_and_part_identity
         world,
         vec![ComponentValue::GuiTheme(GuiTheme {
             parts,
+            ..Default::default()
         })],
         None,
     );
@@ -561,7 +582,6 @@ fn shared_theme_variants_and_sparse_overrides_preserve_control_and_part_identity
             ComponentValue::GuiSkin(GuiSkin {
                 theme,
                 parts: overrides,
-                ..Default::default()
             }),
         )],
     )
@@ -613,6 +633,7 @@ fn labels_use_ordinary_font_demand_and_retain_glyphs_across_visual_only_changes(
         root,
         ComponentValue::GuiButton(GuiButton {
             label: "AA".into(),
+            ..Default::default()
         }),
     );
     frame(&mut host);
@@ -727,6 +748,7 @@ fn checkbox_base_icon_is_checked_only_while_plain_button_icon_stays_visible() {
         world,
         vec![ComponentValue::GuiTheme(GuiTheme {
             parts,
+            ..Default::default()
         })],
         None,
     );
@@ -823,6 +845,7 @@ fn checkbox_unchecked_variant_requires_exact_state_and_accepts_color_or_opacity(
             world,
             vec![ComponentValue::GuiTheme(GuiTheme {
                 parts,
+                ..Default::default()
             })],
             None,
         );
@@ -865,10 +888,12 @@ fn checkbox_unchecked_variant_requires_exact_state_and_accepts_color_or_opacity(
                     1.0
                 }
             );
+            // An opacity-only row fades the default look's dark check mark
+            // (sRGB #00131c).
             assert_eq!(
                 *fill,
                 CanvasShapeFill::Solid(if opacity_only {
-                    [1.0; 4]
+                    [0.0, 0.006_512_090_6, 0.011_612_245, 1.0]
                 } else {
                     [0.3, 0.7, 0.2, 1.0]
                 })
@@ -903,6 +928,7 @@ fn checkbox_unchecked_asset_requires_an_explicit_variant_not_a_ready_base_asset(
         world,
         vec![ComponentValue::GuiTheme(GuiTheme {
             parts: parts.clone(),
+            ..Default::default()
         })],
         None,
     );
@@ -963,6 +989,7 @@ fn checkbox_unchecked_asset_requires_an_explicit_variant_not_a_ready_base_asset(
             EntityRef::Handle(theme),
             ComponentValue::GuiTheme(GuiTheme {
                 parts,
+                ..Default::default()
             }),
         )],
     )
@@ -1237,6 +1264,188 @@ fn slider_range_that_excludes_its_value_presents_a_clamped_thumb_and_keeps_the_v
     }
 }
 
+/// Control-local `[x, y, width, height]` of the boxes painted for `part` of
+/// `entity`'s control, in paint order.
+fn painted_parts(
+    canvas: &CanvasPublication,
+    semantics: &GuiCanvasPublication,
+    root: OutputRef,
+    entity: EntityId,
+    part: CanvasPart,
+) -> Vec<[f32; 4]> {
+    let observed = semantics.views[&root]
+        .controls
+        .iter()
+        .find(|control| control.record.target.entity == entity)
+        .unwrap();
+    canvas
+        .entries
+        .iter()
+        .map(|entry| primitive(entry))
+        .filter_map(|primitive| match primitive {
+            CanvasPrimitive::Box {
+                style,
+                size,
+                ..
+            } if style.identity.part == part && style.identity.target.entity == entity => Some([
+                style.position[0] - observed.hit.position[0],
+                style.position[1] - observed.hit.position[1],
+                size[0],
+                size[1],
+            ]),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A slider in a `20 x 80` box under the row root.
+fn upright_slider(
+    host: &mut HostRuntime,
+    world: WorldId,
+    root: OutputRef,
+    slider: GuiSlider,
+) -> EntityId {
+    let parent = support::top_level_root(host, root.world().id());
+    create(
+        host,
+        world,
+        vec![
+            ComponentValue::GuiSlider(slider),
+            ComponentValue::GuiLayout(GuiLayout {
+                width: 20.0,
+                height: 80.0,
+                ..Default::default()
+            }),
+        ],
+        Some(parent),
+    )
+}
+
+#[test]
+fn a_vertical_slider_paints_and_publishes_its_rail_with_the_minimum_at_the_bottom() {
+    let (mut host, world, root) = fixture();
+    let entity = upright_slider(
+        &mut host,
+        world,
+        root,
+        GuiSlider {
+            value: 0.25,
+            axis: 1,
+            ..Default::default()
+        },
+    );
+    frame(&mut host);
+    let (canvas, semantics) = output(&host, root);
+    let observed = &semantics.views[&root].controls[0];
+
+    // A 15-unit thumb travels from 72.5 at the bottom to 7.5 at the top; the
+    // hit stays the whole control, however thin the painted rail.
+    let slider = observed.slider.unwrap();
+    assert_eq!(slider.axis, 1);
+    assert_eq!(slider.thumb_centers, [72.5, 7.5]);
+    assert_eq!(slider.thumb_rect, [2.5, 48.75, 15.0, 15.0]);
+    let bounds = observed.hit.bounds;
+    assert_eq!([bounds[2] - bounds[0], bounds[3] - bounds[1]], [20.0, 80.0]);
+
+    // The rail is one bar (half the 14-unit default font) thick along the
+    // whole control; the fill rises from its bottom to the thumb centre.
+    let parts = |part| painted_parts(&canvas, &semantics, root, entity, part);
+    assert_eq!(parts(CanvasPart::Background), [[6.5, 0.0, 7.0, 80.0]]);
+    assert_eq!(parts(CanvasPart::Fill), [[6.5, 56.25, 7.0, 23.75]]);
+    assert_eq!(parts(CanvasPart::Icon), [[2.5, 48.75, 15.0, 15.0]]);
+}
+
+#[test]
+fn a_fill_origin_inside_the_range_fills_only_between_it_and_the_thumb() {
+    let (mut host, world, root) = fixture();
+    let bipolar = GuiSlider {
+        min: -100.0,
+        max: 100.0,
+        origin: 0.0,
+        axis: 1,
+        ..Default::default()
+    };
+    let entity = upright_slider(&mut host, world, root, bipolar);
+
+    // From the origin at the middle (40) down to -50 or up to +50, and
+    // nothing while the value is at the origin; an origin outside the range
+    // clamps to its bound.
+    for (origin, value, fill) in [
+        (0.0, -50.0, vec![[6.5, 40.0, 7.0, 16.25]]),
+        (0.0, 50.0, vec![[6.5, 23.75, 7.0, 16.25]]),
+        (0.0, 0.0, Vec::new()),
+        (500.0, 50.0, vec![[6.5, 0.0, 7.0, 23.75]]),
+        (f32::MIN, -100.0, vec![[6.5, 72.5, 7.0, 7.5]]),
+    ] {
+        apply(
+            &mut host,
+            world,
+            vec![Command::insert_value(
+                EntityRef::Handle(entity),
+                ComponentValue::GuiSlider(GuiSlider {
+                    origin,
+                    value,
+                    ..bipolar
+                }),
+            )],
+        )
+        .result
+        .unwrap();
+        frame(&mut host);
+        let (canvas, semantics) = output(&host, root);
+        assert_eq!(
+            painted_parts(&canvas, &semantics, root, entity, CanvasPart::Fill),
+            fill,
+            "origin {origin}, value {value}"
+        );
+    }
+}
+
+#[test]
+fn an_unsized_slider_measures_along_its_axis_and_remeasures_when_it_turns() {
+    let (mut host, world, root) = fixture();
+    let parent = support::top_level_root(&mut host, world);
+    let entity = create(
+        &mut host,
+        world,
+        vec![
+            ComponentValue::GuiSlider(GuiSlider::default()),
+            ComponentValue::GuiFont(GuiFont {
+                font_size: 9.0,
+                ..Default::default()
+            }),
+        ],
+        Some(parent),
+    );
+    frame(&mut host);
+    let size = |host: &HostRuntime| {
+        let (_, semantics) = output(host, root);
+        let bounds = semantics.views[&root].controls[0].hit.bounds;
+        [bounds[2] - bounds[0], bounds[3] - bounds[1]]
+    };
+
+    // Eight ems along the rail and four thirds of an em across it, so the
+    // thumb, three quarters of that depth, is an em square.
+    let (length, depth) = (8.0 * 9.0, 12.0);
+    assert_eq!(size(&host), [length, depth]);
+    apply(
+        &mut host,
+        world,
+        vec![Command::SetField {
+            entity: EntityRef::Handle(entity),
+            component: ComponentValue::GUI_SLIDER,
+            field: FieldWrite {
+                offset: std::mem::offset_of!(GuiSlider, axis) as u32,
+                value: FieldValue::U32(1),
+            },
+        }],
+    )
+    .result
+    .unwrap();
+    frame(&mut host);
+    assert_eq!(size(&host), [depth, length]);
+}
+
 #[test]
 fn refused_theme_write_leaves_presentation_and_control_unchanged() {
     let (mut host, world, root) = fixture();
@@ -1252,6 +1461,7 @@ fn refused_theme_write_leaves_presentation_and_control_unchanged() {
         world,
         vec![ComponentValue::GuiTheme(GuiTheme {
             parts,
+            ..Default::default()
         })],
         None,
     );
@@ -1528,29 +1738,59 @@ fn scroll_parts(canvas: &CanvasPublication, entity: EntityId) -> Vec<(CanvasPart
 }
 
 #[test]
-fn theme_styled_disabled_track_keeps_a_fitting_scroll_bar_visible_without_input() {
+fn a_scrolling_axis_keeps_its_bar_over_fitting_content_without_input() {
     let (mut host, world, root) = fixture();
-    let track = [0.3, 0.3, 0.3, 1.0];
-    let mut parts = Rows::new();
-    parts
-        .push(part(
-            GuiPartId::base(GuiPrimitivePart::ScrollTrackX),
-            [1.0, 0.0, 0.0, 1.0],
-        ))
-        .unwrap();
-    let theme = create(
-        &mut host,
-        world,
-        vec![ComponentValue::GuiTheme(GuiTheme {
-            parts: parts.clone(),
-        })],
-        None,
-    );
     let view = control(
         &mut host,
         world,
         root,
         ComponentValue::GuiScrollView(Default::default()),
+    );
+    frame(&mut host);
+    // The vertical view keeps its default track while its content fits; the
+    // track's disabled state hides the thumb (opacity 0) and the other axis
+    // shows nothing.
+    let (canvas, _) = output(&host, root);
+    let parts = scroll_parts(&canvas, view);
+    assert_eq!(
+        parts.iter().map(|(part, _)| *part).collect::<Vec<_>>(),
+        [CanvasPart::ScrollTrackY, CanvasPart::ScrollThumbY]
+    );
+    let thumb = canvas
+        .entries
+        .iter()
+        .map(|entry| primitive(entry))
+        .find(|primitive| {
+            primitive.style().identity.target.entity == view
+                && primitive.style().identity.part == CanvasPart::ScrollThumbY
+        })
+        .unwrap();
+    assert_eq!(thumb.style().opacity, 0.0);
+
+    // A theme restyles the disabled track; a horizontal track style still
+    // shows no bar on an axis the view neither scrolls nor overflows.
+    let track = [0.3, 0.3, 0.3, 1.0];
+    let mut parts = Rows::new();
+    for row in [
+        part(
+            GuiPartId::base(GuiPrimitivePart::ScrollTrackX),
+            [1.0, 0.0, 0.0, 1.0],
+        ),
+        part(
+            GuiPartId::state(GuiPrimitivePart::ScrollTrackY, GuiSkinState::Disabled),
+            track,
+        ),
+    ] {
+        parts.push(row).unwrap();
+    }
+    let theme = create(
+        &mut host,
+        world,
+        vec![ComponentValue::GuiTheme(GuiTheme {
+            parts,
+            ..Default::default()
+        })],
+        None,
     );
     apply(
         &mut host,
@@ -1566,35 +1806,17 @@ fn theme_styled_disabled_track_keeps_a_fitting_scroll_bar_visible_without_input(
     .result
     .unwrap();
     frame(&mut host);
-    // A base-part style alone does not ask for bars over fitting content.
-    assert_eq!(scroll_parts(&output(&host, root).0, view), []);
-
-    parts
-        .push(part(
-            GuiPartId::state(GuiPrimitivePart::ScrollTrackY, GuiSkinState::Disabled),
-            track,
-        ))
-        .unwrap();
-    apply(
-        &mut host,
-        world,
-        vec![Command::insert_value(
-            EntityRef::Handle(theme),
-            ComponentValue::GuiTheme(GuiTheme {
-                parts,
-            }),
-        )],
-    )
-    .result
-    .unwrap();
-    frame(&mut host);
     let (canvas, semantics) = output(&host, root);
-    // Only the styled vertical track paints; its unstyled thumb and the other
-    // axis stay hidden, and the disabled bar takes no input.
     assert_eq!(
-        scroll_parts(&canvas, view),
-        [(CanvasPart::ScrollTrackY, track)]
+        scroll_parts(&canvas, view)[0],
+        (CanvasPart::ScrollTrackY, track)
     );
+    assert!(
+        scroll_parts(&canvas, view)
+            .iter()
+            .all(|(part, _)| !matches!(part, CanvasPart::ScrollTrackX | CanvasPart::ScrollThumbX))
+    );
+    // The bar that cannot scroll takes no input.
     assert!(canvas.hits.iter().all(|hit| !matches!(
         hit.kind,
         CanvasHitKind::ScrollTrack { .. } | CanvasHitKind::ScrollThumb { .. }

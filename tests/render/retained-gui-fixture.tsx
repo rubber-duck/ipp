@@ -12,6 +12,7 @@ import {
   Button,
   Checkbox,
   Drawing,
+  Font,
   Layout,
   Skin,
   Style,
@@ -58,6 +59,7 @@ interface PanelPartRow {
   part: number;
   color?: Color;
   corner_radius?: readonly [number, number];
+  corner_cut?: readonly [number, number, number, number];
   border_width?: number;
   border_color?: Color;
   fill_mode?: number;
@@ -101,16 +103,29 @@ interface PanelConfig {
 /** Batches and commands one panel render committed to its Canvas World. */
 interface CanvasEdits {
   requests: number;
-  /** Commands: React writes one command per changed field. */
+  /** Commands; React writes several changed fields of one component in one. */
   edits: number;
   /** Distinct entity components (or entities) the commands addressed. */
   components: number;
+  /** Field values the commands wrote in place. */
+  fields: number;
+  /** Kinds of the commands that were not in-place field writes. */
+  structural: string[];
 }
 
-/** Batches and the target of every command committed to one Canvas World. */
+/** One command's target and what it wrote, as the panel render committed it. */
+interface CanvasCommand {
+  target: string;
+  /** Field values written in place: a field write, or an adopting component write. */
+  fields: number;
+  /** The command's kind when it is not an in-place field write. */
+  structural?: string;
+}
+
+/** Batches and every command committed to one Canvas World. */
 interface CanvasBatches {
   requests: number;
-  targets: string[];
+  commands: CanvasCommand[];
 }
 
 /** A Canvas World session the fixture opened to observe committed state. */
@@ -133,14 +148,23 @@ let input: { view: PresentationView; context: GuiPhysicalContext } | undefined;
 /** Batches and command targets per Canvas World, recorded at the generated client's batch entry. */
 const canvasBatches = new Map<string, CanvasBatches>();
 
-/** The entity and component one command addresses. */
-function commandTarget(command: object): string {
-  const { entity, component } = command as {
+/** The entity and component one command addresses, and what it writes. */
+function canvasCommand(command: object): CanvasCommand {
+  const { kind, entity, component, fields, adopt } = command as {
+    kind: string;
     entity?: { kind: string; id?: bigint; alias?: number; symbol?: string };
     component?: number;
+    fields?: readonly unknown[];
+    adopt?: boolean;
   };
   const name = entity?.id ?? entity?.alias ?? entity?.symbol;
-  return `${entity?.kind}:${String(name)}:${String(component)}`;
+  const target = `${entity?.kind}:${String(name)}:${String(component)}`;
+  if (kind === "setField") return { target, fields: 1 };
+  // An adopting component write sets only the listed fields of an existing
+  // component, in place.
+  if (kind === "insertComponent" && adopt)
+    return { target, fields: fields?.length ?? 0 };
+  return { target, fields: 0, structural: kind };
 }
 
 const worldKey = (world: WorldReference) => `${world.id}:${world.incarnation}`;
@@ -159,9 +183,9 @@ function countCanvasBatches() {
     const batch = session.batch.bind(session);
     session.batch = (commands, ...options) => {
       const key = worldKey(world);
-      const batches = canvasBatches.get(key) ?? { requests: 0, targets: [] };
+      const batches = canvasBatches.get(key) ?? { requests: 0, commands: [] };
       batches.requests += 1;
-      batches.targets.push(...commands.map(commandTarget));
+      batches.commands.push(...commands.map(canvasCommand));
       canvasBatches.set(key, batches);
       return batch(commands, ...options);
     };
@@ -214,16 +238,20 @@ export async function guiPanel(config: PanelConfig) {
     panelCanvas ? canvasBatches.get(worldKey(panelCanvas.world)) : undefined;
   const before = {
     requests: recorded()?.requests ?? 0,
-    targets: recorded()?.targets.length ?? 0,
+    commands: recorded()?.commands.length ?? 0,
   };
   await renderPanel();
   if (!panelCanvas) throw new Error("The panel's Canvas World is not attached");
-  const after = recorded() ?? { requests: 0, targets: [] };
-  const targets = after.targets.slice(before.targets);
+  const after = recorded() ?? { requests: 0, commands: [] };
+  const commands = after.commands.slice(before.commands);
   const canvasEdits: CanvasEdits = {
     requests: after.requests - before.requests,
-    edits: targets.length,
-    components: new Set(targets).size,
+    edits: commands.length,
+    components: new Set(commands.map((command) => command.target)).size,
+    fields: commands.reduce((sum, command) => sum + command.fields, 0),
+    structural: commands.flatMap((command) =>
+      command.structural ? [command.structural] : [],
+    ),
   };
   // The orthographic fixture camera spans ORTHO_HEIGHT metres vertically.
   return { pixelsPerMetre: height / surfaceFixture.cameraHeight, canvasEdits };
@@ -234,9 +262,12 @@ async function renderPanel() {
   if (!config || !contract) throw new Error("No GUI panel is configured");
   const { variant, shape } = config;
   const background = contract.guiPaintPartIndex({ part: "background" });
+  // A rounded rectangle: the row states away the default button look's
+  // corner cuts, which it would otherwise sit on.
   const edge: PanelPartRow = {
     part: background,
     corner_radius: [shape.cornerRadius, shape.cornerRadius],
+    corner_cut: [0, 0, 0, 0],
     border_width: shape.borderWidth,
     border_color: [1, 1, 1, 1],
   };
@@ -274,6 +305,22 @@ async function renderPanel() {
     nextSlot: 1,
     rows: new Map([[0, { part: background, color: fill }]]),
   });
+  // The checkbox keeps its default look with round corners: cached and
+  // direct images antialias the inner corner of a square stroke differently,
+  // at one pixel by more than the cache comparison's tolerance.
+  const rounded = contract.GuiSkin.encodeParts({
+    nextSlot: 1,
+    rows: new Map([
+      [
+        0,
+        {
+          part: background,
+          corner_cut: [0, 0, 0, 0],
+          corner_radius: [0.1, 0.1],
+        },
+      ],
+    ]),
+  });
   const label = config.label;
   await surfaceFixture.presentCached(() => (
     <>
@@ -303,6 +350,8 @@ async function renderPanel() {
             height={PANEL_EXTENT[1]}
             {...TOP_LEFT}
           />
+          {/* The panel's text scale, which its controls' default looks follow. */}
+          <Font source={surfaceFixture.assets.font.source} font_size={0.36} />
           <Children>
             <Entity id="backing">
               <Layout
@@ -332,6 +381,7 @@ async function renderPanel() {
                     {config.control ? (
                       <Entity key="control" id="control">
                         <Layout width={0.5} height={1.2} {...TOP_LEFT} />
+                        <Skin parts={rounded} />
                         <Checkbox />
                       </Entity>
                     ) : null}

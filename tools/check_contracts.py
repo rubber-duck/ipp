@@ -57,6 +57,10 @@ COMPONENTS = [
     "GuiVirtualList",
     "GuiVirtualItem",
     "CanvasBounds",
+    "GuiOverlay",
+    "GuiGroup",
+    "CanvasPaint",
+    "GuiColor",
 ]
 
 

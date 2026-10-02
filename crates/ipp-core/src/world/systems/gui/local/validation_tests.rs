@@ -36,6 +36,7 @@ fn slider(min: f32, max: f32, step: f32) -> GuiSlider {
         min,
         max,
         step,
+        ..Default::default()
     }
 }
 
@@ -112,6 +113,44 @@ fn slider_configuration_rejects_negative_steps_non_finite_values_and_inverted_ra
             value: f32::INFINITY,
             ..slider(0.0, 1.0, 0.0)
         },
+        GuiSlider {
+            fine_step: -0.01,
+            ..slider(0.0, 1.0, 0.1)
+        },
+        GuiSlider {
+            fine_step: f32::INFINITY,
+            ..slider(0.0, 1.0, 0.1)
+        },
+        GuiSlider {
+            origin: f32::NAN,
+            ..slider(0.0, 1.0, 0.0)
+        },
+        GuiSlider {
+            origin: f32::NEG_INFINITY,
+            ..slider(0.0, 1.0, 0.0)
+        },
+        GuiSlider {
+            axis: 3,
+            ..slider(0.0, 1.0, 0.0)
+        },
+        GuiSlider {
+            upper: f32::NAN,
+            ..slider(0.0, 1.0, 0.0)
+        },
+        // A range's values never invert, and a dial holds one value.
+        GuiSlider {
+            value: 0.8,
+            upper: 0.2,
+            range: true,
+            ..slider(0.0, 1.0, 0.0)
+        },
+        GuiSlider {
+            value: 0.2,
+            upper: 0.8,
+            range: true,
+            axis: 2,
+            ..slider(0.0, 1.0, 0.0)
+        },
     ] {
         assert_eq!(
             refused(
@@ -141,6 +180,117 @@ fn slider_configuration_rejects_negative_steps_non_finite_values_and_inverted_ra
 }
 
 #[test]
+fn a_colour_holds_finite_channels_in_the_unit_range_however_it_is_written() {
+    let (mut host, world) = fixture();
+    let colour = |hue, saturation, value, alpha| GuiColor {
+        hue,
+        saturation,
+        value,
+        alpha,
+        alpha_rail: true,
+    };
+    for invalid in [
+        colour(1.5, 0.5, 0.5, 1.0),
+        colour(0.5, -0.25, 0.5, 1.0),
+        colour(0.5, 0.5, f32::NAN, 1.0),
+        colour(0.5, 0.5, 0.5, f32::INFINITY),
+    ] {
+        assert_eq!(
+            refused(
+                &mut host,
+                world,
+                create_value(ComponentValue::GuiColor(invalid))
+            ),
+            ErrorReason::InvalidValue,
+            "{invalid:?}"
+        );
+    }
+
+    // A client's field write outside the range is refused like a semantic
+    // colour, and leaves the colour as it was; the bounds are accepted.
+    let entity = create(
+        &mut host,
+        world,
+        ComponentValue::GuiColor(colour(0.0, 1.0, 1.0, 1.0)),
+    );
+    let write = |offset: usize, value: f32| Command::SetField {
+        entity: EntityRef::Handle(entity),
+        component: ComponentValue::GUI_COLOR,
+        field: FieldWrite {
+            offset: offset as u32,
+            value: FieldValue::F32(value),
+        },
+    };
+    let hue = std::mem::offset_of!(GuiColor, hue);
+    let alpha = std::mem::offset_of!(GuiColor, alpha);
+    assert_eq!(
+        refused(&mut host, world, vec![write(hue, 1.01)]),
+        ErrorReason::InvalidValue
+    );
+    apply(&mut host, world, vec![write(hue, 1.0), write(alpha, 0.0)]);
+    assert_eq!(
+        snapshot(&mut host, world, entity).value,
+        GuiTestValue::Color([1.0, 1.0, 1.0, 0.0])
+    );
+}
+
+#[test]
+fn a_range_refuses_values_that_invert_it_and_focus_on_thumbs_it_lacks() {
+    let (mut host, world) = fixture();
+    let range = create(
+        &mut host,
+        world,
+        ComponentValue::GuiSlider(GuiSlider {
+            value: 0.2,
+            upper: 0.6,
+            range: true,
+            ..slider(0.0, 1.0, 0.0)
+        }),
+    );
+    let single = create(
+        &mut host,
+        world,
+        ComponentValue::GuiSlider(slider(0.0, 1.0, 0.0)),
+    );
+    let [range, single] = [range, single].map(|entity| snapshot(&mut host, world, entity).target);
+
+    // The semantic value is the lower one: above the upper value it is
+    // refused, and up to it accepted.
+    for (action_value, result) in [
+        (
+            GuiLocalAction::SetScalar(0.7),
+            Err(ErrorReason::InvalidValue),
+        ),
+        (GuiLocalAction::SetScalar(0.6), Ok(())),
+        (GuiLocalAction::Focus(1), Ok(())),
+        (
+            GuiLocalAction::Focus(2),
+            Err(ErrorReason::UnsupportedAction),
+        ),
+    ] {
+        action(&mut host, world, range, action_value.clone());
+        frame(&mut host);
+        assert_eq!(
+            outcomes(&mut host, world)[0].result.clone().map(|_| ()),
+            result,
+            "{action_value:?}"
+        );
+    }
+    assert_eq!(
+        snapshot(&mut host, world, range.entity).value,
+        GuiTestValue::Range([0.6, 0.6])
+    );
+
+    // A slider with one value has one focus part.
+    action(&mut host, world, single, GuiLocalAction::Focus(1));
+    frame(&mut host);
+    assert_eq!(
+        outcomes(&mut host, world)[0].result,
+        Err(ErrorReason::UnsupportedAction)
+    );
+}
+
+#[test]
 fn text_limit_is_shared_by_configuration_labels_values_and_actions() {
     let (mut host, world) = fixture();
     let maximum: Arc<str> = "a".repeat(MAX_GUI_TEXT_BYTES).into();
@@ -152,17 +302,21 @@ fn text_limit_is_shared_by_configuration_labels_values_and_actions() {
         ComponentValue::GuiTextInput(GuiTextInput {
             text: oversized.clone(),
             placeholder: Arc::default(),
+            ..Default::default()
         }),
         ComponentValue::GuiTextInput(GuiTextInput {
             text: "two\nlines".into(),
             placeholder: Arc::default(),
+            ..Default::default()
         }),
         ComponentValue::GuiTextInput(GuiTextInput {
             text: Arc::default(),
             placeholder: oversized.clone(),
+            ..Default::default()
         }),
         ComponentValue::GuiButton(GuiButton {
             label: oversized.clone(),
+            ..Default::default()
         }),
         ComponentValue::GuiCheckbox(GuiCheckbox {
             checked: false,
@@ -183,6 +337,7 @@ fn text_limit_is_shared_by_configuration_labels_values_and_actions() {
         world,
         ComponentValue::GuiButton(GuiButton {
             label: "Go".into(),
+            ..Default::default()
         }),
     );
     let label = |value: &str| Command::SetField {
@@ -203,6 +358,7 @@ fn text_limit_is_shared_by_configuration_labels_values_and_actions() {
             .components
             .contains(&ComponentValue::GuiButton(GuiButton {
                 label: maximum.clone(),
+                ..Default::default()
             }))
     );
 
@@ -214,6 +370,7 @@ fn text_limit_is_shared_by_configuration_labels_values_and_actions() {
         ComponentValue::GuiTextInput(GuiTextInput {
             text: maximum.clone(),
             placeholder: Arc::default(),
+            ..Default::default()
         }),
     );
     let seeded = snapshot(&mut host, world, entity);

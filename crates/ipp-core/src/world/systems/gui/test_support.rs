@@ -71,10 +71,16 @@ pub(crate) enum GuiTestValue {
     Bool(bool),
     /// A slider's `value`.
     Scalar(f32),
+    /// A range slider's `value` and `upper`.
+    Range([f32; 2]),
     /// A text input's `text`.
     Text(Arc<str>),
+    /// A numeric text input's `value`.
+    Number(f32),
     /// A scroll view's or virtual list's `offset_x` and `offset_y`.
     Scroll([f32; 2]),
+    /// A colour control's hue, saturation, value and alpha.
+    Color([f32; 4]),
 }
 
 /// One control read the way a client reads it: its value and eligibility from
@@ -93,8 +99,23 @@ pub(crate) struct GuiControlRead {
     pub available: bool,
     /// Whether the `GuiFocus` query names this control.
     pub focused: bool,
+    /// The part the `GuiFocus` query names while it names this control.
+    pub focus_part: Option<u32>,
     /// Union of this control's `GuiPointers` records.
     pub interaction: GuiInteractionFlags,
+    /// The pointer feedback paint shows: with a group's active item as hovered.
+    pub painted: GuiInteractionFlags,
+    /// The pointer feedback of each focus part of a control with several.
+    pub parts: Vec<GuiInteractionFlags>,
+    /// The pointer feedback of a numeric input's decrement and increment
+    /// parts, and of the rest of the control.
+    pub steps: [GuiInteractionFlags; 2],
+    /// The pointer feedback over the control naming none of its parts.
+    pub body: GuiInteractionFlags,
+    /// Whether the `GuiActiveItems` query names this control.
+    pub active: bool,
+    /// `GuiButton.selected`; false for other controls.
+    pub selected: bool,
     /// The control's value field.
     pub value: GuiTestValue,
     /// `CanvasBounds` as `[x, y, width, height]`.
@@ -115,9 +136,21 @@ pub(crate) fn read_control(
     let value = match control.kind {
         GuiControlKind::Button => GuiTestValue::None,
         GuiControlKind::Checkbox => GuiTestValue::Bool(components.gui_checkbox(index)?.checked),
-        GuiControlKind::Slider => GuiTestValue::Scalar(components.gui_slider(index)?.value),
+        GuiControlKind::Slider => {
+            let slider = components.gui_slider(index)?;
+            if slider.range {
+                GuiTestValue::Range([slider.value, slider.upper])
+            } else {
+                GuiTestValue::Scalar(slider.value)
+            }
+        }
         GuiControlKind::TextInput => {
-            GuiTestValue::Text(components.gui_text_input(index)?.text.clone())
+            let input = components.gui_text_input(index)?;
+            if input.numeric {
+                GuiTestValue::Number(input.value)
+            } else {
+                GuiTestValue::Text(input.text.clone())
+            }
         }
         GuiControlKind::ScrollView => {
             let scroll = components.gui_scroll_view(index)?;
@@ -127,15 +160,18 @@ pub(crate) fn read_control(
             let list = components.gui_virtual_list(index)?;
             GuiTestValue::Scroll([list.offset_x, list.offset_y])
         }
+        GuiControlKind::Color => GuiTestValue::Color(components.gui_color(index)?.channels()),
     };
     let bounds = components.canvas_bounds(index).map_or([0.0; 4], |bounds| {
         [bounds.x, bounds.y, bounds.width, bounds.height]
     });
     let eligibility = eligibility(simulation, entity);
-    let focused = world
+    let focus = world
         .gui_focus_page(0, entity.to_bits(), 1)
         .first()
-        .is_some_and(|record| record.target == control.target);
+        .filter(|record| record.target == control.target)
+        .copied();
+    let focused = focus.is_some();
     let interaction = world
         .gui_pointer_page(0, entity.to_bits(), usize::MAX)
         .into_iter()
@@ -147,6 +183,22 @@ pub(crate) fn read_control(
                 captured: flags.captured || record.state.captured,
             }
         });
+    let gui = world.system::<super::GuiSystem>(super::GuiSystem::ID);
+    let painted = gui.map_or(GuiInteractionFlags::default(), |gui| {
+        gui.local.interaction_flags(control.target)
+    });
+    let count = super::local::control::focus_parts(simulation, control);
+    let parts = gui
+        .filter(|_| count > 1)
+        .map(|gui| {
+            gui.local.part_interaction(control.target, painted).parts[..count as usize].to_vec()
+        })
+        .unwrap_or_default();
+    let feedback = gui.map(|gui| gui.local.part_interaction(control.target, painted));
+    let active = world
+        .gui_active_item_page(0, 0, usize::MAX)
+        .iter()
+        .any(|record| record.target == control.target);
     Some(GuiControlRead {
         target: control.target,
         kind: control.kind,
@@ -154,7 +206,16 @@ pub(crate) fn read_control(
         visible: eligibility.visible,
         available: eligibility.available,
         focused,
+        focus_part: focus.map(|record| record.part),
         interaction,
+        painted,
+        parts,
+        steps: feedback.map_or_else(Default::default, |feedback| feedback.steps),
+        body: feedback.map_or_else(Default::default, |feedback| feedback.body),
+        active,
+        selected: components
+            .gui_button(index)
+            .is_some_and(|button| button.selected),
         value,
         bounds,
         ancestry: ancestry(&simulation.state, entity),

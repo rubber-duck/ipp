@@ -131,6 +131,7 @@ fn attach(
     let surface = Surface {
         width: extent[0],
         height: extent[1],
+        ..Default::default()
     };
     create(
         host,
@@ -471,11 +472,11 @@ fn nested_canvas_maps_signed_scale_clip_and_frozen_logical_extent() {
     assert_eq!(selected.path.len(), 1);
     let path = vec![selected.path[0].token.clone()];
     assert!(
-        project_composed_point(&host, root(root_canvas), &path, [0.7, 0.25], false)
+        project_composed_point(&host, root(root_canvas), &path, [0.7, 0.25], false, 0)
             .unwrap()
             .is_none()
     );
-    let captured = project_composed_point(&host, root(root_canvas), &path, [0.7, 0.25], true)
+    let captured = project_composed_point(&host, root(root_canvas), &path, [0.7, 0.25], true, 0)
         .unwrap()
         .unwrap();
     assert!((captured.point[0] + 10.0).abs() < 1e-4);
@@ -856,4 +857,261 @@ fn faulted_surface_keeps_its_footprint_and_blocks_without_clickthrough() {
             ..
         }
     ));
+}
+
+/// A checkbox of `size` at `position` in the canvas root, on plane `layer`.
+fn layered_control(
+    host: &mut HostRuntime,
+    output: OutputRef,
+    position: [f32; 2],
+    size: [f32; 2],
+    layer: u32,
+) -> EntityId {
+    let parent = support::top_level_root(host, output.world().id());
+    create(
+        host,
+        output.world().id(),
+        Some(parent),
+        vec![
+            ComponentValue::GuiCheckbox(GuiCheckbox::default()),
+            ComponentValue::GuiLayout(GuiLayout {
+                width: size[0],
+                height: size[1],
+                align_x: -1.0,
+                align_y: -1.0,
+                ..Default::default()
+            }),
+            ComponentValue::CanvasStyle(CanvasStyle {
+                x: position[0],
+                y: position[1],
+                layer,
+                ..Default::default()
+            }),
+        ],
+    )
+}
+
+#[test]
+fn separated_layers_meet_layer_planes_nearest_first_and_fall_through() {
+    let mut host = HostRuntime::new();
+    let parent = host
+        .create_world(Default::default(), &select(&[ATTACHMENTS, CAMERA, SURFACE]))
+        .unwrap();
+    let child = host.create_world(Default::default(), GUI_LAYOUT).unwrap();
+    let output = camera(&mut host, parent);
+    let panel = canvas(&mut host, child);
+    // The base covers the 1 x 1 m panel; the raised control its left half.
+    let base = layered_control(&mut host, panel, [0.0, 0.0], [100.0, 100.0], 0);
+    let raised = layered_control(&mut host, panel, [0.0, 0.0], [50.0, 100.0], 1);
+    // Turned 45 degrees about +Y, the raised plane 0.25 m in front of the base
+    // projects 0.25 m to the left of it: x_local = X / cos - h tan.
+    let half = std::f32::consts::FRAC_PI_8;
+    let anchor = attach(
+        &mut host,
+        parent,
+        panel,
+        [1.0, 1.0],
+        Transform {
+            qy: half.sin(),
+            qw: half.cos(),
+            ..Default::default()
+        },
+    );
+    let spacing = |host: &mut HostRuntime, value: f32| {
+        apply(
+            host,
+            parent,
+            vec![Command::SetField {
+                entity: EntityRef::Handle(anchor),
+                component: ComponentValue::SURFACE,
+                field: FieldWrite {
+                    offset: std::mem::offset_of!(Surface, layer_spacing) as u32,
+                    value: FieldValue::F32(value),
+                },
+            }],
+        );
+    };
+    spacing(&mut host, 0.25);
+    host.set_root_output(output, viewport()).unwrap();
+    frame(&mut host);
+
+    let cos = std::f64::consts::FRAC_1_SQRT_2;
+    // Viewport points whose rays meet the base plane at local x 0.1, -0.3 and 0.4.
+    let at = |base_x: f64| [((base_x * cos + 1.0) / 2.0) as f32, 0.5];
+    let near = |actual: f32, expected: f32| (actual - expected).abs() < 1e-3;
+
+    // The raised plane's control at x -0.15 (content 35) wins over the base at 60.
+    let selected = hit(&host, output, at(0.1));
+    assert_eq!(selected.hit.target.entity, raised);
+    assert_eq!(selected.hit.layer, 1);
+    assert!(near(selected.point[0], 35.0) && near(selected.point[1], 50.0));
+    let distance = selected.path[0].distance.unwrap();
+    // Along the unit ray from z 5: X tan + 5 - h / cos, with X = 0.1 cos and tan 1.
+    assert!((distance - (0.1 * cos + 5.0 - 0.25 / cos)).abs() < 1e-4);
+    // The raised plane is met outside the panel: the base at content 20 answers,
+    // where flat presentation shows the raised control.
+    let selected = hit(&host, output, at(-0.3));
+    assert_eq!(selected.hit.target.entity, base);
+    assert!(near(selected.point[0], 20.0));
+    // The raised plane holds no target at content 65: the ray falls through.
+    let selected = hit(&host, output, at(0.4));
+    assert_eq!(selected.hit.target.entity, base);
+    assert!(near(selected.point[0], 90.0));
+
+    // Captured input stays on its target's plane, inside or outside its bounds.
+    let path = vec![hit(&host, output, at(0.1)).path[0].token.clone()];
+    let on = |host: &HostRuntime, layer| {
+        project_composed_point(host, root(output), &path, at(0.1), true, layer)
+            .unwrap()
+            .unwrap()
+            .point
+    };
+    assert!(near(on(&host, 1)[0], 35.0));
+    assert!(near(on(&host, 0)[0], 60.0));
+
+    // Without spacing every layer shares the base plane in reverse painter order.
+    spacing(&mut host, 0.0);
+    frame(&mut host);
+    assert_eq!(hit(&host, output, at(0.1)).hit.target.entity, base);
+    assert_eq!(hit(&host, output, at(-0.3)).hit.target.entity, raised);
+    assert!(near(on(&host, 1)[0], 60.0));
+}
+
+#[test]
+fn a_layer_plane_keeps_its_depth_across_a_gap_as_other_planes_come_and_go() {
+    let mut host = HostRuntime::new();
+    let parent = host
+        .create_world(Default::default(), &select(&[ATTACHMENTS, CAMERA, SURFACE]))
+        .unwrap();
+    let child = host.create_world(Default::default(), GUI_LAYOUT).unwrap();
+    let output = camera(&mut host, parent);
+    let panel = canvas(&mut host, child);
+    // The base covers the 1 x 1 m panel, plane 3 its left 40 units and plane
+    // 1 its right 20; plane 2 is empty.
+    let base = layered_control(&mut host, panel, [0.0, 0.0], [100.0, 100.0], 0);
+    let top = layered_control(&mut host, panel, [0.0, 0.0], [40.0, 100.0], 3);
+    let middle = layered_control(&mut host, panel, [80.0, 0.0], [20.0, 100.0], 1);
+    // Turned 45 degrees about +Y with 0.1 m between plane ids, plane n meets
+    // a ray n tenths of a metre to the left of where it meets the base.
+    let half = std::f32::consts::FRAC_PI_8;
+    let anchor = attach(
+        &mut host,
+        parent,
+        panel,
+        [1.0, 1.0],
+        Transform {
+            qy: half.sin(),
+            qw: half.cos(),
+            ..Default::default()
+        },
+    );
+    apply(
+        &mut host,
+        parent,
+        vec![Command::SetField {
+            entity: EntityRef::Handle(anchor),
+            component: ComponentValue::SURFACE,
+            field: FieldWrite {
+                offset: std::mem::offset_of!(Surface, layer_spacing) as u32,
+                value: FieldValue::F32(0.1),
+            },
+        }],
+    );
+    host.set_root_output(output, viewport()).unwrap();
+    frame(&mut host);
+
+    let cos = std::f64::consts::FRAC_1_SQRT_2;
+    let at = |base_x: f64| [((base_x * cos + 1.0) / 2.0) as f32, 0.5];
+    let near = |actual: f32, expected: f32| (actual - expected).abs() < 1e-3;
+    let layers = |host: &HostRuntime| {
+        host.output(host.latest_publication(child).unwrap(), panel)
+            .and_then(|chunk| chunk.data::<ipp_core::systems::canvas::CanvasPublication>())
+            .unwrap()
+            .layers
+            .to_vec()
+    };
+    let path = vec![hit(&host, output, at(0.1)).path[0].token.clone()];
+    let assert_top = |host: &HostRuntime| {
+        // Plane 3 lies 0.3 m out, not at a compacted 0.2 m (content 40) or
+        // 0.1 m (content 50): the ray meets it at content 30.
+        let selected = hit(host, output, at(0.1));
+        assert_eq!(selected.hit.target.entity, top);
+        assert_eq!(selected.hit.layer, 3);
+        assert!(near(selected.point[0], 30.0), "{:?}", selected.point);
+        let distance = selected.path[0].distance.unwrap();
+        assert!((distance - (0.1 * cos + 5.0 - 0.3 / cos)).abs() < 1e-4);
+        // Captured input projects onto the same plane.
+        let captured = project_composed_point(host, root(output), &path, at(0.1), true, 3)
+            .unwrap()
+            .unwrap();
+        assert!(near(captured.point[0], 30.0));
+    };
+
+    assert_eq!(layers(&host), [0, 1, 3]);
+    assert_top(&host);
+    // Where plane 3 holds nothing (content 65), the ray falls through the
+    // empty plane 2 to plane 1's control at content 85.
+    let selected = hit(&host, output, at(0.45));
+    assert_eq!(selected.hit.target.entity, middle);
+    assert!(near(selected.point[0], 85.0));
+
+    // Without plane 1, plane 3 keeps its depth, and the same ray reaches the base.
+    apply(
+        &mut host,
+        child,
+        vec![Command::Delete {
+            entity: EntityRef::Handle(middle),
+        }],
+    );
+    frame(&mut host);
+    assert_eq!(layers(&host), [0, 3]);
+    assert_top(&host);
+    let selected = hit(&host, output, at(0.45));
+    assert_eq!(selected.hit.target.entity, base);
+    assert!(near(selected.point[0], 95.0));
+}
+
+#[test]
+fn a_raised_canvas_slot_rises_over_later_base_content() {
+    let mut host = HostRuntime::new();
+    let parent = host
+        .create_world(
+            Default::default(),
+            &select(&[ATTACHMENTS, GUI_LAYOUT, SURFACE]),
+        )
+        .unwrap();
+    let child = host.create_world(Default::default(), GUI_LAYOUT).unwrap();
+    let root_canvas = canvas(&mut host, parent);
+    let root_canvas_entity = support::top_level_root(&mut host, parent);
+    let nested = canvas(&mut host, child);
+    let target = control(&mut host, nested, CanvasStyle::default());
+    let anchor = attach(&mut host, parent, nested, [0.4, 0.4], Transform::default());
+    apply(
+        &mut host,
+        parent,
+        vec![
+            Command::PlaceEntity {
+                entity: EntityRef::Handle(anchor),
+                placement: EntityPlacementRef {
+                    parent: Some(EntityRef::Handle(root_canvas_entity)),
+                    before: None,
+                },
+            },
+            Command::insert_value(
+                EntityRef::Handle(anchor),
+                ComponentValue::CanvasStyle(CanvasStyle {
+                    layer: 1,
+                    ..Default::default()
+                }),
+            ),
+        ],
+    );
+    // A base control painted after the slot in tree order covers it.
+    let cover = layered_control(&mut host, root_canvas, [0.0, 0.0], [100.0, 100.0], 0);
+    host.set_root_output(root_canvas, viewport()).unwrap();
+    frame(&mut host);
+    let selected = hit(&host, root_canvas, [0.05, 0.05]);
+    assert_eq!(selected.hit.target.entity, target);
+    assert_eq!(selected.path.len(), 1);
+    assert_eq!(hit(&host, root_canvas, [0.6, 0.6]).hit.target.entity, cover);
 }

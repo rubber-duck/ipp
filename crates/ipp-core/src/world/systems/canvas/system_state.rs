@@ -12,7 +12,7 @@ pub(super) struct CanvasSystemState {
     pub evaluated: Option<super::CanvasEvaluatedExtent>,
     /// The World canvas's latest output; absent while it cannot be evaluated.
     pub publication: Option<CanvasPublication>,
-    /// Painter order: depth-first over the top-level entities in sibling order.
+    /// Tree order: depth-first over the top-level entities in sibling order.
     pub order: Vec<EntityId>,
     pub leaves: BTreeMap<(EntityId, u16), CanvasPreparedLeaf>,
     pub slots: BTreeMap<EntityId, Arc<CanvasPaintEntry>>,
@@ -44,6 +44,8 @@ pub(super) struct CanvasPreparedLeaf {
     pub incarnation: u64,
     pub geometry: Option<CanvasGeometry>,
     pub style: CanvasPrimitiveStyle,
+    /// The CanvasPaint lifetime the leaf's box took, when it is a painted box.
+    pub paint: Option<super::CanvasTarget>,
     pub geometry_revision: u64,
     pub entry: Option<Arc<CanvasPaintEntry>>,
 }

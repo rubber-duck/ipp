@@ -1,5 +1,11 @@
 //! Ordinary control paint and immutable observations joined to completed Canvas output.
 //! Compact theme/part rows remain typed authoring values, never a second entity tree.
+//! Each control part resolves property by property from its skin's override row, its
+//! theme's rows and finally the built-in default look of its kind ([`looks`]).
+//!
+//! A skinned entity that is not a control paints only its Background part, from the
+//! same rows, during the same Canvas walk; it has no states, focus or hit, and is
+//! absent from these observations.
 //!
 //! Consumers join `GuiCanvasPublication` from CanvasSystem's System chunk with the
 //! exact selected Canvas output in the same WorldPublication, then join each
@@ -17,6 +23,7 @@
 
 mod component;
 mod contract;
+pub mod looks;
 pub(in crate::world::systems::gui) mod measurement;
 pub(in crate::world::systems::gui) mod paint;
 mod part_style;
@@ -24,13 +31,15 @@ pub(in crate::world::systems::gui) mod parts;
 mod publication;
 mod system_state;
 
-pub use component::{GuiFont, GuiPaintPart, GuiSkin, GuiTheme};
+pub use component::{GUI_DEFAULT_FONT_SIZE, GuiFont, GuiPaintPart, GuiSkin, GuiTheme};
 pub(crate) use contract::write_paint_contract;
-pub(in crate::world::systems) use paint::{GuiPaintedControl, control_paint, scroll_bars_kept};
-pub use part_style::{FOCUS_BORDER_COLOR, FOCUS_BORDER_WIDTH, GuiPartStyle, GuiSkinState};
+pub use looks::{GuiSkinLook, gui_skin_looks};
+pub(in crate::world::systems) use paint::{GuiPaintedControl, control_paint, skinned_background};
+pub use part_style::{GuiPartStyle, GuiSkinState};
 pub use parts::{GUI_BASE_PARTS, GuiPartId, GuiPartProperty, GuiPartVariant, GuiPrimitivePart};
 pub use publication::{
     GuiCanvasPublication, GuiCanvasSemanticView, GuiControlObservation, GuiControlRecord,
-    GuiRoutingValue, GuiSemanticActionKind, GuiSliderGeometry,
+    GuiGroupItem, GuiNumberGeometry, GuiOverlayObservation, GuiRoutingValue, GuiSemanticActionKind,
+    GuiSliderGeometry, GuiSliderRange,
 };
 pub(in crate::world::systems) use system_state::GuiCanvasState;

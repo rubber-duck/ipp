@@ -14,6 +14,7 @@ pub(crate) use embedded_shader;
 
 mod analytic_glyphs;
 mod assets;
+mod canvas_paint;
 mod canvas_scene;
 mod custom_material;
 mod custom_shader;
@@ -41,6 +42,8 @@ mod template;
 
 pub(crate) mod glyph_atlas;
 pub(crate) mod gui_batch;
+mod gui_draw_order;
+mod gui_records;
 mod gui_storage;
 pub(crate) mod retained_surfaces;
 
@@ -51,12 +54,10 @@ pub use frame_statistics::RenderFrameSummary;
 pub use frame_statistics::RenderStatistics;
 #[cfg(any(test, feature = "instrumentation"))]
 pub use glyph_atlas::{GlyphAtlasLimits, MIN_POPULATES_PER_FRAME as GLYPH_MIN_POPULATES_PER_FRAME};
-/// Retained GUI vertices are the layout of the public [`RenderDevice`] GUI batch
-/// operations; device-level hosts generate box geometry and interpret its fill
-/// code through these.
-pub use gui_batch::{
-    GUI_FILL_GLYPH, GuiVertex, generate_box_vertices as generate_gui_box_vertices,
-};
+/// Retained GUI records are the layouts of the public [`RenderDevice`] GUI batch
+/// operations; device-level hosts generate box records through these.
+pub use gui_batch::generate_box_records as generate_gui_box_records;
+pub use gui_records::{GuiGlyphRecord, GuiRecord, GuiRecordKind, GuiShapeRecord};
 pub use surface_path::{
     SurfaceBandTexels, SurfaceCurveTexels, SurfacePathAtlas, SurfacePathTexels, pack_surface_paths,
 };
@@ -67,6 +68,9 @@ pub use device::WebGlRenderDevice;
 #[cfg(not(target_arch = "wasm32"))]
 pub use device::GlesRenderDevice;
 
+pub use canvas_paint::{
+    CANVAS_PAINT_SLOTS, CANVAS_PAINT_VECTORS, CanvasPaintFallback, CanvasPaintFallbackReason,
+};
 pub use custom_material::CustomMaterialFallback;
 pub use lighting::RenderLightingFrame;
 pub use service::{RenderError, RenderService};

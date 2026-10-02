@@ -346,7 +346,9 @@ fn inspection_encodes_current_resource_statuses_after_entities() {
         body: ResponseBody::Inspect {
             gui_focus: Vec::new(),
             gui_pointers: Vec::new(),
+            gui_active_items: Vec::new(),
             canvas: None,
+            gui_preferences: None,
             next: 0,
             controllers: Vec::new(),
             time: 0.5,
@@ -395,11 +397,13 @@ fn inspection_encodes_current_resource_statuses_after_entities() {
     assert_eq!(reader.u64().unwrap(), 0x100000001);
     assert_eq!(reader.string().unwrap(), "InvalidAsset");
     assert_eq!(reader.u32().unwrap(), 0);
-    // GUI builds append the empty focus and pointer collections.
-    for _ in 0..2 {
+    // GUI builds append the empty focus, pointer and active item collections.
+    for _ in 0..3 {
         assert_eq!(reader.u32().unwrap(), 0);
     }
-    // Surface builds append the absent Canvas System record.
+    // Surface builds append the absent Canvas System record, and GUI builds the
+    // absent GUI preferences record.
+    assert_eq!(reader.u8().unwrap(), 0);
     assert_eq!(reader.u8().unwrap(), 0);
     assert_eq!(reader.at, bytes.len());
 }
@@ -430,7 +434,9 @@ fn inspection_encodes_dynamic_components_beyond_static_field_limits() {
         body: ResponseBody::Inspect {
             gui_focus: Vec::new(),
             gui_pointers: Vec::new(),
+            gui_active_items: Vec::new(),
             canvas: None,
+            gui_preferences: None,
             next: 0,
             controllers: Vec::new(),
             time: 0.5,
@@ -706,7 +712,9 @@ fn frame_encoding_and_response_identity_are_fenced() {
         ResponseBody::Inspect {
             gui_focus: Vec::new(),
             gui_pointers: Vec::new(),
+            gui_active_items: Vec::new(),
             canvas: None,
+            gui_preferences: None,
             next: 0,
             controllers: Vec::new(),
             time: 0.0,
@@ -748,7 +756,9 @@ fn response_times_are_finite_and_nonnegative() {
                 ResponseBody::Inspect {
                     gui_focus: Vec::new(),
                     gui_pointers: Vec::new(),
+                    gui_active_items: Vec::new(),
                     canvas: None,
+                    gui_preferences: None,
                     next: 0,
                     controllers: Vec::new(),
                     time,

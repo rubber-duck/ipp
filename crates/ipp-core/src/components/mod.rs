@@ -29,17 +29,17 @@ pub use crate::systems::render::{
 pub use crate::systems::surface::{Surface, SurfaceCache};
 
 pub use crate::systems::canvas::{
-    CanvasBitmap, CanvasBox, CanvasDrawing, CanvasGlyphRun, CanvasStyle, CanvasText,
+    CanvasBitmap, CanvasBox, CanvasDrawing, CanvasGlyphRun, CanvasPaint, CanvasStyle, CanvasText,
 };
 
 pub use crate::systems::canvas::CanvasBounds;
-pub use crate::systems::gui::layout::GuiLayout;
+pub use crate::systems::gui::layout::{GuiLayout, GuiOverlay};
 pub use crate::systems::gui::motion::GuiThemeMotion;
 pub use crate::systems::gui::presentation::{GuiFont, GuiSkin, GuiTheme};
 
 pub use crate::systems::gui::local::{
-    GuiBehavior, GuiButton, GuiCheckbox, GuiScrollView, GuiSlider, GuiTextInput, GuiVirtualItem,
-    GuiVirtualList,
+    GuiBehavior, GuiButton, GuiCheckbox, GuiColor, GuiGroup, GuiScrollView, GuiSlider,
+    GuiTextInput, GuiVirtualItem, GuiVirtualList,
 };
 
 pub use crate::systems::skeleton::{JointOverrideRow, Skeleton, SkeletonRuntimeState};

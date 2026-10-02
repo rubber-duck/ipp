@@ -1,8 +1,10 @@
-//! Control identity, eligibility and ancestry read from the component store.
+//! Control identity, eligibility, focus parts and ancestry read from the
+//! component store.
 //!
 //! A control is an entity with a control component. Its identity is the lowest
 //! control component present and that component's incarnation; its eligibility
-//! is the evaluated `GuiBehavior` fields. Nothing here keeps a copy of either.
+//! is the evaluated `GuiBehavior` fields; its focus parts follow its fields.
+//! Nothing here keeps a copy of any of them.
 
 use super::component::CONTROL_COMPONENTS;
 use super::{GuiControlKind, GuiEntityTarget};
@@ -101,6 +103,38 @@ pub(in crate::world::systems) fn eligibility(
                 available: behavior.available,
             },
         )
+}
+
+/// Whether an entity's control takes focus: its own `GuiBehavior.focusable`,
+/// true without one.
+pub(in crate::world::systems) fn focusable(world: &WorldSimulationState, entity: EntityId) -> bool {
+    world
+        .components
+        .gui_behavior(entity.index() as usize)
+        .is_none_or(|behavior| behavior.focusable)
+}
+
+/// The number of focus parts of a control: the stops within it that its focus
+/// names, each a Tab stop with its own focus ring, pointer feedback and arrow
+/// keys. A range slider has two thumbs, and a colour control its field, its
+/// hue rail and its alpha rail when shown; every other control is one part,
+/// part 0, and behaves as a control without parts.
+pub(in crate::world::systems) fn focus_parts(
+    world: &WorldSimulationState,
+    control: GuiControl,
+) -> u32 {
+    let index = control.target.entity.index() as usize;
+    match control.kind {
+        GuiControlKind::Slider => world
+            .components
+            .gui_slider(index)
+            .map_or(1, super::GuiSlider::thumbs),
+        GuiControlKind::Color => world
+            .components
+            .gui_color(index)
+            .map_or(1, super::GuiColor::parts),
+        _ => 1,
+    }
 }
 
 /// Root-first core ancestry, including the entity itself.

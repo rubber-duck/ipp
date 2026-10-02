@@ -16,6 +16,10 @@
 //! published end stays at the end when the measured content shortens.
 //! Before the first layout of a control lifetime a non-default anchor wins,
 //! so restored positions keep their anchored item.
+//!
+//! A scroll view containing a newly focused control then moves the settled
+//! position by the least distance that shows it (`reveal`); the result is
+//! written like any other settled position.
 
 use super::virtual_list::GuiVirtualListLayout;
 use crate::components::registry::ComponentStorage;
@@ -182,6 +186,32 @@ impl GuiScrollLayout {
             anchor_offset,
         });
         layout
+    }
+
+    /// Scroll the least distance that shows `rect`, a box in this layout's
+    /// content coordinates, within the capacity. A box larger than the
+    /// viewport shows its start, and one already covering the viewport stays.
+    /// A list's anchor and wanted range follow the new offset.
+    pub(super) fn reveal(&mut self, rect: super::reveal::GuiRevealBox) {
+        for axis in 0..2 {
+            let (start, end) = (rect[axis], rect[axis + 2]);
+            let offset = self.offset[axis];
+            let far = offset + self.viewport[axis];
+            let revealed = if (start >= offset && end <= far) || (start <= offset && end >= far) {
+                offset
+            } else if start < offset {
+                start
+            } else {
+                (end - self.viewport[axis]).min(start)
+            };
+            self.offset[axis] = revealed.max(0.0).min(self.capacity[axis]);
+        }
+
+        if let Some(list) = &mut self.list {
+            let main = self.offset[list.items.axis];
+            (list.anchor_index, list.anchor_offset) = list.items.anchor(main);
+            list.range = list.items.wanted_range(main);
+        }
     }
 
     /// Write the evaluated values to the control's fields, touching only

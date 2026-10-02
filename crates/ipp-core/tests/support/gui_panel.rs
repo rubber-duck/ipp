@@ -32,6 +32,8 @@ pub enum ControlValue {
     Text(Arc<str>),
     /// A scroll view's or virtual list's `offset_x` and `offset_y`.
     Scroll([f32; 2]),
+    /// A colour control's hue, saturation, value and alpha.
+    Color([f32; 4]),
 }
 
 /// The role, component id and value of one stored control component.
@@ -66,6 +68,11 @@ fn stored_control(value: &ComponentValue) -> Option<(GuiControlKind, u16, Contro
             GuiControlKind::VirtualList,
             ComponentValue::GUI_VIRTUAL_LIST,
             ControlValue::Scroll([value.offset_x, value.offset_y]),
+        ),
+        ComponentValue::GuiColor(value) => (
+            GuiControlKind::Color,
+            ComponentValue::GUI_COLOR,
+            ControlValue::Color([value.hue, value.saturation, value.value, value.alpha]),
         ),
         _ => return None,
     })
@@ -614,14 +621,15 @@ pub fn bounds(publication: &CanvasPublication, entity: EntityId) -> [f32; 4] {
     control_hit(publication, entity).bounds
 }
 
-/// Reverse-painter target of a Canvas-local point; the latest painted eligible hit wins.
+/// Reverse-painter target of a Canvas-local point; the highest-layered, latest
+/// painted eligible hit wins.
 pub fn hit_at(publication: &CanvasPublication, point: [f32; 2]) -> Option<EntityId> {
     publication
         .hits
         .iter()
         .enumerate()
         .filter(|(_, hit)| hit.contains(point))
-        .max_by_key(|(index, hit)| (hit.paint_order, *index))
+        .max_by_key(|(index, hit)| (hit.layer, hit.paint_order, *index))
         .map(|(_, hit)| hit.target.entity)
 }
 

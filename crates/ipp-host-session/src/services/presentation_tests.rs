@@ -11,6 +11,8 @@ struct Platform {
     draws: Vec<OutputRef>,
     lost_during_draw: bool,
     prepared: Vec<Option<OutputRef>>,
+    configured: Vec<WorldViewport>,
+    drawn: Vec<WorldViewport>,
 }
 
 impl HostServices for Platform {
@@ -28,6 +30,8 @@ impl HostServices for Platform {
             draws: Vec::new(),
             lost_during_draw: false,
             prepared: Vec::new(),
+            configured: Vec::new(),
+            drawn: Vec::new(),
         })
     }
 
@@ -43,7 +47,8 @@ impl HostServices for Platform {
         Ok(self.surface)
     }
 
-    fn configure_presentation(&mut self, _: WorldViewport) -> Result<(), PresentationError> {
+    fn configure_presentation(&mut self, viewport: WorldViewport) -> Result<(), PresentationError> {
+        self.configured.push(viewport);
         Ok(())
     }
 
@@ -61,7 +66,7 @@ impl HostServices for Platform {
         _: &HostRuntime,
         output: OutputRef,
         publication: ipp_core::WorldPublicationId,
-        _: WorldViewport,
+        viewport: WorldViewport,
         _: f64,
         completion: crate::PresentationCompletion<'_>,
     ) -> Result<PresentationDrawSummary, HostPresentationFailure> {
@@ -70,6 +75,7 @@ impl HostServices for Platform {
             outputs,
         } = completion;
         self.draws.push(output);
+        self.drawn.push(viewport);
         if let Some(pixels) = capture {
             pixels.fill(output.world().id().0 as u8);
         }
@@ -989,6 +995,187 @@ fn connection_frame_and_capture_observe_current_publication_until_the_view_is_st
     assert!(
         matches!(&replies[1].body, HostResponseBody::Presentation(PresentationResponse::Frame(frame)) if frame.view == replacement)
     );
+    host.close_connection(7);
+}
+
+fn resize(view: PresentationView, width: u32, height: u32, ratio: f64) -> HostRequestBody {
+    HostRequestBody::Presentation(PresentationRequest::Resize {
+        view,
+        viewport: WorldViewport {
+            width,
+            height,
+            device_pixel_ratio: ratio,
+        },
+    })
+}
+
+fn answer(replies: &[HostResponse], request: u64) -> &PresentationResponse {
+    replies
+        .iter()
+        .find_map(|reply| match &reply.body {
+            HostResponseBody::Presentation(response) if reply.request_id == request => {
+                Some(response)
+            }
+            _ => None,
+        })
+        .expect("presentation reply")
+}
+
+#[test]
+fn resize_rebinds_and_reselects_the_same_output_without_an_unselected_draw() {
+    let (mut host, first, _, _) = connected_surface();
+    control_replies(&mut host);
+    host.tick_worlds(0.0).unwrap();
+    host.services_mut().prepared.clear();
+    let output = first.binding.output.resolve(host.runtime()).unwrap();
+    let world = output.world();
+    let mut replies = Vec::new();
+
+    // A wait on the first view is pending when the first resize lands.
+    control(
+        &mut host,
+        3,
+        HostRequestBody::Presentation(PresentationRequest::Frame {
+            view: first,
+            after_sequence: Some(u64::MAX),
+            publication: None,
+            capture: false,
+            after_outputs: Vec::new(),
+        }),
+    );
+
+    // Successive resizes each answer the next view and draw at its extent.
+    let mut view = first;
+    for (request, (width, height, ratio)) in (4..).zip([(5, 4, 1.0), (7, 3, 2.0), (2, 9, 1.5)]) {
+        control(&mut host, request, resize(view, width, height, ratio));
+        host.tick_worlds(0.0).unwrap();
+        replies.extend(control_replies(&mut host));
+        let &PresentationResponse::View(resized) = answer(&replies, request) else {
+            panic!("resize answers the new view")
+        };
+        let viewport = WorldViewport {
+            width,
+            height,
+            device_pixel_ratio: ratio,
+        };
+        assert_eq!(resized.binding.output, first.binding.output);
+        assert_eq!(resized.binding.viewport, viewport);
+        assert_eq!(resized.surface, first.surface);
+        assert!(resized.binding.generation.serial > view.binding.generation.serial);
+        assert!(resized.selection > view.selection);
+        assert_eq!(
+            host.runtime()
+                .root_output_binding(world)
+                .unwrap()
+                .map(RootBinding::from),
+            Some(resized.binding)
+        );
+        assert_eq!(host.presentation.selected, Some(resized));
+        assert_eq!(host.services_mut().configured.last(), Some(&viewport));
+        assert_eq!(host.services_mut().drawn.last(), Some(&viewport));
+        view = resized;
+    }
+    assert_eq!(
+        answer(&replies, 3),
+        &PresentationResponse::Error(PresentationError::StaleView)
+    );
+
+    // The renderer was prepared with the selection at every draw, never with nothing.
+    assert_eq!(host.services_mut().prepared, [Some(output); 3]);
+
+    // Rejections leave the current binding and selection in place.
+    let binding = view.binding;
+    let rejections = [
+        (resize(first, 6, 6, 1.0), PresentationError::StaleView),
+        (resize(view, 0, 6, 1.0), PresentationError::InvalidViewport),
+        (
+            resize(view, 4097, 6, 1.0),
+            PresentationError::InvalidViewport,
+        ),
+        (resize(view, 6, 6, 0.0), PresentationError::InvalidViewport),
+    ];
+    for (request, (body, error)) in (10..).zip(rejections) {
+        control(&mut host, request, body);
+        assert!(host.process_host_requests().is_empty());
+        let replies = control_replies(&mut host);
+        assert_eq!(
+            answer(&replies, request),
+            &PresentationResponse::Error(error)
+        );
+    }
+    let changes: [fn(&mut PresentationSurface); 2] =
+        [|surface| surface.context += 1, |surface| surface.id += 1];
+    for change in changes {
+        let current = host.services_mut().surface;
+        change(&mut host.services_mut().surface);
+        control(&mut host, 20, resize(view, 6, 6, 1.0));
+        assert!(host.process_host_requests().is_empty());
+        let replies = control_replies(&mut host);
+        assert_eq!(
+            answer(&replies, 20),
+            &PresentationResponse::Error(PresentationError::StaleView)
+        );
+        host.services_mut().surface = current;
+    }
+    assert_eq!(
+        host.runtime()
+            .root_output_binding(world)
+            .unwrap()
+            .map(RootBinding::from),
+        Some(binding)
+    );
+    assert_eq!(host.presentation.selected, Some(view));
+    host.tick_worlds(0.0).unwrap();
+    assert_eq!(host.services_mut().prepared.last(), Some(&Some(output)));
+
+    // A same-output rebind without a selection still deselects, and the
+    // renderer releases the output's state; a resize of the old view is stale.
+    control(
+        &mut host,
+        30,
+        HostRequestBody::SetRootOutput {
+            output: first.binding.output,
+            viewport: view.binding.viewport,
+        },
+    );
+    control(&mut host, 31, resize(view, 6, 6, 1.0));
+    host.tick_worlds(0.0).unwrap();
+    let replies = control_replies(&mut host);
+    assert_eq!(
+        answer(&replies, 31),
+        &PresentationResponse::Error(PresentationError::StaleView)
+    );
+    assert_eq!(host.services_mut().prepared.last(), Some(&None));
+    assert_eq!(host.presentation.selected, None);
+
+    // An explicit Clear of a selected view also releases it at the next draw.
+    let binding = host
+        .runtime()
+        .root_output_binding(world)
+        .unwrap()
+        .unwrap()
+        .into();
+    control(
+        &mut host,
+        32,
+        HostRequestBody::Presentation(PresentationRequest::Select {
+            surface: view.surface,
+            binding,
+        }),
+    );
+    host.tick_worlds(0.0).unwrap();
+    let replies = control_replies(&mut host);
+    let &PresentationResponse::View(selected) = answer(&replies, 32) else {
+        panic!("selection")
+    };
+    assert_eq!(host.services_mut().prepared.last(), Some(&Some(output)));
+    control(
+        &mut host,
+        33,
+        HostRequestBody::Presentation(PresentationRequest::Clear(selected)),
+    );
+    host.tick_worlds(0.0).unwrap();
+    assert_eq!(host.services_mut().prepared.last(), Some(&None));
     host.close_connection(7);
 }
 

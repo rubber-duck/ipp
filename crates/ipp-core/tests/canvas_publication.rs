@@ -414,6 +414,7 @@ fn nested_surface_slot_uses_one_invertible_mapping_without_rewriting_physical_ex
     let physical_surface = Surface {
         width: 2.0,
         height: 0.5,
+        ..Default::default()
     };
     let anchor = create(
         &mut host,

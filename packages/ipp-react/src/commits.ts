@@ -18,6 +18,7 @@ import type {
   DynamicValue,
   EntityRef,
   FieldWrite,
+  SystemCommand,
 } from "@ipp/client";
 import type { ReactWorldClient } from "./contract.js";
 import type {
@@ -424,6 +425,30 @@ export class ReactWorldCommits {
     this.animations.close();
     this.controls.close();
     this.callbacks.fence();
+  }
+
+  /**
+   * Send `command` to this root's World at once, beside the declaration
+   * batches; fenced authoring and a closed or replaced session send nothing,
+   * so unmount sends nothing as it deletes nothing. Returns whether it went.
+   */
+  sendSystemCommand(command: SystemCommand): boolean {
+    if (
+      this.closing ||
+      this.fatal ||
+      this.client.closure ||
+      this.client.session !== this.session
+    )
+      return false;
+    try {
+      if (!this.client.sendCommand)
+        throw new Error("The World client cannot send System commands");
+      this.client.sendCommand(command);
+      return true;
+    } catch (error) {
+      this.report(error);
+      return false;
+    }
   }
 
   /**
@@ -961,19 +986,40 @@ export class ReactWorldCommits {
         for (const offset of record.fields.keys())
           if (!fields.has(offset)) record.fields.delete(offset);
         const commands: PlannedCommand[] = [];
-        for (const [offset, value] of fields) {
-          if (equalField(record.fields.get(offset), value)) continue;
+        const changed = new Map(
+          [...fields].filter(
+            ([offset, value]) => !equalField(record.fields.get(offset), value),
+          ),
+        );
+        // Several changed fields are one write, validated together, so a
+        // constraint between fields, such as a slider's bounds or a range's
+        // two values, never sees half of the change.
+        const acknowledge = (batch: AppliedBatch) => {
+          for (const [offset, value] of changed)
+            record.fields.set(offset, acknowledgedValue(value, batch));
+        };
+        if (changed.size > 1)
           commands.push({
             command: {
-              kind: "setField",
+              kind: "insertComponent",
               entity: entityRef(declared.entity),
               component: declared.component,
-              field: { offset, value },
+              fields: writes(changed),
+              adopt: true,
             },
-            applied: (batch) =>
-              record.fields.set(offset, acknowledgedValue(value, batch)),
+            applied: acknowledge,
           });
-        }
+        else
+          for (const [offset, value] of changed)
+            commands.push({
+              command: {
+                kind: "setField",
+                entity: entityRef(declared.entity),
+                component: declared.component,
+                field: { offset, value },
+              },
+              applied: acknowledge,
+            });
         for (const [name, value] of Object.entries(properties)) {
           if (
             Object.hasOwn(record.properties, name) &&

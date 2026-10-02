@@ -80,6 +80,7 @@ pub fn run<D: RenderDevice>(
             ShaderBackendSource {
                 vertex: String::new(),
                 fragment: "vec4 materialFragment() { return p_tint; }".into(),
+                ..Default::default()
             },
         )]),
         required_attributes: 0,
@@ -275,6 +276,7 @@ pub fn run<D: RenderDevice>(
         && p_small[1][0] == 3.0 && p_medium[2][1] == 1.0 && p_large[3][2] == 2.0;
     return valid ? vec4(0.5*(texture(p_first,v_uv).rgb + texture(p_second,v_uv).rgb),1) : vec4(1,0,0,1);
 }"#.into(),
+            ..Default::default()
         })]),
         ..Default::default()
     };
@@ -377,6 +379,7 @@ pub fn run<D: RenderDevice>(
             ShaderBackendSource {
                 vertex: String::new(),
                 fragment: "vec4 materialFragment() { return vec4(0,1,0,1); }".into(),
+                ..Default::default()
             },
         )]),
         ..Default::default()
@@ -421,6 +424,7 @@ pub fn run<D: RenderDevice>(
         backends: BTreeMap::from([("glsl-es-300".into(), ShaderBackendSource {
             vertex: String::new(),
             fragment: "vec4 materialFragment() { float v = 0.001 + clamp((gl_FragCoord.x - 140.0) / 40.0, 0.0, 1.0) * 0.07; return vec4(vec3(v),1); }".into(),
+            ..Default::default()
         })]),
         required_attributes: 0,
         ..Default::default()

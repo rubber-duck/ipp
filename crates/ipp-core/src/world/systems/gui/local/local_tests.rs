@@ -198,12 +198,12 @@ pub(super) fn outcomes(host: &mut GuiTestHost, world: WorldId) -> Vec<GuiTestOut
                             (GuiLocalAction::Press, GuiLocalEffectKind::Pressed) => true,
                             (GuiLocalAction::Submit, GuiLocalEffectKind::Submitted(_)) => true,
                             (
-                                GuiLocalAction::Focus | GuiLocalAction::Blur,
+                                GuiLocalAction::Focus(_) | GuiLocalAction::Blur,
                                 GuiLocalEffectKind::FocusChanged {
                                     focused,
                                     ..
                                 },
-                            ) => *focused == (action == GuiLocalAction::Focus),
+                            ) => *focused == matches!(action, GuiLocalAction::Focus(_)),
                             _ => false,
                         }
                         && effect.source == GuiLocalEffectSource::Semantic
@@ -299,7 +299,7 @@ fn cycle_recovery(focused: bool) {
         frame(&mut host);
         outcomes(&mut host, world);
         if focused {
-            action(&mut host, world, target_control, GuiLocalAction::Focus);
+            action(&mut host, world, target_control, GuiLocalAction::Focus(0));
             frame(&mut host);
             outcomes(&mut host, world);
             assert!(snapshot(&mut host, world, entity).focused);
@@ -374,7 +374,7 @@ fn transient_eligibility_changes_between_frames_preserve_logical_focus() {
             )],
         );
         let target = snapshot(&mut host, world, entity).target;
-        action(&mut host, world, target, GuiLocalAction::Focus);
+        action(&mut host, world, target, GuiLocalAction::Focus(0));
         frame(&mut host);
         let committed = snapshot(&mut host, world, entity).value;
         let mutation = |invalid: bool| {
@@ -581,7 +581,7 @@ fn semantic_button_press_does_not_move_logical_focus_or_commit_a_value() {
     );
     let text_target = snapshot(&mut host, world, text).target;
     let button_target = snapshot(&mut host, world, button).target;
-    action(&mut host, world, text_target, GuiLocalAction::Focus);
+    action(&mut host, world, text_target, GuiLocalAction::Focus(0));
     frame(&mut host);
     assert!(snapshot(&mut host, world, text).focused);
     outcomes(&mut host, world);
@@ -877,7 +877,7 @@ fn logical_focus_publishes_compact_ring_and_direct_priority_without_native_focus
     );
     let selection = crate::OutputRef::canvas(host.world_ref(world).unwrap());
     let local = snapshot(&mut host, world, entity);
-    action(&mut host, world, local.target, GuiLocalAction::Focus);
+    action(&mut host, world, local.target, GuiLocalAction::Focus(0));
     frame(&mut host);
     assert!(host.root_output(world).is_none());
     let publication = host
@@ -907,7 +907,8 @@ fn logical_focus_publishes_compact_ring_and_direct_priority_without_native_focus
         outcomes(&mut host, world)[0].effect().kind,
         GuiLocalEffectKind::FocusChanged {
             focused: true,
-            changed: true
+            changed: true,
+            part: 0,
         }
     ));
     action(&mut host, world, local.target, GuiLocalAction::Press);
@@ -980,14 +981,24 @@ fn ordinary_focus_ring_uses_theme_and_override_color_with_border_precedence() {
     );
     let selection = crate::OutputRef::canvas(host.world_ref(world).unwrap());
     let target = snapshot(&mut host, world, entity).target;
-    action(&mut host, world, target, GuiLocalAction::Focus);
+    action(&mut host, world, target, GuiLocalAction::Focus(0));
     frame(&mut host);
     let theme_color = [0.8, 0.3, 0.1, 1.0];
     let override_color = [0.1, 0.2, 0.9, 1.0];
     let theme_border = [0.1, 0.9, 0.2, 1.0];
     let override_border = [0.8, 0.8, 0.1, 1.0];
+    // Without rows the ring takes the colour of the button's default look, and
+    // its width at the default font size against the look's em.
+    let look = crate::systems::gui::presentation::looks::default_look(GuiControlKind::Button);
+    let ring = look
+        .row(GuiPartId::base(GuiPrimitivePart::FocusRing))
+        .unwrap();
+    let default_color = ring.color.unwrap();
+    let default_width = ring.border_width.unwrap()
+        * crate::systems::gui::presentation::GUI_DEFAULT_FONT_SIZE
+        / look.em;
     let cases = [
-        (None, None, None, None, [1.0; 4]),
+        (None, None, None, None, default_color),
         (Some(theme_color), None, None, None, theme_color),
         (
             Some(theme_color),
@@ -1031,6 +1042,7 @@ fn ordinary_focus_ring_uses_theme_and_override_color_with_border_precedence() {
                     EntityRef::Handle(theme),
                     ComponentValue::GuiTheme(GuiTheme {
                         parts: parts(theme_color, theme_border),
+                        ..Default::default()
                     }),
                 ),
                 Command::insert_value(
@@ -1038,7 +1050,6 @@ fn ordinary_focus_ring_uses_theme_and_override_color_with_border_precedence() {
                     ComponentValue::GuiSkin(GuiSkin {
                         theme,
                         parts: parts(override_color, override_border),
-                        ..Default::default()
                     }),
                 ),
             ],
@@ -1075,7 +1086,7 @@ fn ordinary_focus_ring_uses_theme_and_override_color_with_border_precedence() {
         };
         assert_eq!(*border_color, expected);
         assert_eq!(*fill, CanvasShapeFill::Solid([0.0; 4]));
-        assert_eq!(*border_width, crate::systems::gui::FOCUS_BORDER_WIDTH);
+        assert_eq!(*border_width, default_width);
         assert_eq!(style.identity.target, target.canvas_target());
         assert!(canvas.interaction.focused);
     }
@@ -1111,7 +1122,7 @@ fn hidden_disabled_and_unavailable_controls_refuse_every_semantic_action() {
         );
         let observed = snapshot(&mut host, world, entity);
         assert!(!(observed.enabled && observed.visible), "{state}");
-        for request in [GuiLocalAction::Toggle, GuiLocalAction::Focus] {
+        for request in [GuiLocalAction::Toggle, GuiLocalAction::Focus(0)] {
             action(&mut host, world, observed.target, request.clone());
             frame(&mut host);
             assert_eq!(
@@ -1157,7 +1168,7 @@ fn hidden_disabled_and_unavailable_controls_refuse_every_semantic_action() {
     let unavailable = snapshot(&mut host, world, slider);
     let target = unavailable.target;
     assert!(!unavailable.available);
-    for request in [GuiLocalAction::SetScalar(0.5), GuiLocalAction::Focus] {
+    for request in [GuiLocalAction::SetScalar(0.5), GuiLocalAction::Focus(0)] {
         action(&mut host, world, target, request.clone());
         frame(&mut host);
         assert_eq!(

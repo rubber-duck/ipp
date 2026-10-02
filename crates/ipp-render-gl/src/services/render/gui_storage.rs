@@ -1,21 +1,22 @@
-//! Retained per-Surface GPU storage of GUI boxes and glyph quads.
+//! Retained per-Surface GPU storage of GUI shape or glyph records.
 //!
-//! Every retained box batch and atlas glyph batch of one Surface occupies a slot of one
-//! GPU vertex buffer, in painter order. Boxes and glyphs share the vertex layout and
-//! program, and each vertex carries its clip, so consecutive slots draw as one range:
-//! a run of boxes and text under different clips needs a new draw only where the atlas
-//! page changes or a non-GUI item intervenes.
+//! Every retained shape batch of one Surface occupies a slot of its shape storage, and
+//! every atlas glyph batch a slot of its glyph storage, each in painter order. Each
+//! record carries its clip, so consecutive slots of one storage draw as one range of
+//! instances; the [draw order](super::gui_draw_order) decides where a run of shapes
+//! and text splits into draws.
 //!
 //! Slots keep their positions while their pieces fit before the next retained slot, so
-//! a changed piece rewrites only its own slot and unchanged frames write nothing.
-//! Fresh slots reserve room to grow. Vertices between slots are all zero: degenerate
-//! triangles that rasterize nothing, so drawing across a gap never shows stale
+//! a changed piece rewrites only its own slot and unchanged frames write nothing. A text
+//! edit therefore writes only glyph storage and a shape change only shape storage.
+//! Fresh slots reserve room to grow. Records between slots are all zero: empty
+//! rectangles that rasterize nothing, so drawing across a gap never shows stale
 //! content. A Surface whose pieces no longer fit, or that uses a small fraction of its
 //! storage, moves into newly allocated storage.
 
 use std::collections::HashMap;
 
-use super::gui_batch::GuiVertex;
+use super::gui_records::GuiRecord;
 use crate::services::render::frame_statistics::RenderFrameWork;
 use crate::{RenderDevice, RenderError};
 use ipp_core::systems::canvas::CanvasPrimitiveId;
@@ -23,16 +24,16 @@ use ipp_core::systems::canvas::CanvasPrimitiveId;
 /// Stable identity of one retained piece within its Surface.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum GuiPieceKey {
-    /// Box batch starting with this primitive identity.
+    /// Shape batch starting with this primitive identity.
     Boxes(CanvasPrimitiveId),
     /// Atlas page batch `index` of the text run with this identity.
     Glyphs(CanvasPrimitiveId, u32),
 }
 
-/// Where a piece's vertices come from when its slot is written.
+/// Where a piece's records come from when its slot is written.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum GuiPieceSource {
-    /// Consecutive box identities, as a range of the submission's box list.
+    /// Consecutive shape identities, as a range of the submission's shape list.
     Boxes(std::ops::Range<usize>),
     /// Atlas page batch `index` of a text run.
     Glyphs(CanvasPrimitiveId, u32),
@@ -42,12 +43,15 @@ pub(crate) enum GuiPieceSource {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct GuiPiece {
     pub key: GuiPieceKey,
-    /// Content identity: equal hashes of one key hold identical vertices.
+    /// Content identity: equal hashes of one key hold identical records.
     pub hash: u64,
-    /// Vertex count, a multiple of three.
+    /// Record count.
     pub len: usize,
-    /// Atlas page the piece samples; `None` for boxes.
+    /// Atlas page the piece samples; `None` for shapes.
     pub page: Option<usize>,
+    /// Paint bounds `[x0, y0, x1, y1]` of a glyph batch within its clip, or `None`
+    /// when it paints nothing; shape pieces order by their shapes' own bounds.
+    pub bounds: Option<[f32; 4]>,
     pub source: GuiPieceSource,
 }
 
@@ -60,35 +64,31 @@ struct GuiSlot {
     len: usize,
 }
 
-/// Fewest vertices a fresh slot reserves to grow: one box strip set, or four quads.
-const MIN_SLOT_GROWTH: usize = 24;
+/// Fewest records a fresh slot reserves to grow: one outline box's strips.
+const MIN_SLOT_GROWTH: usize = 4;
 
-/// Most vertices a fresh slot reserves to grow.
-const MAX_SLOT_GROWTH: usize = 96;
+/// Most records a fresh slot reserves to grow.
+const MAX_SLOT_GROWTH: usize = 16;
 
-/// Storage holding more than this many vertices is replaced when its pieces use less
+/// Storage holding more than this many records is replaced when its pieces use less
 /// than a quarter of it.
-const SHRINK_THRESHOLD: usize = 4096;
+const SHRINK_THRESHOLD: usize = 1024;
 
-/// Vertices a fresh slot of `len` reserves after its piece, in whole quads.
+/// Records a fresh slot of `len` reserves after its piece.
 fn slot_growth(len: usize) -> usize {
-    (len / 4)
-        .clamp(MIN_SLOT_GROWTH, MAX_SLOT_GROWTH)
-        .div_ceil(6)
-        * 6
+    (len / 4).clamp(MIN_SLOT_GROWTH, MAX_SLOT_GROWTH)
 }
 
-/// Retained GPU storage of one Surface's GUI pieces.
-pub(crate) struct GuiSurfaceStorage<D: RenderDevice> {
+/// Retained GPU storage of one Surface's GUI pieces of one record kind.
+pub(crate) struct GuiSurfaceStorage<D: RenderDevice, R: GuiRecord> {
     gpu: D::GuiBatch,
-    /// Allocated vertices.
+    /// Allocated records.
     capacity: usize,
     /// Slots of the last committed submission, in painter and storage order.
     slots: Vec<GuiSlot>,
-    /// Vertices at and beyond this index were never written and remain zero.
+    /// Records at and beyond this index were never written and remain zero.
     written: usize,
-    /// Frame that last committed this storage.
-    pub seen: u64,
+    record: std::marker::PhantomData<R>,
 }
 
 /// One write of a commit.
@@ -99,7 +99,7 @@ enum GuiWrite {
         index: usize,
         start: usize,
     },
-    /// `len` zero vertices at `start`.
+    /// `len` zero records at `start`.
     Clear {
         start: usize,
         len: usize,
@@ -122,19 +122,30 @@ impl GuiWrite {
 }
 
 /// Scratch buffers reused by commits.
-#[derive(Default)]
-pub(crate) struct GuiCommitScratch {
+pub(crate) struct GuiCommitScratch<R: GuiRecord> {
     anchors: Vec<Option<usize>>,
     old_index: HashMap<GuiPieceKey, usize>,
     starts: Vec<usize>,
     writes: Vec<GuiWrite>,
-    vertices: Vec<GuiVertex>,
+    records: Vec<R>,
 }
 
-impl<D: RenderDevice> GuiSurfaceStorage<D> {
+impl<R: GuiRecord> Default for GuiCommitScratch<R> {
+    fn default() -> Self {
+        Self {
+            anchors: Vec::new(),
+            old_index: HashMap::new(),
+            starts: Vec::new(),
+            writes: Vec::new(),
+            records: Vec::new(),
+        }
+    }
+}
+
+impl<D: RenderDevice, R: GuiRecord> GuiSurfaceStorage<D, R> {
     /// Allocated GPU bytes.
     pub fn bytes(&self) -> usize {
-        self.capacity * std::mem::size_of::<GuiVertex>()
+        self.capacity * std::mem::size_of::<R>()
     }
 
     /// Release the GPU storage.
@@ -142,94 +153,46 @@ impl<D: RenderDevice> GuiSurfaceStorage<D> {
         device.delete_gui_batch(self.gpu);
     }
 
-    /// Draw pieces `range` of the last commit, one draw per atlas page change.
-    #[allow(clippy::too_many_arguments)]
-    pub fn draw<'t>(
-        &self,
-        device: &mut D,
-        program: &D::Program,
-        pieces: &[GuiPiece],
-        range: std::ops::Range<usize>,
-        atlas: impl Fn(usize) -> Option<&'t D::Texture>,
-        mvp: &[f32; 16],
-        stats: &mut RenderFrameWork,
-    ) -> Result<(), RenderError>
-    where
-        D::Texture: 't,
-    {
-        let mut first = range.start;
-        let mut page = None;
-        for index in range.clone() {
-            let piece_page = pieces[index].page;
-            if piece_page.is_some() && page.is_some() && piece_page != page {
-                self.draw_slots(device, program, first..index, page, &atlas, mvp, stats)?;
-                first = index;
-                page = None;
-            }
-            page = page.or(piece_page);
-        }
-
-        self.draw_slots(device, program, first..range.end, page, &atlas, mvp, stats)
+    /// First record of committed piece `index`.
+    pub fn slot_start(&self, index: usize) -> usize {
+        self.slots[index].start
     }
 
-    /// Draw consecutive slots as one range sampling at most one atlas page.
-    #[allow(clippy::too_many_arguments)]
-    fn draw_slots<'t>(
+    /// Draw records `first..end` of the last commit as instanced quads, sampling
+    /// `atlas` for glyphs.
+    pub fn draw(
         &self,
         device: &mut D,
         program: &D::Program,
-        slots: std::ops::Range<usize>,
-        page: Option<usize>,
-        atlas: &impl Fn(usize) -> Option<&'t D::Texture>,
+        atlas: Option<&D::Texture>,
         mvp: &[f32; 16],
-        stats: &mut RenderFrameWork,
-    ) -> Result<(), RenderError>
-    where
-        D::Texture: 't,
-    {
-        let Some(last) = slots.end.checked_sub(1).map(|index| self.slots[index]) else {
-            return Ok(());
-        };
-        let texture =
-            match page {
-                Some(page) => Some(atlas(page).ok_or_else(|| {
-                    RenderError::RenderDevice("atlas page texture missing".into())
-                })?),
-                None => None,
-            };
-
-        let first = self.slots[slots.start].start;
-        device.draw_gui_batch(
-            program,
-            &self.gpu,
-            texture,
-            mvp,
-            first,
-            last.start + last.len - first,
-        )?;
-        let triangles = self.slots[slots.clone()]
-            .iter()
-            .map(|slot| (slot.len / 3) as u32)
-            .sum();
-        stats.draw(triangles);
-        stats.statistics.gui_batches += slots.len() as u32;
-        Ok(())
+        records: std::ops::Range<usize>,
+    ) -> Result<(), RenderError> {
+        device.draw_gui_batch(program, &self.gpu, atlas, mvp, records.start, records.len())
     }
 }
 
 /// Commit `pieces` to a Surface's storage, allocating or replacing it as needed.
 ///
-/// `fill` appends the vertices of piece `index` to its buffer. Unchanged pieces are not
+/// `fill` appends the records of piece `index` to its buffer. Unchanged pieces are not
 /// written. On failure the storage contents are unknown, so the storage is released
 /// and `storage` left empty.
-pub(crate) fn commit_surface_storage<D: RenderDevice>(
+pub(crate) fn commit_surface_storage<D: RenderDevice, R: GuiRecord>(
     device: &mut D,
-    storage: &mut Option<GuiSurfaceStorage<D>>,
+    storage: &mut Option<GuiSurfaceStorage<D, R>>,
     pieces: &[GuiPiece],
-    fill: &mut dyn FnMut(usize, &mut Vec<GuiVertex>),
-    scratch: &mut GuiCommitScratch,
+    fill: &mut dyn FnMut(usize, &mut Vec<R>),
+    scratch: &mut GuiCommitScratch<R>,
     stats: &mut RenderFrameWork,
 ) -> Result<(), RenderError> {
+    // A Surface without pieces of this kind keeps no storage for them.
+    if pieces.is_empty() {
+        if let Some(current) = storage.take() {
+            current.delete(device);
+        }
+        return Ok(());
+    }
+
     // Unchanged submissions keep every slot and write nothing.
     if let Some(current) = storage.as_ref()
         && current.slots.len() == pieces.len()
@@ -265,11 +228,11 @@ pub(crate) fn commit_surface_storage<D: RenderDevice>(
 
 /// Choose piece starts in `scratch.starts`, keeping retained slots in place where
 /// possible. Returns `false` when the pieces do not fit `capacity`.
-fn plan_slots(
+fn plan_slots<R: GuiRecord>(
     old: &[GuiSlot],
     pieces: &[GuiPiece],
     capacity: usize,
-    scratch: &mut GuiCommitScratch,
+    scratch: &mut GuiCommitScratch<R>,
 ) -> bool {
     scratch.old_index.clear();
     for (index, slot) in old.iter().enumerate() {
@@ -330,10 +293,10 @@ fn plan_slots(
 
 /// Record the writes that move `storage` from its slots to `scratch.starts`, then
 /// adopt the new slots. `scratch.old_index` maps keys to the current slots.
-fn plan_writes<D: RenderDevice>(
-    storage: &mut GuiSurfaceStorage<D>,
+fn plan_writes<D: RenderDevice, R: GuiRecord>(
+    storage: &mut GuiSurfaceStorage<D, R>,
     pieces: &[GuiPiece],
-    scratch: &mut GuiCommitScratch,
+    scratch: &mut GuiCommitScratch<R>,
 ) {
     scratch.writes.clear();
     let old = &storage.slots;
@@ -424,12 +387,12 @@ fn push_clear(writes: &mut Vec<GuiWrite>, range: std::ops::Range<usize>) {
 
 /// Allocate storage for `pieces` with room to grow, write them and release the old
 /// storage.
-fn replace_storage<D: RenderDevice>(
+fn replace_storage<D: RenderDevice, R: GuiRecord>(
     device: &mut D,
-    storage: &mut Option<GuiSurfaceStorage<D>>,
+    storage: &mut Option<GuiSurfaceStorage<D, R>>,
     pieces: &[GuiPiece],
-    fill: &mut dyn FnMut(usize, &mut Vec<GuiVertex>),
-    scratch: &mut GuiCommitScratch,
+    fill: &mut dyn FnMut(usize, &mut Vec<R>),
+    scratch: &mut GuiCommitScratch<R>,
     stats: &mut RenderFrameWork,
 ) -> Result<(), RenderError> {
     scratch.starts.clear();
@@ -440,18 +403,18 @@ fn replace_storage<D: RenderDevice>(
     }
     // Room for appended work, so a growing Surface does not replace its storage on
     // every addition.
-    let capacity = end + (end / 4).div_ceil(6) * 6;
+    let capacity = end + end / 4;
 
     if let Some(old) = storage.take() {
         old.delete(device);
     }
-    let gpu = device.create_gui_batch(capacity)?;
+    let gpu = device.create_gui_batch(R::KIND, capacity)?;
     let replacement = storage.insert(GuiSurfaceStorage {
         gpu,
         capacity,
         slots: Vec::new(),
         written: 0,
-        seen: 0,
+        record: std::marker::PhantomData,
     });
 
     scratch.old_index.clear();
@@ -460,18 +423,18 @@ fn replace_storage<D: RenderDevice>(
 }
 
 /// Issue the planned writes, merging adjacent ones into single uploads.
-fn write_planned<D: RenderDevice>(
+fn write_planned<D: RenderDevice, R: GuiRecord>(
     device: &mut D,
-    storage: &mut GuiSurfaceStorage<D>,
+    storage: &mut GuiSurfaceStorage<D, R>,
     pieces: &[GuiPiece],
-    fill: &mut dyn FnMut(usize, &mut Vec<GuiVertex>),
-    scratch: &mut GuiCommitScratch,
+    fill: &mut dyn FnMut(usize, &mut Vec<R>),
+    scratch: &mut GuiCommitScratch<R>,
     stats: &mut RenderFrameWork,
 ) -> Result<(), RenderError> {
     let mut index = 0;
     while index < scratch.writes.len() {
         let start = scratch.writes[index].range(pieces).start;
-        scratch.vertices.clear();
+        scratch.records.clear();
         let mut end = start;
         while let Some(write) = scratch.writes.get(index)
             && write.range(pieces).start == end
@@ -481,9 +444,9 @@ fn write_planned<D: RenderDevice>(
                     index: piece,
                     ..
                 } => {
-                    let before = scratch.vertices.len();
-                    fill(piece, &mut scratch.vertices);
-                    debug_assert_eq!(scratch.vertices.len() - before, pieces[piece].len);
+                    let before = scratch.records.len();
+                    fill(piece, &mut scratch.records);
+                    debug_assert_eq!(scratch.records.len() - before, pieces[piece].len);
                     stats.statistics.gui_allocations += 1;
                 }
                 GuiWrite::Clear {
@@ -491,22 +454,22 @@ fn write_planned<D: RenderDevice>(
                     ..
                 } => {
                     scratch
-                        .vertices
-                        .resize(scratch.vertices.len() + len, GuiVertex::EMPTY);
+                        .records
+                        .resize(scratch.records.len() + len, R::EMPTY);
                 }
             }
             end = write.range(pieces).end;
             index += 1;
         }
 
-        if end > storage.capacity || scratch.vertices.len() != end - start {
+        if end > storage.capacity || scratch.records.len() != end - start {
             return Err(RenderError::RenderDevice(
-                "GUI piece vertices do not match their slot".into(),
+                "GUI piece records do not match their slot".into(),
             ));
         }
-        device.write_gui_batch(&mut storage.gpu, start, &scratch.vertices)?;
+        device.write_gui_batch(&mut storage.gpu, start, &scratch.records)?;
         storage.written = storage.written.max(end);
-        stats.uploaded(std::mem::size_of_val(scratch.vertices.as_slice()));
+        stats.uploaded(std::mem::size_of_val(scratch.records.as_slice()));
     }
 
     Ok(())
@@ -534,6 +497,7 @@ mod tests {
             hash: 0,
             len,
             page: None,
+            bounds: None,
             source: GuiPieceSource::Boxes(0..0),
         }
     }
@@ -551,7 +515,8 @@ mod tests {
     }
 
     fn plan(old: &[GuiSlot], pieces: &[GuiPiece], capacity: usize) -> Option<Vec<usize>> {
-        let mut scratch = GuiCommitScratch::default();
+        let mut scratch =
+            GuiCommitScratch::<crate::services::render::gui_records::GuiGlyphRecord>::default();
         plan_slots(old, pieces, capacity, &mut scratch).then_some(scratch.starts)
     }
 
@@ -591,8 +556,8 @@ mod tests {
     fn pieces_beyond_the_capacity_need_new_storage() {
         let old = slots(&[(1, 0, 12)]);
         assert_eq!(plan(&old, &[piece(1, 12), piece(2, 30)], 36), None);
-        assert_eq!(slot_growth(6), 24);
-        assert_eq!(slot_growth(200), 54);
-        assert_eq!(slot_growth(10_000), 96);
+        assert_eq!(slot_growth(1), 4);
+        assert_eq!(slot_growth(36), 9);
+        assert_eq!(slot_growth(10_000), 16);
     }
 }

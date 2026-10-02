@@ -154,6 +154,7 @@ if (rendering) {
     "create_shadow_map",
     "draw_surface_path",
     "draw_gui_batch",
+    "set_gui_paint_blocks",
     "write_gui_batch",
     "create_glyph_atlas_page",
     "draw_pose",

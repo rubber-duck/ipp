@@ -1,22 +1,65 @@
-//! Tests for retained GUI triangle batches and their per-Surface GPU storage.
+//! Tests for retained GUI shape batches, their per-Surface GPU storage and the
+//! order their shapes and glyphs draw in.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use super::super::gui_records::{GuiGlyphRecord, GuiRecord, GuiRecordKind, GuiShapeRecord};
 use super::super::gui_storage::{GuiPiece, GuiPieceKey, GuiPieceSource};
 use super::super::retained_surfaces::SurfacePaint;
 use super::{
-    GUI_FILL_GLYPH, GuiBatchRenderCache, GuiVertex, MAX_BATCH_BOXES, RetainedSurfaceSubmission,
-    STORAGE_RETRY_FRAMES, VOLATILE_FRAMES, generate_box_vertices,
+    GUI_PAINT_STROKE, GuiBatchRenderCache, MAX_BATCH_BOXES, RetainedSurfaceSubmission,
+    STORAGE_RETRY_FRAMES, VOLATILE_FRAMES, generate_box_records, hash_box_inputs,
 };
 use crate::services::render::frame_statistics::RenderFrameWork;
 use crate::{RenderDevice, RenderError};
 use ipp_core::systems::canvas::{
-    CanvasClip, CanvasPart, CanvasPrimitive, CanvasPrimitiveId, CanvasPrimitiveStyle,
-    CanvasShapeFill, CanvasShapeGlow,
+    CanvasBoxShape, CanvasClip, CanvasPart, CanvasPrimitive, CanvasPrimitiveId,
+    CanvasPrimitiveStyle, CanvasShapeFill, CanvasShapeGlow,
 };
+
+/// Records of one storage allocation or draw.
+#[derive(Clone, Debug, PartialEq)]
+enum MockRecords {
+    Shapes(Vec<GuiShapeRecord>),
+    Glyphs(Vec<GuiGlyphRecord>),
+}
+
+impl MockRecords {
+    /// Shape records; empty for glyph records.
+    fn shapes(&self) -> &[GuiShapeRecord] {
+        match self {
+            Self::Shapes(records) => records,
+            Self::Glyphs(_) => &[],
+        }
+    }
+
+    /// Glyph records; empty for shape records.
+    fn glyphs(&self) -> &[GuiGlyphRecord] {
+        match self {
+            Self::Glyphs(records) => records,
+            Self::Shapes(_) => &[],
+        }
+    }
+
+    fn slice(&self, range: std::ops::Range<usize>) -> Self {
+        match self {
+            Self::Shapes(records) => Self::Shapes(records[range].to_vec()),
+            Self::Glyphs(records) => Self::Glyphs(records[range].to_vec()),
+        }
+    }
+}
+
+/// One recorded draw.
+#[derive(Clone, Debug)]
+struct MockDraw {
+    batch: usize,
+    program: u32,
+    records: MockRecords,
+    atlas: bool,
+}
 
 #[derive(Default)]
 struct MockGuiDevice {
@@ -25,10 +68,10 @@ struct MockGuiDevice {
     /// `(id, first, len)` of every storage write.
     writes: Vec<(usize, usize, usize)>,
     deleted_batches: Vec<usize>,
-    /// Drawn vertices of every draw, and whether it bound an atlas.
-    draws: Vec<(usize, Vec<GuiVertex>, bool)>,
+    /// Every draw, in order.
+    draws: Vec<MockDraw>,
     /// Current contents of every live storage allocation.
-    contents: BTreeMap<usize, Vec<GuiVertex>>,
+    contents: BTreeMap<usize, MockRecords>,
     next_id: usize,
     fail_writes: bool,
 }
@@ -163,29 +206,51 @@ impl RenderDevice for MockGuiDevice {
 
     fn delete_program(&mut self, _program: Self::Program) {}
 
-    fn create_gui_batch(&mut self, capacity: usize) -> Result<Self::GuiBatch, RenderError> {
+    fn create_gui_batch(
+        &mut self,
+        kind: GuiRecordKind,
+        capacity: usize,
+    ) -> Result<Self::GuiBatch, RenderError> {
         self.next_id += 1;
         let id = self.next_id;
         self.created_batches.push((id, capacity));
-        self.contents.insert(id, vec![GuiVertex::EMPTY; capacity]);
+        self.contents.insert(
+            id,
+            match kind {
+                GuiRecordKind::Shape => MockRecords::Shapes(vec![GuiShapeRecord::EMPTY; capacity]),
+                GuiRecordKind::Glyph => MockRecords::Glyphs(vec![GuiGlyphRecord::EMPTY; capacity]),
+            },
+        );
         Ok(MockGuiBatch {
             id,
         })
     }
 
-    fn write_gui_batch(
+    fn write_gui_batch<R: GuiRecord>(
         &mut self,
         batch: &mut Self::GuiBatch,
         first: usize,
-        vertices: &[GuiVertex],
+        records: &[R],
     ) -> Result<(), RenderError> {
         if self.fail_writes {
             return Err(RenderError::RenderDevice("injected write failure".into()));
         }
 
-        self.writes.push((batch.id, first, vertices.len()));
-        self.contents.get_mut(&batch.id).expect("live storage")[first..first + vertices.len()]
-            .copy_from_slice(vertices);
+        self.writes.push((batch.id, first, records.len()));
+        let written: Box<dyn std::any::Any> = Box::new(records.to_vec());
+        let range = first..first + records.len();
+        match self.contents.get_mut(&batch.id).expect("live storage") {
+            MockRecords::Shapes(contents) => contents[range].copy_from_slice(
+                written
+                    .downcast_ref::<Vec<GuiShapeRecord>>()
+                    .expect("shape records in shape storage"),
+            ),
+            MockRecords::Glyphs(contents) => contents[range].copy_from_slice(
+                written
+                    .downcast_ref::<Vec<GuiGlyphRecord>>()
+                    .expect("glyph records in glyph storage"),
+            ),
+        }
         Ok(())
     }
 
@@ -196,15 +261,20 @@ impl RenderDevice for MockGuiDevice {
 
     fn draw_gui_batch(
         &mut self,
-        _program: &Self::Program,
+        program: &Self::Program,
         batch: &Self::GuiBatch,
         atlas: Option<&Self::Texture>,
         _mvp: &[f32; 16],
         first: usize,
         count: usize,
     ) -> Result<(), RenderError> {
-        let drawn = self.contents[&batch.id][first..first + count].to_vec();
-        self.draws.push((batch.id, drawn, atlas.is_some()));
+        let records = self.contents[&batch.id].slice(first..first + count);
+        self.draws.push(MockDraw {
+            batch: batch.id,
+            program: *program,
+            records,
+            atlas: atlas.is_some(),
+        });
         Ok(())
     }
 
@@ -259,6 +329,7 @@ fn sample_box_primitive(
                 f32::INFINITY,
                 f32::INFINITY,
             ]),
+            layer: 0,
         },
         size,
         corner_radius: [0.05, 0.05],
@@ -266,11 +337,20 @@ fn sample_box_primitive(
         border_color: [0.8, 0.8, 0.8, 1.0],
         fill: CanvasShapeFill::Solid([0.2, 0.4, 0.6, 1.0]),
         glow: None,
+        shape: CanvasBoxShape::RECT,
     }
 }
 
 /// Clip of generated test geometry.
 const CLIP: CanvasClip = [-100.0, -100.0, 100.0, 100.0];
+
+/// Canvas content rectangle of the test Surfaces.
+const DOMAIN: CanvasClip = [0.0, 0.0, 8.0, 2.0];
+
+/// Programs the test draws pass for shapes and for glyphs.
+const SHAPE_PROGRAM: u32 = 1;
+
+const GLYPH_PROGRAM: u32 = 2;
 
 /// One Surface submission whose boxes all share a clip, as the service performs it.
 trait DrawBoxBatch {
@@ -306,12 +386,20 @@ impl DrawBoxBatch for GuiBatchRenderCache<MockGuiDevice> {
         }
 
         let pieces = self.piece_count();
-        self.draw_pieces(program, 0..pieces, |_| None, mvp, stats)
+        self.draw_pieces(
+            program,
+            &GLYPH_PROGRAM,
+            0..pieces,
+            DOMAIN,
+            |_| None,
+            mvp,
+            stats,
+        )
     }
 }
 
 #[test]
-fn box_vertices_form_two_counter_clockwise_triangles_per_quad() {
+fn a_filled_box_is_one_record_over_its_padded_rectangle() {
     let style = CanvasPrimitiveStyle {
         identity: CanvasPrimitiveId {
             target: ipp_core::systems::canvas::CanvasTarget {
@@ -331,13 +419,14 @@ fn box_vertices_form_two_counter_clockwise_triangles_per_quad() {
             f32::INFINITY,
             f32::INFINITY,
         ],
+        layer: 0,
     };
     let size = [3.0, 4.0];
     let corner = [0.1, 0.2];
     let border_color = [0.0, 1.0, 0.0, 1.0];
     let fill = CanvasShapeFill::Solid([1.0, 0.0, 0.0, 1.0]);
 
-    let vertices = generate_box_vertices(
+    let records = generate_box_records(
         &style,
         &size,
         &corner,
@@ -345,23 +434,17 @@ fn box_vertices_form_two_counter_clockwise_triangles_per_quad() {
         &border_color,
         &fill,
         None,
+        &CanvasBoxShape::RECT,
         CLIP,
     );
-    assert_eq!(vertices.len(), 6);
+    assert_eq!(records.len(), 1);
 
     // Quad corners in Surface coordinates with 0.002 conservative AA padding:
     // x0 = 1.0 - 0.002 = 0.998, y0 = 2.0 - 0.002 = 1.998
     // x1 = 4.0 + 0.002 = 4.002, y1 = 6.0 + 0.002 = 6.002
-    assert_eq!(vertices[0].position, [0.998, 1.998]); // TL
-    assert_eq!(vertices[1].position, [0.998, 6.002]); // BL
-    assert_eq!(vertices[2].position, [4.002, 6.002]); // BR
+    assert_eq!(records[0].rect, [0.998, 1.998, 4.002, 6.002]);
 
-    assert_eq!(vertices[3].position, [0.998, 1.998]); // TL
-    assert_eq!(vertices[4].position, [4.002, 6.002]); // BR
-    assert_eq!(vertices[5].position, [4.002, 1.998]); // TR
-
-    // All vertices carry identical shape uniforms
-    for v in &vertices {
+    for v in &records {
         assert_eq!(v.placement, [1.0, 2.0, 3.0, 4.0]);
         assert_eq!(v.color0, [1.0, 0.0, 0.0, 1.0]);
         assert_eq!(v.color1, [1.0, 0.0, 0.0, 1.0]);
@@ -395,6 +478,7 @@ fn linear_gradient_fill_sets_coordinates_and_material_type() {
             f32::INFINITY,
             f32::INFINITY,
         ],
+        layer: 0,
     };
     let fill = CanvasShapeFill::LinearGradient {
         start: [0.0, 0.0],
@@ -403,7 +487,7 @@ fn linear_gradient_fill_sets_coordinates_and_material_type() {
         end_color: [0.0, 0.0, 1.0, 0.8],
     };
 
-    let vertices = generate_box_vertices(
+    let vertices = generate_box_records(
         &style,
         &[2.0, 1.0],
         &[0.0, 0.0],
@@ -411,9 +495,10 @@ fn linear_gradient_fill_sets_coordinates_and_material_type() {
         &[0.0; 4],
         &fill,
         None,
+        &CanvasBoxShape::RECT,
         CLIP,
     );
-    assert_eq!(vertices.len(), 6);
+    assert_eq!(vertices.len(), 1);
 
     for v in &vertices {
         assert_eq!(v.color0, [1.0, 0.0, 0.0, 0.5]);
@@ -444,6 +529,7 @@ fn radial_gradient_fill_sets_center_radius_and_material_type() {
             f32::INFINITY,
             f32::INFINITY,
         ],
+        layer: 0,
     };
     let fill = CanvasShapeFill::RadialGradient {
         center: [0.5, 0.5],
@@ -452,7 +538,7 @@ fn radial_gradient_fill_sets_center_radius_and_material_type() {
         end_color: [0.0, 1.0, 1.0, 0.0],
     };
 
-    let vertices = generate_box_vertices(
+    let vertices = generate_box_records(
         &style,
         &[1.0, 1.0],
         &[0.0, 0.0],
@@ -460,9 +546,10 @@ fn radial_gradient_fill_sets_center_radius_and_material_type() {
         &[0.0; 4],
         &fill,
         None,
+        &CanvasBoxShape::RECT,
         CLIP,
     );
-    assert_eq!(vertices.len(), 6);
+    assert_eq!(vertices.len(), 1);
 
     for v in &vertices {
         assert_eq!(v.color0, [1.0, 1.0, 0.0, 1.0]);
@@ -493,15 +580,17 @@ fn glow_expands_quad_padding_and_packs_glow_parameters() {
             f32::INFINITY,
             f32::INFINITY,
         ],
+        layer: 0,
     };
     let glow = CanvasShapeGlow {
         color: [0.3, 0.6, 0.9, 1.0],
         intensity: 1.5,
         radius: 0.05,
+        inner_radius: 0.0,
         falloff: 2.0,
     };
 
-    let vertices = generate_box_vertices(
+    let vertices = generate_box_records(
         &style,
         &[1.0, 1.0],
         &[0.02, 0.02],
@@ -509,25 +598,27 @@ fn glow_expands_quad_padding_and_packs_glow_parameters() {
         &[0.0; 4],
         &CanvasShapeFill::Solid([0.0; 4]),
         Some(&glow),
+        &CanvasBoxShape::RECT,
         CLIP,
     );
-    assert_eq!(vertices.len(), 6);
+    assert_eq!(vertices.len(), 1);
 
     let expected_x0 = 2.0 - 0.052;
     let expected_y0 = 3.0 - 0.052;
     let expected_x1 = 3.0 + 0.052;
     let expected_y1 = 4.0 + 0.052;
 
-    assert!((vertices[0].position[0] - expected_x0).abs() < 1e-6);
-    assert!((vertices[0].position[1] - expected_y0).abs() < 1e-6);
-    assert!((vertices[2].position[0] - expected_x1).abs() < 1e-6);
-    assert!((vertices[2].position[1] - expected_y1).abs() < 1e-6);
+    assert!((vertices[0].rect[0] - expected_x0).abs() < 1e-6);
+    assert!((vertices[0].rect[1] - expected_y0).abs() < 1e-6);
+    assert!((vertices[0].rect[2] - expected_x1).abs() < 1e-6);
+    assert!((vertices[0].rect[3] - expected_y1).abs() < 1e-6);
 
+    // The intensity joins the glow alpha; the inner reach is absent.
     for v in &vertices {
-        assert_eq!(v.material_params[1], 1.5);
+        assert_eq!(v.material_params[1], 0.0);
         assert_eq!(v.material_params[2], 0.05);
         assert_eq!(v.material_params[3], 2.0);
-        assert_eq!(v.glow_color, [0.3, 0.6, 0.9, 0.8]);
+        assert_eq!(v.glow_color, [0.3, 0.6, 0.9, 0.8 * 1.5]);
     }
 }
 
@@ -552,6 +643,7 @@ fn border_only_box_splits_into_four_edge_strips_without_interior() {
             f32::INFINITY,
             f32::INFINITY,
         ],
+        layer: 0,
     };
     let border_color = [1.0, 1.0, 1.0, 1.0];
     let size = [10.0, 10.0];
@@ -562,10 +654,11 @@ fn border_only_box_splits_into_four_edge_strips_without_interior() {
         color: [0.0, 1.0, 0.0, 1.0],
         intensity: 1.0,
         radius: 0.15,
+        inner_radius: 0.0,
         falloff: 2.0,
     };
     for glow in [None, Some(&glow)] {
-        let vertices = generate_box_vertices(
+        let vertices = generate_box_records(
             &style,
             &size,
             &corner,
@@ -573,18 +666,18 @@ fn border_only_box_splits_into_four_edge_strips_without_interior() {
             &border_color,
             &CanvasShapeFill::Solid([0.0, 0.0, 0.0, 0.0]),
             glow,
+            &CanvasBoxShape::RECT,
             CLIP,
         );
         assert_eq!(
             vertices.len(),
-            24,
-            "large border-only box splits into 4 edge quads (24 vertices)"
+            4,
+            "large border-only box splits into 4 edge quads"
         );
 
-        for quad_idx in 0..4 {
-            let q = &vertices[quad_idx * 6..(quad_idx + 1) * 6];
-            assert_eq!(q[0].position, q[3].position);
-            assert_eq!(q[2].position, q[4].position);
+        for record in &vertices {
+            assert!(record.rect[0] < record.rect[2] && record.rect[1] < record.rect[3]);
+            assert_eq!(record.placement, vertices[0].placement);
         }
     }
 }
@@ -610,13 +703,14 @@ fn small_border_only_box_uses_single_quad() {
             f32::INFINITY,
             f32::INFINITY,
         ],
+        layer: 0,
     };
     let border_color = [1.0, 1.0, 1.0, 1.0];
     let size = [0.3, 0.3];
     let corner = [0.1, 0.1];
     let border_width = 0.1;
 
-    let vertices = generate_box_vertices(
+    let vertices = generate_box_records(
         &style,
         &size,
         &corner,
@@ -624,13 +718,445 @@ fn small_border_only_box_uses_single_quad() {
         &border_color,
         &CanvasShapeFill::Solid([0.0, 0.0, 0.0, 0.0]),
         None,
+        &CanvasBoxShape::RECT,
         CLIP,
     );
     assert_eq!(
         vertices.len(),
-        6,
+        1,
         "small border-only box uses a single quad to avoid strip overhead"
     );
+}
+
+/// Unclipped style of node 1's background at `position` and `scale`.
+fn shape_style(position: [f32; 2], scale: [f32; 2]) -> CanvasPrimitiveStyle {
+    CanvasPrimitiveStyle {
+        identity: CanvasPrimitiveId {
+            target: ipp_core::systems::canvas::CanvasTarget {
+                entity: ipp_core::EntityId::from_bits(1),
+                component: ipp_core::ComponentValue::CANVAS_BOX,
+                incarnation: 1,
+            },
+            part: CanvasPart::Background,
+        },
+        position,
+        scale,
+        color: [1.0; 4],
+        opacity: 1.0,
+        clip: [
+            f32::NEG_INFINITY,
+            f32::NEG_INFINITY,
+            f32::INFINITY,
+            f32::INFINITY,
+        ],
+        layer: 0,
+    }
+}
+
+fn rect(cut: [f32; 4], accent: [f32; 4], accent_width: f32) -> CanvasBoxShape {
+    CanvasBoxShape::Rect {
+        corner_cut: cut,
+        corner_accent: accent,
+        corner_accent_width: accent_width,
+        checker: None,
+    }
+}
+
+/// Axis-aligned `[min_x, min_y, max_x, max_y]` of each generated quad.
+fn quads(records: &[GuiShapeRecord]) -> Vec<[f32; 4]> {
+    records.iter().map(|record| record.rect).collect()
+}
+
+/// Number of quads containing `point`; overlapping coverage would blend twice.
+fn coverage(vertices: &[GuiShapeRecord], point: [f32; 2]) -> usize {
+    quads(vertices)
+        .iter()
+        .filter(|quad| {
+            point[0] >= quad[0] && point[0] <= quad[2] && point[1] >= quad[1] && point[1] <= quad[3]
+        })
+        .count()
+}
+
+fn assert_near(actual: [f32; 4], expected: [f32; 4]) {
+    assert!(
+        actual
+            .iter()
+            .zip(expected)
+            .all(|(actual, expected)| (actual - expected).abs() < 1e-5),
+        "{actual:?} != {expected:?}"
+    );
+}
+
+fn glow(radius: f32, inner_radius: f32) -> CanvasShapeGlow {
+    CanvasShapeGlow {
+        color: [0.0, 1.0, 1.0, 0.5],
+        intensity: 2.0,
+        radius,
+        inner_radius,
+        falloff: 1.0,
+    }
+}
+
+const TRANSPARENT: CanvasShapeFill = CanvasShapeFill::Solid([0.0; 4]);
+
+const OPAQUE: CanvasShapeFill = CanvasShapeFill::Solid([0.0, 0.1, 0.1, 1.0]);
+
+#[test]
+fn corner_cuts_and_accents_clamp_per_corner_without_growing_paint_bounds() {
+    let style = shape_style([1.0, 2.0], [1.0, 1.0]);
+    let vertices = generate_box_records(
+        &style,
+        &[10.0, 4.0],
+        &[0.5, 0.5],
+        0.25,
+        &[1.0; 4],
+        &OPAQUE,
+        None,
+        &rect([100.0, -3.0, 1.0, f32::NAN], [3.0; 4], 0.75),
+        CLIP,
+    );
+
+    // Cuts never paint beyond the rectangle: one quad over it and its antialias pad.
+    assert_eq!(vertices.len(), 1);
+    assert_near(quads(&vertices)[0], [0.998, 1.998, 11.002, 6.002]);
+    for vertex in &vertices {
+        // The oversized top-left cut fills the 4-high left side; invalid cuts are
+        // none. Accents of 3 along the 4-high sides meet halfway.
+        assert_near(vertex.corner_cut, [4.0, 0.0, 1.0, 0.0]);
+        assert_near(vertex.corner_accent, [2.0; 4]);
+        assert_eq!(vertex.shape, [0.5, 0.5, 0.25, 0.75]);
+        assert_eq!(vertex.material_params, [0.0, 0.0, 0.0, 1.0]);
+    }
+
+    // Degenerate uses: cuts of half the short side point a bar's ends, and two
+    // cuts of the whole height of a box twice as wide as high make a triangle.
+    for (size, cuts, expected) in [
+        ([10.0, 2.0], [9.0; 4], [1.0; 4]),
+        ([4.0, 2.0], [100.0, 100.0, 0.0, 0.0], [2.0, 2.0, 0.0, 0.0]),
+        ([4.0, 2.0], [100.0, 0.0, 100.0, 0.0], [2.0, 0.0, 2.0, 0.0]),
+    ] {
+        let vertices = generate_box_records(
+            &style,
+            &size,
+            &[0.0; 2],
+            0.0,
+            &[0.0; 4],
+            &OPAQUE,
+            None,
+            &rect(cuts, [0.0; 4], 0.0),
+            CLIP,
+        );
+        assert_near(vertices[0].corner_cut, expected);
+    }
+}
+
+#[test]
+fn inner_glow_reaches_inward_without_growing_paint_bounds() {
+    let style = shape_style([0.0, 0.0], [2.0, 2.0]);
+    let inner = generate_box_records(
+        &style,
+        &[5.0, 5.0],
+        &[0.0; 2],
+        0.0,
+        &[0.0; 4],
+        &OPAQUE,
+        Some(&glow(0.0, 0.3)),
+        &CanvasBoxShape::RECT,
+        CLIP,
+    );
+    assert_eq!(inner.len(), 1);
+    assert_near(quads(&inner)[0], [-0.002, -0.002, 10.002, 10.002]);
+    for vertex in &inner {
+        // Both reaches scale with the primitive; intensity joins the glow alpha.
+        assert_eq!(vertex.material_params, [0.0, 0.6, 0.0, 1.0]);
+        assert_eq!(vertex.glow_color, [0.0, 1.0, 1.0, 1.0]);
+    }
+
+    let both = generate_box_records(
+        &style,
+        &[5.0, 5.0],
+        &[0.0; 2],
+        0.0,
+        &[0.0; 4],
+        &OPAQUE,
+        Some(&glow(0.25, 0.3)),
+        &CanvasBoxShape::RECT,
+        CLIP,
+    );
+    assert_near(quads(&both)[0], [-0.502, -0.502, 10.502, 10.502]);
+    assert_eq!(both[0].material_params, [0.0, 0.6, 0.5, 1.0]);
+
+    // Neither reach, or a non-finite one, is no glow.
+    for glow in [glow(0.0, 0.0), glow(f32::NAN, 0.3), glow(0.25, -1.0)] {
+        let vertices = generate_box_records(
+            &style,
+            &[5.0, 5.0],
+            &[0.0; 2],
+            0.0,
+            &[0.0; 4],
+            &OPAQUE,
+            Some(&glow),
+            &CanvasBoxShape::RECT,
+            CLIP,
+        );
+        assert_eq!(vertices[0].material_params, [0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(vertices[0].glow_color, [0.0; 4]);
+    }
+}
+
+#[test]
+fn transparent_outlines_cover_inner_glow_and_omit_their_interior() {
+    let style = shape_style([0.0, 0.0], [1.0, 1.0]);
+    let vertices = generate_box_records(
+        &style,
+        &[20.0, 20.0],
+        &[0.0; 2],
+        0.25,
+        &[1.0; 4],
+        &TRANSPARENT,
+        Some(&glow(0.0, 2.0)),
+        &CanvasBoxShape::RECT,
+        CLIP,
+    );
+
+    // The inner glow paints over the empty fill, so the strips reach its depth.
+    assert_eq!(vertices.len(), 4);
+    assert_near(quads(&vertices)[0], [-0.002, -0.002, 20.002, 2.0]);
+    assert_eq!(coverage(&vertices, [10.0, 1.9]), 1);
+    assert_eq!(coverage(&vertices, [10.0, 10.0]), 0);
+
+    // An inner glow too deep for strips to pay off covers the whole box.
+    let deep = generate_box_records(
+        &style,
+        &[20.0, 20.0],
+        &[0.0; 2],
+        0.25,
+        &[1.0; 4],
+        &TRANSPARENT,
+        Some(&glow(0.0, 8.0)),
+        &CanvasBoxShape::RECT,
+        CLIP,
+    );
+    assert_eq!(deep.len(), 1);
+}
+
+#[test]
+fn cut_and_accented_outlines_cover_their_corners_deeper_than_their_edges() {
+    let style = shape_style([0.0, 0.0], [1.0, 1.0]);
+    let pad = 0.002;
+    // A cut top-left corner: its ring runs along the cut, sqrt(2) - 1 border
+    // widths beyond the cut's end on each edge.
+    let cut = generate_box_records(
+        &style,
+        &[20.0, 20.0],
+        &[0.0; 2],
+        0.5,
+        &[1.0; 4],
+        &TRANSPARENT,
+        None,
+        &rect([2.0, 0.0, 0.0, 0.0], [0.0; 4], 0.0),
+        CLIP,
+    );
+    let reach = 2.0 + (std::f32::consts::SQRT_2 - 1.0) * 0.5;
+    assert_eq!(cut.len(), 8);
+    let pieces = quads(&cut);
+    assert_near(pieces[0], [-pad, -pad, reach, reach]);
+    // Other corners and the edges reach only the border width.
+    assert_near(pieces[2], [19.5, 19.5, 20.0 + pad, 20.0 + pad]);
+    assert_near(pieces[4], [reach, -pad, 19.5, 0.5]);
+    for point in [[1.2, 1.0], [10.0, 0.25], [0.25, 10.0], [19.9, 19.9]] {
+        assert_eq!(coverage(&cut, point), 1, "{point:?}");
+    }
+    assert_eq!(coverage(&cut, [10.0, 10.0]), 0);
+
+    // Corner brackets alone paint no edge between their spans: only the four
+    // accented corner squares remain.
+    let brackets = rect([0.0; 4], [4.0; 4], 1.0);
+    let alone = generate_box_records(
+        &style,
+        &[20.0, 20.0],
+        &[0.0; 2],
+        0.0,
+        &[1.0; 4],
+        &TRANSPARENT,
+        None,
+        &brackets,
+        CLIP,
+    );
+    assert_eq!(alone.len(), 4);
+    assert_near(quads(&alone)[1], [16.0, -pad, 20.0 + pad, 4.0]);
+    assert_eq!(coverage(&alone, [3.9, 0.5]), 1);
+    assert_eq!(coverage(&alone, [10.0, 0.5]), 0);
+    assert_eq!(coverage(&alone, [10.0, 10.0]), 0);
+
+    // An outer glow follows the whole contour, so the edges return.
+    let glowing = generate_box_records(
+        &style,
+        &[20.0, 20.0],
+        &[0.0; 2],
+        0.0,
+        &[1.0; 4],
+        &TRANSPARENT,
+        Some(&glow(0.5, 0.0)),
+        &brackets,
+        CLIP,
+    );
+    assert_eq!(glowing.len(), 8);
+    assert_eq!(coverage(&glowing, [10.0, -0.4]), 1);
+    assert_eq!(coverage(&glowing, [10.0, 10.0]), 0);
+
+    // Mirroring the box mirrors its own corners onto the screen.
+    let mirrored = generate_box_records(
+        &shape_style([20.0, 0.0], [-1.0, 1.0]),
+        &[20.0, 20.0],
+        &[0.0; 2],
+        0.5,
+        &[1.0; 4],
+        &TRANSPARENT,
+        None,
+        &rect([2.0, 0.0, 0.0, 0.0], [0.0; 4], 0.0),
+        CLIP,
+    );
+    let pieces = quads(&mirrored);
+    assert_near(pieces[0], [-pad, -pad, 0.5, 0.5]);
+    assert_near(pieces[1], [20.0 - reach, -pad, 20.0 + pad, reach]);
+}
+
+#[test]
+fn strokes_cover_their_segments_from_their_own_bounds() {
+    let style = shape_style([1.0, 1.0], [1.0, 1.0]);
+    let horizontal = CanvasBoxShape::Stroke {
+        segments: [[0.0, 0.5, 1.0, 0.5], [0.5, 0.0, 0.5, 0.0]],
+    };
+    let fill = CanvasShapeFill::LinearGradient {
+        start: [0.0, 0.0],
+        end: [10.0, 0.0],
+        start_color: [1.0; 4],
+        end_color: [0.0, 0.0, 0.0, 1.0],
+    };
+    let vertices = generate_box_records(
+        &style,
+        &[10.0, 10.0],
+        &[0.0; 2],
+        2.0,
+        &[0.0; 4],
+        &fill,
+        Some(&glow(0.5, 0.0)),
+        &horizontal,
+        CLIP,
+    );
+
+    // Butt caps end at the part's edges; the thickness and glow extend across.
+    assert_eq!(vertices.len(), 1);
+    assert_near(quads(&vertices)[0], [0.498, 4.498, 11.502, 7.502]);
+    for vertex in &vertices {
+        assert_eq!(vertex.placement, [1.0, 5.0, 10.0, 2.0]);
+        assert_eq!(vertex.shape, [0.0, 0.0, 2.0, 0.0]);
+        // Segments are centres and half vectors from the stroke's own origin; the
+        // zero-length second segment paints nothing.
+        assert_eq!(vertex.corner_cut, [5.0, 1.0, 5.0, 0.0]);
+        assert_eq!(vertex.corner_accent, [0.0; 4]);
+        // The gradient stays anchored to the part rectangle.
+        assert_eq!(vertex.gradient_coords, [0.0, -4.0, 10.0, -4.0]);
+        assert_eq!(
+            vertex.material_params,
+            [1.0 + GUI_PAINT_STROKE, 0.0, 0.5, 1.0]
+        );
+    }
+
+    // A diagonal stroke reaching the part's corners extends past them by its
+    // half thickness.
+    let check = CanvasBoxShape::Stroke {
+        segments: [[0.0, 0.0, 1.0, 1.0], [0.0, 1.0, 1.0, 0.0]],
+    };
+    let vertices = generate_box_records(
+        &style,
+        &[10.0, 10.0],
+        &[0.0; 2],
+        2.0,
+        &[0.0; 4],
+        &OPAQUE,
+        None,
+        &check,
+        CLIP,
+    );
+    let half = std::f32::consts::FRAC_1_SQRT_2;
+    assert_near(
+        quads(&vertices)[0],
+        [
+            1.0 - half - 0.002,
+            1.0 - half - 0.002,
+            11.0 + half + 0.002,
+            11.0 + half + 0.002,
+        ],
+    );
+    assert_eq!(vertices[0].material_params[0], GUI_PAINT_STROKE);
+    assert_near(
+        vertices[0].corner_accent,
+        [5.0 + half, 5.0 + half, 5.0, -5.0],
+    );
+
+    // Without a segment of length nothing paints, while the primitive keeps its slot.
+    let nothing = generate_box_records(
+        &style,
+        &[10.0, 10.0],
+        &[0.0; 2],
+        2.0,
+        &[0.0; 4],
+        &OPAQUE,
+        None,
+        &CanvasBoxShape::Stroke {
+            segments: [[0.5; 4], [f32::NAN, 0.0, 1.0, 1.0]],
+        },
+        CLIP,
+    );
+    assert_eq!(nothing, vec![GuiShapeRecord::EMPTY]);
+}
+
+#[test]
+fn shape_inputs_change_the_retained_hash() {
+    let style = shape_style([0.0, 0.0], [1.0, 1.0]);
+    let hash = |glow: Option<&CanvasShapeGlow>, shape: &CanvasBoxShape| {
+        hash_box_inputs(
+            &style,
+            &[10.0, 10.0],
+            &[0.0; 2],
+            1.0,
+            &[1.0; 4],
+            &OPAQUE,
+            glow,
+            shape,
+            CLIP,
+        )
+    };
+    let base = hash(Some(&glow(1.0, 0.0)), &CanvasBoxShape::RECT);
+    let variants = [
+        hash(Some(&glow(1.0, 0.5)), &CanvasBoxShape::RECT),
+        hash(
+            Some(&glow(1.0, 0.0)),
+            &rect([1.0, 0.0, 0.0, 0.0], [0.0; 4], 0.0),
+        ),
+        hash(
+            Some(&glow(1.0, 0.0)),
+            &rect([0.0; 4], [0.0, 0.0, 0.0, 2.0], 0.0),
+        ),
+        hash(Some(&glow(1.0, 0.0)), &rect([0.0; 4], [0.0; 4], 1.0)),
+        hash(
+            Some(&glow(1.0, 0.0)),
+            &CanvasBoxShape::Stroke {
+                segments: [[0.0; 4]; 2],
+            },
+        ),
+        hash(
+            Some(&glow(1.0, 0.0)),
+            &CanvasBoxShape::Stroke {
+                segments: [[0.0; 4], [0.0, 0.0, 1.0, 0.0]],
+            },
+        ),
+    ];
+    for (index, variant) in variants.into_iter().enumerate() {
+        assert_ne!(variant, base, "variant {index}");
+    }
 }
 
 #[test]
@@ -663,10 +1189,10 @@ fn warm_frame_uploads_zero_geometry_bytes() {
     assert_eq!(stats1.statistics.gui_rebuilds, 2);
     assert_eq!(stats1.statistics.gui_batches, 1);
     assert_eq!(stats1.summary.triangles, 4); // 2 boxes * 2 triangles
-    let expected_bytes = 12 * std::mem::size_of::<GuiVertex>() as u32;
+    let expected_bytes = 2 * std::mem::size_of::<GuiShapeRecord>() as u32;
     assert_eq!(stats1.statistics.uploaded_bytes, expected_bytes);
     assert_eq!(device.borrow().created_batches.len(), 1);
-    assert_eq!(device.borrow().writes, [(1, 0, 12)]);
+    assert_eq!(device.borrow().writes, [(1, 0, 2)]);
 
     // Frame 2: Warm unchanged frame
     let mut stats2 = RenderFrameWork::default();
@@ -752,10 +1278,10 @@ fn local_change_replaces_batch_storage_and_rebuilds_only_affected_primitive() {
     // batch rewrites its slot without it, and the changed box's own batch follows it
     // in the same storage, in one upload.
     assert_eq!(stats2.statistics.gui_allocations, 2);
-    assert_eq!(device.borrow().writes[1..], [(1, 0, 12)]);
+    assert_eq!(device.borrow().writes[1..], [(1, 0, 2)]);
     assert_eq!(device.borrow().created_batches.len(), 1);
     assert_eq!(stats2.summary.draw_calls, 1);
-    let expected_bytes = 12 * std::mem::size_of::<GuiVertex>() as u32;
+    let expected_bytes = 2 * std::mem::size_of::<GuiShapeRecord>() as u32;
     assert_eq!(stats2.statistics.uploaded_bytes, expected_bytes);
 }
 
@@ -843,7 +1369,7 @@ fn boxes_of_every_part_class_share_one_batch() {
     assert_eq!(stats.statistics.gui_batches, 1, "{stats:?}");
     assert_eq!(stats.summary.draw_calls, 1);
     assert_eq!(device.borrow().created_batches.len(), 1);
-    assert_eq!(device.borrow().writes, [(1, 0, 5 * 6)]);
+    assert_eq!(device.borrow().writes, [(1, 0, 5)]);
 }
 
 #[test]
@@ -860,7 +1386,7 @@ fn text_overlay_boxes_of_one_node_keep_their_own_geometry() {
     let caret = overlay(CanvasPart::Caret, 2.0, 0.01);
     let boxes = [&selection, &caret];
     let clip = [0.0, 0.0, 4.0, 2.0];
-    let expected: Vec<GuiVertex> = boxes
+    let expected: Vec<GuiShapeRecord> = boxes
         .iter()
         .flat_map(|primitive| {
             let CanvasPrimitive::Box {
@@ -871,11 +1397,12 @@ fn text_overlay_boxes_of_one_node_keep_their_own_geometry() {
                 border_color,
                 fill,
                 glow,
+                shape,
             } = primitive
             else {
                 unreachable!();
             };
-            generate_box_vertices(
+            generate_box_records(
                 style,
                 size,
                 corner_radius,
@@ -883,6 +1410,7 @@ fn text_overlay_boxes_of_one_node_keep_their_own_geometry() {
                 border_color,
                 fill,
                 glow.as_ref(),
+                shape,
                 clip,
             )
         })
@@ -908,9 +1436,9 @@ fn text_overlay_boxes_of_one_node_keep_their_own_geometry() {
             live: &live,
             submitted: &live,
         }));
-        let drawn: Vec<GuiVertex> = device.borrow().draws[before..]
+        let drawn: Vec<GuiShapeRecord> = device.borrow().draws[before..]
             .iter()
-            .flat_map(|(_, vertices, _)| vertices.iter().copied())
+            .flat_map(|draw| draw.records.shapes().to_vec())
             .collect();
         (stats, drawn)
     };
@@ -1091,10 +1619,11 @@ fn finish_frame_prunes_unreferenced_batches_and_tracks_resident_bytes() {
         "destroyed entity storage must be freed on GPU"
     );
     // A quad, the room its slot reserves to grow and room for appended work.
-    let storage_bytes = device.borrow().created_batches[0].1 * std::mem::size_of::<GuiVertex>();
+    let storage_bytes =
+        device.borrow().created_batches[0].1 * std::mem::size_of::<GuiShapeRecord>();
     assert_eq!(
         storage_bytes,
-        (6 + 24 + 12) * std::mem::size_of::<GuiVertex>()
+        (1 + 4 + 1) * std::mem::size_of::<GuiShapeRecord>()
     );
     assert_eq!(cache.resident_bytes(), storage_bytes);
 }
@@ -1161,7 +1690,7 @@ fn culled_surfaces_keep_retained_batches_and_incomplete_frames_prune_nothing() {
     assert_eq!(device.borrow().deleted_batches, [1]);
     assert_eq!(
         cache.resident_bytes(),
-        (6 + 24 + 12) * std::mem::size_of::<GuiVertex>()
+        (1 + 4 + 1) * std::mem::size_of::<GuiShapeRecord>()
     );
 }
 
@@ -1212,7 +1741,7 @@ fn failed_batch_replacement_releases_storage_instead_of_drawing_stale_vertices()
     cache.finish_frame(None);
     draw(&mut cache, &moved).unwrap();
     assert_eq!(device.borrow().created_batches.len(), 2);
-    assert_eq!(device.borrow().draws.last().unwrap().0, 2);
+    assert_eq!(device.borrow().draws.last().unwrap().batch, 2);
 }
 
 #[test]
@@ -1260,7 +1789,7 @@ fn repeated_storage_failures_double_the_retry_wait_until_a_commit_succeeds() {
 }
 
 /// Bytes of one filled box quad.
-const BOX_BYTES: u32 = 6 * std::mem::size_of::<GuiVertex>() as u32;
+const BOX_BYTES: u32 = std::mem::size_of::<GuiShapeRecord>() as u32;
 
 /// A long run of small filled boxes, one per GUI node.
 fn box_run(nodes: std::ops::RangeInclusive<u32>) -> Vec<CanvasPrimitive> {
@@ -1347,7 +1876,7 @@ fn large_runs_split_into_bounded_batches_at_identity_boundaries() {
             .borrow()
             .writes
             .iter()
-            .all(|&(_, _, vertices)| vertices <= MAX_BATCH_BOXES * 6)
+            .all(|&(_, _, records)| records <= MAX_BATCH_BOXES)
     );
 
     let warm = draw_run_frame(&mut cache, &boxes, RUN_CLIP);
@@ -1363,11 +1892,11 @@ fn large_runs_split_into_bounded_batches_at_identity_boundaries() {
 
 #[test]
 fn early_box_edits_insertions_and_removals_rebuild_only_nearby_batches() {
-    // Vertices of the first `count` batches, written one per batch by a cold frame.
+    // Boxes of the first `count` batches, written one per batch by a cold frame.
     let first_batches = |device: &Rc<RefCell<MockGuiDevice>>, count: usize| {
         device.borrow().writes[..count]
             .iter()
-            .map(|&(_, _, vertices)| vertices as u32 / 6)
+            .map(|&(_, _, records)| records as u32)
             .sum::<u32>()
     };
 
@@ -1478,17 +2007,18 @@ fn clip_changes_rewrite_only_the_boxes_they_clip() {
     let boxes = box_run(1..=40);
     draw_run_frame(&mut cache, &boxes, RUN_CLIP);
 
-    // Scrolling a container changes the clip its boxes carry in every vertex.
+    // Scrolling a container changes the clip its boxes carry in every record.
     let scrolled = [0.5, 0.0, 3.0, 1.0];
     let stats = draw_run_frame(&mut cache, &boxes, scrolled);
     assert_eq!(stats.statistics.gui_rebuilds, 40);
     assert_eq!(stats.statistics.uploaded_bytes, 40 * BOX_BYTES);
     assert_eq!(device.borrow().created_batches.len(), 1);
-    let drawn = device.borrow().draws.last().unwrap().1.clone();
+    let drawn = device.borrow().draws.last().unwrap().records.clone();
     assert!(
         drawn
+            .shapes()
             .iter()
-            .all(|vertex| *vertex == GuiVertex::EMPTY || vertex.clip == scrolled)
+            .all(|record| *record == GuiShapeRecord::EMPTY || record.clip == scrolled)
     );
 
     // Clipping one box of the run differently rewrites only that box's batch.
@@ -1509,18 +2039,35 @@ fn clip_changes_rewrite_only_the_boxes_they_clip() {
     );
 }
 
-/// Glyph quad vertices of one test text batch, tinted and clipped.
-fn glyph_quads(count: usize, x: f32, clip: CanvasClip) -> Vec<GuiVertex> {
-    (0..count * 6)
-        .map(|index| GuiVertex {
-            position: [x + (index / 6) as f32 * 0.01, 0.0],
-            color0: [1.0, 1.0, 1.0, 1.0],
-            gradient_coords: [0.5, 0.5, 0.0, 0.0],
-            material_params: [GUI_FILL_GLYPH, 0.0, 0.0, 1.0],
-            clip,
-            ..GuiVertex::EMPTY
+/// Glyph records of one test text batch: `count` quads from `x` along a row at `y`,
+/// tinted and clipped.
+fn glyph_quads(count: usize, x: f32, y: f32, clip: CanvasClip) -> Vec<GuiGlyphRecord> {
+    (0..count)
+        .map(|index| {
+            let left = x + index as f32 * 0.01;
+            GuiGlyphRecord {
+                rect: [left, y, left + 0.008, y + 0.01],
+                uv: [0.5, 0.5, 0.6, 0.6],
+                color: [1.0; 4],
+                clip,
+            }
         })
         .collect()
+}
+
+/// Paint bounds of glyph records within their clip, as text batches carry them.
+fn glyph_bounds(records: &[GuiGlyphRecord]) -> Option<[f32; 4]> {
+    records
+        .iter()
+        .filter_map(|record| super::clipped_bounds(record.rect, record.clip))
+        .reduce(|a, b| {
+            [
+                a[0].min(b[0]),
+                a[1].min(b[1]),
+                a[2].max(b[2]),
+                a[3].max(b[3]),
+            ]
+        })
 }
 
 /// One Surface's painter-order GUI work: box runs and text batches.
@@ -1530,7 +2077,7 @@ enum TestWork {
         node: u32,
         page: usize,
         revision: u64,
-        vertices: Vec<GuiVertex>,
+        records: Vec<GuiGlyphRecord>,
     },
 }
 
@@ -1545,12 +2092,46 @@ fn text_identity(node: u32) -> CanvasPrimitiveId {
     }
 }
 
-/// One submitted Surface: its stats, its draws' vertices and whether each bound an
-/// atlas, and the painter-order vertices its work should paint.
+/// One submitted Surface: its stats, its draws and the shapes and glyphs its work
+/// should paint, each in painter order.
 struct SubmittedWork {
     stats: RenderFrameWork,
-    draws: Vec<(Vec<GuiVertex>, bool)>,
-    expected: Vec<GuiVertex>,
+    draws: Vec<MockDraw>,
+    shapes: Vec<GuiShapeRecord>,
+    glyphs: Vec<GuiGlyphRecord>,
+}
+
+impl SubmittedWork {
+    /// Draws in order: `S` for shapes through the shape program without an atlas,
+    /// `G` for glyphs through the glyph program with one.
+    fn kinds(&self) -> String {
+        self.draws
+            .iter()
+            .map(|draw| match (&draw.records, draw.program, draw.atlas) {
+                (MockRecords::Shapes(_), SHAPE_PROGRAM, false) => 'S',
+                (MockRecords::Glyphs(_), GLYPH_PROGRAM, true) => 'G',
+                _ => '?',
+            })
+            .collect()
+    }
+
+    /// Drawn shape records in draw order, without the empty room between slots.
+    fn drawn_shapes(&self) -> Vec<GuiShapeRecord> {
+        self.draws
+            .iter()
+            .flat_map(|draw| draw.records.shapes().iter().copied())
+            .filter(|record| *record != GuiShapeRecord::EMPTY)
+            .collect()
+    }
+
+    /// Drawn glyph records in draw order, without the empty room between slots.
+    fn drawn_glyphs(&self) -> Vec<GuiGlyphRecord> {
+        self.draws
+            .iter()
+            .flat_map(|draw| draw.records.glyphs().iter().copied())
+            .filter(|record| *record != GuiGlyphRecord::EMPTY)
+            .collect()
+    }
 }
 
 /// Submit `work` as one Surface and draw it.
@@ -1562,8 +2143,9 @@ fn submit_work(
     let mut stats = RenderFrameWork::default();
     let entity = ipp_core::EntityId::from_bits(1);
     cache.begin_surface(entity);
-    let mut expected = Vec::new();
-    let mut text: BTreeMap<CanvasPrimitiveId, &[GuiVertex]> = BTreeMap::new();
+    let mut shapes = Vec::new();
+    let mut glyphs = Vec::new();
+    let mut text: BTreeMap<CanvasPrimitiveId, &[GuiGlyphRecord]> = BTreeMap::new();
     for item in work {
         match item {
             TestWork::Boxes(boxes) => {
@@ -1581,11 +2163,12 @@ fn submit_work(
                         border_color,
                         fill,
                         glow,
+                        shape,
                     } = primitive
                     else {
                         unreachable!();
                     };
-                    expected.extend(generate_box_vertices(
+                    shapes.extend(generate_box_records(
                         style,
                         size,
                         corner_radius,
@@ -1593,6 +2176,7 @@ fn submit_work(
                         border_color,
                         fill,
                         glow.as_ref(),
+                        shape,
                         *clip,
                     ));
                 }
@@ -1601,18 +2185,19 @@ fn submit_work(
                 node,
                 page,
                 revision,
-                vertices,
+                records,
             } => {
                 let identity = text_identity(*node);
                 cache.push_glyphs([GuiPiece {
                     key: GuiPieceKey::Glyphs(identity, 0),
                     hash: *revision,
-                    len: vertices.len(),
+                    len: records.len(),
                     page: Some(*page),
+                    bounds: glyph_bounds(records),
                     source: GuiPieceSource::Glyphs(identity, 0),
                 }]);
-                text.insert(identity, vertices);
-                expected.extend_from_slice(vertices);
+                text.insert(identity, records);
+                glyphs.extend_from_slice(records);
             }
         }
     }
@@ -1625,81 +2210,193 @@ fn submit_work(
     let textures = [10, 11];
     cache
         .draw_pieces(
-            &1,
+            &SHAPE_PROGRAM,
+            &GLYPH_PROGRAM,
             0..pieces,
+            DOMAIN,
             |page| textures.get(page),
             &[0.0; 16],
             &mut stats,
         )
         .unwrap();
-    let draws = device.borrow().draws[before..]
-        .iter()
-        .map(|(_, vertices, atlas)| (vertices.clone(), *atlas))
-        .collect();
+    let draws = device.borrow().draws[before..].to_vec();
     SubmittedWork {
         stats,
         draws,
-        expected,
+        shapes,
+        glyphs,
+    }
+}
+
+/// A row of three small boxes from `node`, along the top of the canvas.
+fn row(node: u32, clip: CanvasClip) -> TestWork {
+    TestWork::Boxes(
+        box_run(node..=node + 2)
+            .into_iter()
+            .map(|primitive| (primitive, clip))
+            .collect(),
+    )
+}
+
+/// A three-glyph label of `node` at `x` on atlas `page`, below the boxes of [`row`].
+fn label(node: u32, page: usize, x: f32, clip: CanvasClip) -> TestWork {
+    TestWork::Text {
+        node,
+        page,
+        revision: u64::from(node),
+        records: glyph_quads(3, x, 0.5, clip),
     }
 }
 
 #[test]
-fn boxes_and_text_under_different_clips_draw_once_per_atlas_page() {
+fn a_panel_of_interleaved_backgrounds_and_labels_draws_its_shapes_then_its_glyphs() {
     let device = Rc::new(RefCell::new(MockGuiDevice::default()));
     let mut cache = GuiBatchRenderCache::new(device.clone());
     let clips = [[0.0, 0.0, 1.0, 1.0], [0.2, 0.0, 0.8, 1.0]];
-    let row = |node: u32, clip: CanvasClip| {
-        TestWork::Boxes(
-            box_run(node..=node + 2)
-                .into_iter()
-                .map(|primitive| (primitive, clip))
-                .collect(),
-        )
-    };
-    let text = |node: u32, page: usize, clip| TestWork::Text {
-        node,
-        page,
-        revision: u64::from(node),
-        vertices: glyph_quads(3, 0.1 * node as f32, clip),
-    };
 
-    // Box, text, box and text runs of one page under alternating clips: one draw.
+    // Box, text, box and text runs of one page under alternating clips: two draws.
     let work = [
         row(1, clips[0]),
-        text(100, 0, clips[1]),
+        label(100, 0, 0.25, clips[1]),
         row(10, clips[1]),
-        text(101, 0, clips[0]),
+        label(101, 0, 0.6, clips[0]),
     ];
-    let SubmittedWork {
-        stats,
-        draws,
-        expected,
-    } = submit_work(&mut cache, &device, &work);
-    assert_eq!(stats.summary.draw_calls, 1, "{stats:?}");
-    assert_eq!(stats.statistics.gui_batches, 4);
-    assert!(draws[0].1, "the range samples its atlas page");
-    let painted: Vec<_> = draws[0]
-        .0
-        .iter()
-        .copied()
-        .filter(|vertex| *vertex != GuiVertex::EMPTY)
-        .collect();
-    assert_eq!(painted, expected, "painter order with per-vertex clips");
+    let submitted = submit_work(&mut cache, &device, &work);
+    assert_eq!(submitted.kinds(), "SG", "{:?}", submitted.stats);
+    assert_eq!(submitted.stats.summary.draw_calls, 2);
+    assert_eq!(submitted.stats.statistics.gui_batches, 4);
+    assert_eq!(submitted.stats.summary.triangles, 2 * (6 + 6));
+    assert_eq!(submitted.drawn_shapes(), submitted.shapes);
+    assert_eq!(submitted.drawn_glyphs(), submitted.glyphs);
 
-    // Text on a second page ends the range; later work continues from there.
+    // Text on a second page splits the glyphs, never the shapes.
     let work = [
         row(1, clips[0]),
-        text(100, 0, clips[1]),
-        text(102, 1, clips[1]),
+        label(100, 0, 0.25, clips[1]),
+        label(102, 1, 0.4, clips[1]),
         row(10, clips[1]),
     ];
-    let SubmittedWork {
-        stats,
-        draws,
-        ..
-    } = submit_work(&mut cache, &device, &work);
-    assert_eq!(stats.summary.draw_calls, 2, "{stats:?}");
-    assert!(draws.iter().all(|(_, atlas)| *atlas));
+    let submitted = submit_work(&mut cache, &device, &work);
+    assert_eq!(submitted.kinds(), "SGG");
+    assert_eq!(submitted.drawn_shapes(), submitted.shapes);
+    assert_eq!(submitted.drawn_glyphs(), submitted.glyphs);
+}
+
+#[test]
+fn a_shape_painted_over_earlier_text_cuts_the_run_and_draws_after_that_text() {
+    let device = Rc::new(RefCell::new(MockGuiDevice::default()));
+    let mut cache = GuiBatchRenderCache::new(device.clone());
+    let clip = [0.0, 0.0, 8.0, 2.0];
+    // A dialog over the first label, then the dialog's own title on top of it.
+    let dialog = sample_box_primitive(50, CanvasPart::Background, [0.0, 0.4], [1.0, 0.3], None);
+    let work = [
+        row(1, clip),
+        label(100, 0, 0.25, clip),
+        TestWork::Boxes(vec![(dialog, clip)]),
+        label(101, 0, 0.6, clip),
+        row(10, clip),
+    ];
+    let submitted = submit_work(&mut cache, &device, &work);
+    assert_eq!(submitted.kinds(), "SGSG", "{:?}", submitted.stats);
+    assert_eq!(submitted.drawn_shapes(), submitted.shapes);
+    assert_eq!(submitted.drawn_glyphs(), submitted.glyphs);
+
+    // The label beneath the dialog draws before it and the dialog's title after it.
+    let glyphs_of = |index: usize| submitted.draws[index].records.glyphs().to_vec();
+    assert!(glyphs_of(1).contains(&submitted.glyphs[0]));
+    assert!(
+        submitted.draws[2].records.shapes()[..1]
+            .iter()
+            .all(|record| record.placement == [0.0, 0.4, 1.0, 0.3])
+    );
+    assert!(glyphs_of(3).contains(&submitted.glyphs[3]));
+
+    // Without the overlap the same work is two draws again.
+    let moved = sample_box_primitive(50, CanvasPart::Background, [2.0, 0.4], [1.0, 0.3], None);
+    let work = [
+        row(1, clip),
+        label(100, 0, 0.25, clip),
+        TestWork::Boxes(vec![(moved, clip)]),
+        label(101, 0, 0.6, clip),
+        row(10, clip),
+    ];
+    assert_eq!(submit_work(&mut cache, &device, &work).kinds(), "SG");
+}
+
+#[test]
+fn text_edits_write_only_glyph_storage_and_shape_changes_only_shape_storage() {
+    let device = Rc::new(RefCell::new(MockGuiDevice::default()));
+    let mut cache = GuiBatchRenderCache::new(device.clone());
+    let clip = [0.0, 0.0, 8.0, 2.0];
+    let live = BTreeSet::from([ipp_core::EntityId::from_bits(1)]);
+    let mut submit = |work: &[TestWork]| {
+        let written = device.borrow().writes.len();
+        let submitted = submit_work(&mut cache, &device, work);
+        cache.finish_frame(Some(&RetainedSurfaceSubmission {
+            live: &live,
+            submitted: &live,
+        }));
+        let writes = device.borrow().writes[written..].to_vec();
+        (submitted, writes)
+    };
+    let panel = |fill: f32, revision: u64| {
+        let mut boxes = box_run(1..=3);
+        set_fill(&mut boxes[1], fill);
+        vec![
+            TestWork::Boxes(
+                boxes
+                    .into_iter()
+                    .map(|primitive| (primitive, clip))
+                    .collect(),
+            ),
+            TestWork::Text {
+                node: 100,
+                page: 0,
+                revision,
+                records: glyph_quads(5, 0.2, 0.5, clip),
+            },
+        ]
+    };
+
+    let (cold, writes) = submit(&panel(0.2, 1));
+    assert_eq!(cold.kinds(), "SG");
+    let storage = |kind: GuiRecordKind| {
+        device
+            .borrow()
+            .contents
+            .iter()
+            .find(|(_, records)| {
+                matches!(
+                    (kind, records),
+                    (GuiRecordKind::Shape, MockRecords::Shapes(_))
+                        | (GuiRecordKind::Glyph, MockRecords::Glyphs(_))
+                )
+            })
+            .map(|(id, _)| *id)
+            .expect("live storage of the kind")
+    };
+    let (shapes, glyphs) = (storage(GuiRecordKind::Shape), storage(GuiRecordKind::Glyph));
+    assert_eq!(writes.len(), 2);
+
+    // Retexting the label writes its glyph records and nothing of the shapes.
+    let (edited, writes) = submit(&panel(0.2, 2));
+    assert!(!writes.is_empty());
+    assert!(writes.iter().all(|&(id, _, _)| id == glyphs), "{writes:?}");
+    assert_eq!(
+        edited.stats.statistics.uploaded_bytes,
+        5 * std::mem::size_of::<GuiGlyphRecord>() as u32
+    );
+
+    // A hovered box's new fill writes shape records and nothing of the text.
+    let (hovered, writes) = submit(&panel(0.9, 2));
+    assert!(!writes.is_empty());
+    assert!(writes.iter().all(|&(id, _, _)| id == shapes), "{writes:?}");
+    assert_eq!(hovered.stats.statistics.uploaded_bytes % BOX_BYTES, 0);
+
+    // An unchanged frame writes nothing at all.
+    let (warm, writes) = submit(&panel(0.9, 2));
+    assert!(writes.is_empty());
+    assert_eq!(warm.stats.statistics.uploaded_bytes, 0);
 }
 
 #[test]
@@ -1746,6 +2443,8 @@ fn drawn_ranges_hold_exactly_the_painter_order_work_across_edits() {
             _ => {}
         }
 
+        // The boxes run along the top of the canvas and the text below them, so no
+        // shape covers earlier text and every frame is two draws.
         let thirds = boxes.len() / 3;
         let with_clip = |range: std::ops::Range<usize>| {
             boxes[range]
@@ -1757,7 +2456,7 @@ fn drawn_ranges_hold_exactly_the_painter_order_work_across_edits() {
             node: 100 + run as u32,
             page: 0,
             revision: revisions[run],
-            vertices: glyph_quads(glyphs[run], run as f32, clip),
+            records: glyph_quads(glyphs[run], run as f32, 0.5, clip),
         };
         let work = [
             TestWork::Boxes(with_clip(0..thirds)),
@@ -1767,19 +2466,16 @@ fn drawn_ranges_hold_exactly_the_painter_order_work_across_edits() {
             text(2),
             TestWork::Boxes(with_clip(2 * thirds..boxes.len())),
         ];
-        let SubmittedWork {
-            stats,
-            draws,
-            expected,
-        } = submit_work(&mut cache, &device, &work);
-        assert_eq!(stats.summary.draw_calls, 1, "frame {frame}");
-        let painted: Vec<_> = draws[0]
-            .0
-            .iter()
-            .copied()
-            .filter(|vertex| *vertex != GuiVertex::EMPTY)
-            .collect();
-        assert!(painted == expected, "frame {frame}: drawn work differs");
+        let submitted = submit_work(&mut cache, &device, &work);
+        assert_eq!(submitted.kinds(), "SG", "frame {frame}");
+        assert!(
+            submitted.drawn_shapes() == submitted.shapes,
+            "frame {frame}: drawn shapes differ"
+        );
+        assert!(
+            submitted.drawn_glyphs() == submitted.glyphs,
+            "frame {frame}: drawn glyphs differ"
+        );
 
         let live = BTreeSet::from([ipp_core::EntityId::from_bits(1)]);
         cache.finish_frame(Some(&RetainedSurfaceSubmission {
@@ -1790,13 +2486,13 @@ fn drawn_ranges_hold_exactly_the_painter_order_work_across_edits() {
 
     assert_eq!(
         device.borrow().contents.len(),
-        1,
-        "replaced storage is released"
+        2,
+        "replaced storage is released: one shape and one glyph storage remain"
     );
 }
 
-/// Upload bytes of one glyph quad in the shared GUI vertex layout.
-const GLYPH_QUAD_BYTES: u32 = 6 * std::mem::size_of::<GuiVertex>() as u32;
+/// Upload bytes of one glyph quad.
+const GLYPH_QUAD_BYTES: u32 = std::mem::size_of::<GuiGlyphRecord>() as u32;
 
 /// The retained-gui benchmark terminal: one text piece of 36 glyph quads per row, 12
 /// rows, each row's revision changing when its text changes.
@@ -1809,13 +2505,13 @@ fn terminal_work(revisions: &[u64; 12]) -> Vec<TestWork> {
             node: 100 + row as u32,
             page: 0,
             revision,
-            vertices: glyph_quads(36, row as f32, clip),
+            records: glyph_quads(36, 0.0, row as f32 * 0.1, clip),
         })
         .collect()
 }
 
 #[test]
-fn terminal_updates_upload_exactly_the_changed_rows_glyph_vertices() {
+fn terminal_updates_upload_exactly_the_changed_rows_glyph_records() {
     let device = Rc::new(RefCell::new(MockGuiDevice::default()));
     let mut cache = GuiBatchRenderCache::new(device.clone());
     let live = BTreeSet::from([ipp_core::EntityId::from_bits(1)]);
@@ -1828,21 +2524,22 @@ fn terminal_updates_upload_exactly_the_changed_rows_glyph_vertices() {
         stats
     };
 
-    // The 152-byte vertex makes a 12x36 screen 2,592 vertices, 393,984 bytes.
-    assert_eq!(std::mem::size_of::<GuiVertex>(), 152);
+    // The 64-byte glyph record makes a 12x36 screen 432 records, 27,648 bytes.
+    assert_eq!(std::mem::size_of::<GuiGlyphRecord>(), 64);
     let screen_bytes = 12 * 36 * GLYPH_QUAD_BYTES;
-    assert_eq!(screen_bytes, 393_984);
+    assert_eq!(screen_bytes, 27_648);
 
     let mut revisions = [1u64; 12];
     let cold = submit(&mut cache, &revisions);
     assert_eq!(cold.statistics.uploaded_bytes, screen_bytes);
+    assert_eq!(cold.summary.draw_calls, 1);
     let storages = device.borrow().created_batches.len();
 
     let warm = submit(&mut cache, &revisions);
     assert_eq!(warm.statistics.uploaded_bytes, 0);
 
     // Scrolling or replacing the screen retexts every row at the same length: every
-    // row rewrites in place and nothing beyond the glyph vertices is uploaded.
+    // row rewrites in place and nothing beyond the glyph records is uploaded.
     for revision in &mut revisions {
         *revision += 1;
     }
@@ -1855,7 +2552,7 @@ fn terminal_updates_upload_exactly_the_changed_rows_glyph_vertices() {
     revisions[5] += 1;
     let typed = submit(&mut cache, &revisions);
     assert_eq!(typed.statistics.uploaded_bytes, 36 * GLYPH_QUAD_BYTES);
-    assert_eq!(typed.statistics.uploaded_bytes, 32_832);
+    assert_eq!(typed.statistics.uploaded_bytes, 2_304);
     assert_eq!(typed.statistics.gui_allocations, 1);
     assert_eq!(device.borrow().created_batches.len(), storages);
 }

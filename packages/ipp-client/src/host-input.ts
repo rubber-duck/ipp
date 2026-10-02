@@ -98,6 +98,7 @@ export class GuiPhysicalRejection extends Error {
   }
 }
 
+/** `contextMenu` is the Menu key; `f10` with Shift is the other context request. */
 export type GuiPhysicalKey =
   | "tab"
   | "backTab"
@@ -109,7 +110,10 @@ export type GuiPhysicalKey =
   | "up"
   | "down"
   | "home"
-  | "end";
+  | "end"
+  | "contextMenu"
+  | "f10";
+/** `shift` is whether Shift was held for a key or wheel event; false when omitted. */
 export type GuiPhysicalInput =
   | {
       kind: "pointerDown" | "pointerUp";
@@ -127,8 +131,9 @@ export type GuiPhysicalInput =
       kind: "wheel";
       point: readonly [number, number];
       delta: readonly [number, number];
+      shift?: boolean;
     }
-  | { kind: "key"; key: GuiPhysicalKey }
+  | { kind: "key"; key: GuiPhysicalKey; shift?: boolean }
   | { kind: "blur" };
 
 /** Correlated physical routing settlement, not an effect stream or completed frame. */
@@ -146,19 +151,21 @@ export interface GuiInputCancellation {
   readonly focus: boolean;
 }
 
-const keys: readonly GuiPhysicalKey[] = [
-  "tab",
-  "backTab",
-  "enter",
-  "space",
-  "escape",
-  "left",
-  "right",
-  "up",
-  "down",
-  "home",
-  "end",
-];
+const keys: Readonly<Record<GuiPhysicalKey, string>> = {
+  tab: "TAB",
+  backTab: "BACK_TAB",
+  enter: "ENTER",
+  space: "SPACE",
+  escape: "ESCAPE",
+  left: "LEFT",
+  right: "RIGHT",
+  up: "UP",
+  down: "DOWN",
+  home: "HOME",
+  end: "END",
+  contextMenu: "CONTEXT_MENU",
+  f10: "F10",
+};
 
 type Request = (
   tag: number,
@@ -500,16 +507,14 @@ export class GuiPhysicalContext {
         body.u8(this.tag("GUI_PHYSICAL_EVENT_WHEEL"));
         point(input.point);
         point(input.delta);
+        body.u8(input.shift === true ? 1 : 0);
         break;
       case "key": {
-        const index = keys.indexOf(input.key);
-        if (index < 0) throw new Error("Invalid physical key");
+        if (!Object.hasOwn(keys, input.key))
+          throw new Error("Invalid physical key");
         body.u8(this.tag("GUI_PHYSICAL_EVENT_KEY"));
-        body.u8(
-          this.tag(
-            `GUI_PHYSICAL_KEY_${input.key === "backTab" ? "BACK_TAB" : input.key.toUpperCase()}`,
-          ),
-        );
+        body.u8(this.tag(`GUI_PHYSICAL_KEY_${keys[input.key]}`));
+        body.u8(input.shift === true ? 1 : 0);
         break;
       }
       case "blur":

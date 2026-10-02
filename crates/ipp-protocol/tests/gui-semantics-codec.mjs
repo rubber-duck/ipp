@@ -90,7 +90,8 @@ export async function guiCodecCases(name, directory) {
       [{ kind: "toggle" }, 1, new Uint8Array()],
       [{ kind: "scalar", value: 0.5 }, 2, f32(0.5)],
       [{ kind: "text", value: "é🙂" }, 3, text("é🙂")],
-      [{ kind: "focus" }, 4, new Uint8Array()],
+      [{ kind: "focus" }, 4, u32(0)],
+      [{ kind: "focus", part: 1 }, 4, u32(1)],
       [{ kind: "blur" }, 6, new Uint8Array()],
       [{ kind: "submit" }, 7, new Uint8Array()],
       [
@@ -107,6 +108,11 @@ export async function guiCodecCases(name, directory) {
         { kind: "scrollToIndex", index: 40, offset: 2 },
         10,
         concatenate(u32(40), f32(2)),
+      ],
+      [
+        { kind: "color", value: [0.5, 0.25, 1, 0.75] },
+        11,
+        concatenate(f32(0.5), f32(0.25), f32(1), f32(0.75)),
       ],
     ]) {
       const command = codec.Entity.guiAction(target, action);
@@ -179,10 +185,39 @@ export async function guiCodecCases(name, directory) {
     );
   });
 
-  test(`${name} GUI System query collections page focus and pointer records`, () => {
+  test(`${name} GUI preferences travel as a sparse uncorrelated System command`, () => {
+    const command = (update) =>
+      codec.encodeRequest({
+        session: 7n,
+        requestId: 0n,
+        body: {
+          kind: "command",
+          command: { type: "GuiPreferencesUpdateCommand", ...update },
+        },
+      });
+    const prefix = concatenate(
+      u64(7n),
+      u64(0n),
+      u8(codec.WIRE.REQUEST_GUI_PREFERENCES_UPDATE),
+    );
+    assert.deepEqual(command({}), concatenate(prefix, u16(0)));
+    assert.deepEqual(
+      command({ reducedMotion: true }),
+      concatenate(prefix, u16(1), u8(1)),
+    );
+    assert.deepEqual(
+      command({ reducedMotion: false }),
+      concatenate(prefix, u16(1), u8(0)),
+    );
+    assert.throws(() => command({ reducedMotion: 1 }));
+    assert.throws(() => command({ reducedMotion: true, extra: 1 }));
+  });
+
+  test(`${name} GUI System query collections page focus, pointer and active item records and read preferences`, () => {
     for (const [collection, tag] of [
       ["guiFocus", codec.WIRE.INSPECT_GUI_FOCUS],
       ["guiPointers", codec.WIRE.INSPECT_GUI_POINTERS],
+      ["guiActiveItems", codec.WIRE.INSPECT_GUI_ACTIVE_ITEMS],
     ])
       assert.deepEqual(
         request({ kind: "inspect", collection, target: 3n, limit: 16 }),
@@ -196,6 +231,18 @@ export async function guiCodecCases(name, directory) {
           u16(0),
         ),
       );
+    assert.deepEqual(
+      request({ kind: "inspect", collection: "guiPreferences", limit: 1 }),
+      concatenate(
+        header,
+        u8(codec.WIRE.REQUEST_INSPECT),
+        u8(codec.WIRE.INSPECT_GUI_PREFERENCES),
+        u64(0n),
+        u64(0n),
+        u16(1),
+        u16(0),
+      ),
+    );
     const flags = (hovered, pressed, captured) =>
       concatenate(
         u8(Number(hovered)),
@@ -215,6 +262,7 @@ export async function guiCodecCases(name, directory) {
       u32(1),
       targetBytes,
       u8(1),
+      u32(1),
       u32(2),
       targetBytes,
       u64(5n),
@@ -222,10 +270,15 @@ export async function guiCodecCases(name, directory) {
       targetBytes,
       u64(6n),
       flags(false, true, false),
+      u32(1),
+      u64(9n),
+      targetBytes,
       u8(0),
+      u8(1),
+      u8(1),
     );
     const body = codec.decodeResponse(inspection, 7n).body;
-    assert.deepEqual(body.guiFocus, [{ target, visible: true }]);
+    assert.deepEqual(body.guiFocus, [{ target, visible: true, part: 1 }]);
     assert.deepEqual(body.guiPointers, [
       {
         target,
@@ -238,6 +291,8 @@ export async function guiCodecCases(name, directory) {
         state: { hovered: false, pressed: true, captured: false },
       },
     ]);
+    assert.deepEqual(body.guiActiveItems, [{ group: 9n, target }]);
+    assert.deepEqual(body.guiPreferences, { reducedMotion: true });
     for (let end = 0; end < inspection.length; end++)
       assert.throws(() =>
         codec.decodeResponse(inspection.subarray(0, end), 7n),
@@ -391,16 +446,22 @@ export async function guiCodecCases(name, directory) {
       assert.throws(() => codec.decodeResponse(observed(payload), 7n));
   });
 
-  test(`${name} effects preserve focus results, submitted text and exact ancestry`, () => {
-    for (const focused of [false, true]) {
+  test(`${name} effects preserve focus results, submitted, rejected and discarded text, context points and exact ancestry`, () => {
+    for (const [focused, part] of [
+      [false, 0],
+      [true, 1],
+    ]) {
       const result = codec.decodeResponse(
-        observed(record(concatenate(u8(1), u8(Number(focused)), u8(1)))),
+        observed(
+          record(concatenate(u8(1), u8(Number(focused)), u8(1), u32(part))),
+        ),
         7n,
       ).body.record.effect;
       assert.deepEqual(result.effect, {
         kind: "focusChanged",
         focused,
         changed: true,
+        part,
       });
       assert.deepEqual(result.id, appliedIdentity);
       assert.deepEqual(result.ancestry, [20n, 3n]);
@@ -413,9 +474,35 @@ export async function guiCodecCases(name, directory) {
       ).body.record.effect.effect,
       { kind: "submitted", text: "é🙂" },
     );
+    assert.deepEqual(
+      codec.decodeResponse(
+        observed(record(concatenate(u8(7), text("1,5")))),
+        7n,
+      ).body.record.effect.effect,
+      { kind: "rejected", text: "1,5" },
+    );
+    assert.deepEqual(
+      codec.decodeResponse(
+        observed(record(concatenate(u8(8), text("1,5")))),
+        7n,
+      ).body.record.effect.effect,
+      { kind: "discarded", text: "1,5" },
+    );
     assert.throws(() =>
       codec.decodeResponse(
         observed(record(concatenate(u8(4), u32(6), u8(1)))),
+        7n,
+      ),
+    );
+    const point = concatenate(f32(1.5), f32(-2.25));
+    assert.deepEqual(
+      codec.decodeResponse(observed(record(concatenate(u8(6), point))), 7n).body
+        .record.effect.effect,
+      { kind: "contextRequested", point: [1.5, -2.25] },
+    );
+    assert.throws(() =>
+      codec.decodeResponse(
+        observed(record(concatenate(u8(6), point.subarray(0, 4)))),
         7n,
       ),
     );

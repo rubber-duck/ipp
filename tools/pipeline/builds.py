@@ -360,6 +360,14 @@ def build(name: str) -> None:
             )
     elif name == "gui-motion-fixtures":
         node_product("tests/integration/gui-motion/build.mjs", "target/gui-motion")
+    elif name == "gui-composites-fixtures":
+        node_product(
+            "tests/integration/gui-composites/build.mjs", "target/gui-composites"
+        )
+    elif name == "gui-default-skin-fixtures":
+        node_product(
+            "tests/integration/gui-default-skin/build.mjs", "target/gui-default-skin"
+        )
     elif name == "transport-fixtures":
         run(
             [
@@ -409,6 +417,8 @@ def build(name: str) -> None:
         )
     elif name == "gui-stress-fixtures":
         node_product("tools/build_gui_stress.mjs", "target/gui-stress")
+    elif name == "shared-host":
+        node_product("tools/shared-host/build.mjs", "target/shared-host")
     elif name == "blender-addon":
         from .processes import python_tool
 

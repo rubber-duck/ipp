@@ -6,6 +6,7 @@ import {
 import { guiControlNames } from "./gui/manifest.js";
 import {
   controlCallbackNames,
+  controlFeedbackCallbackNames,
   controlValueCallbackNames,
   type GuiActionListeners,
   type GuiControlListeners,
@@ -133,6 +134,10 @@ export interface ReactComponentDescription {
   /** Set exactly on GUI control components. */
   readonly control?: true;
   readonly controlRef?: GuiControlRef | undefined;
+  /**
+   * The callbacks of a control or a Behavior, always present on one, whose
+   * values the root observes for its callbacks and action listeners.
+   */
   readonly controlListeners?: GuiControlListeners | undefined;
 }
 
@@ -149,6 +154,8 @@ export interface ReactWorldDescription {
   readonly guiActions?: boolean;
   /** Momentary GUI effects (press, submit, actions) have listeners. */
   readonly guiEffects?: boolean;
+  /** Feedback effects (focus and pointer interaction changes) have listeners. */
+  readonly guiFeedback?: boolean;
   readonly attachments?: readonly AttachedWorldDescription[];
   readonly animations: readonly AnimationDescription[];
   readonly assets: readonly AssetDescription[];
@@ -364,18 +371,32 @@ export class ReactWorldTree {
     }
     const descriptor = this.descriptor(type);
     const name = componentNames[type];
-    const supportedCallbacks: readonly string[] =
+    // Every control receives context requests and feedback.
+    const roleCallbacks: readonly string[] =
       name === "GuiButton"
-        ? ["onPress"]
+        ? ["onPress", "onSelectedChange"]
         : name === "GuiCheckbox"
           ? ["onToggle"]
           : name === "GuiSlider"
             ? ["onScalarCommit"]
-            : name === "GuiTextInput"
-              ? ["onTextCommit", "onSubmit"]
-              : name === "GuiScrollView" || name === "GuiVirtualList"
-                ? ["onRangeChange", "onScroll"]
-                : [];
+            : name === "GuiColor"
+              ? ["onColorCommit"]
+              : name === "GuiTextInput"
+                ? [
+                    "onTextCommit",
+                    "onScalarCommit",
+                    "onSubmit",
+                    "onReject",
+                    "onDiscard",
+                  ]
+                : name === "GuiScrollView" || name === "GuiVirtualList"
+                  ? ["onRangeChange", "onScroll"]
+                  : name === "GuiBehavior"
+                    ? ["onVisibleChange"]
+                    : [];
+    const supportedCallbacks = guiControlNames.has(name)
+      ? [...roleCallbacks, "onContextMenu", ...controlFeedbackCallbackNames]
+      : roleCallbacks;
     for (const key of controlCallbackNames) {
       if (props[key] === undefined) continue;
       if (!supportedCallbacks.includes(key) || typeof props[key] !== "function")
@@ -584,13 +605,14 @@ export class ReactWorldTree {
     const name = componentNames[instance.type as ReactWorldComponentType];
     const control = guiControlNames.has(name);
     const controlRef = props.controlRef as GuiControlRef | undefined;
-    const controlListeners = control
-      ? (Object.fromEntries(
-          controlCallbackNames
-            .filter((key) => props[key] !== undefined)
-            .map((key) => [key, props[key]]),
-        ) as GuiControlListeners)
-      : undefined;
+    const controlListeners =
+      control || name === "GuiBehavior"
+        ? (Object.fromEntries(
+            controlCallbackNames
+              .filter((key) => props[key] !== undefined)
+              .map((key) => [key, props[key]]),
+          ) as GuiControlListeners)
+        : undefined;
     const previous = cached?.description;
     const description: ReactComponentDescription =
       previous &&
@@ -607,7 +629,9 @@ export class ReactWorldTree {
             fields: structure!.fields,
             ...(control
               ? { control: true as const, controlRef, controlListeners }
-              : {}),
+              : controlListeners
+                ? { controlListeners }
+                : {}),
             ...(structure!.properties
               ? { properties: structure!.properties }
               : {}),
@@ -938,10 +962,14 @@ export class ReactWorldTree {
       components.some(
         (component) =>
           component.controlListeners?.onPress ||
-          component.controlListeners?.onSubmit,
+          component.controlListeners?.onSubmit ||
+          component.controlListeners?.onReject ||
+          component.controlListeners?.onDiscard ||
+          component.controlListeners?.onContextMenu,
       );
     const guiValues =
-      (guiActions && components.some((component) => component.control)) ||
+      (guiActions &&
+        components.some((component) => component.controlListeners)) ||
       components.some(
         (component) =>
           component.controlListeners &&
@@ -949,8 +977,13 @@ export class ReactWorldTree {
             (name) => component.controlListeners![name],
           ),
       );
-    if (guiEffects || guiValues) this.requireOperation("gui");
-    if (guiEffects && !this.client.subscribeGuiEffects)
+    const guiFeedback = components.some((component) =>
+      controlFeedbackCallbackNames.some(
+        (name) => component.controlListeners?.[name],
+      ),
+    );
+    if (guiEffects || guiValues || guiFeedback) this.requireOperation("gui");
+    if ((guiEffects || guiFeedback) && !this.client.subscribeGuiEffects)
       throw new Error(
         "GUI callbacks require the ordinary GUI observation client",
       );
@@ -1072,6 +1105,7 @@ export class ReactWorldTree {
     return {
       guiActions,
       guiEffects,
+      guiFeedback,
       assets,
       animations,
       entities,

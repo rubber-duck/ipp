@@ -48,6 +48,10 @@ Inject failures at real boundaries: gate fixture responses/transport, disconnect
 - Software graphics prove correctness in that environment. Performance/driver claims require representative hardware.
 - Prefer public headless results; narrow diagnostics must retain the transport boundary. Native tests additionally check low-level memory safety.
 
+## Scenario families
+
+A scenario family that grows with its features runs as independently timed parts: each part has its own environment, fixtures and budget, so no part depends on state another left and a slow part fails alone. Parts share one maintained harness, and a new part adds a scenario module and its cases without touching the others. Timing assertions read the clock the runtime counts, for Host-clock delays the World time of the ticks involved, never wall time or sleeps. The [GUI composites family](../../tests/integration/gui-composites/README.md) shows the harness, the budget rule and how a part is added.
+
 ## Evidence and evolution
 
 Retain scenario/fixture identity, seed/time, build/schema/environment, logs/exits, outcomes and state/frame observations before teardown—even after readiness failure. Visual failures include actual/expected/diff images.

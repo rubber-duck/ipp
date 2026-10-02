@@ -199,6 +199,7 @@ fn style(id: u32, x: f32) -> CanvasPrimitiveStyle {
             f32::INFINITY,
             f32::INFINITY,
         ],
+        layer: 0,
     }
 }
 

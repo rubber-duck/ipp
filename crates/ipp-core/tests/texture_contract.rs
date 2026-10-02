@@ -4,7 +4,7 @@
 fn baseline_texture_registration_and_contract_version() {
     let mut bytes = vec![];
     ipp_core::components::registry::write_contract(&mut bytes);
-    assert_eq!(u16::from_le_bytes(bytes[..2].try_into().unwrap()), 7);
+    assert_eq!(u16::from_le_bytes(bytes[..2].try_into().unwrap()), 10);
 
     {
         use ipp_core::{ComponentValue, components::UnlitTexture, components::schema::FieldValue};

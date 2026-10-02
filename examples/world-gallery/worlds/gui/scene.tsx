@@ -1,18 +1,17 @@
 import type {
   AnimationClipSource,
   AnimationControllerState,
-  AnimationTrack,
   AnimationWorldClient,
   AssetResourceSnapshot,
   Client,
   ClientAssetSource,
-  Command,
   GuiPickingBlocker,
   GuiWorldClient,
   Inspection,
   WorldReference,
 } from "@ipp/client";
 import {
+  Animation,
   CanvasWorld,
   Entity,
   FragmentShader,
@@ -21,11 +20,14 @@ import {
   SurfaceCache,
   Transform,
   VertexShader,
+  type AnimationHandle,
   type CanvasWorldHandle,
 } from "@ipp/react";
+import type { GuiControlHandle } from "@ipp/react/gui";
 import { World, type IppCanvasHandle } from "@ipp/react/web";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  ACCENT_HSV,
   HolographicProjector,
   PROJECTED_PANEL_TRANSFORM,
   projectorResourceSources,
@@ -37,29 +39,28 @@ import BEAM_SHADER from "./projector-beam.glsl";
 import BACKGROUND_SHADER from "./projector-background.glsl";
 import BACKGROUND_VERTEX_SHADER from "./projector-background-vertex.glsl";
 import BEAM_VERTEX_SHADER from "./projector-beam-vertex.glsl";
+import DUST_SHADER from "./projector-dust.glsl";
+import DUST_VERTEX_SHADER from "./projector-dust-vertex.glsl";
 import GLOW_SHADER from "./projector-glow.glsl";
 import METAL_SHADER from "./projector-metal.glsl";
 import SHIELD_SHADER from "./input-shield.glsl";
 import SHIELD_VERTEX_SHADER from "./input-shield-vertex.glsl";
 import { InputShield, SHIELD_ENTITY } from "./shield.js";
+import { CANVAS_ENTITY, ProjectorDashboard } from "./dashboard.js";
+import { INITIAL_AUTOSCAN, INITIAL_CALLSIGN, INITIAL_GAIN } from "./monitor.js";
 import {
-  INITIAL_AUTOSCAN,
-  INITIAL_CALLSIGN,
-  INITIAL_GAIN,
-  PALETTES,
-  ProjectorDashboard,
+  CANVAS_HEIGHT,
+  CANVAS_WIDTH,
   SURFACE_HEIGHT,
   SURFACE_WIDTH,
-  SWITCH_KNOB,
-  THEME_ENTITIES,
-  dashboardThemes,
-  switchKnobColor,
-  type Palette,
-  type ThemeName,
-} from "./dashboard.js";
+  UNITS_PER_METRE,
+} from "./presentation.js";
+import { useStation, type HostFrames, type Station } from "./station.js";
+import { useTuning, type TuningState } from "./tuning.js";
 import {
   WAVEFORM_ENTITIES,
   WaveformAnimations,
+  sweepClip,
   waveformClips,
   waveformResourceSources,
   type WaveformMotionAssets,
@@ -90,7 +91,14 @@ const PANEL_SYSTEMS = [
 
 export { SHIELD_ENTITY };
 
-export type GuiDemoSkin = "aurora" | "ember" | "neon";
+/** The primary actions' accent: the button look or the amber look. */
+export type Accent = "cyan" | "amber";
+
+/** The signal monitor's window: open, minimised to its title bar, or closed. */
+export type MonitorWindow = "normal" | "minimized" | "closed";
+
+/** The right column's tabs. */
+export type WorkbenchTab = "nodes" | "controls" | "colour";
 
 /**
  * Presentation of the GUI Surface. `automatic` opts into distance-based
@@ -116,6 +124,17 @@ const GUI_SURFACE_CACHE = {
   max_refresh_hz: 15,
 } as const;
 
+/**
+ * The exploded view: Surface metres per canvas plane id, and the seconds
+ * the panel takes to separate or close. A plane stands its id times the
+ * spacing in front of the base plane, so the toasts' plane stays in frame
+ * while the anchored overlays' plane separates visibly. The Surface's scale
+ * applies to the spacing, so planes stand 0.7 times as far apart in the
+ * World.
+ */
+export const LAYER_SPACING = 0.2;
+export const LAYER_SECONDS = 0.6;
+
 /** Archived operator messages. Short ones fit one event log line; the
  * longer ones wrap into two, so the log's items measure different extents. */
 const ARCHIVE_MESSAGES = [
@@ -127,10 +146,10 @@ const ARCHIVE_MESSAGES = [
   "RELAY HANDOFF TO GROUND STATION KESTREL COMPLETE",
   "ROUTE N7 ACQUIRED",
   "BEACON 12 SILENT",
-  "STAR TRACKER REACQUIRED GUIDE STAR AFTER GLINT",
+  "STAR TRACKER REACQUIRED GUIDE STAR",
   "DEEP ARRAY LINK STABLE",
   "LENS HEATER CYCLED",
-  "SPARE BUS ISOLATED WHILE FUSE F3 COOLS DOWN",
+  "SPARE BUS ISOLATED WHILE FUSE F3 COOLS",
   "UPLINK WINDOW OPEN",
   "GAIN TRIM LOGGED",
 ] as const;
@@ -159,6 +178,8 @@ const INITIAL_CONTROL_VALUES = {
   autoscan: INITIAL_AUTOSCAN,
   gain: Math.fround(INITIAL_GAIN),
   callsign: INITIAL_CALLSIGN,
+  exploded: false,
+  reducedMotion: false,
 };
 
 type GuiControlValues = typeof INITIAL_CONTROL_VALUES;
@@ -170,11 +191,19 @@ export interface GuiEventWindow {
   readonly last: number;
 }
 
-interface MotionAssets extends ProjectorMotionAssets, WaveformMotionAssets {
-  readonly aurora: ClientAssetSource;
-  readonly ember: ClientAssetSource;
-  readonly neon: ClientAssetSource;
+/** A field of a component, as an animation binding names it. */
+interface FieldTarget {
+  readonly component: number;
+  readonly offset: number;
 }
+
+/** The exploded view's clip: the Surface's layer spacing. */
+interface LayerAssets {
+  readonly spacing: ClientAssetSource;
+  readonly spacingField: FieldTarget;
+}
+
+type MotionAssets = ProjectorMotionAssets & WaveformMotionAssets & LayerAssets;
 
 interface MotionOwnership {
   readonly client: AnimationWorldClient;
@@ -197,9 +226,13 @@ export interface GuiSceneState {
   readonly prepared: boolean;
   readonly revealed: boolean;
   readonly error?: string;
-  readonly skin: GuiDemoSkin;
+  readonly accent: Accent;
+  readonly exploded: boolean;
+  readonly reducedMotion: boolean;
+  readonly monitorWindow: MonitorWindow;
+  readonly advancedOpen: boolean;
+  readonly workbenchTab: WorkbenchTab;
   readonly autoscan: boolean;
-  readonly wide: boolean;
   readonly surfaceCache: GuiSurfaceCacheMode;
   readonly gain: number;
   readonly callsign: string;
@@ -219,18 +252,32 @@ export interface GuiSceneState {
   readonly motions?: MotionAssets;
   readonly beamSection?: ProjectorBeamSection;
   readonly font: ClientAssetSource;
+  readonly station: Station;
+  /** The projection's tuning: the CONTROLS and COLOUR tabs, the scope
+   * popover and the scene tree. */
+  readonly tuning: TuningState;
+  /** Handles of controls the scene writes as the operator would. */
+  readonly scanControl: (handle: GuiControlHandle | null) => void;
+  readonly callsignControl: (handle: GuiControlHandle | null) => void;
+  readonly explodeControl: (handle: GuiControlHandle | null) => void;
   readonly onCommit: () => void;
   readonly attachPanel: (handle: CanvasWorldHandle) => void;
   readonly pulse: () => void;
-  readonly uplink: () => void;
-  readonly purge: () => void;
+  readonly clearLog: () => void;
   readonly toggleShield: () => void;
-  readonly toggleSpan: () => void;
-  readonly selectSkin: (skin: GuiDemoSkin) => void;
+  readonly toggleExplode: () => void;
+  readonly setAccent: (accent: Accent) => void;
+  readonly setExploded: (exploded: boolean) => void;
+  readonly setReducedMotion: (reduced: boolean) => void;
+  readonly setMonitorWindow: (window: MonitorWindow) => void;
+  readonly setAdvancedOpen: (open: boolean) => void;
+  readonly setWorkbenchTab: (tab: WorkbenchTab) => void;
   readonly selectSurfaceCache: (mode: GuiSurfaceCacheMode) => void;
   readonly toggleVectorOnly: () => void;
   readonly setAutoscan: (value: boolean) => void;
   readonly setGain: (value: number) => void;
+  /** Whether a pointer holds the gain slider, which defers its log entry. */
+  readonly holdGain: (held: boolean) => void;
   readonly setCallsign: (value: string) => void;
   readonly setPulseActive: (active: boolean) => void;
   readonly readWaveformPulse: () => Promise<AnimationControllerState>;
@@ -248,109 +295,23 @@ function errorMessage(failure: unknown): string {
   return failure instanceof Error ? failure.message : String(failure);
 }
 
-/** Skin motion channels in track order. The clip tracks carry typed samples
- * only: the runtime binds consecutive tracks to each transitioning control's
- * own colour, opacity, scale and alignment channels. */
-const SKIN_CHANNELS = ["color", "opacity", "scale", "align_x"] as const;
-
-function channelTrack(
-  material: number,
-  channel: (typeof SKIN_CHANNELS)[number],
-  values: readonly (readonly [number, unknown])[],
-): AnimationTrack {
+/** Smoothstep keys of one linear track from 0 to `to` over the layer
+ * duration: the planes ease out of the panel and settle. */
+function easedTrack(
+  property: { readonly component: number; readonly offsets: readonly number[] },
+  to: number,
+): AnimationClipSource["tracks"][number] {
+  const steps = 8;
   return {
-    property: { component: material, name: `skin_${channel}` },
-    keys: values.map(([time, value], index) => ({
-      time,
-      value: {
-        kind: "dynamic" as const,
-        value:
-          channel === "color"
-            ? {
-                kind: "vec4" as const,
-                value: value as readonly [number, number, number, number],
-              }
-            : channel === "scale"
-              ? {
-                  kind: "vec2" as const,
-                  value: value as readonly [number, number],
-                }
-              : { kind: "f32" as const, value: value as number },
-      },
-      ...(index + 1 < values.length
-        ? { interpolation: { kind: "linear" as const } }
-        : {}),
-    })),
-  };
-}
-
-/** Complete color/opacity/scale samples for every interaction destination,
- * then the SCAN switch knob's two ends, which also animate alignment. Other
- * controls hold alignment at 0 and never sample the knob times. */
-function skinMotion(material: number, palette: Palette): AnimationClipSource {
-  const knob = [SWITCH_KNOB.scale, SWITCH_KNOB.scale] as const;
-  const samples = [
-    { time: 0, color: palette.button, opacity: 1, scale: [1, 1] as const },
-    {
-      time: 0.1,
-      color: palette.hovered,
-      opacity: 1,
-      scale: [1.025, 1.025] as const,
-    },
-    {
-      time: 0.2,
-      color: palette.pressed,
-      opacity: 1,
-      scale: [0.985, 0.985] as const,
-    },
-    {
-      time: 0.3,
-      color: palette.disabled,
-      opacity: 0.45,
-      scale: [1, 1] as const,
-    },
-    {
-      time: SWITCH_KNOB.unchecked.time,
-      color: switchKnobColor(palette, false),
-      opacity: 1,
-      scale: knob,
-      alignX: SWITCH_KNOB.unchecked.alignX,
-    },
-    {
-      time: SWITCH_KNOB.checked.time,
-      color: switchKnobColor(palette, true),
-      opacity: 1,
-      scale: knob,
-      alignX: SWITCH_KNOB.checked.alignX,
-    },
-  ] as const;
-  return {
-    duration: SWITCH_KNOB.checked.time,
-    tracks: [
-      channelTrack(
-        material,
-        "color",
-        samples.map(({ time, color }) => [time, color] as const),
-      ),
-      channelTrack(
-        material,
-        "opacity",
-        samples.map(({ time, opacity }) => [time, opacity] as const),
-      ),
-      channelTrack(
-        material,
-        "scale",
-        samples.map(({ time, scale }) => [time, scale] as const),
-      ),
-      channelTrack(
-        material,
-        "align_x",
-        samples.map(
-          (sample) =>
-            [sample.time, "alignX" in sample ? sample.alignX : 0] as const,
-        ),
-      ),
-    ],
+    property,
+    keys: Array.from({ length: steps + 1 }, (_, step) => {
+      const t = step / steps;
+      return {
+        time: t * LAYER_SECONDS,
+        value: { kind: "f32" as const, value: to * t * t * (3 - 2 * t) },
+        ...(step < steps ? { interpolation: { kind: "linear" as const } } : {}),
+      };
+    }),
   };
 }
 
@@ -360,19 +321,27 @@ async function createMotionAssets(
   const canvasStyle = client.components.CanvasStyle;
   const offset = canvasStyle?.fields.x?.offset;
   const material = client.components.CustomMaterial?.id;
+  const surface = client.components.Surface;
+  const spacingOffset = surface?.fields.layer_spacing?.offset;
+  const transform = client.components.Transform;
+  const paint = client.components.CanvasPaint?.id;
   if (canvasStyle === undefined || offset === undefined)
     throw new Error("The gallery GUI profile does not expose CanvasStyle");
   const translation = { component: canvasStyle.id, offset };
   if (material === undefined)
     throw new Error("The gallery GUI profile does not expose CustomMaterial");
+  if (surface === undefined || spacingOffset === undefined)
+    throw new Error("The gallery GUI profile does not expose layer spacing");
+  if (transform === undefined)
+    throw new Error("The gallery GUI profile does not expose Transform");
+  if (paint === undefined)
+    throw new Error("The gallery GUI profile does not expose CanvasPaint");
   const created: ClientAssetSource[] = [];
   const create = async (clip: AnimationClipSource) => {
     const bytes = client.encodeAnimationClip(clip);
     created.push(await client.createAsset(10, bytes.slice().buffer));
   };
   try {
-    for (const name of ["aurora", "ember", "neon"] as const)
-      await create(skinMotion(material, PALETTES[name]));
     for (const clip of waveformClips(translation)) await create(clip);
     await create({
       duration: 40,
@@ -396,15 +365,28 @@ async function createMotionAssets(
         },
       ],
     });
+    // The Surface's spacing: each plane stands its id times the spacing
+    // in front of the base plane.
+    await create({
+      duration: LAYER_SECONDS,
+      tracks: [
+        easedTrack(
+          { component: surface.id, offsets: [spacingOffset] },
+          LAYER_SPACING,
+        ),
+      ],
+    });
+    await create(sweepClip(paint));
     return {
-      aurora: created[0]!,
-      ember: created[1]!,
-      neon: created[2]!,
-      scan: created[3]!,
-      wavePulse: created[4]!,
-      dust: created[5]!,
+      scan: created[0]!,
+      wavePulse: created[1]!,
+      dust: created[2]!,
+      spacing: created[3]!,
+      sweep: created[4]!,
+      paintComponent: paint,
       translation,
       materialComponent: material,
+      spacingField: { component: surface.id, offset: spacingOffset },
     };
   } catch (failure) {
     await Promise.allSettled(
@@ -421,12 +403,11 @@ async function releaseMotionOwnership(
   ownership.released = true;
   await Promise.allSettled(
     [
-      ownership.assets.aurora,
-      ownership.assets.ember,
-      ownership.assets.neon,
       ownership.assets.scan,
       ownership.assets.wavePulse,
       ownership.assets.dust,
+      ownership.assets.spacing,
+      ownership.assets.sweep,
     ].map((asset) => ownership.client.releaseAsset(asset)),
   );
 }
@@ -458,6 +439,7 @@ async function awaitCompleteProjectorFrame(
       "gui-projector-core",
       "gui-projector-emitter",
       "gui-projector-beam",
+      "gui-projector-dust",
       SHIELD_ENTITY,
     ].map(
       (symbolicId) =>
@@ -493,67 +475,6 @@ async function awaitCompleteProjectorFrame(
   throw new Error("Projector resources did not produce a complete frame");
 }
 
-/**
- * Author each skinned theme's motion rows beside its GuiTheme: the
- * transitions sample the selected skin's clip. The theme entities are
- * declared by the panel's React root; their skin motion is an ordinary
- * component this observation session inserts once and then rewrites as a
- * whole table when the skin changes.
- */
-async function writeThemeMotion(
-  panel: PanelClient,
-  skin: GuiDemoSkin,
-  motion: string,
-  active: () => boolean,
-): Promise<void> {
-  const component = panel.components.GuiThemeMotion;
-  const parts = component?.fields.parts;
-  if (!component || !parts)
-    throw new Error("The gallery GUI profile does not expose GuiThemeMotion");
-  const themes = dashboardThemes(skin, motion);
-  for (let attempt = 0; attempt < 120; attempt += 1) {
-    if (!active()) return;
-    const inspection = await panel.inspect();
-    if (!active()) return;
-    const commands: Command[] = [];
-    let declared = true;
-    for (const name of Object.keys(THEME_ENTITIES) as ThemeName[]) {
-      const rows = themes[name].motion;
-      if (!rows) continue;
-      const entity = inspection.entities.find(
-        ({ metadata }) => metadata.symbolicId === THEME_ENTITIES[name],
-      );
-      if (!entity) {
-        declared = false;
-        break;
-      }
-      const field = {
-        offset: parts.offset,
-        value: { kind: "rows" as const, value: rows },
-      };
-      const target = { kind: "handle" as const, id: entity.id };
-      commands.push(
-        entity.components.some(({ component: id }) => id === component.id)
-          ? { kind: "setField", entity: target, component: component.id, field }
-          : {
-              kind: "insertComponent",
-              entity: target,
-              component: component.id,
-              fields: [field],
-            },
-      );
-    }
-    if (declared) {
-      const outcome = await panel.batch(commands);
-      if (!outcome.ok)
-        throw new Error(`Skin motion was rejected: ${outcome.error.reason}`);
-      return;
-    }
-    await panel.waitForFrame(inspection.tick);
-  }
-  throw new Error("The GUI theme entities were not declared");
-}
-
 /** GUI control components, whose entities also carry GuiBehavior. */
 const CONTROL_COMPONENTS = [
   "GuiButton",
@@ -564,16 +485,39 @@ const CONTROL_COMPONENTS = [
   "GuiVirtualList",
 ] as const;
 
-/** Whether the panel World has controls and each is evaluated visible. */
+/**
+ * Whether the dashboard's canvas has controls and each is evaluated visible.
+ * The overlays' controls, in closed lists, popovers and dialogs, stay hidden
+ * until they open and do not count.
+ */
 function controlsVisible(panel: PanelClient, inspection: Inspection): boolean {
   const controls = new Set(
     CONTROL_COMPONENTS.map((name) => panel.components[name]?.id),
   );
   const behavior = panel.components.GuiBehavior?.id;
+  const overlay = panel.components.GuiOverlay?.id;
+  const entities = new Map(
+    inspection.entities.map((entity) => [entity.id, entity]),
+  );
+  const canvas = inspection.entities.find(
+    ({ metadata }) => metadata.symbolicId === CANVAS_ENTITY,
+  )?.id;
+  // On the canvas and outside every overlay.
+  const resting = (id: bigint) => {
+    for (let at: bigint | null | undefined = id; at != null; ) {
+      if (at === canvas) return true;
+      const entity = entities.get(at);
+      if (entity?.components.some(({ component }) => component === overlay))
+        return false;
+      at = entity?.link.parent;
+    }
+    return false;
+  };
   let found = false;
   for (const entity of inspection.entities) {
     if (!entity.components.some(({ component }) => controls.has(component)))
       continue;
+    if (!resting(entity.id)) continue;
     found = true;
     const fields = entity.components.find(
       ({ component }) => component === behavior,
@@ -737,9 +681,14 @@ export function useGuiScene(
   const [error, setError] = useState<string>();
   const [motions, setMotions] = useState<MotionAssets>();
   const [beamSection, setBeamSection] = useState<ProjectorBeamSection>();
-  const [skin, setSkin] = useState<GuiDemoSkin>("aurora");
+  const [accent, setAccentState] = useState<Accent>("cyan");
+  const [exploded, setExplodedState] = useState(false);
+  const [reducedMotion, setReducedMotionState] = useState(false);
+  const [monitorWindow, setMonitorWindowState] =
+    useState<MonitorWindow>("normal");
+  const [advancedOpen, setAdvancedOpen] = useState(true);
+  const [workbenchTab, setWorkbenchTab] = useState<WorkbenchTab>("nodes");
   const [autoscan, setAutoscanState] = useState(INITIAL_AUTOSCAN);
-  const [wide, setWide] = useState(false);
   const [surfaceCache, setSurfaceCache] =
     useState<GuiSurfaceCacheMode>("automatic");
   const [gain, setGainState] = useState(INITIAL_GAIN);
@@ -760,10 +709,20 @@ export function useGuiScene(
   // then each change; only a value that differs from the one the scene holds
   // is an operator event for the log.
   const controlValues = useRef<GuiControlValues>(INITIAL_CONTROL_VALUES);
+  // A held gain slider defers its log entry to the release.
+  const gainHeld = useRef(false);
+  const loggedGain = useRef(INITIAL_CONTROL_VALUES.gain);
   const generation = useRef(0);
   const finishingFrame = useRef(false);
   const motionOwnership = useRef<MotionOwnership | undefined>(undefined);
   const panelRequest = useRef(0);
+  // The log as CLEAR found it, which its toast's UNDO restores.
+  const clearedEvents = useRef<readonly string[]>([]);
+  const controls = useRef<{
+    scan: GuiControlHandle | undefined;
+    callsign: GuiControlHandle | undefined;
+    explode: GuiControlHandle | undefined;
+  }>({ scan: undefined, callsign: undefined, explode: undefined });
 
   const releaseMotions = useCallback(async () => {
     const ownership = motionOwnership.current;
@@ -780,6 +739,8 @@ export function useGuiScene(
     const entry = eventEntry(sequence.current, message);
     setEvents((current) => [entry, ...current].slice(0, MAX_EVENTS));
   }, []);
+  const tuning = useTuning(record, ACCENT_HSV.cyan);
+  const resetTuning = tuning.reset;
 
   useEffect(() => {
     const request = ++generation.current;
@@ -796,9 +757,13 @@ export function useGuiScene(
     shieldRequest.current += 1;
     finishingFrame.current = false;
     if (!canvas || !active) return;
-    setSkin("aurora");
+    setAccentState("cyan");
+    setExplodedState(false);
+    setReducedMotionState(false);
+    setMonitorWindowState("normal");
+    setAdvancedOpen(true);
+    setWorkbenchTab("nodes");
     setAutoscanState(INITIAL_AUTOSCAN);
-    setWide(false);
     setSurfaceCache("automatic");
     setGainState(INITIAL_GAIN);
     setCallsignState(INITIAL_CALLSIGN);
@@ -806,10 +771,14 @@ export function useGuiScene(
     setPulseSequence(0);
     setPulseActive(false);
     setEvents(INITIAL_EVENTS);
+    resetTuning(ACCENT_HSV.cyan);
     setEventWindowState({ first: 0, last: 0 });
     setShieldArmed(true);
     sequence.current = INITIAL_EVENTS.length;
     controlValues.current = INITIAL_CONTROL_VALUES;
+    gainHeld.current = false;
+    loggedGain.current = INITIAL_CONTROL_VALUES.gain;
+    clearedEvents.current = [];
     const client = canvas.client as AnimationWorldClient;
     let disposed = false;
     const controller = new AbortController();
@@ -937,23 +906,6 @@ export function useGuiScene(
     );
   }, [prepared, revealed, panel, motions, error]);
 
-  // Skin transitions follow the selected skin's clip.
-  useEffect(() => {
-    if (!panel || !motions || error) return;
-    let active = true;
-    void writeThemeMotion(
-      panel.client,
-      skin,
-      motions[skin].source,
-      () => active,
-    ).catch((failure: unknown) => {
-      if (active) setError(errorMessage(failure));
-    });
-    return () => {
-      active = false;
-    };
-  }, [panel, motions, skin, error]);
-
   const readWaveformPulse = useCallback(async () => {
     if (!panel || !motions) throw new Error("The waveform World is not active");
     const inspection = await panel.client.inspect();
@@ -1025,52 +977,10 @@ export function useGuiScene(
     [shieldArmed, shieldBlocker, vectorOnly],
   );
 
-  const pulse = useCallback(() => {
-    setPulseSequence((current) => current + 1);
-    setLastCommand("Pulse sent");
-    record("PULSE BURST COMMITTED");
-  }, [record]);
-  const uplink = useCallback(() => {
-    setLastCommand("Uplink sent");
-    record("UPLINK PACKET QUEUED");
-  }, [record]);
-  // PURGE leaves one entry. The runtime clamps the log's scroll position to
-  // the remaining content, and later growth never returns to the discarded
-  // position.
-  const purge = useCallback(() => {
-    sequence.current += 1;
-    setEvents([eventEntry(sequence.current, "LOG PURGED")]);
-    setLastCommand("Log purged");
+  const reportFailure = useCallback((failure: unknown) => {
+    setError(errorMessage(failure));
   }, []);
-  const setEventWindow = useCallback((range: GuiEventWindow) => {
-    setEventWindowState((current) =>
-      current.first === range.first && current.last === range.last
-        ? current
-        : { first: range.first, last: range.last },
-    );
-  }, []);
-  const toggleShield = useCallback(() => {
-    setShieldArmed(!shieldArmed);
-    record(shieldArmed ? "SHIELD LIFTED" : "SHIELD ARMED");
-  }, [shieldArmed, record]);
-  const toggleSpan = useCallback(() => {
-    setWide(!wide);
-    record(`SPAN ${wide ? "NARROW" : "WIDE"}`);
-  }, [wide, record]);
-  const toggleVectorOnly = useCallback(() => {
-    // Isolation unmounts the shield with the projector; its next mount is a
-    // new entity, resolved again after that commit.
-    shieldRequest.current += 1;
-    setShieldBlocker(undefined);
-    setVectorOnly((current) => !current);
-  }, []);
-  const selectSkin = useCallback(
-    (next: GuiDemoSkin) => {
-      setSkin(next);
-      record(`${next.toUpperCase()} SKIN ONLINE`);
-    },
-    [record],
-  );
+
   const changedValue = useCallback(
     <Key extends keyof GuiControlValues>(
       key: Key,
@@ -1082,6 +992,149 @@ export function useGuiScene(
     },
     [],
   );
+
+  // The station paces its operations by the panel World's Host frames.
+  const frames = useMemo<HostFrames | undefined>(
+    () => (panel ? () => panel.client.waitForFrame() : undefined),
+    [panel],
+  );
+  const station = useStation({
+    frames,
+    ready,
+    gain,
+    autoscan,
+    callsign,
+    record,
+    reportFailure,
+    stopScan: () => {
+      void controls.current.scan
+        ?.compareAndSet("checked", true, false)
+        .catch(reportFailure);
+    },
+    focusCallsign: () => {
+      void controls.current.callsign
+        ?.action({ kind: "focus" })
+        .catch(reportFailure);
+    },
+  });
+  const { startPulse, toast } = station;
+
+  const pulse = useCallback(() => {
+    setPulseSequence((current) => current + 1);
+    setLastCommand("Pulse sent");
+    record("PULSE BURST COMMITTED");
+    startPulse();
+  }, [record, startPulse]);
+  // CLEAR leaves one entry. The runtime clamps the log's scroll position to
+  // the remaining content, and later growth never returns to the discarded
+  // position.
+  const clearLog = useCallback(() => {
+    sequence.current += 1;
+    const marker = eventEntry(sequence.current, "LOG CLEARED");
+    setEvents((current) => {
+      clearedEvents.current = current;
+      return [marker];
+    });
+    setLastCommand("Log cleared");
+    toast({
+      severity: "information",
+      text: "Log cleared.",
+      action: {
+        label: "UNDO",
+        onPress: () => {
+          const restored = clearedEvents.current;
+          clearedEvents.current = [];
+          sequence.current += 1;
+          const entry = eventEntry(sequence.current, "LOG RESTORED");
+          // Entries since the clear stay newest; the marker gives way to
+          // the restored history.
+          setEvents((current) =>
+            [
+              entry,
+              ...current.filter((item) => item !== marker),
+              ...restored,
+            ].slice(0, MAX_EVENTS),
+          );
+          setLastCommand("Log restored");
+        },
+      },
+    });
+  }, [toast]);
+  const setEventWindow = useCallback((range: GuiEventWindow) => {
+    setEventWindowState((current) =>
+      current.first === range.first && current.last === range.last
+        ? current
+        : { first: range.first, last: range.last },
+    );
+  }, []);
+  const toggleShield = useCallback(() => {
+    setShieldArmed(!shieldArmed);
+    record(shieldArmed ? "SHIELD LIFTED" : "SHIELD ARMED");
+  }, [shieldArmed, record]);
+  const toggleVectorOnly = useCallback(() => {
+    // Isolation unmounts the shield with the projector; its next mount is a
+    // new entity, resolved again after that commit.
+    shieldRequest.current += 1;
+    setShieldBlocker(undefined);
+    setVectorOnly((current) => !current);
+  }, []);
+  // Choosing an accent also sets the projection colour to the accent's,
+  // which the COLOUR tab's picker, when it is declared, writes to its control.
+  const setColorTuning = tuning.setColor;
+  const setAccent = useCallback(
+    (next: Accent) => {
+      setAccentState(next);
+      setLastCommand(`Accent ${next}`);
+      record(`ACCENT ${next.toUpperCase()}`);
+      setColorTuning(ACCENT_HSV[next]);
+    },
+    [record, setColorTuning],
+  );
+  const setExploded = useCallback(
+    (value: boolean) => {
+      setExplodedState(value);
+      if (changedValue("exploded", value))
+        record(value ? "LAYERS EXPLODED" : "LAYERS FLATTENED");
+    },
+    [changedValue, record],
+  );
+  // The sidebar writes the EXPLODE LAYERS switch as the operator would; its
+  // value callback then explodes the panel, so the switch stays the one
+  // source of the setting.
+  const toggleExplode = useCallback(() => {
+    const handle = controls.current.explode;
+    if (!handle) return;
+    void handle
+      .compareAndSet("checked", exploded, !exploded)
+      .catch(reportFailure);
+  }, [exploded, reportFailure]);
+  const setReducedMotion = useCallback(
+    (value: boolean) => {
+      setReducedMotionState(value);
+      if (changedValue("reducedMotion", value))
+        record(value ? "REDUCED MOTION ON" : "REDUCED MOTION OFF");
+    },
+    [changedValue, record],
+  );
+  const setMonitorWindow = useCallback(
+    (next: MonitorWindow) => {
+      setMonitorWindowState(next);
+      record(`MONITOR ${next === "normal" ? "RESTORED" : next.toUpperCase()}`);
+      if (next === "closed")
+        toast({
+          severity: "information",
+          text: "Monitor closed.",
+          action: {
+            label: "REOPEN",
+            onPress: () => {
+              setMonitorWindowState("normal");
+              record("MONITOR REOPENED");
+            },
+          },
+        });
+    },
+    [record, toast],
+  );
   const setAutoscan = useCallback(
     (value: boolean) => {
       setAutoscanState(value);
@@ -1090,13 +1143,30 @@ export function useGuiScene(
     },
     [changedValue, record],
   );
+  // A drag commits the gain on every frame; the log records where an
+  // adjustment ends: at the release of a drag, or at once from the keyboard
+  // or a machine client.
+  const logGain = useCallback(
+    (value: number) => {
+      if (value === loggedGain.current) return;
+      loggedGain.current = value;
+      record(`SIGNAL GAIN ${Math.round(value * 100)} PERCENT`);
+    },
+    [record],
+  );
   const setGain = useCallback(
     (value: number) => {
       setGainState(value);
-      if (changedValue("gain", value))
-        record(`SIGNAL GAIN ${Math.round(value * 100)} PERCENT`);
+      if (changedValue("gain", value) && !gainHeld.current) logGain(value);
     },
-    [changedValue, record],
+    [changedValue, logGain],
+  );
+  const holdGain = useCallback(
+    (held: boolean) => {
+      gainHeld.current = held;
+      if (!held) logGain(controlValues.current.gain);
+    },
+    [logGain],
   );
   const setCallsign = useCallback(
     (value: string) => {
@@ -1106,8 +1176,14 @@ export function useGuiScene(
     },
     [changedValue, record],
   );
-  const reportFailure = useCallback((failure: unknown) => {
-    setError(errorMessage(failure));
+  const scanControl = useCallback((handle: GuiControlHandle | null) => {
+    controls.current.scan = handle ?? undefined;
+  }, []);
+  const callsignControl = useCallback((handle: GuiControlHandle | null) => {
+    controls.current.callsign = handle ?? undefined;
+  }, []);
+  const explodeControl = useCallback((handle: GuiControlHandle | null) => {
+    controls.current.explode = handle ?? undefined;
   }, []);
 
   return {
@@ -1116,9 +1192,13 @@ export function useGuiScene(
     prepared,
     revealed,
     ...(error ? { error } : {}),
-    skin,
+    accent,
+    exploded,
+    reducedMotion,
+    monitorWindow,
+    advancedOpen,
+    workbenchTab,
     autoscan,
-    wide,
     surfaceCache,
     gain,
     callsign,
@@ -1133,18 +1213,28 @@ export function useGuiScene(
     ...(motions ? { motions } : {}),
     ...(beamSection ? { beamSection } : {}),
     font: absoluteAsset(17, FONT_URL),
+    station,
+    tuning,
+    scanControl,
+    callsignControl,
+    explodeControl,
     onCommit,
     attachPanel,
     pulse,
-    uplink,
-    purge,
+    clearLog,
     toggleShield,
-    toggleSpan,
-    toggleVectorOnly,
-    selectSkin,
+    toggleExplode,
+    setAccent,
+    setExploded,
+    setReducedMotion,
+    setMonitorWindow,
+    setAdvancedOpen,
+    setWorkbenchTab,
     selectSurfaceCache: setSurfaceCache,
+    toggleVectorOnly,
     setAutoscan,
     setGain,
+    holdGain,
     setCallsign,
     setPulseActive,
     readWaveformPulse,
@@ -1216,11 +1306,24 @@ function GuiWorldContent({ scene }: { scene: GuiSceneState }) {
           energy: "f32",
           section: "vec4",
           depth: "vec2",
-          phase: "f32",
         }}
       >
         <VertexShader requiredAttributes={2}>{BEAM_VERTEX_SHADER}</VertexShader>
         <FragmentShader requiredAttributes={2}>{BEAM_SHADER}</FragmentShader>
+      </ShaderAsset>
+      <ShaderAsset
+        id="gui-projector-dust-shader"
+        recipe={{ lighting: true }}
+        parameters={{
+          accent: "vec4",
+          energy: "f32",
+          section: "vec4",
+          depth: "vec2",
+          phase: "f32",
+        }}
+      >
+        <VertexShader>{DUST_VERTEX_SHADER}</VertexShader>
+        <FragmentShader>{DUST_SHADER}</FragmentShader>
       </ShaderAsset>
       <ShaderAsset
         id="gui-input-shield-shader"
@@ -1243,8 +1346,11 @@ function GuiWorldContent({ scene }: { scene: GuiSceneState }) {
 
 /**
  * The projected panel: a Surface on a parent entity presents the canvas of
- * a separate panel World. The parent owns the Surface size, placement and
- * cache policy; the panel World owns the canvas density and content.
+ * a separate panel World. The parent owns the Surface size, placement, cache
+ * policy and layer spacing; the panel World owns the canvas density and
+ * content. The exploded view is an ordinary animation of the Surface's layer
+ * spacing on the Host clock, played forward to separate the planes and
+ * backward to close them.
  */
 function ProjectorPanel({
   scene,
@@ -1254,6 +1360,20 @@ function ProjectorPanel({
   stagingX: number;
 }) {
   const { x: panelX, ...panelTransform } = PROJECTED_PANEL_TRANSFORM;
+  const motions = scene.motions!;
+  const layers = useRef<AnimationHandle>(null);
+  const { exploded, reducedMotion, reportFailure } = scene;
+  const started = useRef(false);
+  useEffect(() => {
+    const handle = layers.current;
+    if (!handle) return;
+    if (!started.current && !exploded) return;
+    started.current = true;
+    const action = reducedMotion
+      ? handle.seek(exploded ? LAYER_SECONDS : 0)
+      : handle.playAtSpeed(exploded ? 1 : -1);
+    void action.catch(reportFailure);
+  }, [exploded, reducedMotion, reportFailure]);
   return (
     <>
       <Entity id={PANEL_ENTITY}>
@@ -1269,12 +1389,26 @@ function ProjectorPanel({
             }
           />
         )}
+        <Animation
+          ref={layers}
+          source={motions.spacing.source}
+          bindings={[
+            {
+              track: 0,
+              property: {
+                component: motions.spacingField.component,
+                offsets: [motions.spacingField.offset],
+              },
+            },
+          ]}
+          autoPlay={false}
+        />
       </Entity>
       <CanvasWorld
         presentation={{ anchor: PANEL_ENTITY }}
         create={{ symbolicId: PANEL_WORLD, selectedSystems: PANEL_SYSTEMS }}
-        extent={[SURFACE_WIDTH, SURFACE_HEIGHT]}
-        unitsPerMetre={1}
+        extent={[CANVAS_WIDTH, CANVAS_HEIGHT]}
+        unitsPerMetre={UNITS_PER_METRE}
         onReady={scene.attachPanel}
         onError={scene.reportFailure}
       >

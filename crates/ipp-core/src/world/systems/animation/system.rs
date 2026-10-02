@@ -169,9 +169,6 @@ impl System for AnimationSystem {
         context: &mut SystemAssetContext<'_>,
         event: &crate::services::asset_management::AssetLifecycleEvent,
     ) {
-        self.motion
-            .reconcile_sources(&context.world, self.gui, event);
-        self.motion.release(&mut context.world, event);
         use crate::services::asset_management::AssetLifecycleKind;
         if event.kind == AssetLifecycleKind::StatusChanged {
             self.suspend_asset(
@@ -211,16 +208,6 @@ impl System for AnimationSystem {
         Ok(())
     }
 
-    fn asset_lifecycle(
-        &mut self,
-        context: &mut SystemAssetContext<'_>,
-        event: &crate::services::asset_management::AssetLifecycleEvent,
-    ) {
-        self.motion
-            .reconcile_sources(&context.world, self.gui, event);
-        self.motion.asset_lifecycle(&mut context.world, event);
-    }
-
     fn finish_update(
         &mut self,
         _context: &mut SystemUpdateContext<'_, '_>,
@@ -237,11 +224,6 @@ impl System for AnimationSystem {
     fn before_commit(&mut self, context: &mut SystemCommitContext<'_>) {
         self.motion.before_commit(context);
         self.invalidate_changes(context);
-    }
-
-    fn after_commit(&mut self, context: &mut SystemCommitContext<'_>) {
-        self.motion
-            .flush_demand(context.world_data.id, context.assets);
     }
 
     fn save_persistent_state(

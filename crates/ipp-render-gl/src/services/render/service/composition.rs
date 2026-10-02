@@ -113,7 +113,7 @@ impl<D: RenderDevice> RenderService<D> {
                         let visible = job.visible
                             && frustum
                                 .as_ref()
-                                .is_none_or(|planes| scene.visible(surface.entity, planes));
+                                .is_none_or(|planes| scene.surface_visible(surface, planes));
                         let Ok(viewport) = self.camera_viewport(surface.extent, job.viewport)
                         else {
                             continue;
@@ -149,6 +149,7 @@ impl<D: RenderDevice> RenderService<D> {
                                 opacity: 1.0,
                                 visible,
                                 interaction: false,
+                                layered: surface.layered(),
                             });
                         }
                         children.push(OutputJob {
@@ -224,6 +225,8 @@ impl<D: RenderDevice> RenderService<D> {
                                         opacity,
                                         visible: job.visible,
                                         interaction: false,
+                                        // A nested slot presents on one plane.
+                                        layered: false,
                                     });
                                 (canvas, cache)
                             }

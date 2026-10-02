@@ -15,9 +15,61 @@ export interface GuiPressEvent {
   readonly ancestry: readonly bigint[];
 }
 
-/** A momentary submission of a text input, carrying the submitted text. */
+/**
+ * A momentary submission of a text input, carrying the submitted text: a
+ * numeric input's committed number as it shows it.
+ */
 export interface GuiSubmitEvent extends GuiPressEvent {
   readonly value: string;
+}
+
+/**
+ * Text a numeric text input refused to commit, on Enter or blur, because it
+ * does not parse; its number is unchanged. `value` is the refused text, for
+ * an error shown beside the field.
+ */
+export type GuiRejectEvent = GuiSubmitEvent;
+
+/**
+ * A numeric text input's pending edit ended without being committed or
+ * refused, such as by Escape, which shows the formatted number again; its
+ * number is unchanged. `value` is the discarded text. A client clears what it
+ * showed for the edit, such as a rejection's error.
+ */
+export type GuiDiscardEvent = GuiSubmitEvent;
+
+/**
+ * A momentary context request on a control: a secondary press, the Menu key
+ * or Shift+F10. The runtime has focused the control; `point` is a logical
+ * point of its canvas, the press point or, for a key, the bottom-left corner
+ * of the control's visible box, where a client may open its menu.
+ */
+export interface GuiContextMenuEvent extends GuiPressEvent {
+  readonly point: readonly [number, number];
+}
+
+/**
+ * A change of a control's logical focus, from the GUI feedback stream:
+ * whether the control holds focus after the change, and the part focus names
+ * (a range slider's lower thumb 0 or upper thumb 1), or the part it left. A
+ * control with one part reports part 0; focus moving between the parts of one
+ * control reports the new part with `focused` true.
+ */
+export interface GuiFocusChangeEvent extends GuiPressEvent {
+  readonly focused: boolean;
+  readonly part: number;
+}
+
+/**
+ * A change of one pointer's interaction with a control, from the GUI feedback
+ * stream: that pointer's flags on the control after the change. Several
+ * pointers may hover a control at once.
+ */
+export interface GuiInteractionEvent extends GuiPressEvent {
+  readonly pointer: bigint;
+  readonly hovered: boolean;
+  readonly pressed: boolean;
+  readonly captured: boolean;
 }
 
 /** A control's field values at the end of the evaluated frame `tick`. */
@@ -27,6 +79,27 @@ export interface GuiControlEvent<Value> {
   readonly value: Value;
 }
 
+/**
+ * A slider's committed values: `value`, and for a range also `upper`, read
+ * from one field observation, so a change of either or both is one event.
+ */
+export interface GuiScalarEvent extends GuiControlEvent<number> {
+  /** A range's upper value; absent for a slider with one value. */
+  readonly upper?: number;
+}
+
+/**
+ * A colour control's colour: hue in turns from red, saturation, value and
+ * alpha, each in 0..1. Hue, saturation and value are the HSV model on
+ * sRGB-encoded values; alpha is linear coverage.
+ */
+export interface GuiHsva {
+  readonly hue: number;
+  readonly saturation: number;
+  readonly value: number;
+  readonly alpha: number;
+}
+
 /** Scroll position of a ScrollView or VirtualList; anchors are 0 for a ScrollView. */
 export interface GuiScrollPosition {
   readonly offset: readonly [number, number];
@@ -34,12 +107,23 @@ export interface GuiScrollPosition {
   readonly anchorOffset: number;
 }
 
-/** A control value that propagates to `onAction` listeners. */
+/**
+ * A value a value callback observes, which then propagates to `onAction`
+ * listeners: a control's value, or `visible`, a Behavior's open state.
+ */
 export type GuiControlValue =
   | { readonly kind: "checked"; readonly value: boolean }
-  | { readonly kind: "scalar"; readonly value: number }
+  | { readonly kind: "selected"; readonly value: boolean }
+  | { readonly kind: "visible"; readonly value: boolean }
+  | {
+      readonly kind: "scalar";
+      readonly value: number;
+      /** A range slider's upper value. */
+      readonly upper?: number;
+    }
   | { readonly kind: "text"; readonly value: string }
-  | { readonly kind: "scroll"; readonly value: GuiScrollPosition };
+  | { readonly kind: "scroll"; readonly value: GuiScrollPosition }
+  | { readonly kind: "color"; readonly value: GuiHsva };
 
 export interface GuiPropagation {
   /** The entity whose declaration's listener runs. */
@@ -76,10 +160,34 @@ export interface GuiVirtualRange {
 }
 
 export type GuiPressListener = (event: GuiPressEvent) => void;
+export type GuiContextMenuListener = (event: GuiContextMenuEvent) => void;
+export type GuiFocusChangeListener = (event: GuiFocusChangeEvent) => void;
+export type GuiInteractionListener = (event: GuiInteractionEvent) => void;
 export type GuiToggleListener = (event: GuiControlEvent<boolean>) => void;
-export type GuiScalarCommitListener = (event: GuiControlEvent<number>) => void;
+/**
+ * A Button's `selected` field changed, whoever wrote it: the application, or
+ * the runtime selecting a group item.
+ */
+export type GuiSelectedChangeListener = (
+  event: GuiControlEvent<boolean>,
+) => void;
+/**
+ * A Behavior's `visible` field changed, whoever wrote it: the application,
+ * or the runtime opening or closing an overlay as its mode decides.
+ */
+export type GuiVisibleChangeListener = (
+  event: GuiControlEvent<boolean>,
+) => void;
+export type GuiScalarCommitListener = (event: GuiScalarEvent) => void;
+/**
+ * A colour control's colour changed, whoever wrote it: one event per frame
+ * that changed any of its channels, carrying all four.
+ */
+export type GuiColorCommitListener = (event: GuiControlEvent<GuiHsva>) => void;
 export type GuiTextCommitListener = (event: GuiControlEvent<string>) => void;
 export type GuiTextSubmitListener = (event: GuiSubmitEvent) => void;
+export type GuiTextRejectListener = (event: GuiRejectEvent) => void;
+export type GuiTextDiscardListener = (event: GuiDiscardEvent) => void;
 export type GuiActionListener = (event: GuiActionEvent) => void;
 export type GuiRangeChangeListener = (range: GuiVirtualRange) => void;
 export type GuiScrollListener = (
@@ -95,20 +203,48 @@ export interface GuiControlListeners {
   onRangeChange?: GuiRangeChangeListener | undefined;
   onScroll?: GuiScrollListener | undefined;
   onPress?: GuiPressListener | undefined;
+  onContextMenu?: GuiContextMenuListener | undefined;
+  onFocusChange?: GuiFocusChangeListener | undefined;
+  onInteractionChange?: GuiInteractionListener | undefined;
   onToggle?: GuiToggleListener | undefined;
+  onSelectedChange?: GuiSelectedChangeListener | undefined;
+  onVisibleChange?: GuiVisibleChangeListener | undefined;
   onScalarCommit?: GuiScalarCommitListener | undefined;
+  onColorCommit?: GuiColorCommitListener | undefined;
   onTextCommit?: GuiTextCommitListener | undefined;
   onSubmit?: GuiTextSubmitListener | undefined;
+  onReject?: GuiTextRejectListener | undefined;
+  onDiscard?: GuiTextDiscardListener | undefined;
+}
+
+/** Callbacks of every control fed by the GUI feedback stream. */
+export interface GuiFeedbackListeners {
+  onFocusChange?: GuiFocusChangeListener;
+  onInteractionChange?: GuiInteractionListener;
 }
 
 export const controlCallbackNames = [
   "onRangeChange",
   "onScroll",
   "onPress",
+  "onContextMenu",
+  "onFocusChange",
+  "onInteractionChange",
   "onToggle",
+  "onSelectedChange",
+  "onVisibleChange",
   "onScalarCommit",
+  "onColorCommit",
   "onTextCommit",
   "onSubmit",
+  "onReject",
+  "onDiscard",
+] as const;
+
+/** Callbacks fed by feedback effects: focus and pointer interaction changes. */
+export const controlFeedbackCallbackNames = [
+  "onFocusChange",
+  "onInteractionChange",
 ] as const;
 
 /** Callbacks fed by field observations rather than momentary effects. */
@@ -116,15 +252,24 @@ export const controlValueCallbackNames = [
   "onRangeChange",
   "onScroll",
   "onToggle",
+  "onSelectedChange",
+  "onVisibleChange",
   "onScalarCommit",
+  "onColorCommit",
   "onTextCommit",
 ] as const;
 
-/** Watched fields of each control kind that has values, by component name. */
+/**
+ * Watched fields of each control kind that has values, and of the Behavior
+ * whose open state a callback observes, by component name.
+ */
 const controlValueFields = {
+  GuiBehavior: ["visible"],
+  GuiButton: ["selected"],
   GuiCheckbox: ["checked"],
-  GuiSlider: ["value"],
-  GuiTextInput: ["text"],
+  GuiSlider: ["value", "upper", "range"],
+  GuiTextInput: ["text", "numeric", "value"],
+  GuiColor: ["hue", "saturation", "value", "alpha"],
   GuiScrollView: [
     "offset_x",
     "offset_y",
@@ -162,8 +307,8 @@ export interface GuiControlValueLayout {
 }
 
 /**
- * The watched fields of the control component `component`, or undefined when
- * the component is not a control with values.
+ * The watched fields of the control component `component`, or of a
+ * Behavior, or undefined when the component has no observed values.
  */
 export function controlValueLayout(
   components: Readonly<Record<string, ComponentDescriptor>>,
@@ -193,7 +338,7 @@ export function controlValueLayout(
 
 /** What one value record of a control carries for its callbacks. */
 export interface GuiControlValues {
-  /** The control's value, observed by its value callback and by actions. */
+  /** The value, observed by its value callback and by actions. */
   readonly value: GuiControlValue;
   /** Scroll geometry and range; ScrollView and VirtualList only. */
   readonly range?: Omit<GuiVirtualRange, "target" | "tick">;
@@ -217,6 +362,20 @@ export function controlValues(
   };
   const number = (name: string) => field(name, "number") as number;
   switch (layout.control) {
+    case "GuiBehavior":
+      return {
+        value: {
+          kind: "visible",
+          value: field("visible", "boolean") as boolean,
+        },
+      };
+    case "GuiButton":
+      return {
+        value: {
+          kind: "selected",
+          value: field("selected", "boolean") as boolean,
+        },
+      };
     case "GuiCheckbox":
       return {
         value: {
@@ -225,10 +384,28 @@ export function controlValues(
         },
       };
     case "GuiSlider":
-      return { value: { kind: "scalar", value: number("value") } };
+      return {
+        value: field("range", "boolean")
+          ? { kind: "scalar", value: number("value"), upper: number("upper") }
+          : { kind: "scalar", value: number("value") },
+      };
     case "GuiTextInput":
       return {
-        value: { kind: "text", value: field("text", "string") as string },
+        value: field("numeric", "boolean")
+          ? { kind: "scalar", value: number("value") }
+          : { kind: "text", value: field("text", "string") as string },
+      };
+    case "GuiColor":
+      return {
+        value: {
+          kind: "color",
+          value: {
+            hue: number("hue"),
+            saturation: number("saturation"),
+            value: number("value"),
+            alpha: number("alpha"),
+          },
+        },
       };
     case "GuiScrollView":
     case "GuiVirtualList": {
@@ -257,18 +434,21 @@ export function controlValues(
   }
 }
 
-/** The control callback that observes each kind of control value. */
+/** The callback that observes each kind of observed value. */
 export const controlValueCallback = {
   checked: "onToggle",
+  selected: "onSelectedChange",
+  visible: "onVisibleChange",
   scalar: "onScalarCommit",
   text: "onTextCommit",
   scroll: "onScroll",
+  color: "onColorCommit",
 } as const satisfies Record<
   GuiControlValue["kind"],
   (typeof controlValueCallbackNames)[number]
 >;
 
-/** Invoke the control listener that observes `event.value`. */
+/** Invoke the listener that observes `event.value`. */
 export function invokeControlValue(
   listeners: GuiControlListeners | undefined,
   event: GuiControlEvent<GuiControlValue>,
@@ -278,12 +458,22 @@ export function invokeControlValue(
   switch (value.kind) {
     case "checked":
       return listeners?.onToggle?.({ ...base, value: value.value });
+    case "selected":
+      return listeners?.onSelectedChange?.({ ...base, value: value.value });
+    case "visible":
+      return listeners?.onVisibleChange?.({ ...base, value: value.value });
     case "scalar":
-      return listeners?.onScalarCommit?.({ ...base, value: value.value });
+      return listeners?.onScalarCommit?.(
+        value.upper === undefined
+          ? { ...base, value: value.value }
+          : { ...base, value: value.value, upper: value.upper },
+      );
     case "text":
       return listeners?.onTextCommit?.({ ...base, value: value.value });
     case "scroll":
       return listeners?.onScroll?.({ ...base, value: value.value });
+    case "color":
+      return listeners?.onColorCommit?.({ ...base, value: value.value });
   }
 }
 
@@ -342,8 +532,55 @@ export function dispatchGuiAction(
 }
 
 /**
- * Dispatch a press or submission to the target control's listeners, then along
- * the effect's runtime ancestry. Other effects have no application callbacks.
+ * Dispatch a feedback effect, a focus or pointer interaction change, to the
+ * target control's own `onFocusChange` or `onInteractionChange`. Feedback
+ * reaches no action listener and does not propagate.
+ */
+export function dispatchGuiFeedback(
+  observed: GuiObservedEffect,
+  controls: () => readonly GuiControlListeners[],
+  live: () => boolean,
+  report: (error: unknown) => unknown,
+): void {
+  const { effect, ...base } = observed;
+  const deliveries =
+    effect.kind === "focusChanged"
+      ? controls().map(
+          (listener) => () =>
+            listener.onFocusChange?.(
+              Object.freeze({
+                ...base,
+                focused: effect.focused,
+                part: effect.part,
+              }),
+            ),
+        )
+      : effect.kind === "interactionChanged"
+        ? controls().map(
+            (listener) => () =>
+              listener.onInteractionChange?.(
+                Object.freeze({
+                  ...base,
+                  pointer: effect.pointer,
+                  ...effect.state,
+                }),
+              ),
+          )
+        : [];
+  for (const deliver of deliveries) {
+    if (!live()) return;
+    try {
+      deliver();
+    } catch (error) {
+      report(error);
+    }
+  }
+}
+
+/**
+ * Dispatch a press, submission, rejection, discard or context request to the
+ * target control's listeners, then along the effect's runtime ancestry.
+ * Feedback effects reach only `dispatchGuiFeedback`.
  */
 export function dispatchGuiEffect(
   observed: GuiObservedEffect,
@@ -354,7 +591,14 @@ export function dispatchGuiEffect(
 ): void {
   if (!live()) return;
   const { effect, ...base } = observed;
-  if (effect.kind !== "pressed" && effect.kind !== "submitted") return;
+  if (
+    effect.kind !== "pressed" &&
+    effect.kind !== "submitted" &&
+    effect.kind !== "rejected" &&
+    effect.kind !== "discarded" &&
+    effect.kind !== "contextRequested"
+  )
+    return;
   if (observed.ancestry.at(-1) !== observed.target.entity) {
     report(new Error("GUI effect omitted its pinned target ancestry"));
     return;
@@ -364,7 +608,14 @@ export function dispatchGuiEffect(
     controls().map((listener) =>
       effect.kind === "pressed"
         ? () => listener.onPress?.(base)
-        : () => listener.onSubmit?.({ ...base, value: effect.text }),
+        : effect.kind === "submitted"
+          ? () => listener.onSubmit?.({ ...base, value: effect.text })
+          : effect.kind === "rejected"
+            ? () => listener.onReject?.({ ...base, value: effect.text })
+            : effect.kind === "discarded"
+              ? () => listener.onDiscard?.({ ...base, value: effect.text })
+              : () =>
+                  listener.onContextMenu?.({ ...base, point: effect.point }),
     ),
     observed.ancestry.map((entity) => ({
       currentTarget: entity,

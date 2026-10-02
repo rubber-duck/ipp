@@ -212,6 +212,36 @@ fn column_flex_scroll_view_keeps_its_slot_clip_and_hits_between_fixed_children()
 }
 
 /// The legacy lane diagnosed unbounded flex (`GuiLayoutDiagnostic::UnboundedFlex`).
+/// Scroll content measured on its unbounded axis keeps its own padding, so
+/// the end of padded content can scroll into view.
+#[test]
+fn padded_scroll_content_keeps_its_padding_in_the_content_extent() {
+    let mut panel = GuiPanel::new(container(3));
+    let root = panel.root_entity;
+    let scroll = panel.create(
+        Some(root),
+        vec![
+            ComponentValue::GuiScrollView(GuiScrollView::default()),
+            ComponentValue::GuiLayout(sized(200.0, 100.0)),
+        ],
+    );
+    let column = panel.node(
+        scroll,
+        GuiLayout {
+            kind: 2,
+            padding_top: 10.0,
+            padding_bottom: 10.0,
+            ..Default::default()
+        },
+    );
+    let item = panel.button(column, sized(200.0, 150.0));
+    panel.frame();
+
+    assert_eq!(panel.layout(column).size, [200.0, 170.0]);
+    assert_eq!(panel.layout(item).origin, [0.0, 10.0]);
+    assert_eq!(panel.scroll(scroll).content, [200.0, 170.0]);
+}
+
 /// The ordinary lane gives the flex child zero main-axis extent and reports no
 /// diagnostic; this pins today's behavior pending a decision.
 #[test]
@@ -681,6 +711,7 @@ fn controls_carry_intrinsic_sizes_from_their_font_and_placeholder() {
             ComponentValue::GuiTextInput(GuiTextInput {
                 text: std::sync::Arc::<str>::default(),
                 placeholder: std::sync::Arc::<str>::from("A".repeat(14)),
+                ..Default::default()
             }),
             ComponentValue::GuiLayout(GuiLayout::default()),
         ],
@@ -692,13 +723,16 @@ fn controls_carry_intrinsic_sizes_from_their_font_and_placeholder() {
             .any(|hit| hit.target.entity == input && hit.bounds[2] - hit.bounds[0] > 80.0)
     });
 
-    // 1.4 em box, 8 x 1.4 em bar and the measured placeholder at 10 units per em.
-    assert_near(&panel.layout(checkbox).size, &[14.0, 14.0]);
-    assert_near(&panel.layout(slider).size, &[80.0, 14.0]);
-    assert_near(&panel.layout(input).size, &[84.0, 14.0]);
+    // At 10 units per em: the 2 em box of a small control, an 8 em slider
+    // 4/3 em tall for its one-em thumb, and the measured placeholder in a
+    // full-size control 2.5 em tall.
+    let slider_height = 40.0 / 3.0;
+    assert_near(&panel.layout(checkbox).size, &[20.0, 20.0]);
+    assert_near(&panel.layout(slider).size, &[80.0, slider_height]);
+    assert_near(&panel.layout(input).size, &[84.0, 25.0]);
     assert_near(
         &bounds(&panel.output(), input),
-        &rect(0.0, 28.0, 84.0, 14.0),
+        &rect(0.0, 20.0 + slider_height, 84.0, 25.0),
     );
 }
 
@@ -730,6 +764,7 @@ fn written_text_reflows_its_input_once_then_reuses_the_measurement() {
             ComponentValue::GuiTextInput(GuiTextInput {
                 text: "A".repeat(15).into(),
                 placeholder: std::sync::Arc::<str>::default(),
+                ..Default::default()
             }),
             ComponentValue::GuiLayout(GuiLayout::default()),
         ],
@@ -741,7 +776,7 @@ fn written_text_reflows_its_input_once_then_reuses_the_measurement() {
             .any(|hit| hit.target.entity == input && hit.bounds[2] - hit.bounds[0] > 80.0)
     });
     panel.frame();
-    assert_near(&panel.layout(input).size, &[90.0, 14.0]);
+    assert_near(&panel.layout(input).size, &[90.0, 25.0]);
     let before = panel.output();
 
     // A written text replaces the stored text and reflows.
@@ -753,7 +788,7 @@ fn written_text_reflows_its_input_once_then_reuses_the_measurement() {
     );
     panel.frame();
     panel.take_outcome().result.unwrap();
-    assert_near(&panel.layout(input).size, &[120.0, 14.0]);
+    assert_near(&panel.layout(input).size, &[120.0, 25.0]);
     let work = panel.work();
     assert_eq!((work.reflows, work.text_measurements), (1, 1));
     let after = panel.output();
@@ -1155,6 +1190,7 @@ fn theme(panel: &mut GuiPanel, part: GuiPaintPart) -> (EntityId, u32) {
         None,
         vec![ComponentValue::GuiTheme(GuiTheme {
             parts,
+            ..Default::default()
         })],
     );
     (entity, slot)
@@ -1438,6 +1474,7 @@ impl PresentedPanel {
         let surface = Surface {
             width: 4.0,
             height: 2.0,
+            ..Default::default()
         };
         create(
             &mut host,

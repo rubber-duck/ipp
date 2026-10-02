@@ -693,6 +693,7 @@ fn transparent(
             ShaderBackendSource {
                 vertex: String::new(),
                 fragment: "vec4 materialFragment() { return p_tint; }".into(),
+                ..Default::default()
             },
         )]),
         required_attributes: 0,
@@ -966,6 +967,7 @@ fn nested<D: RenderDevice>(
         let surface = ipp_core::components::Surface {
             width: 2.0,
             height: 2.0,
+            ..Default::default()
         };
         let anchor = create(
             &mut host,

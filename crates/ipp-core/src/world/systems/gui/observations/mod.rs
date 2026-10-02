@@ -26,7 +26,8 @@ pub struct GuiEffectId {
 /// Application effects and explicit local feedback are distinct subscriptions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GuiObservationClasses {
-    /// Press and submission effects; values reach clients through field observation.
+    /// Press, submission and context-request effects; values reach clients
+    /// through field observation.
     Application,
     /// Changed logical focus and explicitly commanded pointer feedback.
     Feedback,

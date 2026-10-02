@@ -23,6 +23,84 @@ pub(super) fn plane_matrix(origin: [f64; 2], scale: [f64; 2]) -> Result<[f32; 16
     Ok(matrix)
 }
 
+/// Where the camera views a layered Canvas from, in its content space, whose
+/// Z is the Surface's local normal axis.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum CanvasLayerEye {
+    /// A perspective camera's position along the normal.
+    Point(f64),
+    /// The normal component of an orthographic camera's view direction.
+    Direction(f64),
+}
+
+/// How one Canvas presentation separates its layers along its normal.
+///
+/// Each layer's draws translate its content by its plane id times `spacing`
+/// along content Z, folded into that draw's model-view-projection: retained
+/// geometry, vertex layouts and uploads stay unchanged when the spacing
+/// changes, and a layer keeps its depth whatever other layers are in use.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct CanvasLayering {
+    /// Content Z between consecutive plane ids; zero keeps one plane.
+    pub spacing: f32,
+    /// Viewer choosing the order in which layer planes draw.
+    pub eye: CanvasLayerEye,
+}
+
+impl CanvasLayering {
+    /// One plane: layers only order paint, as in a root viewport or a nested slot.
+    pub const FLAT: Self = Self {
+        spacing: 0.0,
+        eye: CanvasLayerEye::Direction(-1.0),
+    };
+
+    /// Content Z of `layer`'s plane.
+    fn depth(&self, layer: u32) -> f64 {
+        f64::from(layer) * f64::from(self.spacing)
+    }
+
+    /// Content model-view-projection of `layer`'s plane.
+    pub fn layer_mvp(&self, mvp: &[f32; 16], layer: u32) -> [f32; 16] {
+        let offset = self.depth(layer) as f32;
+        let mut placed = *mvp;
+        if offset != 0.0 {
+            for row in 0..4 {
+                placed[12 + row] += offset * mvp[8 + row];
+            }
+        }
+        placed
+    }
+
+    /// The ascending plane ids `layers` in view-depth order, farthest plane
+    /// first, so translucent planes compose from the front and from behind.
+    /// Coincident planes keep plane order, which is painter order.
+    pub fn draw_order(&self, layers: &[u32]) -> Vec<u32> {
+        let mut order = layers.to_vec();
+        if self.spacing == 0.0 {
+            return order;
+        }
+        let depth = |layer: u32| match self.eye {
+            CanvasLayerEye::Point(eye) => (self.depth(layer) - eye).abs(),
+            CanvasLayerEye::Direction(direction) => self.depth(layer) * direction,
+        };
+        order.sort_by(|left, right| depth(*right).total_cmp(&depth(*left)).then(left.cmp(right)));
+        order
+    }
+}
+
+/// The camera's view of a Surface's content space, through the Surface's
+/// placement in the camera's domain.
+pub(super) fn layer_eye(
+    camera: &ipp_core::systems::camera::CameraPublication,
+    placement: &ipp_core::systems::geometry::GeometryShapeTransform,
+) -> CanvasLayerEye {
+    if camera.projection.projection == 0 {
+        CanvasLayerEye::Point(placement.inverse_point(camera.pose.point([0.0; 3]))[2])
+    } else {
+        CanvasLayerEye::Direction(placement.inverse_vector(camera.pose.vector([0.0, 0.0, -1.0]))[2])
+    }
+}
+
 pub(super) enum CanvasChild<'a> {
     Canvas {
         scene: CanvasScene<'a>,
@@ -44,6 +122,7 @@ impl<D: RenderDevice> RenderService<D> {
         &mut self,
         host: &HostRuntime,
         surface: &SceneOutputSurface,
+        view: &camera::CameraPublication,
         view_projection: [f32; 16],
         viewport: WorldViewport,
         stats: &mut RenderFrameWork,
@@ -58,11 +137,20 @@ impl<D: RenderDevice> RenderService<D> {
                     [-width * 0.5, height * 0.5],
                     [width / extent[0], -height / extent[1]],
                 )?;
+                let layering = if surface.layered() {
+                    CanvasLayering {
+                        spacing: surface.layer_spacing,
+                        eye: layer_eye(view, &surface.placement),
+                    }
+                } else {
+                    CanvasLayering::FLAT
+                };
                 self.draw_canvas(
                     &scene,
                     camera::multiply(placed, content),
                     scene.root_clip(),
                     1.0,
+                    layering,
                     viewport,
                     stats,
                 )
@@ -152,5 +240,63 @@ pub(super) fn canvas_attachment<'a>(
                 opacity,
             }))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn layering(spacing: f32, eye: CanvasLayerEye) -> CanvasLayering {
+        CanvasLayering {
+            spacing,
+            eye,
+        }
+    }
+
+    #[test]
+    fn layer_planes_draw_farthest_first_from_any_side() {
+        use CanvasLayerEye::{Direction, Point};
+
+        // A perspective eye in front, behind, and between layer planes 0, 1, 2 m.
+        let layers = [0, 1, 2];
+        assert_eq!(layering(1.0, Point(5.0)).draw_order(&layers), [0, 1, 2]);
+        assert_eq!(layering(1.0, Point(-5.0)).draw_order(&layers), [2, 1, 0]);
+        assert_eq!(layering(1.0, Point(1.2)).draw_order(&layers), [0, 2, 1]);
+        // Negative spacing stacks the layers behind the base plane.
+        assert_eq!(layering(-1.0, Point(5.0)).draw_order(&layers), [2, 1, 0]);
+        // Orthographic views looking down -Z from the front, and from behind.
+        assert_eq!(
+            layering(1.0, Direction(-0.5)).draw_order(&layers),
+            [0, 1, 2]
+        );
+        assert_eq!(layering(1.0, Direction(0.5)).draw_order(&layers), [2, 1, 0]);
+        // Coincident or edge-on planes keep painter order.
+        assert_eq!(CanvasLayering::FLAT.draw_order(&layers), [0, 1, 2]);
+        assert_eq!(layering(1.0, Direction(0.0)).draw_order(&layers), [0, 1, 2]);
+    }
+
+    #[test]
+    fn unused_layers_leave_a_gap_in_depth_order() {
+        use CanvasLayerEye::Point;
+
+        // Planes 0, 1 and 3 in use, 2 empty, an eye at 1.8 m: plane 3 lies
+        // 1.2 m away, farther than plane 1 at 0.8 m, so it draws before it.
+        // Compacted onto 2 it would lie 0.2 m away and draw last.
+        assert_eq!(layering(1.0, Point(1.8)).draw_order(&[0, 1, 3]), [0, 3, 1]);
+    }
+
+    #[test]
+    fn a_layer_translates_content_by_its_id_times_the_spacing() {
+        let mvp: [f32; 16] = std::array::from_fn(|index| index as f32 + 1.0);
+        assert_eq!(CanvasLayering::FLAT.layer_mvp(&mvp, 3), mvp);
+        let layered = layering(0.5, CanvasLayerEye::Point(1.0));
+        assert_eq!(layered.layer_mvp(&mvp, 0), mvp);
+        let raised = layered.layer_mvp(&mvp, 2);
+        // Column 3 gains one unit of column 2; the other columns are unchanged.
+        assert_eq!(raised[..12], mvp[..12]);
+        assert_eq!(raised[12..], [22.0, 24.0, 26.0, 28.0]);
+        // Plane 4 sits two units out whatever planes lie between it and the base.
+        assert_eq!(layered.layer_mvp(&mvp, 4)[12..], [31.0, 34.0, 37.0, 40.0]);
     }
 }

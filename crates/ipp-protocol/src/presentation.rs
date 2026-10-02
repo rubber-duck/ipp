@@ -138,6 +138,14 @@ pub enum PresentationRequest {
         /// Exact current root configuration.
         binding: RootBinding,
     },
+    /// Resize the selected view's root in one step: rebind the same output with
+    /// `viewport` and select the new binding, so no draw sees nothing selected.
+    Resize {
+        /// Exact current selection; any other fails as stale.
+        view: PresentationView,
+        /// New drawing and layout extent, validated as a selection's.
+        viewport: WorldViewport,
+    },
     /// Compare-and-clear only this exact selection.
     Clear(PresentationView),
     /// Await a future actual draw, bounded by a monotonic Host deadline.
@@ -269,6 +277,14 @@ impl Reader<'_> {
             PRESENTATION_REQUEST_SELECT => PresentationRequest::Select {
                 surface: self.presentation_surface()?,
                 binding: self.root_binding()?,
+            },
+            PRESENTATION_REQUEST_RESIZE => PresentationRequest::Resize {
+                view: self.presentation_view()?,
+                viewport: WorldViewport {
+                    width: self.u32()?,
+                    height: self.u32()?,
+                    device_pixel_ratio: self.f64()?,
+                },
             },
             PRESENTATION_REQUEST_CLEAR => PresentationRequest::Clear(self.presentation_view()?),
             PRESENTATION_REQUEST_FRAME => PresentationRequest::Frame {
@@ -402,6 +418,16 @@ impl Writer {
                 self.u8(PRESENTATION_REQUEST_SELECT)?;
                 self.presentation_surface(*surface)?;
                 self.root_binding(*binding)
+            }
+            PresentationRequest::Resize {
+                view,
+                viewport,
+            } => {
+                self.u8(PRESENTATION_REQUEST_RESIZE)?;
+                self.presentation_view(*view)?;
+                self.u32(viewport.width)?;
+                self.u32(viewport.height)?;
+                self.f64(viewport.device_pixel_ratio)
             }
             PresentationRequest::Clear(view) => {
                 self.u8(PRESENTATION_REQUEST_CLEAR)?;

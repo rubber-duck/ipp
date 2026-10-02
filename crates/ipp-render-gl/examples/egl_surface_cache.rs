@@ -251,6 +251,7 @@ mod scenario {
         let surface = Surface {
             width: extent[0],
             height: extent[1],
+            ..Default::default()
         };
         create(
             host,
@@ -442,7 +443,8 @@ mod scenario {
             let stack = create(&mut host, gui, None, vec![placed(3, PANEL, [0.0, 0.0])])?;
             let append = |host: &mut HostRuntime, values| create(host, gui, Some(stack), values);
 
-            // Gradient, border and glow: the control's Background part override.
+            // Gradient, border and glow: the control's Background part override,
+            // a rounded box instead of the default button look's cut corners.
             let mut parts = Rows::new();
             parts
                 .push(GuiPaintPart {
@@ -453,6 +455,7 @@ mod scenario {
                     gradient_color0: Some([1.0, 0.08, 0.04, 1.0]),
                     gradient_color1: Some([1.0, 0.8, 0.08, 1.0]),
                     corner_radius: Some([0.12, 0.12]),
+                    corner_cut: Some([0.0; 4]),
                     border_width: Some(0.05),
                     border_color: Some([1.0, 1.0, 1.0, 1.0]),
                     glow_color: Some([1.0, 0.35, 0.05, 1.0]),
@@ -563,6 +566,7 @@ mod scenario {
                 vec![
                     ComponentValue::GuiButton(GuiButton {
                         label: "Go".into(),
+                        ..Default::default()
                     }),
                     ComponentValue::GuiFont(GuiFont {
                         source: font.uri.clone(),
@@ -840,6 +844,30 @@ mod scenario {
                         resource.data().is_some() && resource.graphics_ready() == Some(true)
                     })
             })
+        }
+
+        /// Present until the panel's paint has stopped changing for two frames and
+        /// the panel shows it directly under interaction or from a current image,
+        /// so a transition the last input started has ended and the cache has
+        /// caught up with it.
+        fn settle_paint(&mut self, label: &str) -> Result<()> {
+            let mut steady = 0;
+            for _ in 0..120 {
+                let before = self.revisions();
+                self.frame(DT)?;
+                let presentation = self.record()?.presentation;
+                let current = presentation == SurfaceCachePresentation::Interaction
+                    || presentation == SurfaceCachePresentation::Reused;
+                steady = if self.revisions() == before && current {
+                    steady + 1
+                } else {
+                    0
+                };
+                if steady >= 2 {
+                    return Ok(());
+                }
+            }
+            Err(format!("{label}: paint never settled: {:?}", self.record()?).into())
         }
 
         /// Present until every asset is ready and a frame uploads nothing.
@@ -1251,7 +1279,9 @@ mod scenario {
             self.frame(DT)?;
 
             // Interaction: hover and focus present current content directly and
-            // never leave a stale image behind on release.
+            // never leave a stale image behind on release. The default look's
+            // hover fades in over 80 ms and out over 120 ms on the Host clock, so
+            // each comparison waits for its transition to end.
             for label in ["hover", "focus"] {
                 if label == "hover" {
                     // The "Go" button spans panel metres x 2.1..2.8, y 1.5..1.85;
@@ -1261,12 +1291,18 @@ mod scenario {
                         point: [2.45 / 4.0, (0.5 + 1.675) / 3.0],
                     })?;
                 } else {
-                    self.focus(GuiLocalAction::Focus)?;
+                    self.focus(GuiLocalAction::Focus(0))?;
                 }
                 let stats = self.frame_until(label, |presentation| {
                     presentation == SurfaceCachePresentation::Interaction
                 })?;
                 self.expect(label, &stats, SurfaceCachePresentation::Interaction, 0, 0)?;
+                self.settle_paint(label)?;
+                if self.record()?.presentation != SurfaceCachePresentation::Interaction {
+                    return Err(
+                        format!("{label} lost direct priority: {:?}", self.record()?).into(),
+                    );
+                }
                 let promoted = self.capture(&format!("cache-{label}"))?;
                 let reference = self.direct_reference(&format!("direct-{label}"), BAND1)?;
                 if max_difference(&reference, &promoted) != 0 {
@@ -1290,6 +1326,7 @@ mod scenario {
                 {
                     return Err(format!("{label} release kept direct priority: {record:?}").into());
                 }
+                self.settle_paint(&format!("{label} release"))?;
                 let released = self.capture(&format!("cache-{label}-released"))?;
                 let reference =
                     self.direct_reference(&format!("direct-{label}-released"), BAND1)?;

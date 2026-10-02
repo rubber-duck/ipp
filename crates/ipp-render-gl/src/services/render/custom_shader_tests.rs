@@ -60,6 +60,7 @@ fn pose_and_skin_variants_keep_custom_vertex_and_shadow_entries() {
                     .into(),
                 fragment: "vec4 materialFragment() { if(v_uv.x < 0.5) discard; return vec4(1); }"
                     .into(),
+                ..Default::default()
             },
         )]),
         ..Default::default()

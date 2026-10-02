@@ -119,11 +119,13 @@ pub(crate) fn run(context: &super::egl::Context, evidence: &std::path::Path) -> 
 
     // Writing retained storage checks the same frame's end.
     {
-        let vertex = ipp_render_gl::GuiVertex::EMPTY;
-        let mut batch = device.create_gui_batch(6)?;
+        use ipp_render_gl::GuiRecord as _;
+
+        let record = ipp_render_gl::GuiShapeRecord::EMPTY;
+        let mut batch = device.create_gui_batch(ipp_render_gl::GuiRecordKind::Shape, 1)?;
         device.begin_frame(WIDTH, HEIGHT, &CLEAR)?;
         context.raise_gl_error()?;
-        device.write_gui_batch(&mut batch, 0, &[vertex; 6])?;
+        device.write_gui_batch(&mut batch, 0, &[record])?;
         draw(&mut device)?;
         let ended = device.end_frame();
         device.delete_gui_batch(batch);

@@ -8,7 +8,11 @@
 //! settles its delivery ticket; a command's result is its batch outcome.
 
 use super::command::GuiLocalOperation;
-use super::control::{GuiControl, ancestry, component_incarnation, eligibility, entity_control};
+use super::control::{
+    GuiControl, ancestry, component_incarnation, eligibility, entity_control, focus_parts,
+    focusable,
+};
+use super::group::{GuiGroupTree, selection_write};
 use super::system_state::live;
 use super::*;
 use crate::services::gui_input::GuiInputError;
@@ -72,7 +76,7 @@ fn set_field(entity: EntityId, component: u16, offset: usize, value: FieldValue)
     }
 }
 
-fn write_error(reason: ErrorReason) -> GuiInputError {
+pub(super) fn write_error(reason: ErrorReason) -> GuiInputError {
     match reason {
         ErrorReason::Capacity => GuiInputError::Capacity,
         ErrorReason::InvalidEntity | ErrorReason::MissingComponent => {
@@ -90,6 +94,7 @@ impl GuiSystem {
     ) -> Result<(), ErrorReason> {
         let previous_revision = self.local.presentation_revision;
         let previous_focus = self.local.motion_focus();
+        let previous_active = self.local.active_entities();
         let result = self.execute(context, command);
         if previous_revision != self.local.presentation_revision {
             self.motion.dirty_entity(command.input.target().entity);
@@ -98,8 +103,10 @@ impl GuiSystem {
             {
                 self.motion.dirty_entity(entity);
             }
-            if matches!(command.operation, GuiLocalOperation::Interaction { .. }) {
-                self.motion.watch(command.input.target().entity);
+
+            // An item that stops being active loses its hover paint.
+            for entity in previous_active {
+                self.motion.dirty_entity(entity);
             }
         }
         if let Err(error) = result {
@@ -165,9 +172,40 @@ impl GuiSystem {
                 update,
                 part,
             } => {
+                let group = GuiGroupTree::committed(context.world.world).active_group(control);
+                return self.local.interact(
+                    command, control, lease, *update, *part, group, tick, ancestry,
+                );
+            }
+            GuiLocalOperation::ActiveItem => {
+                let group = GuiGroupTree::committed(context.world.world)
+                    .active_group(control)
+                    .ok_or(GuiInputError::Local(GuiLocalActionError::UnsupportedAction))?;
+                return self.local.make_active(command, control, group);
+            }
+            GuiLocalOperation::Number(operation) => {
                 return self
-                    .local
-                    .interact(command, control, lease, *update, *part, tick, ancestry);
+                    .number_operation(context, command, control, *operation, tick, ancestry);
+            }
+            // Enter on a numeric input commits its edit and submits the number.
+            GuiLocalOperation::Action(GuiLocalAction::Submit)
+                if context
+                    .world
+                    .world
+                    .components
+                    .gui_text_input(entity.index() as usize)
+                    .is_some_and(|input| input.numeric) =>
+            {
+                return self.number_operation(
+                    context,
+                    command,
+                    control,
+                    super::number::GuiNumberOperation::Commit {
+                        submit: true,
+                    },
+                    tick,
+                    ancestry,
+                );
             }
             _ => {}
         }
@@ -190,13 +228,15 @@ impl GuiSystem {
                 chain.enter(*ordinal, command.input.key())?,
             ))),
             GuiLocalOperation::Focus {
+                part,
                 ..
-            } => Some(GuiLocalOperation::Action(GuiLocalAction::Focus)),
+            } => Some(GuiLocalOperation::Action(GuiLocalAction::Focus(*part))),
             _ => None,
         };
         let focus_visible = match command.operation {
             GuiLocalOperation::Focus {
                 visible,
+                ..
             } => visible || control.kind == GuiControlKind::TextInput,
             _ => true,
         };
@@ -216,6 +256,7 @@ impl GuiSystem {
         if let Some(GuiLocalEffectKind::FocusChanged {
             focused: true,
             changed,
+            ..
         }) = &mut kind
         {
             *changed |= self.local.focus_visible != focus_visible;
@@ -224,17 +265,46 @@ impl GuiSystem {
             Some(GuiLocalEffectKind::FocusChanged {
                 focused,
                 changed: true,
-            }) => Some(*focused),
+                part,
+            }) => Some((*focused, *part)),
             _ => None,
         };
 
+        // Routed focus keeps focus that a command set without an owner, so it
+        // outlives this session; any other routed focus belongs to it.
+        let commanded = self
+            .local
+            .focus
+            .as_ref()
+            .is_some_and(|(focused, owner)| *focused == control.target && owner.is_none());
+        let focus_owner = (!commanded).then(|| owner.clone());
+
+        // Focus that moves to this control reveals it in its scroll views.
+        let reveal = focus_change.is_some_and(|(focused, _)| focused)
+            && self
+                .local
+                .focus
+                .as_ref()
+                .is_none_or(|(focused, _)| *focused != control.target);
+
         // A focus change replaces the native record and drops any provisional
-        // run it displayed.
-        let text_changed = focus_change.is_some() && self.local.composing();
+        // run it displayed. Focusing a text input that is already focused
+        // installs this session's record when it does not hold one, as when
+        // the input context adopts focus a command set.
+        let installs_native = matches!(
+            kind,
+            Some(GuiLocalEffectKind::FocusChanged {
+                focused: true,
+                ..
+            })
+        ) && control.kind == GuiControlKind::TextInput
+            && !self.local.holds_native_text(control.target, &owner);
+        let native_changed = focus_change.is_some() || installs_native;
+        let text_changed = native_changed && self.local.composing();
         let presentation_revision = self
             .local
             .presentation_revision
-            .checked_add(u64::from(focus_change.is_some()))
+            .checked_add(u64::from(native_changed))
             .ok_or(GuiInputError::Capacity)?;
         let text_revision = self
             .local
@@ -244,10 +314,11 @@ impl GuiSystem {
         let native_generation = self
             .local
             .native_generation
-            .checked_add(u64::from(focus_change.is_some()))
+            .checked_add(u64::from(native_changed))
             .ok_or(GuiInputError::Capacity)?;
-        let native_reset = focus_change.map(|focused| {
-            focused
+        let native_reset = native_changed.then(|| {
+            focus_change
+                .is_none_or(|(focused, _)| focused)
                 .then(|| {
                     context
                         .world
@@ -258,13 +329,30 @@ impl GuiSystem {
                             super::text::GuiNativeText::new(
                                 control.target,
                                 owner.clone(),
-                                input.text.clone(),
+                                input,
                                 native_generation,
                             )
                         })
                 })
                 .flatten()
         });
+        // A numeric edit another input session's focus takes over ends
+        // without a commit; this session's own blur committed its edit first.
+        let taken = native_changed
+            .then(|| {
+                self.local
+                    .native_text
+                    .as_ref()
+                    .filter(|native| native.owner.id() != owner.id())
+                    .and_then(super::text::GuiNativeText::pending_number_edit)
+            })
+            .flatten();
+        if taken.is_some() {
+            self.local
+                .number_discards
+                .try_reserve(1)
+                .map_err(|_| GuiInputError::Capacity)?;
+        }
         let effect = kind
             .map(|kind| {
                 Ok::<_, GuiInputError>(GuiLocalEffect {
@@ -294,13 +382,24 @@ impl GuiSystem {
         let local = &mut self.local;
         prepared.commit_with_publication(
             || {
-                if let Some(focused) = focus_change {
-                    local.focus = focused.then_some((control.target, Some(owner)));
+                if let Some((focused, part)) = focus_change {
+                    local.focus = focused.then_some((control.target, focus_owner));
+                    local.focus_part = if focused {
+                        part
+                    } else {
+                        0
+                    };
                     local.focus_visible = focused && focus_visible;
+                }
+                if native_changed {
                     local.presentation_revision = presentation_revision;
                     local.text_revision = text_revision;
                 }
+                if reveal {
+                    local.reveal = Some(entity);
+                }
                 if let Some(native) = native_reset {
+                    local.number_discards.extend(taken);
                     local.native_text = native;
                     local.native_generation = native_generation;
                 }
@@ -328,21 +427,57 @@ impl GuiSystem {
         tick: u64,
         ancestry: Arc<[EntityId]>,
     ) -> Result<(), GuiInputError> {
-        let text = context
+        let input = context
             .world
             .world
             .components
             .gui_text_input(control.target.entity.index() as usize)
-            .map(|input| input.text.clone())
+            .cloned()
             .ok_or(GuiInputError::Local(GuiLocalActionError::UnsupportedAction))?;
+
+        // A numeric input edits its native text, which no field holds.
+        let text = if input.numeric {
+            self.local
+                .native_text(control.target)
+                .map(|native| native.text.clone())
+                .ok_or(GuiInputError::Unavailable)?
+        } else {
+            input.text.clone()
+        };
         let super::text::GuiPreparedTextEdit {
-            state,
-            effect,
+            mut state,
+            mut effect,
             changed_text,
-            changed_display,
+            mut changed_display,
         } = self
             .local
             .prepare_text_edit(command, control, text, fence, edit, tick, ancestry)?;
+
+        // Enter commits a numeric edit: its number, then the edit shows it
+        // formatted and submits that; text that does not parse is rejected
+        // and stays.
+        let mut value = None;
+        let mut basis = None;
+        if input.numeric
+            && matches!(edit, GuiTextEdit::Submit)
+            && let Some(effect) = effect.as_mut()
+        {
+            match input.committed(&state.text) {
+                Some(committed) => {
+                    let formatted = super::number::format_number(committed, input.precision);
+                    changed_display |= *state.text != *formatted;
+                    state = super::text::GuiNativeText::state(
+                        control.target,
+                        formatted.clone(),
+                        state.fence.generation,
+                    );
+                    effect.kind = GuiLocalEffectKind::Submitted(formatted.clone());
+                    value = (committed != input.value).then_some(committed);
+                    basis = Some(formatted);
+                }
+                None => effect.kind = GuiLocalEffectKind::Rejected(state.text.clone()),
+            }
+        }
         let presentation_revision = self
             .local
             .presentation_revision
@@ -354,19 +489,27 @@ impl GuiSystem {
             .checked_add(u64::from(changed_display))
             .ok_or(GuiInputError::Capacity)?;
         let generation = state.fence.generation;
-        let written = state.text.clone();
+        let written = match value {
+            Some(value) => Some(set_field(
+                control.target.entity,
+                ComponentValue::GUI_TEXT_INPUT,
+                std::mem::offset_of!(GuiTextInput, value),
+                FieldValue::F32(value),
+            )),
+            None if changed_text && !input.numeric => Some(set_field(
+                control.target.entity,
+                ComponentValue::GUI_TEXT_INPUT,
+                std::mem::offset_of!(GuiTextInput, text),
+                FieldValue::String(state.text.clone()),
+            )),
+            None => None,
+        };
         let prepared = command.input.prepare_native(state, effect)?;
-        if changed_text {
+        if let Some(written) = written {
             self.local.own_text_write = true;
-            let result = context.world.apply_authored_commands(
-                Some(self),
-                &[set_field(
-                    control.target.entity,
-                    ComponentValue::GUI_TEXT_INPUT,
-                    std::mem::offset_of!(GuiTextInput, text),
-                    FieldValue::String(written),
-                )],
-            );
+            let result = context
+                .world
+                .apply_authored_commands(Some(self), &[written]);
             self.local.own_text_write = false;
             if let Err(reason) = result {
                 let error = write_error(reason);
@@ -378,11 +521,11 @@ impl GuiSystem {
         prepared.commit(
             |state| {
                 local.native_generation = generation;
-                local
-                    .native_text
-                    .as_mut()
-                    .expect("validated native owner")
-                    .state = state.clone();
+                let native = local.native_text.as_mut().expect("validated native owner");
+                native.state = state.clone();
+                if basis.is_some() {
+                    native.basis = basis;
+                }
 
                 // The field write's own commit may already have advanced these
                 // dirty counters; they only move forward.
@@ -398,6 +541,14 @@ impl GuiSystem {
 impl GuiLocalState {
     pub(in crate::world::systems::gui) fn motion_focus(&self) -> Option<EntityId> {
         self.focus.as_ref().map(|(target, _)| target.entity)
+    }
+
+    /// The part `target` holds focus on, or 0 when it holds none.
+    fn held_part(&self, target: GuiEntityTarget) -> u32 {
+        match &self.focus {
+            Some((focused, owner)) if *focused == target && live(owner) => self.focus_part,
+            _ => 0,
+        }
     }
 
     /// Check the exact control lifetime and its eligibility fields.
@@ -440,14 +591,66 @@ impl GuiLocalState {
             .get(component, entity.index() as usize)
             .ok_or(GuiLocalActionError::StaleTarget)?;
         let action = match operation {
-            GuiLocalOperation::SliderStep(steps) => {
+            GuiLocalOperation::SliderStep {
+                steps,
+                fine,
+                part,
+            } => {
                 let ComponentValue::GuiSlider(slider) = &value else {
                     return Err(GuiLocalActionError::UnsupportedAction);
                 };
-                let scalar =
-                    super::slider::nudge(slider.min, slider.max, slider.step, slider.value, *steps)
-                        .unwrap_or(slider.value);
-                return value_writes(&GuiLocalAction::SetScalar(scalar), &value)
+                let step = if *fine && slider.fine_step > 0.0 {
+                    slider.fine_step
+                } else {
+                    slider.step
+                };
+                let current = slider.thumb_value(*part);
+                let scalar = super::slider::nudge(slider.min, slider.max, step, current, *steps)
+                    .unwrap_or(current);
+                return thumb_writes(slider, *part, scalar)
+                    .map(|writes| writes.commands(entity, component));
+            }
+            GuiLocalOperation::SliderThumb {
+                part,
+                value: requested,
+            } => {
+                let ComponentValue::GuiSlider(slider) = &value else {
+                    return Err(GuiLocalActionError::UnsupportedAction);
+                };
+                return thumb_writes(slider, *part, *requested)
+                    .map(|writes| writes.commands(entity, component));
+            }
+            GuiLocalOperation::ColorChannels {
+                channels,
+            } => {
+                let ComponentValue::GuiColor(color) = &value else {
+                    return Err(GuiLocalActionError::UnsupportedAction);
+                };
+                let mut target = color.channels();
+                for (channel, requested) in target.iter_mut().zip(channels) {
+                    if let Some(requested) = requested {
+                        *channel = requested.clamp(0.0, 1.0);
+                    }
+                }
+                return color_writes(color, target)
+                    .map(|writes| writes.commands(entity, component));
+            }
+            GuiLocalOperation::ColorStep {
+                channel,
+                steps,
+                fine,
+            } => {
+                let ComponentValue::GuiColor(color) = &value else {
+                    return Err(GuiLocalActionError::UnsupportedAction);
+                };
+                let step = if *fine {
+                    super::color::COLOR_FINE_STEP
+                } else {
+                    super::color::COLOR_STEP
+                };
+                let mut target = color.channels();
+                target[*channel] = super::color::nudge(target[*channel], *steps, step);
+                return color_writes(color, target)
                     .map(|writes| writes.commands(entity, component));
             }
             GuiLocalOperation::ScrollAxis {
@@ -460,6 +663,26 @@ impl GuiLocalState {
                 return scroll
                     .scroll_to(requested)
                     .map(|writes| writes.commands(entity, component));
+            }
+            GuiLocalOperation::Context {
+                point,
+            } => {
+                return Ok(GuiActionOutcome {
+                    kind: Some(GuiLocalEffectKind::ContextRequested {
+                        point: *point,
+                    }),
+                    writes: Vec::new(),
+                    consumed: [0.0; 2],
+                });
+            }
+            GuiLocalOperation::Select => {
+                let tree = GuiGroupTree::committed(world.world);
+                tree.selecting_group(control)
+                    .ok_or(GuiLocalActionError::UnsupportedAction)?;
+                return Ok(GuiValueWrites::new(
+                    selection_write(tree, control).into_iter().collect(),
+                )
+                .commands(entity, component));
             }
             GuiLocalOperation::Action(action) => action,
             GuiLocalOperation::Text {
@@ -476,7 +699,11 @@ impl GuiLocalState {
             }
             | GuiLocalOperation::Focus {
                 ..
-            } => unreachable!("delegated or separately prepared operation"),
+            }
+            | GuiLocalOperation::ActiveItem
+            | GuiLocalOperation::Number(_) => {
+                unreachable!("delegated or separately prepared operation")
+            }
         };
         let momentary = |kind| GuiActionOutcome {
             kind: Some(kind),
@@ -484,30 +711,54 @@ impl GuiLocalState {
             consumed: [0.0; 2],
         };
         match (action, &value) {
-            (GuiLocalAction::Press, ComponentValue::GuiButton(_)) => {
-                Ok(momentary(GuiLocalEffectKind::Pressed))
-            }
+            // Pressing an item of a group that selects selects it.
+            (GuiLocalAction::Press, ComponentValue::GuiButton(_)) => Ok(GuiActionOutcome {
+                writes: selection_write(GuiGroupTree::committed(world.world), control)
+                    .map(|field| Command::SetField {
+                        entity: EntityRef::Handle(entity),
+                        component,
+                        field,
+                    })
+                    .into_iter()
+                    .collect(),
+                ..momentary(GuiLocalEffectKind::Pressed)
+            }),
             (GuiLocalAction::Submit, ComponentValue::GuiTextInput(input)) => {
                 Ok(momentary(GuiLocalEffectKind::Submitted(input.text.clone())))
             }
-            (GuiLocalAction::Focus | GuiLocalAction::Blur, _) => {
+            (GuiLocalAction::Focus(part), _)
+                if !focusable(world.world, entity)
+                    || *part >= focus_parts(world.world, control) =>
+            {
+                Err(GuiLocalActionError::UnsupportedAction)
+            }
+            (GuiLocalAction::Focus(_) | GuiLocalAction::Blur, _) => {
                 let current = self.focus.as_ref().filter(|(_, owner)| live(owner));
                 let target_focused = current.is_some_and(|(target, _)| *target == control.target);
-                // Focus set by a command has no owner and is never foreign.
+                // Focus set by a command has no owner and is never foreign;
+                // focusing it again keeps it unowned, so that is no change.
                 let owner_id = current.and_then(|(_, current)| current.as_ref().map(|c| c.id()));
-                let owned = owner_id == Some(owner.id());
                 let foreign = owner_id.is_some_and(|id| id != owner.id());
-                let focused = *action == GuiLocalAction::Focus;
+                let held = if target_focused {
+                    self.focus_part
+                } else {
+                    0
+                };
+                let (focused, part) = match action {
+                    GuiLocalAction::Focus(part) => (true, *part),
+                    _ => (false, held),
+                };
                 if !focused && target_focused && foreign {
                     return Err(GuiLocalActionError::Unavailable);
                 }
                 Ok(momentary(GuiLocalEffectKind::FocusChanged {
                     focused,
                     changed: if focused {
-                        !target_focused || !owned
+                        !target_focused || foreign || part != held
                     } else {
                         target_focused
                     },
+                    part,
                 }))
             }
             _ => value_writes(action, &value).map(|writes| writes.commands(entity, component)),
@@ -520,7 +771,8 @@ impl GuiSystem {
     ///
     /// Validation runs in the documented order, and nothing changes before it
     /// completes. Value actions write the staged control component; press,
-    /// submit and focus changes publish a momentary effect.
+    /// submit and focus changes publish a momentary effect. A press also
+    /// selects an item of a group that selects.
     pub(in crate::world::systems::gui) fn apply_action(
         &mut self,
         context: &mut SystemOperationContext<'_>,
@@ -552,14 +804,36 @@ impl GuiSystem {
             .staged
             .component(&context.world_data.components, entity, component)
             .map_err(|_| stale)?;
+
+        // The staged value decides the parts, so a batch may make a range and
+        // focus its upper thumb.
+        let parts = match &value {
+            ComponentValue::GuiSlider(slider) => slider.thumbs(),
+            ComponentValue::GuiColor(color) => color.parts(),
+            _ => 1,
+        };
         let kind = match (action, &value) {
             (GuiLocalAction::Press, ComponentValue::GuiButton(_)) => GuiLocalEffectKind::Pressed,
+            (GuiLocalAction::Submit, ComponentValue::GuiTextInput(input)) if input.numeric => {
+                GuiLocalEffectKind::Submitted(input.formatted())
+            }
             (GuiLocalAction::Submit, ComponentValue::GuiTextInput(input)) => {
                 GuiLocalEffectKind::Submitted(input.text.clone())
             }
-            (GuiLocalAction::Focus | GuiLocalAction::Blur, _) => GuiLocalEffectKind::FocusChanged {
-                focused: *action == GuiLocalAction::Focus,
+            (GuiLocalAction::Focus(part), _)
+                if !focusable(context.world_data, entity) || *part >= parts =>
+            {
+                return Err(ErrorReason::UnsupportedAction);
+            }
+            (GuiLocalAction::Focus(part), _) => GuiLocalEffectKind::FocusChanged {
+                focused: true,
                 changed: true,
+                part: *part,
+            },
+            (GuiLocalAction::Blur, _) => GuiLocalEffectKind::FocusChanged {
+                focused: false,
+                changed: true,
+                part: self.local.held_part(control),
             },
             _ => {
                 let writes = value_writes(action, &value).map_err(action_error)?;
@@ -581,6 +855,41 @@ impl GuiSystem {
             }
         };
 
+        // Pressing an item of a group that selects selects it.
+        if kind == GuiLocalEffectKind::Pressed {
+            let tree = GuiGroupTree {
+                world: context.world_data,
+                state: &context.staged.entities_state,
+            };
+            let button = GuiControl {
+                target: control,
+                kind: GuiControlKind::Button,
+            };
+            if let Some(field) = selection_write(tree, button) {
+                context
+                    .staged
+                    .write_component_fields(
+                        &context.world_data.components,
+                        entity,
+                        component,
+                        &[field],
+                    )
+                    .map_err(|reason| match reason {
+                        ErrorReason::Capacity => ErrorReason::Capacity,
+                        _ => ErrorReason::InvalidValue,
+                    })?;
+            }
+        }
+
+        // Focus leaving a numeric input commits its pending edit first.
+        if let GuiLocalEffectKind::FocusChanged {
+            focused,
+            ..
+        } = kind
+        {
+            self.commit_ending_number_edit(context, control, focused)?;
+        }
+
         // The effect is published at this boundary, in ingress order with
         // observation cuts, with the tick of the frame applying the batch.
         let effect = GuiLocalEffect {
@@ -601,11 +910,12 @@ impl GuiSystem {
         };
         if let GuiLocalEffectKind::FocusChanged {
             focused,
+            part,
             ..
         } = effect.kind
         {
             let previous = self.local.motion_focus();
-            if !self.local.set_action_focus(control, focused)? {
+            if !self.local.set_action_focus(control, focused, part)? {
                 return Ok(());
             }
             self.motion.dirty_entity(entity);
@@ -635,12 +945,13 @@ impl GuiLocalState {
         &mut self,
         target: GuiEntityTarget,
         focused: bool,
+        part: u32,
     ) -> Result<bool, ErrorReason> {
         let target_focused = self
             .focus
             .as_ref()
             .is_some_and(|(current, owner)| *current == target && live(owner));
-        if focused == target_focused {
+        if focused == target_focused && (!focused || part == self.focus_part) {
             return Ok(false);
         }
         // Every counter is checked before any state changes.
@@ -654,13 +965,78 @@ impl GuiLocalState {
             return Err(ErrorReason::Capacity);
         };
         self.focus = focused.then_some((target, None));
+        self.focus_part = if focused {
+            part
+        } else {
+            0
+        };
         self.focus_visible = focused;
+        if focused {
+            self.reveal = Some(target.entity);
+        }
         self.native_text = None;
         self.native_generation = native_generation;
         self.presentation_revision = presentation_revision;
         self.text_revision = text_revision;
         Ok(true)
     }
+}
+
+/// The write moving thumb `part` of `slider` towards `requested`: clamped to
+/// the range and, on a range, stopped at the other thumb. A thumb the slider
+/// does not have is unsupported; an unchanged value writes nothing.
+fn thumb_writes(
+    slider: &GuiSlider,
+    part: u32,
+    requested: f32,
+) -> Result<GuiValueWrites, GuiLocalActionError> {
+    if part >= slider.thumbs() {
+        return Err(GuiLocalActionError::UnsupportedAction);
+    }
+    if !requested.is_finite() {
+        return Err(GuiLocalActionError::InvalidValue);
+    }
+    let scalar = slider.thumb_clamp(part, requested);
+    let offset = slider.thumb_field(part);
+    let mut candidate = *slider;
+    if part == 1 {
+        candidate.upper = scalar;
+    } else {
+        candidate.value = scalar;
+    }
+    crate::components::schema::ComponentLifecycle::validate(&candidate)
+        .map_err(|_| GuiLocalActionError::InvalidValue)?;
+    Ok(GuiValueWrites::new(if scalar == slider.thumb_value(part) {
+        Vec::new()
+    } else {
+        vec![field(offset, FieldValue::F32(scalar))]
+    }))
+}
+
+/// The writes moving `color` to the channels `target` in field order; unchanged
+/// channels are not written.
+fn color_writes(color: &GuiColor, target: [f32; 4]) -> Result<GuiValueWrites, GuiLocalActionError> {
+    let candidate = GuiColor {
+        hue: target[0],
+        saturation: target[1],
+        value: target[2],
+        alpha: target[3],
+        ..*color
+    };
+    crate::components::schema::ComponentLifecycle::validate(&candidate)
+        .map_err(|_| GuiLocalActionError::InvalidValue)?;
+    Ok(GuiValueWrites::new(
+        color
+            .channels()
+            .into_iter()
+            .zip(target)
+            .enumerate()
+            .filter(|(_, (current, next))| current != next)
+            .map(|(channel, (_, next))| {
+                field(GuiColor::channel_field(channel), FieldValue::F32(next))
+            })
+            .collect(),
+    ))
 }
 
 /// Compute a value action's field writes from the control's current value,
@@ -696,7 +1072,30 @@ fn value_writes(
                 )]
             }))
         }
-        (GuiLocalAction::SetText(text), ComponentValue::GuiTextInput(input)) => {
+        // A semantic colour outside the channels' range is refused, as a
+        // scalar outside the slider's range is.
+        (GuiLocalAction::SetColor(channels), ComponentValue::GuiColor(color)) => {
+            color_writes(color, *channels)
+        }
+        // A numeric input's semantic value is its number, which the range
+        // bounds as a slider's does.
+        (GuiLocalAction::SetScalar(scalar), ComponentValue::GuiTextInput(input))
+            if input.numeric =>
+        {
+            let scalar = *scalar;
+            if !scalar.is_finite() || scalar < input.min || scalar > input.max {
+                return Err(GuiLocalActionError::InvalidValue);
+            }
+            Ok(GuiValueWrites::new(if scalar == input.value {
+                Vec::new()
+            } else {
+                vec![field(
+                    std::mem::offset_of!(GuiTextInput, value),
+                    FieldValue::F32(scalar),
+                )]
+            }))
+        }
+        (GuiLocalAction::SetText(text), ComponentValue::GuiTextInput(input)) if !input.numeric => {
             super::component::single_line_text(text)
                 .map_err(|_| GuiLocalActionError::InvalidValue)?;
             Ok(GuiValueWrites::new(if **text == *input.text {

@@ -11,6 +11,7 @@ import "./gui-clipboard.test.js";
 import "./gui-soft-keyboard.test.js";
 import "./gui-text-bridge.test.js";
 import "./gui-declaration.test.js";
+import "./gui-kit.test.js";
 import "./control-refs.test.js";
 import "./canvas-world.test.js";
 import {

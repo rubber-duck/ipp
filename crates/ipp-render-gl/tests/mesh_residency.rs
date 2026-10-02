@@ -1020,10 +1020,10 @@ fn context_loss_during_gui_storage_write_reaches_recovery() {
         (1, 1),
         "{recovered:?}"
     );
-    // One glyph quad, the room its slot reserves to grow and room for appended work.
+    // One glyph record, the room its slot reserves to grow and room for appended work.
     assert_eq!(
         recovered.gui_resident_bytes as usize,
-        (6 + 24 + 12) * std::mem::size_of::<ipp_render_gl::GuiVertex>()
+        (1 + 4 + 1) * std::mem::size_of::<ipp_render_gl::GuiGlyphRecord>()
     );
     let warm = present_world!(finish; render_frame, &mut renderer, host, world, 100, 100).unwrap();
     assert_eq!((warm.uploaded_bytes, warm.gui_batches), (0, 1));

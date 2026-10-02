@@ -216,7 +216,9 @@ for (const target of ["native", "wasm"]) {
       }),
       index,
     );
-  assert.throws(() => codec.guiPaintPartIndex({ part: "caret" }));
+  // Composition is a paint identity that resolves through the label, not a
+  // skin part.
+  assert.throws(() => codec.guiPaintPartIndex({ part: "composition" }));
   assert.throws(() =>
     codec.guiPaintPartIndex({ part: "fill", variant: "checked" }),
   );
@@ -239,6 +241,21 @@ for (const target of ["native", "wasm"]) {
         {
           part: codec.guiPaintPartIndex({ part: "background" }),
           color: [0.25, 0.5, 0.75, 1],
+          glow_inner_radius: 3,
+          corner_cut: [4, 0, 4, 0],
+          corner_accent: [0, 8, 0, 8],
+          corner_accent_width: 2,
+          shape: 1,
+          stroke_a: [0.25, 0.5, 0.5, 0.75],
+          stroke_b: [0.5, 0.75, 1, 0],
+          arc_start: -1.25,
+          arc_sweep: 0.75,
+          arc_dashes: [48, 0.25],
+          fill_mode: 4,
+          fill_hue: -0.45,
+          checker_size: 6,
+          checker_color0: [0.6, 0.6, 0.6, 1],
+          checker_color1: [0.3, 0.3, 0.3, 0.5],
         },
       ],
     ]),
@@ -260,8 +277,68 @@ for (const target of ["native", "wasm"]) {
   );
   assert.equal(Object.isFrozen(codec.GUI_PAINT_PART_KEYS), true);
   assert.equal(Object.isFrozen(codec.GUI_PAINT_PART_KEYS[0]), true);
+
+  // The built-in looks are the export's tables, as f32 lanes, and each one is
+  // an ordinary GuiTheme.parts table that round-trips the generated codec.
+  const f32 = (row) =>
+    Object.fromEntries(
+      Object.entries(row).map(([key, value]) => [
+        key,
+        key === "part"
+          ? value
+          : Array.isArray(value)
+            ? value.map(Math.fround)
+            : Math.fround(value),
+      ]),
+    );
+  const looks = Object.fromEntries(
+    Object.entries(codec.GUI_SKIN_LOOKS).map(([name, look]) => [
+      name,
+      {
+        em: Math.fround(look.em),
+        parts: look.parts.map(f32),
+        motion: look.motion.map(f32),
+      },
+    ]),
+  );
+  assert.deepEqual(looks, report[target].skinLooks);
+  for (const name of Object.keys(codec.GUI_SKIN_LOOKS)) {
+    const table = codec.guiSkinLookTable(name);
+    assert.equal(table.nextSlot, codec.GUI_SKIN_LOOKS[name].parts.length);
+    const decoded = codec.GuiTheme.decodeParts(
+      codec.GuiTheme.encodeParts(table),
+    );
+    assert.deepEqual(
+      [...decoded.rows.values()].map(f32),
+      looks[name].parts,
+      `${target}: ${name} look`,
+    );
+    // Its motion rows are an ordinary GuiThemeMotion.parts table too.
+    const motion = codec.guiSkinLookMotionTable(name);
+    assert.equal(motion.nextSlot, codec.GUI_SKIN_LOOKS[name].motion.length);
+    const timing = codec.GuiThemeMotion.decodeParts(
+      codec.GuiThemeMotion.encodeParts(motion),
+    );
+    assert.deepEqual(
+      [...timing.rows.values()].map(f32),
+      looks[name].motion,
+      `${target}: ${name} motion`,
+    );
+  }
+  assert.equal(Object.isFrozen(codec.GUI_SKIN_LOOKS.switch), true);
+
+  // The design-language tokens are the export's values as f32 lanes.
+  const tokens = Object.fromEntries(
+    Object.entries(codec.GUI_SKIN_TOKENS).map(([name, value]) => [
+      name,
+      Array.isArray(value) ? value.map(Math.fround) : Math.fround(value),
+    ]),
+  );
+  assert.deepEqual(tokens, report[target].skinTokens);
+  assert.equal(Object.isFrozen(codec.GUI_SKIN_TOKENS), true);
+  assert.equal(Object.isFrozen(codec.GUI_SKIN_TOKENS.accent), true);
   const types = `
-import { encodeRowsTable, rowPatchFields, GuiTheme, GuiSkin, guiPaintPartIndex, type RowsInput, type GuiThemePartsRow, type GuiThemePartsRowPatch, type GuiPaintPartKey, type GuiPaintBasePartKey } from "./${target}.js";
+import { encodeRowsTable, rowPatchFields, GuiTheme, GuiSkin, guiPaintPartIndex, guiSkinLookTable, type RowsInput, type GuiThemePartsRow, type GuiThemePartsRowPatch, type GuiPaintPartKey, type GuiPaintBasePartKey, type GuiSkinLookName } from "./${target}.js";
 type Assert<Actual extends true> = Actual;
 export type GenericCheck = Assert<{ readonly nextSlot: number; readonly rows: ReadonlyMap<number, Readonly<{ weight: number }>> } extends RowsInput<{ weight: number }> ? true : false>;
 export const helpers = [encodeRowsTable, rowPatchFields];
@@ -273,8 +350,17 @@ export type GuiChecks = [
   Assert<{ part: "fill"; variant: "checked" } extends GuiPaintPartKey ? false : true>,
   Assert<{ part: "fill"; state: "pressed"; variant: "checked" } extends GuiPaintPartKey ? true : false>,
   Assert<{ part: "fill"; state: "pressed" } extends GuiPaintBasePartKey ? false : true>,
-  Assert<{ part: "fill" } extends GuiPaintBasePartKey ? true : false>
+  Assert<{ part: "fill" } extends GuiPaintBasePartKey ? true : false>,
+  Assert<{ part: number; glow_inner_radius: number; corner_cut: readonly [number, number, number, number]; corner_accent: readonly [number, number, number, number]; corner_accent_width: number; shape: number; stroke_a: readonly [number, number, number, number]; stroke_b: readonly [number, number, number, number]; arc_start: number; arc_sweep: number; arc_dashes: readonly [number, number]; fill_hue: number; checker_size: number; checker_color0: readonly [number, number, number, number]; checker_color1: readonly [number, number, number, number] } extends GuiThemePartsRow ? true : false>,
+  Assert<{ part: number; corner_cut: readonly [number, number] } extends GuiThemePartsRow ? false : true>,
+  Assert<{ part: number; arc_dashes: readonly [number, number, number, number] } extends GuiThemePartsRow ? false : true>,
+  Assert<{ part: number; checker_color0: readonly [number, number] } extends GuiThemePartsRow ? false : true>,
+  Assert<{ stroke_a: null; corner_accent: null; arc_sweep: null; fill_hue: null; checker_size: null } extends GuiThemePartsRowPatch ? true : false>,
+  Assert<"switch" extends GuiSkinLookName ? true : false>,
+  Assert<"amber" extends GuiSkinLookName ? true : false>,
+  Assert<"unknown" extends GuiSkinLookName ? false : true>
 ];
+export const switchTheme = GuiTheme.encodeParts(guiSkinLookTable("switch"));
 const parts: RowsInput<GuiThemePartsRow> = { nextSlot: 4, rows: new Map([[3, { part: guiPaintPartIndex({ part: "background" }), color: [1, 0, 0, 1] }]]) };
 export const encoded = GuiTheme.encodeParts(parts);
 export const decoded = GuiTheme.decodeParts(encoded);

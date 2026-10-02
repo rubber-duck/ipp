@@ -94,6 +94,7 @@ impl SystemFactory for CanvasSystemFactory {
                 ComponentValue::CANVAS_GLYPH_RUN,
                 ComponentValue::CANVAS_DRAWING,
                 ComponentValue::CANVAS_BITMAP,
+                ComponentValue::CANVAS_PAINT,
             ]
             .map(|component| {
                 SystemCapability::requiring(
@@ -346,6 +347,7 @@ fn input_component(component: u16) -> bool {
             | ComponentValue::CANVAS_DRAWING
             | ComponentValue::CANVAS_BITMAP
             | ComponentValue::CANVAS_BOX
+            | ComponentValue::CANVAS_PAINT
             | ComponentValue::SURFACE
             | ComponentValue::WORLD_ATTACHMENT
     )
@@ -361,6 +363,8 @@ fn gui_input_component(component: u16) -> bool {
             | ComponentValue::GUI_TEXT_INPUT
             | ComponentValue::GUI_SCROLL_VIEW
             | ComponentValue::GUI_VIRTUAL_LIST
+            | ComponentValue::GUI_COLOR
+            | ComponentValue::GUI_GROUP
             | ComponentValue::GUI_THEME
             | ComponentValue::GUI_SKIN
             | ComponentValue::GUI_FONT

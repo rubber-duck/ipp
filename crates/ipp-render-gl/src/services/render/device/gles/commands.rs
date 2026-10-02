@@ -241,21 +241,33 @@ impl RenderDevice for GlesRenderDevice {
         self.delete_surface_cache_target(target);
     }
 
-    fn create_gui_batch(&mut self, capacity: usize) -> Result<Self::GuiBatch, RenderError> {
-        self.create_gui_batch(capacity)
+    fn create_gui_batch(
+        &mut self,
+        kind: super::GuiRecordKind,
+        capacity: usize,
+    ) -> Result<Self::GuiBatch, RenderError> {
+        self.create_gui_batch(kind, capacity)
     }
 
-    fn write_gui_batch(
+    fn write_gui_batch<R: super::GuiRecord>(
         &mut self,
         batch: &mut Self::GuiBatch,
         first: usize,
-        vertices: &[super::GuiVertex],
+        records: &[R],
     ) -> Result<(), RenderError> {
-        self.write_gui_batch(batch, first, vertices)
+        self.write_gui_batch(batch, first, records)
     }
 
     fn delete_gui_batch(&mut self, batch: Self::GuiBatch) {
         self.delete_gui_batch(batch);
+    }
+
+    fn set_gui_paint_blocks(
+        &mut self,
+        program: &Self::Program,
+        blocks: &[[f32; 4]],
+    ) -> Result<(), RenderError> {
+        self.set_gui_paint_blocks(program, blocks)
     }
 
     fn draw_gui_batch(

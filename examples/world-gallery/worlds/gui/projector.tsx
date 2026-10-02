@@ -15,7 +15,14 @@ import {
   type AnimationHandle,
 } from "@ipp/react";
 import { useEffect, useRef } from "react";
-import type { GuiDemoSkin, GuiSceneState } from "./scene.js";
+import type { Accent, GuiSceneState } from "./scene.js";
+import { focusGain } from "./scene-tree.js";
+import {
+  linearColor,
+  projectionColor,
+  type Channel,
+  type ProjectionColor,
+} from "./tuning.js";
 
 type Color = readonly [number, number, number];
 type Point = readonly [number, number, number];
@@ -56,13 +63,22 @@ function rotatedAxis(axis: Point): Point {
 }
 
 const PROJECTOR_AXIS = rotatedAxis([0, 0, 1]);
+
+/** The panel's front normal in the World: the projector's axis. */
+export const PANEL_NORMAL = PROJECTOR_AXIS;
 const PANEL_CENTER: Point = PROJECTOR_CENTER.map(
   (value, axis) => value + PROJECTOR_AXIS[axis]! * PANEL_DISTANCE,
 ) as [number, number, number];
-const ACCENTS: Readonly<Record<GuiDemoSkin, Color>> = {
-  aurora: [0.18, 0.86, 1],
-  ember: [1, 0.34, 0.08],
-  neon: [0.25, 1, 0.92],
+/** The projection colour of each accent, in linear RGB. */
+export const ACCENT_COLORS: Readonly<Record<Accent, Color>> = {
+  cyan: [0.18, 0.86, 1],
+  amber: [1, 0.55, 0.08],
+};
+
+/** Each accent's projection colour as the colour picker holds it. */
+export const ACCENT_HSV: Readonly<Record<Accent, ProjectionColor>> = {
+  cyan: projectionColor(ACCENT_COLORS.cyan),
+  amber: projectionColor(ACCENT_COLORS.amber),
 };
 
 export const PROJECTOR_MESH_SOURCES = [
@@ -203,10 +219,21 @@ export function HolographicProjector({
   stagingX: number;
 }) {
   const dust = useRef<AnimationHandle>(null);
-  const accent = ACCENTS[scene.skin];
+  // The projection colour is the COLOUR tab's; choosing an accent sets it.
+  const tuning = scene.tuning.tuning;
+  const accent = linearColor(tuning.color);
   const energy = 0.38 + scene.gain * 0.62;
   const energized = scaled(accent, energy);
+  // CHANNELS switch parts off; the scene tree's selection brightens its node.
+  const channel = (key: Channel) => (tuning.channels.includes(key) ? 1 : 0);
+  const focus = (part: string) => focusGain(tuning.focus, part);
+  const lights = tuning.light / 50;
+  const stage = (part: string) => Math.min(focus(part), 1.35);
   const assets = projectorAssets();
+  const [nearZ, farZ] = scene.beamSection!.depth;
+  const dustOrigin = PROJECTOR_CENTER.map(
+    (value, axis) => value + (PROJECTOR_AXIS[axis]! * (nearZ + farZ)) / 2,
+  ) as [number, number, number];
 
   useEffect(() => {
     if (!scene.revealed) return;
@@ -238,7 +265,11 @@ export function HolographicProjector({
         <MeshInstance source={assets.floor} />
         <BoundingGeometry />
         <UnlitTexture source={assets.floorBaked} />
-        <UnlitMaterial r={1} g={1} b={1} />
+        <UnlitMaterial
+          r={stage("floor")}
+          g={stage("floor")}
+          b={stage("floor")}
+        />
       </Entity>
 
       <Entity id="gui-projector-base">
@@ -246,7 +277,7 @@ export function HolographicProjector({
         <MeshInstance source={assets.base} />
         <BoundingGeometry />
         <UnlitTexture source={assets.baseBaked} />
-        <UnlitMaterial r={1} g={1} b={1} />
+        <UnlitMaterial r={stage("base")} g={stage("base")} b={stage("base")} />
       </Entity>
 
       <Entity id="gui-projector-core">
@@ -262,7 +293,7 @@ export function HolographicProjector({
           source={assetRef("gui-projector-metal")}
           base={texture2D(assets.metal)}
           accent={[accent[0], accent[1], accent[2], 1]}
-          energy={energy}
+          energy={energy * focus("core")}
           receives_light
           receives_shadows={false}
           casts_shadows={false}
@@ -278,11 +309,12 @@ export function HolographicProjector({
         />
         <MeshInstance source={assets.trim} />
         <BoundingGeometry />
+        {/* A selected core lights its rim, the trim, in the projection colour. */}
         <PbrMaterial
-          r={0.27}
-          g={0.34}
-          b={0.38}
-          metallic={0.85}
+          r={tuning.focus === "core" ? accent[0] : 0.27}
+          g={tuning.focus === "core" ? accent[1] : 0.34}
+          b={tuning.focus === "core" ? accent[2] : 0.38}
+          metallic={tuning.focus === "core" ? 0.2 : 0.85}
           roughness={0.22}
           receive_shadows={false}
           cast_shadows={false}
@@ -321,7 +353,7 @@ export function HolographicProjector({
         <CustomMaterial
           source={assetRef("gui-projector-glow")}
           accent={[accent[0], accent[1], accent[2], 1]}
-          energy={0.75 + scene.gain * 0.8}
+          energy={(0.75 + scene.gain * 0.8) * focus("lens")}
           alpha_mode={2}
           receives_light
           receives_shadows={false}
@@ -337,9 +369,29 @@ export function HolographicProjector({
           source={assetRef("gui-projector-beam-shader")}
           section={scene.beamSection!.halfSize}
           depth={scene.beamSection!.depth}
+          accent={[accent[0], accent[1], accent[2], 1]}
+          energy={
+            energy * (tuning.beam / 100) * channel("beam") * focus("beam")
+          }
+          alpha_mode={2}
+          receives_light
+          receives_shadows={false}
+          casts_shadows={false}
+        />
+      </Entity>
+
+      {/* The dust sprites reuse the frustum's vertices as quads; see projector-dust-vertex.glsl. */}
+      <Entity id="gui-projector-dust">
+        <Transform {...placed(dustOrigin, stagingX)} />
+        <MeshInstance source={assets.beam} />
+        <BoundingGeometry />
+        <CustomMaterial
+          source={assetRef("gui-projector-dust-shader")}
+          section={scene.beamSection!.halfSize}
+          depth={scene.beamSection!.depth}
           phase={0}
           accent={[accent[0], accent[1], accent[2], 1]}
-          energy={energy}
+          energy={energy * channel("dust") * focus("dust")}
           alpha_mode={2}
           receives_light
           receives_shadows={false}
@@ -379,7 +431,7 @@ export function HolographicProjector({
           r={energized[0]}
           g={energized[1]}
           b={energized[2]}
-          intensity={0.4 + scene.gain * 1.8}
+          intensity={(0.4 + scene.gain * 1.8) * focus("glow")}
           range={7.5}
           cast_shadows={false}
         />
@@ -392,7 +444,7 @@ export function HolographicProjector({
           r={0.9}
           g={0.95}
           b={1}
-          intensity={80}
+          intensity={80 * lights * channel("key") * focus("key")}
           range={20}
           cast_shadows={false}
         />
@@ -404,7 +456,7 @@ export function HolographicProjector({
           r={0.8}
           g={0.88}
           b={1}
-          intensity={32}
+          intensity={32 * lights * channel("fill") * focus("fill")}
           range={24}
           cast_shadows={false}
         />

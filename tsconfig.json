@@ -14,6 +14,9 @@
       "@ipp/gui-authoring-contract": [
         "./target/react-gui-contract/generated.d.ts"
       ],
+      "@ipp/host-contract": [
+        "./target/react-gui-contract/generated.d.ts"
+      ],
       "@ipp/gui-stress-contract": [
         "./target/gui-stress-contract/generated.d.ts"
       ]
@@ -45,6 +48,10 @@
     "target/integration-artifacts/client/**/*.ts",
     "tests/react/**/*.ts",
     "tests/react/**/*.tsx",
+    "tests/skin-lab/**/*.ts",
+    "tests/skin-lab/**/*.tsx",
+    "tools/shared-host/**/*.ts",
+    "tools/shared-host/**/*.tsx",
     "tests/render/**/*.ts",
     "examples/**/*.tsx",
     "tests/render/**/*.tsx",

@@ -1,646 +1,667 @@
-use super::runtime::{GuiMotionChannels, GuiMotionOwner, GuiMotionRequest, GuiMotionSkinTarget};
-use super::{GuiSkinMotionStatus, GuiThemeMotion};
-use crate::systems::animation::AnimationTransitionEasing;
-use crate::systems::gui::local::GuiLocalState;
-use crate::systems::gui::local::control::{GuiControl, eligibility, entity_control};
-use crate::systems::gui::{GuiPartId, GuiPartVariant, GuiPrimitivePart, GuiSkinState};
+use super::runtime::{
+    GuiMotionChannels, GuiMotionFollows, GuiMotionKey, GuiMotionOwner, GuiMotionValues,
+    channel_focus_part, focus_part_channel, notify_sample,
+};
+use super::timing::GuiMotionRows;
+use crate::systems::gui::local::control::{GuiControl, eligibility, entity_control, focus_parts};
+use crate::systems::gui::local::{GUI_MAX_FOCUS_PARTS, GuiBehavior, GuiControlKind, GuiLocalState};
+use crate::systems::gui::presentation::looks::{GuiSkinLook, control_look};
+use crate::systems::gui::presentation::paint::{
+    appearance, control_variant, explicit_unchecked, inherited_font_size,
+};
+use crate::systems::gui::presentation::{GuiSkin, GuiTheme};
+use crate::systems::gui::{GuiPartStyle, GuiPartVariant, GuiPrimitivePart, GuiSkinState};
 use crate::systems::{SystemCommitContext, SystemRuntimeAccess};
-use crate::{ComponentValue, DynamicValue, EntityId};
-use std::collections::{BTreeMap, BTreeSet};
+use crate::world::WorldSimulationState;
+use crate::{ComponentValue, EntityId};
+use std::collections::BTreeSet;
 
-struct GuiMotionMembership {
-    target: GuiMotionSkinTarget,
-    theme: EntityId,
+/// Parts whose appearance follows the control's interaction key. Scroll bar
+/// parts resolve their states from layout, which follows animation, so they
+/// change immediately.
+const MOTION_PARTS: [GuiPrimitivePart; 5] = [
+    GuiPrimitivePart::Background,
+    GuiPrimitivePart::Fill,
+    GuiPrimitivePart::Label,
+    GuiPrimitivePart::Icon,
+    GuiPrimitivePart::FocusRing,
+];
+
+/// The parts focus part `part` of a control `kind` with several paints for
+/// itself: a range's thumb, and a colour control's surface with the field's
+/// marker or a rail's thumb.
+fn focus_part_paints(kind: GuiControlKind, part: u32) -> &'static [GuiPrimitivePart] {
+    use GuiPrimitivePart::{Icon, Marker, Track};
+
+    match kind {
+        GuiControlKind::Color if part == 0 => &[Track, Marker],
+        GuiControlKind::Color => &[Track, Icon],
+        _ => &[Icon],
+    }
 }
 
+/// A numeric input's step parts, each following its decrement (0) or
+/// increment (1) part's state.
+const STEP_PARTS: [(GuiPrimitivePart, usize); 4] = [
+    (GuiPrimitivePart::Decrement, 0),
+    (GuiPrimitivePart::DecrementMark, 0),
+    (GuiPrimitivePart::Increment, 1),
+    (GuiPrimitivePart::IncrementMark, 1),
+];
+
+/// The transition slots of a control `kind` with `parts` focus parts and,
+/// when `steps`, a numeric input's step parts: each channel key, the part it
+/// paints and whose state it follows. A control with several focus parts
+/// paints each focus part's own parts, which move on channels of their own,
+/// in place of the control's one Icon.
+fn motion_slots(
+    kind: GuiControlKind,
+    parts: u32,
+    steps: bool,
+) -> impl Iterator<Item = (u32, GuiPrimitivePart, GuiMotionFollows)> {
+    let several = parts > 1;
+    MOTION_PARTS
+        .into_iter()
+        .filter(move |part| !(several && *part == GuiPrimitivePart::Icon))
+        .map(|part| (part as u32, part, GuiMotionFollows::Control))
+        .chain(
+            (0..if several {
+                parts
+            } else {
+                0
+            })
+                .flat_map(move |focus| {
+                    focus_part_paints(kind, focus).iter().map(move |&part| {
+                        (
+                            focus_part_channel(focus, part),
+                            part,
+                            GuiMotionFollows::FocusPart(focus),
+                        )
+                    })
+                }),
+        )
+        .chain(
+            STEP_PARTS
+                .into_iter()
+                .filter(move |_| steps)
+                .map(|(part, step)| (part as u32, part, GuiMotionFollows::Step(step))),
+        )
+}
+
+/// The part a channel key of [`motion_slots`] paints and whose state it
+/// follows.
+fn slot_of(channel: u32) -> Option<(GuiPrimitivePart, GuiMotionFollows)> {
+    match channel_focus_part(channel) {
+        Some((part, focus)) => Some((part, GuiMotionFollows::FocusPart(focus))),
+        None => MOTION_PARTS
+            .into_iter()
+            .find(|part| *part as u32 == channel)
+            .map(|part| (part, GuiMotionFollows::Control))
+            .or_else(|| {
+                STEP_PARTS
+                    .into_iter()
+                    .find(|(part, _)| *part as u32 == channel)
+                    .map(|(part, step)| (part, GuiMotionFollows::Step(step)))
+            }),
+    }
+}
+
+/// GUI's side of skin motion: it records each control's interaction key and,
+/// when the key changes, writes each changed part's transition request into
+/// the control's `GuiBehavior` for AnimationSystem to sample.
 #[derive(Default)]
 pub(in crate::world::systems::gui) struct GuiMotionState {
+    /// The World selects AnimationSystem, the sole sampler. Without it no key
+    /// is recorded and every part paints its resolved appearance.
+    enabled: bool,
     initialized: bool,
-    skins: BTreeMap<EntityId, GuiMotionMembership>,
-    users: BTreeMap<EntityId, BTreeSet<EntityId>>,
-    membership: BTreeSet<EntityId>,
+    /// Controls to inspect at the next preparation.
     dirty: BTreeSet<EntityId>,
-    theme_dirty: BTreeSet<EntityId>,
-    branches: BTreeSet<EntityId>,
-    ancestors: BTreeMap<EntityId, BTreeSet<EntityId>>,
-    dependents: BTreeMap<EntityId, BTreeSet<EntityId>>,
+    /// Controls whose recorded key is hovered or pressed, which pointer
+    /// feedback revalidation may change without naming them.
     watched: BTreeSet<EntityId>,
-    owners: BTreeMap<EntityId, Vec<GuiMotionOwner>>,
-    invalidated: BTreeSet<EntityId>,
-    withdrawn: BTreeSet<EntityId>,
-    paint_dirty: BTreeMap<EntityId, GuiMotionSkinTarget>,
+    /// Controls holding transition channels.
+    in_flight: BTreeSet<EntityId>,
+    /// Theme and font holders edited, and whether links changed, since the
+    /// last preparation; only in-flight controls re-resolve their destination.
+    themes: BTreeSet<EntityId>,
+    fonts: BTreeSet<EntityId>,
+    links: bool,
+    /// Reduced motion as last applied.
+    reduced: bool,
+    /// Identity of the latest transition started.
+    transitions: u64,
     changed: Vec<GuiMotionOwner>,
     pub statistics: super::GuiMotionPreparationWork,
 }
 
 impl GuiMotionState {
+    pub fn new(enabled: bool) -> Self {
+        Self {
+            enabled,
+            ..Self::default()
+        }
+    }
+
     #[cfg(test)]
-    pub(in crate::world::systems::gui) fn index_counts(&self) -> [usize; 12] {
+    pub(in crate::world::systems::gui) fn index_counts(&self) -> [usize; 5] {
         [
-            self.skins.len(),
-            self.users.len(),
-            self.ancestors.len(),
-            self.dependents.len(),
-            self.watched.len(),
-            self.owners.len(),
-            self.membership.len(),
             self.dirty.len(),
-            self.branches.len(),
-            self.invalidated.len(),
-            self.withdrawn.len(),
-            self.paint_dirty.len(),
+            self.watched.len(),
+            self.in_flight.len(),
+            self.themes.len(),
+            self.fonts.len(),
         ]
     }
 
+    /// Owners whose transition started in the latest preparation.
     pub fn changes(&self) -> &[GuiMotionOwner] {
         &self.changed
     }
 
-    pub fn pending_entities(&self) -> BTreeSet<EntityId> {
-        let mut pending = self.dirty.clone();
-        pending.extend(&self.membership);
-        pending.extend(&self.watched);
-        for theme in &self.theme_dirty {
-            pending.extend(self.users.get(theme).into_iter().flatten().copied());
-        }
-        for entity in &self.branches {
-            if self.skins.contains_key(entity) {
-                pending.insert(*entity);
-            }
-            pending.extend(self.dependents.get(entity).into_iter().flatten().copied());
-        }
-        pending
-    }
-
-    pub fn request_source(
-        local: &GuiLocalState,
-        world: &crate::world::WorldSimulationState,
-        owner: GuiMotionOwner,
-    ) -> Option<crate::services::asset_management::AssetSource> {
-        let skin = owner.skin(world)?.get(world)?;
-        if !super::theme_live(&world.state, skin.theme) {
-            return None;
-        }
-        let control = GuiMotionControl::read(local, world, owner.entity)?;
-        if control.control.target.component != owner.control
-            || control.control.target.incarnation != owner.control_incarnation
-        {
-            return None;
-        }
-        let theme = world.components.gui_theme(skin.theme.index() as usize)?;
-        let motion = world
-            .components
-            .gui_theme_motion(skin.theme.index() as usize)?;
-        resolve_part(
-            skin,
-            theme,
-            motion,
-            &control,
-            local.focus_visible(control.control.target),
-            owner,
-        )
-        .map(|request| request.source)
-    }
-
     pub fn dirty_entity(&mut self, entity: EntityId) {
-        self.dirty.insert(entity);
+        if self.enabled {
+            self.dirty.insert(entity);
+        }
     }
 
-    pub fn watch(&mut self, entity: EntityId) {
-        self.watched.insert(entity);
+    pub fn dirty_entities(&mut self, entities: impl IntoIterator<Item = EntityId>) {
+        if self.enabled {
+            self.dirty.extend(entities);
+        }
     }
 
     pub fn dirty_watched(&mut self) {
-        self.dirty.extend(self.watched.iter().copied());
-    }
-
-    pub fn before_commit(&mut self, context: &SystemCommitContext<'_>) {
-        for (entity, component) in context.changed_components() {
-            if component != ComponentValue::GUI_SKIN {
-                continue;
-            }
-            if !context.retains_component(entity, component) {
-                self.retire(entity);
-            }
-            if let Some((target, theme)) =
-                GuiMotionSkinTarget::declaration_at_commit(context, entity)
-            {
-                if self
-                    .skins
-                    .get(&entity)
-                    .is_some_and(|previous| previous.theme != theme)
-                {
-                    self.invalidated.insert(entity);
-                }
-                self.set_membership(entity, target, theme);
-                self.dirty.insert(entity);
-                self.withdrawn.remove(&entity);
-                if !super::theme_live(context.staged, theme) {
-                    self.withdrawn.insert(entity);
-                }
-            }
-        }
-
-        for (entity, component) in context.changed_components() {
-            if component == ComponentValue::GUI_SKIN {
-                continue;
-            }
-            if matches!(
-                component,
-                ComponentValue::GUI_THEME | ComponentValue::GUI_THEME_MOTION
-            ) {
-                self.theme_dirty.insert(entity);
-                if !super::theme_live(context.staged, entity) {
-                    self.withdrawn
-                        .extend(self.users.get(&entity).into_iter().flatten().copied());
-                }
-                continue;
-            }
-
-            if !context.staged.entities.contains_key(&entity) {
-                continue;
-            }
-
-            if !context.retains_component(entity, component)
-                && self
-                    .owners
-                    .get(&entity)
-                    .is_some_and(|owners| owners.iter().any(|owner| owner.control == component))
-            {
-                self.invalidated.insert(entity);
-            }
-
-            self.component_changed(entity, component);
-        }
-
-        self.branches
-            .extend(context.changed_entity_links().filter(|entity| {
-                context.staged.entities.contains_key(entity) || self.dependents.contains_key(entity)
-            }));
-    }
-
-    fn remove_membership(&mut self, entity: EntityId) {
-        if let Some(membership) = self.skins.remove(&entity)
-            && let Some(users) = self.users.get_mut(&membership.theme)
-        {
-            users.remove(&entity);
-            if users.is_empty() {
-                self.users.remove(&membership.theme);
-            }
-        }
-    }
-
-    fn set_membership(&mut self, entity: EntityId, target: GuiMotionSkinTarget, theme: EntityId) {
-        if self.skins.get(&entity).is_some_and(|previous| {
-            previous.target.incarnation == target.incarnation && previous.theme == theme
-        }) {
-            return;
-        }
-
-        self.remove_membership(entity);
-        self.skins.insert(
-            entity,
-            GuiMotionMembership {
-                target,
-                theme,
-            },
-        );
-        self.users.entry(theme).or_default().insert(entity);
-    }
-
-    fn remove_ancestry(&mut self, entity: EntityId) {
-        if let Some(ancestors) = self.ancestors.remove(&entity) {
-            for ancestor in ancestors {
-                if let Some(dependents) = self.dependents.get_mut(&ancestor) {
-                    dependents.remove(&entity);
-                    if dependents.is_empty() {
-                        self.dependents.remove(&ancestor);
-                    }
-                }
-            }
-        }
-    }
-
-    fn retire(&mut self, entity: EntityId) {
-        self.remove_membership(entity);
-        self.remove_ancestry(entity);
-        self.watched.remove(&entity);
-        self.owners.remove(&entity);
-        self.membership.remove(&entity);
-        self.dirty.remove(&entity);
-        self.branches.remove(&entity);
-        self.invalidated.remove(&entity);
-        self.withdrawn.remove(&entity);
-        self.paint_dirty.remove(&entity);
-    }
-
-    pub fn after_commit(&mut self, context: &mut SystemCommitContext<'_>) {
-        for entity in std::mem::take(&mut self.withdrawn) {
-            let Some(target) = self.skins.get(&entity).map(|membership| membership.target) else {
-                continue;
-            };
-            if let Some(skin) = target.get_mut_at_commit(context)
-                && !skin.runtime.parts.is_empty()
-            {
-                skin.runtime.parts.clear();
-                self.paint_dirty.insert(entity, target);
-            }
+        if self.enabled {
+            self.dirty.extend(self.watched.iter().copied());
         }
     }
 
     pub fn component_changed(&mut self, entity: EntityId, component: u16) {
+        if !self.enabled {
+            return;
+        }
+
         match component {
-            ComponentValue::GUI_SKIN => {
-                self.membership.insert(entity);
-            }
-            ComponentValue::GUI_THEME | ComponentValue::GUI_THEME_MOTION => {
-                self.theme_dirty.insert(entity);
-            }
-            ComponentValue::GUI_BUTTON
-            | ComponentValue::GUI_CHECKBOX
-            | ComponentValue::GUI_SLIDER
-            | ComponentValue::GUI_TEXT_INPUT
-            | ComponentValue::GUI_SCROLL_VIEW
-            | ComponentValue::GUI_VIRTUAL_LIST => {
+            ComponentValue::GUI_BEHAVIOR | ComponentValue::GUI_SKIN => {
                 self.dirty.insert(entity);
             }
-            ComponentValue::GUI_BEHAVIOR
-            | ComponentValue::CANVAS_STYLE
-            | ComponentValue::GUI_LAYOUT => {
-                self.branches.insert(entity);
+            ComponentValue::GUI_THEME | ComponentValue::GUI_THEME_MOTION => {
+                self.themes.insert(entity);
+            }
+            ComponentValue::GUI_FONT => {
+                self.fonts.insert(entity);
+            }
+            component if GuiControlKind::of_component(component).is_some() => {
+                self.dirty.insert(entity);
             }
             _ => {}
         }
     }
 
-    pub fn prepare(&mut self, local: &GuiLocalState, context: &mut SystemRuntimeAccess<'_>) {
-        self.changed.clear();
-        for (entity, target) in std::mem::take(&mut self.paint_dirty) {
-            if let Some(skin) = target.get_mut(context.world) {
-                skin.runtime.notifying_sample = true;
-                context.before_numeric_update(&[(entity, ComponentValue::GUI_SKIN)]);
-                if let Some(skin) = target.get_mut(context.world) {
-                    skin.runtime.notifying_sample = false;
-                }
-            }
+    pub fn before_commit(&mut self, context: &SystemCommitContext<'_>) {
+        if !self.enabled {
+            return;
         }
 
-        self.statistics = Default::default();
+        for (entity, component) in context.changed_components() {
+            self.component_changed(entity, component);
+        }
+        self.links |= context.changed_entity_links().next().is_some();
+    }
 
+    pub fn prepare(
+        &mut self,
+        local: &GuiLocalState,
+        reduced: bool,
+        context: &mut SystemRuntimeAccess<'_>,
+    ) {
+        self.changed.clear();
+        self.statistics = Default::default();
+        if !self.enabled {
+            return;
+        }
+
+        self.release(reduced && !self.reduced, context);
+        self.reduced = reduced;
+        self.retarget_edited(context.world);
         if !self.initialized {
-            self.membership.extend(
-                context
-                    .world
+            let world = &*context.world;
+            self.dirty.extend(
+                world
                     .state
                     .entities
                     .keys()
                     .copied()
-                    .filter(|entity| {
-                        GuiMotionSkinTarget::resolve(context.world, *entity).is_some()
-                    }),
+                    .filter(|entity| entity_control(world, &world.state, *entity).is_some()),
             );
             self.initialized = true;
         }
 
-        for entity in std::mem::take(&mut self.membership) {
-            let Some(target) = GuiMotionSkinTarget::resolve(context.world, entity) else {
-                self.retire(entity);
-                continue;
-            };
-            let theme = target
-                .get(context.world)
-                .expect("resolved skin target")
-                .theme;
-            self.set_membership(entity, target, theme);
-
-            self.dirty.insert(entity);
-        }
-
-        for theme in std::mem::take(&mut self.theme_dirty) {
-            if let Some(users) = self.users.get(&theme) {
-                self.dirty.extend(users.iter().copied());
-            }
-        }
-
-        for entity in std::mem::take(&mut self.branches) {
-            if self.skins.contains_key(&entity) {
-                self.dirty.insert(entity);
-            }
-
-            if let Some(dependents) = self.dependents.get(&entity) {
-                self.dirty.extend(dependents.iter().copied());
-            }
-        }
-
         for entity in std::mem::take(&mut self.dirty) {
-            let invalidated = self.invalidated.remove(&entity);
-            let Some(target) = self
-                .skins
-                .get(&entity)
-                .map(|membership| membership.target)
-                .filter(|target| target.get(context.world).is_some())
-            else {
-                self.retire(entity);
+            self.visit(local, context, entity);
+        }
+    }
+
+    /// Release channels the sampler settled, which paint now resolves without
+    /// them, or every channel when reduced motion has just been turned on.
+    fn release(&mut self, snap: bool, context: &mut SystemRuntimeAccess<'_>) {
+        for entity in std::mem::take(&mut self.in_flight) {
+            let Some(behavior) = behavior_mut(context.world, entity) else {
                 continue;
             };
-            let configured = self.skins.get(&entity).is_some_and(|membership| {
-                super::theme_live(&context.world.state, membership.theme)
-            });
-            self.remove_ancestry(entity);
-
-            if configured {
-                let mut ancestors = BTreeSet::new();
-                let mut current = Some(entity);
-                while let Some(ancestor) = current {
-                    if !ancestors.insert(ancestor) {
-                        break;
-                    }
-
-                    self.dependents.entry(ancestor).or_default().insert(entity);
-                    current = context
-                        .world
-                        .state
-                        .links
-                        .effective(ancestor)
-                        .and_then(|link| link.parent);
+            if snap {
+                if !behavior.motion.parts.is_empty() {
+                    behavior.motion.parts.clear();
+                    notify_sample(context, entity);
                 }
-
-                self.ancestors.insert(entity, ancestors);
-            }
-
-            let requests = if configured {
-                self.statistics.snapshots += 1;
-                GuiMotionControl::read(local, context.world, entity)
-                    .and_then(|view| {
-                        if !view.interaction.hovered
-                            && !view.interaction.pressed
-                            && !view.interaction.captured
-                        {
-                            self.watched.remove(&entity);
-                        } else {
-                            self.watched.insert(entity);
-                        }
-
-                        let skin = target.get(context.world)?;
-                        let theme = context
-                            .world
-                            .components
-                            .gui_theme(skin.theme.index() as usize)?;
-                        let motion = context
-                            .world
-                            .components
-                            .gui_theme_motion(skin.theme.index() as usize)?;
-                        let mut requests = BTreeMap::new();
-                        for part in [
-                            GuiPrimitivePart::Background,
-                            GuiPrimitivePart::Fill,
-                            GuiPrimitivePart::Label,
-                            GuiPrimitivePart::Icon,
-                            GuiPrimitivePart::FocusRing,
-                        ] {
-                            self.statistics.parts += 1;
-
-                            let owner = GuiMotionOwner {
-                                entity,
-                                control: view.control.target.component,
-                                control_incarnation: view.control.target.incarnation,
-                                skin_incarnation: target.incarnation,
-                                part: part as u32,
-                            };
-                            if let Some(request) = resolve_part(
-                                skin,
-                                theme,
-                                motion,
-                                &view,
-                                local.focus_visible(view.control.target),
-                                owner,
-                            ) {
-                                requests.insert(part as u32, request);
-                            }
-                        }
-                        Some(requests)
-                    })
-                    .unwrap_or_default()
-            } else {
-                self.watched.remove(&entity);
-                BTreeMap::new()
-            };
-            if requests.is_empty() {
-                self.watched.remove(&entity);
-            }
-
-            let previous_owners = self.owners.remove(&entity).unwrap_or_default();
-            let next_owners: Vec<_> = requests.values().map(|request| request.owner).collect();
-            self.changed.extend(
-                previous_owners
-                    .into_iter()
-                    .filter(|owner| !next_owners.contains(owner)),
-            );
-            if !next_owners.is_empty() {
-                self.owners.insert(entity, next_owners);
-            }
-
-            let Some(skin) = target.get_mut(context.world) else {
                 continue;
-            };
-            let previous = skin.runtime.parts.len();
-            skin.runtime
+            }
+
+            behavior
+                .motion
                 .parts
-                .retain(|part, _| requests.contains_key(part));
-            let withdrawn = previous != skin.runtime.parts.len();
-            for (part, request) in requests {
-                match skin.runtime.parts.get_mut(&part) {
-                    Some(channels) if channels.request.owner == request.owner => {
-                        if invalidated || channels.request != request {
-                            self.changed.push(request.owner);
-                            channels.request = request;
-                            channels.status = GuiSkinMotionStatus::Pending;
-                        }
-                    }
-                    _ => {
-                        self.changed.push(request.owner);
-                        let mut values = request.values.clone();
-                        values.resize(4, DynamicValue::F32(0.0));
-                        skin.runtime.parts.insert(
-                            part,
-                            GuiMotionChannels {
-                                values,
-                                live_arity: request.values.len(),
-                                ready_appearance: None,
-                                request,
-                                active: false,
-                                status: GuiSkinMotionStatus::Pending,
-                            },
-                        );
-                    }
-                }
-            }
-
-            if withdrawn {
-                skin.runtime.notifying_sample = true;
-                context.before_numeric_update(&[(entity, ComponentValue::GUI_SKIN)]);
-                if let Some(skin) = target.get_mut(context.world) {
-                    skin.runtime.notifying_sample = false;
-                }
+                .retain(|_, channels| !channels.settled);
+            if !behavior.motion.parts.is_empty() {
+                self.in_flight.insert(entity);
             }
         }
     }
-}
 
-/// The control fields and System state a motion request resolves against.
-struct GuiMotionControl {
-    control: GuiControl,
-    enabled: bool,
-    interaction: crate::systems::gui::local::GuiInteractionFlags,
-    checked: Option<bool>,
-}
+    /// Dirty the in-flight controls whose destination an edited theme, an
+    /// edited inherited font or a tree change may have moved.
+    fn retarget_edited(&mut self, world: &WorldSimulationState) {
+        if self.links || !self.themes.is_empty() || !self.fonts.is_empty() {
+            for &entity in &self.in_flight {
+                let themed = world
+                    .components
+                    .gui_skin(entity.index() as usize)
+                    .is_some_and(|skin| self.themes.contains(&skin.theme));
+                // The walk visits each entity at most once, even on a cycle.
+                let font = !self.fonts.is_empty()
+                    && std::iter::successors(Some(entity), |&ancestor| {
+                        world.state.links.parent(ancestor)
+                    })
+                    .take(world.state.entities.len())
+                    .any(|ancestor| self.fonts.contains(&ancestor));
+                if self.links || themed || font {
+                    self.dirty.insert(entity);
+                }
+            }
+        }
 
-impl GuiMotionControl {
-    /// An available, visible control; others resolve no motion.
-    fn read(
+        self.themes.clear();
+        self.fonts.clear();
+        self.links = false;
+    }
+
+    /// Record a control's key; when it changed, start each changed part's
+    /// transition, and when it did not, retarget its in-flight parts.
+    fn visit(
+        &mut self,
         local: &GuiLocalState,
-        world: &crate::world::WorldSimulationState,
+        context: &mut SystemRuntimeAccess<'_>,
         entity: EntityId,
-    ) -> Option<Self> {
-        let control = entity_control(world, &world.state, entity)?;
+    ) {
+        let world = &*context.world;
+        let Some(control) = entity_control(world, &world.state, entity) else {
+            self.forget(context, entity);
+            return;
+        };
+        let Some(behavior_incarnation) = world
+            .state
+            .entities
+            .get(&entity)
+            .and_then(|record| record.input(ComponentValue::GUI_BEHAVIOR))
+            .map(|input| input.incarnation)
+        else {
+            self.watched.remove(&entity);
+            return;
+        };
+
+        self.statistics.snapshots += 1;
         let eligibility = eligibility(world, entity);
         if !eligibility.available || !eligibility.visible {
-            return None;
+            // A hidden control has nothing displayed to move from.
+            self.forget(context, entity);
+            return;
         }
+
+        let target = control.target;
         let interaction = if eligibility.enabled {
-            local.interaction_flags(control.target)
+            local.interaction_flags(target)
         } else {
             Default::default()
         };
-        Some(Self {
-            control,
-            enabled: eligibility.enabled,
-            interaction,
-            checked: world
-                .components
-                .gui_checkbox(entity.index() as usize)
-                .filter(|_| control.target.component == ComponentValue::GUI_CHECKBOX)
-                .map(|checkbox| checkbox.checked),
-        })
-    }
-}
+        let parts = focus_parts(world, control).min(GUI_MAX_FOCUS_PARTS as u32);
+        let feedback = local.part_interaction(target, interaction);
 
-fn resolve_part(
-    skin: &super::super::presentation::GuiSkin,
-    theme: &super::super::presentation::GuiTheme,
-    motion: &GuiThemeMotion,
-    view: &GuiMotionControl,
-    focus_visible: bool,
-    owner: GuiMotionOwner,
-) -> Option<GuiMotionRequest> {
-    let part = [
-        GuiPrimitivePart::Background,
-        GuiPrimitivePart::Fill,
-        GuiPrimitivePart::Label,
-        GuiPrimitivePart::Icon,
-        GuiPrimitivePart::FocusRing,
-    ]
-    .into_iter()
-    .find(|part| *part as u32 == owner.part)?;
-    let state = GuiSkinState::resolve(
-        !view.enabled,
-        view.interaction.pressed,
-        view.interaction.hovered,
-    );
-    let variant = view.checked.map(|checked| {
-        if checked {
-            GuiPartVariant::Checked
-        } else {
-            GuiPartVariant::Unchecked
-        }
-    });
-    let mut style = super::super::presentation::paint::appearance(
-        Some(skin),
-        Some(theme),
-        part,
-        state,
-        variant,
-    );
-    if part == GuiPrimitivePart::Icon
-        && variant == Some(GuiPartVariant::Unchecked)
-        && !super::super::presentation::paint::explicit_unchecked(Some(theme), state)
-    {
-        style.opacity = Some(0.0);
-    }
-    let base = GuiPartId::base(part).index();
-    let aligned = skin
-        .parts
-        .iter()
-        .any(|(_, row)| Some(row.part) == base && row.align_x.is_some())
-        || theme
-            .parts
-            .iter()
-            .any(|(_, row)| Some(row.part) == base && row.align_x.is_some());
-    let mut request = resolve(motion, owner, skin.theme, state, variant, style, aligned)?;
-    request.visible = part != GuiPrimitivePart::FocusRing || (focus_visible && view.enabled);
-    Some(request)
-}
-
-fn resolve(
-    table: &GuiThemeMotion,
-    owner: GuiMotionOwner,
-    theme: EntityId,
-    state: GuiSkinState,
-    variant: Option<GuiPartVariant>,
-    style: crate::systems::gui::GuiPartStyle,
-    aligned: bool,
-) -> Option<GuiMotionRequest> {
-    let part = [
-        GuiPrimitivePart::Background,
-        GuiPrimitivePart::Fill,
-        GuiPrimitivePart::Label,
-        GuiPrimitivePart::Icon,
-        GuiPrimitivePart::FocusRing,
-    ]
-    .into_iter()
-    .find(|part| *part as u32 == owner.part)?;
-    let mut source = None;
-    let mut duration = None;
-    let mut easing = None;
-    let mut track = None;
-    let mut time = None;
-    for key in GuiPartId::candidates(part, state, variant) {
-        if let Some((_, row)) = table
-            .parts
-            .iter()
-            .find(|(_, row)| Some(row.part) == key.index())
+        // A numeric input's step parts take the pointers over them, and its
+        // field only the pointers over the rest of it, as paint resolves them.
+        let number = (control.kind == GuiControlKind::TextInput)
+            .then(|| world.components.gui_text_input(entity.index() as usize))
+            .flatten()
+            .filter(|input| input.shows_step_parts());
+        let body = match number {
+            Some(_) => feedback.body,
+            None => interaction,
+        };
+        let key = GuiMotionKey {
+            state: GuiSkinState::resolve(!eligibility.enabled, body.pressed, body.hovered),
+            variant: control_variant(world, control),
+            focused: eligibility.enabled && local.focus_visible(target),
+            parts,
+            part_states: std::array::from_fn(|part| {
+                GuiSkinState::resolve(
+                    !eligibility.enabled,
+                    feedback.parts[part].pressed,
+                    feedback.parts[part].hovered,
+                )
+            }),
+            steps: number.map(|input| {
+                let stepping = input.step_enabled();
+                std::array::from_fn(|step| {
+                    GuiSkinState::resolve(
+                        !eligibility.enabled || !stepping[step],
+                        feedback.steps[step].pressed,
+                        feedback.steps[step].hovered,
+                    )
+                })
+            }),
+        };
+        let pointed = |state| matches!(state, GuiSkinState::Hovered | GuiSkinState::Pressed);
+        if pointed(key.state)
+            || key.part_states[..parts as usize]
+                .iter()
+                .chain(key.steps.iter().flatten())
+                .any(|s| pointed(*s))
         {
-            source = source.or_else(|| row.source.clone());
-            duration = duration.or(row.duration);
-            easing = easing.or(row.easing);
-            track = track.or(row.track);
-            time = time.or(row.time);
+            self.watched.insert(entity);
+        } else {
+            self.watched.remove(&entity);
+        }
+
+        let owner = GuiMotionOwner {
+            entity,
+            control: target.component,
+            control_incarnation: target.incarnation,
+            behavior_incarnation,
+            part: 0,
+        };
+        let Some(behavior) = behavior_mut(context.world, entity) else {
+            return;
+        };
+        let previous = behavior
+            .motion
+            .key
+            .replace((target.component, target.incarnation, key))
+            .filter(|(component, incarnation, _)| {
+                *component == target.component && *incarnation == target.incarnation
+            })
+            .map(|(_, _, key)| key);
+        // Channels of a replaced control or behavior incarnation are stale.
+        let stale = behavior.motion.parts.len();
+        behavior.motion.parts.retain(|&part, channels| {
+            channels.owner
+                == GuiMotionOwner {
+                    part,
+                    ..owner
+                }
+        });
+        let mut withdrawn = stale != behavior.motion.parts.len();
+
+        match previous {
+            Some(previous) if previous != key => {
+                withdrawn |= self.start(context, control, owner, previous, key);
+            }
+            Some(_) => self.retarget(context, control, key),
+            None => {
+                // First sight: nothing displayed to move from.
+                if let Some(behavior) = behavior_mut(context.world, entity)
+                    && !behavior.motion.parts.is_empty()
+                {
+                    behavior.motion.parts.clear();
+                    withdrawn = true;
+                }
+            }
+        }
+
+        if withdrawn {
+            notify_sample(context, entity);
+        }
+        if context
+            .world
+            .components
+            .gui_behavior(entity.index() as usize)
+            .is_some_and(|behavior| !behavior.motion.parts.is_empty())
+        {
+            self.in_flight.insert(entity);
         }
     }
 
-    let mut values = vec![
-        DynamicValue::Vec4(style.color?),
-        DynamicValue::F32(style.opacity?),
-        DynamicValue::Vec2(style.scale?),
-    ];
-    if aligned {
-        track?.checked_add(3)?;
-        values.push(DynamicValue::F32(style.align_x?));
+    /// Start a transition of every part whose animated values differ between
+    /// the displayed appearance and `key`'s; return whether any channels were
+    /// withdrawn instead.
+    fn start(
+        &mut self,
+        context: &mut SystemRuntimeAccess<'_>,
+        control: GuiControl,
+        owner: GuiMotionOwner,
+        previous: GuiMotionKey,
+        key: GuiMotionKey,
+    ) -> bool {
+        let entity = control.target.entity;
+        let mut started = Vec::new();
+        {
+            let world = &*context.world;
+            let sources = GuiMotionSources::read(world, control);
+            let Some(behavior) = world.components.gui_behavior(entity.index() as usize) else {
+                return false;
+            };
+            for (channel, part, follows) in
+                motion_slots(control.kind, key.parts, key.steps.is_some())
+            {
+                self.statistics.parts += 1;
+                let (from, to) = (previous.slot(follows), key.slot(follows));
+                let destination = sources.style(part, to);
+                let (origin, origin_style, origin_present) =
+                    match behavior.motion.parts.get(&channel) {
+                        Some(channels) => (
+                            channels.values,
+                            channels.appearance.clone(),
+                            channels.present,
+                        ),
+                        None => {
+                            let style = sources.style(part, from);
+                            let (values, present) = GuiMotionValues::of(&style);
+                            (values, style, present)
+                        }
+                    };
+                let (values, present) = GuiMotionValues::of(&destination);
+                let timing = (!self.reduced)
+                    .then(|| sources.rows().timing(part, from, to))
+                    .flatten()
+                    .filter(|(duration, _)| *duration > 0.0);
+                let Some((duration, easing)) = timing.filter(|_| origin != values) else {
+                    started.push((channel, None));
+                    continue;
+                };
+
+                self.transitions += 1;
+                let mut appearance = destination;
+                appearance.inherit(&origin_style);
+                appearance.asset = origin_style.asset;
+                started.push((
+                    channel,
+                    Some(GuiMotionChannels {
+                        owner: GuiMotionOwner {
+                            part: channel,
+                            ..owner
+                        },
+                        transition: self.transitions,
+                        origin,
+                        destination: values,
+                        present: origin_present | present,
+                        duration,
+                        easing,
+                        appearance,
+                        values: origin,
+                        settled: false,
+                    }),
+                ));
+            }
+        }
+
+        let Some(behavior) = behavior_mut(context.world, entity) else {
+            return false;
+        };
+        let mut withdrawn = false;
+        for (channel, channels) in started {
+            match channels {
+                Some(channels) => {
+                    self.changed.push(channels.owner);
+                    behavior.motion.parts.insert(channel, channels);
+                }
+                None => withdrawn |= behavior.motion.parts.remove(&channel).is_some(),
+            }
+        }
+        withdrawn
     }
-    Some(GuiMotionRequest {
-        owner,
-        theme,
-        source: source?,
-        duration: f64::from(duration?),
-        easing: match easing? {
-            0 => AnimationTransitionEasing::Linear,
-            1 => AnimationTransitionEasing::Smoothstep,
-            _ => return None,
-        },
-        track: track?,
-        time: f64::from(time?),
-        values,
-        appearance: style,
-        visible: true,
-    })
+
+    /// Move each in-flight part's destination and material to what `key`
+    /// resolves to now, keeping its origin, timing and clock.
+    fn retarget(
+        &mut self,
+        context: &mut SystemRuntimeAccess<'_>,
+        control: GuiControl,
+        key: GuiMotionKey,
+    ) {
+        let entity = control.target.entity;
+        let mut updates = Vec::new();
+        {
+            let world = &*context.world;
+            let Some(behavior) = world.components.gui_behavior(entity.index() as usize) else {
+                return;
+            };
+            if behavior.motion.parts.is_empty() {
+                return;
+            }
+
+            let sources = GuiMotionSources::read(world, control);
+            for (&index, channels) in &behavior.motion.parts {
+                let Some((part, follows)) = slot_of(index) else {
+                    continue;
+                };
+                self.statistics.parts += 1;
+                let destination = sources.style(part, key.slot(follows));
+                let (values, present) = GuiMotionValues::of(&destination);
+                let mut appearance = destination;
+                appearance.inherit(&channels.appearance);
+                appearance.asset.clone_from(&channels.appearance.asset);
+                if values != channels.destination || appearance != channels.appearance {
+                    updates.push((index, values, present, appearance));
+                }
+            }
+        }
+
+        let Some(behavior) = behavior_mut(context.world, entity) else {
+            return;
+        };
+        for (index, values, present, appearance) in updates {
+            if let Some(channels) = behavior.motion.parts.get_mut(&index) {
+                channels.destination = values;
+                channels.present |= present;
+                channels.appearance = appearance;
+            }
+        }
+    }
+
+    /// Drop a control's key and channels: it next appears without a transition.
+    fn forget(&mut self, context: &mut SystemRuntimeAccess<'_>, entity: EntityId) {
+        self.watched.remove(&entity);
+        self.in_flight.remove(&entity);
+        let Some(behavior) = behavior_mut(context.world, entity) else {
+            return;
+        };
+        behavior.motion.key = None;
+        if !behavior.motion.parts.is_empty() {
+            behavior.motion.parts.clear();
+            notify_sample(context, entity);
+        }
+    }
+}
+
+/// The `GuiBehavior` of a live entity, never a later occupant of its slot.
+fn behavior_mut(world: &mut WorldSimulationState, entity: EntityId) -> Option<&mut GuiBehavior> {
+    if !world.state.entities.contains_key(&entity) {
+        return None;
+    }
+
+    world.components.gui_behavior_mut(entity.index() as usize)
+}
+
+/// What a control's parts resolve their appearance and timing from.
+struct GuiMotionSources<'a> {
+    kind: GuiControlKind,
+    /// The control's default look: its kind's, or the dial's.
+    look: &'static GuiSkinLook,
+    skin: Option<&'a GuiSkin>,
+    theme: Option<&'a GuiTheme>,
+    motion: Option<&'a super::GuiThemeMotion>,
+    /// Inherited label font size, against which theme and look lengths draw.
+    font_size: f32,
+}
+
+impl<'a> GuiMotionSources<'a> {
+    fn read(world: &'a WorldSimulationState, control: GuiControl) -> Self {
+        let entity = control.target.entity;
+        let skin = world.components.gui_skin(entity.index() as usize);
+        let theme = skin
+            .map(|skin| skin.theme)
+            .filter(|theme| theme.to_bits() != 0 && world.state.entities.contains_key(theme));
+        Self {
+            kind: control.kind,
+            look: control_look(world, control),
+            skin,
+            theme: theme.and_then(|theme| world.components.gui_theme(theme.index() as usize)),
+            motion: theme
+                .and_then(|theme| world.components.gui_theme_motion(theme.index() as usize)),
+            font_size: inherited_font_size(world, entity),
+        }
+    }
+
+    fn rows(&self) -> GuiMotionRows<'a> {
+        GuiMotionRows {
+            theme: self.motion,
+            look: &self.look.motion,
+        }
+    }
+
+    /// `part`'s appearance at `key`, as paint resolves it, with the opacity of
+    /// a part that paints only while visible at zero where it is not: an
+    /// unchecked indicator its look leaves unstyled, and a hidden focus ring.
+    fn style(&self, part: GuiPrimitivePart, key: GuiMotionKey) -> GuiPartStyle {
+        let mut style = appearance(
+            self.skin,
+            self.theme,
+            self.look,
+            self.font_size,
+            part,
+            key.state,
+            key.variant,
+        );
+        let hidden = match part {
+            GuiPrimitivePart::Icon => {
+                self.kind == GuiControlKind::Checkbox
+                    && key.variant == Some(GuiPartVariant::Unchecked)
+                    && !explicit_unchecked(self.theme, self.kind, key.state)
+            }
+            GuiPrimitivePart::FocusRing => !key.focused,
+            _ => false,
+        };
+        if hidden {
+            style.opacity = Some(0.0);
+        }
+        style
+    }
 }

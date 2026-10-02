@@ -87,6 +87,23 @@ pub(crate) struct PresentationCoordinator {
     completed: Vec<(u64, u64, PresentationResponse)>,
 }
 
+/// The surface draws `viewport` exactly; it is never clamped to the device bounds.
+fn drawable(
+    viewport: ipp_core::WorldViewport,
+    surface: PresentationSurface,
+) -> Result<(), PresentationError> {
+    if viewport.width == 0
+        || viewport.height == 0
+        || viewport.width > surface.max_width
+        || viewport.height > surface.max_height
+        || !viewport.device_pixel_ratio.is_finite()
+        || viewport.device_pixel_ratio <= 0.0
+    {
+        return Err(PresentationError::InvalidViewport);
+    }
+    Ok(())
+}
+
 fn current_binding(host: &HostRuntime, binding: RootBinding) -> bool {
     binding
         .output
@@ -186,15 +203,7 @@ impl PresentationCoordinator {
                     .resolve(host)
                     .map_err(|_| PresentationError::StaleView)?;
                 let viewport = binding.viewport;
-                if viewport.width == 0
-                    || viewport.height == 0
-                    || viewport.width > surface.max_width
-                    || viewport.height > surface.max_height
-                    || !viewport.device_pixel_ratio.is_finite()
-                    || viewport.device_pixel_ratio <= 0.0
-                {
-                    return Err(PresentationError::InvalidViewport);
-                }
+                drawable(viewport, surface)?;
                 let selection = self
                     .selection
                     .checked_add(1)
@@ -203,15 +212,55 @@ impl PresentationCoordinator {
                 if services.presentation_surface()? != surface {
                     return Err(PresentationError::StaleView);
                 }
-                self.selection = selection;
-                let view = PresentationView {
-                    surface,
+                Reply::View(self.replace_selection(host, services, surface, selection, binding))
+            }
+            PresentationRequest::Resize {
+                view,
+                viewport,
+            } => {
+                // Rebinding and reselecting happen here, between two draws, so the
+                // renderer keeps the output's retained state across the resize.
+                // Every failure leaves the current binding and selection in place.
+                self.validate(host, services, view)?;
+                drawable(viewport, view.surface)?;
+                let output = view
+                    .binding
+                    .output
+                    .resolve(host)
+                    .map_err(|_| PresentationError::StaleView)?;
+                let selection = self
+                    .selection
+                    .checked_add(1)
+                    .ok_or(PresentationError::Capacity)?;
+
+                services.configure_presentation(viewport)?;
+                if services.presentation_surface()? != view.surface {
+                    return Err(PresentationError::StaleView);
+                }
+
+                if let Err(error) = host.set_root_output(output, viewport) {
+                    // A bound root cannot gain a parent, so only exhausted binding
+                    // generations reach here; the surface returns to the current view.
+                    services.configure_presentation(view.binding.viewport)?;
+                    return Err(match error {
+                        ipp_core::ErrorReason::Capacity => PresentationError::Capacity,
+                        _ => PresentationError::StaleView,
+                    });
+                }
+
+                let binding = host
+                    .root_output_binding(output.world())
+                    .ok()
+                    .flatten()
+                    .map(RootBinding::from)
+                    .expect("bound root");
+                Reply::View(self.replace_selection(
+                    host,
+                    services,
+                    view.surface,
                     selection,
                     binding,
-                };
-                self.selected = Some(view);
-                services.presentation_selection(host, self.selected);
-                Reply::View(view)
+                ))
             }
             PresentationRequest::Clear(view) => {
                 if self.selected == Some(view) {
@@ -317,6 +366,26 @@ impl PresentationCoordinator {
             }
         };
         Ok(Some(response))
+    }
+
+    /// Commit a validated selection; the previous view becomes stale.
+    fn replace_selection<P: HostServices>(
+        &mut self,
+        host: &mut HostRuntime,
+        services: &mut P,
+        surface: PresentationSurface,
+        selection: u64,
+        binding: RootBinding,
+    ) -> PresentationView {
+        self.selection = selection;
+        let view = PresentationView {
+            surface,
+            selection,
+            binding,
+        };
+        self.selected = Some(view);
+        services.presentation_selection(host, self.selected);
+        view
     }
 
     pub(crate) fn expire(&mut self, now: Duration) {

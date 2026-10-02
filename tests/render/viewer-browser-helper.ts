@@ -280,6 +280,8 @@ export type GalleryGuiKind =
 export interface GalleryGuiSelector {
   readonly role: GalleryGuiKind;
   readonly name?: string;
+  /** The control's symbolic id, for controls that share a label. */
+  readonly symbol?: string;
 }
 
 /** A control's value as its value fields hold it. */
@@ -309,6 +311,8 @@ export interface GalleryGuiControl {
   readonly label: string;
   /** Core ancestors, parent first. */
   readonly ancestry: readonly bigint[];
+  /** The symbolic id of the overlay the control lies in, if it does. */
+  readonly overlay: string | undefined;
   /** GuiBehavior's evaluated eligibility. */
   readonly enabled: boolean;
   readonly visible: boolean;
@@ -363,6 +367,12 @@ export interface GalleryGuiState {
   };
   /** Components of the parent panel entity. */
   readonly panelComponents: readonly (string | undefined)[];
+  /** Overlay entities and whether each is open and evaluated visible. */
+  readonly overlays: readonly {
+    readonly symbol: string | undefined;
+    readonly open: boolean;
+    readonly visible: boolean;
+  }[];
 }
 
 function componentName(
@@ -468,7 +478,10 @@ async function panelControls(
         : kind === "slider"
           ? { kind: "scalar", value: number("value") }
           : kind === "text"
-            ? { kind: "text", value: String(fields.text ?? "") }
+            ? // A numeric input holds its number rather than its text.
+              fields.numeric === true
+              ? { kind: "scalar", value: number("value") }
+              : { kind: "text", value: String(fields.text ?? "") }
             : kind === "scrollView" || kind === "virtualList"
               ? {
                   kind: "scroll",
@@ -515,6 +528,14 @@ async function panelControls(
               ? fields.label
               : "",
         ancestry,
+        overlay: (() => {
+          for (const id of [entity.id, ...ancestry]) {
+            const holder = entities.get(id);
+            if (holder && componentFields(client, holder, "GuiOverlay"))
+              return holder.metadata.symbolicId ?? "";
+          }
+          return undefined;
+        })(),
         enabled: behavior.effective_enabled !== false,
         visible: behavior.effective_visible !== false,
         available: behavior.available !== false,
@@ -637,6 +658,17 @@ export async function galleryGuiState(flush = true): Promise<GalleryGuiState> {
     panelComponents: parentEntity.components.map(({ component }) =>
       componentName(handle.client, component),
     ),
+    overlays: ordered.flatMap((entity) => {
+      if (!field(entity, "GuiOverlay")) return [];
+      const behavior = field(entity, "GuiBehavior");
+      return [
+        {
+          symbol: entity!.metadata.symbolicId ?? undefined,
+          open: behavior?.visible === true,
+          visible: behavior?.effective_visible === true,
+        },
+      ];
+    }),
   };
 }
 
@@ -647,7 +679,8 @@ function selectControl(
   const matches = state.controls.filter(
     (control) =>
       control.kind === selector.role &&
-      (selector.name === undefined || control.label === selector.name),
+      (selector.name === undefined || control.label === selector.name) &&
+      (selector.symbol === undefined || control.symbol === selector.symbol),
   );
   if (matches.length !== 1)
     throw new Error(
@@ -778,9 +811,12 @@ export async function galleryWaveform(flush = true): Promise<GalleryWaveform> {
 }
 
 /** Project Surface content points, in Canvas units from its top-left
- * corner, through the actual panel Surface and camera transforms. */
+ * corner, through the actual panel Surface and camera transforms: on the
+ * Surface plane, or `depth` Surface metres in front of it along its normal,
+ * where a layer plane of an exploded panel lies. */
 export async function projectGalleryGuiContent(
   points: readonly (readonly [number, number])[],
+  depth = 0,
 ) {
   await requireCanvas().flush();
   const [{ entity, camera, surface }, density] = await Promise.all([
@@ -795,7 +831,7 @@ export async function projectGalleryGuiContent(
     points.map(([x, y]) => [
       x / density - width / 2,
       height / 2 - y / density,
-      0,
+      depth,
     ]),
   );
 }
@@ -872,9 +908,10 @@ export async function galleryGuiRegionStats(
 export async function galleryGuiInkBounds(
   label: string,
   rects: Readonly<Record<string, readonly [number, number, number, number]>>,
+  depth = 0,
 ): Promise<Record<string, readonly [number, number, number, number]>> {
   const frame = requireCapture(label);
-  const quads = await projectGalleryGuiRects(frame, rects);
+  const quads = await projectGalleryGuiRects(frame, rects, depth);
   return Object.fromEntries(
     Object.entries(quads).map(([name, quad]) => {
       const [minX, minY, maxX, maxY] = rects[name]!;
@@ -916,11 +953,13 @@ export async function galleryGuiInkBounds(
   );
 }
 
-/** Project named logical GUI rectangles into completed-frame pixel quads,
- * corners ordered min/min, max/min, max/max, min/max. */
+/** Project named logical GUI rectangles, on the Surface plane or `depth`
+ * metres in front of it, into completed-frame pixel quads, corners ordered
+ * min/min, max/min, max/max, min/max. */
 async function projectGalleryGuiRects(
   frame: ViewerFrame,
   rects: Readonly<Record<string, readonly [number, number, number, number]>>,
+  depth = 0,
 ): Promise<Record<string, readonly (readonly [number, number])[]>> {
   const names = Object.keys(rects);
   const projected = await projectGalleryGuiContent(
@@ -933,6 +972,7 @@ async function projectGalleryGuiRects(
         [minX, maxY],
       ] as const;
     }),
+    depth,
   );
   return Object.fromEntries(
     names.map((name, index) => [

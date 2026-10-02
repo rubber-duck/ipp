@@ -1,17 +1,35 @@
+import { createElement as h } from "react";
 import { renderDiagnostics } from "../../../packages/ipp-client/src/diagnostics.js";
 import type {
   AnimationWorldClient,
+  AssetWorldClient,
   Client,
   Command,
   EntityRef,
   FieldValue,
+  GuiPhysicalContext,
   GuiWorldClient,
   HostClientBase,
+  PresentationView,
   PresentedCapture,
   RowPropertyValue,
   RowsInput,
   RowsLayoutDescriptor,
+  WorldReference,
 } from "@ipp/client";
+import {
+  Children,
+  Entity,
+  createRoot,
+  type ReactWorldClient,
+  type ReactWorldRoot,
+} from "../../../packages/ipp-react/src/index.js";
+import { Button, Font, Layout } from "../../../packages/ipp-react/src/gui.js";
+import {
+  GuiKit,
+  Spinner,
+  type GuiKitContract,
+} from "../../../packages/ipp-react/src/gui-kit.js";
 import {
   aliasId,
   createEntity,
@@ -19,7 +37,6 @@ import {
   successfulBatch,
 } from "../camera-fixtures.js";
 import { canvasOutput } from "../../../packages/ipp-client/src/references.js";
-import { clientAssetSource } from "../../../packages/ipp-client/src/asset-sources.js";
 import { controlState } from "../scenarios/gui-lifecycle.js";
 import { guiAction } from "../gui-actions.js";
 import {
@@ -46,6 +63,17 @@ interface MotionContract {
     layout: RowsLayoutDescriptor,
     rows: RowsInput<Row>,
   ): Uint8Array<ArrayBuffer>;
+  /** Built-in looks with their appearance and motion rows. */
+  readonly GUI_SKIN_LOOKS: Readonly<
+    Record<
+      string,
+      {
+        readonly em: number;
+        readonly parts: readonly Part[];
+        readonly motion: readonly Part[];
+      }
+    >
+  >;
 }
 
 type MotionClient = GuiWorldClient & AnimationWorldClient;
@@ -62,12 +90,6 @@ export interface MotionImage {
 export interface MotionEnvironment {
   capture(image: MotionImage): Promise<void>;
   record(value: object): Promise<void>;
-  pending?: {
-    source: string;
-    stage(bytes: number[]): Promise<void>;
-    requested(): Promise<void>;
-    release(): Promise<void>;
-  };
 }
 const width = 96;
 const height = 64;
@@ -115,7 +137,24 @@ function background(capture: PresentedCapture): number[] {
   return sum.map((value) => value / 128);
 }
 
+/**
+ * A client theme's own transitions on a nested canvas, the built-in looks'
+ * default transitions on unthemed controls driven by physical input, then
+ * the React kit's one reduced-motion setting for the runtime and the kit.
+ */
 export async function ordinarySkinMotion(
+  host: HostClientBase<MotionClient>,
+  contract: MotionContract & GuiKitContract,
+  font: ArrayBuffer,
+  environment: MotionEnvironment,
+) {
+  const themed = await themedSkinMotion(host, contract, environment);
+  const unthemed = await defaultSkinMotion(host, contract, environment);
+  const kit = await kitReducedMotion(host, contract, font, environment);
+  return { themed, unthemed, kit };
+}
+
+async function themedSkinMotion(
   host: HostClientBase<MotionClient>,
   contract: MotionContract,
   environment: MotionEnvironment,
@@ -146,10 +185,6 @@ export async function ordinarySkinMotion(
   });
   const child = await host.openWorld(childWorld.reference);
   const parent = await host.openWorld(parentWorld.reference);
-  const sourceA = clientAssetSource(child.session, 10, "ordinary-motion-A");
-  const sourceB = environment.pending
-    ? { kind: 10, source: environment.pending.source }
-    : clientAssetSource(child.session, 10, "ordinary-motion-B");
   const images: Omit<MotionImage, "pixels">[] = [];
   const evidence: object[] = [];
   let completed = false;
@@ -206,8 +241,17 @@ export async function ordinarySkinMotion(
     };
   }
 
+  // Plain boxes: the rows state away the default checkbox look's line,
+  // corner cuts and focus glow, which they would otherwise sit on.
   const appearance = [
-    { part: key("background"), color: [1, 0, 0, 1], opacity: 1, scale: [1, 1] },
+    {
+      part: key("background"),
+      color: [1, 0, 0, 1],
+      opacity: 1,
+      scale: [1, 1],
+      border_width: 0,
+      corner_cut: [0, 0, 0, 0],
+    },
     {
       part: key("background", "idle", "checked"),
       color: [0, 0, 1, 1],
@@ -220,72 +264,20 @@ export async function ordinarySkinMotion(
       opacity: 1,
       scale: [1, 1],
       border_width: 2,
+      corner_cut: [0, 0, 0, 0],
+      glow_intensity: 0,
     },
   ];
-  function motions(source: typeof sourceA): Part[] {
-    return appearance.map((part, index) => ({
+  // Clipless timing rows: every transition into these appearances takes the
+  // transition duration, linearly.
+  const motions = (): Part[] =>
+    appearance.map((part) => ({
       part: part.part,
-      source,
       duration: transitionDuration,
       easing: 0,
-      track: index === 2 ? 3 : 0,
-      time: index === 1 ? 1 : 0,
     }));
-  }
-
-  function clip() {
-    const values = [
-      [
-        [1, 0, 0, 1],
-        [0, 0, 1, 1],
-      ],
-      [1, 1],
-      [
-        [1, 1],
-        [1, 1],
-      ],
-      [
-        [0, 1, 0, 1],
-        [0, 1, 0, 1],
-      ],
-      [1, 1],
-      [
-        [1, 1],
-        [1, 1],
-      ],
-    ];
-    return child.encodeAnimationClip({
-      duration: 1,
-      tracks: values.map(([first, last], index) => ({
-        property: {
-          component: child.components.CustomMaterial!.id,
-          name: `motion_${index}`,
-        },
-        keys: [first, last].map((value, time) => ({
-          time,
-          value: {
-            kind: "dynamic" as const,
-            value:
-              typeof value === "number"
-                ? { kind: "f32" as const, value }
-                : value!.length === 2
-                  ? { kind: "vec2" as const, value: value as [number, number] }
-                  : {
-                      kind: "vec4" as const,
-                      value: value as [number, number, number, number],
-                    },
-          },
-          interpolation:
-            time === 0
-              ? { kind: "linear" as const }
-              : { kind: "step" as const },
-        })),
-      })),
-    });
-  }
 
   try {
-    await child.registerAsset(sourceA, clip().buffer);
     const declarations: Command[] = [
       createEntity(1, "canvas"),
       createEntity(2, "theme"),
@@ -303,7 +295,7 @@ export async function ordinarySkinMotion(
         { kind: "alias", alias: 2 },
         "GuiThemeMotion",
         "parts",
-        rows("GuiThemeMotion", motions(sourceA)),
+        rows("GuiThemeMotion", motions()),
       ),
       createEntity(3, "checkbox"),
       insertComponent(child, "GuiCheckbox", { kind: "alias", alias: 3 }),
@@ -516,6 +508,14 @@ export async function ordinarySkinMotion(
       incarnation: lifetime.incarnation,
     };
 
+    async function reducedMotion(): Promise<boolean | undefined> {
+      const page = await child.inspectPage({
+        collection: "guiPreferences",
+        limit: 1,
+      });
+      return page.guiPreferences?.reducedMotion;
+    }
+
     async function checked(): Promise<boolean> {
       const page = await child.inspectPage({
         collection: "entities",
@@ -649,38 +649,14 @@ export async function ordinarySkinMotion(
     );
     await action("blur");
     await captureUntil("focus-hidden", (image) => rgba(image, 20, 32)[1]! < 3);
-    if (environment.pending) await environment.pending.stage([...clip()]);
-    else await child.registerAsset(sourceB, clip().buffer);
-    successfulBatch(
-      await child.batch([
-        field(
-          child,
-          handle(theme),
-          "GuiThemeMotion",
-          "parts",
-          rows("GuiThemeMotion", motions(sourceB)),
-        ),
-      ]),
-    );
     await action("toggle");
-    if (environment.pending) {
-      await environment.pending.requested();
-      for (let repeat = 0; repeat < 5; repeat++) {
-        await captureUntil(
-          `pending-holds-${repeat}`,
-          (image) => near(background(image), [255, 0, 0, 255]),
-          repeat === 4,
-        );
-      }
-      await environment.pending.release();
-    }
-    await captureUntil("replacement-intermediate", (image) => {
+    await captureUntil("second-intermediate", (image) => {
       const color = background(image);
       return (
         color[0]! > 40 && color[0]! < 215 && color[2]! > 40 && color[2]! < 215
       );
     });
-    await captureUntil("replacement-blue", (image) =>
+    await captureUntil("second-blue", (image) =>
       near(background(image), [0, 0, 255, 255]),
     );
     check(renderDiagnostics(host), "Render diagnostics unavailable");
@@ -745,7 +721,7 @@ export async function ordinarySkinMotion(
           { kind: "alias", alias: 5 },
           "GuiThemeMotion",
           "parts",
-          rows("GuiThemeMotion", motions(sourceA)),
+          rows("GuiThemeMotion", motions()),
         ),
         field(child, handle(control), "GuiSkin", "theme", {
           kind: "entity",
@@ -754,7 +730,8 @@ export async function ordinarySkinMotion(
         { kind: "delete", entity: handle(theme) },
       ]),
     );
-    const replacementTheme = aliasId(themed, 5);
+    // The new theme was created with its alias.
+    aliasId(themed, 5);
     await mark("retarget-delete-old-same-batch");
     await captureUntil("retarget-blue", (image) =>
       near(background(image), [0, 0, 255, 255]),
@@ -776,9 +753,8 @@ export async function ordinarySkinMotion(
       beforeOverride?.value.kind === "bool" && !beforeOverride.value.value,
       "Override fixture must start from unchecked red",
     );
-    const overrideMotion = motions(sourceA).map((part) =>
-      part.part === key("focusRing") ? part : { ...part, time: 1 },
-    );
+    // Restyling is immediate: a per-control override lands in the first
+    // capture that includes it, and so does its removal.
     successfulBatch(
       await child.batch([
         field(
@@ -788,46 +764,23 @@ export async function ordinarySkinMotion(
           "parts",
           rows("GuiSkin", [{ part: key("background"), color: [0, 0, 1, 1] }]),
         ),
-        field(
-          child,
-          handle(replacementTheme),
-          "GuiThemeMotion",
-          "parts",
-          rows("GuiThemeMotion", overrideMotion),
-        ),
       ]),
     );
-    await mark("override-motion");
-    await captureUntil("override-motion-intermediate", (image) => {
-      const color = background(image);
-      return (
-        color[0]! > 60 && color[0]! < 215 && color[2]! > 60 && color[2]! < 215
-      );
-    });
-    successfulBatch(
-      await child.batch([
-        {
-          kind: "removeComponent",
-          entity: handle(replacementTheme),
-          component: child.components.GuiThemeMotion!.id,
-        },
-      ]),
-    );
-    await mark("override-motion-withdrawn");
+    await mark("override");
     const staticOverride = await captureUntil(
-      "override-retained-static-blue",
+      "override-static-blue",
       () => true,
     );
     check(
       near(background(staticOverride), [0, 0, 255, 255]),
-      "Withdrawing only motion must retain the authored blue override",
+      "An override must restyle the settled control at once",
     );
     const afterOverride = await controlState(child, control);
     check(
       afterOverride?.target.incarnation === beforeOverride.target.incarnation &&
         afterOverride.value.kind === "bool" &&
         !afterOverride.value.value,
-      "Motion/override edits changed the control or its value",
+      "Override edits changed the control or its value",
     );
     successfulBatch(
       await child.batch([
@@ -835,50 +788,53 @@ export async function ordinarySkinMotion(
       ]),
     );
     await mark("override-withdrawn");
-    await captureUntil("override-withdrawn-red", (image) =>
-      near(background(image), [255, 0, 0, 255]),
+    const withdrawn = await captureUntil("override-withdrawn-red", () => true);
+    check(
+      near(background(withdrawn), [255, 0, 0, 255]),
+      "Removing the override must restore the theme at once",
     );
 
-    successfulBatch(
-      await child.batch([
-        insertComponent(child, "GuiThemeMotion", handle(replacementTheme)),
-        field(
-          child,
-          handle(replacementTheme),
-          "GuiThemeMotion",
-          "parts",
-          rows("GuiThemeMotion", motions(sourceA)),
-        ),
-      ]),
-    );
-
+    // Reduced motion snaps a transition under way. The preference precedes
+    // the witness at the mutation boundary, so the first capture including
+    // the witness shows the destination.
     await action("toggle");
-    await captureUntil("before-gate-active", (image) => {
+    await captureUntil("before-reduced-motion", (image) => {
       const color = background(image);
       return (
         color[0]! > 60 && color[0]! < 210 && color[2]! > 60 && color[2]! < 210
       );
     });
-    const afterGateWitness = nextWitness();
-    const withdrawal = successfulBatch(
-      await child.batch([
-        {
-          kind: "removeComponent",
-          entity: handle(replacementTheme),
-          component: child.components.GuiThemeMotion!.id,
-        },
-        ...afterGateWitness.operations,
-      ]),
+    const reducedWitness = nextWitness();
+    check((await reducedMotion()) === false, "Reduced motion must start off");
+    child.sendCommand({
+      type: "GuiPreferencesUpdateCommand",
+      reducedMotion: true,
+    });
+    const reduced = successfulBatch(
+      await child.batch(reducedWitness.operations),
+    );
+    check(
+      (await reducedMotion()) === true,
+      "The GUI preferences query must read back the reduced-motion update",
     );
     await record({
-      label: "gated-withdrawal",
-      mutationTick: withdrawal.tick,
-      futureWitness: afterGateWitness.color,
+      label: "reduced-motion",
+      mutationTick: reduced.tick,
+      futureWitness: reducedWitness.color,
     });
-    expectedWitness = afterGateWitness.color;
-    await captureUntil("resumed-static-blue", (image) =>
-      near(background(image), [0, 0, 255, 255]),
+    expectedWitness = reducedWitness.color;
+    const snapped = await captureUntil(
+      "reduced-motion-snapped-blue",
+      () => true,
     );
+    check(
+      near(background(snapped), [0, 0, 255, 255]),
+      "Reduced motion must snap the transition under way to its destination",
+    );
+    child.sendCommand({
+      type: "GuiPreferencesUpdateCommand",
+      reducedMotion: false,
+    });
 
     await lifetimeWatch.remove();
     check(lifetimeChanges === 0, "Motion edits changed the control's lifetime");
@@ -909,18 +865,6 @@ export async function ordinarySkinMotion(
     await mark("recreated-control");
     await captureUntil("recreated-red", (image) =>
       near(background(image), [255, 0, 0, 255]),
-    );
-    successfulBatch(
-      await child.batch([
-        insertComponent(child, "GuiThemeMotion", handle(replacementTheme)),
-        field(
-          child,
-          handle(replacementTheme),
-          "GuiThemeMotion",
-          "parts",
-          rows("GuiThemeMotion", motions(sourceA)),
-        ),
-      ]),
     );
     // The child moves from the canvas slot to a spatial anchor under a
     // camera.
@@ -990,9 +934,6 @@ export async function ordinarySkinMotion(
       evidence,
       child: childWorld.reference,
       parent: parentWorld.reference,
-      pendingResourceCoverage: environment.pending
-        ? "controlled-http"
-        : "not-provided-by-native-host",
     };
   } finally {
     const cleanup = await Promise.allSettled([
@@ -1005,6 +946,939 @@ export async function ordinarySkinMotion(
       check(
         cleanup.every((result) => result.status === "fulfilled"),
         "Motion fixture Worlds did not cleanly destroy",
+      );
+  }
+}
+
+/** Canvas extent and viewport of the default-motion World. */
+const DEFAULT_WIDTH = 480;
+const DEFAULT_HEIGHT = 128;
+
+/** The controls' inherited font size: four times the looks' em, so every
+ * length of the built-in looks draws four times its sheet size. */
+const DEFAULT_FONT = 64;
+
+interface Rect {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+/** Logical rectangles of the unthemed button and the switch. */
+const BUTTON: Rect = { x: 16, y: 16, width: 192, height: 96 };
+const SWITCH: Rect = { x: 256, y: 16, width: 192, height: 96 };
+
+/** A point on the canvas no control covers. */
+const AWAY = [232, 120] as const;
+
+/** One pointer for every physical event. */
+const POINTER = 1n;
+
+/** Linear tolerance of one sampled channel: 8-bit sRGB quantisation and
+ * blending. */
+const CHANNEL_TOLERANCE = 0.02;
+
+/** Pixel tolerance of a measured block position. */
+const POSITION_TOLERANCE = 1.5;
+
+/** Linear green of the pixel at `x`, `y` of a default-motion capture. */
+function green(capture: PresentedCapture, x: number, y: number): number {
+  const pixel = new Uint8Array(capture.pixels, (y * DEFAULT_WIDTH + x) * 4, 4);
+  return linearChannel(pixel[1]!);
+}
+
+/** Mean linear green over `[x0, x1) x [y0, y1)`. */
+function meanGreen(
+  capture: PresentedCapture,
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+): number {
+  let sum = 0;
+  for (let y = y0; y < y1; y++)
+    for (let x = x0; x < x1; x++) sum += green(capture, x, y);
+  return sum / ((x1 - x0) * (y1 - y0));
+}
+
+/** The button's fill, away from its line and its glow's reach. */
+function buttonFill(capture: PresentedCapture): number {
+  const x = BUTTON.x + BUTTON.width / 2;
+  const y = BUTTON.y + BUTTON.height / 2;
+  return meanGreen(capture, x - 8, y - 8, x + 8, y + 8);
+}
+
+/** The button's top line, inside both its idle and its lit width. */
+function buttonLine(capture: PresentedCapture): number {
+  const x = BUTTON.x + BUTTON.width / 2;
+  return meanGreen(capture, x - 16, BUTTON.y + 1, x + 16, BUTTON.y + 4);
+}
+
+/** The switch block's horizontal centre: the centroid of the bright pixels
+ * on the rail's middle rows, inside its line. */
+function switchBlock(capture: PresentedCapture): number {
+  const y = SWITCH.y + SWITCH.height / 2;
+  let weight = 0;
+  let sum = 0;
+  for (let row = y - 4; row < y + 4; row++)
+    for (let x = SWITCH.x + 8; x < SWITCH.x + SWITCH.width - 8; x++)
+      if (green(capture, x, row) > 0.2) {
+        weight += 1;
+        sum += x + 0.5;
+      }
+  check(weight > 0, "The switch block is not painted");
+  return sum / weight;
+}
+
+/**
+ * The Host time of every frame event one World session receives. The Host
+ * supersedes a frame event that would wait behind other output, so a tick
+ * without its own event is bounded by the recorded frames around it.
+ */
+class FrameTimes {
+  /** Recorded frames in tick order. */
+  readonly frames: { tick: bigint; time: number }[] = [];
+  private stopped = false;
+
+  constructor(private readonly client: Client) {
+    void this.run();
+  }
+
+  get latest(): { tick: bigint; time: number } | undefined {
+    return this.frames.at(-1);
+  }
+
+  private async run(): Promise<void> {
+    let after = 0n;
+    while (!this.stopped) {
+      try {
+        const frame = await this.client.waitForFrame(after);
+        this.frames.push(frame);
+        after = frame.tick;
+      } catch {
+        if (this.stopped || this.client.closure) return;
+      }
+    }
+  }
+
+  /** Host-time bounds of `tick`: the latest recorded frame at or before it
+   * and the earliest at or after it, once one has arrived. */
+  async bounds(tick: bigint): Promise<{ early: number; late: number }> {
+    const deadline = performance.now() + 5_000;
+    while (!this.latest || this.latest.tick < tick) {
+      check(
+        performance.now() < deadline,
+        `No frame event arrived at or after tick ${tick}`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    }
+    let early = Number.NEGATIVE_INFINITY;
+    let late = Number.POSITIVE_INFINITY;
+    for (const frame of this.frames) {
+      if (frame.tick <= tick) early = frame.time;
+      if (frame.tick >= tick) {
+        late = frame.time;
+        break;
+      }
+    }
+    return { early, late };
+  }
+
+  stop(): void {
+    this.stopped = true;
+  }
+}
+
+/** One capture of a transition with the Host-time bounds of its tick. */
+interface TransitionSample {
+  readonly tick: bigint;
+  readonly early: number;
+  readonly late: number;
+  readonly value: number;
+  readonly capture: PresentedCapture;
+}
+
+/** Pointer input, captures and Host-time transition checks of one World
+ * whose canvas is presented as the root at the default-motion size. */
+interface MotionProbe {
+  readonly clock: FrameTimes;
+  /** The next capture that names the World's canvas, with its tick's Host
+   * time bounds. */
+  capture(): Promise<TransitionSample>;
+  save(name: string, sample: TransitionSample, extra?: object): Promise<void>;
+  /** Captures until `measure` reads the same value twice in a row. */
+  settled(
+    measure: (image: PresentedCapture) => number,
+    tolerance: number,
+  ): Promise<TransitionSample>;
+  send(
+    event:
+      | {
+          kind: "pointerMove" | "pointerDown" | "pointerUp";
+          at: readonly [number, number];
+        }
+      | { kind: "pointerCancel" },
+  ): Promise<void>;
+  /**
+   * One transition: settle, send `input`, then capture until the Host has
+   * run a quarter second past `seconds`. Samples before the first changed
+   * capture may predate the input. From that one on, the transition
+   * started no earlier than the last frame observed before the input and
+   * no later than the frame before the first change, which bounds each
+   * sample's elapsed time with the Host-time bounds of its own tick.
+   */
+  transition(
+    label: string,
+    measure: (image: PresentedCapture) => number,
+    tolerance: number,
+    seconds: number,
+    ease: (t: number) => number,
+    input: () => Promise<void>,
+    keep?: boolean,
+  ): Promise<{ from: number; to: number }>;
+  /** Release the pointer, the input context and the frame clock. */
+  close(): Promise<void>;
+}
+
+/** Present `world`'s canvas as the root and open physical input on it. */
+async function presentMotionProbe(
+  host: HostClientBase<MotionClient>,
+  client: Client,
+  world: WorldReference,
+  name: string,
+  record: (value: object) => Promise<void>,
+  environment: MotionEnvironment,
+): Promise<MotionProbe> {
+  const clock = new FrameTimes(client);
+  const output = canvasOutput(world);
+  let presented: { view: PresentationView; input: GuiPhysicalContext };
+  try {
+    const binding = await host.setRootOutput(output, {
+      width: DEFAULT_WIDTH,
+      height: DEFAULT_HEIGHT,
+      devicePixelRatio: 1,
+    });
+    const view = await host.presentation.select(
+      await host.presentation.surface(),
+      binding,
+    );
+    presented = { view, input: await host.input.open(view) };
+  } catch (error) {
+    clock.stop();
+    throw error;
+  }
+  const { view, input: context } = presented;
+  let sequence = 0n;
+
+  async function capture(): Promise<TransitionSample> {
+    const deadline = performance.now() + 10_000;
+    for (;;) {
+      // Naming the canvas output reports the World tick each capture drew.
+      const image = await host.presentation.capture(view, {
+        afterOutputs: [output],
+        ...(sequence === 0n ? {} : { afterSequence: sequence }),
+      });
+      sequence = image.sequence;
+      check(image.failedDrawCalls === 0, "A capture has failed draws");
+      const source = image.sources.find(
+        (entry) => entry.output.world.id === world.id,
+      );
+      if (source)
+        return {
+          tick: source.tick,
+          ...(await clock.bounds(source.tick)),
+          value: Number.NaN,
+          capture: image,
+        };
+      check(
+        performance.now() < deadline,
+        `No capture names the ${name} publication`,
+      );
+    }
+  }
+
+  async function save(name: string, sample: TransitionSample, extra = {}) {
+    await environment.capture({
+      name,
+      width: DEFAULT_WIDTH,
+      height: DEFAULT_HEIGHT,
+      pixels: [...new Uint8Array(sample.capture.pixels)],
+      sequence: sample.capture.sequence,
+      publication: sample.capture.publication,
+      ...{
+        tick: sample.tick,
+        hostTime: [sample.early, sample.late],
+        ...extra,
+      },
+    } as MotionImage);
+  }
+
+  async function settled(
+    measure: (image: PresentedCapture) => number,
+    tolerance: number,
+  ): Promise<TransitionSample> {
+    let previous = await capture();
+    for (let attempt = 0; attempt < 120; attempt++) {
+      const next = await capture();
+      if (
+        Math.abs(measure(next.capture) - measure(previous.capture)) <=
+        tolerance / 4
+      )
+        return { ...next, value: measure(next.capture) };
+      previous = next;
+    }
+    throw new Error(`${name} motion did not settle`);
+  }
+
+  async function send(
+    event:
+      | {
+          kind: "pointerMove" | "pointerDown" | "pointerUp";
+          at: readonly [number, number];
+        }
+      | { kind: "pointerCancel" },
+  ) {
+    const outcome = await context.send(
+      event.kind === "pointerCancel"
+        ? { kind: "pointerCancel", pointer: POINTER }
+        : {
+            kind: event.kind,
+            pointer: POINTER,
+            point: [event.at[0] / DEFAULT_WIDTH, event.at[1] / DEFAULT_HEIGHT],
+          },
+    );
+    check(
+      !outcome.error && outcome.disposition !== "blocked",
+      `${event.kind} was not routed: ${JSON.stringify(outcome)}`,
+    );
+  }
+
+  async function transition(
+    label: string,
+    measure: (image: PresentedCapture) => number,
+    tolerance: number,
+    seconds: number,
+    ease: (t: number) => number,
+    input: () => Promise<void>,
+    keep = false,
+  ) {
+    const from = (await settled(measure, tolerance)).value;
+    const before = clock.latest;
+    check(before, "No frame observed before the input");
+    await input();
+    const samples: TransitionSample[] = [];
+    for (;;) {
+      const sample = await capture();
+      samples.push({ ...sample, value: measure(sample.capture) });
+      const last = samples.at(-1)!;
+      const previous = samples.at(-2);
+      if (
+        last.early - before.time > seconds + 0.25 &&
+        previous &&
+        Math.abs(last.value - previous.value) <= tolerance / 4
+      )
+        break;
+      check(samples.length < 400, `${label} never settled`);
+    }
+    const to = samples.at(-1)!.value;
+    const changed = samples.findIndex(
+      (sample) => Math.abs(sample.value - from) > tolerance,
+    );
+    check(changed >= 0, `${label}: the input changed nothing`);
+    const startLatest = (await clock.bounds(samples[changed]!.tick - 1n)).late;
+    const checked = samples.map((sample, index) => {
+      const progress = (elapsed: number) =>
+        seconds === 0 ? 1 : Math.min(1, Math.max(0, elapsed / seconds));
+      const bounds =
+        index < changed
+          ? [from, from]
+          : [
+              from + (to - from) * ease(progress(sample.early - startLatest)),
+              from + (to - from) * ease(progress(sample.late - before.time)),
+            ];
+      const low = Math.min(bounds[0]!, bounds[1]!) - tolerance;
+      const high = Math.max(bounds[0]!, bounds[1]!) + tolerance;
+      return {
+        tick: sample.tick,
+        hostTime: [sample.early, sample.late],
+        value: sample.value,
+        low,
+        high,
+        passed: sample.value >= low && sample.value <= high,
+      };
+    });
+    const intermediate = samples.filter(
+      (sample) =>
+        Math.abs(sample.value - from) > tolerance &&
+        Math.abs(sample.value - to) > tolerance,
+    ).length;
+    await record({
+      label,
+      seconds,
+      from,
+      to,
+      inputAfter: before,
+      firstChanged: changed,
+      intermediate,
+      samples: checked,
+    });
+    if (keep)
+      for (const [index, sample] of samples.entries())
+        await save(`${label}-${index}`, sample, {
+          elapsed: [
+            Math.max(0, sample.early - startLatest),
+            Math.max(0, sample.late - before.time),
+          ],
+          value: sample.value,
+          bounds: [checked[index]!.low, checked[index]!.high],
+        });
+    else await save(label, samples[changed]!);
+    const failed = checked.find((sample) => !sample.passed);
+    check(
+      !failed,
+      `${label}: a sample left the eased envelope ${JSON.stringify(failed)}`,
+    );
+    if (seconds === 0)
+      check(
+        intermediate === 0,
+        `${label} must land at once, without an intermediate capture`,
+      );
+    else
+      check(
+        intermediate > 0,
+        `${label}: no capture fell inside the ${seconds} s transition`,
+      );
+    return { from, to };
+  }
+
+  return {
+    clock,
+    capture,
+    save,
+    settled,
+    send,
+    transition,
+    async close() {
+      clock.stop();
+      await context
+        .send({ kind: "pointerCancel", pointer: POINTER })
+        .catch(() => {});
+      await context.close().catch(() => {});
+    },
+  };
+}
+
+const linear = (t: number) => t;
+const easeOutCubic = (t: number) => 1 - (1 - t) ** 3;
+
+/** The pointer positions over the button's and the switch's centres. */
+const OVER_BUTTON: readonly [number, number] = [
+  BUTTON.x + BUTTON.width / 2,
+  BUTTON.y + BUTTON.height / 2,
+];
+const OVER_SWITCH: readonly [number, number] = [
+  SWITCH.x + SWITCH.width / 2,
+  SWITCH.y + SWITCH.height / 2,
+];
+
+/**
+ * The built-in looks' transitions on an unthemed button and on a switch
+ * themed from the exported switch look, driven by physical pointer input.
+ * Each capture names the World tick it drew; the Host time of that tick and
+ * of the last frame observed before the input bound the transition's
+ * elapsed time, so each sample is checked against the eased interpolation of
+ * the settled ends over that whole interval. No client timer measures motion.
+ */
+async function defaultSkinMotion(
+  host: HostClientBase<MotionClient>,
+  contract: MotionContract,
+  environment: MotionEnvironment,
+) {
+  const created = await host.createWorld({
+    selectedSystems: selectSystems(GUI, LIFECYCLE),
+    symbolicId: "default-motion",
+    canvas: { extent: [DEFAULT_WIDTH, DEFAULT_HEIGHT], unitsPerMetre: 96 },
+  });
+  const client = await host.openWorld(created.reference);
+  const evidence: object[] = [];
+  let completed = false;
+  let probe: MotionProbe | undefined;
+
+  async function record(value: object) {
+    evidence.push(value);
+    await environment.record(value);
+  }
+
+  function rows(component: string, parts: readonly Part[]): FieldValue {
+    const layout = client.components[component]?.fields.parts?.rows;
+    check(layout, `Missing target rows ${component}.parts`);
+    return {
+      kind: "rows",
+      value: contract.encodeRowsTable(layout, {
+        nextSlot: parts.length,
+        rows: new Map(parts.map((part, index) => [index, part])),
+      }),
+    };
+  }
+
+  function placed(alias: number, control: string, rect: Rect): Command[] {
+    return [
+      createEntity(alias, control),
+      insertComponent(client, control, { kind: "alias", alias }),
+      insertComponent(
+        client,
+        "GuiLayout",
+        { kind: "alias", alias },
+        { width: rect.width, height: rect.height },
+      ),
+      insertComponent(
+        client,
+        "CanvasStyle",
+        { kind: "alias", alias },
+        { x: rect.x, y: rect.y },
+      ),
+      {
+        kind: "placeEntity",
+        entity: { kind: "alias", alias },
+        placement: { parent: { kind: "alias", alias: 1 }, before: null },
+      },
+    ];
+  }
+
+  try {
+    const look = contract.GUI_SKIN_LOOKS.switch;
+    check(look, "The contract exports no switch look");
+    const theme = { kind: "alias" as const, alias: 4 };
+    successfulBatch(
+      await client.batch([
+        createEntity(1, "canvas"),
+        insertComponent(
+          client,
+          "GuiFont",
+          { kind: "alias", alias: 1 },
+          { font_size: DEFAULT_FONT },
+        ),
+        ...placed(2, "GuiButton", BUTTON),
+        ...placed(3, "GuiCheckbox", SWITCH),
+        // A client theme made from the exported switch look: its rows and
+        // its motion rows, as the generated contract carries them.
+        createEntity(4, "switch-theme"),
+        insertComponent(client, "GuiTheme", theme, { em: look.em }),
+        {
+          kind: "setField",
+          entity: theme,
+          component: client.components.GuiTheme!.id,
+          field: {
+            offset: client.components.GuiTheme!.fields.parts!.offset,
+            value: rows("GuiTheme", look.parts),
+          },
+        },
+        insertComponent(client, "GuiThemeMotion", theme),
+        {
+          kind: "setField",
+          entity: theme,
+          component: client.components.GuiThemeMotion!.id,
+          field: {
+            offset: client.components.GuiThemeMotion!.fields.parts!.offset,
+            value: rows("GuiThemeMotion", look.motion),
+          },
+        },
+        insertComponent(client, "GuiSkin", { kind: "alias", alias: 3 }),
+        {
+          kind: "setField",
+          entity: { kind: "alias", alias: 3 },
+          component: client.components.GuiSkin!.id,
+          field: {
+            offset: client.components.GuiSkin!.fields.theme!.offset,
+            value: { kind: "entity", value: theme },
+          },
+        },
+      ]),
+    );
+    probe = await presentMotionProbe(
+      host,
+      client,
+      created.reference,
+      "default-motion",
+      record,
+      environment,
+    );
+    const { send, transition } = probe;
+
+    await send({ kind: "pointerMove", at: AWAY });
+    const hoverIn = await transition(
+      "hover-in",
+      buttonLine,
+      CHANNEL_TOLERANCE,
+      0.08,
+      linear,
+      () => send({ kind: "pointerMove", at: OVER_BUTTON }),
+    );
+    check(hoverIn.to > hoverIn.from, "Hover lights the button's line");
+    await transition(
+      "hover-out",
+      buttonLine,
+      CHANNEL_TOLERANCE,
+      0.12,
+      linear,
+      () => send({ kind: "pointerMove", at: AWAY }),
+    );
+    await send({ kind: "pointerMove", at: OVER_BUTTON });
+    const press = await transition(
+      "press",
+      buttonFill,
+      CHANNEL_TOLERANCE,
+      0,
+      linear,
+      () => send({ kind: "pointerDown", at: OVER_BUTTON }),
+    );
+    check(press.to > press.from, "A press fills the button with the accent");
+    await transition(
+      "release",
+      buttonFill,
+      CHANNEL_TOLERANCE,
+      0.1,
+      linear,
+      () => send({ kind: "pointerUp", at: OVER_BUTTON }),
+    );
+
+    // The switch: off to on and back over 160 ms with an ease-out cubic,
+    // the value committing at the release that toggles it.
+    await send({ kind: "pointerMove", at: OVER_SWITCH });
+    await send({ kind: "pointerDown", at: OVER_SWITCH });
+    const on = await transition(
+      "switch-on",
+      switchBlock,
+      POSITION_TOLERANCE,
+      0.16,
+      easeOutCubic,
+      () => send({ kind: "pointerUp", at: OVER_SWITCH }),
+      true,
+    );
+    check(
+      on.to - on.from > 80,
+      `The block travels from its left to its right end: ${JSON.stringify(on)}`,
+    );
+    await send({ kind: "pointerDown", at: OVER_SWITCH });
+    await transition(
+      "switch-off",
+      switchBlock,
+      POSITION_TOLERANCE,
+      0.16,
+      easeOutCubic,
+      () => send({ kind: "pointerUp", at: OVER_SWITCH }),
+      true,
+    );
+
+    // Reduced motion: the hover lands at once.
+    client.sendCommand({
+      type: "GuiPreferencesUpdateCommand",
+      reducedMotion: true,
+    });
+    await send({ kind: "pointerMove", at: AWAY });
+    await transition(
+      "reduced-motion-hover",
+      buttonLine,
+      CHANNEL_TOLERANCE,
+      0,
+      linear,
+      () => send({ kind: "pointerMove", at: OVER_BUTTON }),
+    );
+    client.sendCommand({
+      type: "GuiPreferencesUpdateCommand",
+      reducedMotion: false,
+    });
+    completed = true;
+    return { world: created.reference, evidence };
+  } finally {
+    await probe?.close();
+    const cleanup = await Promise.allSettled([
+      host.destroyWorld(created.reference),
+    ]);
+    await record({ label: "default-motion-cleanup", cleanup });
+    if (completed)
+      check(
+        cleanup.every((result) => result.status === "fulfilled"),
+        "The default-motion World did not cleanly destroy",
+      );
+  }
+}
+
+/** The kit World's body text size: twice the looks' em, so the spinner's
+ * ring is 48 units across. */
+const KIT_FONT = 32;
+
+/** The spinner's ring, right of the button and the reach of its glow. */
+const SPINNER: Rect = { x: 320, y: 40, width: 48, height: 48 };
+
+/** The RGBA bytes of the spinner's ring in a default-motion-sized capture. */
+function spinnerRing(capture: PresentedCapture): Uint8Array {
+  const ring = new Uint8Array(SPINNER.width * SPINNER.height * 4);
+  for (let row = 0; row < SPINNER.height; row++)
+    ring.set(
+      new Uint8Array(
+        capture.pixels,
+        ((SPINNER.y + row) * DEFAULT_WIDTH + SPINNER.x) * 4,
+        SPINNER.width * 4,
+      ),
+      row * SPINNER.width * 4,
+    );
+  return ring;
+}
+
+/** The lit quarter's centroid from the ring's centre, in pixels, and its
+ * size: the accent's bright green, where the quiet track is dark. */
+function litQuarter(ring: Uint8Array): { x: number; y: number; lit: number } {
+  let lit = 0;
+  let x = 0;
+  let y = 0;
+  for (let index = 0; index < ring.length / 4; index++)
+    if (linearChannel(ring[index * 4 + 1]!) > 0.3) {
+      lit += 1;
+      x += (index % SPINNER.width) + 0.5 - SPINNER.width / 2;
+      y += Math.floor(index / SPINNER.width) + 0.5 - SPINNER.height / 2;
+    }
+  return lit ? { x: x / lit, y: y / lit, lit } : { x: 0, y: 0, lit };
+}
+
+function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
+  return left.length === right.length && left.every((v, i) => v === right[i]);
+}
+
+/**
+ * One reduced-motion setting for the runtime and the kit, through the React
+ * kit's `GuiKit` in a World whose React root declares an unthemed button and
+ * a kit spinner. With the setting on, the root kit sends the World's
+ * preference, which reads back through the `guiPreferences` query: a hover
+ * lands at once and the spinner holds its rest pose, its lit quarter from
+ * twelve to three o'clock, over more than one turn of Host time, with no
+ * animation controller. With it off, the preference reads back off, the
+ * spinner's single controller turns it, and the hover takes the look's 80 ms.
+ */
+async function kitReducedMotion(
+  host: HostClientBase<MotionClient>,
+  contract: GuiKitContract,
+  fontBytes: ArrayBuffer,
+  environment: MotionEnvironment,
+) {
+  const created = await host.createWorld({
+    selectedSystems: selectSystems(GUI, LIFECYCLE),
+    symbolicId: "kit-motion",
+    canvas: { extent: [DEFAULT_WIDTH, DEFAULT_HEIGHT], unitsPerMetre: 96 },
+  });
+  const client = await host.openWorld(created.reference);
+  const evidence: object[] = [];
+  const errors: Error[] = [];
+  let completed = false;
+  let probe: MotionProbe | undefined;
+  let root: ReactWorldRoot | undefined;
+
+  async function record(value: object) {
+    evidence.push(value);
+    await environment.record(value);
+  }
+
+  /** Poll the `guiPreferences` query until it reads `expected`. */
+  async function preference(expected: boolean) {
+    const deadline = performance.now() + 5_000;
+    for (;;) {
+      const page = await client.inspectPage({
+        collection: "guiPreferences",
+        limit: 1,
+      });
+      if (page.guiPreferences?.reducedMotion === expected) return page.tick;
+      check(
+        performance.now() < deadline,
+        `guiPreferences never read reducedMotion ${expected}: ${JSON.stringify(page.guiPreferences)}`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+
+  /** Poll the World's animation controllers until there are `expected`. */
+  async function controllers(expected: number) {
+    const deadline = performance.now() + 5_000;
+    for (;;) {
+      const page = await client.inspectPage({ collection: "controllers" });
+      const count = page.controllers?.length ?? 0;
+      if (count === expected) return count;
+      check(
+        performance.now() < deadline,
+        `The kit World has ${count} animation controllers, not ${expected}`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+
+  try {
+    const font = await (client as unknown as AssetWorldClient).createAsset(
+      17,
+      fontBytes,
+    );
+    const kitRoot = createRoot(client as unknown as ReactWorldClient, {
+      onError: (error) => errors.push(error),
+    });
+    root = kitRoot;
+    const declare = async (reducedMotion: boolean) => {
+      await kitRoot.render(
+        h(
+          GuiKit,
+          { contract, font: font.source, fontSize: KIT_FONT, reducedMotion },
+          h(
+            Entity,
+            { id: "canvas" },
+            h(Font, { font_size: DEFAULT_FONT }),
+            h(Layout, {
+              kind: 3,
+              width: DEFAULT_WIDTH,
+              height: DEFAULT_HEIGHT,
+              align_x: -1,
+              align_y: -1,
+            }),
+            h(
+              Children,
+              null,
+              h(
+                Entity,
+                { id: "button" },
+                h(Layout, {
+                  width: BUTTON.width,
+                  height: BUTTON.height,
+                  margin_left: BUTTON.x,
+                  margin_top: BUTTON.y,
+                  align_x: -1,
+                  align_y: -1,
+                }),
+                h(Button, {}),
+              ),
+              h(Spinner, {
+                id: "spinner",
+                label: "Busy",
+                layout: {
+                  margin_left: SPINNER.x,
+                  margin_top: SPINNER.y,
+                  align_x: -1,
+                  align_y: -1,
+                },
+              }),
+            ),
+          ),
+        ),
+      );
+      check(
+        !errors.length,
+        `The kit declarations failed: ${errors.map((error) => error.message).join("; ")}`,
+      );
+    };
+
+    // On: the root kit sends the preference with its first declarations.
+    await declare(true);
+    const onTick = await preference(true);
+    await controllers(0);
+    probe = await presentMotionProbe(
+      host,
+      client,
+      created.reference,
+      "kit-motion",
+      record,
+      environment,
+    );
+    const { capture, save, send, transition, clock } = probe;
+
+    // The spinner holds its rest pose over more than a turn of Host time.
+    const rest = await probe.settled(
+      (image) => litQuarter(spinnerRing(image)).lit,
+      1,
+    );
+    const pose = litQuarter(spinnerRing(rest.capture));
+    check(
+      pose.lit > 20 && pose.x > 4 && pose.y < -4,
+      `The still spinner's lit quarter is not from twelve to three o'clock: ${JSON.stringify(pose)}`,
+    );
+    await save("kit-reduced-spinner", rest);
+    let still = rest;
+    const restRing = spinnerRing(rest.capture);
+    for (let attempt = 0; still.early - rest.late < 1.25; attempt++) {
+      check(attempt < 400, "Host time did not pass over the still spinner");
+      still = await capture();
+      check(
+        sameBytes(spinnerRing(still.capture), restRing),
+        `The spinner moved under reduced motion at tick ${still.tick}`,
+      );
+    }
+    await save("kit-reduced-spinner-later", still);
+    await record({
+      label: "kit-reduced-spinner",
+      preferenceTick: onTick,
+      pose,
+      hostTime: [rest.early, still.late],
+      ticks: [rest.tick, still.tick],
+    });
+
+    // A hover lands at once.
+    await send({ kind: "pointerMove", at: AWAY });
+    await transition(
+      "kit-reduced-hover",
+      buttonLine,
+      CHANNEL_TOLERANCE,
+      0,
+      linear,
+      () => send({ kind: "pointerMove", at: OVER_BUTTON }),
+    );
+
+    // Off: the root kit sends the change, and both move again.
+    await declare(false);
+    const offTick = await preference(false);
+    await controllers(1);
+    const before = await capture();
+    const beforeRing = spinnerRing(before.capture);
+    let turned = before;
+    for (
+      let attempt = 0;
+      sameBytes(spinnerRing(turned.capture), beforeRing);
+      attempt++
+    ) {
+      check(
+        attempt < 400 && clock.latest!.time - before.late < 3,
+        "The spinner did not turn once reduced motion was off",
+      );
+      turned = await capture();
+    }
+    await save("kit-turning-spinner", turned);
+    await record({
+      label: "kit-turning-spinner",
+      preferenceTick: offTick,
+      from: { tick: before.tick, pose: litQuarter(beforeRing) },
+      to: {
+        tick: turned.tick,
+        pose: litQuarter(spinnerRing(turned.capture)),
+      },
+    });
+    await send({ kind: "pointerMove", at: AWAY });
+    await transition(
+      "kit-hover-in",
+      buttonLine,
+      CHANNEL_TOLERANCE,
+      0.08,
+      linear,
+      () => send({ kind: "pointerMove", at: OVER_BUTTON }),
+    );
+    completed = true;
+    return { world: created.reference, evidence };
+  } finally {
+    await probe?.close();
+    // Unmounting the root leaves its declarations and the preference to the
+    // World, which goes with them.
+    const cleanup = [
+      ...(root ? await Promise.allSettled([root.unmount()]) : []),
+      ...(await Promise.allSettled([host.destroyWorld(created.reference)])),
+    ];
+    await record({ label: "kit-motion-cleanup", cleanup });
+    if (completed)
+      check(
+        cleanup.every((result) => result.status === "fulfilled"),
+        "The kit-motion World did not cleanly destroy",
       );
   }
 }

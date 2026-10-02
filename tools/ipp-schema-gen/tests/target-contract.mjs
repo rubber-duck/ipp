@@ -137,7 +137,7 @@ function contract(bytes) {
   for (const b of bytes.slice(16))
     actual = BigInt.asUintN(64, (actual ^ BigInt(b)) * 0x100000001b3n);
   assert.equal(hash, actual);
-  assert.equal(r.u16(), 7);
+  assert.equal(r.u16(), 10);
   const arch = r.string(),
     os = r.string(),
     pointerBits = r.u8();
@@ -163,6 +163,36 @@ function contract(bytes) {
       state: r.string() || null,
       variant: r.string() || null,
     });
+  const lookRows = () => {
+    const rows = [];
+    for (let row = 0, rowCount = r.u16(); row < rowCount; row++) {
+      const entry = { part: r.u32() };
+      for (let property = 0, n = r.u8(); property < n; property++) {
+        const key = r.string();
+        const lanes = [];
+        for (let lane = 0, width = r.u8(); lane < width; lane++)
+          lanes.push(r.f32());
+        entry[key] = lanes.length === 1 ? lanes[0] : lanes;
+      }
+      rows.push(entry);
+    }
+    return rows;
+  };
+  const skinLooks = {};
+  for (let index = 0, count = r.u16(); index < count; index++) {
+    const name = r.string();
+    const em = r.f32();
+    const parts = lookRows();
+    skinLooks[name] = { em, parts, motion: lookRows() };
+  }
+  const skinTokens = {};
+  for (let index = 0, count = r.u16(); index < count; index++) {
+    const name = r.string();
+    const lanes = [];
+    for (let lane = 0, width = r.u8(); lane < width; lane++)
+      lanes.push(r.f32());
+    skinTokens[name] = lanes.length === 1 ? lanes[0] : lanes;
+  }
   assert.equal(r.u16(), 3);
   const conventions = [];
   for (let i = 0, n = r.u16(); i < n; i++)
@@ -207,6 +237,8 @@ function contract(bytes) {
     pointerBits,
     components,
     paintKeys,
+    skinLooks,
+    skinTokens,
     rowLimits,
     conventions,
     limits,
@@ -250,8 +282,33 @@ assert.deepEqual(target.layouts, native.layouts);
 assert.deepEqual(target.assetFormats, native.assetFormats);
 assert.deepEqual(target.reasons, native.reasons);
 assert.deepEqual(target.paintKeys, native.paintKeys);
+assert.deepEqual(target.skinLooks, native.skinLooks);
+assert.deepEqual(target.skinTokens, native.skinTokens);
 for (const schema of [native, target]) {
   assert.ok(schema.paintKeys.length > 0);
+  const keys = new Set(schema.paintKeys.map((key) => key.index));
+  for (const name of ["button", "checkbox", "slider", "textInput", "scroll"])
+    assert.ok(schema.skinLooks[name]?.parts.length > 0, `default look ${name}`);
+  for (const look of Object.values(schema.skinLooks)) {
+    assert.ok(look.em > 0);
+    for (const row of [...look.parts, ...look.motion])
+      assert.ok(keys.has(row.part));
+  }
+  // Every look times its transitions; the switch block travels in 160 ms.
+  for (const name of ["button", "checkbox", "slider", "textInput", "switch"])
+    assert.ok(schema.skinLooks[name].motion.length > 0, `${name} motion`);
+  assert.ok(
+    schema.skinLooks.switch.motion.some(
+      (row) => row.duration === Math.fround(0.16) && row.easing === 2,
+    ),
+  );
+  // The looks are drawn at the tokens' em, and the default button speaks them.
+  assert.equal(schema.skinTokens.em, schema.skinLooks.button.em);
+  assert.deepEqual(
+    schema.skinLooks.button.parts[0].border_width,
+    schema.skinTokens.lineWidth,
+  );
+  assert.equal(schema.skinTokens.accent.length, 4);
   assert.equal(
     new Set(schema.paintKeys.map((key) => key.index)).size,
     schema.paintKeys.length,
@@ -264,7 +321,10 @@ for (const schema of [native, target]) {
   );
   assert.ok(schema.tags.some((tag) => tag.name === "ANIMATION_TARGET_JOINTS"));
   for (const entry of schema.components) {
-    assert.equal(entry.dynamicProperties, entry.name === "CustomMaterial");
+    assert.equal(
+      entry.dynamicProperties,
+      ["CustomMaterial", "CanvasPaint"].includes(entry.name),
+    );
     if (["ParticleEmitter", "ParticlePlayback"].includes(entry.name)) {
       assert.equal(Object.hasOwn(entry.fields, "runtime"), false);
     }

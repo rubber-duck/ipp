@@ -363,7 +363,7 @@ export async function exerciseOrdinaryGuiPersistence(
       source,
       text,
       { kind: "focus" },
-      { kind: "focusChanged", focused: true, changed: true },
+      { kind: "focusChanged", focused: true, changed: true, part: 0 },
       receipts,
     );
     check(text.focused, "Source focus was not established before save");

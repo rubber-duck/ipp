@@ -6,16 +6,27 @@ use std::collections::BTreeSet;
 ///
 /// A World has at most one active parent attachment and the Host rejects
 /// cycles, so a completed composition is a tree and a walk enters each World
-/// once. This replaces a fixed work budget: the walk is bounded by the
-/// composition it reads, and a World reached twice is an inconsistent
-/// composition that fails the one query instead of looping.
+/// once, or once per layer plane of a Surface separating its canvas's layers.
+/// This replaces a fixed work budget: the walk is bounded by the composition
+/// it reads, and a World reached twice is an inconsistent composition that
+/// fails the one query instead of looping.
 #[derive(Default)]
-pub(crate) struct GuiQueryWorlds(BTreeSet<WorldRef>);
+pub(crate) struct GuiQueryWorlds(BTreeSet<(WorldRef, Option<u32>)>);
 
 impl GuiQueryWorlds {
     /// Record entry into `world`, failing if this walk already entered it.
     pub(crate) fn enter(&mut self, world: WorldRef) -> Result<(), GuiQueryUnavailable> {
-        if self.0.insert(world) {
+        self.enter_plane(world, None)
+    }
+
+    /// Record entry into one layer plane of `world`'s canvas, or into the
+    /// whole World without `layer`.
+    pub(crate) fn enter_plane(
+        &mut self,
+        world: WorldRef,
+        layer: Option<u32>,
+    ) -> Result<(), GuiQueryUnavailable> {
+        if self.0.insert((world, layer)) {
             Ok(())
         } else {
             Err(GuiQueryUnavailable::RepeatedWorld)
@@ -29,6 +40,9 @@ pub(super) struct QueryView {
     pub point: [f32; 2],
     pub extent: [f64; 2],
     pub path: Vec<GuiQueryStep>,
+    /// The one canvas layer a Surface plane holds where the Surface separates
+    /// layers; `None` tests every layer in reverse painter order.
+    pub layer: Option<u32>,
 }
 
 pub(super) enum QueryTask<'a> {
@@ -74,6 +88,7 @@ pub fn query_composed_input<'a>(
                 f64::from(view.viewport.height),
             ],
             path: Vec::new(),
+            layer: None,
         })],
         panel: None,
     };
@@ -112,7 +127,7 @@ impl<'a> QueryWalk<'a, '_> {
             {
                 self.panel = Some(view.path.clone());
             }
-            self.worlds.enter(view.output.world())?;
+            self.worlds.enter_plane(view.output.world(), view.layer)?;
             if let Some(reason) = self.branch_block(view.output.world()) {
                 return Ok(GuiQueryOutcome::Blocked {
                     reason,

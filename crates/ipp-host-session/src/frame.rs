@@ -193,6 +193,19 @@ impl<P: HostServices> WorldSessionContext<'_, P> {
                     self.session.request_origins.remove(&request.request_id);
                     break 'request;
                 }
+                RequestBody::GuiPreferencesUpdateCommand(update) => {
+                    if let Err(_reason) = self.world.enqueue_gui_preferences_update(update) {
+                        ipp_core::diagnostic!(
+                            Warn,
+                            "[IPP {}] command.reject session={} reason={}",
+                            P::NAME,
+                            self.session.id,
+                            _reason
+                        );
+                    }
+                    self.session.request_origins.remove(&request.request_id);
+                    break 'request;
+                }
                 RequestBody::GeometryPickQuery(query) => {
                     if !self
                         .world

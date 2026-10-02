@@ -2,7 +2,16 @@
 //! World's one canvas.
 //!
 //! A World selecting this System is a canvas: every top-level entity and its
-//! descendants are canvas content, painted depth-first in core sibling order. The
+//! descendants are canvas content, painted depth-first in core sibling order
+//! within each layer. [`layers`] resolves `CanvasStyle.layer` plane ids before
+//! the walk, so every primitive, hit and slot carries its plane id and a raised
+//! entity's clip scope starts at the canvas extent; after the walk, paint and
+//! hits are stable-sorted by plane. Hits keep their tree-order ordinal for
+//! keyboard traversal. A canvas without layers skips both steps and publishes
+//! exactly its tree order. The walk leaves out every overlay the GUI layout did
+//! not show, closed or not raised, with its subtree, so it has no paint, hits,
+//! controls or layer; the open ones are published with the GUI observations in
+//! stacking order. The
 //! canvas's extent and density are this System's [`CanvasState`], set at World
 //! creation and changed by [`CanvasStateUpdate`] at the mutation boundary. A
 //! Surface presenting the canvas scales its physical size by the density, a root
@@ -19,7 +28,15 @@
 //!
 //! Raw content has no control or semantic actions. GUI supplies its local control
 //! state, semantics, compact parts and interaction priority through this same paint
-//! boundary; it does not write a parallel Surface item list.
+//! boundary; it does not write a parallel Surface item list. A skinned entity that
+//! is not a control paints its GUI Background part in its own place in the walk,
+//! replacing a CanvasBox's plain paint, without a hit record.
+//!
+//! A CanvasPaint turns its entity's own box fill, a CanvasBox or the Background
+//! part of its skin or control, into a paint fill naming the component, and the
+//! publication carries each named paint instance with its shader and property
+//! values beside the entries, so a property write republishes only the
+//! instances and their own revision.
 //!
 //! [`canvas_state`] declares the canvas state for every World, so World creation and
 //! the protocol always name it; only a World selecting this System accepts it, and
@@ -29,6 +46,7 @@ pub mod canvas_state;
 
 pub use canvas_state::{CanvasEvaluatedExtent, CanvasState, CanvasStateRecord, CanvasStateUpdate};
 mod component;
+mod layers;
 mod publication;
 mod system;
 mod system_state;
@@ -38,12 +56,14 @@ mod update;
 
 pub use component::CanvasBounds;
 pub use component::{
-    CanvasBitmap, CanvasBox, CanvasDrawing, CanvasGlyphRow, CanvasGlyphRun, CanvasStyle, CanvasText,
+    CanvasBitmap, CanvasBox, CanvasDrawing, CanvasGlyphRow, CanvasGlyphRun, CanvasPaint,
+    CanvasStyle, CanvasText,
 };
 pub use publication::{
-    CanvasAttachmentSlot, CanvasAxis, CanvasClip, CanvasGlyph, CanvasHit, CanvasHitKind,
-    CanvasInteractionPriority, CanvasPaintEntry, CanvasPart, CanvasPrimitive, CanvasPrimitiveId,
-    CanvasPrimitiveStyle, CanvasPublication, CanvasShapeFill, CanvasShapeGlow, CanvasTarget,
+    CanvasAttachmentSlot, CanvasAxis, CanvasBoxShape, CanvasClip, CanvasGlyph, CanvasHit,
+    CanvasHitKind, CanvasInteractionPriority, CanvasPaintEntry, CanvasPaintInstance, CanvasPart,
+    CanvasPrimitive, CanvasPrimitiveId, CanvasPrimitiveStyle, CanvasPublication,
+    CanvasShapeChecker, CanvasShapeFill, CanvasShapeGlow, CanvasTarget,
 };
 pub use system::{CanvasSystem, CanvasSystemFactory};
 pub(in crate::world::systems) use system_state::CanvasGeometry;

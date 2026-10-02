@@ -4,6 +4,7 @@ use crate::RenderError;
 use ipp_core::services::asset_management::{AssetKey, AssetProvider};
 use ipp_core::systems::{
     camera::CameraPublication,
+    canvas::CanvasPublication,
     geometry::{
         GeometryBounds, GeometryPlane, GeometryPublication, GeometryShapeTransform, GeometrySystem,
         PublishedGeometry,
@@ -30,10 +31,24 @@ pub(super) struct SceneOutputSurface {
     pub selection: OutputRef,
     pub publication: WorldPublicationId,
     pub model: [f32; 16],
+    /// Surface-local to domain placement that `model` renders.
+    pub placement: GeometryShapeTransform,
     pub extent: [f32; 2],
     pub token: ipp_core::WorldAttachmentToken,
     pub cache_policy: Option<ipp_core::SurfaceCachePolicy>,
     pub interaction_eligible: bool,
+    /// Local Z between consecutive canvas layer plane ids.
+    pub layer_spacing: f32,
+    /// Local Z of the highest layer in use, its plane id times the spacing;
+    /// zero while the canvas's layers share the Surface's plane.
+    pub layer_depth: f32,
+}
+
+impl SceneOutputSurface {
+    /// Whether layer planes leave the Surface's own plane.
+    pub fn layered(&self) -> bool {
+        self.layer_depth != 0.0
+    }
 }
 
 /// Current fault eligibility only, not routed-input authorization.
@@ -146,8 +161,19 @@ impl<'a> RenderScene<'a> {
                 };
                 let placement = GeometryShapeTransform::new(edge.placement)
                     .and_then(|placement| placement.then(&contribution.placement))
-                    .and_then(|placement| placement.render_matrix())
                     .map_err(|_| RenderError::InvalidTransform)?;
+                let model = placement
+                    .render_matrix()
+                    .map_err(|_| RenderError::InvalidTransform)?;
+                // Layer planes leave the Surface's plane only for a canvas
+                // using a layer above the base under a nonzero spacing.
+                let deepest = (selection.kind() == ipp_core::OutputKind::Canvas
+                    && edge.layer_spacing != 0.0)
+                    .then(|| host.output(child.id, selection))
+                    .flatten()
+                    .and_then(|chunk| chunk.data::<CanvasPublication>())
+                    .and_then(|canvas| canvas.layers.last().copied())
+                    .unwrap_or(0);
                 scene.surfaces.push(SceneOutputSurface {
                     entity: RenderEntity {
                         world: publication.world,
@@ -162,11 +188,14 @@ impl<'a> RenderScene<'a> {
                     },
                     selection,
                     publication: child.id,
-                    model: placement,
+                    model,
+                    placement,
                     extent: extent.map(|value| value as f32),
                     token: edge.token.clone(),
                     cache_policy: edge.surface_cache_policy,
                     interaction_eligible,
+                    layer_spacing: edge.layer_spacing,
+                    layer_depth: (f64::from(deepest) * f64::from(edge.layer_spacing)) as f32,
                 });
             }
             for key in publication.resources() {
@@ -271,6 +300,32 @@ impl<'a> RenderScene<'a> {
                     shape.intersects_frustum(&local)
                 })
             })
+    }
+
+    /// Whether a Surface may be visible: its published culling geometry, grown
+    /// along its normal to the deepest layer plane while its canvas's layers
+    /// separate. The parent World's bounds cannot see the child's layers, so the
+    /// growth applies here, where both are known.
+    pub fn surface_visible(
+        &self,
+        surface: &SceneOutputSurface,
+        planes: &[GeometryPlane; 6],
+    ) -> bool {
+        use ipp_core::systems::geometry::{GeometryBounds, GeometryShape};
+
+        if self.visible(surface.entity, planes) {
+            return true;
+        }
+        if !surface.layered() {
+            return false;
+        }
+        let [width, height] = surface.extent.map(|value| f64::from(value) * 0.5);
+        let depth = f64::from(surface.layer_depth);
+        let layers = GeometryShape::Box {
+            min: [-width, -height, depth.min(0.0)],
+            max: [width, height, depth.max(0.0)],
+        };
+        layers.intersects_frustum(&planes.map(|plane| surface.placement.local_plane(&plane)))
     }
 
     pub fn visual_bounds(&self, entity: RenderEntity) -> Option<[[f64; 3]; 2]> {

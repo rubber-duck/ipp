@@ -1,8 +1,11 @@
 //! Ordinary composed physical input. The owning Host supplies the selected view,
 //! delivery permits and event order; this module neither draws nor advances time.
 
+mod focus;
+mod group;
 mod keyboard;
 pub(crate) mod keyboard_panels;
+mod overlay;
 mod routing;
 
 use super::{GuiDeliveryPermit, GuiInputError};
@@ -59,17 +62,22 @@ pub enum GuiPhysicalInput {
     PointerCancel {
         pointer: u64,
     },
+    /// `shift` is whether Shift was held, for the control the wheel reaches.
     Wheel {
         point: [f32; 2],
         delta: [f32; 2],
+        shift: bool,
     },
+    /// `shift` is whether Shift was held, for the focused control's key handling.
     Key {
         key: GuiPhysicalKey,
+        shift: bool,
     },
     Blur,
 }
 
-/// Primary activates controls; other buttons only request scene-gesture admission.
+/// Primary activates controls; a secondary press on a control is a context
+/// request; other presses only request scene-gesture admission.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(missing_docs)]
 pub enum GuiPhysicalButton {
@@ -79,6 +87,7 @@ pub enum GuiPhysicalButton {
 }
 
 /// Logical keys; platform composition is handled separately from activation.
+/// `ContextMenu` is the Menu key; Shift+`F10` is the other context request.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(missing_docs)]
 pub enum GuiPhysicalKey {
@@ -93,6 +102,8 @@ pub enum GuiPhysicalKey {
     Down,
     Home,
     End,
+    ContextMenu,
+    F10,
 }
 
 /// Routing admission, not a committed action or a completed frame.

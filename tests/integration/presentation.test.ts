@@ -105,12 +105,20 @@ for (const {
                     controlled.probe,
                     instrumentation,
                   );
+                  const resize = await scenario.retainedResize(
+                    host,
+                    await (
+                      await fetch(
+                        `${urls.origin}/target/font-assets/shure-tech-mono.ippf`,
+                      )
+                    ).arrayBuffer(),
+                  );
                   const connectionLifetime = native
                     ? await scenario.connectionPresentationLifetime(() =>
                         contract.IppHostClient.connectWebSocket(native.url),
                       )
                     : null;
-                  return { ...presentation, connectionLifetime };
+                  return { ...presentation, resize, connectionLifetime };
                 } finally {
                   await host.close();
                 }
@@ -127,6 +135,16 @@ for (const {
           encodePng({ ...image, pixels: Uint8Array.from(image.pixels) }),
         );
       }
+      for (const [index, image] of result.value.resize.images.entries()) {
+        await writeFile(
+          resolve(images, `resize-${index}.png`),
+          encodePng({ ...image, pixels: Uint8Array.from(image.pixels) }),
+        );
+      }
+      await writeFile(
+        resolve(result.evidenceDirectory, "retained-resize.json"),
+        `${JSON.stringify({ ...result.value.resize, images: undefined }, (_, value) => (typeof value === "bigint" ? value.toString() : value), 2)}\n`,
+      );
       return result;
     }
     if (native) {

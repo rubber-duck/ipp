@@ -2,6 +2,7 @@ use super::super::local::control::{component_incarnation, eligibility};
 use super::component::GuiLayout;
 use super::entity_layout::{GuiEntityLayout, GuiEntityLayoutDiagnostic, GuiEntityLayoutView};
 use super::geometry::{Constraints, align_factor, fill_or_fit};
+use super::overlay_placement::{GuiOverlayInputs, GuiOverlayLayout, GuiOverlayPlacement};
 use super::scroll_layout::{GuiScrollFieldPosition, GuiScrollLayout};
 use crate::systems::SystemRuntimeAccess;
 use crate::systems::canvas::{CanvasGeometry, CanvasTarget, prepare_constrained_geometry};
@@ -9,14 +10,16 @@ use crate::{ComponentValue, EntityId};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Components that make an entity a managed layout box.
-const LAYOUT_COMPONENTS: [u16; 7] = [
+const LAYOUT_COMPONENTS: [u16; 9] = [
     ComponentValue::GUI_LAYOUT,
+    ComponentValue::GUI_OVERLAY,
     ComponentValue::GUI_BUTTON,
     ComponentValue::GUI_CHECKBOX,
     ComponentValue::GUI_SLIDER,
     ComponentValue::GUI_TEXT_INPUT,
     ComponentValue::GUI_SCROLL_VIEW,
     ComponentValue::GUI_VIRTUAL_LIST,
+    ComponentValue::GUI_COLOR,
 ];
 
 /// Maximum tree depth followed during evaluation. Deeper subtrees are cut
@@ -29,9 +32,24 @@ struct Evaluator<'context, 'world> {
     dirty: &'context BTreeSet<EntityId>,
     resources_dirty: bool,
     gui: Option<&'context super::super::GuiSystem>,
+    /// The newly focused control the scroll views containing it reveal.
+    reveal: Option<&'context super::reveal::GuiReveal>,
     /// Nearest entity at or above the current one that declares `GuiFont`.
     font: Option<EntityId>,
+    /// Overlays found among their parents' children, in discovery order,
+    /// laid out after the boxes they are placed against.
+    overlays: Vec<GuiPendingOverlay>,
     view: GuiEntityLayoutView,
+}
+
+/// An overlay waiting to be laid out as its own root.
+#[derive(Clone, Copy)]
+struct GuiPendingOverlay {
+    entity: EntityId,
+    /// Its parent, or none at the top level.
+    parent: Option<EntityId>,
+    /// Typography owner it inherits from its parent.
+    font: Option<EntityId>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -44,6 +62,7 @@ pub(super) fn evaluate(
     resources_dirty: bool,
     revision: u64,
     gui: Option<&super::super::GuiSystem>,
+    reveal: Option<&super::reveal::GuiReveal>,
 ) -> GuiEntityLayoutView {
     let mut evaluator = Evaluator {
         context,
@@ -51,7 +70,9 @@ pub(super) fn evaluate(
         dirty,
         resources_dirty,
         gui,
+        reveal,
         font: None,
+        overlays: Vec::new(),
         view: GuiEntityLayoutView {
             revision,
             extent,
@@ -61,6 +82,7 @@ pub(super) fn evaluate(
             text_constraints: BTreeMap::new(),
             control_labels: BTreeMap::new(),
             scrolls: BTreeMap::new(),
+            overlays: Vec::new(),
             diagnostics: Vec::new(),
             work: super::entity_layout::GuiEntityLayoutWork {
                 reflows: 1,
@@ -68,18 +90,11 @@ pub(super) fn evaluate(
             },
         },
     };
-    // Each top-level entity is a layout root within the canvas extent.
-    let mut pending: Vec<_> = context
-        .world
-        .state
-        .links
-        .children(None)
-        .map(|entity| (entity, None))
-        .collect();
+    // Each top-level entity is a layout root within the canvas extent;
+    // overlays leave the flow and queue for the pass below.
+    let roots = evaluator.flow(None);
+    let mut pending: Vec<_> = roots.into_iter().map(|entity| (entity, None)).collect();
     while let Some((entity, font)) = pending.pop() {
-        if !evaluator.in_scope(entity) {
-            continue;
-        }
         evaluator.font = font;
         if evaluator.declared(entity) {
             evaluator.visit(entity, Constraints::loose(extent[0], extent[1]), 0);
@@ -88,14 +103,19 @@ pub(super) fn evaluate(
                 placement.origin = [margin[3], margin[0]];
             }
         } else {
-            let font = evaluator.font_owner(entity);
-            pending.extend(
-                evaluator
-                    .children(entity)
-                    .into_iter()
-                    .map(|child| (child, font)),
-            );
+            evaluator.font = evaluator.font_owner(entity);
+            let font = evaluator.font;
+            let children = evaluator.children(entity);
+            pending.extend(children.into_iter().map(|child| (child, font)));
         }
+    }
+
+    // Overlays follow the pass that placed their parents; an overlay found
+    // while laying out another one queues after it.
+    let mut next = 0;
+    while let Some(&overlay) = evaluator.overlays.get(next) {
+        next += 1;
+        evaluator.overlay(overlay);
     }
     evaluator.view
 }
@@ -135,14 +155,88 @@ impl Evaluator<'_, '_> {
             .unwrap_or_default()
     }
 
-    fn children(&self, entity: EntityId) -> Vec<EntityId> {
-        self.context
-            .world
-            .state
-            .links
-            .children(Some(entity))
-            .filter(|child| self.in_scope(*child))
-            .collect()
+    /// In-scope children of `entity`, or the top-level entities, that take
+    /// part in its flow. Overlays among them queue to be laid out later.
+    fn flow(&mut self, entity: Option<EntityId>) -> Vec<EntityId> {
+        let mut flow = Vec::new();
+        for child in self.context.world.state.links.children(entity) {
+            if !self.in_scope(child) {
+                continue;
+            }
+            if self
+                .context
+                .world
+                .components
+                .gui_overlay(child.index() as usize)
+                .is_some()
+            {
+                self.overlays.push(GuiPendingOverlay {
+                    entity: child,
+                    parent: entity,
+                    font: self.font,
+                });
+            } else {
+                flow.push(child);
+            }
+        }
+        flow
+    }
+
+    fn children(&mut self, entity: EntityId) -> Vec<EntityId> {
+        self.flow(Some(entity))
+    }
+
+    /// Lay out one overlay as its own root and place it against its parent's
+    /// box or the canvas; see [`super::overlay_placement`].
+    fn overlay(&mut self, overlay: GuiPendingOverlay) {
+        let world = &*self.context.world;
+        let inputs = GuiOverlayInputs::read(
+            world,
+            &self.view.placements,
+            self.view.extent,
+            overlay.entity,
+            overlay.parent,
+        );
+        self.view.overlays.push(GuiOverlayLayout {
+            entity: overlay.entity,
+            parent: overlay.parent,
+            inputs,
+        });
+        if inputs.open && !inputs.raised {
+            self.view
+                .diagnostics
+                .push(GuiEntityLayoutDiagnostic::OverlayNotRaised {
+                    entity: overlay.entity,
+                });
+        }
+        let Some(frame) = inputs.frame else {
+            return;
+        };
+        let placement = GuiOverlayPlacement::new(
+            world
+                .components
+                .gui_overlay(overlay.entity.index() as usize)
+                .copied()
+                .unwrap_or_default(),
+            frame,
+            self.view.extent,
+        );
+
+        // Measure the content, choose the side, then lay out again limited to
+        // the room on any axis the content exceeds, at most once per axis.
+        let queued = self.overlays.len();
+        let diagnostics = self.view.diagnostics.len();
+        let mut constraints = placement.measure();
+        self.font = overlay.font;
+        let mut size = self.visit(overlay.entity, constraints, 0);
+        let side = placement.side(size);
+        while let Some(limited) = placement.limit(constraints, size, side) {
+            self.overlays.truncate(queued);
+            self.view.diagnostics.truncate(diagnostics);
+            constraints = limited;
+            size = self.visit(overlay.entity, constraints, 0);
+        }
+        self.place(overlay.entity, placement.origin(size, side));
     }
 
     fn place(&mut self, entity: EntityId, origin: [f32; 2]) {
@@ -212,13 +306,31 @@ impl Evaluator<'_, '_> {
         );
         let natural = self.intrinsic(entity, content.max_w);
         let children = self.children(entity);
+        // A container fills a bounded axis, padding included, and on an
+        // unbounded one fits its content with its padding round it, as an
+        // overlay's container does while it is measured.
+        let fitted = |size: [f32; 2]| {
+            [
+                if fill[0].is_finite() {
+                    size[0]
+                } else {
+                    size[0] + padding[1] + padding[3]
+                },
+                if fill[1].is_finite() {
+                    size[1]
+                } else {
+                    size[1] + padding[0] + padding[2]
+                },
+            ]
+        };
         let mut size = if let Some(control) = &scrolling {
             self.scroll(entity, &children, content, style, depth, control)
         } else {
             match style.kind {
-                1 | 2 => self.flex(&children, content, fill, style.kind == 1, depth),
-                3 => self.stack(&children, content, fill, depth),
-                4..=6 => self.single(&children, style, content, fill, depth),
+                1 | 2 => fitted(self.flex(&children, content, fill, style.kind == 1, depth)),
+                3 => fitted(self.stack(&children, content, fill, depth)),
+                4 | 5 => fitted(self.single(&children, style, content, fill, depth)),
+                6 => self.single(&children, style, content, fill, depth),
                 _ => {
                     for &child in &children {
                         self.visit(child, content, depth + 1);
@@ -247,6 +359,9 @@ impl Evaluator<'_, '_> {
         let available = size.iter().all(|value| value.is_finite() && *value >= 0.0)
             && scrolling.as_ref().is_none_or(|control| control.available)
             && (scrolling.is_none() || fill.into_iter().all(f32::is_finite));
+        if let Some(label) = self.view.control_labels.get_mut(&entity) {
+            label.place(size, padding);
+        }
         self.view.placements.insert(
             entity,
             GuiEntityLayout {
@@ -367,7 +482,7 @@ impl Evaluator<'_, '_> {
                 );
             }
         }
-        let settled = GuiScrollLayout::settle(
+        let mut settled = GuiScrollLayout::settle(
             control.component,
             control.incarnation,
             control.position,
@@ -377,6 +492,19 @@ impl Evaluator<'_, '_> {
             axis,
             list,
         );
+
+        // A newly focused descendant scrolls into view on this placement,
+        // after any scroll view inside this one has revealed it.
+        let world = &*self.context.world;
+        if let Some(reveal) = self.reveal.filter(|reveal| reveal.inside(entity))
+            && let Some(rect) = reveal.content_box(&self.view, world, entity).or_else(|| {
+                let list = &settled.list.as_ref()?.items;
+                reveal.item_box(world, entity, list)
+            })
+        {
+            settled.reveal(rect);
+        }
+
         for child in children {
             if let Some(placement) = self.view.placements.get_mut(child) {
                 for axis in 0..2 {

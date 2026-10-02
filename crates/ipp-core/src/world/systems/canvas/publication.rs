@@ -35,6 +35,25 @@ pub enum CanvasPart {
     ScrollThumbX,
     ScrollTrackY,
     ScrollThumbY,
+    Track,
+    Ticks,
+    /// The Icon of a control's focus part after the first, such as a range's
+    /// upper thumb or a colour control's rail thumb: each focus part paints
+    /// its own.
+    PartIcon(u8),
+    /// A numeric text input's decrement part.
+    Decrement,
+    /// A numeric text input's increment part.
+    Increment,
+    /// The mark in a numeric text input's decrement part.
+    DecrementMark,
+    /// The mark in a numeric text input's increment part.
+    IncrementMark,
+    /// The Track of a control's focus part after the first, such as a colour
+    /// control's hue or alpha rail.
+    PartTrack(u8),
+    /// A colour control's marker on its saturation-value field.
+    Marker,
 }
 
 /// Primitive identity additionally scoped by its containing exact Canvas OutputRef.
@@ -61,6 +80,11 @@ pub struct CanvasPrimitiveStyle {
     pub opacity: f32,
     /// Fully intersected logical clip; empty clips remain empty.
     pub clip: CanvasClip,
+    /// Plane id of the producing entity's resolved layer, one of the
+    /// publication's `layers`. Painter order is layer first, then tree order;
+    /// a Surface presents each layer its id times its layer spacing along its
+    /// normal.
+    pub layer: u32,
 }
 
 impl CanvasPrimitiveStyle {
@@ -88,6 +112,12 @@ pub struct CanvasGlyph {
 }
 
 /// Bounded shape fill in local logical coordinates.
+///
+/// Gradients interpolate their straight linear stops premultiplied in linear light.
+/// The colour fields instead evaluate the HSV colour model on sRGB-encoded values and
+/// decode each point to linear, so the displayed pixel is the sRGB colour the model
+/// gives there; their colours are opaque, and the style's tint and opacity multiply
+/// them as they do every fill.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[allow(missing_docs)]
 pub enum CanvasShapeFill {
@@ -104,16 +134,172 @@ pub enum CanvasShapeFill {
         start_color: [f32; 4],
         end_color: [f32; 4],
     },
+    /// The hue circle at full saturation and value along the axis from `start` to
+    /// `end`, measured as a linear gradient's: red at `start`, through yellow, green,
+    /// cyan, blue and magenta, to red again a whole turn later at `end`, and constant
+    /// beyond either point.
+    Hue {
+        start: [f32; 2],
+        end: [f32; 2],
+    },
+    /// The saturation-value field of one hue over the box rectangle in its own
+    /// orientation: saturation rises from zero at the left edge to one at the right
+    /// and value from zero at the bottom edge to one at the top, so the top-left
+    /// corner is white, the top-right the pure hue and the bottom edge black. The
+    /// sRGB colour at a point is `value * mix(white, hue colour, saturation)`.
+    SaturationValue {
+        /// Turns from red, taken modulo one turn.
+        hue: f32,
+    },
+    /// The custom paint of the `CanvasPaint` component lifetime `paint`, which the
+    /// publication's [`CanvasPublication::paints`] resolves, called with `color`:
+    /// the straight linear RGBA the box would otherwise fill with solidly, and
+    /// fills with while the renderer cannot use the paint.
+    Paint {
+        color: [f32; 4],
+        paint: CanvasTarget,
+    },
 }
 
-/// Localized paint-only glow; its radius never extends hit bounds.
+impl CanvasShapeFill {
+    /// The colour a custom paint receives in place of this fill: a solid fill's
+    /// colour, a gradient's start colour, and white for the colour fields, whose
+    /// colour the tint gives.
+    pub fn paint_color(&self) -> [f32; 4] {
+        match *self {
+            Self::Solid(color)
+            | Self::Paint {
+                color,
+                ..
+            } => color,
+            Self::LinearGradient {
+                start_color,
+                ..
+            }
+            | Self::RadialGradient {
+                start_color,
+                ..
+            } => start_color,
+            Self::Hue {
+                ..
+            }
+            | Self::SaturationValue {
+                ..
+            } => [1.0; 4],
+        }
+    }
+}
+
+/// One `CanvasPaint` component as a publication carries it beside the boxes it
+/// fills.
+///
+/// Property writes and animation replace this record without changing any paint
+/// entry, so the renderer updates the paint's inputs without regenerating geometry.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CanvasPaintInstance {
+    /// The component lifetime painted fills name.
+    pub target: CanvasTarget,
+    /// Authored shader-definition source, for diagnostics.
+    pub source: Arc<str>,
+    /// Exact loaded shader definition; none while it is unset, pending or failed.
+    pub shader: Option<AssetKey>,
+    /// Numeric property values in name order; asset-valued properties are left out.
+    pub properties: Arc<[(Arc<str>, crate::DynamicValue)]>,
+}
+
+/// Checkerboard beneath a box's fill, inside its border ring.
+///
+/// Square cells alternate between the two straight linear RGBA colours from the box's
+/// own top-left corner, whose cell takes the first. A translucent fill composites
+/// over it in linear light, its alpha being linear coverage: half-transparent white
+/// over black shows sRGB 188, not the 128 of blending encoded values. Cells shrinking
+/// toward a pixel, as on a minified or oblique Surface, fade to the colours' mean
+/// instead of aliasing.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CanvasShapeChecker {
+    /// Cell side in logical units; a checker needs a positive size.
+    pub size: f32,
+    /// Colours of the corner cell and of its neighbours.
+    pub colors: [[f32; 4]; 2],
+}
+
+/// Localized paint-only edge glow; its radii never extend hit bounds.
+///
+/// Light falls off from the shape's outer contour: outward over `radius`, painting
+/// only where the shape does not, and inward over `inner_radius`, over the fill and
+/// beneath the border. Both sides share the colour, intensity and falloff exponent.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[allow(missing_docs)]
 pub struct CanvasShapeGlow {
     pub color: [f32; 4],
     pub intensity: f32,
     pub radius: f32,
+    pub inner_radius: f32,
     pub falloff: f32,
+}
+
+/// Contour of a [`CanvasPrimitive::Box`] within its rectangle.
+///
+/// Corner arrays run `[top-left, top-right, bottom-right, bottom-left]` in the box's
+/// own orientation, so a mirrored box mirrors them. Lengths are final logical lengths
+/// like the corner radius, and the renderer clamps each corner's length so the
+/// lengths of two corners never overlap along the side they share.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum CanvasBoxShape {
+    /// The rectangle and its border ring.
+    Rect {
+        /// 45-degree cut length per corner; an uncut corner keeps the corner radius.
+        corner_cut: [f32; 4],
+        /// Accent span per corner along both edges leaving it, measured from the
+        /// rectangle's corner; zero leaves that corner unaccented.
+        corner_accent: [f32; 4],
+        /// Border width inside accent spans, replacing the border width there.
+        corner_accent_width: f32,
+        /// Optional checkerboard beneath the fill. A box with a checker paints no
+        /// corner accents.
+        checker: Option<CanvasShapeChecker>,
+    },
+    /// One or two straight butt-capped segments painted by the fill, `border_width`
+    /// thick, without a border ring. Each segment is `[x0, y0, x1, y1]` normalised to
+    /// the box rectangle; a zero-length segment paints nothing. Segments sharing an
+    /// end point leave a notch on the outer side of their joint unless one extends
+    /// past it; overlapping segments paint their union once.
+    Stroke {
+        /// First and second segment.
+        segments: [[f32; 4]; 2],
+    },
+    /// A ring arc painted by the fill, `border_width` thick, without a border ring,
+    /// with butt ends along its radius. The ring's outer edge is the circle inscribed
+    /// in the shorter side of the placed rectangle and centred in it, so a whole turn
+    /// covers what a box with half-size radii and the same border width outlines; a
+    /// width of the radius or more fills a pie.
+    ///
+    /// Angles are turns, clockwise from twelve o'clock in the box's own Y-down
+    /// orientation, so a mirrored box mirrors its arc.
+    Arc {
+        /// First end; any finite value, taken modulo one turn.
+        start: f32,
+        /// Extent from `start`, clockwise when positive and counter-clockwise when
+        /// negative. A whole turn or more paints the whole ring and zero paints
+        /// nothing.
+        sweep: f32,
+        /// Dash cells per turn, laid from `start` along the sweep; zero paints a
+        /// solid arc. A whole number divides a full ring evenly.
+        dashes: f32,
+        /// Fraction of each cell its dash covers, centred in the cell, so cells
+        /// meet in the middle of the gaps. One paints a solid arc and zero nothing.
+        dash_duty: f32,
+    },
+}
+
+impl CanvasBoxShape {
+    /// The plain rectangle: no cuts, no accents and no checker.
+    pub const RECT: Self = Self::Rect {
+        corner_cut: [0.0; 4],
+        corner_accent: [0.0; 4],
+        corner_accent_width: 0.0,
+        checker: None,
+    };
 }
 
 /// Immutable ready paint with no component or source-name lookups.
@@ -138,7 +324,8 @@ pub enum CanvasPrimitive {
         bitmap: AssetKey,
         size: [f32; 2],
     },
-    /// Size precedes visual scale; corner radii and border width are final logical lengths.
+    /// Size precedes visual scale; corner radii, border width and the shape's corner
+    /// lengths are final logical lengths.
     Box {
         style: CanvasPrimitiveStyle,
         size: [f32; 2],
@@ -147,6 +334,7 @@ pub enum CanvasPrimitive {
         border_color: [f32; 4],
         fill: CanvasShapeFill,
         glow: Option<CanvasShapeGlow>,
+        shape: CanvasBoxShape,
     },
 }
 
@@ -217,6 +405,9 @@ pub struct CanvasAttachmentSlot {
     /// Cached presentation must retain these same per-primitive semantics without applying it twice.
     /// Zero suppresses paint and hit eligibility, not attachment identity or availability.
     pub opacity: f32,
+    /// Plane id of the anchor's layer; the nested canvas presents on this
+    /// layer's plane, and its own layers only order its content there.
+    pub layer: u32,
 }
 
 impl CanvasAttachmentSlot {
@@ -273,8 +464,11 @@ impl CanvasAttachmentSlot {
 }
 
 /// A retained painter slot; nested attachments keep their position among primitives.
+///
+/// Publications share every entry behind its own `Arc`, so the primitive variant's
+/// larger size costs nothing per copy.
 #[derive(Clone, Debug, PartialEq)]
-#[allow(missing_docs)]
+#[allow(missing_docs, clippy::large_enum_variant)]
 pub enum CanvasPaintEntry {
     Primitive {
         /// Local payload revision, including exact resource identity; excludes visual style.
@@ -284,6 +478,19 @@ pub enum CanvasPaintEntry {
         primitive: CanvasPrimitive,
     },
     Attachment(CanvasAttachmentSlot),
+}
+
+impl CanvasPaintEntry {
+    /// Plane id of the entry's producing entity's layer.
+    pub fn layer(&self) -> u32 {
+        match self {
+            Self::Primitive {
+                primitive,
+                ..
+            } => primitive.style().layer,
+            Self::Attachment(slot) => slot.layer,
+        }
+    }
 }
 
 /// Logical scroll axis.
@@ -309,6 +516,10 @@ pub enum CanvasHitKind {
         anchor: EntityId,
         token: WorldAttachmentToken,
     },
+    /// The box of an open light overlay, or the whole canvas under an open
+    /// modal one, below the overlay's own content: it takes the pointer from
+    /// lower layers and selects no control.
+    Overlay,
 }
 
 /// Immutable routing geometry supplied after local evaluation.
@@ -318,8 +529,13 @@ pub struct CanvasHit {
     pub target: CanvasTarget,
     /// Local action or nested output classification.
     pub kind: CanvasHitKind,
-    /// Painter ordinal, traversed in reverse for pointer targeting.
+    /// Ordinal in the canvas's tree-order paint walk, which keyboard traversal
+    /// follows. Publication hits are listed by layer, then this ordinal; pointer
+    /// targeting walks that list in reverse. Without layers it is the painter
+    /// ordinal of the hit's paint.
     pub paint_order: u32,
+    /// Plane id of the target's layer, as on its paint.
+    pub layer: u32,
     /// Final logical rectangle in minimum/maximum form.
     pub bounds: CanvasClip,
     /// Fully intersected ancestor clip.
@@ -381,12 +597,23 @@ pub struct CanvasPublication {
     pub resource_revision: u64,
     /// Hit/traversal/attachment-token revision within this output incarnation.
     pub input_revision: u64,
-    /// Immutable ordered entries sharing unchanged primitive storage.
+    /// Immutable entries in painter order, layer first and then tree order,
+    /// sharing unchanged primitive storage.
     pub entries: Arc<[Arc<CanvasPaintEntry>]>,
-    /// Evaluated hit records; raw content creates no GUI control behavior.
+    /// Evaluated hit records by layer, then tree order; raw content creates no
+    /// GUI control behavior.
     pub hits: Arc<[CanvasHit]>,
+    /// Plane ids of the layers the canvas's entities resolve to, ascending and
+    /// never empty: only the base plane 0 without layers. Planes not in use
+    /// have no entry, and a plane keeps its id whatever others are in use.
+    pub layers: Arc<[u32]>,
     /// Current local interaction priority, filtered by the composed router before use.
     pub interaction: CanvasInteractionPriority,
+    /// The custom paints the entries' paint fills name, by target.
+    pub paints: Arc<[CanvasPaintInstance]>,
+    /// Custom paint revision within this output incarnation: it changes with
+    /// `paints`, including property values, which leave `paint_revision` alone.
+    pub paints_revision: u64,
     pub(crate) resources: Arc<[AssetKey]>,
 }
 
@@ -399,6 +626,7 @@ impl PartialEq for CanvasPublication {
             && self.paint_revision == other.paint_revision
             && self.resource_revision == other.resource_revision
             && self.input_revision == other.input_revision
+            && self.paints_revision == other.paints_revision
             && self.interaction == other.interaction
     }
 }
@@ -407,5 +635,13 @@ impl CanvasPublication {
     /// Exact resources passed to the generic publication lease builder.
     pub fn resources(&self) -> impl Iterator<Item = AssetKey> + '_ {
         self.resources.iter().copied()
+    }
+
+    /// The custom paint a [`CanvasShapeFill::Paint`] names.
+    pub fn paint(&self, target: CanvasTarget) -> Option<&CanvasPaintInstance> {
+        self.paints
+            .binary_search_by_key(&target, |paint| paint.target)
+            .ok()
+            .map(|index| &self.paints[index])
     }
 }

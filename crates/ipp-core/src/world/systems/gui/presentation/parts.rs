@@ -12,21 +12,23 @@ use crate::{DynamicPropertyKind, DynamicValue, ErrorReason};
 
 /// Stable named paint part of one GUI entity's generated primitives.
 ///
-/// The skin base parts are the authored skin identities. Transient text-input
-/// paint (caret, selection and provisional composition) has its own parts so
-/// every primitive of one entity keeps a distinct identity per Canvas; those
-/// parts are paint identities only and resolve their skin through `Label`.
-/// All parts remain independent of painter order and generated primitive
-/// indices, and the set may grow beyond control parts.
+/// The skin base parts are the authored skin identities, including the
+/// text-input caret and selection. Provisional composition has its own part so
+/// every primitive of one entity keeps a distinct identity per Canvas; that
+/// part is a paint identity only and resolves its skin through `Label`, whose
+/// text it underlines. All parts remain independent of painter order and
+/// generated primitive indices, and the set may grow beyond control parts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum GuiPrimitivePart {
     /// Resizable background of the whole entity rectangle.
     Background,
-    /// Slider value fill, drawn between the track and thumb.
+    /// Value fill, drawn between the track and thumb: a slider rail's bar or a
+    /// dial's value arc, and a colour control's swatch of its colour.
     Fill,
     /// Text or control label.
     Label,
-    /// Drawing or bitmap icon/content.
+    /// Drawing or bitmap icon/content; a slider's thumb, a dial's pointer or
+    /// a colour control's rail thumb.
     Icon,
     /// Focus indicator painted independently of the background.
     FocusRing,
@@ -45,6 +47,25 @@ pub enum GuiPrimitivePart {
     ScrollTrackY,
     /// ScrollView vertical scroll bar thumb.
     ScrollThumbY,
+    /// A value control's whole travel where its Background is not the rail:
+    /// the track arc beneath a dial's value arc, and a colour control's
+    /// saturation-value field and hue and alpha rails, whose fills its value
+    /// gives.
+    Track,
+    /// Marks along a value control's travel: a dial's tick ring.
+    Ticks,
+    /// A numeric text input's decrement part at the field's start, a division
+    /// of its frame that takes its own pointer state.
+    Decrement,
+    /// A numeric text input's increment part at the field's end.
+    Increment,
+    /// The mark drawn in the decrement part, a minus stroke.
+    DecrementMark,
+    /// The mark drawn in the increment part, a plus stroke.
+    IncrementMark,
+    /// The mark of a point on a two-dimensional travel: a colour control's
+    /// marker on its saturation-value field.
+    Marker,
 }
 
 impl GuiPrimitivePart {
@@ -63,12 +84,19 @@ impl GuiPrimitivePart {
             Self::ScrollThumbX => "scrollThumbX",
             Self::ScrollTrackY => "scrollTrackY",
             Self::ScrollThumbY => "scrollThumbY",
+            Self::Track => "track",
+            Self::Ticks => "ticks",
+            Self::Decrement => "decrement",
+            Self::Increment => "increment",
+            Self::DecrementMark => "decrementMark",
+            Self::IncrementMark => "incrementMark",
+            Self::Marker => "marker",
         }
     }
 }
 
 /// Base parts in part-index order.
-pub const GUI_BASE_PARTS: [GuiPrimitivePart; 9] = [
+pub const GUI_BASE_PARTS: [GuiPrimitivePart; 18] = [
     GuiPrimitivePart::Background,
     GuiPrimitivePart::Fill,
     GuiPrimitivePart::Label,
@@ -78,26 +106,41 @@ pub const GUI_BASE_PARTS: [GuiPrimitivePart; 9] = [
     GuiPrimitivePart::ScrollThumbX,
     GuiPrimitivePart::ScrollTrackY,
     GuiPrimitivePart::ScrollThumbY,
+    GuiPrimitivePart::Caret,
+    GuiPrimitivePart::Selection,
+    GuiPrimitivePart::Track,
+    GuiPrimitivePart::Ticks,
+    GuiPrimitivePart::Decrement,
+    GuiPrimitivePart::Increment,
+    GuiPrimitivePart::DecrementMark,
+    GuiPrimitivePart::IncrementMark,
+    GuiPrimitivePart::Marker,
 ];
 
 /// Index of a base part in [`GUI_BASE_PARTS`].
 ///
-/// Text-input overlay parts are paint identities, not skin parts: they
-/// resolve through the `Label` they annotate.
+/// The provisional composition underline is a paint identity, not a skin
+/// part: it resolves through the `Label` it underlines.
 pub const fn base_part_index(part: GuiPrimitivePart) -> u32 {
     match part {
         GuiPrimitivePart::Background => 0,
         GuiPrimitivePart::Fill => 1,
-        GuiPrimitivePart::Label
-        | GuiPrimitivePart::Caret
-        | GuiPrimitivePart::Selection
-        | GuiPrimitivePart::Composition => 2,
+        GuiPrimitivePart::Label | GuiPrimitivePart::Composition => 2,
         GuiPrimitivePart::Icon => 3,
         GuiPrimitivePart::FocusRing => 4,
         GuiPrimitivePart::ScrollTrackX => 5,
         GuiPrimitivePart::ScrollThumbX => 6,
         GuiPrimitivePart::ScrollTrackY => 7,
         GuiPrimitivePart::ScrollThumbY => 8,
+        GuiPrimitivePart::Caret => 9,
+        GuiPrimitivePart::Selection => 10,
+        GuiPrimitivePart::Track => 11,
+        GuiPrimitivePart::Ticks => 12,
+        GuiPrimitivePart::Decrement => 13,
+        GuiPrimitivePart::Increment => 14,
+        GuiPrimitivePart::DecrementMark => 15,
+        GuiPrimitivePart::IncrementMark => 16,
+        GuiPrimitivePart::Marker => 17,
     }
 }
 
@@ -231,7 +274,7 @@ impl GuiPartId {
         part: GuiPrimitivePart,
         state: GuiSkinState,
         variant: Option<GuiPartVariant>,
-    ) -> impl Iterator<Item = Self> {
+    ) -> impl Iterator<Item = Self> + Clone {
         variant
             .map(|variant| Self::variant(part, state, variant))
             .into_iter()
@@ -239,9 +282,13 @@ impl GuiPartId {
     }
 }
 
-/// One skin part property in stable property order. The first
-/// [`Self::APPEARANCE_COUNT`] are appearance properties, which every paint part
-/// row keeps at the same index; the rest configure transitions.
+/// One skin part appearance property in stable property order, which every
+/// paint part row keeps at the same index.
+///
+/// Lengths are final logical units unless stated otherwise. Per-corner Vec4
+/// properties run `[top-left, top-right, bottom-right, bottom-left]` in the part's
+/// own orientation, and paint clamps each corner's length so the lengths of two
+/// corners never overlap along the side they share.
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum GuiPartProperty {
@@ -255,13 +302,20 @@ pub enum GuiPartProperty {
     AlignX,
     /// `asset`: Asset; drawing or bitmap source.
     Asset,
-    /// `corner_radius`: Vec2, non-negative.
+    /// `corner_radius`: Vec2, non-negative; elliptical radii of every uncut corner.
     CornerRadius,
-    /// `border_width`: F32, non-negative.
+    /// `border_width`: F32, non-negative; border ring width, or stroke thickness.
     BorderWidth,
     /// `border_color`: Vec4 in 0..=1.
     BorderColor,
-    /// `fill_mode`: F32; 0 solid, 1 linear, 2 radial.
+    /// `fill_mode`: F32; 0 solid, 1 linear, 2 radial, 3 hue, 4 saturation-value.
+    /// Hue paints the hue circle along the gradient axis, from red at
+    /// `gradient_start` through yellow, green, cyan, blue and magenta to red at
+    /// `gradient_end`. Saturation-value paints `fill_hue` over the part rectangle,
+    /// saturation rising to the right and value upward, in the part's own
+    /// orientation. Both paint the HSV model's opaque sRGB colour at every point,
+    /// which `color` does not change; `opacity` and an inherited tint or opacity
+    /// apply as to every fill.
     FillMode,
     /// `gradient_start`: Vec2.
     GradientStart,
@@ -277,28 +331,68 @@ pub enum GuiPartProperty {
     GlowColor,
     /// `glow_intensity`: F32, non-negative.
     GlowIntensity,
-    /// `glow_radius`: F32, non-negative.
+    /// `glow_radius`: F32, non-negative; outward reach from the outer contour.
     GlowRadius,
     /// `glow_falloff`: F32, non-negative.
     GlowFalloff,
-    /// `motion`: Asset; animation clip of the transition into this state.
-    Motion,
-    /// `duration`: F32, non-negative seconds.
-    Duration,
-    /// `easing`: F32; 0 linear, 1 smoothstep.
-    Easing,
-    /// `track`: F32; whole first track, leaving room for every channel.
-    Track,
-    /// `time`: F32, non-negative clip time of this state's destination.
-    Time,
+    /// `glow_inner_radius`: F32, non-negative; inward reach from the outer contour,
+    /// over the fill and beneath the border.
+    GlowInnerRadius,
+    /// `corner_cut`: Vec4, non-negative; 45-degree cut length per corner. An uncut
+    /// corner keeps `corner_radius`.
+    CornerCut,
+    /// `corner_accent`: Vec4, non-negative; span per corner, along both edges from
+    /// the rectangle's corner, where the border is `corner_accent_width` thick.
+    CornerAccent,
+    /// `corner_accent_width`: F32, non-negative; border width inside accent spans,
+    /// which keep `border_width` while it is absent.
+    CornerAccentWidth,
+    /// `shape`: F32; 0 box, 1 stroke, 2 arc. A stroke and an arc are painted by
+    /// the fill, `border_width` thick, without a border ring.
+    Shape,
+    /// `stroke_a`: Vec4 in 0..=1; first stroke segment `[x0, y0, x1, y1]`
+    /// normalised to the part rectangle, with butt caps. Segments meeting at an end
+    /// point leave a notch outside the joint unless one extends past it.
+    StrokeA,
+    /// `stroke_b`: Vec4 in 0..=1; second stroke segment, painting nothing when
+    /// its end points coincide.
+    StrokeB,
+    /// `arc_start`: F32, any finite value; the arc's first end in turns,
+    /// clockwise from twelve o'clock, taken modulo one turn, so a looping clip
+    /// from 0 to 1 turns an arc without a jump. Absent is 0. The arc's ring has
+    /// its outer edge on the circle inscribed in the shorter side of the part
+    /// rectangle and is `border_width` thick, with butt ends.
+    ArcStart,
+    /// `arc_sweep`: F32, any finite value; the arc's extent in turns from
+    /// `arc_start`, clockwise when positive and counter-clockwise when negative.
+    /// A whole turn or more is the full ring and zero paints nothing; absent is
+    /// the full ring.
+    ArcSweep,
+    /// `arc_dashes`: Vec2 `[cells, duty]`; dash cells per turn laid from
+    /// `arc_start` along the sweep, non-negative, zero for a solid arc, and the
+    /// fraction in 0..=1 of each cell its centred dash covers. A whole number of
+    /// cells divides a full ring evenly. Absent is solid.
+    ArcDashes,
+    /// `fill_hue`: F32, any finite value; the saturation-value fill's hue in turns
+    /// from red, taken modulo one turn. Absent is red.
+    FillHue,
+    /// `checker_size`: F32, non-negative; cell side of a checkerboard beneath a
+    /// box's fill, inside its border, from the part's top-left corner. Zero or
+    /// absent paints none. A translucent fill composites over it in linear light,
+    /// its alpha being linear coverage. A box with a checker paints no corner
+    /// accents, and strokes and arcs paint no checker.
+    CheckerSize,
+    /// `checker_color0`: Vec4 in 0..=1; the corner cell's colour. Absent is the
+    /// light grey of sRGB `#CCCCCC`.
+    CheckerColor0,
+    /// `checker_color1`: Vec4 in 0..=1; the other cells' colour. Absent is the
+    /// grey of sRGB `#999999`.
+    CheckerColor1,
 }
 
 impl GuiPartProperty {
     /// Number of part properties.
-    pub const COUNT: u32 = 23;
-
-    /// Number of appearance properties, which lead the layout.
-    pub const APPEARANCE_COUNT: u32 = 18;
+    pub const COUNT: u32 = 32;
 
     /// Every property in layout order; `ALL[i] as u32 == i`.
     pub const ALL: [Self; Self::COUNT as usize] = [
@@ -320,11 +414,20 @@ impl GuiPartProperty {
         Self::GlowIntensity,
         Self::GlowRadius,
         Self::GlowFalloff,
-        Self::Motion,
-        Self::Duration,
-        Self::Easing,
-        Self::Track,
-        Self::Time,
+        Self::GlowInnerRadius,
+        Self::CornerCut,
+        Self::CornerAccent,
+        Self::CornerAccentWidth,
+        Self::Shape,
+        Self::StrokeA,
+        Self::StrokeB,
+        Self::ArcStart,
+        Self::ArcSweep,
+        Self::ArcDashes,
+        Self::FillHue,
+        Self::CheckerSize,
+        Self::CheckerColor0,
+        Self::CheckerColor1,
     ];
 
     /// Property at a layout index.
@@ -362,11 +465,20 @@ impl GuiPartProperty {
             Self::GlowIntensity => "glow_intensity",
             Self::GlowRadius => "glow_radius",
             Self::GlowFalloff => "glow_falloff",
-            Self::Motion => "motion",
-            Self::Duration => "duration",
-            Self::Easing => "easing",
-            Self::Track => "track",
-            Self::Time => "time",
+            Self::GlowInnerRadius => "glow_inner_radius",
+            Self::CornerCut => "corner_cut",
+            Self::CornerAccent => "corner_accent",
+            Self::CornerAccentWidth => "corner_accent_width",
+            Self::Shape => "shape",
+            Self::StrokeA => "stroke_a",
+            Self::StrokeB => "stroke_b",
+            Self::ArcStart => "arc_start",
+            Self::ArcSweep => "arc_sweep",
+            Self::ArcDashes => "arc_dashes",
+            Self::FillHue => "fill_hue",
+            Self::CheckerSize => "checker_size",
+            Self::CheckerColor0 => "checker_color0",
+            Self::CheckerColor1 => "checker_color1",
         }
     }
 
@@ -377,11 +489,19 @@ impl GuiPartProperty {
             | Self::BorderColor
             | Self::GradientColor0
             | Self::GradientColor1
-            | Self::GlowColor => DynamicPropertyKind::Vec4,
-            Self::Scale | Self::CornerRadius | Self::GradientStart | Self::GradientEnd => {
-                DynamicPropertyKind::Vec2
-            }
-            Self::Asset | Self::Motion => DynamicPropertyKind::Asset,
+            | Self::GlowColor
+            | Self::CornerCut
+            | Self::CornerAccent
+            | Self::StrokeA
+            | Self::StrokeB
+            | Self::CheckerColor0
+            | Self::CheckerColor1 => DynamicPropertyKind::Vec4,
+            Self::Scale
+            | Self::CornerRadius
+            | Self::GradientStart
+            | Self::GradientEnd
+            | Self::ArcDashes => DynamicPropertyKind::Vec2,
+            Self::Asset => DynamicPropertyKind::Asset,
             Self::Opacity
             | Self::AlignX
             | Self::BorderWidth
@@ -390,22 +510,20 @@ impl GuiPartProperty {
             | Self::GlowIntensity
             | Self::GlowRadius
             | Self::GlowFalloff
-            | Self::Duration
-            | Self::Easing
-            | Self::Track
-            | Self::Time => DynamicPropertyKind::F32,
+            | Self::GlowInnerRadius
+            | Self::CornerAccentWidth
+            | Self::Shape
+            | Self::ArcStart
+            | Self::ArcSweep
+            | Self::FillHue
+            | Self::CheckerSize => DynamicPropertyKind::F32,
         }
     }
 
-    /// Whether this is an appearance property rather than transition motion.
-    pub const fn appearance(self) -> bool {
-        (self as u32) < Self::APPEARANCE_COUNT
-    }
-
     /// Whether numeric animation may target it: every property except the
-    /// asset references.
+    /// asset reference.
     pub const fn numeric_animatable(self) -> bool {
-        !matches!(self, Self::Asset | Self::Motion)
+        !matches!(self, Self::Asset)
     }
 }
 
@@ -431,16 +549,26 @@ pub(crate) fn validate_part_property(
             | P::GlowIntensity
             | P::GlowRadius
             | P::GlowFalloff
-            | P::Duration
-            | P::Time,
+            | P::GlowInnerRadius
+            | P::CornerAccentWidth
+            | P::CheckerSize,
             DynamicValue::F32(v),
         ) => *v >= 0.0,
-        (P::FillMode, DynamicValue::F32(v)) => matches!(*v, 0.0 | 1.0 | 2.0),
-        (P::Easing, DynamicValue::F32(v)) => matches!(*v, 0.0 | 1.0),
-        (P::Track, DynamicValue::F32(v)) => skin_motion_base_track(*v).is_some(),
+        (P::FillMode, DynamicValue::F32(v)) => matches!(*v, 0.0 | 1.0 | 2.0 | 3.0 | 4.0),
+        (P::Shape, DynamicValue::F32(v)) => matches!(*v, 0.0 | 1.0 | 2.0),
         (P::CornerRadius, DynamicValue::Vec2(v)) => v.iter().all(|v| *v >= 0.0),
+        (P::ArcDashes, DynamicValue::Vec2([cells, duty])) => *cells >= 0.0 && unit(duty),
+        (P::CornerCut | P::CornerAccent, DynamicValue::Vec4(v)) => v.iter().all(|v| *v >= 0.0),
         (
-            P::Color | P::BorderColor | P::GradientColor0 | P::GradientColor1 | P::GlowColor,
+            P::Color
+            | P::BorderColor
+            | P::GradientColor0
+            | P::GradientColor1
+            | P::GlowColor
+            | P::StrokeA
+            | P::StrokeB
+            | P::CheckerColor0
+            | P::CheckerColor1,
             DynamicValue::Vec4(v),
         ) => v.iter().all(unit),
         _ => true,
@@ -451,17 +579,6 @@ pub(crate) fn validate_part_property(
     } else {
         Err(ErrorReason::InvalidValue)
     }
-}
-
-/// Convert an authored F32 base track only when the colour, opacity and scale
-/// tracks fit; motion that also animates alignment checks its fourth track.
-pub(crate) fn skin_motion_base_track(value: f32) -> Option<u32> {
-    if !value.is_finite() || value < 0.0 || value.fract() != 0.0 {
-        return None;
-    }
-    let base = u32::try_from(value as u64).ok()?;
-    base.checked_add(2)?;
-    Some(base)
 }
 
 #[cfg(test)]

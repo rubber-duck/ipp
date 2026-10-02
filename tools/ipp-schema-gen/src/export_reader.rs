@@ -26,7 +26,7 @@ pub(super) fn read_export(bytes: &[u8]) -> Result<Export, String> {
         bytes: &bytes[16..],
         at: 0,
     };
-    if r.u16()? != 7 {
+    if r.u16()? != 10 {
         return Err("export format".into());
     }
 
@@ -159,6 +159,8 @@ pub(super) fn read_export(bytes: &[u8]) -> Result<Export, String> {
     }
 
     let paint_keys = crate::paint_keys::read(&mut r)?;
+    let skin_looks = crate::paint_keys::read_looks(&mut r, &paint_keys)?;
+    let skin_tokens = crate::paint_keys::read_tokens(&mut r)?;
     let wire = wire_contract::read_wire_contract(&mut r, &components)?;
 
     if !r.is_complete() {
@@ -172,6 +174,8 @@ pub(super) fn read_export(bytes: &[u8]) -> Result<Export, String> {
         pointer,
         components,
         paint_keys,
+        skin_looks,
+        skin_tokens,
         row_limits,
         wire,
     })

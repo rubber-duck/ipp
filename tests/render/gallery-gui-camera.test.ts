@@ -17,6 +17,7 @@ import {
   control,
   controlPoint,
   controlRegion,
+  gainFraction,
   projectContent,
   type ProjectedPoint,
 } from "./gallery-gui-panel.js";
@@ -77,7 +78,39 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
           document.querySelector<HTMLOutputElement>("#status")?.dataset
             .state === "ready",
       );
-      await g.call("galleryGuiState");
+      // The station's first node sync and its toast end before counts
+      // start: their progress and countdown change the panel's paint.
+      await g.page.waitForFunction(
+        () =>
+          document.querySelector("#gui-operation")?.textContent ===
+          "Node sync: complete",
+      );
+      for (const deadline = performance.now() + 15_000; ; ) {
+        const state = await g.call<GalleryGuiState>("galleryGuiState");
+        const closes = state.controls.filter(({ symbol }) =>
+          /^gui-toasts\/[^/]+\/close$/.test(symbol ?? ""),
+        );
+        if (closes.length === 0) break;
+        if (closes.length === 1)
+          try {
+            await g.call(
+              "galleryGuiAction",
+              { role: "button", name: "Dismiss" },
+              { kind: "press" },
+            );
+          } catch (failure) {
+            // The toast may dismiss itself at the end of its time first.
+            if (
+              !(
+                failure instanceof Error &&
+                failure.message.includes("StaleTarget")
+              )
+            )
+              throw failure;
+          }
+        assert.ok(performance.now() < deadline, "the station's toasts stayed");
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
       await g.page.locator("#ipp-world-canvas").scrollIntoViewIfNeeded();
       const canvas = await g.page.locator("#ipp-world-canvas").boundingBox();
       assert.ok(canvas);
@@ -248,7 +281,7 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
       };
       await g.call(
         "galleryGuiAction",
-        { role: "checkbox" },
+        { role: "checkbox", name: "SCAN" },
         { kind: "toggle" },
       );
       await g.page.waitForFunction(
@@ -307,7 +340,7 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
       );
       await g.call(
         "galleryGuiAction",
-        { role: "checkbox" },
+        { role: "checkbox", name: "SCAN" },
         { kind: "toggle" },
       );
       await g.page.waitForFunction(
@@ -315,7 +348,7 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
           document.querySelector("#gui-autoscan")?.textContent === "enabled",
       );
 
-      const [titleX, titleY, titleWidth, titleHeight] = PANEL.title;
+      const [titleX, titleY, titleWidth, titleHeight] = PANEL.telemetryTitle;
       const [header] = await projectContent(g, [
         [titleX + titleWidth / 2, titleY + titleHeight / 2],
       ]);
@@ -323,8 +356,8 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
       edge = await panelEdge();
       await unchangedAfterDrag([header.clientX, header.clientY], edge.outside);
 
-      const sliderStart = await point("slider", undefined, 0.25);
-      const sliderEnd = await point("slider", undefined, 0.75);
+      const sliderStart = await point("slider", undefined, gainFraction(0.25));
+      const sliderEnd = await point("slider", undefined, gainFraction(0.75));
       await unchangedAfterDrag(
         [sliderStart.clientX, sliderStart.clientY],
         [sliderEnd.clientX, sliderEnd.clientY],
@@ -421,11 +454,13 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
       // re-upload panels the drag did not touch: per frame, rebuilds stay
       // within the slider's own background, fill and focus-ring boxes, and
       // uploads beyond the idle baseline come only from rebuilt batches: a
-      // box rewrites six 152-byte vertices and the value label rewrites its
-      // glyph batch, six such vertices per glyph. Measured on SwiftShader
-      // (ipp-rm0k.25): 1.7 rebuilds per drag frame at about 1.8 kB each.
+      // box rewrites one 192-byte record per quad and the value label
+      // rewrites its glyph batch, one 64-byte record per glyph. Measured on
+      // SwiftShader with separate shape and glyph records (ipp-sfgq.14, run
+      // 2026-10-02): 0.56 rebuilds per drag frame at about 1.6 kB each, so
+      // the bound below holds a margin of about two.
       const sliderBoxes = 3;
-      const maxBoxUploadBytes = 4096;
+      const maxBoxUploadBytes = 3072;
       const idleUploadPerTick =
         (idleEnd.uploaded - idleStart.uploaded) /
         (idleEnd.tick - idleStart.tick);
@@ -519,8 +554,8 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
         cameraChanged(beforeOutsideWheel, inspection),
       );
 
-      const aurora = await point("button", "AURORA");
-      const ember = await point("button", "EMBER");
+      const first = await point("button", "PULSE");
+      const second = await point("button", "SYNC");
       // The semantic interaction state names the one hovered control; the
       // skin paints that state, so a stale hover would also keep its look.
       const hovered = async (name: string) =>
@@ -557,12 +592,12 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
           );
         },
         [
-          [aurora.clientX, aurora.clientY],
-          [ember.clientX, ember.clientY],
+          [first.clientX, first.clientY],
+          [second.clientX, second.clientY],
         ],
       );
       for (;;) {
-        if (await hovered("EMBER")) break;
+        if (await hovered("SYNC")) break;
         assert.ok(
           performance.now() - burstStarted < 550,
           "rapid hover burst retained a stale control",
@@ -570,9 +605,55 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
         await new Promise((resolve) => setTimeout(resolve, 16));
       }
       assert.equal(
-        await hovered("AURORA"),
+        await hovered("PULSE"),
         false,
         "rapid hover burst left the earlier control hovered",
+      );
+
+      // The browser adapter prevents the context menu over the canvas, so
+      // a secondary press can be the GUI's context request. The gallery
+      // camera has no secondary-button gesture: a right drag over the
+      // background moves nothing and leaves no gesture behind, so the next
+      // primary drag still orbits.
+      edge = await panelEdge();
+      const contextMenu = await g.page
+        .locator("#ipp-world-canvas")
+        .evaluate((canvas, [x, y]) => {
+          const event = new MouseEvent("contextmenu", {
+            bubbles: true,
+            cancelable: true,
+            clientX: x,
+            clientY: y,
+            button: 2,
+          });
+          return canvas.dispatchEvent(event) ? "shown" : "prevented";
+        }, edge.outside);
+      assert.equal(contextMenu, "prevented");
+      const beforeRightDrag = transform(await g.inspect());
+      await g.page.mouse.move(...edge.outside);
+      await g.page.mouse.down({ button: "right" });
+      await g.page.mouse.move(
+        edge.outside[0] + edge.tangent[0] * span(0.05),
+        edge.outside[1] + edge.tangent[1] * span(0.05),
+        { steps: 6 },
+      );
+      await g.page.mouse.up({ button: "right" });
+      assert.deepEqual(
+        transform(await g.settle()),
+        beforeRightDrag,
+        "a secondary-button drag moved the gallery camera",
+      );
+      const beforeOrbitAfterRight = transform(await g.inspect());
+      await g.page.mouse.move(...edge.outside);
+      await g.page.mouse.down();
+      await g.page.mouse.move(
+        edge.outside[0] + edge.tangent[0] * span(0.05),
+        edge.outside[1] + edge.tangent[1] * span(0.05),
+        { steps: 6 },
+      );
+      await g.page.mouse.up();
+      await g.waitFor((inspection) =>
+        cameraChanged(beforeOrbitAfterRight, inspection),
       );
 
       const assertGain = async (expected: number) => {

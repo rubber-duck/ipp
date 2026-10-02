@@ -422,6 +422,15 @@
       "npm"
     ]
   },
+  "dist/packages/ipp-react/tests/gui-kit.test.js": {
+    "builds": [
+      "typescript"
+    ],
+    "requirements": [
+      "node",
+      "npm"
+    ]
+  },
   "dist/packages/ipp-react/tests/gui-ime.test.js": {
     "builds": [
       "typescript"
@@ -514,6 +523,17 @@
     ]
   },
   "dist/tests/render/gallery-gui.test.js": {
+    "builds": [
+      "typescript",
+      "gallery-fixtures"
+    ],
+    "requirements": [
+      "node",
+      "npm",
+      "browser"
+    ]
+  },
+  "dist/tests/render/gallery-gui-workbench.test.js": {
     "builds": [
       "typescript",
       "gallery-fixtures"

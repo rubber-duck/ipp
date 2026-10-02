@@ -1,15 +1,15 @@
-//! Ordinary skin requests and private channels sampled only by AnimationSystem.
+//! Skin transitions between interaction states, prepared by GUI and sampled
+//! only by AnimationSystem.
 
 mod component;
 mod diagnostics;
 mod runtime;
+mod timing;
 mod update;
 
-pub use component::{GuiMotionPart, GuiThemeMotion};
+pub use component::{GuiMotionEasing, GuiMotionPart, GuiThemeMotion};
 pub use diagnostics::{GuiMotionPreparationWork, GuiMotionSamplingWork};
-pub(in crate::world) use runtime::{
-    GuiMotionChannels, GuiMotionDestination, GuiMotionOwner, GuiMotionRequest, GuiMotionSkinTarget,
-    theme_live,
-};
-pub use runtime::{GuiSkinMotionStatus, GuiSkinRuntime};
+pub use runtime::GuiMotionRuntime;
+pub(in crate::world::systems::gui) use runtime::focus_part_channel;
+pub(in crate::world) use runtime::{GuiMotionOwner, notify_sample};
 pub(in crate::world::systems::gui) use update::GuiMotionState;

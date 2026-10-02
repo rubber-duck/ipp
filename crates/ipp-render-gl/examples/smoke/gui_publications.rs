@@ -216,6 +216,7 @@ pub fn run<D: RenderDevice>(
     let surface = Surface {
         width: 1.0,
         height: 0.5,
+        ..Default::default()
     };
     let anchor = append(
         &mut host,

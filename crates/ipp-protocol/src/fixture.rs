@@ -95,6 +95,21 @@ fn paint_example() -> Vec<u8> {
     let mut theme = GuiTheme::default();
     let mut base = GuiPaintPart::keyed(GuiPartId::base(GuiPrimitivePart::Background)).unwrap();
     base.color = Some([0.25, 0.5, 0.75, 1.0]);
+    base.glow_inner_radius = Some(3.0);
+    base.corner_cut = Some([4.0, 0.0, 4.0, 0.0]);
+    base.corner_accent = Some([0.0, 8.0, 0.0, 8.0]);
+    base.corner_accent_width = Some(2.0);
+    base.shape = Some(1.0);
+    base.stroke_a = Some([0.25, 0.5, 0.5, 0.75]);
+    base.stroke_b = Some([0.5, 0.75, 1.0, 0.0]);
+    base.arc_start = Some(-1.25);
+    base.arc_sweep = Some(0.75);
+    base.arc_dashes = Some([48.0, 0.25]);
+    base.fill_mode = Some(4.0);
+    base.fill_hue = Some(-0.45);
+    base.checker_size = Some(6.0);
+    base.checker_color0 = Some([0.6, 0.6, 0.6, 1.0]);
+    base.checker_color1 = Some([0.3, 0.3, 0.3, 0.5]);
     theme.parts.insert(2, base).unwrap();
     let mut checked = GuiPaintPart::keyed(GuiPartId::variant(
         GuiPrimitivePart::Fill,

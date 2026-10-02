@@ -1,5 +1,5 @@
 use super::component::CONTROL_COMPONENTS;
-use super::control::{component_incarnation, eligibility, entity_control};
+use super::control::{component_incarnation, eligibility, entity_control, focus_parts, focusable};
 use super::*;
 use crate::systems::SystemCommitContext;
 use crate::world::{WorldEntityState, WorldSimulationState};
@@ -7,26 +7,50 @@ use crate::{ComponentValue, EntityId};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-/// GUI System state: focus, pointer feedback, native text and effect
-/// publication. Control values, scroll state and eligibility are component
-/// fields; nothing here mirrors them.
+/// GUI System state: focus, pointer feedback, active items, overlay
+/// invokers, hint delays, held step repeats, native text and effect
+/// publication. Control values, scroll state, eligibility and overlays' open
+/// state are component fields; nothing here mirrors them.
 #[derive(Default)]
 pub(in crate::world::systems::gui) struct GuiLocalState {
     pub(in crate::world::systems::gui) observations: super::super::observations::GuiEffectPublisher,
     pub(super) pointers: Vec<super::interaction::GuiPointerFeedback>,
     /// Logical focus and the physical input session owning it; focus set by a
-    /// `GuiAction` command has no owner.
+    /// `GuiAction` command has no owner, and keeps none while routed input
+    /// focuses the same control again.
     pub(super) focus: Option<(
         GuiEntityTarget,
         Option<crate::services::gui_input::GuiInputSession>,
     )>,
+    /// The focus part of `focus`'s control that focus names, such as a
+    /// range's thumb; 0 for a control with one part and without focus.
+    pub(super) focus_part: u32,
     pub(super) focus_visible: bool,
+    /// Each group's active item: the group entity and its item, an eligible
+    /// control that does not take focus.
+    pub(super) active: Vec<(EntityId, GuiEntityTarget)>,
+    /// The control focus moved to at this frame's mutation boundary. Layout
+    /// scrolls it into view in the same frame, and the System forgets it
+    /// when the frame finishes.
+    pub(in crate::world::systems::gui) reveal: Option<EntityId>,
+    /// Open light and modal overlays with their invokers, and hint timing.
+    pub(super) overlays: super::overlay::GuiOverlayState,
     pub(super) native_text: Option<super::text::GuiNativeText>,
     pub(super) native_generation: u64,
+    /// The held step part of a numeric text input and its repeat timing.
+    pub(super) number_repeat: Option<super::number::GuiNumberRepeat>,
+    /// Numeric edits focus left when the runtime moved it, to commit at the
+    /// next write the System makes.
+    pub(super) number_commits: Vec<(GuiEntityTarget, Arc<str>)>,
+    /// Numeric edits that ended without a commit, to publish as discarded.
+    pub(super) number_discards: Vec<(GuiEntityTarget, Arc<str>)>,
     /// Set while the GUI System writes the `text` of its own native record.
     pub(in crate::world::systems::gui) own_text_write: bool,
     /// Entities whose policy changed through evaluated writes since the last refresh.
     eligibility_dirty: BTreeSet<EntityId>,
+    /// Entities whose evaluated eligibility fields changed since skin motion
+    /// last took them.
+    pub(in crate::world::systems::gui) eligibility_changed: BTreeSet<EntityId>,
     initialized: bool,
     /// Dirty counter of GUI System state that paint reads: focus, pointer
     /// feedback and native text.
@@ -44,11 +68,21 @@ pub(super) fn live(owner: &Option<crate::services::gui_input::GuiInputSession>) 
 
 impl GuiLocalState {
     pub(in crate::world::systems::gui) fn focus_visible(&self, target: GuiEntityTarget) -> bool {
-        self.focus_visible
+        self.focus_ring(target).is_some()
+    }
+
+    /// The focused part of `target` while it shows the focus ring, which
+    /// paints on that part.
+    pub(in crate::world::systems::gui) fn focus_ring(
+        &self,
+        target: GuiEntityTarget,
+    ) -> Option<u32> {
+        (self.focus_visible
             && self
                 .focus
                 .as_ref()
-                .is_some_and(|(focused, owner)| *focused == target && live(owner))
+                .is_some_and(|(focused, owner)| *focused == target && live(owner)))
+        .then_some(self.focus_part)
     }
 
     /// Logical focus of a live owner, as the `GuiFocus` System query reports it.
@@ -57,7 +91,23 @@ impl GuiLocalState {
         live(owner).then_some(GuiFocusRecord {
             target: *target,
             visible: self.focus_visible,
+            part: self.focus_part,
         })
+    }
+
+    /// Logical focus of a live owner with its part, whether a command or the
+    /// runtime set it, so that no input session owns it, and whether it shows
+    /// the ring.
+    pub(in crate::world::systems::gui) fn focus_owner(
+        &self,
+    ) -> Option<(GuiEntityTarget, u32, bool, bool)> {
+        let (target, owner) = self.focus.as_ref()?;
+        live(owner).then_some((
+            *target,
+            self.focus_part,
+            owner.is_none(),
+            self.focus_visible,
+        ))
     }
 
     /// Whether native text currently displays a provisional run over its text.
@@ -105,7 +155,12 @@ impl GuiLocalState {
                     .is_none_or(|link| link.parent.is_none())
             })
             .collect();
-        super::eligibility::refresh_eligibility(&mut world.components, &world.state, &roots);
+        super::eligibility::refresh_eligibility(
+            &mut world.components,
+            &world.state,
+            &roots,
+            &mut self.eligibility_changed,
+        );
         self.eligibility_dirty.clear();
         self.initialized = true;
     }
@@ -124,7 +179,12 @@ impl GuiLocalState {
             return;
         }
         let roots = std::mem::take(&mut self.eligibility_dirty);
-        super::eligibility::refresh_eligibility(&mut world.components, &world.state, &roots);
+        super::eligibility::refresh_eligibility(
+            &mut world.components,
+            &world.state,
+            &roots,
+            &mut self.eligibility_changed,
+        );
     }
 
     pub(in crate::world::systems::gui) fn before_commit(
@@ -148,6 +208,7 @@ impl GuiLocalState {
             .is_none_or(|control| control.target != *target)
         {
             self.focus = None;
+            self.focus_part = 0;
             self.native_text = None;
         }
     }
@@ -164,6 +225,11 @@ impl GuiLocalState {
             {
                 roots.insert(entity);
             }
+
+            // A new, removed or changed overlay may have opened or closed.
+            if component == ComponentValue::GUI_OVERLAY {
+                self.overlays.changed.insert(entity);
+            }
         }
         roots.append(&mut self.eligibility_dirty);
         if !roots.is_empty() {
@@ -171,6 +237,7 @@ impl GuiLocalState {
                 &mut context.world_data.components,
                 &context.staged.entities_state,
                 &roots,
+                &mut self.eligibility_changed,
             );
         }
         self.refresh_native_text(context);
@@ -178,10 +245,13 @@ impl GuiLocalState {
             self.revalidate_focus(context.world_data, &context.staged.entities_state);
         }
         self.revalidate_interactions(context.world_data, &context.staged.entities_state);
+        self.revalidate_active(context.world_data, &context.staged.entities_state);
     }
 
-    /// A write to the focused input's `text` that the native record did not
-    /// make replaces the native record and advances its generation.
+    /// A write to the focused input that the native record did not make
+    /// replaces the native record and advances its generation: a change of
+    /// its `text`, or of a numeric input's formatted number, or of whether it
+    /// holds a number.
     fn refresh_native_text(&mut self, context: &SystemCommitContext<'_>) {
         if self.own_text_write {
             return;
@@ -210,16 +280,21 @@ impl GuiLocalState {
         else {
             return;
         };
-        if Arc::ptr_eq(&input.text, &native.state.text) {
+        let unchanged = match &native.basis {
+            Some(basis) => input.numeric && *input.formatted() == **basis,
+            None => !input.numeric && Arc::ptr_eq(&input.text, &native.state.text),
+        };
+        if unchanged {
             return;
         }
-        let text = input.text.clone();
+        self.discard_native_edit();
         self.native_generation = self
             .native_generation
             .checked_add(1)
             .expect("GUI native text generation exhausted");
         let native = self.native_text.as_mut().expect("native text record");
-        native.state = super::text::GuiNativeText::state(target, text, self.native_generation);
+        let owner = native.owner.clone();
+        *native = super::text::GuiNativeText::new(target, owner, input, self.native_generation);
         self.presentation_changed(true);
     }
 
@@ -229,16 +304,39 @@ impl GuiLocalState {
         state: &WorldEntityState,
     ) {
         if let Some((target, owner)) = &self.focus {
+            let control = entity_control(world, state, target.entity)
+                .filter(|control| control.target == *target);
             let valid = live(owner)
-                && entity_control(world, state, target.entity)
-                    .is_some_and(|control| control.target == *target)
-                && eligibility(world, target.entity).eligible();
+                && control.is_some()
+                && eligibility(world, target.entity).eligible()
+                && focusable(world, target.entity);
             if !valid {
                 let composing = self.composing();
+                self.discard_native_edit();
                 self.focus = None;
+                self.focus_part = 0;
                 self.native_text = None;
                 self.presentation_changed(composing);
+            } else if control.is_some_and(|control| self.focus_part >= focus_parts(world, control))
+            {
+                // A control that lost the focused part, as a range made a
+                // single slider, keeps focus on its first part.
+                self.focus_part = 0;
+                self.presentation_changed(false);
             }
+        }
+
+        // Focus a command set outlives the session holding its native record;
+        // the record and any provisional run end with that session.
+        if self
+            .native_text
+            .as_ref()
+            .is_some_and(|native| !native.owner.is_live())
+        {
+            let composing = self.composing();
+            self.discard_native_edit();
+            self.native_text = None;
+            self.presentation_changed(composing);
         }
     }
 }

@@ -39,6 +39,32 @@ const builds = await Promise.all(
     return { environment, ...(await artifact(path)) };
   }),
 );
+const kitConsumer = resolve(workspace, "tests/react/gui-kit-consumer.tsx");
+for (const environment of ["development", "production"]) {
+  const path = resolve(output, `gui-kit-${environment}.js`);
+  const result = await bundleBrowser(kitConsumer, path, environment, {
+    metafile: true,
+  });
+  const inputs = Object.keys(result.metafile.inputs);
+  if (
+    environment === "production" &&
+    inputs.some((path) => path.includes("packages/ipp-react/src/"))
+  )
+    throw new Error("Production kit consumer bypassed public built exports");
+  if (
+    environment === "development" &&
+    !inputs.some((path) => path.endsWith("packages/ipp-react/src/gui-kit.ts"))
+  )
+    throw new Error("Development kit consumer missed the kit sources");
+  if (
+    inputs.some((path) => /\/(web\.tsx|canvas-world-session\.ts)$/.test(path))
+  )
+    throw new Error("Kit consumer included browser composition code");
+  builds.push({
+    environment: `gui-kit-${environment}`,
+    ...(await artifact(path)),
+  });
+}
 const guiBrowserPath = resolve(output, "gui-fixture.js");
 const guiBrowserBuild = await bundleBrowser(
   guiBrowserFixture,

@@ -76,9 +76,12 @@ pub struct AnimationDriver<T: AnimationSample> {
 /// its validated descriptor, or a row property kept by its offset.
 #[derive(Clone, Copy, Debug)]
 pub(in crate::world) enum DynamicValueDestination {
-    GuiSkin(crate::systems::gui::motion::GuiMotionDestination),
     CustomMaterial(
         crate::world::component_binding::ComponentBinding<crate::components::CustomMaterial>,
+        crate::components::dynamic_properties::DynamicPropertyDescriptor,
+    ),
+    CanvasPaint(
+        crate::world::component_binding::ComponentBinding<crate::components::CanvasPaint>,
         crate::components::dynamic_properties::DynamicPropertyDescriptor,
     ),
     Row(super::row_property_destination::RowPropertyDestination),
@@ -98,13 +101,6 @@ impl DynamicValueDestination {
         key: u32,
     ) -> Option<Self> {
         let index = entity.index() as usize;
-        if component == ComponentValue::GUI_SKIN && key >= 0xffff_0000 {
-            // SAFETY: This binding's caller owns the same storage and invalidates before reuse.
-            return unsafe {
-                crate::systems::gui::motion::GuiMotionDestination::bind(storage, entity, key)
-            }
-            .map(Self::GuiSkin);
-        }
         if crate::components::rows::row_region(key).is_some() {
             return super::row_property_destination::RowPropertyDestination::bind(
                 storage, entity, component, key,
@@ -131,6 +127,16 @@ impl DynamicValueDestination {
                         .descriptor(key)
                         .filter(numeric)?,
                 )),
+                ComponentValue::CANVAS_PAINT => Some(Self::CanvasPaint(
+                    crate::world::component_binding::ComponentBinding::new(
+                        storage.canvas_paint_ptr(index)?,
+                    ),
+                    storage
+                        .canvas_paint(index)?
+                        .properties
+                        .descriptor(key)
+                        .filter(numeric)?,
+                )),
                 _ => None,
             }
         }
@@ -142,8 +148,11 @@ impl DynamicValueDestination {
         value: crate::DynamicValue,
     ) -> Result<(), ErrorReason> {
         match self {
-            Self::GuiSkin(destination) => return destination.write(storage, value),
             Self::CustomMaterial(binding, descriptor) => binding
+                .get_mut(storage)
+                .properties
+                .set_descriptor(descriptor, value),
+            Self::CanvasPaint(binding, descriptor) => binding
                 .get_mut(storage)
                 .properties
                 .set_descriptor(descriptor, value),
@@ -382,13 +391,6 @@ fn validate_transition_value(
         }
         AnimationValue::Field(crate::components::schema::FieldValue::Dynamic(value)) => {
             value.validate().map_err(|_| ErrorReason::InvalidValue)?;
-            if let Some(property) = identity.property.property()
-                && property.component == ComponentValue::GUI_SKIN
-                && let [offset] = property.offsets.as_slice()
-                && *offset >= 0xffff_0000
-            {
-                crate::systems::gui::motion::GuiMotionDestination::validate(*offset, value)?;
-            }
         }
         AnimationValue::Rotation(value) if value.iter().any(|value| !value.is_finite()) => {
             return Err(ErrorReason::InvalidValue);

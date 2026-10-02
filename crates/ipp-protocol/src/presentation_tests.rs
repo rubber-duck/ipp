@@ -57,6 +57,14 @@ fn presentation_contract_roundtrips_exact_identities_and_rejects_truncation() {
             surface,
             binding: root,
         },
+        PresentationRequest::Resize {
+            view,
+            viewport: WorldViewport {
+                width: 320,
+                height: 200,
+                device_pixel_ratio: 1.5,
+            },
+        },
         PresentationRequest::Clear(view),
         PresentationRequest::Frame {
             view,

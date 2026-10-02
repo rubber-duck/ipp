@@ -28,7 +28,8 @@ impl<'a> QueryWalk<'a, '_> {
             .and_then(|chunk| chunk.data::<GuiCanvasPublication>())
             .and_then(|gui| gui.views.get(&view.output));
         for hit in canvas.hits.iter() {
-            if !hit.contains(point) {
+            // A layer plane of a Surface separating layers holds only that layer's targets.
+            if view.layer.is_some_and(|layer| hit.layer != layer) || !hit.contains(point) {
                 continue;
             }
             let CanvasHitKind::Attachment {
@@ -57,8 +58,8 @@ impl<'a> QueryWalk<'a, '_> {
             };
             let slot = canvas
                 .entries
-                .get(hit.paint_order as usize)
-                .and_then(|entry| match entry.as_ref() {
+                .iter()
+                .find_map(|entry| match entry.as_ref() {
                     CanvasPaintEntry::Attachment(slot)
                         if slot.anchor == *anchor && slot.token == *token =>
                     {
@@ -101,6 +102,7 @@ impl<'a> QueryWalk<'a, '_> {
                     point: child_point.map(|value| value as f32),
                     extent: slot.physical_extent,
                     path,
+                    layer: None,
                 }),
                 _ => QueryTask::Outcome(GuiQueryOutcome::Blocked {
                     reason: GuiQueryBlockReason::Unavailable,

@@ -3,16 +3,17 @@ use crate::systems::{
 };
 use crate::world::systems::SystemCommitContext;
 use crate::{ComponentValue, EntityId, ErrorReason};
-use std::collections::BTreeSet;
 
-/// Owner of focus, pointer interaction, native text state, local actions and
-/// skin motion preparation of ordinary GUI entities. Control values are
-/// component fields; this System writes them for actions and input and keeps
-/// the eligibility fields current.
+/// Owner of focus, pointer interaction, overlay modes, native text state,
+/// local actions, presentation preferences and skin motion preparation of
+/// ordinary GUI entities. Control values and overlays' open state are
+/// component fields; this System writes them for actions, input and overlay
+/// modes and keeps the eligibility fields current.
 #[derive(Default)]
 pub struct GuiSystem {
     pub(super) local: super::local::GuiLocalState,
     pub(super) motion: super::motion::GuiMotionState,
+    pub(super) preferences: super::GuiPreferences,
 }
 
 impl GuiSystem {
@@ -44,11 +45,12 @@ impl GuiSystem {
             .is_some_and(|focus| focus.target == target)
     }
 
-    pub(in crate::world::systems) fn focus_visible(
+    /// The focused part of `target` while it shows the focus ring.
+    pub(in crate::world::systems) fn focus_ring(
         &self,
         target: super::local::GuiEntityTarget,
-    ) -> bool {
-        self.local.focus_visible(target)
+    ) -> Option<u32> {
+        self.local.focus_ring(target)
     }
 
     pub(in crate::world::systems) fn native_text_state(
@@ -66,20 +68,59 @@ impl GuiSystem {
         self.local.native_text_entity()
     }
 
-    pub(in crate::world::systems) fn motion_changes(&self) -> &[super::motion::GuiMotionOwner] {
-        self.motion.changes()
+    /// The control focus moved to at this frame's mutation boundary, which
+    /// layout scrolls into view.
+    pub(in crate::world::systems::gui) fn reveal_target(&self) -> Option<EntityId> {
+        self.local.reveal
     }
 
-    pub(in crate::world::systems) fn pending_motion_entities(&self) -> BTreeSet<EntityId> {
-        self.motion.pending_entities()
-    }
-
-    pub(in crate::world::systems) fn motion_request_source(
+    /// `control`'s place in its group, read from its root-first `ancestry`:
+    /// its nearest strict ancestor with a `GuiGroup`, unless the control
+    /// cannot be an item or lies inside another item. Finding no group costs
+    /// one storage slot check per ancestor, so a canvas without groups pays
+    /// nothing measurable.
+    pub(in crate::world::systems) fn group_item(
         &self,
         world: &crate::world::WorldSimulationState,
-        owner: super::motion::GuiMotionOwner,
-    ) -> Option<crate::services::asset_management::AssetSource> {
-        super::motion::GuiMotionState::request_source(&self.local, world, owner)
+        control: super::local::control::GuiControl,
+        ancestry: &[EntityId],
+    ) -> Option<super::presentation::GuiGroupItem> {
+        if !super::local::group::item_kind(control.kind) {
+            return None;
+        }
+        let ancestors = ancestry.split_last()?.1;
+        let (index, value) = ancestors
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(index, ancestor)| {
+                world
+                    .components
+                    .gui_group(ancestor.index() as usize)
+                    .map(|value| (index, value))
+            })?;
+        if ancestors[index + 1..].iter().any(|&between| {
+            super::local::control::entity_control(world, &world.state, between)
+                .is_some_and(|between| super::local::group::item_kind(between.kind))
+        }) {
+            return None;
+        }
+        let group = ancestors[index];
+        Some(super::presentation::GuiGroupItem {
+            group,
+            axis: value.axis,
+            selection: value.selection,
+            selected: control.kind == super::local::GuiControlKind::Button
+                && world
+                    .components
+                    .gui_button(control.target.entity.index() as usize)
+                    .is_some_and(|button| button.selected),
+            active: self.local.is_active(control.target),
+        })
+    }
+
+    pub(in crate::world::systems) fn motion_changes(&self) -> &[super::motion::GuiMotionOwner] {
+        self.motion.changes()
     }
 
     pub(in crate::world) fn motion_work(&self) -> super::motion::GuiMotionPreparationWork {
@@ -107,6 +148,42 @@ impl crate::WorldContext<'_> {
                 }
             })
             .into_iter()
+            .take(limit)
+            .collect()
+    }
+
+    /// The World's logical focus and its focus part, whether a `GuiAction`
+    /// command or the runtime set it, so that no input session owns it, and
+    /// whether it shows the focus ring; the input router adopts such focus as
+    /// the keyboard target of the context presenting this World, in its
+    /// modality.
+    pub(crate) fn gui_logical_focus(
+        &self,
+    ) -> Option<(super::local::GuiEntityTarget, u32, bool, bool)> {
+        self.system::<GuiSystem>(GuiSystem::ID)
+            .and_then(|gui| gui.local.focus_owner())
+    }
+
+    /// `GuiActiveItems` System query: each group's active item, ordered and
+    /// paged by group entity.
+    pub fn gui_active_item_page(
+        &self,
+        after: u64,
+        group: u64,
+        limit: usize,
+    ) -> Vec<super::local::GuiActiveItemRecord> {
+        self.system::<GuiSystem>(GuiSystem::ID)
+            .map(|gui| gui.local.active_records())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|record| {
+                let entity = record.group.to_bits();
+                if group != 0 {
+                    entity == group
+                } else {
+                    entity > after
+                }
+            })
             .take(limit)
             .collect()
     }
@@ -163,6 +240,7 @@ impl SystemFactory for GuiSystemFactory {
             [
                 ComponentValue::GUI_BEHAVIOR,
                 ComponentValue::GUI_VIRTUAL_ITEM,
+                ComponentValue::GUI_GROUP,
             ],
             [crate::systems::WorldOperation::Gui],
         );
@@ -177,6 +255,7 @@ impl SystemFactory for GuiSystemFactory {
                 ComponentValue::GUI_TEXT_INPUT,
                 ComponentValue::GUI_SCROLL_VIEW,
                 ComponentValue::GUI_VIRTUAL_LIST,
+                ComponentValue::GUI_COLOR,
             ]
             .map(|component| {
                 crate::systems::SystemCapability::requiring(
@@ -198,14 +277,12 @@ impl SystemFactory for GuiSystemFactory {
                 )
             }),
         );
+        // Motion rows time transitions that only AnimationSystem samples.
         capabilities
             .components
             .push(crate::systems::SystemCapability::requiring(
                 ComponentValue::GUI_THEME_MOTION,
-                [
-                    crate::systems::animation::AnimationSystem::ID,
-                    crate::systems::asset_dependencies::AssetDependencySystem::ID,
-                ],
+                [crate::systems::animation::AnimationSystem::ID],
             ));
         capabilities
     }
@@ -218,9 +295,18 @@ impl SystemFactory for GuiSystemFactory {
 
     fn create(
         &self,
-        _context: &mut SystemInitContext<'_>,
+        context: &mut SystemInitContext<'_>,
     ) -> Result<Box<dyn System>, SystemInitError> {
-        Ok(Box::new(GuiSystem::default()))
+        // Without AnimationSystem, the sole sampler, every part snaps.
+        let animated = context
+            .world
+            .manifest()
+            .systems()
+            .contains(&crate::systems::animation::AnimationSystem::ID);
+        Ok(Box::new(GuiSystem {
+            motion: super::motion::GuiMotionState::new(animated),
+            ..GuiSystem::default()
+        }))
     }
 }
 
@@ -228,6 +314,11 @@ impl System for GuiSystem {
     fn prepare_evaluation(&mut self, context: &mut crate::systems::SystemUpdateContext<'_, '_>) {
         self.local.initialize(context.world.world);
         self.local.refresh_pending_eligibility(context.world.world);
+
+        // Overlays move focus in and back before focus inside a closed one is
+        // revalidated away; a held step part repeats on the same Host clock.
+        self.evaluate_overlays(context);
+        self.advance_number_repeat(context);
         let focus = self.local.motion_focus();
         self.local
             .revalidate_focus(context.world.world, &context.world.world.state);
@@ -236,23 +327,47 @@ impl System for GuiSystem {
         {
             self.motion.dirty_entity(entity);
         }
+
+        // Numeric edits that ended without a commit since the last frame,
+        // published with this frame's tick.
+        let tick = context
+            .world
+            .world
+            .tick
+            .checked_add(1)
+            .expect("World tick exhausted");
+        self.local
+            .publish_number_discards(context.world.world, tick);
         let revision = self.local.presentation_revision;
+        let active = self.local.active_entities();
         self.local
             .revalidate_interactions(context.world.world, &context.world.world.state);
+        self.local
+            .revalidate_active(context.world.world, &context.world.world.state);
         if revision != self.local.presentation_revision {
             self.motion.dirty_watched();
+            for entity in active {
+                self.motion.dirty_entity(entity);
+            }
         }
-        self.motion.prepare(&self.local, &mut context.world);
+        self.motion
+            .dirty_entities(std::mem::take(&mut self.local.eligibility_changed));
+        self.motion.prepare(
+            &self.local,
+            self.preferences.reduced_motion,
+            &mut context.world,
+        );
     }
 
     fn before_numeric_update(&mut self, context: &mut crate::systems::SystemNumericContext<'_>) {
         for &(entity, component) in context.changed_components() {
-            if component == ComponentValue::GUI_SKIN
+            // Sampled transition channels are not a policy change.
+            if component == ComponentValue::GUI_BEHAVIOR
                 && context
                     .world_data
                     .components
-                    .gui_skin(entity.index() as usize)
-                    .is_some_and(|skin| skin.runtime.notifying_sample)
+                    .gui_behavior(entity.index() as usize)
+                    .is_some_and(|behavior| behavior.motion.notifying_sample)
             {
                 continue;
             }
@@ -270,6 +385,8 @@ impl System for GuiSystem {
             .revalidate_focus(context.world.world, &context.world.world.state);
         self.local
             .revalidate_interactions(context.world.world, &context.world.world.state);
+        self.local
+            .revalidate_active(context.world.world, &context.world.world.state);
     }
 
     fn finish_update(
@@ -279,6 +396,15 @@ impl System for GuiSystem {
     ) {
         // Animated policy is sampled after this System's update.
         self.local.refresh_pending_eligibility(context.world.world);
+
+        // Numeric edits that ended without a commit during evaluation, with
+        // the tick of the frame just evaluated.
+        let tick = context.world.world.tick;
+        self.local
+            .publish_number_discards(context.world.world, tick);
+
+        // Layout revealed the newly focused control in this frame's pass.
+        self.local.reveal = None;
     }
 
     fn apply_operation(
@@ -293,6 +419,13 @@ impl System for GuiSystem {
             return None;
         };
         Some(self.apply_action(context, target, action))
+    }
+
+    fn after_operation(
+        &mut self,
+        context: &mut crate::systems::SystemOperationContext<'_>,
+    ) -> Result<(), ErrorReason> {
+        super::local::group::keep_exclusive_selection(context)
     }
 
     fn before_commit(&mut self, context: &mut SystemCommitContext<'_>) {
@@ -336,11 +469,53 @@ impl System for GuiSystem {
         if let Some(command) = command.downcast_ref::<super::local::GuiLocalCommand>() {
             return self.local_command(context, command);
         }
+        if let Some(command) = command.downcast_ref::<super::local::GuiOverlayCommand>() {
+            return self.close_overlay(context, command);
+        }
+        if let Some(update) = command.downcast_ref::<super::GuiPreferencesUpdate>() {
+            let preferences = update.applied_to(self.preferences);
+            if preferences != self.preferences {
+                crate::diagnostic!(
+                    Debug,
+                    "[IPP core] gui_preferences.update preferences={preferences:?}"
+                );
+                self.preferences = preferences;
+            }
+            return Ok(());
+        }
         Err(ErrorReason::InvalidValue)
     }
 
+    fn save_persistent_state(
+        &self,
+        context: &mut crate::systems::SystemSaveContext<'_>,
+    ) -> Result<Option<crate::systems::SystemPersistentState>, String> {
+        let Some(state) = self.preferences.encode_persistent() else {
+            return Ok(None);
+        };
+        *context.bytes = context
+            .bytes
+            .checked_add(state.len())
+            .ok_or("Snapshot size overflow")?;
+        if *context.bytes > context.max_bytes {
+            return Err("Snapshot byte budget exhausted".into());
+        }
+        Ok(Some(state))
+    }
+
+    fn load_persistent_state(
+        &mut self,
+        _context: &mut crate::systems::SystemLoadContext<'_, '_>,
+        state: Option<&crate::systems::SystemPersistentState>,
+    ) -> Result<(), String> {
+        self.preferences = match state {
+            Some(bytes) => super::GuiPreferences::decode_persistent(bytes)?,
+            None => super::GuiPreferences::default(),
+        };
+        Ok(())
+    }
+
     fn after_commit(&mut self, context: &mut crate::systems::SystemCommitContext<'_>) {
-        self.motion.after_commit(context);
         let revision = self.local.presentation_revision;
         self.local.after_commit(context);
         if revision != self.local.presentation_revision {

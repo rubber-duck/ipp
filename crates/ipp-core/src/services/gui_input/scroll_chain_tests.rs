@@ -22,8 +22,22 @@ fn node(
     create(host, world, values, Some(parent))
 }
 
+/// Bar thickness at this fixture's ten-unit scale; bars sit flush with the
+/// control's sides and ends.
+const BAR: f32 = 0.3;
+
 fn scroll_view() -> Vec<ComponentValue> {
-    vec![ComponentValue::GuiScrollView(GuiScrollView::default())]
+    vec![ComponentValue::GuiScrollView(GuiScrollView {
+        bar_thickness: BAR,
+        bar_inset: 0.0,
+        bar_end_inset: 0.0,
+        ..Default::default()
+    })]
+}
+
+/// Distance a thumb travels: the track without its pointed ends, less the thumb.
+fn thumb_travel(track: [f32; 4], thumb: [f32; 4]) -> f32 {
+    (track[3] - track[1]) - (track[2] - track[0]) - (thumb[3] - thumb[1])
 }
 
 fn checkbox() -> Vec<ComponentValue> {
@@ -341,6 +355,7 @@ fn a_slider_keeps_its_capture_while_another_pointer_drags_the_content() {
             min: 0.0,
             max: 1.0,
             step: 0.0,
+            ..Default::default()
         })],
     );
     node(&mut host, world, content, 0, [10.0, 8.0], Vec::new());
@@ -371,7 +386,7 @@ fn a_thumb_drag_holds_its_capture_and_clamps_without_passing_movement_outward() 
     assert_eq!(nested.offsets(), [0.0, 0.0]);
     // Half the thumb travel scrolls half the capacity, and the capture holds
     // while the pointer wanders off the bar over content.
-    let travel = (track[3] - track[1]) - (thumb[3] - thumb[1]);
+    let travel = thumb_travel(track, thumb);
     nested.pointer(movement, 1, [5.0, grab + travel * 0.5]);
     let offsets = nested.offsets();
     assert_eq!(offsets[0], 0.0);
@@ -496,6 +511,9 @@ fn scroll_bars_and_content_drags_scroll_a_virtual_list_like_a_scroll_view() {
             item_extent: 1.0,
             axis: 1,
             overscan: 0,
+            bar_thickness: BAR,
+            bar_inset: 0.0,
+            bar_end_inset: 0.0,
             ..Default::default()
         })],
     );
@@ -511,7 +529,7 @@ fn scroll_bars_and_content_drags_scroll_a_virtual_list_like_a_scroll_view() {
     // half its travel scrolls about half the capacity.
     let thumb = nested.bar(list, true);
     let track = nested.bar(list, false);
-    let travel = (track[3] - track[1]) - (thumb[3] - thumb[1]);
+    let travel = thumb_travel(track, thumb);
     assert!(thumb[3] - thumb[1] > 0.0 && travel > 0.0);
     let x = (thumb[0] + thumb[2]) * 0.5;
     let grab = (thumb[1] + thumb[3]) * 0.5;

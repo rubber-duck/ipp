@@ -1,5 +1,13 @@
 export const guiComponentContract = {
-  GuiScrollView: { host: "ipp-gui-scroll-view", fields: { axis: "number" } },
+  GuiScrollView: {
+    host: "ipp-gui-scroll-view",
+    fields: {
+      axis: "number",
+      bar_thickness: "number",
+      bar_inset: "number",
+      bar_end_inset: "number",
+    },
+  },
   GuiVirtualList: {
     host: "ipp-gui-virtual-list",
     fields: {
@@ -7,6 +15,9 @@ export const guiComponentContract = {
       item_extent: "number",
       overscan: "number",
       axis: "number",
+      bar_thickness: "number",
+      bar_inset: "number",
+      bar_end_inset: "number",
     },
   },
   GuiVirtualItem: { host: "ipp-gui-virtual-item", fields: { index: "number" } },
@@ -27,6 +38,7 @@ export const guiComponentContract = {
       clip_min_y: "number",
       clip_max_x: "number",
       clip_max_y: "number",
+      layer: "number",
     },
   },
   CanvasText: {
@@ -69,6 +81,10 @@ export const guiComponentContract = {
       radius_y: "number",
     },
   },
+  CanvasPaint: {
+    host: "ipp-canvas-paint",
+    fields: { source: "string", variant: "number" },
+  },
   GuiLayout: {
     host: "ipp-gui-layout",
     fields: {
@@ -93,12 +109,21 @@ export const guiComponentContract = {
       margin_left: "number",
     },
   },
+  GuiOverlay: {
+    host: "ipp-gui-overlay",
+    fields: { side: "number", align: "number", mode: "number" },
+  },
+  GuiGroup: {
+    host: "ipp-gui-group",
+    fields: { axis: "number", selection: "number" },
+  },
   GuiBehavior: {
     host: "ipp-gui-behavior",
     fields: {
       enabled: "boolean",
       visible: "boolean",
       focus_scope: "boolean",
+      focusable: "boolean",
       semantic_label: "string",
     },
   },
@@ -106,12 +131,19 @@ export const guiComponentContract = {
     host: "ipp-gui-font",
     fields: { source: "string", variant: "number", font_size: "number" },
   },
-  GuiTheme: { host: "ipp-gui-theme", fields: { parts: "bytes" } },
+  GuiTheme: { host: "ipp-gui-theme", fields: { parts: "bytes", em: "number" } },
+  GuiThemeMotion: {
+    host: "ipp-gui-theme-motion",
+    fields: { parts: "bytes" },
+  },
   GuiSkin: {
     host: "ipp-gui-skin",
     fields: { theme: "entity", parts: "bytes" },
   },
-  GuiButton: { host: "ipp-gui-button", fields: { label: "string" } },
+  GuiButton: {
+    host: "ipp-gui-button",
+    fields: { label: "string", selected: "boolean" },
+  },
   GuiCheckbox: {
     host: "ipp-gui-checkbox",
     fields: { label: "string", checked: "boolean" },
@@ -122,12 +154,38 @@ export const guiComponentContract = {
       min: "number",
       max: "number",
       step: "number",
+      fine_step: "number",
       value: "number",
+      origin: "number",
+      axis: "number",
+      range: "boolean",
+      upper: "number",
     },
   },
   GuiTextInput: {
     host: "ipp-gui-text-input",
-    fields: { placeholder: "string", text: "string" },
+    fields: {
+      placeholder: "string",
+      text: "string",
+      numeric: "boolean",
+      value: "number",
+      min: "number",
+      max: "number",
+      step: "number",
+      fine_step: "number",
+      precision: "number",
+      step_parts: "boolean",
+    },
+  },
+  GuiColor: {
+    host: "ipp-gui-color",
+    fields: {
+      hue: "number",
+      saturation: "number",
+      value: "number",
+      alpha: "number",
+      alpha_rail: "boolean",
+    },
   },
 } as const;
 
@@ -138,4 +196,5 @@ export const guiControlNames = new Set([
   "GuiCheckbox",
   "GuiSlider",
   "GuiTextInput",
+  "GuiColor",
 ]);

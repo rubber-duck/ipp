@@ -67,6 +67,10 @@ pub struct PublishedWorldAttachment {
     /// Validated effective parent Surface policy, independent of child paint.
     /// Only optional Canvas caching consumes this policy, not Camera target selection.
     pub surface_cache_policy: Option<crate::systems::surface::SurfaceCachePolicy>,
+    /// The parent Surface's `layer_spacing` in metres per canvas layer id;
+    /// zero without a Surface. It separates layers only where the edge is
+    /// presented in a camera's 3D domain.
+    pub layer_spacing: f32,
     /// Last completed child contribution, absent before readiness.
     pub publication: Option<WorldPublicationId>,
 }

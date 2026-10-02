@@ -1,4 +1,10 @@
-//! Immutable backend-specific custom shader definitions (IPPH version 2).
+//! Immutable backend-specific custom shader definitions (IPPH version 3).
+//!
+//! One definition is either a mesh material, with vertex and fragment bodies, a
+//! recipe and required streams, or a canvas paint: one fill function body with
+//! float scalar or vector parameters and nothing else. The renderer's material and
+//! paint guides, `CUSTOM_MATERIALS.md` and `CANVAS_PAINTS.md` beside its render
+//! service, own the backend interfaces.
 
 use super::{Asset, AssetLoader, AssetTypeId, BufferedAssetLoader};
 use crate::{DynamicProperties, DynamicPropertyKind, DynamicValue};
@@ -62,6 +68,11 @@ impl ShaderParameterKind {
         }
     }
 
+    /// Whether a canvas paint may declare this kind: a float scalar or vector.
+    pub fn paint_parameter(self) -> bool {
+        matches!(self, Self::F32 | Self::Vec2 | Self::Vec3 | Self::Vec4)
+    }
+
     fn accepts(self, properties: &DynamicProperties, name: &str) -> bool {
         let Some(descriptor) = properties.descriptors().get(name) else {
             return false;
@@ -84,6 +95,9 @@ pub struct ShaderBackendSource {
     pub vertex: String,
     /// Implements `vec4 materialFragment()` returning linear RGBA.
     pub fragment: String,
+    /// The statements of one canvas paint function returning straight linear RGBA;
+    /// nonblank only in a paint definition.
+    pub paint: String,
 }
 
 /// Explicit compilation features; material values never participate in this recipe.
@@ -119,6 +133,10 @@ pub struct ShaderDefinition {
 
 impl ShaderDefinition {
     /// Validate source-independent definition structure. Compilation belongs to the renderer.
+    ///
+    /// A definition with a nonblank paint body in any backend is a canvas paint: it
+    /// has no material stages, recipe features or required streams, and declares
+    /// only float scalar and vector parameters.
     pub fn validate(&self) -> Result<(), String> {
         if self.recipe.features & !63 != 0 || self.recipe.backend.is_empty() {
             return Err("Invalid shader recipe".into());
@@ -134,11 +152,40 @@ impl ShaderDefinition {
                 || backend.contains('\0')
                 || source.vertex.contains('\0')
                 || source.fragment.contains('\0')
+                || source.paint.contains('\0')
             {
                 return Err("Invalid shader backend source".into());
             }
         }
+        if self.is_paint() {
+            let stages = self.backends.values().any(|source| {
+                !source.vertex.trim().is_empty() || !source.fragment.trim().is_empty()
+            });
+            if stages || self.recipe.features != 0 || self.required_attributes != 0 {
+                return Err(
+                    "A paint definition has no material stages, recipe features or streams".into(),
+                );
+            }
+            if !self.parameters.values().all(|kind| kind.paint_parameter()) {
+                return Err("Paint parameters are float scalars or vectors".into());
+            }
+        }
         Ok(())
+    }
+
+    /// Whether this definition is a canvas paint: some backend has a paint body.
+    pub fn is_paint(&self) -> bool {
+        self.backends
+            .values()
+            .any(|source| !source.paint.trim().is_empty())
+    }
+
+    /// The paint body of `backend`, if it has a nonblank one.
+    pub fn paint_body(&self, backend: &str) -> Option<&str> {
+        self.backends
+            .get(backend)
+            .map(|source| source.paint.as_str())
+            .filter(|body| !body.trim().is_empty())
     }
 
     /// Compare only required properties; shader and component layouts are independent.
@@ -160,7 +207,7 @@ impl ShaderDefinition {
             bytes.extend(value.as_bytes());
             Ok(())
         }
-        let mut bytes = b"IPPH\x02\0\0\0".to_vec();
+        let mut bytes = b"IPPH\x03\0\0\0".to_vec();
         bytes.extend(self.recipe.features.to_le_bytes());
         string(&mut bytes, &self.recipe.backend)?;
         bytes.extend(self.required_attributes.to_le_bytes());
@@ -182,6 +229,7 @@ impl ShaderDefinition {
             string(&mut bytes, backend)?;
             string(&mut bytes, &source.vertex)?;
             string(&mut bytes, &source.fragment)?;
+            string(&mut bytes, &source.paint)?;
         }
         Ok(bytes)
     }
@@ -203,7 +251,7 @@ impl ShaderDefinition {
                 .into())
         }
         let header = take(&mut bytes, 8)?;
-        let recipe = if header == b"IPPH\x02\0\0\0" {
+        let recipe = if header == b"IPPH\x03\0\0\0" {
             ShaderRecipe {
                 features: u32(&mut bytes)?,
                 backend: string(&mut bytes)?,
@@ -228,7 +276,7 @@ impl ShaderDefinition {
             }
         }
         let count = u32(&mut bytes)?;
-        if count as usize > bytes.len() / 13 {
+        if count as usize > bytes.len() / 17 {
             return Err("Truncated shader backends".into());
         }
         for _ in 0..count {
@@ -236,6 +284,7 @@ impl ShaderDefinition {
             let source = ShaderBackendSource {
                 vertex: string(&mut bytes)?,
                 fragment: string(&mut bytes)?,
+                paint: string(&mut bytes)?,
             };
             if definition.backends.insert(backend, source).is_some() {
                 return Err("Duplicate shader backend".into());
@@ -265,7 +314,10 @@ impl Asset for ShaderDefinition {
                 .backends
                 .iter()
                 .map(|(key, value)| {
-                    key.capacity() + value.vertex.capacity() + value.fragment.capacity()
+                    key.capacity()
+                        + value.vertex.capacity()
+                        + value.fragment.capacity()
+                        + value.paint.capacity()
                 })
                 .sum::<usize>()
     }

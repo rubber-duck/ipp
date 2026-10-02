@@ -191,12 +191,13 @@ macro_rules! layouts {
 
 layouts! {
     "gui-target" => [field!("world", Named => "world-reference"), field!("entity", U64), field!("component", U16), field!("incarnation", U64)];
-    // GUI System query records, read through inspection collections 6 and 7.
-    "gui-focus" => [field!("target", Named => "gui-target"), field!("visible", Bool)];
+    // GUI System query records, read through inspection collections 6, 7 and 9.
+    "gui-focus" => [field!("target", Named => "gui-target"), field!("visible", Bool), field!("part", U32)];
     "gui-pointer" => [
         field!("target", Named => "gui-target"), field!("pointer", U64),
         field!("hovered", Bool), field!("pressed", Bool), field!("captured", Bool),
     ];
+    "gui-active-item" => [field!("group", U64), field!("target", Named => "gui-target")];
     "request-gui-observation" => [field!("session", U64), field!("request_id", U64), field!("tag", Variant => "request"), field!("control", Bytes, 64)];
     "response-gui-observation" => [field!("session", U64), field!("request_id", U64), field!("tick", U64), field!("tag", Variant => "response"), field!("record", Bytes, MESSAGE_BYTES)];
     "host-request-resolve-world" => [field!("magic", U64), field!("connection", U64), field!("request_id", U64), field!("tag", Variant => "host-request"), field!("world", Union => "world-selector")];
@@ -212,6 +213,7 @@ layouts! {
     "presented-frame" => [field!("view", Named => "presentation-view"), field!("sequence", U64), field!("publication", Named => "presentation-identity"), field!("draw_calls", U32), field!("triangles", U32), field!("failed_draw_calls", U32), field!("sources", List, crate::presentation::MAX_PRESENTATION_SOURCES as u32 => "presented-source")];
     "presentation-request-surface" => [field!("tag", Variant => "presentation-request")];
     "presentation-request-select" => [field!("tag", Variant => "presentation-request"), field!("surface", Named => "presentation-surface"), field!("binding", Named => "root-binding")];
+    "presentation-request-resize" => [field!("tag", Variant => "presentation-request"), field!("view", Named => "presentation-view"), field!("width", U32), field!("height", U32), field!("device_pixel_ratio", NonnegativeFiniteF64)];
     "presentation-request-clear" => [field!("tag", Variant => "presentation-request"), field!("view", Named => "presentation-view")];
     "presentation-request-frame" => [field!("tag", Variant => "presentation-request"), field!("view", Named => "presentation-view"), field!("after_sequence", Option => "u64"), field!("publication", Option => "presentation-identity"), field!("capture", Bool), field!("after_outputs", List, crate::presentation::MAX_PRESENTATION_SOURCES as u32 => "output-reference")];
     "presentation-request-read-capture" => [field!("tag", Variant => "presentation-request"), field!("capture", U64), field!("offset", U64)];
@@ -241,8 +243,8 @@ layouts! {
     "gui-physical-pointer-move" => [field!("tag", Variant => "gui-physical-event"), field!("pointer", U64), field!("point", Named => "gui-input-vector")];
     "gui-physical-pointer-up" => [field!("tag", Variant => "gui-physical-event"), field!("pointer", U64), field!("point", Named => "gui-input-vector"), field!("button", Variant => "gui-physical-button")];
     "gui-physical-pointer-cancel" => [field!("tag", Variant => "gui-physical-event"), field!("pointer", U64)];
-    "gui-physical-wheel" => [field!("tag", Variant => "gui-physical-event"), field!("point", Named => "gui-input-vector"), field!("delta", Named => "gui-input-vector")];
-    "gui-physical-key" => [field!("tag", Variant => "gui-physical-event"), field!("key", Variant => "gui-physical-key")];
+    "gui-physical-wheel" => [field!("tag", Variant => "gui-physical-event"), field!("point", Named => "gui-input-vector"), field!("delta", Named => "gui-input-vector"), field!("shift", Bool)];
+    "gui-physical-key" => [field!("tag", Variant => "gui-physical-event"), field!("key", Variant => "gui-physical-key"), field!("shift", Bool)];
     "gui-physical-blur" => [field!("tag", Variant => "gui-physical-event")];
     "gui-physical-opened" => [field!("tag", Variant => "gui-physical-response"), field!("context", U64)];
     "gui-physical-closed" => [field!("tag", Variant => "gui-physical-response")];
@@ -265,6 +267,8 @@ layouts! {
     "gui-physical-key-down" => [field!("tag", Variant => "gui-physical-key")];
     "gui-physical-key-home" => [field!("tag", Variant => "gui-physical-key")];
     "gui-physical-key-end" => [field!("tag", Variant => "gui-physical-key")];
+    "gui-physical-key-context-menu" => [field!("tag", Variant => "gui-physical-key")];
+    "gui-physical-key-f10" => [field!("tag", Variant => "gui-physical-key")];
     "gui-native-insert" => [field!("tag", Variant => "gui-native-edit"), field!("text", Utf8, FIELD_BYTES)];
     "gui-native-selection" => [field!("tag", Variant => "gui-native-edit"), field!("start", U32), field!("end", U32)];
     "gui-native-compose" => [field!("tag", Variant => "gui-native-edit"), field!("composition", Named => "gui-native-composition")];
@@ -709,6 +713,16 @@ layouts! {
         field!("tag", Variant => "request"),
         field!("update", Named => "canvas-state-update"),
     ];
+    "gui-preferences-update" => [
+        field!("mask", U16),
+        field!("reducedMotion", Masked, 1 => "bool"),
+    ];
+    "request-gui-preferences-update" => [
+        field!("session", U64),
+        field!("request_id", U64),
+        field!("tag", Variant => "request"),
+        field!("update", Named => "gui-preferences-update"),
+    ];
     // Canvas System query record, read through inspection collection 8.
     "canvas-evaluated-extent" => [
         field!("extent", Named => "canvas-extent"),
@@ -831,12 +845,19 @@ layouts! {
     "gui-action-toggle" => [field!("tag", Variant => "gui-action")];
     "gui-action-set-scalar" => [field!("tag", Variant => "gui-action"), field!("value", FiniteF32)];
     "gui-action-set-text" => [field!("tag", Variant => "gui-action"), field!("text", Utf8, FIELD_BYTES)];
-    "gui-action-focus" => [field!("tag", Variant => "gui-action")];
+    "gui-action-focus" => [field!("tag", Variant => "gui-action"), field!("part", U32)];
     "gui-action-blur" => [field!("tag", Variant => "gui-action")];
     "gui-action-submit" => [field!("tag", Variant => "gui-action")];
     "gui-action-scroll-to" => [field!("tag", Variant => "gui-action"), field!("offset", Named => "gui-input-vector")];
     "gui-action-scroll-by" => [field!("tag", Variant => "gui-action"), field!("delta", Named => "gui-input-vector")];
     "gui-action-scroll-to-index" => [field!("tag", Variant => "gui-action"), field!("index", U32), field!("offset", FiniteF32)];
+    "gui-action-set-color" => [
+        field!("tag", Variant => "gui-action"),
+        field!("hue", FiniteF32),
+        field!("saturation", FiniteF32),
+        field!("value", FiniteF32),
+        field!("alpha", FiniteF32),
+    ];
     "command-remove" => [
         field!("tag", Variant => "command"),
         field!("entity", Union => "reference"),
@@ -937,8 +958,12 @@ layouts! {
         field!("controllers", List, PAGE_RECORDS => "animation-controller"),
         field!("gui_focus", List, PAGE_RECORDS => "gui-focus"),
         field!("gui_pointers", List, PAGE_RECORDS => "gui-pointer"),
+        field!("gui_active_items", List, PAGE_RECORDS => "gui-active-item"),
         field!("canvas", Option => "canvas-state-record"),
+        field!("gui_preferences", Option => "gui-preferences"),
     ];
+    // GUI System query record, read through inspection collection 10.
+    "gui-preferences" => [field!("reduced_motion", Bool)];
     "response-entity-tree" => [
         field!("session", U64),
         field!("request_id", U64),
@@ -1168,6 +1193,8 @@ tags! {
     GuiPhysicalKey GUI_PHYSICAL_KEY_DOWN = 8 => "gui-physical-key-down";
     GuiPhysicalKey GUI_PHYSICAL_KEY_HOME = 9 => "gui-physical-key-home";
     GuiPhysicalKey GUI_PHYSICAL_KEY_END = 10 => "gui-physical-key-end";
+    GuiPhysicalKey GUI_PHYSICAL_KEY_CONTEXT_MENU = 11 => "gui-physical-key-context-menu";
+    GuiPhysicalKey GUI_PHYSICAL_KEY_F10 = 12 => "gui-physical-key-f10";
     GuiNativeEdit GUI_NATIVE_EDIT_INSERT = 0 => "gui-native-insert";
     GuiNativeEdit GUI_NATIVE_EDIT_SELECTION = 1 => "gui-native-selection";
     GuiNativeEdit GUI_NATIVE_EDIT_COMPOSE = 2 => "gui-native-compose";
@@ -1230,6 +1257,7 @@ tags! {
     PresentationRequest PRESENTATION_REQUEST_READ_CAPTURE = 5 => "presentation-request-read-capture";
     PresentationRequest PRESENTATION_REQUEST_RELEASE_CAPTURE = 6 => "presentation-request-release-capture";
     PresentationRequest PRESENTATION_REQUEST_CANCEL_FRAME = 7 => "presentation-request-cancel-frame";
+    PresentationRequest PRESENTATION_REQUEST_RESIZE = 8 => "presentation-request-resize";
     PresentationResponse PRESENTATION_RESPONSE_SURFACE = 1 => "presentation-response-surface";
     PresentationResponse PRESENTATION_RESPONSE_VIEW = 2 => "presentation-response-view";
     PresentationResponse PRESENTATION_RESPONSE_FRAME = 3 => "presentation-response-frame";
@@ -1317,6 +1345,8 @@ tags! {
     InspectionCollection INSPECT_GUI_FOCUS = 6 => "empty";
     InspectionCollection INSPECT_GUI_POINTERS = 7 => "empty";
     InspectionCollection INSPECT_CANVAS = 8 => "empty";
+    InspectionCollection INSPECT_GUI_ACTIVE_ITEMS = 9 => "empty";
+    InspectionCollection INSPECT_GUI_PREFERENCES = 10 => "empty";
     Request REQUEST_LIFECYCLE_SUBSCRIBE = 19 => "request-lifecycle-subscribe";
     Request REQUEST_LIFECYCLE_UNSUBSCRIBE = 20 => "request-lifecycle-unsubscribe";
     Response RESPONSE_LIFECYCLE_SUBSCRIPTION = 16 => "response-lifecycle-subscription";
@@ -1335,6 +1365,7 @@ tags! {
     SnapshotValue SNAPSHOT_VALUE_BOOL = ipp_core::components::schema::FieldKind::Bool as u8 => "snapshot-value-bool";
     Request REQUEST_RENDER_STATE_UPDATE = 10 => "request-render-state-update";
     Request REQUEST_CANVAS_STATE_UPDATE = 41 => "request-canvas-state-update";
+    Request REQUEST_GUI_PREFERENCES_UPDATE = 42 => "request-gui-preferences-update";
     Response RESPONSE_RENDER_STATE_UPDATED = 12 => "response-render-state-updated";
     Value VALUE_F32 = ipp_core::components::schema::FieldKind::F32 as u8 => "value-f32";
     Value VALUE_ENTITY = ipp_core::components::schema::FieldKind::Entity as u8 => "value-entity";
@@ -1423,6 +1454,7 @@ tags! {
     GuiAction GUI_ACTION_SCROLL_TO = 8 => "gui-action-scroll-to";
     GuiAction GUI_ACTION_SCROLL_BY = 9 => "gui-action-scroll-by";
     GuiAction GUI_ACTION_SCROLL_TO_INDEX = 10 => "gui-action-scroll-to-index";
+    GuiAction GUI_ACTION_SET_COLOR = 11 => "gui-action-set-color";
 
     Reference REF_HANDLE = 0 => "reference-handle";
     Reference REF_ALIAS = 1 => "reference-alias";
@@ -1472,7 +1504,7 @@ pub(crate) const CONVENTIONS: &[(&str, &str)] = &[
     ),
     (
         "gui-local",
-        "ordinary-world-entity-component-incarnation;payloads=length-u32-bytes;per-world-session-only;query=kind-u8:entity0-u64|tree1-root?-bool-u64,after?-bool-u64,limit-u16-1..256,maxdepth-u16-0..64;action=world-u64x2,entity-u64,component-u16,incarnation-u64,revision-u32,operation-u8:press0|toggle1|scalar2-f32|text3-utf8|focus4|replace5-value|blur6;value=tag-u8:none0|bool1-u8|scalar2-f32|text3-utf8-max65536;page=world-u64x2,next?-bool-u64,count-u32-max256,row*;row=entity-u64,parent?-bool-u64,order-u128-le,depth-u16,control?-bool-(target,role-u8:button0|checkbox1|slider2|text3,revision-u32,value,label-utf8,ancestry-count-u32-u64*,enabled-bool,visible-bool,available-bool,focused-bool,hovered-bool,pressed-bool,captured-bool);terminal=tag-u8:applied0-effect|rejected1-reason|cancelled2;effect=target,source-u8:semantic0|replacement1,tick-u64,ancestry-count-u32-u64*,kind-u8:pressed0|focus-changed1-focused-bool-changed-bool|committed2-revision-u32-value;reason=u8:session0|capacity1|duplicate2|unavailable3|context6|path7|cancelled8|delivery-session9|delivery-capacity10|target11|revision12-current-u32|local-unavailable13|unsupported14|value15|revision-exhausted16;reserve-slot-rejection-and-exact-applied-bytes-before-mutation;single-terminal-no-generic-command-ack;header-tick=applied-effect-tick|no-effect-zero;terminal-not-frame-observation;no-root-required;equal-replacement-advances-revision;visited-entity-pages-not-state-replication",
+        "ordinary-world-entity-component-incarnation;payloads=length-u32-bytes;per-world-session-only;query=kind-u8:entity0-u64|tree1-root?-bool-u64,after?-bool-u64,limit-u16-1..256,maxdepth-u16-0..64;action=world-u64x2,entity-u64,component-u16,incarnation-u64,revision-u32,operation-u8:press0|toggle1|scalar2-f32|text3-utf8|focus4-part-u32|replace5-value|blur6;value=tag-u8:none0|bool1-u8|scalar2-f32|text3-utf8-max65536;page=world-u64x2,next?-bool-u64,count-u32-max256,row*;row=entity-u64,parent?-bool-u64,order-u128-le,depth-u16,control?-bool-(target,role-u8:button0|checkbox1|slider2|text3,revision-u32,value,label-utf8,ancestry-count-u32-u64*,enabled-bool,visible-bool,available-bool,focused-bool,hovered-bool,pressed-bool,captured-bool);terminal=tag-u8:applied0-effect|rejected1-reason|cancelled2;effect=target,source-u8:semantic0|replacement1,tick-u64,ancestry-count-u32-u64*,kind-u8:pressed0|focus-changed1-focused-bool-changed-bool-part-u32|committed2-revision-u32-value;reason=u8:session0|capacity1|duplicate2|unavailable3|context6|path7|cancelled8|delivery-session9|delivery-capacity10|target11|revision12-current-u32|local-unavailable13|unsupported14|value15|revision-exhausted16;reserve-slot-rejection-and-exact-applied-bytes-before-mutation;single-terminal-no-generic-command-ack;header-tick=applied-effect-tick|no-effect-zero;terminal-not-frame-observation;no-root-required;equal-replacement-advances-revision;visited-entity-pages-not-state-replication",
     ),
     (
         "gui-scroll",
@@ -1480,7 +1512,7 @@ pub(crate) const CONVENTIONS: &[(&str, &str)] = &[
     ),
     (
         "host-presentation",
-        "root-binding=output,viewport,host-u64,generation-u64;root-config-independent-of-surface-selection-and-authoring-sessions;clear-compares-exact-generation;one-surface-one-selected-view;selection-fresh-on-equal-rebind;context-loss-fences-pending-completion;actual-successful-draw-only;no-headless-noop-or-invalid-camera-clear-success;exact-publication-constrains-current-authorized-draw-never-history-replay;viewport-exact-no-silent-clamp;capture=top-left-rgba8;immutable-completed-capture-survives-rebind-and-context-loss;capture-connection-owned-release-expiry-disconnect;frame-deadline-monotonic-host-time;no-simulation-step",
+        "root-binding=output,viewport,host-u64,generation-u64;root-config-independent-of-surface-selection-and-authoring-sessions;clear-compares-exact-generation;one-surface-one-selected-view;selection-fresh-on-equal-rebind;resize-rebinds-selected-output-and-reselects-in-one-step;context-loss-fences-pending-completion;actual-successful-draw-only;no-headless-noop-or-invalid-camera-clear-success;exact-publication-constrains-current-authorized-draw-never-history-replay;viewport-exact-no-silent-clamp;capture=top-left-rgba8;immutable-completed-capture-survives-rebind-and-context-loss;capture-connection-owned-release-expiry-disconnect;frame-deadline-monotonic-host-time;no-simulation-step",
     ),
     ("host-request-magic", HOST_REQUEST_MAGIC_HEX),
     (
@@ -1582,7 +1614,7 @@ pub(crate) const ASSET_FORMATS: &[AssetFormat] = &[
     AssetFormat {
         name: "ASSET_SHADER",
         type_id: ipp_core::services::asset_management::shader::SHADER_TYPE.0,
-        format: "IPPH;version-u32=2;recipe-flags-u32;backend-utf8;attributes-u32;parameters-count-u32:name-utf8,kind-u8;backends-count-u32:name-utf8,vertex-utf8,fragment-utf8;immutable;interface=glsl-es-300-v1;shader-parameter-kinds=f32:1,i32:2,u32:3,bool:4,vec2:5,vec3:6,vec4:7,mat2:8,mat3:9,mat4:10,texture2D:11",
+        format: "IPPH;version-u32=3;recipe-flags-u32;backend-utf8;attributes-u32;parameters-count-u32:name-utf8,kind-u8;backends-count-u32:name-utf8,vertex-utf8,fragment-utf8,paint-utf8;paint-excludes-stages-recipe-attributes;paint-parameters=f32,vec2,vec3,vec4;immutable;interface=glsl-es-300-v1;shader-parameter-kinds=f32:1,i32:2,u32:3,bool:4,vec2:5,vec3:6,vec4:7,mat2:8,mat3:9,mat4:10,texture2D:11",
     },
     AssetFormat {
         name: "ASSET_GEOMETRY",

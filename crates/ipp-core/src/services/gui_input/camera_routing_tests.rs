@@ -115,6 +115,7 @@ fn a_captured_slider_clamps_beyond_a_tilted_surface_and_cancel_keeps_its_value()
             min: 0.0,
             max: 1.0,
             step: 0.05,
+            ..Default::default()
         }),
     );
     let (world, slider) = (near.world(), near.controls[0]);

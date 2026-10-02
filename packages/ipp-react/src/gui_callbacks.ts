@@ -16,9 +16,10 @@ import {
   controlValues,
   dispatchGuiAction,
   dispatchGuiEffect,
+  dispatchGuiFeedback,
   invokeControlValue,
-  type GuiControlValue,
   type GuiControlValues,
+  type GuiControlValue,
   type GuiPropagationStep,
 } from "./gui/callbacks.js";
 
@@ -38,14 +39,25 @@ interface ValueDeliveries {
 const ACTION = "action";
 
 function valueKey(value: GuiControlValue): string {
-  return value.kind === "scroll"
-    ? [
-        value.value.offset[0],
-        value.value.offset[1],
-        value.value.anchorIndex,
-        value.value.anchorOffset,
-      ].join(" ")
-    : String(value.value);
+  if (value.kind === "scroll")
+    return [
+      value.value.offset[0],
+      value.value.offset[1],
+      value.value.anchorIndex,
+      value.value.anchorOffset,
+    ].join(" ");
+  // A range's two values change together, in one event, and so do a
+  // colour's four channels.
+  if (value.kind === "scalar" && value.upper !== undefined)
+    return `${value.value} ${value.upper}`;
+  if (value.kind === "color")
+    return [
+      value.value.hue,
+      value.value.saturation,
+      value.value.value,
+      value.value.alpha,
+    ].join(" ");
+  return String(value.value);
 }
 
 function rangeKey(range: NonNullable<GuiControlValues["range"]>): string {
@@ -78,6 +90,8 @@ export class ReactGuiCallbacks {
   private registered = new Map<number, ReadonlySet<string>>();
   private deliveries = new Map<number, ValueDeliveries>();
   private subscription: Promise<GuiEffectSubscription> | undefined;
+  /** The feedback subscription, while some control has feedback callbacks. */
+  private feedback: Promise<GuiEffectSubscription> | undefined;
   private stopped = false;
   private failure: Error | undefined;
   /** The root's latest commit failed; no registration is published. */
@@ -112,7 +126,7 @@ export class ReactGuiCallbacks {
     const registered = new Map<number, ReadonlySet<string>>();
     const seeds: number[] = [];
     for (const component of description.components) {
-      if (!component.control) continue;
+      if (!component.control && !component.controlListeners) continue;
       const names = new Set<string>(
         controlValueCallbackNames.filter(
           (name) => component.controlListeners?.[name],
@@ -170,16 +184,21 @@ export class ReactGuiCallbacks {
   needsPreparation(): boolean {
     return (
       !this.stopped &&
-      !!this.desired?.guiEffects &&
-      (!this.subscription || !!this.failure)
+      ((!!this.desired?.guiEffects && !this.subscription) ||
+        (!!this.desired?.guiFeedback && !this.feedback) ||
+        (!!this.failure &&
+          (!!this.desired?.guiEffects || !!this.desired?.guiFeedback)))
     );
   }
 
   async prepare(): Promise<void> {
-    if (this.stopped || !this.desired?.guiEffects) return;
+    if (this.stopped) return;
+    const effects = !!this.desired?.guiEffects;
+    const feedback = !!this.desired?.guiFeedback;
+    if (!effects && !feedback) return;
     if (this.failure) throw this.failure;
-    if (!this.subscription) {
-      const pending = this.client.subscribeGuiEffects!((effect) => {
+    if (effects && !this.subscription)
+      this.subscription = this.subscribe("application", (effect) => {
         if (!this.effectsLive()) return;
         const controls = this.targetControls(effect.target);
         const ancestors = this.desiredEntities;
@@ -187,24 +206,49 @@ export class ReactGuiCallbacks {
           this.dispatchEffect(effect, controls, ancestors),
         ).catch(() => {});
       });
-      this.subscription = pending;
-      void pending.then(
-        (subscription) => {
-          void subscription.closed.then((closure) => {
-            if (this.stopped || this.subscription !== pending) return;
-            this.failure =
-              closure.kind === "closed"
-                ? closure.reason
-                : new Error("GUI observation ended");
-            this.report(this.failure);
-          });
-        },
-        () => {
-          if (this.subscription === pending) this.subscription = undefined;
-        },
-      );
-    }
-    await this.subscription;
+    // Feedback is a separate subscription of its own class, opened only
+    // while some control listens to it and kept until disposal.
+    if (feedback && !this.feedback)
+      this.feedback = this.subscribe("feedback", (effect) => {
+        if (!this.feedbackLive()) return;
+        const controls = this.targetControls(effect.target);
+        void this.schedule(async () =>
+          this.dispatchFeedback(effect, controls),
+        ).catch(() => {});
+      });
+    await Promise.all([
+      effects ? this.subscription : undefined,
+      feedback ? this.feedback : undefined,
+    ]);
+  }
+
+  /** Open one effect subscription; its end fails the root's GUI callbacks. */
+  private subscribe(
+    classes: "application" | "feedback",
+    listener: (effect: GuiObservedEffect) => void,
+  ): Promise<GuiEffectSubscription> {
+    const pending = this.client.subscribeGuiEffects!(listener, { classes });
+    const current = () =>
+      classes === "application" ? this.subscription : this.feedback;
+    void pending.then(
+      (subscription) => {
+        void subscription.closed.then((closure) => {
+          if (this.stopped || current() !== pending) return;
+          this.failure =
+            closure.kind === "closed"
+              ? closure.reason
+              : new Error("GUI observation ended");
+          this.report(this.failure);
+        });
+      },
+      () => {
+        if (classes === "application" && this.subscription === pending)
+          this.subscription = undefined;
+        if (classes === "feedback" && this.feedback === pending)
+          this.feedback = undefined;
+      },
+    );
+    return pending;
   }
 
   private usable(): boolean {
@@ -217,6 +261,10 @@ export class ReactGuiCallbacks {
 
   private effectsLive(): boolean {
     return this.usable() && !this.failure && !!this.desired?.guiEffects;
+  }
+
+  private feedbackLive(): boolean {
+    return this.usable() && !this.failure && !!this.desired?.guiFeedback;
   }
 
   /**
@@ -338,9 +386,9 @@ export class ReactGuiCallbacks {
   }
 
   /**
-   * Dispatch a press or submission to the control declarations it reached on
-   * receipt that declare its target once earlier commits are acknowledged,
-   * then along its runtime ancestry.
+   * Dispatch a press, submission or context request to the control
+   * declarations it reached on receipt that declare its target once earlier
+   * commits are acknowledged, then along its runtime ancestry.
    */
   private dispatchEffect(
     effect: GuiObservedEffect,
@@ -364,6 +412,15 @@ export class ReactGuiCallbacks {
           },
           get onSubmit() {
             return declared(identity)?.controlListeners?.onSubmit;
+          },
+          get onReject() {
+            return declared(identity)?.controlListeners?.onReject;
+          },
+          get onDiscard() {
+            return declared(identity)?.controlListeners?.onDiscard;
+          },
+          get onContextMenu() {
+            return declared(identity)?.controlListeners?.onContextMenu;
           },
         })),
       (entity) =>
@@ -397,6 +454,27 @@ export class ReactGuiCallbacks {
     );
   }
 
+  /** Deliver a feedback effect to the target control's own listeners. */
+  private dispatchFeedback(
+    effect: GuiObservedEffect,
+    controls: readonly number[],
+  ): void {
+    const declared = (identity: number) => {
+      const control = this.desiredControls.get(identity);
+      return this.declares(control, effect.target) ? control : undefined;
+    };
+    dispatchGuiFeedback(
+      effect,
+      () =>
+        controls.flatMap((identity) => {
+          const listeners = declared(identity)?.controlListeners;
+          return listeners ? [listeners] : [];
+        }),
+      () => this.feedbackLive() && !this.suspended,
+      this.report,
+    );
+  }
+
   fence(): void {
     this.stopped = true;
     this.desired = undefined;
@@ -404,10 +482,12 @@ export class ReactGuiCallbacks {
 
   async dispose(): Promise<void> {
     this.fence();
-    const pending = this.subscription;
-    if (!pending) return;
-    const subscription = await pending;
-    if (!this.client.closure) await subscription.unsubscribe();
-    if (this.subscription === pending) this.subscription = undefined;
+    for (const pending of [this.subscription, this.feedback]) {
+      if (!pending) continue;
+      const subscription = await pending;
+      if (!this.client.closure) await subscription.unsubscribe();
+    }
+    this.subscription = undefined;
+    this.feedback = undefined;
   }
 }

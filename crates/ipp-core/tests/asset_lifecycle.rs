@@ -853,6 +853,7 @@ fn headless_shader_sources_are_retained_without_claiming_gpu_readiness() {
             ShaderBackendSource {
                 vertex: String::new(),
                 fragment: "vec4 materialFragment() { return vec4(1); }".into(),
+                ..Default::default()
             },
         )]
         .into(),

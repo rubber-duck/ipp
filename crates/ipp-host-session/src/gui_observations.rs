@@ -29,7 +29,9 @@ fn encoded_bound(record: &GuiObservationRecord) -> Option<usize> {
             ..
         } => {
             let text_bytes = match &effect.kind {
-                ipp_core::systems::gui::local::GuiLocalEffectKind::Submitted(text) => text.len(),
+                ipp_core::systems::gui::local::GuiLocalEffectKind::Submitted(text)
+                | ipp_core::systems::gui::local::GuiLocalEffectKind::Rejected(text)
+                | ipp_core::systems::gui::local::GuiLocalEffectKind::Discarded(text) => text.len(),
                 _ => 0,
             };
             encoding

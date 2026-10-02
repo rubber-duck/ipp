@@ -51,6 +51,18 @@ export const TIMING_DEFINITIONS = {
     "Worker time inside the capture to finish pending GPU work and read the pixels back (readPixels wait).",
 } as const;
 
+/** Batches and commands one GUI panel render committed to its Canvas World. */
+interface CanvasEdits {
+  requests: number;
+  edits: number;
+  /** Distinct entity components the commands addressed. */
+  components: number;
+  /** Field values written in place. */
+  fields: number;
+  /** Kinds of the commands that were not in-place field writes. */
+  structural: string[];
+}
+
 export interface RetainedGuiDriver {
   call<T>(name: string, args?: readonly unknown[]): Promise<T>;
   /** Capture the frame after the latest acknowledged state, or with `next` the next frame. */
@@ -102,6 +114,12 @@ const LAYOUT_COUNTERS: ReadonlySet<string> = new Set([
  * eviction.
  */
 const ATLAS_LIMITS = { maxPages: 3, idlePageFrames: 0xffff_ffff };
+
+/**
+ * Bytes of one retained GUI shape record, one per box quad, as `GuiShapeRecord`
+ * asserts beside its definition.
+ */
+const GUI_SHAPE_RECORD_BYTES = 192;
 
 /** Terminal text pixels, as classified by the fixture's coverage count. */
 const isText = (r: number, g: number, b: number) =>
@@ -370,17 +388,17 @@ export async function exerciseRetainedGui(
     }
   }
   // Every row changes when the screen scrolls or is replaced: one full upload
-  // derives the vertex size and the per-row bound from this run.
+  // derives the glyph record size and the per-row bound from this run.
   const fullUpload = streaming[streaming.length - 1]!;
   const glyphQuads = terminal.rows * terminal.columns;
-  const glyphVertexBytes = retained ? fullUpload / (glyphQuads * 6) : null;
+  const glyphRecordBytes = retained ? fullUpload / glyphQuads : null;
   if (retained) {
     assert.ok(
       streaming.every((bytes) => bytes === fullUpload),
       `each full replacement uploads the same geometry: ${streaming}`,
     );
     assert.ok(
-      Number.isInteger(glyphVertexBytes) && glyphVertexBytes! > 0,
+      Number.isInteger(glyphRecordBytes) && glyphRecordBytes! > 0,
       `full replacement uploads whole glyph quads: ${fullUpload}`,
     );
     const rowBytes = fullUpload / terminal.rows;
@@ -389,8 +407,8 @@ export async function exerciseRetainedGui(
       `typing replaces at most one row: ${typingUpload} of ${rowBytes}`,
     );
     assert.ok(
-      blinkUpload <= 6 * glyphVertexBytes!,
-      `cursor blink uploads at most one quad: ${blinkUpload}`,
+      blinkUpload <= GUI_SHAPE_RECORD_BYTES,
+      `cursor blink uploads at most one shape quad: ${blinkUpload}`,
     );
   }
 
@@ -577,7 +595,7 @@ export async function exerciseRetainedGui(
     },
     cold: coldWork,
     uploads: {
-      glyphVertexBytes,
+      glyphRecordBytes,
       fullReplacement: retained ? fullUpload : null,
       typing: retained ? typingUpload : null,
       cursorBlink: retained ? blinkUpload : null,
@@ -641,7 +659,7 @@ async function exerciseRetainedControls(
   ) => {
     const { pixelsPerMetre, canvasEdits } = await call<{
       pixelsPerMetre: number;
-      canvasEdits: { requests: number; edits: number; components: number };
+      canvasEdits: CanvasEdits;
     }>("guiPanel", [
       { variant, shape: GUI_SHAPE, angle, ...(text ? { label: text } : {}) },
     ]);
@@ -870,7 +888,7 @@ async function exerciseLayoutWork(
     text?: { text?: string; color?: readonly number[] },
   ) => Promise<{
     frame: WorkloadFrame;
-    canvasEdits: { requests: number; edits: number; components: number };
+    canvasEdits: CanvasEdits;
     pixels: RgbaFrame;
   }>,
   settled: WorkloadFrame,
@@ -909,11 +927,14 @@ async function exerciseLayoutWork(
     since: since(painted.frame, unchanged),
     greenGlyphs: count(mask(painted.pixels, classes.glyphs!)),
   };
-  // React writes one field per changed channel: red, green and blue.
+  // The edit changes the label's red, green and blue: one batch writes those
+  // three fields of that one component in place, whether as field writes or
+  // as one adopting component write, and nothing structural.
   assert.ok(
     paint.edits.requests === 1 &&
       paint.edits.components === 1 &&
-      paint.edits.edits === 3 &&
+      paint.edits.fields === 3 &&
+      paint.edits.structural.length === 0 &&
       paint.since.measurements === 0 &&
       paint.since.reflows === 0 &&
       paint.greenGlyphs === 0,
@@ -931,7 +952,8 @@ async function exerciseLayoutWork(
   assert.ok(
     text.edits.requests === 1 &&
       text.edits.components === 1 &&
-      text.edits.edits === 1 &&
+      text.edits.fields === 1 &&
+      text.edits.structural.length === 0 &&
       text.since.reflows >= 1 &&
       text.since.measurements === 1,
     `a local text edit must commit one component edit that remeasures one leaf: ${JSON.stringify(text)}`,

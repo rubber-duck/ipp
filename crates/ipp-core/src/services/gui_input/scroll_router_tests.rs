@@ -22,7 +22,9 @@ struct ScrollScene {
 }
 
 impl ScrollScene {
-    /// A 100x50 VirtualList of `items` 10-unit estimates.
+    /// A 100x50 VirtualList of `items` 10-unit estimates, with a 2.5-unit
+    /// bar flush with its right side and ends: x 97.5..100, its thumb
+    /// travelling y 1.25..48.75 between the track's pointed ends.
     fn new(items: u32) -> Self {
         let (mut host, _) = host();
         let world = world(&mut host);
@@ -40,6 +42,9 @@ impl ScrollScene {
                     item_extent: 10.0,
                     axis: 1,
                     overscan: 0,
+                    bar_thickness: 2.5,
+                    bar_inset: 0.0,
+                    bar_end_inset: 0.0,
                     ..Default::default()
                 }),
             ],
@@ -156,7 +161,7 @@ fn dragged_list() -> (
         &mut router,
         &mut context,
         &mut delivery,
-        press(1, [0.98, 0.02]),
+        press(1, [0.98, 0.04]),
     );
     scene.route(&mut router, &mut context, &mut delivery, thumb_move(1, 0.3));
     scene.host.frame(0.0).unwrap();
@@ -283,6 +288,7 @@ fn wheel_during_held_tap(delta: f32) -> bool {
         GuiPhysicalInput::Wheel {
             point: [0.2, 0.6],
             delta: [0.0, delta],
+            shift: false,
         },
     );
     scene.host.frame(0.0).unwrap();
@@ -330,6 +336,7 @@ impl ScrollScene {
             self.world,
             vec![ComponentValue::GuiTheme(GuiTheme {
                 parts,
+                ..Default::default()
             })],
             None,
         );
@@ -502,6 +509,7 @@ fn slider_scene() -> ScrollScene {
                 max: 100.0,
                 step: 1.0,
                 value: 0.0,
+                ..Default::default()
             }),
         ],
         None,

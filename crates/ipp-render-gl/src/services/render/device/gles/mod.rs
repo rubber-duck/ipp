@@ -3,8 +3,8 @@ use std::marker::PhantomData;
 use std::ptr;
 use std::rc::Rc;
 
-pub use super::GuiVertex;
 use super::RenderDevice;
+pub use super::{GuiRecord, GuiRecordKind};
 use super::{SurfacePathDescriptor, SurfacePathInstance};
 use crate::RenderError;
 
@@ -101,12 +101,16 @@ pub struct GlesRenderMesh {
     weight: u32,
 }
 
-/// Native vertex array and buffer holding one Surface's retained GUI vertices.
+/// Native vertex array and buffer holding one Surface's retained GUI records.
 pub struct GlesGuiBatch {
     pub(crate) vao: u32,
     pub(crate) vbo: u32,
-    /// Allocated vertices.
+    pub(crate) kind: GuiRecordKind,
+    /// Allocated records.
     pub(crate) capacity: usize,
+    /// First record the vertex array's attribute pointers address: instanced draws
+    /// have no base instance, so a draw from another record repoints them.
+    pub(crate) based: std::cell::Cell<usize>,
 }
 
 /// Native texture and framebuffer for one glyph atlas page.

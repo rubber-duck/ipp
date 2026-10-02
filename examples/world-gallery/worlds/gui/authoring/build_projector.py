@@ -661,6 +661,8 @@ def mesh_report(data, projection=False):
     positions = streams[0]
     if projection:
         assert count == 24 * (PROJECTION["cornerSegments"] + 1)
+        # The runtime dust sprites address the frustum's vertices by index.
+        assert struct.unpack_from(f"<{indices}H", data, offset) == tuple(range(indices))
         for triangle in range(0, count, 3):
             # Every triangle spans the two endpoint planes: there are no caps.
             assert (

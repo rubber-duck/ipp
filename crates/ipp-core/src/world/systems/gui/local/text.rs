@@ -4,9 +4,10 @@ use std::sync::Arc;
 
 /// Native edits name the exact focused control and transient edit generation.
 ///
-/// The generation advances on every native edit, every focus change and every
-/// write to the control's `text` that the native record did not make, so an
-/// edit prepared against older text never applies.
+/// The generation advances on every native edit, every focus change, every
+/// write to the control's `text` that the native record did not make and
+/// every commit, discard or other change of a numeric input's shown number,
+/// so an edit prepared against older text never applies.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GuiTextFence {
     /// Ordinary control lifetime, never a node-table identity.
@@ -29,7 +30,8 @@ pub struct GuiTextComposition {
 pub struct GuiNativeTextState {
     /// Exact state an asynchronous edit must still match.
     pub fence: GuiTextFence,
-    /// The control's `text` field, shared with the component store.
+    /// The control's `text` field, shared with the component store, or a
+    /// numeric input's edit text, which no field holds.
     pub text: Arc<str>,
     /// UTF-8 anchor and caret in `text`.
     pub selection: [u32; 2],
@@ -70,6 +72,10 @@ impl GuiTextEdit {
 pub(super) struct GuiNativeText {
     pub state: GuiNativeTextState,
     pub owner: GuiInputSession,
+    /// A numeric input's committed number as it was formatted when the edit
+    /// started or last committed; the edit is pending while the text differs.
+    /// None for a text input without a number.
+    pub basis: Option<Arc<str>>,
 }
 
 impl crate::WorldContext<'_> {
@@ -90,6 +96,8 @@ impl crate::WorldContext<'_> {
 }
 
 impl GuiLocalState {
+    /// The live native record of the focused `target`. Focus a command set has
+    /// no owner, and the input session presenting it holds its record.
     pub(in crate::world::systems::gui) fn native_text(
         &self,
         target: GuiEntityTarget,
@@ -99,14 +107,34 @@ impl GuiLocalState {
         (native.owner.is_live()
             && owner
                 .as_ref()
-                .is_some_and(|owner| owner.id() == native.owner.id())
+                .is_none_or(|owner| owner.id() == native.owner.id())
             && *focused == target
             && native.state.fence.target == target)
             .then_some(&native.state)
     }
+
+    /// Whether `session` holds the live native record of the focused `target`.
+    pub(super) fn holds_native_text(
+        &self,
+        target: GuiEntityTarget,
+        session: &GuiInputSession,
+    ) -> bool {
+        self.native_text(target).is_some()
+            && self
+                .native_text
+                .as_ref()
+                .is_some_and(|native| native.owner.id() == session.id())
+    }
 }
 
 impl GuiNativeText {
+    /// The control and text of the pending numeric edit this record holds:
+    /// its text while it differs from its basis.
+    pub(super) fn pending_number_edit(&self) -> Option<(GuiEntityTarget, Arc<str>)> {
+        let basis = self.basis.as_ref()?;
+        (*self.state.text != **basis).then(|| (self.state.fence.target, self.state.text.clone()))
+    }
+
     /// A fresh record over `text` with the caret at its end.
     pub(super) fn state(
         target: GuiEntityTarget,
@@ -124,15 +152,23 @@ impl GuiNativeText {
         }
     }
 
+    /// A fresh record of `input`: over its text, or over a numeric input's
+    /// formatted number, which is then its basis.
     pub(super) fn new(
         target: GuiEntityTarget,
         owner: GuiInputSession,
-        text: Arc<str>,
+        input: &GuiTextInput,
         generation: u64,
     ) -> Self {
+        let basis = input.numeric.then(|| input.formatted());
         GuiNativeText {
-            state: Self::state(target, text, generation),
+            state: Self::state(
+                target,
+                basis.clone().unwrap_or_else(|| input.text.clone()),
+                generation,
+            ),
             owner,
+            basis,
         }
     }
 }

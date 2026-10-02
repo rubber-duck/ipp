@@ -5,7 +5,8 @@ use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
-use super::super::gui_batch::{GuiBatchRenderCache, GuiVertex};
+use super::super::gui_batch::GuiBatchRenderCache;
+use super::super::gui_records::{GuiGlyphRecord, GuiRecord, GuiRecordKind};
 use super::super::retained_surfaces::SurfacePaint;
 use super::{
     ATLAS_PAGE_SIZE, GlyphAtlas, GlyphAtlasLimits, GlyphBatchRenderCache, GlyphFrameWork, GlyphKey,
@@ -166,7 +167,11 @@ impl RenderDevice for MockAtlasDevice {
 
     fn delete_program(&mut self, _program: Self::Program) {}
 
-    fn create_gui_batch(&mut self, capacity: usize) -> Result<Self::GuiBatch, RenderError> {
+    fn create_gui_batch(
+        &mut self,
+        _kind: GuiRecordKind,
+        capacity: usize,
+    ) -> Result<Self::GuiBatch, RenderError> {
         self.next_id += 1;
         let id = self.next_id;
         self.created_batches.push((id, capacity));
@@ -175,13 +180,13 @@ impl RenderDevice for MockAtlasDevice {
         })
     }
 
-    fn write_gui_batch(
+    fn write_gui_batch<R: GuiRecord>(
         &mut self,
         batch: &mut Self::GuiBatch,
         first: usize,
-        vertices: &[GuiVertex],
+        records: &[R],
     ) -> Result<(), RenderError> {
-        self.writes.push((batch.id, first, vertices.len()));
+        self.writes.push((batch.id, first, records.len()));
         Ok(())
     }
 
@@ -278,6 +283,7 @@ fn style(item: u32) -> CanvasPrimitiveStyle {
             f32::INFINITY,
             f32::INFINITY,
         ],
+        layer: 0,
     }
 }
 
@@ -390,7 +396,7 @@ impl TestWorld {
         let cache = &self.cache;
         self.gui
             .commit_surface(
-                |identity, batch| cache.batch_vertices(run.entity, identity, batch),
+                |identity, batch| cache.batch_records(run.entity, identity, batch),
                 &mut stats,
             )
             .unwrap();
@@ -398,7 +404,9 @@ impl TestWorld {
         self.gui
             .draw_pieces(
                 &1,
+                &2,
                 0..pieces,
+                [-1000.0, -1000.0, 1000.0, 1000.0],
                 |page| atlas.page_texture(page),
                 &[1.0; 16],
                 &mut stats,
@@ -407,12 +415,12 @@ impl TestWorld {
         (true, stats)
     }
 
-    /// Vertex counts of a run's retained batches.
+    /// Record counts of a run's retained batches.
     fn batch_lengths(&self, run: &TextRun<'_>) -> Vec<usize> {
         self.cache.surfaces[&run.entity].runs[&run.style.identity]
             .batches
             .iter()
-            .map(|batch| batch.vertices.len())
+            .map(|batch| batch.records.len())
             .collect()
     }
 }
@@ -591,7 +599,7 @@ fn warm_runs_reuse_demand_and_batches_without_rebuilding_keys() {
     );
     assert_eq!(
         cold.statistics.uploaded_bytes,
-        (3 * 6 * std::mem::size_of::<GuiVertex>()) as u32
+        (3 * std::mem::size_of::<GuiGlyphRecord>()) as u32
     );
 
     let record = &world.cache.surfaces[&run.entity].runs[&style.identity];
@@ -648,7 +656,7 @@ fn text_edits_rebuild_the_run_and_update_its_demand() {
     assert_eq!(stats.statistics.gui_rebuilds, 1);
     assert_eq!(device.borrow().created_batches.len(), 1);
     assert_eq!(device.borrow().writes.len(), 2);
-    assert_eq!(device.borrow().writes[1].2, 12);
+    assert_eq!(device.borrow().writes[1].2, 2);
     assert_eq!(atlas.demand.get(&key(20, 32)), Some(&1));
 }
 
@@ -668,8 +676,8 @@ fn whitespace_glyphs_need_no_entries_and_emit_no_quads() {
     atlas.allocate_slot(key(SPACE, 32), 0, 0, [0.0; 4]).unwrap();
     assert!(world.draw(&atlas, &run).0);
 
-    // Only 2 visible glyphs emitted quads (2 * 6 = 12 vertices).
-    assert_eq!(device.borrow().writes[0].2, 12);
+    // Only 2 visible glyphs emitted quads.
+    assert_eq!(device.borrow().writes[0].2, 2);
 }
 
 #[test]
@@ -701,7 +709,7 @@ fn runs_leaving_a_shown_surface_release_demand_and_batches() {
     // The Surface stays visible without its second run.
     world.publish(&mut atlas, &[(run_a, BAND_32_HEIGHT)], &[]);
     assert_eq!(runs(&world), 1);
-    assert_eq!(world.batch_lengths(&run_a), [6]);
+    assert_eq!(world.batch_lengths(&run_a), [1]);
     assert!(!atlas.demand.contains_key(&key(2, 32)));
     assert!(
         atlas.get(&key(2, 32)).is_some(),
@@ -749,8 +757,8 @@ fn committed_and_provisional_runs_of_one_node_keep_separate_batches() {
     world.populate(&mut atlas, 20);
     assert!(world.draw(&atlas, &label_run).0);
     assert!(world.draw(&atlas, &composition_run).0);
-    assert_eq!(world.batch_lengths(&label_run), [6]);
-    assert_eq!(world.batch_lengths(&composition_run), [12]);
+    assert_eq!(world.batch_lengths(&label_run), [1]);
+    assert_eq!(world.batch_lengths(&composition_run), [2]);
 
     // An unchanged composing frame rebuilds neither run.
     world.publish(&mut atlas, &composing, &[]);
@@ -1230,11 +1238,11 @@ fn overlapping_glyphs_of_different_colours_keep_painter_order_across_pages() {
         [pages[0], pages[1], pages[0]],
         "the third glyph paints over the second"
     );
-    assert_eq!(world.batch_lengths(&run), [6, 12, 6]);
+    assert_eq!(world.batch_lengths(&run), [1, 2, 1]);
 }
 
 #[test]
-fn clipped_glyphs_never_generate_vertices_and_long_runs_split_bounded_batches() {
+fn clipped_glyphs_never_generate_records_and_long_runs_split_bounded_batches() {
     let (device, mut atlas, mut world) = setup();
     let style = style(1);
     let mut glyphs = vec![
@@ -1265,9 +1273,9 @@ fn clipped_glyphs_never_generate_vertices_and_long_runs_split_bounded_batches() 
             .borrow()
             .writes
             .iter()
-            .all(|&(_, _, vertices)| vertices <= 256 * 6)
+            .all(|&(_, _, records)| records <= 256)
     );
-    assert_eq!(world.batch_lengths(&run).iter().sum::<usize>(), 600 * 6);
+    assert_eq!(world.batch_lengths(&run).iter().sum::<usize>(), 600);
 }
 
 #[test]

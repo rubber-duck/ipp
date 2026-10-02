@@ -271,6 +271,52 @@ test("keyboard mapping preserves traversal, edit and control keys", () => {
     assert.equal(keyboardKeyToGuiKey(key!), value);
   assert.equal(keyboardKeyToGuiKey("Tab", true), "backTab");
   assert.equal(keyboardKeyToGuiKey("a"), null);
+  // The Menu key and Shift+F10 request a context; F10 alone stays the browser's.
+  assert.equal(keyboardKeyToGuiKey("ContextMenu"), "contextMenu");
+  assert.equal(keyboardKeyToGuiKey("F10", true), "f10");
+  assert.equal(keyboardKeyToGuiKey("F10"), null);
+});
+
+test("context keys and Shift reach the runtime and the browser menu never opens", async (context) => {
+  const state = harness(context);
+  state.canvas.dispatch("keydown", { key: "ContextMenu" });
+  state.canvas.dispatch("keydown", { key: "F10" });
+  state.canvas.dispatch("keydown", { key: "F10", shiftKey: true });
+  state.canvas.dispatch("keydown", { key: "ArrowLeft", shiftKey: true });
+  state.canvas.dispatch("wheel", {
+    clientX: 110,
+    clientY: 45,
+    deltaMode: 1,
+    deltaX: 0,
+    deltaY: 3,
+    shiftKey: true,
+  });
+  assert.equal(state.canvas.dispatch("contextmenu").prevented, true);
+  assert.deepEqual(state.sent, [
+    { kind: "key", key: "contextMenu" },
+    { kind: "key", key: "f10", shift: true },
+    { kind: "key", key: "left", shift: true },
+    {
+      kind: "wheel",
+      point: [0.5, 0.25],
+      delta: [0, DEFAULT_GUI_WHEEL_STEP],
+      shift: true,
+    },
+  ]);
+
+  // While the native text buffer holds focus, context keys are routed input,
+  // not edits, and its own menu is suppressed too.
+  state.focus();
+  state.area.dispatch("keydown", { key: "ContextMenu" });
+  state.area.dispatch("keydown", { key: "F10", shiftKey: true });
+  assert.equal(state.area.dispatch("contextmenu").prevented, true);
+  await flush();
+  assert.deepEqual(state.sent.slice(4), [
+    { kind: "key", key: "contextMenu" },
+    { kind: "key", key: "f10", shift: true },
+  ]);
+  assert.deepEqual(state.edits, []);
+  assert.deepEqual(state.errors, []);
 });
 
 test("pointer, wheel and keys submit immediately in DOM order", async (context) => {
@@ -304,7 +350,7 @@ test("pointer, wheel and keys submit immediately in DOM order", async (context) 
     { kind: "pointerDown", pointer: 7n, point: [0.5, 0.25] },
     { kind: "pointerMove", pointer: 7n, point: [1, 1] },
     { kind: "wheel", point: [0.5, 0.25], delta: [-0.25, 0.5] },
-    { kind: "key", key: "backTab" },
+    { kind: "key", key: "backTab", shift: true },
     { kind: "pointerUp", pointer: 7n, point: [1.5, 1.5] },
   ]);
   await flush();

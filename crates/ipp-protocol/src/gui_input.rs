@@ -82,6 +82,8 @@ const KEYS: &[(u8, GuiPhysicalKey)] = &[
     (GUI_PHYSICAL_KEY_DOWN, GuiPhysicalKey::Down),
     (GUI_PHYSICAL_KEY_HOME, GuiPhysicalKey::Home),
     (GUI_PHYSICAL_KEY_END, GuiPhysicalKey::End),
+    (GUI_PHYSICAL_KEY_CONTEXT_MENU, GuiPhysicalKey::ContextMenu),
+    (GUI_PHYSICAL_KEY_F10, GuiPhysicalKey::F10),
 ];
 
 impl Reader<'_> {
@@ -146,6 +148,7 @@ impl Reader<'_> {
                     GUI_PHYSICAL_EVENT_WHEEL => GuiPhysicalInput::Wheel {
                         point: [reader.f32()?, reader.f32()?],
                         delta: [reader.f32()?, reader.f32()?],
+                        shift: reader.boolean()?,
                     },
                     GUI_PHYSICAL_EVENT_KEY => GuiPhysicalInput::Key {
                         key: {
@@ -155,6 +158,7 @@ impl Reader<'_> {
                                 .ok_or(ProtocolError::Malformed("physical key"))?
                                 .1
                         },
+                        shift: reader.boolean()?,
                     },
                     GUI_PHYSICAL_EVENT_BLUR => GuiPhysicalInput::Blur,
                     tag => return Err(ProtocolError::Unsupported(tag)),
@@ -341,14 +345,17 @@ impl Writer {
                         GuiPhysicalInput::Wheel {
                             point,
                             delta,
+                            shift,
                         } => {
                             writer.u8(GUI_PHYSICAL_EVENT_WHEEL)?;
                             for value in point.iter().chain(delta) {
                                 writer.f32(*value)?;
                             }
+                            writer.u8(u8::from(*shift))?;
                         }
                         GuiPhysicalInput::Key {
                             key,
+                            shift,
                         } => {
                             writer.u8(GUI_PHYSICAL_EVENT_KEY)?;
                             writer.u8(KEYS
@@ -356,6 +363,7 @@ impl Writer {
                                 .find(|(_, candidate)| candidate == key)
                                 .ok_or(ProtocolError::Malformed("physical key"))?
                                 .0)?;
+                            writer.u8(u8::from(*shift))?;
                         }
                         GuiPhysicalInput::Blur => writer.u8(GUI_PHYSICAL_EVENT_BLUR)?,
                     }

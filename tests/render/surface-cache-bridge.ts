@@ -54,16 +54,16 @@ const MAGNIFIED = [
 ];
 
 /**
- * `GuiVertex` words: position, placement, shape, fill start and end, border,
- * gradient, material, glow and clip lanes, as `retained_vertices.rs` lays them
- * out for the bridge.
+ * `GuiShapeRecord` words: covered rectangle, placement, shape, corner cut, corner
+ * accent, fill start and end, border, gradient, material, glow and clip lanes, as
+ * `retained_records.rs` lays them out for the bridge.
  */
-const GUI_VERTEX_LANES = [2, 4, 4, 4, 4, 4, 4, 4, 4, 4];
+const GUI_SHAPE_LANES = [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4];
 /** `GUI_BOX_ANTIALIAS_PAD`: exterior margin generated boxes already carry. */
 const GUI_BOX_PAD = 0.002;
 
 /**
- * Six vertices of one opaque box over `[x0, x1] x [y0, y1]` Surface metres,
+ * The shape record of one opaque box over `[x0, x1] x [y0, y1]` Surface metres,
  * clipped by `clip`.
  */
 function guiBox(
@@ -71,11 +71,14 @@ function guiBox(
   color: readonly [number, number, number, number],
   clip: readonly [number, number, number, number],
 ) {
-  const placement = [x0, y0, x1 - x0, y1 - y0];
-  const vertex = (x: number, y: number) => [
-    x,
-    y,
-    ...placement,
+  return [
+    x0 - GUI_BOX_PAD,
+    y0 - GUI_BOX_PAD,
+    x1 + GUI_BOX_PAD,
+    y1 + GUI_BOX_PAD,
+    ...[x0, y0, x1 - x0, y1 - y0],
+    ...[0, 0, 0, 0],
+    ...[0, 0, 0, 0],
     ...[0, 0, 0, 0],
     ...color,
     ...color,
@@ -85,20 +88,6 @@ function guiBox(
     ...[0, 0, 0, 0],
     ...clip,
   ];
-  const [left, top, right, bottom] = [
-    x0 - GUI_BOX_PAD,
-    y0 - GUI_BOX_PAD,
-    x1 + GUI_BOX_PAD,
-    y1 + GUI_BOX_PAD,
-  ];
-  return [
-    vertex(left, top),
-    vertex(left, bottom),
-    vertex(right, bottom),
-    vertex(left, top),
-    vertex(right, bottom),
-    vertex(right, top),
-  ].flat();
 }
 
 async function frames(count: number) {
@@ -394,23 +383,24 @@ export async function probeSurfaceCacheBridge(bridgeUrl: string, gui: boolean) {
       ...bitmapVertex!,
       ...cacheFragment!,
     );
-    const vertices = guiBox(
+    const record = guiBox(
       [0.5, 0.25, 24.2 / 16, 0.75],
       [1, 0, 0, 1],
       [0, 0, 2, 1],
     );
     let offset = 0;
-    const layout = [152, GUI_VERTEX_LANES.length];
-    GUI_VERTEX_LANES.forEach((components, location) => {
+    const stride = GUI_SHAPE_LANES.reduce((sum, lanes) => sum + lanes, 0) * 4;
+    const layout = [stride, GUI_SHAPE_LANES.length];
+    GUI_SHAPE_LANES.forEach((components, location) => {
       layout.push(location, components, offset);
       offset += components * 4;
     });
-    const batch = ok("create_gui_batch", vertices.length * 4, words(layout));
-    ok("write_gui_batch", batch, 0, floats(vertices), vertices.length * 4);
+    const batch = ok("create_gui_batch", record.length * 4, words(layout));
+    ok("write_gui_batch", batch, 0, floats(record), record.length * 4);
     const small = ok("create_surface_cache_target", 32, 16);
     ok("begin_surface_cache_target", small);
     ok("set_surface_double_sided", 1);
-    ok("draw_gui_batch", boxProgram, batch, 0, floats(CONTENT), 0, 6);
+    ok("draw_gui_batch", boxProgram, batch, 0, floats(CONTENT), 0, 1);
     ok("set_surface_double_sided", 0);
     ok("end_surface_cache_target");
     ok(

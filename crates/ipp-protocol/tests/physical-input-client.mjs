@@ -156,6 +156,7 @@ for (const directory of ["target/gles-host", "target/browser-build/render"]) {
     for (const [key, suffix] of [
       ["tab", "TAB"],
       ["backTab", "BACK_TAB"],
+      ["contextMenu", "CONTEXT_MENU"],
       ...[
         "enter",
         "space",
@@ -166,21 +167,36 @@ for (const directory of ["target/gles-host", "target/browser-build/render"]) {
         "down",
         "home",
         "end",
+        "f10",
       ].map((key) => [key, key.toUpperCase()]),
     ]) {
-      await send(
-        { kind: "key", key },
-        variant("GUI_PHYSICAL_EVENT_KEY", {
-          key: tag(`GUI_PHYSICAL_KEY_${suffix}`),
-        }),
-      );
+      for (const shift of [undefined, false, true]) {
+        await send(
+          { kind: "key", key, ...(shift === undefined ? {} : { shift }) },
+          variant("GUI_PHYSICAL_EVENT_KEY", {
+            key: tag(`GUI_PHYSICAL_KEY_${suffix}`),
+            shift: shift === true,
+          }),
+        );
+      }
     }
-    for (const disposition of ["ROUTED", "MISS", "BLOCKED", "UNHANDLED"]) {
+    for (const [disposition, shift] of [
+      ["ROUTED", true],
+      ["MISS", false],
+      ["BLOCKED", undefined],
+      ["UNHANDLED", true],
+    ]) {
       const result = await send(
-        { kind: "wheel", point: [0.25, 0.5], delta: [4, -5] },
+        {
+          kind: "wheel",
+          point: [0.25, 0.5],
+          delta: [4, -5],
+          ...(shift === undefined ? {} : { shift }),
+        },
         variant("GUI_PHYSICAL_EVENT_WHEEL", {
           point: vector(0.25, 0.5),
           delta: vector(4, -5),
+          shift: shift === true,
         }),
         routed(disposition, { remaining: vector(4, -5), error: "bounded" }),
       );

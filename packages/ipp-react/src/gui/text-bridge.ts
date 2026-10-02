@@ -474,7 +474,7 @@ export function attachTextBridge(
     // twice. All other mapped keys have no beforeinput payload.
     if (key === "space" || key === "backspace" || key === "delete") return;
     event.preventDefault();
-    send({ kind: "key", key });
+    send({ kind: "key", key, ...(event.shiftKey ? { shift: true } : {}) });
   };
 
   const onCompositionStart = (): void => {

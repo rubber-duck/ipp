@@ -128,6 +128,9 @@ pub enum SurfaceCachePresentation {
     Reused,
     /// Repainted into its image, then composited.
     Repainted,
+    /// Direct presentation because the Surface separates its canvas's layers
+    /// along its normal, which one flat image cannot show.
+    Layered,
 }
 
 impl SurfaceCachePresentation {
@@ -142,6 +145,7 @@ impl SurfaceCachePresentation {
             Self::Reused => 5,
             Self::Repainted => 6,
             Self::Animated => 7,
+            Self::Layered => 8,
         }
     }
 
@@ -149,7 +153,12 @@ impl SurfaceCachePresentation {
     pub const fn is_direct(self) -> bool {
         matches!(
             self,
-            Self::Near | Self::Interaction | Self::Fallback | Self::Unavailable | Self::Animated
+            Self::Near
+                | Self::Interaction
+                | Self::Fallback
+                | Self::Unavailable
+                | Self::Animated
+                | Self::Layered
         )
     }
 }
@@ -201,6 +210,9 @@ pub(crate) struct SurfaceCacheInput {
     pub resource_revision: u64,
     /// Live GUI interaction on the Surface's root.
     pub interaction: bool,
+    /// The Surface separates its canvas's layers along its normal; one
+    /// flat image cannot present them.
+    pub layered: bool,
     /// A resource the image's last repaint skipped is resident now.
     pub missing_resident: bool,
     /// Fewer of the Surface's text runs wait for atlas population than when its
@@ -462,7 +474,9 @@ impl<T> SurfaceTextureCache<T> {
 
         let paint_changed =
             std::mem::replace(&mut entry.seen_paint, input.paint_revision) != input.paint_revision;
-        let direct = if input.interaction {
+        let direct = if input.layered {
+            Some(P::Layered)
+        } else if input.interaction {
             Some(P::Interaction)
         } else if entry.band == 0 {
             Some(P::Near)

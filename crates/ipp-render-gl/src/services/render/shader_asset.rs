@@ -1,5 +1,11 @@
 //! Renderer-owned shader provider: complete GPU programs are the loaded payload.
+//!
+//! A material definition loads as its linked programs. A paint definition has no
+//! program of its own: its body is compiled and linked alone, then retained with
+//! its parameters for the canvas program, which the
+//! [paint slots](super::canvas_paint) rebuild whenever their paints change.
 
+use super::canvas_paint::{self, CanvasPaintSource};
 use super::{assets::SharedRenderDevice, custom_shader, shader::RenderShaderConfig};
 use crate::{RenderDevice, RenderError};
 use ipp_core::{
@@ -16,6 +22,11 @@ pub(super) struct GlShaderData<D: RenderDevice> {
     pub surface: Option<D::Program>,
     pub shadow: Option<D::Program>,
     pub custom_vertex: bool,
+    /// A paint definition's validated body and parameters.
+    pub paint: Option<CanvasPaintSource>,
+    /// The paint compiled alone in the current context; graphics invalidation
+    /// clears it until the provider validates the paint again.
+    pub paint_ready: bool,
     device: SharedRenderDevice<D>,
 }
 
@@ -29,6 +40,7 @@ impl<D: RenderDevice> Asset for GlShaderData<D> {
     }
 
     fn invalidate_graphics(&mut self) {
+        self.paint_ready = false;
         let mut device = self.device.borrow_mut();
         if let Some(program) = self.surface.take() {
             device.delete_program(program);
@@ -39,7 +51,7 @@ impl<D: RenderDevice> Asset for GlShaderData<D> {
     }
 
     fn graphics_ready(&self) -> Option<bool> {
-        Some(self.surface.is_some())
+        Some(self.surface.is_some() || self.paint_ready)
     }
 
     fn graphics_bytes(&self) -> Option<usize> {
@@ -105,6 +117,19 @@ pub(super) fn loader<D: RenderDevice>(
 ) -> impl AssetLoader<Data = GlShaderData<D>> {
     BufferedAssetLoader::new(move |bytes| {
         let mut definition = ShaderDefinition::decode(bytes)?;
+        if definition.is_paint() {
+            let paint = validate_paint(&device, &definition)?;
+            definition.backends.clear();
+            return Ok(GlShaderData {
+                definition,
+                surface: None,
+                shadow: None,
+                custom_vertex: false,
+                paint: Some(paint),
+                paint_ready: true,
+                device: device.clone(),
+            });
+        }
         let config = config(&definition).map_err(|error| error.to_string())?;
         let properties = defaults(&definition)?;
         let (declarations, _, _) = custom_shader::parameter_layout(&definition, &properties)
@@ -137,7 +162,40 @@ pub(super) fn loader<D: RenderDevice>(
             surface: Some(surface),
             shadow,
             custom_vertex,
+            paint: None,
+            paint_ready: false,
             device: device.clone(),
         })
     })
+}
+
+/// Check a paint definition's GLSL ES body as the statements of one function, then
+/// compile and link it alone, so a paint that cannot build never reaches the canvas
+/// program. The validation program is released at once.
+fn validate_paint<D: RenderDevice>(
+    device: &SharedRenderDevice<D>,
+    definition: &ShaderDefinition,
+) -> Result<CanvasPaintSource, String> {
+    if definition.recipe.backend != canvas_paint::CANVAS_PAINT_BACKEND {
+        return Err("Unsupported shader backend".into());
+    }
+    let body = definition
+        .paint_body(canvas_paint::CANVAS_PAINT_BACKEND)
+        .ok_or("Paint definition has no GLSL ES paint body")?;
+    canvas_paint::check_paint_body(body)?;
+    let source = CanvasPaintSource {
+        body: body.into(),
+        parameters: definition
+            .parameters
+            .iter()
+            .map(|(name, kind)| (name.clone(), *kind))
+            .collect(),
+    };
+    let (vertex, fragment) = canvas_paint::validation_sources(&source);
+    let mut device = device.borrow_mut();
+    let program = device
+        .create_program(&vertex, &fragment)
+        .map_err(|error| error.to_string())?;
+    device.delete_program(program);
+    Ok(source)
 }

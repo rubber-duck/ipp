@@ -24,12 +24,18 @@ pub struct GuiProjectedPoint {
 /// Reproject a retained hit path, including captured points outside rectangles when requested.
 /// Front-facing and Camera near/far constraints always apply; there is no raw-coordinate fallback.
 /// Gating does not erase readable geometry. The input owner must separately validate capture/gates.
+///
+/// Where a Surface in a camera's domain separates its canvas's layers, the ray
+/// meets the plane of the layer the path continues on: the next nested slot's
+/// layer, or `layer`, the target's own layer in the final canvas, at its id
+/// times the spacing.
 pub fn project_composed_point(
     host: &HostRuntime,
     target: ViewQueryTarget,
     path: &[WorldAttachmentToken],
     point: [f32; 2],
     captured: bool,
+    layer: u32,
 ) -> Result<Option<GuiProjectedPoint>, ErrorReason> {
     if !point.iter().all(|value| value.is_finite()) {
         return Err(ErrorReason::InvalidViewport);
@@ -46,7 +52,7 @@ pub fn project_composed_point(
     ];
     let mut point = point;
     let mut placement = GeometryShapeTransform::default();
-    for token in path {
+    for (step, token) in path.iter().enumerate() {
         let edge = publication
             .attachments
             .iter()
@@ -84,7 +90,9 @@ pub fn project_composed_point(
                 if local.direction[2] >= 0.0 {
                     return Ok(None);
                 }
-                let distance = -local.origin[2] / local.direction[2];
+                let plane = f64::from(plane_layer(host, edge, path.get(step + 1), layer)?)
+                    * f64::from(edge.layer_spacing);
+                let distance = (plane - local.origin[2]) / local.direction[2];
                 if !distance.is_finite() || distance < ray.near || distance > ray.far {
                     return Ok(None);
                 }
@@ -161,4 +169,39 @@ pub fn project_composed_point(
         point,
         extent,
     }))
+}
+
+/// Layer whose plane a camera-domain Surface edge projects onto: zero without
+/// layer separation, the layer of the `next` slot the path enters in its
+/// canvas, or the final target's `layer`.
+fn plane_layer(
+    host: &HostRuntime,
+    edge: &crate::PublishedWorldAttachment,
+    next: Option<&WorldAttachmentToken>,
+    layer: u32,
+) -> Result<u32, ErrorReason> {
+    if edge.layer_spacing == 0.0 {
+        return Ok(0);
+    }
+    let Some(next) = next else {
+        return Ok(layer);
+    };
+    let child = host
+        .attached_publication(edge)
+        .ok_or(ErrorReason::InvalidEntity)?;
+    let Some(canvas) = edge
+        .output
+        .and_then(|output| host.output(child.id, output))
+        .and_then(|chunk| chunk.data::<CanvasPublication>())
+    else {
+        return Ok(0);
+    };
+    canvas
+        .entries
+        .iter()
+        .find_map(|entry| match entry.as_ref() {
+            CanvasPaintEntry::Attachment(slot) if slot.token == *next => Some(slot.layer),
+            _ => None,
+        })
+        .ok_or(ErrorReason::InvalidEntity)
 }

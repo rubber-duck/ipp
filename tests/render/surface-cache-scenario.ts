@@ -619,14 +619,36 @@ async function exerciseCachedGui(
     }
     throw new Error(`${label}: GUI panel never reached ${mode}`);
   };
+  // The checkbox's default look fades hover in over 80 ms and out over 120 ms
+  // on the Host clock, so frames compared with each other are taken once two
+  // consecutive frames in `mode` are identical.
+  const settled = async (label: string, mode: CacheRecord["mode"]) => {
+    await until(label, mode);
+    let pixels = driver.pixels(label);
+    for (let attempt = 0; attempt < 60; attempt++) {
+      const frame = await capture(label, true);
+      const record = records(frame).find(
+        (candidate) => candidate.entity === panel,
+      );
+      const next = driver.pixels(label);
+      if (
+        record?.mode === mode &&
+        compareFrames(pixels, next, 0).changedPixels === 0
+      )
+        return { frame, record };
+      pixels = next;
+    }
+    throw new Error(`${label}: GUI panel never settled in ${mode}`);
+  };
   const cached = await until("gui-cached", "reused");
   const hovered = await (async () => {
     await call("hoverPanel", [true]);
-    return until("gui-hovered", "interaction");
+    const first = await until("gui-hovered", "interaction");
+    assert.equal(first.frame.statistics!.surfaces!.surfaceCacheRepaints, 0);
+    return settled("gui-hovered", "interaction");
   })();
-  assert.equal(hovered.frame.statistics!.surfaces!.surfaceCacheRepaints, 0);
   await call("cameraDistance", [DISTANCE.near]);
-  const nearHovered = await until("gui-direct-hovered", "interaction");
+  const nearHovered = await settled("gui-direct-hovered", "interaction");
   const promoted = compareFrames(
     driver.pixels("gui-direct-hovered"),
     driver.pixels("gui-hovered"),
@@ -640,9 +662,9 @@ async function exerciseCachedGui(
   await call("cameraDistance", [DISTANCE.band1]);
   await until("gui-hovered-far", "interaction");
   await call("hoverPanel", [false]);
-  const released = await until("gui-released", "reused");
+  const released = await settled("gui-released", "reused");
   await call("cameraDistance", [DISTANCE.near]);
-  await until("gui-direct-released", "near");
+  await settled("gui-direct-released", "near");
   const release = compareFrames(
     driver.pixels("gui-direct-released"),
     driver.pixels("gui-released"),

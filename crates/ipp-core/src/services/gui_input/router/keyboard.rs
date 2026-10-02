@@ -76,23 +76,35 @@ pub(super) fn targets(
                     .and_then(|gui| gui.views.get(&view.output));
                 let mut items = Vec::new();
                 if let Some(gui) = gui {
+                    // An open modal overlay keeps traversal off what lies
+                    // under it.
+                    let modal = super::overlay::topmost_modal(gui);
                     for control in gui.controls.iter() {
                         if control.available
                             && control.hit.eligible
+                            && control.record.focusable
                             && !matches!(
                                 control.record.kind,
                                 GuiControlKind::ScrollView | GuiControlKind::VirtualList
                             )
+                            && modal.is_none_or(|modal| !modal.blocks(control))
                         {
-                            items.push((
-                                control.hit.paint_order,
-                                Task::Control(Target {
-                                    control: control.clone(),
-                                    path: view.path.clone(),
-                                    source: root.publication,
-                                    part: CanvasHitKind::Entity,
-                                }),
-                            ));
+                            // A control with several focus parts is a stop
+                            // per part, in part order.
+                            let parts = control.record.focus_parts;
+                            for part in 0..parts.max(1) {
+                                items.push((
+                                    control.hit.paint_order,
+                                    Task::Control(Target {
+                                        control: control.clone(),
+                                        path: view.path.clone(),
+                                        source: root.publication,
+                                        part: CanvasHitKind::Entity,
+                                        focus_part: (parts > 1).then_some(part),
+                                        step: None,
+                                    }),
+                                ));
+                            }
                         }
                     }
                 }
@@ -142,6 +154,19 @@ pub(super) fn targets(
             candidate.control.record.target.world == focus.control.record.target.world
                 && candidate.path == focus.path
                 && candidate.control.record.ancestry.contains(&scope)
+        });
+    }
+
+    // Tab stays inside an open modal overlay of the focused control's canvas,
+    // and from under one it enters the overlay.
+    if let Some(focus) = focused
+        && let Ok(canvas) = super::routing::semantic_view(host, root, &focus.path)
+        && let Some(modal) = super::overlay::topmost_modal(&canvas)
+    {
+        controls.retain(|candidate| {
+            candidate.control.record.target.world == focus.control.record.target.world
+                && candidate.path == focus.path
+                && modal.contains(&candidate.control.record.ancestry)
         });
     }
     Ok(controls)

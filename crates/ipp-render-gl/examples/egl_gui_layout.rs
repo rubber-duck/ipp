@@ -263,6 +263,7 @@ fn main() -> Result<()> {
     let surface = Surface {
         width: 4.0,
         height: 2.0,
+        ..Default::default()
     };
     let camera = create(
         &mut host,
@@ -496,6 +497,7 @@ fn main() -> Result<()> {
         None,
         vec![ComponentValue::GuiTheme(GuiTheme {
             parts: theme_parts,
+            ..Default::default()
         })],
     )?;
     let skin = |overrides: Vec<GuiPaintPart>| -> ComponentValue {
@@ -506,7 +508,6 @@ fn main() -> Result<()> {
         ComponentValue::GuiSkin(GuiSkin {
             theme,
             parts,
-            ..Default::default()
         })
     };
     let placed = |width: f32, height: f32, top: f32, left: f32| {
@@ -526,6 +527,7 @@ fn main() -> Result<()> {
         vec![
             ComponentValue::GuiButton(GuiButton {
                 label: "A".into(),
+                ..Default::default()
             }),
             ComponentValue::GuiFont(GuiFont {
                 source: font.uri.clone(),

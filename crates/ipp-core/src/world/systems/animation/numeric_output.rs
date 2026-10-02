@@ -17,6 +17,7 @@ pub(super) enum AnimationNumericOutput {
     Light(ComponentBinding<Light>),
     Camera(ComponentBinding<Camera>),
     CustomMaterial(ComponentBinding<CustomMaterial>),
+    CanvasPaint(ComponentBinding<CanvasPaint>),
     LinearDriver(ComponentBinding<LinearDriver>),
     BoundingGeometry(ComponentBinding<BoundingGeometry>),
     PickingGeometry(ComponentBinding<PickingGeometry>),
@@ -31,6 +32,7 @@ impl AnimationNumericOutput {
         matches!(
             component,
             ComponentValue::CUSTOM_MATERIAL
+                | ComponentValue::CANVAS_PAINT
                 | ComponentValue::LINEAR_DRIVER
                 | ComponentValue::BOUNDING_GEOMETRY
                 | ComponentValue::PICKING_GEOMETRY
@@ -71,6 +73,9 @@ impl AnimationNumericOutput {
                 }
                 ComponentValue::CUSTOM_MATERIAL => {
                     Self::CustomMaterial(ComponentBinding::new(storage.custom_material_ptr(index)?))
+                }
+                ComponentValue::CANVAS_PAINT => {
+                    Self::CanvasPaint(ComponentBinding::new(storage.canvas_paint_ptr(index)?))
                 }
                 ComponentValue::LINEAR_DRIVER => {
                     Self::LinearDriver(ComponentBinding::new(storage.linear_driver_ptr(index)?))
@@ -174,6 +179,17 @@ impl AnimationNumericOutput {
                             .set_field(*offset, value.clone())
                             .map_err(|_| ErrorReason::InvalidField)?;
                     }
+                }
+            }
+            Self::CanvasPaint(binding) => {
+                // Only existing numeric properties are bound; the source and its
+                // variant are resource fields this program cannot target.
+                let component = binding.get_mut(storage);
+                for ((_, offset), value) in fields() {
+                    component
+                        .properties
+                        .set_field(*offset, value.clone())
+                        .map_err(|_| ErrorReason::InvalidField)?;
                 }
             }
             _ => unreachable!("bound patch output"),

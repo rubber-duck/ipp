@@ -16,6 +16,7 @@ const result = await build({
     index: resolve(directory, "src/index.ts"),
     web: resolve(directory, "src/web.tsx"),
     gui: resolve(directory, "src/gui.ts"),
+    "gui-kit": resolve(directory, "src/gui-kit.ts"),
   },
   outdir: output,
   chunkNames: "shared-[hash]",

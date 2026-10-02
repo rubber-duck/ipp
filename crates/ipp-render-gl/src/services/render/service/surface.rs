@@ -4,15 +4,27 @@ use super::super::assets::GlTextureData;
 use super::super::canvas_scene::{CanvasScene, effective_clip};
 use super::super::frame_statistics::RenderFrameWork;
 use super::super::retained_surfaces::{CANVAS_SURFACE, SurfacePaint};
-use super::canvas_composition::{CanvasChild, canvas_attachment};
+use super::canvas_composition::{CanvasChild, CanvasLayering, canvas_attachment};
 use super::{RenderError, RenderService};
 use crate::RenderDevice;
 use ipp_core::systems::canvas::{CanvasClip, CanvasPaintEntry, CanvasPrimitive};
 
+/// One draw of a Canvas frame on the plane of its layer, the last field.
 pub(super) enum SurfaceOp {
-    Gui(std::ops::Range<usize>),
-    Primitive(usize, CanvasClip),
-    Attachment(usize),
+    /// Committed GUI batches; a range never spans two layers.
+    Gui(std::ops::Range<usize>, u32),
+    Primitive(usize, CanvasClip, u32),
+    Attachment(usize, u32),
+}
+
+impl SurfaceOp {
+    fn layer(&self) -> u32 {
+        match self {
+            Self::Gui(_, layer) | Self::Primitive(_, _, layer) | Self::Attachment(_, layer) => {
+                *layer
+            }
+        }
+    }
 }
 
 struct CanvasDrawFrame<'a> {
@@ -20,18 +32,24 @@ struct CanvasDrawFrame<'a> {
     mvp: [f32; 16],
     clip: CanvasClip,
     opacity: f32,
+    layering: CanvasLayering,
     paint: SurfacePaint,
     ops: std::vec::IntoIter<SurfaceOp>,
     stale_parent: bool,
 }
 
 impl<D: RenderDevice> RenderService<D> {
+    /// Draw a Canvas presentation directly, or its cached image when the cache
+    /// selects one. `layering` separates its layers along content Z; nested
+    /// Canvases draw on their slot's plane.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn draw_canvas(
         &mut self,
         scene: &CanvasScene<'_>,
         mvp: [f32; 16],
         clip: CanvasClip,
         opacity: f32,
+        layering: CanvasLayering,
         viewport: ipp_core::WorldViewport,
         stats: &mut RenderFrameWork,
     ) -> Result<(), RenderError> {
@@ -45,7 +63,9 @@ impl<D: RenderDevice> RenderService<D> {
         let mut frames = Vec::new();
         let mut instances = Vec::new();
         let result = (|| {
-            frames.push(self.prepare_canvas_frame(*scene, mvp, clip, opacity, viewport, stats)?);
+            frames.push(
+                self.prepare_canvas_frame(*scene, mvp, clip, opacity, layering, viewport, stats)?,
+            );
             while let Some(frame) = frames.last_mut() {
                 let Some(op) = frame.ops.next() else {
                     let frame = frames.pop().expect("completed Canvas frame");
@@ -61,28 +81,33 @@ impl<D: RenderDevice> RenderService<D> {
                     continue;
                 };
                 self.device.borrow_mut().set_surface_double_sided(true)?;
+                let mvp = frame.layering.layer_mvp(&frame.mvp, op.layer());
                 match op {
-                    SurfaceOp::Gui(range) => {
-                        self.draw_gui_work(frame.scene.canvas.selection, range, &frame.mvp, stats)?
-                    }
-                    SurfaceOp::Primitive(index, clip) => {
+                    SurfaceOp::Gui(range, _) => self.draw_gui_work(
+                        frame.scene.canvas.selection,
+                        range,
+                        frame.clip,
+                        &mvp,
+                        stats,
+                    )?,
+                    SurfaceOp::Primitive(index, clip, _) => {
                         if let Some(primitive) = frame.scene.primitive(index) {
                             self.draw_surface_primitive(
                                 &frame.scene,
                                 primitive,
                                 clip,
                                 frame.paint,
-                                &frame.mvp,
+                                &mvp,
                                 stats,
                                 &mut instances,
                             )?;
                         }
                     }
-                    SurfaceOp::Attachment(index) => {
+                    SurfaceOp::Attachment(index, _) => {
                         match canvas_attachment(
                             &frame.scene,
                             index,
-                            frame.mvp,
+                            mvp,
                             frame.clip,
                             frame.opacity,
                         )? {
@@ -96,7 +121,13 @@ impl<D: RenderDevice> RenderService<D> {
                                     continue;
                                 }
                                 let frame = self.prepare_canvas_frame(
-                                    scene, mvp, clip, opacity, viewport, stats,
+                                    scene,
+                                    mvp,
+                                    clip,
+                                    opacity,
+                                    CanvasLayering::FLAT,
+                                    viewport,
+                                    stats,
                                 )?;
                                 frames.push(frame);
                             }
@@ -122,12 +153,14 @@ impl<D: RenderDevice> RenderService<D> {
         result.and(restored)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn prepare_canvas_frame<'a>(
         &mut self,
         scene: CanvasScene<'a>,
         mvp: [f32; 16],
         clip: CanvasClip,
         opacity: f32,
+        layering: CanvasLayering,
         viewport: ipp_core::WorldViewport,
         stats: &mut RenderFrameWork,
     ) -> Result<CanvasDrawFrame<'a>, RenderError> {
@@ -136,15 +169,32 @@ impl<D: RenderDevice> RenderService<D> {
             .entry(scene.canvas.selection)
             .or_default()
             .paint(scene.canvas.paint_revision, clip, opacity);
-        self.prepare_glyph_demand(&scene, mvp, viewport, clip, paint);
+        self.prepare_glyph_demand(&scene, mvp, layering, viewport, clip, paint);
         self.populate_glyph_misses(&scene)?;
         let mut ops = std::mem::take(&mut self.surface_ops);
         self.prepare_gui_work(&scene, paint, &mut ops, stats, clip)?;
+        // Separated layer planes draw farthest first; each keeps painter
+        // order. Positions index the ascending layers in use, not plane ids.
+        let layers = &scene.canvas.layers;
+        if layering.spacing != 0.0 && layers.len() > 1 {
+            let mut position = vec![0; layers.len()];
+            for (index, layer) in layering.draw_order(layers).into_iter().enumerate() {
+                if let Ok(slot) = layers.binary_search(&layer) {
+                    position[slot] = index;
+                }
+            }
+            ops.sort_by_key(|op| {
+                layers
+                    .binary_search(&op.layer())
+                    .map_or(usize::MAX, |slot| position[slot])
+            });
+        }
         Ok(CanvasDrawFrame {
             scene,
             mvp,
             clip,
             opacity,
+            layering,
             paint,
             ops: ops.into_iter(),
             stale_parent: std::mem::take(&mut self.inclusions.active.stale_image),
@@ -385,8 +435,12 @@ impl<D: RenderDevice> RenderService<D> {
     /// Surface's storage.
     ///
     /// Boxes and text runs whose atlas entries are all resident become retained
-    /// batches; consecutive batches form one [`SurfaceOp::Gui`] range whatever their
-    /// clips. Every other visible primitive becomes a [`SurfaceOp::Primitive`].
+    /// batches; consecutive batches of one layer form one [`SurfaceOp::Gui`]
+    /// range whatever their clips, which draws its shapes and then its glyphs in the
+    /// [GUI draw order](super::super::gui_draw_order). Painter order groups each
+    /// layer, so a canvas with layers adds one batch and range boundary per layer,
+    /// whatever the spacing, and a spacing change keeps every batch. Every other
+    /// visible primitive becomes a [`SurfaceOp::Primitive`].
     ///
     /// When the Surface has no usable storage after a recoverable allocation or write
     /// failure, or while it backs off from one, its boxes are skipped for the frame and
@@ -396,7 +450,7 @@ impl<D: RenderDevice> RenderService<D> {
     fn prepare_gui_work(
         &mut self,
         scene: &CanvasScene<'_>,
-        paint: super::super::retained_surfaces::SurfacePaint,
+        mut paint: super::super::retained_surfaces::SurfacePaint,
         ops: &mut Vec<SurfaceOp>,
         stats: &mut RenderFrameWork,
         parent_clip: CanvasClip,
@@ -409,9 +463,43 @@ impl<D: RenderDevice> RenderService<D> {
         let mut glyphs = self.glyph_batch_cache.get_mut(&scene.canvas.selection);
         cache.begin_surface(CANVAS_SURFACE);
 
+        // Custom paints take their slots and parameter blocks before the boxes that
+        // name them are hashed; changed lanes rehash every box of the canvas.
+        if !scene.canvas.paints.is_empty() || !cache.paints.is_empty() {
+            let output = scene.canvas.selection;
+            let programs = &mut self.canvas_paints;
+            let fallbacks = &mut self.canvas_paint_fallbacks;
+            cache.paints.prepare(
+                &scene.canvas.paints,
+                |instance| admit_paint::<D>(scene, programs, instance),
+                |instance, reason| record_paint_fallback(fallbacks, output, instance, reason),
+            );
+            fallbacks.retain(|(fallback, entity), _| {
+                *fallback != output
+                    || scene
+                        .canvas
+                        .paints
+                        .iter()
+                        .any(|instance| instance.target.entity == *entity)
+            });
+            if cache.paints.lanes_changed() {
+                paint.reusable = false;
+            }
+        }
+
         let mut boxes = Vec::new();
         let mut gui_start = 0;
+        let mut layer = 0;
         for (index, entry) in scene.canvas.entries.iter().enumerate() {
+            if entry.layer() != layer {
+                cache.push_boxes(paint, &boxes, stats);
+                boxes.clear();
+                if cache.piece_count() > gui_start {
+                    ops.push(SurfaceOp::Gui(gui_start..cache.piece_count(), layer));
+                    gui_start = cache.piece_count();
+                }
+                layer = entry.layer();
+            }
             let CanvasPaintEntry::Primitive {
                 primitive,
                 ..
@@ -420,10 +508,10 @@ impl<D: RenderDevice> RenderService<D> {
                 cache.push_boxes(paint, &boxes, stats);
                 boxes.clear();
                 if cache.piece_count() > gui_start {
-                    ops.push(SurfaceOp::Gui(gui_start..cache.piece_count()));
+                    ops.push(SurfaceOp::Gui(gui_start..cache.piece_count(), layer));
                     gui_start = cache.piece_count();
                 }
-                ops.push(SurfaceOp::Attachment(index));
+                ops.push(SurfaceOp::Attachment(index, layer));
                 continue;
             };
             // Intersect the per-primitive clip with the root content rectangle
@@ -487,22 +575,22 @@ impl<D: RenderDevice> RenderService<D> {
             cache.push_boxes(paint, &boxes, stats);
             boxes.clear();
             if cache.piece_count() > gui_start {
-                ops.push(SurfaceOp::Gui(gui_start..cache.piece_count()));
+                ops.push(SurfaceOp::Gui(gui_start..cache.piece_count(), layer));
                 gui_start = cache.piece_count();
             }
-            ops.push(SurfaceOp::Primitive(index, clip));
+            ops.push(SurfaceOp::Primitive(index, clip, layer));
         }
 
         cache.push_boxes(paint, &boxes, stats);
         if cache.piece_count() > gui_start {
-            ops.push(SurfaceOp::Gui(gui_start..cache.piece_count()));
+            ops.push(SurfaceOp::Gui(gui_start..cache.piece_count(), layer));
         }
 
         let glyphs = glyphs.as_deref();
         let committed = cache.commit_surface(
             |identity, batch| {
                 glyphs.map_or(&[], |glyphs| {
-                    glyphs.batch_vertices(CANVAS_SURFACE, identity, batch)
+                    glyphs.batch_records(CANVAS_SURFACE, identity, batch)
                 })
             },
             stats,
@@ -520,7 +608,7 @@ impl<D: RenderDevice> RenderService<D> {
                 ..
             } = entry.as_ref()
             else {
-                ops.push(SurfaceOp::Attachment(index));
+                ops.push(SurfaceOp::Attachment(index, entry.layer()));
                 continue;
             };
             let Some(clip) = effective_clip(primitive.style(), parent_clip) else {
@@ -528,40 +616,76 @@ impl<D: RenderDevice> RenderService<D> {
             };
 
             if !matches!(primitive, CanvasPrimitive::Box { .. }) {
-                ops.push(SurfaceOp::Primitive(index, clip));
+                ops.push(SurfaceOp::Primitive(index, clip, entry.layer()));
             }
         }
 
         Ok(())
     }
 
-    /// Draw committed GUI batches `range` of the current Surface.
+    /// Draw committed GUI batches `range` of the current Surface, within the canvas
+    /// content rectangle `clip`: shapes through the canvas program, holding the
+    /// Surface's paint parameter blocks, and glyphs through the glyph program.
     fn draw_gui_work(
         &mut self,
         output: ipp_core::OutputRef,
         range: std::ops::Range<usize>,
+        clip: CanvasClip,
         mvp: &[f32; 16],
         stats: &mut RenderFrameWork,
     ) -> Result<(), RenderError> {
-        if self.surface_gui_program.is_none() {
-            self.surface_gui_program = Some(self.device.borrow_mut().create_program(
-                crate::services::render::embedded_shader!("shaders/surface_gui.vert"),
-                crate::services::render::embedded_shader!("shaders/surface_gui.frag"),
-            )?);
-        }
-
-        let program = self.surface_gui_program.as_ref().unwrap();
         let Some(cache) = self.gui_batch_cache.get_mut(&output) else {
             return Ok(());
         };
+        if self.gui_glyph_program.is_none() {
+            self.gui_glyph_program = Some(self.device.borrow_mut().create_program(
+                crate::services::render::embedded_shader!("shaders/surface_glyph.vert"),
+                crate::services::render::embedded_shader!("shaders/surface_glyph.frag"),
+            )?);
+        }
+        let shapes = self.canvas_paints.prepare_draw(
+            &mut self.device.borrow_mut(),
+            output,
+            &cache.paints,
+        )?;
+        let glyphs = self
+            .gui_glyph_program
+            .as_ref()
+            .expect("glyph program created above");
         let atlas = &self.glyph_atlas;
-        cache.draw_pieces(program, range, |page| atlas.page_texture(page), mvp, stats)
+        cache.draw_pieces(
+            shapes,
+            glyphs,
+            range,
+            clip,
+            |page| atlas.page_texture(page),
+            mvp,
+            stats,
+        )
+    }
+
+    /// Canvas entities whose custom paint draws their colour, with the reason, by
+    /// canvas output and entity, separate from semantic World outcomes.
+    pub fn canvas_paint_diagnostics(
+        &self,
+    ) -> &std::collections::BTreeMap<
+        (ipp_core::OutputRef, ipp_core::EntityId),
+        super::super::canvas_paint::CanvasPaintFallback,
+    > {
+        &self.canvas_paint_fallbacks
+    }
+
+    /// Canvas programs built so far, each after a paint entered a slot or the
+    /// context was replaced.
+    pub fn canvas_program_builds(&self) -> u32 {
+        self.canvas_paints.builds()
     }
 
     fn prepare_glyph_demand(
         &mut self,
         scene: &CanvasScene<'_>,
         mvp: [f32; 16],
+        layering: CanvasLayering,
         viewport: ipp_core::WorldViewport,
         clip: CanvasClip,
         paint: SurfacePaint,
@@ -616,7 +740,7 @@ impl<D: RenderDevice> RenderService<D> {
                 glyphs,
             };
             let height = projected_glyph_height(
-                &mvp,
+                &layering.layer_mvp(&mvp, style.layer),
                 style.position,
                 *font_size * style.scale[1],
                 (viewport.width, viewport.height),
@@ -928,6 +1052,78 @@ impl<D: RenderDevice> RenderService<D> {
         statistics.glyph_pages = self.glyph_atlas.page_count();
         statistics.glyph_resident_bytes = self.glyph_atlas.resident_bytes();
     }
+}
+
+/// The slot and source of `instance`'s paint: its loaded, validated shader admitted
+/// to the canvas program.
+fn admit_paint<'a, D: RenderDevice>(
+    scene: &CanvasScene<'a>,
+    programs: &mut super::super::canvas_paint::CanvasPaintPrograms<D>,
+    instance: &ipp_core::systems::canvas::CanvasPaintInstance,
+) -> Result<
+    (u32, &'a super::super::canvas_paint::CanvasPaintSource),
+    super::super::canvas_paint::CanvasPaintFallbackReason,
+> {
+    use super::super::canvas_paint::CanvasPaintFallbackReason;
+
+    let shader = instance
+        .shader
+        .ok_or(CanvasPaintFallbackReason::Unavailable)?;
+    let data = scene
+        .resource(shader)
+        .and_then(|resource| resource.data())
+        .and_then(|asset| {
+            asset
+                .as_any()
+                .downcast_ref::<super::super::shader_asset::GlShaderData<D>>()
+        })
+        .ok_or(CanvasPaintFallbackReason::Unavailable)?;
+    let source = data
+        .paint
+        .as_ref()
+        .ok_or(CanvasPaintFallbackReason::NotAPaint)?;
+    if !data.paint_ready {
+        return Err(CanvasPaintFallbackReason::Unavailable);
+    }
+    Ok((programs.admit(shader, source)?, source))
+}
+
+/// Retain `instance`'s fallback `reason`, logging it only when it changes, or clear
+/// it when the instance paints.
+fn record_paint_fallback(
+    fallbacks: &mut std::collections::BTreeMap<
+        (ipp_core::OutputRef, ipp_core::EntityId),
+        super::super::canvas_paint::CanvasPaintFallback,
+    >,
+    output: ipp_core::OutputRef,
+    instance: &ipp_core::systems::canvas::CanvasPaintInstance,
+    reason: Option<super::super::canvas_paint::CanvasPaintFallbackReason>,
+) {
+    let key = (output, instance.target.entity);
+    let Some(reason) = reason else {
+        fallbacks.remove(&key);
+        return;
+    };
+    if fallbacks
+        .get(&key)
+        .is_some_and(|fallback| fallback.reason == reason && *fallback.source == *instance.source)
+    {
+        return;
+    }
+
+    ipp_core::diagnostic!(
+        Warn,
+        "canvas paint fallback output={output:?} entity={:?}: {}: {reason}",
+        instance.target.entity,
+        instance.source
+    );
+    fallbacks.insert(
+        key,
+        super::super::canvas_paint::CanvasPaintFallback {
+            source: instance.source.to_string(),
+            reason,
+        },
+    );
 }
 
 fn srgb(value: u8) -> f32 {

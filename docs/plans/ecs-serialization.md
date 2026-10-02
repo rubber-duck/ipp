@@ -30,7 +30,7 @@ Extend generic readers/writers and Host transfer state together. Test partial pr
 
 Keep GUI structure, configuration, style, raw Canvas leaves and control state in ordinary entities and component fields under the [GUI identity contract](../architecture/gui.md#identity-and-authoritative-state). Retain compact theme/part tables and incremental layout/paint algorithms. Layout, measurement and Canvas read fields directly without building owned snapshots or walking ancestors; a value change should dirty only its control's paint, a text change only its remeasure and a scroll change only its scope. Validate local changes proportionally and preserve entity/component fences in both native and executed-WASM contracts.
 
-Ordinary entity persistence saves control values with structure, configuration, themes and assets; GUI needs no persistence hook of its own. Reconstruct layout and skin output and preserve ordinary animation persistence. Extend real native/worker snapshots with provisional composition, queued input and adoption of restored controls by a reconnecting client. Keep independent expected values and completed restored-frame assertions through maintained drivers.
+Ordinary entity persistence saves control values with structure, configuration, themes and assets; GUI needs no persistence hook for its entities, and its presentation preferences persist as World-level System state. Reconstruct layout and skin output and preserve ordinary animation persistence. Extend real native/worker snapshots with provisional composition, queued input and adoption of restored controls by a reconnecting client. Keep independent expected values and completed restored-frame assertions through maintained drivers.
 
 ## Integration harness
 

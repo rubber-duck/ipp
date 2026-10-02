@@ -221,15 +221,50 @@ function panelRoot(
 }
 
 /**
- * Exercise real physical pointer/keyboard/native-text outcomes against a
- * presented ordinary GUI, observed through committed control values, effects
- * and native text state. Sub-scenarios in their own Worlds cover nested
- * scrolling, removal during interaction and keyboard entry across panels.
+ * The parts of the physical GUI input scenario, in order. Each creates,
+ * presents and removes its own Worlds, so a driver may run them in separate
+ * timed operations on one Host connection: every control read is an
+ * inspection answered at a Host frame, and the parts together take most of
+ * a 20 s operation on a software-rendered browser host.
+ */
+export const GUI_INPUT_PARTS = {
+  pointerAndKeyboard: exerciseGuiPointerAndKeyboard,
+  scrolling: exerciseGuiScrolling,
+  removal: exerciseGuiRemoval,
+  keyboardEntry: exerciseGuiKeyboardEntry,
+  items: exerciseGuiItems,
+} satisfies Record<
+  string,
+  (host: GuiHost, fontBytes: ArrayBuffer) => Promise<unknown>
+>;
+
+export type GuiInputPart = keyof typeof GUI_INPUT_PARTS;
+
+/**
+ * Exercise real physical pointer/keyboard/native-text outcomes against
+ * presented ordinary GUIs: every part of {@link GUI_INPUT_PARTS} in order,
+ * with each part's result under its name.
+ */
+export async function exerciseGuiInput(host: GuiHost, fontBytes: ArrayBuffer) {
+  const results: Partial<Record<GuiInputPart, unknown>> = {};
+  for (const name of Object.keys(GUI_INPUT_PARTS) as GuiInputPart[])
+    results[name] = await GUI_INPUT_PARTS[name](host, fontBytes);
+  return results;
+}
+
+/**
+ * Pointer, keyboard and native text outcomes against a presented ordinary
+ * GUI, observed through committed control values, effects and native text
+ * state. The other parts in their own Worlds cover nested scrolling, removal
+ * during interaction, keyboard entry across panels and Buttons as items.
  *
  * The panel is a 4 x 3 logical canvas on the full root viewport: the centre
  * tap hits a full-panel checkbox while a far point reaches no panel.
  */
-export async function exerciseGuiInput(host: GuiHost, fontBytes: ArrayBuffer) {
+async function exerciseGuiPointerAndKeyboard(
+  host: GuiHost,
+  fontBytes: ArrayBuffer,
+) {
   const worlds: WorldReference[] = [];
   const sessions: Client[] = [];
   let presentation: PresentedGui | undefined;
@@ -782,19 +817,12 @@ export async function exerciseGuiInput(host: GuiHost, fontBytes: ArrayBuffer) {
     await log.stop();
     await presentation.close();
     presentation = undefined;
-
-    const scrolling = await exerciseGuiScrolling(host);
-    const removal = await exerciseGuiRemoval(host, fontBytes);
-    const keyboardEntry = await exerciseGuiKeyboardEntry(host);
     completed = true;
     return {
       traversal,
       submissions: submitted.length,
       valueChanges,
       unhandledScroll: unscrolled.disposition,
-      scrolling,
-      removal,
-      keyboardEntry,
     };
   } finally {
     await presentation?.close().catch(() => {});
@@ -835,14 +863,26 @@ async function exerciseGuiScrolling(host: GuiHost) {
       await client.batch(
         panelRoot(client, "gui-scrolling-panel", [
           createEntity(2, "gui-scrolling-outer"),
-          insertComponent(client, "GuiScrollView", alias(2), { axis: 1 }),
+          // Bars as thick as 5% of each viewport's shorter side, flush with
+          // the views' right sides and ends.
+          insertComponent(client, "GuiScrollView", alias(2), {
+            axis: 1,
+            bar_thickness: 0.15,
+            bar_inset: 0,
+            bar_end_inset: 0,
+          }),
           layout(2, { width: 4, height: 3 }),
           place(alias(2), alias(1)),
           createEntity(3, "gui-scrolling-outer-content"),
           layout(3, { kind: LAYOUT.column }),
           place(alias(3), alias(2)),
           createEntity(4, "gui-scrolling-inner"),
-          insertComponent(client, "GuiScrollView", alias(4), { axis: 1 }),
+          insertComponent(client, "GuiScrollView", alias(4), {
+            axis: 1,
+            bar_thickness: 0.1,
+            bar_inset: 0,
+            bar_end_inset: 0,
+          }),
           layout(4, { width: 4, height: 2 }),
           place(alias(4), alias(3)),
           createEntity(5, "gui-scrolling-inner-content"),
@@ -986,7 +1026,8 @@ async function exerciseGuiScrolling(host: GuiHost) {
     );
 
     // Scroll bars: the outer view's vertical bar spans x 3.85..4 with a
-    // 1.8-unit thumb travelling 1.2 units over its capacity of 2.
+    // 1.71-unit thumb travelling 1.14 units between the track's pointed ends
+    // over its capacity of 2.
     const outerState = await control(client, outerView);
     const innerState = await control(client, innerView);
     check(
@@ -1025,8 +1066,9 @@ async function exerciseGuiScrolling(host: GuiHost) {
     await press(7n, [[3.92, 2.5]]);
     const paged = await offset(outerView);
     check(Math.abs(paged - 2) < 1e-4, `Track paging missed: ${paged}`);
-    // Dragging the thumb (now at y 1.2..3) up by its whole travel returns
-    // the view to the start, with the pointer leaving the bar on the way.
+    // Dragging the thumb (now at y 1.215..2.925) up by its whole travel
+    // returns the view to the start, with the pointer leaving the bar on the
+    // way.
     await press(8n, [
       [3.92, 2],
       [2, 1.4],
@@ -1568,6 +1610,188 @@ async function exerciseGuiKeyboardEntry(host: GuiHost) {
     return { entry, traversal, turned };
   } finally {
     await input?.close().catch(() => {});
+    await cleanup(host, sessions, worlds, completed);
+  }
+}
+
+/**
+ * Buttons as items, in their own World: a text field keeps focus, its native
+ * text and the keyboard while a Button that does not take focus is pressed,
+ * Tab skips that Button, and Tab to rows below a ScrollView's viewport
+ * scrolls each into view in the frame that focuses it, where a tap finds it.
+ *
+ * The 4 x 3 panel is a column: the field (0..0.75), the Button that does
+ * not take focus (0.75..1.5) and a 4 x 1.5 ScrollView (1.5..3) over three
+ * 4 x 1 rows, so it can scroll by 1.5.
+ */
+async function exerciseGuiItems(host: GuiHost, fontBytes: ArrayBuffer) {
+  const worlds: WorldReference[] = [];
+  const sessions: Client[] = [];
+  let presentation: PresentedGui | undefined;
+  let completed = false;
+  try {
+    const created = await host.createWorld({
+      selectedSystems: selectSystems(GUI, LIFECYCLE),
+      symbolicId: "gui-items",
+      canvas: PANEL_CANVAS,
+    });
+    worlds.push(created.reference);
+    const client = await openGui(host, created.reference);
+    sessions.push(client);
+    const log = await recordEffects(client);
+    const font = await client.createAsset(17, fontBytes);
+    const layout = (
+      at: number,
+      values: Readonly<Record<string, number>>,
+    ): Command => insertComponent(client, "GuiLayout", alias(at), values);
+    const row = (at: number): Command[] => [
+      createEntity(at, `gui-items-row-${at - 5}`),
+      insertComponent(client, "GuiButton", alias(at)),
+      layout(at, { width: 4, height: 1 }),
+      place(alias(at), alias(4)),
+    ];
+    const outcome = successfulBatch(
+      await client.batch(
+        panelRoot(client, "gui-items-panel", [
+          insertComponent(client, "GuiFont", alias(1), {
+            source: font.source,
+            font_size: 0.6,
+          }),
+          createEntity(2, "gui-items-field"),
+          insertComponent(client, "GuiTextInput", alias(2), {
+            text: "",
+            placeholder: "",
+          }),
+          layout(2, { width: 4, height: 0.75 }),
+          place(alias(2), alias(1)),
+          createEntity(3, "gui-items-option"),
+          insertComponent(client, "GuiBehavior", alias(3), {
+            enabled: true,
+            visible: true,
+            focusable: false,
+          }),
+          insertComponent(client, "GuiButton", alias(3)),
+          layout(3, { width: 4, height: 0.75 }),
+          place(alias(3), alias(1)),
+          createEntity(9, "gui-items-view"),
+          insertComponent(client, "GuiScrollView", alias(9), { axis: 1 }),
+          layout(9, { width: 4, height: 1.5 }),
+          place(alias(9), alias(1)),
+          createEntity(4, "gui-items-content"),
+          layout(4, { kind: LAYOUT.column }),
+          place(alias(4), alias(9)),
+          ...row(5),
+          ...row(6),
+          ...row(7),
+        ]),
+      ),
+    );
+    const field = aliasId(outcome, 2);
+    const option = aliasId(outcome, 3);
+    const view = aliasId(outcome, 9);
+    const rows = [5, 6, 7].map((at) => aliasId(outcome, at));
+    presentation = await presentGui(host, [{ child: created.reference }]);
+    const p = presentation;
+    await loadedFont(client);
+    await client.waitForFrame();
+    await p.frame();
+    const send = (input: GuiPhysicalInput) => p.send(input);
+    const tap = async (pointer: bigint, logical: [number, number]) => {
+      const point = p.point(0, logical);
+      const down = await send({ kind: "pointerDown", pointer, point });
+      await send({ kind: "pointerUp", pointer, point });
+      return down;
+    };
+    const pressesOf = (mark: LogMark, entity: bigint) =>
+      log.effects
+        .slice(mark.effects)
+        .filter(
+          (effect) =>
+            effect.target.entity === entity && effect.effect.kind === "pressed",
+        ).length;
+    const offset = async () => {
+      const state = await control(client, view);
+      check(state.value.kind === "scroll", "The view has no scroll value");
+      return state.value.offset[1];
+    };
+
+    // Tab enters the field, which takes the native text.
+    await send({ kind: "key", key: "tab" });
+    const native = await nativeText(
+      p,
+      (state) => state?.fence.target.entity === field,
+    );
+
+    // A tap on the Button that does not take focus presses it once and
+    // leaves focus, the native record and the keyboard on the field.
+    const mark = log.mark();
+    const pressed = await tap(1n, [2, 1.125]);
+    check(
+      routed(pressed),
+      `The option tap was not routed: ${encoded(pressed)}`,
+    );
+    await eventually(
+      p,
+      () => (pressesOf(mark, option) === 1 ? true : undefined),
+      () =>
+        `The option was not pressed once: ${encoded(log.effects.slice(mark.effects))}`,
+    );
+    const kept = await control(client, field);
+    check(
+      kept.focused && !(await control(client, option)).focused,
+      `Pressing the option moved focus: ${encoded(kept)}`,
+    );
+    check(
+      p.input.nativeText?.fence.target.entity === field &&
+        p.input.nativeText.fence.generation === native!.fence.generation,
+      `Pressing the option replaced the native text: ${encoded(p.input.nativeText)}`,
+    );
+    const typed = await p.input.editText(p.input.nativeText.fence, {
+      kind: "text",
+      text: "AV",
+    });
+    check(
+      typed.applied === 1 && (await textValue(client, field)) === "AV",
+      `Typing after the option press missed the field: ${encoded(typed)}`,
+    );
+
+    // Tab skips the option and walks the rows: row 0 (0..1) shows, row 1
+    // (1..2) moves the view 0.5 and row 2 (2..3) to its end, 1.5, each in
+    // the frame that focuses it.
+    const walk: number[] = [];
+    for (const target of rows) {
+      await send({ kind: "key", key: "tab" });
+      await client.waitForFrame();
+      check(
+        (await control(client, target)).focused,
+        `Tab did not focus row ${rows.indexOf(target)}`,
+      );
+      walk.push(await offset());
+    }
+    check(
+      encoded(walk) === encoded([0, 0.5, 1.5]),
+      `Tab did not reveal the rows: ${encoded(walk)}`,
+    );
+
+    // The published hits moved with the view: row 2 now lies at 2..3 of
+    // the panel, where a tap presses it.
+    const tapMark = log.mark();
+    await tap(2n, [2, 2.5]);
+    await eventually(
+      p,
+      () => (pressesOf(tapMark, rows[2]!) === 1 ? true : undefined),
+      () => "The revealed row did not take the tap",
+    );
+    await send({ kind: "key", key: "escape" });
+    await log.stop();
+    completed = true;
+    return {
+      optionPresses: pressesOf(mark, option),
+      text: await textValue(client, field),
+      offsets: walk,
+    };
+  } finally {
+    await presentation?.close().catch(() => {});
     await cleanup(host, sessions, worlds, completed);
   }
 }

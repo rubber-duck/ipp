@@ -55,6 +55,29 @@ fn scroll_view(panel: &mut GuiPanel, parent: EntityId, axis: u32, layout: GuiLay
     )
 }
 
+/// A ScrollView whose bars are `thickness` thick, flush with its sides and ends.
+fn flush_scroll_view(
+    panel: &mut GuiPanel,
+    parent: EntityId,
+    axis: u32,
+    layout: GuiLayout,
+    thickness: f32,
+) -> EntityId {
+    panel.create(
+        Some(parent),
+        vec![
+            ComponentValue::GuiScrollView(GuiScrollView {
+                axis,
+                bar_thickness: thickness,
+                bar_inset: 0.0,
+                bar_end_inset: 0.0,
+                ..Default::default()
+            }),
+            ComponentValue::GuiLayout(layout),
+        ],
+    )
+}
+
 fn scroll_hit(view: &CanvasPublication, entity: EntityId, kind: CanvasHitKind) -> Option<[f32; 4]> {
     view.hits
         .iter()
@@ -84,8 +107,9 @@ fn scroll_to(panel: &mut GuiPanel, entity: EntityId, offset: [f32; 2]) {
     assert_eq!(position(panel, entity).offset, offset);
 }
 
-/// Outer 400 x 300 ScrollView over an explicit `content` column that holds, below
-/// `spacer`, an inner ScrollView of `inner` size over 400 x 300 content.
+/// Outer 400 x 300 ScrollView with flush 15-thick bars over an explicit `content`
+/// column that holds, below `spacer`, an inner ScrollView of `inner` size with
+/// flush 10-thick bars over 400 x 300 content.
 fn nested(
     outer_axis: u32,
     content: [f32; 2],
@@ -95,7 +119,7 @@ fn nested(
 ) -> (GuiPanel, EntityId, EntityId) {
     let mut panel = panel(400.0, 300.0, container(3));
     let root = panel.root_entity;
-    let outer = scroll_view(&mut panel, root, outer_axis, sized(400.0, 300.0));
+    let outer = flush_scroll_view(&mut panel, root, outer_axis, sized(400.0, 300.0), 15.0);
     let column = panel.node(
         outer,
         GuiLayout {
@@ -104,7 +128,13 @@ fn nested(
         },
     );
     panel.node(column, sized(400.0, spacer));
-    let inner_view = scroll_view(&mut panel, column, inner_axis, sized(inner[0], inner[1]));
+    let inner_view = flush_scroll_view(
+        &mut panel,
+        column,
+        inner_axis,
+        sized(inner[0], inner[1]),
+        10.0,
+    );
     panel.button(inner_view, sized(400.0, 300.0));
     panel.frame();
     panel.frame();
@@ -115,7 +145,6 @@ fn nested(
 fn nested_vertical_bars_sharing_an_edge_sit_side_by_side_at_any_outer_offset() {
     let (mut panel, outer, inner) = nested(1, [400.0, 500.0], 0.0, 1, [400.0, 200.0]);
     let view = panel.output();
-    // Thickness is 5% of each viewport's shorter side.
     assert_near(
         &track(&view, outer, CanvasAxis::Vertical),
         &rect(385.0, 0.0, 15.0, 300.0),
@@ -209,7 +238,7 @@ fn nested_tracks_end_before_a_crossing_outer_track() {
 fn scroll_bars_paint_above_the_scrolled_subtree_and_below_later_siblings() {
     let mut panel = panel(400.0, 300.0, container(2));
     let root = panel.root_entity;
-    let scroll = scroll_view(&mut panel, root, 1, sized(400.0, 200.0));
+    let scroll = flush_scroll_view(&mut panel, root, 1, sized(400.0, 200.0), 10.0);
     let content = panel.button(scroll, sized(400.0, 300.0));
     let later = panel.button(root, sized(400.0, 50.0));
     panel.frame();
@@ -248,8 +277,8 @@ fn scroll_bars_paint_above_the_scrolled_subtree_and_below_later_siblings() {
     assert!(thumb < index(later, CanvasPart::Background));
     assert!(index(scroll, CanvasPart::Background) < content_parts[0]);
 
-    // The thumb shows two thirds of the 200-long track and sits at the end of
-    // its travel for the full 100 offset.
+    // The thumb shows two thirds of the 190 units between the track's pointed
+    // ends and sits at the end of its travel for the full 100 offset.
     let thumb_hit = scroll_hit(
         &view,
         scroll,
@@ -258,7 +287,7 @@ fn scroll_bars_paint_above_the_scrolled_subtree_and_below_later_siblings() {
         },
     )
     .unwrap();
-    assert_near(&thumb_hit, &[390.0, 200.0 / 3.0, 400.0, 200.0]);
+    assert_near(&thumb_hit, &[390.0, 5.0 + 190.0 / 3.0, 400.0, 195.0]);
     let bar_order = view
         .hits
         .iter()
@@ -277,6 +306,117 @@ fn scroll_bars_paint_above_the_scrolled_subtree_and_below_later_siblings() {
     assert_eq!(hit_at(&view, [200.0, 150.0]), Some(content));
 }
 
+/// The default bar is half the inherited font thick, one thickness in from
+/// the control's right side and half of one from its ends, measured from the
+/// control box rather than its padded viewport: 7, 7 and 3.5 at the default
+/// 14-unit font. Paint and hit testing share the rectangles, and authoring
+/// the fields moves both.
+#[test]
+fn default_bars_sit_inside_the_control_box_and_follow_their_authored_fields() {
+    let mut panel = panel(400.0, 300.0, container(3));
+    let root = panel.root_entity;
+    let scroll = scroll_view(
+        &mut panel,
+        root,
+        1,
+        GuiLayout {
+            padding_top: 2.0,
+            padding_bottom: 2.0,
+            ..sized(226.0, 82.0)
+        },
+    );
+    panel.button(scroll, sized(198.0, 208.0));
+    panel.frame();
+    panel.frame();
+    let view = panel.output();
+    assert_near(
+        &track(&view, scroll, CanvasAxis::Vertical),
+        &rect(212.0, 3.5, 7.0, 75.0),
+    );
+    // The thumb travels the track without its 3.5-unit points.
+    let length = 68.0 * 78.0 / 208.0;
+    let thumb = |view: &CanvasPublication| {
+        scroll_hit(
+            view,
+            scroll,
+            CanvasHitKind::ScrollThumb {
+                axis: CanvasAxis::Vertical,
+            },
+        )
+        .unwrap()
+    };
+    assert_near(&thumb(&view), &rect(212.0, 7.0, 7.0, length));
+    let painted = |view: &CanvasPublication, part: CanvasPart| match &parts(view, scroll, part)[..]
+    {
+        [
+            ipp_core::systems::canvas::CanvasPrimitive::Box {
+                style,
+                size,
+                ..
+            },
+        ] => rect(style.position[0], style.position[1], size[0], size[1]),
+        other => panic!("{other:?}"),
+    };
+    assert_near(
+        &painted(&view, CanvasPart::ScrollThumbY),
+        &rect(212.0, 7.0, 7.0, length),
+    );
+    assert_eq!(hit_at(&view, [215.0, 12.0]), Some(scroll));
+
+    for (field, value) in [
+        (offset_of!(GuiScrollView, bar_thickness), 6.0),
+        (offset_of!(GuiScrollView, bar_inset), 2.0),
+        (offset_of!(GuiScrollView, bar_end_inset), 0.0),
+    ] {
+        panel.queue_set(
+            scroll,
+            ComponentValue::GUI_SCROLL_VIEW,
+            field,
+            FieldValue::F32(value),
+        );
+    }
+    panel.frame();
+    panel.frame();
+    let view = panel.output();
+    assert_near(
+        &track(&view, scroll, CanvasAxis::Vertical),
+        &rect(218.0, 0.0, 6.0, 82.0),
+    );
+    assert_near(
+        &painted(&view, CanvasPart::ScrollTrackY),
+        &rect(218.0, 0.0, 6.0, 82.0),
+    );
+
+    // Default fields follow the inherited font: at twice the default 14 units
+    // the bar is 14 wide and its default inset one thickness. The authored
+    // end inset stays absolute.
+    for (field, value) in [
+        (offset_of!(GuiScrollView, bar_thickness), -1.0),
+        (offset_of!(GuiScrollView, bar_inset), -1.0),
+    ] {
+        panel.queue_set(
+            scroll,
+            ComponentValue::GUI_SCROLL_VIEW,
+            field,
+            FieldValue::F32(value),
+        );
+    }
+    panel.queue(vec![Command::insert_value(
+        EntityRef::Handle(scroll),
+        ComponentValue::GuiFont(ipp_core::systems::gui::presentation::GuiFont {
+            source: "".into(),
+            variant: 0,
+            font_size: 28.0,
+        }),
+    )]);
+    panel.frame();
+    panel.frame();
+    assert_near(
+        &track(&panel.output(), scroll, CanvasAxis::Vertical),
+        &rect(226.0 - 14.0 - 14.0, 0.0, 14.0, 82.0),
+    );
+}
+
 #[test]
 fn virtual_list_extent_follows_its_count_with_a_minimum_thumb_and_clipped_realized_items() {
     const COUNT: u32 = 100_000;
@@ -290,6 +430,9 @@ fn virtual_list_extent_follows_its_count_with_a_minimum_thumb_and_clipped_realiz
                 item_extent: 100.0,
                 overscan: 2,
                 axis: 1,
+                bar_thickness: 30.0,
+                bar_inset: 0.0,
+                bar_end_inset: 0.0,
                 ..Default::default()
             }),
             ComponentValue::GuiLayout(sized(1000.0, 600.0)),
@@ -301,8 +444,9 @@ fn virtual_list_extent_follows_its_count_with_a_minimum_thumb_and_clipped_realiz
     assert_eq!(geometry.content, [1000.0, COUNT as f32 * 100.0]);
     assert_eq!((geometry.first, geometry.last), (0, 8));
 
-    // The 1000 x 600 viewport shows a vertical bar 30 wide at x 970..1000; over
-    // 100000 items its thumb keeps the two-thickness minimum of 60.
+    // The 1000 x 600 viewport shows its flush 30-wide vertical bar at x
+    // 970..1000; over 100000 items its thumb keeps the two-thickness minimum of
+    // 60, starting where the track's pointed top end does.
     let view = panel.output();
     assert_near(
         &track(&view, list, CanvasAxis::Vertical),
@@ -317,7 +461,7 @@ fn virtual_list_extent_follows_its_count_with_a_minimum_thumb_and_clipped_realiz
             },
         )
         .unwrap(),
-        &rect(970.0, 0.0, 30.0, 60.0),
+        &rect(970.0, 15.0, 30.0, 60.0),
     );
 
     // Declaring items twice the estimate, two of them above the viewport,
@@ -650,6 +794,31 @@ fn scroll_configuration_is_validated_at_its_bounds() {
         scroll,
         ComponentValue::GuiScrollView(GuiScrollView {
             axis: 3,
+            ..Default::default()
+        }),
+    ));
+    assert!(outcome.result.is_err());
+
+    // Bar lengths are finite and non-negative, or -1 for the default.
+    for value in [
+        ComponentValue::GuiScrollView(GuiScrollView {
+            bar_thickness: -2.0,
+            ..Default::default()
+        }),
+        ComponentValue::GuiScrollView(GuiScrollView {
+            bar_end_inset: f32::INFINITY,
+            ..Default::default()
+        }),
+    ] {
+        let outcome = panel.apply(insert(scroll, value.clone()));
+        assert!(outcome.result.is_err(), "{value:?} accepted");
+    }
+    let outcome = panel.apply(insert(
+        list,
+        ComponentValue::GuiVirtualList(GuiVirtualList {
+            item_count: 10,
+            item_extent: 10.0,
+            bar_inset: f32::NAN,
             ..Default::default()
         }),
     ));

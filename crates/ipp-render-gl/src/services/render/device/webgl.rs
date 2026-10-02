@@ -1,5 +1,5 @@
 use super::RenderDevice;
-use super::retained_vertices::GUI_VERTEX_LAYOUT;
+use super::retained_records::{gui_record_layout, gui_record_table};
 use crate::RenderError;
 
 #[link(wasm_import_module = "ipp_gl")]
@@ -209,11 +209,13 @@ unsafe extern "C" {
     fn write_gui_batch(
         batch_handle: u32,
         byte_offset: u32,
-        vertex_ptr: *const f32,
+        record_ptr: *const f32,
         byte_length: u32,
     ) -> u32;
 
     fn delete_gui_batch(batch_handle: u32);
+
+    fn set_gui_paint_blocks(program: u32, blocks: *const f32, count: u32) -> u32;
 
     fn draw_gui_batch(
         program: u32,
@@ -335,10 +337,14 @@ pub struct WebGlGlyphAtlasPage {
     texture: u32,
 }
 
-/// Bytes of `vertices` retained GUI vertices, within the bridge's 32-bit offsets.
-fn gui_bytes(vertices: usize) -> Result<u32, RenderError> {
-    vertices
-        .checked_mul(std::mem::size_of::<super::GuiVertex>())
+// The bridge's `draw_gui_batch` draws this many vertices per record.
+const _: () = assert!(super::super::gui_records::GUI_RECORD_VERTICES == 6);
+
+/// Bytes of `records` retained GUI records of `kind`, within the bridge's 32-bit
+/// offsets.
+fn gui_bytes(kind: super::GuiRecordKind, records: usize) -> Result<u32, RenderError> {
+    records
+        .checked_mul(gui_record_layout(kind).0 as usize)
         .and_then(|bytes| u32::try_from(bytes).ok())
         .ok_or_else(|| {
             RenderError::RenderDevice("retained GUI storage exceeds bridge limits".into())
@@ -756,11 +762,15 @@ impl RenderDevice for WebGlRenderDevice {
         unsafe { delete_surface_cache_target(target) };
     }
 
-    fn create_gui_batch(&mut self, capacity: usize) -> Result<Self::GuiBatch, RenderError> {
-        let bytes = gui_bytes(capacity)?;
-        let layout: *const u32 = std::ptr::from_ref(&GUI_VERTEX_LAYOUT).cast();
+    fn create_gui_batch(
+        &mut self,
+        kind: super::GuiRecordKind,
+        capacity: usize,
+    ) -> Result<Self::GuiBatch, RenderError> {
+        let bytes = gui_bytes(kind, capacity)?;
+        let layout = gui_record_table(kind);
         // SAFETY: `layout` points at a `'static` `#[repr(C)]` table of `u32` words
-        // describing `GuiVertex`. The bridge bounds-checks and reads it before
+        // describing `kind`'s records. The bridge bounds-checks and reads it before
         // returning, keeps no view of WASM memory and cannot reenter Rust.
         let id = unsafe { create_gui_batch(bytes, layout) };
         if id == 0 {
@@ -770,19 +780,20 @@ impl RenderDevice for WebGlRenderDevice {
         }
     }
 
-    fn write_gui_batch(
+    fn write_gui_batch<R: super::GuiRecord>(
         &mut self,
         batch: &mut Self::GuiBatch,
         first: usize,
-        vertices: &[super::GuiVertex],
+        records: &[R],
     ) -> Result<(), RenderError> {
-        let offset = gui_bytes(first)?;
-        let bytes = gui_bytes(vertices.len())?;
-        // SAFETY: `vertices` is a live, 4-byte-aligned slice of exactly `bytes` bytes of
-        // `#[repr(C)]` vertices. The bridge rejects stale handles and writes outside the
-        // storage, then copies that range into GL before returning. It keeps no view of
-        // WASM memory and cannot reenter Rust.
-        self.check(unsafe { write_gui_batch(*batch, offset, vertices.as_ptr().cast(), bytes) })?;
+        let offset = gui_bytes(R::KIND, first)?;
+        let bytes = gui_bytes(R::KIND, records.len())?;
+        // SAFETY: `records` is a live, 4-byte-aligned slice of exactly `bytes` bytes of
+        // `#[repr(C)]` `f32` lanes. The bridge rejects stale handles, writes outside the
+        // storage and offsets that are not whole records of the storage's layout, then
+        // copies that range into GL before returning. It keeps no view of WASM memory and
+        // cannot reenter Rust.
+        self.check(unsafe { write_gui_batch(*batch, offset, records.as_ptr().cast(), bytes) })?;
         self.error_checks.note_retained_upload();
         Ok(())
     }
@@ -791,6 +802,25 @@ impl RenderDevice for WebGlRenderDevice {
         // SAFETY: Only a scalar handle crosses the boundary; no Rust memory is borrowed.
         // The bridge ignores unknown handles and cannot reenter Rust.
         unsafe { delete_gui_batch(batch) };
+    }
+
+    fn set_gui_paint_blocks(
+        &mut self,
+        program: &Self::Program,
+        blocks: &[[f32; 4]],
+    ) -> Result<(), RenderError> {
+        if blocks.len() > crate::CANVAS_PAINT_VECTORS {
+            return Err(RenderError::RenderDevice(
+                "canvas paint blocks exceed their array".into(),
+            ));
+        }
+        // SAFETY: `blocks` is a live borrowed slice of `blocks.len()` vectors that the
+        // bridge copies into the uniform array before returning; the program handle
+        // is validated, no view of WASM memory is kept and the bridge cannot reenter
+        // Rust.
+        self.check(unsafe {
+            set_gui_paint_blocks(program.id, blocks.as_ptr().cast(), blocks.len() as u32)
+        })
     }
 
     fn draw_gui_batch(

@@ -1,4 +1,6 @@
-use super::{GuiCanvasPublication, GuiCanvasSemanticView, GuiControlObservation};
+use super::{
+    GuiCanvasPublication, GuiCanvasSemanticView, GuiControlObservation, GuiOverlayObservation,
+};
 use crate::OutputRef;
 use crate::services::asset_management::AssetKey;
 use crate::systems::canvas::{
@@ -81,10 +83,14 @@ impl GuiCanvasState {
         observation
     }
 
-    pub fn differs(&self, controls: &[Arc<GuiControlObservation>]) -> bool {
-        self.view
-            .as_ref()
-            .is_none_or(|view| view.controls.as_ref() != controls)
+    pub fn differs(
+        &self,
+        controls: &[Arc<GuiControlObservation>],
+        overlays: &[GuiOverlayObservation],
+    ) -> bool {
+        self.view.as_ref().is_none_or(|view| {
+            view.controls.as_ref() != controls || view.overlays.as_ref() != overlays
+        })
     }
 
     pub fn finish(
@@ -92,6 +98,7 @@ impl GuiCanvasState {
         selection: OutputRef,
         revision: u64,
         controls: Vec<Arc<GuiControlObservation>>,
+        overlays: Vec<GuiOverlayObservation>,
         entries: &[Arc<CanvasPaintEntry>],
     ) {
         let live_parts: BTreeSet<_> = entries
@@ -121,6 +128,7 @@ impl GuiCanvasState {
             selection,
             input_revision: revision,
             controls: controls.into(),
+            overlays: overlays.into(),
         }));
         self.changed = true;
     }
@@ -199,14 +207,16 @@ fn same_geometry(previous: &CanvasPrimitive, next: &CanvasPrimitive) -> bool {
             CanvasPrimitive::Box {
                 size: old_size,
                 corner_radius: old_radius,
+                shape: old_shape,
                 ..
             },
             CanvasPrimitive::Box {
                 size,
                 corner_radius,
+                shape,
                 ..
             },
-        ) => old_size == size && old_radius == corner_radius,
+        ) => old_size == size && old_radius == corner_radius && old_shape == shape,
         _ => false,
     }
 }

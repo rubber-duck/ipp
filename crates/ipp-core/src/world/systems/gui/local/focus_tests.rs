@@ -44,7 +44,8 @@ fn focus_effect(host: &mut GuiTestHost, world: WorldId, focused: bool, changed: 
         effects[0].effect().kind,
         GuiLocalEffectKind::FocusChanged {
             focused,
-            changed
+            changed,
+            part: 0,
         }
     );
 }
@@ -58,11 +59,11 @@ fn headless_focus_edit_blur_and_duplicates_preserve_the_value_and_exact_dirty_wo
         ComponentValue::GuiTextInput(GuiTextInput::default()),
     );
     let target = snapshot(&mut host, world, entity).target;
-    action(&mut host, world, target, GuiLocalAction::Focus);
+    action(&mut host, world, target, GuiLocalAction::Focus(0));
     frame(&mut host);
     focus_effect(&mut host, world, true, true);
     let focused = observed(&mut host, world);
-    action(&mut host, world, target, GuiLocalAction::Focus);
+    action(&mut host, world, target, GuiLocalAction::Focus(0));
     frame(&mut host);
     focus_effect(&mut host, world, true, false);
     assert_eq!(observed(&mut host, world), focused);
@@ -109,10 +110,10 @@ fn delayed_blur_never_clears_another_targets_focus() {
     );
     let first = snapshot(&mut host, world, first).target;
     let second = snapshot(&mut host, world, second).target;
-    action(&mut host, world, first, GuiLocalAction::Focus);
+    action(&mut host, world, first, GuiLocalAction::Focus(0));
     frame(&mut host);
     outcomes(&mut host, world);
-    action(&mut host, world, second, GuiLocalAction::Focus);
+    action(&mut host, world, second, GuiLocalAction::Focus(0));
     action(&mut host, world, first, GuiLocalAction::Blur);
     frame(&mut host);
     let effects = outcomes(&mut host, world);
@@ -121,7 +122,8 @@ fn delayed_blur_never_clears_another_targets_focus() {
         effects[0].effect().kind,
         GuiLocalEffectKind::FocusChanged {
             focused: true,
-            changed: true
+            changed: true,
+            part: 0,
         }
     );
     assert_eq!(effects[1].result, Ok(None));
@@ -139,7 +141,7 @@ fn blur_requires_current_lifetime_and_local_eligibility() {
         ComponentValue::GuiTextInput(GuiTextInput::default()),
     );
     let target = snapshot(&mut host, world, entity).target;
-    action(&mut host, world, target, GuiLocalAction::Focus);
+    action(&mut host, world, target, GuiLocalAction::Focus(0));
     action(
         &mut host,
         world,
@@ -164,7 +166,7 @@ fn blur_requires_current_lifetime_and_local_eligibility() {
     );
     let replacement = snapshot(&mut host, world, entity).target;
     assert_ne!(replacement, target);
-    action(&mut host, world, replacement, GuiLocalAction::Focus);
+    action(&mut host, world, replacement, GuiLocalAction::Focus(0));
     action(&mut host, world, target, GuiLocalAction::Blur);
     frame(&mut host);
     assert!(snapshot(&mut host, world, entity).focused);
@@ -198,7 +200,7 @@ fn same_publication_focus_edit_blur_apply_in_order_and_clear_canvas_priority() {
     let (mut host, output, target, context) =
         presented(ComponentValue::GuiTextInput(GuiTextInput::default()));
     let source = host.latest_publication(target.world.id()).unwrap();
-    let focus = routed(&host, &context, target, 100, &[], GuiLocalAction::Focus);
+    let focus = routed(&host, &context, target, 100, &[], GuiLocalAction::Focus(0));
     let edit = routed(
         &host,
         &context,
@@ -233,7 +235,8 @@ fn same_publication_focus_edit_blur_apply_in_order_and_clear_canvas_priority() {
         effects[2].effect().kind,
         GuiLocalEffectKind::FocusChanged {
             focused: false,
-            changed: true
+            changed: true,
+            part: 0,
         }
     );
     let publication = host
@@ -247,7 +250,12 @@ fn same_publication_focus_edit_blur_apply_in_order_and_clear_canvas_priority() {
 #[test]
 fn revoked_routed_blur_cannot_clear_logical_focus_but_headless_semantic_blur_can() {
     let (mut host, _, target, context) = presented(ComponentValue::GuiButton(GuiButton::default()));
-    action(&mut host, target.world.id(), target, GuiLocalAction::Focus);
+    action(
+        &mut host,
+        target.world.id(),
+        target,
+        GuiLocalAction::Focus(0),
+    );
     frame(&mut host);
     outcomes(&mut host, target.world.id());
     let blur = routed(&host, &context, target, 100, &[], GuiLocalAction::Blur);
@@ -279,7 +287,7 @@ fn blur_overflow_preflight_and_no_focus_noop_do_not_wrap_dirty_counters() {
         );
         let target = snapshot(&mut host, world, entity).target;
         if focused {
-            action(&mut host, world, target, GuiLocalAction::Focus);
+            action(&mut host, world, target, GuiLocalAction::Focus(0));
             frame(&mut host);
             outcomes(&mut host, world);
         }

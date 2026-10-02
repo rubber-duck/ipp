@@ -32,6 +32,12 @@ mod pointer_routing_tests;
 #[path = "keyboard_traversal_tests.rs"]
 mod keyboard_traversal_tests;
 
+#[path = "focusable_tests.rs"]
+mod focusable_tests;
+
+#[path = "group_tests.rs"]
+mod group_tests;
+
 #[path = "camera_routing_tests.rs"]
 mod camera_routing_tests;
 
@@ -40,6 +46,27 @@ mod scroll_chain_tests;
 
 #[path = "query_bound_tests.rs"]
 mod query_bound_tests;
+
+#[path = "focus_adoption_tests.rs"]
+mod focus_adoption_tests;
+
+#[path = "context_request_tests.rs"]
+mod context_request_tests;
+
+#[path = "slider_input_tests.rs"]
+mod slider_input_tests;
+
+#[path = "range_input_tests.rs"]
+mod range_input_tests;
+
+#[path = "number_input_tests.rs"]
+mod number_input_tests;
+
+#[path = "color_input_tests.rs"]
+mod color_input_tests;
+
+#[path = "overlay_mode_tests.rs"]
+mod overlay_mode_tests;
 
 const PROBE: SystemId = SystemId("fixture.gui-input-boundary");
 
@@ -736,6 +763,7 @@ fn scene() -> Scene {
     let surface = Surface {
         width: 100.0,
         height: 100.0,
+        ..Default::default()
     };
     let anchor = create(
         &mut host,

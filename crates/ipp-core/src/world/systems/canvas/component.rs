@@ -7,10 +7,22 @@ use ipp_schema_derive::SchemaComponent;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-/// Optional authored placement, tint and rectangular clipping of one Canvas
-/// entity. An entity without it paints with the identity style: no translation,
-/// unit scale, white tint, full opacity and no clip. Tint and opacity multiply
-/// down the tree; translation and scale compose; clips intersect.
+/// Optional authored placement, tint, rectangular clipping and layer of one
+/// Canvas entity. An entity without it paints with the identity style: no
+/// translation, unit scale, white tint, full opacity, no clip and its parent's
+/// layer. Tint and opacity multiply down the tree; translation and scale
+/// compose; clips intersect within a layer.
+///
+/// `layer` is a plane id within the canvas. Zero keeps the entity on its
+/// parent's plane, the base plane 0 at the top level; a nonzero id puts it on
+/// that plane, or one above its parent's when the parent's is not below it, so
+/// content never sits below its parent and every entity resolving to a plane
+/// shares it wherever it is declared. Paint follows plane, then tree order,
+/// and hit testing the reverse. An entity with a nonzero layer starts a new
+/// clip scope at the canvas extent, so lower-layer ancestors no longer clip
+/// it, while its own and its descendants' clips still apply. A Surface's
+/// `layer_spacing` presents each plane its id times the spacing along its
+/// normal.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, SchemaComponent)]
 pub struct CanvasStyle {
@@ -42,6 +54,11 @@ pub struct CanvasStyle {
     pub clip_max_x: f32,
     /// Local clipping maximum Y.
     pub clip_max_y: f32,
+    /// Plane id of this entity's layer within its canvas. Zero keeps its
+    /// parent's plane; a nonzero id names a plane, raised to one above its
+    /// parent's when the parent's is not below it. Structural: animation never
+    /// writes it.
+    pub layer: u32,
 }
 
 impl Default for CanvasStyle {
@@ -61,11 +78,35 @@ impl Default for CanvasStyle {
             clip_min_y: 0.0,
             clip_max_x: 0.0,
             clip_max_y: 0.0,
+            layer: 0,
         }
     }
 }
 
+impl CanvasStyle {
+    /// Compose this style's translation and scale onto a parent's canvas
+    /// `position` and `scale`: the translation moves in the parent's scaled
+    /// space and the scales multiply.
+    pub(in crate::world::systems) fn compose(
+        &self,
+        position: [f32; 2],
+        scale: [f32; 2],
+    ) -> ([f32; 2], [f32; 2]) {
+        (
+            [
+                position[0] + scale[0] * self.x,
+                position[1] + scale[1] * self.y,
+            ],
+            [scale[0] * self.scale_x, scale[1] * self.scale_y],
+        )
+    }
+}
+
 impl ComponentLifecycle for CanvasStyle {
+    fn animatable_field(offset: u32) -> bool {
+        offset != std::mem::offset_of!(Self, layer) as u32
+    }
+
     fn validate_field(&self, _offset: u32) -> Result<(), ErrorReason> {
         // Every field is independently bounded, so a write out of range is
         // refused where it happens.
@@ -227,6 +268,11 @@ impl Default for CanvasBitmap {
 }
 
 /// A resource-independent filled rounded rectangle.
+///
+/// The box paints white under the inherited tint. On an entity that also has a
+/// `GuiSkin` and no control, the skin's resolved Background part paints this box
+/// instead, over its size or its layout bounds, so the skin's rows replace the
+/// plain fill and these radii.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, SchemaComponent)]
 pub struct CanvasBox {
@@ -262,6 +308,107 @@ impl ComponentLifecycle for CanvasBox {
 
     fn validate(&self) -> Result<(), ErrorReason> {
         nonnegative(&[self.width, self.height, self.radius_x, self.radius_y])
+    }
+}
+
+/// A custom paint for the fill of this entity's own box: its `CanvasBox`, or the
+/// Background part of its skin or control.
+///
+/// The paint is an immutable shader-definition asset with a paint body, a small
+/// fragment function the renderer calls for the fill colour; `properties` are its
+/// named inputs, written, animated and saved like custom-material properties. The
+/// box's colour stays where it is authored, in the style tint or the skin row, and
+/// becomes the function's colour input; with a paint the fill is otherwise solid,
+/// so a gradient, colour field or checker of the same part is not drawn. Coverage,
+/// border, glow, clip and opacity stay the renderer's. Until the paint is usable,
+/// and whenever the renderer cannot admit it, the box draws its colour. The
+/// renderer's paint guide, `CANVAS_PAINTS.md`, owns the function interface.
+#[repr(C)]
+#[derive(Clone, Debug, Default, PartialEq, SchemaComponent)]
+pub struct CanvasPaint {
+    /// Immutable shader-definition source with a paint body.
+    pub source: Arc<str>,
+    /// Selected definition variant.
+    pub variant: u32,
+    /// Independently editable named paint inputs.
+    #[schema(ignore)]
+    pub properties: crate::DynamicProperties,
+}
+
+impl ComponentLifecycle for CanvasPaint {
+    fn supports_numeric_property(offset: u32) -> bool {
+        crate::components::dynamic_properties::is_dynamic_field(offset)
+            && offset != crate::components::dynamic_properties::DYNAMIC_METADATA
+    }
+
+    fn validate_numeric_properties(
+        &self,
+        fields: &[(u32, crate::components::schema::FieldValue)],
+    ) -> Result<(), ErrorReason> {
+        // Only existing numeric properties change in place; the source and its
+        // variant are resource fields.
+        for (offset, field) in fields {
+            let crate::components::schema::FieldValue::Dynamic(value) = field else {
+                return Err(ErrorReason::InvalidField);
+            };
+            if !Self::supports_numeric_property(*offset)
+                || value.kind() == crate::DynamicPropertyKind::Asset
+                || self
+                    .properties
+                    .get_key(*offset)
+                    .is_none_or(|previous| previous.kind() != value.kind())
+            {
+                return Err(ErrorReason::InvalidField);
+            }
+            value.validate().map_err(|_| ErrorReason::InvalidValue)?;
+        }
+        Ok(())
+    }
+
+    fn supports_dynamic_properties() -> bool {
+        true
+    }
+
+    fn dynamic_properties(&self) -> Option<&crate::DynamicProperties> {
+        Some(&self.properties)
+    }
+
+    fn dynamic_properties_mut(&mut self) -> Option<&mut crate::DynamicProperties> {
+        Some(&mut self.properties)
+    }
+
+    fn validate(&self) -> Result<(), ErrorReason> {
+        crate::services::asset_management::service::validate_source(&self.source)
+    }
+
+    /// Dynamic properties are indexed state: each write is checked where it
+    /// happens, by its own value.
+    fn validates_after_operation() -> bool {
+        false
+    }
+
+    fn validate_field(&self, _offset: u32) -> Result<(), ErrorReason> {
+        self.validate()
+    }
+
+    fn asset_references() -> &'static [ComponentAssetReference] {
+        &[ComponentAssetReference {
+            kind: crate::services::asset_management::shader::SHADER_TYPE.0,
+            source_offset: std::mem::offset_of!(Self, source) as u32,
+            variant_offset: std::mem::offset_of!(Self, variant) as u32,
+        }]
+    }
+
+    fn resource_demand(&self, demand: &mut BTreeSet<AssetDemandSelection>) {
+        if !self.source.is_empty() {
+            AssetDemandSelection::insert_into(
+                demand,
+                crate::services::asset_management::shader::SHADER_TYPE,
+                &self.source,
+                self.variant,
+            );
+        }
+        self.properties.resource_demand(demand);
     }
 }
 
@@ -350,5 +497,22 @@ fn nonnegative(values: &[f32]) -> Result<(), ErrorReason> {
         Ok(())
     } else {
         Err(ErrorReason::InvalidValue)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_layer_is_structural_and_every_other_style_field_animates() {
+        let layer = std::mem::offset_of!(CanvasStyle, layer) as u32;
+        assert!(!CanvasStyle::animatable_field(layer));
+        assert!(CanvasStyle::animatable_field(
+            std::mem::offset_of!(CanvasStyle, opacity) as u32
+        ));
+        assert!(CanvasStyle::animatable_field(
+            std::mem::offset_of!(CanvasStyle, clip_max_y) as u32
+        ));
     }
 }

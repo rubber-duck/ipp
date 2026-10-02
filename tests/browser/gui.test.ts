@@ -3,6 +3,7 @@ import { writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import test from "node:test";
 import type { Page } from "playwright";
+import type * as GuiInputScenario from "../integration/scenarios/gui-input.js";
 import {
   runBrowserEnvironment,
   type BrowserBuildConfiguration,
@@ -53,7 +54,7 @@ function columns(
   return found;
 }
 
-/** Columns of the default white caret bar over the blue control background. */
+/** Columns of the theme's white caret bar over the blue control background. */
 function caretColumns(paint: TextInputPaint): number[] {
   return columns(paint, CARET_ROWS, (x, y) =>
     rgb(paint, x, y).every((channel) => channel > 200),
@@ -373,6 +374,17 @@ test("a 100000-item VirtualList scrolls, clips and restores through a real worke
   );
 });
 
+/** The GUI input scenario's state on the page between its timed parts. */
+type GuiInputPage = typeof globalThis & {
+  guiInput?: {
+    scenario: typeof GuiInputScenario;
+    host: Parameters<typeof GuiInputScenario.exerciseGuiInput>[0] & {
+      close(): Promise<void>;
+    };
+    font: ArrayBuffer;
+  };
+};
+
 test("GUI pointer, keyboard and text input routes through a real worker connection", {
   timeout: 60000,
 }, async (context) => {
@@ -397,10 +409,14 @@ test("GUI pointer, keyboard and text input routes through a real worker connecti
     },
     context.signal,
     async (env) => {
-      const result = await env.execute("gui input", {}, () =>
+      // One worker Host connection serves every part of the scenario. Every
+      // control read is an inspection answered at a Host frame, so on a
+      // software-rendered worker the parts together take about 20 s: each
+      // part is its own timed operation, so a stall fails at its part.
+      const parts = await env.execute("gui input connection", {}, () =>
         env.page.evaluate(async (urls) => {
           const contract = await import(urls.generated);
-          const { exerciseGuiInput } = await import(
+          const scenario = await import(
             `${urls.origin}/dist/tests/integration/scenarios/gui-input.js`
           );
           const canvas = document.createElement("canvas");
@@ -416,14 +432,31 @@ test("GUI pointer, keyboard and text input routes through a real worker connecti
             urls.wasm,
             { canvas: canvas.transferControlToOffscreen() },
           );
-          try {
-            return await exerciseGuiInput(host, font);
-          } finally {
-            await host.close();
-          }
+          (globalThis as GuiInputPage).guiInput = { scenario, host, font };
+          return Object.keys(
+            scenario.GUI_INPUT_PARTS,
+          ) as GuiInputScenario.GuiInputPart[];
         }, env.urls),
       );
-      env.evidence.record("gui input", result);
+      try {
+        for (const part of parts) {
+          const result = await env.execute(`gui input ${part}`, {}, () =>
+            env.page.evaluate(
+              (part: GuiInputScenario.GuiInputPart): Promise<unknown> => {
+                const { scenario, host, font } = (globalThis as GuiInputPage)
+                  .guiInput!;
+                return scenario.GUI_INPUT_PARTS[part](host, font);
+              },
+              part,
+            ),
+          );
+          env.evidence.record(`gui input ${part}`, result);
+        }
+      } finally {
+        await env.page.evaluate(async () => {
+          await (globalThis as GuiInputPage).guiInput?.host.close();
+        });
+      }
     },
   );
 });
@@ -532,10 +565,12 @@ test("mounted IppCanvas owns trusted text, IME, selection and clipboard lifecycl
       );
       assert.deepEqual(themeFrame.parts, [
         "background",
+        "caret",
         "fill",
         "focusRing",
         "icon",
         "label",
+        "selection",
       ]);
       assert.equal(themeFrame.width, 240);
       assert.equal(themeFrame.height, 180);
@@ -1367,9 +1402,9 @@ test("mounted nested ScrollViews drag, wheel and clip in completed WebGL frames"
         );
       };
 
-      // Outer offset 1 of 2: the 108 px thumb starts half way along its
-      // 72 px travel.
-      await expectThumb("bar-scrolled", 36, 144);
+      // Outer offset 1 of 2: the 102.6 px thumb starts half way along its
+      // 68.4 px travel, which begins below the track's 4.5 px pointed end.
+      await expectThumb("bar-scrolled", 39, 141);
 
       // Dragging the thumb 36 px down scrolls the outer view by one more
       // unit with the pressed skin while held; the capture holds when the
@@ -1377,9 +1412,9 @@ test("mounted nested ScrollViews drag, wheel and clip in completed WebGL frames"
       await env.page.mouse.move(...page(235, 90));
       await env.page.mouse.down();
       await env.page.mouse.move(...page(150, 126), { steps: 6 });
-      await expectThumb("bar-thumb-pressed", 72, 180, "white");
+      await expectThumb("bar-thumb-pressed", 73, 176, "white");
       await env.page.mouse.up();
-      await expectThumb("bar-thumb-dragged", 72, 180);
+      await expectThumb("bar-thumb-dragged", 73, 176);
       // Outer offset 2 leaves the narrow blue block above `narrow` and the
       // yellow block under the lower samples.
       await expectFrame("bar-content-after-drag", {
@@ -1392,7 +1427,7 @@ test("mounted nested ScrollViews drag, wheel and clip in completed WebGL frames"
       // A track press above the thumb pages back by one viewport, clamped
       // at the start.
       await env.page.mouse.click(...page(235, 20));
-      await expectThumb("bar-track-paged", 0, 108);
+      await expectThumb("bar-track-paged", 5, 107);
 
       const canvasCount = await env.page.evaluate(
         async (url) => (await import(url)).closeScrollCanvas(),
@@ -1523,7 +1558,8 @@ test("a mounted React VirtualList declares its wanted range and scrolls in compl
         [2.75, "red"],
       ]);
 
-      // Dragging the 18 px thumb half its 162 px travel scrolls to the middle
+      // Dragging the 18 px thumb, which starts below the track's 4.5 px
+      // pointed end, 81 px along its 153 px travel scrolls past the middle
       // of 100000 items; the list then declares the items there and paints
       // each by its index, placed from the persisted anchor.
       await env.page.mouse.move(...page(235, 9));
@@ -1539,9 +1575,9 @@ test("a mounted React VirtualList declares its wanted range and scrolls in compl
       );
       assert.ok(
         covered.length > 0 &&
-          Math.abs(covered[0]! - 81) <= 10 &&
-          Math.abs(covered.at(-1)! - 99) <= 10,
-        `virtual-thumb: thumb rows ${covered} not 81..99; ${await env.page.evaluate(
+          Math.abs(covered[0]! - 86) <= 10 &&
+          Math.abs(covered.at(-1)! - 104) <= 10,
+        `virtual-thumb: thumb rows ${covered} not 86..104; ${await env.page.evaluate(
           async (url) => (await import(url)).scrollDiagnostics(),
           fixture,
         )}`,

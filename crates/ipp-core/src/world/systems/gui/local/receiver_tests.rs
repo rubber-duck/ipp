@@ -154,7 +154,7 @@ fn physical_events_share_one_publication_and_apply_in_order() {
 #[test]
 fn focus_and_momentary_press_apply_without_writing_a_value() {
     let (mut host, _, target, context) = presented(ComponentValue::GuiButton(GuiButton::default()));
-    let focus = routed(&host, &context, target, 100, &[], GuiLocalAction::Focus);
+    let focus = routed(&host, &context, target, 100, &[], GuiLocalAction::Focus(0));
     let press = routed(&host, &context, target, 101, &[], GuiLocalAction::Press);
     let last = routed(&host, &context, target, 102, &[], GuiLocalAction::Press);
     for command in [focus, press, last] {
@@ -170,7 +170,8 @@ fn focus_and_momentary_press_apply_without_writing_a_value() {
         effects[0].effect().kind,
         GuiLocalEffectKind::FocusChanged {
             focused: true,
-            changed: true
+            changed: true,
+            part: 0,
         }
     );
     assert!(
@@ -193,7 +194,12 @@ fn candidate_counter_overflow_rejects_before_any_commit() {
         })
         .unwrap();
     let before = snapshot(&mut host, target.world.id(), target.entity);
-    action(&mut host, target.world.id(), target, GuiLocalAction::Focus);
+    action(
+        &mut host,
+        target.world.id(),
+        target,
+        GuiLocalAction::Focus(0),
+    );
     frame(&mut host);
     assert_eq!(
         before,
@@ -295,7 +301,7 @@ fn root_session_owns_child_focus_without_numeric_session_bridge_and_close_is_imm
         target,
         300,
         &[token],
-        GuiLocalAction::Focus,
+        GuiLocalAction::Focus(0),
     );
     queue(&mut host, target.world.id(), focus);
     frame(&mut host);

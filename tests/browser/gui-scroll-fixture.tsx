@@ -97,25 +97,60 @@ let themes:
     }
   | undefined;
 
-/** Opaque scroll bar skins so frames classify bar columns by colour: the
- * outer view has a cyan track and a magenta thumb that turns white while
+/** Opaque flat scroll bar skins so frames classify bar columns by colour:
+ * the outer view has a cyan track and a magenta thumb that turns white while
  * pressed; the inner view a blue track and a yellow thumb. Backgrounds are
- * the ScrollView fills. */
+ * the ScrollView fills. Every part states away the default look's lines,
+ * corner cuts and glow. */
 function scrollThemes(current: GuiPanelContract) {
+  const plain = {
+    border_width: 0,
+    corner_cut: [0, 0, 0, 0],
+    glow_intensity: 0,
+  };
   return {
     outer: encodeTheme(current, [
-      ["background", undefined, { color: SCROLL_COLORS.outer, opacity: 1 }],
-      ["scrollTrackY", undefined, { color: [0.1, 0.8, 0.8, 1], opacity: 1 }],
-      ["scrollThumbY", undefined, { color: [0.8, 0.1, 0.8, 1], opacity: 1 }],
+      [
+        "background",
+        undefined,
+        { color: SCROLL_COLORS.outer, opacity: 1, ...plain },
+      ],
+      [
+        "scrollTrackY",
+        undefined,
+        { color: [0.1, 0.8, 0.8, 1], opacity: 1, ...plain },
+      ],
+      [
+        "scrollThumbY",
+        undefined,
+        { color: [0.8, 0.1, 0.8, 1], opacity: 1, ...plain },
+      ],
       ["scrollThumbY", "pressed", { color: [0.9, 0.9, 0.9, 1] }],
     ]),
     inner: encodeTheme(current, [
-      ["background", undefined, { color: SCROLL_COLORS.inner, opacity: 1 }],
-      ["scrollTrackY", undefined, { color: [0.1, 0.1, 0.8, 1], opacity: 1 }],
-      ["scrollThumbY", undefined, { color: [0.8, 0.8, 0.1, 1], opacity: 1 }],
+      [
+        "background",
+        undefined,
+        { color: SCROLL_COLORS.inner, opacity: 1, ...plain },
+      ],
+      [
+        "scrollTrackY",
+        undefined,
+        { color: [0.1, 0.1, 0.8, 1], opacity: 1, ...plain },
+      ],
+      [
+        "scrollThumbY",
+        undefined,
+        { color: [0.8, 0.8, 0.1, 1], opacity: 1, ...plain },
+      ],
     ]),
   };
 }
+
+/** Bars as thick as 5% of a viewport's shorter side, flush with the
+ * control's right side and ends. */
+const flushBar = (thickness: number) =>
+  ({ bar_thickness: thickness, bar_inset: 0, bar_end_inset: 0 }) as const;
 
 function Block({
   id,
@@ -155,6 +190,7 @@ function virtualListPanel(): ReactElement {
         item_extent={VIRTUAL_LIST.estimate}
         overscan={1}
         axis={1}
+        {...flushBar(9)}
         onRangeChange={(range) => ranges.push(range)}
         renderItem={(index) => {
           const height = VIRTUAL_LIST.heights[index % 2]!;
@@ -183,16 +219,17 @@ function virtualListPanel(): ReactElement {
  * block), a narrow 120x120 blue block at the left and a 60-unit yellow
  * block. The outer view can scroll by 120 and the inner view by 60. Track
  * thickness is 5% of the shorter viewport side: the outer vertical bar spans
- * x 231..240 with a 108-unit thumb travelling 72 units over that capacity.
- * The inner 6-unit bar would share that edge, so it ends at the outer
- * track's inner edge: x 225..231, with an 80-unit thumb.
+ * x 231..240, and its thumb, 102.6 units long, travels 68.4 units between
+ * the track's 4.5-unit pointed ends over that capacity. The inner 6-unit bar
+ * would share that edge, so it ends at the outer track's inner edge: x
+ * 225..231.
  */
 function nestedScrollPanel(): ReactElement {
   return (
     <Entity id="outer">
       <Layout width={WIDTH} height={HEIGHT} />
       <Skin theme="scroll-bars" />
-      <ScrollView ref={outerRef} axis={1} />
+      <ScrollView ref={outerRef} axis={1} {...flushBar(9)} />
       <Children>
         <Entity id="outer-content">
           <Layout kind={2} width={WIDTH} />
@@ -200,7 +237,7 @@ function nestedScrollPanel(): ReactElement {
             <Entity id="inner">
               <Layout width={WIDTH} height={120} />
               <Skin theme="inner-scroll-bars" />
-              <ScrollView axis={1} />
+              <ScrollView axis={1} {...flushBar(6)} />
               <Children>
                 <Entity id="inner-content">
                   <Layout kind={2} width={WIDTH} />

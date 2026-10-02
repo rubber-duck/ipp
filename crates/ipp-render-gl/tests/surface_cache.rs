@@ -615,7 +615,7 @@ fn focus_takes_interaction_priority_until_the_control_is_disabled() {
     cache_policy(&mut host, panel, Some(ALWAYS));
     let cold = frame(&mut renderer, &mut host, world_id, 0.1);
     assert_eq!(work(&cold), [1, 0, 0, 0, 1]);
-    checkbox_action(&mut host, panel, 1, GuiLocalAction::Focus);
+    checkbox_action(&mut host, panel, 1, GuiLocalAction::Focus(0));
     let focused = frame(&mut renderer, &mut host, world_id, 0.01);
     assert_eq!(work(&focused), [0, 0, 1, 0, 0]);
     assert!(panel.publication(&host).interaction.focused);
@@ -841,7 +841,7 @@ fn faulted_focus(location: FaultLocation) {
         1 + u32::from(sibling.is_some())
     );
     for focused in std::iter::once(panel).chain(sibling) {
-        checkbox_action(&mut host, focused, 1, GuiLocalAction::Focus);
+        checkbox_action(&mut host, focused, 1, GuiLocalAction::Focus(0));
     }
     assert_eq!(
         frame(&mut renderer, &mut host, parent, 0.01).surface_cache_direct,
@@ -944,11 +944,16 @@ fn interaction_presents_directly_and_returns_only_to_current_images() {
         }
     }
 
+    // Override rows win in every state: a plain box without the default
+    // look's border or glow, so hover leaves the paint unchanged.
     let appearance = |color| {
         let mut parts = ipp_core::components::rows::Rows::new();
         parts
             .push(GuiPaintPart {
                 color: Some(color),
+                border_width: Some(0.0),
+                border_color: Some([0.0; 4]),
+                glow_intensity: Some(0.0),
                 ..GuiPaintPart::keyed(GuiPartId::base(GuiPrimitivePart::Background)).unwrap()
             })
             .unwrap();
@@ -990,7 +995,7 @@ fn interaction_presents_directly_and_returns_only_to_current_images() {
     );
     take_events(&state);
 
-    action(&mut host, 1, GuiLocalAction::Focus);
+    action(&mut host, 1, GuiLocalAction::Focus(0));
     let focused = frame(&mut renderer, &mut host, world_id, 0.01);
     assert_eq!(work(&focused), [0, 0, 1, 0, 0], "{focused:?}");
     assert!(!take_events(&state).contains('C'));

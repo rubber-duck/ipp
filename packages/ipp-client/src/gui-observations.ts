@@ -201,7 +201,11 @@ export class GuiObservations {
     )
       throw new Error("Invalid GUI observation provenance or ordinal");
     const application =
-      effect.effect.kind === "pressed" || effect.effect.kind === "submitted";
+      effect.effect.kind === "pressed" ||
+      effect.effect.kind === "submitted" ||
+      effect.effect.kind === "rejected" ||
+      effect.effect.kind === "discarded" ||
+      effect.effect.kind === "contextRequested";
     if (
       registration.classes !== "all" &&
       (registration.classes === "application") !== application

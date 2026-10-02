@@ -315,7 +315,9 @@ test("schema rows fields generate typed row helpers and decode inspected tables"
       tag: tag("RESPONSE_INSPECT"),
       gui_focus: [],
       gui_pointers: [],
+      gui_active_items: [],
       canvas: null,
+      gui_preferences: null,
       next: 0n,
       time: 0,
       entities: [
@@ -977,7 +979,9 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", asy
     tag: tag("RESPONSE_INSPECT"),
     gui_focus: [],
     gui_pointers: [],
+    gui_active_items: [],
     canvas: null,
+    gui_preferences: null,
     next: 0n,
     time: 2.25,
     entities: [entity],
@@ -1461,7 +1465,9 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", asy
       tag: tag("RESPONSE_INSPECT"),
       gui_focus: [],
       gui_pointers: [],
+      gui_active_items: [],
       canvas: null,
+      gui_preferences: null,
       next: 0n,
       time: 0,
       entities: [
@@ -1679,7 +1685,9 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", asy
       tag: tag("RESPONSE_INSPECT"),
       gui_focus: [],
       gui_pointers: [],
+      gui_active_items: [],
       canvas: null,
+      gui_preferences: null,
       next: 0n,
       time: 2.25,
       entities: [
@@ -1761,7 +1769,9 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", asy
       tag: tag("RESPONSE_INSPECT"),
       gui_focus: [],
       gui_pointers: [],
+      gui_active_items: [],
       canvas: null,
+      gui_preferences: null,
       next: 0n,
       time: 2.25,
       entities: [
@@ -1811,7 +1821,9 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", asy
           tag: tag("RESPONSE_INSPECT"),
           gui_focus: [],
           gui_pointers: [],
+          gui_active_items: [],
           canvas: null,
+          gui_preferences: null,
           next: 0n,
           time: 2.25,
           entities: [
@@ -2689,7 +2701,9 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", asy
         tag: tag("RESPONSE_INSPECT"),
         gui_focus: [],
         gui_pointers: [],
+        gui_active_items: [],
         canvas: null,
+        gui_preferences: null,
         next: 0n,
         time: 2.25,
         entities: [
@@ -2931,6 +2945,47 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", asy
       await host.presentation.select(presentationSurface, rootBinding),
       presentationView,
     );
+    const resizedView = {
+      surface: presentationSurface,
+      selection: 16n,
+      binding: {
+        output,
+        viewport: { width: 5, height: 4, devicePixelRatio: 2 },
+        generation: { host: 13n, serial: 15n },
+      },
+    };
+    exchanges.push({
+      request: presentationRequest("RESIZE", {
+        view: encodedPresentationView,
+        width: 5,
+        height: 4,
+        device_pixel_ratio: 2,
+      }),
+      response: presentationResponse("VIEW", {
+        view: layout("presentation-view", {
+          surface: encodedSurface,
+          selection: 16n,
+          binding: layout("root-binding", {
+            output: encodedOutput,
+            width: 5,
+            height: 4,
+            device_pixel_ratio: 2,
+            generation: layout("presentation-identity", {
+              host: 13n,
+              serial: 15n,
+            }),
+          }),
+        }),
+      }),
+    });
+    assert.deepEqual(
+      await host.presentation.resize(presentationView, {
+        width: 5,
+        height: 4,
+        devicePixelRatio: 2,
+      }),
+      resizedView,
+    );
     for (const options of [
       {},
       { afterSequence: 15n, publication: presentedFrame.publication },
@@ -3109,7 +3164,7 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", asy
       /trailing/i,
     );
     assert.equal(exchanges.length, 0);
-    assert.equal(nextRequest, 21n);
+    assert.equal(nextRequest, 22n);
   } finally {
     await host.close();
   }
@@ -3147,7 +3202,7 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", asy
           name !== "SNAPSHOT_VALUE_ROWS" &&
           // GUI, Canvas and lifecycle diagnostic codecs are covered by the
           // gui-semantics, physical-input and lifecycle-diagnostics clients.
-          !/^(GUI_|COMMAND_GUI_ACTION$|INSPECT_GUI_|(REQUEST|RESPONSE)_GUI_OBSERVATION$|INSPECT_CANVAS$|REQUEST_CANVAS_STATE_UPDATE$|(REQUEST|RESPONSE)_LIFECYCLE_DIAGNOSTICS$)/.test(
+          !/^(GUI_|COMMAND_GUI_ACTION$|INSPECT_GUI_|(REQUEST|RESPONSE)_GUI_OBSERVATION$|INSPECT_CANVAS$|REQUEST_CANVAS_STATE_UPDATE$|REQUEST_GUI_PREFERENCES_UPDATE$|(REQUEST|RESPONSE)_LIFECYCLE_DIAGNOSTICS$)/.test(
             name,
           ) &&
           !animationTag(name) &&

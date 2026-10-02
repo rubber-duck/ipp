@@ -94,6 +94,104 @@ impl GuiLayout {
     }
 }
 
+/// Raises an entity out of its parent's layout flow and places it against
+/// its parent's evaluated box: an overlay such as a list, menu, popover,
+/// tooltip, toast stack or dialog.
+///
+/// The overlay takes no space among its siblings. It is laid out as its own
+/// root, sized by its content, and placed in canvas coordinates beside its
+/// parent's box on `side`, aligned along that side by `align`. A top-level
+/// overlay is placed inside the canvas instead, against the canvas edge
+/// `side` names. Its own `CanvasStyle` translation offsets the placement, so
+/// a gap below a trigger or a pointer point is authored there; flipping to
+/// the opposite side mirrors the offset along the flipped axis. When the
+/// preferred side lacks room and the opposite side has more, the overlay
+/// flips; it then shifts along the other axis to stay inside the canvas, and
+/// an axis whose content exceeds the room is laid out again limited to it,
+/// so the content scrolls.
+///
+/// The overlay is open while its `GuiBehavior.visible` field is set, which it
+/// requires; a closed overlay is not laid out, painted, hit or traversed. It
+/// must be raised by a nonzero `CanvasStyle.layer`, which stacks a nested
+/// overlay above the overlay it opens from; an overlay that is not raised is
+/// never shown and reports [`GuiEntityLayoutDiagnostic::OverlayNotRaised`].
+///
+/// Its `mode` decides what besides client writes opens and closes it, and how
+/// it takes input:
+///
+/// - manual (a toast stack): only client writes open and close it.
+/// - light (a menu, option list or popover): a press outside it and its
+///   parent's subtree closes it and is swallowed, and so does focus moving
+///   outside both. Its box takes the pointer from lower layers.
+/// - modal (a dialog): the pointer, hover, the wheel and keys never reach the
+///   lower layers of its canvas, and Tab stays inside it.
+/// - hint (a tooltip): the GUI System opens it after a delay while its parent
+///   control is hovered or holds visible focus, and closes it after a grace
+///   when that ends, when the parent is pressed or on Escape. It is inert to
+///   the pointer and never takes focus.
+///
+/// When a light or modal overlay holding a focusable control opens, focus
+/// moves to its first one and closing it returns focus to the control focused
+/// before, and Escape closes the topmost overlay of the focused control's
+/// canvas that is not manual. The input router documents these rules.
+///
+/// [`GuiEntityLayoutDiagnostic::OverlayNotRaised`]: super::GuiEntityLayoutDiagnostic::OverlayNotRaised
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, SchemaComponent)]
+pub struct GuiOverlay {
+    /// Side of the parent's box the overlay sits beside: bottom 0, top 1,
+    /// right 2, left 3, or centred over it 4. Against the canvas, the edge
+    /// it rests on inside the canvas, or centred.
+    pub side: u32,
+    /// Alignment along the side: start 0, centre 1, end 2, or stretch 3 to
+    /// the box's extent. Over the box (side 4) it applies horizontally.
+    pub align: u32,
+    /// Who opens and closes it besides client writes of its visible field:
+    /// manual 0, light 1, modal 2 or hint 3.
+    pub mode: u32,
+}
+
+impl GuiOverlay {
+    /// Largest `side`: centred over the box.
+    pub(super) const SIDE_CENTRE: u32 = 4;
+
+    /// `align` that stretches the overlay to the box's extent.
+    pub(super) const ALIGN_STRETCH: u32 = 3;
+
+    /// `mode`: only client writes open and close it.
+    pub const MODE_MANUAL: u32 = 0;
+
+    /// `mode`: an outside press or focus leaving closes it.
+    pub const MODE_LIGHT: u32 = 1;
+
+    /// `mode`: it blocks input to the lower layers of its canvas.
+    pub const MODE_MODAL: u32 = 2;
+
+    /// `mode`: hovering or visibly focusing its parent opens it.
+    pub const MODE_HINT: u32 = 3;
+}
+
+impl ComponentLifecycle for GuiOverlay {
+    fn required_components() -> &'static [u16] {
+        &[crate::ComponentValue::GUI_BEHAVIOR]
+    }
+
+    fn animatable_field(_offset: u32) -> bool {
+        false
+    }
+
+    fn validate(&self) -> Result<(), ErrorReason> {
+        if self.side > Self::SIDE_CENTRE
+            || self.align > Self::ALIGN_STRETCH
+            || self.mode > Self::MODE_HINT
+        {
+            Err(ErrorReason::InvalidValue)
+        } else {
+            Ok(())
+        }
+    }
+}
+
 impl ComponentLifecycle for GuiLayout {
     fn validate(&self) -> Result<(), ErrorReason> {
         let optional = [self.width, self.height, self.max_width, self.max_height];

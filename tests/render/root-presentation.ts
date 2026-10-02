@@ -105,15 +105,24 @@ export class RootPresentation {
       camera,
       "camera",
     );
-    this.selected = await RootPresentation.bind(this.host, output, viewport);
+    if (sameOutputReference(output, this.selected.output))
+      await this.resize(viewport);
+    else
+      this.selected = await RootPresentation.bind(this.host, output, viewport);
   }
 
+  /** Rebind the selected output at `viewport` and keep it selected, in one request. */
   async resize(viewport: RootViewport) {
-    this.selected = await RootPresentation.bind(
-      this.host,
-      this.selected.output,
-      viewport,
-    );
+    const view = await this.host.presentation.resize(this.selected.view, {
+      width: viewport.width,
+      height: viewport.height,
+      devicePixelRatio: viewport.devicePixelRatio ?? 1,
+    });
+    this.selected = {
+      output: this.selected.output,
+      binding: view.binding,
+      view,
+    };
   }
 
   /** Select the unchanged binding on the graphics context restored after loss. */

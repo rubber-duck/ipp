@@ -52,7 +52,7 @@ fn create(
     apply(host, world, operations)[0].1
 }
 
-fn counts(host: &mut HostRuntime, world: WorldId) -> [usize; 12] {
+fn counts(host: &mut HostRuntime, world: WorldId) -> [usize; 5] {
     host.world_mut(world)
         .unwrap()
         .system::<GuiSystem>(GuiSystem::ID)
@@ -61,8 +61,23 @@ fn counts(host: &mut HostRuntime, world: WorldId) -> [usize; 12] {
         .index_counts()
 }
 
+fn select(host: &mut HostRuntime, world: WorldId, entity: EntityId, selected: bool) {
+    apply(
+        host,
+        world,
+        vec![Command::SetField {
+            entity: EntityRef::Handle(entity),
+            component: ComponentValue::GUI_BUTTON,
+            field: crate::FieldWrite {
+                offset: std::mem::offset_of!(crate::components::GuiButton, selected) as u32,
+                value: crate::FieldValue::Bool(selected),
+            },
+        }],
+    );
+}
+
 #[test]
-fn motion_membership_and_ancestry_churn_are_bounded_before_and_after_preparation() {
+fn motion_indexes_stay_bounded_through_control_churn_and_mid_transition_deletion() {
     let mut host = HostRuntime::new();
     let world = host
         .create_world(
@@ -98,7 +113,7 @@ fn motion_membership_and_ancestry_churn_are_bounded_before_and_after_preparation
                     entity: EntityRef::Handle(entity),
                 }],
             );
-            assert_eq!(&counts(&mut host, world)[..6], &[0; 6]);
+            assert_eq!(counts(&mut host, world), [0; 5]);
         }
         let entity = create(
             &mut host,
@@ -113,22 +128,17 @@ fn motion_membership_and_ancestry_churn_are_bounded_before_and_after_preparation
             Some(parent),
         );
         control = Some(entity);
-        let pending = counts(&mut host, world);
-        assert!(pending[6..].iter().all(|count| *count <= 3), "{pending:?}");
+
+        // Every eighth control is deleted halfway through a selection fill.
         if turn % 8 == 0 {
-            let frame = host.frame(0.0).unwrap();
+            select(&mut host, world, entity, true);
+            let frame = host.frame(0.01).unwrap();
             assert!(frame.worlds.values().all(Result::is_ok));
-            assert_eq!(
-                counts(&mut host, world),
-                [1, 1, 1, 2, 0, 0, 0, 0, 0, 0, 0, 0]
-            );
+            assert_eq!(counts(&mut host, world), [0, 0, 1, 0, 0]);
         }
     }
     host.frame(0.0).unwrap();
-    assert_eq!(
-        counts(&mut host, world),
-        [1, 1, 1, 2, 0, 0, 0, 0, 0, 0, 0, 0]
-    );
+    assert_eq!(counts(&mut host, world), [0; 5]);
     apply(
         &mut host,
         world,
@@ -137,5 +147,5 @@ fn motion_membership_and_ancestry_churn_are_bounded_before_and_after_preparation
         }],
     );
     host.frame(0.0).unwrap();
-    assert_eq!(counts(&mut host, world), [0; 12]);
+    assert_eq!(counts(&mut host, world), [0; 5]);
 }

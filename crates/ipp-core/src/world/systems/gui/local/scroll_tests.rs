@@ -327,8 +327,9 @@ fn a_thumb_dragged_to_the_end_settles_at_the_end_in_every_measurement_order() {
         top_deleted,
         end_declared,
     }) {
-        // Twenty items estimated at 10 in a 30-high viewport. Measured items
-        // are shorter, so each declared window shortens the content.
+        // Twenty items estimated at 10 in a 30-high viewport, with a 1.5-wide
+        // bar flush with its right side and ends. Measured items are shorter,
+        // so each declared window shortens the content.
         let mut host = GuiRoutedHost::new();
         let world = host.world.id();
         let list = host.create(vec![
@@ -342,6 +343,9 @@ fn a_thumb_dragged_to_the_end_settles_at_the_end_in_every_measurement_order() {
                 item_extent: 10.0,
                 overscan: 1,
                 axis: 1,
+                bar_thickness: 1.5,
+                bar_inset: 0.0,
+                bar_end_inset: 0.0,
                 ..Default::default()
             }),
         ]);
@@ -1182,6 +1186,7 @@ fn a_routed_wheel_at_the_scroll_limit_writes_and_repaints_nothing() {
     let wheel = |delta| GuiPhysicalInput::Wheel {
         point,
         delta: [0.0, delta],
+        shift: false,
     };
     let changed = |terminals: &[GuiDeliveryTerminal]| {
         terminals

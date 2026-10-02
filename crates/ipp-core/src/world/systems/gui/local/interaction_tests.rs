@@ -427,7 +427,7 @@ fn assert_local_clip_lifetime(style: crate::components::CanvasStyle, eligible: b
         } else {
             entity
         };
-        action(&mut host, world, pointer.target, GuiLocalAction::Focus);
+        action(&mut host, world, pointer.target, GuiLocalAction::Focus(0));
         frame(&mut host);
         for update in [
             GuiInteractionUpdate::Hover(true),

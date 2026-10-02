@@ -3,7 +3,8 @@
 //! [`GuiLayoutSystem`] runs after the GUI state and animation passes and
 //! retains the evaluated geometry of ordinary `GuiLayout` entities for Canvas
 //! production. The pass writes the scroll geometry, wanted range and
-//! normalized position fields of scrolling controls it evaluated; it never
+//! normalized position fields of scrolling controls it evaluated, including
+//! positions that reveal a control focus moved to in this frame; it never
 //! issues client commands and never advances simulation time.
 
 use crate::ComponentValue;
@@ -41,12 +42,14 @@ impl SystemFactory for GuiLayoutSystemFactory {
 
     fn capabilities(&self) -> crate::systems::SystemCapabilities {
         let mut capabilities = crate::systems::SystemCapabilities::default();
-        capabilities
-            .components
-            .push(crate::systems::SystemCapability::requiring(
-                ComponentValue::GUI_LAYOUT,
-                [crate::systems::canvas::CanvasSystem::ID],
-            ));
+        capabilities.components.extend(
+            [ComponentValue::GUI_LAYOUT, ComponentValue::GUI_OVERLAY].map(|component| {
+                crate::systems::SystemCapability::requiring(
+                    component,
+                    [crate::systems::canvas::CanvasSystem::ID],
+                )
+            }),
+        );
         capabilities
     }
 

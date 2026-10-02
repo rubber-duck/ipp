@@ -132,6 +132,7 @@ fn attach(
     let surface = Surface {
         width: 2.0,
         height: 1.0,
+        ..Default::default()
     };
 
     create(
@@ -412,6 +413,7 @@ fn authored_canvas_mapping_and_camera_versions_invalidate_visual_stamps() {
 
 #[test]
 fn hit_and_pointer_only_publications_preserve_visual_content_stamp() {
+    use ipp_core::components::rows::Rows;
     use ipp_core::components::{GuiBehavior, GuiButton, GuiLayout};
     use ipp_core::services::gui_input::{
         GuiDeliveryError, GuiDeliveryPermit, GuiDeliveryTerminal, GuiInputService,
@@ -420,6 +422,8 @@ fn hit_and_pointer_only_publications_preserve_visual_content_stamp() {
     use ipp_core::systems::gui::local::{
         GuiEntityTarget, GuiInteractionUpdate, GuiLocalCommand, GuiLocalEffect,
     };
+    use ipp_core::systems::gui::presentation::{GuiPaintPart, GuiSkin};
+    use ipp_core::systems::gui::{GuiPartId, GuiPrimitivePart};
 
     struct Permit;
 
@@ -439,6 +443,19 @@ fn hit_and_pointer_only_publications_preserve_visual_content_stamp() {
     let mut host = HostRuntime::new();
     let root = canvas(&mut host);
     let world = root.world().id();
+
+    // Override rows win in every state: a plain box that pins what the default
+    // look changes under hover, press and disable, so only hits change.
+    let mut parts = Rows::new();
+    parts
+        .push(GuiPaintPart {
+            color: Some([0.5, 0.5, 0.5, 1.0]),
+            border_width: Some(0.0),
+            border_color: Some([0.0; 4]),
+            glow_intensity: Some(0.0),
+            ..GuiPaintPart::keyed(GuiPartId::base(GuiPrimitivePart::Background)).unwrap()
+        })
+        .unwrap();
     let control = create(
         &mut host,
         world,
@@ -448,6 +465,10 @@ fn hit_and_pointer_only_publications_preserve_visual_content_stamp() {
             ComponentValue::GuiLayout(GuiLayout {
                 width: 50.0,
                 height: 50.0,
+                ..Default::default()
+            }),
+            ComponentValue::GuiSkin(GuiSkin {
+                parts,
                 ..Default::default()
             }),
         ],
@@ -684,6 +705,7 @@ fn retained_publication_slot_cannot_resurrect_retired_write() {
             ComponentValue::Surface(Surface {
                 width: 2.0,
                 height: 1.0,
+                ..Default::default()
             }),
         )],
     );

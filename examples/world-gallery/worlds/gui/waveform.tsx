@@ -1,32 +1,103 @@
 /**
- * The scrolling sine trace, independent pulse and reference grid: immutable
- * drawing assets on ordinary Canvas entities. Only the two trace entities
- * move, through Host-owned animation of their Canvas style translation; gain
- * changes their scale without rewriting their geometry.
+ * The SIGNAL MONITOR's scope: the scrolling sine trace and the independent
+ * pulse, immutable drawing assets on ordinary Canvas entities, over the scope
+ * paint, a canvas paint that draws the reference grid or scanlines and the
+ * sweep band. Only the two trace entities and the band move, through
+ * Host-owned animation of the traces' Canvas style translation and the
+ * paint's `phase` property; gain changes the traces' vertical scale and
+ * OFFSET their height without rewriting their geometry.
  */
 import type {
   AnimationClipSource,
   AnimationPlaybackEvent,
   ClientAssetSource,
 } from "@ipp/client";
-import { Animation, Entity, type AnimationHandle } from "@ipp/react";
-import { Drawing, Style } from "@ipp/react/gui";
+import {
+  Animation,
+  Entity,
+  PaintShader,
+  ShaderAsset,
+  assetRef,
+  type AnimationHandle,
+} from "@ipp/react";
+import { Box, Drawing, Paint, Style } from "@ipp/react/gui";
 import { useCallback, useEffect, useRef } from "react";
-import type { Palette } from "./dashboard.js";
-import { BoxLayout, Stack } from "./presentation.js";
+import { BoxLayout, LEAF, Stack, TOKENS, type Color } from "./presentation.js";
 import type { GuiSceneState } from "./scene.js";
+import { SCAN_RATES, linearColor } from "./tuning.js";
 
-const WIDTH = 3.54;
-const HEIGHT = 0.46;
+/** Drawing units per canvas unit: the drawings' 330 by 170 period box. */
+const CURVE_SCALE = 0.7;
 const PERIOD = 330;
 const PACKET_WIDTH = 110;
-const CURVE_SCALE = WIDTH / PERIOD;
 
-/** Symbolic IDs of the two animated trace entities. */
+/** The scope's viewport in canvas units: one drawn period. */
+export const WAVE_WIDTH = PERIOD * CURVE_SCALE;
+export const WAVE_HEIGHT = 170 * CURVE_SCALE;
+
+/** Seconds the pulse packet takes to cross the scope. */
+export const PULSE_SECONDS = 1.2;
+
+/** Seconds of one scan loop: two sine cycles slide through the scope. */
+const SCAN_SECONDS = 2.4;
+
+/** Symbolic IDs of the two animated trace entities and the scope paint. */
 export const WAVEFORM_ENTITIES = {
   signal: "gui-waveform-signal",
   pulse: "gui-waveform-pulse",
+  paint: "gui-scope-paint",
 } as const;
+
+/** The scope paint's shader asset. */
+export const SCOPE_PAINT = "gui-scope-paint-shader";
+
+/**
+ * The scope paint: the grid of eight by four cells and the frame, or
+ * scanlines, in the line colour, and the sweep band, a soft vertical band at
+ * `phase` of the way from `low` to `high` across the scope. The box paints
+ * nothing else, so the panel shows through.
+ */
+const SCOPE_PAINT_BODY = `
+vec2 footprint = max(fwidth(position), vec2(1.0e-4));
+vec2 cell = size / p_cells;
+vec2 offset = abs(fract(position / cell + 0.5) - 0.5) * cell;
+vec2 lines = clamp((0.5 * p_width - offset) / footprint + 0.5, 0.0, 1.0);
+float frame = clamp((p_width + edge) / max(fwidth(edge), 1.0e-4) + 0.5, 0.0, 1.0);
+float grid = max(max(lines.x, lines.y) * p_grid, frame * max(p_grid, p_scan));
+float row = abs(fract(position.y / p_pitch) - 0.5) * p_pitch;
+float scan = clamp((0.5 * p_width - row) / footprint.y + 0.5, 0.0, 1.0) * p_scan;
+float ink = max(grid, scan * 0.6) * p_line.a;
+float centre = mix(p_low, p_high, p_phase) * size.x;
+float distance = (position.x - centre) / max(p_band * size.x, 1.0e-4);
+float band = exp(-distance * distance) * p_sweep.a;
+float alpha = clamp(ink + band, 0.0, 1.0);
+vec3 rgb = (p_line.rgb * ink + p_sweep.rgb * band) / max(ink + band, 1.0e-4);
+return vec4(rgb, alpha * color.a);`;
+
+/** The scope paint's shader, declared beside the panel's components. */
+export function ScopePaintAsset() {
+  return (
+    <ShaderAsset
+      id={SCOPE_PAINT}
+      recipe={{}}
+      parameters={{
+        cells: "vec2",
+        width: "f32",
+        grid: "f32",
+        pitch: "f32",
+        scan: "f32",
+        line: "vec4",
+        sweep: "vec4",
+        low: "f32",
+        high: "f32",
+        band: "f32",
+        phase: "f32",
+      }}
+    >
+      <PaintShader>{SCOPE_PAINT_BODY}</PaintShader>
+    </ShaderAsset>
+  );
+}
 
 function asset(name: string): ClientAssetSource {
   return {
@@ -39,7 +110,7 @@ function asset(name: string): ClientAssetSource {
 }
 
 export function waveformResourceSources(): readonly ClientAssetSource[] {
-  return ["waveform-grid", "waveform", "waveform-pulse"].map(asset);
+  return ["waveform", "waveform-pulse"].map(asset);
 }
 
 /** The Canvas style translation both traces animate. */
@@ -51,7 +122,38 @@ export interface WaveformTranslation {
 export interface WaveformMotionAssets {
   readonly scan: ClientAssetSource;
   readonly wavePulse: ClientAssetSource;
+  /** The scope paint's sweep phase over one scan loop. */
+  readonly sweep: ClientAssetSource;
   readonly translation: WaveformTranslation;
+  /** The CanvasPaint component, whose `phase` property the sweep animates. */
+  readonly paintComponent: number;
+}
+
+/**
+ * Sweep clip: the band's phase from 0 to 1 over one scan loop, which the
+ * scope paint maps onto the SWEEP range. A clip on a property adds its change
+ * to the authored value, which rests at 0.
+ */
+export function sweepClip(paintComponent: number): AnimationClipSource {
+  return {
+    duration: SCAN_SECONDS,
+    tracks: [
+      {
+        property: { component: paintComponent, name: "phase" },
+        keys: [
+          {
+            time: 0,
+            value: { kind: "dynamic", value: { kind: "f32", value: 0 } },
+            interpolation: { kind: "linear" },
+          },
+          {
+            time: SCAN_SECONDS,
+            value: { kind: "dynamic", value: { kind: "f32", value: 1 } },
+          },
+        ],
+      },
+    ],
+  };
 }
 
 /** One linear track of the trace's horizontal Canvas style translation. */
@@ -82,46 +184,54 @@ function translationClip(
   };
 }
 
-/** Scan clip: two sine cycles slide through the stationary graph. Pulse
- * clip: the packet crosses the graph from its right edge. */
+/** Scan clip: two sine cycles slide through the stationary scope. Pulse
+ * clip: the packet crosses the scope from its right edge. */
 export function waveformClips(
   translation: WaveformTranslation,
 ): readonly AnimationClipSource[] {
   return [
-    translationClip(translation, 2.4, 0, -WIDTH),
-    translationClip(translation, 1.2, WIDTH, -PACKET_WIDTH * CURVE_SCALE),
+    translationClip(translation, SCAN_SECONDS, 0, -WAVE_WIDTH),
+    translationClip(
+      translation,
+      PULSE_SECONDS,
+      WAVE_WIDTH,
+      -PACKET_WIDTH * CURVE_SCALE,
+    ),
   ];
 }
 
-/** A trace drawing whose curve's zero line sits at the middle of the
- * viewport. The entity's layout box is the authored trace extent; the
+/** A trace drawing whose zero line runs through the middle of the scope,
+ * raised by `y`. The entity's layout box is the authored trace extent; the
  * drawing paints in its own units scaled by the Canvas style. */
 function Trace({
   id,
   source,
   width,
-  scale,
+  scaleY,
+  y,
   color,
   opacity,
 }: {
   readonly id: string;
   readonly source: string;
   readonly width: number;
-  readonly scale: readonly [number, number];
-  readonly color: readonly [number, number, number, number];
+  readonly scaleY: number;
+  readonly y: number;
+  readonly color: Color;
   readonly opacity: number;
 }) {
   return (
     <Entity id={id}>
       <BoxLayout
-        kind={0}
+        kind={LEAF}
         width={width}
-        height={0.01}
-        margin={[HEIGHT / 2, 0, 0, 0]}
+        height={1}
+        margin={[WAVE_HEIGHT / 2 - 0.5, 0, 0, 0]}
       />
       <Style
-        scale_x={scale[0]}
-        scale_y={scale[1]}
+        y={y}
+        scale_x={CURVE_SCALE}
+        scale_y={scaleY}
         red={color[0]}
         green={color[1]}
         blue={color[2]}
@@ -133,45 +243,57 @@ function Trace({
   );
 }
 
-/** Only the traces move; the clipped viewport and reference grid remain
- * fixed. */
-export function Waveform({
-  scene,
-  palette,
-}: {
-  readonly scene: GuiSceneState;
-  readonly palette: Palette;
-}) {
+/** Whether the sweep band shows: SCAN is on and the popover shows the sweep.
+ * Under reduced motion the band stands still halfway across its range. */
+function sweeping(scene: GuiSceneState): boolean {
+  return scene.autoscan && scene.tuning.tuning.sweepShown;
+}
+
+/** Only the traces and the band move; the clipped scope stays fixed. */
+export function Waveform({ scene }: { readonly scene: GuiSceneState }) {
   const amplitude = 0.12 + scene.gain * 0.88;
+  const tuning = scene.tuning.tuning;
+  const y = (-tuning.offset / 100) * (WAVE_HEIGHT / 2);
+  const line = TOKENS.neutral;
+  // The band crosses the scope in the projection's colour.
+  const band = linearColor(tuning.color);
   return (
-    <Stack id="gui-waveform" width={WIDTH} height={HEIGHT} clip>
-      <Entity id="gui-waveform-grid">
-        <BoxLayout kind={0} width={WIDTH} height={HEIGHT} />
-        <Style
-          scale_x={WIDTH / PERIOD}
-          scale_y={HEIGHT / 50}
-          red={palette.muted[0]}
-          green={palette.muted[1]}
-          blue={palette.muted[2]}
-          alpha={palette.muted[3]}
-          opacity={0.35}
+    <Stack id="gui-waveform" width={WAVE_WIDTH} height={WAVE_HEIGHT} clip>
+      <Entity id={WAVEFORM_ENTITIES.paint}>
+        <BoxLayout kind={LEAF} width={WAVE_WIDTH} height={WAVE_HEIGHT} />
+        <Box />
+        <Paint
+          source={assetRef(SCOPE_PAINT)}
+          cells={[8, 4]}
+          width={1}
+          grid={tuning.grid === "lines" ? 1 : 0}
+          scan={tuning.grid === "scanlines" ? 1 : 0}
+          pitch={4}
+          line={[line[0], line[1], line[2], 0.5]}
+          sweep={[band[0], band[1], band[2], sweeping(scene) ? 0.35 : 0]}
+          low={tuning.sweep[0] / 100}
+          high={tuning.sweep[1] / 100}
+          band={0.06}
+          // At rest the band stands halfway; the sweep clip adds its travel.
+          phase={scene.reducedMotion ? 0.5 : 0}
         />
-        <Drawing source={asset("waveform-grid").source} />
       </Entity>
       <Trace
         id={WAVEFORM_ENTITIES.signal}
         source={asset("waveform").source}
-        width={WIDTH * 2}
-        scale={[CURVE_SCALE, CURVE_SCALE * amplitude]}
-        color={palette.primary}
-        opacity={scene.autoscan ? 0.9 : 0.35}
+        width={WAVE_WIDTH * 2}
+        scaleY={CURVE_SCALE * amplitude}
+        y={y}
+        color={TOKENS.accent}
+        opacity={scene.autoscan ? 1 : 0.4}
       />
       <Trace
         id={WAVEFORM_ENTITIES.pulse}
         source={asset("waveform-pulse").source}
         width={PACKET_WIDTH * CURVE_SCALE}
-        scale={[CURVE_SCALE, CURVE_SCALE * (0.65 + scene.gain * 0.35)]}
-        color={palette.hovered}
+        scaleY={CURVE_SCALE * (0.65 + scene.gain * 0.35)}
+        y={y}
+        color={TOKENS.text}
         opacity={scene.pulseActive ? 1 : 0}
       />
     </Stack>
@@ -186,6 +308,7 @@ export function WaveformAnimations({
   readonly scene: GuiSceneState;
 }) {
   const scanController = useRef<AnimationHandle>(null);
+  const sweepController = useRef<AnimationHandle>(null);
   const pulseController = useRef<AnimationHandle>(null);
   const previousPulse = useRef(scene.pulseSequence);
   const restart = useRef(Promise.resolve());
@@ -231,12 +354,15 @@ export function WaveformAnimations({
     },
     [scene.pulseSequence, readWaveformPulse, reportFailure, setPulseActive],
   );
+  const speed =
+    SCAN_RATES.find(({ key }) => key === scene.tuning.tuning.rate)?.speed ?? 1;
   useEffect(() => {
     let active = true;
-    // The scan starts once the placed panel has presented a complete frame.
+    // The scan starts once the placed panel has presented a complete frame,
+    // at the RATE's speed.
     const action =
       scene.ready && scene.autoscan
-        ? scanController.current?.play()
+        ? scanController.current?.playAtSpeed(speed)
         : scanController.current?.pause();
     void action?.catch((failure: unknown) => {
       if (active) reportFailure(failure);
@@ -244,7 +370,22 @@ export function WaveformAnimations({
     return () => {
       active = false;
     };
-  }, [scene.ready, scene.autoscan, reportFailure]);
+  }, [scene.ready, scene.autoscan, speed, reportFailure]);
+  // The band crosses the SWEEP range with each scan loop; under reduced
+  // motion its controller is not declared and the band stands still.
+  const sweepRuns = scene.ready && sweeping(scene) && !scene.reducedMotion;
+  useEffect(() => {
+    let active = true;
+    const action = sweepRuns
+      ? sweepController.current?.playAtSpeed(speed)
+      : sweepController.current?.pause();
+    void action?.catch((failure: unknown) => {
+      if (active) reportFailure(failure);
+    });
+    return () => {
+      active = false;
+    };
+  }, [sweepRuns, speed, scene.reducedMotion, reportFailure]);
   useEffect(() => {
     if (previousPulse.current === scene.pulseSequence) return;
     previousPulse.current = scene.pulseSequence;
@@ -281,6 +422,21 @@ export function WaveformAnimations({
         onPlaybackEvent={onPlaybackEvent}
         autoPlay={false}
       />
+      {!scene.reducedMotion && (
+        <Animation
+          ref={sweepController}
+          source={motions.sweep.source}
+          target={WAVEFORM_ENTITIES.paint}
+          bindings={[
+            {
+              track: 0,
+              property: { component: motions.paintComponent, name: "phase" },
+            },
+          ]}
+          looping
+          autoPlay={false}
+        />
+      )}
     </>
   );
 }

@@ -6,8 +6,8 @@ use crate::codec::{ProtocolError, Reader, Writer};
 use crate::references::WorldReference;
 use ipp_core::EntityId;
 use ipp_core::systems::gui::local::{
-    GuiEntityTarget, GuiFocusRecord, GuiLocalAction, GuiLocalEffect, GuiLocalEffectKind,
-    GuiLocalEffectSource, GuiPointerRecord,
+    GuiActiveItemRecord, GuiEntityTarget, GuiFocusRecord, GuiLocalAction, GuiLocalEffect,
+    GuiLocalEffectKind, GuiLocalEffectSource, GuiPointerRecord,
 };
 use ipp_core::systems::gui::observations::{
     GuiObservationClasses, GuiObservationControlResult, GuiObservationEncoding,
@@ -45,8 +45,8 @@ const GUI_ROUTED_SOURCE_BYTES: usize = 1 + 16;
 const GUI_EFFECT_PAYLOAD_BYTES: usize = 8 + 4;
 
 /// Peak encoded allocations, including the ordinary response header and framing.
-/// The largest fixed payload is a routed pointer feedback effect; submitted
-/// text is charged per byte.
+/// The largest fixed payload is a routed pointer feedback effect; submitted,
+/// rejected and discarded text is charged per byte.
 pub const GUI_OBSERVATION_ENCODING: GuiObservationEncoding = GuiObservationEncoding {
     control_bytes: 80,
     effect_bytes: GUI_OBSERVATION_ENVELOPE_BYTES
@@ -140,7 +140,7 @@ impl Reader<'_> {
             GUI_ACTION_TOGGLE => GuiLocalAction::Toggle,
             GUI_ACTION_SET_SCALAR => GuiLocalAction::SetScalar(self.f32()?),
             GUI_ACTION_SET_TEXT => GuiLocalAction::SetText(self.text()?),
-            GUI_ACTION_FOCUS => GuiLocalAction::Focus,
+            GUI_ACTION_FOCUS => GuiLocalAction::Focus(self.u32()?),
             GUI_ACTION_BLUR => GuiLocalAction::Blur,
             GUI_ACTION_SUBMIT => GuiLocalAction::Submit,
             GUI_ACTION_SCROLL_TO => GuiLocalAction::ScrollTo([self.f32()?, self.f32()?]),
@@ -149,6 +149,9 @@ impl Reader<'_> {
                 index: self.u32()?,
                 offset: self.f32()?,
             },
+            GUI_ACTION_SET_COLOR => {
+                GuiLocalAction::SetColor([self.f32()?, self.f32()?, self.f32()?, self.f32()?])
+            }
             _ => return Err(ProtocolError::Malformed("GUI action")),
         })
     }
@@ -161,7 +164,8 @@ impl Writer {
         record: &GuiFocusRecord,
     ) -> Result<(), ProtocolError> {
         self.gui_target(record.target)?;
-        self.u8(u8::from(record.visible))
+        self.u8(u8::from(record.visible))?;
+        self.u32(record.part)
     }
 
     /// Encode one `GuiPointers` System query record.
@@ -176,6 +180,15 @@ impl Writer {
             u8::from(record.state.pressed),
             u8::from(record.state.captured),
         ])
+    }
+
+    /// Encode one `GuiActiveItems` System query record.
+    pub(crate) fn gui_active_item_record(
+        &mut self,
+        record: &GuiActiveItemRecord,
+    ) -> Result<(), ProtocolError> {
+        self.u64(record.group.to_bits())?;
+        self.gui_target(record.target)
     }
 
     fn gui_target(&mut self, target: GuiEntityTarget) -> Result<(), ProtocolError> {
@@ -222,14 +235,31 @@ impl Writer {
             GuiLocalEffectKind::FocusChanged {
                 focused,
                 changed,
+                part,
             } => {
                 self.u8(1)?;
                 self.u8(u8::from(*focused))?;
-                self.u8(u8::from(*changed))
+                self.u8(u8::from(*changed))?;
+                self.u32(*part)
             }
             GuiLocalEffectKind::Submitted(text) => {
                 self.u8(4)?;
                 self.string(text)
+            }
+            GuiLocalEffectKind::Rejected(text) => {
+                self.u8(7)?;
+                self.string(text)
+            }
+            GuiLocalEffectKind::Discarded(text) => {
+                self.u8(8)?;
+                self.string(text)
+            }
+            GuiLocalEffectKind::ContextRequested {
+                point,
+            } => {
+                self.u8(6)?;
+                self.f32(point[0])?;
+                self.f32(point[1])
             }
             GuiLocalEffectKind::InteractionChanged(interaction) => {
                 self.u8(3)?;

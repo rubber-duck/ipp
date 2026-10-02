@@ -40,6 +40,37 @@ fn public_feedback_queue_publishes_all_priorities_without_reflow_or_repainting_i
         root,
         ComponentValue::GuiButton(GuiButton::default()),
     );
+    // Override rows win in every state, so these pin every property the
+    // button's default look varies with interaction: its styles stay identical.
+    let mut parts = Rows::default();
+    for row in [
+        GuiPaintPart {
+            color: Some([0.2, 0.2, 0.2, 1.0]),
+            border_width: Some(1.0),
+            border_color: Some([0.5, 0.5, 0.5, 1.0]),
+            glow_intensity: Some(0.0),
+            ..GuiPaintPart::keyed(GuiPartId::base(GuiPrimitivePart::Background)).unwrap()
+        },
+        GuiPaintPart {
+            color: Some([1.0; 4]),
+            ..GuiPaintPart::keyed(GuiPartId::base(GuiPrimitivePart::Label)).unwrap()
+        },
+    ] {
+        parts.push(row).unwrap();
+    }
+    apply(
+        &mut host,
+        world,
+        vec![Command::insert_value(
+            EntityRef::Handle(entity),
+            ComponentValue::GuiSkin(GuiSkin {
+                parts,
+                ..Default::default()
+            }),
+        )],
+    )
+    .result
+    .unwrap();
     host.set_root_output(
         root,
         WorldViewport {
@@ -134,6 +165,7 @@ fn ordinary_skin_feedback_preserves_state_precedence_and_control_override() {
         world,
         vec![ComponentValue::GuiTheme(GuiTheme {
             parts,
+            ..Default::default()
         })],
         None,
     );
@@ -212,7 +244,6 @@ fn ordinary_skin_feedback_preserves_state_precedence_and_control_override() {
             ComponentValue::GuiSkin(GuiSkin {
                 theme,
                 parts: overrides,
-                ..Default::default()
             }),
         )],
     )

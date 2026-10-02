@@ -348,14 +348,9 @@ impl GuiRoutedHost {
         logical.map(|value| value / ROUTED_EXTENT)
     }
 
-    /// Route one input against the current completed view without a frame,
-    /// so several inputs can reach the same local mutation boundary.
-    pub fn send(
-        &mut self,
-        input: router::GuiPhysicalInput,
-    ) -> Result<router::GuiRoutingDisposition, GuiInputError> {
-        let view = self
-            .gui
+    /// The presented root view.
+    fn view(&self) -> crate::ViewDescriptor {
+        self.gui
             .resolve_view(crate::ViewQueryTarget::RootView {
                 output: self.root,
                 expected_viewport: crate::WorldViewport {
@@ -364,7 +359,34 @@ impl GuiRoutedHost {
                     device_pixel_ratio: 1.0,
                 },
             })
+            .unwrap()
+    }
+
+    /// The adapter's routing boundary without input: it may adopt focus a
+    /// command set, applied by the next frame.
+    pub fn synchronize(&mut self) -> router::GuiRoutingCancellation {
+        let view = self.view();
+        self.router
+            .synchronize(&mut self.gui.host, &mut self.context, Some(view))
+    }
+
+    /// Replace the input context, closing its session as an adapter does.
+    pub fn rebind(&mut self) {
+        let (fresh, _) = self
+            .router
+            .bind(&self.gui, self.world, 900, Vec::new())
             .unwrap();
+        let old = std::mem::replace(&mut self.context, fresh);
+        self.router.release(&mut self.gui.host, old);
+    }
+
+    /// Route one input against the current completed view without a frame,
+    /// so several inputs can reach the same local mutation boundary.
+    pub fn send(
+        &mut self,
+        input: router::GuiPhysicalInput,
+    ) -> Result<router::GuiRoutingDisposition, GuiInputError> {
+        let view = self.view();
         let mut delivery = RoutedDelivery {
             deliveries: self.gui.deliveries.clone(),
             world: self.world.id(),

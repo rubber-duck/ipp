@@ -174,8 +174,19 @@ impl<P: HostServices> WorldSessionContext<'_, P> {
             } else {
                 vec![]
             },
+            gui_active_items: if query.collection == 9 {
+                self.world
+                    .gui_active_item_page(query.after, query.target, count + 1)
+            } else {
+                vec![]
+            },
             canvas: if query.collection == 8 {
                 self.world.canvas_state().ok()
+            } else {
+                None
+            },
+            gui_preferences: if query.collection == 10 {
+                self.world.gui_preferences().ok()
             } else {
                 None
             },
@@ -190,6 +201,7 @@ impl<P: HostServices> WorldSessionContext<'_, P> {
                 render_diagnostics,
                 gui_focus,
                 gui_pointers,
+                gui_active_items,
                 ..
             } = &mut body
             else {
@@ -208,6 +220,7 @@ impl<P: HostServices> WorldSessionContext<'_, P> {
             trim!(controllers, |item| item.id.to_bits());
             trim!(render_diagnostics, |item| item.entity.to_bits());
             trim!(gui_focus, |item| item.target.entity.to_bits());
+            trim!(gui_active_items, |item| item.group.to_bits());
             trim_pointer_page(gui_pointers, limit, next);
             let response = Response {
                 session: self.session.id,

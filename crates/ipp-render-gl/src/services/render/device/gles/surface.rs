@@ -1,7 +1,8 @@
-use super::super::retained_vertices::{GUI_VERTEX_LAYOUT, RetainedVertexLayout};
+use super::super::retained_records::gui_record_layout;
 use super::{ARRAY_BUFFER, DYNAMIC_DRAW, FLOAT, TRIANGLES};
 use super::{GlesRenderDevice, GlesRenderProgram, GlesSurfacePath};
 use crate::RenderError;
+use crate::services::render::gui_records::GUI_RECORD_VERTICES;
 use crate::services::render::surface_path::{
     BAND_HEADER_TEXELS, SurfaceBandTexels, SurfaceCurveTexels, SurfacePathTexels,
 };
@@ -40,14 +41,17 @@ impl GlesRenderDevice {
         })
     }
 
-    /// Enable and point every attribute of `layout` at the bound array buffer.
+    /// Point every attribute of `kind`'s record layout at record `first` of the bound
+    /// array buffer, advancing once per instance.
     ///
     /// # Safety
     ///
     /// The device context is current with the destination vertex array and its array
     /// buffer bound, so each offset addresses that buffer rather than client memory.
-    unsafe fn point_retained_attributes<const N: usize>(&self, layout: &RetainedVertexLayout<N>) {
-        for attribute in &layout.attributes {
+    unsafe fn point_retained_attributes(&self, kind: super::GuiRecordKind, first: usize) {
+        let (stride, attributes) = gui_record_layout(kind);
+        let base = first * stride as usize;
+        for attribute in attributes {
             // SAFETY: The caller binds the destination vertex array and buffer in the
             // current context; GL copies these scalar arguments during the call.
             unsafe {
@@ -57,9 +61,10 @@ impl GlesRenderDevice {
                     attribute.components as i32,
                     FLOAT,
                     0,
-                    layout.stride as i32,
-                    ptr::without_provenance(attribute.offset as usize),
+                    stride as i32,
+                    ptr::without_provenance(base + attribute.offset as usize),
                 );
+                (self.gl.attrib_divisor)(attribute.location, 1);
             }
         }
     }
@@ -500,17 +505,17 @@ impl GlesRenderDevice {
 
     pub(super) fn create_gui_batch(
         &mut self,
+        kind: super::GuiRecordKind,
         capacity: usize,
     ) -> Result<super::GlesGuiBatch, RenderError> {
         self.submission.invalidate();
+        let (stride, _) = gui_record_layout(kind);
         let bytes = capacity
-            .checked_mul(std::mem::size_of::<
-                crate::services::render::gui_batch::GuiVertex,
-            >())
+            .checked_mul(stride as usize)
             .and_then(|bytes| isize::try_from(bytes).ok())
             .filter(|_| i32::try_from(capacity).is_ok())
-            .ok_or_else(|| RenderError::RenderDevice("too many gui batch vertices".into()))?;
-        // GLES leaves new buffer contents undefined; storage relies on zero vertices.
+            .ok_or_else(|| RenderError::RenderDevice("too many gui batch records".into()))?;
+        // GLES leaves new buffer contents undefined; storage relies on zero records.
         let zeros = vec![0u8; bytes as usize];
         let mut vao = 0;
         let mut vbo = 0;
@@ -534,14 +539,16 @@ impl GlesRenderDevice {
             self.bind_vertex_array(vao);
             (self.gl.bind_buffer)(ARRAY_BUFFER, vbo);
             (self.gl.buffer_data)(ARRAY_BUFFER, bytes, zeros.as_ptr().cast(), DYNAMIC_DRAW);
-            self.point_retained_attributes(&GUI_VERTEX_LAYOUT);
+            self.point_retained_attributes(kind, 0);
             self.bind_vertex_array(0);
             (self.gl.bind_buffer)(ARRAY_BUFFER, 0);
         }
         let batch = super::GlesGuiBatch {
             vao,
             vbo,
+            kind,
             capacity,
+            based: std::cell::Cell::new(0),
         };
         if let Err(error) = self.check() {
             self.delete_gui_batch(batch);
@@ -550,31 +557,37 @@ impl GlesRenderDevice {
         Ok(batch)
     }
 
-    pub(super) fn write_gui_batch(
+    pub(super) fn write_gui_batch<R: super::GuiRecord>(
         &mut self,
         batch: &mut super::GlesGuiBatch,
         first: usize,
-        vertices: &[crate::services::render::gui_batch::GuiVertex],
+        records: &[R],
     ) -> Result<(), RenderError> {
+        if R::KIND != batch.kind {
+            return Err(RenderError::RenderDevice(
+                "gui batch write of another record kind".into(),
+            ));
+        }
         if first
-            .checked_add(vertices.len())
+            .checked_add(records.len())
             .is_none_or(|end| end > batch.capacity)
         {
             return Err(RenderError::RenderDevice(
                 "gui batch write exceeds its storage".into(),
             ));
         }
-        let stride = std::mem::size_of::<crate::services::render::gui_batch::GuiVertex>();
-        // SAFETY: The range lies within the allocated store, checked above. BufferSubData
-        // copies the live `vertices` slice synchronously; GL keeps the previous contents
+        let stride = std::mem::size_of::<R>();
+        // SAFETY: The range lies within the allocated store, checked above, and the
+        // records are `#[repr(C)]` lanes of the storage's own layout. BufferSubData
+        // copies the live `records` slice synchronously; GL keeps the previous contents
         // for queued draws that read them.
         unsafe {
             (self.gl.bind_buffer)(ARRAY_BUFFER, batch.vbo);
             (self.gl.buffer_sub_data)(
                 ARRAY_BUFFER,
                 (first * stride) as isize,
-                std::mem::size_of_val(vertices) as isize,
-                vertices.as_ptr().cast(),
+                std::mem::size_of_val(records) as isize,
+                records.as_ptr().cast(),
             );
             (self.gl.bind_buffer)(ARRAY_BUFFER, 0);
         }
@@ -596,6 +609,32 @@ impl GlesRenderDevice {
                 (self.gl.delete_buffers)(1, &batch.vbo);
             }
         }
+    }
+
+    pub(super) fn set_gui_paint_blocks(
+        &mut self,
+        program: &GlesRenderProgram,
+        blocks: &[[f32; 4]],
+    ) -> Result<(), RenderError> {
+        if blocks.len() > crate::CANVAS_PAINT_VECTORS {
+            return Err(RenderError::RenderDevice(
+                "canvas paint blocks exceed their array".into(),
+            ));
+        }
+        if blocks.is_empty() {
+            return Ok(());
+        }
+
+        self.use_program(program.id);
+        let location = self.surface_location(program, c"u_paint_blocks");
+        if location >= 0 {
+            // SAFETY: The program is current in this context and owns the location;
+            // GL copies the borrowed vectors synchronously and keeps no pointer.
+            unsafe {
+                (self.gl.uniform_vec4)(location, blocks.len() as i32, blocks.as_ptr().cast());
+            }
+        }
+        self.check_draw()
     }
 
     pub(super) fn draw_gui_batch(
@@ -624,17 +663,26 @@ impl GlesRenderDevice {
             self.surface_location(program, c"u_viewport"),
             &viewport,
         );
-        self.program_int(program, self.surface_location(program, c"u_atlas"), 0);
+        if atlas_texture.is_some() {
+            self.program_int(program, self.surface_location(program, c"u_atlas"), 0);
+        }
         self.bind_vertex_array(batch.vao);
-        // SAFETY: The bound VAO encapsulates this storage's attribute pointers and the
-        // drawn range lies within it, checked above. A glyph range binds its live
-        // atlas texture. Box-only ranges never sample unit 0 but still bind the
-        // default texture there, because a leftover integer curve texture would not
-        // match the float `u_atlas` sampler.
+        // SAFETY: The bound VAO encapsulates this storage's attribute pointers; a draw
+        // from another first record repoints them at that record of the storage's own
+        // live buffer, and the drawn range lies within it, checked above. A glyph range
+        // binds its live atlas texture. Shape ranges never sample unit 0 but still bind
+        // the default texture there, so no leftover integer curve texture stays bound
+        // beside the draw.
         unsafe {
+            if batch.based.get() != first {
+                (self.gl.bind_buffer)(ARRAY_BUFFER, batch.vbo);
+                self.point_retained_attributes(batch.kind, first);
+                (self.gl.bind_buffer)(ARRAY_BUFFER, 0);
+                batch.based.set(first);
+            }
             (self.gl.active_texture)(0x84C0);
             (self.gl.bind_texture)(0x0DE1, atlas_texture.copied().unwrap_or(0));
-            (self.gl.draw_arrays)(TRIANGLES, first as i32, count as i32);
+            (self.gl.draw_arrays_instances)(TRIANGLES, 0, GUI_RECORD_VERTICES as i32, count as i32);
         }
         self.check_draw()
     }

@@ -1,5 +1,5 @@
 import test from "node:test";
-import { relative, resolve } from "node:path";
+import { resolve } from "node:path";
 import { mkdir, writeFile } from "node:fs/promises";
 import { encodePng } from "../../render/retained-gui-images.js";
 import { runNativeEnvironment } from "../environment.js";
@@ -13,15 +13,12 @@ declare global {
   interface Window {
     saveMotionCapture(image: MotionImage): Promise<void>;
     recordMotionEvidence(value: object): Promise<void>;
-    stageMotionAsset(bytes: number[]): Promise<void>;
-    motionAssetRequested(): Promise<void>;
-    releaseMotionAsset(): Promise<void>;
   }
 }
 
 for (const mode of ["development", "production", "native"] as const) {
   test(`ordinary skin motion ${mode}`, {
-    timeout: 180_000,
+    timeout: 240_000,
   }, async (context) => {
     const native = mode === "native";
     const workspace = resolve(process.cwd());
@@ -39,34 +36,13 @@ for (const mode of ["development", "production", "native"] as const) {
       url: string;
       presentationUrl: string;
     }) {
-      let release!: () => void;
-      let requested!: () => void;
-      const held = new Promise<void>((resolve) => {
-        release = resolve;
-      });
-      const request = new Promise<void>((resolve) => {
-        requested = resolve;
-      });
       await runBrowserEnvironment(
         `gui-motion-${mode}`,
         {
           workspace,
           build,
-          operationTimeoutMs: 120_000,
+          operationTimeoutMs: 150_000,
           rendering: !native,
-          async beforeArtifactResponse(url, signal) {
-            if (url.pathname.endsWith("/pending-motion.bin")) {
-              requested();
-              await Promise.race([
-                held,
-                new Promise<void>((resolve) =>
-                  signal.addEventListener("abort", () => resolve(), {
-                    once: true,
-                  }),
-                ),
-              ]);
-            }
-          },
         },
         context.signal,
         async (environment) => {
@@ -91,25 +67,9 @@ for (const mode of ["development", "production", "native"] as const) {
             "recordMotionEvidence",
             (value: object) => environment.evidence.record("motion", value),
           );
-          await environment.page.exposeFunction(
-            "stageMotionAsset",
-            async (bytes: number[]) =>
-              writeFile(
-                resolve(environment.evidence.directory, "pending-motion.bin"),
-                Uint8Array.from(bytes),
-              ),
-          );
-          await environment.page.exposeFunction(
-            "motionAssetRequested",
-            () => request,
-          );
-          await environment.page.exposeFunction("releaseMotionAsset", () =>
-            release(),
-          );
-          const pendingSource = `${environment.urls.origin}/${relative(workspace, environment.evidence.directory)}/pending-motion.bin`;
           return environment.execute("ordinary-motion", { mode }, () =>
             environment.page.evaluate(
-              async ({ urls, endpoint, mode, pendingSource }) => {
+              async ({ urls, endpoint, mode }) => {
                 const contract = await import(urls.generated);
                 const scenario = await import(
                   `${urls.origin}/target/gui-motion/scenario.js`
@@ -134,31 +94,28 @@ for (const mode of ["development", "production", "native"] as const) {
                 }
                 const host =
                   await contract.IppHostClient.connectTransport(transport);
+                // The kit's spinner draws its label in the shared GUI font.
+                const font = await (
+                  await fetch(
+                    `${urls.origin}/target/font-assets/shure-tech-mono.ippf`,
+                  )
+                ).arrayBuffer();
                 const motion: MotionEnvironment = {
                   capture: (image) => window.saveMotionCapture(image),
                   record: (value) => window.recordMotionEvidence(value),
-                  ...(endpoint
-                    ? {}
-                    : {
-                        pending: {
-                          source: pendingSource,
-                          stage: (bytes) => window.stageMotionAsset(bytes),
-                          requested: () => window.motionAssetRequested(),
-                          release: () => window.releaseMotionAsset(),
-                        },
-                      }),
                 };
                 try {
                   return await scenario.ordinarySkinMotion(
                     host,
                     contract,
+                    font,
                     motion,
                   );
                 } finally {
                   await host.close();
                 }
               },
-              { urls: environment.urls, endpoint, mode, pendingSource },
+              { urls: environment.urls, endpoint, mode },
             ),
           );
         },

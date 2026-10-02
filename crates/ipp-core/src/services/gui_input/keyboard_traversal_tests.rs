@@ -3,7 +3,7 @@
 
 use super::router_test_support::*;
 use super::*;
-use crate::components::{CanvasStyle, GuiBehavior, GuiCheckbox};
+use crate::components::{CanvasStyle, GuiBehavior, GuiCheckbox, GuiOverlay};
 use crate::services::gui_input::router::*;
 
 /// Canvas root `r` of one World:
@@ -171,6 +171,93 @@ fn traversal_stays_within_the_innermost_focus_scope() {
 }
 
 #[test]
+fn raised_layers_keep_their_tree_place_in_the_tab_sequence() {
+    let mut scoped = Scoped::new();
+    let (world, nodes) = (scoped.world, scoped.nodes);
+    // The first control and a later one paint above the rest of the canvas;
+    // traversal still follows the tree, not painter order.
+    let raised = [2, 8].map(|node| {
+        Command::insert_value(
+            EntityRef::Handle(nodes[node]),
+            ComponentValue::CanvasStyle(CanvasStyle {
+                layer: 1,
+                ..Default::default()
+            }),
+        )
+    });
+    apply(&mut scoped.rig.host, world, raised.into());
+    scoped.rig.frame();
+    assert_eq!(scoped.walk(&[Tab]), [Some(2)]);
+    scoped.tap(8);
+    assert_eq!(scoped.walk(&[Tab, Tab, Tab]), [Some(9), Some(2), Some(4)]);
+    scoped.tap(2);
+    assert_eq!(scoped.walk(&[BackTab, BackTab]), [Some(9), Some(8)]);
+    scoped.tap(7);
+    assert_eq!(scoped.walk(&[Escape, BackTab]), [None, Some(9)]);
+    scoped.finish();
+}
+
+#[test]
+fn a_closed_overlay_leaves_the_tab_sequence_and_an_open_one_keeps_its_tree_place() {
+    let mut scoped = Scoped::new();
+    let (world, nodes) = (scoped.world, scoped.nodes);
+    // A closed overlay below the first checkbox holds a checkbox of its own.
+    let overlay = create(
+        &mut scoped.rig.host,
+        world,
+        vec![
+            ComponentValue::GuiOverlay(GuiOverlay::default()),
+            ComponentValue::GuiBehavior(GuiBehavior {
+                visible: false,
+                ..Default::default()
+            }),
+            ComponentValue::CanvasStyle(CanvasStyle {
+                layer: 1,
+                ..Default::default()
+            }),
+            sized(2, 4.0, 1.0),
+        ],
+        Some(nodes[2]),
+    );
+    let inside = create(
+        &mut scoped.rig.host,
+        world,
+        vec![
+            ComponentValue::GuiCheckbox(GuiCheckbox::default()),
+            sized(0, 4.0, 1.0),
+        ],
+        Some(overlay),
+    );
+    scoped.rig.frame();
+    scoped.tap(2);
+    assert_eq!(scoped.walk(&[Tab]), [Some(4)]);
+
+    // Open, its checkbox follows its parent in tree order although it paints
+    // above everything else.
+    apply(
+        &mut scoped.rig.host,
+        world,
+        vec![Command::SetField {
+            entity: EntityRef::Handle(overlay),
+            component: ComponentValue::GUI_BEHAVIOR,
+            field: crate::FieldWrite {
+                offset: std::mem::offset_of!(GuiBehavior, visible) as u32,
+                value: crate::FieldValue::Bool(true),
+            },
+        }],
+    );
+    scoped.rig.frame();
+    scoped.tap(2);
+    scoped.rig.send(key(Tab));
+    assert_eq!(
+        scoped.rig.focused(&[(world, inside)]),
+        Some((world, inside))
+    );
+    assert_eq!(scoped.walk(&[Tab]), [Some(4)]);
+    scoped.finish();
+}
+
+#[test]
 fn escape_leaves_the_scope_and_tab_reenters_the_panel() {
     let mut scoped = Scoped::new();
     scoped.tap(7);
@@ -240,6 +327,7 @@ fn nested_panel(
     let surface = Surface {
         width: 4.0,
         height: 4.0,
+        ..Default::default()
     };
     create(
         host,

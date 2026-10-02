@@ -34,4 +34,4 @@ export type ReactWorldClient = Pick<
       | "onPlaybackEvent"
     >
   > &
-  Partial<Pick<GuiWorldClient, "subscribeGuiEffects">>;
+  Partial<Pick<GuiWorldClient, "subscribeGuiEffects" | "sendCommand">>;

@@ -107,6 +107,8 @@ pub(super) struct Export {
     pub(super) pointer: u8,
     pub(super) components: Vec<Component>,
     pub(super) paint_keys: Vec<GuiPaintKey>,
+    pub(super) skin_looks: Vec<GuiSkinLook>,
+    pub(super) skin_tokens: Vec<GuiSkinToken>,
     pub(super) row_limits: RowLimits,
     pub(super) wire: WireContract,
 }
@@ -116,4 +118,26 @@ pub(super) struct GuiPaintKey {
     pub(super) part: String,
     pub(super) state: String,
     pub(super) variant: String,
+}
+
+/// One built-in skin look: named `GuiTheme.parts` rows and the font size
+/// their lengths were measured at.
+pub(super) struct GuiSkinLook {
+    pub(super) name: String,
+    pub(super) em: f32,
+    pub(super) rows: Vec<GuiSkinLookRow>,
+    /// `GuiThemeMotion.parts` rows timing the look's transitions.
+    pub(super) motion: Vec<GuiSkinLookRow>,
+}
+
+/// One look row: a paint key index and the numeric properties it sets.
+pub(super) struct GuiSkinLookRow {
+    pub(super) part: u32,
+    pub(super) properties: Vec<(String, Vec<f32>)>,
+}
+
+/// One design-language token: a number (one lane) or a colour (four lanes).
+pub(super) struct GuiSkinToken {
+    pub(super) name: String,
+    pub(super) lanes: Vec<f32>,
 }

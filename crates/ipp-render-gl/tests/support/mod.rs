@@ -66,13 +66,27 @@ pub struct DeviceState {
     pub fail_cache_composite: RefCell<Option<RenderError>>,
     /// Curve-path draws, excluding analytic glyph instances.
     pub surface_path_draws: Cell<u32>,
-    /// Retained GUI draws sampling an atlas page.
+    /// Retained GUI draws of glyph records, each sampling an atlas page.
     pub glyph_batch_draws: Cell<u32>,
-    /// Retained GUI draws of boxes only.
+    /// Retained GUI draws of shape records.
     pub gui_batch_draws: Cell<u32>,
+    /// Model-view-projection of every retained GUI draw, in draw order.
+    pub gui_draw_mvps: RefCell<Vec<[f32; 16]>>,
+    /// Fragment source of every program creation attempt, in order.
+    pub program_fragments: RefCell<Vec<String>>,
+    /// Program creations whose fragment source contains this text fail.
+    pub fail_program_containing: RefCell<Option<String>>,
+    /// Canvas paint parameter vectors of every upload, in order.
+    pub paint_block_uploads: RefCell<Vec<Vec<[f32; 4]>>>,
+    /// Shape records of every retained GUI storage write, in order.
+    pub gui_shapes_written: RefCell<Vec<ipp_render_gl::GuiShapeRecord>>,
+    /// Glyph records of every retained GUI storage write, in order.
+    pub gui_glyphs_written: RefCell<Vec<ipp_render_gl::GuiGlyphRecord>>,
+    /// Kind of every retained GUI storage allocation, by handle.
+    pub gui_batch_kinds: RefCell<Vec<ipp_render_gl::GuiRecordKind>>,
     /// Ordered Surface work: `B`/`E` begin and end a cache target, `C` composites,
-    /// `P` draws paths, `G` analytic glyphs, `T` retained GUI work sampling atlas
-    /// text, `X` retained GUI boxes only, `F` begins the frame.
+    /// `P` draws paths, `G` analytic glyphs, `T` retained GUI glyphs sampling an
+    /// atlas, `X` retained GUI shapes, `F` begins the frame.
     pub surface_events: RefCell<String>,
 }
 
@@ -94,7 +108,8 @@ impl RenderDevice for TestDevice {
     type Texture = ();
 
     type ShadowMap = ();
-    type GuiBatch = ();
+    /// Index of the allocation in [`DeviceState::gui_batch_kinds`].
+    type GuiBatch = usize;
     type GlyphAtlasPage = ();
 
     fn glyph_atlas_texture(page: &Self::GlyphAtlasPage) -> &Self::Texture {
@@ -166,7 +181,17 @@ impl RenderDevice for TestDevice {
             .set(self.0.live_shadow_maps.get() - 1);
     }
 
-    fn create_program(&mut self, _vertex: &str, _fragment: &str) -> Result<(), RenderError> {
+    fn create_program(&mut self, _vertex: &str, fragment: &str) -> Result<(), RenderError> {
+        self.0.program_fragments.borrow_mut().push(fragment.into());
+        if self
+            .0
+            .fail_program_containing
+            .borrow()
+            .as_ref()
+            .is_some_and(|marker| fragment.contains(marker.as_str()))
+        {
+            return Err(RenderError::RenderDevice("injected compile failure".into()));
+        }
         self.0.program_creates.set(self.0.program_creates.get() + 1);
         Ok(())
     }
@@ -426,31 +451,59 @@ impl RenderDevice for TestDevice {
             .set(self.0.cache_targets_live.get() - 1);
     }
 
-    fn create_gui_batch(&mut self, _: usize) -> Result<(), RenderError> {
-        Ok(())
+    fn create_gui_batch(
+        &mut self,
+        kind: ipp_render_gl::GuiRecordKind,
+        _: usize,
+    ) -> Result<usize, RenderError> {
+        let mut kinds = self.0.gui_batch_kinds.borrow_mut();
+        kinds.push(kind);
+        Ok(kinds.len() - 1)
     }
 
-    fn write_gui_batch(
+    fn write_gui_batch<R: ipp_render_gl::GuiRecord>(
         &mut self,
-        _: &mut (),
+        batch: &mut usize,
         _: usize,
-        _: &[ipp_render_gl::GuiVertex],
+        records: &[R],
     ) -> Result<(), RenderError> {
+        assert_eq!(self.0.gui_batch_kinds.borrow()[*batch], R::KIND);
         self.0
             .gui_batch_writes
             .set(self.0.gui_batch_writes.get() + 1);
+        let records: Box<dyn std::any::Any> = Box::new(records.to_vec());
+        if let Some(shapes) = records.downcast_ref::<Vec<ipp_render_gl::GuiShapeRecord>>() {
+            self.0
+                .gui_shapes_written
+                .borrow_mut()
+                .extend_from_slice(shapes);
+        }
+        if let Some(glyphs) = records.downcast_ref::<Vec<ipp_render_gl::GuiGlyphRecord>>() {
+            self.0
+                .gui_glyphs_written
+                .borrow_mut()
+                .extend_from_slice(glyphs);
+        }
         match self.0.fail_gui_batch_write.borrow().clone() {
             Some(error) => Err(error),
             None => Ok(()),
         }
     }
 
+    fn set_gui_paint_blocks(&mut self, _: &(), blocks: &[[f32; 4]]) -> Result<(), RenderError> {
+        self.0
+            .paint_block_uploads
+            .borrow_mut()
+            .push(blocks.to_vec());
+        Ok(())
+    }
+
     fn draw_gui_batch(
         &mut self,
         _: &(),
-        _: &(),
+        batch: &usize,
         atlas: Option<&()>,
-        _: &[f32; 16],
+        mvp: &[f32; 16],
         _: usize,
         _: usize,
     ) -> Result<(), RenderError> {
@@ -458,6 +511,13 @@ impl RenderDevice for TestDevice {
             !self.0.atlas_target_bound.get(),
             "the main pass never draws into an atlas page"
         );
+        let kind = self.0.gui_batch_kinds.borrow()[*batch];
+        assert_eq!(
+            atlas.is_some(),
+            kind == ipp_render_gl::GuiRecordKind::Glyph,
+            "glyph storage samples an atlas and shape storage none"
+        );
+        self.0.gui_draw_mvps.borrow_mut().push(*mvp);
         if atlas.is_some() {
             self.0
                 .glyph_batch_draws

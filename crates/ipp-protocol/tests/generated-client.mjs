@@ -104,7 +104,7 @@ function scalarFieldContract(input) {
     return value;
   };
 
-  assertContract(u16() === 7, "target contract version");
+  assertContract(u16() === 10, "target contract version");
   string();
   string();
   u8();

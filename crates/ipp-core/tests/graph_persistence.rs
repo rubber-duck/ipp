@@ -818,6 +818,7 @@ fn real_canvas_graph_restores_selected_outputs_density_paint_and_sparse_systems(
     let surface = Surface {
         width: 2.0,
         height: 0.5,
+        ..Default::default()
     };
     let anchor = entity(
         &mut host,

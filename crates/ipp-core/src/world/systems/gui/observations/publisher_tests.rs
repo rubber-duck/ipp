@@ -66,6 +66,7 @@ fn ordinal_is_preflighted_without_consumption_and_noop_survives_exhaustion() {
     let unchanged = GuiLocalEffectKind::FocusChanged {
         focused: false,
         changed: false,
+        part: 0,
     };
     assert_eq!(
         publisher

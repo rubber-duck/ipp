@@ -79,6 +79,7 @@ fn theme_entity(world: &mut WorldContext<'_>) -> EntityId {
                     EntityRef::Alias(1),
                     ComponentValue::GuiTheme(GuiTheme {
                         parts: parts(&[BACKGROUND, FILL]),
+                        ..Default::default()
                     }),
                 ),
             ],
@@ -322,6 +323,98 @@ fn row_targets_reject_absent_dead_and_whole_table_offsets_and_out_of_range_value
     );
     assert_eq!(property(&world, entity, opacity), f32_value(0.5));
     assert!((0.0..=1.0).contains(&effective_f32(&world, entity, opacity)));
+}
+
+#[test]
+fn an_arc_start_animates_past_a_whole_turn() {
+    // Arc angles take any finite value, so a clip turning a spinner may carry the
+    // start beyond one turn; paint takes it modulo a turn.
+    let (mut host, id) = world();
+    let mut world = host.world_mut(id).unwrap();
+    let entity = theme_entity(&mut world);
+    let mut table = Rows::new();
+    table
+        .insert(
+            BACKGROUND,
+            GuiPaintPart {
+                shape: Some(2.0),
+                arc_start: Some(0.25),
+                ..row(GuiPrimitivePart::Background, None)
+            },
+        )
+        .unwrap();
+    set_field(
+        &mut world,
+        entity,
+        FieldWrite {
+            offset: table_offset(),
+            value: FieldValue::Rows(table.encode()),
+        },
+    );
+    let start = offset(BACKGROUND, GuiPartProperty::ArcStart);
+    upload(&mut world, 1, &clip(&[start], 0.0, 1.5));
+    let controller = world
+        .create_animation_controller(description(entity, 1, &[start]))
+        .unwrap();
+
+    // Halfway: 0.25 + 1.5 / 2, then 0.25 + 1.5 * 0.95.
+    seek(&mut world, controller, 1.0);
+    assert_eq!(property(&world, entity, start), f32_value(1.0));
+    let report = seek(&mut world, controller, 1.9);
+    assert!(
+        !has_event(&report, controller, AnimationPlaybackEventKind::Failed),
+        "{:?}",
+        report.playback_events
+    );
+    assert!((effective_f32(&world, entity, start) - 1.675).abs() < 1e-6);
+}
+
+#[test]
+fn a_fill_hue_animates_past_a_whole_turn_beside_its_checker_cell() {
+    // The saturation-value fill's hue takes any finite value, so a clip may turn it
+    // through red; its checker's cell side animates as an ordinary length.
+    let (mut host, id) = world();
+    let mut world = host.world_mut(id).unwrap();
+    let entity = theme_entity(&mut world);
+    let mut table = Rows::new();
+    table
+        .insert(
+            BACKGROUND,
+            GuiPaintPart {
+                fill_mode: Some(4.0),
+                fill_hue: Some(0.5),
+                checker_size: Some(4.0),
+                ..row(GuiPrimitivePart::Background, None)
+            },
+        )
+        .unwrap();
+    set_field(
+        &mut world,
+        entity,
+        FieldWrite {
+            offset: table_offset(),
+            value: FieldValue::Rows(table.encode()),
+        },
+    );
+    let hue = offset(BACKGROUND, GuiPartProperty::FillHue);
+    let cell = offset(BACKGROUND, GuiPartProperty::CheckerSize);
+    upload(&mut world, 1, &clip(&[hue, cell], 0.0, 1.5));
+    let controller = world
+        .create_animation_controller(description(entity, 1, &[hue, cell]))
+        .unwrap();
+
+    // Halfway: each base plus 1.5 / 2, then plus 1.5 * 0.95.
+    seek(&mut world, controller, 1.0);
+    assert_eq!(property(&world, entity, hue), f32_value(1.25));
+    assert_eq!(property(&world, entity, cell), f32_value(4.75));
+    let report = seek(&mut world, controller, 1.9);
+    assert!(
+        !has_event(&report, controller, AnimationPlaybackEventKind::Failed),
+        "{:?}",
+        report.playback_events
+    );
+    assert!((effective_f32(&world, entity, hue) - 1.925).abs() < 1e-6);
+    assert!((effective_f32(&world, entity, cell) - 5.425).abs() < 1e-6);
 }
 
 #[test]

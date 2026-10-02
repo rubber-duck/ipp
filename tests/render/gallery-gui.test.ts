@@ -432,27 +432,47 @@ test("Gallery runs a real GUI demo and cleans it up", {
           ([r, g, b]) => g! > 110 && b! > 125 && g! - r! > 12,
         ).length;
       };
-      // The scope's zero line near both ends, where the pulse's flat
-      // baseline runs.
-      const sampleWaveformBaseline = async (label: string) => {
-        const groups = [0.06, 0.15, 0.85, 0.94].map((fraction) =>
-          [-2.5, 0, 2.5].map(
-            (offset) =>
+      // The light the pulse's flat baseline adds near both ends of the
+      // scope's zero line. At the oblique test camera the line is about a
+      // pixel thick, so one pixel's level depends on where the line falls
+      // within it; the green it adds over the whole column of pixels round
+      // it, against the same pixels before the pulse, does not.
+      const sampleWaveformBaseline = async (
+        label: string,
+        before: string,
+        { width, height }: { readonly width: number; readonly height: number },
+      ) => {
+        const centres = await g.call<{ x: number; y: number }[]>(
+          "projectGalleryGuiContent",
+          [0.06, 0.15, 0.85, 0.94].map((fraction) => [
+            gridX + gridWidth * fraction,
+            gridY + gridHeight / 2,
+          ]),
+        );
+        const rows = [-3, -2, -1, 0, 1, 2, 3];
+        const column = centres.flatMap(({ x, y }) =>
+          rows.map(
+            (row) =>
               [
-                gridX + gridWidth * fraction,
-                gridY + gridHeight / 2 + offset,
+                (Math.floor(x * width) + 0.5) / width,
+                (Math.floor(y * height) + row + 0.5) / height,
               ] as const,
           ),
         );
-        const pixels = await g.call<readonly (readonly number[])[]>(
-          "sampleGalleryGuiCapture",
-          label,
-          groups.flat(),
-        );
-        return groups.map((_, group) =>
-          Math.max(
-            ...pixels.slice(group * 3, group * 3 + 3).map((pixel) => pixel[1]!),
+        const [lit, unlit] = await Promise.all(
+          [label, before].map((capture) =>
+            g.call<readonly (readonly number[])[]>(
+              "sampleViewerCapture",
+              capture,
+              column,
+            ),
           ),
+        );
+        return centres.map((_, group) =>
+          rows.reduce((sum, _row, index) => {
+            const pixel = group * rows.length + index;
+            return sum + Math.max(0, lit![pixel]![1]! - unlit![pixel]![1]!);
+          }, 0),
         );
       };
       // Two complete sine cycles at phase zero: alternating crests and
@@ -1495,7 +1515,10 @@ test("Gallery runs a real GUI demo and cleans it up", {
       );
       const baselineSignal = await sampleWaveformBaseline(
         "gui-waveform-pulse-active",
+        "gui-waveform-before-pulse",
+        pulseFrame.frame,
       );
+      await recordWaveform("pulse-baseline", { green: baselineSignal });
       assert.ok(
         baselineSignal.every((green) => green > 150),
         `manual pulse must join a visible baseline on both sides: ${JSON.stringify(baselineSignal)}`,

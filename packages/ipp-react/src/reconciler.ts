@@ -29,21 +29,26 @@ export class ReactWorldContainer {
   )[] = [];
   private scheduled = false;
   private captured = false;
+  /** The latest description this container published. */
+  private described: ReactWorldDescription | undefined;
 
   constructor(
     readonly tree: ReactWorldTree,
     readonly commits: ReactWorldCommits,
   ) {}
 
-  /** Describe this container's tree when a commit changed it. */
+  /** Describe what a commit changed in this container's tree. */
   capture(): void {
     if (this.captured && !this.tree.changed) return;
     this.captured = true;
-    this.tree.changed = false;
     try {
-      const description = this.tree.describe();
+      const description = this.tree.describeCommit();
+      // The commit replaced props without changing any declaration.
+      if (description === this.described) return;
+      this.described = description;
       this.pending.push({ description });
     } catch (error) {
+      this.described = undefined;
       this.pending.push({ error });
     }
     if (this.scheduled) return;
@@ -72,6 +77,8 @@ export class ReactWorldContainer {
     // React clears its host tree before reporting an uncaught render error.
     // Discard that recovery snapshot before it can delete acknowledged state.
     this.pending = [];
+    this.described = undefined;
+    this.tree.restructure();
     const settled = this.commits.failed(error);
     this.onFailure?.(settled);
   }
@@ -128,43 +135,43 @@ const config: ReactWorldReconcilerConfig & {
   finalizeInitialChildren: no,
   shouldSetTextContent: (type) => isShader(type),
   appendChild(parent, child) {
-    parent.tree.changed = true;
+    parent.tree.restructure();
     insert(parent, child);
   },
   appendChildToContainer(container, child) {
-    container.tree.changed = true;
+    container.tree.restructure();
     insert(container.tree, child);
   },
   insertBefore(parent, child, before) {
-    parent.tree.changed = true;
+    parent.tree.restructure();
     insert(parent, child, before);
   },
   insertInContainerBefore(container, child, before) {
-    container.tree.changed = true;
+    container.tree.restructure();
     insert(container.tree, child, before);
   },
   removeChild(parent, child) {
-    parent.tree.changed = true;
+    parent.tree.restructure();
     remove(parent, child);
   },
   removeChildFromContainer(container, child) {
-    container.tree.changed = true;
+    container.tree.restructure();
     remove(container.tree, child);
   },
   clearContainer(container) {
-    container.tree.changed = true;
+    container.tree.restructure();
     container.tree.children = [];
   },
   commitUpdate(instance, _type, _previous, props) {
-    instance.tree.changed = true;
     instance.props = props;
+    instance.tree.touch(instance);
   },
   hideInstance(instance) {
-    instance.tree.changed = true;
+    instance.tree.restructure();
     instance.hidden = true;
   },
   unhideInstance(instance) {
-    instance.tree.changed = true;
+    instance.tree.restructure();
     instance.hidden = false;
   },
   scheduleTimeout: setTimeout,

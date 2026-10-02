@@ -672,6 +672,49 @@ test("value callbacks fire from value records, current value first, only when th
   }
 });
 
+test("a render that only replaces a value callback sends nothing, and the new callback receives values", async () => {
+  const world = valueWorld();
+  const batch = world.client.batch.bind(world.client);
+  let batches = 0;
+  world.client.batch = (operations) => {
+    batches++;
+    return batch(operations);
+  };
+  const received: [string, boolean][] = [];
+  const root = createRoot(world.client, {
+    onError: (error) => assert.fail(error),
+  });
+  const scene = (name: string) =>
+    createElement(
+      Entity,
+      { id: "row" },
+      createElement(Checkbox, {
+        checked: false,
+        onToggle: (event: GuiControlEvent<boolean>) =>
+          received.push([name, event.value]),
+      }),
+    );
+  try {
+    await root.render(scene("first"));
+    await settled();
+    world.deliver(5n, false);
+    await settled();
+    const sent = batches;
+    await root.render(scene("second"));
+    await settled();
+    assert.equal(batches, sent, "a callback is not a declared value");
+    assert.equal(world.watches.length, 1, "the control stays observed");
+    world.deliver(6n, true);
+    await settled();
+    assert.deepEqual(received, [
+      ["first", false],
+      ["second", true],
+    ]);
+  } finally {
+    await root.unmount();
+  }
+});
+
 test("a colour control delivers its four channels in one event per changed record", async () => {
   const world = valueWorld();
   const colors: GuiControlEvent<GuiHsva>[] = [];

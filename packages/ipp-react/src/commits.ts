@@ -21,11 +21,12 @@ import type {
   SystemCommand,
 } from "@ipp/client";
 import type { ReactWorldClient } from "./contract.js";
-import type {
-  ReactComponentDescription,
-  ReactEntityDescription,
-  ReactWorldDescription,
-  ReactWorldFieldValue,
+import {
+  commitCounters,
+  type ReactComponentDescription,
+  type ReactEntityDescription,
+  type ReactWorldDescription,
+  type ReactWorldFieldValue,
 } from "./tree.js";
 
 export interface ReactWorldRootOptions {
@@ -74,6 +75,15 @@ interface ComponentRecord {
 interface LinkRecord {
   description: ResolvedEntityLink;
   readonly entity: EntityRecord;
+}
+
+/**
+ * Declarations that changed since the records last matched a description, by
+ * their position in the descriptions; later changes replace earlier ones.
+ */
+interface UnappliedChanges {
+  readonly entities: Map<number, ReactEntityDescription>;
+  readonly components: Map<number, ReactComponentDescription>;
 }
 
 /** One command and the acknowledged state it establishes once applied. */
@@ -206,6 +216,18 @@ export class ReactWorldCommits {
   private controlRefreshQueued = false;
   private localFailureGeneration = 0;
   private closing = false;
+  /** The serial of the last captured description. */
+  private capturedSerial: number | undefined;
+  /**
+   * What changed since the description the records last matched, while each
+   * captured description named its changes; otherwise the next commit
+   * compares the whole description.
+   */
+  private unapplied: UnappliedChanges | undefined;
+  /** Entity records changed since they were last published to callbacks. */
+  private entityRecordsChanged = true;
+  /** The handle each symbol had when bound records last learned it. */
+  private readonly learned = new Map<string, bigint>();
 
   constructor(
     private readonly client: ReactWorldClient,
@@ -251,12 +273,13 @@ export class ReactWorldCommits {
         const generation = this.localFailureGeneration;
         void this.enqueue(async () => {
           this.assetCommitQueued = false;
+          // A changed asset changes the fields that refer to it.
           if (
             !this.closing &&
             generation === this.localFailureGeneration &&
             this.desired
           )
-            await this.apply(this.desired);
+            await this.apply(this.desired, true);
         }).catch(() => {});
       },
       (error) => this.report(error),
@@ -276,6 +299,7 @@ export class ReactWorldCommits {
 
   /** Forget a record and every component and link declared on it. */
   private forgetEntity(record: EntityRecord): void {
+    this.entityRecordsChanged = true;
     this.orphans.delete(record);
     for (const [identity, entity] of this.entities)
       if (entity === record) this.entities.delete(identity);
@@ -310,10 +334,13 @@ export class ReactWorldCommits {
     this.components.clear();
     this.links.clear();
     this.linkOrders.clear();
+    this.learned.clear();
+    this.unapplied = undefined;
     this.publishEntities();
   }
 
   private publishEntities(): void {
+    this.entityRecordsChanged = false;
     const acknowledged: {
       description: ReactEntityDescription;
       entity: bigint;
@@ -351,6 +378,14 @@ export class ReactWorldCommits {
     // committed, so unmount deletes nothing.
     if (this.closing) return this.latest;
     if (this.client.closure) return this.failed(this.client.closure.reason);
+    const changes = description.changes;
+    if (this.unapplied && changes && changes.base === this.capturedSerial) {
+      for (const [index, entity] of changes.entities)
+        this.unapplied.entities.set(index, entity);
+      for (const [index, component] of changes.components)
+        this.unapplied.components.set(index, component);
+    } else this.unapplied = undefined;
+    this.capturedSerial = description.serial;
     this.desired = description;
     this.assets.setDesired(description.assets);
     this.animations.setDesired(description.animations);
@@ -398,6 +433,8 @@ export class ReactWorldCommits {
     // records that the corrected render must delete.
     this.signature = undefined;
     this.desired = undefined;
+    this.capturedSerial = undefined;
+    this.unapplied = undefined;
     this.localFailureGeneration++;
     return this.enqueue(async () => {
       this.needsReset = true;
@@ -572,8 +609,18 @@ export class ReactWorldCommits {
     return undefined;
   }
 
-  private async apply(description: ReactWorldDescription): Promise<void> {
+  /**
+   * Bring the World to `description`. Unless `whole`, a description whose
+   * changes since the one the records match are known writes only those.
+   */
+  private async apply(
+    description: ReactWorldDescription,
+    whole = false,
+  ): Promise<void> {
     this.checkSession();
+    // Changes captured from here on follow this description.
+    const changes = whole || this.needsReset ? undefined : this.unapplied;
+    this.unapplied = { entities: new Map(), components: new Map() };
     if (this.needsReset) this.controls.reset(true);
     const failures: unknown[] = [];
     try {
@@ -589,10 +636,13 @@ export class ReactWorldCommits {
         await this.deleteRecords(false);
         this.needsReset = false;
       }
-      await this.applyAttempt(description);
+      if (!changes || !(await this.applyChanges(description, changes)))
+        await this.applyAttempt(description);
     } catch (error) {
       failures.push(error);
     }
+    // After a failure the records match no description.
+    if (failures.length) this.unapplied = undefined;
     // Callbacks follow the acknowledged tree: a failed commit publishes no
     // registration until a later commit succeeds.
     if (failures.length) this.callbacks.suspend();
@@ -642,6 +692,194 @@ export class ReactWorldCommits {
   }
 
   /**
+   * Apply a description that differs from the one the records match only in
+   * `changes`: write the changed fields of those component declarations and
+   * take their new listeners, without comparing the rest. Returns false,
+   * having sent nothing, when the records do not allow it.
+   */
+  private async applyChanges(
+    description: ReactWorldDescription,
+    changes: UnappliedChanges,
+  ): Promise<boolean> {
+    this.checkSession();
+    await this.animations.removeExcept(
+      new Set(description.animations.map((animation) => animation.identity)),
+    );
+    await this.assets.prepare(description.assets);
+    this.checkSession();
+    if (this.needsReset || this.orphans.size || this.uncertain.size)
+      return false;
+    const entities: [EntityRecord, ReactEntityDescription][] = [];
+    for (const entity of changes.entities.values()) {
+      const record = this.entities.get(entity.identity);
+      if (
+        record?.description.symbolicId !== entity.symbolicId ||
+        record.description.kind !== entity.kind
+      )
+        return false;
+      entities.push([record, entity]);
+    }
+    const components: [ComponentRecord, ReactComponentDescription][] = [];
+    for (const index of [...changes.components.keys()].sort((a, b) => a - b)) {
+      const declared = changes.components.get(index)!;
+      const record = this.components.get(declared.identity);
+      if (
+        record?.description.component !== declared.component ||
+        this.entities.get(declared.entity) !== record.entity
+      )
+        return false;
+      components.push([record, declared]);
+    }
+    for (const [record, entity] of entities) record.description = entity;
+    const entityRef = (identity: number): EntityRef =>
+      this.recordRef(this.entities.get(identity)!);
+    const plan = components.flatMap(([record, declared]) =>
+      this.updateComponent(record, declared, entityRef),
+    );
+    // Nothing is removed, so no removal can find its target gone.
+    if (plan.length) await this.commit(plan);
+    await this.animations.apply(
+      description.animations,
+      this.assets,
+      (identity) => this.entities.get(identity)?.entity,
+    );
+    await this.assets.releaseUnused();
+    await this.publishControls();
+    return true;
+  }
+
+  private recordRef(record: EntityRecord): EntityRef {
+    return record.description.kind === "bound" || record.entity === undefined
+      ? { kind: "symbol", symbol: record.description.symbolicId }
+      : { kind: "handle", id: record.entity };
+  }
+
+  /**
+   * The declared fields of `declared` with asset and entity references
+   * resolved: `resolved` as declared, `fields` as written.
+   */
+  private declaredFields(
+    declared: ReactComponentDescription,
+    entityRef: (identity: number) => EntityRef,
+  ): {
+    resolved: ReadonlyMap<number, ReactWorldFieldValue>;
+    fields: Map<number, DeclarationFieldValue>;
+  } {
+    const resolved = this.resolveAssets(declared);
+    const fields = new Map<number, DeclarationFieldValue>();
+    for (const [offset, value] of resolved) {
+      if (value.kind === "asset" || value.kind === "row-asset")
+        throw new Error("Unresolved asset reference");
+      if (value.kind !== "entity-reference") {
+        fields.set(offset, value);
+        continue;
+      }
+      if (typeof value.value === "string")
+        throw new Error("Unresolved entity reference");
+      fields.set(offset, {
+        kind: "entity",
+        value:
+          typeof value.value === "bigint"
+            ? { kind: "handle", id: value.value }
+            : entityRef(value.value.entity),
+      });
+    }
+    return { resolved, fields };
+  }
+
+  /**
+   * Plan the writes that bring the component `record` acknowledges to the
+   * declaration `declared`, and take its description.
+   */
+  private updateComponent(
+    record: ComponentRecord,
+    declared: ReactComponentDescription,
+    entityRef: (identity: number) => EntityRef,
+  ): PlannedCommand[] {
+    commitCounters.compared++;
+    const { resolved, fields } = this.declaredFields(declared, entityRef);
+    const properties = declared.properties ?? {};
+    record.description = declared;
+    // An unchanged field map needs no comparison unless it names
+    // entities, whose handles may have changed.
+    if (
+      resolved === record.declared &&
+      declared.properties === undefined &&
+      ![...resolved.values()].some((value) => value.kind === "entity-reference")
+    )
+      return [];
+    // A removed prop leaves its last value in place; declaring it again
+    // writes it again.
+    for (const offset of record.fields.keys())
+      if (!fields.has(offset)) record.fields.delete(offset);
+    const commands: PlannedCommand[] = [];
+    const changed = new Map(
+      [...fields].filter(
+        ([offset, value]) => !equalField(record.fields.get(offset), value),
+      ),
+    );
+    // Several changed fields are one write, validated together, so a
+    // constraint between fields, such as a slider's bounds or a range's
+    // two values, never sees half of the change.
+    const acknowledge = (batch: AppliedBatch) => {
+      for (const [offset, value] of changed)
+        record.fields.set(offset, acknowledgedValue(value, batch));
+    };
+    if (changed.size > 1)
+      commands.push({
+        command: {
+          kind: "insertComponent",
+          entity: entityRef(declared.entity),
+          component: declared.component,
+          fields: writes(changed),
+          adopt: true,
+        },
+        applied: acknowledge,
+      });
+    else
+      for (const [offset, value] of changed)
+        commands.push({
+          command: {
+            kind: "setField",
+            entity: entityRef(declared.entity),
+            component: declared.component,
+            field: { offset, value },
+          },
+          applied: acknowledge,
+        });
+    for (const [name, value] of Object.entries(properties)) {
+      if (
+        Object.hasOwn(record.properties, name) &&
+        JSON.stringify(record.properties[name]) === JSON.stringify(value)
+      )
+        continue;
+      commands.push({
+        command: {
+          kind: "setDynamicProperty",
+          entity: entityRef(declared.entity),
+          component: declared.component,
+          name,
+          value,
+        },
+        applied: () => {
+          record.properties[name] = value;
+        },
+      });
+    }
+    const last = commands.at(-1);
+    if (!last) record.declared = resolved;
+    else
+      commands[commands.length - 1] = {
+        command: last.command,
+        applied: (batch, operation) => {
+          last.applied!(batch, operation);
+          record.declared = resolved;
+        },
+      };
+    return commands;
+  }
+
+  /**
    * Plan and submit one render: remove components whose declarations
    * disappeared, create or adopt new declared entities, place links, insert
    * or adopt new components and write changed fields, then delete entities
@@ -656,6 +894,9 @@ export class ReactWorldCommits {
     );
     await this.assets.prepare(description.assets);
     this.checkSession();
+    // Entity records may change below; bound records may be new.
+    this.entityRecordsChanged = true;
+    this.learned.clear();
     const plan: PlannedCommand[] = [];
     let nextAlias = 1;
 
@@ -731,9 +972,7 @@ export class ReactWorldCommits {
       await this.resolveBoundEntities(creating);
 
     const recordRef = (record: EntityRecord): EntityRef =>
-      record.description.kind === "bound" || record.entity === undefined
-        ? { kind: "symbol", symbol: record.description.symbolicId }
-        : { kind: "handle", id: record.entity };
+      this.recordRef(record);
     const entityRef = (identity: number): EntityRef => {
       const alias = created.get(identity);
       if (alias !== undefined) return { kind: "alias", alias };
@@ -949,109 +1188,12 @@ export class ReactWorldCommits {
 
     for (const declared of description.components) {
       const record = retained.get(declared.identity);
-      const resolved = this.resolveAssets(declared);
-      const fields = new Map<number, DeclarationFieldValue>();
-      for (const [offset, value] of resolved) {
-        if (value.kind === "asset" || value.kind === "row-asset")
-          throw new Error("Unresolved asset reference");
-        if (value.kind !== "entity-reference") {
-          fields.set(offset, value);
-          continue;
-        }
-        if (typeof value.value === "string")
-          throw new Error("Unresolved entity reference");
-        fields.set(offset, {
-          kind: "entity",
-          value:
-            typeof value.value === "bigint"
-              ? { kind: "handle", id: value.value }
-              : entityRef(value.value.entity),
-        });
-      }
-      const properties = declared.properties ?? {};
       if (record) {
-        record.description = declared;
-        // An unchanged field map needs no comparison unless it names
-        // entities, whose handles may have changed.
-        if (
-          resolved === record.declared &&
-          declared.properties === undefined &&
-          ![...resolved.values()].some(
-            (value) => value.kind === "entity-reference",
-          )
-        )
-          continue;
-        // A removed prop leaves its last value in place; declaring it again
-        // writes it again.
-        for (const offset of record.fields.keys())
-          if (!fields.has(offset)) record.fields.delete(offset);
-        const commands: PlannedCommand[] = [];
-        const changed = new Map(
-          [...fields].filter(
-            ([offset, value]) => !equalField(record.fields.get(offset), value),
-          ),
-        );
-        // Several changed fields are one write, validated together, so a
-        // constraint between fields, such as a slider's bounds or a range's
-        // two values, never sees half of the change.
-        const acknowledge = (batch: AppliedBatch) => {
-          for (const [offset, value] of changed)
-            record.fields.set(offset, acknowledgedValue(value, batch));
-        };
-        if (changed.size > 1)
-          commands.push({
-            command: {
-              kind: "insertComponent",
-              entity: entityRef(declared.entity),
-              component: declared.component,
-              fields: writes(changed),
-              adopt: true,
-            },
-            applied: acknowledge,
-          });
-        else
-          for (const [offset, value] of changed)
-            commands.push({
-              command: {
-                kind: "setField",
-                entity: entityRef(declared.entity),
-                component: declared.component,
-                field: { offset, value },
-              },
-              applied: acknowledge,
-            });
-        for (const [name, value] of Object.entries(properties)) {
-          if (
-            Object.hasOwn(record.properties, name) &&
-            JSON.stringify(record.properties[name]) === JSON.stringify(value)
-          )
-            continue;
-          commands.push({
-            command: {
-              kind: "setDynamicProperty",
-              entity: entityRef(declared.entity),
-              component: declared.component,
-              name,
-              value,
-            },
-            applied: () => {
-              record.properties[name] = value;
-            },
-          });
-        }
-        const last = commands.at(-1);
-        if (!last) record.declared = resolved;
-        else
-          commands[commands.length - 1] = {
-            command: last.command,
-            applied: (batch, operation) => {
-              last.applied!(batch, operation);
-              record.declared = resolved;
-            },
-          };
-        plan.push(...commands);
+        plan.push(...this.updateComponent(record, declared, entityRef));
         continue;
       }
+      const { resolved, fields } = this.declaredFields(declared, entityRef);
+      const properties = declared.properties ?? {};
       let inserted: ComponentRecord | undefined;
       plan.push({
         command: {
@@ -1327,7 +1469,7 @@ export class ReactWorldCommits {
       return false;
     } finally {
       this.pruneOrphans();
-      this.publishEntities();
+      if (this.entityRecordsChanged) this.publishEntities();
     }
   }
 
@@ -1346,6 +1488,12 @@ export class ReactWorldCommits {
 
   /** Record the handles an outcome reports for bound entities' symbols. */
   private learnSymbols(batch: AppliedBatch): void {
+    // Bound records took each known handle when it was learned, and only a
+    // full commit adds bound records.
+    let unknown = false;
+    for (const [symbol, entity] of batch.symbols)
+      if (this.learned.get(symbol) !== entity) unknown = true;
+    if (!unknown) return;
     for (const record of [...this.entities.values(), ...this.orphans]) {
       if (record.description.kind !== "bound") continue;
       const entity = batch.symbols.get(record.description.symbolicId);
@@ -1355,6 +1503,9 @@ export class ReactWorldCommits {
         for (const [identity, component] of this.components)
           if (component.entity === record) this.reacknowledged.add(identity);
       record.entity = entity;
+      this.entityRecordsChanged = true;
     }
+    for (const [symbol, entity] of batch.symbols)
+      this.learned.set(symbol, entity);
   }
 }

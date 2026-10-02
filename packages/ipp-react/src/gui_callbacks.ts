@@ -114,6 +114,22 @@ export class ReactGuiCallbacks {
   }
 
   setDesired(description: ReactWorldDescription): void {
+    const changes = description.changes;
+    if (
+      changes &&
+      this.desired?.serial !== undefined &&
+      changes.base === this.desired.serial
+    ) {
+      // Only listeners changed: which callbacks are registered, and the
+      // symbolic ids dispatch compares, stay the same.
+      this.desired = description;
+      for (const entity of changes.entities.values())
+        this.desiredEntities.set(entity.identity, entity);
+      for (const component of changes.components.values())
+        if (component.control)
+          this.desiredControls.set(component.identity, component);
+      return;
+    }
     this.desired = description;
     this.desiredEntities = new Map(
       description.entities.map((entity) => [entity.identity, entity]),

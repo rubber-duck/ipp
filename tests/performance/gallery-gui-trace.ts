@@ -4,9 +4,12 @@
  * Each state gets one counter window with a Chrome trace of every thread,
  * then one CPU-profile window of the runtime worker and the page's main
  * thread. Counters come from the renderer's statistics totals, page-side
- * message and React commit counts; nothing here asserts. Run the compiled
- * file with `node --test`; `IPP_TRACE_OUTPUT` names the output directory and
- * `IPP_BROWSER_ANGLE` selects a hardware ANGLE backend as in other browser runs.
+ * message counts, and React commits with the components that ran and the host
+ * instances that changed in them, for each renderer that registers with the
+ * React DevTools hook (React DOM does; `@ipp/react` does not); nothing here
+ * asserts. Run the compiled file with `node --test`; `IPP_TRACE_OUTPUT` names
+ * the output directory and `IPP_BROWSER_ANGLE` selects a hardware ANGLE
+ * backend as in other browser runs.
  *
  * States: 1 idle at load (SCAN on), 2 idle with SCAN off and reduced motion,
  * 3 pointer sweeping the panel, 4 dragging GAIN, 5 layers exploded, 6 camera
@@ -63,17 +66,22 @@ const STATES = new Set(
 );
 const selected = (name: string) => STATES.has(name.split("-")[0]!);
 
-/** Page-side counters: messages to and from the runtime, React commits. */
+/**
+ * Page-side counters: messages to and from the runtime, React commits and the
+ * work each renderer's commits did.
+ */
 function installPageCounters() {
   type Counters = {
     sent: Record<string, { count: number; bytes: number }>;
     received: { count: number; bytes: number };
     commits: Record<string, number>;
+    rendered: Record<string, { components: number; instances: number }>;
   };
   const counters: Counters = {
     sent: {},
     received: { count: 0, bytes: 0 },
     commits: {},
+    rendered: {},
   };
   (window as unknown as { __ippTrace: Counters }).__ippTrace = counters;
   const size = (data: unknown): number => {
@@ -137,7 +145,44 @@ function installPageCounters() {
       return add.apply(this, args);
     } as typeof prototype.addEventListener;
   }
-  // React reports every commit of every renderer to this hook.
+  // A commit's work, found as React DevTools finds it: descend only where a
+  // fiber's children changed, and count the components that ran and the host
+  // instances that mounted or received new props.
+  type Fiber = {
+    readonly tag: number;
+    readonly flags: number;
+    readonly child: Fiber | null;
+    readonly sibling: Fiber | null;
+    readonly alternate: Fiber | null;
+    readonly memoizedProps: unknown;
+  };
+  // Function, class, forwardRef and simple memo components; host components,
+  // hoistables and singletons.
+  const COMPONENT_TAGS = new Set([0, 1, 11, 15]);
+  const HOST_TAGS = new Set([5, 26, 27]);
+  const PERFORMED_WORK = 1;
+  const countWork = (
+    parent: Fiber,
+    work: { components: number; instances: number },
+  ) => {
+    for (let fiber = parent.child; fiber; fiber = fiber.sibling) {
+      const previous = fiber.alternate;
+      if (
+        COMPONENT_TAGS.has(fiber.tag) &&
+        (previous === null || (fiber.flags & PERFORMED_WORK) !== 0)
+      )
+        work.components += 1;
+      if (
+        HOST_TAGS.has(fiber.tag) &&
+        (previous === null || previous.memoizedProps !== fiber.memoizedProps)
+      )
+        work.instances += 1;
+      if (previous === null || previous.child !== fiber.child)
+        countWork(fiber, work);
+    }
+  };
+  // React reports every commit of every renderer that registers with this
+  // hook.
   const renderers = new Map<number, string>();
   (
     window as unknown as { __REACT_DEVTOOLS_GLOBAL_HOOK__: unknown }
@@ -150,9 +195,13 @@ function installPageCounters() {
       renderers.set(id, renderer.rendererPackageName ?? `renderer-${id}`);
       return id;
     },
-    onCommitFiberRoot(id: number) {
+    onCommitFiberRoot(id: number, root: { current: Fiber }) {
       const name = renderers.get(id) ?? `renderer-${id}`;
       counters.commits[name] = (counters.commits[name] ?? 0) + 1;
+      countWork(
+        root.current,
+        (counters.rendered[name] ??= { components: 0, instances: 0 }),
+      );
     },
     onCommitFiberUnmount() {},
     onPostCommitFiberRoot() {},
@@ -175,6 +224,10 @@ interface FrameWindow {
   readonly sent: Record<string, { count: number; bytes: number }>;
   readonly received: { count: number; bytes: number };
   readonly commits: Record<string, number>;
+  readonly rendered: Record<
+    string,
+    { readonly components: number; readonly instances: number }
+  >;
   readonly device: unknown;
   readonly surfaceCaches: unknown;
 }
@@ -213,6 +266,7 @@ async function frameWindow(
       const sentBefore = copy(counters.sent);
       const receivedBefore = copy(counters.received);
       const commitsBefore = copy(counters.commits);
+      const renderedBefore = copy(counters.rendered);
       const start = performance.now();
       const wallStart = Date.now();
       let tick: bigint | undefined;
@@ -269,6 +323,19 @@ async function frameWindow(
         sent: diff(sentBefore, counters.sent),
         received: diff(receivedBefore, counters.received),
         commits: diff(commitsBefore, counters.commits),
+        rendered: Object.fromEntries(
+          Object.entries(counters.rendered).map(
+            ([name, work]: [string, any]) => [
+              name,
+              {
+                components:
+                  work.components - (renderedBefore[name]?.components ?? 0),
+                instances:
+                  work.instances - (renderedBefore[name]?.instances ?? 0),
+              },
+            ],
+          ),
+        ),
         device: copy(after.device),
         surfaceCaches: JSON.parse(
           JSON.stringify(after.surfaces.surfaceCaches, (_key, value) =>

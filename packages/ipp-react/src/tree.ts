@@ -163,24 +163,72 @@ export interface ReactWorldDescription {
   readonly components: readonly ReactComponentDescription[];
   readonly links: readonly ReactEntityLinkDescription[];
   readonly signature: string;
+  /** This description's position among its tree's descriptions. */
+  readonly serial?: number;
+  /**
+   * Present when this description differs from the tree's previous one, of
+   * serial `base`, only in the listed declarations: no declaration appeared,
+   * disappeared, moved, changed its symbolic id or gained or lost a
+   * listener. A consumer that saw that description updates only these.
+   */
+  readonly changes?: ReactWorldDescriptionChanges;
+}
+
+/** The declarations a description changed, by their position in it. */
+export interface ReactWorldDescriptionChanges {
+  readonly base: number;
+  readonly entities: ReadonlyMap<number, ReactEntityDescription>;
+  readonly components: ReadonlyMap<number, ReactComponentDescription>;
+}
+
+/**
+ * Running totals of commit work in this module, which tests compare across a
+ * commit: `described` counts each instance whose declaration a describe
+ * visited, `compared` each component declaration whose fields a commit
+ * compared with the acknowledged ones.
+ */
+export const commitCounters = { described: 0, compared: 0 };
+
+/** Where the last full describe placed an instance. */
+type InstanceRole =
+  | {
+      readonly kind: "entity" | "component" | "asset" | "attachment";
+      readonly index: number;
+    }
+  | {
+      readonly kind: "animation";
+      readonly index: number;
+      readonly parent: number | undefined;
+    }
+  | { readonly kind: "stage"; readonly asset: ReactWorldInstance }
+  | { readonly kind: "placement" };
+
+/** The last description and what describing a commit's changes needs of it. */
+interface DescribedTree {
+  readonly description: ReactWorldDescription;
+  readonly resources: string;
+  /** Each instance the last full describe visited. */
+  readonly roles: ReadonlyMap<ReactWorldInstance, InstanceRole>;
+  readonly assetIds: ReadonlySet<string>;
+  readonly animationAssets: ReadonlyMap<
+    string,
+    { kind: number; clip?: import("@ipp/client").AnimationClipSource }
+  >;
+  readonly reference: (value: string | bigint) => ReactEntityReference;
 }
 
 export class ReactWorldTree {
   children: ReactWorldInstance[] = [];
-  /** Set by reconciler mutations; a container re-describes only when set. */
-  changed = true;
+  /** A commit inserted, removed, hid or revealed an instance. */
+  private structural = true;
+  /** Instances whose props a commit replaced since the last describe. */
+  private readonly touched = new Set<ReactWorldInstance>();
   private readonly components: ReactWorldClient["components"];
   private nextIdentity = 1;
   private nextAssetVersion = 1;
+  private nextSerial = 1;
   private revision = 0;
-  private described:
-    | {
-        resources: string;
-        entities: readonly ReactEntityDescription[];
-        components: readonly ReactComponentDescription[];
-        links: readonly ReactEntityLinkDescription[];
-      }
-    | undefined;
+  private described: DescribedTree | undefined;
   private readonly descriptors = new Map<
     ReactWorldElementType,
     ComponentDescriptor
@@ -252,6 +300,21 @@ export class ReactWorldTree {
 
   constructor(private readonly client: ReactWorldClient) {
     this.components = client.components;
+  }
+
+  /** Whether a commit changed this tree since its last description. */
+  get changed(): boolean {
+    return this.structural || this.touched.size > 0;
+  }
+
+  /** A commit replaced the props of `instance`. */
+  touch(instance: ReactWorldInstance): void {
+    this.touched.add(instance);
+  }
+
+  /** A commit inserted, removed, hid or revealed instances. */
+  restructure(): void {
+    this.structural = true;
   }
 
   validate(type: ReactWorldElementType, props: ReactWorldElementProps): void {
@@ -739,12 +802,273 @@ export class ReactWorldTree {
     return { ...cached.description, suspended };
   }
 
+  /** Describe one asset declaration, encoding it only when its inputs changed. */
+  private describeAsset(instance: ReactWorldInstance): {
+    description: AssetDescription;
+    clip: import("@ipp/client").AnimationClipSource | undefined;
+  } {
+    this.validateOnce(instance);
+    const props = instance.props;
+    let encoded: ReturnType<ReactWorldTree["encodedAsset"]>;
+    let kind: number;
+    let clip: import("@ipp/client").AnimationClipSource | undefined;
+    if (instance.type === SHADER_ASSET_HOST_TYPE) {
+      const shader = props as unknown as ShaderAssetProps;
+      const stages = instance.children
+        .filter((child) => !child.hidden)
+        .map((child) => {
+          if (!isShader(child.type))
+            throw new Error("ShaderAsset children must be shader stages");
+          return { type: child.type, props: shaderProps(child.props) };
+        });
+      encoded = this.encodedAsset(
+        instance,
+        [
+          encodeShaderDefinition,
+          // Parameter and recipe tables are plain data that renders
+          // commonly pass as fresh literals; compare them by value.
+          JSON.stringify(shader.parameters),
+          JSON.stringify(shader.recipe),
+          ...stages.flatMap(({ type, props }) => [
+            type,
+            props.children,
+            props.backend,
+            props.requiredAttributes,
+            props.references,
+          ]),
+        ],
+        () =>
+          encodeShaderDefinition(
+            describeShader(stages, shader.parameters, shader.recipe),
+          ),
+      );
+      kind = 13;
+    } else if (instance.type === ANIMATION_ASSET_HOST_TYPE) {
+      if (!this.client.encodeAnimationClip)
+        throw new Error("AnimationAsset requires an animation-capable client");
+      encoded = this.encodedAsset(
+        instance,
+        [this.client.encodeAnimationClip, props.clip],
+        () =>
+          this.client.encodeAnimationClip!(
+            props.clip as import("@ipp/client").AnimationClipSource,
+          ),
+      );
+      kind = 10;
+      clip = props.clip as import("@ipp/client").AnimationClipSource;
+    } else {
+      const asset = props as unknown as AssetProps<unknown>;
+      encoded = this.encodedAsset(instance, [asset.encode, asset.data], () =>
+        asset.encode(asset.data),
+      );
+      kind = asset.kind;
+    }
+    const variant = (props.variant ?? 0) as number;
+    if (!Number.isInteger(variant) || variant < 0 || variant > 0xffffffff)
+      throw new Error("Invalid asset variant");
+    return {
+      description: {
+        identity: instance.identity,
+        id: props.id as string,
+        kind,
+        variant,
+        bytes: encoded.bytes,
+        signature: encoded.signature,
+        version: encoded.version,
+      },
+      clip,
+    };
+  }
+
+  /** Reject animation bindings this World cannot evaluate. */
+  private checkAnimation(animation: AnimationDescription): void {
+    for (const binding of animation.bindings) {
+      if (binding.property.entityLink) this.requireOperation("entityLinks");
+      if (binding.property.joints) this.requireOperation("jointAnimation");
+      const component = binding.property.component;
+      if (
+        component !== undefined &&
+        this.client.manifest &&
+        !this.client.manifest.components.includes(component)
+      )
+        throw new Error(
+          `This World does not select animation component ${component}`,
+        );
+    }
+  }
+
   /**
-   * Describe the committed host tree. Instances whose props object is
+   * Describe a commit. When it only replaced props, only the instances it
+   * touched are described again, and the result names the declarations that
+   * changed; a commit that inserted, removed, hid or revealed instances, or
+   * changed what other declarations depend on, describes the whole tree.
+   * Returns the previous description itself when nothing described changed.
+   */
+  describeCommit(): ReactWorldDescription {
+    if (this.structural || !this.described) return this.describe();
+    let description: ReactWorldDescription | undefined;
+    try {
+      description = this.describeTouched(this.described);
+    } catch (error) {
+      this.touched.clear();
+      this.structural = true;
+      throw error;
+    }
+    if (!description) return this.describe();
+    this.touched.clear();
+    return description;
+  }
+
+  private describeTouched(
+    described: DescribedTree,
+  ): ReactWorldDescription | undefined {
+    const previous = described.description;
+    const entities = new Copied(previous.entities);
+    const components = new Copied(previous.components);
+    const assets = new Copied(previous.assets);
+    const animations = new Copied(previous.animations);
+    const attachments = new Copied(previous.attachments ?? []);
+    const changedEntities = new Map<number, ReactEntityDescription>();
+    const changedComponents = new Map<number, ReactComponentDescription>();
+    const touchedAssets = new Set<ReactWorldInstance>();
+    let revised = false;
+    for (const instance of this.touched) {
+      const role = described.roles.get(instance);
+      // A hidden or removed instance is not described.
+      if (!role) continue;
+      commitCounters.described++;
+      if (role.kind === "entity") {
+        const before = entities.values[role.index]!;
+        const next = this.describeEntity(instance, before.parent);
+        if (next === before) continue;
+        if (
+          next.symbolicId !== before.symbolicId ||
+          next.kind !== before.kind ||
+          !next.onAction !== !before.onAction ||
+          !next.onActionCapture !== !before.onActionCapture
+        )
+          return undefined;
+        entities.set(role.index, next);
+        changedEntities.set(role.index, next);
+      } else if (role.kind === "component") {
+        const before = components.values[role.index]!;
+        const cached = this.componentDescriptions.get(instance)?.description;
+        const { description, structure } = this.describeComponent(
+          instance,
+          before.entity,
+        );
+        if (description === cached) continue;
+        if (!cached || !sameListenerShape(cached, description))
+          return undefined;
+        for (const id of structure.assetIds)
+          if (!described.assetIds.has(id))
+            throw new Error(`Unknown asset id: ${id}`);
+        const next = structure.entityReferences
+          ? {
+              ...description,
+              fields: resolvedFields(structure, described.reference),
+            }
+          : description;
+        if (!sameComponent(before, next)) revised = true;
+        components.set(role.index, next);
+        changedComponents.set(role.index, next);
+      } else if (role.kind === "asset") touchedAssets.add(instance);
+      else if (role.kind === "stage") touchedAssets.add(role.asset);
+      else if (role.kind === "animation") {
+        this.validateOnce(instance);
+        const next = describeAnimation(
+          instance.identity,
+          instance.props as unknown as AnimationProps & {
+            mailbox: AnimationMailbox;
+          },
+          role.parent,
+          entities.values,
+          described.animationAssets,
+        );
+        this.checkAnimation(next);
+        animations.set(role.index, next);
+      } else if (role.kind === "attachment") {
+        const before = attachments.values[role.index]!;
+        attachments.set(
+          role.index,
+          this.describeAttachment(instance, before.suspended),
+        );
+      } else {
+        // Children and EntityLink: a changed placement moves entities.
+        const validated = this.validated.get(instance);
+        if (
+          validated !== instance.props &&
+          !(validated && sameDeclarationProps(validated, instance.props))
+        )
+          return undefined;
+        this.validated.set(instance, instance.props);
+      }
+    }
+    for (const instance of touchedAssets) {
+      const role = described.roles.get(instance) as { index: number };
+      const before = assets.values[role.index]!;
+      const { description } = this.describeAsset(instance);
+      // Other declarations resolve against asset ids and kinds.
+      if (description.id !== before.id || description.kind !== before.kind)
+        return undefined;
+      if (
+        description.version === before.version &&
+        description.variant === before.variant
+      )
+        continue;
+      // Animations resolve against an animation asset's clip.
+      if (instance.type === ANIMATION_ASSET_HOST_TYPE) return undefined;
+      assets.set(role.index, description);
+    }
+    if (
+      !entities.copied &&
+      !components.copied &&
+      !assets.copied &&
+      !animations.copied &&
+      !attachments.copied
+    )
+      return previous;
+    let resources = described.resources;
+    if (assets.copied || animations.copied) {
+      resources = resourceSignature(assets.values, animations.values);
+      if (resources !== described.resources) revised = true;
+    }
+    if (revised) this.revision++;
+    const description: ReactWorldDescription = {
+      ...previous,
+      assets: assets.values,
+      animations: animations.values,
+      entities: entities.values,
+      components: components.values,
+      links: previous.links,
+      attachments: attachments.values,
+      signature: String(this.revision),
+      serial: this.nextSerial++,
+      changes: {
+        base: previous.serial!,
+        entities: changedEntities,
+        components: changedComponents,
+      },
+    };
+    this.described = { ...described, description, resources };
+    return description;
+  }
+
+  /**
+   * Describe the whole committed host tree. Instances whose props object is
    * unchanged reuse their previous description; the signature changes only
    * when a described declaration, link, asset or animation changes.
    */
   describe(): ReactWorldDescription {
+    this.touched.clear();
+    this.structural = true;
+    const description = this.describeAll();
+    this.structural = false;
+    return description;
+  }
+
+  private describeAll(): ReactWorldDescription {
+    const roles = new Map<ReactWorldInstance, InstanceRole>();
     const attachments: AttachedWorldDescription[] = [];
     const pending = this.children.toReversed().map((instance) => ({
       instance,
@@ -753,9 +1077,11 @@ export class ReactWorldTree {
     while (pending.length) {
       const { instance, hidden } = pending.pop()!;
       const suspended = hidden || instance.hidden;
-      if (instance.type === ATTACHED_WORLD_HOST_TYPE)
+      if (instance.type === ATTACHED_WORLD_HOST_TYPE) {
+        commitCounters.described++;
+        roles.set(instance, { kind: "attachment", index: attachments.length });
         attachments.push(this.describeAttachment(instance, suspended));
-      else
+      } else
         for (const child of instance.children.toReversed())
           pending.push({ instance: child, hidden: suspended });
     }
@@ -791,86 +1117,29 @@ export class ReactWorldTree {
       if (instance.type === ATTACHED_WORLD_HOST_TYPE) {
         return;
       }
+      commitCounters.described++;
       const props = instance.props;
       if (instance.type === ANIMATION_HOST_TYPE) {
         this.validateOnce(instance);
         if (instance.children.length)
           throw new Error("Animation cannot contain declarations");
+        roles.set(instance, {
+          kind: "animation",
+          index: animationNodes.length,
+          parent,
+        });
         animationNodes.push({ instance, parent });
         return;
       }
       if (isAsset(instance.type)) {
-        this.validateOnce(instance);
-        let encoded: ReturnType<ReactWorldTree["encodedAsset"]>;
-        let kind: number;
-        if (instance.type === SHADER_ASSET_HOST_TYPE) {
-          const shader = props as unknown as ShaderAssetProps;
-          const stages = instance.children
-            .filter((child) => !child.hidden)
-            .map((child) => {
-              if (!isShader(child.type))
-                throw new Error("ShaderAsset children must be shader stages");
-              return { type: child.type, props: shaderProps(child.props) };
-            });
-          encoded = this.encodedAsset(
-            instance,
-            [
-              encodeShaderDefinition,
-              shader.parameters,
-              JSON.stringify(shader.recipe),
-              ...stages.flatMap(({ type, props }) => [
-                type,
-                props.children,
-                props.backend,
-                props.requiredAttributes,
-                props.references,
-              ]),
-            ],
-            () =>
-              encodeShaderDefinition(
-                describeShader(stages, shader.parameters, shader.recipe),
-              ),
-          );
-          kind = 13;
-        } else if (instance.type === ANIMATION_ASSET_HOST_TYPE) {
-          if (!this.client.encodeAnimationClip)
-            throw new Error(
-              "AnimationAsset requires an animation-capable client",
-            );
-          encoded = this.encodedAsset(
-            instance,
-            [this.client.encodeAnimationClip, props.clip],
-            () =>
-              this.client.encodeAnimationClip!(
-                props.clip as import("@ipp/client").AnimationClipSource,
-              ),
-          );
-          kind = 10;
-          animationClips.set(
-            props.id as string,
-            props.clip as import("@ipp/client").AnimationClipSource,
-          );
-        } else {
-          const asset = props as unknown as AssetProps<unknown>;
-          encoded = this.encodedAsset(
-            instance,
-            [asset.encode, asset.data],
-            () => asset.encode(asset.data),
-          );
-          kind = asset.kind;
-        }
-        const variant = (props.variant ?? 0) as number;
-        if (!Number.isInteger(variant) || variant < 0 || variant > 0xffffffff)
-          throw new Error("Invalid asset variant");
-        assets.push({
-          identity: instance.identity,
-          id: props.id as string,
-          kind,
-          variant,
-          bytes: encoded.bytes,
-          signature: encoded.signature,
-          version: encoded.version,
-        });
+        const { description, clip } = this.describeAsset(instance);
+        if (clip) animationClips.set(description.id, clip);
+        roles.set(instance, { kind: "asset", index: assets.length });
+        if (instance.type === SHADER_ASSET_HOST_TYPE)
+          for (const child of instance.children)
+            if (!child.hidden)
+              roles.set(child, { kind: "stage", asset: instance });
+        assets.push(description);
         if (instance.type === ASSET_HOST_TYPE)
           for (const child of instance.children)
             visit(child, parent, hierarchyParent);
@@ -886,6 +1155,7 @@ export class ReactWorldTree {
         this.validateOnce(instance);
         if (parent === undefined)
           throw new Error("Children must be inside an Entity");
+        roles.set(instance, { kind: "placement" });
         for (const child of instance.children) {
           if (child.hidden) continue;
           if (child.type !== ENTITY_HOST_TYPE)
@@ -905,6 +1175,7 @@ export class ReactWorldTree {
         return;
       }
       if (instance.type === ENTITY_HOST_TYPE) {
+        roles.set(instance, { kind: "entity", index: entities.length });
         entities.push(this.describeEntity(instance, parent));
         for (const child of instance.children) visit(child, instance.identity);
         return;
@@ -913,6 +1184,7 @@ export class ReactWorldTree {
         this.validateOnce(instance);
         if (parent === undefined)
           throw new Error("EntityLink must be inside an Entity");
+        roles.set(instance, { kind: "placement" });
         unresolvedLinks.push({
           identity: instance.identity,
           entity: parent,
@@ -938,6 +1210,7 @@ export class ReactWorldTree {
           );
         visit(child, parent);
       }
+      roles.set(instance, { kind: "component", index: components.length });
       components.push(description);
       shapes.push(structure);
     };
@@ -1047,20 +1320,7 @@ export class ReactWorldTree {
         animationAssets,
       ),
     );
-    for (const animation of animations)
-      for (const binding of animation.bindings) {
-        if (binding.property.entityLink) this.requireOperation("entityLinks");
-        if (binding.property.joints) this.requireOperation("jointAnimation");
-        const component = binding.property.component;
-        if (
-          component !== undefined &&
-          this.client.manifest &&
-          !this.client.manifest.components.includes(component)
-        )
-          throw new Error(
-            `This World does not select animation component ${component}`,
-          );
-      }
+    for (const animation of animations) this.checkAnimation(animation);
     // Declarations sharing a symbolic id reach one entity, so at most one of
     // them may place it.
     const parented = new Set<string>();
@@ -1084,25 +1344,17 @@ export class ReactWorldTree {
       };
     });
 
-    // Preserve NaN, infinities and -0 so encoder-rejected authored values
-    // cannot compare equal to a later corrected declaration.
-    const resources = JSON.stringify([
-      assets.map(({ bytes, signature, ...asset }) => asset),
-      animations.map(({ mailbox, onPlaybackEvent, ...description }) =>
-        animationSignature(description),
-      ),
-    ]);
+    const resources = resourceSignature(assets, animations);
     const previous = this.described;
     if (
       !previous ||
       previous.resources !== resources ||
-      !sameEach(previous.entities, entities, sameEntity) ||
-      !sameEach(previous.components, components, sameComponent) ||
-      !sameEach(previous.links, links, sameLink)
+      !sameEach(previous.description.entities, entities, sameEntity) ||
+      !sameEach(previous.description.components, components, sameComponent) ||
+      !sameEach(previous.description.links, links, sameLink)
     )
       this.revision++;
-    this.described = { resources, entities, components, links };
-    return {
+    const description: ReactWorldDescription = {
       guiActions,
       guiEffects,
       guiFeedback,
@@ -1113,8 +1365,68 @@ export class ReactWorldTree {
       links,
       attachments,
       signature: String(this.revision),
+      serial: this.nextSerial++,
     };
+    this.described = {
+      description,
+      resources,
+      roles,
+      assetIds: ids,
+      animationAssets,
+      reference,
+    };
+    return description;
   }
+}
+
+/**
+ * The asset and animation declarations as compared between descriptions.
+ * Preserves NaN, infinities and -0 so encoder-rejected authored values cannot
+ * compare equal to a later corrected declaration.
+ */
+function resourceSignature(
+  assets: readonly AssetDescription[],
+  animations: readonly AnimationDescription[],
+): string {
+  return JSON.stringify([
+    assets.map(({ bytes, signature, ...asset }) => asset),
+    animations.map(({ mailbox, onPlaybackEvent, ...description }) =>
+      animationSignature(description),
+    ),
+  ]);
+}
+
+/** An array copied on its first change. */
+class Copied<T> {
+  copied = false;
+
+  constructor(public values: readonly T[]) {}
+
+  set(index: number, value: T): void {
+    if (!this.copied) {
+      this.values = [...this.values];
+      this.copied = true;
+    }
+    (this.values as T[])[index] = value;
+  }
+}
+
+/**
+ * Whether two descriptions of one component declaration have the same
+ * listeners and ref present, which decide what a root observes and checks.
+ */
+function sameListenerShape(
+  left: ReactComponentDescription,
+  right: ReactComponentDescription,
+): boolean {
+  if (!left.controlRef !== !right.controlRef) return false;
+  if (!left.controlListeners || !right.controlListeners)
+    return left.controlListeners === right.controlListeners;
+  const keys = Object.keys(right.controlListeners);
+  return (
+    keys.length === Object.keys(left.controlListeners).length &&
+    keys.every((key) => Object.hasOwn(left.controlListeners!, key))
+  );
 }
 
 /** Declaration inputs derived from one component's props. */
@@ -1133,7 +1445,9 @@ interface ComponentShape {
 /**
  * Whether a props update leaves every declared value unchanged. Callbacks and
  * callback refs are listeners rather than declared values; byte arrays always
- * compare by content because callers may reuse and mutate them.
+ * compare by content because callers may reuse and mutate them. Plain arrays
+ * and objects, such as vectors and binding lists that renders pass as fresh
+ * literals, compare by value.
  */
 function sameDeclarationProps(
   previous: ReactWorldElementProps,
@@ -1151,8 +1465,45 @@ function sameDeclarationProps(
       continue;
     }
     if (typeof before === "function" && typeof after === "function") continue;
-    return false;
+    if (!samePlainData(before, after, 0)) return false;
   }
+  return true;
+}
+
+/** Whether two plain arrays or objects hold equal primitive values. */
+function samePlainData(left: unknown, right: unknown, depth: number): boolean {
+  if (Object.is(left, right)) return !(right instanceof Uint8Array);
+  if (
+    depth > 4 ||
+    typeof left !== "object" ||
+    typeof right !== "object" ||
+    left === null ||
+    right === null
+  )
+    return false;
+  if (Array.isArray(left)) {
+    if (!Array.isArray(right) || left.length !== right.length) return false;
+    for (let index = 0; index < left.length; index++)
+      if (!samePlainData(left[index], right[index], depth + 1)) return false;
+    return true;
+  }
+  if (
+    Object.getPrototypeOf(left) !== Object.prototype ||
+    Object.getPrototypeOf(right) !== Object.prototype
+  )
+    return false;
+  const keys = Object.keys(right);
+  if (keys.length !== Object.keys(left).length) return false;
+  for (const key of keys)
+    if (
+      !Object.hasOwn(left, key) ||
+      !samePlainData(
+        (left as Record<string, unknown>)[key],
+        (right as Record<string, unknown>)[key],
+        depth + 1,
+      )
+    )
+      return false;
   return true;
 }
 

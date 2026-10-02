@@ -1,3 +1,5 @@
+import { useSyncExternalStore } from "react";
+import type { PendingRequests } from "../../gallery-controller.js";
 import {
   MESH_CATALOG,
   parameterControl,
@@ -320,13 +322,14 @@ export function SelectionSummary({
   pending,
 }: {
   selected: ObjectId | undefined;
-  pending: number;
+  pending: PendingRequests;
 }) {
+  const requests = useSyncExternalStore(pending.subscribe, pending.current);
   return (
     <div className="selection-summary" aria-live="polite">
       <p
         id="selection-status"
-        data-pending={pending}
+        data-pending={requests}
         data-selected={selected ?? ""}
       >
         {selected

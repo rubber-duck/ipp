@@ -148,6 +148,8 @@ function controlFieldValue(
  */
 export class ReactControlRefs {
   private desired = new Map<number, ControlDeclaration>();
+  /** The serial of the description `desired` follows. */
+  private serial: number | undefined;
   private bindings = new Map<number, ControlBinding>();
   private tracked = new Map<number, TrackedControl>();
   private dirty = new Set<number>();
@@ -296,6 +298,25 @@ export class ReactControlRefs {
 
   setDesired(description: ReactWorldDescription): void {
     if (this.closed) return;
+    const changes = description.changes;
+    const serial = this.serial;
+    this.serial = description.serial;
+    if (changes && serial !== undefined && changes.base === serial) {
+      // Changed declarations keep their entity, ref presence and observed
+      // callbacks, so each tracked control stays tracked; a ref may change.
+      for (const component of changes.components.values()) {
+        const declaration = this.desired.get(component.identity);
+        if (!declaration) continue;
+        this.desired.set(component.identity, {
+          ...declaration,
+          description: component,
+        });
+        const binding = this.bindings.get(component.identity);
+        if (binding)
+          this.assign(component.identity, binding, component.controlRef);
+      }
+      return;
+    }
     const entities = new Map(
       description.entities.map((entity) => [entity.identity, entity]),
     );

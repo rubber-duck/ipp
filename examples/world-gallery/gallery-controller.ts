@@ -25,6 +25,30 @@ declare global {
 type GalleryClient = PickingWorldClient & RenderWorldClient;
 type PickHandler = Parameters<typeof installCameraControls>[1]["picked"];
 
+/**
+ * The count of outstanding pick, projection and camera requests. It stays out
+ * of the gallery's React state: a camera gesture sends a request every frame,
+ * and only the readout that shows the count re-renders, never the scene.
+ */
+export class PendingRequests {
+  private count = 0;
+  private readonly listeners = new Set<() => void>();
+
+  readonly subscribe = (listener: () => void): (() => void) => {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  };
+
+  readonly current = (): number => this.count;
+
+  change(delta: number): void {
+    this.count += delta;
+    for (const listener of this.listeners) listener();
+  }
+}
+
 /** Authored worlds share a session; the disk scene owns a fresh loaded session.
  * Each session presents its gallery camera as the explicit Canvas root output. */
 export function useGallery() {
@@ -46,7 +70,7 @@ export function useGallery() {
     gallerySceneFromHash(window.location.hash),
   );
   const [switching, setSwitching] = useState(false);
-  const [pendingPicks, setPendingPicks] = useState(0);
+  const [pendingPicks] = useState(() => new PendingRequests());
   const [error, setError] = useState<string>();
 
   useEffect(() => {
@@ -146,7 +170,6 @@ export function useGallery() {
     page,
     switching,
     pendingPicks,
-    setPendingPicks,
     error,
     setError,
     ready,
@@ -167,7 +190,7 @@ export function useGalleryControls(
     cameraControls,
     page,
     switching,
-    setPendingPicks,
+    pendingPicks,
     setError,
   } = gallery;
   useEffect(() => {
@@ -179,7 +202,7 @@ export function useGalleryControls(
       pan: false,
       binding: () => canvas.view?.binding,
       flush: () => canvas.flush(),
-      pending: (delta) => setPendingPicks((count) => count + delta),
+      pending: (delta) => pendingPicks.change(delta),
       error: (failure) => setError(message(failure)),
       picked,
       ...(unhandledInputGate === undefined
@@ -199,7 +222,7 @@ export function useGalleryControls(
     page,
     switching,
     picked,
-    setPendingPicks,
+    pendingPicks,
     setError,
     enabled,
     unhandledInputGate,

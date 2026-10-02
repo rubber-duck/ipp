@@ -14,6 +14,7 @@ import "./gui-declaration.test.js";
 import "./gui-kit.test.js";
 import "./control-refs.test.js";
 import "./canvas-world.test.js";
+import "./commit-scope.test.js";
 import {
   createElement,
   Fragment,

@@ -100,7 +100,8 @@ export const PRESETS: readonly {
       beam: 100,
       light: 50,
       offset: 0,
-      sweep: [20, 80],
+      // At first show the band crosses the whole scope, edge to edge.
+      sweep: [0, 100],
       rate: "normal",
       channels: ["beam", "dust", "key", "fill"],
     },

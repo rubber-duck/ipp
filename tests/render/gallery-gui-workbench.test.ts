@@ -220,9 +220,90 @@ test("Gallery GUI's workbench tabs, value controls, list and popover drive the s
         `the beam's energy went from ${beamBefore} to ${beamAfter} at ${percent}%`,
       );
 
-      // SWEEP: the upper thumb dragged to the middle of the rail narrows the
-      // band's travel, which the scope paint takes. The column scrolls to
-      // its end first, which shows SWEEP and RATE.
+      // The sweep band crosses the whole scope with each scan loop at the
+      // first SWEEP range: near the scope's left edge early in the loop and
+      // near its right edge late in it. The sweep and scan clips hold at the
+      // Host times the test seeks, so only the band moves between the two
+      // captures: per column of the scope, the light the early capture has
+      // over the late one peaks at the early band and dips at the late one.
+      const motion = await g.call<GalleryWaveform>("galleryWaveform");
+      const sweeping = motion.controllers.find(({ description }) =>
+        description.drivers.some(
+          ({ property }) => "name" in property && property.name === "phase",
+        ),
+      );
+      assert.ok(sweeping, "the sweep band has no controller");
+      assert.equal(sweeping.state, "playing");
+      const held = [sweeping.id, motion.scan.controller!.id];
+      await g.call("controlGalleryAnimation", held, { action: "pause" }, true);
+      await g.page.mouse.move(1, 1);
+      const [scopeX, scopeY, scopeWidth, scopeHeight] = PANEL.waveform;
+      const columns = 48;
+      const rows = 12;
+      const scopePoints = Array.from(
+        { length: rows * columns },
+        (_, index) =>
+          [
+            scopeX + (scopeWidth * ((index % columns) + 0.5)) / columns,
+            scopeY + (scopeHeight * (Math.floor(index / columns) + 0.5)) / rows,
+          ] as const,
+      );
+      // Mean light, the sum of the channels, of each column at a share of
+      // the 2.4 s scan loop.
+      const sweepAt = async (label: string, share: number) => {
+        const time = share * 2.4;
+        await g.call(
+          "controlGalleryAnimation",
+          sweeping.id,
+          { action: "seek", time },
+          true,
+        );
+        const seeked = (
+          await g.call<GalleryWaveform>("galleryWaveform")
+        ).controllers.find(({ id }) => id === sweeping.id);
+        assert.ok(
+          seeked?.state === "paused" && Math.abs(seeked.time - time) < 1e-6,
+          `the sweep did not hold at ${time} s: ${seeked?.state} ${seeked?.time}`,
+        );
+        await g.capture(label);
+        const samples = await g.call<readonly (readonly number[])[]>(
+          "sampleGalleryGuiCapture",
+          label,
+          scopePoints,
+        );
+        return Array.from({ length: columns }, (_, column) => {
+          let light = 0;
+          for (let row = 0; row < rows; row++) {
+            const [red, green, blue] = samples[row * columns + column]!;
+            light += red! + green! + blue!;
+          }
+          return light / rows;
+        });
+      };
+      const early = await sweepAt("sweep-early", 0.05);
+      const late = await sweepAt("sweep-late", 0.95);
+      await g.call("controlGalleryAnimation", held, { action: "play" }, true);
+      const lift = early.map((light, column) => light - late[column]!);
+      const earlyColumn = lift.indexOf(Math.max(...lift));
+      const lateColumn = lift.indexOf(Math.min(...lift));
+      const travel = {
+        early: (earlyColumn + 0.5) / columns,
+        late: (lateColumn + 0.5) / columns,
+        lift: [lift[earlyColumn]!, lift[lateColumn]!],
+      };
+      await scenario.evidence.record("sweep-travel", travel);
+      assert.ok(
+        travel.early < 0.15 &&
+          travel.late > 0.85 &&
+          travel.lift[0]! > 100 &&
+          travel.lift[1]! < -100,
+        `the sweep band does not cross the scope edge to edge: ${JSON.stringify(travel)}`,
+      );
+
+      // SWEEP: the upper thumb dragged from the end of the rail to its
+      // middle narrows the band's travel to the scope's left half, which the
+      // scope paint takes. The column scrolls to its end first, which shows
+      // SWEEP and RATE.
       await g.call(
         "galleryGuiAction",
         { role: "scrollView", name: "CONTROLS" },
@@ -237,7 +318,7 @@ test("Gallery GUI's workbench tabs, value controls, list and popover drive the s
       const thumb = (value: number) =>
         x + edge / 2 + (value / 100) * (width - edge);
       const [from, to] = await projectContent(g, [
-        [thumb(80), y + height / 2],
+        [thumb(100), y + height / 2],
         [thumb(50), y + height / 2],
       ]);
       await g.page.mouse.move(from!.clientX, from!.clientY);
@@ -248,7 +329,7 @@ test("Gallery GUI's workbench tabs, value controls, list and popover drive the s
         () =>
           document
             .querySelector("#gui-tuning")
-            ?.textContent?.includes("sweep 20-50%") ?? false,
+            ?.textContent?.includes("sweep 0-50%") ?? false,
       );
 
       // RATE: the list opens from its trigger on the anchored plane; FAST

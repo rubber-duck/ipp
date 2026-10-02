@@ -40,6 +40,8 @@ export interface ShadowRenderStatistics {
 export interface GuiRenderStatistics {
   guiBatches: number;
   guiRebuilds: number;
+  /** Retained boxes and text runs hashed to find whether they changed. */
+  guiHashes: number;
   guiAllocations: number;
   guiResidentBytes: number;
   glyphMisses: number;
@@ -49,6 +51,7 @@ export interface GuiRenderStatistics {
   glyphPages: number;
   glyphResidentBytes: number;
   totalGuiRebuilds: number;
+  totalGuiHashes: number;
   totalGuiAllocations: number;
   totalGlyphMisses: number;
   totalGlyphPopulates: number;

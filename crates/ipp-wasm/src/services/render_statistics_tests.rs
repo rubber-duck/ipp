@@ -48,6 +48,8 @@ const NAMED_WORDS: [(&str, usize); RECORD_WORDS] = [
     ("guiTextMeasurements", GUI_TEXT_MEASUREMENTS),
     ("totalGuiLayoutReflows", TOTAL_GUI_LAYOUT_REFLOWS),
     ("totalGuiTextMeasurements", TOTAL_GUI_TEXT_MEASUREMENTS),
+    ("guiHashes", GUI_HASHES),
+    ("totalGuiHashes", TOTAL_GUI_HASHES),
 ];
 
 #[test]

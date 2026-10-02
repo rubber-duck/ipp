@@ -304,22 +304,21 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
         self.order.len()
     }
 
-    /// Append one contiguous run of box primitives, each with its effective clip, as
-    /// bounded batches.
+    /// Append one contiguous run of box primitives, each with its effective clip and
+    /// its entry's paint, as bounded batches.
     ///
     /// Stable boxes split at identity-selected boundaries; volatile boxes form their own
-    /// small batches. Boxes whose retained hash was computed under the Surface's reusable
-    /// `paint` revision are not hashed again. A custom paint fill takes its instance's
+    /// small batches. Boxes whose retained hash was computed under a revision their
+    /// `paint` reuses are not hashed again. A custom paint fill takes its instance's
     /// lanes from [`Self::paints`], and draws its colour solidly without them.
     pub fn push_boxes(
         &mut self,
-        paint: SurfacePaint,
-        boxes: &[(&CanvasPrimitive, CanvasClip)],
+        boxes: &[(&CanvasPrimitive, CanvasClip, SurfacePaint)],
         stats: &mut RenderFrameWork,
     ) {
         // Refresh every box's geometry and volatility before choosing batch boundaries.
         self.run_boxes.clear();
-        for &(primitive, clip) in boxes {
+        for &(primitive, clip, paint) in boxes {
             let CanvasPrimitive::Box {
                 style,
                 size,
@@ -382,6 +381,7 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
                 Entry::Occupied(entry) => {
                     let cached = entry.into_mut();
                     if !paint.reuses(cached.revision) {
+                        stats.statistics.gui_hashes += 1;
                         let hash = hash();
                         if cached.hash != hash {
                             cached.hash = hash;
@@ -389,11 +389,12 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
                             cached.volatile_until = self.frame + VOLATILE_FRAMES;
                             stats.statistics.gui_rebuilds += 1;
                         }
-                        cached.revision = paint.revision;
                     }
+                    cached.revision = paint.revision;
                     cached
                 }
                 Entry::Vacant(entry) => {
+                    stats.statistics.gui_hashes += 1;
                     stats.statistics.gui_rebuilds += 1;
                     let (records, bounds) = generate();
                     entry.insert(CachedPrimitiveGeometry {

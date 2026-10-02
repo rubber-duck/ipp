@@ -52,6 +52,15 @@ impl<'a> CanvasScene<'a> {
         }
     }
 
+    /// Whether this paint revision replaced the entry at `index` in place of
+    /// the revision it patched; false when it patched none.
+    pub fn replaced(&self, index: usize) -> bool {
+        self.canvas
+            .paint_changes
+            .as_ref()
+            .is_some_and(|changes| changes.replaced(index))
+    }
+
     pub fn root_clip(&self) -> CanvasClip {
         [
             0.0,

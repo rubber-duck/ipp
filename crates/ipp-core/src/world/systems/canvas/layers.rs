@@ -12,10 +12,8 @@
 //! its depth, whatever other planes come into or go out of use. A canvas whose
 //! layers are all zero resolves nothing and keeps its tree order unchanged.
 
-use super::{CanvasHit, CanvasPaintEntry};
 use crate::EntityId;
 use crate::world::WorldSimulationState;
-use std::sync::Arc;
 
 /// Resolved layers of one canvas walk, aligned with its tree order.
 pub(super) struct CanvasLayers {
@@ -86,7 +84,7 @@ impl CanvasLayers {
 /// parent's for zero, otherwise `layer` but never below one above the parent.
 /// An entity under the highest plane id stays on its parent's plane, after it
 /// in tree order.
-fn resolve(parent: u32, layer: u32) -> u32 {
+pub(super) fn resolve(parent: u32, layer: u32) -> u32 {
     if layer == 0 {
         parent
     } else {
@@ -94,11 +92,27 @@ fn resolve(parent: u32, layer: u32) -> u32 {
     }
 }
 
-/// Order paint and hits by plane, keeping the tree order of the walk within
-/// each plane. Hits keep their tree-order `paint_order`.
-pub(super) fn order_by_layer(entries: &mut [Arc<CanvasPaintEntry>], hits: &mut [CanvasHit]) {
-    entries.sort_by_key(|entry| entry.layer());
-    hits.sort_by_key(|hit| hit.layer);
+/// Published index of each tree-order item on plane `layers`: by plane,
+/// keeping tree order within each plane. Hits keep their tree-order
+/// `paint_order`.
+pub(super) fn layer_order(layers: impl Iterator<Item = u32>) -> Vec<u32> {
+    let layers: Vec<u32> = layers.collect();
+    let mut published: Vec<u32> = (0..layers.len() as u32).collect();
+    published.sort_by_key(|&index| layers[index as usize]);
+    let mut order = vec![0; layers.len()];
+    for (at, index) in published.into_iter().enumerate() {
+        order[index as usize] = at as u32;
+    }
+    order
+}
+
+/// Tree-order `items` at their published indices `order`.
+pub(super) fn in_layer_order<T>(items: Vec<T>, order: &[u32]) -> Vec<T> {
+    let mut published: Vec<Option<T>> = std::iter::repeat_with(|| None).take(items.len()).collect();
+    for (item, &at) in items.into_iter().zip(order) {
+        published[at as usize] = Some(item);
+    }
+    published.into_iter().map(Option::unwrap).collect()
 }
 
 #[cfg(test)]

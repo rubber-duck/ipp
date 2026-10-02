@@ -797,6 +797,8 @@ pub struct GlyphFrameWork {
     pub populates: u32,
     /// Recoverable allocation or rasterization failures.
     pub failures: u32,
+    /// Text runs whose demand was hashed again.
+    pub hashes: u32,
 }
 
 impl GlyphFrameWork {
@@ -807,6 +809,7 @@ impl GlyphFrameWork {
         self.misses = 0;
         self.populates = 0;
         self.failures = 0;
+        self.hashes = 0;
     }
 
     /// Record a missing entry; queue it within the per-frame cap unless it backs off.
@@ -845,6 +848,7 @@ impl GlyphFrameWork {
         statistics.glyph_misses = self.misses;
         statistics.glyph_populates = self.populates;
         statistics.glyph_population_failures = self.failures;
+        statistics.gui_hashes = statistics.gui_hashes.saturating_add(self.hashes);
     }
 }
 
@@ -1078,11 +1082,12 @@ impl GlyphBatchRenderCache {
         let demand_hash = if hashed {
             record.demand_hash
         } else {
+            work.hashes += 1;
             let (demand_hash, geometry_hash) = run.hashes(record.band);
             record.geometry_hash = geometry_hash;
-            record.hashed = Some((paint.revision, record.band));
             Some(demand_hash)
         };
+        record.hashed = Some((paint.revision, record.band));
 
         if record.demand_hash != demand_hash {
             self.scratch_keys.clear();

@@ -14,7 +14,7 @@ use ipp_render_gl::{GlesRenderDevice, RenderService, RenderStatistics};
 #[derive(Default)]
 pub(super) struct StatisticsTotals {
     uploaded_bytes: u32,
-    gui: [u32; 6],
+    gui: [u32; 7],
     layout: ipp_host_session::services::gui_layout_statistics::HostGuiLayoutStatistics,
     surface_cache: [u32; 5],
 }
@@ -48,9 +48,10 @@ impl StatisticsTotals {
     }
 }
 
-fn gui_accumulated(statistics: &RenderStatistics) -> [u32; 6] {
+fn gui_accumulated(statistics: &RenderStatistics) -> [u32; 7] {
     [
         statistics.gui_rebuilds,
+        statistics.gui_hashes,
         statistics.gui_allocations,
         statistics.glyph_misses,
         statistics.glyph_populates,
@@ -92,6 +93,7 @@ pub(super) fn snapshot(
 
     let [
         total_rebuilds,
+        total_hashes,
         total_allocations,
         total_misses,
         total_populates,
@@ -100,9 +102,10 @@ pub(super) fn snapshot(
     ] = totals.gui;
     write!(
         json,
-        ",\"gui\":{{\"guiBatches\":{},\"guiRebuilds\":{},\"guiAllocations\":{},\"guiResidentBytes\":{},\"glyphMisses\":{},\"glyphPopulates\":{},\"glyphPopulationFailures\":{},\"glyphPageRetirements\":{},\"glyphPages\":{},\"glyphResidentBytes\":{},\"totalGuiRebuilds\":{total_rebuilds},\"totalGuiAllocations\":{total_allocations},\"totalGlyphMisses\":{total_misses},\"totalGlyphPopulates\":{total_populates},\"totalGlyphPopulationFailures\":{total_failures},\"totalGlyphPageRetirements\":{total_retirements}",
+        ",\"gui\":{{\"guiBatches\":{},\"guiRebuilds\":{},\"guiHashes\":{},\"guiAllocations\":{},\"guiResidentBytes\":{},\"glyphMisses\":{},\"glyphPopulates\":{},\"glyphPopulationFailures\":{},\"glyphPageRetirements\":{},\"glyphPages\":{},\"glyphResidentBytes\":{},\"totalGuiRebuilds\":{total_rebuilds},\"totalGuiHashes\":{total_hashes},\"totalGuiAllocations\":{total_allocations},\"totalGlyphMisses\":{total_misses},\"totalGlyphPopulates\":{total_populates},\"totalGlyphPopulationFailures\":{total_failures},\"totalGlyphPageRetirements\":{total_retirements}",
         statistics.gui_batches,
         statistics.gui_rebuilds,
+        statistics.gui_hashes,
         statistics.gui_allocations,
         statistics.gui_resident_bytes,
         statistics.glyph_misses,

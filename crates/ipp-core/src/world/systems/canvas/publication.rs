@@ -614,7 +614,28 @@ pub struct CanvasPublication {
     /// Custom paint revision within this output incarnation: it changes with
     /// `paints`, including property values, which leave `paint_revision` alone.
     pub paints_revision: u64,
+    /// The entries this paint revision replaced in place, when every other
+    /// entry is the one the previous paint revision published at its index,
+    /// so a consumer that presented that revision need only look at these.
+    pub paint_changes: Option<CanvasPaintChanges>,
     pub(crate) resources: Arc<[AssetKey]>,
+}
+
+/// Entries a paint revision replaced in place.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CanvasPaintChanges {
+    /// Paint revision of the publication whose entries these replace; every
+    /// other entry is that publication's shared entry at the same index.
+    pub base: u64,
+    /// Indices of the replaced entries, ascending.
+    pub entries: Arc<[u32]>,
+}
+
+impl CanvasPaintChanges {
+    /// Whether the entry at `index` was replaced.
+    pub fn replaced(&self, index: usize) -> bool {
+        u32::try_from(index).map_or(true, |index| self.entries.binary_search(&index).is_ok())
+    }
 }
 
 impl PartialEq for CanvasPublication {

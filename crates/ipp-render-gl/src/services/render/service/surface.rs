@@ -96,7 +96,7 @@ impl<D: RenderDevice> RenderService<D> {
                                 &frame.scene,
                                 primitive,
                                 clip,
-                                frame.paint,
+                                frame.paint.entry(frame.scene.replaced(index)),
                                 &mvp,
                                 stats,
                                 &mut instances,
@@ -168,7 +168,16 @@ impl<D: RenderDevice> RenderService<D> {
             .surface_paint
             .entry(scene.canvas.selection)
             .or_default()
-            .paint(scene.canvas.paint_revision, clip, opacity);
+            .paint(
+                scene.canvas.paint_revision,
+                scene
+                    .canvas
+                    .paint_changes
+                    .as_ref()
+                    .map(|changes| changes.base),
+                clip,
+                opacity,
+            );
         self.prepare_glyph_demand(&scene, mvp, layering, viewport, clip, paint);
         self.populate_glyph_misses(&scene)?;
         let mut ops = std::mem::take(&mut self.surface_ops);
@@ -483,7 +492,7 @@ impl<D: RenderDevice> RenderService<D> {
                         .any(|instance| instance.target.entity == *entity)
             });
             if cache.paints.lanes_changed() {
-                paint.reusable = false;
+                paint.invalidate();
             }
         }
 
@@ -492,7 +501,7 @@ impl<D: RenderDevice> RenderService<D> {
         let mut layer = 0;
         for (index, entry) in scene.canvas.entries.iter().enumerate() {
             if entry.layer() != layer {
-                cache.push_boxes(paint, &boxes, stats);
+                cache.push_boxes(&boxes, stats);
                 boxes.clear();
                 if cache.piece_count() > gui_start {
                     ops.push(SurfaceOp::Gui(gui_start..cache.piece_count(), layer));
@@ -505,7 +514,7 @@ impl<D: RenderDevice> RenderService<D> {
                 ..
             } = entry.as_ref()
             else {
-                cache.push_boxes(paint, &boxes, stats);
+                cache.push_boxes(&boxes, stats);
                 boxes.clear();
                 if cache.piece_count() > gui_start {
                     ops.push(SurfaceOp::Gui(gui_start..cache.piece_count(), layer));
@@ -529,7 +538,7 @@ impl<D: RenderDevice> RenderService<D> {
                     // The clip above is already non-empty; this re-check guards the
                     // device against invalid box dimensions in hand-built submissions.
                     if size.iter().all(|value| value.is_finite() && *value > 0.0) {
-                        boxes.push((primitive, clip));
+                        boxes.push((primitive, clip, paint.entry(scene.replaced(index))));
                     }
                     continue;
                 }
@@ -561,7 +570,7 @@ impl<D: RenderDevice> RenderService<D> {
                             glyphs: run_glyphs,
                         };
                         if glyphs.prepare_text_run(&self.glyph_atlas, &run, stats) {
-                            cache.push_boxes(paint, &boxes, stats);
+                            cache.push_boxes(&boxes, stats);
                             boxes.clear();
                             cache.push_glyphs(glyphs.run_pieces(CANVAS_SURFACE, style.identity));
                             continue;
@@ -572,7 +581,7 @@ impl<D: RenderDevice> RenderService<D> {
             }
 
             // Any other primitive ends the current GUI range.
-            cache.push_boxes(paint, &boxes, stats);
+            cache.push_boxes(&boxes, stats);
             boxes.clear();
             if cache.piece_count() > gui_start {
                 ops.push(SurfaceOp::Gui(gui_start..cache.piece_count(), layer));
@@ -581,7 +590,7 @@ impl<D: RenderDevice> RenderService<D> {
             ops.push(SurfaceOp::Primitive(index, clip, layer));
         }
 
-        cache.push_boxes(paint, &boxes, stats);
+        cache.push_boxes(&boxes, stats);
         if cache.piece_count() > gui_start {
             ops.push(SurfaceOp::Gui(gui_start..cache.piece_count(), layer));
         }
@@ -699,7 +708,7 @@ impl<D: RenderDevice> RenderService<D> {
             .or_default();
         atlas.begin_publication();
         cache.begin_publication();
-        for entry in scene.canvas.entries.iter() {
+        for (index, entry) in scene.canvas.entries.iter().enumerate() {
             let CanvasPaintEntry::Primitive {
                 primitive:
                     CanvasPrimitive::Glyphs {
@@ -751,7 +760,14 @@ impl<D: RenderDevice> RenderService<D> {
                     .filter(|range| range.curve_range[1] != 0)
                     .and_then(|_| data.glyph_bounds.get(glyph_id as usize).copied())
             };
-            cache.publish_run(atlas, &run, paint, height, bounds, work);
+            cache.publish_run(
+                atlas,
+                &run,
+                paint.entry(scene.replaced(index)),
+                height,
+                bounds,
+                work,
+            );
         }
         cache.end_publication(atlas);
         atlas.release_if_unused();

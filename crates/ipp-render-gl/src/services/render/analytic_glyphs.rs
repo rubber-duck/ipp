@@ -146,12 +146,14 @@ impl<D: RenderDevice> AnalyticGlyphCache<D> {
                 return Some(retained.hash);
             }
 
+            stats.statistics.gui_hashes += 1;
             let hash = run.hash();
             (retained.hash == hash).then_some(hash)
         });
         let hash = match current {
             Some(hash) => hash,
             None => {
+                stats.statistics.gui_hashes += 1;
                 let hash = run.hash();
                 self.replace(key, path, hash, scratch, build, stats)?;
                 hash

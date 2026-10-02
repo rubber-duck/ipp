@@ -9,7 +9,7 @@ use crate::systems::canvas::{
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(in crate::world::systems) struct GuiCanvasState {
     entries: BTreeMap<CanvasPrimitiveId, Arc<CanvasPaintEntry>>,
     observations: BTreeMap<CanvasTarget, Arc<GuiControlObservation>>,
@@ -124,13 +124,61 @@ impl GuiCanvasState {
         {
             return;
         }
+        self.replace_view(selection, revision, controls.into(), overlays.into());
+    }
+
+    /// The latest semantic view of the canvas output.
+    pub fn view(&self) -> Option<&GuiCanvasSemanticView> {
+        self.view.as_deref()
+    }
+
+    /// Forget retained parts and observations a patch no longer produces.
+    pub fn forget(
+        &mut self,
+        parts: impl IntoIterator<Item = CanvasPrimitiveId>,
+        controls: impl IntoIterator<Item = CanvasTarget>,
+    ) {
+        for part in parts {
+            self.entries.remove(&part);
+        }
+        for control in controls {
+            self.observations.remove(&control);
+        }
+    }
+
+    /// Replace the semantic view after its controls or overlays changed.
+    pub fn replace_view(
+        &mut self,
+        selection: OutputRef,
+        revision: u64,
+        controls: Arc<[Arc<GuiControlObservation>]>,
+        overlays: Arc<[GuiOverlayObservation]>,
+    ) {
         self.view = Some(Arc::new(GuiCanvasSemanticView {
             selection,
             input_revision: revision,
-            controls: controls.into(),
-            overlays: overlays.into(),
+            controls,
+            overlays,
         }));
         self.changed = true;
+    }
+
+    /// Whether `other` retains the same parts, observations and view: a
+    /// patched evaluation's state against the whole walk's.
+    #[cfg(feature = "checked-invariants")]
+    pub fn same(&self, other: &Self) -> bool {
+        self.entries == other.entries
+            && self.observations == other.observations
+            && self.revision == other.revision
+            && self.changed == other.changed
+            && match (&self.view, &other.view) {
+                (Some(view), Some(other)) => {
+                    view == other
+                        && view.controls == other.controls
+                        && view.overlays == other.overlays
+                }
+                (view, other) => view.is_none() && other.is_none(),
+            }
     }
 
     /// Publish the semantic view of the canvas output, or none while the

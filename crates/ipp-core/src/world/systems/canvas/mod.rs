@@ -19,6 +19,14 @@
 //! applies otherwise. Leaf geometry is prepared only after relevant input/resource
 //! changes, and unchanged output, primitive and glyph chunks retain their Arcs.
 //!
+//! The [`walk`] retains what it derived for each entity. A change that affects
+//! neither structure, GUI layout nor layers, such as an animated style, a leaf
+//! value or a sampled skin transition, is [patched](patch): only the changed
+//! entities' subtrees are walked again, their entries, hits and observations are
+//! replaced in place, and the publication's `paint_changes` names the replaced
+//! entries so the renderer looks only at them. Every other change walks the
+//! whole canvas. [`CanvasWork`] counts each evaluation's work.
+//!
 //! Every Surface anchor is a canvas slot whose retained mapping is shared with the
 //! generic attachment-placement hook before child evaluation; spatial attachments
 //! keep their spatial placement. Completed edges must match the canvas output,
@@ -46,24 +54,28 @@ pub mod canvas_state;
 
 pub use canvas_state::{CanvasEvaluatedExtent, CanvasState, CanvasStateRecord, CanvasStateUpdate};
 mod component;
+mod diagnostics;
 mod layers;
+mod patch;
 mod publication;
 mod system;
 mod system_state;
 #[cfg(test)]
 pub(crate) mod test_support;
 mod update;
+mod walk;
 
 pub use component::CanvasBounds;
 pub use component::{
     CanvasBitmap, CanvasBox, CanvasDrawing, CanvasGlyphRow, CanvasGlyphRun, CanvasPaint,
     CanvasStyle, CanvasText,
 };
+pub use diagnostics::CanvasWork;
 pub use publication::{
     CanvasAttachmentSlot, CanvasAxis, CanvasBoxShape, CanvasClip, CanvasGlyph, CanvasHit,
-    CanvasHitKind, CanvasInteractionPriority, CanvasPaintEntry, CanvasPaintInstance, CanvasPart,
-    CanvasPrimitive, CanvasPrimitiveId, CanvasPrimitiveStyle, CanvasPublication,
-    CanvasShapeChecker, CanvasShapeFill, CanvasShapeGlow, CanvasTarget,
+    CanvasHitKind, CanvasInteractionPriority, CanvasPaintChanges, CanvasPaintEntry,
+    CanvasPaintInstance, CanvasPart, CanvasPrimitive, CanvasPrimitiveId, CanvasPrimitiveStyle,
+    CanvasPublication, CanvasShapeChecker, CanvasShapeFill, CanvasShapeGlow, CanvasTarget,
 };
 pub use system::{CanvasSystem, CanvasSystemFactory};
 pub(in crate::world::systems) use system_state::CanvasGeometry;

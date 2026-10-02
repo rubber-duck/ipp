@@ -17,6 +17,7 @@ mod geometry;
 mod overlay_placement;
 mod reveal;
 pub use component::{GuiLayout, GuiOverlay};
+pub(in crate::world::systems) use entity_layout::GuiEntityLayoutView;
 pub use entity_layout::{GuiEntityLayout, GuiEntityLayoutDiagnostic};
 pub use entity_layout::{GuiEntityLayoutStatistics, GuiEntityLayoutWork};
 pub(crate) mod scroll_bars;

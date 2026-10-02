@@ -378,9 +378,12 @@ impl DrawBoxBatch for GuiBatchRenderCache<MockGuiDevice> {
         mvp: &[f32; 16],
         stats: &mut RenderFrameWork,
     ) -> Result<(), RenderError> {
-        let clipped: Vec<_> = boxes.iter().map(|&primitive| (primitive, clip)).collect();
+        let clipped: Vec<_> = boxes
+            .iter()
+            .map(|&primitive| (primitive, clip, paint))
+            .collect();
         self.begin_surface(entity);
-        self.push_boxes(paint, &clipped, stats);
+        self.push_boxes(&clipped, stats);
         if !self.commit_surface(|_, _| &[], stats)? {
             return Ok(());
         }
@@ -1475,6 +1478,8 @@ fn unchanged_paint_revisions_skip_hashing_until_the_revision_changes() {
         opacity: 1.0,
         revision,
         reusable,
+        patched: 0,
+        kept: 0,
     };
 
     assert_eq!(
@@ -1755,8 +1760,7 @@ fn repeated_storage_failures_double_the_retry_wait_until_a_commit_succeeds() {
     let mut commit = |cache: &mut GuiBatchRenderCache<MockGuiDevice>, primitive| {
         cache.begin_surface(entity);
         cache.push_boxes(
-            SurfacePaint::UNKNOWN,
-            &[(primitive, [0.0, 0.0, 4.0, 2.0])],
+            &[(primitive, [0.0, 0.0, 4.0, 2.0], SurfacePaint::UNKNOWN)],
             &mut stats,
         );
         let committed = cache.commit_surface(|_, _| &[], &mut stats).unwrap();
@@ -2025,12 +2029,12 @@ fn clip_changes_rewrite_only_the_boxes_they_clip() {
     let refs: Vec<_> = boxes.iter().collect();
     let mut clipped: Vec<_> = refs
         .iter()
-        .map(|&primitive| (primitive, scrolled))
+        .map(|&primitive| (primitive, scrolled, SurfacePaint::UNKNOWN))
         .collect();
     clipped[20].1 = [1.0, 0.0, 2.0, 1.0];
     let mut stats = RenderFrameWork::default();
     cache.begin_surface(ipp_core::EntityId::from_bits(1));
-    cache.push_boxes(SurfacePaint::UNKNOWN, &clipped, &mut stats);
+    cache.push_boxes(&clipped, &mut stats);
     cache.commit_surface(|_, _| &[], &mut stats).unwrap();
     assert_eq!(stats.statistics.gui_rebuilds, 1);
     assert!(
@@ -2151,9 +2155,9 @@ fn submit_work(
             TestWork::Boxes(boxes) => {
                 let refs: Vec<_> = boxes
                     .iter()
-                    .map(|(primitive, clip)| (primitive, *clip))
+                    .map(|(primitive, clip)| (primitive, *clip, SurfacePaint::UNKNOWN))
                     .collect();
-                cache.push_boxes(SurfacePaint::UNKNOWN, &refs, &mut stats);
+                cache.push_boxes(&refs, &mut stats);
                 for (primitive, clip) in boxes {
                     let CanvasPrimitive::Box {
                         style,

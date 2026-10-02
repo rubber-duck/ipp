@@ -25,13 +25,35 @@ impl CanvasSystem {
         self.state.publication.as_ref()
     }
 
-    /// A GUI field change repaints the canvas; a theme change also repaints
-    /// every retained control part.
-    fn gui_changed(&mut self, component: u16) {
-        if component == ComponentValue::GUI_THEME {
-            self.state.gui_dirty = true;
-        } else if gui_input_component(component) {
-            self.state.dirty = true;
+    /// Classify one changed component. A retained style or leaf value, or a
+    /// sampled GUI transition, re-walks its entity's subtree, and a retained
+    /// paint's property write re-reads that paint; the next evaluation patches
+    /// them unless another change requires the whole walk. Every other input
+    /// change walks the whole canvas, and a theme change also repaints every
+    /// retained control part.
+    fn changed(&mut self, entity: EntityId, component: u16, retained: bool, sample: bool) {
+        let patch = &mut self.state.patch;
+        match component {
+            ComponentValue::GUI_THEME => self.state.gui_dirty = true,
+            ComponentValue::GUI_BEHAVIOR if sample => {
+                patch.subtrees.insert(entity);
+            }
+            ComponentValue::CANVAS_STYLE if retained => {
+                patch.subtrees.insert(entity);
+            }
+            ComponentValue::CANVAS_PAINT if retained => {
+                patch.paints.insert(entity);
+            }
+            component if retained && super::walk::LEAF_COMPONENTS.contains(&component) => {
+                patch.subtrees.insert(entity);
+                self.state.geometry_dirty.insert((entity, component));
+            }
+            component if input_component(component) => {
+                self.state.dirty = true;
+                self.state.geometry_dirty.insert((entity, component));
+            }
+            component if gui_input_component(component) => self.state.dirty = true,
+            _ => {}
         }
     }
 
@@ -287,13 +309,10 @@ impl System for CanvasSystem {
 
     fn before_commit(&mut self, context: &mut SystemCommitContext<'_>) {
         for (entity, component) in context.changed_components() {
-            self.gui_changed(component);
-            if input_component(component) {
-                self.state.dirty = true;
-                self.state.geometry_dirty.insert((entity, component));
-                if !context.retains_component(entity, component) {
-                    self.state.leaves.remove(&(entity, component));
-                }
+            let retained = context.retains_component(entity, component);
+            self.changed(entity, component, retained, false);
+            if input_component(component) && !retained {
+                self.state.leaves.remove(&(entity, component));
             }
         }
         if context.changed_entity_links().next().is_some() {
@@ -303,11 +322,15 @@ impl System for CanvasSystem {
 
     fn before_numeric_update(&mut self, context: &mut SystemNumericContext<'_>) {
         for &(entity, component) in context.changed_components() {
-            self.gui_changed(component);
-            if input_component(component) {
-                self.state.dirty = true;
-                self.state.geometry_dirty.insert((entity, component));
-            }
+            // GUI writes a sampled transition into its control's GuiBehavior,
+            // which changes only that control's paint.
+            let sample = component == ComponentValue::GUI_BEHAVIOR
+                && context
+                    .world_data
+                    .components
+                    .gui_behavior(entity.index() as usize)
+                    .is_some_and(|behavior| behavior.motion.notifying_sample);
+            self.changed(entity, component, true, sample);
         }
     }
 

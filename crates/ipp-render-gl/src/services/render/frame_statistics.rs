@@ -44,6 +44,10 @@ pub struct RenderStatistics {
     /// GUI box primitives whose CPU geometry was regenerated, plus glyph batches
     /// rebuilt after a text edit or the retirement of an atlas page they sampled.
     pub gui_rebuilds: u32,
+    /// Retained GUI boxes and text runs whose inputs were hashed to find whether
+    /// they changed: those their Canvas's paint revision may have changed. Boxes and
+    /// runs a revision kept from the one last drawn are not hashed.
+    pub gui_hashes: u32,
     /// Retained GUI batches written to GPU storage during this frame.
     pub gui_allocations: u32,
     /// Resident bytes of retained per-Surface GUI GPU storage across every World

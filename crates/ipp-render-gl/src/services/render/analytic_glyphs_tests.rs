@@ -333,6 +333,8 @@ fn reusable_paint_revisions_skip_hashing_until_the_revision_changes() {
         opacity: 1.0,
         revision,
         reusable,
+        patched: 0,
+        kept: 0,
     };
 
     draw(&mut cache, &run(1, &first, &text), paint(7, false));

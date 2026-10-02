@@ -57,16 +57,19 @@ pub(crate) const GUI_LAYOUT_REFLOWS: usize = 36;
 pub(crate) const GUI_TEXT_MEASUREMENTS: usize = 37;
 pub(crate) const TOTAL_GUI_LAYOUT_REFLOWS: usize = 38;
 pub(crate) const TOTAL_GUI_TEXT_MEASUREMENTS: usize = 39;
+pub(crate) const GUI_HASHES: usize = 40;
+pub(crate) const TOTAL_GUI_HASHES: usize = 41;
 
 /// Words in the record.
-pub(crate) const RECORD_WORDS: usize = 40;
+pub(crate) const RECORD_WORDS: usize = 42;
 
 pub(crate) const FLAG_LAYOUT: u32 = 1;
 
 /// Per-frame counters the record also accumulates.
-const ACCUMULATED: [(usize, usize); 12] = [
+const ACCUMULATED: [(usize, usize); 13] = [
     (UPLOADED_BYTES, TOTAL_UPLOADED_BYTES),
     (GUI_REBUILDS, TOTAL_GUI_REBUILDS),
+    (GUI_HASHES, TOTAL_GUI_HASHES),
     (GUI_ALLOCATIONS, TOTAL_GUI_ALLOCATIONS),
     (GLYPH_MISSES, TOTAL_GLYPH_MISSES),
     (GLYPH_POPULATES, TOTAL_GLYPH_POPULATES),
@@ -162,6 +165,7 @@ fn per_frame(statistics: &RenderStatistics) -> [u32; RECORD_WORDS] {
 
     words[GUI_BATCHES] = statistics.gui_batches;
     words[GUI_REBUILDS] = statistics.gui_rebuilds;
+    words[GUI_HASHES] = statistics.gui_hashes;
     words[GUI_ALLOCATIONS] = statistics.gui_allocations;
     words[GUI_RESIDENT_BYTES] = statistics.gui_resident_bytes;
     words[GLYPH_MISSES] = statistics.glyph_misses;

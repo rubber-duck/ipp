@@ -14,6 +14,9 @@
 //! Each exact Canvas output owns a paint revision including primitive identities and
 //! painter order. Hash reuse additionally requires the same inherited clip as its
 //! last successful submission. A changed output incarnation owns fresh cache state.
+//! A revision that replaced only some entries in place of the revision last drawn
+//! names them, so the entries it kept reuse their hashes and only the replaced ones
+//! are hashed again.
 
 use std::collections::BTreeSet;
 
@@ -51,6 +54,14 @@ pub struct SurfacePaint {
     /// The revision and identity order match the Surface's last successful draw, so
     /// hashes computed under `revision` still describe each primitive identity.
     pub reusable: bool,
+    /// The paint revision of the Surface's last successful draw, under the same
+    /// clip and opacity, when `revision` replaced only some of its entries in place;
+    /// zero otherwise.
+    pub patched: u64,
+    /// For one entry that `revision` kept from `patched`, that revision: hashes
+    /// computed under it still describe the entry. Zero for the whole Surface and
+    /// for a replaced entry.
+    pub kept: u64,
 }
 
 impl SurfacePaint {
@@ -60,11 +71,32 @@ impl SurfacePaint {
         revision: 0,
         opacity: 1.0,
         reusable: false,
+        patched: 0,
+        kept: 0,
     };
 
     /// Whether work hashed under `revision` may be reused without hashing again.
     pub fn reuses(self, revision: u64) -> bool {
-        self.reusable && revision == self.revision
+        (self.reusable && revision == self.revision) || (self.kept != 0 && revision == self.kept)
+    }
+
+    /// The paint of one entry, which the current revision `replaced` or kept.
+    pub fn entry(self, replaced: bool) -> Self {
+        Self {
+            kept: if replaced {
+                0
+            } else {
+                self.patched
+            },
+            ..self
+        }
+    }
+
+    /// Hash every entry again, as after its paint inputs changed.
+    pub fn invalidate(&mut self) {
+        self.reusable = false;
+        self.patched = 0;
+        self.kept = 0;
     }
 }
 
@@ -75,16 +107,26 @@ pub struct SurfacePaintTracker {
 }
 
 impl SurfacePaintTracker {
+    /// The paint of `revision`, which replaced entries in place of revision
+    /// `patched`, if any, presented within `clip` at `opacity`.
     pub fn paint(
         &self,
         revision: u64,
+        patched: Option<u64>,
         clip: ipp_core::systems::canvas::CanvasClip,
         opacity: f32,
     ) -> SurfacePaint {
+        let reusable = revision != 0 && self.last == Some((revision, clip, opacity));
         SurfacePaint {
             revision,
             opacity,
-            reusable: revision != 0 && self.last == Some((revision, clip, opacity)),
+            reusable,
+            patched: patched
+                .filter(|&patched| {
+                    !reusable && patched != 0 && self.last == Some((patched, clip, opacity))
+                })
+                .unwrap_or(0),
+            kept: 0,
         }
     }
 

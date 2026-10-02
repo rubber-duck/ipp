@@ -75,6 +75,7 @@ export interface RetainedGuiDriver {
 export const RETAINED_COUNTERS = [
   "guiBatches",
   "guiRebuilds",
+  "guiHashes",
   "guiAllocations",
   "guiResidentBytes",
   "glyphMisses",
@@ -84,6 +85,7 @@ export const RETAINED_COUNTERS = [
   "glyphPages",
   "glyphResidentBytes",
   "totalGuiRebuilds",
+  "totalGuiHashes",
   "totalGuiAllocations",
   "totalGlyphMisses",
   "totalGlyphPopulates",

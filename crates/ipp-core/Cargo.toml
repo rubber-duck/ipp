@@ -19,8 +19,10 @@ ipp-core = { workspace = true, features = ["checked-invariants"] }
 default = []
 # Test-only controls and profiling hooks; see docs/architecture/rust-workspace.md.
 instrumentation = []
-# Test-only oracle: assert (panic) after each commit that every committed
-# component passes whole-component validation. It never changes a batch result.
+# Test-only oracles: assert (panic) after each commit that every committed
+# component passes whole-component validation, and after each patched Canvas
+# evaluation that it equals the whole walk of the same state. They never change
+# a batch result or an output.
 # Only the self dev-dependency below enables it, for ipp-core's own unit and
 # integration test targets; it must never appear in a build profile or in a
 # dependent crate's feature list.

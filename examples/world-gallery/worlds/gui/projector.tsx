@@ -15,8 +15,9 @@ import {
   type AnimationHandle,
 } from "@ipp/react";
 import { useEffect, useRef } from "react";
-import type { Accent, GuiSceneState } from "./scene.js";
+import type { Accent, GuiScene } from "./scene.js";
 import { focusGain } from "./scene-tree.js";
+import { useStoreValue } from "./store.js";
 import {
   linearColor,
   projectionColor,
@@ -210,24 +211,31 @@ function basePlaced(stagingX: number) {
   };
 }
 
-/** Authored projector parts and Host animation compose around the real GUI panel. */
+/** Authored projector parts and Host animation compose around the real GUI
+ * panel. GAIN, the projection colour, CHANNELS, LIGHT, BEAM and the scene
+ * tree's selection light them. */
 export function HolographicProjector({
   scene,
   stagingX,
 }: {
-  scene: GuiSceneState;
+  scene: GuiScene;
   stagingX: number;
 }) {
   const dust = useRef<AnimationHandle>(null);
+  const gain = useStoreValue(scene.state, (state) => state.gain);
   // The projection colour is the COLOUR tab's; choosing an accent sets it.
-  const tuning = scene.tuning.tuning;
-  const accent = linearColor(tuning.color);
-  const energy = 0.38 + scene.gain * 0.62;
+  const color = useStoreValue(scene.state, (state) => state.tuning.color);
+  const channels = useStoreValue(scene.state, (state) => state.tuning.channels);
+  const selected = useStoreValue(scene.state, (state) => state.tuning.focus);
+  const light = useStoreValue(scene.state, (state) => state.tuning.light);
+  const beam = useStoreValue(scene.state, (state) => state.tuning.beam);
+  const accent = linearColor(color);
+  const energy = 0.38 + gain * 0.62;
   const energized = scaled(accent, energy);
   // CHANNELS switch parts off; the scene tree's selection brightens its node.
-  const channel = (key: Channel) => (tuning.channels.includes(key) ? 1 : 0);
-  const focus = (part: string) => focusGain(tuning.focus, part);
-  const lights = tuning.light / 50;
+  const channel = (key: Channel) => (channels.includes(key) ? 1 : 0);
+  const focus = (part: string) => focusGain(selected, part);
+  const lights = light / 50;
   const stage = (part: string) => Math.min(focus(part), 1.35);
   const assets = projectorAssets();
   const [nearZ, farZ] = scene.beamSection!.depth;
@@ -311,10 +319,10 @@ export function HolographicProjector({
         <BoundingGeometry />
         {/* A selected core lights its rim, the trim, in the projection colour. */}
         <PbrMaterial
-          r={tuning.focus === "core" ? accent[0] : 0.27}
-          g={tuning.focus === "core" ? accent[1] : 0.34}
-          b={tuning.focus === "core" ? accent[2] : 0.38}
-          metallic={tuning.focus === "core" ? 0.2 : 0.85}
+          r={selected === "core" ? accent[0] : 0.27}
+          g={selected === "core" ? accent[1] : 0.34}
+          b={selected === "core" ? accent[2] : 0.38}
+          metallic={selected === "core" ? 0.2 : 0.85}
           roughness={0.22}
           receive_shadows={false}
           cast_shadows={false}
@@ -353,7 +361,7 @@ export function HolographicProjector({
         <CustomMaterial
           source={assetRef("gui-projector-glow")}
           accent={[accent[0], accent[1], accent[2], 1]}
-          energy={(0.75 + scene.gain * 0.8) * focus("lens")}
+          energy={(0.75 + gain * 0.8) * focus("lens")}
           alpha_mode={2}
           receives_light
           receives_shadows={false}
@@ -370,9 +378,7 @@ export function HolographicProjector({
           section={scene.beamSection!.halfSize}
           depth={scene.beamSection!.depth}
           accent={[accent[0], accent[1], accent[2], 1]}
-          energy={
-            energy * (tuning.beam / 100) * channel("beam") * focus("beam")
-          }
+          energy={energy * (beam / 100) * channel("beam") * focus("beam")}
           alpha_mode={2}
           receives_light
           receives_shadows={false}
@@ -431,7 +437,7 @@ export function HolographicProjector({
           r={energized[0]}
           g={energized[1]}
           b={energized[2]}
-          intensity={(0.4 + scene.gain * 1.8) * focus("glow")}
+          intensity={(0.4 + gain * 1.8) * focus("glow")}
           range={7.5}
           cast_shadows={false}
         />

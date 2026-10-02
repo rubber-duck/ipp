@@ -39,7 +39,7 @@ import {
   ParticleControls,
   INITIAL_PARTICLES,
 } from "./worlds/particles/controls.js";
-import { GuiWorld } from "./worlds/gui/scene.js";
+import { GuiWorld, useGuiBlockers } from "./worlds/gui/scene.js";
 import { GuiControls, useGuiScene } from "./worlds/gui/controls.js";
 import { GUI_WHEEL_STEP } from "./worlds/gui/dashboard.js";
 import {
@@ -118,6 +118,7 @@ export function Gallery() {
     }));
   const platformer = usePlatformerScene(canvas, page === "platformer");
   const gui = useGuiScene(canvas, page === "gui");
+  const guiBlockers = useGuiBlockers(gui);
   const animation = useWorldAnimation(canvas, page === "lighting");
   const picked = useLightingInteraction(
     canvas,
@@ -232,7 +233,7 @@ export function Gallery() {
                   guiInput: {
                     unhandledInputGate: guiInputGate,
                     wheelStep: GUI_WHEEL_STEP,
-                    blockers: gui.blockers,
+                    blockers: guiBlockers,
                   },
                 }
               : {})}

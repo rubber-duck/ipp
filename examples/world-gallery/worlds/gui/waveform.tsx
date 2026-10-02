@@ -23,7 +23,8 @@ import {
 import { Box, Drawing, Paint, Style } from "@ipp/react/gui";
 import { useCallback, useEffect, useRef } from "react";
 import { BoxLayout, LEAF, Stack, TOKENS, type Color } from "./presentation.js";
-import type { GuiSceneState } from "./scene.js";
+import type { GuiPageState, GuiScene } from "./scene.js";
+import { useStoreValue } from "./store.js";
 import { SCAN_RATES, linearColor } from "./tuning.js";
 
 /** Drawing units per canvas unit: the drawings' 330 by 170 period box. */
@@ -245,18 +246,33 @@ function Trace({
 
 /** Whether the sweep band shows: SCAN is on and the popover shows the sweep.
  * Under reduced motion the band stands still halfway across its range. */
-function sweeping(scene: GuiSceneState): boolean {
-  return scene.autoscan && scene.tuning.tuning.sweepShown;
+function sweeping(state: GuiPageState): boolean {
+  return state.autoscan && state.tuning.sweepShown;
 }
 
-/** Only the traces and the band move; the clipped scope stays fixed. */
-export function Waveform({ scene }: { readonly scene: GuiSceneState }) {
-  const amplitude = 0.12 + scene.gain * 0.88;
-  const tuning = scene.tuning.tuning;
-  const y = (-tuning.offset / 100) * (WAVE_HEIGHT / 2);
+/**
+ * Only the traces and the band move; the clipped scope stays fixed. GAIN
+ * scales the traces, OFFSET raises them, SCAN dims the signal while it stands
+ * by, and the scope popover and SWEEP set the paint.
+ */
+export function Waveform({ scene }: { readonly scene: GuiScene }) {
+  const gain = useStoreValue(scene.state, (state) => state.gain);
+  const autoscan = useStoreValue(scene.state, (state) => state.autoscan);
+  const pulseActive = useStoreValue(scene.state, (state) => state.pulseActive);
+  const reducedMotion = useStoreValue(
+    scene.state,
+    (state) => state.reducedMotion,
+  );
+  const offset = useStoreValue(scene.state, (state) => state.tuning.offset);
+  const color = useStoreValue(scene.state, (state) => state.tuning.color);
+  const grid = useStoreValue(scene.state, (state) => state.tuning.grid);
+  const sweep = useStoreValue(scene.state, (state) => state.tuning.sweep);
+  const swept = useStoreValue(scene.state, sweeping);
+  const amplitude = 0.12 + gain * 0.88;
+  const y = (-offset / 100) * (WAVE_HEIGHT / 2);
   const line = TOKENS.neutral;
   // The band crosses the scope in the projection's colour.
-  const band = linearColor(tuning.color);
+  const band = linearColor(color);
   return (
     <Stack id="gui-waveform" width={WAVE_WIDTH} height={WAVE_HEIGHT} clip>
       <Entity id={WAVEFORM_ENTITIES.paint}>
@@ -266,16 +282,16 @@ export function Waveform({ scene }: { readonly scene: GuiSceneState }) {
           source={assetRef(SCOPE_PAINT)}
           cells={[8, 4]}
           width={1}
-          grid={tuning.grid === "lines" ? 1 : 0}
-          scan={tuning.grid === "scanlines" ? 1 : 0}
+          grid={grid === "lines" ? 1 : 0}
+          scan={grid === "scanlines" ? 1 : 0}
           pitch={4}
           line={[line[0], line[1], line[2], 0.5]}
-          sweep={[band[0], band[1], band[2], sweeping(scene) ? 0.35 : 0]}
-          low={tuning.sweep[0] / 100}
-          high={tuning.sweep[1] / 100}
+          sweep={[band[0], band[1], band[2], swept ? 0.35 : 0]}
+          low={sweep[0] / 100}
+          high={sweep[1] / 100}
           band={0.06}
           // At rest the band stands halfway; the sweep clip adds its travel.
-          phase={scene.reducedMotion ? 0.5 : 0}
+          phase={reducedMotion ? 0.5 : 0}
         />
       </Entity>
       <Trace
@@ -285,16 +301,16 @@ export function Waveform({ scene }: { readonly scene: GuiSceneState }) {
         scaleY={CURVE_SCALE * amplitude}
         y={y}
         color={TOKENS.accent}
-        opacity={scene.autoscan ? 1 : 0.4}
+        opacity={autoscan ? 1 : 0.4}
       />
       <Trace
         id={WAVEFORM_ENTITIES.pulse}
         source={asset("waveform-pulse").source}
         width={PACKET_WIDTH * CURVE_SCALE}
-        scaleY={CURVE_SCALE * (0.65 + scene.gain * 0.35)}
+        scaleY={CURVE_SCALE * (0.65 + gain * 0.35)}
         y={y}
         color={TOKENS.text}
-        opacity={scene.pulseActive ? 1 : 0}
+        opacity={pulseActive ? 1 : 0}
       />
     </Stack>
   );
@@ -302,18 +318,25 @@ export function Waveform({ scene }: { readonly scene: GuiSceneState }) {
 
 /** Controllers for both traces, declared in the panel World beside their
  * targets. The Host owns both clocks. */
-export function WaveformAnimations({
-  scene,
-}: {
-  readonly scene: GuiSceneState;
-}) {
+export function WaveformAnimations({ scene }: { readonly scene: GuiScene }) {
   const scanController = useRef<AnimationHandle>(null);
   const sweepController = useRef<AnimationHandle>(null);
   const pulseController = useRef<AnimationHandle>(null);
-  const previousPulse = useRef(scene.pulseSequence);
+  const pulseSequence = useStoreValue(
+    scene.state,
+    (state) => state.pulseSequence,
+  );
+  const autoscan = useStoreValue(scene.state, (state) => state.autoscan);
+  const reducedMotion = useStoreValue(
+    scene.state,
+    (state) => state.reducedMotion,
+  );
+  const rate = useStoreValue(scene.state, (state) => state.tuning.rate);
+  const swept = useStoreValue(scene.state, sweeping);
+  const previousPulse = useRef(pulseSequence);
   const restart = useRef(Promise.resolve());
   const live = useRef(false);
-  const { reportFailure, readWaveformPulse, setPulseActive } = scene;
+  const { ready, reportFailure, readWaveformPulse, setPulseActive } = scene;
   useEffect(() => {
     live.current = true;
     return () => {
@@ -322,10 +345,7 @@ export function WaveformAnimations({
   }, []);
   const onPlaybackEvent = useCallback(
     (event: AnimationPlaybackEvent) => {
-      if (
-        event.kind !== "completed" ||
-        previousPulse.current !== scene.pulseSequence
-      )
+      if (event.kind !== "completed" || previousPulse.current !== pulseSequence)
         return;
       const sequence = previousPulse.current;
       // Completion can arrive after a newer PULSE. Observe state after its
@@ -352,16 +372,15 @@ export function WaveformAnimations({
           },
         );
     },
-    [scene.pulseSequence, readWaveformPulse, reportFailure, setPulseActive],
+    [pulseSequence, readWaveformPulse, reportFailure, setPulseActive],
   );
-  const speed =
-    SCAN_RATES.find(({ key }) => key === scene.tuning.tuning.rate)?.speed ?? 1;
+  const speed = SCAN_RATES.find(({ key }) => key === rate)?.speed ?? 1;
   useEffect(() => {
     let active = true;
     // The scan starts once the placed panel has presented a complete frame,
     // at the RATE's speed.
     const action =
-      scene.ready && scene.autoscan
+      ready && autoscan
         ? scanController.current?.playAtSpeed(speed)
         : scanController.current?.pause();
     void action?.catch((failure: unknown) => {
@@ -370,10 +389,10 @@ export function WaveformAnimations({
     return () => {
       active = false;
     };
-  }, [scene.ready, scene.autoscan, speed, reportFailure]);
+  }, [ready, autoscan, speed, reportFailure]);
   // The band crosses the SWEEP range with each scan loop; under reduced
   // motion its controller is not declared and the band stands still.
-  const sweepRuns = scene.ready && sweeping(scene) && !scene.reducedMotion;
+  const sweepRuns = ready && swept && !reducedMotion;
   useEffect(() => {
     let active = true;
     const action = sweepRuns
@@ -385,10 +404,10 @@ export function WaveformAnimations({
     return () => {
       active = false;
     };
-  }, [sweepRuns, speed, scene.reducedMotion, reportFailure]);
+  }, [sweepRuns, speed, reducedMotion, reportFailure]);
   useEffect(() => {
-    if (previousPulse.current === scene.pulseSequence) return;
-    previousPulse.current = scene.pulseSequence;
+    if (previousPulse.current === pulseSequence) return;
+    previousPulse.current = pulseSequence;
     let active = true;
     setPulseActive(true);
     restart.current = pulseController.current!.restart();
@@ -398,7 +417,7 @@ export function WaveformAnimations({
     return () => {
       active = false;
     };
-  }, [scene.pulseSequence, reportFailure, setPulseActive]);
+  }, [pulseSequence, reportFailure, setPulseActive]);
   const motions = scene.motions!;
   const translation = {
     component: motions.translation.component,
@@ -422,7 +441,7 @@ export function WaveformAnimations({
         onPlaybackEvent={onPlaybackEvent}
         autoPlay={false}
       />
-      {!scene.reducedMotion && (
+      {!reducedMotion && (
         <Animation
           ref={sweepController}
           source={motions.sweep.source}

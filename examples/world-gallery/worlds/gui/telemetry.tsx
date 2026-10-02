@@ -38,12 +38,14 @@ import {
   TextLeaf,
   Tint,
 } from "./presentation.js";
-import type { GuiSceneState } from "./scene.js";
+import type { GuiPageState, GuiScene } from "./scene.js";
 import {
   SCENE_TREE,
   SCENE_TREE_EXPANDED,
   sceneNodeLabel,
 } from "./scene-tree.js";
+import { onlineCount } from "./station.js";
+import { useStoreValue } from "./store.js";
 
 /** Symbolic IDs of the panel's scrolling controls. */
 export const TELEMETRY_ENTITY = "gui-telemetry";
@@ -104,29 +106,35 @@ const EVENT_ITEM_EXTENT = 38;
 /** Event log items declared beyond each end of the visible ones. */
 const EVENT_LOG_OVERSCAN = 2;
 
-function readouts(scene: GuiSceneState) {
-  const station = scene.station;
-  const link =
-    scene.callsign === ""
-      ? "OFFLINE"
-      : station.operation?.kind === "uplink" &&
-          station.operation.phase === "running"
-        ? `UPLINK ${Math.floor(station.operation.value * 100)}%`
-        : scene.autoscan
-          ? "HELD"
-          : "READY";
-  return [
-    ["SIGNAL", `${Math.round(scene.gain * 100)}%`],
-    ["OUTPUT", `${(2.1 + scene.gain * 1.7).toFixed(1)} KW`],
-    ["SCAN", scene.autoscan ? "ACTIVE" : "STANDBY"],
-    ["LINK", link],
-    ["NODES", `${station.online}/${station.nodes.length} ONLINE`],
-    ["FOCUS", sceneNodeLabel(scene.tuning.tuning.focus) ?? "NONE"],
-  ] as const;
+/** The link's readout: offline without a callsign, an uplink's progress,
+ * held while SCAN runs, or ready. */
+function linkReadout(state: GuiPageState): string {
+  const { operation } = state;
+  if (state.callsign === "") return "OFFLINE";
+  if (operation?.kind === "uplink" && operation.phase === "running")
+    return `UPLINK ${Math.floor(operation.value * 100)}%`;
+  return state.autoscan ? "HELD" : "READY";
 }
 
-export function Telemetry({ scene }: { readonly scene: GuiSceneState }) {
-  const rows = readouts(scene);
+/** The readouts, each the text its row shows. A row selects that text, so it
+ * re-renders only when the text changes. */
+const READOUTS: readonly (readonly [
+  name: string,
+  text: (state: GuiPageState) => string,
+])[] = [
+  ["SIGNAL", (state) => `${Math.round(state.gain * 100)}%`],
+  ["OUTPUT", (state) => `${(2.1 + state.gain * 1.7).toFixed(1)} KW`],
+  ["SCAN", (state) => (state.autoscan ? "ACTIVE" : "STANDBY")],
+  ["LINK", linkReadout],
+  [
+    "NODES",
+    (state) =>
+      `${onlineCount(state.nodes, state.gain)}/${state.nodes.length} ONLINE`,
+  ],
+  ["FOCUS", (state) => sceneNodeLabel(state.tuning.focus) ?? "NONE"],
+];
+
+export function Telemetry({ scene }: { readonly scene: GuiScene }) {
   const [view, setView] = useState<TelemetryView>("events");
   return (
     <Panel id="gui-telemetry-panel" layout={{ height: TELEMETRY_HEIGHT }}>
@@ -146,12 +154,15 @@ export function Telemetry({ scene }: { readonly scene: GuiSceneState }) {
               />
               <Children>
                 <Entity id="gui-readouts">
-                  <BoxLayout kind={ROW} height={rows.length * READOUT_ROW} />
+                  <BoxLayout
+                    kind={ROW}
+                    height={READOUTS.length * READOUT_ROW}
+                  />
                   <Children>
                     <Entity id="gui-readout-names">
                       <BoxLayout kind={COLUMN} width={READOUT_LABEL_WIDTH} />
                       <Children>
-                        {rows.map(([name]) => (
+                        {READOUTS.map(([name]) => (
                           <KitRow
                             key={name}
                             id={`gui-readout-${name.toLowerCase()}`}
@@ -174,17 +185,13 @@ export function Telemetry({ scene }: { readonly scene: GuiSceneState }) {
                     <Entity id="gui-readout-values">
                       <BoxLayout kind={COLUMN} flex={1} />
                       <Children>
-                        {rows.map(([name, value]) => (
-                          <KitRow
+                        {READOUTS.map(([name, text]) => (
+                          <ReadoutValue
                             key={name}
-                            id={`gui-readout-${name.toLowerCase()}-row`}
-                            height={READOUT_ROW}
-                          >
-                            <TextLine
-                              id={`gui-readout-${name.toLowerCase()}-value`}
-                              text={value}
-                            />
-                          </KitRow>
+                            scene={scene}
+                            name={name}
+                            text={text}
+                          />
                         ))}
                       </Children>
                     </Entity>
@@ -221,21 +228,47 @@ export function Telemetry({ scene }: { readonly scene: GuiSceneState }) {
             </Entity>
           </Children>
         </Entity>
-        <PanelFooter id="gui-telemetry-footer">
-          <TextLine
-            id="gui-event-count"
-            text={`${scene.events.length} EVENTS`}
-            layout={{ flex: 1 }}
-          />
-          <SecondaryButton
-            id="gui-clear"
-            label="CLEAR"
-            disabled={scene.events.length <= 1}
-            onPress={scene.clearLog}
-          />
-        </PanelFooter>
+        <TelemetryFooter scene={scene} />
       </PanelBody>
     </Panel>
+  );
+}
+
+/** One readout's value row. */
+function ReadoutValue({
+  scene,
+  name,
+  text,
+}: {
+  readonly scene: GuiScene;
+  readonly name: string;
+  readonly text: (state: GuiPageState) => string;
+}) {
+  const value = useStoreValue(scene.state, text);
+  return (
+    <KitRow id={`gui-readout-${name.toLowerCase()}-row`} height={READOUT_ROW}>
+      <TextLine id={`gui-readout-${name.toLowerCase()}-value`} text={value} />
+    </KitRow>
+  );
+}
+
+/** The event count and CLEAR, which needs more than one entry. */
+function TelemetryFooter({ scene }: { readonly scene: GuiScene }) {
+  const count = useStoreValue(scene.state, (state) => state.events.length);
+  return (
+    <PanelFooter id="gui-telemetry-footer">
+      <TextLine
+        id="gui-event-count"
+        text={`${count} EVENTS`}
+        layout={{ flex: 1 }}
+      />
+      <SecondaryButton
+        id="gui-clear"
+        label="CLEAR"
+        disabled={count <= 1}
+        onPress={scene.clearLog}
+      />
+    </PanelFooter>
   );
 }
 
@@ -243,9 +276,9 @@ export function Telemetry({ scene }: { readonly scene: GuiSceneState }) {
  * The scene's nodes in a tree as tall as the event log. Its selection is the
  * scene's focus; the operator's expansion stays while the view is shown.
  */
-function SceneTree({ scene }: { readonly scene: GuiSceneState }) {
+function SceneTree({ scene }: { readonly scene: GuiScene }) {
   const tuning = scene.tuning;
-  const focus = tuning.tuning.focus;
+  const focus = useStoreValue(scene.state, (state) => state.tuning.focus);
   return (
     <TreeView
       id={SCENE_TREE_ENTITY}
@@ -264,13 +297,14 @@ function SceneTree({ scene }: { readonly scene: GuiSceneState }) {
  * and asks for the items it shows; React declares only those entries, and
  * each declared entry's measured extent replaces the estimate.
  */
-function EventLog({ scene }: { readonly scene: GuiSceneState }) {
+function EventLog({ scene }: { readonly scene: GuiScene }) {
+  const events = useStoreValue(scene.state, (state) => state.events);
   return (
     <Entity id={EVENT_LOG_ENTITY}>
       <BoxLayout kind={LEAF} height={EVENT_LOG_HEIGHT} />
       <Behavior semantic_label="EVENT LOG" />
       <VirtualList
-        item_count={scene.events.length}
+        item_count={events.length}
         item_extent={EVENT_ITEM_EXTENT}
         overscan={EVENT_LOG_OVERSCAN}
         onRangeChange={(range: GuiVirtualRange) =>
@@ -291,7 +325,7 @@ function EventLog({ scene }: { readonly scene: GuiSceneState }) {
                 />
                 <Tint color={index === 0 ? TOKENS.text : TOKENS.neutral} />
                 <Text
-                  text={scene.events[index] ?? ""}
+                  text={events[index] ?? ""}
                   source={scene.font.source}
                   font_size={EVENT_TEXT_SIZE}
                 />

@@ -13,7 +13,8 @@ import type { GuiHsva } from "@ipp/react/gui";
 import { ColorPicker, GuiKit, parseHex } from "@ipp/react/gui-kit";
 import { BODY } from "./presentation.js";
 import { ACCENT_HSV } from "./projector.js";
-import type { GuiSceneState } from "./scene.js";
+import type { GuiScene } from "./scene.js";
+import { useStoreValue } from "./store.js";
 
 export const COLOUR_PICKER = "gui-colour";
 
@@ -31,9 +32,10 @@ const PRESETS = [
   ].map(({ hex, label }) => ({ value: parseHex(hex)!, label })),
 ];
 
-export function ColourTab({ scene }: { readonly scene: GuiSceneState }) {
+export function ColourTab({ scene }: { readonly scene: GuiScene }) {
   const tuning = scene.tuning;
-  const color: GuiHsva = { ...tuning.tuning.color, alpha: 1 };
+  const projection = useStoreValue(scene.state, (state) => state.tuning.color);
+  const color: GuiHsva = { ...projection, alpha: 1 };
   return (
     <GuiKit fontSize={PICKER_BODY}>
       <ColorPicker

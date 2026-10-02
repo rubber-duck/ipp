@@ -23,17 +23,20 @@ import {
   SecondaryButton,
   TextLine,
   type ContextMenuState,
+  type DataGridCell,
   type DataGridColumn,
   type MenuItem,
 } from "@ipp/react/gui-kit";
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState, type RefObject } from "react";
 import {
   TOKENS,
   WORKBENCH_HEIGHT,
   WORKBENCH_WIDTH,
   type Rect,
 } from "./presentation.js";
-import type { GuiSceneState } from "./scene.js";
+import type { GuiScene } from "./scene.js";
+import { isBusy, nodeRows, onlineCount } from "./station.js";
+import { useStoreValue } from "./store.js";
 
 /** Symbolic IDs of the grid, the footer's buttons and the overlays. */
 export const NODE_FIND_ENTITY = "gui-node-find";
@@ -68,29 +71,50 @@ const GRID_HEIGHT = 7 * GRID_ROW;
 /** FIND's width: the tab's content at the inset. */
 const FIND_WIDTH = WORKBENCH_WIDTH - 2 * TOKENS.lineWidth - 2 * TOKENS.inset;
 
+/**
+ * FIND and the grid. FIND selects the node names it suggests from, and the
+ * grid its rows, which follow GAIN, and the selection; accepting a suggestion
+ * scrolls the grid through the handle they share.
+ */
 export function NodesTab({
   scene,
   menu,
 }: {
-  readonly scene: GuiSceneState;
+  readonly scene: GuiScene;
   readonly menu: NodeMenu;
 }) {
-  const station = scene.station;
   const grid = useRef<GuiControlHandle | null>(null);
+  return (
+    <>
+      <NodeFind scene={scene} grid={grid} />
+      <NodeGrid scene={scene} menu={menu} grid={grid} />
+    </>
+  );
+}
+
+function NodeFind({
+  scene,
+  grid,
+}: {
+  readonly scene: GuiScene;
+  readonly grid: RefObject<GuiControlHandle | null>;
+}) {
+  const nodes = useStoreValue(scene.state, (state) => state.nodes);
   const [query, setQuery] = useState("");
   const needle = query.trim().toLowerCase();
   const suggestions =
     needle === ""
       ? []
-      : station.nodes
+      : nodes
           .filter(({ name }) => name.toLowerCase().includes(needle))
           .map(({ key, name }) => ({ key, label: name }));
   // Select a found node and scroll its row to the middle of the grid,
   // which the runtime clamps to the grid's scroll range.
   const find = (key: string) => {
-    const index = station.rows.findIndex((row) => row.key === key);
+    const { nodes, gain } = scene.state.current;
+    const index = nodeRows(nodes, gain).findIndex((row) => row.key === key);
     if (index < 0) return;
-    station.findNode(key);
+    scene.station.findNode(key);
     const viewport = GRID_HEIGHT - GRID_ROW;
     const offset = Math.max(0, index * GRID_ROW - (viewport - GRID_ROW) / 2);
     void grid.current
@@ -98,40 +122,63 @@ export function NodesTab({
       .catch(scene.reportFailure);
   };
   return (
-    <>
-      <Autocomplete
-        id={NODE_FIND_ENTITY}
-        label="FIND"
-        placeholder="FIND NODE"
-        suggestions={suggestions}
-        onInputChange={setQuery}
-        onSelect={find}
-        onCommit={() => {
-          if (suggestions[0]) find(suggestions[0].key);
-        }}
-        layout={{ width: FIND_WIDTH }}
-      />
-      <DataGrid
-        id={NODE_GRID_ENTITY}
-        columns={NODE_COLUMNS}
-        rows={station.rows}
-        scroll
-        scrollRef={(handle) => {
-          grid.current = handle;
-        }}
-        sort={{ column: "signal", direction: "descending" }}
-        {...(station.selected === undefined
-          ? {}
-          : { selected: station.selected })}
-        {...(station.focusedCell ? { focusedCell: station.focusedCell } : {})}
-        {...(station.editingCell ? { editingCell: station.editingCell } : {})}
-        onRowPress={station.pressRow}
-        onRowContextMenu={(key, event) => menu.opener(key)(event)}
-        onCellEdit={station.renameNode}
-        emptyText="No records"
-        layout={{ height: GRID_HEIGHT, margin_top: TOKENS.inset / 2 }}
-      />
-    </>
+    <Autocomplete
+      id={NODE_FIND_ENTITY}
+      label="FIND"
+      placeholder="FIND NODE"
+      suggestions={suggestions}
+      onInputChange={setQuery}
+      onSelect={find}
+      onCommit={() => {
+        if (suggestions[0]) find(suggestions[0].key);
+      }}
+      layout={{ width: FIND_WIDTH }}
+    />
+  );
+}
+
+function NodeGrid({
+  scene,
+  menu,
+  grid,
+}: {
+  readonly scene: GuiScene;
+  readonly menu: NodeMenu;
+  readonly grid: RefObject<GuiControlHandle | null>;
+}) {
+  const station = scene.station;
+  const nodes = useStoreValue(scene.state, (state) => state.nodes);
+  const gain = useStoreValue(scene.state, (state) => state.gain);
+  const selected = useStoreValue(scene.state, (state) => state.selected);
+  const editing = useStoreValue(scene.state, (state) => state.editing);
+  const rows = useMemo(() => nodeRows(nodes, gain), [nodes, gain]);
+  // A press focuses the selected row's name cell, which an edit opens.
+  const cell = useMemo(
+    () =>
+      selected === undefined
+        ? undefined
+        : ({ row: selected, column: "node" } as DataGridCell),
+    [selected],
+  );
+  return (
+    <DataGrid
+      id={NODE_GRID_ENTITY}
+      columns={NODE_COLUMNS}
+      rows={rows}
+      scroll
+      scrollRef={(handle) => {
+        grid.current = handle;
+      }}
+      sort={{ column: "signal", direction: "descending" }}
+      {...(selected === undefined ? {} : { selected })}
+      {...(cell ? { focusedCell: cell } : {})}
+      {...(cell && editing ? { editingCell: cell } : {})}
+      onRowPress={station.pressRow}
+      onRowContextMenu={(key, event) => menu.opener(key)(event)}
+      onCellEdit={station.renameNode}
+      emptyText="No records"
+      layout={{ height: GRID_HEIGHT, margin_top: TOKENS.inset / 2 }}
+    />
   );
 }
 
@@ -139,31 +186,39 @@ export function NodesTab({
  * The workbench's footer under every tab: the online count, SYNC and the
  * amber PURGE, which the input shield stands in front of.
  */
-export function NodesFooter({ scene }: { readonly scene: GuiSceneState }) {
+export function NodesFooter({ scene }: { readonly scene: GuiScene }) {
   const station = scene.station;
+  const busy = useStoreValue(scene.state, (state) => isBusy(state.operation));
+  const empty = useStoreValue(scene.state, (state) => state.nodes.length === 0);
   return (
     <PanelFooter id="gui-nodes-footer">
-      <TextLine
-        id="gui-nodes-count"
-        text={`${station.online}/${station.nodes.length} ONLINE`}
-        layout={{ flex: 1 }}
-      />
+      <NodesCount scene={scene} />
       <SecondaryButton
         id={SYNC_ENTITY}
         label="SYNC"
-        disabled={station.busy}
+        disabled={busy}
         onPress={station.sync}
       />
       <SecondaryButton
         id={PURGE_ENTITY}
         label="PURGE"
         amber
-        disabled={station.busy || station.nodes.length === 0}
+        disabled={busy || empty}
         onPress={station.askPurge}
         layout={{ margin_left: TOKENS.inset / 2 }}
       />
     </PanelFooter>
   );
+}
+
+/** The online count, which GAIN moves across the online threshold. */
+function NodesCount({ scene }: { readonly scene: GuiScene }) {
+  const text = useStoreValue(
+    scene.state,
+    (state) =>
+      `${onlineCount(state.nodes, state.gain)}/${state.nodes.length} ONLINE`,
+  );
+  return <TextLine id="gui-nodes-count" text={text} layout={{ flex: 1 }} />;
 }
 
 /** The commands of a node row; nothing that changes rows while busy. */
@@ -187,15 +242,16 @@ export function NodeContextMenu({
   scene,
   menu,
 }: {
-  readonly scene: GuiSceneState;
+  readonly scene: GuiScene;
   readonly menu: NodeMenu;
 }) {
   const station = scene.station;
+  const busy = useStoreValue(scene.state, (state) => isBusy(state.operation));
   return (
     <ContextMenu
       id={NODE_MENU_ENTITY}
       menu={menu}
-      items={nodeCommands(station.busy)}
+      items={nodeCommands(busy)}
       onSelect={(command, key) =>
         command === "rename"
           ? station.editNode(key)
@@ -208,15 +264,17 @@ export function NodeContextMenu({
 }
 
 /** PURGE's confirmation, a root of the canvas on the dialog layer. */
-export function PurgeDialog({ scene }: { readonly scene: GuiSceneState }) {
+export function PurgeDialog({ scene }: { readonly scene: GuiScene }) {
   const station = scene.station;
+  const open = useStoreValue(scene.state, (state) => state.purgeAsked);
+  const count = useStoreValue(scene.state, (state) => state.nodes.length);
   return (
     <ConfirmationDialog
       id={PURGE_DIALOG_ENTITY}
-      open={station.purgeAsked}
+      open={open}
       title="Purge nodes?"
       body={[
-        `Remove ${station.nodes.length} nodes from the table.`,
+        `Remove ${count} nodes from the table.`,
         "A toast offers to restore them.",
       ]}
       action="Purge"

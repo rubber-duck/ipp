@@ -10,7 +10,7 @@ import { Panel, Tabs } from "@ipp/react/gui-kit";
 import { ColourTab } from "./colour-tab.js";
 import { NodesFooter, NodesTab, type NodeMenu } from "./nodes.js";
 import { WORKBENCH_HEIGHT } from "./presentation.js";
-import type { GuiSceneState, WorkbenchTab } from "./scene.js";
+import type { GuiScene, WorkbenchTab } from "./scene.js";
 import { TuningTab } from "./tuning-tab.js";
 
 export const WORKBENCH_TABS = "gui-workbench";
@@ -19,7 +19,7 @@ export function Workbench({
   scene,
   menu,
 }: {
-  readonly scene: GuiSceneState;
+  readonly scene: GuiScene;
   readonly menu: NodeMenu;
 }) {
   return (

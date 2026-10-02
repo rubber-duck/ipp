@@ -17,7 +17,8 @@ import {
 } from "@ipp/react/gui-kit";
 import { SWITCH_THEME } from "./monitor.js";
 import { BoxLayout, LEAF, PanelBody, TOKENS } from "./presentation.js";
-import type { Accent, GuiSceneState } from "./scene.js";
+import type { Accent, GuiScene } from "./scene.js";
+import { useStoreValue } from "./store.js";
 
 const ROW_GAP = 4;
 
@@ -36,14 +37,16 @@ export const ADVANCED_CONTROLS = {
   motion: "gui-reduced-motion",
 } as const;
 
-export function Advanced({ scene }: { readonly scene: GuiSceneState }) {
+export function Advanced({ scene }: { readonly scene: GuiScene }) {
+  const open = useStoreValue(scene.state, (state) => state.advancedOpen);
+  const accent = useStoreValue(scene.state, (state) => state.accent);
   return (
     <PanelBody id="gui-advanced">
       <Expander
         id={ADVANCED_CONTROLS.header}
         label="ADVANCED"
         summary="3 OPTIONS"
-        expanded={scene.advancedOpen}
+        expanded={open}
         onExpandedChange={scene.setAdvancedOpen}
       >
         <Setting id="gui-accent-row" label="ACCENT" first>
@@ -53,7 +56,7 @@ export function Advanced({ scene }: { readonly scene: GuiSceneState }) {
               { value: "cyan", label: "CYAN" },
               { value: "amber", label: "AMBER" },
             ]}
-            value={scene.accent}
+            value={accent}
             onChange={(value) => scene.setAccent(value as Accent)}
             layout={{ width: 160 }}
           />

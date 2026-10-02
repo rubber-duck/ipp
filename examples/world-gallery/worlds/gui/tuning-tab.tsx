@@ -36,7 +36,8 @@ import {
   TOKENS,
   WORKBENCH_WIDTH,
 } from "./presentation.js";
-import type { GuiSceneState } from "./scene.js";
+import type { GuiScene } from "./scene.js";
+import { useStoreValue } from "./store.js";
 import { FRAMELESS_SCROLL_THEME } from "./telemetry.js";
 import {
   CHANNELS,
@@ -76,9 +77,15 @@ const CONTENT_WIDTH =
 const CAPTION_WIDTH = 80;
 const SELECT_WIDTH = CONTENT_WIDTH - CAPTION_WIDTH;
 
-export function TuningTab({ scene }: { readonly scene: GuiSceneState }) {
+export function TuningTab({ scene }: { readonly scene: GuiScene }) {
   const tuning = scene.tuning;
-  const values = tuning.tuning;
+  const beam = useStoreValue(scene.state, (state) => state.tuning.beam);
+  const light = useStoreValue(scene.state, (state) => state.tuning.light);
+  const offset = useStoreValue(scene.state, (state) => state.tuning.offset);
+  const sweep = useStoreValue(scene.state, (state) => state.tuning.sweep);
+  const rate = useStoreValue(scene.state, (state) => state.tuning.rate);
+  const preset = useStoreValue(scene.state, (state) => state.tuning.preset);
+  const channels = useStoreValue(scene.state, (state) => state.tuning.channels);
   return (
     <Entity id={TUNING_CONTROLS.scroll}>
       {/* The scroll view fills the tab's content, its bar in the last column. */}
@@ -100,7 +107,7 @@ export function TuningTab({ scene }: { readonly scene: GuiSceneState }) {
                   max={200}
                   step={5}
                   units="%"
-                  value={values.beam}
+                  value={beam}
                   onChange={tuning.setBeam}
                   layout={{ width: KNOB_WIDTH }}
                 >
@@ -112,7 +119,7 @@ export function TuningTab({ scene }: { readonly scene: GuiSceneState }) {
                     units="%"
                     stepParts={false}
                     bounds={false}
-                    value={values.beam}
+                    value={beam}
                     onChange={tuning.setBeam}
                   />
                 </Knob>
@@ -125,7 +132,7 @@ export function TuningTab({ scene }: { readonly scene: GuiSceneState }) {
                   units="%"
                   vertical
                   length={RAIL_LENGTH}
-                  value={values.light}
+                  value={light}
                   onChange={tuning.setLight}
                   scale={{ count: 5 }}
                   layout={{ flex: 1 }}
@@ -148,7 +155,7 @@ export function TuningTab({ scene }: { readonly scene: GuiSceneState }) {
               step={5}
               units="%"
               origin={0}
-              value={values.offset}
+              value={offset}
               onChange={tuning.setOffset}
               scale={{ count: 5, origin: 0 }}
             />
@@ -159,7 +166,7 @@ export function TuningTab({ scene }: { readonly scene: GuiSceneState }) {
               max={100}
               step={5}
               units="%"
-              value={values.sweep}
+              value={sweep}
               onChange={(range) => tuning.setSweep([range[0], range[1]])}
             />
             <Caption id="gui-rate-row" text="RATE">
@@ -167,7 +174,7 @@ export function TuningTab({ scene }: { readonly scene: GuiSceneState }) {
                 id={TUNING_CONTROLS.rate}
                 label="RATE"
                 options={SCAN_RATES.map(({ key, label }) => ({ key, label }))}
-                value={values.rate}
+                value={rate}
                 onChange={(key) => tuning.setRate(key as ScanRate)}
                 layout={{ width: SELECT_WIDTH }}
               />
@@ -186,9 +193,7 @@ export function TuningTab({ scene }: { readonly scene: GuiSceneState }) {
                 label="PRESET"
                 placeholder="CHOOSE"
                 options={PRESETS.map(({ key, label }) => ({ key, label }))}
-                {...(values.preset === undefined
-                  ? {}
-                  : { value: values.preset })}
+                {...(preset === undefined ? {} : { value: preset })}
                 onChange={tuning.setPreset}
                 layout={{ width: SELECT_WIDTH }}
               />
@@ -199,7 +204,7 @@ export function TuningTab({ scene }: { readonly scene: GuiSceneState }) {
                 label="CHANNELS"
                 placeholder="NONE"
                 options={CHANNELS.map(({ key, label }) => ({ key, label }))}
-                value={values.channels}
+                value={channels}
                 onChange={(keys) => tuning.setChannels(keys as Channel[])}
                 layout={{ width: SELECT_WIDTH }}
               />

@@ -25,7 +25,7 @@ import {
 } from "@ipp/react";
 import type { GuiControlHandle } from "@ipp/react/gui";
 import { World, type IppCanvasHandle } from "@ipp/react/web";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ACCENT_HSV,
   HolographicProjector,
@@ -55,8 +55,20 @@ import {
   SURFACE_WIDTH,
   UNITS_PER_METRE,
 } from "./presentation.js";
-import { useStation, type HostFrames, type Station } from "./station.js";
-import { useTuning, type TuningState } from "./tuning.js";
+import {
+  INITIAL_STATION,
+  useStation,
+  type HostFrames,
+  type StationActions,
+  type StationState,
+} from "./station.js";
+import { Store, useStoreValue } from "./store.js";
+import {
+  initialTuning,
+  useTuning,
+  type Tuning,
+  type TuningActions,
+} from "./tuning.js";
 import {
   WAVEFORM_ENTITIES,
   WaveformAnimations,
@@ -220,12 +232,9 @@ interface PanelSession {
   readonly client: PanelClient;
 }
 
-export interface GuiSceneState {
-  readonly ready: boolean;
-  readonly vectorOnly: boolean;
-  readonly prepared: boolean;
-  readonly revealed: boolean;
-  readonly error?: string;
+/** The page's application state: what its controls set, the event log, the
+ * tuning and the station. The panel and the sidebar select what they show. */
+export interface GuiPageState extends StationState {
   readonly accent: Accent;
   readonly exploded: boolean;
   readonly reducedMotion: boolean;
@@ -243,23 +252,71 @@ export interface GuiSceneState {
   readonly events: readonly string[];
   /** Event log items the VirtualList declares for its wanted range. */
   readonly eventWindow: GuiEventWindow;
-  readonly setEventWindow: (range: GuiEventWindow) => void;
   /** Whether the input shield in front of PURGE is armed. */
   readonly shieldArmed: boolean;
-  /** Scene blockers for `IppCanvas.guiInput`: the armed, mounted shield's
-   * exact picking geometry. */
-  readonly blockers: readonly GuiPickingBlocker[];
+  /** Whether the scene shows the panel alone, without the projector. */
+  readonly vectorOnly: boolean;
+  /** The mounted shield's exact picking geometry, once resolved. */
+  readonly shieldBlocker: GuiPickingBlocker | undefined;
+  /** The projection's tuning: the CONTROLS and COLOUR tabs, the scope
+   * popover and the scene tree. */
+  readonly tuning: Tuning;
+}
+
+/** The settings, log and tuning the page opens with. The station keeps its
+ * nodes from an earlier visit. */
+function openingSettings(): Omit<
+  GuiPageState,
+  keyof StationState | "vectorOnly" | "shieldBlocker"
+> {
+  return {
+    accent: "cyan",
+    exploded: false,
+    reducedMotion: false,
+    monitorWindow: "normal",
+    advancedOpen: true,
+    workbenchTab: "nodes",
+    autoscan: INITIAL_AUTOSCAN,
+    surfaceCache: "automatic",
+    gain: INITIAL_GAIN,
+    callsign: INITIAL_CALLSIGN,
+    lastCommand: "Awaiting command",
+    pulseSequence: 0,
+    pulseActive: false,
+    events: INITIAL_EVENTS,
+    eventWindow: { first: 0, last: 0 },
+    shieldArmed: true,
+    tuning: initialTuning(ACCENT_HSV.cyan),
+  };
+}
+
+/**
+ * The GUI page: its loading state, the page's state and its actions. The
+ * loading state changes only while the page opens; the page's state lives in
+ * `state`, so a component that shows a value selects it there with
+ * `useStoreValue` and re-renders only when it changes. Every action keeps its
+ * identity, so passing the scene down re-renders nothing.
+ */
+export interface GuiScene {
+  readonly ready: boolean;
+  readonly prepared: boolean;
+  readonly revealed: boolean;
+  readonly error?: string;
   readonly motions?: MotionAssets;
   readonly beamSection?: ProjectorBeamSection;
   readonly font: ClientAssetSource;
-  readonly station: Station;
-  /** The projection's tuning: the CONTROLS and COLOUR tabs, the scope
-   * popover and the scene tree. */
-  readonly tuning: TuningState;
+  readonly state: Store<GuiPageState>;
+  readonly station: StationActions;
+  readonly tuning: TuningActions;
+  readonly setEventWindow: (range: GuiEventWindow) => void;
   /** Handles of controls the scene writes as the operator would. */
   readonly scanControl: (handle: GuiControlHandle | null) => void;
   readonly callsignControl: (handle: GuiControlHandle | null) => void;
   readonly explodeControl: (handle: GuiControlHandle | null) => void;
+  /** Write SCAN off through its control, as the operator would. */
+  readonly stopScan: () => void;
+  /** Move focus to the callsign editor. */
+  readonly focusCallsign: () => void;
   readonly onCommit: () => void;
   readonly attachPanel: (handle: CanvasWorldHandle) => void;
   readonly pulse: () => void;
@@ -671,9 +728,8 @@ function observeEssentialResources(
 export function useGuiScene(
   canvas: IppCanvasHandle | undefined,
   active: boolean,
-): GuiSceneState {
+): GuiScene {
   const [ready, setReady] = useState(false);
-  const [vectorOnly, setVectorOnly] = useState(false);
   const [prepared, setPrepared] = useState(false);
   const [revealed, setRevealed] = useState(false);
   const [treeCommitted, setTreeCommitted] = useState(false);
@@ -681,28 +737,16 @@ export function useGuiScene(
   const [error, setError] = useState<string>();
   const [motions, setMotions] = useState<MotionAssets>();
   const [beamSection, setBeamSection] = useState<ProjectorBeamSection>();
-  const [accent, setAccentState] = useState<Accent>("cyan");
-  const [exploded, setExplodedState] = useState(false);
-  const [reducedMotion, setReducedMotionState] = useState(false);
-  const [monitorWindow, setMonitorWindowState] =
-    useState<MonitorWindow>("normal");
-  const [advancedOpen, setAdvancedOpen] = useState(true);
-  const [workbenchTab, setWorkbenchTab] = useState<WorkbenchTab>("nodes");
-  const [autoscan, setAutoscanState] = useState(INITIAL_AUTOSCAN);
-  const [surfaceCache, setSurfaceCache] =
-    useState<GuiSurfaceCacheMode>("automatic");
-  const [gain, setGainState] = useState(INITIAL_GAIN);
-  const [callsign, setCallsignState] = useState(INITIAL_CALLSIGN);
-  const [lastCommand, setLastCommand] = useState("Awaiting command");
-  const [pulseSequence, setPulseSequence] = useState(0);
-  const [pulseActive, setPulseActive] = useState(false);
-  const [events, setEvents] = useState<readonly string[]>(INITIAL_EVENTS);
-  const [eventWindow, setEventWindowState] = useState<GuiEventWindow>({
-    first: 0,
-    last: 0,
-  });
-  const [shieldArmed, setShieldArmed] = useState(true);
-  const [shieldBlocker, setShieldBlocker] = useState<GuiPickingBlocker>();
+  const [state] = useState(
+    () =>
+      new Store<GuiPageState>({
+        ...openingSettings(),
+        vectorOnly: false,
+        shieldBlocker: undefined,
+        ...INITIAL_STATION,
+      }),
+  );
+  const [font] = useState(() => absoluteAsset(17, FONT_URL));
   const shieldRequest = useRef(0);
   const sequence = useRef(INITIAL_EVENTS.length);
   // Value callbacks report a control's current value when they register and
@@ -732,20 +776,21 @@ export function useGuiScene(
       motionOwnership.current = undefined;
   }, []);
 
-  const record = useCallback((message: string) => {
-    sequence.current += 1;
-    // Number the entry now: records batched before the next render each
-    // keep their own sequence.
-    const entry = eventEntry(sequence.current, message);
-    setEvents((current) => [entry, ...current].slice(0, MAX_EVENTS));
-  }, []);
-  const tuning = useTuning(record, ACCENT_HSV.cyan);
-  const resetTuning = tuning.reset;
+  const record = useCallback(
+    (message: string) => {
+      sequence.current += 1;
+      const entry = eventEntry(sequence.current, message);
+      state.update(({ events }) => ({
+        events: [entry, ...events].slice(0, MAX_EVENTS),
+      }));
+    },
+    [state],
+  );
+  const tuning = useTuning(state, record);
 
   useEffect(() => {
     const request = ++generation.current;
     setReady(false);
-    setVectorOnly(false);
     setPrepared(false);
     setRevealed(false);
     setTreeCommitted(false);
@@ -753,27 +798,11 @@ export function useGuiScene(
     setError(undefined);
     setMotions(undefined);
     setBeamSection(undefined);
-    setShieldBlocker(undefined);
+    state.update({ vectorOnly: false, shieldBlocker: undefined });
     shieldRequest.current += 1;
     finishingFrame.current = false;
     if (!canvas || !active) return;
-    setAccentState("cyan");
-    setExplodedState(false);
-    setReducedMotionState(false);
-    setMonitorWindowState("normal");
-    setAdvancedOpen(true);
-    setWorkbenchTab("nodes");
-    setAutoscanState(INITIAL_AUTOSCAN);
-    setSurfaceCache("automatic");
-    setGainState(INITIAL_GAIN);
-    setCallsignState(INITIAL_CALLSIGN);
-    setLastCommand("Awaiting command");
-    setPulseSequence(0);
-    setPulseActive(false);
-    setEvents(INITIAL_EVENTS);
-    resetTuning(ACCENT_HSV.cyan);
-    setEventWindowState({ first: 0, last: 0 });
-    setShieldArmed(true);
+    state.update(openingSettings());
     sequence.current = INITIAL_EVENTS.length;
     controlValues.current = INITIAL_CONTROL_VALUES;
     gainHeld.current = false;
@@ -812,7 +841,7 @@ export function useGuiScene(
           motionOwnership.current = undefined;
       }
     };
-  }, [canvas, active, releaseMotions]);
+  }, [canvas, active, releaseMotions, state]);
 
   useEffect(() => {
     if (!error) return;
@@ -877,7 +906,7 @@ export function useGuiScene(
         {
           client: panel.client,
           assets: [
-            absoluteAsset(17, FONT_URL),
+            font,
             ...waveformResourceSources(),
             motions.scan,
             motions.wavePulse,
@@ -888,7 +917,7 @@ export function useGuiScene(
       () => setPrepared(true),
       (message) => setError(message),
     );
-  }, [canvas, active, motions, treeCommitted, panel, error, prepared]);
+  }, [canvas, active, motions, treeCommitted, panel, error, prepared, font]);
 
   // Reveal the staged assembly once the panel World has committed its
   // prepared controls and both waveform controllers.
@@ -919,8 +948,11 @@ export function useGuiScene(
     return controller;
   }, [panel, motions]);
 
+  // The World root calls this after each render the gallery gives it: while
+  // the page loads, and when the projector mounts or unmounts.
   const onCommit = useCallback(() => {
     if (!canvas || !active || error) return;
+    const { vectorOnly, shieldBlocker } = state.current;
     if (revealed && !vectorOnly && shieldBlocker === undefined) {
       // This commit mounted the shield with the revealed assembly; name its
       // exact picking geometry so the canvas can mark it as a GUI input
@@ -931,7 +963,7 @@ export function useGuiScene(
           if (shieldRequest.current !== request) return;
           if (blocker === undefined)
             setError("The GUI input shield is not mounted");
-          else setShieldBlocker(blocker);
+          else state.update({ shieldBlocker: blocker });
         },
         (failure: unknown) => {
           if (shieldRequest.current === request)
@@ -958,288 +990,241 @@ export function useGuiScene(
         if (generation.current === request) setError(errorMessage(failure));
       },
     );
-  }, [
-    canvas,
-    active,
-    error,
-    ready,
-    revealed,
-    treeCommitted,
-    vectorOnly,
-    shieldBlocker,
-  ]);
-
-  const blockers = useMemo<readonly GuiPickingBlocker[]>(
-    () =>
-      shieldArmed && shieldBlocker !== undefined && !vectorOnly
-        ? [shieldBlocker]
-        : [],
-    [shieldArmed, shieldBlocker, vectorOnly],
-  );
+  }, [canvas, active, error, ready, revealed, treeCommitted, state]);
 
   const reportFailure = useCallback((failure: unknown) => {
     setError(errorMessage(failure));
   }, []);
-
-  const changedValue = useCallback(
-    <Key extends keyof GuiControlValues>(
-      key: Key,
-      value: GuiControlValues[Key],
-    ) => {
-      if (controlValues.current[key] === value) return false;
-      controlValues.current = { ...controlValues.current, [key]: value };
-      return true;
-    },
-    [],
-  );
 
   // The station paces its operations by the panel World's Host frames.
   const frames = useMemo<HostFrames | undefined>(
     () => (panel ? () => panel.client.waitForFrame() : undefined),
     [panel],
   );
-  const station = useStation({
+  const station = useStation(state, {
     frames,
     ready,
-    gain,
-    autoscan,
-    callsign,
     record,
     reportFailure,
-    stopScan: () => {
-      void controls.current.scan
-        ?.compareAndSet("checked", true, false)
-        .catch(reportFailure);
-    },
-    focusCallsign: () => {
-      void controls.current.callsign
-        ?.action({ kind: "focus" })
-        .catch(reportFailure);
-    },
   });
-  const { startPulse, toast } = station;
 
-  const pulse = useCallback(() => {
-    setPulseSequence((current) => current + 1);
-    setLastCommand("Pulse sent");
-    record("PULSE BURST COMMITTED");
-    startPulse();
-  }, [record, startPulse]);
-  // CLEAR leaves one entry. The runtime clamps the log's scroll position to
-  // the remaining content, and later growth never returns to the discarded
-  // position.
-  const clearLog = useCallback(() => {
-    sequence.current += 1;
-    const marker = eventEntry(sequence.current, "LOG CLEARED");
-    setEvents((current) => {
-      clearedEvents.current = current;
-      return [marker];
-    });
-    setLastCommand("Log cleared");
-    toast({
-      severity: "information",
-      text: "Log cleared.",
-      action: {
-        label: "UNDO",
-        onPress: () => {
-          const restored = clearedEvents.current;
-          clearedEvents.current = [];
-          sequence.current += 1;
-          const entry = eventEntry(sequence.current, "LOG RESTORED");
-          // Entries since the clear stay newest; the marker gives way to
-          // the restored history.
-          setEvents((current) =>
-            [
-              entry,
-              ...current.filter((item) => item !== marker),
-              ...restored,
-            ].slice(0, MAX_EVENTS),
-          );
-          setLastCommand("Log restored");
-        },
-      },
-    });
-  }, [toast]);
-  const setEventWindow = useCallback((range: GuiEventWindow) => {
-    setEventWindowState((current) =>
-      current.first === range.first && current.last === range.last
-        ? current
-        : { first: range.first, last: range.last },
-    );
-  }, []);
-  const toggleShield = useCallback(() => {
-    setShieldArmed(!shieldArmed);
-    record(shieldArmed ? "SHIELD LIFTED" : "SHIELD ARMED");
-  }, [shieldArmed, record]);
-  const toggleVectorOnly = useCallback(() => {
-    // Isolation unmounts the shield with the projector; its next mount is a
-    // new entity, resolved again after that commit.
-    shieldRequest.current += 1;
-    setShieldBlocker(undefined);
-    setVectorOnly((current) => !current);
-  }, []);
-  // Choosing an accent also sets the projection colour to the accent's,
-  // which the COLOUR tab's picker, when it is declared, writes to its control.
-  const setColorTuning = tuning.setColor;
-  const setAccent = useCallback(
-    (next: Accent) => {
-      setAccentState(next);
-      setLastCommand(`Accent ${next}`);
-      record(`ACCENT ${next.toUpperCase()}`);
-      setColorTuning(ACCENT_HSV[next]);
-    },
-    [record, setColorTuning],
-  );
-  const setExploded = useCallback(
-    (value: boolean) => {
-      setExplodedState(value);
-      if (changedValue("exploded", value))
-        record(value ? "LAYERS EXPLODED" : "LAYERS FLATTENED");
-    },
-    [changedValue, record],
-  );
-  // The sidebar writes the EXPLODE LAYERS switch as the operator would; its
-  // value callback then explodes the panel, so the switch stays the one
-  // source of the setting.
-  const toggleExplode = useCallback(() => {
-    const handle = controls.current.explode;
-    if (!handle) return;
-    void handle
-      .compareAndSet("checked", exploded, !exploded)
-      .catch(reportFailure);
-  }, [exploded, reportFailure]);
-  const setReducedMotion = useCallback(
-    (value: boolean) => {
-      setReducedMotionState(value);
-      if (changedValue("reducedMotion", value))
-        record(value ? "REDUCED MOTION ON" : "REDUCED MOTION OFF");
-    },
-    [changedValue, record],
-  );
-  const setMonitorWindow = useCallback(
-    (next: MonitorWindow) => {
-      setMonitorWindowState(next);
-      record(`MONITOR ${next === "normal" ? "RESTORED" : next.toUpperCase()}`);
-      if (next === "closed")
-        toast({
-          severity: "information",
-          text: "Monitor closed.",
-          action: {
-            label: "REOPEN",
-            onPress: () => {
-              setMonitorWindowState("normal");
-              record("MONITOR REOPENED");
-            },
-          },
-        });
-    },
-    [record, toast],
-  );
-  const setAutoscan = useCallback(
-    (value: boolean) => {
-      setAutoscanState(value);
-      if (changedValue("autoscan", value))
-        record(`AUTOSCAN ${value ? "ENABLED" : "STANDBY"}`);
-    },
-    [changedValue, record],
-  );
-  // A drag commits the gain on every frame; the log records where an
-  // adjustment ends: at the release of a drag, or at once from the keyboard
-  // or a machine client.
-  const logGain = useCallback(
-    (value: number) => {
+  const actions = useMemo(() => {
+    const changedValue = <Key extends keyof GuiControlValues>(
+      key: Key,
+      value: GuiControlValues[Key],
+    ) => {
+      if (controlValues.current[key] === value) return false;
+      controlValues.current = { ...controlValues.current, [key]: value };
+      return true;
+    };
+    // A drag commits the gain on every frame; the log records where an
+    // adjustment ends: at the release of a drag, or at once from the
+    // keyboard or a machine client.
+    const logGain = (value: number) => {
       if (value === loggedGain.current) return;
       loggedGain.current = value;
       record(`SIGNAL GAIN ${Math.round(value * 100)} PERCENT`);
-    },
-    [record],
-  );
-  const setGain = useCallback(
-    (value: number) => {
-      setGainState(value);
-      if (changedValue("gain", value) && !gainHeld.current) logGain(value);
-    },
-    [changedValue, logGain],
-  );
-  const holdGain = useCallback(
-    (held: boolean) => {
-      gainHeld.current = held;
-      if (!held) logGain(controlValues.current.gain);
-    },
-    [logGain],
-  );
-  const setCallsign = useCallback(
-    (value: string) => {
-      setCallsignState(value);
-      if (changedValue("callsign", value))
-        record(`CALLSIGN ${value || "CLEARED"}`);
-    },
-    [changedValue, record],
-  );
-  const scanControl = useCallback((handle: GuiControlHandle | null) => {
-    controls.current.scan = handle ?? undefined;
-  }, []);
-  const callsignControl = useCallback((handle: GuiControlHandle | null) => {
-    controls.current.callsign = handle ?? undefined;
-  }, []);
-  const explodeControl = useCallback((handle: GuiControlHandle | null) => {
-    controls.current.explode = handle ?? undefined;
-  }, []);
+    };
+    return {
+      setEventWindow: (range: GuiEventWindow) =>
+        state.update(({ eventWindow }) =>
+          eventWindow.first === range.first && eventWindow.last === range.last
+            ? {}
+            : { eventWindow: { first: range.first, last: range.last } },
+        ),
+      scanControl: (handle: GuiControlHandle | null) => {
+        controls.current.scan = handle ?? undefined;
+      },
+      callsignControl: (handle: GuiControlHandle | null) => {
+        controls.current.callsign = handle ?? undefined;
+      },
+      explodeControl: (handle: GuiControlHandle | null) => {
+        controls.current.explode = handle ?? undefined;
+      },
+      stopScan: () => {
+        void controls.current.scan
+          ?.compareAndSet("checked", true, false)
+          .catch(reportFailure);
+      },
+      focusCallsign: () => {
+        void controls.current.callsign
+          ?.action({ kind: "focus" })
+          .catch(reportFailure);
+      },
+      pulse: () => {
+        state.update(({ pulseSequence }) => ({
+          pulseSequence: pulseSequence + 1,
+          lastCommand: "Pulse sent",
+        }));
+        record("PULSE BURST COMMITTED");
+        station.startPulse();
+      },
+      // CLEAR leaves one entry. The runtime clamps the log's scroll position
+      // to the remaining content, and later growth never returns to the
+      // discarded position.
+      clearLog: () => {
+        sequence.current += 1;
+        const marker = eventEntry(sequence.current, "LOG CLEARED");
+        clearedEvents.current = state.current.events;
+        state.update({ events: [marker], lastCommand: "Log cleared" });
+        station.toast({
+          severity: "information",
+          text: "Log cleared.",
+          action: {
+            label: "UNDO",
+            onPress: () => {
+              const restored = clearedEvents.current;
+              clearedEvents.current = [];
+              sequence.current += 1;
+              const entry = eventEntry(sequence.current, "LOG RESTORED");
+              // Entries since the clear stay newest; the marker gives way to
+              // the restored history.
+              state.update(({ events }) => ({
+                events: [
+                  entry,
+                  ...events.filter((item) => item !== marker),
+                  ...restored,
+                ].slice(0, MAX_EVENTS),
+                lastCommand: "Log restored",
+              }));
+            },
+          },
+        });
+      },
+      toggleShield: () => {
+        const armed = !state.current.shieldArmed;
+        state.update({ shieldArmed: armed });
+        record(armed ? "SHIELD ARMED" : "SHIELD LIFTED");
+      },
+      toggleVectorOnly: () => {
+        // Isolation unmounts the shield with the projector; its next mount
+        // is a new entity, resolved again after that commit.
+        shieldRequest.current += 1;
+        state.update(({ vectorOnly }) => ({
+          shieldBlocker: undefined,
+          vectorOnly: !vectorOnly,
+        }));
+      },
+      // Choosing an accent also sets the projection colour to the accent's,
+      // which the COLOUR tab's picker, when it is declared, writes to its
+      // control.
+      setAccent: (next: Accent) => {
+        state.update({ accent: next, lastCommand: `Accent ${next}` });
+        record(`ACCENT ${next.toUpperCase()}`);
+        tuning.setColor(ACCENT_HSV[next]);
+      },
+      setExploded: (value: boolean) => {
+        state.update({ exploded: value });
+        if (changedValue("exploded", value))
+          record(value ? "LAYERS EXPLODED" : "LAYERS FLATTENED");
+      },
+      // The sidebar writes the EXPLODE LAYERS switch as the operator would;
+      // its value callback then explodes the panel, so the switch stays the
+      // one source of the setting.
+      toggleExplode: () => {
+        const handle = controls.current.explode;
+        if (!handle) return;
+        const { exploded } = state.current;
+        void handle
+          .compareAndSet("checked", exploded, !exploded)
+          .catch(reportFailure);
+      },
+      setReducedMotion: (value: boolean) => {
+        state.update({ reducedMotion: value });
+        if (changedValue("reducedMotion", value))
+          record(value ? "REDUCED MOTION ON" : "REDUCED MOTION OFF");
+      },
+      setMonitorWindow: (next: MonitorWindow) => {
+        state.update({ monitorWindow: next });
+        record(
+          `MONITOR ${next === "normal" ? "RESTORED" : next.toUpperCase()}`,
+        );
+        if (next === "closed")
+          station.toast({
+            severity: "information",
+            text: "Monitor closed.",
+            action: {
+              label: "REOPEN",
+              onPress: () => {
+                state.update({ monitorWindow: "normal" });
+                record("MONITOR REOPENED");
+              },
+            },
+          });
+      },
+      setAdvancedOpen: (open: boolean) => state.update({ advancedOpen: open }),
+      setWorkbenchTab: (tab: WorkbenchTab) =>
+        state.update({ workbenchTab: tab }),
+      selectSurfaceCache: (mode: GuiSurfaceCacheMode) =>
+        state.update({ surfaceCache: mode }),
+      setAutoscan: (value: boolean) => {
+        state.update({ autoscan: value });
+        if (changedValue("autoscan", value))
+          record(`AUTOSCAN ${value ? "ENABLED" : "STANDBY"}`);
+      },
+      setGain: (value: number) => {
+        state.update({ gain: value });
+        if (changedValue("gain", value) && !gainHeld.current) logGain(value);
+      },
+      holdGain: (held: boolean) => {
+        gainHeld.current = held;
+        if (!held) logGain(controlValues.current.gain);
+      },
+      setCallsign: (value: string) => {
+        state.update({ callsign: value });
+        if (changedValue("callsign", value))
+          record(`CALLSIGN ${value || "CLEARED"}`);
+      },
+      setPulseActive: (active: boolean) =>
+        state.update({ pulseActive: active }),
+    };
+  }, [state, record, reportFailure, station, tuning]);
 
-  return {
-    ready,
-    vectorOnly,
-    prepared,
-    revealed,
-    ...(error ? { error } : {}),
-    accent,
-    exploded,
-    reducedMotion,
-    monitorWindow,
-    advancedOpen,
-    workbenchTab,
-    autoscan,
-    surfaceCache,
-    gain,
-    callsign,
-    pulseSequence,
-    pulseActive,
-    lastCommand,
-    events,
-    eventWindow,
-    setEventWindow,
-    shieldArmed,
-    blockers,
-    ...(motions ? { motions } : {}),
-    ...(beamSection ? { beamSection } : {}),
-    font: absoluteAsset(17, FONT_URL),
-    station,
-    tuning,
-    scanControl,
-    callsignControl,
-    explodeControl,
-    onCommit,
-    attachPanel,
-    pulse,
-    clearLog,
-    toggleShield,
-    toggleExplode,
-    setAccent,
-    setExploded,
-    setReducedMotion,
-    setMonitorWindow,
-    setAdvancedOpen,
-    setWorkbenchTab,
-    selectSurfaceCache: setSurfaceCache,
-    toggleVectorOnly,
-    setAutoscan,
-    setGain,
-    holdGain,
-    setCallsign,
-    setPulseActive,
-    readWaveformPulse,
-    reportFailure,
-  };
+  return useMemo(
+    () => ({
+      ready,
+      prepared,
+      revealed,
+      ...(error ? { error } : {}),
+      ...(motions ? { motions } : {}),
+      ...(beamSection ? { beamSection } : {}),
+      font,
+      state,
+      station,
+      tuning,
+      onCommit,
+      attachPanel,
+      readWaveformPulse,
+      reportFailure,
+      ...actions,
+    }),
+    [
+      ready,
+      prepared,
+      revealed,
+      error,
+      motions,
+      beamSection,
+      font,
+      state,
+      station,
+      tuning,
+      onCommit,
+      attachPanel,
+      readWaveformPulse,
+      reportFailure,
+      actions,
+    ],
+  );
+}
+
+/** Scene blockers for `IppCanvas.guiInput`: the armed, mounted shield's exact
+ * picking geometry. */
+export function useGuiBlockers(scene: GuiScene): readonly GuiPickingBlocker[] {
+  const blocker = useStoreValue(scene.state, (state) =>
+    state.shieldArmed && !state.vectorOnly ? state.shieldBlocker : undefined,
+  );
+  return useMemo(() => (blocker ? [blocker] : []), [blocker]);
 }
 
 /**
@@ -1248,14 +1233,20 @@ export function useGuiScene(
  * removes its declarations, which deletes the entities, assets and panel World
  * they created. Before the content first shows, nothing mounts, so the scene's
  * commit callback only ever sees commits of the page's own declarations.
+ *
+ * The root renders again only when the scene finishes a loading step or the
+ * projector mounts or unmounts, and the scene's commit callback follows each
+ * of those renders. A value change re-renders only the components that
+ * select it, inside the root.
  */
-export function GuiWorld({
+export const GuiWorld = memo(function GuiWorld({
   scene,
   active,
 }: {
-  scene: GuiSceneState;
+  scene: GuiScene;
   active: boolean;
 }) {
+  const vectorOnly = useStoreValue(scene.state, (state) => state.vectorOnly);
   const shown =
     active &&
     scene.motions !== undefined &&
@@ -1266,12 +1257,18 @@ export function GuiWorld({
   if (!shown && !mounted) return null;
   return (
     <World onCommit={scene.onCommit}>
-      {shown ? <GuiWorldContent scene={scene} /> : null}
+      {shown ? <GuiWorldContent scene={scene} vectorOnly={vectorOnly} /> : null}
     </World>
   );
-}
+});
 
-function GuiWorldContent({ scene }: { scene: GuiSceneState }) {
+function GuiWorldContent({
+  scene,
+  vectorOnly,
+}: {
+  scene: GuiScene;
+  vectorOnly: boolean;
+}) {
   if (!scene.motions || !scene.beamSection || scene.error) return null;
   const stagingX = scene.revealed ? 0 : STAGING_X;
   return (
@@ -1333,10 +1330,10 @@ function GuiWorldContent({ scene }: { scene: GuiSceneState }) {
         <VertexShader>{SHIELD_VERTEX_SHADER}</VertexShader>
         <FragmentShader>{SHIELD_SHADER}</FragmentShader>
       </ShaderAsset>
-      {!scene.vectorOnly && (
+      {!vectorOnly && (
         <>
           <HolographicProjector scene={scene} stagingX={stagingX} />
-          <InputShield armed={scene.shieldArmed} stagingX={stagingX} />
+          <Shield scene={scene} stagingX={stagingX} />
         </>
       )}
       <ProjectorPanel scene={scene} stagingX={stagingX} />
@@ -1344,66 +1341,29 @@ function GuiWorldContent({ scene }: { scene: GuiSceneState }) {
   );
 }
 
+/** The input shield, armed or lifted from the sidebar. */
+function Shield({ scene, stagingX }: { scene: GuiScene; stagingX: number }) {
+  const armed = useStoreValue(scene.state, (state) => state.shieldArmed);
+  return <InputShield armed={armed} stagingX={stagingX} />;
+}
+
 /**
  * The projected panel: a Surface on a parent entity presents the canvas of
  * a separate panel World. The parent owns the Surface size, placement, cache
  * policy and layer spacing; the panel World owns the canvas density and
- * content. The exploded view is an ordinary animation of the Surface's layer
- * spacing on the Host clock, played forward to separate the planes and
- * backward to close them.
+ * content. Mounting or unmounting the projector beside it renders nothing
+ * here.
  */
-function ProjectorPanel({
+const ProjectorPanel = memo(function ProjectorPanel({
   scene,
   stagingX,
 }: {
-  scene: GuiSceneState;
+  scene: GuiScene;
   stagingX: number;
 }) {
-  const { x: panelX, ...panelTransform } = PROJECTED_PANEL_TRANSFORM;
-  const motions = scene.motions!;
-  const layers = useRef<AnimationHandle>(null);
-  const { exploded, reducedMotion, reportFailure } = scene;
-  const started = useRef(false);
-  useEffect(() => {
-    const handle = layers.current;
-    if (!handle) return;
-    if (!started.current && !exploded) return;
-    started.current = true;
-    const action = reducedMotion
-      ? handle.seek(exploded ? LAYER_SECONDS : 0)
-      : handle.playAtSpeed(exploded ? 1 : -1);
-    void action.catch(reportFailure);
-  }, [exploded, reducedMotion, reportFailure]);
   return (
     <>
-      <Entity id={PANEL_ENTITY}>
-        <Transform {...panelTransform} x={panelX + stagingX} />
-        <Surface width={SURFACE_WIDTH} height={SURFACE_HEIGHT} />
-        {scene.surfaceCache !== "direct" && (
-          <SurfaceCache
-            {...GUI_SURFACE_CACHE}
-            direct_distance={
-              scene.surfaceCache === "cached"
-                ? 0
-                : GUI_SURFACE_CACHE.direct_distance
-            }
-          />
-        )}
-        <Animation
-          ref={layers}
-          source={motions.spacing.source}
-          bindings={[
-            {
-              track: 0,
-              property: {
-                component: motions.spacingField.component,
-                offsets: [motions.spacingField.offset],
-              },
-            },
-          ]}
-          autoPlay={false}
-        />
-      </Entity>
+      <PanelSurface scene={scene} stagingX={stagingX} />
       <CanvasWorld
         presentation={{ anchor: PANEL_ENTITY }}
         create={{ symbolicId: PANEL_WORLD, selectedSystems: PANEL_SYSTEMS }}
@@ -1416,5 +1376,71 @@ function ProjectorPanel({
         <WaveformAnimations scene={scene} />
       </CanvasWorld>
     </>
+  );
+});
+
+/**
+ * The Surface entity that presents the panel World. The exploded view is an
+ * ordinary animation of the Surface's layer spacing on the Host clock, played
+ * forward to separate the planes and backward to close them.
+ */
+function PanelSurface({
+  scene,
+  stagingX,
+}: {
+  scene: GuiScene;
+  stagingX: number;
+}) {
+  const { x: panelX, ...panelTransform } = PROJECTED_PANEL_TRANSFORM;
+  const motions = scene.motions!;
+  const layers = useRef<AnimationHandle>(null);
+  const exploded = useStoreValue(scene.state, (state) => state.exploded);
+  const reducedMotion = useStoreValue(
+    scene.state,
+    (state) => state.reducedMotion,
+  );
+  const surfaceCache = useStoreValue(
+    scene.state,
+    (state) => state.surfaceCache,
+  );
+  const { reportFailure } = scene;
+  const started = useRef(false);
+  useEffect(() => {
+    const handle = layers.current;
+    if (!handle) return;
+    if (!started.current && !exploded) return;
+    started.current = true;
+    const action = reducedMotion
+      ? handle.seek(exploded ? LAYER_SECONDS : 0)
+      : handle.playAtSpeed(exploded ? 1 : -1);
+    void action.catch(reportFailure);
+  }, [exploded, reducedMotion, reportFailure]);
+  return (
+    <Entity id={PANEL_ENTITY}>
+      <Transform {...panelTransform} x={panelX + stagingX} />
+      <Surface width={SURFACE_WIDTH} height={SURFACE_HEIGHT} />
+      {surfaceCache !== "direct" && (
+        <SurfaceCache
+          {...GUI_SURFACE_CACHE}
+          direct_distance={
+            surfaceCache === "cached" ? 0 : GUI_SURFACE_CACHE.direct_distance
+          }
+        />
+      )}
+      <Animation
+        ref={layers}
+        source={motions.spacing.source}
+        bindings={[
+          {
+            track: 0,
+            property: {
+              component: motions.spacingField.component,
+              offsets: [motions.spacingField.offset],
+            },
+          },
+        ]}
+        autoPlay={false}
+      />
+    </Entity>
   );
 }

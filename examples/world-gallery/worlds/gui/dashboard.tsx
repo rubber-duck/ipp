@@ -13,7 +13,7 @@
 import { Children, Entity } from "@ipp/react";
 import { Behavior, Font, Theme, ThemeMotion } from "@ipp/react/gui";
 import { GuiKit, ToastStack, useContextMenu } from "@ipp/react/gui-kit";
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import { ADVANCED_HEIGHT, Advanced } from "./advanced.js";
 import {
   ACTION_THEME,
@@ -39,8 +39,9 @@ import {
   type Color,
   type Rect,
 } from "./presentation.js";
-import type { Accent, GuiSceneState } from "./scene.js";
+import type { GuiScene } from "./scene.js";
 import { StatusPanel } from "./status.js";
+import { useStoreValue } from "./store.js";
 import { ScopePaintAsset } from "./waveform.js";
 import { Workbench } from "./workbench.js";
 import {
@@ -124,7 +125,8 @@ function lookTheme(
  * actions in the selected accent, the switch, and a scroll view without the
  * list frame, for a body that the panel's frame already holds.
  */
-function VariantThemes({ accent }: { readonly accent: Accent }) {
+function VariantThemes({ scene }: { readonly scene: GuiScene }) {
+  const accent = useStoreValue(scene.state, (state) => state.accent);
   const themes = useMemo(() => {
     const background = CONTRACT.guiPaintPartIndex({ part: "background" });
     return {
@@ -155,21 +157,59 @@ function VariantThemes({ accent }: { readonly accent: Accent }) {
   );
 }
 
-export function ProjectorDashboard({
+/**
+ * The panel World's GuiKit. REDUCED MOTION is its preference; changing it
+ * re-renders the kit and what reads the preference, not the dashboard, whose
+ * elements the kit receives unchanged.
+ */
+function DashboardKit({
   scene,
+  children,
 }: {
-  readonly scene: GuiSceneState;
+  readonly scene: GuiScene;
+  readonly children: ReactNode;
 }) {
-  const font = scene.font.source;
-  const nodeMenu = useContextMenu<string>();
+  const reducedMotion = useStoreValue(
+    scene.state,
+    (state) => state.reducedMotion,
+  );
   return (
     <GuiKit
       contract={CONTRACT}
-      font={font}
+      font={scene.font.source}
       fontSize={BODY}
-      reducedMotion={scene.reducedMotion}
+      reducedMotion={reducedMotion}
     >
-      <VariantThemes accent={scene.accent} />
+      {children}
+    </GuiKit>
+  );
+}
+
+/** The toasts of completed actions, on the kit's toast plane. */
+function Toasts({ scene }: { readonly scene: GuiScene }) {
+  const toasts = useStoreValue(scene.state, (state) => state.toasts);
+  return (
+    <ToastStack
+      id={TOAST_STACK_ENTITY}
+      toasts={toasts}
+      onDismiss={scene.station.dismissToast}
+      limit={3}
+      layout={{ width: TOAST_WIDTH }}
+    />
+  );
+}
+
+/**
+ * The dashboard. It selects no value from the page's state: each section
+ * selects what it shows, so a value change re-renders only the parts that
+ * show it.
+ */
+export function ProjectorDashboard({ scene }: { readonly scene: GuiScene }) {
+  const font = scene.font.source;
+  const nodeMenu = useContextMenu<string>();
+  return (
+    <DashboardKit scene={scene}>
+      <VariantThemes scene={scene} />
       {/* Assets are declared beside components, never as child entities. */}
       <Entity id="gui-paints">
         <ScopePaintAsset />
@@ -233,13 +273,7 @@ export function ProjectorDashboard({
       {/* Roots of the canvas on the kit's overlay layers. */}
       <NodeContextMenu scene={scene} menu={nodeMenu} />
       <PurgeDialog scene={scene} />
-      <ToastStack
-        id={TOAST_STACK_ENTITY}
-        toasts={scene.station.toasts}
-        onDismiss={scene.station.dismissToast}
-        limit={3}
-        layout={{ width: TOAST_WIDTH }}
-      />
-    </GuiKit>
+      <Toasts scene={scene} />
+    </DashboardKit>
   );
 }

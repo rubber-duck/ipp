@@ -1,6 +1,6 @@
 /**
  * The projection's tuning: what the CONTROLS and COLOUR tabs, the scope's
- * popover and the scene tree set, held as application state beside the
+ * popover and the scene tree set, held in the page's state beside the
  * station. Each setting reaches the scene, the scope or the readouts:
  *
  * - BEAM scales the beam's energy and LIGHT the studio key and fill lights.
@@ -16,7 +16,8 @@
  * - The scene tree's selection names a scene node in the readouts and
  *   brightens it.
  */
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useMemo } from "react";
+import type { Store } from "./store.js";
 
 export type ScanRate = "slow" | "normal" | "fast";
 
@@ -242,45 +243,45 @@ export function hexColor(color: ProjectionColor): string {
     .join("")}`;
 }
 
-/** The tuning, its setters and the operator events they log. */
+/**
+ * The tuning's setters and the operator events they log. The tuning itself is
+ * the `tuning` field of the page's state, which components select from.
+ */
 export function useTuning(
+  state: Store<{ readonly tuning: Tuning }>,
   record: (message: string) => void,
-  initialColor: ProjectionColor,
 ) {
-  const [tuning, setTuning] = useState<Tuning>(() =>
-    initialTuning(initialColor),
-  );
-  const latest = useRef(tuning);
-  latest.current = tuning;
-
-  /** Change settings; a change to what a preset fixes forgets the preset. */
-  const update = useCallback((change: Partial<Tuning>) => {
-    setTuning((current) => {
-      const next = { ...current, ...change };
-      if (change.preset === undefined && current.preset !== undefined) {
+  return useMemo(() => {
+    const current = () => state.current.tuning;
+    /** Change settings; a change to what a preset fixes forgets the preset. */
+    const update = (change: Partial<Tuning>) => {
+      const previous = current();
+      const next = { ...previous, ...change };
+      if (change.preset === undefined && previous.preset !== undefined) {
         const values = PRESETS.find(
-          ({ key }) => key === current.preset,
+          ({ key }) => key === previous.preset,
         )?.values;
         const kept =
           values !== undefined &&
           (Object.keys(values) as (keyof PresetValues)[]).every(
             (key) => JSON.stringify(values[key]) === JSON.stringify(next[key]),
           );
-        if (!kept) return { ...next, preset: undefined };
+        if (!kept) {
+          state.update({ tuning: { ...next, preset: undefined } });
+          return;
+        }
       }
-      return next;
-    });
-  }, []);
-
-  const setters = useMemo(
-    () => ({
-      reset: (color: ProjectionColor) => setTuning(initialTuning(color)),
+      state.update({ tuning: next });
+    };
+    return {
+      reset: (color: ProjectionColor) =>
+        state.update({ tuning: initialTuning(color) }),
       setBeam: (beam: number) => update({ beam }),
       setLight: (light: number) => update({ light }),
       setOffset: (offset: number) => update({ offset }),
       setSweep: (sweep: readonly [number, number]) => update({ sweep }),
       setRate: (rate: ScanRate) => {
-        if (rate === latest.current.rate) return;
+        if (rate === current().rate) return;
         update({ rate });
         record(`SCAN RATE ${rate.toUpperCase()}`);
       },
@@ -302,25 +303,23 @@ export function useTuning(
         record(`PRESET ${preset.label}`);
       },
       setGrid: (grid: ScopeGrid) => {
-        if (grid === latest.current.grid) return;
+        if (grid === current().grid) return;
         update({ grid });
         record(`SCOPE GRID ${grid.toUpperCase()}`);
       },
       setSweepShown: (sweepShown: boolean) => {
-        if (sweepShown === latest.current.sweepShown) return;
+        if (sweepShown === current().sweepShown) return;
         update({ sweepShown });
         record(`SCOPE SWEEP ${sweepShown ? "ON" : "OFF"}`);
       },
       setFocus: (focus: string | undefined, label?: string) => {
-        if (focus === latest.current.focus) return;
+        if (focus === current().focus) return;
         update({ focus });
         if (label) record(`FOCUS ${label}`);
       },
       setColor: (color: ProjectionColor) => update({ color }),
-    }),
-    [record, update],
-  );
-  return { tuning, ...setters };
+    };
+  }, [state, record]);
 }
 
-export type TuningState = ReturnType<typeof useTuning>;
+export type TuningActions = ReturnType<typeof useTuning>;

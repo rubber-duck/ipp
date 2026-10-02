@@ -20,7 +20,7 @@ The gallery World owns the `gui-demo` entity: its Transform, Surface size, cache
 - **ADVANCED** ([advanced.tsx](advanced.tsx)): an expander with ACCENT, EXPLODE LAYERS and REDUCED MOTION.
 - **Toasts** report completed actions at the bottom right, above the content; one with an action stays until it is dismissed or its action answers it.
 
-[station.ts](station.ts) holds the station's application state and [tuning.ts](tuning.ts) the projection's settings. The station's operations advance on the Host clock: each step waits for the panel World's next frames and measures elapsed Host time, and their effects are real rows, log entries and toasts.
+The page's application state is one small [store](store.ts) that the sidebar, rendered by React DOM, and the panel World's own React root both read. Each part of the panel selects the values it shows and re-renders only when they change: moving GAIN re-renders its readouts, the waveform, the node rows and the projector, and nothing else. [scene.tsx](scene.tsx) holds the controls' settings and the event log, [station.ts](station.ts) the station's state and operations, and [tuning.ts](tuning.ts) the projection's settings. The station's operations advance on the Host clock: each step waits for the panel World's next frames and measures elapsed Host time, and their effects are real rows, log entries and toasts.
 
 ## Looks and re-theming
 

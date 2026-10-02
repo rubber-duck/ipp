@@ -18,8 +18,17 @@ import {
   StatusBadge,
 } from "@ipp/react/gui-kit";
 import { BoxLayout, COLUMN, PanelBody, TOKENS } from "./presentation.js";
-import type { GuiSceneState } from "./scene.js";
-import { operationLabel } from "./station.js";
+import type { GuiScene } from "./scene.js";
+import {
+  ALERT_SEVERITY,
+  linkBadge,
+  operationLabel,
+  scanBadge,
+  stationAlertKind,
+  stationAlertText,
+  type StationBadge,
+} from "./station.js";
+import { useStoreValue } from "./store.js";
 
 /** The ring's row and the operation beside it. */
 const OPERATION_ROW = 96;
@@ -43,16 +52,20 @@ export const STATUS_HEIGHT =
   OPERATION_ROW +
   TOKENS.inset;
 
-export function StatusPanel({ scene }: { readonly scene: GuiSceneState }) {
-  const station = scene.station;
-  const alert = station.alert;
-  const operation = station.operation;
-  const badges = [
-    ...station.badges,
-    scene.shieldArmed
-      ? { key: "shield", status: "active" as const, label: "SHIELD ARMED" }
-      : { key: "shield", status: "warning" as const, label: "SHIELD LIFTED" },
-  ];
+const SHIELD_ARMED: StationBadge = {
+  key: "shield",
+  status: "active",
+  label: "SHIELD ARMED",
+};
+const SHIELD_LIFTED: StationBadge = {
+  key: "shield",
+  status: "warning",
+  label: "SHIELD LIFTED",
+};
+
+/** The panel's frame; its badges, alert, pulse ring and operation each
+ * select what they show. */
+export function StatusPanel({ scene }: { readonly scene: GuiScene }) {
   return (
     <Panel id="gui-status-panel" layout={{ height: STATUS_HEIGHT }}>
       <PanelBody id="gui-status-content">
@@ -63,61 +76,15 @@ export function StatusPanel({ scene }: { readonly scene: GuiSceneState }) {
             padding={[TOKENS.inset, TOKENS.inset, TOKENS.inset, TOKENS.inset]}
           />
           <Children>
-            <KitRow id="gui-badges" height={TOKENS.smallHeight}>
-              {badges.map((badge, index) => (
-                <StatusBadge
-                  key={badge.key}
-                  id={`gui-badge-${badge.key}`}
-                  status={badge.status}
-                  label={badge.label}
-                  {...(index > 0 ? { layout: { margin_left: BADGE_GAP } } : {})}
-                />
-              ))}
-            </KitRow>
-            <InlineAlert
-              key={alert.key}
-              id="gui-alert"
-              severity={alert.severity}
-              text={alert.text}
-              {...(alert.action ? { action: alert.action } : {})}
-              layout={{ margin_top: BADGE_GAP }}
-            />
+            <Badges scene={scene} />
+            <Alert scene={scene} />
             <KitRow
               id="gui-operations"
               height={OPERATION_ROW}
               layout={{ margin_top: BADGE_GAP }}
             >
               <PulseRing scene={scene} />
-              <Entity id="gui-operation">
-                <BoxLayout
-                  kind={COLUMN}
-                  flex={1}
-                  height={PROGRESS_HEIGHT}
-                  alignY={0}
-                  margin={[0, 0, 0, TOKENS.inset]}
-                />
-                <Children>
-                  {operation?.phase === "pending" ? (
-                    <Spinner
-                      id="gui-operation-pending"
-                      label={`${operationLabel(operation)}…`}
-                    />
-                  ) : (
-                    <ProgressBar
-                      id="gui-operation-progress"
-                      label={
-                        operation ? operationLabel(operation) : "Node sync"
-                      }
-                      segments={operation?.segments ?? []}
-                      {...(operation?.phase === "complete"
-                        ? { status: "complete" as const }
-                        : operation?.phase === "failed"
-                          ? { status: "failed" as const }
-                          : {})}
-                    />
-                  )}
-                </Children>
-              </Entity>
+              <Operation scene={scene} />
             </KitRow>
           </Children>
         </Entity>
@@ -126,13 +93,57 @@ export function StatusPanel({ scene }: { readonly scene: GuiSceneState }) {
   );
 }
 
+/** Badges for the scan, the link and the input shield. */
+function Badges({ scene }: { readonly scene: GuiScene }) {
+  const scan = useStoreValue(scene.state, scanBadge);
+  const link = useStoreValue(scene.state, linkBadge);
+  const shield = useStoreValue(scene.state, (state) =>
+    state.shieldArmed ? SHIELD_ARMED : SHIELD_LIFTED,
+  );
+  return (
+    <KitRow id="gui-badges" height={TOKENS.smallHeight}>
+      {[scan, link, shield].map((badge, index) => (
+        <StatusBadge
+          key={badge.key}
+          id={`gui-badge-${badge.key}`}
+          status={badge.status}
+          label={badge.label}
+          {...(index > 0 ? { layout: { margin_left: BADGE_GAP } } : {})}
+        />
+      ))}
+    </KitRow>
+  );
+}
+
+/** The one alert worth saying now, with its recovery action. */
+function Alert({ scene }: { readonly scene: GuiScene }) {
+  const kind = useStoreValue(scene.state, stationAlertKind);
+  const text = useStoreValue(scene.state, stationAlertText);
+  const action =
+    kind === "callsign"
+      ? { label: "EDIT", onPress: scene.focusCallsign }
+      : kind === "scan"
+        ? { label: "STOP", onPress: scene.stopScan }
+        : undefined;
+  return (
+    <InlineAlert
+      key={kind}
+      id="gui-alert"
+      severity={ALERT_SEVERITY[kind]}
+      text={text}
+      {...(action ? { action } : {})}
+      layout={{ margin_top: BADGE_GAP }}
+    />
+  );
+}
+
 /**
  * The pulse transfer as a ring. Before the first PULSE nothing is being
  * sent, so the ring is idle: the quiet track alone, without an arc or a
  * percentage.
  */
-function PulseRing({ scene }: { readonly scene: GuiSceneState }) {
-  const pulse = scene.station.pulse;
+function PulseRing({ scene }: { readonly scene: GuiScene }) {
+  const pulse = useStoreValue(scene.state, (state) => state.pulse);
   return (
     <CircularProgress
       id="gui-pulse-ring"
@@ -145,5 +156,41 @@ function PulseRing({ scene }: { readonly scene: GuiSceneState }) {
       // beside it.
       layout={{ width: PULSE_RING_WIDTH }}
     />
+  );
+}
+
+/** The current or last operation: a spinner while it connects, then its
+ * progress and outcome. */
+function Operation({ scene }: { readonly scene: GuiScene }) {
+  const operation = useStoreValue(scene.state, (state) => state.operation);
+  return (
+    <Entity id="gui-operation">
+      <BoxLayout
+        kind={COLUMN}
+        flex={1}
+        height={PROGRESS_HEIGHT}
+        alignY={0}
+        margin={[0, 0, 0, TOKENS.inset]}
+      />
+      <Children>
+        {operation?.phase === "pending" ? (
+          <Spinner
+            id="gui-operation-pending"
+            label={`${operationLabel(operation)}…`}
+          />
+        ) : (
+          <ProgressBar
+            id="gui-operation-progress"
+            label={operation ? operationLabel(operation) : "Node sync"}
+            segments={operation?.segments ?? []}
+            {...(operation?.phase === "complete"
+              ? { status: "complete" as const }
+              : operation?.phase === "failed"
+                ? { status: "failed" as const }
+                : {})}
+          />
+        )}
+      </Children>
+    </Entity>
   );
 }

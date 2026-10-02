@@ -41,7 +41,9 @@ import {
   Section,
   TOKENS,
 } from "./presentation.js";
-import type { GuiSceneState } from "./scene.js";
+import type { GuiScene } from "./scene.js";
+import { isBusy } from "./station.js";
+import { useStoreValue } from "./store.js";
 import { SCOPE_GRIDS, type ScopeGrid } from "./tuning.js";
 import { WAVE_HEIGHT, Waveform } from "./waveform.js";
 
@@ -89,11 +91,14 @@ export const INITIAL_CALLSIGN = "VESPER-7";
 export const INITIAL_GRID: ScopeGrid = "lines";
 export const INITIAL_SWEEP = true;
 
-export function SignalMonitor({ scene }: { readonly scene: GuiSceneState }) {
-  const window = scene.monitorWindow;
+/**
+ * The monitor's layout follows its window; the controls report to the scene
+ * and the readouts, the waveform, SCAN's state and UPLINK select what they
+ * show.
+ */
+export function SignalMonitor({ scene }: { readonly scene: GuiScene }) {
+  const window = useStoreValue(scene.state, (state) => state.monitorWindow);
   const minimized = window === "minimized";
-  const uplinkEnabled =
-    !scene.autoscan && scene.callsign !== "" && !scene.station.busy;
   return (
     <Entity id="gui-monitor-slot">
       <BoxLayout
@@ -181,12 +186,7 @@ export function SignalMonitor({ scene }: { readonly scene: GuiSceneState }) {
                         onToggle={(event) => scene.setAutoscan(event.value)}
                       />
                     </Entity>
-                    <TextLine
-                      id="gui-scan-state"
-                      text={scene.autoscan ? "ACTIVE" : "STANDBY"}
-                      tone="neutral"
-                      layout={{ flex: 1, margin_left: TOKENS.inset }}
-                    />
+                    <ScanState scene={scene} />
                     <Action
                       id={MONITOR_CONTROLS.pulse}
                       label="PULSE"
@@ -215,13 +215,7 @@ export function SignalMonitor({ scene }: { readonly scene: GuiSceneState }) {
                         onTextCommit={(event) => scene.setCallsign(event.value)}
                       />
                     </Entity>
-                    <Action
-                      id={MONITOR_CONTROLS.uplink}
-                      label="UPLINK"
-                      hint="Send the callsign to the relay"
-                      enabled={uplinkEnabled}
-                      onPress={scene.station.uplink}
-                    />
+                    <Uplink scene={scene} />
                   </KitRow>
                 </Children>
               </Entity>
@@ -238,7 +232,7 @@ export function SignalMonitor({ scene }: { readonly scene: GuiSceneState }) {
  * controls: the paint's pattern and whether the sweep band runs while SCAN
  * does. The trigger stands docked in the header's height.
  */
-function ScopePopover({ scene }: { readonly scene: GuiSceneState }) {
+function ScopePopover({ scene }: { readonly scene: GuiScene }) {
   const tuning = scene.tuning;
   return (
     <Popover
@@ -287,8 +281,40 @@ function ScopePopover({ scene }: { readonly scene: GuiSceneState }) {
   );
 }
 
+/** SCAN's state beside its switch. */
+function ScanState({ scene }: { readonly scene: GuiScene }) {
+  const autoscan = useStoreValue(scene.state, (state) => state.autoscan);
+  return (
+    <TextLine
+      id="gui-scan-state"
+      text={autoscan ? "ACTIVE" : "STANDBY"}
+      tone="neutral"
+      layout={{ flex: 1, margin_left: TOKENS.inset }}
+    />
+  );
+}
+
+/** UPLINK: enabled while SCAN is off, a callsign is set and no operation
+ * runs. */
+function Uplink({ scene }: { readonly scene: GuiScene }) {
+  const enabled = useStoreValue(
+    scene.state,
+    (state) =>
+      !state.autoscan && state.callsign !== "" && !isBusy(state.operation),
+  );
+  return (
+    <Action
+      id={MONITOR_CONTROLS.uplink}
+      label="UPLINK"
+      hint="Send the callsign to the relay"
+      enabled={enabled}
+      onPress={scene.station.uplink}
+    />
+  );
+}
+
 /** The scope: the waveform, a vertical division and the gain readout. */
-function Scope({ scene }: { readonly scene: GuiSceneState }) {
+function Scope({ scene }: { readonly scene: GuiScene }) {
   return (
     <Entity id="gui-scope">
       <BoxLayout
@@ -313,16 +339,26 @@ function Scope({ scene }: { readonly scene: GuiSceneState }) {
               size="small"
               layout={{ height: TOKENS.denseRow, align_y: -1 }}
             />
-            <TextLine
-              id="gui-gain-readout-value"
-              text={`${Math.round(scene.gain * 100)}%`}
-              size="display"
-              layout={{ align_y: -1 }}
-            />
+            <GainReadout scene={scene} />
           </Children>
         </Entity>
       </Children>
     </Entity>
+  );
+}
+
+/** The gain in percent, beside the scope. */
+function GainReadout({ scene }: { readonly scene: GuiScene }) {
+  const percent = useStoreValue(scene.state, (state) =>
+    Math.round(state.gain * 100),
+  );
+  return (
+    <TextLine
+      id="gui-gain-readout-value"
+      text={`${percent}%`}
+      size="display"
+      layout={{ align_y: -1 }}
+    />
   );
 }
 

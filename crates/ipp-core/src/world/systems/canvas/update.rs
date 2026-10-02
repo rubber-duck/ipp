@@ -27,6 +27,9 @@ pub(super) fn incarnation(
         .map(|input| input.incarnation)
 }
 
+/// Published entries in painter order.
+pub(super) type CanvasEntries = Arc<[Arc<CanvasPaintEntry>]>;
+
 /// What one evaluation publishes against the previous publication; each
 /// replacement is present only when it differs.
 pub(super) struct CanvasOutputChanges<'a> {
@@ -34,7 +37,7 @@ pub(super) struct CanvasOutputChanges<'a> {
     pub layout: bool,
     /// Replacement entries, also when only the extent, density or layers
     /// changed, with the entries they replace in place.
-    pub entries: Option<(Arc<[Arc<CanvasPaintEntry>]>, Option<CanvasPaintChanges>)>,
+    pub entries: Option<(CanvasEntries, Option<CanvasPaintChanges>)>,
     /// Replacement hits, when the hits or the GUI observations changed.
     pub hits: Option<Arc<[CanvasHit]>>,
     pub layers: &'a [u32],

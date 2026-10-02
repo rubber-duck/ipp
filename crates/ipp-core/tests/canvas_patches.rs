@@ -277,6 +277,12 @@ fn a_patched_publication_names_the_entries_it_replaced() {
     assert!(painted.paints_revision > after.paints_revision);
 }
 
+/// One change of the lockstep sequence, as the operations of one frame.
+type Step = fn(&Scene) -> Vec<Command>;
+
+/// One revision of a publication.
+type Revision = fn(&CanvasPublication) -> u64;
+
 /// The content two equivalent publications share; revisions are compared by
 /// what changed.
 fn assert_same_content(patched: &CanvasPublication, whole: &CanvasPublication, step: &str) {
@@ -302,62 +308,47 @@ fn assert_same_content(patched: &CanvasPublication, whole: &CanvasPublication, s
 fn patched_and_whole_walks_publish_the_same_canvas_over_a_sequence_of_changes() {
     let mut patched = Scene::new(16);
     let mut whole = Scene::new(16);
-    let steps: Vec<(&str, Box<dyn Fn(&Scene) -> Vec<Command>>)> = vec![
-        ("phase", Box::new(|scene: &Scene| vec![scene.phase(0.3)])),
-        (
-            "leaf translation",
-            Box::new(|scene: &Scene| {
-                vec![scene.style(scene.leaf, offset_of!(CanvasStyle, y), 3.0)]
-            }),
-        ),
-        (
-            "group tint and scale",
-            Box::new(|scene: &Scene| {
-                vec![
-                    scene.style(scene.group, offset_of!(CanvasStyle, red), 0.25),
-                    scene.style(scene.group, offset_of!(CanvasStyle, scale_x), 2.0),
-                ]
-            }),
-        ),
-        (
-            "group clip",
-            Box::new(|scene: &Scene| {
-                vec![
-                    Command::SetField {
-                        entity: EntityRef::Handle(scene.group),
-                        component: ComponentValue::CANVAS_STYLE,
-                        field: FieldWrite {
-                            offset: offset_of!(CanvasStyle, clipped) as u32,
-                            value: FieldValue::Bool(true),
-                        },
+    let steps: Vec<(&str, Step)> = vec![
+        ("phase", |scene: &Scene| vec![scene.phase(0.3)]),
+        ("leaf translation", |scene: &Scene| {
+            vec![scene.style(scene.leaf, offset_of!(CanvasStyle, y), 3.0)]
+        }),
+        ("group tint and scale", |scene: &Scene| {
+            vec![
+                scene.style(scene.group, offset_of!(CanvasStyle, red), 0.25),
+                scene.style(scene.group, offset_of!(CanvasStyle, scale_x), 2.0),
+            ]
+        }),
+        ("group clip", |scene: &Scene| {
+            vec![
+                Command::SetField {
+                    entity: EntityRef::Handle(scene.group),
+                    component: ComponentValue::CANVAS_STYLE,
+                    field: FieldWrite {
+                        offset: offset_of!(CanvasStyle, clipped) as u32,
+                        value: FieldValue::Bool(true),
                     },
-                    scene.style(scene.group, offset_of!(CanvasStyle, clip_max_x), 10.0),
-                    scene.style(scene.group, offset_of!(CanvasStyle, clip_max_y), 10.0),
-                ]
-            }),
-        ),
-        (
-            "root opacity and a paint together",
-            Box::new(|scene: &Scene| {
-                vec![
-                    scene.style(
-                        scene.panel.root_entity,
-                        offset_of!(CanvasStyle, opacity),
-                        0.5,
-                    ),
-                    scene.phase(0.9),
-                ]
-            }),
-        ),
-        (
-            "two separate subtrees",
-            Box::new(|scene: &Scene| {
-                vec![
-                    scene.style(scene.leaf, offset_of!(CanvasStyle, green), 0.5),
-                    scene.style(scene.group, offset_of!(CanvasStyle, x), -4.0),
-                ]
-            }),
-        ),
+                },
+                scene.style(scene.group, offset_of!(CanvasStyle, clip_max_x), 10.0),
+                scene.style(scene.group, offset_of!(CanvasStyle, clip_max_y), 10.0),
+            ]
+        }),
+        ("root opacity and a paint together", |scene: &Scene| {
+            vec![
+                scene.style(
+                    scene.panel.root_entity,
+                    offset_of!(CanvasStyle, opacity),
+                    0.5,
+                ),
+                scene.phase(0.9),
+            ]
+        }),
+        ("two separate subtrees", |scene: &Scene| {
+            vec![
+                scene.style(scene.leaf, offset_of!(CanvasStyle, green), 0.5),
+                scene.style(scene.group, offset_of!(CanvasStyle, x), -4.0),
+            ]
+        }),
     ];
     // The root has no style until the first step that writes one adds it.
     for scene in [&mut patched, &mut whole] {
@@ -381,7 +372,7 @@ fn patched_and_whole_walks_publish_the_same_canvas_over_a_sequence_of_changes() 
 
         let next = (patched.panel.output(), whole.panel.output());
         assert_same_content(&next.0, &next.1, step);
-        let revisions: [(&str, fn(&CanvasPublication) -> u64); 3] = [
+        let revisions: [(&str, Revision); 3] = [
             ("paint", |canvas| canvas.paint_revision),
             ("input", |canvas| canvas.input_revision),
             ("paints", |canvas| canvas.paints_revision),

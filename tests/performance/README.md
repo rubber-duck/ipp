@@ -21,4 +21,6 @@ The [retained Surface rendering guide](retained-gui.md) compares analytic and re
 
 The [React GUI stress benchmark](gui-stress.md) runs one GUI-enabled build per revision through a fixed logical workload on real browser/WebGL or native/GLES paths, with separate timing, capture, work and allocation windows.
 
+The [gallery GUI trace](gallery-gui-trace.ts) records counters, a Chrome trace of every thread and worker and main-thread CPU profiles for the GUI demo at idle, under hover, slider drag, exploded layers and camera orbit. Headless Chromium on Vulkan composites the page in software, reading the WebGL canvas back every frame and pacing frames near 36 per second whatever the content; `IPP_BROWSER_GPU_COMPOSITING=1` composites on the GPU as a desktop browser does.
+
 The [Blender streaming harness](blender-stream.md) compares full and indexed imports, checks command page bounds and pending source delivery, and captures matching completed frames. [Stress profiling](stress.md) supports worker CPU/allocation sampling and save/load stage measurements on verified hardware WebGL.

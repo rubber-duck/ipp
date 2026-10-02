@@ -16,7 +16,12 @@ export function browserLaunchOptions(rendering = true) {
       `--use-angle=${angle}`,
       "--ignore-gpu-blocklist",
       ...(angle === "vulkan"
-        ? ["--enable-features=Vulkan", "--disable-vulkan-surface"]
+        ? [
+            "--enable-features=Vulkan",
+            ...(process.env.IPP_BROWSER_GPU_COMPOSITING === "1"
+              ? []
+              : ["--disable-vulkan-surface"]),
+          ]
         : []),
     ],
   };

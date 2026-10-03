@@ -3216,7 +3216,11 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", asy
           // native and worker Host lifecycle/persistence suites, separately
           // from this World-envelope fixture. Output kinds (space 32) now
           // appear only in the Host bind-output request.
-          ![23, 24, 25, 32].includes(manifest.WIRE_TAG_LAYOUTS[name].space),
+          // Profiling nested controls use the generated Host reader in the
+          // native/worker host-profiling suite, not World-envelope codecs.
+          ![23, 24, 25, 32, 60, 61, 62].includes(
+            manifest.WIRE_TAG_LAYOUTS[name].space,
+          ),
       )
       .sort(),
   );

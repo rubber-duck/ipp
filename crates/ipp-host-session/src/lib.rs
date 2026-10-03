@@ -9,6 +9,9 @@ use ipp_core::systems::lifecycle_publisher::{LifecyclePublisherOutput, Lifecycle
 use ipp_core::{WorldContext, WorldId};
 use ipp_protocol::{Request, RequestBody, Response, ResponseBody};
 
+#[cfg(feature = "instrumentation")]
+mod profiling;
+
 mod attachment_receipts;
 mod inspection;
 mod outbox;
@@ -37,6 +40,35 @@ pub const MAX_PENDING: usize = 64;
 pub trait HostServices {
     /// Short diagnostic identity such as `server` or `wasm`.
     const NAME: &'static str;
+
+    /// Start optional renderer measurements at an accepted capture boundary.
+    #[cfg(feature = "instrumentation")]
+    fn render_profile_start(
+        &mut self,
+        _capture: u64,
+        _host: u64,
+        _options: ipp_protocol::profiling::ProfileRenderOptions,
+    ) -> ipp_protocol::profiling::ProfileGpuCapability {
+        ipp_protocol::profiling::ProfileGpuCapability::Unsupported
+    }
+
+    /// Freeze terminal and pending GPU records without waiting for the device.
+    #[cfg(feature = "instrumentation")]
+    fn render_profile_stop(&mut self, _capture: u64) -> ipp_protocol::profiling::ProfileGpuCapture {
+        use ipp_protocol::profiling::*;
+        ProfileGpuCapture {
+            sampling: ProfileGpuSampling::Off,
+            capability: ProfileGpuCapability::Unsupported,
+            availability: ProfileGpuAvailability::Unsupported,
+            dropped_records: 0,
+            records: Vec::new(),
+            gl_calls: None,
+        }
+    }
+
+    /// Cancel pending owned GPU queries at a quiescent control boundary.
+    #[cfg(feature = "instrumentation")]
+    fn render_profile_cancel(&mut self, _capture: u64) {}
 
     /// Initialize shared facilities before publishing any world.
     fn initialize(host: &mut ipp_core::HostRuntime) -> Result<Self, String>
@@ -218,6 +250,8 @@ pub(crate) use session::next_ingress_id;
 /// Process/worker owner of shared services, worlds and world-scoped sessions.
 /// World sessions contain routing and protocol queues, never services or worlds.
 pub struct Host<P: HostServices> {
+    #[cfg(feature = "instrumentation")]
+    profiling: profiling::HostProfiling,
     connections: services::connection::HostConnectionService,
     sessions: std::collections::BTreeMap<u64, WorldSession>,
     runtime: ipp_core::HostRuntime,

@@ -11,6 +11,12 @@
       "@ipp/client": [
         "./packages/ipp-client/src/index.ts"
       ],
+      "@ipp/client/testing": [
+        "./packages/ipp-client/src/testing.ts"
+      ],
+      "@ipp/client/diagnostics": [
+        "./packages/ipp-client/src/diagnostics.ts"
+      ],
       "@ipp/gui-authoring-contract": [
         "./target/react-gui-contract/generated.d.ts"
       ],

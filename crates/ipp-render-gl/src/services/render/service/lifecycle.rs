@@ -14,6 +14,8 @@ impl<D: RenderDevice> RenderService<D> {
         let device = Rc::new(RefCell::new(device));
         Ok(Self {
             inclusions: Default::default(),
+            #[cfg(feature = "instrumentation")]
+            gpu_capture: Default::default(),
             generated_paths: super::super::generated_paths::GeneratedPathCache::new(device.clone()),
             generated_meshes: super::super::generated_meshes::GeneratedMeshCache::new(
                 device.clone(),
@@ -240,6 +242,8 @@ impl<D: RenderDevice> RenderService<D> {
     ) -> Result<(), RenderError> {
         self.unload_host(host)?;
         host.flush_resource_lifecycle();
+        #[cfg(feature = "instrumentation")]
+        self.gpu_replace_context();
         *self.device.borrow_mut() = device;
         Ok(())
     }

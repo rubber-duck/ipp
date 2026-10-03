@@ -55,7 +55,7 @@ impl GlesRenderDevice {
             let mut value = 0;
             // SAFETY: The current context writes one integer into this exclusive
             // local; GL retains no pointer.
-            unsafe { (self.gl.get_integer)(name, &mut value) };
+            unsafe { self.gl.get_integer(name, &mut value) };
             value
         };
         let draw = state
@@ -70,7 +70,7 @@ impl GlesRenderDevice {
             let mut viewport = [0; 4];
             // SAFETY: VIEWPORT writes exactly four integers into this exclusive
             // local array in the current context; GL retains no pointer.
-            unsafe { (self.gl.get_integer)(VIEWPORT, viewport.as_mut_ptr()) };
+            unsafe { self.gl.get_integer(VIEWPORT, viewport.as_mut_ptr()) };
             viewport
         });
         let depth_mask = state
@@ -109,13 +109,13 @@ impl GlesRenderDevice {
         // borrowed Host handles; binding copies scalars and retains no pointer.
         unsafe {
             if draw_changed && read_changed && draw == read {
-                (self.gl.bind_framebuffer)(FRAMEBUFFER, draw);
+                self.gl.bind_framebuffer(FRAMEBUFFER, draw);
             } else {
                 if draw_changed {
-                    (self.gl.bind_framebuffer)(DRAW_FRAMEBUFFER, draw);
+                    self.gl.bind_framebuffer(DRAW_FRAMEBUFFER, draw);
                 }
                 if read_changed {
-                    (self.gl.bind_framebuffer)(READ_FRAMEBUFFER, read);
+                    self.gl.bind_framebuffer(READ_FRAMEBUFFER, read);
                 }
             }
         }
@@ -128,21 +128,24 @@ impl GlesRenderDevice {
         if self.targets.draw.replace(Some(draw)) != Some(draw) {
             // SAFETY: A live framebuffer of this current context or a borrowed
             // Host handle; binding copies a scalar and retains no pointer.
-            unsafe { (self.gl.bind_framebuffer)(DRAW_FRAMEBUFFER, draw) };
+            unsafe { self.gl.bind_framebuffer(DRAW_FRAMEBUFFER, draw) };
         }
     }
 
     pub(super) fn set_viewport(&self, viewport: [i32; 4]) {
         if self.targets.viewport.replace(Some(viewport)) != Some(viewport) {
             // SAFETY: Scalar context state in the current context only.
-            unsafe { (self.gl.viewport)(viewport[0], viewport[1], viewport[2], viewport[3]) };
+            unsafe {
+                self.gl
+                    .viewport(viewport[0], viewport[1], viewport[2], viewport[3])
+            };
         }
     }
 
     pub(super) fn set_depth_mask(&self, enabled: bool) {
         if self.targets.depth_mask.replace(Some(enabled)) != Some(enabled) {
             // SAFETY: Scalar context state in the current context only.
-            unsafe { (self.gl.depth_mask)(u8::from(enabled)) };
+            unsafe { self.gl.depth_mask(u8::from(enabled)) };
         }
     }
 

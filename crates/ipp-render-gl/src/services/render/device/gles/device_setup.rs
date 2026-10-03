@@ -23,7 +23,7 @@ impl GlesRenderDevice {
         let gl = unsafe { Functions::load(&mut loader)? };
         // SAFETY: The caller provides a current context. GL owns a terminated
         // version string valid while this context remains alive; we only read it.
-        let version = unsafe { (gl.get_string)(0x1F02) };
+        let version = unsafe { gl.get_string(0x1F02) };
         if version.is_null() {
             return Err(RenderError::RenderDevice("no current GLES context".into()));
         }
@@ -42,9 +42,9 @@ impl GlesRenderDevice {
         // SAFETY: Each query writes its specified scalar/two-element result into
         // live exclusively borrowed storage. The GL context remains current.
         unsafe {
-            (gl.get_integer)(0x8869, &mut attributes);
-            (gl.get_integer)(0x0D56, &mut depth);
-            (gl.get_integer)(0x0D3A, max_viewport.as_mut_ptr());
+            gl.get_integer(0x8869, &mut attributes);
+            gl.get_integer(0x0D56, &mut depth);
+            gl.get_integer(0x0D3A, max_viewport.as_mut_ptr());
         }
         if attributes < REQUIRED_VERTEX_ATTRIBUTES
             || depth < 16
@@ -58,7 +58,7 @@ impl GlesRenderDevice {
         let max_texture_size = {
             let mut limit = 0;
             // SAFETY: Current context writes one integer into exclusive storage.
-            unsafe { (gl.get_integer)(0x0D33, &mut limit) };
+            unsafe { gl.get_integer(0x0D33, &mut limit) };
             if limit <= 0 {
                 return Err(RenderError::RenderDevice(
                     "GLES texture size baseline unavailable".into(),
@@ -70,7 +70,7 @@ impl GlesRenderDevice {
         let max_renderbuffer_size = {
             let mut limit = 0;
             // SAFETY: Current context writes one integer into exclusive storage.
-            unsafe { (gl.get_integer)(0x84E8, &mut limit) };
+            unsafe { gl.get_integer(0x84E8, &mut limit) };
             if limit <= 0 {
                 return Err(RenderError::RenderDevice(
                     "GLES renderbuffer size baseline unavailable".into(),
@@ -84,9 +84,9 @@ impl GlesRenderDevice {
         let mut fragment_units = 0;
         // SAFETY: The current context writes its fixed limits into exclusive locals.
         unsafe {
-            (gl.get_integer)(0x8A30, &mut max_parameter_bytes);
-            (gl.get_integer)(0x8B4C, &mut vertex_units);
-            (gl.get_integer)(0x8872, &mut fragment_units);
+            gl.get_integer(0x8A30, &mut max_parameter_bytes);
+            gl.get_integer(0x8B4C, &mut vertex_units);
+            gl.get_integer(0x8872, &mut fragment_units);
         }
 
         let (frame_check_interval, reset_status) =
@@ -94,8 +94,16 @@ impl GlesRenderDevice {
             // and the constructor's context is current.
             unsafe { context_loss_reporting(&gl, &version, &mut loader) };
 
+        #[cfg(feature = "instrumentation")]
+        // SAFETY: Same current context and exact-signature loader contract as required entry points.
+        let gpu_queries = super::super::gpu_queries::GpuQueryPool::new(unsafe {
+            gpu_queries::GlesGpuQueries::load(&gl, reset_status, &mut loader)
+        });
+
         let device = Self {
             gl,
+            #[cfg(feature = "instrumentation")]
+            gpu_queries,
             parameter_buffer: 0,
             parameter_capacity: 0,
             max_parameter_bytes: max_parameter_bytes.max(0) as usize,
@@ -139,21 +147,22 @@ impl GlesRenderDevice {
         // slice synchronously. The enabled attribute stores a GPU offset only.
         // T is used solely to copy its bytes; no CPU alias is constructed.
         unsafe {
-            (self.gl.gen_buffers)(1, &mut buffer);
+            self.gl.gen_buffers(1, &mut buffer);
             if buffer == 0 {
                 return Err(RenderError::RenderDevice(
                     "attribute allocation failed".into(),
                 ));
             }
-            (self.gl.bind_buffer)(ARRAY_BUFFER, buffer);
-            (self.gl.buffer_data)(
+            self.gl.bind_buffer(ARRAY_BUFFER, buffer);
+            self.gl.buffer_data(
                 ARRAY_BUFFER,
                 std::mem::size_of_val(values) as isize,
                 values.as_ptr().cast(),
                 STATIC_DRAW,
             );
-            (self.gl.enable_attrib)(slot);
-            (self.gl.attrib_pointer)(slot, width, format, u8::from(normalized), 0, ptr::null());
+            self.gl.enable_attrib(slot);
+            self.gl
+                .attrib_pointer(slot, width, format, u8::from(normalized), 0, ptr::null());
         }
         Ok(buffer)
     }
@@ -173,17 +182,27 @@ impl GlesRenderDevice {
             return self.check();
         }
         match self.reset_status {
-            // SAFETY: Loaded for a GLES 3.2 context reporting resets; the query
-            // takes no arguments and only reads the context's reset status.
-            Some(status) if unsafe { status() } != 0 => Err(RenderError::ContextLost),
-            _ => Ok(()),
+            Some(status) => {
+                #[cfg(feature = "instrumentation")]
+                self.gl
+                    .calls
+                    .record(super::super::gl_call_counts::GlCallCategory::Other);
+                // SAFETY: Loaded for a GLES 3.2 context reporting resets; the query
+                // takes no arguments and only reads the context's reset status.
+                if unsafe { status() } != 0 {
+                    Err(RenderError::ContextLost)
+                } else {
+                    Ok(())
+                }
+            }
+            None => Ok(()),
         }
     }
 
     pub(super) fn check(&self) -> Result<(), RenderError> {
         // SAFETY: The constructor's context/lifetime contract still holds; this
         // query passes no pointers and changes only GL error state.
-        match unsafe { (self.gl.get_error)() } {
+        match unsafe { self.gl.get_error() } {
             0 => Ok(()),
             0x0507 => Err(RenderError::ContextLost),
             error => Err(RenderError::RenderDevice(format!(
@@ -200,18 +219,18 @@ impl GlesRenderDevice {
         // live source bytes synchronously. Status writes to exclusive local
         // storage. Failed shader handles are deleted before returning.
         unsafe {
-            let shader = (self.gl.create_shader)(kind);
+            let shader = self.gl.create_shader(kind);
             if shader == 0 {
                 return Err(RenderError::RenderDevice("shader allocation failed".into()));
             }
 
-            (self.gl.shader_source)(shader, 1, &pointer, &length);
-            (self.gl.compile_shader)(shader);
+            self.gl.shader_source(shader, 1, &pointer, &length);
+            self.gl.compile_shader(shader);
             let mut status = 0;
-            (self.gl.shader_iv)(shader, COMPILE_STATUS, &mut status);
+            self.gl.shader_iv(shader, COMPILE_STATUS, &mut status);
             if status == 0 {
                 let log = self.log(shader, true);
-                (self.gl.delete_shader)(shader);
+                self.gl.delete_shader(shader);
                 return Err(RenderError::RenderDevice(log));
             }
 
@@ -227,20 +246,20 @@ impl GlesRenderDevice {
         // buffer capacity and is not retained by GL.
         unsafe {
             if shader {
-                (self.gl.shader_iv)(id, INFO_LOG_LENGTH, &mut length);
+                self.gl.shader_iv(id, INFO_LOG_LENGTH, &mut length);
             } else {
-                (self.gl.program_iv)(id, INFO_LOG_LENGTH, &mut length);
+                self.gl.program_iv(id, INFO_LOG_LENGTH, &mut length);
             }
             let mut bytes = vec![0; length.clamp(1, 65536) as usize];
             if shader {
-                (self.gl.shader_log)(
+                self.gl.shader_log(
                     id,
                     bytes.len() as i32,
                     &mut written,
                     bytes.as_mut_ptr().cast(),
                 );
             } else {
-                (self.gl.program_log)(
+                self.gl.program_log(
                     id,
                     bytes.len() as i32,
                     &mut written,
@@ -289,8 +308,8 @@ unsafe fn context_loss_reporting(
     // SAFETY: A core GLES 3.2 query writing one integer into this exclusive
     // local; an unexpected error is read back and cleared immediately.
     let error = unsafe {
-        (gl.get_integer)(RESET_NOTIFICATION_STRATEGY, &mut strategy);
-        (gl.get_error)()
+        gl.get_integer(RESET_NOTIFICATION_STRATEGY, &mut strategy);
+        gl.get_error()
     };
     match (error, strategy) {
         (0, NO_RESET_NOTIFICATION) => (super::super::error_checks::FRAME_CHECK_INTERVAL, None),

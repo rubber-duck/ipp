@@ -4,8 +4,11 @@
     "noEmit": true,
     "paths": {
       "@ipp/client": ["../../packages/ipp-client/src/index.ts"],
+      "@ipp/client/*": ["../../packages/ipp-client/src/*.ts"],
+      "@ipp/react": ["../../packages/ipp-react/src/index.ts"],
+      "@ipp/react/*": ["../../packages/ipp-react/src/*.ts"],
       "@ipp/gui-stress-contract": ["../../target/gui-stress-contract/generated.d.ts"]
     }
   },
-  "include": ["gui-stress-fixture.tsx", "gui-stress.ts", "gui-stress.test.ts"]
+  "include": ["gui-stress-fixture.tsx", "gui-stress.ts", "gui-stress.test.ts", "gui-profile-capture.test.ts", "gpu-memory.test.ts"]
 }

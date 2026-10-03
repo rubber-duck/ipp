@@ -68,17 +68,22 @@ export async function openGallery(
     readonly initialPage?: "gui";
     /** Share of the canvas frame per axis; `GALLERY_CANVAS_SHARE` by default. */
     readonly canvasShare?: number;
+    /** Alternate maintained application/observer fixtures for diagnostic products. */
+    readonly entryPath?: string;
+    readonly helperPath?: string;
   } = {},
 ) {
   const { page } = scenario;
   const {
     initialPage,
     canvasShare = GALLERY_CANVAS_SHARE,
+    entryPath = "/examples/world-gallery/index.html",
+    helperPath = "/target/gallery-fixtures/viewer-browser-helper.js",
     ...server
   } = options;
   await confineGalleryCanvas(page, canvasShare);
   const origin = await startGalleryServer(process.cwd(), scenario, server);
-  const helper = `${origin}/target/gallery-fixtures/viewer-browser-helper.js`;
+  const helper = `${origin}${helperPath}`;
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   // Image measurements are evidence: their values show the margin of each
@@ -292,7 +297,7 @@ export async function openGallery(
     }
   };
   await page.goto(
-    `${origin}/examples/world-gallery/index.html${initialPage ? `#${initialPage}` : ""}`,
+    `${origin}${entryPath}${initialPage ? `#${initialPage}` : ""}`,
   );
   await call("waitForViewer");
   return {

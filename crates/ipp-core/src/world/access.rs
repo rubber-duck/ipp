@@ -313,6 +313,8 @@ pub(in crate::world) fn commit_components(
     evaluated: bool,
 ) -> Result<(), ErrorReason> {
     #[cfg(feature = "instrumentation")]
+    let _context = crate::profiling::ContextScope::world(world.profile_context);
+    #[cfg(feature = "instrumentation")]
     let _allocation_scope = crate::profiling::AllocationScope::new(200, "world.commit");
 
     let mut staged = WorldMutationState {

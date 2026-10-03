@@ -76,6 +76,8 @@ Reuse passing evidence while relevant source/configuration/environment remains u
 
 Behavior changes extend maintained scenarios/fixtures and representative CI with failure artifacts. Await readiness/frame completion, assert real outcomes and meaningful images, and clean up owned participants under the [testing policy](integration-testing.md). Missing/skipped environments are not passing coverage. Docs-only changes need no runtime tests.
 
+For performance work, follow the [measurement guide](performance.md) to choose builds, separate timing from intrusive diagnostics, preserve source/device identity and interpret scoped observations. Artifact-size reports have no default ceilings; benchmarks remain separate from correctness regression.
+
 ## Review, integration, and handoff
 
 Review the actual diff, contracts and evidence. Passing CI/agent review does not approve architectural decisions. Record omitted checks and unresolved limitations.

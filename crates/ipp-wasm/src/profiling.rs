@@ -1,102 +1,69 @@
-//! Host-only profiling exports, omitted by ordinary builds.
+//! Instrumentation-only trusted Host control and bounded immutable readback.
+
+use ipp_protocol::profiling::{ProfileRequest, ProfileResponse, ProfileStatus};
 
 #[global_allocator]
 static ALLOCATOR: ipp_core::profiling::CountingAllocator = ipp_core::profiling::CountingAllocator;
 
-/// Registered System profile keys; grows as Worlds register new keys.
-// SAFETY: Unique diagnostic export returning a scalar.
-#[unsafe(no_mangle)]
-pub extern "C" fn ipp_profile_name_count() -> usize {
-    ipp_core::profiling::system_count()
+std::thread_local! {
+    static RESPONSE: std::cell::RefCell<ProfileResponse> = std::cell::RefCell::new(ProfileResponse::status(ProfileStatus::Unavailable));
 }
 
-/// Entries readable through [`ipp_profile_counter`], four per stage slot.
-// SAFETY: Unique diagnostic export returning a scalar.
+/// Called outside frame guards; ownership uses the trusted worker adapter identity.
+// SAFETY: Unique export accepts scalar controls and exposes no simulation stepping.
 #[unsafe(no_mangle)]
-pub extern "C" fn ipp_profile_counter_count() -> usize {
-    ipp_core::profiling::counter_count()
+pub extern "C" fn ipp_profile_control(
+    kind: u32,
+    capture: u64,
+    offset: u64,
+    counters: u32,
+    max_artifact_bytes: u64,
+) -> u32 {
+    let request = match kind {
+        0 => ProfileRequest::Status,
+        1 => ProfileRequest::Start {
+            counters: counters != 0,
+            max_artifact_bytes,
+            gpu: ipp_protocol::profiling::ProfileGpuSampling::Off,
+            gl_calls: false,
+            max_events: 0,
+        },
+        2 => ProfileRequest::Stop(capture),
+        3 => ProfileRequest::Read {
+            capture,
+            offset,
+        },
+        4 => ProfileRequest::Release(capture),
+        _ => return ProfileStatus::InvalidCapture as u32,
+    };
+    let response = crate::BOUNDARY.with_borrow_mut(|boundary| boundary.profile_control(request));
+    let status = response.status as u32;
+    RESPONSE.with_borrow_mut(|slot| *slot = response);
+    status
 }
 
-/// Allocation categories readable through [`ipp_profile_category_name_ptr`].
-// SAFETY: Unique diagnostic export returning a scalar.
+// SAFETY: Unique scalar metadata export, no retained pointers or mutable access.
 #[unsafe(no_mangle)]
-pub extern "C" fn ipp_profile_category_count() -> usize {
-    ipp_core::profiling::category_count()
+pub extern "C" fn ipp_profile_response_capture() -> u64 {
+    RESPONSE.with_borrow(|response| response.capture)
 }
 
-// SAFETY: Unique diagnostic export; immutable static name remains live forever.
+// SAFETY: Unique scalar metadata export, no retained pointers or mutable access.
 #[unsafe(no_mangle)]
-pub extern "C" fn ipp_profile_name_ptr(index: usize) -> *const u8 {
-    if index < ipp_core::profiling::system_count() {
-        ipp_core::profiling::system_name(index).as_ptr()
-    } else {
-        std::ptr::null()
-    }
+pub extern "C" fn ipp_profile_response_total() -> u64 {
+    RESPONSE.with_borrow(|response| response.total_bytes)
 }
 
-// SAFETY: Unique diagnostic export; only the length of an immutable static name.
+/// Read-only bytes remain valid until the next control call or Host disposal.
+// SAFETY: The worker copies bytes synchronously before issuing the next control;
+// it must refresh memory.buffer after a call that may grow linear memory.
 #[unsafe(no_mangle)]
-pub extern "C" fn ipp_profile_name_len(index: usize) -> usize {
-    ipp_core::profiling::system_name(index).len()
+pub extern "C" fn ipp_profile_response_ptr() -> *const u8 {
+    RESPONSE.with_borrow(|response| response.bytes.as_ptr())
 }
 
-// SAFETY: Unique diagnostic export; bounded read of immutable composition metadata.
+// SAFETY: Unique bounded response length export; no mutable access.
 #[unsafe(no_mangle)]
-pub extern "C" fn ipp_profile_composition_id(index: usize) -> u64 {
-    ipp_core::profiling::system_composition(index)
-}
-
-// SAFETY: Unique diagnostic export; resets owned counters, no World mutation.
-#[unsafe(no_mangle)]
-pub extern "C" fn ipp_profile_reset(enabled: u32) {
-    ipp_core::profiling::reset(enabled != 0);
-}
-
-// SAFETY: Unique diagnostic export; bounded read of atomic counters only.
-#[unsafe(no_mangle)]
-pub extern "C" fn ipp_profile_counter(index: usize) -> u64 {
-    ipp_core::profiling::counter(index)
-}
-
-// SAFETY: Unique diagnostic export; observes counters without exposing memory.
-#[unsafe(no_mangle)]
-pub extern "C" fn ipp_profile_allocations(bytes: u32) -> u64 {
-    let values = ipp_core::profiling::allocations();
-    if bytes == 0 {
-        values.0
-    } else {
-        values.1
-    }
-}
-
-// SAFETY: Unique diagnostic export; bounds-checked immutable static name access.
-#[unsafe(no_mangle)]
-pub extern "C" fn ipp_profile_category_name_ptr(index: usize) -> *const u8 {
-    if index < ipp_core::profiling::category_count() {
-        ipp_core::profiling::category_name(index).as_ptr()
-    } else {
-        std::ptr::null()
-    }
-}
-
-// SAFETY: Unique diagnostic export; scalar length of an immutable static name.
-#[unsafe(no_mangle)]
-pub extern "C" fn ipp_profile_category_name_len(index: usize) -> usize {
-    if index < ipp_core::profiling::category_count() {
-        ipp_core::profiling::category_name(index).len()
-    } else {
-        0
-    }
-}
-
-// SAFETY: Unique diagnostic export; bounds-checked atomic counter read only.
-#[unsafe(no_mangle)]
-pub extern "C" fn ipp_profile_category_counter(index: usize) -> u64 {
-    ipp_core::profiling::category_counter(index)
-}
-
-// SAFETY: Unique diagnostic export; changes only measurement counters' enabled flag.
-#[unsafe(no_mangle)]
-pub extern "C" fn ipp_profile_pause() {
-    ipp_core::profiling::pause();
+pub extern "C" fn ipp_profile_response_len() -> usize {
+    RESPONSE.with_borrow(|response| response.bytes.len())
 }

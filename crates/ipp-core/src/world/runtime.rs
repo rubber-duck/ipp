@@ -127,7 +127,7 @@ impl World {
     }
 
     pub(crate) fn construct(
-        id: crate::WorldId,
+        identity: WorldConstructionIdentity,
         limits: WorldLimits,
         hints: WorldCapacityHints,
         factories: &systems::SystemFactories,
@@ -135,6 +135,8 @@ impl World {
         io: &mut crate::services::io::IoService,
         data_service: &mut crate::services::data::DataService,
     ) -> Result<Self, WorldConstructionError> {
+        let id = identity.id;
+
         let mut data = Self::simulation_state(limits).map_err(WorldConstructionError::Limits)?;
         data.id = id;
         data.manifest =
@@ -212,11 +214,20 @@ impl World {
             });
         }
         #[cfg(feature = "instrumentation")]
-        for instance in &mut instances {
-            instance.profile_slot = Some(crate::profiling::register_system(
-                instance.id.0,
+        {
+            data.profile_context = crate::profiling::register_world(
+                identity.host,
+                id.0,
+                data.identity as u64,
                 data.manifest.composition_id(),
-            ));
+            );
+            for instance in &mut instances {
+                instance.profile_slot = Some(crate::profiling::register_system(
+                    instance.id.0,
+                    data.manifest.composition_id(),
+                    data.profile_context,
+                ));
+            }
         }
         Ok(Self {
             data,
@@ -242,6 +253,9 @@ impl World {
         io: &mut crate::services::io::IoService,
         data: &mut crate::services::data::DataService,
     ) {
+        #[cfg(feature = "instrumentation")]
+        let _context = crate::profiling::ContextScope::world(self.data.profile_context);
+
         teardown_instances(&self.data, &mut self.schedule.instances, assets, io, data);
     }
 
@@ -250,6 +264,8 @@ impl World {
             return Err(ErrorReason::Capacity);
         }
         Ok(WorldSimulationState {
+            #[cfg(feature = "instrumentation")]
+            profile_context: 0,
             updating: false,
             prepared_frame: false,
             accepting_removals: false,

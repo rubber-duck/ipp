@@ -30,7 +30,7 @@ impl GlesRenderDevice {
             // SAFETY: The current context owns the live program. All renderer
             // program changes use this helper; deletion and Host entry invalidate
             // the cache before names can be reused. No CPU pointer is passed.
-            unsafe { (self.gl.use_program)(program) };
+            unsafe { self.gl.use_program(program) };
         }
     }
 
@@ -39,7 +39,7 @@ impl GlesRenderDevice {
             // SAFETY: The current context owns this VAO. Upload, draw and cleanup
             // use this helper; deletion and Host entry invalidate cached names.
             // Attribute changes still happen on the selected VAO as before.
-            unsafe { (self.gl.bind_vertex_array)(vao) };
+            unsafe { self.gl.bind_vertex_array(vao) };
         }
     }
 }

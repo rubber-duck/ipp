@@ -529,6 +529,9 @@ impl WorldContext<'_> {
     /// This is not the data visibility cut: producers and Host time may still progress.
     /// Data bindings consume final notifications in `System::prepare_evaluation`.
     pub fn prepare_update(&mut self, dt: f64) -> Result<(), ErrorReason> {
+        #[cfg(feature = "instrumentation")]
+        let _context = crate::profiling::ContextScope::world(self.world.profile_context);
+
         if self.world.updating || !dt.is_finite() || dt < 0.0 || !(self.world.time + dt).is_finite()
         {
             return Err(ErrorReason::InvalidValue);
@@ -554,6 +557,9 @@ impl WorldContext<'_> {
     }
 
     pub(crate) fn admit_frame(&mut self, dt: f64) -> Result<WorldUpdateReport, ErrorReason> {
+        #[cfg(feature = "instrumentation")]
+        let _context = crate::profiling::ContextScope::world(self.world.profile_context);
+
         self.prepare_update(dt)?;
         self.owns_update = true;
         self.world.updating = true;
@@ -646,6 +652,11 @@ impl WorldContext<'_> {
         dt: f64,
         mut report: WorldUpdateReport,
     ) -> Result<WorldUpdateReport, ErrorReason> {
+        #[cfg(feature = "instrumentation")]
+        let _context = crate::profiling::ContextScope::world(self.world.profile_context);
+        #[cfg(feature = "instrumentation")]
+        let _trace = crate::profiling::WorldTraceScope::new();
+
         self.owns_update = true;
         self.world.updating = true;
         self.data.begin_evaluation();

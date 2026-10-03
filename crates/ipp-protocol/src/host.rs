@@ -193,6 +193,8 @@ pub struct HostRequest {
 /// Host-visible discovery and lifecycle. World authoring remains in ordinary requests.
 #[derive(Clone, Debug, PartialEq)]
 pub enum HostRequestBody {
+    /// Optional Host measurement controls; production explicitly reports unavailability.
+    Profile(crate::profiling::ProfileRequest),
     /// List the next page of published Worlds in identity order.
     ListWorlds {
         /// Exclusive runtime-identity cursor; zero starts discovery.
@@ -338,6 +340,8 @@ pub struct HostResponse {
 /// Host results have no simulation tick and do not imply resource/render readiness.
 #[derive(Clone, Debug, PartialEq)]
 pub enum HostResponseBody {
+    /// Optional profiling status or an immutable diagnostic artifact page.
+    Profile(crate::profiling::ProfileResponse),
     /// Current root configuration; not a presentation fence.
     RootBinding(Option<RootBinding>),
     /// Surface-scoped presentation control or completion.
@@ -481,6 +485,7 @@ pub fn decode_host_request(bytes: &[u8], connection: u64) -> Result<HostRequest,
             HostRequestBody::GetRootOutputBinding(reader.world_reference()?)
         }
         HOST_REQUEST_PRESENTATION => HostRequestBody::Presentation(reader.presentation_request()?),
+        HOST_REQUEST_PROFILE => HostRequestBody::Profile(reader.profile_request()?),
         HOST_REQUEST_GUI_INPUT => HostRequestBody::GuiInput(reader.gui_physical_request()?),
         HOST_REQUEST_RENAME_WORLD => HostRequestBody::RenameWorld {
             world: read_selector(&mut reader)?,
@@ -647,6 +652,10 @@ pub fn encode_host_request(request: &HostRequest) -> Result<Vec<u8>, ProtocolErr
             writer.u8(HOST_REQUEST_PRESENTATION)?;
             writer.presentation_request(request)?;
         }
+        HostRequestBody::Profile(request) => {
+            writer.u8(HOST_REQUEST_PROFILE)?;
+            writer.profile_request(request)?;
+        }
         HostRequestBody::GuiInput(request) => {
             writer.u8(HOST_REQUEST_GUI_INPUT)?;
             writer.gui_physical_request(request)?;
@@ -800,6 +809,10 @@ fn write_host_response(response: &HostResponse, writer: &mut Writer) -> Result<(
             writer.u8(HOST_RESPONSE_PRESENTATION)?;
             writer.presentation_response(response)?;
         }
+        HostResponseBody::Profile(response) => {
+            writer.u8(HOST_RESPONSE_PROFILE)?;
+            writer.profile_response(response)?;
+        }
         HostResponseBody::GuiInput(response) => {
             writer.u8(HOST_RESPONSE_GUI_INPUT)?;
             writer.gui_physical_response(response)?;
@@ -938,6 +951,7 @@ pub fn decode_host_response(bytes: &[u8], connection: u64) -> Result<HostRespons
         HOST_RESPONSE_PRESENTATION => {
             HostResponseBody::Presentation(reader.presentation_response()?)
         }
+        HOST_RESPONSE_PROFILE => HostResponseBody::Profile(reader.profile_response()?),
         HOST_RESPONSE_GUI_INPUT => HostResponseBody::GuiInput(reader.gui_physical_response()?),
         HOST_RESPONSE_WORLDS => {
             let count = reader.count(32)?;

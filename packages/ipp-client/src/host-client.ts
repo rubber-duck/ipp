@@ -1,3 +1,4 @@
+import { bindHostProfiling, HostProfiling } from "./profiling.js";
 import { ClientDatasets, type DatasetContract } from "./datasets.js";
 import { isAssetSourceResponse } from "./asset-sources.js";
 import { acceptHostAnnouncement, hostHello } from "./host-contract.js";
@@ -97,6 +98,13 @@ export abstract class HostClientBase<T extends Client> {
     protected readonly options: ConnectOptions = {},
   ) {
     this.timeoutMs = options.timeoutMs ?? 10_000;
+    bindHostProfiling(
+      this,
+      new HostProfiling(
+        (tag, encode) => this.request(tag, encode),
+        (name) => this.hostTag(name),
+      ),
+    );
     // Statistics and testing controls reach the presentation through
     // `@ipp/client/diagnostics` and `/testing`, not a member of this type.
     bindPresentation(this, presentationOf(transport));

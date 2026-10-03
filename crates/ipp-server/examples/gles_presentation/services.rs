@@ -18,6 +18,8 @@ pub(crate) struct GlesHostServices {
     native: NativeHostServices,
     // Declared before `context`: the renderer releases GPU state first.
     renderer: RenderService<GlesRenderDevice>,
+    #[cfg(feature = "instrumentation")]
+    profile: Option<super::profiling::RenderProfileCapture>,
     context: Context,
     control: Receiver<PresentationControl>,
     output: Sender<PresentationOutput>,
@@ -35,6 +37,45 @@ pub(crate) struct GlesHostServices {
 
 impl HostServices for GlesHostServices {
     const NAME: &'static str = "gles";
+
+    #[cfg(feature = "instrumentation")]
+    fn render_profile_start(
+        &mut self,
+        capture: u64,
+        host: u64,
+        options: ipp_protocol::profiling::ProfileRenderOptions,
+    ) -> ipp_protocol::profiling::ProfileGpuCapability {
+        let state = super::profiling::RenderProfileCapture::start(
+            &mut self.renderer,
+            capture,
+            host,
+            options,
+        );
+        let capability = state.capability();
+        self.profile = Some(state);
+        capability
+    }
+
+    #[cfg(feature = "instrumentation")]
+    fn render_profile_stop(&mut self, capture: u64) -> ipp_protocol::profiling::ProfileGpuCapture {
+        let state = self
+            .profile
+            .take()
+            .expect("accepted Host capture owns render profile");
+        assert!(state.matches(capture), "Host capture generation mismatch");
+        state.stop(&mut self.renderer)
+    }
+
+    #[cfg(feature = "instrumentation")]
+    fn render_profile_cancel(&mut self, capture: u64) {
+        if self
+            .profile
+            .as_ref()
+            .is_some_and(|state| state.matches(capture))
+        {
+            self.profile.take().unwrap().cancel(&mut self.renderer);
+        }
+    }
 
     fn record_frame(&mut self, host: &mut HostRuntime, frame: &ipp_core::HostFrameReport) {
         self.totals.record_frame(host, frame);
@@ -77,6 +118,8 @@ impl HostServices for GlesHostServices {
         let mut services = Self {
             native,
             renderer,
+            #[cfg(feature = "instrumentation")]
+            profile: None,
             context,
             control: setup.control,
             output: setup.output,
@@ -294,6 +337,8 @@ impl GlesHostServices {
             }
             PresentationTesting::ContextLoss => {
                 if self.active {
+                    #[cfg(feature = "instrumentation")]
+                    self.renderer.invalidate_gpu_context();
                     // The same recovery path as the WASM detach export: context
                     // state goes, the Host and its Worlds keep their logical assets.
                     self.renderer

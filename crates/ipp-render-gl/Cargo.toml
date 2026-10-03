@@ -32,3 +32,7 @@ required-features = ["instrumentation"]
 [[test]]
 name = "surface_cache"
 required-features = ["instrumentation"]
+
+[[test]]
+name = "gpu_profiling"
+required-features = ["instrumentation"]

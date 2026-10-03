@@ -1,5 +1,9 @@
 //! Local headless IPP host with optional WebSocket ingress.
 
+#[cfg(feature = "instrumentation")]
+#[global_allocator]
+static ALLOCATOR: ipp_core::profiling::CountingAllocator = ipp_core::profiling::CountingAllocator;
+
 use std::io::{self, Write};
 use std::net::{SocketAddr, TcpListener};
 

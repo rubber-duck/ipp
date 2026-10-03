@@ -299,11 +299,7 @@ function Panel({
           x={positionX}
           y={positionY + GUI_STRESS_WORKLOAD.layout.rawYOffset}
         />
-        <SurfaceCache
-          direct_distance={0}
-          texels_per_metre={128}
-          max_refresh_hz={240}
-        />
+        <SurfaceCache {...GUI_STRESS_WORKLOAD.rawSurfaceCache} />
         <Surface
           width={PANEL_WIDTH}
           height={GUI_STRESS_WORKLOAD.layout.rawHeight}

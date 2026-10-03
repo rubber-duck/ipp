@@ -211,12 +211,18 @@ def main(args: list[str]) -> None:
     if operation == "build":
         build(remaining[0])
     elif operation == "benchmark-build":
-        from .benchmark import build_browser, build_native
+        from .benchmark import build_browser, build_gui_native, build_native
 
         if remaining[0] == "browser":
             build_browser()
+        elif remaining[0].startswith("gui-native"):
+            build_gui_native(remaining[0] == "gui-native-instrumented")
         else:
             build_native(remaining[0] == "native-instrumented")
+    elif operation == "gui-paired":
+        from .gui_comparison import compare
+
+        compare(json.loads(remaining[0]))
     elif operation == "chart-benchmark-build":
         from .chart_benchmark import build as build_charts
 

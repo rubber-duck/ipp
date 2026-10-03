@@ -1,148 +1,148 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { installProfiler } from "../src/profile-worker.js";
+import type { ProfileCapture } from "../src/profiling.js";
 
-interface ProfileCapture {
+interface WorkerCapture extends ProfileCapture {
   memoryBytes: number;
-  shadowDrawCalls: number | null;
   frames: number[][];
-  names: string[];
-  compositionIds: string[];
-  stages: number[];
-  categories: { name: string; calls: number; bytes: number }[];
-  allocations: number[];
 }
-
 interface ProfileApi {
-  start(profile?: boolean): void;
-  stop(): ProfileCapture;
-  count(): number;
+  start(counters?: boolean): void;
+  stop(): WorkerCapture;
   growMemory(): number;
 }
-
 type ProfileGlobal = typeof globalThis & { ippProfile?: ProfileApi };
 
-interface ProfilerOptions {
-  names?: string[];
-  compositionIds?: bigint[];
-}
-
-function setupProfiler(options: ProfilerOptions = {}) {
-  const names = options.names ?? ["ipp.system.alpha", "ipp.system.alpha"];
-  const compositionIds = options.compositionIds ?? [101n, 202n];
+function setup() {
   const memory = new WebAssembly.Memory({ initial: 1 });
-  const encoder = new TextEncoder();
-  const namePointer = (index: number) => 128 + index * 64;
-  const categoryPointer = 2048;
-
-  names.forEach((name, index) => {
-    new Uint8Array(memory.buffer, namePointer(index)).set(encoder.encode(name));
-  });
-  new Uint8Array(memory.buffer, categoryPointer).set(
-    encoder.encode("allocator🧪"),
-  );
-
-  const exports = {
-    ipp_profile_reset(_enabled: number) {},
-    ipp_profile_pause() {},
-    ipp_profile_name_count: () => names.length,
-    ipp_profile_counter_count: () => names.length * 4,
-    ipp_profile_category_count: () => 1,
-    ipp_profile_name_ptr: namePointer,
-    ipp_profile_name_len: (index: number) =>
-      encoder.encode(names[index]!).length,
-    ipp_profile_composition_id: (index: number) => compositionIds[index]!,
-    ipp_profile_counter: (index: number) => index,
-    ipp_profile_category_name_ptr: () => categoryPointer,
-    ipp_profile_category_name_len: () => encoder.encode("allocator🧪").length,
-    ipp_profile_category_counter: (index: number) => index + 10,
-    ipp_profile_allocations: (bytes: number) => bytes + 20,
-    ipp_profile_shadow_draw_calls: () => 37,
-  } as unknown as WebAssembly.Exports;
-  const frame = { evaluate(_dt: number) {}, run(_dt: number) {} };
-  const timedFrame = installProfiler(exports, memory, frame);
-
-  return { memory, timedFrame, exports, names, compositionIds };
-}
-
-function profileApi(): ProfileApi {
-  return (globalThis as ProfileGlobal).ippProfile!;
-}
-
-function restoreProfiler(previous: ProfileApi | undefined) {
-  const target = globalThis as ProfileGlobal;
-  if (previous === undefined) delete target.ippProfile;
-  else target.ippProfile = previous;
-}
-
-test("profiler keeps repeated system names distinct by exact composition id", (context) => {
-  const previous = (globalThis as ProfileGlobal).ippProfile;
-  context.after(() => restoreProfiler(previous));
-
-  const { memory, timedFrame } = setupProfiler({
-    names: ["ipp.system.alpha", "ipp.system.alpha"],
-    compositionIds: [
-      BigInt.asIntN(64, (1n << 64n) - 1n),
-      BigInt.asIntN(64, 1n << 63n),
+  const identities = ["18446744073709551615", "9223372036854775808"];
+  let bytes = new Uint8Array();
+  let page = new Uint8Array();
+  const controls: number[] = [];
+  const artifact = (): ProfileCapture => ({
+    format: "ipp-profile/1",
+    captureId: "7",
+    hostId: "1",
+    source: {
+      target: "wasm",
+      schemaHash: "9",
+      instrumentation: true,
+      scope: "evaluation-thread",
+      backgroundAllocations: "excluded",
+      adapter: "wasm",
+    },
+    window: {
+      firstBoundary: "1",
+      lastBoundary: "2",
+      start: "1",
+      end: "2",
+      clockDomain: "ipp-core.monotonic",
+      unit: "nanoseconds",
+    },
+    availability: {
+      cpu: "available",
+      allocations: "available",
+      gpu: "not-requested",
+      trace: "not-requested",
+    },
+    units: {
+      calls: "calls",
+      duration: "nanoseconds",
+      allocationCalls: "allocation-or-reallocation calls",
+      requestedBytes: "requested bytes, not retained memory",
+    },
+    stages: identities.map((compositionId, index) => ({
+      kind: "system",
+      name: "ipp.system.alpha",
+      identity: {
+        scope: "world",
+        hostId: "1",
+        worldId: String(index + 1),
+        incarnation: String(index + 10),
+        compositionId,
+        system: "ipp.system.alpha",
+        phase: "evaluate",
+      },
+      calls: "1",
+      duration: "20",
+      allocationCalls: "0",
+      requestedBytes: "0",
+    })),
+    categories: [
+      {
+        name: "allocator🧪",
+        identity: {
+          scope: "unassigned",
+          hostId: "0",
+          worldId: "0",
+          incarnation: "0",
+          compositionId: "0",
+          system: "",
+          phase: null,
+        },
+        allocationCalls: "2",
+        requestedBytes: "5",
+      },
     ],
+    allocations: { calls: "2", requestedBytes: "5" },
+    retention: { artifactLimitBytes: "16777216" },
+    instrumentationStorage: { counterBytes: "128", metadataBytes: "64" },
   });
-  const profile = profileApi();
+  const exports = {
+    ipp_profile_control(kind: number, _capture: bigint, offset: bigint) {
+      controls.push(kind);
+      if (kind === 2)
+        bytes = new TextEncoder().encode(JSON.stringify(artifact()));
+      if (kind === 3) {
+        // Each page can grow the heap. The reader must refresh its buffer.
+        memory.grow(1);
+        page = bytes.slice(Number(offset), Number(offset) + 256);
+        new Uint8Array(memory.buffer, 128, page.length).set(page);
+      }
+      return 0;
+    },
+    ipp_profile_response_capture: () => 7n,
+    ipp_profile_response_total: () => BigInt(bytes.length),
+    ipp_profile_response_ptr: () => 128,
+    ipp_profile_response_len: () => page.length,
+  } as unknown as WebAssembly.Exports;
+  return { memory, identities, exports, controls };
+}
+
+test("worker copies semantic exact identities and Unicode across heap growth before release", (context) => {
+  const previous = (globalThis as ProfileGlobal).ippProfile;
+  context.after(() => {
+    if (previous) (globalThis as ProfileGlobal).ippProfile = previous;
+    else delete (globalThis as ProfileGlobal).ippProfile;
+  });
+  const { memory, identities, exports, controls } = setup();
+  const frame = installProfiler(exports, memory, { evaluate() {}, run() {} });
+  const profile = (globalThis as ProfileGlobal).ippProfile!;
   profile.start(true);
-  timedFrame.evaluate(1 / 60);
-  timedFrame.run(1 / 60);
-  assert.equal(profile.growMemory(), 1);
-
-  const capture = profile.stop();
-
-  assert.deepEqual(capture.names, ["ipp.system.alpha", "ipp.system.alpha"]);
-  assert.deepEqual(capture.compositionIds, [
-    "18446744073709551615",
-    "9223372036854775808",
-  ]);
-  assert.equal(capture.categories[0]?.name, "allocator🧪");
-  assert.equal(capture.memoryBytes, memory.buffer.byteLength);
-  assert.equal(capture.frames.length, 1);
-  assert.equal(capture.frames[0]?.length, 2);
-  assert.equal(capture.stages.length, 8);
-  assert.deepEqual(capture.allocations, [20, 21]);
+  frame.evaluate(0.1);
+  frame.run(0.1);
+  identities.push("8");
+  profile.growMemory();
+  const captured = profile.stop();
+  assert.deepEqual(
+    captured.stages.map((record) => record.identity.compositionId),
+    identities,
+  );
+  assert.equal(captured.categories[0]!.name, "allocator🧪");
+  assert.equal(captured.memoryBytes, memory.buffer.byteLength);
+  assert.equal(captured.frames.length, 1);
+  assert.equal(controls.at(-1), 4);
+  assert.ok(controls.filter((kind) => kind === 3).length > 1);
 });
 
-test("profiler reads System tables that grew after installation", (context) => {
-  const previous = (globalThis as ProfileGlobal).ippProfile;
-  context.after(() => restoreProfiler(previous));
-
-  const { timedFrame, names, compositionIds } = setupProfiler({
-    names: ["ipp.system.alpha"],
-    compositionIds: [7n],
-  });
-  const profile = profileApi();
-  profile.start(true);
-  timedFrame.run(1 / 60);
-  // A World constructed during the capture registers another System.
-  names.push("ipp.system.alpha");
-  compositionIds.push(8n);
-
-  const capture = profile.stop();
-  assert.deepEqual(capture.compositionIds, ["7", "8"]);
-  assert.equal(capture.stages.length, 8);
-});
-
-test("profiler requires composition exports", (context) => {
-  const previous = (globalThis as ProfileGlobal).ippProfile;
-  context.after(() => restoreProfiler(previous));
-
-  const { memory, exports } = setupProfiler();
-  const withoutExport = (name: string) =>
-    Object.fromEntries(
-      Object.entries(exports).filter(([exportName]) => exportName !== name),
-    ) as WebAssembly.Exports;
-
+test("worker requires owner-aware diagnostic controls", () => {
+  const { memory, exports } = setup();
+  const missing = Object.fromEntries(
+    Object.entries(exports).filter(([name]) => name !== "ipp_profile_control"),
+  ) as WebAssembly.Exports;
   assert.throws(
-    () =>
-      installProfiler(withoutExport("ipp_profile_composition_id"), memory, {
-        evaluate() {},
-        run() {},
-      }),
-    /ipp_profile_composition_id/,
+    () => installProfiler(missing, memory, { evaluate() {}, run() {} }),
+    /ipp_profile_control/,
   );
 });

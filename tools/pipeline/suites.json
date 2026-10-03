@@ -568,12 +568,28 @@
       }
     ]
   },
+  "host-profiling": {
+    "description": "Semantic capture ownership, World lifetimes and fixed/allocation records through real native GLES and worker generated clients",
+    "sourceRoots": ["tests/integration/profile-scenario.ts", "tests/performance/gui-profile-capture.test.ts", "packages/ipp-client/src/profiling.ts", "crates/ipp-host-session/src/profiling.rs"],
+    "commands": [
+      { "name": "browser", "command": ["@node", "--test", "--test-name-pattern", "through browser", "target/gui-stress/gui-profile-capture.test.js"], "builds": ["gui-stress-fixtures", "font-assets", "surface-assets", "browser:render-instrumentation"], "requirements": ["node", "npm", "browser"] },
+      { "name": "native-gles", "command": ["@node", "--test", "--test-name-pattern", "through native-gles", "target/gui-stress/gui-profile-capture.test.js"], "builds": ["gui-stress-fixtures", "font-assets", "surface-assets", "gles-host-instrumentation"], "requirements": ["node", "npm", "browser", "gles"] }
+    ]
+  },
+  "platformer-profile": {
+    "description": "Bounded legacy worker semantic readback and heap growth with actual platformer pixels",
+    "sourceRoots": ["tests/performance/robot.ts", "packages/ipp-client/src/profile-worker.ts", "crates/ipp-wasm/src/profiling.rs"],
+    "commands": [
+      { "name": "worker", "command": ["@node", "--test", "target/worker-profiling/robot.mjs"], "builds": ["worker-profiling-fixture"], "requirements": ["node", "npm", "browser"] }
+    ]
+  },
   "client": {
     "description": "Generated client codecs, events and correlation",
     "files": [
       "dist/packages/ipp-client/tests/asset-sources.test.js",
       "dist/packages/ipp-client/tests/gui-semantics.test.js",
       "dist/packages/ipp-client/tests/profile-worker.test.js",
+      "dist/packages/ipp-client/tests/profiling.test.js",
       "dist/packages/ipp-client/tests/resource-worker.test.js",
       "dist/packages/ipp-client/tests/transport.test.js",
       "dist/packages/ipp-client/tests/worker.test.js",
@@ -2238,6 +2254,8 @@
       "examples/gui-stress/",
       "tests/performance/gui-stress-fixture.tsx",
       "tests/performance/gui-stress.ts",
+      "tests/performance/gpu-memory.ts",
+      "tests/performance/gpu-memory.test.ts",
       "tests/performance/gui-stress.test.ts",
       "tests/performance/tsconfig.gui-stress.json",
       "crates/ipp-host-session/src/services/gui_layout_statistics.rs",
@@ -2278,7 +2296,7 @@
       },
       {
         "name": "browser",
-        "command": ["@node", "--test", "--test-name-pattern=cycles|through browser", "target/gui-stress/gui-stress.test.js"],
+        "command": ["@node", "--test", "--test-name-pattern=cycles|GPU memory|through browser", "target/gui-stress/gui-stress.test.js"],
         "builds": ["gui-stress-fixtures", "surface-assets", "browser:render"],
         "requirements": ["node", "npm", "browser"]
       },
@@ -2288,6 +2306,14 @@
         "builds": ["gui-stress-fixtures", "surface-assets", "gles-host"],
         "requirements": ["node", "npm", "browser", "gles"]
       }
+    ]
+  },
+  "gpu-profiling": {
+    "description": "Real worker/native GPU profiling captures with completed images, query availability and retained lifetime identity",
+    "sourceRoots": ["crates/ipp-render-gl/src/services/render/", "crates/ipp-wasm/src/services/", "crates/ipp-server/examples/gles_presentation/", "packages/ipp-client/src/", "tests/render/gpu-profiling-fixture.ts", "tests/render/gpu-profiling.test.ts", "tools/build_surfaces.mjs", "tests/render/tsconfig.surfaces.json"],
+    "commands": [
+      {"name": "browser", "command": ["@node", "--test", "--test-name-pattern=^gpu-profiling:browser:", "target/surface-build/gpu-profiling.test.js"], "builds": ["surface-fixtures", "browser:render-instrumentation"], "partitionExcludes": ["target/gles-host-instrumentation"], "requirements": ["node", "npm", "browser"]},
+      {"name": "native", "command": ["@node", "--test", "--test-name-pattern=^gpu-profiling:native:", "target/surface-build/gpu-profiling.test.js"], "builds": ["surface-fixtures", "gles-host-instrumentation"], "partitionExcludes": ["target/browser-build"], "requirements": ["node", "npm", "browser", "gles"]}
     ]
   },
   "surface-cache": {
@@ -2759,6 +2785,78 @@
     ],
     "files": [
       "dist/tests/render/native-gallery.test.js"
+    ]
+  },
+  "gallery-trace": {
+    "description": "Bounded semantic gallery CPU capture through generated worker/native Hosts with real images and explicit clocks",
+    "sourceRoots": [
+      "tests/performance/gallery-gui-trace.ts",
+      "tools/profile_trace.mjs",
+      "tools/build_gallery_trace.mjs",
+      "tools/pipeline/trace.py"
+    ],
+    "commands": [
+      {
+        "name": "exporter",
+        "command": [
+          "@node",
+          "--test",
+          "tools/tests/profile_trace.test.mjs"
+        ],
+        "builds": [],
+        "requirements": [
+          "node"
+        ]
+      },
+      {
+        "name": "browser",
+        "command": [
+          "@node",
+          "target/gallery-trace/gallery-gui-trace.mjs",
+          "--backend",
+          "browser",
+          "--max-events",
+          "512",
+          "--max-artifact-bytes",
+          "8388608",
+          "--output",
+          "target/integration-artifacts/gallery-trace-browser"
+        ],
+        "builds": [
+          "gallery-trace-fixture"
+        ],
+        "requirements": [
+          "node",
+          "npm",
+          "browser"
+        ]
+      },
+      {
+        "name": "native",
+        "command": [
+          "@node",
+          "target/gallery-trace/gallery-gui-trace.mjs",
+          "--backend",
+          "native",
+          "--max-events",
+          "512",
+          "--max-artifact-bytes",
+          "8388608",
+          "--output",
+          "target/integration-artifacts/gallery-trace-native"
+        ],
+        "builds": [
+          "gallery-trace-fixture",
+          "gles-host-instrumentation",
+          "shared-host"
+        ],
+        "requirements": [
+          "node",
+          "npm",
+          "browser",
+          "gles"
+        ]
+      }
     ]
   }
 }

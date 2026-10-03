@@ -35,7 +35,7 @@ Each host target has one compiled schema and one target contract. Instrumentatio
 
 Cargo features exist only for the instrumentation axis (`instrumentation`), the WASM host's renderer (`render`) and core's test-only invariant oracle (`checked-invariants`). Every build logs, answers statistics requests and installs a panic hook that reports through its log sink, so a production fault is diagnosable; [diagnostic logging](runtime.md#diagnostic-logging) keeps that cost off hot paths. Every build carries its contract descriptors and can [serve them to a client](protocol-and-schema.md#build-compatibility). Platform dependencies follow the host target: the native server always includes its WebSocket transport. Do not add capability or placeholder flags. [GUI](gui.md) layout and interaction remain headless, browser input services stay in client adapters, and Surface conversion dependencies stay in offline tooling. [Manifests/configurations](../development/building.md#crates-and-features) own the declarations.
 
-Artifact size is a measured budget per host distribution, not a compile-time selection. Keep it down through shared implementation and demand-driven resources; a capability that cannot fit the budget needs an architecture review, not a feature flag.
+Measure artifact size per host distribution without default size ceilings. Keep it down through shared implementation and demand-driven resources; size measurements never select capabilities at compile time. Runtime resource isolation budgets, when explicitly configured for a World or attached child World, are a separate policy from distribution size and require their own resource accounting and enforcement design.
 
 ## Compile-time generation
 
@@ -45,7 +45,7 @@ Follow [target compatibility](protocol-and-schema.md#build-compatibility): expli
 
 Use pinned stable Rust, reserving dated nightly for specific verification or measured experiments. Justify production dependencies by purpose, enabled/transitive features, maintenance and artifact cost. Prefer std/small glue when sufficient; established libraries when correctness/interoperability warrants them.
 
-Own networking in hosts, graphics in renderers and conversion outside viewers. Keep a runtime decoder only in the host targets that use it, versions central and lockfiles retained. Build release artifacts by package, target and axis selection to avoid hidden workspace feature unification. Measure WASM, JavaScript, shaders and native shims separately against their size budgets; validate the production and instrumentation builds of each host distribution through real integration, with scenarios on the production build unless they need a test control or the profiler. Compilation alone does not prove delivery.
+Own networking in hosts, graphics in renderers and conversion outside viewers. Keep a runtime decoder only in the host targets that use it, versions central and lockfiles retained. Build release artifacts by package, target and axis selection to avoid hidden workspace feature unification. Measure WASM, JavaScript, shaders and native shims separately, reporting attribution and unknown costs without default size ceilings; validate the production and instrumentation builds of each host distribution through real integration, with scenarios on the production build unless they need a test control or the profiler. Compilation alone does not prove delivery.
 
 ## Development tooling
 

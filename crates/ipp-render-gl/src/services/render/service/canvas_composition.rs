@@ -127,6 +127,12 @@ impl<D: RenderDevice> RenderService<D> {
         viewport: WorldViewport,
         stats: &mut RenderFrameWork,
     ) -> Result<(), RenderError> {
+        #[cfg(feature = "instrumentation")]
+        let _gpu_surface = self.gpu_scope(
+            super::RenderGpuScope::Surface,
+            Some(surface.entity.world),
+            Some(surface.entity.entity),
+        );
         let placed = camera::multiply(view_projection, surface.model);
         let [width, height] = surface.extent.map(f64::from);
         match surface.selection.kind() {

@@ -217,6 +217,8 @@ pub struct World {
 
 /// ECS storage, ingress and simulation clock retained by a World.
 pub struct WorldSimulationState {
+    #[cfg(feature = "instrumentation")]
+    profile_context: usize,
     updating: bool,
     prepared_frame: bool,
     accepting_removals: bool,
@@ -256,6 +258,12 @@ enum Ingress {
         batch: Batch,
         effect_sink: Option<Box<dyn crate::OperationEffectSink>>,
     },
+}
+
+pub(crate) struct WorldConstructionIdentity {
+    pub(crate) id: crate::WorldId,
+    #[cfg(feature = "instrumentation")]
+    pub(crate) host: u64,
 }
 
 /// A world is unpublished until its limits and complete selected graph validate.
@@ -364,3 +372,10 @@ mod numeric_properties;
 mod property_binding;
 
 mod component_query;
+
+#[cfg(feature = "instrumentation")]
+impl Drop for World {
+    fn drop(&mut self) {
+        crate::profiling::retire_world(self.data.profile_context);
+    }
+}

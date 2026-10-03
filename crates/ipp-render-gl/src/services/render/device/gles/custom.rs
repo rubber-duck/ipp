@@ -20,7 +20,7 @@ impl GlesRenderDevice {
         // GPU storage; capacity is committed only after the allocation check.
         unsafe {
             if self.parameter_buffer == 0 {
-                (self.gl.gen_buffers)(1, &mut self.parameter_buffer);
+                self.gl.gen_buffers(1, &mut self.parameter_buffer);
             }
             if self.parameter_buffer == 0 {
                 return Err(RenderError::RenderDevice(
@@ -30,8 +30,9 @@ impl GlesRenderDevice {
             let capacity = bytes
                 .max(self.parameter_capacity.saturating_mul(2))
                 .max(256);
-            (self.gl.bind_buffer)(0x8A11, self.parameter_buffer);
-            (self.gl.buffer_data)(0x8A11, capacity as isize, ptr::null(), 0x88E0);
+            self.gl.bind_buffer(0x8A11, self.parameter_buffer);
+            self.gl
+                .buffer_data(0x8A11, capacity as isize, ptr::null(), 0x88E0);
             self.check()?;
             self.parameter_capacity = capacity;
         }
@@ -52,23 +53,25 @@ impl GlesRenderDevice {
         unsafe {
             self.use_program(program.id);
             if !words.is_empty() && program.parameters != u32::MAX {
-                (self.gl.bind_buffer)(0x8A11, self.parameter_buffer);
+                self.gl.bind_buffer(0x8A11, self.parameter_buffer);
                 let bytes = std::mem::size_of_val(words);
-                (self.gl.buffer_sub_data)(0x8A11, 0, bytes as isize, words.as_ptr().cast());
-                (self.gl.bind_buffer_base)(0x8A11, 0, self.parameter_buffer);
-                (self.gl.uniform_block_binding)(program.id, program.parameters, 0);
+                self.gl
+                    .buffer_sub_data(0x8A11, 0, bytes as isize, words.as_ptr().cast());
+                self.gl.bind_buffer_base(0x8A11, 0, self.parameter_buffer);
+                self.gl
+                    .uniform_block_binding(program.id, program.parameters, 0);
             }
             for (index, texture) in textures.enumerate() {
                 let (name, texture) = texture?;
                 let unit = (index + 2) as u32;
                 let location = self.custom_texture_location(program, name)?;
-                (self.gl.active_texture)(0x84C0 + unit);
-                (self.gl.bind_sampler)(unit, 0);
-                (self.gl.bind_texture)(0x0DE1, *texture);
+                self.gl.active_texture(0x84C0 + unit);
+                self.gl.bind_sampler(unit, 0);
+                self.gl.bind_texture(0x0DE1, *texture);
                 self.program_int(program, location, unit as i32);
             }
-            (self.gl.uniform_int)(program.alpha_mode, alpha_mode as i32);
-            (self.gl.uniform_float)(program.alpha_cutoff, alpha_cutoff);
+            self.gl.uniform_int(program.alpha_mode, alpha_mode as i32);
+            self.gl.uniform_float(program.alpha_cutoff, alpha_cutoff);
         }
         self.check_draw()
     }
@@ -86,7 +89,7 @@ impl GlesRenderDevice {
             .map_err(|_| RenderError::RenderDevice("invalid parameter name".into()))?;
         // SAFETY: Program is live in the current context. The name is terminated,
         // borrowed only for this synchronous lookup, and never retained by GL.
-        let location = unsafe { (self.gl.uniform_location)(program.id, c_name.as_ptr()) };
+        let location = unsafe { self.gl.uniform_location(program.id, c_name.as_ptr()) };
         locations.insert(name.into(), location);
         Ok(location)
     }
@@ -103,11 +106,11 @@ impl GlesRenderDevice {
         // SAFETY: Context is current; these calls copy scalar state only.
         unsafe {
             if enabled {
-                (self.gl.enable)(0x0BE2);
-                (self.gl.blend_equation)(0x8006);
-                (self.gl.blend_func)(0x0302, 0x0303, 1, 0x0303);
+                self.gl.enable(0x0BE2);
+                self.gl.blend_equation(0x8006);
+                self.gl.blend_func(0x0302, 0x0303, 1, 0x0303);
             } else {
-                (self.gl.disable)(0x0BE2);
+                self.gl.disable(0x0BE2);
             }
         }
         self.set_depth_mask(!enabled);

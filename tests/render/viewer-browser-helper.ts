@@ -1,3 +1,4 @@
+import { hostProfiling } from "../../packages/ipp-client/src/profiling.js";
 import type { RenderStatisticsSnapshot } from "@ipp/client/diagnostics";
 import { renderDiagnostics } from "../../packages/ipp-client/src/diagnostics.js";
 import type {
@@ -2178,4 +2179,27 @@ async function nextFrame(timeoutMs: number): Promise<void> {
       reject(new Error("World gallery did not become ready"));
     }, timeoutMs);
   });
+}
+
+/** Diagnostic capture stays on the live gallery Host connection. */
+let galleryTraceCapture: string | undefined;
+export async function startGalleryTrace(
+  maxEvents: number,
+  maxArtifactBytes: number,
+) {
+  const reader = hostProfiling(requireCanvas().host);
+  galleryTraceCapture = await reader.start({
+    counters: false,
+    trace: { maxEvents },
+    maxArtifactBytes,
+  });
+  return galleryTraceCapture;
+}
+export async function stopGalleryTrace() {
+  return hostProfiling(requireCanvas().host).stop();
+}
+export async function cancelGalleryTrace() {
+  if (galleryTraceCapture)
+    await hostProfiling(requireCanvas().host).release(galleryTraceCapture);
+  galleryTraceCapture = undefined;
 }

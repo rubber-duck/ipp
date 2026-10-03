@@ -4,6 +4,15 @@ use crate::RenderError;
 
 #[link(wasm_import_module = "ipp_gl")]
 unsafe extern "C" {
+    #[cfg(feature = "instrumentation")]
+    fn gl_calls_start() -> u32;
+
+    #[cfg(feature = "instrumentation")]
+    fn gl_calls_stop();
+
+    #[cfg(feature = "instrumentation")]
+    fn gl_calls_count(index: u32) -> u64;
+
     fn mesh_skin(mesh: u32, indices: *const [u8; 4], weights: *const [f32; 4], count: usize)
     -> u32;
 
@@ -262,6 +271,8 @@ unsafe extern "C" {
 #[derive(Default)]
 pub struct WebGlRenderDevice {
     uniform_epoch: u64,
+    #[cfg(feature = "instrumentation")]
+    gpu_queries: super::gpu_queries::GpuQueryPool<super::webgl_gpu_queries::WebGlGpuQueries>,
     error_checks: super::error_checks::RenderDeviceErrorChecks,
     surface_instance_scratch: Vec<[f32; 16]>,
 }
@@ -353,6 +364,64 @@ fn gui_bytes(kind: super::GuiRecordKind, records: usize) -> Result<u32, RenderEr
 }
 
 impl RenderDevice for WebGlRenderDevice {
+    #[cfg(feature = "instrumentation")]
+    fn gl_calls_start(&mut self) -> bool {
+        // SAFETY: Scalar import uses this device's live context; retains no Rust pointer.
+        unsafe { gl_calls_start() != 0 }
+    }
+
+    #[cfg(feature = "instrumentation")]
+    fn gl_calls_snapshot(&self) -> Option<super::RenderGlCallCounts> {
+        // SAFETY: Scalar imports read this context's retained counters without aliases or pointers.
+        Some(unsafe {
+            super::RenderGlCallCounts {
+                draws: gl_calls_count(0),
+                state: gl_calls_count(1),
+                uploads: gl_calls_count(2),
+                other: gl_calls_count(3),
+                profiler: gl_calls_count(4),
+                overflowed: gl_calls_count(5) != 0,
+            }
+        })
+    }
+
+    #[cfg(feature = "instrumentation")]
+    fn gl_calls_loss_end(&self) -> Option<u64> {
+        // SAFETY: Pure scalar readback from this device's bridge; no memory aliasing.
+        unsafe { (gl_calls_count(7) != 0).then(|| gl_calls_count(6)) }
+    }
+
+    #[cfg(feature = "instrumentation")]
+    fn gl_calls_stop(&mut self) {
+        // SAFETY: Scalar import changes only this device's diagnostic capture state.
+        unsafe { gl_calls_stop() }
+    }
+
+    #[cfg(feature = "instrumentation")]
+    fn gpu_capability(&self) -> super::RenderGpuCapability {
+        self.gpu_queries.capability()
+    }
+
+    #[cfg(feature = "instrumentation")]
+    fn gpu_start(&mut self) -> Result<super::RenderGpuQueryToken, super::RenderGpuAvailability> {
+        self.gpu_queries.start()
+    }
+
+    #[cfg(feature = "instrumentation")]
+    fn gpu_end(&mut self, token: super::RenderGpuQueryToken) {
+        self.gpu_queries.end(token);
+    }
+
+    #[cfg(feature = "instrumentation")]
+    fn gpu_poll(&mut self, token: super::RenderGpuQueryToken) -> super::RenderGpuAvailability {
+        self.gpu_queries.poll(token)
+    }
+
+    #[cfg(feature = "instrumentation")]
+    fn gpu_stop(&mut self, reason: super::RenderGpuAvailability) {
+        self.gpu_queries.stop(reason);
+    }
+
     fn set_exhaustive_draw_checks(&mut self, enabled: bool) {
         self.error_checks.set_exhaustive(enabled);
         // SAFETY: The bridge copies a scalar diagnostic setting, retaining no pointers.

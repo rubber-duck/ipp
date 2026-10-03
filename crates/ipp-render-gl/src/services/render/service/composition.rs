@@ -404,6 +404,16 @@ impl<D: RenderDevice> RenderService<D> {
         }
 
         self.surface_cache_program()?;
+        #[cfg(feature = "instrumentation")]
+        let _gpu_composite = if self.camera_targets.contains_key(&selection) {
+            self.gpu_scope(
+                super::RenderGpuScope::Composite,
+                Some(selection.world()),
+                None,
+            )
+        } else {
+            None
+        };
         let Some((target, _)) = self.camera_targets.get(&selection) else {
             return Ok(());
         };

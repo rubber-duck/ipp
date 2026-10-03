@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { resolve } from "node:path";
 import { GUI_STRESS_WORKLOAD } from "../../examples/gui-stress/workload.js";
+import "./gpu-memory.test.js";
 import { runGuiStress } from "./gui-stress.js";
 
 test("all supported GUI stress cycles target distinct valid virtual items", () => {

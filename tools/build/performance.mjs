@@ -3,7 +3,13 @@ import { build } from "esbuild";
 import { resolve } from "node:path";
 import { bundleBrowser } from "./helpers.mjs";
 
-const [scenario, output] = process.argv.slice(2);
+const [scenario, requestedOutput] = process.argv.slice(2);
+const output =
+  requestedOutput ??
+  resolve(
+    process.env.IPP_BUILD_OUTPUT ?? "target/worker-profiling",
+    `${scenario}.mjs`,
+  );
 if (!["native-import", "mixed-import", "stress", "robot"].includes(scenario))
   throw new Error("Unknown performance scenario");
 if (scenario === "stress")

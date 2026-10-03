@@ -61,6 +61,7 @@ REGRESSION_GROUPS = {
         "WebGL frames, cameras, geometry, materials, lighting, deformation and resource recovery",
         (
             "render",
+            "platformer-profile",
             "cameras",
             "geometry",
             "custom-materials",
@@ -75,6 +76,8 @@ REGRESSION_GROUPS = {
             "composed-queries",
         ),
         (
+            "test:host-profiling:browser",
+            "test:gpu-profiling:browser",
             "test:canvas:lifecycle",
             "test:canvas:dom",
             "test:canvas:controller-webgl",
@@ -117,6 +120,7 @@ REGRESSION_GROUPS = {
             "gallery-platformer",
             "native-gallery",
         ),
+        steps=("test:gallery-trace:exporter", "test:gallery-trace:browser"),
     ),
     "blender": RegressionGroup(
         "Blender packaging, exports, streaming and browser presentation",
@@ -127,6 +131,9 @@ REGRESSION_GROUPS = {
         steps=(
             *tuple(record["id"] for record in GLES_CHECKS),
             "test:canvas:controller-gles",
+            "test:host-profiling:native-gles",
+            "test:gallery-trace:native",
+            "test:gpu-profiling:native",
             "test:presentation:native-gles",
             "test:react-gui-authoring:gles",
             "test:plots:native",
@@ -143,6 +150,7 @@ REGRESSION_GROUPS = {
             "check:wasm-default",
             "check:wasm-all-features",
             "check:browser-identities",
+            "check:distribution-sizes",
         ),
     ),
     "scaling": RegressionGroup(
@@ -271,6 +279,12 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
         "gui-stress-fixtures",
         ("react", "native"),
         ("target/gui-stress", "target/gui-stress-contract"),
+        ("node", "npm"),
+    )
+    build(
+        "worker-profiling-fixture",
+        ("gallery-fixtures", "browser:render-instrumentation"),
+        ("target/worker-profiling",),
         ("node", "npm"),
     )
     build("builtin-exporter", (), ("target/builtin-exporter",), ("rust",))
@@ -436,6 +450,26 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
     ) -> None:
         add(Task(f"check:{name}", f"Check {name}", command, dependencies, requirements))
 
+    add(
+        Task(
+            "check:distribution-sizes",
+            "Measure current browser distributions without size ceilings",
+            (
+                sys.executable,
+                "tools/measure_artifacts.py",
+                *(
+                    value
+                    for profile in PROFILES["browser"]
+                    for value in ("--profile", profile)
+                ),
+                "--output",
+                "target/measurements/distribution-sizes.json",
+            ),
+            tuple(f"build:browser:{name}" for name in PROFILES["browser"]),
+            ("rust", "node", "git"),
+            ("target/measurements/distribution-sizes.json",),
+        )
+    )
     check("repository", (sys.executable, "tools/check_repo.py"), ("git",))
     check("catalog", operation("catalog"))
     check("workspace", (sys.executable, "tools/check_workspace.py"), ("rust",))
@@ -561,6 +595,9 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
                 ),
             )
         )
+    from .trace import register as register_traces
+
+    register_traces(tasks)
     select(tasks, [])
     from .benchmark import register
 

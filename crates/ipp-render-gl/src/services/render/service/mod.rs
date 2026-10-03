@@ -3,6 +3,14 @@
 //! The service boundary types live here; lifecycle, frame, surface and shadow
 //! submissions each own their implementation file.
 
+#[cfg(feature = "instrumentation")]
+mod gpu_profiling;
+#[cfg(feature = "instrumentation")]
+pub use gpu_profiling::{
+    RenderGlCallWindow, RenderGlStopReason, RenderGpuIdentity, RenderGpuSample, RenderGpuSampling,
+    RenderGpuScope,
+};
+
 mod canvas_composition;
 mod composition;
 mod frame;
@@ -90,6 +98,8 @@ pub struct RenderService<D: RenderDevice> {
     uploads: super::frame_statistics::RenderUploadCounter,
     /// Statistics of the last completed render.
     statistics: super::frame_statistics::RenderStatistics,
+    #[cfg(feature = "instrumentation")]
+    gpu_capture: gpu_profiling::RenderGpuCapture,
     frame_scratch: RenderFrameScratch,
     pub(super) light_selections:
         BTreeMap<ipp_core::OutputRef, super::light_selection::LightSelectionState>,

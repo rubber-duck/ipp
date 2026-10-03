@@ -1,6 +1,33 @@
 use super::*;
 
 impl<P: HostServices> Host<P> {
+    /// Adapter-owned optional profiling control at a quiescent Host boundary.
+    /// A trusted adapter supplies a private owner ID; transport requests use
+    /// the negotiated connection identity. Never call during frame evaluation.
+    pub fn profile_control(
+        &mut self,
+        connection: u64,
+        request: ipp_protocol::profiling::ProfileRequest,
+    ) -> ipp_protocol::profiling::ProfileResponse {
+        #[cfg(feature = "instrumentation")]
+        {
+            self.profiling.request(
+                self.runtime.identity(),
+                P::NAME,
+                connection,
+                request,
+                &mut self.services,
+            )
+        }
+        #[cfg(not(feature = "instrumentation"))]
+        {
+            let _ = (connection, request);
+            ipp_protocol::profiling::ProfileResponse::status(
+                ipp_protocol::profiling::ProfileStatus::Unavailable,
+            )
+        }
+    }
+
     /// Initialize Host services once, independently of world creation.
     pub fn new() -> Result<Self, String> {
         Self::with_system_factories(ipp_core::systems::compiled_system_factories())
@@ -14,6 +41,8 @@ impl<P: HostServices> Host<P> {
             .map_err(|error| error.to_string())?;
         let services = P::initialize(&mut runtime)?;
         Ok(Self {
+            #[cfg(feature = "instrumentation")]
+            profiling: Default::default(),
             connections: Default::default(),
             sessions: Default::default(),
             runtime,
@@ -85,9 +114,6 @@ impl<P: HostServices> Host<P> {
 
     /// Run a Host frame, preserving independent progress when one session fails.
     pub fn tick_worlds(&mut self, dt: f64) -> Result<Vec<(u64, String)>, String> {
-        #[cfg(feature = "instrumentation")]
-        let _allocation_scope = ipp_core::profiling::AllocationScope::new(208, "host.tick");
-
         if !dt.is_finite() || dt < 0.0 {
             return Err("invalid host frame delta".into());
         }
@@ -97,6 +123,11 @@ impl<P: HostServices> Host<P> {
         }
 
         let mut failures = self.process_host_requests();
+        #[cfg(feature = "instrumentation")]
+        let _profile = self.runtime.profile_scope();
+        #[cfg(feature = "instrumentation")]
+        let _allocation_scope = ipp_core::profiling::AllocationScope::new(208, "host.tick");
+
         failures.extend(self.admit_session_requests(dt));
         self.services.service_resources(&mut self.runtime)?;
         let mut scratch = std::mem::take(&mut self.frame_scratch);
@@ -230,6 +261,9 @@ impl<P: HostServices> Host<P> {
         failures.extend(self.drain_lifecycle_watches());
         failures.extend(self.drain_gui_observations());
         self.frame_scratch = scratch;
+        #[cfg(feature = "instrumentation")]
+        self.profiling.completed_boundary();
+
         Ok(failures)
     }
 

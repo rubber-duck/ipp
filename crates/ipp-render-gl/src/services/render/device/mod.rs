@@ -1,3 +1,14 @@
+#[cfg(feature = "instrumentation")]
+mod gl_call_counts;
+#[cfg(feature = "instrumentation")]
+mod gpu_queries;
+#[cfg(feature = "instrumentation")]
+pub use gl_call_counts::RenderGlCallCounts;
+#[cfg(all(feature = "instrumentation", target_arch = "wasm32"))]
+mod webgl_gpu_queries;
+#[cfg(feature = "instrumentation")]
+pub use gpu_queries::{RenderGpuAvailability, RenderGpuCapability, RenderGpuQueryToken};
+
 mod error_checks;
 mod retained_records;
 mod uniform_cache;
@@ -155,6 +166,54 @@ pub struct ViewportLimits {
 /// A device belongs to one context. Hosts keep that context current and discard
 /// its renderer on context loss before creating a replacement after restoration.
 pub trait RenderDevice: 'static {
+    /// Begin physical-call counting on this device; unsupported devices remain explicit.
+    #[cfg(feature = "instrumentation")]
+    fn gl_calls_start(&mut self) -> bool {
+        false
+    }
+
+    /// Retained context-owned physical-call snapshot; absent when unsupported.
+    #[cfg(feature = "instrumentation")]
+    fn gl_calls_snapshot(&self) -> Option<RenderGlCallCounts> {
+        None
+    }
+
+    /// Actual bridge loss callback clock, when observation froze before Rust saw loss.
+    #[cfg(feature = "instrumentation")]
+    fn gl_calls_loss_end(&self) -> Option<u64> {
+        None
+    }
+
+    /// Stop counting without changing ordinary rendering statistics.
+    #[cfg(feature = "instrumentation")]
+    fn gl_calls_stop(&mut self) {}
+
+    /// Optional query capability; never controls ordinary rendering.
+    #[cfg(feature = "instrumentation")]
+    fn gpu_capability(&self) -> RenderGpuCapability {
+        RenderGpuCapability::Unsupported
+    }
+
+    /// Issue an asynchronous timer scope owned by this device context.
+    #[cfg(feature = "instrumentation")]
+    fn gpu_start(&mut self) -> Result<RenderGpuQueryToken, RenderGpuAvailability> {
+        Err(RenderGpuAvailability::Unsupported)
+    }
+
+    /// End the issued scope without waiting for its result.
+    #[cfg(feature = "instrumentation")]
+    fn gpu_end(&mut self, _token: RenderGpuQueryToken) {}
+
+    /// Read one available result only after checking completion; pending never blocks.
+    #[cfg(feature = "instrumentation")]
+    fn gpu_poll(&mut self, _token: RenderGpuQueryToken) -> RenderGpuAvailability {
+        RenderGpuAvailability::Unsupported
+    }
+
+    /// Invalidate and retire all query resources; lost contexts abandon names.
+    #[cfg(feature = "instrumentation")]
+    fn gpu_stop(&mut self, _reason: RenderGpuAvailability) {}
+
     /// Context-owned linked program and uniform locations.
     type Program;
     /// Context-owned vertex array, vertex/index buffers and draw count.

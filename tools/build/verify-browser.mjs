@@ -226,7 +226,7 @@ for (const [name, expected] of [
   ["ipp_render_set_glyph_atlas_limits", rendering && instrumentation],
   ["ipp_render_set_surface_cache_budget", rendering && instrumentation],
   ["ipp_profile_shadow_draw_calls", rendering && instrumentation],
-  ["ipp_profile_reset", instrumentation],
+  ["ipp_profile_control", instrumentation],
   ["ipp_instrumentation_panic", instrumentation],
 ])
   assert.equal(
@@ -249,7 +249,7 @@ const workerSource = await readFile(
   "utf8",
 );
 assert.equal(workerSource.includes("IPP_INSTRUMENTATION"), false);
-assert.equal(workerSource.includes("ipp_profile_reset"), false);
+assert.equal(workerSource.includes("ipp_profile_control"), false);
 if (rendering) {
   const renderWorker = await readFile(
     resolve(directory, "render-worker.js"),

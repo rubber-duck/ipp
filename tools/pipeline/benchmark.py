@@ -10,7 +10,7 @@ import shutil
 import time
 
 from .artifacts import source_identity, write_json
-from .builds import cargo, compile_client, native_contract, product, wasm
+from .builds import cargo, compile_client, gles_host, native_contract, product, wasm
 from .catalog import PROFILES
 from .model import ROOT, Task
 from .processes import blender, node, run
@@ -77,6 +77,28 @@ def build_native(instrumented: bool) -> None:
         )
 
 
+def build_gui_native(instrumented: bool) -> None:
+    """Release GLES Host products keep ordinary timing and diagnostics separate."""
+    name = "gui-native-instrumented" if instrumented else "gui-native"
+    features = ["instrumentation"] if instrumented else []
+    with product(DIRECTORY / name) as directory:
+        gles_host(directory, instrumented, release=True)
+        suffix = ".exe" if os.name == "nt" else ""
+        write_json(
+            directory / "build-identity.json",
+            {
+                "source": source_identity(ROOT),
+                "profile": "release",
+                "features": features,
+                "instrumented": instrumented,
+                "target": "native",
+                "backend": "gles",
+                "executable": digest(directory / f"gles_host{suffix}"),
+                "contract": digest(directory / "contract.bin"),
+            },
+        )
+
+
 def build_browser() -> None:
     """The instrumentation browser distribution whose profiler the browser stress
     scene reads, built apart from the regression products."""
@@ -102,7 +124,13 @@ def register(tasks: dict[str, Task]) -> None:
 
     register_charts(tasks)
 
-    for name in ("native", "native-instrumented", "browser"):
+    for name in (
+        "native",
+        "native-instrumented",
+        "browser",
+        "gui-native",
+        "gui-native-instrumented",
+    ):
         tasks[f"build:performance-{name}"] = Task(
             f"build:performance-{name}",
             f"Prepare opt-in {name} performance host",
@@ -115,6 +143,17 @@ def register(tasks: dict[str, Task]) -> None:
 
 def plan(args: argparse.Namespace, tasks: dict[str, Task]) -> list[str]:
     from .catalog import operation
+
+    if args.device == "software" and not (
+        args.scene == "gui-stress" and args.backend == "native" and args.instrumented
+    ):
+        raise ValueError(
+            "--software is available only for native GUI --instrumented diagnostics; ordinary timing requires hardware"
+        )
+    if args.compare_checkout and getattr(args, "scene", "stress") != "gui-stress":
+        raise ValueError("--compare-checkout requires --scene gui-stress")
+    if args.pairs != 1 and not args.compare_checkout:
+        raise ValueError("--pairs requires --compare-checkout")
 
     if getattr(args, "scene", "stress") == "chart-data":
         from .chart_benchmark import plan as plan_charts
@@ -135,8 +174,12 @@ def plan(args: argparse.Namespace, tasks: dict[str, Task]) -> list[str]:
         unsupported = [
             f"--{name.replace('_', '-')}"
             for name in RETAINED_GUI_UNSUPPORTED
-            if getattr(args, name) not in (None, False)
+            if name != "instrumented" and getattr(args, name) not in (None, False)
         ]
+        if args.instrumented and args.backend != "native":
+            raise ValueError(
+                "--instrumented GUI diagnostics currently select the native Host"
+            )
         if unsupported:
             raise ValueError(
                 "The GUI stress benchmark does not accept Blender stress options: "
@@ -147,7 +190,13 @@ def plan(args: argparse.Namespace, tasks: dict[str, Task]) -> list[str]:
         dependencies = (
             "build:gui-stress-fixtures",
             "build:surface-assets",
-            "build:browser:render" if args.backend == "browser" else "build:gles-host",
+            "build:browser:render"
+            if args.backend == "browser"
+            else (
+                "build:performance-gui-native-instrumented"
+                if args.instrumented
+                else "build:performance-gui-native"
+            ),
             *(
                 ["build:browser:render-instrumentation"]
                 if args.backend == "browser"
@@ -156,6 +205,21 @@ def plan(args: argparse.Namespace, tasks: dict[str, Task]) -> list[str]:
         )
         if args.build_only:
             return list(dependencies)
+        if args.compare_checkout:
+            if args.instrumented:
+                raise ValueError(
+                    "Paired GUI runs compare ordinary timing; instrumentation is a separate window"
+                )
+            if args.pairs < 1 or args.pairs > 4:
+                raise ValueError("GUI pairs must be in 1..4")
+            checkout = Path(args.compare_checkout).resolve()
+            if not (checkout / ".git").exists():
+                raise ValueError(
+                    "--compare-checkout must name an existing source checkout"
+                )
+            from .gui_comparison import register_pair
+
+            return register_pair(args, tasks, dependencies, checkout)
         tasks["benchmark:gui-stress"] = Task(
             "benchmark:gui-stress",
             "Measure the fixed React GUI stress workload through real completed frames",
@@ -167,7 +231,22 @@ def plan(args: argparse.Namespace, tasks: dict[str, Task]) -> list[str]:
                 args.output or "target/performance/gui-stress",
                 str(args.samples),
                 *([args.egl_dir] if args.backend == "native" else []),
-                *(["--core-profile"] if args.backend == "browser" else []),
+                *(
+                    ["--core-profile"]
+                    if args.backend == "browser"
+                    else [
+                        "--host-build",
+                        str(
+                            DIRECTORY
+                            / (
+                                "gui-native-instrumented"
+                                if args.instrumented
+                                else "gui-native"
+                            )
+                        ),
+                    ]
+                ),
+                *(["--instrumented-diagnostics"] if args.instrumented else []),
             ),
             () if args.reuse_build else dependencies,
             (

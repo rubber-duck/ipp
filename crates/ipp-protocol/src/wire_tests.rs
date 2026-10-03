@@ -30,6 +30,9 @@ fn manifest_names_tags_and_layout_references_are_valid() {
 
     assert_eq!(layout_names.len(), LAYOUTS.len());
     let tag_spaces = [
+        "profile-request",
+        "profile-status",
+        "profile-gpu-sampling",
         "dataset-request",
         "dataset-response",
         "dataset-value",
@@ -188,6 +191,9 @@ fn tag_space_name(space: TagSpace) -> &'static str {
         TagSpace::DatasetDelta => "dataset-delta",
         TagSpace::DatasetKind => "dataset-kind",
         TagSpace::DatasetValue => "dataset-value",
+        TagSpace::ProfileRequest => "profile-request",
+        TagSpace::ProfileStatus => "profile-status",
+        TagSpace::ProfileGpuSampling => "profile-gpu-sampling",
     }
 }
 

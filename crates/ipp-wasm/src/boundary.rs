@@ -36,6 +36,21 @@ impl WasmHostBoundary {
         }
     }
 
+    #[cfg(feature = "instrumentation")]
+    pub(crate) fn profile_control(
+        &mut self,
+        request: ipp_protocol::profiling::ProfileRequest,
+    ) -> ipp_protocol::profiling::ProfileResponse {
+        self.host.as_mut().map_or_else(
+            || {
+                ipp_protocol::profiling::ProfileResponse::status(
+                    ipp_protocol::profiling::ProfileStatus::Unavailable,
+                )
+            },
+            |host| host.profile_control(u64::MAX, request),
+        )
+    }
+
     pub(crate) fn open(&mut self, id: u64) -> bool {
         if self.host.is_some() || !self.connections.is_empty() {
             return self.diagnostic("Dispose the previous Host endpoints before reopening");

@@ -15,7 +15,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from pipeline.cli import main, parser
+from pipeline.cli import main, make_plan, parser
 from pipeline.environment import Requirement, probe
 from pipeline.model import ROOT, Plan, Task
 from pipeline.runner import (
@@ -402,16 +402,20 @@ class BrowserDeviceTests(Fixture):
                     arguments.parse_args(
                         [*command, "--software", "--hardware", "vulkan"]
                     )
-        for invalid in (
-            ["regression", "--hardware", "software"],
-            # Benchmarks require hardware and offer no software option.
-            ["benchmark", "browser", "--software"],
-        ):
+        for invalid in (["regression", "--hardware", "software"],):
             with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                 arguments.parse_args(invalid)
         self.assertEqual(
             arguments.parse_args(["benchmark", "browser"]).device, "vulkan"
         )
+        # Software parses for native diagnostics; ordinary timing rejects it in planning.
+        with self.assertRaisesRegex(ValueError, "ordinary timing requires hardware"):
+            make_plan(arguments.parse_args(["benchmark", "browser", "--software"]))
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            arguments.parse_args(
+                ["benchmark", "native", "--software", "--hardware", "vulkan"]
+            )
+
         for argv, expected in (
             (["regression", "--only", "check:catalog"], None),
             (["regression", "--only", "check:catalog", "--software"], "software"),
@@ -420,6 +424,19 @@ class BrowserDeviceTests(Fixture):
                 "gl-egl",
             ),
             (["benchmark", "browser", "--build-only"], "vulkan"),
+            (
+                [
+                    "benchmark",
+                    "native",
+                    "--scene",
+                    "gui-stress",
+                    "--instrumented",
+                    "--software",
+                    "--egl-dir",
+                    "/usr/lib64",
+                ],
+                "software",
+            ),
         ):
             with self.subTest(argv=argv):
                 with patch(

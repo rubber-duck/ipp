@@ -321,6 +321,9 @@ fn manifest_tag_space(space: TagSpace) -> &'static str {
         TagSpace::DatasetDelta => "dataset-delta",
         TagSpace::DatasetKind => "dataset-kind",
         TagSpace::DatasetValue => "dataset-value",
+        TagSpace::ProfileRequest => "profile-request",
+        TagSpace::ProfileStatus => "profile-status",
+        TagSpace::ProfileGpuSampling => "profile-gpu-sampling",
     }
 }
 

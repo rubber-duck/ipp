@@ -292,10 +292,72 @@ class PlanningTests(unittest.TestCase):
             "benchmark", "native", "--scene", "gui-stress", "--egl-dir", "/lib64"
         ).tasks[-1]
         self.assertEqual(native.command[2], "native-gles")
-        self.assertIn("build:gles-host", native.dependencies)
+        self.assertIn("build:performance-gui-native", native.dependencies)
+        self.assertIn("--host-build", native.command)
+        diagnostics = plan(
+            "benchmark",
+            "native",
+            "--scene",
+            "gui-stress",
+            "--egl-dir",
+            "/lib64",
+            "--instrumented",
+        ).tasks[-1]
+        self.assertIn(
+            "build:performance-gui-native-instrumented", diagnostics.dependencies
+        )
+        self.assertIn("--instrumented-diagnostics", diagnostics.command)
         for flags in (("--frames", "4"), ("--group", "32"), ("--surface-cache",)):
             with self.subTest(flags=flags), self.assertRaises(ValueError):
                 plan("benchmark", "browser", "--scene", "gui-stress", *flags)
+
+    def test_trace_capacity_and_instrumented_products(self):
+        with self.assertRaises(ValueError):
+            plan("trace", "browser", "--max-events", "0")
+        with (
+            patch.dict(os.environ, {"IPP_EGL_LIBRARY_DIR": ""}),
+            self.assertRaises(ValueError),
+        ):
+            plan("trace", "native", "--max-events", "64")
+        for backend in ("browser", "native"):
+            args = ["trace", backend, "--max-events", "64", "--software"]
+            if backend == "native":
+                args += ["--egl-dir", "/usr/lib64"]
+            selected = plan(*args)
+            names = {task.id for task in selected.tasks}
+            self.assertIn("build:browser:render-instrumentation", names)
+            self.assertIn("trace:gallery-gui", names)
+            self.assertIn("64", selected.tasks[-1].command)
+            self.assertEqual(
+                "build:gles-host-instrumentation" in names, backend == "native"
+            )
+
+    def test_gui_software_selection_is_diagnostic_only(self):
+        arguments = (
+            "benchmark",
+            "native",
+            "--scene",
+            "gui-stress",
+            "--egl-dir",
+            "/lib64",
+            "--software",
+        )
+        with self.assertRaisesRegex(ValueError, "ordinary timing requires hardware"):
+            plan(*arguments)
+        diagnostic = plan(*arguments, "--instrumented").tasks[-1]
+        self.assertIn("--instrumented-diagnostics", diagnostic.command)
+        self.assertIn(
+            "build:performance-gui-native-instrumented", diagnostic.dependencies
+        )
+        with self.assertRaisesRegex(ValueError, "native GUI"):
+            plan(
+                "benchmark",
+                "browser",
+                "--scene",
+                "gui-stress",
+                "--software",
+                "--instrumented",
+            )
 
     def test_gui_stress_correctness_uses_its_strict_product_and_real_backends(self):
         for backend in ("browser", "native"):

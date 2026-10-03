@@ -108,3 +108,5 @@ pub use host::{WorldAttachmentEffect, WorldAttachmentRetirement, WorldAttachment
 /// Opt-in stage timing and allocation counters; never enabled by default.
 #[cfg(feature = "instrumentation")]
 pub mod profiling;
+#[cfg(feature = "instrumentation")]
+pub mod profiling_trace;

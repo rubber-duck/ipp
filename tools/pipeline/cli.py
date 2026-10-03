@@ -199,17 +199,52 @@ def parser() -> argparse.ArgumentParser:
     importing.add_argument("--namespace", default="scene")
     importing.add_argument("--world", default="world.ipp")
     importing.add_argument("--clips-only", action="store_true")
+    tracing = commands.add_parser(
+        "trace",
+        help="capture bounded instrumentation timelines outside ordinary timing",
+    )
+    common(tracing)
+    hardware(tracing)
+    tracing.add_argument(
+        "--cdp",
+        action="store_true",
+        help="optional separate unaligned worker CPU profile (browser only)",
+    )
+    tracing.add_argument("backend", choices=("browser", "native"))
+    tracing.add_argument("--scene", choices=("gallery-gui",), default="gallery-gui")
+    tracing.add_argument("--output", default="target/performance/gallery-gui-trace")
+    tracing.add_argument(
+        "--max-artifact-bytes",
+        type=int,
+        default=16_777_216,
+        help="independent Host diagnostic JSON retention limit; capacity failures are errors",
+    )
+    tracing.add_argument(
+        "--max-events",
+        type=int,
+        required=True,
+        help="explicit retained complete-span capacity",
+    )
+
     benchmarking = commands.add_parser(
         "benchmark", help="run opt-in scene performance experiments outside regression"
     )
     common(benchmarking)
-    # Performance claims need real hardware, so benchmarks never fall back to software.
-    benchmarking.add_argument(
+    # Ordinary timing needs hardware; explicit software is diagnostic-only.
+    benchmark_device = benchmarking.add_mutually_exclusive_group()
+    benchmark_device.add_argument(
         "--hardware",
         dest="device",
         choices=HARDWARE_DEVICES,
         default=HARDWARE_DEVICES[0],
         help="run browser steps on this hardware ANGLE backend (default: %(default)s)",
+    )
+    benchmark_device.add_argument(
+        "--software",
+        dest="device",
+        action="store_const",
+        const="software",
+        help="software Chromium for native GUI instrumentation diagnostics only",
     )
     benchmarking.add_argument("backend", choices=("native", "browser"))
     # Stress defaults are applied by the planner so other scenes can reject them.
@@ -239,6 +274,13 @@ def parser() -> argparse.ArgumentParser:
         help="timed action cycles per sweep and repetition for --scene gui-stress",
     )
     benchmarking.add_argument("--output")
+    benchmarking.add_argument(
+        "--compare-checkout",
+        help="existing checkout with prepared GUI artifacts for alternating paired runs",
+    )
+    benchmarking.add_argument(
+        "--pairs", type=int, default=1, help="GUI A/B/B/A blocks, bounded to 1..4"
+    )
     benchmarking.add_argument(
         "--warmup", type=int, default=2, help="untimed action cycles for chart-data"
     )
@@ -276,10 +318,16 @@ def parser() -> argparse.ArgumentParser:
         help="opt the retained-gui terminal panels into whole-Surface caching",
     )
     measuring = commands.add_parser(
-        "measure", help="record explicit artifact sizes and hashes"
+        "measure", help="measure artifacts or current browser distributions"
     )
     common(measuring)
-    measuring.add_argument("paths", nargs="+")
+    measuring.add_argument("paths", nargs="*")
+    measuring.add_argument(
+        "--profile", action="append", choices=tuple(PROFILES["browser"])
+    )
+    measuring.add_argument("--output")
+    measuring.add_argument("--compare")
+    measuring.add_argument("--native-shim", action="append", default=[])
     return result
 
 
@@ -475,16 +523,39 @@ def make_plan(args: argparse.Namespace) -> Plan:
             ("node", "npm", "browser"),
         )
         requested = [id_]
+    elif args.command == "trace":
+        from .trace import plan
+
+        requested = plan(args, tasks)
     elif args.command == "benchmark":
         from .benchmark import plan
 
         requested = plan(args, tasks)
     elif args.command == "measure":
+        if not args.paths and not args.profile:
+            raise ValueError(
+                "Select artifact paths or --profile. Use check distribution-sizes for all profiles."
+            )
         id_ = "measure:artifacts"
+        options = tuple(
+            value
+            for name, values in (
+                ("--profile", args.profile or []),
+                ("--output", [args.output] if args.output else []),
+                ("--compare", [args.compare] if args.compare else []),
+                ("--native-shim", args.native_shim),
+            )
+            for item in values
+            for value in (name, item)
+        )
         tasks[id_] = Task(
             id_,
-            "Measure explicit artifacts",
-            (sys.executable, "tools/measure_artifacts.py", *args.paths),
+            "Measure artifacts and selected distributions",
+            (sys.executable, "tools/measure_artifacts.py", *args.paths, *options),
+            tuple(
+                f"build:browser:{name}" for name in dict.fromkeys(args.profile or [])
+            ),
+            ("rust", "node", "git") if args.profile else (),
         )
         requested = [id_]
     if not requested:
@@ -516,6 +587,10 @@ def list_selections(args: argparse.Namespace) -> dict:
                 name: group.description for name, group in REGRESSION_GROUPS.items()
             },
             "steps": list(tasks),
+        }
+    if args.command == "trace":
+        return {
+            "gallery-gui": "Bounded semantic CPU gallery capture with clock uncertainty"
         }
     if args.command == "benchmark":
         return {

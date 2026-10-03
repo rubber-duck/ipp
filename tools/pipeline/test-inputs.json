@@ -42,6 +42,15 @@
       "npm"
     ]
   },
+  "dist/packages/ipp-client/tests/profiling.test.js": {
+    "builds": [
+      "typescript"
+    ],
+    "requirements": [
+      "node",
+      "npm"
+    ]
+  },
   "dist/packages/ipp-client/tests/profile-worker.test.js": {
     "builds": [
       "typescript"

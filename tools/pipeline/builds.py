@@ -8,7 +8,7 @@ import shutil
 import tempfile
 from typing import Iterator
 
-from .artifacts import write_json
+from .artifacts import digest, source_identity, write_json
 from .catalog import PROFILES
 from .model import ROOT
 from .processes import blender, node, run
@@ -138,6 +138,17 @@ def browser(name: str) -> None:
         )
         run([node(), "tools/build/verify-browser.mjs", str(request)])
         request.unlink()
+        write_json(
+            directory / "build-identity.json",
+            {
+                "source": source_identity(ROOT),
+                "profile": "release-small",
+                "features": configuration["features"],
+                "instrumented": "instrumentation" in configuration["features"],
+                "runtime": digest(directory / "runtime.wasm"),
+                "contract": digest(directory / "contract.bin"),
+            },
+        )
 
 
 def native_contract(output: Path, *, release: bool = False) -> None:
@@ -171,7 +182,7 @@ def native_host(directory: Path, features: list[str], *, release: bool = False) 
     native_contract(directory / "contract.bin", release=release)
 
 
-def gles_host(directory: Path, instrumentation: bool) -> None:
+def gles_host(directory: Path, instrumentation: bool, *, release: bool = False) -> None:
     """The presenting GLES testing host of ipp-server, its contract and client.
 
     The instrumentation build honours the testing controls; the normal one is the
@@ -183,10 +194,18 @@ def gles_host(directory: Path, instrumentation: bool) -> None:
         "ipp-server",
         "--example",
         "gles_host",
+        *(["--release"] if release else []),
         *(["--features", "instrumentation"] if instrumentation else []),
     )
-    shutil.copy2(ROOT / "target/debug/examples/gles_host", directory / "gles_host")
-    native_contract(directory / "contract.bin")
+    suffix = ".exe" if os.name == "nt" else ""
+    shutil.copy2(
+        ROOT
+        / "target"
+        / ("release" if release else "debug")
+        / f"examples/gles_host{suffix}",
+        directory / f"gles_host{suffix}",
+    )
+    native_contract(directory / "contract.bin", release=release)
     compile_client(directory, directory / "contract.bin")
 
 
@@ -429,6 +448,8 @@ def build(name: str) -> None:
         )
     elif name == "gui-stress-fixtures":
         node_product("tools/build_gui_stress.mjs", "target/gui-stress")
+    elif name == "worker-profiling-fixture":
+        node_product("tools/build/performance.mjs", "target/worker-profiling", "robot")
     elif name == "shared-host":
         node_product("tools/shared-host/build.mjs", "target/shared-host")
     elif name == "blender-addon":

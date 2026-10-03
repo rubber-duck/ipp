@@ -19,6 +19,8 @@ unsafe extern "C" {
 
 pub(crate) struct RenderSurfaceService {
     renderer: RenderService<WebGlRenderDevice>,
+    #[cfg(feature = "instrumentation")]
+    profile: Option<super::render_profiling::RenderProfileCapture>,
     active: bool,
     width: u32,
     height: u32,
@@ -39,6 +41,48 @@ pub(crate) struct RenderSurfaceService {
 const SURFACE_CACHE_RECORD_WORDS: usize = 10;
 
 impl RenderSurfaceService {
+    #[cfg(feature = "instrumentation")]
+    pub(crate) fn profile_start(
+        &mut self,
+        capture: u64,
+        host: u64,
+        options: ipp_protocol::profiling::ProfileRenderOptions,
+    ) -> ipp_protocol::profiling::ProfileGpuCapability {
+        let state = super::render_profiling::RenderProfileCapture::start(
+            &mut self.renderer,
+            capture,
+            host,
+            options,
+        );
+        let capability = state.capability();
+        self.profile = Some(state);
+        capability
+    }
+
+    #[cfg(feature = "instrumentation")]
+    pub(crate) fn profile_stop(
+        &mut self,
+        capture: u64,
+    ) -> ipp_protocol::profiling::ProfileGpuCapture {
+        let state = self
+            .profile
+            .take()
+            .expect("accepted Host capture owns render profile");
+        assert!(state.matches(capture), "Host capture generation mismatch");
+        state.stop(&mut self.renderer)
+    }
+
+    #[cfg(feature = "instrumentation")]
+    pub(crate) fn profile_cancel(&mut self, capture: u64) {
+        if self
+            .profile
+            .as_ref()
+            .is_some_and(|state| state.matches(capture))
+        {
+            self.profile.take().unwrap().cancel(&mut self.renderer);
+        }
+    }
+
     pub(crate) fn record_frame(
         &mut self,
         host: &mut HostRuntime,
@@ -55,6 +99,8 @@ impl RenderSurfaceService {
             .expect("factories registered before source use");
         Self {
             renderer,
+            #[cfg(feature = "instrumentation")]
+            profile: None,
             active: false,
             width: 1,
             height: 1,
@@ -141,6 +187,10 @@ impl RenderSurfaceService {
     }
 
     fn detach_host(&mut self, host: &mut ipp_core::HostRuntime) -> Result<(), String> {
+        #[cfg(feature = "instrumentation")]
+        if self.active {
+            self.renderer.invalidate_gpu_context();
+        }
         self.renderer
             .prepare(host, None)
             .map_err(|error| error.to_string())?;

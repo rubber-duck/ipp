@@ -1,10 +1,18 @@
 /** Runs the fixed React GUI stress workload once and writes its report. */
+import type { ProfileCapture, HostProfileStatus } from "@ipp/client/testing";
 import type { HostGuiLayoutStatistics } from "@ipp/client/diagnostics";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { arch, cpus, platform, release } from "node:os";
+import {
+  lstat,
+  mkdir,
+  readFile,
+  readdir,
+  readlink,
+  writeFile,
+} from "node:fs/promises";
+import { arch, cpus, loadavg, platform, release } from "node:os";
 import { resolve } from "node:path";
 import {
   runBrowserEnvironment,
@@ -15,8 +23,16 @@ import { runNativeEnvironment } from "../integration/environment.js";
 import { invoke } from "../render/evidence.js";
 import { encodePng } from "../render/retained-gui-images.js";
 import { GUI_STRESS_WORKLOAD } from "../../examples/gui-stress/workload.js";
+import {
+  accountedMemory,
+  sampleChromeMemory,
+  sampleDrmMemory,
+} from "./gpu-memory.js";
 import { sampleWorkerAllocations } from "./worker-profiling.js";
-import { verifyHardwareRenderer } from "#ipp-browser-options";
+import {
+  browserLaunchOptions,
+  verifyHardwareRenderer,
+} from "#ipp-browser-options";
 
 type Arrangement = "browser" | "native-gles";
 type FixtureCapture = {
@@ -65,15 +81,6 @@ type StepSample = {
   };
 };
 
-type CoreProfile = {
-  memoryBytes: number;
-  frames: number[][];
-  names: string[];
-  stages: number[];
-  categories: { name: string; calls: number; bytes: number }[];
-  allocations: number[];
-};
-
 const SOFTWARE_RENDERER = /swiftshader|llvmpipe|softpipe|lavapipe/i;
 const ASSETS = [
   "target/font-assets/shure-tech-mono.ippf",
@@ -90,25 +97,46 @@ async function digest(path: string): Promise<string> {
 
 async function sourceIdentity() {
   const git = (...args: string[]) =>
-    execFileSync("git", args, { encoding: "utf8" }).trim();
-  const status = git("status", "--porcelain=v1");
-  const diff = git("diff", "HEAD", "--binary");
-  const hash = createHash("sha256").update(diff).update(status);
-  const changed = git(
-    "ls-files",
-    "--modified",
-    "--others",
-    "--exclude-standard",
-  )
-    .split("\n")
+    execFileSync("git", args, { encoding: "utf8" });
+  const names = [
+    ...new Set(
+      git("ls-files", "--cached", "--others", "--exclude-standard", "-z").split(
+        "\0",
+      ),
+    ),
+  ]
     .filter(Boolean)
     .sort();
-  for (const path of changed) hash.update(path).update(await readFile(path));
+  const hash = createHash("sha256");
+  for (const path of names) {
+    hash.update(path).update("\0");
+    const metadata = await lstat(path).catch(() => null);
+    hash
+      .update(
+        metadata?.isSymbolicLink()
+          ? `link:${await readlink(path)}`
+          : metadata?.isFile()
+            ? await digest(path)
+            : "missing",
+      )
+      .update("\0");
+  }
   return {
-    revision: git("rev-parse", "HEAD"),
-    uncommittedChanges: status.length > 0,
-    changesSha256: status ? hash.digest("hex") : null,
+    revision: git("rev-parse", "HEAD").trim(),
+    sourceSha256: hash.digest("hex"),
   };
+}
+
+async function clientArtifacts(directory: string) {
+  return Promise.all(
+    (await readdir(directory))
+      .filter((name) => name.endsWith(".js"))
+      .sort()
+      .map(async (name) => ({
+        name,
+        sha256: await digest(resolve(directory, name)),
+      })),
+  );
 }
 
 function image(capture: FixtureCapture) {
@@ -267,10 +295,16 @@ async function exercise(
   repetitions: number,
   samplesPerSweep: number,
   measure: boolean,
+  nativeProcessId: number | null = null,
+  instrumentedDiagnostics = false,
 ) {
   const moduleUrl = `${env.urls.origin}/target/gui-stress/gui-stress-fixture.js`;
   const call = <T>(name: string, args: readonly unknown[] = []) =>
-    env.execute(name, args, () => invoke<T>(env.page, moduleUrl, name, args));
+    name.startsWith("hostProfile")
+      ? invoke<T>(env.page, moduleUrl, name, args)
+      : env.execute(name, args, () =>
+          invoke<T>(env.page, moduleUrl, name, args),
+        );
   const output = [];
   const mountedEntities = new Set<string>();
   let lastRangeChanges = 0;
@@ -279,6 +313,12 @@ async function exercise(
   ]);
   let scenarioFailure: unknown;
   try {
+    const profilingStatus = await call<HostProfileStatus>("hostProfileStatus");
+    assert.equal(
+      profilingStatus.available,
+      instrumentedDiagnostics,
+      "Selected product instrumentation availability mismatch",
+    );
     for (const sweep of GUI_STRESS_WORKLOAD.sweeps) {
       for (let repeat = 0; repeat < repetitions; repeat += 1) {
         const mounted = await call<{
@@ -288,6 +328,8 @@ async function exercise(
           cameraX?: number;
           rangeChanges: number;
           range?: [number, number];
+          buildToFrameMs: number | null;
+          observedPanelEntities: number;
         }>("mount", [sweep]);
         assert.ok(
           !mountedEntities.has(mounted.entity),
@@ -486,6 +528,10 @@ async function exercise(
         output.push({
           sweep,
           repeat,
+          mount: {
+            buildToFrameMs: mounted.buildToFrameMs,
+            observedPanelEntities: mounted.observedPanelEntities,
+          },
           state,
           samples,
           timings: Object.fromEntries(
@@ -663,6 +709,50 @@ async function exercise(
         actions: GUI_STRESS_WORKLOAD.allocationActions,
       };
     }
+    let nativeProfile: {
+      status: HostProfileStatus;
+      capture: ProfileCapture | null;
+      actions: readonly string[];
+      ownershipArtifact: string | null;
+    } | null = null;
+    if ("nativeHost" in connection) {
+      const status = profilingStatus;
+      assert.equal(
+        status.available,
+        instrumentedDiagnostics,
+        "Host instrumentation availability must match selected product",
+      );
+      nativeProfile = {
+        status,
+        capture: null,
+        actions: [],
+        ownershipArtifact: null,
+      };
+      if (instrumentedDiagnostics) {
+        await call("mount", [GUI_STRESS_WORKLOAD.probeSweep]);
+        await call("warmup", [GUI_STRESS_WORKLOAD.warmupFrames]);
+        const ownership = await call<Record<string, unknown>>(
+          "hostProfileOwnershipScenario",
+        );
+        await env.evidence.writeJson(
+          "native-profile-ownership.json",
+          ownership,
+        );
+        const captureId = await call<string>("hostProfileStart");
+        for (const action of GUI_STRESS_WORKLOAD.allocationActions)
+          await call("step", [action]);
+        const captured = await call<ProfileCapture>("hostProfileStop");
+        assert.equal(captured.captureId, captureId);
+        validateSemanticProfile(captured, "native");
+        await env.evidence.writeJson("native-cpu-allocations.json", captured);
+        nativeProfile = {
+          status,
+          capture: captured,
+          ownershipArtifact: "native-profile-ownership.json",
+          actions: GUI_STRESS_WORKLOAD.allocationActions,
+        };
+      }
+    }
     let layoutDiagnosticsProbe = null;
     if (!measure) {
       const probe = await call<{
@@ -720,8 +810,111 @@ async function exercise(
       assert.deepEqual(probe.missing.total, probe.retired.total);
       layoutDiagnosticsProbe = probe;
     }
+    const panelDiagnostics = [];
+    for (const count of GUI_STRESS_WORKLOAD.diagnosticPanelEntities) {
+      const panel = await call<{
+        requestedEntities: number;
+        observedEntities: number;
+        buildMs: number | null;
+        inspectMs: number | null;
+        inspectionJsonUtf8Bytes: number;
+        inspectionScope: string;
+        edits: {
+          action: string;
+          updateMs: number | null;
+          updateToFrameMs: number | null;
+        }[];
+        before: FixtureCapture;
+        after: FixtureCapture;
+      }>("panelDiagnostic", [count, samplesPerSweep]);
+      assert.equal(panel.observedEntities, count);
+      assert.ok(paintedPixels(panel.before) > 1000);
+      const changed = changedPixels(panel.before, panel.after);
+      assert.ok(changed > 0, `Panel ${count} local edit changed no pixels`);
+      await retainCapture(env, `diagnostic-${count}-before`, panel.before);
+      await retainCapture(env, `diagnostic-${count}-after`, panel.after);
+      panelDiagnostics.push({
+        ...panel,
+        before: undefined,
+        after: undefined,
+        correctness: {
+          paintedPixels: paintedPixels(panel.before),
+          changedPixels: changed,
+        },
+        timings: Object.fromEntries(
+          ["local-colour", "local-position"].map((action) => [
+            action,
+            {
+              updateMs: measure
+                ? distribution(
+                    panel.edits
+                      .filter((edit) => edit.action === action)
+                      .map((edit) => edit.updateMs!),
+                  )
+                : null,
+              updateToFrameMs: measure
+                ? distribution(
+                    panel.edits
+                      .filter((edit) => edit.action === action)
+                      .map((edit) => edit.updateToFrameMs!),
+                  )
+                : null,
+            },
+          ]),
+        ),
+      });
+    }
+    // Restore the rich probe before final external memory observations.
+    await call("mount", [GUI_STRESS_WORKLOAD.probeSweep]);
+    await call("warmup", [GUI_STRESS_WORKLOAD.warmupFrames]);
+    // External diagnostics run only after all timing/allocation windows have ended.
+    const memoryFrame = await call<FixtureCapture>("capture");
+    const memoryIdentity = {
+      capture: `${env.evidence.directory}/memory-frame.json`,
+      pipelineRun: process.env.IPP_PIPELINE_RUN ?? null,
+      device: memoryFrame.statistics?.device ?? null,
+    };
+    const browser = env.page.context().browser();
+    const chromeMemory = browser
+      ? await sampleChromeMemory(memoryIdentity, browser)
+      : null;
+    const drmMemory = await sampleDrmMemory(
+      memoryIdentity,
+      nativeProcessId === null
+        ? (chromeMemory?.processIds ?? [])
+        : [nativeProcessId],
+    );
+    const memory = {
+      samplingWindow: "after timing, capture, work and allocation windows",
+      semantics:
+        "IPP-accounted resources, DRM client counters and Chrome process backing allocations are distinct overlapping observations, not additive ownership totals. Chrome fields do not establish physical VRAM residency. Shared DRM buffers may overlap across clients.",
+      accounted: accountedMemory(memoryIdentity, memoryFrame.statistics),
+      external: [
+        ...(chromeMemory?.observations ?? []),
+        ...drmMemory.observations,
+      ],
+      chromeRole:
+        nativeProcessId === null
+          ? "runtime browser"
+          : "native presentation client browser; does not include native Host GPU allocations",
+      rawArtifact: "gpu-memory-raw.json",
+    };
+    await env.evidence.writeJson("gpu-memory-raw.json", {
+      chrome: chromeMemory?.raw ?? null,
+      drm: drmMemory.raw,
+    });
+    await retainCapture(env, "memory", memoryFrame);
+    const afterMemory = await call<FixtureCapture>("capture");
+    assert.equal(afterMemory.failedDrawCalls, 0);
+    assert.deepEqual(
+      afterMemory.worlds,
+      memoryFrame.worlds,
+      "Memory sampling changed World identities",
+    );
     return {
       init,
+      memory,
+      panelDiagnostics,
       browser: env.page.context().browser()?.version() ?? null,
       device: output[0]?.after.statistics?.device ?? null,
       softwareRenderer: Object.values(
@@ -731,6 +924,8 @@ async function exercise(
       sweeps: output,
       workProbe,
       allocationProfile,
+      nativeProfile,
+      profilingStatus,
       layoutDiagnosticsProbe,
     };
   } catch (error) {
@@ -763,27 +958,23 @@ async function exerciseCoreProfile(env: BrowserEnvironmentContext) {
     },
   ]);
   try {
-    const worker = env.page.workers().at(-1);
-    if (!worker || !(await worker.evaluate(() => "ippProfile" in globalThis)))
-      throw new Error("The GUI profiling worker has no host profiling hooks");
+    const status = await call<HostProfileStatus>("hostProfileStatus");
+    assert.equal(
+      status.available,
+      true,
+      "Instrumented worker profiling unavailable",
+    );
     const collect = async (
       sweep: {
         readonly name: string;
         readonly panels: number;
         readonly treeRows: number;
       },
-      allocations: boolean,
       idle: boolean,
-    ): Promise<CoreProfile> => {
+    ) => {
       await call("mount", [sweep]);
       await call("warmup", [GUI_STRESS_WORKLOAD.warmupFrames]);
-      await worker.evaluate((enabled) => {
-        (
-          globalThis as unknown as {
-            ippProfile: { start(profile: boolean): void };
-          }
-        ).ippProfile.start(enabled);
-      }, allocations);
+      const captureId = await call<string>("hostProfileStart");
       if (idle) {
         for (
           let frame = 0;
@@ -793,92 +984,214 @@ async function exerciseCoreProfile(env: BrowserEnvironmentContext) {
           await call("step", ["idle", frame]);
       } else {
         for (const action of GUI_STRESS_WORKLOAD.allocationActions)
-          await call("step", [action, 0]);
+          await call("step", [action]);
       }
-      return worker.evaluate(() =>
-        (
-          globalThis as unknown as { ippProfile: { stop(): CoreProfile } }
-        ).ippProfile.stop(),
-      );
+      const capture = await call<ProfileCapture>("hostProfileStop");
+      assert.equal(capture.captureId, captureId);
+      validateSemanticProfile(capture, "wasm");
+      return capture;
     };
-    const cpuSummary = (profile: CoreProfile) => ({
-      frameCount: profile.frames.length,
-      evaluationMs: distribution(profile.frames.map((frame) => frame[0]!)),
-      hostFrameMs: distribution(profile.frames.map((frame) => frame[1]!)),
-      wasmMemoryBytes: profile.memoryBytes,
-    });
-    const allocationSummary = (profile: CoreProfile) => {
-      const categoryTotals = new Map<
-        string,
-        { calls: number; bytes: number }
-      >();
-      for (const category of profile.categories) {
-        const name = category.name || "unclassified";
-        const current = categoryTotals.get(name) ?? { calls: 0, bytes: 0 };
-        categoryTotals.set(name, {
-          calls: current.calls + category.calls,
-          bytes: current.bytes + category.bytes,
-        });
-      }
-      return {
-        calls: profile.allocations[0],
-        requestedBytes: profile.allocations[1],
-        wasmMemoryBytes: profile.memoryBytes,
-        bySemanticName: [...categoryTotals]
-          .filter(([, totals]) => totals.calls > 0)
-          .map(([name, totals]) => ({ name, ...totals })),
-      };
-    };
-    const validate = (cpu: CoreProfile, allocations: CoreProfile) => {
-      assert.ok(cpu.frames.length > 0 && allocations.frames.length > 0);
-      assert.ok(cpu.memoryBytes > 0 && allocations.memoryBytes > 0);
-      assert.equal(
-        allocations.categories.reduce(
-          (total, category) => total + category.calls,
-          0,
-        ),
-        allocations.allocations[0],
-        "Core allocation categories do not sum to the allocator total",
-      );
-    };
-    const cpu = await collect(GUI_STRESS_WORKLOAD.probeSweep, false, false);
-    const allocations = await collect(
-      GUI_STRESS_WORKLOAD.probeSweep,
-      true,
-      false,
+    await call("mount", [GUI_STRESS_WORKLOAD.probeSweep]);
+    await call("warmup", [GUI_STRESS_WORKLOAD.warmupFrames]);
+    const ownership = await call<Record<string, unknown>>(
+      "hostProfileOwnershipScenario",
     );
-    validate(cpu, allocations);
+    await env.evidence.writeJson("worker-profile-ownership.json", ownership);
+    const mixed = await collect(GUI_STRESS_WORKLOAD.probeSweep, false);
     const idleSweeps = [];
-    for (const sweep of GUI_STRESS_WORKLOAD.sweeps.filter((candidate) =>
-      candidate.name.startsWith("panels-"),
-    )) {
-      const idleCpu = await collect(sweep, false, true);
-      const idleAllocations = await collect(sweep, true, true);
-      validate(idleCpu, idleAllocations);
-      idleSweeps.push({ sweep, cpu: idleCpu, allocations: idleAllocations });
-    }
-    await writeFile(
-      resolve(env.evidence.directory, "core-profile.json"),
-      `${JSON.stringify({ mixed: { cpu, allocations }, idleSweeps }, null, 2)}\n`,
-    );
+    for (const sweep of GUI_STRESS_WORKLOAD.sweeps.filter((item) =>
+      item.name.startsWith("panels-"),
+    ))
+      idleSweeps.push({
+        sweep,
+        requestedFrames: GUI_STRESS_WORKLOAD.idleProfileFrames,
+        capture: await collect(sweep, true),
+      });
+    await env.evidence.writeJson("core-profile.json", { mixed, idleSweeps });
     return {
       evidence: env.evidence.directory,
       artifact: "core-profile.json",
       build: "render-instrumentation",
-      cpu: cpuSummary(cpu),
-      allocations: allocationSummary(allocations),
-      idleSweeps: idleSweeps.map((profile) => ({
-        sweep: profile.sweep,
-        requestedFrames: GUI_STRESS_WORKLOAD.idleProfileFrames,
-        cpu: cpuSummary(profile.cpu),
-        allocations: allocationSummary(profile.allocations),
-      })),
+      mixed,
+      ownership,
+      idleSweeps,
       stageInterpretation:
-        "Raw slot-indexed stage tables are preserved in the artifact; compare semantic names, not slot positions, across changed selected-system schedules.",
+        "Semantic System/phase and fixed stages carry exact Host/World/incarnation/composition identities. Inclusive stage CPU durations are not additive wall time; exclusive allocation categories sum to evaluation-thread totals, excluding background allocations.",
     };
   } finally {
     await call("close");
   }
+}
+
+function validateSemanticProfile(
+  captured: ProfileCapture,
+  target: "native" | "wasm",
+) {
+  assert.equal(captured.source.target, target);
+  assert.equal(captured.source.scope, "evaluation-thread");
+  assert.equal(captured.source.backgroundAllocations, "excluded");
+  assert.equal(captured.availability.cpu, "available");
+  assert.equal(captured.availability.allocations, "available");
+  assert.ok(
+    captured.stages.some(
+      (stage) =>
+        stage.kind === "system" &&
+        stage.identity.scope === "world" &&
+        stage.identity.system.length > 0,
+    ),
+  );
+  assert.ok(captured.stages.some((stage) => BigInt(stage.duration) > 0n));
+  assert.equal(
+    captured.categories.reduce(
+      (total, item) => total + BigInt(item.allocationCalls),
+      0n,
+    ),
+    BigInt(captured.allocations.calls),
+  );
+  assert.equal(
+    captured.categories.reduce(
+      (total, item) => total + BigInt(item.requestedBytes),
+      0n,
+    ),
+    BigInt(captured.allocations.requestedBytes),
+  );
+}
+
+export async function runGuiProfileCapture(
+  signal: AbortSignal,
+  arrangement: Arrangement,
+  output: string,
+  eglDirectory?: string,
+) {
+  const directory = resolve(
+    arrangement === "browser"
+      ? "target/browser-build/render-instrumentation"
+      : "target/gles-host-instrumentation",
+  );
+  const build: BrowserBuildConfiguration = {
+    name: arrangement === "browser" ? "render-instrumentation" : "gles",
+    generatedModule: resolve(directory, "generated.js"),
+    runtimeWasm: resolve(
+      directory,
+      arrangement === "browser"
+        ? "runtime.wasm"
+        : process.platform === "win32"
+          ? "gles_host.exe"
+          : "gles_host",
+    ),
+    contractArtifact: resolve(directory, "contract.bin"),
+  };
+  const config = {
+    workspace: process.cwd(),
+    build,
+    rendering: arrangement === "browser",
+    deviceScaleFactor: GUI_STRESS_WORKLOAD.viewport.dpr,
+    operationTimeoutMs: 60_000,
+    evidenceParent: output,
+  };
+  const collect = async (
+    env: BrowserEnvironmentContext,
+    connection: Record<string, unknown>,
+  ) => {
+    const moduleUrl = `${env.urls.origin}/target/gui-stress/gui-stress-fixture.js`;
+    const call = <T>(name: string, args: readonly unknown[] = []) =>
+      invoke<T>(env.page, moduleUrl, name, args);
+    try {
+      await call("initialize", [
+        {
+          generatedModuleUrl: env.urls.generated,
+          measure: false,
+          ...connection,
+        },
+      ]);
+      assert.equal(
+        (await call<HostProfileStatus>("hostProfileStatus")).available,
+        true,
+      );
+      await call("mount", [GUI_STRESS_WORKLOAD.probeSweep]);
+      await call("warmup", [GUI_STRESS_WORKLOAD.warmupFrames]);
+      const before = await call<FixtureCapture>("capture");
+      assert.ok(paintedPixels(before) > 1000);
+      await retainCapture(env, "profile-before", before);
+      const ownership = await call<Record<string, unknown>>(
+        "hostProfileOwnershipScenario",
+      );
+      await env.evidence.writeJson("profile-ownership.json", ownership);
+      const captureId = await call<string>("hostProfileStart");
+      for (const action of GUI_STRESS_WORKLOAD.allocationActions)
+        await call("step", [action]);
+      const artifact = await call<ProfileCapture>("hostProfileStop");
+      assert.equal(artifact.captureId, captureId);
+      validateSemanticProfile(
+        artifact,
+        arrangement === "browser" ? "wasm" : "native",
+      );
+      await env.evidence.writeJson("profile-capture.json", artifact);
+      const after = await call<FixtureCapture>("capture");
+      assert.ok(changedPixels(before, after) > 0);
+      await retainCapture(env, "profile-after", after);
+      await env.evidence.record("profile-summary", {
+        captureId: artifact.captureId,
+        hostId: artifact.hostId,
+        stages: artifact.stages.length,
+        categories: artifact.categories.length,
+        worlds: new Set(
+          artifact.stages.map(
+            (stage) =>
+              `${stage.identity.worldId}/${stage.identity.incarnation}`,
+          ),
+        ).size,
+      });
+      return {
+        captureId: artifact.captureId,
+        evidence: env.evidence.directory,
+      };
+    } finally {
+      await call("close");
+    }
+  };
+  if (arrangement === "browser")
+    return runBrowserEnvironment(
+      "gui-profile-capture-worker",
+      config,
+      signal,
+      (env) =>
+        collect(env, {
+          workerScriptUrl: env.urls.workerScript,
+          wasmUrl: env.urls.wasm,
+        }),
+    );
+  if (!eglDirectory)
+    throw new Error("Native profiling correctness requires EGL directory");
+  return runNativeEnvironment(
+    "gui-profile-capture-native",
+    {
+      executable: build.runtimeWasm,
+      schemaArtifact: build.contractArtifact,
+      workingDirectory: process.cwd(),
+      extraArguments: ["--egl-dir", eglDirectory],
+      readinessTimeoutMs: 30_000,
+      operationTimeoutMs: 60_000,
+      evidenceParent: output,
+    },
+    signal,
+    async (host) => {
+      if (!host.presentationUrl)
+        throw new Error("Native presentation unavailable");
+      return runBrowserEnvironment(
+        "gui-profile-capture-native-client",
+        config,
+        host.signal,
+        (env) =>
+          collect(env, {
+            nativeHost: {
+              url: host.url,
+              presentationUrl: host.presentationUrl,
+            },
+          }),
+      );
+    },
+  );
 }
 
 export async function runGuiStress(
@@ -890,6 +1203,8 @@ export async function runGuiStress(
   samplesPerSweep: number = GUI_STRESS_WORKLOAD.samplesPerSweep,
   withCoreProfile = false,
   correctnessOnly = false,
+  hostBuildDirectory?: string,
+  instrumentedDiagnostics = false,
 ) {
   if (!Number.isSafeInteger(repetitions) || repetitions < 1)
     throw new Error("GUI stress repetitions must be positive");
@@ -902,19 +1217,106 @@ export async function runGuiStress(
   await mkdir(output, { recursive: true });
   const workspace = process.cwd();
   const startedAt = new Date().toISOString();
+  const contentionBefore = {
+    loadAverage: loadavg(),
+    logicalCpus: cpus().length,
+    timestamp: startedAt,
+  };
   // Timing runs measure the normal build each backend ships.
-  const buildName = arrangement === "browser" ? "render" : "gles";
+  const buildName =
+    arrangement === "browser"
+      ? "render"
+      : instrumentedDiagnostics
+        ? "gles-release-instrumented"
+        : correctnessOnly
+          ? "gles"
+          : "gles-release";
   const directory = resolve(
     arrangement === "browser"
       ? "target/browser-build/render"
-      : "target/gles-host",
+      : (hostBuildDirectory ??
+          (correctnessOnly
+            ? "target/gles-host"
+            : "target/performance-build/gui-native")),
   );
+  const currentSource = await sourceIdentity();
+  const fixtureBuild = JSON.parse(
+    await readFile("target/gui-stress/build-report.json", "utf8"),
+  );
+  for (const item of fixtureBuild.artifacts)
+    assert.equal(
+      item.sha256,
+      await digest(
+        resolve("target/gui-stress", item.path.split(/[\\/]/).at(-1)),
+      ),
+      "Fixture artifact changed since build",
+    );
+  for (const item of fixtureBuild.fixtureSources)
+    assert.equal(
+      item.sha256,
+      await digest(item.path),
+      "Fixture source changed since build",
+    );
+  let buildProvenance = null;
+  if (arrangement === "native-gles" && !correctnessOnly) {
+    buildProvenance = JSON.parse(
+      await readFile(resolve(directory, "build-identity.json"), "utf8"),
+    );
+    assert.equal(
+      buildProvenance.profile,
+      "release",
+      "Native timing requires a release Host",
+    );
+    assert.equal(buildProvenance.instrumented, instrumentedDiagnostics);
+    assert.deepEqual(
+      buildProvenance.source,
+      currentSource,
+      "Native artifact source differs from current checkout; rebuild before timing",
+    );
+    assert.equal(
+      buildProvenance.executable,
+      await digest(
+        resolve(
+          directory,
+          process.platform === "win32" ? "gles_host.exe" : "gles_host",
+        ),
+      ),
+    );
+    assert.equal(
+      buildProvenance.contract,
+      await digest(resolve(directory, "contract.bin")),
+    );
+  }
+  if (arrangement === "browser" && !correctnessOnly) {
+    buildProvenance = JSON.parse(
+      await readFile(resolve(directory, "build-identity.json"), "utf8"),
+    );
+    assert.equal(buildProvenance.profile, "release-small");
+    assert.equal(buildProvenance.instrumented, false);
+    assert.deepEqual(
+      buildProvenance.source,
+      currentSource,
+      "Browser artifact source differs from current checkout; rebuild before timing",
+    );
+    assert.equal(
+      buildProvenance.runtime,
+      await digest(resolve(directory, "runtime.wasm")),
+    );
+    assert.equal(
+      buildProvenance.contract,
+      await digest(resolve(directory, "contract.bin")),
+    );
+  }
   const build: BrowserBuildConfiguration = {
-    name: buildName,
+    name: arrangement === "browser" ? "render" : "gles",
     generatedModule: resolve(directory, "generated.js"),
     runtimeWasm: resolve(
       directory,
-      arrangement === "browser" ? "runtime.wasm" : "gles_host",
+      arrangement === "browser"
+        ? "runtime.wasm"
+        : process.platform === "win32"
+          ? "gles_host.exe"
+          : "gles_host",
     ),
     contractArtifact: resolve(directory, "contract.bin"),
   };
@@ -939,7 +1341,7 @@ export async function runGuiStress(
           { workerScriptUrl: env.urls.workerScript, wasmUrl: env.urls.wasm },
           repetitions,
           samplesPerSweep,
-          !correctnessOnly,
+          !correctnessOnly && !instrumentedDiagnostics,
         ),
     );
     result = run.value;
@@ -977,7 +1379,9 @@ export async function runGuiStress(
               },
               repetitions,
               samplesPerSweep,
-              !correctnessOnly,
+              !correctnessOnly && !instrumentedDiagnostics,
+              host.processId ?? null,
+              instrumentedDiagnostics,
             ),
         );
         return browser.value;
@@ -993,6 +1397,23 @@ export async function runGuiStress(
     const profileDirectory = resolve(
       "target/browser-build/render-instrumentation",
     );
+    const profileProvenance = JSON.parse(
+      await readFile(resolve(profileDirectory, "build-identity.json"), "utf8"),
+    );
+    assert.deepEqual(
+      profileProvenance.source,
+      currentSource,
+      "Instrumented worker artifact source differs from checkout; rebuild",
+    );
+    assert.equal(profileProvenance.instrumented, true);
+    assert.equal(
+      profileProvenance.runtime,
+      await digest(resolve(profileDirectory, "runtime.wasm")),
+    );
+    assert.equal(
+      profileProvenance.contract,
+      await digest(resolve(profileDirectory, "contract.bin")),
+    );
     const profileBuild: BrowserBuildConfiguration = {
       name: "render-instrumentation",
       generatedModule: resolve(profileDirectory, "generated.js"),
@@ -1007,6 +1428,7 @@ export async function runGuiStress(
     );
     coreProfile = {
       ...profiled.value,
+      provenance: profileProvenance,
       contractSha256: await digest(profileBuild.contractArtifact),
       runtimeSha256: await digest(profileBuild.runtimeWasm),
     };
@@ -1014,14 +1436,16 @@ export async function runGuiStress(
   const report = {
     measurementMode: correctnessOnly
       ? "correctness-only"
-      : "post-admission-draw",
+      : instrumentedDiagnostics
+        ? "instrumented-diagnostics"
+        : "post-admission-draw",
     workload: GUI_STRESS_WORKLOAD,
     workloadSha256: createHash("sha256")
       .update(JSON.stringify(GUI_STRESS_WORKLOAD))
       .digest("hex"),
     repetitions,
     samplesPerSweep,
-    source: await sourceIdentity(),
+    source: currentSource,
     machine: {
       platform: platform(),
       release: release(),
@@ -1032,14 +1456,59 @@ export async function runGuiStress(
     build: {
       arrangement,
       name: buildName,
+      provenance: buildProvenance,
+      currentSource,
+      sourceMatches: buildProvenance
+        ? JSON.stringify(buildProvenance.source) ===
+          JSON.stringify(currentSource)
+        : null,
+      clientArtifacts: await clientArtifacts(directory),
       contractSha256: await digest(build.contractArtifact),
       runtimeSha256: await digest(build.runtimeWasm),
+    },
+    fixture: {
+      path: "target/gui-stress/gui-stress-fixture.js",
+      sha256: await digest("target/gui-stress/gui-stress-fixture.js"),
+      sources: fixtureBuild.fixtureSources,
     },
     assets: await Promise.all(
       ASSETS.map(async (path) => ({ path, sha256: await digest(path) })),
     ),
     pipelineRun: process.env.IPP_PIPELINE_RUN ?? null,
     startedAt,
+    contention: {
+      before: contentionBefore,
+      after: {
+        loadAverage: loadavg(),
+        logicalCpus: cpus().length,
+        timestamp: new Date().toISOString(),
+      },
+      thermal: process.env.IPP_GUI_THERMAL_NOTE
+        ? {
+            status: "manual-observation",
+            note: process.env.IPP_GUI_THERMAL_NOTE,
+          }
+        : {
+            status: "unavailable",
+            reason: "No thermal sensor adapter or manual observation recorded",
+          },
+      scope:
+        "machine load averages include unrelated work; never attribute them to IPP alone",
+    },
+    compositor: {
+      settings: {
+        gui: "runtime-default",
+        chromium: browserLaunchOptions(arrangement === "browser"),
+        requestedAngle: process.env.IPP_BROWSER_ANGLE ?? null,
+        requestedGpuCompositing:
+          process.env.IPP_BROWSER_GPU_COMPOSITING ?? null,
+        rawSurfaceCache: GUI_STRESS_WORKLOAD.rawSurfaceCache,
+      },
+      observed: result.sweeps.map((item) => ({
+        sweep: item.sweep.name,
+        surfaces: item.after.statistics?.surfaces ?? null,
+      })),
+    },
     timingScope:
       "Update-to-frame measures post-ACK Host-admission evaluation cuts through an actual completed root draw including all exact scene outputs. It includes barrier latency, not the first visible instant. Correctness-only runs record null latency. Captures, diagnostics and allocation windows remain separate.",
     hardwareClaim: result.softwareRenderer
@@ -1052,8 +1521,12 @@ export async function runGuiStress(
         ? {
             workerAllocationSampling:
               "Native GLES host has no Chromium worker; sampled JS heap is unavailable",
-            coreCpuAndAllocator:
-              "This harness has no native host ippProfile hook; native core CPU/allocator sampling is unavailable, while GPU-resident bytes remain in diagnostics captures",
+            ...(instrumentedDiagnostics
+              ? {}
+              : {
+                  coreCpuAndAllocator:
+                    "Ordinary Host explicitly reports instrumentation unavailable; use separate --instrumented diagnostics",
+                }),
           }
         : {},
     ...result,
@@ -1084,5 +1557,10 @@ if (direct) {
     eglDirectory,
     Number(samples),
     process.argv.includes("--core-profile"),
+    false,
+    process.argv.includes("--host-build")
+      ? process.argv[process.argv.indexOf("--host-build") + 1]
+      : undefined,
+    process.argv.includes("--instrumented-diagnostics"),
   );
 }

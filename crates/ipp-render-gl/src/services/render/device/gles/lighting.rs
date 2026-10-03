@@ -21,16 +21,16 @@ impl GlesLightingLocations {
         // names are terminated; these queries retain no pointers or CPU aliases.
         unsafe {
             Self {
-                model: (gl.uniform_location)(id, c"u_model".as_ptr()),
-                normal: (gl.uniform_location)(id, c"u_normal".as_ptr()),
-                camera: (gl.uniform_location)(id, c"u_camera".as_ptr()),
-                ambient: (gl.uniform_location)(id, c"u_ambient".as_ptr()),
-                surface: (gl.uniform_location)(id, c"u_surface".as_ptr()),
-                lights: (gl.uniform_location)(id, c"u_lights[0]".as_ptr()),
-                count: (gl.uniform_location)(id, c"u_light_count".as_ptr()),
-                shadow_map: (gl.uniform_location)(id, c"u_shadow_map".as_ptr()),
-                shadow_matrix: (gl.uniform_location)(id, c"u_shadow_matrix[0]".as_ptr()),
-                shadow_settings: (gl.uniform_location)(id, c"u_shadow_settings[0]".as_ptr()),
+                model: gl.uniform_location(id, c"u_model".as_ptr()),
+                normal: gl.uniform_location(id, c"u_normal".as_ptr()),
+                camera: gl.uniform_location(id, c"u_camera".as_ptr()),
+                ambient: gl.uniform_location(id, c"u_ambient".as_ptr()),
+                surface: gl.uniform_location(id, c"u_surface".as_ptr()),
+                lights: gl.uniform_location(id, c"u_lights[0]".as_ptr()),
+                count: gl.uniform_location(id, c"u_light_count".as_ptr()),
+                shadow_map: gl.uniform_location(id, c"u_shadow_map".as_ptr()),
+                shadow_matrix: gl.uniform_location(id, c"u_shadow_matrix[0]".as_ptr()),
+                shadow_settings: gl.uniform_location(id, c"u_shadow_settings[0]".as_ptr()),
             }
         }
     }
@@ -56,25 +56,30 @@ impl GlesRenderDevice {
         unsafe {
             self.use_program(program.id);
             if locations.model >= 0 {
-                (self.gl.uniform_matrix)(locations.model, 1, 0, model.as_ptr());
+                self.gl
+                    .uniform_matrix(locations.model, 1, 0, model.as_ptr());
             }
             if locations.normal >= 0 {
-                (self.gl.uniform_matrix)(locations.normal, 1, 0, normal.as_ptr());
+                self.gl
+                    .uniform_matrix(locations.normal, 1, 0, normal.as_ptr());
             }
             if changed & CAMERA != 0 && locations.camera >= 0 {
-                (self.gl.uniform_vec4)(locations.camera, 1, frame.camera.as_ptr());
+                self.gl
+                    .uniform_vec4(locations.camera, 1, frame.camera.as_ptr());
             }
             if changed & AMBIENT != 0 && locations.ambient >= 0 {
-                (self.gl.uniform_rgb)(locations.ambient, 1, frame.ambient.as_ptr());
+                self.gl
+                    .uniform_rgb(locations.ambient, 1, frame.ambient.as_ptr());
             }
             if changed & SURFACE != 0 && locations.surface >= 0 {
-                (self.gl.uniform_rgb)(locations.surface, 1, surface.as_ptr());
+                self.gl.uniform_rgb(locations.surface, 1, surface.as_ptr());
             }
             if changed & LIGHTS != 0 && locations.lights >= 0 && frame.count > 0 {
-                (self.gl.uniform_vec4)(locations.lights, frame.count * 4, frame.lights.as_ptr());
+                self.gl
+                    .uniform_vec4(locations.lights, frame.count * 4, frame.lights.as_ptr());
             }
             if changed & COUNT != 0 && locations.count >= 0 {
-                (self.gl.uniform_int)(locations.count, frame.count);
+                self.gl.uniform_int(locations.count, frame.count);
             }
         }
         self.check_draw()
@@ -108,8 +113,8 @@ impl GlesRenderDevice {
         // exclusive locals; null pixel input allocates storage. Partial names are
         // deleted on failure, framebuffer bindings restored, no CPU borrow retained.
         let complete = unsafe {
-            (self.gl.gen_textures)(1, &mut map.texture);
-            (self.gl.gen_framebuffers)(1, &mut map.framebuffer);
+            self.gl.gen_textures(1, &mut map.texture);
+            self.gl.gen_framebuffers(1, &mut map.framebuffer);
             if map.texture == 0 || map.framebuffer == 0 {
                 self.free_shadow(map);
                 return Err(RenderError::RenderDevice(
@@ -117,15 +122,15 @@ impl GlesRenderDevice {
                 ));
             }
             self.submission.shadow_texture.set(None);
-            (self.gl.active_texture)(0x84C1);
-            (self.gl.bind_texture)(0x0DE1, map.texture);
-            (self.gl.bind_buffer)(0x88EC, 0);
-            (self.gl.tex_parameter)(0x0DE1, 0x2801, 0x2600);
-            (self.gl.tex_parameter)(0x0DE1, 0x2800, 0x2600);
-            (self.gl.tex_parameter)(0x0DE1, 0x2802, 0x812F);
-            (self.gl.tex_parameter)(0x0DE1, 0x2803, 0x812F);
-            (self.gl.tex_parameter)(0x0DE1, 0x813D, 0);
-            (self.gl.tex_image)(
+            self.gl.active_texture(0x84C1);
+            self.gl.bind_texture(0x0DE1, map.texture);
+            self.gl.bind_buffer(0x88EC, 0);
+            self.gl.tex_parameter(0x0DE1, 0x2801, 0x2600);
+            self.gl.tex_parameter(0x0DE1, 0x2800, 0x2600);
+            self.gl.tex_parameter(0x0DE1, 0x2802, 0x812F);
+            self.gl.tex_parameter(0x0DE1, 0x2803, 0x812F);
+            self.gl.tex_parameter(0x0DE1, 0x813D, 0);
+            self.gl.tex_image(
                 0x0DE1,
                 0,
                 0x81A6,
@@ -137,12 +142,13 @@ impl GlesRenderDevice {
                 ptr::null(),
             );
             self.bind_framebuffers(map.framebuffer, map.framebuffer);
-            (self.gl.framebuffer_texture)(0x8D40, 0x8D00, 0x0DE1, map.texture, 0);
-            (self.gl.draw_buffers)(1, &0);
-            (self.gl.read_buffer)(0);
-            let complete = (self.gl.check_framebuffer)(0x8D40) == 0x8CD5;
+            self.gl
+                .framebuffer_texture(0x8D40, 0x8D00, 0x0DE1, map.texture, 0);
+            self.gl.draw_buffers(1, &0);
+            self.gl.read_buffer(0);
+            let complete = self.gl.check_framebuffer(0x8D40) == 0x8CD5;
             self.bind_framebuffers(previous.draw, previous.read);
-            (self.gl.bind_texture)(0x0DE1, 0);
+            self.gl.bind_texture(0x0DE1, 0);
             complete
         };
         let result = self.check().and_then(|()| {
@@ -185,12 +191,12 @@ impl GlesRenderDevice {
         // SAFETY: Bound names belong to this live context; these calls copy
         // scalar state and retain no CPU pointer.
         unsafe {
-            (self.gl.active_texture)(0x84C1);
-            (self.gl.bind_texture)(0x0DE1, 0);
-            (self.gl.color_mask)(0, 0, 0, 0);
+            self.gl.active_texture(0x84C1);
+            self.gl.bind_texture(0x0DE1, 0);
+            self.gl.color_mask(0, 0, 0, 0);
             if slot == 0 {
-                (self.gl.clear_depth)(1.0);
-                (self.gl.clear)(0x00000100);
+                self.gl.clear_depth(1.0);
+                self.gl.clear(0x00000100);
             }
         }
         self.check()
@@ -203,7 +209,7 @@ impl GlesRenderDevice {
             self.bind_draw_framebuffer(target.draw);
             self.set_viewport(target.viewport);
             // SAFETY: Scalar colour-write state in the current context only.
-            unsafe { (self.gl.color_mask)(1, 1, 1, 1) };
+            unsafe { self.gl.color_mask(1, 1, 1, 1) };
         }
         self.check()
     }
@@ -229,15 +235,15 @@ impl GlesRenderDevice {
         unsafe {
             self.use_program(program.id);
             if self.submission.shadow_texture.replace(Some(map.texture)) != Some(map.texture) {
-                (self.gl.active_texture)(0x84C1);
-                (self.gl.bind_sampler)(1, 0);
-                (self.gl.bind_texture)(0x0DE1, map.texture);
+                self.gl.active_texture(0x84C1);
+                self.gl.bind_sampler(1, 0);
+                self.gl.bind_texture(0x0DE1, map.texture);
             }
             if changed & SHADOW_SAMPLER != 0 {
-                (self.gl.uniform_int)(program.lighting.shadow_map, 1);
+                self.gl.uniform_int(program.lighting.shadow_map, 1);
             }
             if changed & SHADOW_MATRICES != 0 && frame.count > 0 {
-                (self.gl.uniform_matrix)(
+                self.gl.uniform_matrix(
                     program.lighting.shadow_matrix,
                     frame.count,
                     0,
@@ -245,7 +251,7 @@ impl GlesRenderDevice {
                 );
             }
             if changed & SHADOW_SETTINGS != 0 && frame.count > 0 {
-                (self.gl.uniform_vec4)(
+                self.gl.uniform_vec4(
                     program.lighting.shadow_settings,
                     frame.count,
                     frame.shadow_settings.as_ptr(),
@@ -261,8 +267,8 @@ impl GlesRenderDevice {
         // SAFETY: Consumes exclusively owned names once in the current context;
         // GL tolerates zero names and context loss. No CPU data is accessed.
         unsafe {
-            (self.gl.delete_framebuffers)(1, &map.framebuffer);
-            (self.gl.delete_textures)(1, &map.texture);
+            self.gl.delete_framebuffers(1, &map.framebuffer);
+            self.gl.delete_textures(1, &map.texture);
         }
     }
 }

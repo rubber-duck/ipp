@@ -96,3 +96,40 @@ export function sampleWorkerCpu<T>(
 ) {
   return sampleWorker(browser, workerUrl, collect, "cpu");
 }
+
+/** Optional CDP artifact, explicitly separate until its clock relation is measured. */
+export async function optionalWorkerCpu<T>(
+  browser: Browser,
+  workerUrl: string,
+  collect: () => Promise<T>,
+) {
+  let collected = false;
+  let value: { result: T } | undefined;
+  try {
+    const sampled = await sampleWorkerCpu(browser, workerUrl, async () => {
+      collected = true;
+      value = { result: await collect() };
+      return value.result;
+    });
+    return {
+      value: sampled.window,
+      track: {
+        availability: "available",
+        participant: workerUrl,
+        clockDomain: "cdp-profiler.unspecified",
+        alignment: "unaligned; no measured relation to caller/core clock",
+        profile: sampled.profile,
+      },
+    };
+  } catch (error) {
+    if (collected && !value) throw error;
+    return {
+      value: value ? value.result : await collect(),
+      track: {
+        availability: "unavailable",
+        participant: workerUrl,
+        reason: error instanceof Error ? error.message : String(error),
+      },
+    };
+  }
+}

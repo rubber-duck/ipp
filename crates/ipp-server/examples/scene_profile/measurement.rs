@@ -106,52 +106,86 @@ pub(super) fn measure(
         result?;
         let allocations = profile::allocations();
         println!(
-            "{label}: Rust allocations/frame {}, requested bytes/frame {}",
+            "{label}: evaluation-thread Rust allocations/frame {}, requested bytes/frame {} (background allocations excluded)",
             allocations.0 as f64 / 5.0,
             allocations.1 as f64 / 5.0
         );
         std::fs::write(
             output.join(format!("{label}-allocations.json")),
             format!(
-                "{{\"frames\":5,\"dt\":{dt},\"calls\":{},\"requested_bytes\":{}}}\n",
-                allocations.0, allocations.1
+                "{{\"captureId\":\"{}\",\"hostId\":\"{}\",\"scope\":\"evaluation-thread\",\"backgroundAllocations\":\"excluded\",\"frames\":5,\"dt\":{dt},\"calls\":\"{}\",\"requested_bytes\":\"{}\",\"units\":{{\"calls\":\"allocation-or-reallocation calls\",\"requested_bytes\":\"requested bytes, not retained memory\"}}}}\n",
+                profile::capture_id(),
+                scene.host.identity(),
+                allocations.0,
+                allocations.1
             ),
         )?;
         let mut stages = std::fs::File::create(output.join(format!("{label}-stages.csv")))?;
         writeln!(
             stages,
-            "composition,system,phase,calls,ms_per_frame,allocations,requested_bytes"
+            "capture,host,world,incarnation,composition,system,phase,kind,name,calls,duration_ns,allocation_calls,requested_bytes,allocation_scope"
         )?;
-        for system in 0..profile::system_count() {
-            let name = profile::system_name(system);
-            if name.is_empty() {
+        for slot in 0..profile::counter_count() / 4 {
+            let offset = slot * 4;
+            if profile::counter(offset) == 0 {
                 continue;
             }
-            for (phase, label) in [
-                "check", "accept", "prepare", "evaluate", "finish", "observe",
-            ]
-            .iter()
-            .enumerate()
-            {
-                let offset = (system * profile::SYSTEM_PHASES + phase) * 4;
-                if profile::counter(offset) == 0 {
-                    continue;
-                }
-                let label = if name.starts_with("profile.") {
-                    &"scope"
-                } else {
-                    label
-                };
-                writeln!(
-                    stages,
-                    "{},{name},{label},{},{},{},{}",
-                    profile::system_composition(system),
-                    profile::counter(offset),
-                    profile::counter(offset + 1) as f64 / 5e6,
-                    profile::counter(offset + 2),
-                    profile::counter(offset + 3)
-                )?;
+            let identity = profile::stage_context(slot);
+            let kind = if slot < profile::fixed_stage_base() {
+                "system"
+            } else {
+                "fixed"
+            };
+            let name = if kind == "system" {
+                identity.system
+            } else {
+                profile::fixed_stage_name(slot)
+            };
+            let phase = identity.phase.map_or("", |phase| phase.name());
+            writeln!(
+                stages,
+                "{},{},{},{},{},{},{},{},{},{},{},{},{},evaluation-thread",
+                profile::capture_id(),
+                identity.host,
+                identity.world,
+                identity.incarnation,
+                identity.composition,
+                identity.system,
+                phase,
+                kind,
+                name,
+                profile::counter(offset),
+                profile::counter(offset + 1),
+                profile::counter(offset + 2),
+                profile::counter(offset + 3)
+            )?;
+        }
+        let mut categories = std::fs::File::create(output.join(format!("{label}-categories.csv")))?;
+        writeln!(
+            categories,
+            "capture,host,world,incarnation,composition,system,phase,name,allocation_calls,requested_bytes,allocation_scope"
+        )?;
+        for category in 0..profile::category_count() {
+            let calls = profile::category_counter(category * 2);
+            let bytes = profile::category_counter(category * 2 + 1);
+            if calls == 0 && bytes == 0 {
+                continue;
             }
+            let identity = profile::category_context(category);
+            writeln!(
+                categories,
+                "{},{},{},{},{},{},{},{},{},{},evaluation-thread",
+                profile::capture_id(),
+                identity.host,
+                identity.world,
+                identity.incarnation,
+                identity.composition,
+                identity.system,
+                identity.phase.map_or("", |phase| phase.name()),
+                profile::category_name(category),
+                calls,
+                bytes
+            )?;
         }
         if allocations != (0, 0) {
             return Err(format!(

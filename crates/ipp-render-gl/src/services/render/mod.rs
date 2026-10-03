@@ -83,3 +83,14 @@ pub use surface_cache::{
     SURFACE_CACHE_ANIMATED_FRAMES, SURFACE_CACHE_BUDGET_BYTES, SURFACE_CACHE_SETTLE_FRAMES,
     SurfaceCacheDiagnostic, SurfaceCachePresentation,
 };
+
+#[cfg(feature = "instrumentation")]
+pub use device::RenderGlCallCounts;
+#[cfg(feature = "instrumentation")]
+pub use device::{RenderGpuAvailability, RenderGpuCapability, RenderGpuQueryToken};
+
+#[cfg(feature = "instrumentation")]
+pub use service::{
+    RenderGlCallWindow, RenderGlStopReason, RenderGpuIdentity, RenderGpuSample, RenderGpuSampling,
+    RenderGpuScope,
+};

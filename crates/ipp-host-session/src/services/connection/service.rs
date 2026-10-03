@@ -226,6 +226,30 @@ impl<P: HostServices> Host<P> {
             connection
                 .reply_reservations
                 .insert(request.request_id, reservation);
+            if let HostRequestBody::Profile(
+                body @ (ipp_protocol::profiling::ProfileRequest::Read {
+                    ..
+                }
+                | ipp_protocol::profiling::ProfileRequest::Release(_)),
+            ) = request.body
+            {
+                #[cfg(feature = "instrumentation")]
+                let response = self.profiling.request(
+                    self.runtime.identity(),
+                    P::NAME,
+                    id,
+                    body,
+                    &mut self.services,
+                );
+                #[cfg(not(feature = "instrumentation"))]
+                let response = {
+                    let _ = body;
+                    ipp_protocol::profiling::ProfileResponse::status(
+                        ipp_protocol::profiling::ProfileStatus::Unavailable,
+                    )
+                };
+                return connection.reply(request.request_id, HostResponseBody::Profile(response));
+            }
             // A completed capture is an immutable snapshot: reading or releasing it needs no
             // frame boundary, like asset source transfers. Transfers answer at ingress, so they
             // keep their arrival order and never wait behind requests queued for the next frame.
@@ -435,6 +459,9 @@ impl<P: HostServices> Host<P> {
         let Some(mut connection) = self.connections.states.remove(&id) else {
             return false;
         };
+        #[cfg(feature = "instrumentation")]
+        self.profiling.disconnect(id);
+
         std::mem::take(&mut connection.datasets).disconnect(&mut self.runtime);
         connection.outbox.close();
         if let Some(input) = self.services.gui_input() {
@@ -453,6 +480,8 @@ impl<P: HostServices> Host<P> {
     }
 
     pub(crate) fn process_host_requests(&mut self) -> Vec<(u64, String)> {
+        #[cfg(feature = "instrumentation")]
+        self.profiling.cleanup(&mut self.services);
         self.expire_queued_presentations();
         if self.connections.states.values().all(|connection| {
             connection.pending.is_empty()
@@ -688,6 +717,9 @@ impl<P: HostServices> Host<P> {
         request: HostRequestBody,
     ) -> Result<HostResponseBody, String> {
         match request {
+            HostRequestBody::Profile(request) => Ok(HostResponseBody::Profile(
+                self.profile_control(connection.id, request),
+            )),
             HostRequestBody::GuiInput(_) => {
                 Err("physical input request requires correlation".into())
             }

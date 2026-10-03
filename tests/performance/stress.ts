@@ -1,3 +1,4 @@
+import type { ProfileCapture } from "../../packages/ipp-client/src/profiling.js";
 /** Opt-in stress profile through the maintained real browser environment. */
 import assert from "node:assert/strict";
 import type { EntitySnapshot } from "@ipp/client";
@@ -23,14 +24,10 @@ interface FixtureProbe {
   position_blender: number[];
   quaternion_wxyz: number[];
 }
-interface Profile {
+interface Profile extends ProfileCapture {
+  frames: number[][];
   memoryBytes: number;
   shadowDrawCalls: number | null;
-  frames: number[][];
-  categories: { name: string; calls: number; bytes: number }[];
-  allocations: number[];
-  stages: number[];
-  names: string[];
 }
 interface Profiler {
   start(profile?: boolean): void;
@@ -166,8 +163,8 @@ test("Blender stress benchmark covers deformation, materials, constraints, geome
         }
         const data = await stop();
         assert.equal(
-          data.categories.reduce((n, c) => n + c.calls, 0),
-          data.allocations[0],
+          data.categories.reduce((n, c) => n + BigInt(c.allocationCalls), 0n),
+          BigInt(data.allocations.calls),
         );
         return data;
       };
@@ -210,22 +207,29 @@ test("Blender stress benchmark covers deformation, materials, constraints, geome
       );
       if (fixture.cubes <= 64) {
         assert.ok(
-          allocation.allocations[0]! / allocation.frames.length <= 100,
+          Number(allocation.allocations.calls) / allocation.frames.length <=
+            100,
           "warmed smoke allocation count regressed",
         );
         assert.ok(
-          allocation.allocations[1]! / allocation.frames.length <= 128 * 1024,
+          Number(allocation.allocations.requestedBytes) /
+            allocation.frames.length <=
+            128 * 1024,
           "warmed smoke allocation bytes regressed",
         );
         assert.equal(
           allocation.categories
             .filter((c) => c.name.startsWith("ipp.") && c.name !== "ipp.render")
-            .reduce((n, c) => n + c.calls, 0),
-          0,
+            .reduce((n, c) => n + BigInt(c.allocationCalls), 0n),
+          0n,
           "warmed core system allocations regressed",
         );
       }
-      assert.equal(allocation.allocations[0], 0, "warmed frame allocated");
+      assert.equal(
+        BigInt(allocation.allocations.calls),
+        0n,
+        "warmed frame allocated",
+      );
       console.log(
         `Stress profile: ${timing.frames.length} timed frames, exact held state and pixels`,
       );
@@ -253,13 +257,13 @@ test("Blender stress benchmark covers deformation, materials, constraints, geome
         assert.equal(
           allocation.categories
             .filter((c) => c.name.startsWith("ipp.") && c.name !== "ipp.render")
-            .reduce((n, c) => n + c.calls, 0),
-          0,
+            .reduce((n, c) => n + BigInt(c.allocationCalls), 0n),
+          0n,
           "bounds evaluation reintroduced core allocations",
         );
         assert.equal(
-          allocation.allocations[0],
-          0,
+          BigInt(allocation.allocations.calls),
+          0n,
           "warmed culled frame allocated",
         );
         const comparison = { timing, allocation, frame, difference };
@@ -364,15 +368,18 @@ test("Blender stress benchmark covers deformation, materials, constraints, geome
         JSON.stringify(movingAllocations, null, 2),
       );
       assert.equal(
-        movingAllocations.allocations[0],
-        0,
+        BigInt(movingAllocations.allocations.calls),
+        0n,
         "warmed moving frame allocated",
       );
       assert.equal(
         movingAllocations.categories
           .filter((c) => c.name.startsWith("ipp.") && c.name !== "ipp.render")
-          .reduce((count, category) => count + category.calls, 0),
-        0,
+          .reduce(
+            (count, category) => count + BigInt(category.allocationCalls),
+            0n,
+          ),
+        0n,
         "warmed moving evaluation reintroduced core allocations",
       );
       console.log(

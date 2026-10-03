@@ -8,3 +8,10 @@ pub(crate) mod render;
 
 #[cfg(all(feature = "render", any(test, target_arch = "wasm32")))]
 pub(crate) mod render_statistics;
+
+#[cfg(all(
+    feature = "instrumentation",
+    feature = "render",
+    target_arch = "wasm32"
+))]
+mod render_profiling;

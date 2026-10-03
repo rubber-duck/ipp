@@ -145,10 +145,15 @@ impl HostRuntime {
 
     /// Advance each eligible World once; no client-facing time operation is introduced.
     pub fn frame(&mut self, delta: f64) -> Result<HostFrameReport, ErrorReason> {
+        #[cfg(feature = "instrumentation")]
+        let _profile = self.profile_scope();
+
         if !delta.is_finite() || delta < 0.0 {
             return Err(ErrorReason::InvalidValue);
         }
         let next_frame = self.frame.checked_add(1).ok_or(ErrorReason::Capacity)?;
+        #[cfg(feature = "instrumentation")]
+        let _trace_frame = crate::profiling_trace::frame();
         self.data
             .advance_time(delta)
             .map_err(|_| ErrorReason::InvalidValue)?;

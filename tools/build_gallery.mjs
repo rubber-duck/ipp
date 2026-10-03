@@ -33,9 +33,25 @@ const renderContract = resolve(
   "contract.bin",
 );
 
+// Workspace installs share node_modules between worktrees. Resolve every public
+// React entry from this worktree's built package so contexts never mix products.
+const reactDirectory = resolve(workspace, "packages/ipp-react");
+const reactExports = JSON.parse(
+  await readFile(resolve(reactDirectory, "package.json"), "utf8"),
+).exports;
+const reactAliases = Object.fromEntries(
+  Object.entries(reactExports).map(([entry, conditions]) => [
+    `@ipp/react${entry === "." ? "" : entry.slice(1)}`,
+    resolve(reactDirectory, conditions.default),
+  ]),
+);
+
 function bundleGallery(entry, destination, environment = "production") {
   return bundleBrowser(entry, destination, environment, {
-    alias: { "@ipp/host-contract": resolve(renderContract, "../generated.js") },
+    alias: {
+      ...reactAliases,
+      "@ipp/host-contract": resolve(renderContract, "../generated.js"),
+    },
   });
 }
 

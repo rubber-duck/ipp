@@ -66,8 +66,8 @@ impl GlesRenderDevice {
         // SAFETY: Upheld by the caller; the null pixel pointer requests
         // uninitialized storage and GL reads no client memory.
         unsafe {
-            (self.gl.bind_buffer)(0x88EC, 0); // PIXEL_UNPACK_BUFFER
-            (self.gl.tex_image)(
+            self.gl.bind_buffer(0x88EC, 0); // PIXEL_UNPACK_BUFFER
+            self.gl.tex_image(
                 TEXTURE_2D,
                 0,
                 // SRGB8_ALPHA8, as the main linear target: blending stays linear
@@ -105,32 +105,32 @@ impl GlesRenderDevice {
         // framebuffers and viewport are borrowed host state, rebound unchanged
         // before returning, so no binding refers to a partial target.
         let complete = unsafe {
-            (self.gl.gen_textures)(1, &mut target.texture);
-            (self.gl.gen_framebuffers)(1, &mut target.framebuffer);
-            (self.gl.active_texture)(0x84C0); // TEXTURE0
-            (self.gl.bind_texture)(TEXTURE_2D, target.texture);
-            (self.gl.tex_parameter)(TEXTURE_2D, 0x2801, 0x2601); // MIN_FILTER LINEAR
-            (self.gl.tex_parameter)(TEXTURE_2D, 0x2800, 0x2601); // MAG_FILTER LINEAR
-            (self.gl.tex_parameter)(TEXTURE_2D, 0x2802, 0x812F); // WRAP_S CLAMP_TO_EDGE
-            (self.gl.tex_parameter)(TEXTURE_2D, 0x2803, 0x812F); // WRAP_T CLAMP_TO_EDGE
-            (self.gl.tex_parameter)(TEXTURE_2D, 0x813C, 0); // BASE_LEVEL
-            (self.gl.tex_parameter)(TEXTURE_2D, 0x813D, 0); // MAX_LEVEL
+            self.gl.gen_textures(1, &mut target.texture);
+            self.gl.gen_framebuffers(1, &mut target.framebuffer);
+            self.gl.active_texture(0x84C0); // TEXTURE0
+            self.gl.bind_texture(TEXTURE_2D, target.texture);
+            self.gl.tex_parameter(TEXTURE_2D, 0x2801, 0x2601); // MIN_FILTER LINEAR
+            self.gl.tex_parameter(TEXTURE_2D, 0x2800, 0x2601); // MAG_FILTER LINEAR
+            self.gl.tex_parameter(TEXTURE_2D, 0x2802, 0x812F); // WRAP_S CLAMP_TO_EDGE
+            self.gl.tex_parameter(TEXTURE_2D, 0x2803, 0x812F); // WRAP_T CLAMP_TO_EDGE
+            self.gl.tex_parameter(TEXTURE_2D, 0x813C, 0); // BASE_LEVEL
+            self.gl.tex_parameter(TEXTURE_2D, 0x813D, 0); // MAX_LEVEL
             self.specify_surface_cache_storage(width, height);
-            (self.gl.bind_texture)(TEXTURE_2D, 0);
+            self.gl.bind_texture(TEXTURE_2D, 0);
             self.bind_framebuffers(target.framebuffer, target.framebuffer);
-            (self.gl.framebuffer_texture)(
+            self.gl.framebuffer_texture(
                 FRAMEBUFFER,
                 0x8CE0, // COLOR_ATTACHMENT0
                 TEXTURE_2D,
                 target.texture,
                 0,
             );
-            let complete = (self.gl.check_framebuffer)(FRAMEBUFFER) == FRAMEBUFFER_COMPLETE;
+            let complete = self.gl.check_framebuffer(FRAMEBUFFER) == FRAMEBUFFER_COMPLETE;
             if complete {
                 // Uninitialized storage must never be composited as an image.
                 self.set_viewport([0, 0, width as i32, height as i32]);
-                (self.gl.clear_color)(0.0, 0.0, 0.0, 0.0);
-                (self.gl.clear)(COLOR_BUFFER_BIT);
+                self.gl.clear_color(0.0, 0.0, 0.0, 0.0);
+                self.gl.clear(COLOR_BUFFER_BIT);
             }
             self.bind_framebuffers(previous.draw, previous.read);
             self.set_viewport(previous.viewport);
@@ -169,14 +169,15 @@ impl GlesRenderDevice {
         // keeps the framebuffer attachment and passes no client pointer; the
         // texture is unbound again before any other texture use.
         unsafe {
-            (self.gl.active_texture)(0x84C0);
-            (self.gl.bind_texture)(TEXTURE_2D, target.texture);
+            self.gl.active_texture(0x84C0);
+            self.gl.bind_texture(TEXTURE_2D, target.texture);
             self.specify_surface_cache_storage(width, height);
-            (self.gl.bind_texture)(TEXTURE_2D, 0);
+            self.gl.bind_texture(TEXTURE_2D, 0);
             if target.depth != 0 {
-                (self.gl.bind_renderbuffer)(0x8D41, target.depth);
-                (self.gl.renderbuffer_storage)(0x8D41, 0x81A6, width as i32, height as i32);
-                (self.gl.bind_renderbuffer)(0x8D41, 0);
+                self.gl.bind_renderbuffer(0x8D41, target.depth);
+                self.gl
+                    .renderbuffer_storage(0x8D41, 0x81A6, width as i32, height as i32);
+                self.gl.bind_renderbuffer(0x8D41, 0);
             }
         }
 
@@ -198,31 +199,32 @@ impl GlesRenderDevice {
         // depth attachment. No CPU pointer is retained; deletion owns both handles.
         let complete = unsafe {
             if target.depth == 0 {
-                (self.gl.gen_renderbuffers)(1, &mut target.depth);
-                (self.gl.bind_renderbuffer)(0x8D41, target.depth);
-                (self.gl.renderbuffer_storage)(
+                self.gl.gen_renderbuffers(1, &mut target.depth);
+                self.gl.bind_renderbuffer(0x8D41, target.depth);
+                self.gl.renderbuffer_storage(
                     0x8D41,
                     0x81A6,
                     target.width as i32,
                     target.height as i32,
                 );
-                (self.gl.framebuffer_renderbuffer)(FRAMEBUFFER, 0x8D00, 0x8D41, target.depth);
+                self.gl
+                    .framebuffer_renderbuffer(FRAMEBUFFER, 0x8D00, 0x8D41, target.depth);
             }
-            (self.gl.enable)(0x0B71);
-            (self.gl.enable)(0x0B44);
-            (self.gl.disable)(0x0BE2);
-            (self.gl.disable)(0x0BD0);
-            (self.gl.disable)(0x8037);
-            (self.gl.disable)(0x809E);
-            (self.gl.disable)(0x80A0);
-            (self.gl.disable)(0x8C89);
-            (self.gl.depth_func)(0x0201);
-            (self.gl.front_face)(0x0901);
-            (self.gl.cull_face)(0x0405);
-            (self.gl.clear_color)(clear[0], clear[1], clear[2], clear[3]);
-            (self.gl.clear_depth)(1.0);
-            (self.gl.clear)(COLOR_BUFFER_BIT | 0x00000100);
-            target.depth != 0 && (self.gl.check_framebuffer)(FRAMEBUFFER) == FRAMEBUFFER_COMPLETE
+            self.gl.enable(0x0B71);
+            self.gl.enable(0x0B44);
+            self.gl.disable(0x0BE2);
+            self.gl.disable(0x0BD0);
+            self.gl.disable(0x8037);
+            self.gl.disable(0x809E);
+            self.gl.disable(0x80A0);
+            self.gl.disable(0x8C89);
+            self.gl.depth_func(0x0201);
+            self.gl.front_face(0x0901);
+            self.gl.cull_face(0x0405);
+            self.gl.clear_color(clear[0], clear[1], clear[2], clear[3]);
+            self.gl.clear_depth(1.0);
+            self.gl.clear(COLOR_BUFFER_BIT | 0x00000100);
+            target.depth != 0 && self.gl.check_framebuffer(FRAMEBUFFER) == FRAMEBUFFER_COMPLETE
         };
         let result = self.check().and_then(|()| {
             if complete {
@@ -273,11 +275,11 @@ impl GlesRenderDevice {
         self.set_depth_mask(false);
         // SAFETY: Scalar context state in the current context only.
         unsafe {
-            (self.gl.disable)(0x0C11); // SCISSOR_TEST
-            (self.gl.disable)(0x0B90); // STENCIL_TEST
-            (self.gl.color_mask)(1, 1, 1, 1);
-            (self.gl.clear_color)(0.0, 0.0, 0.0, 0.0);
-            (self.gl.clear)(COLOR_BUFFER_BIT);
+            self.gl.disable(0x0C11); // SCISSOR_TEST
+            self.gl.disable(0x0B90); // STENCIL_TEST
+            self.gl.color_mask(1, 1, 1, 1);
+            self.gl.clear_color(0.0, 0.0, 0.0, 0.0);
+            self.gl.clear(COLOR_BUFFER_BIT);
         }
 
         // The end of the repaint checks the whole pass.
@@ -336,7 +338,7 @@ impl GlesRenderDevice {
         }
         if self.surface_quad_vao == 0 {
             // SAFETY: GL writes one new name owned by this current context.
-            unsafe { (self.gl.gen_vertex_arrays)(1, &mut self.surface_quad_vao) };
+            unsafe { self.gl.gen_vertex_arrays(1, &mut self.surface_quad_vao) };
             if self.surface_quad_vao == 0 {
                 return Err(RenderError::RenderDevice(
                     "surface quad allocation failed".into(),
@@ -352,9 +354,9 @@ impl GlesRenderDevice {
             // already multiplied by its coverage alpha.
             // SAFETY: Scalar blend state in the current context.
             unsafe {
-                (self.gl.enable)(0x0BE2); // BLEND
-                (self.gl.blend_equation)(0x8006); // FUNC_ADD
-                (self.gl.blend_func)(1, 0x0303, 1, 0x0303); // ONE, ONE_MINUS_SRC_ALPHA
+                self.gl.enable(0x0BE2); // BLEND
+                self.gl.blend_equation(0x8006); // FUNC_ADD
+                self.gl.blend_func(1, 0x0303, 1, 0x0303); // ONE, ONE_MINUS_SRC_ALPHA
             }
             self.set_depth_mask(false);
         }
@@ -372,11 +374,11 @@ impl GlesRenderDevice {
         // gl_VertexID, so no buffer or client pointer is read. The image is
         // unbound again so a later repaint of it never samples its own target.
         unsafe {
-            (self.gl.active_texture)(0x84C0);
-            (self.gl.bind_sampler)(0, 0);
-            (self.gl.bind_texture)(TEXTURE_2D, target.texture);
-            (self.gl.draw_arrays)(0x0005, 0, 4); // TRIANGLE_STRIP
-            (self.gl.bind_texture)(TEXTURE_2D, 0);
+            self.gl.active_texture(0x84C0);
+            self.gl.bind_sampler(0, 0);
+            self.gl.bind_texture(TEXTURE_2D, target.texture);
+            self.gl.draw_arrays(0x0005, 0, 4); // TRIANGLE_STRIP
+            self.gl.bind_texture(TEXTURE_2D, 0);
         }
 
         // Composites are routine draws; the frame end reports their errors.
@@ -401,11 +403,11 @@ impl GlesRenderDevice {
         // and tolerates names invalidated by context loss.
         unsafe {
             if target.framebuffer != 0 {
-                (self.gl.delete_framebuffers)(1, &target.framebuffer);
-                (self.gl.delete_renderbuffers)(1, &target.depth);
+                self.gl.delete_framebuffers(1, &target.framebuffer);
+                self.gl.delete_renderbuffers(1, &target.depth);
             }
             if target.texture != 0 {
-                (self.gl.delete_textures)(1, &target.texture);
+                self.gl.delete_textures(1, &target.texture);
             }
         }
     }

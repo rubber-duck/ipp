@@ -43,17 +43,52 @@ impl<D: RenderDevice> RenderService<D> {
             return Err(RenderError::InvalidViewport);
         }
 
-        self.statistics = Default::default();
-        self.device
-            .borrow_mut()
-            .begin_frame(viewport.width, viewport.height, &BACKGROUND)?;
-        self.device.borrow_mut().end_frame()?;
-        Ok(RenderFrameSummary::default())
+        #[cfg(feature = "instrumentation")]
+        self.gpu_begin_frame();
+        #[cfg(feature = "instrumentation")]
+        let _gpu_frame = self.gpu_scope(super::RenderGpuScope::Frame, None, None);
+        let result = (|| {
+            self.statistics = Default::default();
+            self.device
+                .borrow_mut()
+                .begin_frame(viewport.width, viewport.height, &BACKGROUND)?;
+            self.device.borrow_mut().end_frame()?;
+            Ok(RenderFrameSummary::default())
+        })();
+        #[cfg(feature = "instrumentation")]
+        if matches!(result, Err(RenderError::ContextLost)) {
+            self.gpu_context_lost();
+        }
+        #[cfg(feature = "instrumentation")]
+        self.gpu_end_frame();
+        result
     }
 
     /// Present the Host's current explicit root output publication and viewport.
     /// Mismatched viewports fail before GPU work; nested outputs use attachment authority.
     pub fn draw(
+        &mut self,
+        host: &ipp_core::HostRuntime,
+        selection: ipp_core::OutputRef,
+        publication: ipp_core::WorldPublicationId,
+        viewport: ipp_core::WorldViewport,
+        presentation_time: f64,
+    ) -> Result<RenderFrameSummary, RenderError> {
+        #[cfg(feature = "instrumentation")]
+        self.gpu_begin_frame();
+        #[cfg(feature = "instrumentation")]
+        let _gpu_frame = self.gpu_scope(super::RenderGpuScope::Frame, None, None);
+        let result = self.draw_contents(host, selection, publication, viewport, presentation_time);
+        #[cfg(feature = "instrumentation")]
+        if matches!(result, Err(RenderError::ContextLost)) {
+            self.gpu_context_lost();
+        }
+        #[cfg(feature = "instrumentation")]
+        self.gpu_end_frame();
+        result
+    }
+
+    fn draw_contents(
         &mut self,
         host: &ipp_core::HostRuntime,
         selection: ipp_core::OutputRef,
@@ -144,6 +179,12 @@ impl<D: RenderDevice> RenderService<D> {
             self.draw_items(&scene, &scene.items, camera, prepass, viewport)
         });
         let finish = self.device.borrow_mut().end_frame();
+        #[cfg(feature = "instrumentation")]
+        if matches!(result, Err(RenderError::ContextLost))
+            || matches!(finish, Err(RenderError::ContextLost))
+        {
+            self.gpu_context_lost();
+        }
         self.finish_canvas_caches(result.is_ok() && finish.is_ok());
         let mut work = result?;
         finish?;

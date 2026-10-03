@@ -241,13 +241,16 @@ fn tag_space_name(id: u8) -> Result<&'static str, String> {
         57 => Ok("dataset-delta"),
         58 => Ok("dataset-kind"),
         59 => Ok("dataset-value"),
+        60 => Ok("profile-request"),
+        61 => Ok("profile-status"),
+        62 => Ok("profile-gpu-sampling"),
 
         _ => Err("unknown wire tag space".into()),
     }
 }
 
 fn is_tag_space_name(name: &str) -> bool {
-    (1..=59).any(|id| tag_space_name(id).is_ok_and(|candidate| candidate == name))
+    (1..=62).any(|id| tag_space_name(id).is_ok_and(|candidate| candidate == name))
 }
 
 impl WireEncoding {
@@ -362,7 +365,11 @@ mod tests {
             assert_eq!(tag_space_name(id).unwrap(), name);
             assert!(is_tag_space_name(name));
         }
-        assert!(tag_space_name(60).is_err());
+        assert_eq!(tag_space_name(60).unwrap(), "profile-request");
+        assert_eq!(tag_space_name(61).unwrap(), "profile-status");
+        assert_eq!(tag_space_name(62).unwrap(), "profile-gpu-sampling");
+        assert!(is_tag_space_name("profile-gpu-sampling"));
+        assert!(tag_space_name(63).is_err());
         assert!(!is_tag_space_name("animation-transition-unknown"));
         assert!(!is_tag_space_name("lifecycle-watch-unknown"));
     }

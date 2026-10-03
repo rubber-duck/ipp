@@ -1,3 +1,7 @@
+import { createWebGlCallCounts } from "./webgl_call_counts.js";
+import { createWebGlGpuQueries } from "./webgl_gpu_queries.js";
+declare const IPP_INSTRUMENTATION: boolean;
+
 /**
  * Vertex attribute locations used by the widest built-in layout: instanced
  * particles beside the position, normal, texture, weight, pose and skin streams.
@@ -75,7 +79,13 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     preserveDrawingBuffer: false,
   });
   if (!context) throw new Error("WebGL 2 is unavailable");
-  const gl = context;
+  const glCalls = IPP_INSTRUMENTATION
+    ? createWebGlCallCounts(context)
+    : undefined;
+  const gl = glCalls?.gl ?? context;
+  const gpuQueries = IPP_INSTRUMENTATION
+    ? createWebGlGpuQueries(gl, glCalls)
+    : undefined;
   function initializeAttributeDefaults(): void {
     // Generic values are context state, retained across VAO switches and draws.
     // This device owns the context and never assigns other constants to these
@@ -969,6 +979,10 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     glyphAtlasTarget = undefined;
 
     event.preventDefault();
+    if (IPP_INSTRUMENTATION) {
+      gpuQueries!.reset();
+      glCalls!.contextLost();
+    }
     invalidateSubmission();
     programs.clear();
     meshes.clear();
@@ -999,6 +1013,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     shadows.clear();
     shadowTarget = undefined;
     gl.drawingBufferColorSpace = "srgb";
+    if (IPP_INSTRUMENTATION) gpuQueries!.restore();
     maxViewport = gl.getParameter(gl.MAX_VIEWPORT_DIMS) as Int32Array;
     maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE) as number;
     maxRenderbufferSize = gl.getParameter(gl.MAX_RENDERBUFFER_SIZE) as number;
@@ -2588,6 +2603,9 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     },
   };
 
+  if (IPP_INSTRUMENTATION) Object.assign(imports, gpuQueries!.imports);
+  if (IPP_INSTRUMENTATION) Object.assign(imports, glCalls!.imports);
+
   Object.assign(imports, skinImports);
 
   {
@@ -2952,6 +2970,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     },
     isContextLost: () => disposed || gl.isContextLost(),
     dispose() {
+      if (IPP_INSTRUMENTATION) gpuQueries!.reset();
       gl.deleteBuffer(instanceBuffer);
       instanceBuffer = null;
       instanceCount = 0;

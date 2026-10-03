@@ -22,10 +22,17 @@ await bundleBrowser(
   fixture,
 );
 const artifacts = [await artifact(fixture)];
+const profileFixture = resolve(output, "gpu-profiling-fixture.js");
+await bundleBrowser(
+  resolve(workspace, "tests/render/gpu-profiling-fixture.ts"),
+  profileFixture,
+);
+artifacts.push(await artifact(profileFixture));
 for (const [source, name] of [
   ["tests/integration/surface.test.ts", "lifecycle.test.js"],
   ["tests/render/surface.test.ts", "surface.test.js"],
   ["tests/render/surface-cache.test.ts", "surface-cache.test.js"],
+  ["tests/render/gpu-profiling.test.ts", "gpu-profiling.test.js"],
 ]) {
   const path = resolve(output, name);
   await bundleBrowser(source, path, "production", {

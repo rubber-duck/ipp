@@ -53,7 +53,7 @@ impl GlesRenderDevice {
         if changed {
             // SAFETY: The caller made `program` current in this context; the
             // location belongs to it and GL copies the scalar.
-            unsafe { (self.gl.uniform_int)(location, value) };
+            unsafe { self.gl.uniform_int(location, value) };
         }
     }
 
@@ -66,7 +66,7 @@ impl GlesRenderDevice {
         if changed {
             // SAFETY: The caller made `program` current in this context; the
             // location belongs to it and GL copies the scalar.
-            unsafe { (self.gl.uniform_float)(location, value) };
+            unsafe { self.gl.uniform_float(location, value) };
         }
     }
 
@@ -84,7 +84,7 @@ impl GlesRenderDevice {
         if changed {
             // SAFETY: The caller made `program` current in this context; GL
             // copies the four live floats synchronously and keeps no pointer.
-            unsafe { (self.gl.uniform_vec4)(location, 1, value.as_ptr()) };
+            unsafe { self.gl.uniform_vec4(location, 1, value.as_ptr()) };
         }
     }
 
@@ -102,7 +102,7 @@ impl GlesRenderDevice {
         if changed {
             // SAFETY: The caller made `program` current in this context; GL
             // copies the sixteen live floats synchronously and keeps no pointer.
-            unsafe { (self.gl.uniform_matrix)(location, 1, 0, value.as_ptr()) };
+            unsafe { self.gl.uniform_matrix(location, 1, 0, value.as_ptr()) };
         }
     }
 }

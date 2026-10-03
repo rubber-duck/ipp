@@ -243,6 +243,12 @@ impl<D: RenderDevice> RenderService<D> {
             return Ok(());
         };
 
+        #[cfg(feature = "instrumentation")]
+        let _gpu_repaint = self.gpu_scope(
+            super::RenderGpuScope::CacheRepaint,
+            Some(selection.world()),
+            None,
+        );
         self.canvas_cache_frame.repainting = Some(selection);
         let parent_sources = std::mem::take(&mut self.inclusions.active);
         self.inclusions.active.collect_image = true;
@@ -367,6 +373,16 @@ impl<D: RenderDevice> RenderService<D> {
         }
 
         self.surface_cache_program()?;
+        #[cfg(feature = "instrumentation")]
+        let _gpu_composite = if self.surface_cache.image(world, anchor).is_some() {
+            self.gpu_scope(
+                super::RenderGpuScope::Composite,
+                Some(selection.world()),
+                None,
+            )
+        } else {
+            None
+        };
         let Some((target, _)) = self.surface_cache.image(world, anchor) else {
             return Ok(false);
         };

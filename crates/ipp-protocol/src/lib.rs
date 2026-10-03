@@ -11,6 +11,7 @@ pub mod host;
 pub mod lifecycle_diagnostics;
 pub mod lifecycle_watch;
 pub mod presentation;
+pub mod profiling;
 /// Owned, untrusted transport reference tokens and exact Host resolution.
 pub mod references;
 pub mod views;

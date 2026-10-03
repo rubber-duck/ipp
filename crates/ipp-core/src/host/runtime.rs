@@ -4,6 +4,8 @@ impl HostRuntime {
     /// Construct services without publishing a world.
     pub fn new() -> Self {
         let host = Self {
+            #[cfg(feature = "instrumentation")]
+            profile_context: 0,
             worlds: BTreeMap::new(),
             next_world: 0,
             identity_namespace: next_host_namespace(),
@@ -18,6 +20,10 @@ impl HostRuntime {
         };
         let mut host = host;
         host.topology.identity = host.publications.identity;
+        #[cfg(feature = "instrumentation")]
+        {
+            host.profile_context = crate::profiling::register_world(host.identity(), 0, 0, 0);
+        }
         host.assets.require_lifecycle_barrier();
         host.assets
             .install_io_sources(&mut host.io)
@@ -30,6 +36,12 @@ impl HostRuntime {
     /// it is observational metadata, not authority to construct runtime tokens.
     pub fn identity(&self) -> u64 {
         self.topology.identity
+    }
+
+    /// Enter shared Host attribution without assigning work to a World.
+    #[cfg(feature = "instrumentation")]
+    pub fn profile_scope(&self) -> crate::profiling::ContextScope {
+        crate::profiling::ContextScope::new(self.profile_context)
     }
 
     /// Observe an exact live World's current fault without advancing or flushing anything.
@@ -105,7 +117,11 @@ impl HostRuntime {
         self.validate_new_world_symbol(&symbolic_id, None)
             .map_err(WorldConstructionError::Metadata)?;
         let result = World::construct(
-            id,
+            crate::world::WorldConstructionIdentity {
+                id,
+                #[cfg(feature = "instrumentation")]
+                host: self.identity(),
+            },
             limits,
             options.capacity_hints,
             &factories,

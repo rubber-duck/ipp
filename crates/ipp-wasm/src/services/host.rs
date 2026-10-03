@@ -36,6 +36,38 @@ impl WasmHostServices {
 impl HostServices for WasmHostServices {
     const NAME: &'static str = "wasm";
 
+    #[cfg(all(
+        feature = "instrumentation",
+        feature = "render",
+        target_arch = "wasm32"
+    ))]
+    fn render_profile_start(
+        &mut self,
+        capture: u64,
+        host: u64,
+        options: ipp_protocol::profiling::ProfileRenderOptions,
+    ) -> ipp_protocol::profiling::ProfileGpuCapability {
+        self.presentation.profile_start(capture, host, options)
+    }
+
+    #[cfg(all(
+        feature = "instrumentation",
+        feature = "render",
+        target_arch = "wasm32"
+    ))]
+    fn render_profile_stop(&mut self, capture: u64) -> ipp_protocol::profiling::ProfileGpuCapture {
+        self.presentation.profile_stop(capture)
+    }
+
+    #[cfg(all(
+        feature = "instrumentation",
+        feature = "render",
+        target_arch = "wasm32"
+    ))]
+    fn render_profile_cancel(&mut self, capture: u64) {
+        self.presentation.profile_cancel(capture);
+    }
+
     #[cfg(all(feature = "render", target_arch = "wasm32"))]
     fn record_frame(&mut self, host: &mut HostRuntime, frame: &ipp_core::HostFrameReport) {
         self.presentation.record_frame(host, frame);

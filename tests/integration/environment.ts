@@ -31,6 +31,8 @@ export interface NativeServerConfiguration {
 }
 
 export interface NativeEnvironmentContext {
+  /** PID of this environment's owned Host, for optional external diagnostics. */
+  readonly processId?: number | null;
   readonly signal: AbortSignal;
   readonly url: string;
   /** Presentation channel of a presenting test host, when its readiness names one. */
@@ -134,6 +136,10 @@ class NativeServerEnvironment {
   ) {
     this.#configuration = configuration;
     this.#evidence = evidence;
+  }
+
+  get processId(): number | null {
+    return this.#child?.pid ?? null;
   }
 
   async start(signal: AbortSignal): Promise<ReadyEndpoints> {
@@ -423,6 +429,7 @@ export async function runNativeEnvironment<T>(
     };
 
     const value = await scenario({
+      processId: environment.processId,
       signal: scenarioController.signal,
       url,
       ...(presentationUrl === undefined ? {} : { presentationUrl }),

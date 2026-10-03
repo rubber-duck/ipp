@@ -37,7 +37,7 @@ impl GlesRenderDevice {
         let mut locations = program.parameter_locations.borrow_mut();
         *locations.entry(key.into_owned()).or_insert_with(|| {
             // SAFETY: The program is live and GL borrows this static name only for the call.
-            unsafe { (self.gl.uniform_location)(program.id, name.as_ptr()) }
+            unsafe { self.gl.uniform_location(program.id, name.as_ptr()) }
         })
     }
 
@@ -55,8 +55,8 @@ impl GlesRenderDevice {
             // SAFETY: The caller binds the destination vertex array and buffer in the
             // current context; GL copies these scalar arguments during the call.
             unsafe {
-                (self.gl.enable_attrib)(attribute.location);
-                (self.gl.attrib_pointer)(
+                self.gl.enable_attrib(attribute.location);
+                self.gl.attrib_pointer(
                     attribute.location,
                     attribute.components as i32,
                     FLOAT,
@@ -64,7 +64,7 @@ impl GlesRenderDevice {
                     stride as i32,
                     ptr::without_provenance(base + attribute.offset as usize),
                 );
-                (self.gl.attrib_divisor)(attribute.location, 1);
+                self.gl.attrib_divisor(attribute.location, 1);
             }
         }
     }
@@ -130,23 +130,23 @@ impl GlesRenderDevice {
         // SAFETY: GL writes exclusive names and synchronously copies from the
         // borrowed texel slices, which outlive the calls. No CPU pointer survives.
         unsafe {
-            (self.gl.gen_textures)(1, &mut path.texture);
-            (self.gl.gen_textures)(1, &mut path.band_texture);
-            (self.gl.gen_vertex_arrays)(1, &mut path.vao);
+            self.gl.gen_textures(1, &mut path.texture);
+            self.gl.gen_textures(1, &mut path.band_texture);
+            self.gl.gen_vertex_arrays(1, &mut path.vao);
             if path.texture == 0 || path.band_texture == 0 || path.vao == 0 {
                 self.delete_surface_path(path);
                 return Err(RenderError::RenderDevice(
                     "surface path allocation failed".into(),
                 ));
             }
-            (self.gl.active_texture)(0x84C0);
-            (self.gl.bind_buffer)(0x88EC, 0);
-            (self.gl.pixel_store)(0x0CF5, 1);
-            (self.gl.bind_texture)(0x0DE1, path.texture);
+            self.gl.active_texture(0x84C0);
+            self.gl.bind_buffer(0x88EC, 0);
+            self.gl.pixel_store(0x0CF5, 1);
+            self.gl.bind_texture(0x0DE1, path.texture);
             self.upload_path_texels(&curves, curve_count, width, height);
-            (self.gl.bind_texture)(0x0DE1, path.band_texture);
+            self.gl.bind_texture(0x0DE1, path.band_texture);
             self.upload_path_texels(&bands, band_count, band_width, band_height);
-            (self.gl.bind_texture)(0x0DE1, 0);
+            self.gl.bind_texture(0x0DE1, 0);
         }
         if let Err(error) = self.check() {
             self.delete_surface_path(path);
@@ -176,11 +176,11 @@ impl GlesRenderDevice {
 
         // SAFETY: Upheld by the caller; each copy reads inside the `count` texels.
         unsafe {
-            (self.gl.tex_parameter)(0x0DE1, 0x2801, 0x2600);
-            (self.gl.tex_parameter)(0x0DE1, 0x2800, 0x2600);
-            (self.gl.tex_parameter)(0x0DE1, 0x2802, 0x812F);
-            (self.gl.tex_parameter)(0x0DE1, 0x2803, 0x812F);
-            (self.gl.tex_image)(
+            self.gl.tex_parameter(0x0DE1, 0x2801, 0x2600);
+            self.gl.tex_parameter(0x0DE1, 0x2800, 0x2600);
+            self.gl.tex_parameter(0x0DE1, 0x2802, 0x812F);
+            self.gl.tex_parameter(0x0DE1, 0x2803, 0x812F);
+            self.gl.tex_image(
                 0x0DE1,
                 0,
                 upload.internal_format,
@@ -192,7 +192,7 @@ impl GlesRenderDevice {
                 ptr::null(),
             );
             if full_rows > 0 {
-                (self.gl.tex_sub_image)(
+                self.gl.tex_sub_image(
                     0x0DE1,
                     0,
                     0,
@@ -205,7 +205,7 @@ impl GlesRenderDevice {
                 );
             }
             if remainder > 0 {
-                (self.gl.tex_sub_image)(
+                self.gl.tex_sub_image(
                     0x0DE1,
                     0,
                     0,
@@ -277,7 +277,7 @@ impl GlesRenderDevice {
         // context and stay bound only for the draw; no client pointer is read.
         unsafe {
             self.bind_path_textures(path);
-            (self.gl.draw_arrays)(0x0005, 0, 4); // TRIANGLE_STRIP
+            self.gl.draw_arrays(0x0005, 0, 4); // TRIANGLE_STRIP
             self.release_band_texture();
         }
         self.check_draw()
@@ -291,10 +291,10 @@ impl GlesRenderDevice {
     unsafe fn bind_path_textures(&self, path: &GlesSurfacePath) {
         // SAFETY: Upheld by the caller; binding copies scalar names only.
         unsafe {
-            (self.gl.active_texture)(0x84C0);
-            (self.gl.bind_texture)(0x0DE1, path.texture);
-            (self.gl.active_texture)(0x84C1);
-            (self.gl.bind_texture)(0x0DE1, path.band_texture);
+            self.gl.active_texture(0x84C0);
+            self.gl.bind_texture(0x0DE1, path.texture);
+            self.gl.active_texture(0x84C1);
+            self.gl.bind_texture(0x0DE1, path.band_texture);
         }
     }
 
@@ -307,8 +307,8 @@ impl GlesRenderDevice {
     unsafe fn release_band_texture(&self) {
         // SAFETY: Upheld by the caller; unbinding copies scalar names only.
         unsafe {
-            (self.gl.bind_texture)(0x0DE1, 0);
-            (self.gl.active_texture)(0x84C0);
+            self.gl.bind_texture(0x0DE1, 0);
+            self.gl.active_texture(0x84C0);
         }
         self.submission.shadow_texture.set(None);
     }
@@ -319,9 +319,9 @@ impl GlesRenderDevice {
 
         // SAFETY: Consumes exclusive context handles; zero is accepted by GL.
         unsafe {
-            (self.gl.delete_textures)(1, &path.texture);
-            (self.gl.delete_textures)(1, &path.band_texture);
-            (self.gl.delete_vertex_arrays)(1, &path.vao);
+            self.gl.delete_textures(1, &path.texture);
+            self.gl.delete_textures(1, &path.band_texture);
+            self.gl.delete_vertex_arrays(1, &path.vao);
         }
     }
 
@@ -373,30 +373,30 @@ impl GlesRenderDevice {
         // packed instance slice synchronously. Attribute pointers are byte offsets into
         // the newly bound buffer; the instanced shader reads no per-vertex attributes.
         unsafe {
-            (self.gl.gen_vertex_arrays)(1, &mut vao);
-            (self.gl.gen_buffers)(1, &mut vbo);
+            self.gl.gen_vertex_arrays(1, &mut vao);
+            self.gl.gen_buffers(1, &mut vbo);
             if vao == 0 || vbo == 0 {
                 if vao != 0 {
-                    (self.gl.delete_vertex_arrays)(1, &vao);
+                    self.gl.delete_vertex_arrays(1, &vao);
                 }
                 if vbo != 0 {
-                    (self.gl.delete_buffers)(1, &vbo);
+                    self.gl.delete_buffers(1, &vbo);
                 }
                 return Err(RenderError::RenderDevice(
                     "surface instance allocation failed".into(),
                 ));
             }
             self.bind_vertex_array(vao);
-            (self.gl.bind_buffer)(super::ARRAY_BUFFER, vbo);
-            (self.gl.buffer_data)(
+            self.gl.bind_buffer(super::ARRAY_BUFFER, vbo);
+            self.gl.buffer_data(
                 super::ARRAY_BUFFER,
                 bytes as isize,
                 self.surface_instance_scratch.as_ptr().cast(),
                 super::STATIC_DRAW,
             );
             for slot in 0..4u32 {
-                (self.gl.enable_attrib)(slot);
-                (self.gl.attrib_pointer)(
+                self.gl.enable_attrib(slot);
+                self.gl.attrib_pointer(
                     slot,
                     4,
                     super::FLOAT,
@@ -404,10 +404,10 @@ impl GlesRenderDevice {
                     64,
                     (slot as usize * 16) as *const _,
                 );
-                (self.gl.attrib_divisor)(slot, 1);
+                self.gl.attrib_divisor(slot, 1);
             }
             self.bind_vertex_array(0);
-            (self.gl.bind_buffer)(super::ARRAY_BUFFER, 0);
+            self.gl.bind_buffer(super::ARRAY_BUFFER, 0);
         }
 
         let stream = super::GlesSurfaceInstances {
@@ -435,14 +435,14 @@ impl GlesRenderDevice {
         // SAFETY: BufferData replaces the complete store and copies the packed slice
         // synchronously. GL preserves storage needed by queued draws.
         unsafe {
-            (self.gl.bind_buffer)(super::ARRAY_BUFFER, stream.vbo);
-            (self.gl.buffer_data)(
+            self.gl.bind_buffer(super::ARRAY_BUFFER, stream.vbo);
+            self.gl.buffer_data(
                 super::ARRAY_BUFFER,
                 bytes as isize,
                 self.surface_instance_scratch.as_ptr().cast(),
                 super::STATIC_DRAW,
             );
-            (self.gl.bind_buffer)(super::ARRAY_BUFFER, 0);
+            self.gl.bind_buffer(super::ARRAY_BUFFER, 0);
         }
 
         // Outside exhaustive mode this frame's end checks the replacement.
@@ -458,10 +458,10 @@ impl GlesRenderDevice {
         // SAFETY: Consumes exclusive context handles; zero and invalid handles are tolerated.
         unsafe {
             if stream.vao != 0 {
-                (self.gl.delete_vertex_arrays)(1, &stream.vao);
+                self.gl.delete_vertex_arrays(1, &stream.vao);
             }
             if stream.vbo != 0 {
-                (self.gl.delete_buffers)(1, &stream.vbo);
+                self.gl.delete_buffers(1, &stream.vbo);
             }
         }
     }
@@ -497,7 +497,7 @@ impl GlesRenderDevice {
         // and the path's textures are live in this current context.
         unsafe {
             self.bind_path_textures(path);
-            (self.gl.draw_arrays_instances)(0x0005, 0, 4, stream.count);
+            self.gl.draw_arrays_instances(0x0005, 0, 4, stream.count);
             self.release_band_texture();
         }
         self.check_draw()
@@ -523,25 +523,26 @@ impl GlesRenderDevice {
         // copies the live `zeros` slice synchronously, and the attribute offsets index
         // that newly bound buffer rather than client memory.
         unsafe {
-            (self.gl.gen_vertex_arrays)(1, &mut vao);
-            (self.gl.gen_buffers)(1, &mut vbo);
+            self.gl.gen_vertex_arrays(1, &mut vao);
+            self.gl.gen_buffers(1, &mut vbo);
             if vao == 0 || vbo == 0 {
                 if vao != 0 {
-                    (self.gl.delete_vertex_arrays)(1, &vao);
+                    self.gl.delete_vertex_arrays(1, &vao);
                 }
                 if vbo != 0 {
-                    (self.gl.delete_buffers)(1, &vbo);
+                    self.gl.delete_buffers(1, &vbo);
                 }
                 return Err(RenderError::RenderDevice(
                     "gui batch allocation failed".into(),
                 ));
             }
             self.bind_vertex_array(vao);
-            (self.gl.bind_buffer)(ARRAY_BUFFER, vbo);
-            (self.gl.buffer_data)(ARRAY_BUFFER, bytes, zeros.as_ptr().cast(), DYNAMIC_DRAW);
+            self.gl.bind_buffer(ARRAY_BUFFER, vbo);
+            self.gl
+                .buffer_data(ARRAY_BUFFER, bytes, zeros.as_ptr().cast(), DYNAMIC_DRAW);
             self.point_retained_attributes(kind, 0);
             self.bind_vertex_array(0);
-            (self.gl.bind_buffer)(ARRAY_BUFFER, 0);
+            self.gl.bind_buffer(ARRAY_BUFFER, 0);
         }
         let batch = super::GlesGuiBatch {
             vao,
@@ -582,14 +583,14 @@ impl GlesRenderDevice {
         // copies the live `records` slice synchronously; GL keeps the previous contents
         // for queued draws that read them.
         unsafe {
-            (self.gl.bind_buffer)(ARRAY_BUFFER, batch.vbo);
-            (self.gl.buffer_sub_data)(
+            self.gl.bind_buffer(ARRAY_BUFFER, batch.vbo);
+            self.gl.buffer_sub_data(
                 ARRAY_BUFFER,
                 (first * stride) as isize,
                 std::mem::size_of_val(records) as isize,
                 records.as_ptr().cast(),
             );
-            (self.gl.bind_buffer)(ARRAY_BUFFER, 0);
+            self.gl.bind_buffer(ARRAY_BUFFER, 0);
         }
 
         // Outside exhaustive mode this frame's end checks the write.
@@ -603,10 +604,10 @@ impl GlesRenderDevice {
         // SAFETY: Handle deletion is context-checked; invalid handles are tolerated.
         unsafe {
             if batch.vao != 0 {
-                (self.gl.delete_vertex_arrays)(1, &batch.vao);
+                self.gl.delete_vertex_arrays(1, &batch.vao);
             }
             if batch.vbo != 0 {
-                (self.gl.delete_buffers)(1, &batch.vbo);
+                self.gl.delete_buffers(1, &batch.vbo);
             }
         }
     }
@@ -631,7 +632,8 @@ impl GlesRenderDevice {
             // SAFETY: The program is current in this context and owns the location;
             // GL copies the borrowed vectors synchronously and keeps no pointer.
             unsafe {
-                (self.gl.uniform_vec4)(location, blocks.len() as i32, blocks.as_ptr().cast());
+                self.gl
+                    .uniform_vec4(location, blocks.len() as i32, blocks.as_ptr().cast());
             }
         }
         self.check_draw()
@@ -675,14 +677,16 @@ impl GlesRenderDevice {
         // beside the draw.
         unsafe {
             if batch.based.get() != first {
-                (self.gl.bind_buffer)(ARRAY_BUFFER, batch.vbo);
+                self.gl.bind_buffer(ARRAY_BUFFER, batch.vbo);
                 self.point_retained_attributes(batch.kind, first);
-                (self.gl.bind_buffer)(ARRAY_BUFFER, 0);
+                self.gl.bind_buffer(ARRAY_BUFFER, 0);
                 batch.based.set(first);
             }
-            (self.gl.active_texture)(0x84C0);
-            (self.gl.bind_texture)(0x0DE1, atlas_texture.copied().unwrap_or(0));
-            (self.gl.draw_arrays_instances)(TRIANGLES, 0, GUI_RECORD_VERTICES as i32, count as i32);
+            self.gl.active_texture(0x84C0);
+            self.gl
+                .bind_texture(0x0DE1, atlas_texture.copied().unwrap_or(0));
+            self.gl
+                .draw_arrays_instances(TRIANGLES, 0, GUI_RECORD_VERTICES as i32, count as i32);
         }
         self.check_draw()
     }
@@ -699,7 +703,7 @@ impl GlesRenderDevice {
         self.alpha_blend(true)?;
         if self.surface_quad_vao == 0 {
             // SAFETY: GL writes one new name owned by this current context.
-            unsafe { (self.gl.gen_vertex_arrays)(1, &mut self.surface_quad_vao) };
+            unsafe { self.gl.gen_vertex_arrays(1, &mut self.surface_quad_vao) };
             if self.surface_quad_vao == 0 {
                 return Err(RenderError::RenderDevice(
                     "surface quad allocation failed".into(),
@@ -717,9 +721,9 @@ impl GlesRenderDevice {
         // SAFETY: The texture and attribute-less VAO are live names of this
         // current context; unit 0 keeps the texture until another draw binds one.
         unsafe {
-            (self.gl.active_texture)(0x84C0);
-            (self.gl.bind_texture)(0x0DE1, *texture);
-            (self.gl.draw_arrays)(0x0005, 0, 4);
+            self.gl.active_texture(0x84C0);
+            self.gl.bind_texture(0x0DE1, *texture);
+            self.gl.draw_arrays(0x0005, 0, 4);
         }
         self.check_draw()
     }
@@ -740,14 +744,14 @@ impl GlesRenderDevice {
         // cleared to zero coverage. The previous draw/read framebuffers and viewport are
         // tracked state, rebound unchanged before returning.
         let complete = unsafe {
-            (self.gl.gen_textures)(1, &mut texture);
-            (self.gl.gen_framebuffers)(1, &mut framebuffer);
-            (self.gl.bind_texture)(0x0DE1, texture);
-            (self.gl.tex_parameter)(0x0DE1, 0x2801, 0x2601); // MIN_FILTER LINEAR
-            (self.gl.tex_parameter)(0x0DE1, 0x2800, 0x2601); // MAG_FILTER LINEAR
-            (self.gl.tex_parameter)(0x0DE1, 0x2802, 0x812F); // WRAP_S CLAMP_TO_EDGE
-            (self.gl.tex_parameter)(0x0DE1, 0x2803, 0x812F); // WRAP_T CLAMP_TO_EDGE
-            (self.gl.tex_image)(
+            self.gl.gen_textures(1, &mut texture);
+            self.gl.gen_framebuffers(1, &mut framebuffer);
+            self.gl.bind_texture(0x0DE1, texture);
+            self.gl.tex_parameter(0x0DE1, 0x2801, 0x2601); // MIN_FILTER LINEAR
+            self.gl.tex_parameter(0x0DE1, 0x2800, 0x2601); // MAG_FILTER LINEAR
+            self.gl.tex_parameter(0x0DE1, 0x2802, 0x812F); // WRAP_S CLAMP_TO_EDGE
+            self.gl.tex_parameter(0x0DE1, 0x2803, 0x812F); // WRAP_T CLAMP_TO_EDGE
+            self.gl.tex_image(
                 0x0DE1,
                 0,
                 0x8229, // R8
@@ -758,18 +762,19 @@ impl GlesRenderDevice {
                 0x1401, // UNSIGNED_BYTE
                 ptr::null(),
             );
-            (self.gl.bind_texture)(0x0DE1, 0);
+            self.gl.bind_texture(0x0DE1, 0);
 
             // A failed allocation must not bind and clear the borrowed host target.
             let complete = texture != 0 && framebuffer != 0 && {
                 self.bind_framebuffers(framebuffer, framebuffer);
-                (self.gl.framebuffer_texture)(0x8D40, 0x8CE0, 0x0DE1, texture, 0);
-                (self.gl.check_framebuffer)(0x8D40) == 0x8CD5
+                self.gl
+                    .framebuffer_texture(0x8D40, 0x8CE0, 0x0DE1, texture, 0);
+                self.gl.check_framebuffer(0x8D40) == 0x8CD5
             };
             if complete {
                 self.set_viewport([0, 0, width as i32, height as i32]);
-                (self.gl.clear_color)(0.0, 0.0, 0.0, 0.0);
-                (self.gl.clear)(0x00004000); // COLOR_BUFFER_BIT
+                self.gl.clear_color(0.0, 0.0, 0.0, 0.0);
+                self.gl.clear(0x00004000); // COLOR_BUFFER_BIT
             }
             self.bind_framebuffers(previous.draw, previous.read);
             self.set_viewport(previous.viewport);
@@ -781,10 +786,10 @@ impl GlesRenderDevice {
             // SAFETY: Releases partially allocated texture and framebuffer on failure.
             unsafe {
                 if texture != 0 {
-                    (self.gl.delete_textures)(1, &texture);
+                    self.gl.delete_textures(1, &texture);
                 }
                 if framebuffer != 0 {
-                    (self.gl.delete_framebuffers)(1, &framebuffer);
+                    self.gl.delete_framebuffers(1, &framebuffer);
                 }
             }
 
@@ -809,10 +814,10 @@ impl GlesRenderDevice {
         // SAFETY: Context owns these handles and tolerates invalid handles.
         unsafe {
             if page.framebuffer != 0 {
-                (self.gl.delete_framebuffers)(1, &page.framebuffer);
+                self.gl.delete_framebuffers(1, &page.framebuffer);
             }
             if page.texture != 0 {
-                (self.gl.delete_textures)(1, &page.texture);
+                self.gl.delete_textures(1, &page.texture);
             }
         }
     }

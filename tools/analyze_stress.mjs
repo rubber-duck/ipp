@@ -34,8 +34,10 @@ for (const path of process.argv.slice(2)) {
       timing.frames.map((f) => f[0]),
       0.95,
     ),
-    rustAllocations: allocation.allocations[0] / allocation.frames.length,
-    requestedBytes: allocation.allocations[1] / allocation.frames.length,
+    rustAllocations:
+      Number(allocation.allocations.calls) / allocation.frames.length,
+    requestedBytes:
+      Number(allocation.allocations.requestedBytes) / allocation.frames.length,
     wasmMiB: timing.memoryBytes / (1024 * 1024),
     draws: frame?.draws ?? "not captured",
     shadowDraws: timing.shadowDrawCalls ?? "not captured",
@@ -49,38 +51,28 @@ for (const path of process.argv.slice(2)) {
     console.log(`${workload}: allocation sources`);
     console.table(
       allocation.categories
-        .filter((c) => c.calls)
+        .filter((c) => BigInt(c.allocationCalls) > 0n)
         .map((c) => ({
           name: c.name,
-          calls: c.calls / allocation.frames.length,
-          bytes: c.bytes / allocation.frames.length,
+          calls: Number(c.allocationCalls) / allocation.frames.length,
+          bytes: Number(c.requestedBytes) / allocation.frames.length,
         }))
         .sort((a, b) => b.bytes - a.bytes),
     );
     console.log("Instrumented core System time (separate from timing windows)");
     console.table(
-      allocation.names
-        .flatMap((name, index) => {
-          if (!name) return [];
-          const phases = [
-            "check",
-            "accept",
-            "prepare",
-            "evaluate",
-            "finish",
-            "observe",
-          ];
-          return phases
-            .map((phase, offset) => ({
-              name,
-              phase,
-              milliseconds:
-                allocation.stages[(index * phases.length + offset) * 4 + 1] /
-                1e6 /
-                allocation.frames.length,
-            }))
-            .filter((row) => row.milliseconds >= 0.1);
-        })
+      allocation.stages
+        .filter((stage) => stage.kind === "system")
+        .map((stage) => ({
+          host: stage.identity.hostId,
+          world: stage.identity.worldId,
+          incarnation: stage.identity.incarnation,
+          composition: stage.identity.compositionId,
+          name: stage.identity.system,
+          phase: stage.identity.phase,
+          milliseconds: Number(stage.duration) / 1e6 / allocation.frames.length,
+        }))
+        .filter((row) => row.milliseconds >= 0.1)
         .sort((a, b) => b.milliseconds - a.milliseconds),
     );
   }

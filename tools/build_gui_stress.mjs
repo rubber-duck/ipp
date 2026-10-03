@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { artifact, bundleBrowser, workspace } from "./build/helpers.mjs";
 
@@ -38,14 +39,25 @@ execFileSync(
 );
 await mkdir(output, { recursive: true });
 const artifacts = [];
-for (const name of ["gui-stress-fixture", "gui-stress", "gui-stress.test"]) {
+for (const name of [
+  "gui-stress-fixture",
+  "gui-stress",
+  "gui-stress.test",
+  "gui-profile-capture.test",
+]) {
   const path = resolve(output, `${name}.js`);
-  await bundleBrowser(
+  const built = await bundleBrowser(
     `tests/performance/${name}.${name.endsWith("fixture") ? "tsx" : "ts"}`,
     path,
     "production",
     name.endsWith("fixture")
-      ? {}
+      ? {
+          tsconfig: resolve(
+            workspace,
+            "tests/performance/tsconfig.gui-stress.json",
+          ),
+          metafile: true,
+        }
       : {
           platform: "node",
           conditions: ["node"],
@@ -55,6 +67,11 @@ for (const name of ["gui-stress-fixture", "gui-stress", "gui-stress.test"]) {
         },
   );
   artifacts.push(await artifact(path));
+  if (name.endsWith("fixture"))
+    await writeFile(
+      resolve(output, "fixture-inputs.json"),
+      `${JSON.stringify({ inputs: Object.keys(built.metafile.inputs).sort() }, null, 2)}\n`,
+    );
 }
 await writeFile(
   resolve(output, "build-report.json"),
@@ -62,6 +79,22 @@ await writeFile(
     {
       scope: "Frozen GUI stress scene and real transport correctness drivers",
       artifacts,
+      fixtureSources: await Promise.all(
+        [
+          "examples/gui-stress/workload.ts",
+          "examples/gui-stress/scene.tsx",
+          "examples/gui-stress/diagnostic-panel.tsx",
+          "tests/performance/gui-stress-fixture.tsx",
+          "tests/integration/camera-fixtures.ts",
+          "tests/integration/system-selections.ts",
+          "tests/integration/gui-actions.ts",
+        ].map(async (path) => ({
+          path,
+          sha256: createHash("sha256")
+            .update(await readFile(resolve(workspace, path)))
+            .digest("hex"),
+        })),
+      ),
     },
     null,
     2,

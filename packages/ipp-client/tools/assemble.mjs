@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 import { build } from "esbuild";
 
 export const CLIENT_SUPPORT_MODULES = [
+  "profiling.ts",
   "client.ts",
   "command-pages.ts",
   "dynamic-properties.ts",
@@ -105,6 +106,7 @@ export async function assembleBrowserHost(
       platform: "browser",
       target: "es2023",
       minifySyntax: true,
+      define: { IPP_INSTRUMENTATION: String(instrumentation) },
     });
   return [
     ...modules.map((name) =>

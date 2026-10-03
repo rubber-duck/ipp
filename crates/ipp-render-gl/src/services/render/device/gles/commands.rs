@@ -1,6 +1,52 @@
 use super::*;
 
 impl RenderDevice for GlesRenderDevice {
+    #[cfg(feature = "instrumentation")]
+    fn gl_calls_start(&mut self) -> bool {
+        self.gl.calls.start();
+        true
+    }
+
+    #[cfg(feature = "instrumentation")]
+    fn gl_calls_snapshot(&self) -> Option<super::super::RenderGlCallCounts> {
+        Some(self.gl.calls.snapshot())
+    }
+
+    #[cfg(feature = "instrumentation")]
+    fn gl_calls_stop(&mut self) {
+        self.gl.calls.stop();
+    }
+
+    #[cfg(feature = "instrumentation")]
+    fn gpu_capability(&self) -> super::super::RenderGpuCapability {
+        self.gpu_queries.capability()
+    }
+
+    #[cfg(feature = "instrumentation")]
+    fn gpu_start(
+        &mut self,
+    ) -> Result<super::super::RenderGpuQueryToken, super::super::RenderGpuAvailability> {
+        self.gpu_start_query()
+    }
+
+    #[cfg(feature = "instrumentation")]
+    fn gpu_end(&mut self, token: super::super::RenderGpuQueryToken) {
+        self.gpu_end_query(token);
+    }
+
+    #[cfg(feature = "instrumentation")]
+    fn gpu_poll(
+        &mut self,
+        token: super::super::RenderGpuQueryToken,
+    ) -> super::super::RenderGpuAvailability {
+        self.gpu_poll_query(token)
+    }
+
+    #[cfg(feature = "instrumentation")]
+    fn gpu_stop(&mut self, reason: super::super::RenderGpuAvailability) {
+        self.gpu_stop_queries(reason);
+    }
+
     fn set_exhaustive_draw_checks(&mut self, enabled: bool) {
         self.error_checks.set_exhaustive(enabled);
     }
@@ -111,10 +157,10 @@ impl RenderDevice for GlesRenderDevice {
         // context. Frame setup establishes BACK as the ordinary cull face.
         unsafe {
             if enabled {
-                (self.gl.disable)(0x0B44); // CULL_FACE
+                self.gl.disable(0x0B44); // CULL_FACE
             } else {
-                (self.gl.cull_face)(0x0405); // BACK
-                (self.gl.enable)(0x0B44); // CULL_FACE
+                self.gl.cull_face(0x0405); // BACK
+                self.gl.enable(0x0B44); // CULL_FACE
             }
         }
         self.check_draw()
@@ -316,24 +362,26 @@ impl RenderDevice for GlesRenderDevice {
         // immutable slice and retains only its own storage, with no Rust aliases.
         unsafe {
             if self.instance_buffer == 0 {
-                (self.gl.gen_buffers)(1, &mut self.instance_buffer);
+                self.gl.gen_buffers(1, &mut self.instance_buffer);
             }
             if self.instance_buffer == 0 {
                 return Err(RenderError::RenderDevice(
                     "Instance allocation failed".into(),
                 ));
             }
-            (self.gl.bind_buffer)(ARRAY_BUFFER, self.instance_buffer);
+            self.gl.bind_buffer(ARRAY_BUFFER, self.instance_buffer);
             let bytes = std::mem::size_of_val(instances);
             if bytes > self.instance_capacity {
                 let capacity = bytes
                     .max(self.instance_capacity.saturating_mul(2))
                     .max(1024);
-                (self.gl.buffer_data)(ARRAY_BUFFER, capacity as isize, ptr::null(), 0x88E0);
+                self.gl
+                    .buffer_data(ARRAY_BUFFER, capacity as isize, ptr::null(), 0x88E0);
                 self.check()?;
                 self.instance_capacity = capacity;
             }
-            (self.gl.buffer_sub_data)(ARRAY_BUFFER, 0, bytes as isize, instances.as_ptr().cast());
+            self.gl
+                .buffer_sub_data(ARRAY_BUFFER, 0, bytes as isize, instances.as_ptr().cast());
         }
         self.check_draw()
     }
@@ -343,7 +391,7 @@ impl RenderDevice for GlesRenderDevice {
             self.submission.blend.set(Some(3));
             // SAFETY: Scalar context state only; the context remains current.
             unsafe {
-                (self.gl.blend_func)(0x0302, 1, 1, 1);
+                self.gl.blend_func(0x0302, 1, 1, 1);
             }
         }
         self.check_draw()
@@ -359,7 +407,7 @@ impl RenderDevice for GlesRenderDevice {
             Ok(shader) => shader,
             Err(error) => {
                 // SAFETY: vertex is a live exclusively owned context handle.
-                unsafe { (self.gl.delete_shader)(vertex) };
+                unsafe { self.gl.delete_shader(vertex) };
                 return Err(error);
             }
         };
@@ -368,51 +416,51 @@ impl RenderDevice for GlesRenderDevice {
         // exclusive locals and uniform names are static terminated strings.
         // Shaders and partial programs are released on every failure path.
         unsafe {
-            let id = (self.gl.create_program)();
+            let id = self.gl.create_program();
             if id == 0 {
-                (self.gl.delete_shader)(vertex);
-                (self.gl.delete_shader)(fragment);
+                self.gl.delete_shader(vertex);
+                self.gl.delete_shader(fragment);
                 return Err(RenderError::RenderDevice(
                     "program allocation failed".into(),
                 ));
             }
 
-            (self.gl.attach_shader)(id, vertex);
-            (self.gl.attach_shader)(id, fragment);
-            (self.gl.link_program)(id);
-            (self.gl.delete_shader)(vertex);
-            (self.gl.delete_shader)(fragment);
+            self.gl.attach_shader(id, vertex);
+            self.gl.attach_shader(id, fragment);
+            self.gl.link_program(id);
+            self.gl.delete_shader(vertex);
+            self.gl.delete_shader(fragment);
             let mut status = 0;
-            (self.gl.program_iv)(id, LINK_STATUS, &mut status);
+            self.gl.program_iv(id, LINK_STATUS, &mut status);
             if status == 0 {
                 let log = self.log(id, false);
-                (self.gl.delete_program)(id);
+                self.gl.delete_program(id);
                 return Err(RenderError::RenderDevice(log));
             }
 
-            let mvp = (self.gl.uniform_location)(id, c"u_mvp".as_ptr());
-            let material = (self.gl.uniform_location)(id, c"u_material".as_ptr());
-            let texture = (self.gl.uniform_location)(id, c"u_texture".as_ptr());
+            let mvp = self.gl.uniform_location(id, c"u_mvp".as_ptr());
+            let material = self.gl.uniform_location(id, c"u_material".as_ptr());
+            let texture = self.gl.uniform_location(id, c"u_texture".as_ptr());
 
             if let Err(error) = self.check() {
-                (self.gl.delete_program)(id);
+                self.gl.delete_program(id);
                 return Err(error);
             }
 
             Ok(GlesRenderProgram {
                 id,
-                parameters: (self.gl.uniform_block_index)(id, c"IppParameters".as_ptr()),
-                alpha_mode: (self.gl.uniform_location)(id, c"u_alpha_mode".as_ptr()),
-                alpha_cutoff: (self.gl.uniform_location)(id, c"u_alpha_cutoff".as_ptr()),
+                parameters: self.gl.uniform_block_index(id, c"IppParameters".as_ptr()),
+                alpha_mode: self.gl.uniform_location(id, c"u_alpha_mode".as_ptr()),
+                alpha_cutoff: self.gl.uniform_location(id, c"u_alpha_cutoff".as_ptr()),
                 parameter_locations: Default::default(),
                 mvp,
                 material,
-                transparency: (self.gl.uniform_location)(id, c"u_transparency".as_ptr()),
+                transparency: self.gl.uniform_location(id, c"u_transparency".as_ptr()),
                 lighting: lighting::GlesLightingLocations::load(&self.gl, id),
                 uniforms: Default::default(),
                 values: Default::default(),
-                joints: (self.gl.uniform_location)(id, c"u_joints[0]".as_ptr()),
-                pose_weight: (self.gl.uniform_location)(id, c"u_pose_weight".as_ptr()),
+                joints: self.gl.uniform_location(id, c"u_joints[0]".as_ptr()),
+                pose_weight: self.gl.uniform_location(id, c"u_pose_weight".as_ptr()),
                 texture,
             })
         }
@@ -436,25 +484,25 @@ impl RenderDevice for GlesRenderDevice {
         // asset slices synchronously. Attribute pointers are GPU offsets, never
         // retained CPU addresses. The host keeps this context current.
         unsafe {
-            (self.gl.gen_vertex_arrays)(1, &mut mesh.vao);
-            (self.gl.gen_buffers)(2, mesh.buffers.as_mut_ptr());
+            self.gl.gen_vertex_arrays(1, &mut mesh.vao);
+            self.gl.gen_buffers(2, mesh.buffers.as_mut_ptr());
             if mesh.vao == 0 || mesh.buffers.contains(&0) {
                 self.delete_mesh(mesh);
                 return Err(RenderError::RenderDevice("mesh allocation failed".into()));
             }
 
             self.bind_vertex_array(mesh.vao);
-            (self.gl.bind_buffer)(ARRAY_BUFFER, mesh.buffers[0]);
-            (self.gl.buffer_data)(
+            self.gl.bind_buffer(ARRAY_BUFFER, mesh.buffers[0]);
+            self.gl.buffer_data(
                 ARRAY_BUFFER,
                 std::mem::size_of_val(asset.positions()) as isize,
                 asset.positions().as_ptr().cast(),
                 STATIC_DRAW,
             );
-            (self.gl.enable_attrib)(0);
-            (self.gl.attrib_pointer)(0, 3, FLOAT, 0, 0, ptr::null());
-            (self.gl.bind_buffer)(ELEMENT_ARRAY_BUFFER, mesh.buffers[1]);
-            (self.gl.buffer_data)(
+            self.gl.enable_attrib(0);
+            self.gl.attrib_pointer(0, 3, FLOAT, 0, 0, ptr::null());
+            self.gl.bind_buffer(ELEMENT_ARRAY_BUFFER, mesh.buffers[1]);
+            self.gl.buffer_data(
                 ELEMENT_ARRAY_BUFFER,
                 std::mem::size_of_val(asset.indices()) as isize,
                 asset.indices().as_ptr().cast(),
@@ -487,7 +535,7 @@ impl RenderDevice for GlesRenderDevice {
         // SAFETY: Unbinding changes only current context state, no CPU aliases.
         unsafe {
             self.bind_vertex_array(0);
-            (self.gl.bind_buffer)(ARRAY_BUFFER, 0);
+            self.gl.bind_buffer(ARRAY_BUFFER, 0);
         }
         if let Err(error) = result {
             self.delete_mesh(mesh);
@@ -521,26 +569,26 @@ impl RenderDevice for GlesRenderDevice {
         // buffer is unbound, so texImage2D synchronously copies exactly the
         // validated live slice. No pointer or CPU borrow survives this call.
         unsafe {
-            (self.gl.gen_textures)(1, &mut texture);
+            self.gl.gen_textures(1, &mut texture);
             if texture == 0 {
                 return Err(RenderError::RenderDevice(
                     "texture allocation failed".into(),
                 ));
             }
-            (self.gl.active_texture)(0x84C0); // TEXTURE0
-            (self.gl.bind_texture)(0x0DE1, texture); // TEXTURE_2D
-            (self.gl.bind_buffer)(0x88EC, 0); // PIXEL_UNPACK_BUFFER
-            (self.gl.pixel_store)(0x0CF5, 1); // UNPACK_ALIGNMENT
-            (self.gl.pixel_store)(0x0CF2, 0); // UNPACK_ROW_LENGTH
-            (self.gl.pixel_store)(0x0CF3, 0); // UNPACK_SKIP_ROWS
-            (self.gl.pixel_store)(0x0CF4, 0); // UNPACK_SKIP_PIXELS
-            (self.gl.tex_parameter)(0x0DE1, 0x2801, 0x2600); // MIN_FILTER NEAREST
-            (self.gl.tex_parameter)(0x0DE1, 0x2800, 0x2600); // MAG_FILTER NEAREST
-            (self.gl.tex_parameter)(0x0DE1, 0x2802, 0x2901); // WRAP_S REPEAT
-            (self.gl.tex_parameter)(0x0DE1, 0x2803, 0x2901); // WRAP_T REPEAT
-            (self.gl.tex_parameter)(0x0DE1, 0x813C, 0); // BASE_LEVEL
-            (self.gl.tex_parameter)(0x0DE1, 0x813D, 0); // MAX_LEVEL
-            (self.gl.tex_image)(
+            self.gl.active_texture(0x84C0); // TEXTURE0
+            self.gl.bind_texture(0x0DE1, texture); // TEXTURE_2D
+            self.gl.bind_buffer(0x88EC, 0); // PIXEL_UNPACK_BUFFER
+            self.gl.pixel_store(0x0CF5, 1); // UNPACK_ALIGNMENT
+            self.gl.pixel_store(0x0CF2, 0); // UNPACK_ROW_LENGTH
+            self.gl.pixel_store(0x0CF3, 0); // UNPACK_SKIP_ROWS
+            self.gl.pixel_store(0x0CF4, 0); // UNPACK_SKIP_PIXELS
+            self.gl.tex_parameter(0x0DE1, 0x2801, 0x2600); // MIN_FILTER NEAREST
+            self.gl.tex_parameter(0x0DE1, 0x2800, 0x2600); // MAG_FILTER NEAREST
+            self.gl.tex_parameter(0x0DE1, 0x2802, 0x2901); // WRAP_S REPEAT
+            self.gl.tex_parameter(0x0DE1, 0x2803, 0x2901); // WRAP_T REPEAT
+            self.gl.tex_parameter(0x0DE1, 0x813C, 0); // BASE_LEVEL
+            self.gl.tex_parameter(0x0DE1, 0x813D, 0); // MAX_LEVEL
+            self.gl.tex_image(
                 0x0DE1,
                 0,
                 0x8C43, // SRGB8_ALPHA8
@@ -555,7 +603,7 @@ impl RenderDevice for GlesRenderDevice {
                     pixels.as_ptr().cast()
                 },
             );
-            (self.gl.bind_texture)(0x0DE1, 0);
+            self.gl.bind_texture(0x0DE1, 0);
         }
         if let Err(error) = self.check() {
             self.delete_texture(texture);
@@ -595,14 +643,14 @@ impl RenderDevice for GlesRenderDevice {
         // exactly this immutable slice. No unpack buffer is bound, GL copies it
         // synchronously, and no pointer or alias survives the call.
         unsafe {
-            (self.gl.active_texture)(0x84C0);
-            (self.gl.bind_texture)(0x0DE1, *texture);
-            (self.gl.bind_buffer)(0x88EC, 0);
-            (self.gl.pixel_store)(0x0CF5, 1);
-            (self.gl.pixel_store)(0x0CF2, 0);
-            (self.gl.pixel_store)(0x0CF3, 0);
-            (self.gl.pixel_store)(0x0CF4, 0);
-            (self.gl.tex_sub_image)(
+            self.gl.active_texture(0x84C0);
+            self.gl.bind_texture(0x0DE1, *texture);
+            self.gl.bind_buffer(0x88EC, 0);
+            self.gl.pixel_store(0x0CF5, 1);
+            self.gl.pixel_store(0x0CF2, 0);
+            self.gl.pixel_store(0x0CF3, 0);
+            self.gl.pixel_store(0x0CF4, 0);
+            self.gl.tex_sub_image(
                 0x0DE1,
                 0,
                 0,
@@ -613,7 +661,7 @@ impl RenderDevice for GlesRenderDevice {
                 0x1401,
                 pixels.as_ptr().cast(),
             );
-            (self.gl.bind_texture)(0x0DE1, 0);
+            self.gl.bind_texture(0x0DE1, 0);
         }
         self.check()
     }
@@ -648,23 +696,23 @@ impl RenderDevice for GlesRenderDevice {
         // SAFETY: The host keeps its framebuffer/context current. These calls
         // only set context state and copy scalar arguments; no CPU pointers.
         unsafe {
-            (self.gl.enable)(0x0B71); // DEPTH_TEST
-            (self.gl.enable)(0x0B44); // CULL_FACE
-            (self.gl.disable)(0x0BE2); // BLEND
-            (self.gl.disable)(0x0C11); // SCISSOR_TEST
-            (self.gl.disable)(0x0BD0); // DITHER
-            (self.gl.disable)(0x8037); // POLYGON_OFFSET_FILL
-            (self.gl.disable)(0x809E); // SAMPLE_ALPHA_TO_COVERAGE
-            (self.gl.disable)(0x80A0); // SAMPLE_COVERAGE
-            (self.gl.disable)(0x8C89); // RASTERIZER_DISCARD
-            (self.gl.disable)(0x0B90); // STENCIL_TEST
-            (self.gl.depth_func)(0x0201); // LESS
-            (self.gl.color_mask)(1, 1, 1, 1);
-            (self.gl.front_face)(0x0901); // CCW
-            (self.gl.cull_face)(0x0405); // BACK
-            (self.gl.clear_color)(clear[0], clear[1], clear[2], clear[3]);
-            (self.gl.clear_depth)(1.0);
-            (self.gl.clear)(0x00004000 | 0x00000100);
+            self.gl.enable(0x0B71); // DEPTH_TEST
+            self.gl.enable(0x0B44); // CULL_FACE
+            self.gl.disable(0x0BE2); // BLEND
+            self.gl.disable(0x0C11); // SCISSOR_TEST
+            self.gl.disable(0x0BD0); // DITHER
+            self.gl.disable(0x8037); // POLYGON_OFFSET_FILL
+            self.gl.disable(0x809E); // SAMPLE_ALPHA_TO_COVERAGE
+            self.gl.disable(0x80A0); // SAMPLE_COVERAGE
+            self.gl.disable(0x8C89); // RASTERIZER_DISCARD
+            self.gl.disable(0x0B90); // STENCIL_TEST
+            self.gl.depth_func(0x0201); // LESS
+            self.gl.color_mask(1, 1, 1, 1);
+            self.gl.front_face(0x0901); // CCW
+            self.gl.cull_face(0x0405); // BACK
+            self.gl.clear_color(clear[0], clear[1], clear[2], clear[3]);
+            self.gl.clear_depth(1.0);
+            self.gl.clear(0x00004000 | 0x00000100);
         }
 
         self.check_draw()
@@ -686,7 +734,7 @@ impl RenderDevice for GlesRenderDevice {
         // matrix slice is copied synchronously and no Rust pointer is retained.
         unsafe {
             self.use_program(program.id);
-            (self.gl.uniform_matrix)(
+            self.gl.uniform_matrix(
                 program.joints,
                 palette.len() as i32,
                 0,
@@ -722,48 +770,48 @@ impl RenderDevice for GlesRenderDevice {
         unsafe {
             self.use_program(program.id);
             if program.mvp >= 0 {
-                (self.gl.uniform_matrix)(program.mvp, 1, 0, mvp.as_ptr());
+                self.gl.uniform_matrix(program.mvp, 1, 0, mvp.as_ptr());
             }
             if program.material >= 0 {
-                (self.gl.uniform_rgb)(program.material, 1, material.as_ptr());
+                self.gl.uniform_rgb(program.material, 1, material.as_ptr());
             }
             if program.texture >= 0 {
-                (self.gl.active_texture)(0x84C0);
-                (self.gl.bind_sampler)(0, 0);
-                (self.gl.bind_texture)(0x0DE1, texture.copied().unwrap_or(0));
+                self.gl.active_texture(0x84C0);
+                self.gl.bind_sampler(0, 0);
+                self.gl.bind_texture(0x0DE1, texture.copied().unwrap_or(0));
                 self.program_int(program, program.texture, 0);
             }
             self.bind_vertex_array(mesh.vao);
             if let Some((target, weight)) = pose {
-                (self.gl.uniform_float)(program.pose_weight, weight);
-                (self.gl.bind_buffer)(ARRAY_BUFFER, target.buffers[0]);
-                (self.gl.enable_attrib)(7);
-                (self.gl.attrib_pointer)(7, 3, FLOAT, 0, 0, ptr::null());
+                self.gl.uniform_float(program.pose_weight, weight);
+                self.gl.bind_buffer(ARRAY_BUFFER, target.buffers[0]);
+                self.gl.enable_attrib(7);
+                self.gl.attrib_pointer(7, 3, FLOAT, 0, 0, ptr::null());
                 if mesh.normal != 0 && target.normal != 0 {
-                    (self.gl.bind_buffer)(ARRAY_BUFFER, target.normal);
-                    (self.gl.enable_attrib)(8);
-                    (self.gl.attrib_pointer)(8, 3, FLOAT, 0, 0, ptr::null());
+                    self.gl.bind_buffer(ARRAY_BUFFER, target.normal);
+                    self.gl.enable_attrib(8);
+                    self.gl.attrib_pointer(8, 3, FLOAT, 0, 0, ptr::null());
                 }
             }
             // Generic values are context state, not VAO state. The weight-free
             // shader specializes absent weights to one without consuming slot 3.
             if mesh.color == 0 {
-                (self.gl.attrib_rgb)(1, 1.0, 1.0, 1.0);
+                self.gl.attrib_rgb(1, 1.0, 1.0, 1.0);
             }
             if mesh.uv == 0 {
-                (self.gl.attrib_rgb)(2, 0.0, 0.0, 0.0);
+                self.gl.attrib_rgb(2, 0.0, 0.0, 0.0);
             }
             if mesh.weight == 0 {
-                (self.gl.attrib_rgb)(3, 1.0, 0.0, 0.0);
+                self.gl.attrib_rgb(3, 1.0, 0.0, 0.0);
             }
             if mesh.normal == 0 {
-                (self.gl.attrib_rgb)(4, 0.0, 0.0, 0.0);
+                self.gl.attrib_rgb(4, 0.0, 0.0, 0.0);
             }
             if self.instance_count > 0 {
-                (self.gl.bind_buffer)(ARRAY_BUFFER, self.instance_buffer);
+                self.gl.bind_buffer(ARRAY_BUFFER, self.instance_buffer);
                 for slot in 9..14 {
-                    (self.gl.enable_attrib)(slot);
-                    (self.gl.attrib_pointer)(
+                    self.gl.enable_attrib(slot);
+                    self.gl.attrib_pointer(
                         slot,
                         4,
                         FLOAT,
@@ -771,33 +819,34 @@ impl RenderDevice for GlesRenderDevice {
                         80,
                         ((slot - 9) * 16) as usize as *const c_void,
                     );
-                    (self.gl.attrib_divisor)(slot, 1);
+                    self.gl.attrib_divisor(slot, 1);
                 }
-                (self.gl.draw_instances)(
+                self.gl.draw_instances(
                     TRIANGLES,
                     mesh.indices,
                     UNSIGNED_SHORT,
                     ptr::null(),
                     self.instance_count,
                 );
-                (self.gl.bind_buffer)(ARRAY_BUFFER, mesh.buffers[0]);
+                self.gl.bind_buffer(ARRAY_BUFFER, mesh.buffers[0]);
                 for slot in 9..14 {
-                    (self.gl.attrib_divisor)(slot, 0);
-                    (self.gl.disable_attrib)(slot);
-                    (self.gl.attrib_pointer)(slot, 3, FLOAT, 0, 0, ptr::null());
+                    self.gl.attrib_divisor(slot, 0);
+                    self.gl.disable_attrib(slot);
+                    self.gl.attrib_pointer(slot, 3, FLOAT, 0, 0, ptr::null());
                 }
             } else {
-                (self.gl.draw_elements)(TRIANGLES, mesh.indices, UNSIGNED_SHORT, ptr::null());
+                self.gl
+                    .draw_elements(TRIANGLES, mesh.indices, UNSIGNED_SHORT, ptr::null());
             }
             if pose.is_some() {
                 // Release VAO references to borrowed target buffers before their
                 // resource can unload. Disabling alone would retain GL storage.
-                (self.gl.bind_buffer)(ARRAY_BUFFER, mesh.buffers[0]);
+                self.gl.bind_buffer(ARRAY_BUFFER, mesh.buffers[0]);
                 for slot in [7, 8] {
-                    (self.gl.attrib_pointer)(slot, 3, FLOAT, 0, 0, ptr::null());
-                    (self.gl.disable_attrib)(slot);
+                    self.gl.attrib_pointer(slot, 3, FLOAT, 0, 0, ptr::null());
+                    self.gl.disable_attrib(slot);
                 }
-                (self.gl.bind_buffer)(ARRAY_BUFFER, 0);
+                self.gl.bind_buffer(ARRAY_BUFFER, 0);
             }
         }
 
@@ -810,12 +859,12 @@ impl RenderDevice for GlesRenderDevice {
         unsafe {
             self.bind_vertex_array(0);
             self.use_program(0);
-            (self.gl.active_texture)(0x84C1);
-            (self.gl.bind_texture)(0x0DE1, 0);
-            (self.gl.bind_sampler)(1, 0);
-            (self.gl.active_texture)(0x84C0);
-            (self.gl.bind_texture)(0x0DE1, 0);
-            (self.gl.bind_sampler)(0, 0);
+            self.gl.active_texture(0x84C1);
+            self.gl.bind_texture(0x0DE1, 0);
+            self.gl.bind_sampler(1, 0);
+            self.gl.active_texture(0x84C0);
+            self.gl.bind_texture(0x0DE1, 0);
+            self.gl.bind_sampler(0, 0);
         }
 
         let checked = self.check_frame_end();
@@ -829,26 +878,26 @@ impl RenderDevice for GlesRenderDevice {
         // SAFETY: Names are consumed exactly once while the constructor's
         // context lifetime contract holds. GL ignores zero or lost objects.
         unsafe {
-            (self.gl.delete_vertex_arrays)(1, &mesh.vao);
-            (self.gl.delete_buffers)(2, mesh.buffers.as_ptr());
-            (self.gl.delete_buffers)(1, &mesh.color);
-            (self.gl.delete_buffers)(1, &mesh.normal);
-            (self.gl.delete_buffers)(2, mesh.skin.as_ptr());
+            self.gl.delete_vertex_arrays(1, &mesh.vao);
+            self.gl.delete_buffers(2, mesh.buffers.as_ptr());
+            self.gl.delete_buffers(1, &mesh.color);
+            self.gl.delete_buffers(1, &mesh.normal);
+            self.gl.delete_buffers(2, mesh.skin.as_ptr());
             {
-                (self.gl.delete_buffers)(1, &mesh.uv);
-                (self.gl.delete_buffers)(1, &mesh.weight);
+                self.gl.delete_buffers(1, &mesh.uv);
+                self.gl.delete_buffers(1, &mesh.weight);
             }
         }
     }
 
     fn delete_texture(&mut self, texture: u32) {
         // SAFETY: Consumes the owned name once in the current context; GL ignores zero.
-        unsafe { (self.gl.delete_textures)(1, &texture) };
+        unsafe { self.gl.delete_textures(1, &texture) };
     }
 
     fn delete_program(&mut self, program: GlesRenderProgram) {
         self.submission.invalidate();
         // SAFETY: This consumes the owned program in its still-current context.
-        unsafe { (self.gl.delete_program)(program.id) };
+        unsafe { self.gl.delete_program(program.id) };
     }
 }

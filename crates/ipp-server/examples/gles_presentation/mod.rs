@@ -1,6 +1,8 @@
 //! GLES surface integration and diagnostics controls. Authoring sessions never select it.
 
 mod channel;
+#[cfg(feature = "instrumentation")]
+mod profiling;
 mod services;
 mod statistics;
 

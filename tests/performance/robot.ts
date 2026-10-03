@@ -1,19 +1,16 @@
+import type { ProfileCapture } from "../../packages/ipp-client/src/profiling.js";
 /** Actual generated-client/worker/WASM/WebGL platformer, with host-only profiling hooks. */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { sampleWorkerAllocations } from "./worker-profiling.js";
 import type { AnimationWorldClient } from "@ipp/client";
 import { runBrowserEnvironment } from "../browser/environment.js";
 import { openGallery, galleryEnvironment } from "../render/gallery-driver.js";
 
-interface ProfileResult {
-  names: string[];
+interface ProfileResult extends ProfileCapture {
   frames: number[][];
-  stages: number[];
-  allocations: number[];
-  categories: { name: string; calls: number; bytes: number }[];
 }
 interface ProfileWorker {
   ippProfile: {
@@ -29,10 +26,37 @@ test("platformer profiling preserves state and completed frames", {
 }, async (context) => {
   const result = await runBrowserEnvironment(
     "platformer performance",
-    galleryEnvironment,
+    {
+      ...galleryEnvironment,
+      build: {
+        name: "render-instrumentation",
+        generatedModule: resolve(
+          "target/browser-build/render-instrumentation/generated.js",
+        ),
+        runtimeWasm: resolve(
+          "target/browser-build/render-instrumentation/runtime.wasm",
+        ),
+        contractArtifact: resolve(
+          "target/browser-build/render-instrumentation/contract.bin",
+        ),
+      },
+    },
     context.signal,
     async (environment) => {
-      await environment.page.setViewportSize({ width: 800, height: 600 });
+      // The published gallery keeps its ordinary runtime URL. Redirect that
+      // distribution as a whole to the verified instrumentation product.
+      await environment.page
+        .context()
+        .route("**/target/browser-build/render/**", async (route) => {
+          const suffix = new URL(route.request().url()).pathname.split(
+            "/target/browser-build/render/",
+          )[1]!;
+          const response = await route.fetch({
+            url: `${environment.urls.origin}/target/browser-build/render-instrumentation/${suffix}`,
+          });
+          await route.fulfill({ response });
+        });
+      await environment.page.setViewportSize({ width: 1200, height: 800 });
       const g = await openGallery(environment);
       try {
         await g.navigate("platformer");
@@ -73,6 +97,10 @@ test("platformer profiling preserves state and completed frames", {
             (globalThis as unknown as ProfileWorker).ippProfile.start(profile),
           profile,
         );
+        if (profile)
+          await worker.evaluate(() =>
+            (globalThis as unknown as ProfileWorker).ippProfile.growMemory(),
+          );
         // Poll diagnostics only; no per-frame inspection/transport or captures in samples.
         for (;;) {
           await new Promise((resolve) => setTimeout(resolve, 250));
@@ -105,12 +133,18 @@ test("platformer profiling preserves state and completed frames", {
       const timing = await collect(false, playing ? 50 : 100);
       const profile = await collect(true, 20);
       assert.equal(
-        profile.categories.reduce((sum, c) => sum + c.calls, 0),
-        profile.allocations[0],
+        profile.categories.reduce(
+          (sum, c) => sum + BigInt(c.allocationCalls),
+          0n,
+        ),
+        BigInt(profile.allocations.calls),
       );
       assert.equal(
-        profile.categories.reduce((sum, c) => sum + c.bytes, 0),
-        profile.allocations[1],
+        profile.categories.reduce(
+          (sum, c) => sum + BigInt(c.requestedBytes),
+          0n,
+        ),
+        BigInt(profile.allocations.requestedBytes),
       );
       const jsAllocations =
         process.env.IPP_PROFILE_JS === "1"

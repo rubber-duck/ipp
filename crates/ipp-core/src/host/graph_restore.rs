@@ -77,7 +77,11 @@ impl HostRuntime {
             let id = self.next_world_id().map_err(|error| error.to_string())?;
             self.next_world = id.0;
             let mut world = World::construct(
-                id,
+                crate::world::WorldConstructionIdentity {
+                    id,
+                    #[cfg(feature = "instrumentation")]
+                    host: self.identity(),
+                },
                 budgets,
                 node.world.capacity_hints.clone(),
                 &factories,

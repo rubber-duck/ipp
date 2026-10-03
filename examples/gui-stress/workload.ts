@@ -1,6 +1,12 @@
 /** Versioned logical workload of the React GUI stress benchmark. */
 export const GUI_STRESS_WORKLOAD = {
-  version: 1,
+  version: 2,
+  diagnosticPanelEntities: [51, 136, 1001],
+  rawSurfaceCache: {
+    direct_distance: 0,
+    texels_per_metre: 128,
+    max_refresh_hz: 240,
+  },
   seed: 0x19770517,
   viewport: { width: 1280, height: 800, dpr: 1 },
   camera: { projection: "orthographic", height: 9.4 },
@@ -26,6 +32,7 @@ export const GUI_STRESS_WORKLOAD = {
     "churn",
     "control-press",
     "control-toggle",
+    "control-drag",
     "virtual-scroll",
     "camera-only",
     "animation",
@@ -49,6 +56,7 @@ export const GUI_STRESS_WORKLOAD = {
     "callback-only",
     "control-press",
     "control-toggle",
+    "control-drag",
     "virtual-scroll",
     "camera-only",
     "animation",

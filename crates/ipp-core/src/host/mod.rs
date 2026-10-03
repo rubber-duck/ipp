@@ -15,6 +15,8 @@ pub struct WorldId(pub u64);
 /// Headless runtime owned directly by a Host alongside its platform services.
 /// Worlds are destroyed before services, including during ordinary Rust drop.
 pub struct HostRuntime {
+    #[cfg(feature = "instrumentation")]
+    profile_context: usize,
     worlds: BTreeMap<WorldId, World>,
     next_world: u64,
     identity_namespace: u64,
@@ -38,6 +40,8 @@ impl Drop for HostRuntime {
         while let Some(id) = self.worlds.keys().next().copied() {
             self.destroy_world(id);
         }
+        #[cfg(feature = "instrumentation")]
+        crate::profiling::retire_world(self.profile_context);
     }
 }
 

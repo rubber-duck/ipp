@@ -82,6 +82,9 @@ pub(crate) enum TagSpace {
     DatasetDelta = 57,
     DatasetKind = 58,
     DatasetValue = 59,
+    ProfileRequest = 60,
+    ProfileStatus = 61,
+    ProfileGpuSampling = 62,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -195,6 +198,23 @@ macro_rules! layouts {
 }
 
 layouts! {
+    "profile-gpu-off" => [field!("tag", Variant => "profile-gpu-sampling")];
+    "profile-gpu-frame" => [field!("tag", Variant => "profile-gpu-sampling")];
+    "profile-gpu-passes" => [field!("tag", Variant => "profile-gpu-sampling")];
+    "profile-gpu-all" => [field!("tag", Variant => "profile-gpu-sampling")];
+    "profile-request-status" => [field!("tag", Variant => "profile-request")];
+    "profile-request-start" => [field!("tag", Variant => "profile-request"), field!("counters", Bool), field!("max_events", U64), field!("max_artifact_bytes", U64), field!("gl_calls", Bool), field!("gpu", Variant => "profile-gpu-sampling")];
+    "profile-request-stop" => [field!("tag", Variant => "profile-request"), field!("capture", U64)];
+    "profile-request-read" => [field!("tag", Variant => "profile-request"), field!("capture", U64), field!("offset", U64)];
+    "profile-request-release" => [field!("tag", Variant => "profile-request"), field!("capture", U64)];
+    "profile-status-available" => [field!("tag", Variant => "profile-status")];
+    "profile-status-unavailable" => [field!("tag", Variant => "profile-status")];
+    "profile-status-busy" => [field!("tag", Variant => "profile-status")];
+    "profile-status-invalid-capture" => [field!("tag", Variant => "profile-status")];
+    "profile-status-capacity" => [field!("tag", Variant => "profile-status")];
+    "profile-status-incomplete" => [field!("tag", Variant => "profile-status")];
+    "host-request-profile" => [field!("magic", U64), field!("connection", U64), field!("request_id", U64), field!("tag", Variant => "host-request"), field!("body", Union => "profile-request")];
+    "host-response-profile" => [field!("magic", U64), field!("connection", U64), field!("request_id", U64), field!("tag", Variant => "host-response"), field!("status", Variant => "profile-status"), field!("capture", U64), field!("total_bytes", U64), field!("offset", U64), field!("bytes", Bytes, FIELD_BYTES)];
     "dataset-value-f32" => [field!("tag", Variant => "dataset-value"), field!("value_bits", U32)];
     "dataset-value-integer" => [field!("tag", Variant => "dataset-value"), field!("bits", U32)];
     "dataset-value-bool" => [field!("tag", Variant => "dataset-value"), field!("value", Bool)];
@@ -1362,6 +1382,23 @@ tags! {
     PresentationError PRESENTATION_ERROR_DRAW_FAILED = 8 => "presentation-error-draw-failed";
     HostRequest HOST_REQUEST_PRESENTATION = 23 => "host-request-presentation";
     HostRequest HOST_REQUEST_GET_ROOT_OUTPUT_BINDING = 24 => "host-request-get-root-output-binding";
+    ProfileGpuSampling PROFILE_GPU_OFF = 0 => "profile-gpu-off";
+    ProfileGpuSampling PROFILE_GPU_FRAME = 1 => "profile-gpu-frame";
+    ProfileGpuSampling PROFILE_GPU_PASSES = 2 => "profile-gpu-passes";
+    ProfileGpuSampling PROFILE_GPU_ALL = 3 => "profile-gpu-all";
+    ProfileRequest PROFILE_REQUEST_STATUS = 0 => "profile-request-status";
+    ProfileRequest PROFILE_REQUEST_START = 1 => "profile-request-start";
+    ProfileRequest PROFILE_REQUEST_STOP = 2 => "profile-request-stop";
+    ProfileRequest PROFILE_REQUEST_READ = 3 => "profile-request-read";
+    ProfileRequest PROFILE_REQUEST_RELEASE = 4 => "profile-request-release";
+    ProfileStatus PROFILE_STATUS_AVAILABLE = 0 => "profile-status-available";
+    ProfileStatus PROFILE_STATUS_UNAVAILABLE = 1 => "profile-status-unavailable";
+    ProfileStatus PROFILE_STATUS_BUSY = 2 => "profile-status-busy";
+    ProfileStatus PROFILE_STATUS_INVALID_CAPTURE = 3 => "profile-status-invalid-capture";
+    ProfileStatus PROFILE_STATUS_INCOMPLETE = 4 => "profile-status-incomplete";
+    ProfileStatus PROFILE_STATUS_CAPACITY = 5 => "profile-status-capacity";
+    HostRequest HOST_REQUEST_PROFILE = 26 => "host-request-profile";
+    HostResponse HOST_RESPONSE_PROFILE = 20 => "host-response-profile";
     HostRequest HOST_REQUEST_GUI_INPUT = 25 => "host-request-gui-input";
     HostResponse HOST_RESPONSE_GUI_INPUT = 19 => "host-response-gui-input";
     HostResponse HOST_RESPONSE_PRESENTATION = 17 => "host-response-presentation";

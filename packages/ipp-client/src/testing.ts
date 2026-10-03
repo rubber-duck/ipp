@@ -76,3 +76,25 @@ export function presentationTesting(target: object): PresentationTesting {
       send({ type: "exhaustive-draw-checks", enabled }),
   };
 }
+
+export {
+  hostProfiling,
+  ProfileControlError,
+  summarizeProfileCompositions,
+} from "./profiling.js";
+export type {
+  HostProfiling,
+  HostProfileStatus,
+  ProfileCapture,
+  ProfileTrace,
+  ProfileSpan,
+  ProfileClockCorrelation,
+  ProfileIdentity,
+  ProfilePhase,
+  ProfileStage,
+  ProfileCategory,
+  ProfileAsyncIdentity,
+  ProfileCompositionSummary,
+  ProfileGpuCapture,
+  ProfileGpuRecord,
+} from "./profiling.js";

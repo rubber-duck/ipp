@@ -13,6 +13,10 @@
 //! Readiness is one stdout line with both loopback URLs:
 //! `{"event":"ready","url":"ws://…","presentation":"ws://…"}`.
 
+#[cfg(feature = "instrumentation")]
+#[global_allocator]
+static ALLOCATOR: ipp_core::profiling::CountingAllocator = ipp_core::profiling::CountingAllocator;
+
 // Share the maintained test-host context loader, never a production device shim.
 // This host does not call every loader method, such as the error-check helpers.
 #[cfg(target_os = "linux")]

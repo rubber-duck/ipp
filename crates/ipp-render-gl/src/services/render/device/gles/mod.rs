@@ -8,6 +8,11 @@ pub use super::{GuiRecord, GuiRecordKind};
 use super::{SurfacePathDescriptor, SurfacePathInstance};
 use crate::RenderError;
 
+#[cfg(all(test, feature = "instrumentation"))]
+mod gl_call_tests;
+#[cfg(feature = "instrumentation")]
+mod gpu_queries;
+
 mod custom;
 mod lighting;
 mod linear_target;
@@ -41,6 +46,8 @@ use loader::Functions;
 /// detection of context destruction belong to the host.
 pub struct GlesRenderDevice {
     gl: Functions,
+    #[cfg(feature = "instrumentation")]
+    gpu_queries: super::gpu_queries::GpuQueryPool<gpu_queries::GlesGpuQueries>,
     parameter_buffer: u32,
     parameter_capacity: usize,
     max_parameter_bytes: usize,

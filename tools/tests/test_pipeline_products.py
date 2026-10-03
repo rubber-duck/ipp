@@ -58,6 +58,10 @@ class ProductTests(unittest.TestCase):
             (root / "target/gallery-fixtures/helper.js").write_text(
                 "export const ready = true;"
             )
+            for directory in ("gallery-trace", "browser-build/render-instrumentation"):
+                path = root / "target" / directory
+                path.mkdir(parents=True)
+                (path / "helper.js").write_text("export const diagnostic = true;")
             (root / "private.txt").write_text("not public")
             with ThreadingHTTPServer(
                 ("127.0.0.1", 0), handler("gallery", root)
@@ -83,6 +87,14 @@ class ProductTests(unittest.TestCase):
                     self.assertEqual(response.status, 200)
                     self.assertIn("javascript", response.headers["Content-Type"])
                     response.read()
+                    for path in (
+                        "/target/gallery-trace/helper.js",
+                        "/target/browser-build/render-instrumentation/helper.js",
+                    ):
+                        connection.request("GET", path)
+                        response = connection.getresponse()
+                        self.assertEqual(response.status, 200)
+                        response.read()
                     for path in (
                         "/private.txt",
                         "/target/gallery-fixtures/%2e%2e/%2e%2e/private.txt",

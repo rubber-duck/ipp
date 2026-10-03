@@ -885,6 +885,9 @@ impl<D: RenderDevice> RenderService<D> {
         scene: &CanvasScene<'_>,
         queue: &[super::super::glyph_atlas::GlyphKey],
     ) -> Result<(), RenderError> {
+        #[cfg(feature = "instrumentation")]
+        let _gpu_atlas = self.gpu_scope(super::RenderGpuScope::Atlas, None, None);
+
         struct PlannedGlyph<'a, P> {
             key: super::super::glyph_atlas::GlyphKey,
             page: usize,

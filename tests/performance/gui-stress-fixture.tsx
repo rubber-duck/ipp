@@ -16,7 +16,10 @@ import {
   type GuiWorldClient,
   type Inspection,
 } from "@ipp/client";
-import { nativePresentationTransport } from "../../packages/ipp-client/src/testing.js";
+import {
+  hostProfiling,
+  nativePresentationTransport,
+} from "../../packages/ipp-client/src/testing.js";
 import { planCommandPages } from "../../packages/ipp-client/src/command-pages.js";
 import {
   createRoot,
@@ -29,6 +32,7 @@ import {
   GUI_STRESS_COLORS,
   type GuiStressAssets,
 } from "../../examples/gui-stress/scene.js";
+import { GuiDiagnosticPanel } from "../../examples/gui-stress/diagnostic-panel.js";
 import { GUI_STRESS_WORKLOAD } from "../../examples/gui-stress/workload.js";
 import {
   aliasId,
@@ -45,6 +49,7 @@ import {
   GUI,
   selectSystems,
 } from "../integration/system-selections.js";
+import { exerciseHostProfileOwnership } from "../integration/profile-scenario.js";
 import { guiAction } from "../integration/gui-actions.js";
 
 type StressClient = GuiWorldClient & CameraWorldClient & AnimationWorldClient;
@@ -73,6 +78,7 @@ let world: WorldReference | undefined;
 let view: PresentationView | undefined;
 let sequence = 0n;
 let measure = false;
+let activeProfileCapture: string | undefined;
 let themes: Uint8Array<ArrayBuffer>[] = [];
 const children = new Map<string, CanvasWorldHandle>();
 const preparations: Promise<void>[] = [];
@@ -594,6 +600,7 @@ export async function mount(next: Sweep) {
   firstButton.current = null;
   firstList.current = null;
   ranges.clear();
+  const buildStarted = measure ? performance.now() : null;
   await render();
   await until(
     () => children.size === next.panels * 2,
@@ -639,6 +646,9 @@ export async function mount(next: Sweep) {
   const completed = await frame(outputs());
   if (completed.failedDrawCalls)
     throw new Error("GUI stress scene did not present a valid frame");
+  const buildToFrameMs =
+    buildStarted === null ? null : performance.now() - buildStarted;
+  const observedPanelEntities = (await firstPanel()).inspection.entities.length;
   const firstEntity = await panelEntity();
   const list = await firstList.current!.read();
   const camera = (await current.client.inspect()).entities.find(
@@ -649,6 +659,8 @@ export async function mount(next: Sweep) {
       component.component === current.client.components.Transform!.id,
   )?.fields.x;
   return {
+    buildToFrameMs,
+    observedPanelEntities,
     frame: {
       sequence: String(completed.sequence),
       publication: {
@@ -678,6 +690,7 @@ export async function step(action: Action, cycle = 0) {
   let expectedRange: number | undefined;
   let toggleBefore: boolean | undefined;
   let toggleApplied: boolean | undefined;
+  let controlValueChanged: boolean | undefined;
   if (action === "local-text") {
     revision += 1;
     await render();
@@ -725,6 +738,86 @@ export async function step(action: Action, cycle = 0) {
     toggleApplied = result.ok;
     if (!toggleApplied)
       throw new Error("Semantic checkbox toggle was rejected");
+  } else if (action === "control-drag") {
+    const panel = await firstPanel();
+    const slider = panel.rows.find((row) => row.control?.kind === "slider");
+    if (!slider?.control || !host || !view || !sweep)
+      throw new Error("Slider drag fixture is unavailable");
+    const entity = panel.inspection.entities.find(
+      (item) => item.id === slider.entity,
+    )!;
+    const bounds = entity.components.find(
+      (item) => item.component === panel.session.components.CanvasBounds!.id,
+    )?.fields;
+    if (!bounds) throw new Error("Slider has no evaluated bounds");
+    const rootEntities = (await current.client.inspect()).entities;
+    const surface = rootEntities.find(
+      (item) => item.metadata.symbolicId === "stress-panel-0",
+    )!;
+    const transform = surface.components.find(
+      (item) => item.component === current.client.components.Transform!.id,
+    )!.fields;
+    const camera = rootEntities.find((item) => item.id === cameraEntity)!;
+    const cameraX = Number(
+      camera.components.find(
+        (item) => item.component === current.client.components.Transform!.id,
+      )!.fields.x,
+    );
+    const scale =
+      GUI_STRESS_WORKLOAD.viewport.height / GUI_STRESS_WORKLOAD.camera.height;
+    // Host input is normalized viewport space; slider thumb centres stay
+    // inside the rail rather than reaching the control's outer edge.
+    const thumb = 0.75 * Math.min(Number(bounds.width), Number(bounds.height));
+    const point = (fraction: number): readonly [number, number] => [
+      0.5 +
+        ((Number(transform.x) -
+          cameraX -
+          GUI_STRESS_WORKLOAD.layout.panelWidth / 2 +
+          Number(bounds.x) +
+          thumb / 2 +
+          (Number(bounds.width) - thumb) * fraction) *
+          scale) /
+          GUI_STRESS_WORKLOAD.viewport.width,
+      0.5 -
+        ((Number(transform.y) +
+          GUI_STRESS_WORKLOAD.layout.panelHeight / 2 -
+          Number(bounds.y) -
+          Number(bounds.height) / 2) *
+          scale) /
+          GUI_STRESS_WORKLOAD.viewport.height,
+    ];
+    const previous = Number(slider.control.fields.value);
+    const target = previous < 0.5 ? 0.85 : 0.15;
+    const input = await host.input.open(view);
+    try {
+      for (const event of [
+        { kind: "pointerMove" as const, pointer: 1n, point: point(previous) },
+        { kind: "pointerDown" as const, pointer: 1n, point: point(previous) },
+        ...Array.from({ length: 4 }, (_, index) => ({
+          kind: "pointerMove" as const,
+          pointer: 1n,
+          point: point(previous + ((target - previous) * (index + 1)) / 4),
+        })),
+        { kind: "pointerUp" as const, pointer: 1n, point: point(target) },
+      ]) {
+        const outcome = await input.send(event);
+        if (event.kind === "pointerDown" && outcome.disposition !== "routed")
+          throw new Error(
+            `Slider pointer missed its thumb at ${JSON.stringify(event.point)}`,
+          );
+        if (outcome.rejected || outcome.error)
+          throw new Error(`Slider physical input rejected: ${outcome.error}`);
+        await frame(outputs());
+      }
+    } finally {
+      await input.close();
+    }
+    const changed = (await firstPanel()).rows.find(
+      (row) => row.entity === slider.entity,
+    )?.control?.fields.value;
+    if (typeof changed !== "number" || Math.abs(changed - previous) < 0.05)
+      throw new Error("Routed slider drag did not change its value");
+    controlValueChanged = true;
   } else if (action === "virtual-scroll") {
     const list = firstList.current;
     if (!list) throw new Error("VirtualList handle is unavailable");
@@ -776,7 +869,6 @@ export async function step(action: Action, cycle = 0) {
   const presented = measure ? performance.now() : null;
   if (failures.length || completed.failedDrawCalls)
     throw new Error(`GUI stress frame failed: ${failures.join("; ")}`);
-  let controlValueChanged: boolean | undefined;
   if (toggleBefore !== undefined) {
     const panel = await firstPanel();
     controlValueChanged =
@@ -1104,9 +1196,132 @@ export async function layoutDiagnosticsProbe() {
   }
 }
 
+/** React declaration, transport inspection and local edits on counted panels. */
+export async function panelDiagnostic(count: number, samples: number) {
+  if (
+    !GUI_STRESS_WORKLOAD.diagnosticPanelEntities.some(
+      (expected) => expected === count,
+    )
+  )
+    throw new Error("Unsupported diagnostic panel size");
+  const current = active();
+  if (animationController !== undefined) {
+    await current.client.deleteAnimationController(animationController);
+    animationController = undefined;
+  }
+  await current.root.render(null);
+  // Destroyed child sessions already closed their effect subscriptions.
+  subscriptions.length = 0;
+  preparations.length = 0;
+  for (const restore of restoreTraffic.splice(1)) restore();
+  children.clear();
+  let handle: CanvasWorldHandle | undefined;
+  let revision = 0;
+  let position = 0;
+  const declaration = () => (
+    <GuiDiagnosticPanel
+      count={count}
+      revision={revision}
+      position={position}
+      onReady={(next) => {
+        handle = next;
+        children.set("panel-0", next);
+      }}
+    />
+  );
+  const started = measure ? performance.now() : null;
+  await current.root.render(declaration());
+  await until(() => handle !== undefined, "Diagnostic panel did not attach");
+  await frame(outputs());
+  const buildMs = started === null ? null : performance.now() - started;
+  const session = childClient(handle!.world);
+  const inspectStarted = measure ? performance.now() : null;
+  const inspection = await session.inspect();
+  const inspectMs =
+    inspectStarted === null ? null : performance.now() - inspectStarted;
+  if (inspection.entities.length !== count)
+    throw new Error(
+      `Diagnostic panel expected ${count} entities, observed ${inspection.entities.length}`,
+    );
+  const inspectionJsonUtf8Bytes = new TextEncoder().encode(
+    JSON.stringify(inspection, (_, item: unknown) =>
+      typeof item === "bigint" ? item.toString() : item,
+    ),
+  ).byteLength;
+  await warmup(GUI_STRESS_WORKLOAD.warmupFrames);
+  const before = await capture();
+  const edits = [];
+  for (let sample = 0; sample < samples; sample += 1) {
+    for (const action of ["local-colour", "local-position"] as const) {
+      const started = measure ? performance.now() : null;
+      if (action === "local-colour") revision += 1;
+      else position = sample % 2 === 0 ? 0.02 : 0;
+      await current.root.render(declaration());
+      const acknowledged = measure ? performance.now() : null;
+      await frame(outputs());
+      edits.push({
+        action,
+        updateMs:
+          started === null || acknowledged === null
+            ? null
+            : acknowledged - started,
+        updateToFrameMs: started === null ? null : performance.now() - started,
+      });
+    }
+  }
+  // End with a colour guaranteed to differ from the before capture.
+  revision = 1;
+  await current.root.render(declaration());
+  await frame(outputs());
+  return {
+    requestedEntities: count,
+    observedEntities: inspection.entities.length,
+    buildMs,
+    inspectMs,
+    inspectionJsonUtf8Bytes,
+    inspectionScope:
+      "encoded inspection JSON after transport decoding; not wire bytes",
+    edits,
+    before,
+    after: await capture(),
+  };
+}
+
+export async function hostProfileOwnershipScenario() {
+  if (!host) throw new Error("Host is unavailable");
+  return exerciseHostProfileOwnership(host, selectSystems(GUI));
+}
+
+export async function hostProfileStatus() {
+  if (!host) throw new Error("Host is unavailable");
+  return hostProfiling(host).status();
+}
+
+export async function hostProfileStart() {
+  if (!host) throw new Error("Host is unavailable");
+  activeProfileCapture = await hostProfiling(host).start({ counters: true });
+  return activeProfileCapture;
+}
+
+export async function hostProfileStop() {
+  if (!host || activeProfileCapture === undefined)
+    throw new Error("Capture is unavailable");
+  const reader = hostProfiling(host);
+  try {
+    return await reader.stop();
+  } finally {
+    await reader.release(activeProfileCapture);
+    activeProfileCapture = undefined;
+  }
+}
+
 export async function close() {
   for (const restore of restoreTraffic.splice(0)) restore();
   try {
+    if (host && activeProfileCapture !== undefined) {
+      await hostProfiling(host).release(activeProfileCapture);
+      activeProfileCapture = undefined;
+    }
     for (const subscription of subscriptions.splice(0))
       await subscription.unsubscribe();
     if (animationController !== undefined && client)

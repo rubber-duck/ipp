@@ -6,6 +6,7 @@ in vec3 v_color;
 {{#if texture}}{{texture_declarations}}{{/if}}
 {{#if weight}}{{weight_declarations}}{{/if}}
 uniform vec3 u_material;
+uniform float u_transparency;
 uniform vec4 u_camera;
 uniform vec3 u_surface;
 uniform vec3 u_ambient;
@@ -74,5 +75,5 @@ void main() {
     }
     // Direct-light subset uses unit exposure and clips before the standard sRGB transfer.
     vec3 rgb = clamp(radiance, 0.0, 1.0);
-    out_color = vec4(rgb, 1.0);
+    out_color = vec4(rgb, 1.0 - u_transparency);
 }

@@ -1,16 +1,26 @@
-//! Scalar constraint declarations, strict bindings and dependency-ordered evaluation.
+//! Component constraint declarations, compiled properties and dependency-ordered evaluation.
 //!
-//! Each [`LinearDriver`] binds one source Scalar and writes its target's value
-//! every frame, before animation, so animation contributions to a target apply
+//! [`LinearDriver`] binds one source Scalar; [`ExpressionDriver`] maps fields
+//! on one typed source entity into a shared immutable expression plan. Both write
+//! properties on their own entity. Successful absolute writes land
+//! before animation, so animation contributions to a target apply
 //! on top of the constraint's value. The target keeps no memory of its value from
 //! before the binding: a binding that departs leaves the last written value.
-//! Drivers evaluate with every source before its target. A self-dependency or
+//! Invalid expressions retain the target and expose [`ExpressionDriverStatus`].
+//! Drivers evaluate by resolved property overlap, with sources before targets.
+//! A self-dependency or
 //! cycle makes its members invalid: they do not evaluate, their targets keep
 //! their values, the batch still succeeds, and a Warn diagnostic names each
 //! member. Correcting any member's declaration or binding restores evaluation.
 
 mod component;
-pub use component::LinearDriver;
+pub use component::{ExpressionDriver, LinearDriver};
+
+mod input_mapping;
+pub use input_mapping::{
+    DriverProperty, EXPRESSION_DRIVER_MAX_INPUTS, ExpressionDriverInput,
+    decode_expression_driver_inputs, encode_expression_driver_inputs,
+};
 
 use crate::{
     ComponentValue, EntityId, ErrorReason,
@@ -38,4 +48,15 @@ pub use system_state::ConstraintSystemState;
 mod system;
 pub use system::{ConstraintSystem, ConstraintSystemFactory};
 
+mod dependency_graph;
+mod expression_binding;
+mod status;
+pub use status::{
+    ExpressionDriverAvailability, ExpressionDriverReason, ExpressionDriverState,
+    ExpressionDriverStatus,
+};
+
 mod update;
+
+#[cfg(test)]
+mod expression_tests;

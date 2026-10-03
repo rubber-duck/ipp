@@ -39,8 +39,8 @@ pub(crate) fn fixture_world_selecting<'host>(
     host: &'host mut ipp_core::HostRuntime,
     extra: &[ipp_core::systems::SystemId],
 ) -> Result<WorldContext<'host>> {
-    if host.data_sources().registration_id("fixture:///").is_none() {
-        host.data_sources_mut().register_stream("fixture://")?;
+    if host.io().registration_id("fixture:///").is_none() {
+        host.io_mut().register_stream("fixture://")?;
     }
     let mut selected = fixture_systems();
     selected.extend_from_slice(extra);

@@ -1,3 +1,4 @@
+import { clientAssetSource } from "../../packages/ipp-client/src/asset-sources.js";
 import type { AnimationWorldClient, PresentedCapture } from "@ipp/client";
 import {
   AnimationFixture,
@@ -169,7 +170,74 @@ export async function run(
       // Persist each frame before later assertions or operations can fail.
       await record("animation.capture", captured);
     }
+    // Extend this existing real scene with an expression-driven visible field.
+    const driverSource = await fixture.create("expression-position", {
+      Scalar: { value: 0.5 },
+    });
+    const expression = new contract.ExpressionBuilder();
+    const asset = clientAssetSource(client.session, 19, 850n);
+    await client.registerAsset(
+      asset,
+      expression.encode(expression.input("position", "f32")).buffer,
+    );
+    const scalar = client.components.Scalar!;
+    const driver = client.components.ExpressionDriver!;
+    const fields = fixture.fields("ExpressionDriver", {
+      source: driverSource,
+      expression_source: asset.source,
+      target_component: transform.id,
+      target_offset: transform.fields.x!.offset,
+      inputs: contract.encodeExpressionDriverInputs([
+        {
+          name: "position",
+          property: {
+            component: scalar.id,
+            offset: scalar.fields.value!.offset,
+          },
+        },
+      ]),
+    });
+    await client.batch([
+      {
+        kind: "insertComponent",
+        entity: { kind: "handle", id: target },
+        component: driver.id,
+        fields,
+      },
+    ]);
+    const driverDeadline = performance.now() + 10_000;
+    let driverState;
+    for (;;) {
+      driverState = await client.host.datasets.driverStatus(
+        client.session,
+        target,
+      );
+      if (driverState.state === "Written") break;
+      check(
+        performance.now() < driverDeadline,
+        "render expression driver did not become ready",
+      );
+    }
+    const driverInspection = await fixture.inspect();
+    check(
+      fixture.value(driverInspection, target, "Transform", "x") === 0.5,
+      "expression did not drive visible position",
+    );
+    const driverFrame = await presentation.capture();
+    check(
+      presentation.sourceTick(driverFrame) > driverInspection.tick,
+      "driver capture predates inspected state",
+    );
+    const driverCapture = {
+      label: "expression-position",
+      metadata: captureSummary(driverFrame),
+      summary: summarizeImage(capturedImage(driverFrame)),
+      dataUrl: dataUrl(driverFrame),
+    };
+    await record("animation.capture", driverCapture);
     return {
+      driverCapture,
+      driverState,
       captures,
       differences: [
         compareImages(capturedImage(frames[0]!), capturedImage(frames[2]!)),

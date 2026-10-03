@@ -12,6 +12,7 @@ use std::{cell::RefCell, rc::Rc};
 pub(crate) mod scope;
 
 pub(crate) mod asset_sources;
+mod datasets;
 mod messages;
 mod persistence;
 
@@ -47,6 +48,7 @@ pub(crate) struct HostConnectionState {
     reply_budget: crate::attachment_receipts::SharedReplyBudget,
     progress_leases: Rc<std::cell::Cell<usize>>,
     presentation_pending: usize,
+    datasets: datasets::DatasetConnection,
     pub(crate) batches: crate::command_batches::HostBatchBuilders,
 }
 

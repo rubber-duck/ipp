@@ -11,6 +11,8 @@ use crate::systems::{
 pub struct GeometrySystem {
     pub(in crate::world) state: GeometrySystemState,
     refresh: bool,
+    pub(super) plot:
+        Option<crate::systems::SystemDependencyBinding<crate::systems::plot::PlotSystem>>,
     pub(super) programs_ready: bool,
 }
 
@@ -65,6 +67,7 @@ impl SystemFactory for GeometrySystemFactory {
             SystemDependency::After(SystemId("ipp.skeleton")),
             SystemDependency::After(SystemId("ipp.skinning")),
             SystemDependency::After(SystemId("ipp.particles")),
+            SystemDependency::After(crate::systems::plot::PlotSystem::ID),
         ]
     }
 
@@ -75,7 +78,14 @@ impl SystemFactory for GeometrySystemFactory {
         context.dependency::<crate::systems::asset_dependencies::AssetDependencySystem>(
             crate::systems::asset_dependencies::AssetDependencySystem::ID,
         )?;
-        Ok(Box::new(GeometrySystem::default()))
+        Ok(Box::new(GeometrySystem {
+            plot: context
+                .dependency::<crate::systems::plot::PlotSystem>(
+                    crate::systems::plot::PlotSystem::ID,
+                )
+                .ok(),
+            ..Default::default()
+        }))
     }
 }
 

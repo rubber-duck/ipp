@@ -1,0 +1,17 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": [
+    "datasets.test.ts",
+    "react-data.test.ts",
+    "scenarios/react-data.ts",
+    "dataset-driver.ts",
+    "scenarios/datasets.ts",
+    "data-authoring.test.ts",
+    "scenarios/data-authoring.ts",
+    "../render/animation.test.ts",
+    "../render/animation-fixture.ts"
+  ]
+}

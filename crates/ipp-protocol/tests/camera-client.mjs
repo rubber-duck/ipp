@@ -129,6 +129,8 @@ function hitLayout(part, include, requestId = 1n) {
       publication: publicationLayout(publication),
       entity: 42n,
       incarnation: 2n,
+      component: 24,
+      plot_row: null,
       position_x: 1,
       position_y: 2,
       position_z: 3,
@@ -166,6 +168,7 @@ test("hit responses carry exact view, identity, path and optional finite planes 
         publication,
         entity: 42n,
         incarnation: 2n,
+        component: 24,
         position: [1, 2, 3],
         distance: 4,
         part,
@@ -533,4 +536,36 @@ test("geometry encoding grows beyond prior part and byte quotas and rejects cycl
   const cyclic = { type: "compound", parts: [] };
   cyclic.parts.push(cyclic);
   assert.throws(() => codec.encodeBoundingShape(cyclic), /nesting/);
+});
+
+test("Plot picks preserve full source row identity", () => {
+  const bytes = layout("response-geometry-pick", {
+    session: 7n,
+    request_id: 1n,
+    tick: 3n,
+    tag: tag("RESPONSE_GEOMETRY_PICK"),
+    result: layout("pick-result-hit", {
+      tag: tag("PICK_OUTCOME_HIT"),
+      view: descriptorLayout,
+      world: layout("world-reference", { id: 5n, incarnation: 6n }),
+      publication: publicationLayout(publication),
+      entity: 42n,
+      incarnation: 2n,
+      component: 105,
+      plot_row: layout("plot-row-hit", {
+        series: 9,
+        row_id: 18446744073709551615n,
+      }),
+      position_x: 1,
+      position_y: 2,
+      position_z: 0,
+      distance: 0,
+      part: 0,
+      path: [],
+      view_plane: null,
+    }),
+  }).bytes;
+  const event = codec.decodeResponse(bytes, 7n).body.event;
+  assert.equal(event.hit.component, 105);
+  assert.deepEqual(event.hit.row, { series: 9, rowId: 18446744073709551615n });
 });

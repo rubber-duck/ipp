@@ -1,6 +1,6 @@
 //! Native staged output. File I/O runs on an owned worker; only a completed file is renamed.
 
-use ipp_core::services::data_source::DataWriter;
+use ipp_core::services::io::IoWriter;
 use std::{
     fs::{File, OpenOptions},
     io::Write,
@@ -34,7 +34,7 @@ struct FileWriteProgress {
 /// cannot undo a rename that has already committed. Directory crash durability is a
 /// separate platform policy; successful completion does not promise directory fsync.
 /// One worker and at most one 64 KiB chunk are retained by each active writer.
-pub struct NativeFileDataWriter {
+pub struct NativeFileIoWriter {
     shared: Arc<(Mutex<FileWriteProgress>, Condvar)>,
     pending: Option<FileWriteKind>,
     flushed: bool,
@@ -48,7 +48,7 @@ enum FileWriteKind {
     Finish,
 }
 
-impl NativeFileDataWriter {
+impl NativeFileIoWriter {
     /// Resolve destinations through trusted Host/application policy, never file contents.
     pub fn new(destination: impl AsRef<Path>) -> Result<Self, String> {
         let destination = destination.as_ref().to_path_buf();
@@ -108,7 +108,7 @@ impl NativeFileDataWriter {
     }
 }
 
-impl DataWriter for NativeFileDataWriter {
+impl IoWriter for NativeFileIoWriter {
     fn poll_write(&mut self, cx: &mut Context<'_>, bytes: &[u8]) -> Poll<Result<usize, String>> {
         match self.poll_acknowledgement(cx) {
             Poll::Pending => return Poll::Pending,
@@ -179,7 +179,7 @@ impl DataWriter for NativeFileDataWriter {
     }
 }
 
-impl Drop for NativeFileDataWriter {
+impl Drop for NativeFileIoWriter {
     fn drop(&mut self) {
         self.abort();
     }

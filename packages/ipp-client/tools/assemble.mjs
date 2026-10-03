@@ -19,6 +19,7 @@ export const CLIENT_SUPPORT_MODULES = [
   "host-presentation.ts",
   "host-input.ts",
   "asset-sources.ts",
+  "datasets.ts",
   "logging.ts",
   "presentation.ts",
   "references.ts",

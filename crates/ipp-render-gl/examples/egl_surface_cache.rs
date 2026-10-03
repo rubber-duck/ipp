@@ -338,7 +338,7 @@ mod scenario {
         ) -> Result<Self> {
             let mut host = HostRuntime::new();
             renderer.install(&mut host)?;
-            host.data_sources_mut().register_stream("fixture://")?;
+            host.io_mut().register_stream("fixture://")?;
             let world = host.create_world(Default::default(), &smoke::selection::scene())?;
             let canvas = canvas_output(&mut host, PANEL)?;
             let backdrop = canvas_output(&mut host, [4.0, 3.0])?;

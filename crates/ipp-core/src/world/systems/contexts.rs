@@ -101,7 +101,9 @@ impl SystemWorldView<'_> {
 /// Factory access to already initialized, declared predecessors and Host services.
 pub struct SystemInitContext<'a> {
     /// Temporarily borrowed Host generic I/O service.
-    pub data_sources: &'a mut crate::services::data_source::DataSourceManagementService,
+    pub io: &'a mut crate::services::io::IoService,
+    /// Temporarily borrowed Host typed datasets.
+    pub data: &'a mut crate::services::data::DataService,
     /// Resolved World-owned reservations for the system being constructed.
     pub capacity_hints: &'a crate::WorldSystemCapacityHints,
     pub(in crate::world) identity: usize,
@@ -185,7 +187,8 @@ impl SystemUpdateContext<'_, '_> {
                 instances: self.world.instances.before,
                 trailing: None,
             },
-            data_sources: Some(self.world.data_sources),
+            io: Some(self.world.io),
+            data: Some(self.world.data),
             assets: Some(self.world.asset_acquisition),
         };
         (
@@ -213,11 +216,19 @@ pub struct SystemCommitContext<'a> {
     pub(in crate::world) world_data: &'a mut WorldSimulationState,
     pub(in crate::world) staged: &'a mut crate::world::WorldMutationState,
     pub(in crate::world) assets: &'a mut crate::services::asset_management::AssetManagementService,
+    pub(in crate::world) data: &'a mut crate::services::data::DataService,
     pub(in crate::world) evaluated: bool,
     pub(in crate::world) cleanup: &'a mut Vec<(crate::EntityId, crate::ComponentValue)>,
 }
 
 impl SystemCommitContext<'_> {
+    /// Release or reconfigure data demand at this committed component boundary.
+    pub fn data_sources(&mut self) -> crate::services::data::DataConsumerAccess<'_> {
+        crate::services::data::DataConsumerAccess {
+            service: self.data,
+        }
+    }
+
     /// Borrow Host resources while validating or invalidating a component change.
     pub fn asset_resources(&self) -> &crate::services::asset_management::AssetManagementService {
         self.assets
@@ -298,7 +309,9 @@ impl SystemNumericContext<'_> {
 /// Reverse-order teardown, including cleanup after partial initialization.
 pub struct SystemTeardownContext<'a> {
     /// Temporarily borrowed Host generic I/O service.
-    pub data_sources: &'a mut crate::services::data_source::DataSourceManagementService,
+    pub io: &'a mut crate::services::io::IoService,
+    /// Temporarily borrowed Host typed datasets.
+    pub data: &'a mut crate::services::data::DataService,
     /// The ECS remains live until all systems finish teardown.
     pub world: SystemWorldView<'a>,
     pub(in crate::world) identity: usize,
@@ -382,8 +395,8 @@ pub struct SystemRuntimeAccess<'a> {
     pub(in crate::world) instances: crate::world::access::SystemInstanceAccess<'a>,
     pub(in crate::world) asset_acquisition:
         &'a mut crate::services::asset_management::AssetManagementService,
-    pub(in crate::world) data_sources:
-        &'a mut crate::services::data_source::DataSourceManagementService,
+    pub(in crate::world) io: &'a mut crate::services::io::IoService,
+    pub(in crate::world) data: &'a mut crate::services::data::DataService,
     pub(in crate::world) topology: &'a mut crate::host::topology::HostTopology,
     pub(in crate::world) frame_context: Option<&'a crate::WorldFrameContext>,
     pub(in crate::world) reference_worlds:
@@ -391,6 +404,30 @@ pub struct SystemRuntimeAccess<'a> {
 }
 
 impl SystemRuntimeAccess<'_> {
+    /// Observe shared sources. Producer writes belong to the exclusive Host boundary.
+    ///
+    /// ```compile_fail
+    /// fn mutate(context: &mut ipp_core::systems::SystemRuntimeAccess<'_>,
+    ///           producer: ipp_core::services::data::DataProducerHandle) {
+    ///     context.data_sources().apply_batch(producer, []);
+    /// }
+    /// ```
+    pub fn data_sources(&self) -> &crate::services::data::DataService {
+        self.data
+    }
+
+    /// Consume final data invalidation in `System::prepare_evaluation`, after ingress commits.
+    /// `prepare_frame` and `accept_ingress` precede this boundary and shared service progress.
+    pub fn take_data_notification(
+        &mut self,
+        handle: crate::services::data::DataConsumerHandle,
+    ) -> Result<
+        Option<crate::services::data::DataConsumerNotification>,
+        crate::services::data::DataError,
+    > {
+        self.data.take_notification(handle)
+    }
+
     /// Borrow identity and effective-state access for this callback only.
     pub(in crate::world) fn view(&self) -> SystemWorldView<'_> {
         SystemWorldView {
@@ -473,6 +510,7 @@ pub struct SystemOperationContext<'a> {
     pub(in crate::world) staged: &'a mut crate::world::WorldMutationState,
     pub(in crate::world) command: &'a crate::Command,
     pub(in crate::world) aliases: &'a mut crate::world::EntityAliases,
+    pub(in crate::world) data: &'a crate::services::data::DataService,
     pub(in crate::world) assets: &'a mut crate::services::asset_management::AssetManagementService,
     pub(in crate::world) dependencies: SystemDependencies<'a>,
     pub(in crate::world) topology: &'a mut crate::host::topology::HostTopology,
@@ -480,6 +518,11 @@ pub struct SystemOperationContext<'a> {
 }
 
 impl SystemOperationContext<'_> {
+    /// Nonmutating data-request preflight before authored properties are committed.
+    pub fn data_sources(&self) -> &crate::services::data::DataService {
+        self.data
+    }
+
     /// Retain an applied effect for the enclosing command buffer, independently of later errors.
     pub fn emit_effect(&mut self, effect: crate::OperationEffect) {
         self.effects.push(effect);

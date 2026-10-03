@@ -127,6 +127,7 @@ unsafe extern "C" {
     ) -> u32;
 
     fn set_alpha_blend(enabled: u32) -> u32;
+    fn set_mesh_opacity(program: u32, opacity: f32) -> u32;
 
     fn set_surface_double_sided(enabled: u32) -> u32;
 
@@ -507,6 +508,16 @@ impl RenderDevice for WebGlRenderDevice {
             })?;
         }
         Ok(())
+    }
+
+    fn set_mesh_opacity(
+        &mut self,
+        program: &WebGlRenderProgram,
+        opacity: f32,
+    ) -> Result<(), RenderError> {
+        // SAFETY: Context-scoped program handle and scalar cross synchronously;
+        // the bridge validates ownership and copies the uniform without pointers.
+        self.check(unsafe { set_mesh_opacity(program.id, opacity) })
     }
 
     fn set_alpha_blend(&mut self, enabled: bool) -> Result<(), RenderError> {

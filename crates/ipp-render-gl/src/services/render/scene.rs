@@ -56,10 +56,25 @@ pub(super) fn world_interaction_eligible(host: &HostRuntime, world: WorldRef) ->
     host.world_fault(world) == Ok(None)
 }
 
+#[derive(Clone)]
+pub(super) struct ScenePlotPlane<'a> {
+    pub entity: RenderEntity,
+    pub target: ipp_core::systems::canvas::CanvasTarget,
+    pub publication: WorldPublicationId,
+    pub model: [f32; 16],
+    pub chart_model: [f32; 16],
+    pub geometry: &'a std::sync::Arc<ipp_core::systems::plot::PlotPreparedGeometry>,
+    pub plane: &'a ipp_core::systems::plot::PlotPublishedPlane,
+}
+
 pub(super) struct SceneItem<'a> {
     pub entity: RenderEntity,
     pub value: ipp_core::RenderItem,
     pub published: &'a PublishedRenderItem,
+    pub derived: Option<(
+        ipp_core::systems::canvas::CanvasTarget,
+        &'a ipp_core::systems::plot::PlotPublishedMesh,
+    )>,
 }
 
 impl std::ops::Deref for SceneItem<'_> {
@@ -99,6 +114,7 @@ pub(super) struct RenderScene<'a> {
     pub lights: Vec<(RenderEntity, [f32; 16], ipp_core::components::Light)>,
     pub geometry: BTreeMap<(WorldRef, EntityId), SceneGeometry<'a>>,
     pub surfaces: Vec<SceneOutputSurface>,
+    pub plot_planes: Vec<ScenePlotPlane<'a>>,
     resources: BTreeMap<AssetKey, WorldPublicationId>,
 }
 
@@ -130,6 +146,7 @@ impl<'a> RenderScene<'a> {
             lights: Vec::new(),
             geometry: BTreeMap::new(),
             surfaces: Vec::new(),
+            plot_planes: Vec::new(),
             resources: BTreeMap::new(),
         };
         for contribution in host
@@ -215,6 +232,58 @@ impl<'a> RenderScene<'a> {
                     );
                 }
             }
+            if let Some(plot) = publication
+                .chunk(ipp_core::systems::plot::PlotSystem::ID)
+                .and_then(|chunk| chunk.data::<ipp_core::systems::plot::PlotPublication>())
+            {
+                for chart in &plot.charts {
+                    let entity = RenderEntity {
+                        world: publication.world,
+                        entity: chart.target.entity,
+                        incarnation: chart.target.incarnation,
+                    };
+                    for mesh in &chart.meshes {
+                        let mut value = mesh.render.item;
+                        value.model = compose_model(value.model, contribution.placement)?;
+                        value.normal = compose_normal(value.normal, contribution.placement);
+                        scene.items.push(SceneItem {
+                            entity,
+                            value,
+                            published: &mesh.render,
+                            derived: Some((chart.target, mesh)),
+                        });
+                    }
+                    let chart_model = compose_model(chart.model, contribution.placement)?;
+                    let camera_model = camera
+                        .pose
+                        .render_matrix()
+                        .map_err(|_| RenderError::InvalidTransform)?;
+                    for plane in chart.planes.iter() {
+                        let model = compose_model(
+                            ipp_core::systems::camera::multiply(chart.model, plane.model),
+                            contribution.placement,
+                        )?;
+                        scene.plot_planes.push(ScenePlotPlane {
+                            entity,
+                            target: chart.target,
+                            publication: publication.id,
+                            geometry: &chart.geometry,
+                            chart_model,
+                            plane,
+                            model: super::plot_plane_facing::model(
+                                super::plot_view_placement::model(
+                                    model,
+                                    chart_model,
+                                    camera_model,
+                                    plane.placement,
+                                )?,
+                                plane.facing,
+                                camera_model,
+                            )?,
+                        });
+                    }
+                }
+            }
             let Some(render) = publication
                 .chunk(RenderSystem::ID)
                 .and_then(|chunk| chunk.data::<RenderPublication>())
@@ -239,6 +308,7 @@ impl<'a> RenderScene<'a> {
                     },
                     value,
                     published,
+                    derived: None,
                 });
             }
             for item in &render.debug {

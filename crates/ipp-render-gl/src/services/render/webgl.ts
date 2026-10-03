@@ -1414,6 +1414,20 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
         return 1;
       });
     },
+    set_mesh_opacity(programId: number, opacity: number): number {
+      return status(() => {
+        const program = programs.get(programId >>> 0);
+        if (!program) throw new Error("WebGL program handle is stale");
+        useProgram(program.object);
+        programFloat(
+          program,
+          parameterLocation(program, "u_transparency"),
+          1 - opacity,
+        );
+        checkDraw();
+        return 1;
+      });
+    },
     set_alpha_blend(enabled: number): number {
       return status(() => {
         const mode = enabled ? 2 : 1;

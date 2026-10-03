@@ -148,6 +148,7 @@ pub(super) struct CanvasWalkInputs<'a, 'w> {
     pub context: &'a SystemRuntimeAccess<'w>,
     pub layout: Option<Arc<GuiEntityLayoutView>>,
     pub gui: Option<&'a crate::systems::gui::GuiSystem>,
+    pub plot: Option<&'a crate::systems::plot::PlotSystem>,
     pub extent: [f32; 2],
     pub density: f32,
 }
@@ -178,6 +179,7 @@ pub(super) struct CanvasWalk {
     first: usize,
     pub entries: Vec<Arc<CanvasPaintEntry>>,
     pub hits: Vec<CanvasHit>,
+    pub plot_hits: Vec<crate::systems::plot::PlotCanvasHit>,
     pub controls: Vec<Arc<GuiControlObservation>>,
     pub overlays: Vec<GuiOverlayObservation>,
     /// Records of the walked positions, in order.
@@ -202,6 +204,7 @@ impl CanvasWalk {
             first,
             entries: Vec::new(),
             hits: Vec::new(),
+            plot_hits: Vec::new(),
             controls: Vec::new(),
             overlays: Vec::new(),
             records: Vec::new(),
@@ -676,6 +679,54 @@ impl CanvasSystem {
                     None => background,
                 };
                 walk.entries.push(self.state.gui.primitive(background));
+            }
+        }
+
+        if placed.available
+            && let Some(plot) = inputs.plot
+        {
+            for (target, primitives, geometry) in plot.canvas_charts(entity) {
+                let style = content_placement.style(target);
+                walk.plot_hits.push(crate::systems::plot::PlotCanvasHit {
+                    target,
+                    geometry: geometry.clone(),
+                    placement: [
+                        style.position[0],
+                        style.position[1],
+                        style.scale[0],
+                        style.scale[1],
+                    ],
+                    clip: style.clip,
+                    layer: style.layer,
+                    order: walk.entry_index(),
+                });
+                for local in primitives {
+                    let mut primitive = local.clone();
+                    let authored = *local.style();
+                    let style = primitive.style_mut();
+                    *style = content_placement.style(target);
+                    style.identity = authored.identity;
+                    for axis in 0..2 {
+                        style.position[axis] += authored.position[axis] * style.scale[axis];
+                        style.scale[axis] *= authored.scale[axis];
+                    }
+                    for lane in 0..4 {
+                        style.color[lane] *= authored.color[lane];
+                    }
+                    walk.entries.push(self.state.gui.primitive(primitive));
+                }
+                if let Some(frame) = world.components.plot_frame2d(entity.index() as usize) {
+                    let bounds = placed.bounds([0.0, 0.0, frame.width, frame.height]);
+                    walk.bounds.push((
+                        entity,
+                        [
+                            bounds[0],
+                            bounds[1],
+                            bounds[2] - bounds[0],
+                            bounds[3] - bounds[1],
+                        ],
+                    ));
+                }
             }
         }
 

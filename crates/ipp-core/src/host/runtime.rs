@@ -9,7 +9,8 @@ impl HostRuntime {
             identity_namespace: next_host_namespace(),
             system_factories: SystemFactories::new(compiled_system_factories())
                 .expect("valid compiled factory graph"),
-            data_sources: crate::services::data_source::DataSourceManagementService::new(),
+            io: crate::services::io::IoService::new(),
+            data: crate::services::data::DataService::new(),
             assets: crate::services::asset_management::service::AssetManagementService::new(),
             topology: Default::default(),
             publications: Default::default(),
@@ -19,7 +20,7 @@ impl HostRuntime {
         host.topology.identity = host.publications.identity;
         host.assets.require_lifecycle_barrier();
         host.assets
-            .install_data_sources(&mut host.data_sources)
+            .install_io_sources(&mut host.io)
             .expect("private producer source");
         host
     }
@@ -109,7 +110,8 @@ impl HostRuntime {
             options.capacity_hints,
             &factories,
             &mut self.assets,
-            &mut self.data_sources,
+            &mut self.io,
+            &mut self.data,
         )
         .map(|mut world| {
             if let Some(canvas) = options.canvas {
@@ -166,7 +168,8 @@ impl HostRuntime {
         self.flush_resource_lifecycle();
         let mut context = self.worlds.get_mut(&id)?.context(
             &mut self.assets,
-            &mut self.data_sources,
+            &mut self.io,
+            &mut self.data,
             &mut self.topology,
         );
         context.publications = Some(&self.publications);
@@ -196,7 +199,7 @@ impl HostRuntime {
             }
         }
         self.retire_publications();
-        world.teardown(&mut self.assets, &mut self.data_sources);
+        world.teardown(&mut self.assets, &mut self.io, &mut self.data);
         self.assets.release_world(id);
         self.flush_resource_lifecycle();
         true
@@ -218,19 +221,19 @@ impl HostRuntime {
 
     /// Install a Host-provided URI scheme once for every world.
     pub fn register_stream_resource_provider(&mut self, scheme: &str) -> Result<(), ErrorReason> {
-        self.data_sources
+        self.io
             .register_stream(&format!("{scheme}:"))
             .map_err(|_| ErrorReason::InvalidValue)
     }
 
     /// Pending requests from all worlds, issued by their shared resources.
     pub fn take_resource_requests(&mut self) -> Vec<crate::AssetAcquisitionRequest> {
-        self.assets.requests(&self.data_sources)
+        self.assets.requests(&self.io)
     }
 
     /// Cancellations after aggregate demand or Host residency changes.
     pub fn take_resource_cancellations(&mut self) -> Vec<u64> {
-        self.data_sources.take_cancellations()
+        self.io.take_cancellations()
     }
 
     /// Retain provider bytes independently of any particular world's lifetime.
@@ -239,24 +242,24 @@ impl HostRuntime {
         id: u64,
         result: Result<Vec<u8>, String>,
     ) -> Result<(), ErrorReason> {
-        self.data_sources
+        self.io
             .complete_read(id, result)
             .map_err(|_| ErrorReason::Capacity)
     }
 
     /// Feed one bounded HostRuntime-owned input stream.
     pub fn asset_input_chunk(&self, id: u64, bytes: &[u8]) -> Result<bool, String> {
-        self.data_sources.input_chunk(id, bytes)
+        self.io.input_chunk(id, bytes)
     }
 
     /// Complete only the matching live stream; stale completions are harmless.
     pub fn asset_input_end(&self, id: u64, result: Result<(), String>) {
-        self.data_sources.input_end(id, result);
+        self.io.input_end(id, result);
     }
 
     /// Retained provider staging across all world consumers.
     pub fn asset_input_bytes(&self) -> usize {
-        self.data_sources.input_bytes()
+        self.io.input_bytes()
     }
 
     /// Select GPU-aware polling at the HostRuntime rendering boundary.
@@ -267,14 +270,14 @@ impl HostRuntime {
     /// Progress CPU evaluation assets while a graphics context is detached.
     pub fn progress_evaluation_assets(&mut self) {
         self.flush_resource_lifecycle();
-        self.assets.poll_evaluation_assets(&mut self.data_sources);
+        self.assets.poll_evaluation_assets(&mut self.io);
         self.flush_resource_lifecycle();
     }
 
     /// Advance shared readers/loaders once at the HostRuntime's selected service phase.
     pub fn progress_assets(&mut self) {
         self.flush_resource_lifecycle();
-        self.assets.poll(&mut self.data_sources);
+        self.assets.poll(&mut self.io);
         self.flush_resource_lifecycle();
     }
 }
@@ -371,15 +374,13 @@ impl HostRuntime {
 
 impl HostRuntime {
     /// Borrow generic I/O independently of asset management or World state.
-    pub fn data_sources(&self) -> &crate::services::data_source::DataSourceManagementService {
-        &self.data_sources
+    pub fn io(&self) -> &crate::services::io::IoService {
+        &self.io
     }
 
     /// Configure and use generic data I/O at a Host boundary.
-    pub fn data_sources_mut(
-        &mut self,
-    ) -> &mut crate::services::data_source::DataSourceManagementService {
-        &mut self.data_sources
+    pub fn io_mut(&mut self) -> &mut crate::services::io::IoService {
+        &mut self.io
     }
 }
 
@@ -392,7 +393,12 @@ impl HostRuntime {
             for event in self.assets.take_lifecycle_events() {
                 for world in self.worlds.values_mut() {
                     world
-                        .context(&mut self.assets, &mut self.data_sources, &mut self.topology)
+                        .context(
+                            &mut self.assets,
+                            &mut self.io,
+                            &mut self.data,
+                            &mut self.topology,
+                        )
                         .dispatch_asset_lifecycle(&event, false);
                 }
                 self.assets.finish_lifecycle_event(&event);
@@ -406,16 +412,38 @@ impl HostRuntime {
                 self.invalidate_publication_resources(&event);
                 for world in self.worlds.values_mut() {
                     world
-                        .context(&mut self.assets, &mut self.data_sources, &mut self.topology)
+                        .context(
+                            &mut self.assets,
+                            &mut self.io,
+                            &mut self.data,
+                            &mut self.topology,
+                        )
                         .dispatch_asset_lifecycle(&event, true);
                 }
                 for world in self.worlds.values_mut() {
                     world
-                        .context(&mut self.assets, &mut self.data_sources, &mut self.topology)
+                        .context(
+                            &mut self.assets,
+                            &mut self.io,
+                            &mut self.data,
+                            &mut self.topology,
+                        )
                         .flush_lifecycle_cleanup();
                 }
                 self.assets.finish_release(&event);
             }
         }
+    }
+}
+
+impl HostRuntime {
+    /// Shared typed datasets, independent of World component and asset storage.
+    pub fn data_sources(&self) -> &crate::services::data::DataService {
+        &self.data
+    }
+
+    /// Local producer admission and Host policy configuration.
+    pub fn data_sources_mut(&mut self) -> &mut crate::services::data::DataService {
+        &mut self.data
     }
 }

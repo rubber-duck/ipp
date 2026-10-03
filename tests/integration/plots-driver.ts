@@ -1,0 +1,95 @@
+/** Worker/WebGL driver for the same transport-independent Plot scenarios. */
+import type { Client, HostClientBase } from "@ipp/client";
+import { createWorkerHost } from "../../packages/ipp-client/src/worker.js";
+import { image, settled } from "../../tools/shared-host/presentation.js";
+import { exercisePlot2d } from "./scenarios/plots-2d.js";
+import { exercisePlot3d } from "./scenarios/plots-3d.js";
+import { reactPlots } from "./scenarios/react-plots.js";
+import { exercisePlotViewPlacement } from "./scenarios/plot-view-placement.js";
+
+export async function workerPlots(
+  urls: {
+    generated: string;
+    workerScript: string;
+    wasm: string;
+    origin: string;
+  },
+  family: "2d" | "3d" | "react" | "view",
+) {
+  const contract = await import(urls.generated);
+  const canvas = document.createElement("canvas");
+  canvas.width = 1400;
+  canvas.height = 1000;
+  document.body.replaceChildren(canvas);
+  const owner = createWorkerHost(
+    urls.workerScript,
+    urls.wasm,
+    contract.MAX_MESSAGE_BYTES,
+    {
+      canvas: canvas.transferControlToOffscreen(),
+    },
+  );
+  let connection: HostClientBase<Client> | undefined;
+  const record = async (label: string, value: unknown) => {
+    await (
+      globalThis as unknown as {
+        recordPlot(label: string, value: unknown): Promise<void>;
+      }
+    ).recordPlot(
+      label,
+      JSON.parse(
+        JSON.stringify(value, (_, v) =>
+          typeof v === "bigint" ? { $bigint: v.toString() } : v,
+        ),
+      ),
+    );
+  };
+  try {
+    const host: HostClientBase<Client> =
+      await contract.IppHostClient.connectTransport(owner.connect());
+    connection = host;
+    const font = new Uint8Array(
+      await (
+        await fetch(`${urls.origin}/target/font-assets/shure-tech-mono.ippf`)
+      ).arrayBuffer(),
+    );
+    const surface = await host.presentation.surface();
+    const capture = async (
+      label: string,
+      binding: import("@ipp/client").RootBinding,
+    ) => {
+      const view = await host.presentation.select(surface, binding);
+      try {
+        const frame = image(await settled(host, view, [binding.output]));
+        await record("capture", {
+          label,
+          width: frame.width,
+          height: frame.height,
+          pixels: Array.from(frame.pixels),
+        });
+        return frame;
+      } finally {
+        await host.presentation.clear(view);
+      }
+    };
+    return family === "2d"
+      ? await exercisePlot2d(host, contract, font, capture, record)
+      : family === "3d"
+        ? await exercisePlot3d(host, contract, font, capture)
+        : family === "view"
+          ? await exercisePlotViewPlacement(
+              host,
+              contract,
+              font,
+              capture,
+              record,
+            )
+          : await reactPlots(host, contract, font, capture, record);
+  } finally {
+    try {
+      await connection?.close();
+    } finally {
+      await owner.close();
+    }
+  }
+}

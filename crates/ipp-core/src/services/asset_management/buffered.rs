@@ -1,6 +1,6 @@
 //! Buffered loading for encodings needing whole-input validation.
 
-use super::{Asset, AssetLoader, DataReader, STREAM_CAPACITY};
+use super::{Asset, AssetLoader, IoReader, STREAM_CAPACITY};
 use std::task::{Context, Poll};
 
 type AssetDecoder<T> = dyn Fn(&[u8]) -> Result<T, String>;
@@ -9,6 +9,7 @@ type AssetDecoder<T> = dyn Fn(&[u8]) -> Result<T, String>;
 pub struct BufferedAssetLoader<T: Asset> {
     bytes: Vec<u8>,
     decode: Box<AssetDecoder<T>>,
+    max_bytes: Option<usize>,
 }
 
 impl<T: Asset> BufferedAssetLoader<T> {
@@ -17,6 +18,18 @@ impl<T: Asset> BufferedAssetLoader<T> {
         Self {
             bytes: Vec::new(),
             decode: Box::new(decode),
+            max_bytes: None,
+        }
+    }
+
+    /// Bound retained input before reservation, including sources with unknown lengths.
+    pub fn bounded(
+        max_bytes: usize,
+        decode: impl Fn(&[u8]) -> Result<T, String> + 'static,
+    ) -> Self {
+        Self {
+            max_bytes: Some(max_bytes),
+            ..Self::new(decode)
         }
     }
 }
@@ -26,7 +39,7 @@ impl<T: Asset> AssetLoader for BufferedAssetLoader<T> {
 
     fn poll_load(
         &mut self,
-        reader: &mut dyn DataReader,
+        reader: &mut dyn IoReader,
         cx: &mut Context<'_>,
     ) -> Poll<Result<T, String>> {
         let mut chunk = [0; STREAM_CAPACITY];
@@ -41,6 +54,12 @@ impl<T: Asset> AssetLoader for BufferedAssetLoader<T> {
                         return Poll::Ready(Err(
                             "Data reader returned an invalid byte count".into()
                         ));
+                    }
+                    if self
+                        .max_bytes
+                        .is_some_and(|limit| n > limit.saturating_sub(self.bytes.len()))
+                    {
+                        return Poll::Ready(Err("Asset input byte limit exceeded".into()));
                     }
                     if let Err(error) = self.bytes.try_reserve_exact(n) {
                         return Poll::Ready(Err(error.to_string()));

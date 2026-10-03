@@ -4,8 +4,8 @@ use super::{catalog::AssetSlot, resource::AssetLoaderConstructor};
 use crate::ErrorReason;
 use crate::components::schema::same_text;
 use crate::services::asset_management::*;
-use crate::services::data_source::DataSourceManagementService;
-use crate::services::data_source::MemoryDataSource;
+use crate::services::io::IoService;
+use crate::services::io::MemoryIoSource;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 use std::task::{Context, Waker};
@@ -122,7 +122,7 @@ pub struct AssetManagementService {
     pub(super) idle_resident_bytes: usize,
     pub(super) idle_epoch: u64,
     pub(super) idle_resident_bytes_target: usize,
-    pub(super) memory: MemoryDataSource,
+    pub(super) memory: MemoryIoSource,
     pub(super) events: VecDeque<AssetLoadProgress>,
     pub(super) lifecycle_barrier: bool,
     pub(super) lifecycle_recipients: BTreeMap<AssetKey, BTreeSet<crate::WorldId>>,
@@ -206,6 +206,12 @@ impl AssetManagementService {
         manager
             .register_loader(super::font::FONT_TYPE, super::font::cpu_font_loader)
             .expect("surface font loader");
+        manager
+            .register_loader(
+                super::expression::EXPRESSION_TYPE,
+                super::expression::expression_asset_loader,
+            )
+            .expect("expression definition loader");
         manager
             .register_loader(
                 super::drawing::DRAWING_TYPE,
@@ -585,10 +591,7 @@ impl AssetManagementService {
         }
     }
 
-    pub(crate) fn requests(
-        &self,
-        data: &DataSourceManagementService,
-    ) -> Vec<AssetAcquisitionRequest> {
+    pub(crate) fn requests(&self, data: &IoService) -> Vec<AssetAcquisitionRequest> {
         data.take_selected_requests(|id| self.iter().any(|asset| asset.request_id() == Some(id)))
             .into_iter()
             .filter_map(|request| {
@@ -607,7 +610,7 @@ impl AssetManagementService {
             .collect()
     }
 
-    pub(crate) fn poll(&mut self, data: &mut DataSourceManagementService) {
+    pub(crate) fn poll(&mut self, data: &mut IoService) {
         data.progress();
         self.poll_loads(data, &mut Context::from_waker(Waker::noop()));
     }
@@ -627,7 +630,7 @@ impl AssetManagementService {
             .collect();
     }
 
-    pub(crate) fn poll_evaluation_assets(&mut self, data: &mut DataSourceManagementService) {
+    pub(crate) fn poll_evaluation_assets(&mut self, data: &mut IoService) {
         data.progress();
         let keys = self
             .iter()

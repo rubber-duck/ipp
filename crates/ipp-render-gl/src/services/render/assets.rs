@@ -114,7 +114,7 @@ impl<D: RenderDevice> AssetLoader for GlMeshLoader<D> {
 
     fn poll_load(
         &mut self,
-        reader: &mut dyn DataReader,
+        reader: &mut dyn IoReader,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<Self::Data, String>> {
         use std::task::Poll;
@@ -244,7 +244,7 @@ impl<D: RenderDevice> AssetLoader for GlTextureLoader<D> {
 
     fn poll_load(
         &mut self,
-        reader: &mut dyn DataReader,
+        reader: &mut dyn IoReader,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<Self::Data, String>> {
         use std::task::Poll;

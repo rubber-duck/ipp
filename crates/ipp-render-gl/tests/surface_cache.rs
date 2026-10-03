@@ -1462,9 +1462,7 @@ fn drawing_scene(
     WorldId,
     CanvasSurface,
 ) {
-    host.data_sources_mut()
-        .register_stream("fixture://")
-        .unwrap();
+    host.io_mut().register_stream("fixture://").unwrap();
     let (world, renderer, state) = setup(host);
     state.cache_limit.set(4096);
     let world_id = world.id();
@@ -1635,9 +1633,7 @@ fn budget_pressure_evicts_idle_images_then_falls_back() {
 #[test]
 fn worlds_share_the_context_budget() {
     let mut host = ipp_core::HostRuntime::new();
-    host.data_sources_mut()
-        .register_stream("fixture://")
-        .unwrap();
+    host.io_mut().register_stream("fixture://").unwrap();
     let (world, mut renderer, state) = setup(&mut host);
     let world_id = world.id();
     drop(world);

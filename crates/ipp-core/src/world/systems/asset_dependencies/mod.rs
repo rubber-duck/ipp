@@ -20,7 +20,7 @@ pub(in crate::world) struct AssetDependencyReadAccess<'a> {
     world: &'a WorldSimulationState,
     state: Option<&'a AssetDependencySystemState>,
     asset_acquisition: &'a AssetManagementService,
-    data_sources: &'a crate::services::data_source::DataSourceManagementService,
+    io: &'a crate::services::io::IoService,
 }
 
 mod demand;

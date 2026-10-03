@@ -21,6 +21,7 @@ pub(super) struct CanvasSystemState {
     pub slots: BTreeMap<EntityId, Arc<CanvasPaintEntry>>,
     /// A change the canvas cannot patch: the next evaluation walks it whole.
     pub dirty: bool,
+    pub plot_revision: u64,
     pub geometry_dirty: BTreeSet<(EntityId, u16)>,
     /// Changes that affect neither structure, layout nor layers, which the
     /// next evaluation patches unless something requires the whole walk.

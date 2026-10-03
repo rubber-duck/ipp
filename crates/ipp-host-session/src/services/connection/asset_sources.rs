@@ -2,6 +2,7 @@
 
 use super::*;
 use ipp_core::services::asset_management::AssetSource;
+use ipp_core::services::io::{IoUploadAssembly, IoUploadError};
 use ipp_protocol::asset_source::{self, SourceOperation};
 
 pub(crate) struct ClientSourceRecord {
@@ -10,8 +11,7 @@ pub(crate) struct ClientSourceRecord {
 
 pub(crate) struct SourceTransfer {
     source: AssetSource,
-    length: usize,
-    bytes: Vec<u8>,
+    upload: IoUploadAssembly,
 }
 
 impl<P: HostServices> Host<P> {
@@ -100,8 +100,7 @@ impl<P: HostServices> Host<P> {
                     id,
                     SourceTransfer {
                         source,
-                        length,
-                        bytes: Vec::new(),
+                        upload: IoUploadAssembly::new(length),
                     },
                 );
             }
@@ -114,20 +113,10 @@ impl<P: HostServices> Host<P> {
                     .source_transfers
                     .get_mut(&transfer)
                     .ok_or("Unknown asset source transfer")?;
-                let end = input
-                    .bytes
-                    .len()
-                    .checked_add(bytes.len())
-                    .ok_or("Asset source length overflow")?;
-                if offset != input.bytes.len() as u64 || end > input.length || bytes.is_empty() {
+                if let Err(error) = input.upload.push(offset, bytes) {
                     session.source_transfers.remove(&transfer);
-                    return Err("Invalid asset source chunk bounds".into());
+                    return Err(asset_upload_error(error).into());
                 }
-                if input.bytes.try_reserve(bytes.len()).is_err() {
-                    session.source_transfers.remove(&transfer);
-                    return Err("Asset source allocation failed".into());
-                }
-                input.bytes.extend_from_slice(bytes);
             }
             SourceOperation::Finish {
                 transfer,
@@ -136,14 +125,12 @@ impl<P: HostServices> Host<P> {
                     .source_transfers
                     .remove(&transfer)
                     .ok_or("Unknown asset source transfer")?;
-                if input.bytes.len() != input.length {
-                    return Err("Incomplete asset source transfer".into());
-                }
+                let bytes = input.upload.finish().map_err(asset_upload_error)?;
                 self.runtime
                     .world_mut(session.world)
                     .ok_or("World is closed")?
                     .asset_resources_mut()
-                    .register_client_source(session.world, input.source.clone(), input.bytes)?;
+                    .register_client_source(session.world, input.source.clone(), bytes)?;
                 session.client_sources.insert(
                     input.source,
                     ClientSourceRecord {
@@ -174,6 +161,15 @@ impl<P: HostServices> Host<P> {
             }
         }
         Ok(())
+    }
+}
+
+fn asset_upload_error(error: IoUploadError) -> &'static str {
+    match error {
+        IoUploadError::LengthOverflow => "Asset source length overflow",
+        IoUploadError::InvalidChunkBounds => "Invalid asset source chunk bounds",
+        IoUploadError::AllocationFailed => "Asset source allocation failed",
+        IoUploadError::Incomplete => "Incomplete asset source transfer",
     }
 }
 

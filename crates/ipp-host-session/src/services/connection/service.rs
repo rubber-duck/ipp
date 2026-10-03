@@ -89,6 +89,7 @@ impl<P: HostServices> Host<P> {
                 progress_leases: Default::default(),
                 presentation_pending: 0,
                 batches: Default::default(),
+                datasets: Default::default(),
             },
         );
         Ok(())
@@ -125,7 +126,14 @@ impl<P: HostServices> Host<P> {
         let Some(connection) = self.connections.states.get_mut(&id) else {
             return false;
         };
-        let ingress = connection.admitted_requests(&self.sessions);
+        // An admitted source update needs its next chunk before its final reply can
+        // complete. Count hysteresis must not withhold those continuations behind
+        // other long-lived reservations; output-byte pressure still withholds input.
+        let ingress = if connection.datasets.has_transfers() {
+            0
+        } else {
+            connection.admitted_requests(&self.sessions)
+        };
         let account = &connection.reply_budget.0;
         let backlog = account.record_usage().bytes;
         let metadata = account.usage().bytes - backlog;
@@ -157,6 +165,9 @@ impl<P: HostServices> Host<P> {
             });
             connection.ready = true;
             return Ok(());
+        }
+        if bytes.starts_with(ipp_protocol::dataset::REQUEST_MAGIC) {
+            return self.receive_dataset(id, bytes);
         }
         if bytes.starts_with(ipp_protocol::asset_source::REQUEST_MAGIC) {
             return self.receive_asset_source(id, bytes);
@@ -424,6 +435,7 @@ impl<P: HostServices> Host<P> {
         let Some(mut connection) = self.connections.states.remove(&id) else {
             return false;
         };
+        std::mem::take(&mut connection.datasets).disconnect(&mut self.runtime);
         connection.outbox.close();
         if let Some(input) = self.services.gui_input() {
             input.close_connection(&mut self.runtime, id);

@@ -8,12 +8,14 @@ pub(super) enum RenderDrawIndex {
     Visual(usize),
     Debug(usize),
     Surface(usize),
+    PlotPlane(usize),
 }
 
 pub(super) enum RenderDrawItem<'a> {
     Visual(&'a RenderItem<'a>),
     Debug(&'a DebugRenderItem),
     Surface(&'a super::scene::SceneOutputSurface),
+    PlotPlane(&'a super::scene::ScenePlotPlane<'a>),
 }
 
 impl RenderDrawIndex {
@@ -22,18 +24,20 @@ impl RenderDrawIndex {
         items: &'a [RenderItem<'a>],
         debug: &'a [DebugRenderItem],
         surfaces: &'a [super::scene::SceneOutputSurface],
+        plot_planes: &'a [super::scene::ScenePlotPlane<'a>],
     ) -> RenderDrawItem<'a> {
         match self {
             Self::Visual(index) => RenderDrawItem::Visual(&items[index]),
             Self::Debug(index) => RenderDrawItem::Debug(&debug[index]),
             Self::Surface(index) => RenderDrawItem::Surface(&surfaces[index]),
+            Self::PlotPlane(index) => RenderDrawItem::PlotPlane(&plot_planes[index]),
         }
     }
 
     pub fn order(self) -> usize {
         match self {
             Self::Visual(index) | Self::Debug(index) => index,
-            Self::Surface(index) => index,
+            Self::Surface(index) | Self::PlotPlane(index) => index,
         }
     }
 }

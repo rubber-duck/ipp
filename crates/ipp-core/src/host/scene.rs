@@ -27,7 +27,11 @@ pub struct PublishedSceneHit {
     pub world: WorldRef,
     /// Generational picked entity within its World.
     pub entity: EntityId,
-    /// Captured PickingGeometry incarnation.
+    /// Producing component identity (PickingGeometry or Plot).
+    pub component: u16,
+    /// Original source-row identity for a Plot mark.
+    pub row: Option<crate::systems::plot::PlotRowIdentity>,
+    /// Captured producing component incarnation.
     pub incarnation: u64,
     /// Containing-domain ray parameter and primitive ordinal.
     pub hit: GeometryRayHit,
@@ -105,41 +109,73 @@ impl HostRuntime {
         let contributions = self.spatial_contributions_for_output(publication, selection)?;
         let mut nearest: Option<PublishedSceneHit> = None;
         for contribution in contributions {
-            let Some(geometry) = contribution
+            let local = contribution.placement.inverse_ray(ray);
+            let mut candidates = Vec::new();
+            if let Some(geometry) = contribution
                 .publication
                 .chunk(GeometrySystem::ID)
                 .and_then(|chunk| chunk.data::<GeometryPublication>())
-            else {
-                continue;
-            };
-            let local = contribution.placement.inverse_ray(ray);
-            let Some((entity, hit)) = geometry.pick(&local, near, far)? else {
-                continue;
-            };
-            let incarnation = geometry
-                .entities
-                .iter()
-                .find(|value| value.entity == entity)
-                .and_then(|value| value.picking_incarnation)
-                .expect("published picking shape");
-            let candidate = PublishedSceneHit {
-                publication: contribution.publication.id,
-                world: contribution.publication.world,
-                entity,
-                incarnation,
-                hit,
-                path: contribution.path,
-            };
-            if nearest.as_ref().is_none_or(|previous| {
-                candidate
-                    .hit
-                    .distance
-                    .total_cmp(&previous.hit.distance)
-                    .then(candidate.world.cmp(&previous.world))
-                    .then(candidate.entity.cmp(&previous.entity))
-                    .is_lt()
-            }) {
-                nearest = Some(candidate);
+                && let Some((entity, hit)) = geometry.pick(&local, near, far)?
+            {
+                let incarnation = geometry
+                    .entities
+                    .iter()
+                    .find(|value| value.entity == entity)
+                    .and_then(|value| value.picking_incarnation)
+                    .expect("published picking shape");
+                candidates.push(PublishedSceneHit {
+                    publication: contribution.publication.id,
+                    world: contribution.publication.world,
+                    entity,
+                    component: crate::ComponentValue::PICKING_GEOMETRY,
+                    incarnation,
+                    row: None,
+                    hit,
+                    path: contribution.path.clone(),
+                });
+            }
+            if let Some(plot) = contribution
+                .publication
+                .chunk(crate::systems::plot::PlotSystem::ID)
+                .and_then(|chunk| chunk.data::<crate::systems::plot::PlotPublication>())
+                && let Some(pick) = plot.pick(&local, near, far)
+            {
+                candidates.push(PublishedSceneHit {
+                    publication: contribution.publication.id,
+                    world: contribution.publication.world,
+                    entity: pick.target.entity,
+                    component: pick.target.component,
+                    incarnation: pick.target.incarnation,
+                    row: Some(pick.row),
+                    hit: pick.hit,
+                    path: contribution.path.clone(),
+                });
+            }
+            for edge in &contribution.publication.attachments {
+                if edge.mode == WorldAttachmentMode::Spatial
+                    || edge
+                        .placement_output
+                        .is_some_and(|owner| owner != selection)
+                {
+                    continue;
+                }
+                if let Some(hit) = self.pick_plot_surface(&contribution, edge, ray, near, far)? {
+                    candidates.push(hit);
+                }
+            }
+            for candidate in candidates {
+                if nearest.as_ref().is_none_or(|previous| {
+                    candidate
+                        .hit
+                        .distance
+                        .total_cmp(&previous.hit.distance)
+                        .then(candidate.world.cmp(&previous.world))
+                        .then(candidate.entity.cmp(&previous.entity))
+                        .then(candidate.component.cmp(&previous.component))
+                        .is_lt()
+                }) {
+                    nearest = Some(candidate);
+                }
             }
         }
         Ok(nearest)

@@ -59,9 +59,7 @@ impl PaintScene {
     /// A presented canvas holding one ordinary box and an ordinary button.
     fn new() -> Self {
         let mut host = HostRuntime::new();
-        host.data_sources_mut()
-            .register_stream("fixture://")
-            .unwrap();
+        host.io_mut().register_stream("fixture://").unwrap();
         let (world, renderer, state) = setup(&mut host);
         let world_id = world.id();
         drop(world);

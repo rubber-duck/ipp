@@ -27,6 +27,23 @@ impl SurfaceOp {
     }
 }
 
+pub(super) struct PrimitiveScene<'a> {
+    pub host: &'a ipp_core::HostRuntime,
+    pub publication: ipp_core::WorldPublicationId,
+    pub world: ipp_core::WorldRef,
+    pub selection: Option<ipp_core::OutputRef>,
+    pub plane: Option<super::plot_planes::PlotPlaneKey>,
+}
+
+impl<'a> PrimitiveScene<'a> {
+    fn resource(
+        &self,
+        key: ipp_core::services::asset_management::AssetKey,
+    ) -> Option<&'a ipp_core::services::asset_management::AssetProvider> {
+        self.host.publication_resource(self.publication, key)
+    }
+}
+
 struct CanvasDrawFrame<'a> {
     scene: CanvasScene<'a>,
     mvp: [f32; 16],
@@ -93,7 +110,13 @@ impl<D: RenderDevice> RenderService<D> {
                     SurfaceOp::Primitive(index, clip, _) => {
                         if let Some(primitive) = frame.scene.primitive(index) {
                             self.draw_surface_primitive(
-                                &frame.scene,
+                                &PrimitiveScene {
+                                    host: frame.scene.host,
+                                    publication: frame.scene.publication.id,
+                                    world: frame.scene.publication.world,
+                                    selection: Some(frame.scene.canvas.selection),
+                                    plane: None,
+                                },
                                 primitive,
                                 clip,
                                 frame.paint.entry(frame.scene.replaced(index)),
@@ -224,9 +247,9 @@ impl<D: RenderDevice> RenderService<D> {
 
     /// Draw one text, drawing or bitmap primitive that is not retained GUI work.
     #[allow(clippy::too_many_arguments)]
-    fn draw_surface_primitive(
+    pub(super) fn draw_surface_primitive(
         &mut self,
-        scene: &CanvasScene<'_>,
+        scene: &PrimitiveScene<'_>,
         primitive: &CanvasPrimitive,
         clip: CanvasClip,
         paint: super::super::retained_surfaces::SurfacePaint,
@@ -321,12 +344,60 @@ impl<D: RenderDevice> RenderService<D> {
                 };
                 let program = self.surface_instance_program.as_ref().unwrap();
                 let device = &self.device;
-                self.analytic_glyphs
-                    .entry(scene.canvas.selection)
-                    .or_insert_with(|| {
-                        super::super::analytic_glyphs::AnalyticGlyphCache::new(device.clone())
-                    })
-                    .draw_run(program, path, &run, paint, mvp, instances, build, stats)?;
+                let cache = if let Some(key) = scene.plane {
+                    &mut self
+                        .plot_plane_caches
+                        .get_mut(&key)
+                        .expect("prepared plane cache")
+                        .glyphs
+                } else {
+                    self.analytic_glyphs
+                        .entry(scene.selection.expect("Canvas selection"))
+                        .or_insert_with(|| {
+                            super::super::analytic_glyphs::AnalyticGlyphCache::new(device.clone())
+                        })
+                };
+                cache.draw_run(program, path, &run, paint, mvp, instances, build, stats)?;
+            }
+            CanvasPrimitive::Path {
+                path,
+                ..
+            } => {
+                if path.contours.is_empty() {
+                    return Ok(());
+                }
+                let (data, uploaded) = self.generated_paths.get(
+                    (scene.world, style.identity, scene.plane.map(|key| key.2)),
+                    path,
+                )?;
+                stats.uploaded(uploaded);
+                let color = [
+                    style.color[0],
+                    style.color[1],
+                    style.color[2],
+                    style.color[3] * style.opacity,
+                ];
+                let placement = [
+                    style.position[0],
+                    style.position[1],
+                    style.scale[0],
+                    style.scale[1],
+                ];
+                self.device.borrow_mut().draw_surface_path(
+                    self.surface_program.as_ref().expect("shared path program"),
+                    data.gpu.as_ref().expect("live generated path"),
+                    &path.bounds,
+                    data.descriptor,
+                    mvp,
+                    &placement,
+                    &clip,
+                    &color,
+                    u32::from(matches!(
+                        path.fill_rule,
+                        ipp_core::services::asset_management::drawing::FillRule::EvenOdd
+                    )),
+                )?;
+                stats.draw(2);
             }
             CanvasPrimitive::Drawing {
                 style: _,

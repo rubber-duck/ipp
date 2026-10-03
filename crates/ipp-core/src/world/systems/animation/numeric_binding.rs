@@ -7,9 +7,7 @@
 //! value on every write (see `driver::DynamicValueDestination`).
 
 use crate::{
-    ComponentValue,
-    components::registry::ComponentStorage,
-    components::{Camera, Light, PbrMaterial, Scalar, Transform, UnlitMaterial},
+    ComponentValue, components::Transform, components::registry::ComponentStorage,
     world::component_binding::ComponentBinding,
 };
 use std::mem::offset_of;
@@ -49,38 +47,9 @@ pub(super) fn bind_frozen_f32(
 }
 
 pub(super) fn frozen_f32_field_supported(component: u16, offset: u32) -> bool {
-    macro_rules! fields {
-        ($ty:ty; $($field:ident),+) => {
-            [$(offset_of!($ty, $field) as u32),+].contains(&offset)
-        };
-    }
-    match component {
-        ComponentValue::SCALAR => offset == offset_of!(Scalar, value) as u32,
-        ComponentValue::TRANSFORM => {
-            fields!(Transform; x, y, z, sx, sy, sz)
-        }
-        ComponentValue::UNLIT_MATERIAL => fields!(UnlitMaterial; r, g, b),
-        ComponentValue::PBR_MATERIAL => {
-            fields!(PbrMaterial; r, g, b, metallic, roughness)
-        }
-        ComponentValue::LIGHT => {
-            fields!(Light; r, g, b, intensity, shadow_radius, shadow_bias)
-        }
-        ComponentValue::CAMERA => fields!(Camera; fov_y, ortho_height),
-        ComponentValue::LINEAR_DRIVER
-        | ComponentValue::BOUNDING_GEOMETRY
-        | ComponentValue::PICKING_GEOMETRY => {
-            super::numeric_fields::range(component, offset).is_some()
-        }
-        ComponentValue::MESH_POSE => super::numeric_fields::range(component, offset).is_some(),
-        ComponentValue::PARTICLE_EMITTER | ComponentValue::PARTICLE_SPRITE => {
-            super::numeric_fields::range(component, offset).is_some()
-        }
-        ComponentValue::PARTICLE_PLAYBACK => {
-            offset == offset_of!(crate::components::ParticlePlayback, time) as u32
-        }
-        _ => false,
-    }
+    (component == ComponentValue::PARTICLE_PLAYBACK
+        && offset == offset_of!(crate::components::ParticlePlayback, time) as u32)
+        || crate::world::numeric_properties::fixed_range(component, offset).is_some()
 }
 
 pub(super) fn bind_frozen_rotation(

@@ -1,3 +1,4 @@
+import { ClientDatasets, type DatasetContract } from "./datasets.js";
 import { isAssetSourceResponse } from "./asset-sources.js";
 import { acceptHostAnnouncement, hostHello } from "./host-contract.js";
 import { HostPhysicalInput } from "./host-input.js";
@@ -102,6 +103,21 @@ export abstract class HostClientBase<T extends Client> {
   }
 
   protected abstract hostTag(name: string): number;
+  protected abstract datasetContract(): DatasetContract;
+
+  private datasetClient?: ClientDatasets;
+  get datasets(): ClientDatasets {
+    return (this.datasetClient ??= new ClientDatasets(
+      () => this.connection,
+      this.datasetContract(),
+      (bytes) => this.transport.send(bytes),
+      this.timeoutMs,
+      (error) => {
+        this.stop(error);
+        void this.close().catch(() => {});
+      },
+    ));
+  }
   /** A named Host protocol bound of the connected target contract. */
   protected abstract hostLimit(name: string): number;
   protected abstract hostMagic(response: boolean): Uint8Array<ArrayBuffer>;
@@ -547,6 +563,7 @@ export abstract class HostClientBase<T extends Client> {
   }
 
   private receive(bytes: Uint8Array): void {
+    if (this.datasetClient?.receive(bytes)) return;
     if (this.hostMagic(true).every((value, index) => bytes[index] === value)) {
       const reader = new HostWireReader(bytes);
       reader.raw(8);
@@ -630,6 +647,7 @@ export abstract class HostClientBase<T extends Client> {
     if (this.stopped) return;
     this.stopped = true;
     this.input.stop(error);
+    this.datasetClient?.close(error);
     for (const session of [...this.attachments.keys()])
       this.invalidateAttachment(session, error);
     for (const waiter of this.pending.values()) {

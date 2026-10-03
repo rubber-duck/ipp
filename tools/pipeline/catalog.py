@@ -41,6 +41,7 @@ REGRESSION_GROUPS = {
             "react",
             "react-attached",
             "headless-client",
+            "datasets",
         ),
         ("test:presentation:host-wire",),
     ),
@@ -77,6 +78,13 @@ REGRESSION_GROUPS = {
             "test:canvas:lifecycle",
             "test:canvas:dom",
             "test:canvas:controller-webgl",
+            "test:canvas:patch-oracle",
+            "test:canvas:patch-render",
+            "test:plots:core",
+            "test:plots:authoring",
+            "test:plots:browser",
+            "test:plots:views-browser",
+            "test:plots:3d-browser",
             "test:react-gui-authoring:webgl",
             "test:presentation:webgl",
             "test:presentation:webgl-production",
@@ -120,6 +128,9 @@ REGRESSION_GROUPS = {
             "test:canvas:controller-gles",
             "test:presentation:native-gles",
             "test:react-gui-authoring:gles",
+            "test:plots:native",
+            "test:plots:views-native",
+            "test:plots:3d-native",
         ),
     ),
     "matrix": RegressionGroup(
@@ -228,6 +239,8 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
     build(
         "world-hosts", (), ("target/world-host-build",), ("node", "npm", "rust", "wasm")
     )
+    build("dataset-fixtures", ("native",), ("target/datasets",), ("node", "npm"))
+    build("plots-fixtures", ("native", "react"), ("target/plots",), ("node", "npm"))
     build("scaling-host", (), ("target/scaling-host-build",))
     build(
         "transport-fixtures", ("native",), ("target/multiplex-tests",), ("node", "npm")

@@ -360,5 +360,7 @@ use crate::commands::metadata_bytes;
 mod queries;
 
 mod component_binding;
+mod numeric_properties;
+mod property_binding;
 
 mod component_query;

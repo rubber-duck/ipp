@@ -18,7 +18,7 @@ pub use primitives::{Scalar, Transform};
 pub use registry::ComponentValue;
 
 pub use crate::systems::camera::Camera;
-pub use crate::systems::constraints::LinearDriver;
+pub use crate::systems::constraints::{ExpressionDriver, LinearDriver};
 pub use crate::systems::geometry::{BoundingGeometry, PickingGeometry};
 pub use crate::systems::hierarchy::ParentJoint;
 pub use crate::systems::look_at::{LookAt, LookAtRuntimeState};
@@ -56,4 +56,11 @@ pub use rows_fixture::{RowsFixture, RowsFixtureItem, RowsFixtureTag};
 
 pub use crate::systems::particles::{
     ParticleEmitter, ParticleMesh, ParticlePlayback, ParticleSprite,
+};
+
+pub use crate::systems::data_bindings::{BufferDataSourceBinding, StreamingDataSourceBinding};
+
+pub use crate::systems::plot::{
+    PlotBars2d, PlotFrame2d, PlotFrame3d, PlotGridBars3d, PlotHeightSurface3d, PlotLine2d,
+    PlotPie2d, PlotPie3d, PlotPoints3d,
 };

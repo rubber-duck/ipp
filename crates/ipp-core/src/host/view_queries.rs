@@ -154,6 +154,24 @@ impl HostRuntime {
             return Err(ErrorReason::InvalidViewport);
         }
         let view = self.resolve_view(target)?;
+        if view.output.kind() == OutputKind::Canvas {
+            let canvas = self
+                .output(view.publication, view.output)
+                .and_then(|chunk| chunk.data::<crate::systems::canvas::CanvasPublication>())
+                .ok_or(ErrorReason::InvalidEntity)?;
+            let logical = [
+                point[0] * canvas.logical_extent[0],
+                point[1] * canvas.logical_extent[1],
+            ];
+            let hit = self
+                .pick_canvas_plot(view.publication, view.output, logical, Vec::new(), None)?
+                .map(|identity| ViewPickHit {
+                    identity,
+                    position: [logical[0], logical[1], 0.0],
+                    view_plane: None,
+                });
+            return Ok((view, hit));
+        }
         let camera = self.camera_publication(view.output, view.publication)?;
         let ray = camera.ray(point, view.viewport.width, view.viewport.height)?;
         let hit =

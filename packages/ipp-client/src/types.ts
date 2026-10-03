@@ -401,6 +401,10 @@ export interface EventEnvelope {
   tick: bigint;
 }
 export type GeometryPickHit = {
+  /** Producing PickingGeometry or Plot component. */
+  component: number;
+  /** Exact original data source identity; never converted to Number. */
+  row?: { series: number; rowId: bigint };
   world: WorldReference;
   publication: PublicationReference;
   entity: bigint;
@@ -521,6 +525,14 @@ export type ComponentFieldValue =
 export interface ComponentSnapshot {
   component: number;
   properties?: Record<string, DynamicValue>;
+  /** Exact lifetime-scoped property addresses for driver authoring, never CPU pointers. */
+  propertyDescriptors?: Record<
+    string,
+    {
+      offset: number;
+      kind: import("./dynamic-properties.js").DynamicPropertyKind;
+    }
+  >;
   fields: Record<string, ComponentFieldValue>;
 }
 /** One entity's stored state: its link and its components in registry order. */

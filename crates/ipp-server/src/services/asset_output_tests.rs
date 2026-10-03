@@ -1,5 +1,5 @@
 use super::*;
-use ipp_core::services::data_source::DataWriteJob;
+use ipp_core::services::io::IoWriteJob;
 use std::task::Wake;
 
 struct WriterWake(std::thread::Thread);
@@ -10,7 +10,7 @@ impl Wake for WriterWake {
     }
 }
 
-fn finish(mut job: DataWriteJob<NativeFileDataWriter>) -> Result<(), String> {
+fn finish(mut job: IoWriteJob<NativeFileIoWriter>) -> Result<(), String> {
     let waker = Waker::from(Arc::new(WriterWake(std::thread::current())));
     let mut cx = Context::from_waker(&waker);
     loop {
@@ -26,13 +26,13 @@ fn staged_file_publication_replaces_only_completed_output() {
     let destination = std::env::temp_dir().join(format!("ipp-output-{}.ippw", std::process::id()));
     std::fs::write(&destination, b"previous").unwrap();
     let bytes = vec![42; 180_000];
-    finish(DataWriteJob::new(
+    finish(IoWriteJob::new(
         bytes.clone(),
-        NativeFileDataWriter::new(&destination).unwrap(),
+        NativeFileIoWriter::new(&destination).unwrap(),
     ))
     .unwrap();
     assert_eq!(std::fs::read(&destination).unwrap(), bytes);
-    let mut cancelled = NativeFileDataWriter::new(&destination).unwrap();
+    let mut cancelled = NativeFileIoWriter::new(&destination).unwrap();
     let mut cx = Context::from_waker(Waker::noop());
     let _ = cancelled.poll_write(&mut cx, b"partial");
     cancelled.abort();
@@ -47,9 +47,9 @@ fn failed_publication_preserves_destination() {
         std::env::temp_dir().join(format!("ipp-output-directory-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
     assert!(
-        finish(DataWriteJob::new(
+        finish(IoWriteJob::new(
             vec![1, 2, 3],
-            NativeFileDataWriter::new(&directory).unwrap()
+            NativeFileIoWriter::new(&directory).unwrap()
         ))
         .is_err()
     );
@@ -97,9 +97,9 @@ fn authored_world_state_round_trips_through_native_file_publication() {
     let captured = host.save_world(world, 123, limits).unwrap();
     let destination =
         std::env::temp_dir().join(format!("ipp-world-round-trip-{}.ippw", std::process::id()));
-    finish(DataWriteJob::new(
+    finish(IoWriteJob::new(
         captured,
-        NativeFileDataWriter::new(&destination).unwrap(),
+        NativeFileIoWriter::new(&destination).unwrap(),
     ))
     .unwrap();
     let bytes = std::fs::read(&destination).unwrap();

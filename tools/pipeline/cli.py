@@ -215,7 +215,9 @@ def parser() -> argparse.ArgumentParser:
     # Stress defaults are applied by the planner so other scenes can reject them.
     benchmarking.add_argument("--preset", choices=("smoke", "full"))
     benchmarking.add_argument(
-        "--scene", choices=("stress", "retained-gui", "gui-stress"), default="stress"
+        "--scene",
+        choices=("stress", "retained-gui", "gui-stress", "chart-data"),
+        default="stress",
     )
     benchmarking.add_argument(
         "--frames",
@@ -237,6 +239,20 @@ def parser() -> argparse.ArgumentParser:
         help="timed action cycles per sweep and repetition for --scene gui-stress",
     )
     benchmarking.add_argument("--output")
+    benchmarking.add_argument(
+        "--warmup", type=int, default=2, help="untimed action cycles for chart-data"
+    )
+    benchmarking.add_argument(
+        "--cases", help="comma-separated chart-data case names; see its guide"
+    )
+    benchmarking.add_argument(
+        "--modes", help="comma-separated chart-data action modes (default: all)"
+    )
+    benchmarking.add_argument(
+        "--diagnostic",
+        choices=("data", "chart"),
+        help="separate local release/allocation diagnostics for chart-data",
+    )
     benchmarking.add_argument("--scene-dir")
     benchmarking.add_argument("--bundle-dir")
     benchmarking.add_argument("--geometry-index", choices=("flat", "bvh"))

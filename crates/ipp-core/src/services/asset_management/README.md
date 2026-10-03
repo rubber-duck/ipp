@@ -1,6 +1,6 @@
 # Shared asset ownership
 
-`AssetManagementService` owns Host-wide resource identities, providers and consumer demand. Worlds retain typed source references; providers acquire immutable content through the separately owned [data source service](../data_source/README.md). The [asset architecture](../../../../../docs/architecture/assets.md) defines the ownership and recovery contract.
+`AssetManagementService` owns Host-wide resource identities, providers and consumer demand. Worlds retain typed source references; providers acquire immutable content through the separately owned [I/O service](../io/README.md). The [asset architecture](../../../../../docs/architecture/assets.md) defines the ownership and recovery contract.
 
 Copying an asset key does not retain its resource. Unloading preserves identities retained by demand or ownership; an unreferenced idle identity may be discarded to avoid reacquisition. Final release invalidates the generation before reuse. The Host completes synchronous invalidation across all Worlds before releasing shared payloads. Embedders that progress services directly must also complete that Host lifecycle boundary, including dispatch of pending observations.
 
@@ -13,5 +13,7 @@ Completed outputs acquire an opaque, service-scoped publication ID over exact lo
 Decoded CPU availability and graphics readiness are independent. Consumers can use retained CPU data during graphics recovery; failed acquisition preserves authored references and reports failure. Immutable client sources can be prepared before component selection, and releasing producer ownership preserves recovery data still required by other consumers. Completed externally recoverable resources remain in an unused cache under a soft memory target with a non-zero [default](service.rs) that Hosts may override; 0 evicts on release. That target governs idle retention rather than admission: active demand and producer ownership may exceed it. Resource counts have no IPP quota; memory, representable identities and device capabilities bound growth.
 
 Start with [service and demand](service.rs), [provider loading/recovery](resource.rs) and the [release barrier](lifecycle.rs). Renderer-owned loaders provide GPU representations through the same lifecycle.
+
+[Expression definitions](expression.rs) retain an immutable declaration and a shared CPU plan using the existing [IPPE format](../../expressions/EXPRESSION_FORMAT.md). Consumers own bindings, parameters and scratch, and invalidate plan access through the ordinary asset lifecycle. Resident payload accounting counts distinct shared text once within the asset; independently cloned plans may keep their allocations alive after provider unload and belong to their consumers' accounting.
 
 The [mesh](MESH_FORMAT.md), [texture](TEXTURE_FORMAT.md) and [skeletal](SKELETAL_FORMATS.md) format references describe the binary payloads beside their decoders.

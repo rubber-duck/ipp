@@ -112,3 +112,19 @@ export {
   LifecycleWatchStartError,
   isLifecycleWatchRemoveError,
 } from "./lifecycle-watches.js";
+
+export { ClientDatasets } from "./datasets.js";
+export type {
+  DataBindingPage,
+  ExpressionResult,
+  ExpressionDriverStatus,
+  DatasetColumn,
+  DatasetContract,
+  DatasetDelta,
+  DatasetOutcome,
+  DatasetPage,
+  DatasetProducer,
+  DatasetTransfer,
+  DatasetValue,
+  DatasetValueKind,
+} from "./datasets.js";

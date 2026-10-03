@@ -12,6 +12,8 @@ flowchart TD
     host["Host: clock / lifecycle"] -->|"Schedules attachment graph"| world
     clients -->|"Owned asset data"| assets["Host asset services"]
     assets -->|"Shared resources"| world
+    clients -->|"Dataset protocol / bulk updates"| data["Host Data Service"]
+    data -->|"Typed sources / shared retention"| world
     world -->|"Completed outputs"| render["RenderService: composition / GPU"]
     host -->|"Root output / context / surface"| render
 ```
@@ -27,6 +29,7 @@ One mutation owner, one stored value per component field, stable storage, demand
 | [Runtime](architecture/runtime.md) | Host/World ownership, state, lifetime and evaluation order |
 | [Protocol and schema](architecture/protocol-and-schema.md) | Sessions, generated contracts and persistence |
 | [Assets](architecture/assets.md) | Identity, demand, I/O, loading and recovery |
+| [Data](architecture/data.md) | Typed sources, data bindings, updates and shared retention |
 | [Rendering](architecture/rendering.md) | GPU boundary, materials, cameras and interaction |
 | [GUI](architecture/gui.md) | Canvas content, layout, local controls and platform input |
 | [Authoring](architecture/authoring.md) | React and Blender integration boundaries |

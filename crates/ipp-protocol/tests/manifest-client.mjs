@@ -1303,6 +1303,8 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", asy
     assert.throws(() => codec.decodeResponse(bytes.slice(0, -1), 7n));
   }
   const hitFields = {
+    component: 24,
+    plot_row: null,
     view: encodedView,
     world: worldReference(7n, 2n),
     publication: encodedPublication,
@@ -1319,6 +1321,7 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", asy
     view_plane: null,
   };
   const hit = {
+    component: 24,
     world: { id: 7n, incarnation: 2n },
     publication,
     entity: 41n,
@@ -3200,6 +3203,9 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", asy
         (name) =>
           !unreachableSnapshotKinds.has(name) &&
           name !== "SNAPSHOT_VALUE_ROWS" &&
+          // The separate dataset lane is covered by the maintained datasets
+          // native/worker source and combined data-authoring scenarios.
+          !name.startsWith("DATASET_") &&
           // GUI, Canvas and lifecycle diagnostic codecs are covered by the
           // gui-semantics, physical-input and lifecycle-diagnostics clients.
           !/^(GUI_|COMMAND_GUI_ACTION$|INSPECT_GUI_|(REQUEST|RESPONSE)_GUI_OBSERVATION$|INSPECT_CANVAS$|REQUEST_CANVAS_STATE_UPDATE$|REQUEST_GUI_PREFERENCES_UPDATE$|(REQUEST|RESPONSE)_LIFECYCLE_DIAGNOSTICS$)/.test(

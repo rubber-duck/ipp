@@ -135,23 +135,24 @@ impl ConstraintSystem {
             .declarations
             .retain(|target, _| staged.entities.contains_key(target));
         if !touched.is_empty() {
-            // A new cycle passes through a changed binding; a broken one was
-            // already invalid. Reclassify both, proportionally to their chains.
-            let previous: Vec<_> = self.state.invalid.iter().copied().collect();
-            classify_cycles(
-                &self.state.bindings,
-                &mut self.state.invalid,
-                touched.into_iter().chain(previous),
-            );
+            self.state.numeric_dirty = true;
         }
         result
     }
 
-    pub(super) fn prepare_numeric(&mut self, components: &ComponentStorage) {
+    pub(super) fn prepare_drivers(
+        &mut self,
+        world: &WorldSimulationState,
+        assets: &crate::services::asset_management::AssetManagementService,
+    ) {
+        use super::dependency_graph::{DriverDependencies, DriverKey, PropertyIdentity};
+        use super::system_state::{PreparedConstraint, ScalarNumericBinding};
+        let components = &world.components;
         self.state.numeric.clear();
-        self.state.targets.clear();
-        for entity in evaluation_order(&self.state.bindings, &self.state.invalid) {
-            let binding = self.state.bindings[&entity];
+        self.state.order.clear();
+        let mut dependencies = self.prepare_expressions(world, assets);
+        let mut indices = BTreeMap::new();
+        for (&entity, binding) in &self.state.bindings {
             let Some(source) = components.scalar_ptr(binding.source.index() as usize) else {
                 continue;
             };
@@ -161,107 +162,186 @@ impl ConstraintSystem {
             let Some(driver) = components.linear_driver_ptr(entity.index() as usize) else {
                 continue;
             };
-            self.state.targets.push((
+            let key = DriverKey(entity, ComponentValue::LINEAR_DRIVER);
+            let scalar = DriverProperty {
+                component: ComponentValue::SCALAR,
+                offset: std::mem::offset_of!(crate::components::Scalar, value) as u32,
+            };
+            let target_property = PropertyIdentity {
                 entity,
-                ComponentValue::SCALAR,
-                std::mem::offset_of!(crate::components::Scalar, value) as u32,
-            ));
-            // SAFETY: Reconciliation established exact source/target incarnations.
-            // before_commit clears these cell-origin bindings before any referenced
-            // component changes. Evaluation borrows the same World's storage.
+                incarnation: binding.target_incarnation,
+                kind: crate::DynamicPropertyKind::F32,
+                property: scalar,
+            };
+            let mut sources = vec![PropertyIdentity {
+                entity: binding.source,
+                incarnation: binding.source_incarnation,
+                kind: crate::DynamicPropertyKind::F32,
+                property: scalar,
+            }];
+            if let Some(input) = world
+                .state
+                .entities
+                .get(&entity)
+                .and_then(|record| record.input(ComponentValue::LINEAR_DRIVER))
+            {
+                for offset in [
+                    std::mem::offset_of!(LinearDriver, scale),
+                    std::mem::offset_of!(LinearDriver, bias),
+                ] {
+                    sources.push(PropertyIdentity {
+                        entity,
+                        incarnation: input.incarnation,
+                        kind: crate::DynamicPropertyKind::F32,
+                        property: DriverProperty {
+                            component: ComponentValue::LINEAR_DRIVER,
+                            offset: offset as u32,
+                        },
+                    });
+                }
+            }
+            dependencies.push(DriverDependencies {
+                key,
+                target: target_property,
+                sources,
+            });
+            indices.insert(key, self.state.numeric.len());
+            // SAFETY: Reconciliation pins exact source/target incarnations.
+            // before_commit revokes every copy before occupied cell replacement;
+            // accesses borrow the same World's storage in its sequential phase.
             self.state.numeric.push(unsafe {
-                super::system_state::ScalarNumericBinding {
+                ScalarNumericBinding {
                     source: crate::world::component_binding::ComponentBinding::new(source),
                     target: crate::world::component_binding::ComponentBinding::new(target),
                     driver: crate::world::component_binding::ComponentBinding::new(driver),
                 }
             });
         }
+        let (order, invalid) = super::dependency_graph::order(&dependencies);
+        for key in invalid.difference(&self.state.invalid) {
+            crate::diagnostic!(
+                Warn,
+                "[IPP core] constraint.invalid target={} component={} reason=dependency-cycle",
+                key.0.to_bits(),
+                key.1
+            );
+        }
+        for key in self.state.invalid.difference(&invalid) {
+            crate::diagnostic!(
+                Debug,
+                "[IPP core] constraint.valid target={} component={}",
+                key.0.to_bits(),
+                key.1
+            );
+        }
+        for key in &invalid {
+            if key.1 == ComponentValue::EXPRESSION_DRIVER {
+                let binding = self.state.expressions.get_mut(&key.0).unwrap();
+                binding.status.state =
+                    ExpressionDriverState::Retained(ExpressionDriverReason::Cycle);
+                binding.status.recovered = false;
+            }
+        }
+        self.state.invalid = invalid;
+        for key in order {
+            self.state
+                .order
+                .push(if key.1 == ComponentValue::LINEAR_DRIVER {
+                    PreparedConstraint::Linear {
+                        entity: key.0,
+                        index: indices[&key],
+                    }
+                } else {
+                    PreparedConstraint::Expression(key.0)
+                });
+        }
         self.state.numeric_dirty = false;
     }
 
-    pub(super) fn evaluate(&mut self, world: &mut WorldSimulationState) {
-        for binding in &self.state.numeric {
-            let driver = *binding.driver.get(&world.components);
-            let source = binding.source.get(&world.components).value;
-            binding.target.get_mut(&mut world.components).value =
-                source * driver.scale + driver.bias;
-        }
-    }
-}
-
-/// Classify the drivers reachable from `affected` along their source chains.
-/// Every driver has one source, so a walk either ends, reaches a chain that is
-/// already classified, or closes a cycle; only the cycle's members are invalid.
-/// Drivers that read an invalid driver's target still evaluate from its current value.
-fn classify_cycles(
-    bindings: &BTreeMap<EntityId, ScalarConstraintBinding>,
-    invalid: &mut BTreeSet<EntityId>,
-    affected: impl IntoIterator<Item = EntityId>,
-) {
-    let mut done = BTreeSet::new();
-    let mut positions = BTreeMap::new();
-    for start in affected {
-        positions.clear();
-        let mut path = Vec::new();
-        let mut current = start;
-        let cycle = loop {
-            if done.contains(&current) {
-                break None;
-            }
-            if let Some(&position) = positions.get(&current) {
-                break Some(position);
-            }
-            let Some(binding) = bindings.get(&current) else {
-                break None;
-            };
-            positions.insert(current, path.len());
-            path.push(current);
-            current = binding.source;
-        };
-        if !bindings.contains_key(&start) {
-            invalid.remove(&start);
-        }
-        for (position, entity) in path.into_iter().enumerate() {
-            done.insert(entity);
-            if cycle.is_some_and(|first| position >= first) {
-                if invalid.insert(entity) {
-                    crate::diagnostic!(
-                        Warn,
-                        "[IPP core] constraint.invalid target={} reason=dependency-cycle",
-                        entity.to_bits()
-                    );
+    pub(super) fn evaluate(&mut self, context: &mut crate::systems::SystemRuntimeAccess<'_>) {
+        use super::system_state::PreparedConstraint;
+        use crate::expressions::{ExpressionInvalid, ExpressionResult};
+        for prepared in &self.state.order {
+            match *prepared {
+                PreparedConstraint::Linear {
+                    entity,
+                    index,
+                } => {
+                    let binding = &self.state.numeric[index];
+                    let driver = *binding.driver.get(&context.world.components);
+                    let result = binding.source.get(&context.world.components).value * driver.scale
+                        + driver.bias;
+                    let offset = std::mem::offset_of!(crate::components::Scalar, value) as u32;
+                    context.before_absolute_writes(&[(entity, ComponentValue::SCALAR, offset)]);
+                    context.before_numeric_update(&[(entity, ComponentValue::SCALAR)]);
+                    binding.target.get_mut(&mut context.world.components).value = result;
                 }
-            } else if invalid.remove(&entity) {
-                crate::diagnostic!(
-                    Debug,
-                    "[IPP core] constraint.valid target={}",
-                    entity.to_bits()
-                );
+                PreparedConstraint::Expression(entity) => {
+                    let binding = self.state.expressions.get_mut(&entity).unwrap();
+                    let Some(runtime) = &mut binding.runtime else {
+                        continue;
+                    };
+                    for (value, source) in runtime.values.iter_mut().zip(&runtime.sources) {
+                        *value = source.and_then(|source| source.read(&context.world.components));
+                    }
+                    let mut inputs = [None; EXPRESSION_DRIVER_MAX_INPUTS];
+                    for (input, value) in inputs.iter_mut().zip(&runtime.values) {
+                        *input = value.as_ref();
+                    }
+                    let result = runtime
+                        .plan
+                        .evaluate(&mut runtime.scratch, &inputs[..runtime.values.len()])
+                        .expect("prepared input kinds and scratch identity")
+                        .clone();
+                    let value = match result {
+                        ExpressionResult::Valid(value) => value,
+                        ExpressionResult::Invalid(reason) => {
+                            binding.status.state = ExpressionDriverState::Retained(match reason {
+                                ExpressionInvalid::MissingInput {
+                                    slot,
+                                } => ExpressionDriverReason::MissingInput {
+                                    slot: slot as u32,
+                                },
+                                ExpressionInvalid::InvalidInput {
+                                    slot,
+                                } => ExpressionDriverReason::InvalidInput {
+                                    slot: slot as u32,
+                                },
+                                ExpressionInvalid::Calculation => {
+                                    ExpressionDriverReason::Calculation
+                                }
+                            });
+                            binding.status.recovered = false;
+                            continue;
+                        }
+                    };
+                    if let Err(reason) = runtime
+                        .destination
+                        .validate(&context.world.components, &value)
+                    {
+                        binding.status.state = ExpressionDriverState::Retained(
+                            ExpressionDriverReason::TargetRejected(reason),
+                        );
+                        binding.status.recovered = false;
+                        continue;
+                    }
+                    let target = binding.target.expect("prepared target identity");
+                    // Validation precedes notification: a skipped/rejected result
+                    // must preserve the animation contribution already in storage.
+                    context.before_absolute_writes(&[(
+                        entity,
+                        target.property.component,
+                        target.property.offset,
+                    )]);
+                    context.before_numeric_update(&[(entity, target.property.component)]);
+                    runtime
+                        .destination
+                        .write_validated(&mut context.world.components, value);
+                    binding.status.recovered =
+                        matches!(binding.status.state, ExpressionDriverState::Retained(_));
+                    binding.status.state = ExpressionDriverState::Written;
+                }
             }
         }
     }
-}
-
-/// Valid drivers with every source evaluated before its target. Invalid cycle
-/// members are omitted, so the remaining chains are acyclic.
-fn evaluation_order(
-    bindings: &BTreeMap<EntityId, ScalarConstraintBinding>,
-    invalid: &BTreeSet<EntityId>,
-) -> Vec<EntityId> {
-    let mut order = Vec::with_capacity(bindings.len());
-    let mut done = BTreeSet::new();
-    for &target in bindings.keys() {
-        let mut path = Vec::new();
-        let mut current = target;
-        while !invalid.contains(&current) && done.insert(current) {
-            let Some(binding) = bindings.get(&current) else {
-                break;
-            };
-            path.push(current);
-            current = binding.source;
-        }
-        order.extend(path.into_iter().rev());
-    }
-    order
 }

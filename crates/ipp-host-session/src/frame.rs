@@ -207,15 +207,13 @@ impl<P: HostServices> WorldSessionContext<'_, P> {
                     break 'request;
                 }
                 RequestBody::GeometryPickQuery(query) => {
-                    if !self
-                        .world
-                        .manifest()
+                    let manifest = self.world.manifest();
+                    let supports_canvas =
+                        manifest.supports_operation(ipp_core::systems::WorldOperation::Canvas);
+                    let supports_camera_geometry = manifest
                         .supports_operation(ipp_core::systems::WorldOperation::Camera)
-                        || !self
-                            .world
-                            .manifest()
-                            .supports_operation(ipp_core::systems::WorldOperation::Geometry)
-                    {
+                        && manifest.supports_operation(ipp_core::systems::WorldOperation::Geometry);
+                    if !supports_canvas && !supports_camera_geometry {
                         WorldSessionReply::Rejected(
                             "Unsupported camera/geometry query for this World".to_owned(),
                         )

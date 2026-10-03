@@ -10,7 +10,6 @@ mod gui_motion;
 mod lifecycle;
 mod math;
 mod numeric_binding;
-mod numeric_fields;
 mod numeric_output;
 mod persistence;
 mod row_property_destination;

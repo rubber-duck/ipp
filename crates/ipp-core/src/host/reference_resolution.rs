@@ -121,7 +121,8 @@ impl HostRuntime {
         if referenced.worlds.is_empty() {
             let mut context = self.worlds.get_mut(&world)?.context(
                 &mut self.assets,
-                &mut self.data_sources,
+                &mut self.io,
+                &mut self.data,
                 &mut self.topology,
             );
             context.publications = Some(&self.publications);
@@ -141,8 +142,12 @@ impl HostRuntime {
                 foreign.insert(*id, &*value);
             }
         }
-        let mut context =
-            target?.context(&mut self.assets, &mut self.data_sources, &mut self.topology);
+        let mut context = target?.context(
+            &mut self.assets,
+            &mut self.io,
+            &mut self.data,
+            &mut self.topology,
+        );
         context.reference_worlds = Some(ReferenceWorlds(foreign));
         context.publications = Some(&self.publications);
         Some(context)

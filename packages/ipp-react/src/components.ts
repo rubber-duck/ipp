@@ -5,13 +5,23 @@ import type { AssetReference, AssetFieldWrite } from "./assets.js";
 import type { ReactNode } from "react";
 import type { FieldWrite } from "@ipp/client";
 import { guiComponentContract } from "./gui/manifest.js";
+import { plotComponentContract } from "./plot-manifest.js";
 
 export const ENTITY_HOST_TYPE = "ipp-entity";
 export const CHILDREN_HOST_TYPE = "ipp-children";
 export const ENTITY_LINK_HOST_TYPE = "ipp-entity-link";
 /** One static authoring manifest drives prop types and host-to-contract lookup. */
 export const componentContract = {
+  ...plotComponentContract,
   ...guiComponentContract,
+  BufferDataSourceBinding: {
+    host: "ipp-buffer-data-source-binding",
+    fields: { source: "string" },
+  },
+  StreamingDataSourceBinding: {
+    host: "ipp-streaming-data-source-binding",
+    fields: { source: "string", windows: "bytes" },
+  },
   Surface: {
     host: "ipp-surface",
     fields: { width: "number", height: "number", layer_spacing: "number" },

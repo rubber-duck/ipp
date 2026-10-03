@@ -3,7 +3,7 @@
 use std::{any::Any, task::Poll};
 
 use ipp_core::services::asset_management::{
-    Asset, AssetLoader, BufferedAssetLoader, DataReader,
+    Asset, AssetLoader, BufferedAssetLoader, IoReader,
     drawing::DrawingAsset,
     font::FontAsset,
     quadratic::{QuadraticContour, QuadraticSegment},
@@ -140,7 +140,7 @@ impl<D: RenderDevice> AssetLoader for SurfaceLoader<D, FontAsset> {
 
     fn poll_load(
         &mut self,
-        reader: &mut dyn DataReader,
+        reader: &mut dyn IoReader,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Result<Self::Data, String>> {
         let font = match self.pending.take() {
@@ -259,7 +259,7 @@ impl<D: RenderDevice> AssetLoader for SurfaceLoader<D, DrawingAsset> {
 
     fn poll_load(
         &mut self,
-        reader: &mut dyn DataReader,
+        reader: &mut dyn IoReader,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Result<Self::Data, String>> {
         let drawing = match self.pending.take() {

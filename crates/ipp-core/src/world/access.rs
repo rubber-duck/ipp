@@ -16,7 +16,8 @@ pub struct WorldContext<'a> {
     pub(in crate::world) instances: SystemInstanceAccess<'a>,
     pub(crate) asset_acquisition:
         &'a mut crate::services::asset_management::service::AssetManagementService,
-    pub(crate) data_sources: &'a mut crate::services::data_source::DataSourceManagementService,
+    pub(crate) io: &'a mut crate::services::io::IoService,
+    pub(crate) data: &'a mut crate::services::data::DataService,
     pub(crate) topology: &'a mut crate::host::topology::HostTopology,
     pub(crate) frame_context: Option<&'a crate::WorldFrameContext>,
     pub(crate) reference_worlds: Option<crate::host::reference_resolution::ReferenceWorlds<'a>>,
@@ -27,6 +28,7 @@ pub struct WorldContext<'a> {
 impl Drop for WorldContext<'_> {
     fn drop(&mut self) {
         if self.owns_update {
+            self.data.end_evaluation();
             self.world.updating = false;
         }
     }
@@ -80,7 +82,8 @@ impl WorldContext<'_> {
                         after,
                     },
                     asset_acquisition: self.asset_acquisition,
-                    data_sources: self.data_sources,
+                    io: self.io,
+                    data: self.data,
                     topology: self.topology,
                     frame_context: self.frame_context,
                     reference_worlds: self.reference_worlds.as_ref(),
@@ -226,7 +229,8 @@ impl WorldContext<'_> {
                     after,
                 },
                 asset_acquisition: self.asset_acquisition,
-                data_sources: self.data_sources,
+                io: self.io,
+                data: self.data,
                 topology: self.topology,
                 frame_context: self.frame_context,
                 reference_worlds: self.reference_worlds.as_ref(),
@@ -276,6 +280,7 @@ impl WorldContext<'_> {
             &mut self.instances,
             None,
             self.asset_acquisition,
+            self.data,
             true,
         ) {
             crate::diagnostic!(
@@ -293,6 +298,7 @@ impl WorldContext<'_> {
             &mut self.instances,
             None,
             self.asset_acquisition,
+            self.data,
             false,
         )
     }
@@ -303,6 +309,7 @@ pub(in crate::world) fn commit_components(
     instances: &mut SystemInstanceAccess<'_>,
     mut current: Option<&mut dyn systems::System>,
     assets: &mut crate::services::asset_management::AssetManagementService,
+    data: &mut crate::services::data::DataService,
     evaluated: bool,
 ) -> Result<(), ErrorReason> {
     #[cfg(feature = "instrumentation")]
@@ -339,6 +346,7 @@ pub(in crate::world) fn commit_components(
             world_data: world,
             staged: &mut staged,
             assets,
+            data,
             evaluated,
             cleanup: &mut cleanup,
         });
@@ -357,6 +365,7 @@ pub(in crate::world) fn commit_components(
                 world_data: world,
                 staged: &mut staged,
                 assets,
+                data,
                 evaluated,
                 cleanup: &mut cleanup,
             });
@@ -452,6 +461,7 @@ pub(in crate::world) fn commit_components(
             world_data: world,
             staged: &mut staged,
             assets,
+            data,
             evaluated,
             cleanup: &mut cleanup,
         });
@@ -526,6 +536,7 @@ impl systems::SystemRuntimeAccess<'_> {
             &mut self.instances,
             Some(current),
             self.asset_acquisition,
+            self.data,
             true,
         )
     }
@@ -583,6 +594,7 @@ impl systems::SystemRuntimeAccess<'_> {
             &mut self.instances,
             Some(current),
             self.asset_acquisition,
+            self.data,
             true,
         )
     }

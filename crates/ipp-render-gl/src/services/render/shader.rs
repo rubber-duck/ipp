@@ -131,6 +131,14 @@ impl RenderShaderConfig {
                 "shadow_body",
                 "if (u_surface.z > 0.5) shadow = visibility_from_shadow(i, nl, n);",
             ),
+            (
+                "opacity",
+                if self.sprite {
+                    "v_particle_opacity * (1.0 - smoothstep(0.35, 0.5, length(v_particle_uv - vec2(0.5))))"
+                } else {
+                    "1.0 - u_transparency"
+                },
+            ),
         ];
         let conditions = [
             ("solid", self.solid),
@@ -140,6 +148,7 @@ impl RenderShaderConfig {
             ("shadow", self.shadow),
             ("normals", self.normals),
             ("flat_normals", !self.normals),
+            ("sprite", self.sprite),
         ];
         if self.lit {
             return Ok((
@@ -161,14 +170,10 @@ impl RenderShaderConfig {
             template::evaluate(source, values, &conditions)
                 .map_err(|error| RenderError::RenderDevice(error.0))
         };
-        let mut fragment = expand(
+        let fragment = expand(
             crate::services::render::embedded_shader!("unlit.frag"),
             &values,
         )?;
-        if self.sprite {
-            fragment = fragment.replace("out vec4 out_color;", "in vec2 v_particle_uv;\nin float v_particle_opacity;\nout vec4 out_color;")
-                .replace("vec4(linear_rgb, 1.0)", "vec4(linear_rgb, v_particle_opacity * (1.0 - smoothstep(0.35, 0.5, length(v_particle_uv - vec2(0.5)))))");
-        }
         Ok((
             with_limit_definitions(
                 self.vertex_source(crate::services::render::embedded_shader!("unlit.vert"))?,
@@ -339,6 +344,35 @@ mod tests {
         let (_, fragment) = RenderShaderConfig::default().sources().unwrap();
         assert!(!fragment.contains("sampler2D"));
         assert!(!fragment.contains("v_weight"));
+    }
+
+    #[test]
+    fn sprite_fragments_keep_instance_fade_and_soft_edges() {
+        for textured in [false, true] {
+            let config = RenderShaderConfig::new(textured, false).with_particles(true, true);
+            let (vertex, fragment) = config.sources().unwrap();
+            assert!(vertex.contains("v_particle_opacity = a_instance_data.x"));
+            assert!(vertex.contains("v_particle_uv = a_position.xy + vec2(0.5)"));
+            assert!(fragment.contains("in vec2 v_particle_uv;"));
+            assert!(fragment.contains("in float v_particle_opacity;"));
+            assert!(fragment.contains("vec4(linear_rgb, v_particle_opacity * (1.0 - smoothstep(0.35, 0.5, length(v_particle_uv - vec2(0.5)))))"));
+            assert!(!fragment.contains("vec4(linear_rgb, 1.0 - u_transparency)"));
+        }
+    }
+
+    #[test]
+    fn ordinary_mesh_fragments_keep_uniform_opacity_without_sprite_inputs() {
+        for instanced in [false, true] {
+            let config = RenderShaderConfig::new(true, true).with_particles(instanced, false);
+            let (_, fragment) = config.sources().unwrap();
+            assert!(fragment.contains("vec4(linear_rgb, 1.0 - u_transparency)"));
+            assert!(!fragment.contains("v_particle_opacity"));
+            assert!(!fragment.contains("v_particle_uv"));
+
+            let (_, lit) = config.with_lighting(true, true).sources().unwrap();
+            assert!(lit.contains("vec4(rgb, 1.0 - u_transparency)"));
+            assert!(!lit.contains("v_particle_opacity"));
+        }
     }
 }
 

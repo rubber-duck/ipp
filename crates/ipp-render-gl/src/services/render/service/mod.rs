@@ -8,6 +8,7 @@ mod composition;
 mod frame;
 mod inclusion;
 mod lifecycle;
+mod plot_planes;
 mod shadow;
 mod surface;
 mod surface_cache;
@@ -99,6 +100,11 @@ pub struct RenderService<D: RenderDevice> {
     pub(super) camera_targets: BTreeMap<ipp_core::OutputRef, (D::SurfaceCacheTarget, [u32; 2])>,
     pub(super) camera_completed: std::collections::BTreeSet<ipp_core::OutputRef>,
     debug: crate::services::render::debug_geometry::DebugGeometryRenderCache<D>,
+    generated_paths: super::generated_paths::GeneratedPathCache<D>,
+    generated_meshes: super::generated_meshes::GeneratedMeshCache<D>,
+    pub(super) plot_label_layouts:
+        BTreeMap<ipp_core::OutputRef, super::plot_label_layout::PlotLabelLayoutState>,
+    plot_plane_caches: BTreeMap<plot_planes::PlotPlaneKey, plot_planes::PlotPlaneCache<D>>,
     pub(super) surface_program: Option<D::Program>,
     surface_instance_program: Option<D::Program>,
     surface_bitmap_program: Option<D::Program>,

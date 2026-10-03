@@ -22,9 +22,9 @@ impl Scene {
         let mut host = HostRuntime::new();
         renderer.install(&mut host)?;
         let prefix = "https://stress.ipp.invalid/";
-        host.data_sources_mut().register(
+        host.io_mut().register(
             prefix,
-            ipp_server::services::data_source::FileSystemDataSource::new(prefix, bundle, false)?,
+            ipp_server::services::io::FileSystemIoSource::new(prefix, bundle, false)?,
         )?;
         let world = host.load_world(
             &std::fs::read(bundle.join("benchmark.ipp"))?,

@@ -116,12 +116,10 @@ fn triangle() -> Vec<u8> {
 fn malformed_asset_rejection_preserves_shared_demand_recovery_and_publication_leases() {
     let mut host = ipp_core::HostRuntime::new();
     host.asset_resources_mut().set_idle_resident_bytes_target(0);
-    let memory = ipp_core::services::data_source::MemoryDataSource::default();
+    let memory = ipp_core::services::io::MemoryIoSource::default();
     let shared = "rejection:shared";
     memory.insert(shared.into(), triangle()).unwrap();
-    host.data_sources_mut()
-        .register("rejection:", memory)
-        .unwrap();
+    host.io_mut().register("rejection:", memory).unwrap();
     let left = host
         .create_world(WorldLimits::default(), &select(&[CONSTRAINTS, RENDER]))
         .unwrap();

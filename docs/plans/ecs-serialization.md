@@ -24,6 +24,8 @@ Extend the [serialization service](../../crates/ipp-core/src/services/world_seri
 
 Exercise stored-value round trips, applied animation contributions, selected Systems, controller restoration and pending resources together. Restore all graph identities before references and bindings; restore/remap controller bindings for clip-local entity references without rewriting immutable asset key slots per World or load. Validate before publishing any World. Keep System selection separate from capacity hints. React and Blender content persists as ordinary stored state; test sibling copies sharing durable IDs without merging.
 
+Extend native/worker snapshot scenarios with [data-source binding state](../architecture/data.md#persistence). Verify that configuration, column-binding asset references, parameter properties, windows and source names survive without runtime handles, source samples or evaluated views, and that restored bindings report unavailable data until a client creates a compatible source incarnation. Saving binding state must not introduce dataset payload export.
+
 Extend generic readers/writers and Host transfer state together. Test partial progress, cancellation and complete-only publication. Measure capture, encoding, restoration and transfer memory separately; synchronous work can pause the Host. Add compression, indexing or cooperative execution only for measured benefit and within accepted design. [Asset bundling](../architecture/assets.md#asset-output-and-durable-bundles) remains separate from ordinary reference-only saves.
 
 ## GUI state

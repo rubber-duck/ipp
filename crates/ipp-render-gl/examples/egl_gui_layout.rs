@@ -248,7 +248,7 @@ fn main() -> Result<()> {
     let mut renderer = ipp_render_gl::RenderService::new(context.device()?)?;
     let mut host = ipp_core::HostRuntime::new();
     renderer.install(&mut host)?;
-    host.data_sources_mut().register_stream("fixture://")?;
+    host.io_mut().register_stream("fixture://")?;
     let world = host.create_world(Default::default(), &smoke::selection::scene())?;
 
     // One logical unit per Surface metre keeps content coordinates in panel metres.

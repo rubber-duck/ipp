@@ -1,3 +1,5 @@
+import { isAssetReference } from "./assets.js";
+import { ReactDataSourceRegistry } from "./data_state.js";
 import { ReactControlRefs } from "./control_refs.js";
 import { ReactGuiCallbacks } from "./gui_callbacks.js";
 import { fieldIdentity, type DeclarationFieldValue } from "./field_values.js";
@@ -66,7 +68,7 @@ interface ComponentRecord {
   readonly serial: number;
   /** Acknowledged declared values, with batch aliases replaced by handles. */
   readonly fields: Map<number, DeclarationFieldValue>;
-  readonly properties: Record<string, DynamicValue>;
+  readonly properties: Record<string, DynamicValue | null>;
   /** The resolved field map whose every value is acknowledged. */
   declared: ReadonlyMap<number, ReactWorldFieldValue> | undefined;
 }
@@ -207,6 +209,7 @@ export class ReactWorldCommits {
   private signature: string | undefined;
   private fatal: Error | undefined;
   private needsReset = false;
+  readonly dataSources: ReactDataSourceRegistry;
   readonly assets: ReactAssetRegistry;
   readonly animations: ReactAnimationRegistry;
   private readonly controls: ReactControlRefs;
@@ -234,6 +237,9 @@ export class ReactWorldCommits {
     private readonly options: ReactWorldRootOptions,
   ) {
     this.session = client.session;
+    this.dataSources = new ReactDataSourceRegistry(client, (error) =>
+      this.report(error),
+    );
     this.controls = new ReactControlRefs(
       client,
       (error) => this.report(error),
@@ -255,6 +261,7 @@ export class ReactWorldCommits {
     void client.closed?.then(({ reason }) => {
       this.fatal = reason;
       this.closing = true;
+      this.dataSources.close();
       this.assets.close();
       this.animations.close();
       this.controls.close();
@@ -387,6 +394,7 @@ export class ReactWorldCommits {
     } else this.unapplied = undefined;
     this.capturedSerial = description.serial;
     this.desired = description;
+    this.dataSources.setDesired(description.dataSources ?? []);
     this.assets.setDesired(description.assets);
     this.animations.setDesired(description.animations);
     this.callbacks.setDesired(description);
@@ -435,6 +443,7 @@ export class ReactWorldCommits {
     this.desired = undefined;
     this.capturedSerial = undefined;
     this.unapplied = undefined;
+    this.dataSources.setDesired([]);
     this.localFailureGeneration++;
     return this.enqueue(async () => {
       this.needsReset = true;
@@ -458,6 +467,7 @@ export class ReactWorldCommits {
    */
   fence(): void {
     this.closing = true;
+    this.dataSources.close();
     this.assets.close();
     this.animations.close();
     this.controls.close();
@@ -505,6 +515,7 @@ export class ReactWorldCommits {
           () => this.controls.dispose(),
           () => this.callbacks.dispose(),
           ...(remove ? [() => this.deleteRecords()] : []),
+          () => this.dataSources.dispose(remove),
         ]) {
           try {
             await cleanup();
@@ -705,6 +716,7 @@ export class ReactWorldCommits {
     await this.animations.removeExcept(
       new Set(description.animations.map((animation) => animation.identity)),
     );
+    await this.dataSources.prepare(description.dataSources ?? []);
     await this.assets.prepare(description.assets);
     this.checkSession();
     if (this.needsReset || this.orphans.size || this.uncertain.size)
@@ -744,6 +756,7 @@ export class ReactWorldCommits {
       (identity) => this.entities.get(identity)?.entity,
     );
     await this.assets.releaseUnused();
+    await this.dataSources.releaseUnused(description.dataSources ?? []);
     await this.publishControls();
     return true;
   }
@@ -787,6 +800,20 @@ export class ReactWorldCommits {
     return { resolved, fields };
   }
 
+  /** Resolve named asset references without losing a previous pending selection. */
+  private declaredProperties(
+    declared: ReactComponentDescription,
+  ): Record<string, DynamicValue | null> {
+    const properties: Record<string, DynamicValue | null> = {};
+    for (const [name, value] of Object.entries(declared.properties ?? {})) {
+      if (isAssetReference(value)) {
+        const current = this.assets.get(value.assetId)?.current;
+        if (current) properties[name] = { kind: "asset", value: current };
+      } else properties[name] = value;
+    }
+    return properties;
+  }
+
   /**
    * Plan the writes that bring the component `record` acknowledges to the
    * declaration `declared`, and take its description.
@@ -798,7 +825,7 @@ export class ReactWorldCommits {
   ): PlannedCommand[] {
     commitCounters.compared++;
     const { resolved, fields } = this.declaredFields(declared, entityRef);
-    const properties = declared.properties ?? {};
+    const properties = this.declaredProperties(declared);
     record.description = declared;
     // An unchanged field map needs no comparison unless it names
     // entities, whose handles may have changed.
@@ -854,13 +881,21 @@ export class ReactWorldCommits {
       )
         continue;
       commands.push({
-        command: {
-          kind: "setDynamicProperty",
-          entity: entityRef(declared.entity),
-          component: declared.component,
-          name,
-          value,
-        },
+        command:
+          value === null
+            ? {
+                kind: "removeDynamicProperty",
+                entity: entityRef(declared.entity),
+                component: declared.component,
+                name,
+              }
+            : {
+                kind: "setDynamicProperty",
+                entity: entityRef(declared.entity),
+                component: declared.component,
+                name,
+                value,
+              },
         applied: () => {
           record.properties[name] = value;
         },
@@ -892,6 +927,7 @@ export class ReactWorldCommits {
     await this.animations.removeExcept(
       new Set(description.animations.map((animation) => animation.identity)),
     );
+    await this.dataSources.prepare(description.dataSources ?? []);
     await this.assets.prepare(description.assets);
     this.checkSession();
     // Entity records may change below; bound records may be new.
@@ -1193,7 +1229,7 @@ export class ReactWorldCommits {
         continue;
       }
       const { resolved, fields } = this.declaredFields(declared, entityRef);
-      const properties = declared.properties ?? {};
+      const properties = this.declaredProperties(declared);
       let inserted: ComponentRecord | undefined;
       plan.push({
         command: {
@@ -1226,13 +1262,21 @@ export class ReactWorldCommits {
       const names = Object.keys(properties);
       names.forEach((name, index) =>
         plan.push({
-          command: {
-            kind: "setDynamicProperty",
-            entity: entityRef(declared.entity),
-            component: declared.component,
-            name,
-            value: properties[name]!,
-          },
+          command:
+            properties[name] === null
+              ? {
+                  kind: "removeDynamicProperty",
+                  entity: entityRef(declared.entity),
+                  component: declared.component,
+                  name,
+                }
+              : {
+                  kind: "setDynamicProperty",
+                  entity: entityRef(declared.entity),
+                  component: declared.component,
+                  name,
+                  value: properties[name]!,
+                },
           applied: () => {
             if (!inserted) return;
             inserted.properties[name] = properties[name]!;
@@ -1294,6 +1338,7 @@ export class ReactWorldCommits {
     if (separateDeletions && (await this.commit(deletions)))
       return this.applyAttempt(description);
     await this.assets.releaseUnused();
+    await this.dataSources.releaseUnused(description.dataSources ?? []);
     await this.publishControls();
   }
 

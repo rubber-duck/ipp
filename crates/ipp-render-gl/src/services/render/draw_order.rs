@@ -85,11 +85,13 @@ fn depth(item: &RenderItem<'_>, view_projection: &[f32; 16]) -> f64 {
         + f64::from(view_projection[14])
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn prepare(
     draws: &mut Vec<RenderDraw>,
     items: &[RenderItem<'_>],
     debug: &[DebugRenderItem],
     surfaces: &[super::scene::SceneOutputSurface],
+    plot_planes: &[super::scene::ScenePlotPlane<'_>],
     customs: &BTreeMap<EntityId, PreparedCustomMaterial>,
     lighting: &PreparedLighting,
     view_projection: &[f32; 16],
@@ -100,7 +102,11 @@ pub(super) fn prepare(
         let item = &items[index];
         let custom = customs.get(&item.entity);
         let sprite = item.particle.filter(|p| p.sprite);
-        let transparent = sprite.is_some() || custom.is_some_and(|c| c.material.alpha_mode == 2);
+        let transparent = sprite.is_some()
+            || custom.is_some_and(|c| c.material.alpha_mode == 2)
+            || item
+                .derived
+                .is_some_and(|(_, mesh)| mesh.geometry.meshes[mesh.mesh_index].color[3] < 1.0);
         let material = if transparent {
             RenderMaterialKey::default()
         } else {
@@ -161,6 +167,21 @@ pub(super) fn prepare(
             + f64::from(view_projection[10]) * f64::from(item.model[14])
             + f64::from(view_projection[14]),
     }));
+    draws.extend(
+        plot_planes
+            .iter()
+            .enumerate()
+            .map(|(index, item)| RenderDraw {
+                index: RenderDrawIndex::PlotPlane(index),
+                key: (item.entity, 3),
+                material: RenderMaterialKey::default(),
+                phase: 2,
+                depth: f64::from(view_projection[2]) * f64::from(item.model[12])
+                    + f64::from(view_projection[6]) * f64::from(item.model[13])
+                    + f64::from(view_projection[10]) * f64::from(item.model[14])
+                    + f64::from(view_projection[14]),
+            }),
+    );
     draws.sort_unstable_by(RenderDraw::compare);
 }
 

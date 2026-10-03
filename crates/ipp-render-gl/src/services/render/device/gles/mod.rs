@@ -80,6 +80,7 @@ pub struct GlesRenderProgram {
     parameter_locations: std::cell::RefCell<std::collections::BTreeMap<String, i32>>,
     mvp: i32,
     material: i32,
+    transparency: i32,
     lighting: lighting::GlesLightingLocations,
     uniforms: std::cell::RefCell<super::uniform_cache::RenderUniformCache>,
     /// Per-draw uniform values last uploaded to this program.

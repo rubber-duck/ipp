@@ -19,7 +19,8 @@ pub struct HostRuntime {
     next_world: u64,
     identity_namespace: u64,
     system_factories: SystemFactories,
-    data_sources: crate::services::data_source::DataSourceManagementService,
+    io: crate::services::io::IoService,
+    data: crate::services::data::DataService,
     assets: crate::services::asset_management::service::AssetManagementService,
     topology: topology::HostTopology,
     publications: publication::HostPublications,
@@ -74,5 +75,6 @@ pub(crate) mod ingress;
 pub use ingress::HostIngressView;
 mod scene;
 pub use scene::{PublishedSceneContribution, PublishedSceneHit};
+mod plot_queries;
 mod view_queries;
 pub use view_queries::{ViewDescriptor, ViewPickHit, ViewQueryTarget};

@@ -7,6 +7,7 @@ ipp_schema_derive::component_registry! {
         #[cfg(test)]
         RowsFixture = 60001,
         LinearDriver = 2,
+        ExpressionDriver = 102,
         Transform = 3,
         UnlitMaterial = 4,
         MeshInstance = 5,
@@ -56,6 +57,17 @@ ipp_schema_derive::component_registry! {
         GuiGroup = 51,
         CanvasPaint = 52,
         GuiColor = 53,
+        BufferDataSourceBinding = 100,
+        StreamingDataSourceBinding = 101,
+        PlotFrame2d = 103,
+        PlotFrame3d = 104,
+        PlotLine2d = 105,
+        PlotBars2d = 106,
+        PlotPie2d = 107,
+        PlotGridBars3d = 108,
+        PlotHeightSurface3d = 109,
+        PlotPoints3d = 110,
+        PlotPie3d = 111,
     }
 }
 

@@ -2286,8 +2286,8 @@ fn indexed_clip_binding_survives_payload_unload_and_checked_reload() {
 fn external_clip_source_hints_cannot_bypass_sampled_producer_namespace_isolation() {
     use components::{MeshInstance, Transform};
     let mut host = HostRuntime::new();
-    let external = services::data_source::MemoryDataSource::default();
-    host.data_sources_mut()
+    let external = services::io::MemoryIoSource::default();
+    host.io_mut()
         .register("https://example.test/", external.clone())
         .unwrap();
     let id = host

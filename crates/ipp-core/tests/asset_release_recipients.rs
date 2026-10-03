@@ -21,9 +21,7 @@ const SESSION: u64 = 1;
 #[test]
 fn later_world_reconciliation_preserves_completed_release_observations() {
     let mut host = HostRuntime::new();
-    host.data_sources_mut()
-        .register_stream("fixture://")
-        .unwrap();
+    host.io_mut().register_stream("fixture://").unwrap();
     let first = host
         .create_world(Default::default(), &select(&[LIFECYCLE, RENDER]))
         .unwrap();
@@ -157,9 +155,7 @@ fn release_deferred_by_a_publication_lease_still_reaches_the_departed_consumer()
     let mut host = HostRuntime::new();
     // This test proves eviction at final demand, so the Host keeps no idle cache.
     host.asset_resources_mut().set_idle_resident_bytes_target(0);
-    host.data_sources_mut()
-        .register_stream("fixture://")
-        .unwrap();
+    host.io_mut().register_stream("fixture://").unwrap();
     let world = host
         .create_world(Default::default(), &select(&[LIFECYCLE, RENDER]))
         .unwrap();

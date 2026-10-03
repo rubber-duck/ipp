@@ -61,3 +61,7 @@ pub use ipp_schema_derive::system_update;
 pub mod particles;
 
 mod entity_references;
+
+pub mod data_bindings;
+
+pub mod plot;

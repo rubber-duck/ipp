@@ -133,17 +133,17 @@ impl AssetDependencyReadAccess<'_> {
 
     /// Feed a bounded stream chunk; false applies backpressure to the host.
     pub fn asset_input_chunk(&self, id: u64, bytes: &[u8]) -> Result<bool, String> {
-        self.data_sources.input_chunk(id, bytes)
+        self.io.input_chunk(id, bytes)
     }
 
     /// End exactly this input reader. Stale readers cannot reach a new load.
     pub fn asset_input_end(&self, id: u64, result: Result<(), String>) {
-        self.data_sources.input_end(id, result);
+        self.io.input_end(id, result);
     }
 
     /// Aggregate retained asynchronous source staging, including unused capacity.
     pub fn asset_input_bytes(&self) -> usize {
-        self.data_sources.input_bytes()
+        self.io.input_bytes()
     }
 
     /// Number of upload replies still awaiting a resource-owned result.
@@ -162,7 +162,7 @@ impl crate::WorldContext<'_> {
                 .system::<AssetDependencySystem>(AssetDependencySystem::ID)
                 .map(|system| &system.state),
             asset_acquisition: self.asset_acquisition,
-            data_sources: self.data_sources,
+            io: self.io,
         }
     }
 
@@ -178,12 +178,12 @@ impl crate::WorldContext<'_> {
 
     /// Drain newly issued provider work once; source I/O belongs to the host.
     pub fn take_resource_requests(&mut self) -> Vec<crate::AssetAcquisitionRequest> {
-        self.asset_acquisition.requests(self.data_sources)
+        self.asset_acquisition.requests(self.io)
     }
 
     /// Drain cancelled host input streams.
     pub fn take_resource_cancellations(&mut self) -> Vec<u64> {
-        self.data_sources.take_cancellations()
+        self.io.take_cancellations()
     }
 
     /// Queue owned provider data for the next boundary. Obsolete input streams are harmless.
@@ -192,7 +192,7 @@ impl crate::WorldContext<'_> {
         id: u64,
         result: Result<Vec<u8>, String>,
     ) -> Result<(), ErrorReason> {
-        self.data_sources
+        self.io
             .complete_read(id, result)
             .map_err(|_| ErrorReason::Capacity)
     }
@@ -217,7 +217,7 @@ impl crate::WorldContext<'_> {
     /// Hosts install only schemes they implement during initialization. Source
     /// reads remain asynchronous and use the ordinary request/cancellation APIs.
     pub fn register_stream_resource_provider(&mut self, scheme: &str) -> Result<(), ErrorReason> {
-        self.data_sources
+        self.io
             .register_stream(&format!("{scheme}:"))
             .map_err(|_| ErrorReason::InvalidValue)
     }
@@ -250,16 +250,15 @@ impl crate::WorldContext<'_> {
     /// Progress all shared loaders at an embedding Host boundary with an existing
     /// world borrow. Multi-world hosts call Host::progress_assets once instead.
     pub fn poll_all_assets(&mut self) {
-        self.asset_acquisition.poll(self.data_sources);
+        self.asset_acquisition.poll(self.io);
     }
 
     /// Poll resource-owned loaders during the caller's host execution phase.
     pub fn poll_assets(&mut self) {
         if self.asset_acquisition.renderer_driven {
-            self.asset_acquisition
-                .poll_evaluation_assets(self.data_sources);
+            self.asset_acquisition.poll_evaluation_assets(self.io);
         } else {
-            self.asset_acquisition.poll(self.data_sources);
+            self.asset_acquisition.poll(self.io);
         }
     }
 

@@ -134,7 +134,19 @@ impl AnimationController {
         self.discrete_drivers.clear();
         self.numeric_outputs.clear();
         for &key in self.driver_targets.keys() {
-            if let Some(output) = super::numeric_output::AnimationNumericOutput::bind(storage, key)
+            let offsets: Vec<_> = self
+                .drivers_for(key)
+                .flat_map(|driver| {
+                    driver
+                        .identity()
+                        .property
+                        .property()
+                        .into_iter()
+                        .flat_map(|property| property.offsets.iter().copied())
+                })
+                .collect();
+            if let Some(output) =
+                super::numeric_output::AnimationNumericOutput::bind(storage, key, &offsets)
             {
                 self.numeric_outputs.push((key, output));
                 self.numeric_targets.push(key);
@@ -155,7 +167,7 @@ impl AnimationController {
         self.numeric_outputs
             .binary_search_by_key(&key, |entry| entry.0)
             .ok()
-            .map(|index| self.numeric_outputs[index].1)
+            .map(|index| self.numeric_outputs[index].1.clone())
     }
 
     pub(super) fn drivers_for(

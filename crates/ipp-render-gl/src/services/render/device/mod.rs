@@ -267,6 +267,20 @@ pub trait RenderDevice: 'static {
         ))
     }
 
+    /// Built-in mesh opacity; ordinary authored meshes use one. Programs without
+    /// this uniform ignore it. Values remain instance inputs, never geometry uploads.
+    fn set_mesh_opacity(
+        &mut self,
+        _program: &Self::Program,
+        opacity: f32,
+    ) -> Result<(), RenderError> {
+        if opacity == 1.0 {
+            Ok(())
+        } else {
+            Err(RenderError::RenderDevice("mesh opacity unavailable".into()))
+        }
+    }
+
     /// Select ordinary opaque depth writes or straight-alpha blending.
     fn set_alpha_blend(&mut self, enabled: bool) -> Result<(), RenderError> {
         if enabled {

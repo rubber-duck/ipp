@@ -74,11 +74,30 @@ impl CanvasSystem {
             self.evaluate_canvas(context, selection, extent, density, false);
             return;
         };
+        // Plot row hits are independent of ordinary Canvas hit/entry ranges.
+        // Rebuild only when a patched subtree contains a chart; other GUI
+        // subtrees preserve the incremental patch path and retained Plot hits.
+        if self
+            .plot
+            .and_then(|binding| context.dependency(binding))
+            .is_some_and(|plot| {
+                roots.iter().any(|root| {
+                    let records = &self.state.walk.records;
+                    records[root.position..records[root.position].subtree_end]
+                        .iter()
+                        .any(|record| plot.canvas_charts(record.entity).next().is_some())
+                })
+            })
+        {
+            self.evaluate_canvas(context, selection, extent, density, false);
+            return;
+        }
         #[cfg(feature = "checked-invariants")]
         let whole = CanvasSystem {
             state: self.state.clone(),
             layout: self.layout,
             gui: self.gui,
+            plot: self.plot,
         };
         let output = match self.patch_walk(context, &roots, extent, density) {
             Ok(output) => output,
@@ -437,6 +456,7 @@ impl CanvasSystem {
                 layout: output.layout,
                 entries: entries.map(|(entries, changes)| (entries, Some(changes))),
                 hits,
+                plot_hits: None,
                 layers: &layers,
                 interaction: self.state.walk.priority(),
                 paints: changed_paints.then(|| paints.into()),
@@ -469,6 +489,7 @@ impl CanvasSystem {
                 && a.units_per_metre == b.units_per_metre
                 && a.entries == b.entries
                 && a.hits == b.hits
+                && a.plot_hits == b.plot_hits
                 && a.layers == b.layers
                 && a.paints == b.paints
                 && a.paint_changes == b.paint_changes

@@ -323,9 +323,21 @@ for (const schema of [native, target]) {
   for (const entry of schema.components) {
     assert.equal(
       entry.dynamicProperties,
-      ["CustomMaterial", "CanvasPaint"].includes(entry.name),
+      [
+        "CustomMaterial",
+        "CanvasPaint",
+        "BufferDataSourceBinding",
+        "StreamingDataSourceBinding",
+      ].includes(entry.name),
     );
-    if (["ParticleEmitter", "ParticlePlayback"].includes(entry.name)) {
+    if (
+      [
+        "ParticleEmitter",
+        "ParticlePlayback",
+        "BufferDataSourceBinding",
+        "StreamingDataSourceBinding",
+      ].includes(entry.name)
+    ) {
       assert.equal(Object.hasOwn(entry.fields, "runtime"), false);
     }
   }

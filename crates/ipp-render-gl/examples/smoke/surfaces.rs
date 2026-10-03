@@ -112,7 +112,7 @@ pub(crate) fn run<D: RenderDevice>(
 ) -> Result<()> {
     let mut host = HostRuntime::new();
     renderer.install(&mut host)?;
-    host.data_sources_mut().register_stream("fixture://")?;
+    host.io_mut().register_stream("fixture://")?;
     let id = super::world::fixture_world(&mut host)?.id();
 
     let mut options = WorldCreateOptions::new(super::selection::panel());

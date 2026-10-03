@@ -30,6 +30,11 @@ fn manifest_names_tags_and_layout_references_are_valid() {
 
     assert_eq!(layout_names.len(), LAYOUTS.len());
     let tag_spaces = [
+        "dataset-request",
+        "dataset-response",
+        "dataset-value",
+        "dataset-kind",
+        "dataset-delta",
         "value",
         "request",
         "command",
@@ -178,6 +183,11 @@ fn tag_space_name(space: TagSpace) -> &'static str {
         TagSpace::GuiPhysicalDisposition => "gui-physical-disposition",
         TagSpace::GuiAction => "gui-action",
         TagSpace::OutputTarget => "output-target",
+        TagSpace::DatasetRequest => "dataset-request",
+        TagSpace::DatasetResponse => "dataset-response",
+        TagSpace::DatasetDelta => "dataset-delta",
+        TagSpace::DatasetKind => "dataset-kind",
+        TagSpace::DatasetValue => "dataset-value",
     }
 }
 
@@ -383,4 +393,19 @@ fn cached_schema_hash_matches_the_hashed_contract() {
 
     assert_eq!(crate::schema_hash(), hash.0);
     assert_eq!(crate::schema_hash(), hash.0, "repeated reads use the cache");
+}
+
+#[test]
+fn expression_asset_metadata_names_the_reviewed_shared_core_codec() {
+    let format = ASSET_FORMATS
+        .iter()
+        .find(|format| format.name == "ASSET_EXPRESSION")
+        .unwrap();
+    assert_eq!(
+        format.type_id,
+        ipp_core::services::asset_management::expression::EXPRESSION_TYPE.0
+    );
+    assert_eq!(ipp_core::expressions::EXPRESSION_FORMAT_MAGIC, *b"IPPE");
+    assert_eq!(ipp_core::expressions::EXPRESSION_FORMAT_VERSION, 1);
+    assert!(format.format.starts_with("IPPE;version-u32=1;"));
 }

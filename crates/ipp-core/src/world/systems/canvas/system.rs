@@ -10,6 +10,8 @@ use crate::{AttachmentPlacement, ComponentValue, EntityId, ErrorReason, OutputKi
 /// Ordinary entity Canvas evaluation and immutable output production.
 #[derive(Default)]
 pub struct CanvasSystem {
+    pub(super) plot:
+        Option<crate::systems::SystemDependencyBinding<crate::systems::plot::PlotSystem>>,
     pub(super) state: CanvasSystemState,
     pub(super) layout:
         Option<crate::systems::SystemDependencyBinding<crate::systems::gui::GuiLayoutSystem>>,
@@ -131,6 +133,7 @@ impl SystemFactory for CanvasSystemFactory {
 
     fn dependencies(&self) -> &[SystemDependency] {
         &[
+            SystemDependency::After(crate::systems::plot::PlotSystem::ID),
             SystemDependency::After(crate::systems::animation::AnimationSystem::ID),
             SystemDependency::After(crate::systems::asset_dependencies::AssetDependencySystem::ID),
             SystemDependency::After(crate::systems::gui::GuiLayoutSystem::ID),
@@ -143,6 +146,11 @@ impl SystemFactory for CanvasSystemFactory {
         context: &mut SystemInitContext<'_>,
     ) -> Result<Box<dyn System>, SystemInitError> {
         Ok(Box::new(CanvasSystem {
+            plot: context
+                .dependency::<crate::systems::plot::PlotSystem>(
+                    crate::systems::plot::PlotSystem::ID,
+                )
+                .ok(),
             gui: context
                 .dependency::<crate::systems::gui::GuiSystem>(crate::systems::gui::GuiSystem::ID)
                 .ok(),

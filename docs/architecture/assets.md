@@ -22,11 +22,11 @@ There are no asset-count, input or queued-byte admission quotas. Memory, represe
 
 ## Source references and resource providers
 
-DataSourceManagementService independently supplies listing and capability-checked readers/writers, allowing serialization I/O without asset objects. Core needs no networking library or executor. Source I/O, typed decoding and GPU residency have distinct owners.
+IoService owns generic listing, capability-checked byte readers/writers, source routing, transfers, cancellation and backpressure, including persistence I/O without asset objects. Asset Management and the [Data Service](data.md#service-and-source-ownership) both build on it; it knows neither dataset rows nor retention windows. Core needs no networking library or executor. Byte I/O, typed decoding and GPU residency have distinct owners.
 
 Register opaque, non-overlapping string prefixes; reject duplicates and overlap in either direction. Route literally and forward the complete identifier unchanged. Sources validate syntax; generic routing never parses, normalizes or decodes identifiers.
 
-Requests and registrations carry producer/resource/session scope. Cancellation and replacement fence stale completions; references contain no process pointers. Adapters never reenter Worlds or call graphics APIs. [Data-source implementation](../../crates/ipp-core/src/services/data_source) owns buffering and adapters. [Built-ins](../../crates/ipp-core/src/services/asset_management/builtin) use the same loading/recovery path without special World or renderer behavior.
+Requests and registrations carry producer/resource/session scope. Cancellation and replacement fence stale completions; references contain no process pointers. Adapters never reenter Worlds or call graphics APIs. [Current implementation](../../crates/ipp-core/src/services/io) owns buffering and adapters. [Built-ins](../../crates/ipp-core/src/services/asset_management/builtin) use the same loading/recovery path without special World or renderer behavior.
 
 ## Shader recipes and graphics loading
 
@@ -37,6 +37,10 @@ Hosts register narrow device/compiler dependencies and progress loaders with the
 ## Client-authored sources
 
 Clients register immutable names in session-isolated scene scopes; scene-local IDs are authoring bindings, not mutable resource aliases. Retain a recovery source while producer ownership or consumers require it. Explicit preparation loads before component selection, allowing editors to keep prior selections until replacements are ready. Release removes only that producer's ownership/demand. Registration, decoded data and GPU allocation have independent lifetimes.
+
+## Column-binding definitions
+
+[Column-binding definitions](data.md#data-bindings-and-evaluation) are ordinary immutable, reusable assets. Data-source bindings are ordinary consumers of them.
 
 ## Geometry definitions
 

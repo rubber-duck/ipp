@@ -4,7 +4,7 @@ use super::{
     Asset, AssetKey, AssetLoadProgress, AssetLoadStatus, AssetLoader, AssetSource, AssetStats,
     bounded_error,
 };
-use crate::services::data_source::{DataReadOptions, DataReader, DataSourceManagementService};
+use crate::services::io::{IoReadOptions, IoReader, IoService};
 use std::{
     rc::Rc,
     task::{Context, Poll},
@@ -15,7 +15,7 @@ pub(super) trait ErasedAssetLoader {
 
     fn poll_load(
         &mut self,
-        reader: &mut dyn DataReader,
+        reader: &mut dyn IoReader,
         cx: &mut Context<'_>,
     ) -> Poll<Result<Box<dyn Asset>, String>>;
 }
@@ -31,7 +31,7 @@ impl<L: AssetLoader> ErasedAssetLoader for TypedAssetLoader<L> {
 
     fn poll_load(
         &mut self,
-        reader: &mut dyn DataReader,
+        reader: &mut dyn IoReader,
         cx: &mut Context<'_>,
     ) -> Poll<Result<Box<dyn Asset>, String>> {
         self.0
@@ -48,12 +48,12 @@ pub struct AssetProvider {
     source: AssetSource,
     make_loader: AssetLoaderConstructor,
     status: AssetLoadStatus,
-    reader: Option<CountingDataReader>,
+    reader: Option<CountingIoReader>,
     loader: Option<Box<dyn ErasedAssetLoader>>,
     data: Option<Box<dyn Asset>>,
     source_bytes: u64,
     recovery: bool,
-    source_registration: Option<crate::services::data_source::DataSourceRegistrationId>,
+    source_registration: Option<crate::services::io::IoSourceRegistrationId>,
     pub(super) owned_input: Option<String>,
 }
 
@@ -148,7 +148,7 @@ impl AssetProvider {
 
     pub(super) fn poll_load(
         &mut self,
-        sources: &mut DataSourceManagementService,
+        sources: &mut IoService,
         cx: &mut Context<'_>,
         events: &mut Vec<AssetLoadProgress>,
     ) {
@@ -173,14 +173,14 @@ impl AssetProvider {
             }
             match sources.open_read(
                 identifier,
-                DataReadOptions {
+                IoReadOptions {
                     max_bytes: None,
                     recovery: self.recovery,
                 },
             ) {
                 Ok(reader) => {
                     self.source_registration = registration;
-                    self.reader = Some(CountingDataReader {
+                    self.reader = Some(CountingIoReader {
                         reader,
                         bytes: 0,
                     });
@@ -271,12 +271,12 @@ impl AssetProvider {
     }
 }
 
-struct CountingDataReader {
-    reader: Box<dyn DataReader>,
+struct CountingIoReader {
+    reader: Box<dyn IoReader>,
     bytes: u64,
 }
 
-impl DataReader for CountingDataReader {
+impl IoReader for CountingIoReader {
     fn poll_read(
         &mut self,
         cx: &mut Context<'_>,

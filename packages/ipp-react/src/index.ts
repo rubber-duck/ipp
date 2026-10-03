@@ -91,6 +91,12 @@ export interface ReactWorldRoot {
     entity: string | bigint,
     kind: "camera",
   ): Promise<CameraOutputReference>;
+  getDataSource(
+    name: string,
+  ): import("./data.js").ReactDataSourceState | undefined;
+  onDataSourceChange(
+    listener: (state: import("./data.js").ReactDataSourceState) => void,
+  ): () => void;
   getAsset(id: string): import("./asset_state.js").ReactAssetState | undefined;
   onAssetChange(
     listener: (state: import("./asset_state.js").ReactAssetState) => void,
@@ -249,6 +255,11 @@ export function createRoot(
         throw new Error("The Host bound a non-Camera output");
       return output;
     },
+    getDataSource: (name) => commits.dataSources.get(name),
+    onDataSourceChange: (listener) =>
+      commits.dataSources.subscribe((state) => {
+        if (!client.closure && !closing) listener(state);
+      }),
     getAsset: (id) => commits.assets.get(id),
     onAssetChange: (listener) =>
       commits.assets.subscribe((state) => {
@@ -330,3 +341,47 @@ export type {
   ParticleSpriteProps,
   ParticleMeshProps,
 } from "./components.js";
+
+export {
+  DataSource,
+  ColumnBindingAsset,
+  BufferDataSourceBinding,
+  StreamingDataSourceBinding,
+} from "./data.js";
+export type {
+  DataSourceProps,
+  DataSourceHandle,
+  ReactDataSourceState,
+  ColumnBindingAssetProps,
+  DataColumnBinding,
+  BufferDataSourceBindingProps,
+  StreamingDataSourceBindingProps,
+  DataWindow,
+} from "./data.js";
+
+export {
+  PlotFrame2d,
+  PlotFrame3d,
+  PlotLine2d,
+  PlotBars2d,
+  PlotPie2d,
+  PlotGridBars3d,
+  PlotHeightSurface3d,
+  PlotPoints3d,
+  PlotPie3d,
+} from "./plots.js";
+export type {
+  PlotContract,
+  PlotSeries,
+  PlotLabel,
+  PlotRowsProps,
+  PlotFrame2dProps,
+  PlotFrame3dProps,
+  PlotLine2dProps,
+  PlotBars2dProps,
+  PlotPie2dProps,
+  PlotGridBars3dProps,
+  PlotHeightSurface3dProps,
+  PlotPoints3dProps,
+  PlotPie3dProps,
+} from "./plots.js";

@@ -30,7 +30,7 @@ pub use buffered::BufferedAssetLoader;
 
 pub use resource::AssetProvider;
 
-pub use crate::services::data_source::{DataReader, STREAM_CAPACITY};
+pub use crate::services::io::{IoReader, STREAM_CAPACITY};
 
 /// Compiled asset type identity; registration never assigns IDs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -207,7 +207,7 @@ pub trait AssetLoader: 'static {
     /// Consume available input without blocking or retaining borrowed buffers.
     fn poll_load(
         &mut self,
-        reader: &mut dyn DataReader,
+        reader: &mut dyn IoReader,
         cx: &mut Context<'_>,
     ) -> Poll<Result<Self::Data, String>>;
 }
@@ -241,6 +241,8 @@ pub mod quadratic;
 pub mod font;
 
 pub mod drawing;
+
+pub mod expression;
 
 pub mod mesh_metadata;
 

@@ -337,9 +337,7 @@ fn output_aware_spatial_queries_preserve_unavailable_geometry_and_output_errors(
 
     let (mut host, inputs, parent, child, _, owner) = fixture();
     let other = camera(&mut host, parent);
-    host.data_sources_mut()
-        .register_stream("fixture://")
-        .unwrap();
+    host.io_mut().register_stream("fixture://").unwrap();
     create(
         &mut host,
         child,

@@ -28,6 +28,8 @@ pub use components::{
 
 pub mod identity;
 
+pub mod expressions;
+
 pub mod services;
 
 mod world;

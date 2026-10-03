@@ -63,7 +63,7 @@ impl AnimationComponentValues {
         storage: &crate::components::registry::ComponentStorage,
     ) -> Option<FieldValue> {
         if !crate::components::registry::ComponentStorage::supports_numeric_property(key.1, offset)
-            && super::numeric_fields::range(key.1, offset).is_none()
+            && crate::world::numeric_properties::range(key.1, offset).is_none()
         {
             return None;
         }

@@ -24,10 +24,15 @@ mod draw_lighting;
 mod draw_order;
 mod frame_scratch;
 mod frame_statistics;
+mod generated_meshes;
+mod generated_paths;
 mod light_selection;
 mod lighting;
 
 mod particles;
+mod plot_label_layout;
+mod plot_plane_facing;
+mod plot_view_placement;
 
 mod program_assets;
 mod scene;

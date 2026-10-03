@@ -1,0 +1,26 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "paths": {
+      "@ipp/client": [
+        "../../packages/ipp-client/src/index.ts"
+      ],
+      "@ipp/host-contract": [
+        "../../target/integration-artifacts/client/generated.d.ts"
+      ],
+      "@ipp/gui-authoring-contract": [
+        "../../target/integration-artifacts/client/generated.d.ts"
+      ]
+    }
+  },
+  "include": [
+    "plots-runtime.test.ts",
+    "plots-driver.ts",
+    "scenarios/plots-2d.ts",
+    "scenarios/plots-3d.ts",
+    "scenarios/react-plots.ts",
+    "scenarios/plot-view-placement.ts",
+    "../../packages/ipp-react/tests/plots.test.ts"
+  ]
+}

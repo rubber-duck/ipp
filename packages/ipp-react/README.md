@@ -4,6 +4,57 @@
 
 Build with `python tools/ipp.py build react` from the repository root. Import scene declarations from `@ipp/react` and browser composition from `@ipp/react/web`. React is a peer dependency; the client and reconciler are package dependencies. Applications supply React DOM. [package.json](package.json) owns versions and exports; [index.ts](src/index.ts) defines the public entry point.
 
+## Data sources and bindings
+
+Headless data declarations compose ordinary entity components with Host-wide datasets. [Data helpers](src/data.ts) expose buffer and streaming bindings, immutable column definitions and explicit source ownership. Use the receiving target's generated `ExpressionBuilder` and `encodeDataWindows`; definition assets follow the same preparation, failure and replacement behavior as other root-local assets.
+
+```tsx
+import {
+  createRoot, DataSource, Entity, ColumnBindingAsset,
+  StreamingDataSourceBinding, assetRef,
+} from "@ipp/react";
+import { ExpressionBuilder, encodeDataWindows } from "./generated.js";
+
+const expression = new ExpressionBuilder();
+const sample = expression.input("column:value", "f32");
+const gain = expression.input("parameter", "f32");
+const definition = expression.encode(expression.binary("multiply", sample, gain));
+const root = createRoot(client);
+const name = "datasets://sensor";
+
+await root.render(
+  <DataSource name={name} ownership="producer" kind="streaming"
+    schema={[{ name: "value", kind: "f32" }]} datasets={host.datasets}>
+    <ColumnBindingAsset id="scaled" definition={definition} />
+    <Entity id="sensor-view">
+      <StreamingDataSourceBinding source={name}
+        columns={{ scaled: { definition: assetRef("scaled"), parameter: 2 } }}
+        windows={[{ kind: "count", count: 100n }]} encodeWindows={encodeDataWindows} />
+    </Entity>
+  </DataSource>,
+);
+const producer = root.getDataSource(name)?.handle;
+if (!producer) throw new Error("Source preparation failed");
+const outcome = await producer.update([
+  { operation: "append", rows: [[{ kind: "f32", value: 3 }]] },
+]);
+if (outcome.failure) throw new Error(outcome.failure.reason);
+
+// Explicit declaration removal releases producer ownership and removes the entity.
+await root.render(null);
+await root.unmount();
+```
+
+`BufferDataSourceBinding` uses the same `source` and `columns` without windows. Identity definitions encode one `ExpressionBuilder.input("column:<name>", kind)` as the output. A column can also reference an already registered concrete asset. Parameters are ordinary dynamic values named `<output>_parameter`, so existing animation declarations can target them; parameter changes do not replace definitions. Omitted columns and parameters preserve their last stored value, as ordinary React props do. Use `parameter: null` to remove a parameter (allowing an expression's missing-input fallback), or `columns: { output: null }` to remove that output and its companion parameter.
+
+`DataSource` with `ownership="borrowed"` names an existing source and never creates, releases or destroys it. Producer declarations create through the existing `ClientDatasets` lane after commit; their handles send ordered bulk deltas with that lane's backpressure and partial-outcome behavior. Data rows stay in the Host, outside React and World command batches. Removing a producer declaration releases only producer ownership; explicit destruction remains `host.datasets.destroy(handle.producer)`. Root unmount preserves sources and authored World state, and fences the helper's handles. The Host connection still owns the preserved producer; retain its token for deliberate later update/release/destruction.
+
+`getDataSource` and `onDataSourceChange` report producer preparation, readiness and failure. Borrowed state reports ownership only; source and evaluated binding availability are separate observations through `host.datasets.read` and `host.datasets.bindingView`. Those read-only observations never clear binding dirty. Await `root.render` before streaming samples needed by its windows; it establishes binding acknowledgement, while expression asset readiness and evaluated columns remain separate barriers. The maintained [React data scenario](../../tests/integration/scenarios/react-data.ts) runs through native WebSocket and worker/WASM in the `datasets` suite.
+
+## Data charts
+
+[Typed Plot declarations](src/plots.md) compose a data binding, frame and chart on one Entity, preserving source-row label identities and stable series slots through the receiving target's generated row codec. The [native chart showcase](../../examples/chart-showcase/README.md) authors both reference studies with real sources and Host-controlled parameter animation.
+
 ## Declaration roots
 
 Connect a matching generated client:

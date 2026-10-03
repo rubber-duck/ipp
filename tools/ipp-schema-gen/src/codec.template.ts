@@ -1379,7 +1379,17 @@ function readComponent(r: Reader): ComponentSnapshot {
   )
     fail("incomplete component inspection");
   return descriptor.dynamicProperties
-    ? { component, fields, properties }
+    ? {
+        component,
+        fields,
+        properties,
+        propertyDescriptors: Object.fromEntries(
+          [...dynamicDescriptors!].map(([offset, property]) => [
+            property.name,
+            { offset, kind: property.kind },
+          ]),
+        ),
+      }
     : { component, fields };
 }
 function readResources(
@@ -1583,6 +1593,14 @@ function readGeometryResult(r: Reader): GeometryPickResultPayload {
   const publication = { host: r.u64(), revision: r.u64() };
   const entity = r.u64();
   const incarnation = r.u64();
+  const component = r.u16();
+  const rowTag = r.u8();
+  const row =
+    rowTag === WIRE.OPTION_SOME
+      ? { series: r.u32(), rowId: r.u64() }
+      : rowTag === WIRE.OPTION_NONE
+        ? undefined
+        : fail("plot row option");
   const position: [number, number, number] = [r.f32(), r.f32(), r.f32()];
   const distance = r.f64();
   const part = r.u32();
@@ -1591,6 +1609,8 @@ function readGeometryResult(r: Reader): GeometryPickResultPayload {
   for (let index = 0; index < count; index++)
     path.push({ world: readWorldReference(r), anchor: r.u64() });
   const hit: GeometryPickHit = {
+    component,
+    ...(row ? { row } : {}),
     world,
     publication,
     entity,
@@ -2668,6 +2688,9 @@ export class IppHostClient extends GeneratedHostClientBase<IppClient> {
   }
   protected hostLimit(name: string): number {
     return HOST_LIMITS[name] ?? fail("Host contract limit");
+  }
+  protected datasetContract() {
+    return DATASET_CONTRACT;
   }
   protected hostMagic(response: boolean): Uint8Array<ArrayBuffer> {
     return new Uint8Array(response ? HOST_RESPONSE_MAGIC : HOST_REQUEST_MAGIC);

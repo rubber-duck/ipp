@@ -4,7 +4,7 @@ mod support;
 
 use support::selection::{ASSETS, CONSTRAINTS, RENDER, select};
 
-use ipp_core::services::data_source::{DataWriteJob, DataWriter, MemoryDataWriter};
+use ipp_core::services::io::{IoWriteJob, IoWriter, MemoryIoWriter};
 use ipp_core::services::world_serialization::{
     WorldGraphSnapshot, WorldLoadOptions, WorldPersistenceLimits,
 };
@@ -238,11 +238,11 @@ fn capture_is_detached_from_later_authoring_and_world_destruction() {
 }
 
 struct ShortWriter {
-    memory: MemoryDataWriter,
+    memory: MemoryIoWriter,
     pending: bool,
 }
 
-impl DataWriter for ShortWriter {
+impl IoWriter for ShortWriter {
     fn poll_write(&mut self, cx: &mut Context<'_>, bytes: &[u8]) -> Poll<Result<usize, String>> {
         self.pending = !self.pending;
         if self.pending {
@@ -269,10 +269,10 @@ impl DataWriter for ShortWriter {
 #[test]
 fn async_writer_handles_partial_progress_and_publication() {
     let bytes: Vec<_> = (0..255).collect();
-    let mut job = DataWriteJob::new(
+    let mut job = IoWriteJob::new(
         bytes.clone(),
         ShortWriter {
-            memory: MemoryDataWriter::new(1024),
+            memory: MemoryIoWriter::new(1024),
             pending: false,
         },
     );

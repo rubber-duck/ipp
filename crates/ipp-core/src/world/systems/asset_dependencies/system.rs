@@ -115,10 +115,12 @@ impl AssetDependencySystem {
         &mut self,
         ecs: crate::systems::SystemEcsAccess<'_>,
         assets: &mut crate::services::asset_management::AssetManagementService,
-        animation: &crate::systems::animation::AnimationSystem,
+        animation: Option<&crate::systems::animation::AnimationSystem>,
         _dt: f64,
     ) {
-        if self.state.animation_demand_revision != Some(animation.state.demand_revision) {
+        if let Some(animation) = animation
+            && self.state.animation_demand_revision != Some(animation.state.demand_revision)
+        {
             self.state.animation_demand_revision = Some(animation.state.demand_revision);
             let animation_sources: std::collections::BTreeSet<_> =
                 animation.state.animation_sources.iter().cloned().collect();

@@ -80,6 +80,7 @@ impl SystemRuntimeAccess<'_> {
                 &mut self.instances,
                 current,
                 self.asset_acquisition,
+                self.data,
                 false,
             )?;
         }
@@ -147,6 +148,7 @@ impl SystemRuntimeAccess<'_> {
                         aliases,
                         dependencies,
                         assets: self.asset_acquisition,
+                        data: self.data,
                         topology: self.topology,
                         frame_context: self.frame_context,
                     });
@@ -170,6 +172,7 @@ impl SystemRuntimeAccess<'_> {
                             aliases,
                             dependencies,
                             assets: self.asset_acquisition,
+                            data: self.data,
                             topology: self.topology,
                             frame_context: self.frame_context,
                         });
@@ -201,6 +204,7 @@ impl SystemRuntimeAccess<'_> {
                     aliases,
                     dependencies,
                     assets: self.asset_acquisition,
+                    data: self.data,
                     topology: self.topology,
                     frame_context: self.frame_context,
                 });
@@ -242,6 +246,7 @@ impl SystemRuntimeAccess<'_> {
             &mut self.instances,
             current,
             self.asset_acquisition,
+            self.data,
             false,
         );
         result.and(commit)
@@ -258,7 +263,8 @@ impl WorldContext<'_> {
                 after: self.instances.after,
             },
             asset_acquisition: self.asset_acquisition,
-            data_sources: self.data_sources,
+            io: self.io,
+            data: self.data,
             topology: self.topology,
             frame_context: self.frame_context,
             reference_worlds: self.reference_worlds.as_ref(),
@@ -458,7 +464,8 @@ impl WorldContext<'_> {
                         after: systems_after_current,
                     },
                     asset_acquisition: self.asset_acquisition,
-                    data_sources: self.data_sources,
+                    io: self.io,
+                    data: self.data,
                     topology: self.topology,
                     frame_context: self.frame_context,
                     reference_worlds: self.reference_worlds.as_ref(),
@@ -518,7 +525,9 @@ impl WorldContext<'_> {
         .unwrap_or(Err(ErrorReason::InvalidValue))
     }
 
-    /// Admit queued inputs through subsystem hooks before shared service progression.
+    /// Preflight/accept subsystem ingress before shared service progression.
+    /// This is not the data visibility cut: producers and Host time may still progress.
+    /// Data bindings consume final notifications in `System::prepare_evaluation`.
     pub fn prepare_update(&mut self, dt: f64) -> Result<(), ErrorReason> {
         if self.world.updating || !dt.is_finite() || dt < 0.0 || !(self.world.time + dt).is_finite()
         {
@@ -639,6 +648,7 @@ impl WorldContext<'_> {
     ) -> Result<WorldUpdateReport, ErrorReason> {
         self.owns_update = true;
         self.world.updating = true;
+        self.data.begin_evaluation();
         if self.world.fault.is_none() {
             self.dispatch_phase(dt, SystemFramePhase::Prepare, &mut report)?;
             self.world.accepting_removals = true;
@@ -654,6 +664,7 @@ impl WorldContext<'_> {
             self.dispatch_phase(dt, SystemFramePhase::Finish, &mut report)?;
             self.dispatch_phase(dt, SystemFramePhase::Observe, &mut report)?;
         }
+        self.data.end_evaluation();
         self.world.prepared_frame = false;
         self.world.updating = false;
         self.owns_update = false;
@@ -682,7 +693,8 @@ impl WorldContext<'_> {
                     after,
                 },
                 asset_acquisition: self.asset_acquisition,
-                data_sources: self.data_sources,
+                io: self.io,
+                data: self.data,
                 topology: self.topology,
                 frame_context: self.frame_context,
                 reference_worlds: self.reference_worlds.as_ref(),

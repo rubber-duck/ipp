@@ -160,6 +160,74 @@ class PlanningTests(unittest.TestCase):
             ):
                 plan("benchmark", backend, *flags)
 
+    def test_chart_data_uses_release_only_benchmark_products(self):
+        native = plan(
+            "benchmark", "native", "--scene", "chart-data", "--egl-dir", "/example/egl"
+        )
+        native_ids = [task.id for task in native.tasks]
+        self.assertIn("build:performance-chart-data", native_ids)
+        self.assertNotIn("build:gles-host", native_ids)
+        self.assertEqual(native_ids[-1], "benchmark:chart-data")
+        for kind in ("data", "chart"):
+            for mode, flags in (("timing", []), ("allocations", ["--instrumented"])):
+                selected = plan(
+                    "benchmark",
+                    "native",
+                    "--scene",
+                    "chart-data",
+                    "--diagnostic",
+                    kind,
+                    "--build-only",
+                    *flags,
+                )
+                self.assertEqual(
+                    [task.id for task in selected.tasks],
+                    [f"build:performance-chart-{kind}-{mode}"],
+                )
+                self.assertEqual(
+                    selected.tasks[0].outputs,
+                    (f"target/performance-build/chart-{kind}-{mode}",),
+                )
+        tasks = catalog("/example/egl")
+        for full in (False, True):
+            self.assertFalse(
+                any(
+                    "performance-chart" in task.id
+                    or task.id.startswith("benchmark:chart")
+                    for task in select(tasks, regression_ids(tasks, full=full))
+                )
+            )
+
+    def test_chart_data_rejects_invalid_sampling_and_arrangements(self):
+        base = (
+            "benchmark",
+            "native",
+            "--scene",
+            "chart-data",
+            "--egl-dir",
+            "/example/egl",
+        )
+        for flags in (
+            ("--samples", "0"),
+            ("--samples", "65"),
+            ("--repetitions", "0"),
+            ("--repetitions", "9"),
+            ("--warmup", "-1"),
+            ("--warmup", "17"),
+            ("--instrumented",),
+        ):
+            with self.subTest(flags=flags), self.assertRaises(ValueError):
+                plan(*base, *flags)
+        with self.assertRaises(ValueError):
+            plan("benchmark", "browser", "--scene", "chart-data")
+        with patch.dict(os.environ):
+            os.environ.pop("IPP_EGL_LIBRARY_DIR", None)
+            with self.assertRaises(ValueError):
+                plan("benchmark", "native", "--scene", "chart-data")
+        with patch.dict(os.environ, {"IPP_EGL_LIBRARY_DIR": "/example/egl"}):
+            inherited = plan("benchmark", "native", "--scene", "chart-data")
+            self.assertEqual(inherited.tasks[-1].id, "benchmark:chart-data")
+
     def test_retained_gui_benchmark_rejects_stress_options(self):
         for flags in (
             ["--preset", "smoke"],

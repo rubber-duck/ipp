@@ -410,9 +410,7 @@ fn surface_draw_failure_restores_mesh_culling_state() {
     use support::canvas::CanvasSurface;
 
     let mut host = ipp_core::HostRuntime::new();
-    host.data_sources_mut()
-        .register_stream("fixture://")
-        .unwrap();
+    host.io_mut().register_stream("fixture://").unwrap();
     let (mut world, mut renderer, state) = setup(&mut host);
     renderable(&mut world, 41, 0.0);
     upload(&mut world, 41);

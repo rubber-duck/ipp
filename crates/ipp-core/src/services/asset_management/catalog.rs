@@ -4,7 +4,7 @@ use super::{
     resource::{AssetLoaderConstructor, TypedAssetLoader},
     *,
 };
-use crate::services::data_source::{DataSourceManagementService, MemoryDataSource};
+use crate::services::io::{IoService, MemoryIoSource};
 use std::{
     any::Any,
     collections::{BTreeMap, BTreeSet, VecDeque},
@@ -38,7 +38,7 @@ impl AssetManagementService {
             idle_resident_bytes: 0,
             idle_epoch: 0,
             idle_resident_bytes_target: Self::DEFAULT_IDLE_RESIDENT_BYTES_TARGET,
-            memory: MemoryDataSource::default(),
+            memory: MemoryIoSource::default(),
             events: VecDeque::new(),
             lifecycle_barrier: false,
             lifecycle_recipients: BTreeMap::new(),
@@ -50,10 +50,7 @@ impl AssetManagementService {
     }
 
     /// Install the private producer-input namespace in the Host's generic router.
-    pub fn install_data_sources(
-        &self,
-        sources: &mut DataSourceManagementService,
-    ) -> Result<(), String> {
+    pub fn install_io_sources(&self, sources: &mut IoService) -> Result<(), String> {
         sources.register("asset-memory:", self.memory.clone())
     }
 
@@ -167,7 +164,7 @@ impl AssetManagementService {
         }
     }
 
-    /// Revoke external resources routed through a DataSource registration before
+    /// Revoke external resources routed through an IoSource registration before
     /// that registration is removed. Producer-owned inputs use a different source.
     pub fn revoke_source_prefix(&mut self, prefix: &str) {
         let keys: Vec<_> = self
@@ -429,7 +426,7 @@ impl AssetManagementService {
     }
 
     /// Progress loading at the Host's selected phase with borrowed generic I/O.
-    pub fn poll_loads(&mut self, sources: &mut DataSourceManagementService, cx: &mut Context<'_>) {
+    pub fn poll_loads(&mut self, sources: &mut IoService, cx: &mut Context<'_>) {
         #[cfg(feature = "instrumentation")]
         let _allocation_scope = crate::profiling::AllocationScope::new(211, "assets.poll");
         // Polling cannot insert, remove or reuse catalog slots. Loader callbacks
@@ -444,7 +441,7 @@ impl AssetManagementService {
     /// Progress selected representations without duplicating lifecycle state.
     pub fn poll_selected_loads(
         &mut self,
-        sources: &mut DataSourceManagementService,
+        sources: &mut IoService,
         keys: &BTreeSet<AssetKey>,
         cx: &mut Context<'_>,
     ) {
@@ -453,12 +450,7 @@ impl AssetManagementService {
         }
     }
 
-    fn poll_load_key(
-        &mut self,
-        sources: &mut DataSourceManagementService,
-        key: AssetKey,
-        cx: &mut Context<'_>,
-    ) {
+    fn poll_load_key(&mut self, sources: &mut IoService, key: AssetKey, cx: &mut Context<'_>) {
         if self.pending_releases.contains_key(&key) || self.get(key).is_none() {
             return;
         }

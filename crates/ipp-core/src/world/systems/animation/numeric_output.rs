@@ -8,16 +8,16 @@ use crate::{
     world::component_binding::ComponentBinding,
 };
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(super) enum AnimationNumericOutput {
     Scalar(ComponentBinding<Scalar>),
+    Properties(crate::world::property_binding::NumericPropertyComponent),
     Transform(ComponentBinding<Transform>),
     Unlit(ComponentBinding<UnlitMaterial>),
     Pbr(ComponentBinding<PbrMaterial>),
     Light(ComponentBinding<Light>),
     Camera(ComponentBinding<Camera>),
     CustomMaterial(ComponentBinding<CustomMaterial>),
-    CanvasPaint(ComponentBinding<CanvasPaint>),
     LinearDriver(ComponentBinding<LinearDriver>),
     BoundingGeometry(ComponentBinding<BoundingGeometry>),
     PickingGeometry(ComponentBinding<PickingGeometry>),
@@ -29,24 +29,42 @@ pub(super) enum AnimationNumericOutput {
 
 impl AnimationNumericOutput {
     pub(super) fn patch_only(component: u16) -> bool {
-        matches!(
-            component,
-            ComponentValue::CUSTOM_MATERIAL
-                | ComponentValue::CANVAS_PAINT
-                | ComponentValue::LINEAR_DRIVER
-                | ComponentValue::BOUNDING_GEOMETRY
-                | ComponentValue::PICKING_GEOMETRY
-                | ComponentValue::MESH_POSE
-                | ComponentValue::PARTICLE_EMITTER
-                | ComponentValue::PARTICLE_SPRITE
-                | ComponentValue::PARTICLE_PLAYBACK
-        )
+        ComponentValue::supports_dynamic_properties(component)
+            || matches!(
+                component,
+                ComponentValue::CUSTOM_MATERIAL
+                    | ComponentValue::LINEAR_DRIVER
+                    | ComponentValue::BOUNDING_GEOMETRY
+                    | ComponentValue::PICKING_GEOMETRY
+                    | ComponentValue::MESH_POSE
+                    | ComponentValue::PARTICLE_EMITTER
+                    | ComponentValue::PARTICLE_SPRITE
+                    | ComponentValue::PARTICLE_PLAYBACK
+            )
     }
 
     pub(super) fn bind(
         storage: &ComponentStorage,
         (entity, component): (EntityId, u16),
+        offsets: &[u32],
     ) -> Option<Self> {
+        if ComponentValue::supports_dynamic_properties(component)
+            && !offsets.is_empty()
+            && offsets
+                .iter()
+                .all(|offset| crate::components::dynamic_properties::is_dynamic_field(*offset))
+        {
+            // SAFETY: Controller lifecycle revokes compiled destinations before
+            // any selected descriptor or occupied component incarnation departs.
+            if let Some(output) = unsafe {
+                crate::world::property_binding::NumericPropertyComponent::bind(
+                    storage, entity, component, offsets,
+                )
+            } {
+                return Some(Self::Properties(output));
+            }
+        }
+
         let index = entity.index() as usize;
         // SAFETY: Every pointer originates from the typed stable cell. Animation
         // drops these outputs with its drivers before target incarnation destruction.
@@ -74,9 +92,6 @@ impl AnimationNumericOutput {
                 ComponentValue::CUSTOM_MATERIAL => {
                     Self::CustomMaterial(ComponentBinding::new(storage.custom_material_ptr(index)?))
                 }
-                ComponentValue::CANVAS_PAINT => {
-                    Self::CanvasPaint(ComponentBinding::new(storage.canvas_paint_ptr(index)?))
-                }
                 ComponentValue::LINEAR_DRIVER => {
                     Self::LinearDriver(ComponentBinding::new(storage.linear_driver_ptr(index)?))
                 }
@@ -98,6 +113,13 @@ impl AnimationNumericOutput {
                 ComponentValue::PARTICLE_PLAYBACK => Self::ParticlePlayback(ComponentBinding::new(
                     storage.particle_playback_ptr(index)?,
                 )),
+                component if ComponentValue::supports_dynamic_properties(component) => {
+                    Self::Properties(
+                        crate::world::property_binding::NumericPropertyComponent::bind(
+                            storage, entity, component, offsets,
+                        )?,
+                    )
+                }
                 _ => return None,
             })
         }
@@ -116,7 +138,7 @@ impl AnimationNumericOutput {
                 // Guard the complete sampled patch before publishing any field.
                 // Resource fields and private evaluation buffers remain untouched.
                 for ((_, offset), value) in fields() {
-                    let range = super::numeric_fields::range(key.1, *offset)
+                    let range = crate::world::numeric_properties::range(key.1, *offset)
                         .expect("bound independent numeric field");
                     if !matches!(value, FieldValue::F32(value) if range.contains(*value)) {
                         return Err(ErrorReason::InvalidValue);
@@ -130,6 +152,7 @@ impl AnimationNumericOutput {
             }};
         }
         match self {
+            Self::Properties(binding) => binding.write(storage, key, properties)?,
             Self::LinearDriver(binding) => write_numeric_fields!(binding),
             Self::BoundingGeometry(binding) => write_numeric_fields!(binding),
             Self::PickingGeometry(binding) => write_numeric_fields!(binding),
@@ -179,17 +202,6 @@ impl AnimationNumericOutput {
                             .set_field(*offset, value.clone())
                             .map_err(|_| ErrorReason::InvalidField)?;
                     }
-                }
-            }
-            Self::CanvasPaint(binding) => {
-                // Only existing numeric properties are bound; the source and its
-                // variant are resource fields this program cannot target.
-                let component = binding.get_mut(storage);
-                for ((_, offset), value) in fields() {
-                    component
-                        .properties
-                        .set_field(*offset, value.clone())
-                        .map_err(|_| ErrorReason::InvalidField)?;
                 }
             }
             _ => unreachable!("bound patch output"),

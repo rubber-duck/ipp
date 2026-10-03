@@ -164,6 +164,39 @@ impl AnimationSystem {
         let _measurement =
             crate::profiling::Stage::fixed(crate::profiling::FixedStage::AnimationInvalidate);
 
+        // Dynamic metadata can rebuild byte offsets while preserving property
+        // keys and the component incarnation. Revoke compiled descriptors before
+        // that storage changes, then prepare them against committed storage.
+        // Applied contributions and controller clocks remain semantic state.
+        for key in context
+            .staged
+            .changed
+            .keys()
+            .filter(|key| ComponentValue::supports_dynamic_properties(key.1))
+        {
+            if let Some(ids) = self.state.target_controllers.get(key) {
+                for id in ids {
+                    let controller = self.state.controllers.get_mut(id).unwrap();
+                    controller.numeric_outputs.clear();
+                    controller.numeric_targets.clear();
+                    controller.ready = false;
+                    if let Some(transition) = &mut controller.transition {
+                        transition.program = None;
+                        let source = match &mut transition.source {
+                            super::system_state::AnimationTransitionSource::Live(source) => source,
+                            super::system_state::AnimationTransitionSource::Frozen {
+                                bindings,
+                                ..
+                            } => bindings,
+                        };
+                        source.numeric_outputs.clear();
+                        source.numeric_targets.clear();
+                        source.ready = false;
+                    }
+                }
+            }
+        }
+
         // Every real mutation invalidates held discrete output, including writes
         // from another System. The sampling controller acknowledges its own
         // successful publication only after all lifecycle callbacks complete.

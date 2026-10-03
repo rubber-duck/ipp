@@ -50,8 +50,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             if prefix.is_empty() {
                 return Err("--file-prefix must not be empty".into());
             }
-            let source =
-                ipp_server::services::data_source::FileSystemDataSource::new(&prefix, root, false)?;
+            let source = ipp_server::services::io::FileSystemIoSource::new(&prefix, root, false)?;
             Some((prefix, source))
         }
         _ => return Err("--file-root and --file-prefix must be provided together".into()),

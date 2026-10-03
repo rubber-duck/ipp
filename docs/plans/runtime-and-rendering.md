@@ -18,6 +18,12 @@ Extend controller playback with signed clocks and explicit transitions under the
 
 Use the maintained `animation`, `skinning`, `gallery-gui` and `snapshots` suites through real native WebSocket and worker/WASM clients. Independent numeric and joint-pose fixtures should cover reverse endpoints and loops, phase-aligned locomotion, partial gesture transitions, interruption, delayed assets and a saved interrupted fade. Completed WebGL frames and state/events must agree with independent sampling expectations. The Surface hover scene exercises a single reversible clip in a real pointer flow; existing drivers keep these scenarios independent of Host arrangement. Signed clocks and transition math also need focused core tests and malformed protocol coverage.
 
+### Shared pure expressions
+
+Extend the [pure expression boundary](../architecture/runtime.md#pure-expression-evaluation) with validated declarations, prepared input access and a contiguous execution sequence. Keep field resolution and scratch allocation outside repeated evaluation, and keep the operator vocabulary and detailed numeric rules beside the implementation. Share preparation and pure operations between driver and dataset consumers while preserving each System's binding lifetime, output ownership and schedule. Investigate scalar and block execution with measured dispatch, allocation and memory costs before adding specialized kernels or fusion; the shared evaluator must not depend on Plot or rendering being selected.
+
+Extend maintained driver/animation and contract scenarios through generated clients in native WebSocket and worker/WASM environments, comparing independently calculated expressions, invalid declarations and replaced binding targets with observed results, reports and invalidation. Reuse local scene assets and completed WebGL/GLES frame assertions where expression-driven fields affect visible state. Focused core fixtures exercise scalar and row/block inputs, without standing in for Plot integration. Keep scenario semantics independent of environment launch and preserve failure artifacts and participant cleanup.
+
 ## Asset transport
 
 Extend generic sources/readers/writers and Host adapters together through the [asset boundary](../architecture/assets.md). Measure copies and retained representations before adding transports or shared memory. Keep World dependency accounting separate from resource loading, including applied effects of failed batches.
@@ -45,6 +51,16 @@ Use the Python pipeline's declared products, shared executor and selected enviro
 ## Particle implementation approach
 
 Extend private CPU evaluation, immutable cache decoding and renderer-owned instance uploads through existing animation, asset and material paths. Use seeded emitters and sampled playback fixtures to compare lifecycle, seeking, bounds and rendered output. Blender translation follows the [authoring strategy](blender-integration.md).
+
+## Data sources and visualization
+
+Extend the [Data Service and Data Binding System boundary](../architecture/data.md) alongside Asset Management on the shared IoService. Keep byte routing, transfers, cancellation and backpressure generic; dataset identity, schema, mutation and retention belong to Data Service. Expose target-correct source creation and batched deltas through the logical dataset protocol, and give local producers the same validated admission path.
+
+Keep both binding components independent of Plot, using asset-valued dynamic properties for column-binding definitions and ordinary typed properties for companion parameters, prepared through the shared pure evaluator. Materialize changed computed columns in reusable runtime buffers of the binding; direct identity access must preserve source lifetime safety. Coordinate the raw-source retention union across streaming windows. Choose storage and admission mechanics from measured update, retention and publication costs.
+
+Extend the maintained [`datasets` suite](../../tools/pipeline/suites.json) through native WebSocket and worker/WASM drivers with generated clients, real dataset protocol updates, column-binding definitions and local multidimensional fixtures. Compare independently calculated columns and window membership with typed observations and completed WebGL/GLES captures using local scene and font fixtures, reusing assertions across environment drivers with failure artifacts and cleanup under the [harness policy](../development/integration-testing.md). The [serialization strategy](ecs-serialization.md#world-persistence) owns persistence validation. Focused expression and storage tests supplement these real paths.
+
+Implement the [initial Plot scope](../architecture/rendering.md#data-visualization) after the independent GUI rendering foundation lands, against each entity's own binding view, one linear Cartesian frame and a separate radial pie layout. Generate line, arrow and pie-sector paths at runtime for the existing analytic quadratic renderer, investigating stroke width, join, cap and approximation preparation for smooth lines, without depending on new primitive shapes. Investigate surface connectivity, including automatic triangulation, without requiring every source to be a regular grid. Add a maintained 3D axis fixture with labels, ticks and arrows and no child World or Canvas World, asserting completed frames. Compare independently calculated positions, heights, slice extents and labels with geometry observations and meaningful completed-frame regions.
 
 ## Surface implementation approach
 

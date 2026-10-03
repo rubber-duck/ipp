@@ -1,4 +1,9 @@
 import {
+  DATA_SOURCE_HOST_TYPE,
+  type DataSourceDescription,
+  type DataSourceProps,
+} from "./data.js";
+import {
   declarationFields,
   fieldIdentity,
   type DeclarationFieldValue,
@@ -61,6 +66,7 @@ import {
   type ReactWorldComponentType,
 } from "./components.js";
 export type ReactWorldElementType =
+  | typeof DATA_SOURCE_HOST_TYPE
   | typeof ATTACHED_WORLD_HOST_TYPE
   | typeof ANIMATION_HOST_TYPE
   | typeof CHILDREN_HOST_TYPE
@@ -69,6 +75,10 @@ export type ReactWorldElementType =
   | ReactWorldComponentType
   | ShaderHostType
   | AssetHostType;
+export type ReactWorldDynamicValue =
+  | DynamicValue
+  | null
+  | import("./assets.js").AssetReference;
 export type ReactWorldFieldValue =
   | DeclarationFieldValue
   | { kind: "asset"; value: string }
@@ -130,7 +140,7 @@ export interface ReactComponentDescription {
   readonly component: number;
   /** Declared field values by offset; an omitted prop is not written. */
   readonly fields: ReadonlyMap<number, ReactWorldFieldValue>;
-  readonly properties?: Readonly<Record<string, DynamicValue>>;
+  readonly properties?: Readonly<Record<string, ReactWorldDynamicValue>>;
   /** Set exactly on GUI control components. */
   readonly control?: true;
   readonly controlRef?: GuiControlRef | undefined;
@@ -157,6 +167,7 @@ export interface ReactWorldDescription {
   /** Feedback effects (focus and pointer interaction changes) have listeners. */
   readonly guiFeedback?: boolean;
   readonly attachments?: readonly AttachedWorldDescription[];
+  readonly dataSources?: readonly DataSourceDescription[];
   readonly animations: readonly AnimationDescription[];
   readonly assets: readonly AssetDescription[];
   readonly entities: readonly ReactEntityDescription[];
@@ -201,7 +212,8 @@ type InstanceRole =
       readonly parent: number | undefined;
     }
   | { readonly kind: "stage"; readonly asset: ReactWorldInstance }
-  | { readonly kind: "placement" };
+  | { readonly kind: "placement" }
+  | { readonly kind: "data-source" };
 
 /** The last description and what describing a commit's changes needs of it. */
 interface DescribedTree {
@@ -318,6 +330,24 @@ export class ReactWorldTree {
   }
 
   validate(type: ReactWorldElementType, props: ReactWorldElementProps): void {
+    if (type === DATA_SOURCE_HOST_TYPE) {
+      if (
+        typeof props.name !== "string" ||
+        !props.name ||
+        !["borrowed", "producer"].includes(props.ownership as string)
+      )
+        throw new Error("DataSource requires a name and explicit ownership");
+      if (
+        props.ownership === "producer" &&
+        (!props.datasets ||
+          !["buffer", "streaming"].includes(props.kind as string) ||
+          !Array.isArray(props.schema))
+      )
+        throw new Error(
+          "Producer DataSource requires datasets, kind and schema",
+        );
+      return;
+    }
     if (type === ATTACHED_WORLD_HOST_TYPE) {
       describeAttachedWorld(props);
       return;
@@ -466,6 +496,21 @@ export class ReactWorldTree {
         throw new Error(`Unsupported ${name} callback: ${key}`);
     }
     declarationFields(props.fields);
+    if (props.properties !== undefined) {
+      if (
+        !descriptor.dynamicProperties ||
+        typeof props.properties !== "object" ||
+        props.properties === null ||
+        Array.isArray(props.properties)
+      )
+        throw new Error("Named properties require a dynamic component");
+      for (const [name, value] of Object.entries(props.properties)) {
+        if (!/^[A-Za-z_][A-Za-z_0-9]*$/.test(name))
+          throw new Error(`Invalid dynamic property name: ${name}`);
+        if (value !== null && !isAssetReference(value))
+          inferDynamicValue(value);
+      }
+    }
     if (props.controlRef !== undefined) {
       if (!guiControlNames.has(name))
         throw new Error("Only controls accept control refs");
@@ -483,6 +528,7 @@ export class ReactWorldTree {
           "ref",
           "children",
           "fields",
+          "properties",
           "controlRef",
           ...supportedCallbacks,
         ].includes(key)
@@ -496,7 +542,12 @@ export class ReactWorldTree {
           throw new Error(`Unsupported ${name} prop: ${key}`);
         if (!/^[A-Za-z_][A-Za-z_0-9]*$/.test(key))
           throw new Error(`Invalid dynamic property name: ${key}`);
-        if (props[key] !== undefined) inferDynamicValue(props[key]);
+        if (
+          props[key] !== undefined &&
+          props[key] !== null &&
+          !isAssetReference(props[key])
+        )
+          inferDynamicValue(props[key]);
         continue;
       }
       const value = props[key];
@@ -556,6 +607,7 @@ export class ReactWorldTree {
     const cached = this.descriptors.get(type);
     if (cached) return cached;
     if (
+      type === DATA_SOURCE_HOST_TYPE ||
       type === ATTACHED_WORLD_HOST_TYPE ||
       type === ANIMATION_HOST_TYPE ||
       isAsset(type) ||
@@ -770,14 +822,32 @@ export class ReactWorldTree {
                   "ref",
                   "children",
                   "fields",
+                  "properties",
                   "controlRef",
                   ...controlCallbackNames,
                 ].includes(name) &&
                 !Object.hasOwn(descriptor.fields, name),
             )
-            .map(([name, value]) => [name, inferDynamicValue(value)]),
+            .map(([name, value]) => [
+              name,
+              value === null || isAssetReference(value)
+                ? value
+                : inferDynamicValue(value),
+            ])
+            .concat(
+              Object.entries(
+                (props.properties ?? {}) as Record<string, unknown>,
+              ).map(([name, value]) => [
+                name,
+                value === null || isAssetReference(value)
+                  ? value
+                  : inferDynamicValue(value),
+              ]),
+            ),
         )
       : undefined;
+    for (const value of Object.values(properties ?? {}))
+      if (isAssetReference(value)) assetIds.push(value.assetId);
     return {
       component: descriptor.id,
       fields,
@@ -937,6 +1007,7 @@ export class ReactWorldTree {
       // A hidden or removed instance is not described.
       if (!role) continue;
       commitCounters.described++;
+      if (role.kind === "data-source") return undefined;
       if (role.kind === "entity") {
         const before = entities.values[role.index]!;
         const next = this.describeEntity(instance, before.parent);
@@ -1030,7 +1101,11 @@ export class ReactWorldTree {
       return previous;
     let resources = described.resources;
     if (assets.copied || animations.copied) {
-      resources = resourceSignature(assets.values, animations.values);
+      resources = resourceSignature(
+        assets.values,
+        animations.values,
+        previous.dataSources ?? [],
+      );
       if (resources !== described.resources) revised = true;
     }
     if (revised) this.revision++;
@@ -1085,6 +1160,8 @@ export class ReactWorldTree {
         for (const child of instance.children.toReversed())
           pending.push({ instance: child, hidden: suspended });
     }
+    const dataSources: DataSourceDescription[] = [];
+    const sourceNames = new Set<string>();
     const assets: AssetDescription[] = [];
     const animationNodes: {
       instance: ReactWorldInstance;
@@ -1119,6 +1196,32 @@ export class ReactWorldTree {
       }
       commitCounters.described++;
       const props = instance.props;
+      if (instance.type === DATA_SOURCE_HOST_TYPE) {
+        this.validateOnce(instance);
+        roles.set(instance, { kind: "data-source" });
+        const source = props as unknown as DataSourceProps;
+        if (sourceNames.has(source.name))
+          throw new Error(`Duplicate DataSource name: ${source.name}`);
+        sourceNames.add(source.name);
+        const captured: DataSourceProps =
+          source.ownership === "borrowed"
+            ? { name: source.name, ownership: "borrowed" }
+            : {
+                ...source,
+                schema: source.schema.map((column) => ({ ...column })),
+              };
+        dataSources.push({
+          identity: instance.identity,
+          props: captured,
+          signature: JSON.stringify(
+            [source.name, source.ownership, source.kind, source.schema],
+            (_, value) => (typeof value === "bigint" ? String(value) : value),
+          ),
+        });
+        for (const child of instance.children)
+          visit(child, parent, hierarchyParent);
+        return;
+      }
       if (instance.type === ANIMATION_HOST_TYPE) {
         this.validateOnce(instance);
         if (instance.children.length)
@@ -1344,17 +1447,23 @@ export class ReactWorldTree {
       };
     });
 
-    const resources = resourceSignature(assets, animations);
+    const resources = resourceSignature(assets, animations, dataSources);
     const previous = this.described;
     if (
       !previous ||
       previous.resources !== resources ||
+      !sameEach(
+        previous.description.dataSources ?? [],
+        dataSources,
+        (a, b) => a.props.datasets === b.props.datasets,
+      ) ||
       !sameEach(previous.description.entities, entities, sameEntity) ||
       !sameEach(previous.description.components, components, sameComponent) ||
       !sameEach(previous.description.links, links, sameLink)
     )
       this.revision++;
     const description: ReactWorldDescription = {
+      dataSources,
       guiActions,
       guiEffects,
       guiFeedback,
@@ -1387,8 +1496,10 @@ export class ReactWorldTree {
 function resourceSignature(
   assets: readonly AssetDescription[],
   animations: readonly AnimationDescription[],
+  dataSources: readonly DataSourceDescription[],
 ): string {
   return JSON.stringify([
+    dataSources.map((source) => [source.identity, source.signature]),
     assets.map(({ bytes, signature, ...asset }) => asset),
     animations.map(({ mailbox, onPlaybackEvent, ...description }) =>
       animationSignature(description),
@@ -1433,7 +1544,9 @@ function sameListenerShape(
 interface ComponentShape {
   readonly component: number;
   readonly fields: ReadonlyMap<number, ReactWorldFieldValue>;
-  readonly properties: Readonly<Record<string, DynamicValue>> | undefined;
+  readonly properties:
+    | Readonly<Record<string, ReactWorldDynamicValue>>
+    | undefined;
   readonly assetIds: readonly string[];
   readonly entityReferences: boolean;
   resolved?: {

@@ -82,9 +82,7 @@ impl Scene {
     /// A Surface in front of the camera painting `content` in order.
     fn new(content: Vec<Vec<ComponentValue>>) -> Self {
         let mut host = HostRuntime::new();
-        host.data_sources_mut()
-            .register_stream("fixture://")
-            .unwrap();
+        host.io_mut().register_stream("fixture://").unwrap();
         let (context, renderer, state) = setup(&mut host);
         let world = context.id();
         drop(context);

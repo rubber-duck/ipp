@@ -98,6 +98,9 @@ def build_browser() -> None:
 
 def register(tasks: dict[str, Task]) -> None:
     from .catalog import operation
+    from .chart_benchmark import register as register_charts
+
+    register_charts(tasks)
 
     for name in ("native", "native-instrumented", "browser"):
         tasks[f"build:performance-{name}"] = Task(
@@ -112,6 +115,11 @@ def register(tasks: dict[str, Task]) -> None:
 
 def plan(args: argparse.Namespace, tasks: dict[str, Task]) -> list[str]:
     from .catalog import operation
+
+    if getattr(args, "scene", "stress") == "chart-data":
+        from .chart_benchmark import plan as plan_charts
+
+        return plan_charts(args, tasks)
 
     if getattr(args, "scene", "stress") == "gui-stress":
         if args.repetitions < 1:

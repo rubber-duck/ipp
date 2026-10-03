@@ -52,6 +52,7 @@ impl SystemRuntimeAccess<'_> {
             &mut self.instances,
             Some(current),
             self.asset_acquisition,
+            self.data,
             true,
         );
         validation.and(committed)

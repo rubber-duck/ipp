@@ -134,7 +134,14 @@ impl GeometrySystem {
                 for &(entity, binding) in self.state.$query.entries() {
                     let value = binding.get_mut(&mut runtime.world.components);
                     let mut state = value.runtime.evaluation.take().unwrap_or_default();
-                    if state.update_rigid(runtime.world) {
+                    let plot_bounds = if $visual {
+                        self.plot
+                            .and_then(|binding| runtime.dependency(binding))
+                            .and_then(|plot| plot.local_bounds(entity))
+                    } else {
+                        None
+                    };
+                    if plot_bounds.is_none() && state.update_rigid(runtime.world) {
                         if state.changed {
                             self.state.$index.publish(super::GeometryPreparedBounds {
                                 entity,
@@ -176,6 +183,50 @@ impl GeometrySystem {
                             .and_then(super::GeometryEnclosure::new);
                     }
                     let generated = input.geometry.is_empty() && input.source.is_empty();
+                    let plot_shape = plot_bounds.and_then(|[min, max]| {
+                        let transform = GeometryReadAccess::new(
+                            runtime.world,
+                            runtime.asset_acquisition,
+                            &self.state,
+                        )
+                        .geometry_model(entity)
+                        .ok()?;
+                        Some(TransformedGeometryShape {
+                            shape: GeometryShape::Box {
+                                min: min.map(f64::from),
+                                max: max.map(f64::from),
+                            },
+                            transform,
+                        })
+                    });
+                    if generated && let Some(plot_shape) = plot_shape {
+                        let mut derived = std::mem::replace(
+                            &mut state.evaluated,
+                            Err(ErrorReason::GeometryUnavailable),
+                        )
+                        .unwrap_or_default();
+                        // The previous compound may already contain a Plot enclosure.
+                        // Rebuild this tiny derived union without retaining obsolete bounds.
+                        derived.parts.clear();
+                        if let Ok(parts) = GeometryReadAccess::new(
+                            runtime.world,
+                            runtime.asset_acquisition,
+                            &self.state,
+                        )
+                        .visual_geometry(entity)
+                        {
+                            derived.parts.extend(parts);
+                        }
+                        derived.parts.push(plot_shape);
+                        state.evaluated = Ok(derived);
+                        state.enclosure = state
+                            .evaluated
+                            .as_ref()
+                            .ok()
+                            .and_then(GeometryBounds::bounds)
+                            .and_then(super::GeometryEnclosure::new);
+                        state.changed = true;
+                    }
                     let visual_bounds = if generated || !$visual {
                         state.enclosure.map(|value| value.bounds)
                     } else {
@@ -187,6 +238,19 @@ impl GeometrySystem {
                         .visual_bounds(entity)
                         .ok()
                         .flatten()
+                    };
+                    let visual_bounds = if !generated && let Some(shape) = plot_shape {
+                        shape.bounds().map(|mut plot| {
+                            if let Some(other) = visual_bounds {
+                                for axis in 0..3 {
+                                    plot[0][axis] = plot[0][axis].min(other[0][axis]);
+                                    plot[1][axis] = plot[1][axis].max(other[1][axis]);
+                                }
+                            }
+                            plot
+                        })
+                    } else {
+                        visual_bounds
                     };
                     let visual_changed = state.visual.map(|value| value.bounds) != visual_bounds;
                     if generated || !$visual {

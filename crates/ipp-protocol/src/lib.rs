@@ -5,6 +5,8 @@ mod codec;
 
 pub mod asset_source;
 pub mod attachment_receipts;
+mod data_authoring;
+pub mod dataset;
 pub mod host;
 pub mod lifecycle_diagnostics;
 pub mod lifecycle_watch;

@@ -487,6 +487,16 @@ fn write_response(response: &Response, w: &mut Writer) -> Result<(), ProtocolErr
                     w.publication_reference(hit.identity.publication)?;
                     w.u64(hit.identity.entity.to_bits())?;
                     w.u64(hit.identity.incarnation)?;
+                    w.u16(hit.identity.component)?;
+                    w.u8(if hit.identity.row.is_some() {
+                        OPTION_SOME
+                    } else {
+                        OPTION_NONE
+                    })?;
+                    if let Some(row) = hit.identity.row {
+                        w.u32(row.series)?;
+                        w.u64(row.row_id.0)?;
+                    }
                     for coordinate in hit.position {
                         w.f32(coordinate)?;
                     }

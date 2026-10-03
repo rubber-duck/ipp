@@ -346,7 +346,7 @@ fn report_connection_failure(sender: &SyncSender<String>, error: &str) {
 #[derive(Default)]
 pub struct ServeOptions {
     /// Filesystem data source registered under its literal prefix.
-    pub file_access: Option<(String, crate::services::data_source::FileSystemDataSource)>,
+    pub file_access: Option<(String, crate::services::io::FileSystemIoSource)>,
     /// Soft target in bytes for completed assets kept after their last consumer;
     /// `None` keeps the Host default and 0 evicts on release.
     pub asset_cache_bytes: Option<usize>,
@@ -390,7 +390,7 @@ pub fn serve_with<P: HostServices>(
     if let Some((prefix, source)) = options.file_access {
         host.host
             .runtime_mut()
-            .data_sources_mut()
+            .io_mut()
             .register(&prefix, source)
             .map_err(io::Error::other)?;
     }

@@ -1394,7 +1394,7 @@
   },
   "canvas": {
     "description": "Canvas composition, lifecycle and pixel density",
-    "sourceRoots": ["packages/ipp-react/src/", "tests/render/canvas-fixture.tsx", "tests/render/saved-canvas-fixture.tsx"],
+    "sourceRoots": ["packages/ipp-react/src/", "tests/render/canvas-fixture.tsx", "tests/render/saved-canvas-fixture.tsx", "crates/ipp-core/src/world/systems/canvas/", "crates/ipp-core/tests/canvas_patches.rs", "crates/ipp-render-gl/tests/canvas_patches.rs"],
     "commands": [
       {
         "name": "lifecycle",
@@ -1419,6 +1419,18 @@
         "command": ["@node", "target/canvas-build/canvas-controller.test.js", "--backend", "gles", "--egl-dir", "@egl"],
         "builds": ["canvas-fixtures", "gles-host-instrumentation"],
         "requirements": ["node", "npm", "browser", "gles"]
+      },
+      {
+        "name": "patch-oracle",
+        "command": ["cargo", "test", "-p", "ipp-core", "--test", "canvas_patches", "--features", "checked-invariants", "--locked"],
+        "builds": [],
+        "requirements": ["rust"]
+      },
+      {
+        "name": "patch-render",
+        "command": ["cargo", "test", "-p", "ipp-render-gl", "--test", "canvas_patches", "--locked"],
+        "builds": [],
+        "requirements": ["rust"]
       }
     ]
   },
@@ -2381,6 +2393,356 @@
         "builds": [],
         "requirements": [
           "rust"
+        ]
+      }
+    ]
+  },
+  "datasets": {
+    "description": "Connection-owned sources, generated data authoring and read-only bindings/driver observations through native WebSocket and worker WASM",
+    "sourceRoots": [
+      "crates/ipp-protocol/src/dataset/",
+      "crates/ipp-host-session/src/services/connection/datasets.rs",
+      "crates/ipp-host-session/src/services/connection/datasets_tests.rs",
+      "packages/ipp-client/src/datasets.ts",
+      "tools/ipp-schema-gen/src/dataset.template.ts",
+      "tests/integration/dataset-driver.ts",
+      "tests/integration/dataset-faults.ts",
+      "tests/integration/datasets.test.ts",
+      "tests/integration/scenarios/datasets.ts",
+      "tests/integration/tsconfig.datasets.json",
+      "tools/build_datasets.mjs",
+      "crates/ipp-protocol/examples/data_authoring_fixture.rs",
+      "tools/ipp-schema-gen/tests/data-authoring-contract.mjs",
+      "tools/check_contracts.py",
+      "crates/ipp-protocol/src/data_authoring.rs",
+      "tools/ipp-schema-gen/src/data-authoring.template.ts",
+      "tests/integration/data-authoring.test.ts",
+      "tests/integration/scenarios/data-authoring.ts",
+      "tests/render/animation-fixture.ts",
+      "tests/render/animation.test.ts",
+      "packages/ipp-react/src/",
+      "tests/integration/react-data.test.ts",
+      "tests/integration/react-data-driver.ts",
+      "tests/integration/scenarios/react-data.ts"
+    ],
+    "commands": [
+      {
+        "name": "native",
+        "partitionExcludes": [
+          "target/browser-build/headless"
+        ],
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "native WebSocket",
+          "target/datasets/datasets.test.js"
+        ],
+        "builds": [
+          "native",
+          "dataset-fixtures"
+        ],
+        "requirements": [
+          "rust",
+          "node",
+          "npm"
+        ]
+      },
+      {
+        "name": "worker",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "worker WASM",
+          "target/datasets/datasets.test.js"
+        ],
+        "builds": [
+          "browser:headless",
+          "dataset-fixtures"
+        ],
+        "requirements": [
+          "rust",
+          "wasm",
+          "node",
+          "npm",
+          "browser"
+        ]
+      },
+      {
+        "name": "combined-native",
+        "partitionExcludes": [
+          "target/browser-build/headless"
+        ],
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "native WebSocket",
+          "target/datasets/data-authoring.test.js"
+        ],
+        "builds": [
+          "native",
+          "dataset-fixtures"
+        ],
+        "requirements": [
+          "rust",
+          "node",
+          "npm"
+        ]
+      },
+      {
+        "name": "combined-worker",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "worker WASM",
+          "target/datasets/data-authoring.test.js"
+        ],
+        "builds": [
+          "browser:headless",
+          "dataset-fixtures"
+        ],
+        "requirements": [
+          "rust",
+          "wasm",
+          "node",
+          "npm",
+          "browser"
+        ]
+      },
+      {
+        "name": "driver-render",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern=render uses real clip",
+          "target/datasets/animation.test.js"
+        ],
+        "builds": [
+          "dataset-fixtures",
+          "browser:render"
+        ],
+        "requirements": [
+          "rust",
+          "node",
+          "npm",
+          "wasm",
+          "browser"
+        ]
+      },
+      {
+        "name": "react-native",
+        "command": ["@node", "--test", "--test-name-pattern", "native WebSocket", "target/datasets/react-data.test.js"],
+        "builds": ["native", "dataset-fixtures"],
+        "requirements": ["rust", "node", "npm"]
+      },
+      {
+        "name": "react-worker",
+        "command": ["@node", "--test", "--test-name-pattern", "worker WASM", "target/datasets/react-data.test.js"],
+        "builds": ["browser:headless", "dataset-fixtures"],
+        "requirements": ["rust", "wasm", "node", "npm", "browser"]
+      }
+    ]
+  },
+  "plots": {
+    "description": "Retained source-bound 2D/3D and typed React charts, exact row picks and source/parameter edits through native GLES and worker WASM/WebGL",
+    "sourceRoots": [
+      "crates/ipp-core/src/world/systems/plot/",
+      "crates/ipp-render-gl/src/services/render/generated_paths.rs",
+      "crates/ipp-render-gl/src/services/render/generated_meshes.rs",
+      "crates/ipp-render-gl/src/services/render/scene.rs",
+      "crates/ipp-render-gl/src/services/render/plot_plane_facing.rs",
+      "crates/ipp-render-gl/src/services/render/plot_label_layout.rs",
+      "crates/ipp-render-gl/src/services/render/plot_label_layout_tests.rs",
+      "crates/ipp-render-gl/src/services/render/plot_view_placement.rs",
+      "crates/ipp-render-gl/src/services/render/plot_view_placement_tests.rs",
+      "tests/integration/plot-2d-scene.ts",
+      "tests/integration/plot-3d-scene.ts",
+      "tests/integration/scenarios/plots-2d.ts",
+      "tests/integration/scenarios/plots-3d.ts",
+      "tests/integration/scenarios/react-plots.ts",
+      "tests/integration/scenarios/plot-view-placement.ts",
+      "packages/ipp-react/src/plots.ts",
+      "packages/ipp-react/tests/plots.test.ts",
+      "examples/chart-showcase/",
+      "tests/integration/plots-runtime.test.ts",
+      "tests/integration/plots-driver.ts",
+      "tests/integration/tsconfig.plots.json",
+      "tools/build_plots.mjs"
+    ],
+    "commands": [
+      {
+        "name": "core",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "ipp-core",
+          "--lib",
+          "world::systems::plot",
+          "--locked"
+        ],
+        "builds": [],
+        "requirements": [
+          "rust"
+        ]
+      },
+      {
+        "name": "authoring",
+        "command": [
+          "@node",
+          "--test",
+          "target/plots/plot-authoring.test.js"
+        ],
+        "builds": [
+          "plots-fixtures"
+        ],
+        "requirements": [
+          "node",
+          "npm"
+        ]
+      },
+      {
+        "name": "native",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern=^(2d|react) Plot through native WebSocket/GLES",
+          "target/plots/plots-runtime.test.js"
+        ],
+        "builds": [
+          "plots-fixtures",
+          "gles-host",
+          "font-assets"
+        ],
+        "requirements": [
+          "rust",
+          "node",
+          "npm",
+          "gles"
+        ],
+        "partitionExcludes": [
+          "target/browser-build/render"
+        ]
+      },
+      {
+        "name": "browser",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern=^(2d|react) Plot through worker WASM/WebGL",
+          "target/plots/plots-runtime.test.js"
+        ],
+        "builds": [
+          "plots-fixtures",
+          "browser:render",
+          "font-assets"
+        ],
+        "requirements": [
+          "rust",
+          "wasm",
+          "node",
+          "npm",
+          "browser"
+        ],
+        "partitionExcludes": [
+          "target/gles-host"
+        ]
+      },
+      {
+        "name": "views-native",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern=^view Plot through native WebSocket/GLES",
+          "target/plots/plots-runtime.test.js"
+        ],
+        "builds": [
+          "plots-fixtures",
+          "gles-host",
+          "font-assets"
+        ],
+        "requirements": [
+          "rust",
+          "node",
+          "npm",
+          "gles"
+        ],
+        "partitionExcludes": [
+          "target/browser-build/render"
+        ]
+      },
+      {
+        "name": "views-browser",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern=^view Plot through worker WASM/WebGL",
+          "target/plots/plots-runtime.test.js"
+        ],
+        "builds": [
+          "plots-fixtures",
+          "browser:render",
+          "font-assets"
+        ],
+        "requirements": [
+          "rust",
+          "wasm",
+          "node",
+          "npm",
+          "browser"
+        ],
+        "partitionExcludes": [
+          "target/gles-host"
+        ]
+      },
+      {
+        "name": "3d-native",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern=^3d Plot through native WebSocket/GLES",
+          "target/plots/plots-runtime.test.js"
+        ],
+        "builds": [
+          "plots-fixtures",
+          "gles-host",
+          "font-assets"
+        ],
+        "requirements": [
+          "rust",
+          "node",
+          "npm",
+          "gles"
+        ],
+        "partitionExcludes": [
+          "target/browser-build/render"
+        ]
+      },
+      {
+        "name": "3d-browser",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern=^3d Plot through worker WASM/WebGL",
+          "target/plots/plots-runtime.test.js"
+        ],
+        "builds": [
+          "plots-fixtures",
+          "browser:render",
+          "font-assets"
+        ],
+        "requirements": [
+          "rust",
+          "wasm",
+          "node",
+          "npm",
+          "browser"
+        ],
+        "partitionExcludes": [
+          "target/gles-host"
         ]
       }
     ]

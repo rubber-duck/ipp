@@ -9,6 +9,8 @@ fn template_identifiers() -> &'static std::collections::BTreeSet<String> {
         for template in [
             include_str!("codec.template.ts"),
             include_str!("animation.template.ts"),
+            include_str!("dataset.template.ts"),
+            include_str!("data-authoring.template.ts"),
             include_str!("geometry.template.ts"),
             include_str!("skeleton.template.ts"),
             include_str!("skinning.template.ts"),

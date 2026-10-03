@@ -38,7 +38,7 @@ impl AssetLoader for Loader {
 
     fn poll_load(
         &mut self,
-        reader: &mut dyn ipp_core::services::data_source::DataReader,
+        reader: &mut dyn ipp_core::services::io::IoReader,
         cx: &mut Context<'_>,
     ) -> Poll<Result<Self::Data, String>> {
         let mut byte = [0];

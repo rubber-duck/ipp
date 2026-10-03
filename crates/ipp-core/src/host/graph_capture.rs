@@ -34,7 +34,12 @@ impl HostRuntime {
                 return Err("Stale attached World".into());
             }
             let children = world
-                .context(&mut self.assets, &mut self.data_sources, &mut self.topology)
+                .context(
+                    &mut self.assets,
+                    &mut self.io,
+                    &mut self.data,
+                    &mut self.topology,
+                )
                 .snapshot_children(limits.max_bytes)?;
             order.push(reference);
             pending.extend(children.into_iter().rev());
@@ -57,7 +62,12 @@ impl HostRuntime {
                 .get_mut(&reference.id())
                 .expect("captured World");
             for (output, entity) in world
-                .context(&mut self.assets, &mut self.data_sources, &mut self.topology)
+                .context(
+                    &mut self.assets,
+                    &mut self.io,
+                    &mut self.data,
+                    &mut self.topology,
+                )
                 .snapshot_outputs(limits.max_bytes)?
             {
                 if references.outputs.len() >= limits.max_bytes / 128 {
@@ -82,7 +92,12 @@ impl HostRuntime {
                 .worlds
                 .get_mut(&reference.id())
                 .expect("captured World")
-                .context(&mut self.assets, &mut self.data_sources, &mut self.topology)
+                .context(
+                    &mut self.assets,
+                    &mut self.io,
+                    &mut self.data,
+                    &mut self.topology,
+                )
                 .capture_world_with_references(&references, &mut fields, &mut bytes, limits)?;
             nodes.push(WorldGraphNode {
                 id: references.worlds[reference],

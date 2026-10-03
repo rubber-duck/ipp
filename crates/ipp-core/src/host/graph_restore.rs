@@ -40,7 +40,7 @@ impl HostRuntime {
             Err(error) => {
                 for (_, mut world) in candidates {
                     let id = world.runtime_ref().id();
-                    world.teardown(&mut self.assets, &mut self.data_sources);
+                    world.teardown(&mut self.assets, &mut self.io, &mut self.data);
                     self.assets.release_world(id);
                 }
 
@@ -82,7 +82,8 @@ impl HostRuntime {
                 node.world.capacity_hints.clone(),
                 &factories,
                 &mut self.assets,
-                &mut self.data_sources,
+                &mut self.io,
+                &mut self.data,
             )
             .map_err(|error| {
                 self.assets.release_world(id);
@@ -100,7 +101,7 @@ impl HostRuntime {
         for node in &graph.nodes {
             let world = candidates.get_mut(&node.id).expect("private World");
             let ids = world
-                .context(&mut self.assets, &mut self.data_sources, topology)
+                .context(&mut self.assets, &mut self.io, &mut self.data, topology)
                 .restore_world_entities(&node.world)?;
             entities.insert(node.id, ids);
             deferred.insert(
@@ -116,7 +117,7 @@ impl HostRuntime {
             candidates
                 .get_mut(&node.id)
                 .expect("private World")
-                .context(&mut self.assets, &mut self.data_sources, topology)
+                .context(&mut self.assets, &mut self.io, &mut self.data, topology)
                 .restore_world_components(&node.world, &entities[&node.id], &deferred[&node.id])?;
         }
 
@@ -127,7 +128,7 @@ impl HostRuntime {
                     let world = candidates
                         .get_mut(&output.world)
                         .expect("output World")
-                        .context(&mut self.assets, &mut self.data_sources, topology);
+                        .context(&mut self.assets, &mut self.io, &mut self.data, topology);
                     let selection = match output.entity {
                         Some(entity) => {
                             world.bind_output(entities[&output.world][&entity], output.kind)
@@ -172,7 +173,7 @@ impl HostRuntime {
                     candidates
                         .get_mut(&node.id)
                         .expect("private World")
-                        .context(&mut self.assets, &mut self.data_sources, topology)
+                        .context(&mut self.assets, &mut self.io, &mut self.data, topology)
                         .restore_world_component(
                             entities[&node.id][&entity.persistent_id],
                             value,
@@ -184,7 +185,7 @@ impl HostRuntime {
             candidates
                 .get_mut(&node.id)
                 .expect("private World")
-                .context(&mut self.assets, &mut self.data_sources, topology)
+                .context(&mut self.assets, &mut self.io, &mut self.data, topology)
                 .finish_restored_components()?;
         }
 
@@ -192,7 +193,7 @@ impl HostRuntime {
             candidates
                 .get_mut(&node.id)
                 .expect("private World")
-                .context(&mut self.assets, &mut self.data_sources, topology)
+                .context(&mut self.assets, &mut self.io, &mut self.data, topology)
                 .restore_world_systems(&node.world, &entities[&node.id], limits)?;
         }
 

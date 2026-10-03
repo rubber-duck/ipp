@@ -14,6 +14,7 @@ TARGETS = ("native", "wasm")
 COMPONENTS = [
     "Scalar",
     "LinearDriver",
+    "ExpressionDriver",
     "Transform",
     "UnlitMaterial",
     "MeshInstance",
@@ -61,6 +62,17 @@ COMPONENTS = [
     "GuiGroup",
     "CanvasPaint",
     "GuiColor",
+    "BufferDataSourceBinding",
+    "StreamingDataSourceBinding",
+    "PlotFrame2d",
+    "PlotFrame3d",
+    "PlotLine2d",
+    "PlotBars2d",
+    "PlotPie2d",
+    "PlotGridBars3d",
+    "PlotHeightSurface3d",
+    "PlotPoints3d",
+    "PlotPie3d",
 ]
 
 
@@ -151,7 +163,14 @@ def main():
         str(directory),
     )
     run("node", "tools/ipp-schema-gen/tests/rows-contract.mjs", str(directory))
+    export("data_authoring_fixture", directory / "data-authoring.json")
+    run(
+        "node", "tools/ipp-schema-gen/tests/data-authoring-contract.mjs", str(directory)
+    )
     generated.extend(str(directory / f"{target}-rows-types.ts") for target in TARGETS)
+    generated.extend(
+        str(directory / f"{target}-authoring-types.ts") for target in TARGETS
+    )
     run(
         "node",
         "node_modules/typescript/bin/tsc",

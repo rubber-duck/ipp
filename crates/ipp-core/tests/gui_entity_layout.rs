@@ -1558,7 +1558,11 @@ impl PresentedPanel {
 /// The primitive with its intersected clip cleared, for comparing everything else.
 fn unclipped(mut primitive: CanvasPrimitive) -> CanvasPrimitive {
     match &mut primitive {
-        CanvasPrimitive::Glyphs {
+        CanvasPrimitive::Path {
+            style,
+            ..
+        }
+        | CanvasPrimitive::Glyphs {
             style,
             ..
         }

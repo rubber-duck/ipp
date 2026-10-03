@@ -915,9 +915,7 @@ pub fn text_run_scene_with(
     ipp_core::WorldId,
     canvas::CanvasSurface,
 ) {
-    host.data_sources_mut()
-        .register_stream("fixture://")
-        .unwrap();
+    host.io_mut().register_stream("fixture://").unwrap();
     let (world, renderer, state) = setup_with(host, systems);
     let world_id = world.id();
     drop(world);

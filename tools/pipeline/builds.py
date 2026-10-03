@@ -299,6 +299,10 @@ def build(name: str) -> None:
         browser(name.removeprefix("browser:"))
     elif name == "native":
         baseline_native()
+    elif name == "dataset-fixtures":
+        node_product("tools/build_datasets.mjs", "target/datasets")
+    elif name == "plots-fixtures":
+        node_product("tools/build_plots.mjs", "target/plots")
     elif name == "headless-client":
         node_product("tools/build_headless_client.mjs", "target/headless-client")
     elif name in ("gles-host", "gles-host-instrumentation"):

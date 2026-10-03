@@ -97,8 +97,21 @@ function freezeContract<T>(value: T): T {\n\
     }
     out.push_str("} as const);\n");
 
+    let authoring = wire
+        .conventions
+        .iter()
+        .find(|(name, _)| name == "data-authoring")
+        .ok_or("target contract omits data authoring metadata")?;
+    writeln!(
+        out,
+        "const DATA_AUTHORING = freezeContract({} as const);",
+        authoring.1
+    )
+    .unwrap();
     codec_limits::render(&mut out, &wire, &row_limits)?;
     out.push_str(include_str!("codec.template.ts"));
+    out.push_str(include_str!("dataset.template.ts"));
+    out.push_str(include_str!("data-authoring.template.ts"));
     out.push_str(include_str!("animation.template.ts"));
     out.push_str(include_str!("geometry.template.ts"));
     out.push_str(include_str!("gui.template.ts"));

@@ -103,7 +103,7 @@ impl Dependent {
         &mut self,
         ecs: SystemEcsAccess<'_>,
         source: &Source,
-        io: &mut ipp_core::services::data_source::DataSourceManagementService,
+        io: &mut ipp_core::services::io::IoService,
         assets: &mut ipp_core::services::asset_management::AssetManagementService,
         dt: f64,
     ) {
@@ -142,8 +142,8 @@ impl DuplicateService {
     fn update(
         &mut self,
         _ecs: SystemEcsAccess<'_>,
-        _one: &ipp_core::services::data_source::DataSourceManagementService,
-        _two: &mut ipp_core::services::data_source::DataSourceManagementService,
+        _one: &ipp_core::services::io::IoService,
+        _two: &mut ipp_core::services::io::IoService,
         _dt: f64,
     ) {
     }

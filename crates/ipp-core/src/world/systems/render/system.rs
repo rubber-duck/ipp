@@ -194,7 +194,9 @@ impl System for RenderSystem {
 #[crate::systems::system_update(
     SystemDependency::Required(crate::systems::geometry::GeometrySystem::ID),
     SystemDependency::After(crate::systems::camera::CameraSystem::ID),
-    SystemDependency::After(SystemId("ipp.particles"))
+    SystemDependency::After(SystemId("ipp.particles")),
+    SystemDependency::After(crate::systems::data_bindings::DataBindingSystem::ID),
+    SystemDependency::After(crate::systems::plot::PlotSystem::ID)
 )]
 impl RenderSystem {
     fn update(

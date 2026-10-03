@@ -32,7 +32,9 @@ pub struct SystemParameterInputs<'a> {
     /// Already validated World-local dependency slots.
     pub dependencies: SystemDependencies<'a>,
     /// Generic Host I/O, available to one parameter in this callback.
-    pub data_sources: Option<&'a mut crate::services::data_source::DataSourceManagementService>,
+    pub io: Option<&'a mut crate::services::io::IoService>,
+    /// Host typed datasets, available to one parameter in this callback.
+    pub data: Option<&'a crate::services::data::DataService>,
     /// Shared Host resource catalog, available to one parameter in this callback.
     pub assets: Option<&'a mut crate::services::asset_management::AssetManagementService>,
 }
@@ -274,11 +276,25 @@ macro_rules! service_parameter {
     };
 }
 
-service_parameter!(
-    crate::services::data_source::DataSourceManagementService,
-    data_sources,
-    "ipp.data-source"
-);
+service_parameter!(crate::services::io::IoService, io, "ipp.io");
+
+impl SystemParameter for crate::services::data::DataService {
+    type Binding = ();
+    const DEPENDENCY: Option<SystemDependency> = None;
+    const SERVICE: Option<&'static str> = Some("ipp.data");
+
+    fn bind(_context: &SystemInitContext<'_>) -> Result<(), SystemInitError> {
+        Ok(())
+    }
+
+    fn borrow<'a>((): (), inputs: &mut SystemParameterInputs<'a>) -> &'a Self {
+        inputs
+            .data
+            .take()
+            .expect("unique initialized data parameter")
+    }
+}
+
 service_parameter!(
     crate::services::asset_management::AssetManagementService,
     assets,

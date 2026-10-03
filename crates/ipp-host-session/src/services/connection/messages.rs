@@ -50,6 +50,7 @@ impl HostConnectionMessage {
             && !bytes.starts_with(&ipp_protocol::MAGIC)
             && !bytes.starts_with(ipp_protocol::host::HOST_REQUEST_MAGIC)
             && !bytes.starts_with(ipp_protocol::asset_source::REQUEST_MAGIC)
+            && !bytes.starts_with(ipp_protocol::dataset::REQUEST_MAGIC)
             && ipp_protocol::is_batch_page(&bytes);
         let arrival = page
             .then(|| match decode_world(&bytes, None, &mut Vec::new()) {

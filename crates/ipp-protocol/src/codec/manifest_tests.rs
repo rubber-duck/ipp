@@ -316,6 +316,11 @@ fn manifest_tag_space(space: TagSpace) -> &'static str {
         TagSpace::GuiPhysicalDisposition => "gui-physical-disposition",
         TagSpace::GuiAction => "gui-action",
         TagSpace::OutputTarget => "output-target",
+        TagSpace::DatasetRequest => "dataset-request",
+        TagSpace::DatasetResponse => "dataset-response",
+        TagSpace::DatasetDelta => "dataset-delta",
+        TagSpace::DatasetKind => "dataset-kind",
+        TagSpace::DatasetValue => "dataset-value",
     }
 }
 

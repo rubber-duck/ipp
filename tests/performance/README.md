@@ -9,6 +9,7 @@ The `instrumentation` feature adds stage timing and allocation counters without 
 ## Measurements
 
 - [Expanded feature coverage baseline](feature-results.md)
+- [Chart and data measurements](chart-data-results.md)
 - [Native results and camera culling](native-results.md)
 - [Initial stress results](stress-results.md)
 - [Joint, material and response reuse](reuse.md)
@@ -20,6 +21,8 @@ These reports preserve the original machine, revision and methodology. Historica
 The [retained Surface rendering guide](retained-gui.md) compares analytic and retained browser text presentation and defines the pending iPhone 14 Pro GUI procedure.
 
 The [React GUI stress benchmark](gui-stress.md) runs one GUI-enabled build per revision through a fixed logical workload on real browser/WebGL or native/GLES paths, with separate timing, capture, work and allocation windows.
+
+The [chart and data stress benchmark](chart-data.md) measures bounded source/binding scales and dense Plot frames through a normal release native Host, with separate memory observations and paired local allocation diagnostics.
 
 The [gallery GUI trace](gallery-gui-trace.ts) records counters, a Chrome trace of every thread and worker and main-thread CPU profiles for the GUI demo at idle, under hover, slider drag, exploded layers and camera orbit. Headless Chromium on Vulkan composites the page in software, reading the WebGL canvas back every frame and pacing frames near 36 per second whatever the content; `IPP_BROWSER_GPU_COMPOSITING=1` composites on the GPU as a desktop browser does.
 

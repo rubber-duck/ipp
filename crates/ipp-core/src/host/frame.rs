@@ -148,7 +148,11 @@ impl HostRuntime {
         if !delta.is_finite() || delta < 0.0 {
             return Err(ErrorReason::InvalidValue);
         }
-        self.frame = self.frame.checked_add(1).ok_or(ErrorReason::Capacity)?;
+        let next_frame = self.frame.checked_add(1).ok_or(ErrorReason::Capacity)?;
+        self.data
+            .advance_time(delta)
+            .map_err(|_| ErrorReason::InvalidValue)?;
+        self.frame = next_frame;
         self.progress_evaluation_assets();
         let mut report = HostFrameReport {
             frame: self.frame,
@@ -200,7 +204,12 @@ impl HostRuntime {
                 .worlds
                 .get_mut(&world)
                 .expect("live graph World")
-                .context(&mut self.assets, &mut self.data_sources, &mut self.topology);
+                .context(
+                    &mut self.assets,
+                    &mut self.io,
+                    &mut self.data,
+                    &mut self.topology,
+                );
             access.frame_context = Some(&context);
             let result = access.evaluate_frame(delta, admitted);
             if let Some(fault) = access.fault() {
@@ -264,7 +273,12 @@ impl HostRuntime {
                 .worlds
                 .get_mut(&world)
                 .expect("live graph World")
-                .context(&mut self.assets, &mut self.data_sources, &mut self.topology);
+                .context(
+                    &mut self.assets,
+                    &mut self.io,
+                    &mut self.data,
+                    &mut self.topology,
+                );
             if let Some(fault) = access.fault() {
                 report.publication_errors.insert(world, fault.to_string());
                 continue;

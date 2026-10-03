@@ -260,6 +260,10 @@ pub(in crate::world) fn validate_authoring_instances(
                 any.is::<super::hierarchy::FinalPropagationSystem>()
             }
             super::geometry::GeometrySystem::ID => any.is::<super::geometry::GeometrySystem>(),
+            super::plot::PlotSystem::ID => any.is::<super::plot::PlotSystem>(),
+            super::data_bindings::DataBindingSystem::ID => {
+                any.is::<super::data_bindings::DataBindingSystem>()
+            }
             super::particles::ParticleSystem::ID => any.is::<super::particles::ParticleSystem>(),
             super::surface::SurfaceSystem::ID => any.is::<super::surface::SurfaceSystem>(),
             super::canvas::CanvasSystem::ID => any.is::<super::canvas::CanvasSystem>(),
@@ -281,6 +285,8 @@ pub(in crate::world) fn validate_authoring_instances(
                     || any.is::<super::render::RenderSystem>()
                     || any.is::<super::skeleton::SkeletonSystem>()
                     || any.is::<super::skinning::SkinningSystem>()
+                    || any.is::<super::data_bindings::DataBindingSystem>()
+                    || any.is::<super::plot::PlotSystem>()
                     || any.is::<super::particles::ParticleSystem>()
                     || any.is::<super::surface::SurfaceSystem>()
                     || any.is::<super::canvas::CanvasSystem>()
@@ -311,6 +317,8 @@ pub fn compiled_system_factories() -> Vec<Arc<dyn SystemFactory>> {
         Arc::new(super::hierarchy::FinalPropagationSystemFactory),
         Arc::new(super::geometry::GeometrySystemFactory),
         Arc::new(super::camera::CameraSystemFactory),
+        Arc::new(super::data_bindings::DataBindingSystemFactory),
+        Arc::new(super::plot::PlotSystemFactory),
         Arc::new(super::particles::ParticleSystemFactory),
         Arc::new(super::surface::SurfaceSystemFactory),
         Arc::new(super::canvas::CanvasSystemFactory),

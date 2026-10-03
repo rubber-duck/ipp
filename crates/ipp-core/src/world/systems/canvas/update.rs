@@ -40,6 +40,7 @@ pub(super) struct CanvasOutputChanges<'a> {
     pub entries: Option<(CanvasEntries, Option<CanvasPaintChanges>)>,
     /// Replacement hits, when the hits or the GUI observations changed.
     pub hits: Option<Arc<[CanvasHit]>>,
+    pub plot_hits: Option<Arc<[crate::systems::plot::PlotCanvasHit]>>,
     pub layers: &'a [u32],
     pub interaction: CanvasInteractionPriority,
     pub paints: Option<Arc<[CanvasPaintInstance]>>,
@@ -50,6 +51,12 @@ impl CanvasSystem {
     pub(super) fn evaluate(&mut self, context: &SystemRuntimeAccess<'_>) {
         self.state.work = CanvasWork::default();
         let world = &*context.world;
+        let plot_revision = self
+            .plot
+            .and_then(|binding| context.dependency(binding))
+            .map_or(0, crate::systems::plot::PlotSystem::presentation_revision);
+        self.state.dirty |= plot_revision != self.state.plot_revision;
+        self.state.plot_revision = plot_revision;
         let structure_changed = self.state.tree_dirty || !self.state.initialized;
         if structure_changed {
             self.rebuild_order(world);
@@ -154,6 +161,7 @@ impl CanvasSystem {
                 .and_then(|layout| layout.entity_view())
                 .cloned(),
             gui: self.gui.and_then(|binding| context.dependency(binding)),
+            plot: self.plot.and_then(|binding| context.dependency(binding)),
             extent,
             density,
         }
@@ -209,6 +217,7 @@ impl CanvasSystem {
         let CanvasWalk {
             entries,
             hits,
+            mut plot_hits,
             controls,
             overlays,
             records,
@@ -235,6 +244,12 @@ impl CanvasSystem {
         } else {
             (entries, hits, overlays, Vec::new(), Vec::new(), Vec::new())
         };
+        for hit in &mut plot_hits {
+            if let Some(&order) = entry_order.get(hit.order as usize) {
+                hit.order = order;
+            }
+        }
+        plot_hits.sort_by_key(|hit| (hit.layer, hit.order));
         let paints = paint_instances(world, assets, &entries);
         let resources = retained_resources(&entries, &paints);
         let interaction = records.iter().fold([0; 4], |counts, record| {
@@ -293,10 +308,9 @@ impl CanvasSystem {
         let changed_paints = previous
             .as_ref()
             .is_none_or(|previous| *previous.paints != *paints);
-        let changed_input = previous
-            .as_ref()
-            .is_none_or(|previous| previous.hits.as_ref() != hits)
-            || self.state.gui.differs(&controls, &overlays);
+        let changed_input = previous.as_ref().is_none_or(|previous| {
+            previous.hits.as_ref() != hits || previous.plot_hits.as_ref() != plot_hits
+        }) || self.state.gui.differs(&controls, &overlays);
         let input_revision = self.install(
             selection,
             extent,
@@ -306,6 +320,7 @@ impl CanvasSystem {
                 layout: layout_changed,
                 entries: changed_paint.then(|| (entries.into(), paint_changes)),
                 hits: changed_input.then(|| hits.into()),
+                plot_hits: changed_input.then(|| plot_hits.into()),
                 layers: used,
                 interaction: self.state.walk.priority(),
                 paints: changed_paints.then(|| paints.into()),
@@ -332,7 +347,7 @@ impl CanvasSystem {
         previous: Option<CanvasPublication>,
         changes: CanvasOutputChanges<'_>,
     ) -> u64 {
-        let changed_input = changes.hits.is_some();
+        let changed_input = changes.hits.is_some() || changes.plot_hits.is_some();
         let revision = if changes.layout
             || changes.entries.is_some()
             || changes.resources.is_some()
@@ -375,6 +390,9 @@ impl CanvasSystem {
             },
             entries,
             hits: changes.hits.unwrap_or_else(|| kept().hits.clone()),
+            plot_hits: changes
+                .plot_hits
+                .unwrap_or_else(|| kept().plot_hits.clone()),
             layers: match previous {
                 Some(previous) if *previous.layers == *changes.layers => previous.layers.clone(),
                 _ => changes.layers.into(),

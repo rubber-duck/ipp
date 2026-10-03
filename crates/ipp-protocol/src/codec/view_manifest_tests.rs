@@ -303,6 +303,8 @@ pub(super) fn responses(covered: &mut BTreeSet<&'static str>) {
                 world: view.output.world(),
                 entity: camera(view.output).0,
                 incarnation: 15,
+                component: ipp_core::ComponentValue::PICKING_GEOMETRY,
+                row: None,
                 hit: ipp_core::systems::geometry::GeometryRayHit {
                     distance: 4.0,
                     part: 8,
@@ -330,6 +332,11 @@ pub(super) fn responses(covered: &mut BTreeSet<&'static str>) {
                             ManifestValue::U64(camera(view.output).0.to_bits()),
                         ),
                         ("incarnation", ManifestValue::U64(15)),
+                        (
+                            "component",
+                            ManifestValue::U16(ipp_core::ComponentValue::PICKING_GEOMETRY),
+                        ),
+                        ("plot_row", ManifestValue::None),
                         ("position_x", ManifestValue::F32(1.0)),
                         ("position_y", ManifestValue::F32(2.0)),
                         ("position_z", ManifestValue::F32(3.0)),

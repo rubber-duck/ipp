@@ -83,6 +83,17 @@ const FIELD_LIMITS: &[(&str, &str, &str, bool)] = &[
 
 /// Named contract limits no layout field carries, as `(constant, limit, exported)`.
 const CONTRACT_LIMITS: &[(&str, &str, bool)] = &[
+    ("DATASET_CHUNK_BYTES", "dataset-chunk-bytes", true),
+    ("DATASET_UPDATE_BYTES", "dataset-update-bytes", true),
+    ("DATASET_FRAME_BYTES", "dataset-frame-bytes", true),
+    ("DATASET_PAGE_BYTES", "dataset-page-bytes", true),
+    ("DATASET_PAGE_ROWS", "dataset-page-rows", true),
+    ("DATASET_COLUMNS", "dataset-columns", true),
+    ("DATASET_NAME_BYTES", "dataset-name-bytes", true),
+    ("DATASET_DELTAS", "dataset-deltas", true),
+    ("DATASET_TRANSFERS", "dataset-transfers", true),
+    ("DATASET_STAGING_BYTES", "dataset-staging-bytes", true),
+    ("DATASET_PRODUCERS", "dataset-producers", true),
     ("ENTITY_TREE_DEPTH", "entity-tree-depth", false),
     ("MAX_MESH_VERTICES", "mesh-vertices", true),
     ("MAX_JOINTS", "skeleton-joints", true),
@@ -117,6 +128,22 @@ const GUI_FIELD_LIMITS: &[(&str, &str, &str, bool)] = &[
 
 /// Every constant name this module emits, reserved against component names.
 pub(super) const CODEC_LIMIT_NAMES: &[&str] = &[
+    "DATA_AUTHORING",
+    "DATASET_CHUNK_BYTES",
+    "DATASET_UPDATE_BYTES",
+    "DATASET_FRAME_BYTES",
+    "DATASET_PAGE_BYTES",
+    "DATASET_PAGE_ROWS",
+    "DATASET_COLUMNS",
+    "DATASET_NAME_BYTES",
+    "DATASET_DELTAS",
+    "DATASET_TRANSFERS",
+    "DATASET_STAGING_BYTES",
+    "DATASET_PRODUCERS",
+    "DATASET_CONTRACT",
+    "DATASET_LIMITS",
+    "DATASET_REQUEST_MAGIC",
+    "DATASET_RESPONSE_MAGIC",
     "LIFECYCLE_MEMBERS",
     "LIFECYCLE_VALUE_FIELDS",
     "LIFECYCLE_PREFERRED_PAGE_MEMBERS",
@@ -188,6 +215,22 @@ pub(super) fn render(
         ("HOST_RESPONSE_MAGIC", "host-response-magic"),
     ] {
         let bytes = magic(convention(wire, convention_name)?)?;
+        writeln!(out, "const {name} = [{bytes}] as const;").unwrap();
+    }
+
+    for (name, convention_name) in [
+        ("DATASET_REQUEST_MAGIC", "dataset-request-magic"),
+        ("DATASET_RESPONSE_MAGIC", "dataset-response-magic"),
+    ] {
+        let hex = convention(wire, convention_name)?;
+        if hex.len() != 8 {
+            return Err("invalid dataset magic".into());
+        }
+        let bytes = (0..4)
+            .map(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).map(|v| v.to_string()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| "invalid dataset magic")?
+            .join(", ");
         writeln!(out, "const {name} = [{bytes}] as const;").unwrap();
     }
 
@@ -364,6 +407,8 @@ mod tests {
         wire.conventions.extend([
             ("host-request-magic".into(), "4950504801000000".into()),
             ("host-response-magic".into(), "4950504802000000".into()),
+            ("dataset-request-magic".into(), "49504453".into()),
+            ("dataset-response-magic".into(), "49504452".into()),
         ]);
         assert_eq!(
             render(&mut String::new(), &wire, &ROWS).unwrap_err(),

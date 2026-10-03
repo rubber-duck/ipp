@@ -63,6 +63,11 @@ impl<D: RenderDevice> RenderService<D> {
     ) -> Result<RenderFrameSummary, RenderError> {
         let (width, height) = (viewport.width, viewport.height);
         self.inclusions.reset_frame();
+        self.generated_paths.retain_live_worlds(host);
+        self.generated_meshes.retain_live_worlds(host);
+        self.plot_plane_caches.retain(|(world, _, _), cache| {
+            host.world_fault(*world).is_ok() && cache.source.strong_count() != 0
+        });
         if width == 0
             || height == 0
             || width > i32::MAX as u32
@@ -217,6 +222,11 @@ impl<D: RenderDevice> RenderService<D> {
         {
             self.particle_quad = Some(super::super::particles::quad(self.device.clone())?);
         }
+        let plot_planes = self
+            .plot_label_layouts
+            .entry(world.selection)
+            .or_default()
+            .arrange(&world.plot_planes, view_projection, viewport);
         let camera_model = world
             .camera
             .pose
@@ -256,6 +266,7 @@ impl<D: RenderDevice> RenderService<D> {
                 items,
                 debug,
                 &world.surfaces,
+                &plot_planes,
                 &customs,
                 &lighting,
                 &view_projection,
@@ -263,7 +274,10 @@ impl<D: RenderDevice> RenderService<D> {
             let mut draws = scratch
                 .draws
                 .iter()
-                .map(|draw| draw.index.resolve(items, debug, &world.surfaces))
+                .map(|draw| {
+                    draw.index
+                        .resolve(items, debug, &world.surfaces, &plot_planes)
+                })
                 .peekable();
             // Particle batching consumes lookahead entries.
             while let Some(item) = draws.next() {
@@ -273,6 +287,11 @@ impl<D: RenderDevice> RenderService<D> {
                         self.device.borrow_mut().set_instances(&[])?;
                         self.device.borrow_mut().set_alpha_blend(false)?;
                         self.draw_debug(world, item, view_projection, &mut stats)?;
+                        continue;
+                    }
+                    Item::PlotPlane(plane) => {
+                        self.device.borrow_mut().set_instances(&[])?;
+                        self.draw_plot_plane(world, plane, view_projection, &mut stats)?;
                         continue;
                     }
                     Item::Surface(surface) => {
@@ -332,9 +351,22 @@ impl<D: RenderDevice> RenderService<D> {
                 } {
                     continue;
                 }
-                let data = world
-                    .resource(AssetKey::from_u64(item.mesh.asset))
-                    .and_then(|r| r.data()?.as_any().downcast_ref::<GlMeshData<D>>());
+                let derived = if let Some((target, mesh)) = item.derived {
+                    let (data, uploaded) = self.generated_meshes.get(
+                        (item.entity.world, target, item.mesh.variant),
+                        &mesh.geometry,
+                        mesh.mesh_index,
+                    )?;
+                    stats.uploaded(uploaded);
+                    Some(data)
+                } else {
+                    None
+                };
+                let data = derived.as_deref().or_else(|| {
+                    world
+                        .resource(AssetKey::from_u64(item.mesh.asset))
+                        .and_then(|r| r.data()?.as_any().downcast_ref::<GlMeshData<D>>())
+                });
                 let data = if item.particle.is_some_and(|p| p.sprite) {
                     self.particle_quad.as_ref()
                 } else {
@@ -445,6 +477,18 @@ impl<D: RenderDevice> RenderService<D> {
                     self.device
                         .borrow_mut()
                         .set_skin_palette(program, palette)?;
+                }
+                let opacity = item.derived.map_or(1.0, |(_, mesh)| {
+                    mesh.geometry.meshes[mesh.mesh_index].color[3]
+                });
+                if opacity == 0.0 {
+                    continue;
+                }
+                self.device
+                    .borrow_mut()
+                    .set_mesh_opacity(program, opacity)?;
+                if opacity < 1.0 {
+                    self.device.borrow_mut().set_alpha_blend(true)?;
                 }
                 let mvp = camera::multiply(view_projection, *model);
                 let material = [item.material.r, item.material.g, item.material.b];

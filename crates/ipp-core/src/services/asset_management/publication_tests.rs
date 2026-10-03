@@ -1,6 +1,6 @@
 use super::super::AssetReleaseKind;
 use super::*;
-use crate::services::data_source::DataSourceManagementService;
+use crate::services::io::IoService;
 use std::{
     any::Any,
     collections::{BTreeMap, BTreeSet},
@@ -50,7 +50,7 @@ impl super::super::Asset for GraphicsBlob {
     }
 }
 
-fn fixture() -> (AssetManagementService, DataSourceManagementService) {
+fn fixture() -> (AssetManagementService, IoService) {
     let mut assets = AssetManagementService::empty();
     assets
         .register_loader(super::super::AssetTypeId(42), || {
@@ -67,8 +67,8 @@ fn fixture() -> (AssetManagementService, DataSourceManagementService) {
             })
         })
         .unwrap();
-    let mut data = DataSourceManagementService::new();
-    assets.install_data_sources(&mut data).unwrap();
+    let mut data = IoService::new();
+    assets.install_io_sources(&mut data).unwrap();
     data.register_stream("fixture:").unwrap();
     (assets, data)
 }
@@ -81,7 +81,7 @@ fn source(uri: &str) -> super::super::AssetSource {
     }
 }
 
-fn poll(assets: &mut AssetManagementService, data: &mut DataSourceManagementService) {
+fn poll(assets: &mut AssetManagementService, data: &mut IoService) {
     data.progress();
     assets.poll_loads(data, &mut Context::from_waker(Waker::noop()));
 }

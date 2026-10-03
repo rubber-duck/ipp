@@ -1,5 +1,5 @@
 use super::*;
-use ipp_core::services::data_source::MemoryDataReader;
+use ipp_core::services::io::MemoryIoReader;
 use std::rc::Rc;
 
 #[derive(Default)]
@@ -158,7 +158,7 @@ fn load(
         fail_path,
     }));
     let mut loader = drawing_loader(device, Default::default());
-    let mut reader = MemoryDataReader::new(bytes);
+    let mut reader = MemoryIoReader::new(bytes);
     let waker = std::task::Waker::noop();
     let mut context = std::task::Context::from_waker(waker);
     let result = match loader.poll_load(&mut reader, &mut context) {

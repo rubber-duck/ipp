@@ -217,6 +217,18 @@ def main(args: list[str]) -> None:
             build_browser()
         else:
             build_native(remaining[0] == "native-instrumented")
+    elif operation == "chart-benchmark-build":
+        from .chart_benchmark import build as build_charts
+
+        build_charts()
+    elif operation == "chart-diagnostic-build":
+        from .chart_benchmark import build_diagnostic
+
+        build_diagnostic(remaining[0], remaining[1] == "allocations")
+    elif operation == "chart-diagnostic":
+        from .chart_benchmark import diagnostic
+
+        diagnostic(json.loads(remaining[0]))
     elif operation == "benchmark":
         from .benchmark import scene
 

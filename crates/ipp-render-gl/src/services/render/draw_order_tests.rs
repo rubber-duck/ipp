@@ -48,6 +48,7 @@ fn ordered(items: &[RenderItem], customs: &BTreeMap<EntityId, PreparedCustomMate
             entity: super::super::scene::test_entity(published.item.entity.to_bits()),
             value: published.item,
             published,
+            derived: None,
         })
         .collect();
     let customs: BTreeMap<_, _> = customs
@@ -63,6 +64,7 @@ fn ordered(items: &[RenderItem], customs: &BTreeMap<EntityId, PreparedCustomMate
     prepare(
         &mut draws,
         &items,
+        &[],
         &[],
         &[],
         &customs,

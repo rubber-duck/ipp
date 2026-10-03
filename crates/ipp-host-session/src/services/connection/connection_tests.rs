@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "asset_sources_tests.rs"]
+mod asset_sources;
+
 #[path = "ended_session_tests.rs"]
 mod ended_sessions;
 

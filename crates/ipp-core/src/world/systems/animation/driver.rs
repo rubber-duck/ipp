@@ -76,14 +76,7 @@ pub struct AnimationDriver<T: AnimationSample> {
 /// its validated descriptor, or a row property kept by its offset.
 #[derive(Clone, Copy, Debug)]
 pub(in crate::world) enum DynamicValueDestination {
-    CustomMaterial(
-        crate::world::component_binding::ComponentBinding<crate::components::CustomMaterial>,
-        crate::components::dynamic_properties::DynamicPropertyDescriptor,
-    ),
-    CanvasPaint(
-        crate::world::component_binding::ComponentBinding<crate::components::CanvasPaint>,
-        crate::components::dynamic_properties::DynamicPropertyDescriptor,
-    ),
+    Property(crate::world::property_binding::PropertyBinding),
     Row(super::row_property_destination::RowPropertyDestination),
 }
 
@@ -100,7 +93,6 @@ impl DynamicValueDestination {
         component: u16,
         key: u32,
     ) -> Option<Self> {
-        let index = entity.index() as usize;
         if crate::components::rows::row_region(key).is_some() {
             return super::row_property_destination::RowPropertyDestination::bind(
                 storage, entity, component, key,
@@ -108,38 +100,12 @@ impl DynamicValueDestination {
             .map(Self::Row);
         }
 
-        let numeric =
-            |descriptor: &crate::components::dynamic_properties::DynamicPropertyDescriptor| {
-                descriptor.kind != crate::DynamicPropertyKind::Asset
-            };
-        // SAFETY: each pointer originates from the stable occupied cell whose
-        // descriptor is captured with it; the caller's contract above bounds
-        // their lifetime, and writes borrow the owning storage exclusively.
+        // SAFETY: The caller revokes this cell/descriptor binding before reuse.
         unsafe {
-            match component {
-                ComponentValue::CUSTOM_MATERIAL => Some(Self::CustomMaterial(
-                    crate::world::component_binding::ComponentBinding::new(
-                        storage.custom_material_ptr(index)?,
-                    ),
-                    storage
-                        .custom_material(index)?
-                        .properties
-                        .descriptor(key)
-                        .filter(numeric)?,
-                )),
-                ComponentValue::CANVAS_PAINT => Some(Self::CanvasPaint(
-                    crate::world::component_binding::ComponentBinding::new(
-                        storage.canvas_paint_ptr(index)?,
-                    ),
-                    storage
-                        .canvas_paint(index)?
-                        .properties
-                        .descriptor(key)
-                        .filter(numeric)?,
-                )),
-                _ => None,
-            }
+            crate::world::property_binding::PropertyBinding::bind(storage, entity, component, key)
         }
+        .filter(|binding| binding.writable())
+        .map(Self::Property)
     }
 
     fn write(
@@ -148,14 +114,10 @@ impl DynamicValueDestination {
         value: crate::DynamicValue,
     ) -> Result<(), ErrorReason> {
         match self {
-            Self::CustomMaterial(binding, descriptor) => binding
-                .get_mut(storage)
-                .properties
-                .set_descriptor(descriptor, value),
-            Self::CanvasPaint(binding, descriptor) => binding
-                .get_mut(storage)
-                .properties
-                .set_descriptor(descriptor, value),
+            Self::Property(binding) => {
+                binding.validate(storage, &value)?;
+                binding.write_validated(storage, value);
+            }
             Self::Row(destination) => return destination.write(storage, value),
         }
         Ok(())
@@ -249,6 +211,11 @@ impl AnimationTransitionOutput {
                 crate::components::schema::FieldValue::F32(*source.get(storage)),
             ),
             Self::Rotation(source, _) => AnimationValue::Rotation(*source.get(storage)),
+            Self::Dynamic(DynamicValueDestination::Property(binding), _) => {
+                AnimationValue::Field(crate::components::schema::FieldValue::Dynamic(
+                    binding.read(storage).ok_or(ErrorReason::InvalidField)?,
+                ))
+            }
             Self::Dynamic(_, identity) => {
                 let property = identity
                     .property
@@ -401,33 +368,8 @@ fn validate_transition_value(
 }
 
 fn transition_field_valid(component: u16, offset: u32, value: f32) -> bool {
-    use crate::components::*;
-    use std::mem::offset_of;
-    if let Some(range) = super::numeric_fields::range(component, offset) {
-        return range.contains(value);
-    }
-    macro_rules! fields {
-        ($ty:ty; $($field:ident),+) => { [$(offset_of!($ty, $field) as u32),+].contains(&offset) };
-    }
-    match component {
-        ComponentValue::TRANSFORM if fields!(Transform; sx, sy, sz) => value > 0.0,
-        ComponentValue::TRANSFORM if fields!(Transform; x, y, z) => true,
-        ComponentValue::UNLIT_MATERIAL if fields!(UnlitMaterial; r, g, b) => {
-            (0.0..=1.0).contains(&value)
-        }
-        ComponentValue::PBR_MATERIAL if fields!(PbrMaterial; r, g, b, metallic, roughness) => {
-            (0.0..=1.0).contains(&value)
-        }
-        ComponentValue::LIGHT if fields!(Light; r, g, b) => (0.0..=1.0).contains(&value),
-        ComponentValue::LIGHT if fields!(Light; intensity, shadow_radius) => value >= 0.0,
-        ComponentValue::LIGHT if fields!(Light; shadow_bias) => (0.0..=0.05).contains(&value),
-        ComponentValue::CAMERA if fields!(Camera; fov_y) => {
-            (0.001..=std::f32::consts::PI - 0.001).contains(&value)
-        }
-        ComponentValue::CAMERA if fields!(Camera; ortho_height) => value > 0.0,
-        ComponentValue::SCALAR => true,
-        _ => false,
-    }
+    crate::world::numeric_properties::fixed_range(component, offset)
+        .is_some_and(|range| range.contains(value))
 }
 
 impl<T: AnimationSample> AnimationDriverBinding for AnimationDriver<T> {

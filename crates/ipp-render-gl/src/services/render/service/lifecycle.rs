@@ -14,6 +14,12 @@ impl<D: RenderDevice> RenderService<D> {
         let device = Rc::new(RefCell::new(device));
         Ok(Self {
             inclusions: Default::default(),
+            generated_paths: super::super::generated_paths::GeneratedPathCache::new(device.clone()),
+            generated_meshes: super::super::generated_meshes::GeneratedMeshCache::new(
+                device.clone(),
+            ),
+            plot_plane_caches: BTreeMap::new(),
+            plot_label_layouts: BTreeMap::new(),
             debug: crate::services::render::debug_geometry::DebugGeometryRenderCache::new(
                 device.clone(),
             ),
@@ -158,6 +164,10 @@ impl<D: RenderDevice> RenderService<D> {
     ) {
         self.clear_shadows();
         self.debug.clear();
+        self.generated_paths.clear();
+        self.generated_meshes.clear();
+        self.plot_plane_caches.clear();
+        self.plot_label_layouts.clear();
         if let Some(program) = self.surface_program.take() {
             self.device.borrow_mut().delete_program(program);
         }
@@ -249,6 +259,8 @@ impl<D: RenderDevice> RenderService<D> {
     pub fn forget_world(&mut self, world: ipp_core::WorldId) {
         self.light_selections
             .retain(|selection, _| selection.world().id() != world);
+        self.plot_label_layouts
+            .retain(|selection, _| selection.world().id() != world);
         self.forget_surface_caches(world);
         {
             self.surface_paint
@@ -323,6 +335,10 @@ impl<D: RenderDevice> RenderService<D> {
         }
         if selection.is_none() || self.prepared_output != selection {
             self.debug.clear();
+            self.generated_paths.clear();
+            self.generated_meshes.clear();
+            self.plot_plane_caches.clear();
+            self.plot_label_layouts.clear();
             self.custom_materials.clear();
             self.custom_fallbacks.clear();
         }
@@ -343,6 +359,8 @@ impl<D: RenderDevice> RenderService<D> {
             }
         }
         self.light_selections
+            .retain(|selection, _| outputs.contains(selection));
+        self.plot_label_layouts
             .retain(|selection, _| outputs.contains(selection));
     }
 

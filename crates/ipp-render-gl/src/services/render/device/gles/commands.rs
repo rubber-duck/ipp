@@ -407,6 +407,7 @@ impl RenderDevice for GlesRenderDevice {
                 parameter_locations: Default::default(),
                 mvp,
                 material,
+                transparency: (self.gl.uniform_location)(id, c"u_transparency".as_ptr()),
                 lighting: lighting::GlesLightingLocations::load(&self.gl, id),
                 uniforms: Default::default(),
                 values: Default::default(),
@@ -692,6 +693,16 @@ impl RenderDevice for GlesRenderDevice {
                 palette.as_ptr().cast(),
             );
         }
+        self.check_draw()
+    }
+
+    fn set_mesh_opacity(
+        &mut self,
+        program: &GlesRenderProgram,
+        opacity: f32,
+    ) -> Result<(), RenderError> {
+        self.use_program(program.id);
+        self.program_float(program, program.transparency, 1.0 - opacity);
         self.check_draw()
     }
 

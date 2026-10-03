@@ -8,7 +8,7 @@ use ipp_core::{components::MeshInstance, services::asset_management::AssetKey, *
 
 fn host_with_meshes() -> HostRuntime {
     let mut host = HostRuntime::new();
-    let memory = services::data_source::MemoryDataSource::default();
+    let memory = services::io::MemoryIoSource::default();
     for width in [1, 2] {
         memory
             .insert(
@@ -20,9 +20,7 @@ fn host_with_meshes() -> HostRuntime {
             )
             .unwrap();
     }
-    host.data_sources_mut()
-        .register("fixture:", memory)
-        .unwrap();
+    host.io_mut().register("fixture:", memory).unwrap();
     host
 }
 

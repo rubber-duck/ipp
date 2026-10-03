@@ -1,5 +1,5 @@
 //! Real slot-backed assets and generic asynchronous data flow.
-use ipp_core::services::{asset_management::*, data_source::*};
+use ipp_core::services::{asset_management::*, io::*};
 use std::{
     any::Any,
     cell::Cell,
@@ -68,7 +68,7 @@ fn graphics_blob_loader() -> impl AssetLoader<Data = GraphicsBlob> {
     })
 }
 
-fn fixture() -> (AssetManagementService, DataSourceManagementService) {
+fn fixture() -> (AssetManagementService, IoService) {
     let mut assets = AssetManagementService::empty();
     // Retention mechanics need an unbounded budget so the default soft target
     // never evicts during these tests.
@@ -76,8 +76,8 @@ fn fixture() -> (AssetManagementService, DataSourceManagementService) {
     assets
         .register_loader(AssetTypeId(42), blob_loader)
         .unwrap();
-    let mut data = DataSourceManagementService::new();
-    assets.install_data_sources(&mut data).unwrap();
+    let mut data = IoService::new();
+    assets.install_io_sources(&mut data).unwrap();
     data.register_stream("http:").unwrap();
     (assets, data)
 }
@@ -115,7 +115,7 @@ fn source(uri: &str) -> AssetSource {
     }
 }
 
-fn poll(assets: &mut AssetManagementService, data: &mut DataSourceManagementService) {
+fn poll(assets: &mut AssetManagementService, data: &mut IoService) {
     data.progress();
     assets.poll_loads(data, &mut Context::from_waker(Waker::noop()));
 }
@@ -249,7 +249,7 @@ fn payload_is_unavailable_until_eof_and_recovery_keeps_the_key() {
 
 fn load_external(
     assets: &mut AssetManagementService,
-    data: &mut DataSourceManagementService,
+    data: &mut IoService,
     uri: &str,
     bytes: &[u8],
     used: &mut BTreeSet<AssetKey>,

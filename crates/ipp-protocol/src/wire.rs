@@ -77,6 +77,11 @@ pub(crate) enum TagSpace {
     GuiPhysicalDisposition = 52,
     GuiAction = 53,
     OutputTarget = 54,
+    DatasetRequest = 55,
+    DatasetResponse = 56,
+    DatasetDelta = 57,
+    DatasetKind = 58,
+    DatasetValue = 59,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -190,6 +195,49 @@ macro_rules! layouts {
 }
 
 layouts! {
+    "dataset-value-f32" => [field!("tag", Variant => "dataset-value"), field!("value_bits", U32)];
+    "dataset-value-integer" => [field!("tag", Variant => "dataset-value"), field!("bits", U32)];
+    "dataset-value-bool" => [field!("tag", Variant => "dataset-value"), field!("value", Bool)];
+    "dataset-value-text" => [field!("tag", Variant => "dataset-value"), field!("value", Utf8, crate::dataset::UPDATE_BYTES as u32)];
+    "dataset-value-vec2" => [field!("tag", Variant => "dataset-value"), field!("lane0_bits", U32), field!("lane1_bits", U32)];
+    "dataset-value-vec3" => [field!("tag", Variant => "dataset-value"), field!("lane0_bits", U32), field!("lane1_bits", U32), field!("lane2_bits", U32)];
+    "dataset-value-vec4" => [field!("tag", Variant => "dataset-value"), field!("lane0_bits", U32), field!("lane1_bits", U32), field!("lane2_bits", U32), field!("lane3_bits", U32)];
+    "dataset-value-mat2" => [field!("tag", Variant => "dataset-value"), field!("lane0_bits", U32), field!("lane1_bits", U32), field!("lane2_bits", U32), field!("lane3_bits", U32)];
+    "dataset-value-mat3" => [field!("tag", Variant => "dataset-value"), field!("lane0_bits", U32), field!("lane1_bits", U32), field!("lane2_bits", U32), field!("lane3_bits", U32), field!("lane4_bits", U32), field!("lane5_bits", U32), field!("lane6_bits", U32), field!("lane7_bits", U32), field!("lane8_bits", U32)];
+    "dataset-value-mat4" => [field!("tag", Variant => "dataset-value"), field!("lane0_bits", U32), field!("lane1_bits", U32), field!("lane2_bits", U32), field!("lane3_bits", U32), field!("lane4_bits", U32), field!("lane5_bits", U32), field!("lane6_bits", U32), field!("lane7_bits", U32), field!("lane8_bits", U32), field!("lane9_bits", U32), field!("lane10_bits", U32), field!("lane11_bits", U32), field!("lane12_bits", U32), field!("lane13_bits", U32), field!("lane14_bits", U32), field!("lane15_bits", U32)];
+    "dataset-update" => [field!("deltas", List, crate::dataset::DELTAS as u32 => "dataset-delta")];
+    "dataset-delta" => [field!("tag", Variant => "dataset-delta")];
+
+    "dataset-request" => [field!("magic", U32), field!("connection", U64), field!("request_id", U64), field!("tag", Variant => "dataset-request")];
+    "dataset-binding-view" => [
+        field!("tag", Variant => "dataset-request"),
+        field!("session", U64), field!("entity", U64), field!("offset", U64), field!("limit", U32),
+    ];
+    "dataset-driver-status" => [
+        field!("tag", Variant => "dataset-request"), field!("session", U64), field!("entity", U64),
+    ];
+    "dataset-observation" => [
+        field!("tag", Variant => "dataset-response"), field!("body", Bytes, crate::dataset::PAGE_BYTES as u32 - 25),
+    ];
+    "dataset-create" => [field!("magic", U32), field!("connection", U64), field!("request_id", U64), field!("tag", Variant => "dataset-request"), field!("name", Utf8, crate::dataset::NAME_BYTES as u32), field!("kind", Union => "dataset-kind"), field!("schema", List, crate::dataset::COLUMNS as u32 => "dataset-column")];
+    "dataset-column" => [field!("name", Utf8, crate::dataset::NAME_BYTES as u32), field!("kind", Variant => "dataset-value"), field!("text_max_bytes", Option => "u64")];
+    "dataset-begin" => [field!("magic", U32), field!("connection", U64), field!("request_id", U64), field!("tag", Variant => "dataset-request"), field!("producer", U64), field!("length", U64)];
+    "dataset-chunk" => [field!("magic", U32), field!("connection", U64), field!("request_id", U64), field!("tag", Variant => "dataset-request"), field!("transfer", U64), field!("offset", U64), field!("bytes", Bytes, crate::dataset::CHUNK_BYTES as u32)];
+    "dataset-transfer" => [field!("magic", U32), field!("connection", U64), field!("request_id", U64), field!("tag", Variant => "dataset-request"), field!("transfer", U64)];
+    "dataset-created" => [field!("magic", U32), field!("connection", U64), field!("request_id", U64), field!("tag", Variant => "dataset-response"), field!("producer", U64)];
+    "dataset-producer" => [field!("magic", U32), field!("connection", U64), field!("request_id", U64), field!("tag", Variant => "dataset-request"), field!("producer", U64)];
+    "dataset-read" => [field!("magic", U32), field!("connection", U64), field!("request_id", U64), field!("tag", Variant => "dataset-request"), field!("name", Utf8, crate::dataset::NAME_BYTES as u32), field!("incarnation", U64), field!("offset", U64), field!("limit", U32)];
+    "dataset-page" => [field!("magic", U32), field!("connection", U64), field!("request_id", U64), field!("tag", Variant => "dataset-response"), field!("name", Utf8, crate::dataset::NAME_BYTES as u32), field!("incarnation", U64), field!("kind", Union => "dataset-kind"), field!("schema", List, crate::dataset::COLUMNS as u32 => "dataset-column"), field!("retained_rows", U64), field!("retained_bytes", U64), field!("allocated_bytes", U64), field!("schema_bytes", U64), field!("has_next", Bool), field!("next_offset", U64), field!("rows", List, crate::dataset::PAGE_ROWS as u32 => "dataset-row")];
+    "dataset-row" => [field!("id", U64), field!("values", List, crate::dataset::COLUMNS as u32 => "dataset-value")];
+    "dataset-value" => [field!("tag", Variant => "dataset-value")];
+    "dataset-append" => [field!("tag", Variant => "dataset-delta"), field!("rows", List, (crate::dataset::UPDATE_BYTES / 4) as u32 => "dataset-values")];
+    "dataset-values" => [field!("values", List, crate::dataset::COLUMNS as u32 => "dataset-value")];
+    "dataset-insert" => [field!("tag", Variant => "dataset-delta"), field!("index", U64), field!("rows", List, (crate::dataset::UPDATE_BYTES / 4) as u32 => "dataset-values")];
+    "dataset-edit" => [field!("tag", Variant => "dataset-delta"), field!("row", U64), field!("values", List, crate::dataset::COLUMNS as u32 => "dataset-value")];
+    "dataset-remove" => [field!("tag", Variant => "dataset-delta"), field!("row", U64)];
+    "dataset-outcome" => [field!("magic", U32), field!("connection", U64), field!("request_id", U64), field!("tag", Variant => "dataset-response"), field!("failed", Bool), field!("committed_deltas", U64), field!("assigned_rows", U64), field!("last_assigned_row", U64)];
+    "dataset-error" => [field!("magic", U32), field!("connection", U64), field!("request_id", U64), field!("tag", Variant => "dataset-response"), field!("reason", Utf8, 4096)];
+
     "gui-target" => [field!("world", Named => "world-reference"), field!("entity", U64), field!("component", U16), field!("incarnation", U64)];
     // GUI System query records, read through inspection collections 6, 7 and 9.
     "gui-focus" => [field!("target", Named => "gui-target"), field!("visible", Bool), field!("part", U32)];
@@ -469,6 +517,8 @@ layouts! {
         field!("publication", Named => "publication-reference"),
         field!("entity", U64),
         field!("incarnation", U64),
+        field!("component", U16),
+        field!("plot_row", Option => "plot-row-hit"),
         field!("position_x", FiniteF32),
         field!("position_y", FiniteF32),
         field!("position_z", FiniteF32),
@@ -477,6 +527,7 @@ layouts! {
         field!("path", List, (crate::MAX_MESSAGE_BYTES / 24) as u32 => "view-path-entry"),
         field!("view_plane", Option => "pick-view-plane"),
     ];
+    "plot-row-hit" => [field!("series", U32), field!("row_id", U64)];
     "pick-view-plane" => [
         field!("point_x", FiniteF32),
         field!("point_y", FiniteF32),
@@ -1161,6 +1212,42 @@ macro_rules! tags {
 }
 
 tags! {
+    DatasetRequest DATASET_REQUEST_CREATE = 0 => "dataset-create";
+    DatasetRequest DATASET_REQUEST_BEGIN = 1 => "dataset-begin";
+    DatasetRequest DATASET_REQUEST_CHUNK = 2 => "dataset-chunk";
+    DatasetRequest DATASET_REQUEST_FINISH = 3 => "dataset-transfer";
+    DatasetRequest DATASET_REQUEST_CANCEL = 4 => "dataset-transfer";
+    DatasetRequest DATASET_REQUEST_RELEASE = 5 => "dataset-producer";
+    DatasetRequest DATASET_REQUEST_DESTROY = 6 => "dataset-producer";
+    DatasetRequest DATASET_REQUEST_READ = 7 => "dataset-read";
+    DatasetRequest DATASET_REQUEST_BINDING_VIEW = 8 => "dataset-binding-view";
+    DatasetRequest DATASET_REQUEST_DRIVER_STATUS = 9 => "dataset-driver-status";
+    DatasetResponse DATASET_RESPONSE_BINDING_VIEW = 7 => "dataset-observation";
+    DatasetResponse DATASET_RESPONSE_DRIVER_STATUS = 8 => "dataset-observation";
+    DatasetResponse DATASET_RESPONSE_CREDIT = 0 => "empty";
+    DatasetResponse DATASET_RESPONSE_CREATED = 1 => "dataset-created";
+    DatasetResponse DATASET_RESPONSE_OUTCOME = 2 => "dataset-outcome";
+    DatasetResponse DATASET_RESPONSE_COMPLETE = 3 => "empty";
+    DatasetResponse DATASET_RESPONSE_PAGE = 4 => "dataset-page";
+    DatasetResponse DATASET_RESPONSE_ERROR = 5 => "dataset-error";
+    DatasetResponse DATASET_RESPONSE_REFUSED = 6 => "dataset-error";
+    DatasetDelta DATASET_DELTA_APPEND = 0 => "dataset-append";
+    DatasetDelta DATASET_DELTA_INSERT = 1 => "dataset-insert";
+    DatasetDelta DATASET_DELTA_EDIT = 2 => "dataset-edit";
+    DatasetDelta DATASET_DELTA_REMOVE = 3 => "dataset-remove";
+    DatasetKind DATASET_KIND_BUFFER = 0 => "empty";
+    DatasetKind DATASET_KIND_STREAMING = 1 => "empty";
+    DatasetValue DATASET_VALUE_F32 = ipp_core::components::DynamicPropertyKind::F32 as u8 => "dataset-value-f32";
+    DatasetValue DATASET_VALUE_I32 = ipp_core::components::DynamicPropertyKind::I32 as u8 => "dataset-value-integer";
+    DatasetValue DATASET_VALUE_U32 = ipp_core::components::DynamicPropertyKind::U32 as u8 => "dataset-value-integer";
+    DatasetValue DATASET_VALUE_BOOL = ipp_core::components::DynamicPropertyKind::Bool as u8 => "dataset-value-bool";
+    DatasetValue DATASET_VALUE_VEC2 = ipp_core::components::DynamicPropertyKind::Vec2 as u8 => "dataset-value-vec2";
+    DatasetValue DATASET_VALUE_VEC3 = ipp_core::components::DynamicPropertyKind::Vec3 as u8 => "dataset-value-vec3";
+    DatasetValue DATASET_VALUE_VEC4 = ipp_core::components::DynamicPropertyKind::Vec4 as u8 => "dataset-value-vec4";
+    DatasetValue DATASET_VALUE_MAT2 = ipp_core::components::DynamicPropertyKind::Mat2 as u8 => "dataset-value-mat2";
+    DatasetValue DATASET_VALUE_MAT3 = ipp_core::components::DynamicPropertyKind::Mat3 as u8 => "dataset-value-mat3";
+    DatasetValue DATASET_VALUE_MAT4 = ipp_core::components::DynamicPropertyKind::Mat4 as u8 => "dataset-value-mat4";
+    DatasetValue DATASET_VALUE_TEXT = ipp_core::components::DynamicPropertyKind::Text as u8 => "dataset-value-text";
     GuiPhysicalRequest GUI_PHYSICAL_REQUEST_OPEN = 0 => "gui-physical-open";
     GuiPhysicalRequest GUI_PHYSICAL_REQUEST_CLOSE = 1 => "gui-physical-close";
     GuiPhysicalRequest GUI_PHYSICAL_REQUEST_EVENT = 2 => "gui-physical-event";
@@ -1498,6 +1585,16 @@ tags! {
 }
 
 pub(crate) const CONVENTIONS: &[(&str, &str)] = &[
+    ("dataset-request-magic", "49504453"),
+    ("dataset-response-magic", "49504452"),
+    (
+        "dataset-protocol",
+        "connection-u64;request-u64-increasing;request-tag-u8;credit-is-transport-only;one-final-update-result-on-begin-id;domain-failure=outcome-prefix,index-u64,reason-utf8;malformed-incomplete-update-refused-without-mutation;pages-independent;incarnation-zero=any;last-row-zero=none;no-demand-or-time-side-effects",
+    ),
+    (
+        "dataset-values",
+        "count-u32;value=core-kind-u8,payload;f32-or-matrices=ieee754-le;ints=exact-i32-or-u32-le;bool=u8-0-or-1;text=length-u32,utf8;no-assets;decode-representation-before-ordered-service-domain-admission",
+    ),
     (
         "attachment-receipts",
         "session-owned-bounded-registry;effects=ordered-operation-index,exact-parent,anchor,component-incarnation,nonreused-write-revision,child;conditional-detach-resolves-at-operation;partial-prefix-retained;pending-is-not-retired;release-invalidates-handle;runtime-only;reply-and-registry-capacity-before-callbacks",
@@ -1582,6 +1679,20 @@ pub(crate) const CONVENTIONS: &[(&str, &str)] = &[
 /// Numeric bounds generated clients enforce that no wire layout field carries, each
 /// read from its Rust constant so generated codecs never repeat the value.
 pub(crate) const LIMITS: &[(&str, u32)] = &[
+    ("dataset-chunk-bytes", crate::dataset::CHUNK_BYTES as u32),
+    ("dataset-update-bytes", crate::dataset::UPDATE_BYTES as u32),
+    ("dataset-frame-bytes", crate::dataset::FRAME_BYTES as u32),
+    ("dataset-page-bytes", crate::dataset::PAGE_BYTES as u32),
+    ("dataset-page-rows", crate::dataset::PAGE_ROWS as u32),
+    ("dataset-columns", crate::dataset::COLUMNS as u32),
+    ("dataset-name-bytes", crate::dataset::NAME_BYTES as u32),
+    ("dataset-deltas", crate::dataset::DELTAS as u32),
+    ("dataset-transfers", crate::dataset::TRANSFERS as u32),
+    (
+        "dataset-staging-bytes",
+        crate::dataset::STAGING_BYTES as u32,
+    ),
+    ("dataset-producers", crate::dataset::PRODUCERS as u32),
     ("entity-tree-depth", crate::MAX_ENTITY_TREE_DEPTH as u32),
     ("mesh-vertices", ipp_core::MAX_MESH_VERTICES),
     (
@@ -1591,6 +1702,11 @@ pub(crate) const LIMITS: &[(&str, u32)] = &[
 ];
 
 pub(crate) const ASSET_FORMATS: &[AssetFormat] = &[
+    AssetFormat {
+        name: "ASSET_EXPRESSION",
+        type_id: ipp_core::services::asset_management::expression::EXPRESSION_TYPE.0,
+        format: "IPPE;version-u32=1;inputs-u32;nodes-u32;output-u32;input=name-utf8,core-kind-u8;node=input0|constant1|unary2|binary3|clamp4|ternary5|fallback6;references-u32;bool-constant-u32;text-length-u32;exact-core-values;immutable;one-shared-core-expression-declaration-codec",
+    },
     AssetFormat {
         name: "ASSET_FONT",
         type_id: 17,
@@ -1696,11 +1812,14 @@ reasons! {
 pub(crate) fn write_contract(sink: &mut impl ContractSink) {
     sink.write(&3u16.to_le_bytes());
 
-    sink.write(&(CONVENTIONS.len() as u16).to_le_bytes());
+    sink.write(&((CONVENTIONS.len() + 1) as u16).to_le_bytes());
     for (name, value) in CONVENTIONS {
         write_string(sink, name);
         write_string(sink, value);
     }
+
+    write_string(sink, "data-authoring");
+    write_string(sink, crate::data_authoring::metadata());
 
     sink.write(&(LIMITS.len() as u16).to_le_bytes());
     for (name, value) in LIMITS {

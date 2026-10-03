@@ -152,7 +152,7 @@ impl TextureDecoder {
     /// Read and validate only the fixed-size header.
     pub fn poll_header(
         &mut self,
-        reader: &mut dyn crate::services::asset_management::DataReader,
+        reader: &mut dyn crate::services::asset_management::IoReader,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<TextureHeader, String>> {
         use std::task::Poll;
@@ -196,7 +196,7 @@ impl TextureDecoder {
     /// Read packed pixels and verify exact EOF after the declared payload.
     pub fn poll_pixels(
         &mut self,
-        reader: &mut dyn crate::services::asset_management::DataReader,
+        reader: &mut dyn crate::services::asset_management::IoReader,
         cx: &mut std::task::Context<'_>,
         output: &mut [u8],
     ) -> std::task::Poll<Result<usize, String>> {

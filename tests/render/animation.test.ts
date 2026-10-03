@@ -1,12 +1,17 @@
 import assert from "node:assert/strict";
-import { resolve } from "node:path";
+import { relative, resolve } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { runBrowserEnvironment } from "../browser/environment.js";
 import { invoke, writeDataUrl } from "./evidence.js";
 import { requireVisible } from "./image-assertions.js";
 import type { run } from "./animation-fixture.js";
 
 const workspace = resolve(process.cwd());
+const fixturePath = relative(
+  workspace,
+  fileURLToPath(new URL("./animation-fixture.js", import.meta.url)),
+).replaceAll("\\", "/");
 for (const name of ["headless", "render"] as const) {
   test(`${name} uses real clip assets and multi-entity controller playback`, {
     timeout: 60_000,
@@ -54,7 +59,7 @@ for (const name of ["headless", "render"] as const) {
           () =>
             invoke<Awaited<ReturnType<typeof run>>>(
               environment.page,
-              `${environment.urls.origin}/dist/tests/render/animation-fixture.js`,
+              `${environment.urls.origin}/${fixturePath}`,
               "run",
               [environment.urls, name === "render"],
             ),
@@ -90,6 +95,16 @@ for (const name of ["headless", "render"] as const) {
           stopped!.summary.meanRgb[0] > 240 && stopped!.summary.meanRgb[1] < 10,
         );
         assert.ok(Math.abs(stopped!.summary.centroidX! - 99.5) < 2);
+        requireVisible(result.driverCapture!.summary, "expression-position");
+        // Orthographic height 4 over 240 pixels: x=0.5 shifts the centroid 30 pixels.
+        assert.ok(
+          Math.abs(
+            result.driverCapture!.summary.centroidX! -
+              (320 / 2 - 0.5 + (0.5 * 240) / 4),
+          ) < 2,
+        );
+        assert.equal(result.driverCapture!.metadata.drawCalls, 1);
+        assert.equal(result.driverState!.state, "Written");
         assert.ok(result.differences[0]!.changedFraction > 0.04);
         assert.equal(result.differences[1]!.changedPixels, 0);
       },

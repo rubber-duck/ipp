@@ -22,6 +22,8 @@ pub struct CanvasTarget {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[allow(missing_docs)]
 pub enum CanvasPart {
+    /// Compact runtime-generated Plot primitive identity.
+    Plot(u32),
     Content,
     Background,
     Fill,
@@ -313,6 +315,11 @@ pub enum CanvasPrimitive {
         font_size: f32,
         glyphs: Arc<[CanvasGlyph]>,
     },
+    /// Runtime-generated top-left/Y-down closed contours, retained with the publication.
+    Path {
+        style: CanvasPrimitiveStyle,
+        path: Arc<crate::systems::plot::PlotPath>,
+    },
     /// Original drawing layers normalized at the shared source/preparation boundary.
     Drawing {
         style: CanvasPrimitiveStyle,
@@ -346,7 +353,37 @@ impl CanvasPrimitive {
                 style,
                 ..
             }
+            | Self::Path {
+                style,
+                ..
+            }
             | Self::Drawing {
+                style,
+                ..
+            }
+            | Self::Bitmap {
+                style,
+                ..
+            }
+            | Self::Box {
+                style,
+                ..
+            } => style,
+        }
+    }
+
+    /// Update placement while preserving immutable local geometry storage.
+    pub(crate) fn style_mut(&mut self) -> &mut CanvasPrimitiveStyle {
+        match self {
+            Self::Glyphs {
+                style,
+                ..
+            }
+            | Self::Drawing {
+                style,
+                ..
+            }
+            | Self::Path {
                 style,
                 ..
             }
@@ -377,6 +414,9 @@ impl CanvasPrimitive {
                 ..
             } => Some(*bitmap),
             Self::Box {
+                ..
+            }
+            | Self::Path {
                 ..
             } => None,
         }
@@ -603,6 +643,8 @@ pub struct CanvasPublication {
     /// Evaluated hit records by layer, then tree order; raw content creates no
     /// GUI control behavior.
     pub hits: Arc<[CanvasHit]>,
+    /// Chart-local analytic marks placed through the same Canvas walk and clips.
+    pub plot_hits: Arc<[crate::systems::plot::PlotCanvasHit]>,
     /// Plane ids of the layers the canvas's entities resolve to, ascending and
     /// never empty: only the base plane 0 without layers. Planes not in use
     /// have no entry, and a plane keeps its id whatever others are in use.

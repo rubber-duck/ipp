@@ -570,6 +570,7 @@ impl<P: HostServices> Host<P> {
     pub fn maintain_connections(&mut self, now: Duration) {
         self.connections.now = self.connections.now.max(now);
         self.expire_command_batches();
+        self.expire_dataset_transfers();
         self.expire_queued_presentations();
         self.presentation.expire(self.connections.now);
         for (id, error) in self.publish_presentation_responses() {

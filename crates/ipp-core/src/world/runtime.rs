@@ -104,7 +104,8 @@ impl World {
     pub(crate) fn context<'a>(
         &'a mut self,
         assets: &'a mut crate::services::asset_management::service::AssetManagementService,
-        data_sources: &'a mut crate::services::data_source::DataSourceManagementService,
+        io: &'a mut crate::services::io::IoService,
+        data: &'a mut crate::services::data::DataService,
         topology: &'a mut crate::host::topology::HostTopology,
     ) -> WorldContext<'a> {
         WorldContext {
@@ -115,7 +116,8 @@ impl World {
                 after: &mut [],
             },
             asset_acquisition: assets,
-            data_sources,
+            io,
+            data,
             topology,
             frame_context: None,
             reference_worlds: None,
@@ -130,7 +132,8 @@ impl World {
         hints: WorldCapacityHints,
         factories: &systems::SystemFactories,
         assets: &mut crate::services::asset_management::service::AssetManagementService,
-        data_sources: &mut crate::services::data_source::DataSourceManagementService,
+        io: &mut crate::services::io::IoService,
+        data_service: &mut crate::services::data::DataService,
     ) -> Result<Self, WorldConstructionError> {
         let mut data = Self::simulation_state(limits).map_err(WorldConstructionError::Limits)?;
         data.id = id;
@@ -169,7 +172,8 @@ impl World {
                     authored: &data.state,
                 },
                 assets,
-                data_sources,
+                io,
+                data: data_service,
             };
             let created = registration
                 .factory
@@ -188,7 +192,7 @@ impl World {
                     profile_slot: None,
                 }),
                 Err(error) => {
-                    teardown_instances(&data, &mut instances, assets, data_sources);
+                    teardown_instances(&data, &mut instances, assets, io, data_service);
                     return Err(WorldConstructionError::Initialization {
                         system: registration.id,
                         error,
@@ -201,7 +205,7 @@ impl World {
                 systems::SystemInitError::AuthoringSystemType(id) => *id,
                 _ => unreachable!(),
             };
-            teardown_instances(&data, &mut instances, assets, data_sources);
+            teardown_instances(&data, &mut instances, assets, io, data_service);
             return Err(WorldConstructionError::Initialization {
                 system,
                 error,
@@ -235,14 +239,10 @@ impl World {
     pub(crate) fn teardown(
         &mut self,
         assets: &mut crate::services::asset_management::service::AssetManagementService,
-        data_sources: &mut crate::services::data_source::DataSourceManagementService,
+        io: &mut crate::services::io::IoService,
+        data: &mut crate::services::data::DataService,
     ) {
-        teardown_instances(
-            &self.data,
-            &mut self.schedule.instances,
-            assets,
-            data_sources,
-        );
+        teardown_instances(&self.data, &mut self.schedule.instances, assets, io, data);
     }
 
     fn simulation_state(limits: WorldLimits) -> Result<WorldSimulationState, ErrorReason> {
@@ -296,28 +296,34 @@ fn next_system_world_identity() -> Result<usize, ErrorReason> {
 }
 
 fn teardown_instances(
-    data: &WorldSimulationState,
+    world: &WorldSimulationState,
     instances: &mut Vec<systems::scheduler::SystemInstance>,
     assets: &mut crate::services::asset_management::service::AssetManagementService,
-    data_sources: &mut crate::services::data_source::DataSourceManagementService,
+    io: &mut crate::services::io::IoService,
+    data: &mut crate::services::data::DataService,
 ) {
     while let Some(mut current) = instances.pop() {
         current
             .system
             .teardown(&mut systems::SystemTeardownContext {
                 world: systems::SystemWorldView {
-                    world: data,
-                    authored: &data.state,
+                    world,
+                    authored: &world.state,
                 },
-                identity: data.identity,
+                identity: world.identity,
                 dependent: instances.len(),
                 instances,
                 assets,
-                data_sources,
+                io,
+                data,
             });
         // Drop each dependent before tearing down its predecessors.
         drop(current);
     }
+    data.release_world(crate::WorldRef {
+        id: world.id,
+        incarnation: world.identity,
+    });
 }
 
 impl World {

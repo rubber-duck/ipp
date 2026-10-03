@@ -1,9 +1,8 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { browserRuntime } from "@ipp/client";
-import { IppCanvas, World } from "@ipp/react/web";
+import { IppCanvas } from "@ipp/react/web";
 import { createGuiUnhandledInputGate } from "@ipp/react/gui";
-import { ShapesWorld } from "./worlds/geometry/world.js";
 import {
   ShapesControls,
   GeometryLegend,
@@ -11,7 +10,6 @@ import {
   type ControlsState,
 } from "./worlds/geometry/controls.js";
 import type { MeshSettings } from "./shared/geometry-catalog.js";
-import { LightingWorld } from "./worlds/lighting/world.js";
 import {
   LightingControls,
   SelectionSummary,
@@ -24,79 +22,58 @@ import {
 import { useLightingInteraction } from "./worlds/lighting/interaction.js";
 import {
   AnimationControls,
-  useWorldAnimation,
+  type useWorldAnimation,
 } from "./worlds/lighting/animation.js";
 import { GALLERY_RUNTIME } from "./shared/runtime.js";
 import { CanvasFrameRate } from "./frame-rate.js";
-import {
-  message,
-  useGallery,
-  useGalleryControls,
-} from "./gallery-controller.js";
+import { useGallery, useGalleryControls } from "./gallery-controller.js";
 
-import { ParticlesWorld } from "./worlds/particles/world.js";
 import {
   ParticleControls,
   INITIAL_PARTICLES,
 } from "./worlds/particles/controls.js";
-import { GuiWorld, useGuiBlockers } from "./worlds/gui/scene.js";
-import { GuiControls, useGuiScene } from "./worlds/gui/controls.js";
+import { useGuiBlockers, type GuiScene } from "./worlds/gui/scene.js";
+import { GuiControls } from "./worlds/gui/controls.js";
 import { GUI_WHEEL_STEP } from "./worlds/gui/dashboard.js";
+import {
+  PlatformerControls,
+  type usePlatformerScene,
+} from "./worlds/platformer/controls.js";
+import { ChartControls } from "./worlds/charts/controls.js";
+import { ResponsiveControls, ScenePicker } from "./gallery-shell.js";
+import { galleryScene, gallerySceneFromHash } from "./scene-catalog.js";
+import { gallerySceneDefinition } from "./scene-registry.js";
+import { browserGalleryAssets } from "./browser-assets.js";
+import type { GalleryOptions } from "./shared/scene.js";
 import {
   PLATFORMER_ASSETS,
   PLATFORMER_SOURCE,
-  PLATFORMER_WORLD,
-  initializePlatformerScene,
 } from "./worlds/platformer/scene-file.js";
-import { PlatformerWorld } from "./worlds/platformer/world.js";
-import {
-  PlatformerControls,
-  usePlatformerScene,
-} from "./worlds/platformer/controls.js";
-import { ResponsiveControls, ScenePicker } from "./gallery-shell.js";
-import { galleryScene } from "./scene-catalog.js";
+import type { CameraView } from "./shared/camera.js";
+import type { GuiPickingBlocker } from "@ipp/client";
 
-/** Systems of the authored gallery World: animated and skinned meshes, lights
- * and particles under a camera, and the Surface anchor presenting the GUI panel
- * World. The panel World itself selects Canvas and GUI. */
-const GALLERY_SYSTEMS = [
-  "ipp.world-attachment",
-  "ipp.lifecycle-publisher",
-  "ipp.animation",
-  "ipp.asset-dependencies",
-  "ipp.skeleton",
-  "ipp.skinning",
-  "ipp.hierarchy",
-  "ipp.look-at",
-  "ipp.final-propagation",
-  "ipp.geometry",
-  "ipp.camera",
-  "ipp.particles",
-  "ipp.surface",
-  "ipp.render",
-] as const;
+const contract: Readonly<Record<string, unknown>> = await import(
+  `${GALLERY_RUNTIME}generated.js`
+);
 
 /** The DOM shell composes the gallery worlds and retains their authored state. */
 export function Gallery() {
   const guiInputGate = useMemo(createGuiUnhandledInputGate, []);
-  const gallery = useGallery();
-  const {
-    canvas,
-    output,
-    viewChanged,
-    canvasFrame,
-    page,
-    switching,
-    pendingPicks,
-    error,
-    setError,
-    ready,
-    navigate,
-  } = gallery;
+  const [page, setPage] = useState<CameraView>(() =>
+    gallerySceneFromHash(window.location.hash),
+  );
+  const scene = gallerySceneDefinition(page);
+  const assets = useMemo(
+    () => browserGalleryAssets(new URL(window.location.href)),
+    [],
+  );
   const [controls, setControls] = useState<ControlsState>(INITIAL_CONTROLS);
   const [particles, setParticles] = useState(INITIAL_PARTICLES);
   const [objects, setObjects] = useState(INITIAL_OBJECTS);
   const [selected, setSelected] = useState<ObjectId>();
+  const [retainedOptions, setRetainedOptions] = useState<
+    Partial<Record<CameraView, GalleryOptions>>
+  >({});
   const updateControls = (change: Partial<ControlsState>) =>
     setControls((current) => ({ ...current, ...change }));
   const updateMesh = (change: Partial<MeshSettings>) =>
@@ -116,46 +93,80 @@ export function Gallery() {
       ...current,
       [id]: { ...current[id], ...patch },
     }));
-  const platformer = usePlatformerScene(canvas, page === "platformer");
-  const gui = useGuiScene(canvas, page === "gui");
-  const guiBlockers = useGuiBlockers(gui);
-  const animation = useWorldAnimation(canvas, page === "lighting");
+  const options = useMemo(
+    () =>
+      page === "shapes"
+        ? { ...controls }
+        : page === "particles"
+          ? { ...particles }
+          : page === "lighting"
+            ? { objects, selected }
+            : (retainedOptions[page] ?? scene.defaultOptions),
+    [page, controls, particles, objects, selected, scene, retainedOptions],
+  );
+  const gallery = useGallery(
+    scene,
+    options,
+    assets,
+    contract,
+    setPage,
+    (id, value) =>
+      setRetainedOptions((current) => ({ ...current, [id]: value })),
+  );
+  const {
+    canvas,
+    output,
+    viewChanged,
+    canvasFrame,
+    switching,
+    pendingPicks,
+    error,
+    setError,
+    ready,
+    navigate,
+  } = gallery;
+  const platformer =
+    page === "platformer"
+      ? (gallery.mount?.controller as
+          | ReturnType<typeof usePlatformerScene>
+          | undefined)
+      : undefined;
+  const gui =
+    page === "gui"
+      ? (gallery.mount?.controller as GuiScene | undefined)
+      : undefined;
+  const animation = (
+    page === "lighting" ? gallery.mount?.controller : undefined
+  ) as ReturnType<typeof useWorldAnimation> | undefined;
+  const [guiBlockers, setGuiBlockers] = useState<readonly GuiPickingBlocker[]>(
+    [],
+  );
   const picked = useLightingInteraction(
     canvas,
     { objects, select: setSelected, update: updateObject },
-    animation.session,
+    animation?.session,
     () => setError(undefined),
   );
   useGalleryControls(
     gallery,
     picked,
-    page !== "platformer",
+    page !== "platformer" && page !== "charts2d" && page !== "charts3d",
     page === "gui" ? guiInputGate : undefined,
   );
   const worldError =
-    error ??
-    (page === "lighting"
-      ? animation.error
-      : page === "platformer"
-        ? platformer.error
-        : page === "gui"
-          ? gui.error
-          : undefined);
-
+    error ?? animation?.error ?? platformer?.error ?? gui?.error;
   const status = worldError
     ? "error"
     : switching
       ? "switching"
-      : canvas &&
-          (page !== "lighting" || animation.session) &&
-          (page !== "platformer" || platformer.session) &&
-          (page !== "gui" || gui.ready)
+      : canvas
         ? "ready"
         : "starting";
   const currentScene = galleryScene(page);
 
   return (
     <main className="viewer-shell" data-page={page}>
+      {gui && <GuiInputBridge scene={gui} changed={setGuiBlockers} />}
       <header className="gallery-toolbar">
         <div className="gallery-brand">
           <span className="brand-mark" aria-hidden="true">
@@ -168,7 +179,7 @@ export function Gallery() {
         </div>
         <ScenePicker
           page={page}
-          disabled={!canvas || switching}
+          disabled={!gallery.handle && !worldError}
           navigate={navigate}
         />
         <output id="status" data-state={status} aria-live="polite">
@@ -197,37 +208,24 @@ export function Gallery() {
         >
           <IppCanvas
             key={page === "platformer" ? page : "authored"}
-            world={
-              page === "platformer"
-                ? { load: { url: PLATFORMER_WORLD } }
-                : { create: { selectedSystems: GALLERY_SYSTEMS } }
-            }
+            world={scene.world(assets)}
             output={output}
-            {...(page === "platformer"
-              ? { initialize: initializePlatformerScene }
-              : {})}
+            initialize={(client, signal, host) =>
+              scene.initialize?.(client, signal, host, assets)
+            }
             id="stage"
             className="stage"
             aria-label="3D world"
             runtime={{
               ...browserRuntime(new URL(GALLERY_RUNTIME, window.location.href)),
-              ...(page === "platformer"
-                ? {
-                    resourceUrls: [
-                      {
-                        prefix: PLATFORMER_SOURCE,
-                        baseUrl: new URL(
-                          PLATFORMER_ASSETS,
-                          window.location.href,
-                        ).href,
-                      },
-                    ],
-                  }
-                : {}),
+              resourceUrls: [
+                {
+                  prefix: PLATFORMER_SOURCE,
+                  baseUrl: assets.url(PLATFORMER_ASSETS),
+                },
+              ],
             }}
-            // IppCanvas fixes guiInput when the canvas starts (K12), so the
-            // authored canvas opens it on every page: the GUI page then gets
-            // its input gate even when the gallery started on another page.
+            // The browser owns physical input routing to presented scene outputs.
             {...(page !== "platformer"
               ? {
                   guiInput: {
@@ -238,39 +236,10 @@ export function Gallery() {
                 }
               : {})}
             canvasProps={{ id: "ipp-world-canvas" }}
-            onReady={(handle) => {
-              void ready(handle).catch((failure: unknown) =>
-                setError(message(failure)),
-              );
-            }}
+            onReady={ready}
             onViewChange={viewChanged}
             onError={(failure) => setError(failure.message)}
-          >
-            {page === "platformer" ? (
-              <PlatformerWorld onCommit={platformer.onCommit} />
-            ) : (
-              <>
-                {/* Unmounting a React root deletes nothing, so the authored
-                    pages share one mounted World root: leaving a page removes
-                    its declarations, which deletes what it created. */}
-                <World>
-                  {page === "shapes" ? (
-                    controls.mounted && (
-                      <ShapesWorld
-                        shape={controls.shape}
-                        meshes={controls.meshes}
-                      />
-                    )
-                  ) : page === "particles" ? (
-                    <ParticlesWorld settings={particles} />
-                  ) : page === "lighting" ? (
-                    <LightingWorld objects={objects} selected={selected} />
-                  ) : null}
-                </World>
-                <GuiWorld scene={gui} active={page === "gui"} />
-              </>
-            )}
-          </IppCanvas>
+          />
           {page === "platformer" && status !== "ready" && (
             <div
               id={`${page}-loading`}
@@ -343,9 +312,15 @@ export function Gallery() {
             }
           />
         ) : page === "platformer" ? (
-          <PlatformerControls demo={platformer} />
+          platformer && <PlatformerControls demo={platformer} />
         ) : page === "gui" ? (
-          <GuiControls scene={gui} />
+          gui && <GuiControls scene={gui} />
+        ) : page === "charts2d" || page === "charts3d" ? (
+          <ChartControls
+            mount={gallery.mount}
+            spatial={page === "charts3d"}
+            report={setError}
+          />
         ) : (
           <>
             <LightingControls
@@ -354,12 +329,30 @@ export function Gallery() {
               select={setSelected}
               update={updateObject}
             />
-            <AnimationControls demo={animation} selectedObject={selected} />
+            {animation && (
+              <AnimationControls demo={animation} selectedObject={selected} />
+            )}
           </>
         )}
       </ResponsiveControls>
     </main>
   );
+}
+
+/** Keeps browser input blockers subscribed to runtime-owned GUI state. */
+function GuiInputBridge({
+  scene,
+  changed,
+}: {
+  readonly scene: GuiScene;
+  readonly changed: (blockers: readonly GuiPickingBlocker[]) => void;
+}) {
+  const blockers = useGuiBlockers(scene);
+  useEffect(() => {
+    changed(blockers);
+    return () => changed([]);
+  }, [blockers, changed]);
+  return null;
 }
 
 const mount = document.getElementById("app");

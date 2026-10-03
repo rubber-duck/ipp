@@ -1,7 +1,7 @@
 import { useLayoutEffect, useState, type ReactNode } from "react";
 import type { AssetWorldClient, AssetResourceSnapshot } from "@ipp/client";
 import { Entity, MeshInstance, UnlitTexture } from "@ipp/react";
-import { useIppCanvas } from "@ipp/react/web";
+import { useIppCanvas } from "@ipp/react/canvas";
 
 interface GeometrySources {
   readonly mesh: string;

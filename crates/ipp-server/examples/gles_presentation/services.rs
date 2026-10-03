@@ -49,6 +49,10 @@ impl HostServices for GlesHostServices {
     fn initialize(host: &mut HostRuntime) -> Result<Self, String> {
         let native = NativeHostServices::initialize(host)?;
         let setup = super::take_setup()?;
+        for (prefix, source) in setup.read_sources {
+            host.io_mut().register(&prefix, source)?;
+        }
+
         let context = Context::new(
             &setup.egl_directory,
             super::PBUFFER_SIZE,

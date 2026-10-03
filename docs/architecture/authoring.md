@@ -24,6 +24,12 @@ Cross-World submission is ordered and recoverable rather than atomic: create/ope
 
 Resize preserves sessions. Cleanup settles pending work, detaches presentation callbacks and unmounts its roots before closing the connections and Host it owns, including StrictMode/startup unmount; it destroys no World itself. Session failure fences later DOM events from released input paths. DOM commit, acknowledgement, resource readiness, World evaluation and completed output presentation are distinct barriers. New sessions use fresh runtime handles under [session policy](protocol-and-schema.md#world-scoped-connections).
 
+## Shared scene gallery
+
+The gallery authors one set of scene definitions for browser presentation and persistent native development sessions. Definitions own metadata, high-level options and actions, declarations, readiness, output selection and explicit cleanup; a scene may compose several Worlds. Scene content depends on the matching Host contract and an asset adapter, independently of DOM or filesystem APIs. Runners own the primary World, Host connection and platform presentation; scene mounts own their roots, subscriptions and any additional Worlds. Browser navigation, inspectors and native input remain platform adapters.
+
+Native sessions select a scene at startup and retain it for option changes, actions, inspection, capture and reload. Reload builds a replacement before disposing the active scene, preserves high-level options and recreates runtime handles; a build failure leaves the active scene usable. Rust or contract changes require restarting the Host. Hosts retain clock and event-loop ownership. Capture waits for scene readiness and completed output frames, without requiring animated pixels to become stationary. Native presentation initially captures offscreen GLES frames as PNG files.
+
 ## Process ownership
 
 ```mermaid

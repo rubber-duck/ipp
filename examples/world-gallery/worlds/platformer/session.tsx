@@ -1,4 +1,4 @@
-import type { IppCanvasHandle } from "@ipp/react/web";
+import type { IppCanvasHandle } from "@ipp/react/canvas";
 import { createRef } from "react";
 import {
   Animation,
@@ -15,8 +15,10 @@ import type {
   AnimationKeyframe,
   AnimationTrack,
   AnimationWorldClient,
+  OutputReference,
 } from "@ipp/client";
 import type { BlenderDiskManifest } from "../../../../integrations/blender/client/disk-import.js";
+import type { GalleryAssets } from "../../shared/scene.js";
 import { PLATFORMER_ASSETS, PLATFORMER_ROUTE } from "./scene-file.js";
 
 export type PlatformerMode = "walk" | "run" | "crawl";
@@ -195,20 +197,19 @@ export class PlatformerSession {
 
   static async create(
     canvas: IppCanvasHandle,
+    assets: GalleryAssets,
+    output: OutputReference,
     signal: AbortSignal,
     changed: (state: PlatformerPlayback) => void,
   ) {
     const client = canvas.client as AnimationWorldClient;
-    const [manifestResponse, routeResponse] = await Promise.all([
-      fetch(PLATFORMER_ASSETS + "manifest.json", { signal }),
-      fetch(PLATFORMER_ROUTE, { signal }),
+    const [manifest, route] = await Promise.all([
+      assets.readJson<BlenderDiskManifest>(
+        PLATFORMER_ASSETS + "manifest.json",
+        signal,
+      ),
+      assets.readJson<RouteManifest>(PLATFORMER_ROUTE, signal),
     ]);
-    if (!manifestResponse.ok)
-      throw new Error(`Platformer manifest: HTTP ${manifestResponse.status}`);
-    if (!routeResponse.ok)
-      throw new Error(`Platformer route: HTTP ${routeResponse.status}`);
-    const manifest: BlenderDiskManifest = await manifestResponse.json();
-    const route: RouteManifest = await routeResponse.json();
     if (manifest.format !== 1)
       throw new Error("Unsupported platformer asset manifest");
     const inspection = await client.inspect();
@@ -353,9 +354,7 @@ export class PlatformerSession {
         await client.waitForFrame(state.tick);
       }
       // The first completed frame of the loaded scene, without readback.
-      const view = canvas.view;
-      if (!view) throw new Error("The platformer camera is not presented");
-      await canvas.frame({ afterOutputs: [view.binding.output] });
+      await canvas.frame({ afterOutputs: [output] });
       signal.throwIfAborted();
       await session.applyPlayback();
       await session.releasePreparations();
@@ -647,6 +646,7 @@ export class PlatformerSession {
     await this.queue.catch(() => {});
     await Promise.allSettled(this.modeOperations);
     await this.releasePreparations();
+    await this.root.render(null);
     await this.root.unmount();
   }
 }

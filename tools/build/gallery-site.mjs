@@ -8,7 +8,7 @@ import { artifact, bundleBrowser, workspace } from "./helpers.mjs";
 // to index.html, so these URLs work unchanged at /, /ipp/ or a custom subdirectory.
 const locations = [
   ["/target/browser-build/render/", "./runtime/"],
-  ["/target/gallery-build/", "./assets/"],
+  ["/target/gallery-assets/", "./assets/"],
   ["/target/gallery-gui-assets/", "./assets/gui/"],
   ["/target/font-assets/", "./assets/shared/"],
   ["/target/gallery-platformer-assets/", "./assets/platformer/"],
@@ -25,6 +25,12 @@ export async function buildGallerySite(output) {
     resolve(output, "gallery.js"),
     "production",
     {
+      alias: {
+        "@ipp/host-contract": resolve(
+          workspace,
+          "target/browser-build/render/generated.js",
+        ),
+      },
       plugins: [
         {
           name: "gallery-site-locations",
@@ -89,7 +95,7 @@ export async function buildGallerySite(output) {
   }
 
   for (const name of ["spot-marker.mesh", "sun-marker.mesh"])
-    await copy(`target/gallery-build/${name}`, `assets/${name}`);
+    await copy(`target/gallery-assets/${name}`, `assets/${name}`);
   await copy(
     "target/font-assets/shure-tech-mono.ippf",
     "assets/shared/shure-tech-mono.ippf",

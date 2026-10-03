@@ -351,7 +351,9 @@ test("Gallery runs a real GUI demo and cleans it up", {
       const waitForPanelWorldGone = async (message: string) => {
         const deadline = performance.now() + 15_000;
         while (
-          (await g.call<string[]>("galleryWorlds")).includes(PANEL_WORLD)
+          (await g.call<string[]>("galleryWorlds")).some((name) =>
+            name.startsWith(PANEL_WORLD + "/"),
+          )
         ) {
           assert.ok(performance.now() < deadline, message);
           await new Promise((resolve) => setTimeout(resolve, 50));
@@ -721,7 +723,9 @@ test("Gallery runs a real GUI demo and cleans it up", {
         inspection.resources.every(({ source }) =>
           baselineSources.has(source),
         ) &&
-        !(await g.call<string[]>("galleryWorlds")).includes(PANEL_WORLD);
+        !(await g.call<string[]>("galleryWorlds")).some((name) =>
+          name.startsWith(PANEL_WORLD + "/"),
+        );
 
       const waitForGuiSourcesGone = async () => {
         const deadline = performance.now() + 15_000;
@@ -816,7 +820,7 @@ test("Gallery runs a real GUI demo and cleans it up", {
         documentStatus(
           await g.page.locator("#status").getAttribute("data-state"),
         ),
-        "starting",
+        "switching",
       );
 
       const fontLoaded = (inspection: Inspection) =>
@@ -844,7 +848,7 @@ test("Gallery runs a real GUI demo and cleans it up", {
       );
       assert.equal(
         await g.page.locator("#status").getAttribute("data-state"),
-        "starting",
+        "switching",
       );
       // The reveal moves the prepared panel and projector from their staging
       // position in one React render of the gallery World: its Transform
@@ -906,7 +910,8 @@ test("Gallery runs a real GUI demo and cleans it up", {
         canvasBounds.x + canvasBounds.width / 2,
         canvasBounds.y + canvasBounds.height / 2,
       );
-      await g.settle();
+      // This intentionally observes the staged scene before readiness.
+      await g.inspect();
       assert.equal(
         documentStatus(await g.page.locator("#gui-autoscan").textContent()),
         "enabled",
@@ -915,7 +920,7 @@ test("Gallery runs a real GUI demo and cleans it up", {
       const resourcesLoadedMs = performance.now() - startupStarted;
       assert.equal(
         await g.page.locator("#status").getAttribute("data-state"),
-        "starting",
+        "switching",
         "resource readiness bypassed the reveal acknowledgement",
       );
       await g.call("delayNextPresentedFrame");
@@ -926,7 +931,7 @@ test("Gallery runs a real GUI demo and cleans it up", {
       }, g.helper);
       assert.equal(
         await g.page.locator("#status").getAttribute("data-state"),
-        "starting",
+        "switching",
         "the GUI demo reported ready before its first completed visible frame",
       );
       await g.call("releasePresentedFrame");

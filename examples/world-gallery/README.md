@@ -1,6 +1,6 @@
 # World gallery
 
-The gallery demonstrates React scene authoring through the generated client, worker Host and WebGL renderer. Ordinary React state drives controls; the Host owns animation, particle simulation and camera mathematics.
+The gallery shares scene definitions between the browser shell and persistent native development sessions. Both use matching generated clients and the same React declarations, datasets, assets and controllers; the Host owns animation, particle simulation and camera mathematics. Browser inspectors and physical input remain in the DOM shell.
 
 Run from the repository root and open the printed URL:
 
@@ -9,6 +9,14 @@ python tools/ipp.py dev gallery
 ```
 
 Use `python tools/ipp.py dev gallery --build` to build without serving.
+
+For persistent offscreen GLES sessions, start the [shared development Host](../../docs/development/shared-host.md) with gallery assets and select a scene at startup:
+
+```sh
+node tools/shared-host/shared-host.mjs gallery charts2d --name gallery
+```
+
+The [native gallery guide](../../tools/shared-host/README.md) describes option changes, actions, inspection, completed-frame PNG capture and reload. Scene reload preserves high-level options and recreates handles; a failed rebuild leaves the active scene usable. Rust or generated-contract changes require restarting the Host.
 
 ## Reading the examples
 
@@ -21,8 +29,10 @@ Start with each world file; neighboring controls implement its HTML inspector.
 | Platformer | [world.tsx](worlds/platformer/world.tsx) | Blender-authored KayKit course, skinned gait transitions, reversible route playback and a following camera |
 | Particles | [world.tsx](worlds/particles/world.tsx) | Live emission, sprite/mesh presentation, appearance changes and lifetime drain |
 | GUI Demo | [scene.tsx](worlds/gui/scene.tsx) | A signal-station dashboard in an attached Canvas World on the runtime's default skin and every GUI kit component: panels, tabs, window controls, a data grid, a scene tree, nested scrolling over a virtual event log, value and selection controls, a colour picker, a canvas paint, feedback components, a tooltip, a popover, a context menu and a confirmation dialog, in-place re-theming, an exploded view of the overlay planes and an input shield on a Surface |
+| Charts 2D | [scene.tsx](worlds/charts2d/scene.tsx) | Shared Data Service sources, line and bar plots, authored labels, pie slices and a Host-driven column parameter |
+| Charts 3D | [scene.tsx](worlds/charts3d/scene.tsx) | Grid bars, a height surface, point groups and variable pie slices in attached Camera Worlds |
 
-[main.tsx](main.tsx) composes worlds and inspectors with `IppCanvas`. Geometry, lighting, particles and the GUI demo share one render session; changing to or from the saved platformer scene creates a fresh session. Controls retain ordinary React state across navigation. [gallery-controller.ts](gallery-controller.ts) coordinates presentation and camera controls.
+[scene-registry.ts](scene-registry.ts) exposes the same definitions to both runners. Each mount names its output, readiness, high-level options and actions and explicitly releases its roots, subscriptions and child Worlds. The runner owns the primary World and platform presentation. [main.tsx](main.tsx) binds these mounts to `IppCanvas` and retains the existing HTML inspectors; authored scenes share the primary session across navigation, while the saved Platformer scene uses a fresh session. [gallery-controller.ts](gallery-controller.ts) coordinates scene teardown, presentation and camera controls.
 
 The compact toolbar opens a searchable scene picker backed by [scene-catalog.ts](scene-catalog.ts). On wide screens, the current scene controls remain in a collapsible dock. On smaller screens, the Controls button below the canvas opens those same controls in a scrollable modal sheet, preserving their state as the layout changes.
 

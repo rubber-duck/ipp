@@ -30,7 +30,13 @@ export interface SessionState {
 
 /** A capture request and its reply, as JSON lines on the session port. */
 export interface SessionRequest {
-  readonly command: "capture" | "stop";
+  readonly command:
+    | "capture"
+    | "stop"
+    | "options"
+    | "action"
+    | "inspect"
+    | "reload";
   readonly args?: readonly string[];
   readonly out?: string;
 }
@@ -90,9 +96,10 @@ export async function serveCapture(
   reload: boolean,
 ): Promise<CaptureReply> {
   const started = performance.now();
-  const next = reload
-    ? await loadClient(workspace, module, open.identity)
-    : null;
+  const next =
+    reload && open.client.reloadOnCapture !== false
+      ? await loadClient(workspace, module, open.identity)
+      : null;
   if (next) {
     open.client = next.client;
     open.identity = next.identity;
@@ -115,6 +122,32 @@ export async function serveCapture(
   };
 }
 
+/** Serve an operation on the already mounted client, retaining session state. */
+export async function serveCommand(
+  open: OpenClient,
+  command: string,
+  args: readonly string[],
+  out: string,
+): Promise<CaptureReply> {
+  if (!open.client.command)
+    throw new Error(`This client does not support session ${command}`);
+  const started = performance.now();
+  const result = await open.client.command(
+    open.state,
+    open.context,
+    command,
+    args,
+  );
+  return {
+    name: open.context.name,
+    files: await writeResult(result, out),
+    ...(result.report === undefined ? {} : { report: result.report }),
+    ...(result.summary ? { summary: result.summary } : {}),
+    reloaded: command === "reload",
+    timings: { commandMs: performance.now() - started },
+  };
+}
+
 /** Start a detached session process and wait until it serves requests. */
 export async function startSession(options: {
   readonly workspace: string;
@@ -124,6 +157,7 @@ export async function startSession(options: {
   readonly name: string;
   readonly args: readonly string[];
   readonly idleMinutes?: string;
+  readonly watch?: boolean;
 }): Promise<SessionState> {
   const { directory, name } = options;
   if (!/^[A-Za-z0-9._-]+$/.test(name))
@@ -149,6 +183,7 @@ export async function startSession(options: {
       "--host",
       directory,
       ...(options.idleMinutes ? ["--idle-minutes", options.idleMinutes] : []),
+      ...(options.watch ? ["--watch"] : []),
       ...options.args,
     ],
     {
@@ -181,6 +216,7 @@ export async function serveSession(options: {
   readonly name: string;
   readonly args: readonly string[];
   readonly idleMinutes: number;
+  readonly watch?: boolean;
 }): Promise<void> {
   const { workspace, directory, module, name } = options;
   const host = await requireHost(directory);
@@ -196,17 +232,32 @@ export async function serveSession(options: {
   let queue: Promise<unknown> = Promise.resolve();
   let idle: NodeJS.Timeout | undefined;
   let stopping = false;
+  let watching = false;
+  let watchError = "";
   const server = createServer();
-  const shutdown = async (reason: string) => {
+  const shutdown = async (
+    reason: string,
+    acknowledge?: (result: object) => Promise<void>,
+  ) => {
     if (stopping) return;
     stopping = true;
     console.error(`session ${name}: stopping (${reason})`);
     clearTimeout(idle);
     clearInterval(watchdog);
+    clearInterval(watcher);
     server.close();
+    let failure: unknown;
+    try {
+      await closeClient(open);
+    } catch (error) {
+      failure = error;
+      console.error("session cleanup failed:", error);
+    }
     await rm(statePath, { force: true });
-    await closeClient(open).catch(() => {});
-    process.exit(0);
+    await acknowledge?.(
+      failure ? { ok: false, error: String(failure) } : { ok: true },
+    );
+    process.exit(failure ? 1 : 0);
   };
   const touch = () => {
     clearTimeout(idle);
@@ -218,6 +269,30 @@ export async function serveSession(options: {
   const watchdog = setInterval(() => {
     if (!alive(host.pid)) void shutdown("the Host stopped");
   }, 1_000);
+  const watcher = options.watch
+    ? setInterval(() => {
+        if (watching || stopping) return;
+        watching = true;
+        queue = queue.then(async () => {
+          try {
+            await serveCommand(
+              open,
+              "reload",
+              ["--if-changed"],
+              join(workspace, "target/shared-host-captures", name),
+            );
+            watchError = "";
+          } catch (error) {
+            const message = String(error);
+            if (message !== watchError)
+              console.error("watch reload failed:", error);
+            watchError = message;
+          } finally {
+            watching = false;
+          }
+        });
+      }, 1_000)
+    : undefined;
   for (const signal of ["SIGTERM", "SIGINT"] as const)
     process.on(signal, () => void shutdown(signal));
   server.on("connection", (socket: Socket) => {
@@ -230,16 +305,18 @@ export async function serveSession(options: {
       const line = buffer.slice(0, newline);
       buffer = "";
       touch();
-      const reply = (value: object) =>
-        socket.end(
-          `${JSON.stringify(value, (_, entry) => (typeof entry === "bigint" ? String(entry) : entry))}\n`,
+      const reply = (value: object): Promise<void> =>
+        new Promise((resolve) =>
+          socket.end(
+            `${JSON.stringify(value, (_, entry) => (typeof entry === "bigint" ? String(entry) : entry))}\n`,
+            resolve,
+          ),
         );
       queue = queue.then(async () => {
         try {
           const request = JSON.parse(line) as SessionRequest;
           if (request.command === "stop") {
-            reply({ ok: true });
-            await shutdown("stop requested");
+            await shutdown("stop requested", reply);
           } else if (request.command === "capture")
             reply({
               ok: true,
@@ -251,6 +328,19 @@ export async function serveSession(options: {
                 request.out ??
                   join(workspace, "target/shared-host-captures", name),
                 true,
+              )),
+            });
+          else if (
+            ["options", "action", "inspect", "reload"].includes(request.command)
+          )
+            reply({
+              ok: true,
+              ...(await serveCommand(
+                open,
+                request.command,
+                request.args ?? [],
+                request.out ??
+                  join(workspace, "target/shared-host-captures", name),
               )),
             });
           else throw new Error(`Unknown session command ${request.command}`);
@@ -315,10 +405,13 @@ export async function stopSession(
   directory: string,
   session: SessionState,
 ): Promise<void> {
-  if (alive(session.pid))
-    await request(session, { command: "stop" }).catch(() =>
-      process.kill(session.pid, "SIGTERM"),
-    );
+  if (alive(session.pid)) {
+    const reply = await request(session, { command: "stop" }).catch(() => {
+      if (alive(session.pid)) process.kill(session.pid, "SIGTERM");
+      return undefined;
+    });
+    if (reply && !reply.ok) throw new Error(String(reply.error));
+  }
   await rm(join(sessionDirectory(directory), `${session.name}.json`), {
     force: true,
   });

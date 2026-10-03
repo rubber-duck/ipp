@@ -1,3 +1,4 @@
+import type { GalleryAssets } from "../../shared/scene.js";
 /**
  * The SIGNAL MONITOR's scope: the scrolling sine trace and the independent
  * pulse, immutable drawing assets on ordinary Canvas entities, over the scope
@@ -100,18 +101,17 @@ export function ScopePaintAsset() {
   );
 }
 
-function asset(name: string): ClientAssetSource {
+function asset(assets: GalleryAssets, name: string): ClientAssetSource {
   return {
     kind: 18,
-    source: new URL(
-      `/target/gallery-gui-assets/${name}.ippd`,
-      globalThis.location.href,
-    ).href,
+    source: assets.url(`/target/gallery-gui-assets/${name}.ippd`),
   };
 }
 
-export function waveformResourceSources(): readonly ClientAssetSource[] {
-  return ["waveform", "waveform-pulse"].map(asset);
+export function waveformResourceSources(
+  assets: GalleryAssets,
+): readonly ClientAssetSource[] {
+  return ["waveform", "waveform-pulse"].map((name) => asset(assets, name));
 }
 
 /** The Canvas style translation both traces animate. */
@@ -296,7 +296,7 @@ export function Waveform({ scene }: { readonly scene: GuiScene }) {
       </Entity>
       <Trace
         id={WAVEFORM_ENTITIES.signal}
-        source={asset("waveform").source}
+        source={asset(scene.assets, "waveform").source}
         width={WAVE_WIDTH * 2}
         scaleY={CURVE_SCALE * amplitude}
         y={y}
@@ -305,7 +305,7 @@ export function Waveform({ scene }: { readonly scene: GuiScene }) {
       />
       <Trace
         id={WAVEFORM_ENTITIES.pulse}
-        source={asset("waveform-pulse").source}
+        source={asset(scene.assets, "waveform-pulse").source}
         width={PACKET_WIDTH * CURVE_SCALE}
         scaleY={CURVE_SCALE * (0.65 + gain * 0.35)}
         y={y}

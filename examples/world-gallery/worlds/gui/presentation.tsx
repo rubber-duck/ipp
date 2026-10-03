@@ -13,7 +13,7 @@ import type { ReactNode } from "react";
 import { Children, Entity } from "@ipp/react";
 import { Behavior, Box, Layout, Style, Text } from "@ipp/react/gui";
 import type { GuiKitContract } from "@ipp/react/gui-kit";
-import { GALLERY_RUNTIME } from "../../shared/runtime.js";
+import * as HostContract from "@ipp/host-contract";
 
 /** Linear RGBA. */
 export type Color = readonly [number, number, number, number];
@@ -51,9 +51,7 @@ interface GalleryContract extends GuiKitContract {
 }
 
 /** The gallery runtime's generated contract module. */
-export const CONTRACT: GalleryContract = await import(
-  `${GALLERY_RUNTIME}generated.js`
-);
+export const CONTRACT = HostContract as unknown as GalleryContract;
 
 /** The design language's colours and lengths. */
 export const TOKENS = CONTRACT.GUI_SKIN_TOKENS;

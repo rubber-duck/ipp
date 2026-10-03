@@ -72,55 +72,68 @@ async function captureScene(page) {
   return page.evaluate(async () => {
     const handle = window.ippWorldCanvas;
     if (!handle) throw new Error("Gallery did not expose its live canvas");
+    const output = handle.view?.binding.output;
+    if (!output) throw new Error("Gallery did not select a root view");
+    const sameWorld =
+      output.world.id === handle.client.worldReference?.id &&
+      output.world.incarnation === handle.client.worldReference?.incarnation;
+    const client = sameWorld
+      ? handle.client
+      : await handle.host.openWorld(output.world);
     const deadline = performance.now() + 60_000;
-    for (;;) {
-      await handle.flush();
-      const state = await handle.client.inspect();
-      const failed = state.resources.find(
-        (resource) => resource.status === "failed",
-      );
-      if (failed) throw new Error(`${failed.source}: ${failed.error}`);
-      if (state.resources.every((resource) => resource.status === "loaded")) {
-        if (state.renderDiagnostics.length)
-          throw new Error(JSON.stringify(state.renderDiagnostics));
-        const output = handle.view?.binding.output;
-        if (!output) throw new Error("Gallery did not select a root view");
-        const frame = await handle.capture({ afterOutputs: [output] });
-        const source = frame.sources.find(
-          (source) => source.output.entity === output.entity,
+    try {
+      for (;;) {
+        await handle.flush();
+        const state = await client.inspect();
+        const failed = state.resources.find(
+          (resource) => resource.status === "failed",
         );
-        if (!source || source.tick < state.tick)
-          throw new Error("Capture predates the inspected World");
-        const { width, height } = frame.view.binding.viewport;
-        const pixels = new Uint8ClampedArray(frame.pixels);
-        let foreground = 0;
-        for (let offset = 0; offset < pixels.length; offset += 4) {
-          const difference =
-            Math.abs(pixels[offset] - pixels[0]) +
-            Math.abs(pixels[offset + 1] - pixels[1]) +
-            Math.abs(pixels[offset + 2] - pixels[2]);
-          if (difference > 40 && pixels[offset + 3] > 200) foreground++;
+        if (failed) throw new Error(`${failed.source}: ${failed.error}`);
+        if (state.resources.every((resource) => resource.status === "loaded")) {
+          if (state.renderDiagnostics.length)
+            throw new Error(JSON.stringify(state.renderDiagnostics));
+          const frame = await handle.capture({ afterOutputs: [output] });
+          const source = frame.sources.find(
+            (source) =>
+              source.output.entity === output.entity &&
+              source.output.world.id === output.world.id &&
+              source.output.world.incarnation === output.world.incarnation,
+          );
+          if (!source || source.tick < state.tick)
+            throw new Error("Capture predates the inspected World");
+          const { width, height } = frame.view.binding.viewport;
+          const pixels = new Uint8ClampedArray(frame.pixels);
+          let foreground = 0;
+          for (let offset = 0; offset < pixels.length; offset += 4) {
+            const difference =
+              Math.abs(pixels[offset] - pixels[0]) +
+              Math.abs(pixels[offset + 1] - pixels[1]) +
+              Math.abs(pixels[offset + 2] - pixels[2]);
+            if (difference > 40 && pixels[offset + 3] > 200) foreground++;
+          }
+          const canvas = document.createElement("canvas");
+          canvas.width = width;
+          canvas.height = height;
+          canvas
+            .getContext("2d")
+            .putImageData(new ImageData(pixels, width, height), 0, 0);
+          return {
+            width,
+            height,
+            drawCalls: frame.drawCalls,
+            triangles: frame.triangles,
+            foreground,
+            entities: state.entities.length,
+            sources: state.resources.map(({ source }) => source),
+            png: canvas.toDataURL("image/png"),
+          };
         }
-        const canvas = document.createElement("canvas");
-        canvas.width = width;
-        canvas.height = height;
-        canvas
-          .getContext("2d")
-          .putImageData(new ImageData(pixels, width, height), 0, 0);
-        return {
-          width,
-          height,
-          drawCalls: frame.drawCalls,
-          triangles: frame.triangles,
-          foreground,
-          entities: state.entities.length,
-          sources: state.resources.map(({ source }) => source),
-          png: canvas.toDataURL("image/png"),
-        };
+        if (performance.now() >= deadline)
+          throw new Error("Gallery resources did not finish loading");
+        await client.waitForFrame(state.tick);
       }
-      if (performance.now() >= deadline)
-        throw new Error("Gallery resources did not finish loading");
-      await handle.client.waitForFrame(state.tick);
+    } finally {
+      if (!sameWorld) await client.close();
     }
   });
 }
@@ -196,6 +209,8 @@ test("the release gallery is complete and renders at root and project URLs", {
           "lighting",
           "particles",
           "gui",
+          "charts2d",
+          "charts3d",
           "shapes",
         ].entries()) {
           if (index > 0) await selectScene(page, scene);
@@ -230,6 +245,52 @@ test("the release gallery is complete and renders at root and project URLs", {
             `${scene}: captured frame is blank`,
           );
           assert.ok(frame.entities > 0, `${scene}: no World entities`);
+          if (scene === "charts2d" || scene === "charts3d") {
+            const controls = page.locator("#controls-toggle");
+            if ((await controls.getAttribute("aria-expanded")) === "false")
+              await controls.click();
+            // Controlled values commit only after the shared mount acknowledges updates.
+            await page.locator("#charts-changed").click();
+            await page.waitForFunction(
+              () => document.querySelector("#charts-changed")?.checked === true,
+            );
+            const changed = await captureScene(page);
+            assert.notEqual(
+              changed.png,
+              png,
+              `${scene}: dataset control did not change pixels`,
+            );
+            if (scene === "charts3d") {
+              await page.locator("#charts-rotated").click();
+              await page.waitForFunction(
+                () =>
+                  document.querySelector("#charts-rotated")?.checked === true,
+              );
+            } else {
+              await page.locator("#charts-parameter").evaluate((input) => {
+                Object.getOwnPropertyDescriptor(
+                  HTMLInputElement.prototype,
+                  "value",
+                ).set.call(input, "0.35");
+                input.dispatchEvent(new Event("input", { bubbles: true }));
+              });
+              await page.waitForFunction(
+                () =>
+                  document.querySelector('label[for="charts-parameter"] output')
+                    ?.textContent === "0.35",
+              );
+            }
+            const adjusted = await captureScene(page);
+            assert.notEqual(
+              adjusted.png,
+              changed.png,
+              `${scene}: view control did not change pixels`,
+            );
+            await writeFile(
+              resolve(evidence, `${label}-${scene}-adjusted.png`),
+              Buffer.from(adjusted.png.split(",")[1], "base64"),
+            );
+          }
         }
         assert.deepEqual(errors, []);
         assert.deepEqual(

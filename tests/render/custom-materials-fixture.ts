@@ -110,7 +110,7 @@ export async function initialize(configuration: {
   });
   // Uploaded fixture ownership, including the immutable shader, follows the same path as meshes.
   const meshBytes = new Uint8Array(
-    await (await fetch("/target/gallery-build/cube.mesh")).arrayBuffer(),
+    await (await fetch("/target/gallery-assets/cube.mesh")).arrayBuffer(),
   );
   const mesh = await upload(1, meshBytes);
   for (const [name, x, color] of [
@@ -855,7 +855,7 @@ export async function shadowScene() {
   const mesh = await upload(
     1,
     new Uint8Array(
-      await (await fetch("/target/gallery-build/cube.mesh")).arrayBuffer(),
+      await (await fetch("/target/gallery-assets/cube.mesh")).arrayBuffer(),
     ),
   );
   await update("left", "MeshInstance", { source: mesh });

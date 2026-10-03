@@ -69,6 +69,8 @@ export async function openClient(options: {
     host: connection.client,
     contract: connection.contract,
     workspace,
+    assetRoot: join(host.worktree, "target"),
+    assetPrefixes: host.ioRead?.map((source) => source.prefix) ?? [],
     name: options.name,
     font: async () => new Uint8Array(await readFile(host.font)),
     load: (path, previous) => loadModule(workspace, path, previous),

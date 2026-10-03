@@ -1,5 +1,5 @@
 import type { GeometryPickResultEvent } from "@ipp/client";
-import type { IppCanvasHandle } from "@ipp/react/web";
+import type { IppCanvasHandle } from "@ipp/react/canvas";
 import { useCallback, useLayoutEffect, useRef } from "react";
 import type { PickInteraction } from "../../shared/camera-controls.js";
 import type { AnimationSession } from "./animation-controller.js";

@@ -115,6 +115,7 @@ REGRESSION_GROUPS = {
             "gallery-gui-camera",
             "gallery-particles",
             "gallery-platformer",
+            "native-gallery",
         ),
     ),
     "blender": RegressionGroup(
@@ -288,11 +289,17 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
         ("node", "npm"),
     )
     build(
+        "gallery-assets",
+        ("builtin-exporter",),
+        ("target/gallery-assets",),
+        ("node", "npm"),
+    )
+    build(
         "gallery",
         (
             "browser:render",
             "react",
-            "builtin-exporter",
+            "gallery-assets",
             "gallery-gui-assets",
             "gallery-platformer-assets",
         ),
@@ -353,6 +360,12 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
         ("browser:render",),
         ("target/gallery-platformer-assets",),
         ("python-tools", "blender", "node", "npm", "browser"),
+    )
+    build(
+        "gallery-platformer-native-assets",
+        ("native",),
+        ("target/gallery-platformer-native-assets",),
+        ("python-tools", "blender", "node", "npm"),
     )
     build(
         "surface-fixtures",

@@ -50,7 +50,7 @@ for (const variant of ["development", "production"] as const) {
           generatedModuleUrl: scenario.urls.generated,
           workerScriptUrl: scenario.urls.workerScript,
           wasmUrl: scenario.urls.wasm,
-          meshSource: `${scenario.urls.origin}/target/gallery-build/cube.mesh`,
+          meshSource: `${scenario.urls.origin}/target/gallery-assets/cube.mesh`,
           timeoutMs: 10_000,
         };
         const captured = new Set<string>();
@@ -571,7 +571,7 @@ test("render worker diagnostics honor levels, partial batch effects, and idle si
           generatedModuleUrl: scenario.urls.generated,
           workerScriptUrl: scenario.urls.workerScript,
           wasmUrl: scenario.urls.wasm,
-          meshSource: `${scenario.urls.origin}/target/gallery-build/cube.mesh`,
+          meshSource: `${scenario.urls.origin}/target/gallery-assets/cube.mesh`,
           timeoutMs: 10_000,
           logLevel,
         };
@@ -850,7 +850,7 @@ test("HTTP resources remain declarative across pending, failure, cancellation, a
     context.signal,
     async (scenario) => {
       const moduleUrl = `${scenario.urls.origin}/target/gallery-fixtures/fixture.js`;
-      const staticMesh = `${scenario.urls.origin}/target/gallery-build/cube.mesh`;
+      const staticMesh = `${scenario.urls.origin}/target/gallery-assets/cube.mesh`;
       const delayedSource = `${staticMesh}?delayed-shared`;
       const configuration = {
         generatedModuleUrl: scenario.urls.generated,
@@ -953,7 +953,7 @@ test("HTTP resources remain declarative across pending, failure, cancellation, a
         await invoke(scenario.page, moduleUrl, "closeCube");
         for (const [missingSource, expectedError, label] of [
           [
-            `${scenario.urls.origin}/target/gallery-build/missing-resource.mesh`,
+            `${scenario.urls.origin}/target/gallery-assets/missing-resource.mesh`,
             /404/,
             "http-resource-failed",
           ],

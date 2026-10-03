@@ -734,5 +734,21 @@
       "npm",
       "browser"
     ]
+  },
+  "dist/tests/render/native-gallery.test.js": {
+    "builds": [
+      "typescript",
+      "gles-host",
+      "font-assets",
+      "gallery-assets",
+      "gallery-gui-assets",
+      "gallery-platformer-native-assets",
+      "shared-host"
+    ],
+    "requirements": [
+      "node",
+      "npm",
+      "gles"
+    ]
   }
 }

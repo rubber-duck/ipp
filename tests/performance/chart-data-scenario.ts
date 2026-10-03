@@ -19,7 +19,7 @@ import {
   createEntity,
   insertComponent,
   successfulBatch,
-} from "../../examples/chart-showcase/commands.js";
+} from "../../examples/world-gallery/worlds/charts/shared/commands.js";
 
 export type ChartContract = Pick<
   typeof Generated,

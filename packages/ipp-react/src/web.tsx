@@ -7,21 +7,17 @@ import type {
 } from "@ipp/client";
 import {
   useCallback,
-  useContext,
   useEffect,
   useLayoutEffect,
   useRef,
   useState,
   type ComponentPropsWithoutRef,
   type HTMLAttributes,
-  type ReactNode,
 } from "react";
-import type { ReactWorldRoot } from "./index.js";
 import {
   CanvasWorldSession,
   asError,
   notify,
-  type CanvasWorldBinding,
   type IppCanvasHandle,
 } from "./canvas-world-session.js";
 import { CanvasLifetime, type CanvasWorldSource } from "./canvas-lifetime.js";
@@ -84,12 +80,6 @@ export interface IppCanvasProps
   readonly guiInput?: Omit<CanvasGuiInputOptions, "onError">;
   readonly onReady?: (handle: IppCanvasHandle) => void;
   readonly onViewChange?: (view: PresentationView | null) => void;
-  readonly onError?: (error: Error) => void;
-}
-
-export interface WorldProps {
-  readonly children?: ReactNode;
-  readonly onCommit?: (scope: ReactWorldRoot) => void;
   readonly onError?: (error: Error) => void;
 }
 
@@ -409,54 +399,5 @@ function CanvasSurface({
   );
 }
 
-export function useIppCanvas(): IppCanvasHandle | undefined {
-  return useCanvasSession() ?? undefined;
-}
-
-function useCanvasSession(): CanvasWorldSession | null {
-  const session = useContext(CanvasContext);
-  if (session === undefined)
-    throw new Error("World and useIppCanvas require an ancestor IppCanvas");
-  return session;
-}
-
-export function World({ children, onCommit, onError }: WorldProps) {
-  const session = useCanvasSession();
-  const binding = useRef<CanvasWorldBinding | undefined>(undefined);
-  const callbacks = useRef({ onCommit, onError });
-  const [error, setError] = useState<{
-    session: CanvasWorldSession;
-    error: Error;
-  }>();
-  useLayoutEffect(() => {
-    callbacks.current = { onCommit, onError };
-  });
-  useLayoutEffect(() => {
-    if (!session || session.isClosing) return;
-    let active = true;
-    const fallback = (error: Error): void => {
-      if (active) setError({ session, error });
-      else session.report(error);
-    };
-    const report = (error: Error): void => {
-      if (!active) session.report(error);
-      else if (callbacks.current.onError)
-        notify(() => callbacks.current.onError!(error), fallback);
-      else fallback(error);
-    };
-    const world = session.attach(report);
-    binding.current = world;
-    return () => {
-      active = false;
-      binding.current = undefined;
-      void world.close().catch(() => {});
-    };
-  }, [session]);
-  useLayoutEffect(() => {
-    const world = binding.current;
-    if (!session || !world) return;
-    world.render(children, (scope) => callbacks.current.onCommit?.(scope));
-  }, [children, session]);
-  if (error?.session === session) throw error!.error;
-  return null;
-}
+export { World, useIppCanvas } from "./canvas-scope.js";
+export type { WorldProps } from "./canvas-scope.js";

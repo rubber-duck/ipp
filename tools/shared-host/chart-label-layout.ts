@@ -4,7 +4,7 @@ import { defineClient } from "./client.js";
 import {
   componentFields,
   successfulBatch,
-} from "../../examples/chart-showcase/commands.js";
+} from "../../examples/world-gallery/worlds/charts/shared/commands.js";
 import chartLegibility from "./chart-legibility.js";
 import {
   openPlot3d,
@@ -12,7 +12,7 @@ import {
   readyPlot3d,
   type Plot3dContract,
   type Plot3dScene,
-} from "../../examples/chart-showcase/plot-3d-scene.js";
+} from "../../examples/world-gallery/worlds/charts3d/content.js";
 
 type Row = Readonly<Record<string, RowPropertyValue>>;
 

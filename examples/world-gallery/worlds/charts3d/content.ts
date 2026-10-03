@@ -10,7 +10,7 @@ import type {
   RowPropertyValue,
   DataBindingPage,
 } from "@ipp/client";
-import { clientAssetSource } from "../../packages/ipp-client/src/asset-sources.js";
+import { clientAssetSource } from "@ipp/client";
 import type * as Generated from "@ipp/host-contract";
 import {
   aliasId,
@@ -18,7 +18,7 @@ import {
   createEntity,
   insertComponent,
   successfulBatch,
-} from "./commands.js";
+} from "../charts/shared/commands.js";
 
 export type Plot3dContract = PlotContract &
   Pick<
@@ -41,7 +41,7 @@ const SCHEMA = [
   { name: "height", kind: "f32" },
   { name: "color", kind: "vec4" },
 ] as const;
-import { declarePlot } from "./declare-plot.js";
+import { declarePlot } from "../charts/shared/declare-plot.js";
 import type { ReactWorldRoot, PlotContract } from "@ipp/react";
 
 type Row = Readonly<Record<string, RowPropertyValue>>;
@@ -511,36 +511,82 @@ export async function rotatePlot3d(
     );
 }
 
-export async function changePlot3d(scene: Plot3dScene): Promise<void> {
+export async function changePlot3d(
+  scene: Plot3dScene,
+  changed = true,
+): Promise<void> {
+  const peak =
+    0.3 + 2.5 * Math.exp(-((7.5 - 3) ** 2 + (7.5 - 4) ** 2) / 5) + 2.8;
   const edits = await scene.host.datasets.update(scene.bars, [
-    { operation: "edit", row: 6n, values: data(1, 35, 1, 80) },
+    {
+      operation: "edit",
+      row: 6n,
+      values: changed ? data(1, 35, 1, 80) : data(1, 85, 1, 25),
+    },
   ]);
   if (edits.failure) throw new Error("Bar/point source edit failed");
   const pie = await scene.host.datasets.update(scene.pie, [
     {
       operation: "edit",
       row: 1n,
-      values: data(0, 20, 0, 20, 1, 2.2, 3.1, CYAN),
+      values: changed
+        ? data(0, 20, 0, 20, 1, 2.2, 3.1, CYAN)
+        : data(0, 40, 0, 40, 1, 3.0, 2.4, CYAN),
     },
   ]);
   if (pie.failure) throw new Error("Variable pie source edit failed");
   const terrain = await scene.host.datasets.update(scene.surface, [
-    { operation: "edit", row: 217n, values: data(7.6, 3.8, 7.4, 3.8) },
+    {
+      operation: "edit",
+      row: 217n,
+      values: changed ? data(7.6, 3.8, 7.4, 3.8) : data(7.5, peak, 7.5),
+    },
   ]);
   if (terrain.failure) throw new Error("Irregular height sample edit failed");
   for (const chart of scene.charts) {
     const labels =
       chart.name === "grid-bars"
-        ? [label(6n, "B / 35 UNITS", [1, -2.4], true)]
+        ? [
+            label(
+              6n,
+              changed ? "B / 35 UNITS" : "B / 85 UNITS",
+              [1, -2.4],
+              true,
+            ),
+          ]
         : chart.name === "variable-pie"
           ? [
-              label(1n, "A 25% / R2.2 H3.1", [0, 0], true),
-              label(2n, "B 37.5% / R2.4 H1.5", [0, 0]),
-              label(3n, "C 25% / R2.1 H0.9", [0, 0]),
-              label(4n, "D 12.5% / R2.7 H1.8", [0, 0]),
+              label(
+                1n,
+                changed ? "A 25% / R2.2 H3.1" : "A 40% / R3 H2.4",
+                [0, 0],
+                true,
+              ),
+              label(
+                2n,
+                changed ? "B 37.5% / R2.4 H1.5" : "B 30% / R2.4 H1.5",
+                [0, 0],
+              ),
+              label(
+                3n,
+                changed ? "C 25% / R2.1 H0.9" : "C 20% / R2.1 H0.9",
+                [0, 0],
+              ),
+              label(
+                4n,
+                changed ? "D 12.5% / R2.7 H1.8" : "D 10% / R2.7 H1.8",
+                [0, 0],
+              ),
             ]
           : chart.name === "height-surface"
-            ? [label(217n, "PEAK / Y 3.8 M", [1.2, -1.8], true)]
+            ? [
+                label(
+                  217n,
+                  changed ? "PEAK / Y 3.8 M" : "PEAK / Y 3.1 M",
+                  [1.2, -1.8],
+                  true,
+                ),
+              ]
             : undefined;
     if (labels)
       successfulBatch(
@@ -566,10 +612,10 @@ export async function changePlot3d(scene: Plot3dScene): Promise<void> {
   const deadline = performance.now() + 30_000;
   for (;;) {
     const expected = [
-      ["grid-bars", 6n, "value", 35],
-      ["point-plot", 6n, "y", 1.4],
-      ["height-surface", 217n, "y", 3.8],
-      ["variable-pie", 1n, "value", 20],
+      ["grid-bars", 6n, "value", changed ? 35 : 85],
+      ["point-plot", 6n, "y", changed ? 1.4 : 3.4],
+      ["height-surface", 217n, "y", changed ? 3.8 : peak],
+      ["variable-pie", 1n, "value", changed ? 20 : 40],
     ] as const;
     const prepared = await Promise.all(
       expected.map(async ([name, row, output, value]) => {

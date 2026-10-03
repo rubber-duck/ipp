@@ -15,6 +15,7 @@ const result = await build({
   entryPoints: {
     index: resolve(directory, "src/index.ts"),
     web: resolve(directory, "src/web.tsx"),
+    canvas: resolve(directory, "src/canvas.ts"),
     gui: resolve(directory, "src/gui.ts"),
     "gui-kit": resolve(directory, "src/gui-kit.ts"),
   },

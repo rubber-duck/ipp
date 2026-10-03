@@ -1,3 +1,4 @@
+import type { GalleryAssets, GalleryOptions } from "../../shared/scene.js";
 import type {
   AnimationClipSource,
   AnimationControllerState,
@@ -24,7 +25,7 @@ import {
   type CanvasWorldHandle,
 } from "@ipp/react";
 import type { GuiControlHandle } from "@ipp/react/gui";
-import { World, type IppCanvasHandle } from "@ipp/react/web";
+import { World, type IppCanvasHandle } from "@ipp/react/canvas";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ACCENT_HSV,
@@ -265,7 +266,7 @@ export interface GuiPageState extends StationState {
 
 /** The settings, log and tuning the page opens with. The station keeps its
  * nodes from an earlier visit. */
-function openingSettings(): Omit<
+export function openingSettings(): Omit<
   GuiPageState,
   keyof StationState | "vectorOnly" | "shieldBlocker"
 > {
@@ -298,6 +299,9 @@ function openingSettings(): Omit<
  * identity, so passing the scene down re-renders nothing.
  */
 export interface GuiScene {
+  readonly assets: GalleryAssets;
+  readonly panelWorldName: string;
+  readonly initialControls: GuiControlValues;
   readonly ready: boolean;
   readonly prepared: boolean;
   readonly revealed: boolean;
@@ -311,8 +315,14 @@ export interface GuiScene {
   readonly setEventWindow: (range: GuiEventWindow) => void;
   /** Handles of controls the scene writes as the operator would. */
   readonly scanControl: (handle: GuiControlHandle | null) => void;
+  readonly gainControl: (handle: GuiControlHandle | null) => void;
+  readonly motionControl: (handle: GuiControlHandle | null) => void;
   readonly callsignControl: (handle: GuiControlHandle | null) => void;
   readonly explodeControl: (handle: GuiControlHandle | null) => void;
+  readonly writeControl: (
+    key: keyof GuiControlValues,
+    value: boolean | number | string,
+  ) => Promise<void>;
   /** Write SCAN off through its control, as the operator would. */
   readonly stopScan: () => void;
   /** Move focus to the callsign editor. */
@@ -339,13 +349,6 @@ export interface GuiScene {
   readonly setPulseActive: (active: boolean) => void;
   readonly readWaveformPulse: () => Promise<AnimationControllerState>;
   readonly reportFailure: (failure: unknown) => void;
-}
-
-function absoluteAsset(kind: number, path: string): ClientAssetSource {
-  return {
-    kind,
-    source: new URL(path, globalThis.location.href).href,
-  };
 }
 
 function errorMessage(failure: unknown): string {
@@ -476,6 +479,7 @@ async function releaseMotionOwnership(
  */
 async function awaitCompleteProjectorFrame(
   canvas: IppCanvasHandle,
+  assets: GalleryAssets,
   active: () => boolean,
 ): Promise<void> {
   const client = canvas.client;
@@ -484,7 +488,7 @@ async function awaitCompleteProjectorFrame(
     await canvas.flush();
     const inspection = await client.inspect();
     if (!active()) return;
-    const resources = projectorResourceSources();
+    const resources = projectorResourceSources(assets);
     const projector = resources.map(({ kind, source }) =>
       inspection.resources.find(
         (resource) => resource.kind === kind && resource.source === source,
@@ -728,6 +732,8 @@ function observeEssentialResources(
 export function useGuiScene(
   canvas: IppCanvasHandle | undefined,
   active: boolean,
+  assets: GalleryAssets,
+  options: GalleryOptions = {},
 ): GuiScene {
   const [ready, setReady] = useState(false);
   const [prepared, setPrepared] = useState(false);
@@ -741,21 +747,29 @@ export function useGuiScene(
     () =>
       new Store<GuiPageState>({
         ...openingSettings(),
+        ...options,
         vectorOnly: false,
         shieldBlocker: undefined,
         ...INITIAL_STATION,
       }),
   );
-  const [font] = useState(() => absoluteAsset(17, FONT_URL));
+  const [font] = useState(() => ({ kind: 17, source: assets.url(FONT_URL) }));
+  const [initialControls] = useState<GuiControlValues>(() => ({
+    autoscan: state.current.autoscan,
+    gain: Math.fround(state.current.gain),
+    callsign: state.current.callsign,
+    exploded: state.current.exploded,
+    reducedMotion: state.current.reducedMotion,
+  }));
   const shieldRequest = useRef(0);
   const sequence = useRef(INITIAL_EVENTS.length);
   // Value callbacks report a control's current value when they register and
   // then each change; only a value that differs from the one the scene holds
   // is an operator event for the log.
-  const controlValues = useRef<GuiControlValues>(INITIAL_CONTROL_VALUES);
+  const controlValues = useRef<GuiControlValues>(initialControls);
   // A held gain slider defers its log entry to the release.
   const gainHeld = useRef(false);
-  const loggedGain = useRef(INITIAL_CONTROL_VALUES.gain);
+  const loggedGain = useRef(initialControls.gain);
   const generation = useRef(0);
   const finishingFrame = useRef(false);
   const motionOwnership = useRef<MotionOwnership | undefined>(undefined);
@@ -766,7 +780,15 @@ export function useGuiScene(
     scan: GuiControlHandle | undefined;
     callsign: GuiControlHandle | undefined;
     explode: GuiControlHandle | undefined;
-  }>({ scan: undefined, callsign: undefined, explode: undefined });
+    gain: GuiControlHandle | undefined;
+    motion: GuiControlHandle | undefined;
+  }>({
+    scan: undefined,
+    callsign: undefined,
+    explode: undefined,
+    gain: undefined,
+    motion: undefined,
+  });
 
   const releaseMotions = useCallback(async () => {
     const ownership = motionOwnership.current;
@@ -802,17 +824,17 @@ export function useGuiScene(
     shieldRequest.current += 1;
     finishingFrame.current = false;
     if (!canvas || !active) return;
-    state.update(openingSettings());
+    state.update({ ...openingSettings(), ...options });
     sequence.current = INITIAL_EVENTS.length;
-    controlValues.current = INITIAL_CONTROL_VALUES;
+    controlValues.current = initialControls;
     gainHeld.current = false;
-    loggedGain.current = INITIAL_CONTROL_VALUES.gain;
+    loggedGain.current = initialControls.gain;
     clearedEvents.current = [];
     const client = canvas.client as AnimationWorldClient;
     let disposed = false;
     const controller = new AbortController();
     let owned: MotionOwnership | undefined;
-    void loadProjectorBeamSection(controller.signal)
+    void loadProjectorBeamSection(assets, controller.signal)
       .then(async (section) => ({
         section,
         created: await createMotionAssets(client),
@@ -841,7 +863,7 @@ export function useGuiScene(
           motionOwnership.current = undefined;
       }
     };
-  }, [canvas, active, releaseMotions, state]);
+  }, [canvas, active, releaseMotions, state, assets]);
 
   useEffect(() => {
     if (!error) return;
@@ -901,13 +923,13 @@ export function useGuiScene(
       [
         {
           client: canvas.client as AnimationWorldClient,
-          assets: [motions.dust, ...projectorResourceSources()],
+          assets: [motions.dust, ...projectorResourceSources(assets)],
         },
         {
           client: panel.client,
           assets: [
             font,
-            ...waveformResourceSources(),
+            ...waveformResourceSources(assets),
             motions.scan,
             motions.wavePulse,
           ],
@@ -981,6 +1003,7 @@ export function useGuiScene(
     const request = generation.current;
     void awaitCompleteProjectorFrame(
       canvas,
+      assets,
       () => generation.current === request,
     ).then(
       () => {
@@ -1035,11 +1058,53 @@ export function useGuiScene(
       scanControl: (handle: GuiControlHandle | null) => {
         controls.current.scan = handle ?? undefined;
       },
+      gainControl: (handle: GuiControlHandle | null) => {
+        controls.current.gain = handle ?? undefined;
+      },
+      motionControl: (handle: GuiControlHandle | null) => {
+        controls.current.motion = handle ?? undefined;
+      },
       callsignControl: (handle: GuiControlHandle | null) => {
         controls.current.callsign = handle ?? undefined;
       },
       explodeControl: (handle: GuiControlHandle | null) => {
         controls.current.explode = handle ?? undefined;
+      },
+      writeControl: async (
+        key: keyof GuiControlValues,
+        value: boolean | number | string,
+      ) => {
+        if (
+          key === "gain" &&
+          (typeof value !== "number" ||
+            !Number.isFinite(value) ||
+            value < 0 ||
+            value > 1)
+        )
+          throw new Error("GUI gain must be a finite number from 0 to 1");
+        const names = {
+          autoscan: "scan",
+          gain: "gain",
+          callsign: "callsign",
+          exploded: "explode",
+          reducedMotion: "motion",
+        } as const;
+        const handle = controls.current[names[key]];
+        if (!handle) throw new Error(`GUI control ${key} is not mounted`);
+        const field =
+          key === "gain" ? "value" : key === "callsign" ? "text" : "checked";
+        const current = (await handle.read())[field];
+        if (typeof current !== typeof value)
+          throw new Error(`Invalid GUI control ${key} value`);
+        const next = key === "gain" ? Math.fround(Number(value)) : value;
+        if (
+          !(await handle.compareAndSet(
+            field,
+            current as boolean | number | string,
+            next,
+          ))
+        )
+          throw new Error(`GUI control ${key} changed during update`);
       },
       stopScan: () => {
         void controls.current.scan
@@ -1182,6 +1247,9 @@ export function useGuiScene(
 
   return useMemo(
     () => ({
+      assets,
+      panelWorldName: `${PANEL_WORLD}/${canvas?.client.worldReference?.id ?? "pending"}`,
+      initialControls,
       ready,
       prepared,
       revealed,
@@ -1199,6 +1267,8 @@ export function useGuiScene(
       ...actions,
     }),
     [
+      assets,
+      canvas,
       ready,
       prepared,
       revealed,
@@ -1366,7 +1436,10 @@ const ProjectorPanel = memo(function ProjectorPanel({
       <PanelSurface scene={scene} stagingX={stagingX} />
       <CanvasWorld
         presentation={{ anchor: PANEL_ENTITY }}
-        create={{ symbolicId: PANEL_WORLD, selectedSystems: PANEL_SYSTEMS }}
+        create={{
+          symbolicId: scene.panelWorldName,
+          selectedSystems: PANEL_SYSTEMS,
+        }}
         extent={[CANVAS_WIDTH, CANVAS_HEIGHT]}
         unitsPerMetre={UNITS_PER_METRE}
         onReady={scene.attachPanel}

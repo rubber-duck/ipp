@@ -28,6 +28,7 @@ def handler(name: str, root: Path = ROOT) -> type[BaseHTTPRequestHandler]:
             for path in (
                 "examples/world-gallery",
                 "target/gallery-build",
+                "target/gallery-assets",
                 "target/gallery-fixtures",
                 "target/browser-build/render",
                 "target/gallery-gui-assets",

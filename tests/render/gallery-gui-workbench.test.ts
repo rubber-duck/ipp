@@ -214,7 +214,16 @@ test("Gallery GUI's workbench tabs, value controls, list and popover drive the s
         "BEAM stepper field",
       );
       assert.deepEqual(stepper.value, { kind: "scalar", value: percent });
-      const beamAfter = energy(await g.inspect(), "gui-projector-beam");
+      // The child controls and DOM readout can commit before the parent
+      // World's separate React root acknowledges the projected energy.
+      const projected = await g.waitFor(
+        (inspection) =>
+          Math.abs(
+            energy(inspection, "gui-projector-beam") / beamBefore -
+              percent / 100,
+          ) < 1e-3,
+      );
+      const beamAfter = energy(projected, "gui-projector-beam");
       assert.ok(
         Math.abs(beamAfter / beamBefore - percent / 100) < 1e-3,
         `the beam's energy went from ${beamBefore} to ${beamAfter} at ${percent}%`,

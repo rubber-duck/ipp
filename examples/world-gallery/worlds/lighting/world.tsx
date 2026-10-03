@@ -10,10 +10,10 @@ import {
   Transform,
   UnlitMaterial,
 } from "@ipp/react";
-import { useIppCanvas } from "@ipp/react/web";
+import { useIppCanvas } from "@ipp/react/canvas";
+import { useGallerySceneContext } from "../../shared/scene.js";
 import { hexToLinear } from "../../shared/colors.js";
 import { ReadyGeometry } from "../../shared/ready-geometry.js";
-import { GALLERY_RUNTIME } from "../../shared/runtime.js";
 import {
   initialMeshSettings,
   meshSource,
@@ -25,9 +25,6 @@ import type {
   ObjectSettings,
   LightingWorldObjects,
 } from "./model.js";
-
-const { encodeBoundingShape }: { encodeBoundingShape: GeometryEncoder } =
-  await import(`${GALLERY_RUNTIME}generated.js`);
 
 /** Compose the demonstrations; each object owns its material and picking geometry. */
 export function LightingWorld({
@@ -106,6 +103,8 @@ function SolidObject({
   value: ObjectSettings;
   selected: boolean;
 }) {
+  const { contract } = useGallerySceneContext();
+  const encodeBoundingShape = contract.encodeBoundingShape as GeometryEncoder;
   const source = meshSource(shape, {
     ...initialMeshSettings(shape),
     parameters: value.parameters,
@@ -189,13 +188,13 @@ function LightMarker({
   value: ObjectSettings;
   selected: boolean;
 }) {
+  const { assets } = useGallerySceneContext();
   const source =
     id === "lighting-point"
       ? "ipp://mesh/sphere?radius=0.16"
-      : new URL(
-          `/target/gallery-build/${id === "lighting-spot" ? "spot" : "sun"}-marker.mesh`,
-          window.location.href,
-        ).href;
+      : assets.url(
+          `/target/gallery-assets/${id === "lighting-spot" ? "spot" : "sun"}-marker.mesh`,
+        );
   const [r, g, b] = hexToLinear(value.color);
   const scale = value.scale * value.markerSize;
   const pose = id === "lighting-point" ? {} : aimAt(...value.position);

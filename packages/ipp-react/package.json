@@ -23,6 +23,11 @@
       "types": "./src/gui-kit.ts",
       "development": "./src/gui-kit.ts",
       "default": "./dist/gui-kit.js"
+    },
+    "./canvas": {
+      "types": "./src/canvas.ts",
+      "development": "./src/canvas.ts",
+      "default": "./dist/canvas.js"
     }
   },
   "scripts": {

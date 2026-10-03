@@ -5,7 +5,7 @@ import { image, settled } from "./presentation.js";
 import {
   componentFields,
   successfulBatch,
-} from "../../examples/chart-showcase/commands.js";
+} from "../../examples/world-gallery/worlds/charts/shared/commands.js";
 import {
   openPlot3d,
   readyPlot3d,
@@ -15,12 +15,12 @@ import {
   PLOT_3D_EXTENT,
   type Plot3dContract,
   type Plot3dScene,
-} from "../../examples/chart-showcase/plot-3d-scene.js";
+} from "../../examples/world-gallery/worlds/charts3d/content.js";
 import {
   openPlot3dSheet,
   closePlot3dSheet,
   type Plot3dSheet,
-} from "../../examples/chart-showcase/sheet-3d.js";
+} from "../../examples/world-gallery/worlds/charts3d/sheet.js";
 
 interface Study {
   scene: Plot3dScene;

@@ -519,11 +519,20 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
         [input.clientX + span(0.033), input.clientY],
       );
 
+      await g.call("observeGalleryGuiInput");
       const beforeQuickDrag = transform(await g.inspect());
       await g.drag(edge.outside, [
         edge.outside[0] + edge.tangent[0] * span(0.04),
         edge.outside[1] + edge.tangent[1] * span(0.04),
       ]);
+      await scenario.evidence.record("quick-background-drag", {
+        input: await g.call("finishGalleryGuiInputObservation"),
+        edge,
+        currentEdge: await panelEdge(),
+        canvas: await g.page.locator("canvas").first().boundingBox(),
+        before: beforeQuickDrag,
+        after: transform(await g.inspect()),
+      });
       await g.waitFor((inspection) =>
         cameraChanged(beforeQuickDrag, inspection),
       );

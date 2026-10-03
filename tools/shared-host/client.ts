@@ -28,6 +28,10 @@ export interface ClientContext {
   readonly contract: Readonly<Record<string, unknown>>;
   /** Checkout the command runs from; relative paths resolve against it. */
   readonly workspace: string;
+  /** Application build products of the checkout providing the running Host. */
+  readonly assetRoot: string;
+  /** Read-only source namespaces configured by the Host owner. */
+  readonly assetPrefixes?: readonly string[];
   /** Run or session name, unique on the Host; use it in World symbolic ids. */
   readonly name: string;
   /** The shared GUI font (`.ippf`) built with the Host. */
@@ -59,6 +63,8 @@ export interface ClientResult {
 }
 
 export interface SharedHostClient<State = unknown> {
+  /** Explicit scene reload clients disable function-only capture hot reload. */
+  readonly reloadOnCapture?: boolean;
   /**
    * Create Worlds and declarations. `args` are the command-line arguments
    * after the module (`run`, `session start`).
@@ -72,6 +78,13 @@ export interface SharedHostClient<State = unknown> {
   capture(
     state: State,
     context: ClientContext,
+    args: readonly string[],
+  ): Promise<ClientResult>;
+  /** Development session operations, independent of runtime protocol commands. */
+  command?(
+    state: State,
+    context: ClientContext,
+    command: string,
     args: readonly string[],
   ): Promise<ClientResult>;
   /** Release what `open` created; temporary Worlds also end with the connection. */

@@ -9,7 +9,7 @@ import {
   PLOT_2D_EXTENT,
   type Plot2dContract,
   type Plot2dScene,
-} from "./plot-2d-scene.js";
+} from "../world-gallery/worlds/charts2d/content.js";
 import {
   openPlot3d,
   readyPlot3d,
@@ -18,12 +18,12 @@ import {
   closePlot3d,
   type Plot3dContract,
   type Plot3dScene,
-} from "./plot-3d-scene.js";
+} from "../world-gallery/worlds/charts3d/content.js";
 import {
   openPlot3dSheet,
   closePlot3dSheet,
   type Plot3dSheet,
-} from "./sheet-3d.js";
+} from "../world-gallery/worlds/charts3d/sheet.js";
 
 interface Study {
   readonly flat: Plot2dScene;

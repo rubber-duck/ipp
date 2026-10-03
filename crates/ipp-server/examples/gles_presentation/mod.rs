@@ -19,6 +19,7 @@ const PBUFFER_SIZE: u32 = 2048;
 /// Inputs [`GlesHostServices`] takes when the Host initializes it.
 struct PresentationSetup {
     egl_directory: PathBuf,
+    read_sources: Vec<(String, ipp_server::services::io::FileSystemIoSource)>,
     control: Receiver<PresentationControl>,
     output: Sender<PresentationOutput>,
 }
@@ -31,6 +32,7 @@ static SETUP: Mutex<Option<PresentationSetup>> = Mutex::new(None);
 pub(crate) fn prepare(
     egl_directory: PathBuf,
     listener: TcpListener,
+    read_sources: Vec<(String, ipp_server::services::io::FileSystemIoSource)>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (control, control_receiver) = mpsc::channel();
     let (output, output_receiver) = mpsc::channel();
@@ -39,6 +41,7 @@ pub(crate) fn prepare(
         .lock()
         .map_err(|_| "presentation setup lock poisoned")? = Some(PresentationSetup {
         egl_directory,
+        read_sources,
         control: control_receiver,
         output,
     });

@@ -19,7 +19,7 @@ import {
 import {
   componentFields,
   successfulBatch,
-} from "../../../examples/chart-showcase/commands.js";
+} from "../../../examples/world-gallery/worlds/charts/shared/commands.js";
 
 interface Frame {
   readonly width: number;

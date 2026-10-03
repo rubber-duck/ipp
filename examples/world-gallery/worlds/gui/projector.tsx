@@ -1,3 +1,4 @@
+import type { GalleryAssets } from "../../shared/scene.js";
 import type { ClientAssetSource } from "@ipp/client";
 import {
   Animation,
@@ -111,9 +112,8 @@ export interface ProjectorAssets {
   readonly floorBaked: string;
 }
 
-export function projectorAssets(): ProjectorAssets {
-  const absolute = (path: string) =>
-    new URL(path, globalThis.location.href).href;
+export function projectorAssets(assets: GalleryAssets): ProjectorAssets {
+  const absolute = (path: string) => assets.url(path);
   return {
     shell: absolute(PROJECTOR_MESH_SOURCES[0]),
     trim: absolute(PROJECTOR_MESH_SOURCES[1]),
@@ -128,8 +128,10 @@ export function projectorAssets(): ProjectorAssets {
   };
 }
 
-export function projectorResourceSources(): readonly ClientAssetSource[] {
-  const assets = projectorAssets();
+export function projectorResourceSources(
+  adapter: GalleryAssets,
+): readonly ClientAssetSource[] {
+  const assets = projectorAssets(adapter);
   return [
     { kind: 1, source: BACKGROUND_MESH },
     ...[
@@ -155,19 +157,17 @@ export interface ProjectorBeamSection {
 
 /** The authored mesh manifest owns the near/far cross-sections used by its shader. */
 export async function loadProjectorBeamSection(
+  assets: GalleryAssets,
   signal: AbortSignal,
 ): Promise<ProjectorBeamSection> {
-  const response = await fetch(`${ASSET_ROOT}projector.json`, { signal });
-  if (!response.ok)
-    throw new Error(`Projector metadata failed: ${response.status}`);
-  const metadata = (await response.json()) as {
+  const metadata = await assets.readJson<{
     projection: {
       nearHalfSize: [number, number];
       farHalfSize: [number, number];
       nearZ: number;
       farZ: number;
     };
-  };
+  }>(`${ASSET_ROOT}projector.json`, signal);
   const section = [
     ...metadata.projection.nearHalfSize,
     ...metadata.projection.farHalfSize,
@@ -237,7 +237,7 @@ export function HolographicProjector({
   const focus = (part: string) => focusGain(selected, part);
   const lights = light / 50;
   const stage = (part: string) => Math.min(focus(part), 1.35);
-  const assets = projectorAssets();
+  const assets = projectorAssets(scene.assets);
   const [nearZ, farZ] = scene.beamSection!.depth;
   const dustOrigin = PROJECTOR_CENTER.map(
     (value, axis) => value + (PROJECTOR_AXIS[axis]! * (nearZ + farZ)) / 2,

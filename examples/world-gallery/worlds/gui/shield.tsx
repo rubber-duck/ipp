@@ -1,4 +1,4 @@
-import type { BoundingShape, GeometryEncoder } from "@ipp/client";
+import type { BoundingShape } from "@ipp/client";
 import {
   BoundingGeometry,
   CustomMaterial,
@@ -8,7 +8,7 @@ import {
   Transform,
   assetRef,
 } from "@ipp/react";
-import { GALLERY_RUNTIME } from "../../shared/runtime.js";
+import { encodeBoundingShape } from "@ipp/host-contract";
 import { SHIELD_CONTENT_RECT } from "./dashboard.js";
 import {
   CANVAS_HEIGHT,
@@ -16,9 +16,6 @@ import {
   UNITS_PER_METRE,
 } from "./presentation.js";
 import { PANEL_SCALE, placedOnPanel } from "./projector.js";
-
-const { encodeBoundingShape }: { encodeBoundingShape: GeometryEncoder } =
-  await import(`${GALLERY_RUNTIME}generated.js`);
 
 /** Symbolic ID the scene resolves to name the shield as a GUI input blocker. */
 export const SHIELD_ENTITY = "gui-input-shield";

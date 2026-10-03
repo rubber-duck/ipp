@@ -35,6 +35,10 @@ export interface HostState {
   readonly eglDirectory: string;
   readonly log: string;
   readonly startedAt: string;
+  readonly ioRead?: readonly {
+    readonly prefix: string;
+    readonly directory: string;
+  }[];
 }
 
 /** The generated client module of the running Host. */
@@ -130,7 +134,12 @@ function git(workspace: string, ...args: string[]): string {
 export async function startHost(
   workspace: string,
   directory: string,
-  options: { eglDirectory: string; build: boolean },
+  options: {
+    eglDirectory: string;
+    build: boolean;
+    gallery?: boolean;
+    ioRead?: readonly { readonly prefix: string; readonly directory: string }[];
+  },
 ): Promise<HostState> {
   const existing = await readHost(directory);
   if (existing && alive(existing.pid))
@@ -141,7 +150,19 @@ export async function startHost(
   if (options.build) {
     const built = spawnSync(
       process.env.PYTHON ?? "python",
-      ["tools/ipp.py", "build", "gles-host", "font-assets"],
+      [
+        "tools/ipp.py",
+        "build",
+        "gles-host",
+        "font-assets",
+        ...(options.gallery
+          ? [
+              "gallery-assets",
+              "gallery-gui-assets",
+              "gallery-platformer-native-assets",
+            ]
+          : []),
+      ],
       { cwd: workspace, stdio: ["ignore", process.stderr, process.stderr] },
     );
     if (built.status !== 0)
@@ -165,7 +186,32 @@ export async function startHost(
   const output = openSync(log, "w");
   const child = spawn(
     join(client, "gles_host"),
-    ["--egl-dir", options.eglDirectory],
+    [
+      "--egl-dir",
+      options.eglDirectory,
+      ...[
+        ...(options.ioRead ?? []),
+        ...(options.gallery
+          ? [
+              {
+                prefix: "ipp-gallery://assets/",
+                directory: join(workspace, "target"),
+              },
+              {
+                prefix: "https://platformer.ipp.invalid/",
+                directory: join(
+                  workspace,
+                  "target/gallery-platformer-native-assets",
+                ),
+              },
+            ]
+          : []),
+      ].flatMap(({ prefix, directory }) => [
+        "--io-read",
+        prefix,
+        resolve(workspace, directory),
+      ]),
+    ],
     { cwd: workspace, detached: true, stdio: ["ignore", output, output] },
   );
   closeSync(output);
@@ -190,6 +236,27 @@ export async function startHost(
         eglDirectory: options.eglDirectory,
         log,
         startedAt: new Date().toISOString(),
+        ioRead: [
+          ...(options.ioRead ?? []),
+          ...(options.gallery
+            ? [
+                {
+                  prefix: "ipp-gallery://assets/",
+                  directory: join(workspace, "target"),
+                },
+                {
+                  prefix: "https://platformer.ipp.invalid/",
+                  directory: join(
+                    workspace,
+                    "target/gallery-platformer-native-assets",
+                  ),
+                },
+              ]
+            : []),
+        ].map(({ prefix, directory }) => ({
+          prefix,
+          directory: resolve(workspace, directory),
+        })),
       };
       await writeFile(
         join(directory, "host.json"),

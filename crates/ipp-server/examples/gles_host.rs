@@ -7,7 +7,7 @@
 //! only through `nativePresentationTransport` of `@ipp/client/testing`.
 //!
 //! ```text
-//! gles_host [--bind 127.0.0.1:PORT] --egl-dir DIRECTORY
+//! gles_host [--bind 127.0.0.1:PORT] --egl-dir DIRECTORY [--io-read PREFIX DIRECTORY]
 //! ```
 //!
 //! Readiness is one stdout line with both loopback URLs:
@@ -31,12 +31,22 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut bind = "127.0.0.1:0".parse::<SocketAddr>()?;
     let mut egl_directory = std::env::var_os("IPP_EGL_LIBRARY_DIR").map(PathBuf::from);
+    let mut read_sources = Vec::new();
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--bind" => bind = args.next().ok_or("--bind requires an IP:PORT")?.parse()?,
             "--egl-dir" => {
                 egl_directory = Some(args.next().ok_or("--egl-dir requires a directory")?.into())
+            }
+            "--io-read" => {
+                let prefix = args
+                    .next()
+                    .ok_or("--io-read requires a prefix and directory")?;
+                let directory = args.next().ok_or("--io-read requires a directory")?;
+                let source =
+                    ipp_server::services::io::FileSystemIoSource::new(&prefix, directory, false)?;
+                read_sources.push((prefix, source));
             }
             _ => return Err(format!("unknown argument: {arg}").into()),
         }
@@ -51,7 +61,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let presentation = TcpListener::bind((bind.ip(), 0))?;
     let presentation_address = presentation.local_addr()?;
-    gles_presentation::prepare(egl_directory, presentation)?;
+    gles_presentation::prepare(egl_directory, presentation, read_sources)?;
 
     let listener = TcpListener::bind(bind)?;
     ipp_server::websocket::serve_with::<gles_presentation::GlesHostServices>(

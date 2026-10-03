@@ -313,3 +313,5 @@ import {
 ## Validation
 
 Run `python tools/ipp.py regression --suite react-attached --suite canvas` for the maintained native/worker reconciliation and browser/GLES presentation cases. The [suite registry](../../tools/pipeline/suites.json) includes additional material, animation and completed-frame coverage.
+
+The DOM-free [`@ipp/react/canvas`](src/canvas.ts) entry point provides Canvas authoring sessions and declaration scopes for shared browser and native applications. The generic `@ipp/react` entry point remains independent of Canvas session lifecycle and presentation.

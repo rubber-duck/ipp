@@ -10,6 +10,7 @@ import { parseArgs } from "node:util";
 import { chromium } from "playwright";
 import { browserLaunchOptions } from "#ipp-browser-options";
 import { bundleBrowser, workspace } from "./build/helpers.mjs";
+import { importNativeBlenderScene } from "./build/native-blender-import.mjs";
 
 const { positionals, values } = parseArgs({
   allowPositionals: true,
@@ -17,6 +18,7 @@ const { positionals, values } = parseArgs({
     namespace: { type: "string", default: "scene" },
     world: { type: "string", default: "world.ipp" },
     "clips-only": { type: "boolean", default: false },
+    native: { type: "boolean", default: false },
   },
 });
 if (
@@ -25,7 +27,7 @@ if (
   !/^[a-zA-Z0-9_.-]+\.ipp$/.test(values.world)
 )
   throw new Error(
-    "Expected EXPORT_DIR OUTPUT_DIR [--namespace NAME] [--world FILE.ipp] [--clips-only]",
+    "Expected EXPORT_DIR OUTPUT_DIR [--namespace NAME] [--world FILE.ipp] [--clips-only] [--native]",
   );
 const [input, output] = positionals.map((path) => resolve(path));
 await mkdir(output, { recursive: true });
@@ -42,16 +44,17 @@ for (const name of Object.keys(catalog)) {
   if (from !== to) await copyFile(from, to);
 }
 const entry = resolve(workspace, "target/blender-import/import.js");
-await bundleBrowser(
-  resolve(workspace, "integrations/blender/client/disk-import.ts"),
-  entry,
-  "production",
-  {
-    alias: {
-      "@ipp/client": resolve(workspace, "packages/ipp-client/src/index.ts"),
+if (!values.native)
+  await bundleBrowser(
+    resolve(workspace, "integrations/blender/client/disk-import.ts"),
+    entry,
+    "production",
+    {
+      alias: {
+        "@ipp/client": resolve(workspace, "packages/ipp-client/src/index.ts"),
+      },
     },
-  },
-);
+  );
 const runtime = resolve(
   workspace,
   process.env.IPP_BROWSER_DISTRIBUTION ?? "target/browser-build/render",
@@ -114,83 +117,94 @@ const server = createServer(async (request, response) => {
 await new Promise((done) => server.listen(0, "127.0.0.1", done));
 let browser;
 try {
-  browser = await chromium.launch(browserLaunchOptions());
-  const page = await browser.newPage();
-  page.on("console", (message) => {
-    console.log(message.text());
-  });
-  await page.goto(`http://127.0.0.1:${server.address().port}/`);
-  const result = await page.evaluate(
-    async ({ source, namespace, clipsOnly }) => {
-      const contract = await import("/runtime/generated.js");
-      const { importBlenderScene } = await import("/import.js");
-      const prefix = `https://${namespace}.ipp.invalid/`;
-      const canvas = document.createElement("canvas");
-      canvas.width = 400;
-      canvas.height = 300;
-      document.body.append(canvas);
-      const host = await contract.IppHostClient.connectWorker(
-        "/runtime/wasm-worker.js",
-        "/runtime/runtime.wasm",
-        {
-          canvas: canvas.transferControlToOffscreen(),
-          timeoutMs: 60000,
-          logLevel: "error",
-          resourceUrls: [
-            { prefix, baseUrl: new URL("/bundle/", location.href).href },
-          ],
-        },
-      );
-      console.info("Import Host ready");
-      const assetName = (source) => {
-        const match = /^\/assets\/([A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*)$/.exec(
-          source,
-        );
-        if (!match) throw new Error(`Invalid exported source ${source}`);
-        return match[1];
-      };
-      let failure;
-      try {
-        const result = await importBlenderScene(
-          host,
-          contract,
-          source,
-          {
-            resolve: (source) => prefix + assetName(source),
-            read: (source) =>
-              new URL("/source/" + assetName(source), location.href).href,
-            publishAnimation: async (bytes) => {
-              const response = await fetch("/animation", {
-                method: "POST",
-                body: bytes,
-              });
-              if (!response.ok) throw new Error("Animation publication failed");
-              return prefix + (await response.text());
-            },
-          },
-          { symbolicId: namespace, clipsOnly },
-        );
-        console.info("World saved");
-        return { ...result, bytes: Array.from(result.bytes) };
-      } catch (error) {
-        failure = error;
-        console.error("Import failed", String(error));
-        throw error;
-      } finally {
-        try {
-          await host.close();
-        } catch (error) {
-          if (!failure) throw error;
-          console.error("Import cleanup failed", String(error));
-        }
-      }
-    },
-    {
+  let result;
+  if (values.native) {
+    result = await importNativeBlenderScene({
       source,
       namespace: values.namespace,
       clipsOnly: values["clips-only"],
-    },
-  );
+      output,
+      origin: `http://127.0.0.1:${server.address().port}`,
+    });
+  } else {
+    browser = await chromium.launch(browserLaunchOptions());
+    const page = await browser.newPage();
+    page.on("console", (message) => {
+      console.log(message.text());
+    });
+    await page.goto(`http://127.0.0.1:${server.address().port}/`);
+    result = await page.evaluate(
+      async ({ source, namespace, clipsOnly }) => {
+        const contract = await import("/runtime/generated.js");
+        const { importBlenderScene } = await import("/import.js");
+        const prefix = `https://${namespace}.ipp.invalid/`;
+        const canvas = document.createElement("canvas");
+        canvas.width = 400;
+        canvas.height = 300;
+        document.body.append(canvas);
+        const host = await contract.IppHostClient.connectWorker(
+          "/runtime/wasm-worker.js",
+          "/runtime/runtime.wasm",
+          {
+            canvas: canvas.transferControlToOffscreen(),
+            timeoutMs: 60000,
+            logLevel: "error",
+            resourceUrls: [
+              { prefix, baseUrl: new URL("/bundle/", location.href).href },
+            ],
+          },
+        );
+        console.info("Import Host ready");
+        const assetName = (source) => {
+          const match =
+            /^\/assets\/([A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*)$/.exec(source);
+          if (!match) throw new Error(`Invalid exported source ${source}`);
+          return match[1];
+        };
+        let failure;
+        try {
+          const result = await importBlenderScene(
+            host,
+            contract,
+            source,
+            {
+              resolve: (source) => prefix + assetName(source),
+              read: (source) =>
+                new URL("/source/" + assetName(source), location.href).href,
+              publishAnimation: async (bytes) => {
+                const response = await fetch("/animation", {
+                  method: "POST",
+                  body: bytes,
+                });
+                if (!response.ok)
+                  throw new Error("Animation publication failed");
+                return prefix + (await response.text());
+              },
+            },
+            { symbolicId: namespace, clipsOnly },
+          );
+          console.info("World saved");
+          return { ...result, bytes: Array.from(result.bytes) };
+        } catch (error) {
+          failure = error;
+          console.error("Import failed", String(error));
+          throw error;
+        } finally {
+          try {
+            await host.close();
+          } catch (error) {
+            if (!failure) throw error;
+            console.error("Import cleanup failed", String(error));
+          }
+        }
+      },
+      {
+        source,
+        namespace: values.namespace,
+        clipsOnly: values["clips-only"],
+      },
+    );
+  }
   await writeFile(resolve(output, values.world), Buffer.from(result.bytes));
   await writeFile(
     resolve(output, "manifest.json"),

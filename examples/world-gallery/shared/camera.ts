@@ -5,6 +5,11 @@ import type { CameraWorldClient, Command } from "@ipp/client";
 export async function initializeCamera(
   client: CameraWorldClient,
 ): Promise<bigint> {
+  const existing = (await client.inspect()).entities.find(
+    (entity) => entity.metadata.symbolicId === "gallery-camera",
+  );
+  if (existing) return existing.id;
+
   const transform = client.components.Transform;
   const camera = client.components.Camera;
   if (!transform || !camera) throw new Error("Gallery requires camera support");
@@ -56,12 +61,7 @@ export async function initializeCamera(
   return created.id;
 }
 
-export type CameraView =
-  | "shapes"
-  | "lighting"
-  | "platformer"
-  | "particles"
-  | "gui";
+export type CameraView = import("./scene.js").GallerySceneId;
 
 /** Keep the protected session camera alive while changing its view. */
 export async function setCameraView(

@@ -15,7 +15,7 @@ import type {
   AnimationPlaybackControl,
   AnimationControllerSnapshot,
 } from "@ipp/client";
-import type { IppCanvasHandle } from "@ipp/react/web";
+import type { IppCanvasHandle } from "@ipp/react/canvas";
 import { ANIMATED_IDS, SCENE_OBJECTS, type ObjectId } from "./model.js";
 import {
   beamPickingSource,
@@ -23,6 +23,7 @@ import {
   SKIN_ASSET,
   uploadRigAssets,
   animationClips,
+  type AnimationModule,
 } from "./animation-assets.js";
 
 export interface DemoPlayer extends AnimationControllerSnapshot {
@@ -30,6 +31,13 @@ export interface DemoPlayer extends AnimationControllerSnapshot {
   symbol: ObjectId;
   speed: number;
   looping: boolean;
+}
+
+export interface LightingPlaybackOptions {
+  readonly speed: number;
+  readonly looping: boolean;
+  readonly state: "playing" | "paused" | "stopped";
+  readonly time?: number;
 }
 
 /** Runtime controllers own clocks; React owns target objects and visible properties. */
@@ -41,6 +49,11 @@ export class AnimationSession {
     speed: 1,
     looping: true,
   }));
+  private readonly playback = ANIMATED_IDS.map(() => ({
+    state: "stopped" as LightingPlaybackOptions["state"],
+    time: undefined as number | undefined,
+  }));
+
   private constructor(
     private readonly client: AnimationWorldClient,
     readonly players: readonly bigint[],
@@ -52,11 +65,11 @@ export class AnimationSession {
 
   static async create(
     canvas: IppCanvasHandle,
-    moduleUrl: string,
+    module: AnimationModule,
     signal: AbortSignal,
   ) {
     const client = canvas.client as AnimationWorldClient;
-    await uploadRigAssets(client, moduleUrl);
+    await uploadRigAssets(client, module);
     signal.throwIfAborted();
     const deadline = performance.now() + 10_000;
     let targets: bigint[];
@@ -195,7 +208,17 @@ export class AnimationSession {
       else if (control.action === "playAtSpeed")
         await ref.playAtSpeed(control.speed);
       else await ref[control.action]();
-      if (control.action === "stop") await ref.seek(0);
+      const intent = this.playback[this.players.indexOf(id)]!;
+      if (control.action === "seek") intent.time = control.time;
+      else if (control.action === "pause") intent.state = "paused";
+      else if (control.action === "stop") {
+        await ref.seek(0);
+        intent.state = "stopped";
+        intent.time = 0;
+      } else {
+        intent.state = "playing";
+        if (control.action === "restart") intent.time = 0;
+      }
     }
   }
 
@@ -231,6 +254,52 @@ export class AnimationSession {
       else setting.looping = Boolean(value);
     }
     await this.render();
+  }
+
+  get playbackOptions(): Readonly<Record<string, LightingPlaybackOptions>> {
+    return Object.fromEntries(
+      ANIMATED_IDS.map((id, index) => {
+        const playback = this.playback[index]!;
+        return [
+          id,
+          {
+            ...this.settings[index]!,
+            state: playback.state,
+            ...(playback.time === undefined ? {} : { time: playback.time }),
+          },
+        ];
+      }),
+    );
+  }
+
+  async restorePlayback(
+    options: Readonly<Record<string, LightingPlaybackOptions>>,
+  ) {
+    if (this.closed) return;
+    for (const [id, option] of Object.entries(options)) {
+      const index = ANIMATED_IDS.indexOf(id as (typeof ANIMATED_IDS)[number]);
+      if (index < 0) throw new Error(`Unknown animated lighting object: ${id}`);
+      if (
+        !Number.isFinite(option.speed) ||
+        typeof option.looping !== "boolean" ||
+        !["playing", "paused", "stopped"].includes(option.state)
+      )
+        throw new Error(`Invalid lighting playback options: ${id}`);
+      this.settings[index] = { speed: option.speed, looping: option.looping };
+    }
+    await this.render();
+    for (const [id, option] of Object.entries(options)) {
+      if (option.time !== undefined)
+        await this.control(id, { action: "seek", time: option.time });
+      await this.control(id, {
+        action:
+          option.state === "playing"
+            ? "play"
+            : option.state === "paused"
+              ? "pause"
+              : "stop",
+      });
+    }
   }
 
   async observe(): Promise<DemoPlayer[]> {

@@ -15,8 +15,8 @@ import {
   type ReactWorldRoot,
 } from "@ipp/react";
 import { Box, Style, Text } from "@ipp/react/gui";
-import { componentFields, successfulBatch } from "./commands.js";
-import type { Plot3dScene } from "./plot-3d-scene.js";
+import { componentFields, successfulBatch } from "../charts/shared/commands.js";
+import type { Plot3dScene } from "./content.js";
 import type * as Generated from "@ipp/host-contract";
 
 const EXTENT = { width: 1536, height: 1024, devicePixelRatio: 1 } as const;
@@ -172,7 +172,7 @@ export async function openPlot3dSheet(
           <Style x={30} y={1000} {...color(tokens.text)} />
           <Text
             source={assetRef("font")}
-            text="REAL NATIVE GLES / SHARED SOURCE / TYPED REACT AUTHORING"
+            text="SHARED SOURCE / TYPED REACT AUTHORING"
             font_size={12}
           />
         </Entity>

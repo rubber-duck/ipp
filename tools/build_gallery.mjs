@@ -11,13 +11,17 @@ import {
   workspace,
 } from "./build/helpers.mjs";
 const selection = process.argv[2];
-if (!["application", "fixtures", "site"].includes(selection))
-  throw new Error("Expected application, fixtures or site");
+if (!["application", "fixtures", "site", "assets"].includes(selection))
+  throw new Error("Expected application, fixtures, site or assets");
 const output =
   process.env.IPP_BUILD_OUTPUT ??
   resolve(
     workspace,
-    selection === "site" ? "target/gallery-site" : "target/gallery-build",
+    selection === "site"
+      ? "target/gallery-site"
+      : selection === "assets"
+        ? "target/gallery-assets"
+        : "target/gallery-build",
   );
 await mkdir(output, { recursive: true });
 
@@ -28,6 +32,12 @@ const renderContract = resolve(
   process.env.IPP_BROWSER_DISTRIBUTION ?? "target/browser-build/render",
   "contract.bin",
 );
+
+function bundleGallery(entry, destination, environment = "production") {
+  return bundleBrowser(entry, destination, environment, {
+    alias: { "@ipp/host-contract": resolve(renderContract, "../generated.js") },
+  });
+}
 
 async function validateWorldContract(path, label, contract) {
   const world = await readFile(path);
@@ -112,65 +122,7 @@ async function validateSavedWorldContracts() {
   ]);
 }
 
-if (selection === "site") {
-  await validateSavedWorldContracts();
-  await buildGallerySite(output);
-} else if (selection === "fixtures") {
-  await Promise.all([
-    bundleBrowser(
-      resolve(workspace, "tests/render/browser-fixture.ts"),
-      resolve(output, "fixture.js"),
-      "development",
-    ),
-    bundleBrowser(
-      resolve(workspace, "tests/render/browser-fixture.ts"),
-      resolve(output, "fixture-production.js"),
-    ),
-    bundleBrowser(
-      resolve(workspace, "tests/render/viewer-browser-helper.ts"),
-      resolve(output, "viewer-browser-helper.js"),
-    ),
-    ...["development", "production"].map((mode) =>
-      bundleBrowser(
-        resolve(workspace, "tests/render/ready-geometry-fixture.tsx"),
-        resolve(output, `ready-geometry-${mode}.js`),
-        mode,
-      ),
-    ),
-  ]);
-  await writeFile(
-    resolve(output, "replacement.mesh"),
-    await exportBuiltin("mesh", "ipp://mesh/cube?width=1&height=2&length=2"),
-  );
-  await writeFile(
-    resolve(output, "replacement.texture"),
-    await exportBuiltin(
-      "texture",
-      "ipp://texture/checkerboard?width=64&height=64&cellsX=8&cellsY=8",
-    ),
-  );
-  const artifacts = await Promise.all(
-    [
-      "fixture.js",
-      "fixture-production.js",
-      "viewer-browser-helper.js",
-      "ready-geometry-development.js",
-      "ready-geometry-production.js",
-      "replacement.mesh",
-      "replacement.texture",
-    ].map((name) => artifact(resolve(output, name))),
-  );
-  await writeFile(
-    resolve(output, "fixture-report.json"),
-    `${JSON.stringify({ artifacts }, null, 2)}\n`,
-  );
-} else {
-  await validateSavedWorldContracts();
-  await bundleBrowser(
-    resolve(workspace, "examples/world-gallery/main.tsx"),
-    resolve(output, "world-gallery.js"),
-  );
-
+if (selection === "assets") {
   const meshModule = await loadFixtureGenerators(
     resolve(workspace, "examples/world-gallery/assets/cube-mesh.ts"),
   );
@@ -207,14 +159,70 @@ if (selection === "site") {
     }
     await writeFile(resolve(output, `${name}-marker.mesh`), bytes);
   }
+} else if (selection === "site") {
+  await validateSavedWorldContracts();
+  await buildGallerySite(output);
+} else if (selection === "fixtures") {
+  await Promise.all([
+    bundleGallery(
+      resolve(workspace, "tests/render/browser-fixture.ts"),
+      resolve(output, "fixture.js"),
+      "development",
+    ),
+    bundleGallery(
+      resolve(workspace, "tests/render/browser-fixture.ts"),
+      resolve(output, "fixture-production.js"),
+    ),
+    bundleGallery(
+      resolve(workspace, "tests/render/viewer-browser-helper.ts"),
+      resolve(output, "viewer-browser-helper.js"),
+    ),
+    ...["development", "production"].map((mode) =>
+      bundleGallery(
+        resolve(workspace, "tests/render/ready-geometry-fixture.tsx"),
+        resolve(output, `ready-geometry-${mode}.js`),
+        mode,
+      ),
+    ),
+  ]);
+  await writeFile(
+    resolve(output, "replacement.mesh"),
+    await exportBuiltin("mesh", "ipp://mesh/cube?width=1&height=2&length=2"),
+  );
+  await writeFile(
+    resolve(output, "replacement.texture"),
+    await exportBuiltin(
+      "texture",
+      "ipp://texture/checkerboard?width=64&height=64&cellsX=8&cellsY=8",
+    ),
+  );
+  const artifacts = await Promise.all(
+    [
+      "fixture.js",
+      "fixture-production.js",
+      "viewer-browser-helper.js",
+      "ready-geometry-development.js",
+      "ready-geometry-production.js",
+      "replacement.mesh",
+      "replacement.texture",
+    ].map((name) => artifact(resolve(output, name))),
+  );
+  await writeFile(
+    resolve(output, "fixture-report.json"),
+    `${JSON.stringify({ artifacts }, null, 2)}\n`,
+  );
+} else {
+  await validateSavedWorldContracts();
+  await bundleGallery(
+    resolve(workspace, "examples/world-gallery/main.tsx"),
+    resolve(output, "world-gallery.js"),
+  );
 
   const artifacts = await Promise.all([
-    ...[
-      "world-gallery.js",
-      "cube.mesh",
-      "spot-marker.mesh",
-      "sun-marker.mesh",
-    ].map((name) => artifact(resolve(output, name))),
+    artifact(resolve(output, "world-gallery.js")),
+    ...["cube.mesh", "spot-marker.mesh", "sun-marker.mesh"].map((name) =>
+      artifact(resolve(workspace, "target/gallery-assets", name)),
+    ),
     artifact(platformerWorld),
     artifact(resolve(platformerAssets, "manifest.json")),
     artifact(resolve(platformerAssets, "catalog.json")),

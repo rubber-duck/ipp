@@ -153,7 +153,8 @@ export function SignalMonitor({ scene }: { readonly scene: GuiScene }) {
                       />
                       <Behavior semantic_label="GAIN" />
                       <Slider
-                        value={INITIAL_GAIN}
+                        value={scene.initialControls.gain}
+                        ref={scene.gainControl}
                         min={0}
                         max={1}
                         step={0.05}
@@ -181,7 +182,7 @@ export function SignalMonitor({ scene }: { readonly scene: GuiScene }) {
                       <Behavior semantic_label="SCAN" />
                       <Checkbox
                         label=""
-                        checked={INITIAL_AUTOSCAN}
+                        checked={scene.initialControls.autoscan}
                         ref={scene.scanControl}
                         onToggle={(event) => scene.setAutoscan(event.value)}
                       />
@@ -209,7 +210,7 @@ export function SignalMonitor({ scene }: { readonly scene: GuiScene }) {
                       />
                       <Behavior semantic_label="CALLSIGN" />
                       <TextInput
-                        text={INITIAL_CALLSIGN}
+                        text={scene.initialControls.callsign}
                         placeholder="CALLSIGN"
                         ref={scene.callsignControl}
                         onTextCommit={(event) => scene.setCallsign(event.value)}
@@ -234,6 +235,8 @@ export function SignalMonitor({ scene }: { readonly scene: GuiScene }) {
  */
 function ScopePopover({ scene }: { readonly scene: GuiScene }) {
   const tuning = scene.tuning;
+  const grid = useStoreValue(scene.state, (state) => state.tuning.grid);
+  const sweep = useStoreValue(scene.state, (state) => state.tuning.sweepShown);
   return (
     <Popover
       id={MONITOR_CONTROLS.scope}
@@ -249,7 +252,7 @@ function ScopePopover({ scene }: { readonly scene: GuiScene }) {
         id={MONITOR_CONTROLS.grid}
         label="GRID"
         options={SCOPE_GRIDS.map(({ key, label }) => ({ value: key, label }))}
-        defaultValue={INITIAL_GRID}
+        value={grid}
         onChange={(value) => tuning.setGrid(value as ScopeGrid)}
       />
       <KitRow
@@ -272,7 +275,7 @@ function ScopePopover({ scene }: { readonly scene: GuiScene }) {
           <Behavior semantic_label="SWEEP" />
           <Checkbox
             label=""
-            checked={INITIAL_SWEEP}
+            checked={sweep}
             onToggle={(event) => tuning.setSweepShown(event.value)}
           />
         </Entity>

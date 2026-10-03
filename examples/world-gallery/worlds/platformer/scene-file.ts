@@ -3,6 +3,7 @@ import type {
   CameraWorldClient,
   Client,
 } from "@ipp/client";
+import type { GalleryAssets } from "../../shared/scene.js";
 import type { BlenderDiskManifest } from "../../../../integrations/blender/client/disk-import.js";
 
 export const PLATFORMER_ASSETS = "/target/gallery-platformer-assets/";
@@ -15,12 +16,13 @@ export const PLATFORMER_ROUTE = PLATFORMER_ASSETS + "route.json";
 export async function initializePlatformerScene(
   base: Client,
   signal: AbortSignal,
+  assets: GalleryAssets,
 ) {
   const client = base as AnimationWorldClient & CameraWorldClient;
-  const response = await fetch(PLATFORMER_ASSETS + "manifest.json", { signal });
-  if (!response.ok)
-    throw new Error(`Platformer manifest: HTTP ${response.status}`);
-  const manifest: BlenderDiskManifest = await response.json();
+  const manifest = await assets.readJson<BlenderDiskManifest>(
+    PLATFORMER_ASSETS + "manifest.json",
+    signal,
+  );
   if (manifest.format !== 1)
     throw new Error("Unsupported platformer asset manifest");
   signal.throwIfAborted();

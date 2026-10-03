@@ -16,6 +16,7 @@ import * as React from "react";
 import * as jsxRuntime from "react/jsx-runtime";
 import * as IppClient from "@ipp/client";
 import * as IppReact from "@ipp/react";
+import * as IppReactCanvas from "@ipp/react/canvas";
 import * as IppReactGui from "@ipp/react/gui";
 import * as IppReactGuiKit from "@ipp/react/gui-kit";
 import type { LoadedModule } from "./client.js";
@@ -26,6 +27,7 @@ const modules: Record<string, unknown> = {
   "react/jsx-runtime": jsxRuntime,
   "@ipp/client": IppClient,
   "@ipp/react": IppReact,
+  "@ipp/react/canvas": IppReactCanvas,
   "@ipp/react/gui": IppReactGui,
   "@ipp/react/gui-kit": IppReactGuiKit,
 };
@@ -42,7 +44,7 @@ const shared: Plugin = {
     build.onResolve(
       {
         filter:
-          /^(react|react\/jsx-runtime|@ipp\/client|@ipp\/react(\/gui(-kit)?)?|@ipp\/host-contract)$/,
+          /^(react|react\/jsx-runtime|@ipp\/client|@ipp\/react(\/(canvas|gui(-kit)?))?|@ipp\/host-contract)$/,
       },
       (args) => ({ path: args.path, namespace: "shared-host-modules" }),
     );
@@ -73,6 +75,7 @@ export async function loadModule(
     platform: "node",
     target: "node22",
     jsx: "automatic",
+    loader: { ".glsl": "text" },
     sourcemap: "inline",
     logLevel: "silent",
     plugins: [shared],

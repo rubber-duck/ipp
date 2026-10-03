@@ -2746,5 +2746,19 @@
         ]
       }
     ]
+  },
+  "native-gallery": {
+    "description": "Shared gallery scenes through native GLES with persistent sessions, actions, reload failure and cleanup",
+    "sourceRoots": [
+      "examples/world-gallery/",
+      "tools/shared-host/",
+      "tools/build/native-blender-import.mjs",
+      "tests/render/native-gallery.test.ts",
+      "tests/render/native-gallery-driver.ts",
+      "tests/render/native-gallery-scene-assertions.ts"
+    ],
+    "files": [
+      "dist/tests/render/native-gallery.test.js"
+    ]
   }
 }

@@ -73,7 +73,7 @@ export function Advanced({ scene }: { readonly scene: GuiScene }) {
             <Behavior semantic_label="EXPLODE LAYERS" />
             <Checkbox
               label=""
-              checked={false}
+              checked={scene.initialControls.exploded}
               ref={scene.explodeControl}
               onToggle={(event) => scene.setExploded(event.value)}
             />
@@ -90,7 +90,8 @@ export function Advanced({ scene }: { readonly scene: GuiScene }) {
             <Behavior semantic_label="REDUCED MOTION" />
             <Checkbox
               label=""
-              checked={false}
+              checked={scene.initialControls.reducedMotion}
+              ref={scene.motionControl}
               onToggle={(event) => scene.setReducedMotion(event.value)}
             />
           </Entity>

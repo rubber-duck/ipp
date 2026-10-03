@@ -22,7 +22,7 @@ interface MeshData {
   weights: Four[];
   indices: number[];
 }
-interface AnimationModule {
+export interface AnimationModule {
   GEOMETRY_TYPE: number;
   encodeBoundingShape: GeometryEncoder;
   encodeSkinnedMesh(source: MeshData): Uint8Array<ArrayBuffer>;
@@ -38,12 +38,11 @@ const uploaded = new WeakMap<AnimationWorldClient, Promise<void>>();
 /** Upload the closed 3D rig; AnimationAsset declarations supply its motion. */
 export function uploadRigAssets(
   client: AnimationWorldClient,
-  moduleUrl: string,
+  module: AnimationModule,
 ) {
   let pending = uploaded.get(client);
   if (!pending) {
     pending = (async () => {
-      const module: AnimationModule = await import(moduleUrl);
       const upload = async (
         kind: number,
         asset: bigint,
@@ -108,6 +107,33 @@ export function uploadRigAssets(
     uploaded.set(client, pending);
   }
   return pending;
+}
+
+/** Release this producer's uploaded rig; scene consumers release their own demand. */
+export async function releaseRigAssets(client: AnimationWorldClient) {
+  const pending = uploaded.get(client);
+  if (!pending) return;
+  uploaded.delete(client);
+  await pending.catch(() => {});
+  const results = await Promise.allSettled(
+    (
+      [
+        [1, BEAM_ASSET],
+        [3, SKELETON_ASSET],
+        [5, SKIN_ASSET],
+        [6, BEAM_PICKING_ASSET],
+      ] as const
+    ).map(([kind, id]) =>
+      client.releaseAsset(
+        clientAssetSource(client.session, Number(kind!), id!),
+      ),
+    ),
+  );
+  const failures = results.flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : [],
+  );
+  if (failures.length)
+    throw new AggregateError(failures, "Lighting rig assets remain owned");
 }
 
 /** Nine square sections with separate face normals and closed end caps. */

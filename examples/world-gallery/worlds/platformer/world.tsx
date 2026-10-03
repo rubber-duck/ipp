@@ -5,7 +5,7 @@ import {
   ShaderAsset,
   assetRef,
 } from "@ipp/react";
-import { World } from "@ipp/react/web";
+import { World } from "@ipp/react/canvas";
 import ORB_SHADER from "./orb.glsl";
 
 /** React adds runtime choreography to the Blender-authored hierarchy. */

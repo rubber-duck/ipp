@@ -252,9 +252,10 @@ def node_product(script: str, destination: str, *args: str) -> None:
         run([node(), script, *args], env={"IPP_BUILD_OUTPUT": str(directory)})
 
 
-def gallery_platformer_assets() -> None:
+def gallery_platformer_assets(*, native: bool = False) -> None:
     authoring = ROOT / "examples/world-gallery/worlds/platformer/authoring"
-    with product(ROOT / "target/gallery-platformer-assets") as directory:
+    name = "gallery-platformer-native-assets" if native else "gallery-platformer-assets"
+    with product(ROOT / "target" / name) as directory:
         with tempfile.TemporaryDirectory(
             prefix="platformer-export-", dir=ROOT / "target"
         ) as exported:
@@ -283,6 +284,7 @@ def gallery_platformer_assets() -> None:
                     "--world",
                     "platformer.ipp",
                     "--clips-only",
+                    *(["--native"] if native else []),
                 ]
             )
         run(
@@ -314,6 +316,12 @@ def build(name: str) -> None:
     elif name == "surface-assets":
         with product(ROOT / "target/surface-assets") as directory:
             run([development_python(), "tools/build_surface_assets.py", str(directory)])
+    elif name == "gallery-assets":
+        with product(ROOT / "target/gallery-assets") as directory:
+            run(
+                [node(), "tools/build_gallery.mjs", "assets"],
+                env={"IPP_BUILD_OUTPUT": str(directory)},
+            )
     elif name == "gallery-gui-assets":
         with product(ROOT / "target/gallery-gui-assets") as directory:
             authoring = ROOT / "examples/world-gallery/worlds/gui/authoring"
@@ -340,8 +348,8 @@ def build(name: str) -> None:
                     str(directory),
                 ]
             )
-    elif name == "gallery-platformer-assets":
-        gallery_platformer_assets()
+    elif name in ("gallery-platformer-assets", "gallery-platformer-native-assets"):
+        gallery_platformer_assets(native=name == "gallery-platformer-native-assets")
     elif name in ("world-hosts", "scaling-host"):
         world_hosts(name == "scaling-host")
     elif name == "builtin-exporter":

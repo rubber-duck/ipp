@@ -10,14 +10,14 @@ import type {
   RootBinding,
   RowPropertyValue,
 } from "@ipp/client";
-import { clientAssetSource } from "../../packages/ipp-client/src/asset-sources.js";
+import { clientAssetSource } from "@ipp/client";
 import type * as Generated from "@ipp/host-contract";
 import {
   aliasId,
   createEntity,
   insertComponent,
   successfulBatch,
-} from "./commands.js";
+} from "../charts/shared/commands.js";
 
 export type Plot2dContract = PlotContract &
   Pick<
@@ -37,7 +37,7 @@ const schema = [
   { name: "valid", kind: "f32" },
   { name: "color", kind: "vec4" },
 ] as const;
-import { declarePlot } from "./declare-plot.js";
+import { declarePlot } from "../charts/shared/declare-plot.js";
 import type { ReactWorldRoot, PlotContract } from "@ipp/react";
 
 type Row = Readonly<Record<string, RowPropertyValue>>;
@@ -517,25 +517,49 @@ export async function readyPlot2d(scene: Plot2dScene): Promise<void> {
 }
 
 /** Keep source identities while changing data and authored highlight selection. */
-export async function changePlot2d(scene: Plot2dScene): Promise<void> {
+export async function changePlot2d(
+  scene: Plot2dScene,
+  changed = true,
+): Promise<void> {
   for (const index of [0, 1]) {
     const outcome = await scene.host.datasets.update(scene.producers[index]!, [
-      { operation: "edit", row: 3n, values: data(4, 30, 50) },
+      {
+        operation: "edit",
+        row: 3n,
+        values: changed ? data(4, 30, 50) : data(4, 65, 60),
+      },
     ]);
     if (outcome.failure) throw new Error("Line source edit failed");
     await setLabels(scene, index, [
-      label(5n, "selected / 35", [-130, -54], true),
+      changed
+        ? label(5n, "selected / 35", [-130, -54], true)
+        : label(3n, "sample / 65", [26, -48], true),
     ]);
   }
-  await pinPlot2dParameter(scene, 1);
+  await pinPlot2dParameter(scene, changed ? 1 : 0);
   await scene.host.datasets.update(scene.producers[2]!, [
-    { operation: "edit", row: 2n, values: data(2, 40) },
+    { operation: "edit", row: 2n, values: data(2, changed ? 40 : 65) },
   ]);
-  await setLabels(scene, 2, [label(4n, "D / 80", [-90, -45], true)]);
-  await setLabels(scene, 3, [
-    label(2n, "30 / SELECTED", [-180, 20], true),
-    label(1n, "40 / SHARE", [42, -64]),
+  await setLabels(scene, 2, [
+    changed
+      ? label(4n, "D / 80", [-90, -45], true)
+      : label(2n, "B / 65", [24, -48], true),
   ]);
+  await setLabels(
+    scene,
+    3,
+    changed
+      ? [
+          label(2n, "30 / SELECTED", [-180, 20], true),
+          label(1n, "40 / SHARE", [42, -64]),
+        ]
+      : [
+          label(1n, "40 / SHARE", [42, -64], true),
+          label(2n, "30 / SHARE", [-180, 16]),
+          label(3n, "20 / SHARE", [-170, -42]),
+          label(4n, "10 / SHARE", [12, -52]),
+        ],
+  );
 }
 
 /** Playback intent only: the Host owns time; captures pin the existing controller. */

@@ -8,13 +8,14 @@ import {
 import type { IppCanvasHandle } from "@ipp/react/web";
 import type { GuiUnhandledInputGate } from "@ipp/react/gui";
 import { useEffect, useRef, useState } from "react";
-import {
-  initializeCamera,
-  setCameraView,
-  type CameraView,
-} from "./shared/camera.js";
+import { type CameraView } from "./shared/camera.js";
 import { installCameraControls } from "./shared/camera-controls.js";
-import { gallerySceneFromHash } from "./scene-catalog.js";
+import type {
+  GalleryAssets,
+  GalleryOptions,
+  GallerySceneDefinition,
+  GallerySceneMount,
+} from "./shared/scene.js";
 
 declare global {
   interface Window {
@@ -49,130 +50,206 @@ export class PendingRequests {
   }
 }
 
-/** Authored worlds share a session; the disk scene owns a fresh loaded session.
- * Each session presents its gallery camera as the explicit Canvas root output. */
-export function useGallery() {
-  const [attached, setAttached] = useState<{
+/** Browser navigation and presentation wrap the same mounts as native sessions. */
+export function useGallery(
+  scene: GallerySceneDefinition,
+  options: GalleryOptions,
+  assets: GalleryAssets,
+  contract: Readonly<Record<string, unknown>>,
+  onNavigate: (page: CameraView) => void,
+  retainOptions: (page: CameraView, options: GalleryOptions) => void,
+) {
+  const [handle, setHandle] = useState<IppCanvasHandle>();
+  const [mounted, setMounted] = useState<{
     handle: IppCanvasHandle;
-    output: OutputReference;
+    mount: GallerySceneMount;
   }>();
   const [view, setView] = useState<PresentationView | null>(null);
+  const [sceneReady, setSceneReady] = useState(false);
+  const [frameReady, setFrameReady] = useState(false);
+  const [transitioning, setTransitioning] = useState(false);
+  const [, changed] = useState(0);
   const canvas =
-    attached && view && sameOutput(view.binding.output, attached.output)
-      ? attached.handle
+    mounted &&
+    sceneReady &&
+    frameReady &&
+    view &&
+    sameOutput(view.binding.output, mounted.mount.output)
+      ? mounted.handle
       : undefined;
   const canvasFrame = useRef<HTMLDivElement>(null);
   const cameraControls = useRef<(() => void) | undefined>(undefined);
-  const cameraId = useRef<bigint | undefined>(undefined);
-  const cameraRest = useRef<Record<string, unknown>>({});
-  const generation = useRef(0);
-  const [page, setPage] = useState<CameraView>(() =>
-    gallerySceneFromHash(window.location.hash),
-  );
-  const [switching, setSwitching] = useState(false);
+  const page = scene.id;
   const [pendingPicks] = useState(() => new PendingRequests());
   const [error, setError] = useState<string>();
+  const currentOptions = useRef(options);
+  currentOptions.current = options;
+  const mountedRef = useRef<GallerySceneMount | undefined>(undefined);
+  const mounting = useRef(Promise.resolve());
+  const cleanupFailures = useRef(new WeakMap<IppCanvasHandle, unknown>());
+  const disposeScene = useRef<(() => Promise<void>) | undefined>(undefined);
 
   useEffect(() => {
-    if (!canvas) return;
-    window.ippWorldCanvas = canvas;
+    if (!handle) return;
+    const startup = new AbortController();
+    let owned: GallerySceneMount | undefined;
+    let unsubscribe: (() => void) | undefined;
+    setSceneReady(false);
+    setFrameReady(false);
+    setMounted(undefined);
+    const report = (failure: unknown) => {
+      if (!startup.signal.aborted) setError(message(failure));
+    };
+    const pending = mounting.current.then(async () => {
+      if (startup.signal.aborted) return;
+      if (cleanupFailures.current.has(handle))
+        throw cleanupFailures.current.get(handle);
+      await assets.prepare(scene.resources ?? [], startup.signal);
+      const mount = await scene.mount(
+        {
+          canvas: handle,
+          assets,
+          contract,
+          signal: startup.signal,
+          onError: report,
+        },
+        currentOptions.current,
+      );
+      owned = mount;
+      if (startup.signal.aborted) return;
+      mountedRef.current = mount;
+      unsubscribe = mount.subscribe?.(() => changed((value) => value + 1));
+      setMounted({ handle, mount });
+      void mount.ready.then(() => {
+        if (!startup.signal.aborted) setSceneReady(true);
+      }, report);
+    });
+    mounting.current = pending.catch(report);
+    let cleanup: Promise<void> | undefined;
+    const dispose = () => {
+      if (cleanup) return cleanup;
+      startup.abort();
+      unsubscribe?.();
+      mountedRef.current = undefined;
+      cleanup = mounting.current
+        .then(async () => {
+          await owned?.dispose();
+        })
+        .catch((failure: unknown) => {
+          cleanupFailures.current.set(handle, failure);
+          setError(message(failure));
+          throw failure;
+        });
+      // The returned barrier keeps cleanup failure observable to navigation;
+      // the mount queue retains its separate per-handle failure fence above.
+      mounting.current = cleanup.then(
+        () => {},
+        () => {},
+      );
+      return cleanup;
+    };
+    disposeScene.current = dispose;
     return () => {
-      generation.current += 1;
+      if (disposeScene.current === dispose) disposeScene.current = undefined;
+      void dispose().catch(() => {});
+    };
+  }, [handle, scene, assets, contract]);
+
+  useEffect(() => {
+    const mount = mountedRef.current;
+    if (!mount) return;
+    void mount
+      .update(options)
+      .catch((failure: unknown) => setError(message(failure)));
+  }, [options]);
+
+  useEffect(() => {
+    if (
+      !sceneReady ||
+      !mounted ||
+      !view ||
+      !sameOutput(view.binding.output, mounted.mount.output)
+    )
+      return;
+    let active = true;
+    void Promise.resolve(mounted.mount.resize?.(view.binding.viewport))
+      .then(() =>
+        mounted.handle.frame({ afterOutputs: [mounted.mount.output] }),
+      )
+      .then(
+        () => {
+          if (active) {
+            setFrameReady(true);
+            setTransitioning(false);
+          }
+        },
+        (failure: unknown) => {
+          if (active) setError(message(failure));
+        },
+      );
+    return () => {
+      active = false;
+    };
+  }, [sceneReady, mounted, view]);
+
+  useEffect(() => {
+    if (!handle) return;
+    // Inspection observes the connected primary World while resources prepare;
+    // controls and frame capture still use the scene-ready canvas above.
+    window.ippWorldCanvas = handle;
+    return () => {
       delete window.ippWorldCanvas;
     };
-  }, [canvas]);
-
-  async function ready(handle: IppCanvasHandle) {
-    const client = handle.client as GalleryClient;
-    const world = client.worldReference;
-    if (!world) throw new Error("The gallery requires an explicit World");
-    let camera: bigint;
-    if (page === "platformer") {
-      const state = await client.inspect();
-      const saved = state.entities.find(
-        (value) => value.metadata.symbolicId === "platformer-camera",
-      );
-      if (!saved) throw new Error("Saved platformer camera is missing");
-      camera = saved.id;
-      cameraRest.current =
-        saved.components.find((value) => "qx" in value.fields)?.fields ?? {};
-    } else {
-      camera = await initializeCamera(client);
-      if (page !== "shapes") await setCameraView(client, camera, page);
-    }
-    cameraId.current = camera;
-    const output = await handle.host.bindOutput(world, camera, "camera");
-    setSwitching(false);
-    setAttached({ handle, output });
-  }
+  }, [handle]);
 
   async function navigate(nextPage: CameraView) {
-    if (!canvas || cameraId.current === undefined) return;
-    cameraControls.current?.();
-    const request = ++generation.current;
-    setSwitching(true);
-    const diskPage = (value: CameraView) => value === "platformer";
-    if (page !== nextPage && (diskPage(page) || diskPage(nextPage))) {
-      setAttached(undefined);
-      setView(null);
-      cameraId.current = undefined;
-      setPage(nextPage);
-      window.location.hash = nextPage;
-      setError(undefined);
+    if (!canvas && !handle && !error) return;
+    if (nextPage === page) {
+      try {
+        await mounted?.mount.action("resetCamera");
+      } catch (failure) {
+        setError(message(failure));
+      }
       return;
     }
-    try {
-      if (page === "platformer") {
-        // Restore the imported camera placement after interactive orbit/zoom.
-        const state = await canvas.client.inspect();
-        const camera = state.entities.find(
-          (value) => value.id === cameraId.current,
-        )!;
-        const transform = camera.components.find(
-          (value) => "qx" in value.fields,
-        )!;
-        const result = await canvas.client.batch(
-          Object.entries(cameraRest.current).map(([name, value]) => ({
-            kind: "setField" as const,
-            entity: { kind: "handle" as const, id: camera.id },
-            component: transform.component,
-            field: {
-              offset: canvas.client.components.Transform!.fields[name]!.offset,
-              value: { kind: "f32" as const, value: Number(value) },
-            },
-          })),
-        );
-        if (!result.ok) throw new Error(result.error.reason);
+    cameraControls.current?.();
+    setTransitioning(true);
+    if (mounted && page !== "gui") retainOptions(page, mounted.mount.options);
+    if (page === "platformer" || nextPage === "platformer") {
+      try {
+        // A new Canvas closes the previous Host. Remove declarations and
+        // owned children while its old session can still acknowledge cleanup.
+        await disposeScene.current?.();
+      } catch (failure) {
+        setTransitioning(false);
+        setError(message(failure));
         return;
       }
-      await setCameraView(
-        canvas.client as GalleryClient,
-        cameraId.current,
-        nextPage,
-      );
-      if (generation.current !== request) return;
-      setPage(nextPage);
-      window.location.hash = nextPage;
-      setError(undefined);
-    } catch (failure) {
-      if (generation.current === request) setError(message(failure));
-    } finally {
-      if (generation.current === request) setSwitching(false);
+      setHandle(undefined);
     }
+    setMounted(undefined);
+    setView(null);
+    setSceneReady(false);
+    setFrameReady(false);
+    setError(undefined);
+    onNavigate(nextPage);
+    window.location.hash = nextPage;
   }
 
   return {
     canvas,
-    output: attached?.output ?? null,
+    handle,
+    mount: mounted?.mount,
+    output: mounted?.mount.output ?? null,
     viewChanged: setView,
     canvasFrame,
     cameraControls,
     page,
-    switching,
+    switching: transitioning || (!!handle && !sceneReady),
     pendingPicks,
     error,
     setError,
-    ready,
+    ready: setHandle,
     navigate,
   };
 }

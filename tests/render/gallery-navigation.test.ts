@@ -319,6 +319,20 @@ test("gallery fills desktop and phone viewports while picker and controls preser
         await page.locator("#world-shapes").getAttribute("aria-current"),
         "page",
       );
+      assert.deepEqual(
+        await page
+          .locator(".scene-option")
+          .evaluateAll((options) => options.map((option) => option.id)),
+        [
+          "world-shapes",
+          "world-lighting",
+          "world-platformer",
+          "world-particles",
+          "world-gui",
+          "world-charts2d",
+          "world-charts3d",
+        ],
+      );
       await page.locator("#scene-search").fill("no matching world");
       assert.match(
         await page.locator(".empty-search").innerText(),
@@ -422,7 +436,7 @@ test("gallery fills desktop and phone viewports while picker and controls preser
       await page.waitForFunction(
         () => document.querySelector<HTMLDialogElement>("#scene-picker")?.open,
       );
-      const lastScene = page.locator("#world-gui");
+      const lastScene = page.locator("#world-charts3d");
       await lastScene.scrollIntoViewIfNeeded();
       const [pickerBounds, lastSceneBounds] = await Promise.all([
         page.locator("#scene-picker").boundingBox(),
@@ -440,11 +454,17 @@ test("gallery fills desktop and phone viewports while picker and controls preser
       await page.waitForFunction(
         () =>
           document.querySelector<HTMLElement>(".viewer-shell")?.dataset.page ===
-            "gui" &&
+            "charts3d" &&
           document.querySelector<HTMLOutputElement>("#status")?.dataset
             .state === "ready",
       );
       assert.equal(await readSession(), desktop.session.toString());
+      await g.navigate("gui");
+      assert.equal(
+        await readSession(),
+        desktop.session.toString(),
+        "GUI navigation replaced the authored gallery session",
+      );
       await g.navigate("shapes");
       await tap("#controls-toggle");
       await waitForControls(true, true);

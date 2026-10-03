@@ -2,6 +2,7 @@
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
+import { createInterface } from "node:readline/promises";
 import {
   closeClient,
   moduleName,
@@ -34,13 +35,19 @@ import {
 
 const USAGE = `Usage: node tools/shared-host/shared-host.mjs <command>
 
-  host start [--egl-dir DIR] [--no-build]  build and start the shared Host
+  host start [--egl-dir DIR] [--no-build] [--gallery]
+  host start --io-read PREFIX DIRECTORY   authorize a read-only asset root (repeatable)
   host status                              Host, Worlds, sessions, lock holder
   host stop                                stop the Host and its sessions
   run MODULE [ARGS...]                     open a client module, capture once
   session start MODULE --name NAME [ARGS...]
                                            keep a client module open
   session capture NAME [ARGS...]           reload the module if edited, capture
+  gallery SCENE --name NAME [--watch]      mount one shared gallery scene
+  session options NAME '{"option":value}' apply high-level scene options
+  session action NAME ACTION [JSON]       run a scene action
+  session inspect NAME | session reload NAME
+  session repl NAME                      interactive options/action/capture/reload
   session list | session stop NAME | session stop --all
   compare FIRST.png SECOND.png [--first-box X,Y,W,H] [--second-box X,Y,W,H]
           [--zoom-factor N] [--out FILE]   side-by-side of two PNGs
@@ -62,9 +69,13 @@ const COMMON = {
   "no-build": "boolean",
   all: "boolean",
   help: "boolean",
+  watch: "boolean",
+  gallery: "boolean",
 } as const;
 
-type Common = { -readonly [Key in keyof typeof COMMON]?: string | boolean };
+type Common = { -readonly [Key in keyof typeof COMMON]?: string | boolean } & {
+  ioRead?: { prefix: string; directory: string }[];
+};
 
 function split(argv: readonly string[]): {
   common: Common;
@@ -74,6 +85,14 @@ function split(argv: readonly string[]): {
   const rest: string[] = [];
   for (let index = 0; index < argv.length; index++) {
     const argument = argv[index]!;
+    if (argument === "--io-read") {
+      const prefix = argv[++index],
+        directory = argv[++index];
+      if (!prefix || !directory)
+        throw new Error("--io-read needs PREFIX DIRECTORY");
+      (common.ioRead ??= []).push({ prefix, directory });
+      continue;
+    }
     const match = /^--([^=]+)(?:=(.*))?$/.exec(argument);
     const name = match?.[1] as keyof typeof COMMON | undefined;
     const kind = name && COMMON[name];
@@ -127,6 +146,8 @@ async function hostCommand(
       eglDirectory:
         text(common["egl-dir"]) ?? process.env.IPP_EGL_LIBRARY_DIR ?? "/lib64",
       build: common["no-build"] !== true,
+      gallery: common.gallery === true,
+      ...(common.ioRead ? { ioRead: common.ioRead } : {}),
     });
     print(
       json,
@@ -225,7 +246,7 @@ async function run(
     };
     print(common.json === true, result, describe(result));
   } finally {
-    await closeClient(open).catch(() => {});
+    await closeClient(open);
   }
 }
 
@@ -250,6 +271,7 @@ async function sessionCommand(
       module,
       name,
       args,
+      watch: common.watch === true,
       ...(text(common["idle-minutes"])
         ? { idleMinutes: text(common["idle-minutes"])! }
         : {}),
@@ -269,13 +291,21 @@ async function sessionCommand(
       name: text(common.name)!,
       args,
       idleMinutes: Number(text(common["idle-minutes"]) ?? 120),
+      watch: common.watch === true,
     });
-  } else if (action === "capture") {
+  } else if (
+    ["capture", "options", "action", "inspect", "reload"].includes(action ?? "")
+  ) {
     const [name, ...args] = rest;
     const session = await findSession(directory, name ?? "");
     const started = performance.now();
     const reply = await request(session, {
-      command: "capture",
+      command: action as
+        | "capture"
+        | "options"
+        | "action"
+        | "inspect"
+        | "reload",
       args,
       ...(text(common.out) ? { out: resolve(text(common.out)!) } : {}),
     });
@@ -288,7 +318,71 @@ async function sessionCommand(
         commandMs: performance.now() - started,
       },
     };
-    print(json, timed, describe(timed));
+    print(
+      json,
+      timed,
+      [
+        describe(timed),
+        ...(action !== "capture" && timed.report !== undefined
+          ? [
+              JSON.stringify(
+                timed.report,
+                (_, value) =>
+                  typeof value === "bigint" ? String(value) : value,
+                2,
+              ),
+            ]
+          : []),
+      ].join("\n"),
+    );
+  } else if (action === "repl") {
+    const session = await findSession(directory, rest[0] ?? "");
+    const terminal = createInterface({
+      input: process.stdin,
+      output: process.stdout,
+    });
+    console.log(
+      "options JSON; action NAME [JSON]; capture; inspect; reload; quit (leave session running)",
+    );
+    try {
+      for (;;) {
+        const line = await terminal
+          .question(`${session.name}> `)
+          .catch(() => "quit");
+        const match = /^(\S+)(?:\s+(.*))?$/.exec(line.trim());
+        if (!match) continue;
+        const command = match[1]!;
+        if (command === "quit" || command === "exit") break;
+        try {
+          if (
+            !["options", "action", "capture", "inspect", "reload"].includes(
+              command,
+            )
+          )
+            throw new Error("Unknown REPL command");
+          const args =
+            command === "action"
+              ? (match[2]
+                  ?.match(/^(\S+)(?:\s+([\s\S]*))?$/)
+                  ?.slice(1)
+                  .filter((value): value is string => value !== undefined) ??
+                [])
+              : match[2]
+                ? [match[2]]
+                : [];
+          const reply = await request(session, {
+            command: command as "capture",
+            args,
+            ...(text(common.out) ? { out: resolve(text(common.out)!) } : {}),
+          });
+          print(json, reply, JSON.stringify(reply, null, 2));
+        } catch (error) {
+          console.error(error instanceof Error ? error.message : error);
+        }
+      }
+    } finally {
+      terminal.close();
+    }
   } else if (action === "stop") {
     const sessions = common.all
       ? await readSessions(directory)
@@ -379,5 +473,13 @@ export async function main(
   else if (command === "run") await run(workspace, directory, rest, common);
   else if (command === "session")
     await sessionCommand(workspace, directory, launcher, rest, common);
+  else if (command === "gallery")
+    await sessionCommand(
+      workspace,
+      directory,
+      launcher,
+      ["start", "tools/shared-host/gallery.ts", ...rest],
+      common,
+    );
   else throw new Error(USAGE);
 }

@@ -108,6 +108,7 @@ export async function openGallery(
     );
   };
   const settle = async () => {
+    await call("waitForGallerySceneReady");
     await settleSelection();
     return inspect();
   };

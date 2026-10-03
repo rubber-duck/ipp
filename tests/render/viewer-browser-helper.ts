@@ -1778,10 +1778,24 @@ export function countViewerColors(
   });
 }
 
+/** Scene completion is separate from the connected diagnostic canvas handle. */
+export async function waitForGallerySceneReady(): Promise<void> {
+  const deadline = performance.now() + 15_000;
+  for (;;) {
+    const status = document.querySelector<HTMLOutputElement>("#status");
+    if (status?.dataset.state === "ready") return;
+    if (status?.dataset.state === "error")
+      throw new Error(status.textContent?.trim() || "Gallery scene failed");
+    const remaining = deadline - performance.now();
+    if (remaining <= 0) throw new Error("Gallery scene did not become ready");
+    await nextFrame(remaining);
+  }
+}
+
 export async function waitForViewer(): Promise<ViewerObservation> {
   const deadline = performance.now() + 10_000;
   let handle = (window as ViewerWindow).ippWorldCanvas;
-  while (handle === undefined) {
+  while (handle === undefined || !handle.view) {
     const status = document.querySelector<HTMLOutputElement>("#status");
     if (status?.dataset.state === "error") {
       throw new Error(
@@ -1793,6 +1807,7 @@ export async function waitForViewer(): Promise<ViewerObservation> {
     await nextFrame(remaining);
     handle = (window as ViewerWindow).ippWorldCanvas;
   }
+  await waitForGallerySceneReady();
   const ready = await captureCanvas(handle);
   return {
     session: ready.session,

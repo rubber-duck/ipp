@@ -8,7 +8,7 @@ import {
   ParticleMesh,
 } from "@ipp/react";
 import { hexToLinear } from "../../shared/colors.js";
-import type { ParticleSettings } from "./controls.js";
+import type { ParticleSettings } from "./options.js";
 
 /** React authors one persistent emitter; the Host owns every simulation step. */
 export function ParticlesWorld({ settings }: { settings: ParticleSettings }) {

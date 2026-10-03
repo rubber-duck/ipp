@@ -26,6 +26,12 @@ Track desired declarations, submitted work and acknowledged identities separatel
 
 Resolve child World/session and output identities before parent attachment submission. Recover from a successful batch in one World followed by failure in another without assuming rollback; cleanup retains the acknowledged identities needed to detach, delete what the root created or adopted and destroy only child Worlds the boundary created. Keep asset preparation and World-local animation binding behind their existing readiness/acknowledgement boundaries.
 
+## Shared gallery runners
+
+Extract gallery scene definitions behind the [shared scene boundary](../architecture/authoring.md#shared-scene-gallery), keeping browser controls and navigation in the DOM shell. Reuse headless React roots and Canvas/attached-World composition through the same session context as browser mounting. Supply target-matched encoders and asset reads through adapters rather than importing browser build paths in scene modules.
+
+Exercise the same scene fixtures through worker/WASM/WebGL and persistent Node/WebSocket/GLES sessions. Keep launch, source rebuild, presentation and capture in reusable environment drivers; scene assertions inspect acknowledged state and completed frames. Cover option changes, actions, animated capture, successful remount with preserved options, failed builds retaining the active scene and cleanup of owned Worlds/resources. Native development starts with offscreen PNG capture; browser evidence retains DOM inspector and routed input behavior.
+
 ## Integration harness
 
 Extend the `react`, `canvas`, `animation` and `custom-materials` [suites](../../tools/pipeline/suites.json) through real React DOM/custom reconciler → generated SDK → worker/WASM/WebGL. Use shared World/asset fixtures and a second client writing the same fields as React.

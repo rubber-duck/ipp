@@ -1,35 +1,63 @@
 use super::*;
 use crate::{HostRuntime, OutputKind, ViewQueryTarget, WorldPublication};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
-/// Worlds one composed walk has entered.
-///
-/// A World has at most one active parent attachment and the Host rejects
-/// cycles, so a completed composition is a tree and a walk enters each World
-/// once, or once per layer plane of a Surface separating its canvas's layers.
-/// This replaces a fixed work budget: the walk is bounded by the composition
-/// it reads, and a World reached twice is an inconsistent composition that
-/// fails the one query instead of looping.
+/// Worlds a geometry-independent traversal has entered. Keyboard traversal
+/// visits each attachment once; repeated Worlds indicate inconsistent topology.
 #[derive(Default)]
-pub(crate) struct GuiQueryWorlds(BTreeSet<(WorldRef, Option<u32>)>);
+pub(crate) struct GuiQueryWorlds(BTreeSet<WorldRef>);
 
 impl GuiQueryWorlds {
     /// Record entry into `world`, failing if this walk already entered it.
     pub(crate) fn enter(&mut self, world: WorldRef) -> Result<(), GuiQueryUnavailable> {
-        self.enter_plane(world, None)
-    }
-
-    /// Record entry into one layer plane of `world`'s canvas, or into the
-    /// whole World without `layer`.
-    pub(crate) fn enter_plane(
-        &mut self,
-        world: WorldRef,
-        layer: Option<u32>,
-    ) -> Result<(), GuiQueryUnavailable> {
-        if self.0.insert((world, layer)) {
+        if self.0.insert(world) {
             Ok(())
         } else {
             Err(GuiQueryUnavailable::RepeatedWorld)
+        }
+    }
+}
+
+/// Distinct geometric candidates may revisit the same attachment path. Reject
+/// cycles and competing topology, while allowing every root and its descendants.
+#[derive(Default)]
+pub(super) struct GuiQueryPaths(BTreeMap<WorldRef, Vec<(u64, u64)>>);
+
+impl GuiQueryPaths {
+    pub(super) fn enter(
+        &mut self,
+        world: WorldRef,
+        path: &[GuiQueryStep],
+    ) -> Result<(), GuiQueryUnavailable> {
+        let mut ancestry = BTreeSet::new();
+        let mut previous = path.first().map(|step| step.token.parent());
+        if let Some(root) = previous {
+            ancestry.insert(root);
+        }
+        for step in path {
+            if Some(step.token.parent()) != previous {
+                return Err(GuiQueryUnavailable::RepeatedWorld);
+            }
+            let child = step
+                .token
+                .child()
+                .ok_or(GuiQueryUnavailable::RepeatedWorld)?;
+            if !ancestry.insert(child) {
+                return Err(GuiQueryUnavailable::RepeatedWorld);
+            }
+            previous = Some(child);
+        }
+        if previous.is_some_and(|last| last != world) {
+            return Err(GuiQueryUnavailable::RepeatedWorld);
+        }
+        let identity: Vec<_> = path.iter().map(|step| step.token.identity()).collect();
+        match self.0.get(&world) {
+            Some(known) if *known != identity => Err(GuiQueryUnavailable::RepeatedWorld),
+            Some(_) => Ok(()),
+            None => {
+                self.0.insert(world, identity);
+                Ok(())
+            }
         }
     }
 }
@@ -40,7 +68,7 @@ pub(super) struct QueryView {
     pub point: [f32; 2],
     pub extent: [f64; 2],
     pub path: Vec<GuiQueryStep>,
-    /// The one canvas layer a Surface plane holds where the Surface separates
+    /// The one canvas layer a Surface shell holds where the Surface separates
     /// layers; `None` tests every layer in reverse painter order.
     pub layer: Option<u32>,
 }
@@ -53,7 +81,7 @@ pub(super) enum QueryTask<'a> {
 pub(super) struct QueryWalk<'a, 'options> {
     pub host: &'a HostRuntime,
     pub options: GuiQueryOptions<'options>,
-    pub worlds: GuiQueryWorlds,
+    pub paths: GuiQueryPaths,
     pub pending: Vec<QueryTask<'a>>,
     /// Path to the nearest Surface a Camera ray entered, reported when the
     /// walk ends without a hit.
@@ -78,7 +106,7 @@ pub fn query_composed_input<'a>(
     let mut walk = QueryWalk {
         host,
         options,
-        worlds: GuiQueryWorlds::default(),
+        paths: GuiQueryPaths::default(),
         pending: vec![QueryTask::View(QueryView {
             output: view.output,
             publication: view.publication,
@@ -127,7 +155,7 @@ impl<'a> QueryWalk<'a, '_> {
             {
                 self.panel = Some(view.path.clone());
             }
-            self.worlds.enter_plane(view.output.world(), view.layer)?;
+            self.paths.enter(view.output.world(), &view.path)?;
             if let Some(reason) = self.branch_block(view.output.world()) {
                 return Ok(GuiQueryOutcome::Blocked {
                     reason,

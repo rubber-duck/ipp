@@ -8,7 +8,7 @@ import {
 import {
   createRoot,
   Entity,
-  Surface,
+  FlatSurface,
   SurfaceCache,
   type AttachedWorldHandle,
   type ReactWorldRoot,
@@ -768,7 +768,7 @@ export async function surfaceCacheDeclarations() {
   const policyRoot = createRoot(client);
   const panel = (cache?: SurfaceCacheProps) => (
     <Entity id="surface-cache-policy">
-      <Surface width={1} height={1} />
+      <FlatSurface width={1} height={1} />
       {cache ? <SurfaceCache {...cache} /> : null}
     </Entity>
   );

@@ -3,15 +3,14 @@
 //!
 //! A World selecting this System is a canvas: every top-level entity and its
 //! descendants are canvas content, painted depth-first in core sibling order
-//! within each layer. [`layers`] resolves `CanvasStyle.layer` plane ids before
-//! the walk, so every primitive, hit and slot carries its plane id and a raised
-//! entity's clip scope starts at the canvas extent; after the walk, paint and
-//! hits are stable-sorted by plane. Hits keep their tree-order ordinal for
-//! keyboard traversal. A canvas without layers skips both steps and publishes
-//! exactly its tree order. The walk leaves out every overlay the GUI layout did
-//! not show, closed or not raised, with its subtree, so it has no paint, hits,
-//! controls or layer; the open ones are published with the GUI observations in
-//! stacking order. The
+//! within each layer. [`layers`] sums relative `CanvasStyle.layer` offsets and
+//! orders complete GUI overlay scopes within semantic priority bands. Every
+//! primitive, hit and slot carries a compact physical rank. Ordinary raised
+//! content retains ancestor clips; an overlay resets clipping at the canvas.
+//! Paint and hits sort by rank, while hits retain tree ordinals for keyboard
+//! traversal. All-zero ordinary content keeps the tree-order fast path. Closed
+//! overlay subtrees have no output or occupied group. Open overlays publish in
+//! stacking order through GUI observations. The
 //! canvas's extent and density are this System's [`CanvasState`], set at World
 //! creation and changed by [`CanvasStateUpdate`] at the mutation boundary. A
 //! Surface presenting the canvas scales its physical size by the density, a root

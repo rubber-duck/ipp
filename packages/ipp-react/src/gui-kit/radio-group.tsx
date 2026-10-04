@@ -22,7 +22,7 @@
  */
 import { Children, Entity } from "../components.js";
 import { Button } from "../gui/controls.js";
-import { Behavior, Font, Group, Layout } from "../gui/components.js";
+import { Style, Behavior, Font, Group, Layout } from "../gui/components.js";
 import { Skin } from "../gui/theme.js";
 import {
   GROUP_HORIZONTAL,
@@ -52,6 +52,8 @@ export interface RadioOption {
 }
 
 export interface RadioGroupProps extends ChoiceProps {
+  /** Nonnegative layer offset applied once at this component root; zero inherits. */
+  readonly layer?: number;
   /** Symbolic id of the group's root entity; options extend it. */
   readonly id: string;
   /** The group's label above its options, such as AXIS. */
@@ -76,6 +78,7 @@ function geometry(kit: GuiKitScope) {
 
 export function RadioGroup({
   id,
+  layer = 0,
   label,
   options,
   horizontal = false,
@@ -92,6 +95,7 @@ export function RadioGroup({
   const optionsHeight = horizontal ? g.height : g.height * options.length;
   return (
     <Entity id={id}>
+      <Style layer={layer} />
       <Layout
         kind={LAYOUT_COLUMN}
         height={(label === undefined ? 0 : g.caption) + optionsHeight}

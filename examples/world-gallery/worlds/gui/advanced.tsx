@@ -11,6 +11,7 @@ import type { ReactNode } from "react";
 import { Behavior, Checkbox, Skin } from "@ipp/react/gui";
 import {
   Expander,
+  Panel,
   Row as KitRow,
   SegmentedControl,
   TextLine,
@@ -31,7 +32,8 @@ export const ADVANCED_HEIGHT =
 
 /** Symbolic IDs of the settings controls. */
 export const ADVANCED_CONTROLS = {
-  header: "gui-advanced-header",
+  section: "gui-advanced-header",
+  header: "gui-advanced-header/header",
   accent: "gui-accent",
   explode: "gui-explode",
   motion: "gui-reduced-motion",
@@ -42,61 +44,72 @@ export function Advanced({ scene }: { readonly scene: GuiScene }) {
   const accent = useStoreValue(scene.state, (state) => state.accent);
   return (
     <PanelBody id="gui-advanced">
-      <Expander
-        id={ADVANCED_CONTROLS.header}
-        label="ADVANCED"
-        summary="3 OPTIONS"
-        expanded={open}
-        onExpandedChange={scene.setAdvancedOpen}
+      <Panel
+        id="gui-advanced-panel"
+        layer={3}
+        layout={{
+          height: open ? ADVANCED_HEIGHT : TOKENS.controlHeight,
+          padding_left: 0,
+          padding_right: 0,
+        }}
       >
-        <Setting id="gui-accent-row" label="ACCENT" first>
-          <SegmentedControl
-            id={ADVANCED_CONTROLS.accent}
-            options={[
-              { value: "cyan", label: "CYAN" },
-              { value: "amber", label: "AMBER" },
-            ]}
-            value={accent}
-            onChange={(value) => scene.setAccent(value as Accent)}
-            layout={{ width: 160 }}
-          />
-        </Setting>
-        <Setting id="gui-explode-row" label="EXPLODE LAYERS">
-          <Entity id={ADVANCED_CONTROLS.explode}>
-            <BoxLayout
-              kind={LEAF}
-              width={72}
-              height={TOKENS.smallHeight}
-              alignY={0}
+        <Expander
+          id={ADVANCED_CONTROLS.section}
+          label="ADVANCED"
+          summary="3 OPTIONS"
+          expanded={open}
+          layout={{ height: ADVANCED_HEIGHT }}
+          onExpandedChange={scene.setAdvancedOpen}
+        >
+          <Setting id="gui-accent-row" label="ACCENT" first>
+            <SegmentedControl
+              id={ADVANCED_CONTROLS.accent}
+              options={[
+                { value: "cyan", label: "CYAN" },
+                { value: "amber", label: "AMBER" },
+              ]}
+              value={accent}
+              onChange={(value) => scene.setAccent(value as Accent)}
+              layout={{ width: 160 }}
             />
-            <Skin theme={SWITCH_THEME} />
-            <Behavior semantic_label="EXPLODE LAYERS" />
-            <Checkbox
-              label=""
-              checked={scene.initialControls.exploded}
-              ref={scene.explodeControl}
-              onToggle={(event) => scene.setExploded(event.value)}
-            />
-          </Entity>
-        </Setting>
-        <Setting id="gui-motion-row" label="REDUCED MOTION">
-          <Entity id={ADVANCED_CONTROLS.motion}>
-            <BoxLayout
-              kind={LEAF}
-              width={TOKENS.smallHeight}
-              height={TOKENS.smallHeight}
-              alignY={0}
-            />
-            <Behavior semantic_label="REDUCED MOTION" />
-            <Checkbox
-              label=""
-              checked={scene.initialControls.reducedMotion}
-              ref={scene.motionControl}
-              onToggle={(event) => scene.setReducedMotion(event.value)}
-            />
-          </Entity>
-        </Setting>
-      </Expander>
+          </Setting>
+          <Setting id="gui-explode-row" label="EXPLODE LAYERS">
+            <Entity id={ADVANCED_CONTROLS.explode}>
+              <BoxLayout
+                kind={LEAF}
+                width={72}
+                height={TOKENS.smallHeight}
+                alignY={0}
+              />
+              <Skin theme={SWITCH_THEME} />
+              <Behavior semantic_label="EXPLODE LAYERS" />
+              <Checkbox
+                label=""
+                checked={scene.state.current.exploded}
+                ref={scene.explodeControl}
+                onToggle={(event) => scene.setExploded(event.value)}
+              />
+            </Entity>
+          </Setting>
+          <Setting id="gui-motion-row" label="REDUCED MOTION">
+            <Entity id={ADVANCED_CONTROLS.motion}>
+              <BoxLayout
+                kind={LEAF}
+                width={TOKENS.smallHeight}
+                height={TOKENS.smallHeight}
+                alignY={0}
+              />
+              <Behavior semantic_label="REDUCED MOTION" />
+              <Checkbox
+                label=""
+                checked={scene.state.current.reducedMotion}
+                ref={scene.motionControl}
+                onToggle={(event) => scene.setReducedMotion(event.value)}
+              />
+            </Entity>
+          </Setting>
+        </Expander>
+      </Panel>
     </PanelBody>
   );
 }

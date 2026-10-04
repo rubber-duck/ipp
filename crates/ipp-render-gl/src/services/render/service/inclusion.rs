@@ -8,6 +8,8 @@ pub(super) struct OutputSources {
     pub stale_image: bool,
     pub collect_image: bool,
     pub image_outputs: BTreeSet<OutputRef>,
+    /// Optional images represented by pixels, regardless of publication freshness.
+    pub represented_images: BTreeSet<OutputRef>,
 }
 
 #[derive(Default)]
@@ -58,6 +60,9 @@ impl OutputInclusions {
                 self.active
                     .image_outputs
                     .extend(image.image_outputs.iter().copied());
+                self.active
+                    .represented_images
+                    .extend(image.represented_images.iter().copied());
             }
             self.active.sources.extend(
                 image

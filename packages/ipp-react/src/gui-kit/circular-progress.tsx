@@ -21,7 +21,7 @@
  * centres on each other.
  */
 import { Children, Entity } from "../components.js";
-import { Font, Layout } from "../gui/components.js";
+import { Style, Font, Layout } from "../gui/components.js";
 import { Arc, TURNING_SWEEP } from "./arc.js";
 import { LEAD } from "./row-motion.js";
 import { useGuiKit, type GuiKitTone, type GuiKitTypeSize } from "./kit.js";
@@ -42,6 +42,8 @@ export type CircularProgressStatus = "complete" | "failed";
 export type CircularProgressSize = "large" | "small";
 
 export interface CircularProgressProps {
+  /** Nonnegative layer offset applied once at this component root; zero inherits. */
+  readonly layer?: number;
   readonly id: string;
   /** The task, such as Uploading. */
   readonly label: string;
@@ -99,6 +101,7 @@ const OUTCOMES: Readonly<
 
 export function CircularProgress({
   id,
+  layer = 0,
   label,
   value,
   status,
@@ -153,6 +156,7 @@ export function CircularProgress({
 
   return (
     <Entity id={id}>
+      <Style layer={layer} />
       <Layout
         kind={LAYOUT_COLUMN}
         width={Math.max(kit.unit(diameter), caption)}

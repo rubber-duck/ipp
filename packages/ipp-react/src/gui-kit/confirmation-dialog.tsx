@@ -25,7 +25,7 @@ import { Layout } from "../gui/components.js";
 import { Skin } from "../gui/theme.js";
 import { useGuiKit } from "./kit.js";
 import { LAYOUT_COLUMN, LAYOUT_LEAF, LAYOUT_ROW, Row } from "./layout.js";
-import { Floating, GUI_KIT_LAYERS, useOverlayOpen } from "./overlay.js";
+import { Floating, useOverlayOpen } from "./overlay.js";
 import { PanelHeader } from "./panel.js";
 import { TextLine } from "./text.js";
 import { WindowControl } from "./window-controls.js";
@@ -37,6 +37,8 @@ import { WindowControl } from "./window-controls.js";
 const WIDTH = 368;
 
 export interface ConfirmationDialogProps {
+  /** Nonnegative layer offset applied once at this component root; zero inherits. */
+  readonly layer?: number;
   /** Symbolic id of the dialog; its parts extend it. */
   readonly id: string;
   /** Whether the dialog is open; the application closes it once answered. */
@@ -60,6 +62,7 @@ export interface ConfirmationDialogProps {
 
 export function ConfirmationDialog({
   id,
+  layer = 0,
   open,
   title,
   body,
@@ -118,10 +121,11 @@ export function ConfirmationDialog({
   return (
     <Floating
       id={id}
+      layer={layer}
       side="centre"
       align="centre"
       mode="modal"
-      layer={GUI_KIT_LAYERS.dialog}
+      band="dialog"
       open={open}
       onVisibleChange={overlay.onVisibleChange}
       layout={{ width: kit.unit(width) }}

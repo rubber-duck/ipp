@@ -1,7 +1,7 @@
 use super::input_test_support::GuiTestHost;
 use super::local_tests::{GuiTestValue, action, apply, create, frame, outcomes, snapshot};
 use super::*;
-use crate::components::Surface;
+use crate::components::FlatSurface;
 use crate::services::gui_input::*;
 use crate::systems::gui::GuiSystem;
 use crate::{
@@ -247,7 +247,7 @@ pub(super) fn attached() -> (
     let anchor = create(
         &mut host,
         parent,
-        ComponentValue::Surface(Surface::default()),
+        ComponentValue::FlatSurface(FlatSurface::default()),
     );
     apply(
         &mut host,

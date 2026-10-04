@@ -119,7 +119,7 @@ export async function composedOutputInclusion(
     const parentOutcome = successfulBatch(
       await parent.batch([
         createEntity(2, "child-surface"),
-        insertComponent(parent, "Surface", shape, {
+        insertComponent(parent, "FlatSurface", shape, {
           width: 1,
           height: 64 / 96,
         }),

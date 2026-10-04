@@ -25,10 +25,14 @@ impl<D: RenderDevice> RenderService<D> {
             surface_instance_program: None,
             surface_bitmap_program: None,
             surface_cache_program: None,
+            surface_image_program: None,
+            projected_surfaces: Default::default(),
+            projected_repainting: None,
             surface_cache: Default::default(),
             canvas_caches: Default::default(),
             canvas_cache_frame: Default::default(),
             surface_missing: Vec::new(),
+            surface_missing_draws: 0,
             surface_analytic_text: false,
             surface_gui_unretained: false,
             canvas_paints: Default::default(),
@@ -194,6 +198,7 @@ impl<D: RenderDevice> RenderService<D> {
         }
         // Cache images are rebuilt from current evaluated inputs; the budget survives.
         self.clear_surface_caches();
+        self.clear_projected_surfaces();
         for cache in self.analytic_glyphs.values_mut() {
             cache.clear();
         }
@@ -279,6 +284,7 @@ impl<D: RenderDevice> RenderService<D> {
         self.plot_label_layouts
             .retain(|selection, _| selection.world().id() != world);
         self.forget_surface_caches(world);
+        self.forget_projected_world(world);
         {
             self.surface_paint
                 .retain(|output, _| output.world().id() != world);
@@ -368,6 +374,7 @@ impl<D: RenderDevice> RenderService<D> {
                 .copied()
                 .collect();
             self.retain_canvas_outputs(outputs);
+            self.retain_projected_outputs(outputs);
             for selection in retired {
                 if let Some((target, _)) = self.camera_targets.remove(&selection) {
                     self.device.borrow_mut().delete_surface_cache_target(target);
@@ -418,6 +425,7 @@ impl<D: RenderDevice> RenderService<D> {
 
 impl<D: RenderDevice> Drop for RenderService<D> {
     fn drop(&mut self) {
+        self.clear_projected_surfaces();
         {
             let mut device = self.device.borrow_mut();
             self.surface_cache

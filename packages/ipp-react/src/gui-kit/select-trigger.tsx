@@ -14,7 +14,7 @@
 import { useCallback, type ReactNode, type Ref, type RefObject } from "react";
 import { Children, Entity } from "../components.js";
 import { Button } from "../gui/controls.js";
-import { Behavior, Font, Layout } from "../gui/components.js";
+import { Style, Behavior, Font, Layout } from "../gui/components.js";
 import { Skin } from "../gui/theme.js";
 import type {
   GuiPressListener,
@@ -33,6 +33,8 @@ export const SELECT_WIDTH = 240;
 const CHEVRON = 16;
 
 export interface SelectTriggerProps {
+  /** Nonnegative layer offset applied once at this component root; zero inherits. */
+  readonly layer?: number;
   readonly id: string;
   /** The value shown, or the placeholder while `placeholder` is set. */
   readonly text: string;
@@ -64,6 +66,7 @@ export function selectTextRoom(
 
 export function SelectTrigger({
   id,
+  layer = 0,
   text,
   placeholder = false,
   open,
@@ -80,6 +83,7 @@ export function SelectTrigger({
   const inset = kit.unit(t.inset);
   return (
     <Entity id={id}>
+      <Style layer={layer} />
       <Layout
         kind={LAYOUT_ROW}
         width={kit.unit(SELECT_WIDTH)}
@@ -134,6 +138,8 @@ export function SelectTrigger({
 }
 
 export interface SelectListProps {
+  /** Nonnegative layer offset applied once at this component root; zero inherits. */
+  readonly layer?: number;
   readonly id: string;
   /** Its `Behavior.visible` as declared: open, with anything to show. */
   readonly open: boolean;
@@ -149,6 +155,7 @@ export interface SelectListProps {
  */
 export function SelectList({
   id,
+  layer = 0,
   open,
   onVisibleChange,
   children,
@@ -157,6 +164,7 @@ export function SelectList({
   return (
     <Floating
       id={id}
+      layer={layer}
       mode="light"
       align="stretch"
       open={open}

@@ -1,7 +1,5 @@
-//! Canvas layers through real headless Host frames: plane ids resolved from
-//! any depth, painter and hit order by plane then tree order, planes that keep
-//! their ids as others come and go, clip scopes, inherited style, the
-//! unchanged publication of a canvas without layers, and tree edits.
+//! Relative layers through headless Host frames: sums across uneven depths,
+//! compact ranks, repacking, retained ancestor clips and the all-zero fast path.
 
 mod support;
 
@@ -14,7 +12,7 @@ use support::gui_panel::*;
 
 const EXTENT: [f32; 2] = [300.0, 200.0];
 
-/// The canvas clip a raised entity's scope starts from.
+/// The initial canvas clip.
 const CANVAS: [f32; 4] = [0.0, 0.0, EXTENT[0], EXTENT[1]];
 
 fn panel() -> GuiPanel {
@@ -50,7 +48,7 @@ fn at(position: [f32; 2], layer: u32) -> CanvasStyle {
     }
 }
 
-/// An eligible button of `size` at `position` on plane `layer`, painting a
+/// An eligible button of `size` at `position` with relative offset `layer`, painting a
 /// plain box over its bounds.
 fn button(
     panel: &mut GuiPanel,
@@ -149,8 +147,8 @@ fn assert_ordered(view: &CanvasPublication) {
 /// root
 ///  ├ a      button (0, 0) 100 x 100
 ///  ├ b      group (50, 50), layer 1
-///  │  ├ c   button (0, 0) 100 x 100          plane 1, its parent's
-///  │  └ e   button (10, 10) 20 x 20, layer 1 plane 2, above its parent's
+///  │  ├ c   button (0, 0) 100 x 100          level 1, inherited
+///  │  └ e   button (10, 10) 20 x 20, layer 1 level 2, parent + 1
 ///  └ d      button (60, 60) 100 x 100
 /// ```
 struct Scene {
@@ -218,7 +216,7 @@ fn paint_follows_layer_then_tree_order_and_hits_reverse_it() {
 }
 
 #[test]
-fn layers_are_plane_ids_that_keep_their_ids_and_leave_gaps() {
+fn large_offsets_publish_compact_ranks_and_removing_a_group_repacks() {
     let Scene {
         mut panel,
         b,
@@ -228,22 +226,21 @@ fn layers_are_plane_ids_that_keep_their_ids_and_leave_gaps() {
     } = scene(1);
     set_layer(&mut panel, e, 5);
     let view = panel.output();
-    assert_eq!(*view.layers, [0, 1, 5]);
-    assert_eq!(box_style(&view, e).layer, 5);
-    assert_eq!(control_hit(&view, e).layer, 5);
+    assert_eq!(*view.layers, [0, 1, 2]);
+    assert_eq!(box_style(&view, e).layer, 2);
+    assert_eq!(control_hit(&view, e).layer, 2);
 
-    // Lowering b leaves planes 0 and 5, with c back on the base and e still
-    // on plane 5 although no plane between them is in use.
+    // Lowering b leaves two occupied groups; the later rank repacks.
     set_layer(&mut panel, b, 0);
     let view = panel.output();
-    assert_eq!(*view.layers, [0, 5]);
+    assert_eq!(*view.layers, [0, 1]);
     assert_eq!(box_style(&view, c).layer, 0);
-    assert_eq!(box_style(&view, e).layer, 5);
+    assert_eq!(box_style(&view, e).layer, 1);
     assert_ordered(&view);
 }
 
 #[test]
-fn the_same_id_from_any_depth_shares_a_plane_and_a_nested_raise_rises_above_its_parent() {
+fn equal_relative_sums_share_a_group_across_uneven_depths() {
     let mut panel = panel();
     let root = panel.root_entity;
     // A top-level button on plane 2, declared first.
@@ -256,9 +253,8 @@ fn the_same_id_from_any_depth_shares_a_plane_and_a_nested_raise_rises_above_its_
         [200.0, 200.0],
         CanvasStyle::default(),
     );
-    let deep = button(&mut panel, inner, [20.0, 20.0], [40.0, 40.0], 2);
-    // Under the plane-2 button: zero keeps its plane, and ids 1 and 2, not
-    // above it, both rise to plane 3.
+    let deep = button(&mut panel, inner, [20.0, 20.0], [40.0, 40.0], 1);
+    // Under resolved level 2, zero inherits; offsets 1 and 2 make levels 3 and 4.
     let same = button(&mut panel, deep, [0.0, 0.0], [10.0, 10.0], 0);
     let lower = button(&mut panel, deep, [10.0, 0.0], [10.0, 10.0], 1);
     let equal = button(&mut panel, deep, [20.0, 0.0], [10.0, 10.0], 2);
@@ -267,16 +263,16 @@ fn the_same_id_from_any_depth_shares_a_plane_and_a_nested_raise_rises_above_its_
     panel.frame();
     let view = panel.output();
 
-    assert_eq!(*view.layers, [0, 1, 2, 3]);
+    assert_eq!(*view.layers, [0, 1, 2, 3, 4]);
     assert_eq!(
         [top, deep, same, lower, equal, later].map(|entity| box_style(&view, entity).layer),
-        [2, 2, 2, 3, 3, 0]
+        [2, 2, 2, 3, 4, 0]
     );
     assert_eq!(control_hit(&view, deep).layer, 2);
     assert_ordered(&view);
 
-    // Plane 2 holds both declarations in tree order, above plane 1 and the
-    // later base button, and below the plane-3 children.
+    // Resolved level 2 holds both declarations in tree order, above level 1
+    // and the later base button, and below the level-3/4 children.
     let order = [later, top, deep, same, lower, equal].map(|entity| box_position(&view, entity));
     assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{order:?}");
     // The deep plane-2 button, later in the tree than the top-level one,
@@ -288,7 +284,7 @@ fn the_same_id_from_any_depth_shares_a_plane_and_a_nested_raise_rises_above_its_
 }
 
 #[test]
-fn a_plane_keeps_its_id_and_paint_while_another_comes_and_goes() {
+fn adding_and_removing_an_occupied_group_repacks_later_ranks() {
     let mut panel = panel();
     let root = panel.root_entity;
     let anchor = button(&mut panel, root, [0.0, 0.0], [100.0, 40.0], 0);
@@ -298,17 +294,17 @@ fn a_plane_keeps_its_id_and_paint_while_another_comes_and_goes() {
     let tooltip = button(&mut panel, anchor, [0.0, 40.0], [60.0, 20.0], 0);
     panel.frame();
     let shown = panel.output();
-    assert_eq!(*shown.layers, [0, 3]);
-    assert_eq!(box_style(&shown, toast).layer, 3);
+    assert_eq!(*shown.layers, [0, 1]);
+    assert_eq!(box_style(&shown, toast).layer, 1);
     let toast_entry = |view: &CanvasPublication| view.entries[box_position(view, toast)].clone();
 
     set_layer(&mut panel, tooltip, 1);
     let open = panel.output();
-    assert_eq!(*open.layers, [0, 1, 3]);
+    assert_eq!(*open.layers, [0, 1, 2]);
     assert_eq!(box_style(&open, tooltip).layer, 1);
-    assert_eq!(box_style(&open, toast).layer, 3);
-    // The toast's retained primitive is unchanged by the plane opening below it.
-    assert!(std::sync::Arc::ptr_eq(
+    assert_eq!(box_style(&open, toast).layer, 2);
+    // Repacking changes the physical rank stored in the retained primitive.
+    assert!(!std::sync::Arc::ptr_eq(
         &toast_entry(&shown),
         &toast_entry(&open)
     ));
@@ -316,11 +312,12 @@ fn a_plane_keeps_its_id_and_paint_while_another_comes_and_goes() {
 
     set_layer(&mut panel, tooltip, 0);
     let closed = panel.output();
-    assert_eq!(*closed.layers, [0, 3]);
-    assert!(std::sync::Arc::ptr_eq(
-        &toast_entry(&shown),
-        &toast_entry(&closed)
-    ));
+    assert_eq!(*closed.layers, [0, 1]);
+    assert_eq!(box_style(&closed, toast).layer, 1);
+    assert_eq!(
+        primitive(&toast_entry(&shown)),
+        primitive(&toast_entry(&closed))
+    );
 }
 
 #[test]
@@ -348,7 +345,7 @@ fn a_canvas_without_layers_publishes_tree_order_unchanged() {
     // Raising and lowering again restores the identical paint and hits; only
     // the revisions of the re-evaluated primitives advance.
     set_layer(&mut panel, b, 2);
-    assert_eq!(*panel.output().layers, [0, 2]);
+    assert_eq!(*panel.output().layers, [0, 1]);
     set_layer(&mut panel, b, 0);
     let restored = panel.output();
     assert_eq!(*restored.layers, [0]);
@@ -363,7 +360,7 @@ fn a_canvas_without_layers_publishes_tree_order_unchanged() {
 }
 
 #[test]
-fn raised_content_starts_a_clip_scope_at_the_canvas_extent() {
+fn ordinary_raised_content_retains_ancestor_clips() {
     let mut panel = panel();
     let root = panel.root_entity;
     let clip = group(
@@ -403,18 +400,18 @@ fn raised_content_starts_a_clip_scope_at_the_canvas_extent() {
 
     assert_eq!(control_hit(&view, low).clip, [0.0, 0.0, 40.0, 40.0]);
     assert_eq!(box_style(&view, low).clip, [0.0, 0.0, 40.0, 40.0]);
-    // The raised button escapes its lower-layer ancestor's clip.
-    assert_eq!(control_hit(&view, high).clip, CANVAS);
-    assert_eq!(box_style(&view, high).clip, CANVAS);
-    assert_eq!(hit_at(&view, [75.0, 75.0]), Some(high));
-    // A raised scope's own clip and its descendants' clips still apply.
-    assert_eq!(control_hit(&view, inner).clip, [10.0, 10.0, 70.0, 70.0]);
+    // Raising ordinary content preserves the ancestor clip.
+    assert_eq!(control_hit(&view, high).clip, [0.0, 0.0, 40.0, 40.0]);
+    assert_eq!(box_style(&view, high).clip, [0.0, 0.0, 40.0, 40.0]);
+    assert_eq!(hit_at(&view, [75.0, 75.0]), None);
+    // The raised root's own clip intersects the ancestor clip.
+    assert_eq!(control_hit(&view, inner).clip, [10.0, 10.0, 40.0, 40.0]);
     assert_eq!(control_hit(&view, inner).layer, 1);
-    assert_eq!(box_style(&view, inner).clip, [10.0, 10.0, 70.0, 70.0]);
+    assert_eq!(box_style(&view, inner).clip, [10.0, 10.0, 40.0, 40.0]);
 }
 
 #[test]
-fn raised_content_in_a_scroll_view_follows_its_offset_outside_its_viewport() {
+fn raised_content_in_a_scroll_view_moves_with_its_offset_and_stays_clipped() {
     let mut panel = panel();
     let root = panel.root_entity;
     let view_entity = panel.create(
@@ -449,10 +446,10 @@ fn raised_content_in_a_scroll_view_follows_its_offset_outside_its_viewport() {
     panel.frame();
     panel.frame();
     let view = panel.output();
-    // The row stays inside the 50-unit viewport; the raised popup paints below it.
+    // Raised ordinary content stays clipped to the same scroll viewport.
     assert_eq!(control_hit(&view, row).clip, [0.0, 0.0, 100.0, 50.0]);
     let style = box_style(&view, popup);
-    assert_eq!(style.clip, CANVAS);
+    assert_eq!(style.clip, [0.0, 0.0, 100.0, 50.0]);
     assert_eq!(style.layer, 1);
     assert_eq!(style.position, [0.0, 30.0]);
 
@@ -462,7 +459,7 @@ fn raised_content_in_a_scroll_view_follows_its_offset_outside_its_viewport() {
     panel.frame();
     let style = box_style(&panel.output(), popup);
     assert_eq!(style.position, [0.0, 20.0]);
-    assert_eq!(style.clip, CANVAS);
+    assert_eq!(style.clip, [0.0, 0.0, 100.0, 50.0]);
 }
 
 #[test]
@@ -551,4 +548,34 @@ fn removal_and_reparenting_resolve_layers_again() {
     // At its own origin now, c is the latest base target there.
     assert_eq!(hit_at(&view, [10.0, 10.0]), Some(c));
     assert_ordered(&view);
+}
+
+#[test]
+fn relative_sums_beyond_u32_do_not_saturate_or_overflow() {
+    let mut panel = panel();
+    let root = panel.root_entity;
+    let parent = group(&mut panel, root, [100.0, 100.0], at([0.0, 0.0], u32::MAX));
+    let child = button(&mut panel, parent, [0.0, 0.0], [20.0, 20.0], u32::MAX);
+    let later = button(&mut panel, root, [0.0, 0.0], [20.0, 20.0], u32::MAX);
+    panel.frame();
+    let view = panel.output();
+    assert_eq!(*view.layers, [0, 1, 2]);
+    assert_eq!(box_style(&view, child).layer, 2);
+    assert_eq!(box_style(&view, later).layer, 1);
+    assert_eq!(hit_at(&view, [5.0, 5.0]), Some(child));
+}
+
+#[test]
+fn empty_structural_roots_occupy_groups_and_zero_wrappers_do_not() {
+    let mut panel = panel();
+    let root = panel.root_entity;
+    let empty = group(&mut panel, root, [100.0, 100.0], at([0.0, 0.0], 10));
+    let wrapper = group(&mut panel, root, [100.0, 100.0], CanvasStyle::default());
+    let high = button(&mut panel, wrapper, [0.0, 0.0], [20.0, 20.0], 20);
+    panel.frame();
+    assert_eq!(*panel.output().layers, [0, 1, 2]);
+    assert_eq!(box_style(&panel.output(), high).layer, 2);
+    set_layer(&mut panel, empty, 0);
+    assert_eq!(*panel.output().layers, [0, 1]);
+    assert_eq!(box_style(&panel.output(), high).layer, 1);
 }

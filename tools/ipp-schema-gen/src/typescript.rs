@@ -115,6 +115,7 @@ function freezeContract<T>(value: T): T {\n\
     out.push_str(include_str!("animation.template.ts"));
     out.push_str(include_str!("geometry.template.ts"));
     out.push_str(include_str!("gui.template.ts"));
+    out.push_str("\nexport * from \"./surface-config.js\";\n");
     out.push_str(include_str!("skeleton.template.ts"));
     out.push_str(include_str!("skinning.template.ts"));
 

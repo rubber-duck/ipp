@@ -1599,7 +1599,7 @@ fn parent_context_is_current_and_detachment_clears_it() {
         vec![
             Command::insert_value(
                 EntityRef::Handle(anchor),
-                ComponentValue::Surface(ipp_core::components::Surface::default()),
+                ComponentValue::FlatSurface(ipp_core::components::FlatSurface::default()),
             ),
             Command::insert_value(
                 EntityRef::Handle(anchor),
@@ -1830,7 +1830,7 @@ fn custom_material_lights_unknown_bounds_and_unchanged_chunks_are_owned() {
 
 #[test]
 fn parent_surface_cache_policy_is_owned_validated_and_current() {
-    use ipp_core::components::{Surface, SurfaceCache};
+    use ipp_core::components::{FlatSurface, SurfaceCache};
     use ipp_core::systems::surface::SurfaceCachePolicy;
 
     let mut host = crate::support::task_scheduler::host();
@@ -1844,7 +1844,7 @@ fn parent_surface_cache_policy_is_owned_validated_and_current() {
         &mut host,
         parent,
         vec![
-            ComponentValue::Surface(Surface::default()),
+            ComponentValue::FlatSurface(FlatSurface::default()),
             ComponentValue::SurfaceCache(cache),
             ComponentValue::WorldAttachment(WorldAttachment::surface(selected)),
         ],
@@ -1935,7 +1935,7 @@ fn parent_surface_cache_policy_is_owned_validated_and_current() {
             ),
             Command::RemoveComponent {
                 entity: EntityRef::Handle(anchor),
-                component: ComponentValue::SURFACE,
+                component: ComponentValue::FLAT_SURFACE,
             },
         ],
     )
@@ -1967,7 +1967,7 @@ fn surface_camera_mode_never_becomes_spatial_and_explicit_rebind_restores_availa
         parent,
         vec![
             ComponentValue::Transform(Transform::default()),
-            ComponentValue::Surface(ipp_core::components::Surface::default()),
+            ComponentValue::FlatSurface(ipp_core::components::FlatSurface::default()),
             ComponentValue::WorldAttachment(WorldAttachment::surface(selected)),
         ],
     );
@@ -2044,7 +2044,7 @@ fn surface_camera_mode_never_becomes_spatial_and_explicit_rebind_restores_availa
         parent,
         vec![Command::RemoveComponent {
             entity: EntityRef::Handle(anchor),
-            component: ComponentValue::SURFACE,
+            component: ComponentValue::FLAT_SURFACE,
         }],
     )
     .unwrap();

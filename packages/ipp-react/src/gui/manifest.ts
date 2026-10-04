@@ -111,7 +111,7 @@ export const guiComponentContract = {
   },
   GuiOverlay: {
     host: "ipp-gui-overlay",
-    fields: { side: "number", align: "number", mode: "number" },
+    fields: { side: "number", align: "number", mode: "number", band: "number" },
   },
   GuiGroup: {
     host: "ipp-gui-group",

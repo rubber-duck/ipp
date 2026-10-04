@@ -212,6 +212,7 @@ impl GuiInputRouter {
         let target = |control: &Observation| Target {
             control: control.clone(),
             path: focus.path.clone(),
+            surface_lifetimes: focus.surface_lifetimes.clone(),
             source: view.publication,
             part: CanvasHitKind::Entity,
             focus_part: None,

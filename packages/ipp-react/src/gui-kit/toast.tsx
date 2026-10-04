@@ -46,7 +46,7 @@ import {
   Strut,
   type GuiKitLayout,
 } from "./layout.js";
-import { GUI_KIT_LAYERS } from "./overlay.js";
+import { GUI_KIT_OVERLAY_BANDS } from "./overlay.js";
 import { SecondaryButton } from "./secondary-button.js";
 import { Separator } from "./separator.js";
 import { CheckMark, Icon, TextLine } from "./text.js";
@@ -95,6 +95,8 @@ const SEVERITIES: Readonly<
 };
 
 export interface ToastProps extends Omit<ToastItem, "key"> {
+  /** Nonnegative layer offset applied once at this component root; zero inherits. */
+  readonly layer?: number;
   readonly id: string;
   /** The close button's press, or the end of the toast's time. */
   readonly onDismiss?: () => void;
@@ -105,6 +107,7 @@ export interface ToastProps extends Omit<ToastItem, "key"> {
 
 export function Toast({
   id,
+  layer = 0,
   severity = "information",
   text,
   action,
@@ -155,7 +158,7 @@ export function Toast({
       />
       <Font source={kit.font} font_size={kit.fontSize} />
       <Skin theme={kit.theme(theme)} />
-      <Style opacity={1} />
+      <Style layer={layer} opacity={1} />
       <Behavior focusable={false} semantic_label={text} />
       <Button label="" {...feedback("body")} />
       <Children>
@@ -284,6 +287,8 @@ function Countdown({
 }
 
 export interface ToastStackProps {
+  /** Nonnegative layer offset applied once at this component root; zero inherits. */
+  readonly layer?: number;
   readonly id: string;
   /** The toasts in the order they stack, the first nearest the stack's top. */
   readonly toasts: readonly ToastItem[];
@@ -305,6 +310,7 @@ const ALIGNS = { start: 0, centre: 1, end: 2 } as const;
 
 export function ToastStack({
   id,
+  layer = 0,
   toasts,
   onDismiss,
   limit,
@@ -319,9 +325,13 @@ export function ToastStack({
   const inset = kit.unit(t.inset);
   return (
     <Entity id={id}>
-      <Overlay side={side === "top" ? 1 : 0} align={ALIGNS[align]} />
+      <Overlay
+        side={side === "top" ? 1 : 0}
+        align={ALIGNS[align]}
+        band={GUI_KIT_OVERLAY_BANDS.notification}
+      />
       <Style
-        layer={GUI_KIT_LAYERS.toast}
+        layer={layer}
         x={align === "start" ? inset : align === "end" ? -inset : 0}
         y={side === "top" ? inset : -inset}
       />

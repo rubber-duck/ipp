@@ -144,6 +144,9 @@ pub(super) struct CanvasWalkRecord {
 pub(super) struct CanvasWalkState {
     pub positions: BTreeMap<EntityId, usize>,
     pub records: Vec<CanvasWalkRecord>,
+    /// Logical relative priorities used to reject patches that alter grouping.
+    /// Empty on the all-zero ordinary-content fast path.
+    pub layer_keys: Vec<super::layers::CanvasLayerKey>,
     /// Published index of each tree-order entry, hit and overlay; empty while
     /// the canvas publishes in tree order, on one layer.
     pub entry_order: Vec<u32>,

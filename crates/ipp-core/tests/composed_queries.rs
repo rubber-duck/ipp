@@ -10,7 +10,7 @@ use support::selection::{
 use support::world_failures::select_with_failures;
 
 use ipp_core::components::{
-    Camera, CanvasStyle, GuiCheckbox, GuiLayout, PickingGeometry, Surface, Transform,
+    Camera, CanvasStyle, FlatSurface, GuiCheckbox, GuiLayout, PickingGeometry, Transform,
 };
 use ipp_core::services::gui_input::query::*;
 use ipp_core::systems::geometry::{GeometryDefinition, GeometryShape};
@@ -129,7 +129,7 @@ fn attach(
     transform: Transform,
 ) -> EntityId {
     let attachment = WorldAttachment::surface(output);
-    let surface = Surface {
+    let surface = FlatSurface {
         width: extent[0],
         height: extent[1],
         ..Default::default()
@@ -140,7 +140,7 @@ fn attach(
         None,
         vec![
             ComponentValue::Transform(transform),
-            ComponentValue::Surface(surface),
+            ComponentValue::FlatSurface(surface),
             ComponentValue::WorldAttachment(attachment),
         ],
     )
@@ -924,9 +924,9 @@ fn separated_layers_meet_layer_planes_nearest_first_and_fall_through() {
             parent,
             vec![Command::SetField {
                 entity: EntityRef::Handle(anchor),
-                component: ComponentValue::SURFACE,
+                component: ComponentValue::FLAT_SURFACE,
                 field: FieldWrite {
-                    offset: std::mem::offset_of!(Surface, layer_spacing) as u32,
+                    offset: std::mem::offset_of!(FlatSurface, layer_spacing) as u32,
                     value: FieldValue::F32(value),
                 },
             }],
@@ -979,7 +979,7 @@ fn separated_layers_meet_layer_planes_nearest_first_and_fall_through() {
 }
 
 #[test]
-fn a_layer_plane_keeps_its_depth_across_a_gap_as_other_planes_come_and_go() {
+fn occupied_layer_ranks_repack_depth_and_capture_when_a_group_disappears() {
     let mut host = crate::support::task_scheduler::host();
     let parent = host
         .create_world(Default::default(), &select(&[ATTACHMENTS, CAMERA, SURFACE]))
@@ -987,12 +987,12 @@ fn a_layer_plane_keeps_its_depth_across_a_gap_as_other_planes_come_and_go() {
     let child = host.create_world(Default::default(), GUI_LAYOUT).unwrap();
     let output = camera(&mut host, parent);
     let panel = canvas(&mut host, child);
-    // The base covers the 1 x 1 m panel, plane 3 its left 40 units and plane
-    // 1 its right 20; plane 2 is empty.
+    // The base covers the panel. Offset 3 covers its left 40 units and
+    // offset 1 its right 20; the three occupied levels use ranks 0, 1, 2.
     let base = layered_control(&mut host, panel, [0.0, 0.0], [100.0, 100.0], 0);
     let top = layered_control(&mut host, panel, [0.0, 0.0], [40.0, 100.0], 3);
     let middle = layered_control(&mut host, panel, [80.0, 0.0], [20.0, 100.0], 1);
-    // Turned 45 degrees about +Y with 0.1 m between plane ids, plane n meets
+    // Turned 45 degrees about +Y with 0.1 m between compact ranks, rank n meets
     // a ray n tenths of a metre to the left of where it meets the base.
     let half = std::f32::consts::FRAC_PI_8;
     let anchor = attach(
@@ -1011,9 +1011,9 @@ fn a_layer_plane_keeps_its_depth_across_a_gap_as_other_planes_come_and_go() {
         parent,
         vec![Command::SetField {
             entity: EntityRef::Handle(anchor),
-            component: ComponentValue::SURFACE,
+            component: ComponentValue::FLAT_SURFACE,
             field: FieldWrite {
-                offset: std::mem::offset_of!(Surface, layer_spacing) as u32,
+                offset: std::mem::offset_of!(FlatSurface, layer_spacing) as u32,
                 value: FieldValue::F32(0.1),
             },
         }],
@@ -1031,32 +1031,35 @@ fn a_layer_plane_keeps_its_depth_across_a_gap_as_other_planes_come_and_go() {
             .layers
             .to_vec()
     };
-    let path = vec![hit(&host, output, at(0.1)).path[0].token.clone()];
-    let assert_top = |host: &HostRuntime| {
-        // Plane 3 lies 0.3 m out, not at a compacted 0.2 m (content 40) or
-        // 0.1 m (content 50): the ray meets it at content 30.
-        let selected = hit(host, output, at(0.1));
+    let path = vec![hit(&host, output, at(-0.05)).path[0].token.clone()];
+    let assert_top = |host: &HostRuntime, rank: u32| {
+        // Independently intersect parallel planes: base content is 45 and
+        // each 0.1 m of normal separation shifts the intersection by 10 units.
+        let content_x = 45.0 - 10.0 * rank as f32;
+        let offset = f64::from(rank) * 0.1;
+        let selected = hit(host, output, at(-0.05));
         assert_eq!(selected.hit.target.entity, top);
-        assert_eq!(selected.hit.layer, 3);
-        assert!(near(selected.point[0], 30.0), "{:?}", selected.point);
+        assert_eq!(selected.hit.layer, rank);
+        assert!(near(selected.point[0], content_x), "{:?}", selected.point);
         let distance = selected.path[0].distance.unwrap();
-        assert!((distance - (0.1 * cos + 5.0 - 0.3 / cos)).abs() < 1e-4);
+        assert!((distance - (-0.05 * cos + 5.0 - offset / cos)).abs() < 1e-4);
         // Captured input projects onto the same plane.
-        let captured = project_composed_point(host, root(output), &path, at(0.1), true, 3)
+        let captured = project_composed_point(host, root(output), &path, at(-0.05), true, rank)
             .unwrap()
             .unwrap();
-        assert!(near(captured.point[0], 30.0));
+        assert!(near(captured.point[0], content_x));
     };
 
-    assert_eq!(layers(&host), [0, 1, 3]);
-    assert_top(&host);
-    // Where plane 3 holds nothing (content 65), the ray falls through the
-    // empty plane 2 to plane 1's control at content 85.
+    assert_eq!(layers(&host), [0, 1, 2]);
+    assert_top(&host, 2);
+    // Where rank 2 holds nothing (content 75), the ray falls through to
+    // rank 1's control at content 85.
     let selected = hit(&host, output, at(0.45));
     assert_eq!(selected.hit.target.entity, middle);
     assert!(near(selected.point[0], 85.0));
 
-    // Without plane 1, plane 3 keeps its depth, and the same ray reaches the base.
+    // Removing the middle group repacks the top to rank 1, and the other
+    // ray reaches the base because the top control does not cover it.
     apply(
         &mut host,
         child,
@@ -1065,8 +1068,8 @@ fn a_layer_plane_keeps_its_depth_across_a_gap_as_other_planes_come_and_go() {
         }],
     );
     frame(&mut host);
-    assert_eq!(layers(&host), [0, 3]);
-    assert_top(&host);
+    assert_eq!(layers(&host), [0, 1]);
+    assert_top(&host, 1);
     let selected = hit(&host, output, at(0.45));
     assert_eq!(selected.hit.target.entity, base);
     assert!(near(selected.point[0], 95.0));

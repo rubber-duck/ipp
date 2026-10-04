@@ -36,11 +36,6 @@ pub enum GuiEntityLayoutDiagnostic {
         /// The excluded child, still present in the authoritative core tree.
         entity: EntityId,
     },
-    /// An open overlay has no nonzero `CanvasStyle.layer`; it is not shown.
-    OverlayNotRaised {
-        /// The overlay entity.
-        entity: EntityId,
-    },
 }
 
 /// Actual ordinary-layout work, excluding raw Canvas preparation.
@@ -111,26 +106,26 @@ pub(super) struct GuiEntityLayoutState {
 }
 
 pub(in crate::world::systems::gui) fn entity_layout_input(component: u16) -> bool {
-    matches!(
-        component,
-        ComponentValue::GUI_LAYOUT
-            | ComponentValue::CANVAS_BOX
-            | ComponentValue::CANVAS_TEXT
-            | ComponentValue::CANVAS_GLYPH_RUN
-            | ComponentValue::CANVAS_DRAWING
-            | ComponentValue::CANVAS_BITMAP
-            | ComponentValue::SURFACE
-            | ComponentValue::GUI_BUTTON
-            | ComponentValue::GUI_CHECKBOX
-            | ComponentValue::GUI_SLIDER
-            | ComponentValue::GUI_TEXT_INPUT
-            | ComponentValue::GUI_COLOR
-            | ComponentValue::GUI_FONT
-            | ComponentValue::GUI_SCROLL_VIEW
-            | ComponentValue::GUI_VIRTUAL_LIST
-            | ComponentValue::GUI_VIRTUAL_ITEM
-            | ComponentValue::GUI_OVERLAY
-    )
+    crate::systems::surface::is_provider(component)
+        || matches!(
+            component,
+            ComponentValue::GUI_LAYOUT
+                | ComponentValue::CANVAS_BOX
+                | ComponentValue::CANVAS_TEXT
+                | ComponentValue::CANVAS_GLYPH_RUN
+                | ComponentValue::CANVAS_DRAWING
+                | ComponentValue::CANVAS_BITMAP
+                | ComponentValue::GUI_BUTTON
+                | ComponentValue::GUI_CHECKBOX
+                | ComponentValue::GUI_SLIDER
+                | ComponentValue::GUI_TEXT_INPUT
+                | ComponentValue::GUI_COLOR
+                | ComponentValue::GUI_FONT
+                | ComponentValue::GUI_SCROLL_VIEW
+                | ComponentValue::GUI_VIRTUAL_LIST
+                | ComponentValue::GUI_VIRTUAL_ITEM
+                | ComponentValue::GUI_OVERLAY
+        )
 }
 
 /// Control components whose value fields do not affect layout; only a change

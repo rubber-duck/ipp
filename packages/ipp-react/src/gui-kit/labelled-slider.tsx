@@ -19,7 +19,7 @@
  * End captions are shown by default unless a scale labels the ends.
  */
 import { Children, Entity } from "../components.js";
-import { Font, Layout } from "../gui/components.js";
+import { Style, Font, Layout } from "../gui/components.js";
 import { useGuiKit } from "./kit.js";
 import {
   LAYOUT_COLUMN,
@@ -73,6 +73,7 @@ export interface LabelledSliderProps extends SliderCompositeProps {
 export function LabelledSlider(props: LabelledSliderProps) {
   const {
     id,
+    layer = 0,
     label,
     min,
     max,
@@ -145,6 +146,7 @@ export function LabelledSlider(props: LabelledSliderProps) {
     const rows = (label === undefined ? 0 : 1) + (bounds ? 2 : 0) + 1;
     return (
       <Entity id={id}>
+        <Style layer={layer} />
         <Layout kind={LAYOUT_COLUMN} height={rows * g.row + rail} {...layout} />
         <Font source={kit.font} font_size={kit.fontSize} />
         <Children>
@@ -199,6 +201,7 @@ export function LabelledSlider(props: LabelledSliderProps) {
   const box = Math.max(g.depth, scaleExtent ?? 0);
   return (
     <Entity id={id}>
+      <Style layer={layer} />
       <Layout kind={LAYOUT_COLUMN} height={g.row + box} {...layout} />
       <Font source={kit.font} font_size={kit.fontSize} />
       <Children>

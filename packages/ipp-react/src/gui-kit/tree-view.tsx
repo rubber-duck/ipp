@@ -82,6 +82,8 @@ export interface TreeViewHandle {
 }
 
 export interface TreeViewProps extends ChoiceProps {
+  /** Nonnegative layer offset applied once at this component root; zero inherits. */
+  readonly layer?: number;
   /** Symbolic id of the frame; rows extend it with their keys. */
   readonly id: string;
   readonly nodes: readonly TreeNode[];
@@ -142,6 +144,7 @@ function geometry(kit: GuiKitScope) {
 
 export function TreeView({
   id,
+  layer = 0,
   nodes,
   expanded,
   defaultExpanded = [],
@@ -211,6 +214,7 @@ export function TreeView({
   const pad = g.gap;
   return (
     <Entity id={id}>
+      <Style layer={layer} />
       <Layout kind={LAYOUT_STACK} {...layout} />
       <Font source={kit.font} font_size={kit.fontSize} />
       <ScrollView

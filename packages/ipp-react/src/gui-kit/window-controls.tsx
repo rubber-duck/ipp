@@ -8,7 +8,7 @@
  */
 import { Children, Entity } from "../components.js";
 import { Button } from "../gui/controls.js";
-import { Behavior, Font, Layout } from "../gui/components.js";
+import { Style, Behavior, Font, Layout } from "../gui/components.js";
 import { Skin } from "../gui/theme.js";
 import type {
   GuiFeedbackListeners,
@@ -33,6 +33,8 @@ const LABELS: Readonly<Record<WindowControlKind, string>> = {
 };
 
 export interface WindowControlProps extends GuiFeedbackListeners {
+  /** Nonnegative layer offset applied once at this component root; zero inherits. */
+  readonly layer?: number;
   readonly id: string;
   readonly kind: WindowControlKind;
   readonly onPress?: GuiPressListener;
@@ -54,6 +56,7 @@ export interface WindowControlProps extends GuiFeedbackListeners {
 
 export function WindowControl({
   id,
+  layer = 0,
   kind,
   onPress,
   ref,
@@ -76,6 +79,7 @@ export function WindowControl({
       : "secondaryIcon";
   return (
     <Entity id={id}>
+      <Style layer={layer} />
       <Layout
         kind={LAYOUT_LEAF}
         width={kit.unit(docked ? t.dockedWidth : FREE_WIDTH)}
@@ -101,6 +105,8 @@ export function WindowControl({
 }
 
 export interface WindowControlsProps {
+  /** Nonnegative layer offset applied once at this component root; zero inherits. */
+  readonly layer?: number;
   readonly id: string;
   /** Each given callback adds its control, in this order, half an inset apart. */
   readonly onMinimize?: GuiPressListener;
@@ -116,6 +122,7 @@ export interface WindowControlsProps {
  */
 export function WindowControls({
   id,
+  layer = 0,
   onMinimize,
   onMaximize,
   onRestore,
@@ -135,6 +142,7 @@ export function WindowControls({
   const gap = t.inset / 2;
   return (
     <Entity id={id}>
+      <Style layer={layer} />
       <Layout
         kind={LAYOUT_ROW}
         width={kit.unit(

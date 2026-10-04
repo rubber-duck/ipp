@@ -70,6 +70,7 @@ async function clearText(
 
 export function SearchableDropdown({
   id,
+  layer = 0,
   options,
   placeholder = "Select",
   label,
@@ -130,6 +131,7 @@ export function SearchableDropdown({
   return (
     <SelectTrigger
       id={id}
+      layer={layer}
       text={selected?.label ?? placeholder}
       placeholder={!selected}
       open={open}

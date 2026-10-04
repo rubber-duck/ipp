@@ -3,7 +3,7 @@
 mod support;
 use support::task_scheduler::HostTaskTestDriver;
 
-use ipp_core::components::{Surface, Transform};
+use ipp_core::components::{FlatSurface, Transform};
 use ipp_core::services::asset_management::{AssetSource, font::FONT_TYPE};
 use ipp_core::systems::canvas::{
     CanvasAttachmentSlot, CanvasBox, CanvasGlyph, CanvasGlyphRow, CanvasGlyphRun, CanvasHitKind,
@@ -96,7 +96,7 @@ fn surface_anchor(
         world,
         vec![
             ComponentValue::CanvasStyle(CanvasStyle::default()),
-            ComponentValue::Surface(Surface::default()),
+            ComponentValue::FlatSurface(FlatSurface::default()),
             ComponentValue::WorldAttachment(WorldAttachment::surface(child)),
         ],
     );
@@ -412,7 +412,7 @@ fn nested_surface_slot_uses_one_invertible_mapping_without_rewriting_physical_ex
         .unwrap();
     let (parent_output, parent_output_entity) = canvas(&mut host, parent);
     let (child_output, _) = canvas(&mut host, child);
-    let physical_surface = Surface {
+    let physical_surface = FlatSurface {
         width: 2.0,
         height: 0.5,
         ..Default::default()
@@ -433,7 +433,7 @@ fn nested_surface_slot_uses_one_invertible_mapping_without_rewriting_physical_ex
                 scale_y: 2.0,
                 ..Default::default()
             }),
-            ComponentValue::Surface(physical_surface),
+            ComponentValue::FlatSurface(physical_surface),
             ComponentValue::WorldAttachment(WorldAttachment::surface(child_output)),
         ],
     );
@@ -558,7 +558,7 @@ fn core_ancestry_visual_transforms_and_empty_clips_are_shared_by_paint_and_hits(
         &mut host,
         parent,
         vec![
-            ComponentValue::Surface(Surface::default()),
+            ComponentValue::FlatSurface(FlatSurface::default()),
             ComponentValue::WorldAttachment(WorldAttachment::surface(child_output)),
         ],
     );
@@ -695,7 +695,7 @@ fn camera_and_parent_surface_motion_retain_child_canvas_payloads() {
         parent,
         vec![
             ComponentValue::Transform(Transform::default()),
-            ComponentValue::Surface(Surface::default()),
+            ComponentValue::FlatSurface(FlatSurface::default()),
             ComponentValue::WorldAttachment(WorldAttachment::surface(child_output)),
         ],
     );
@@ -1067,7 +1067,7 @@ fn unavailable_canvas_mapping_suppresses_hierarchy_fallback_and_can_recover() {
     let grandparent = host
         .create_world(Default::default(), &select(&[ATTACHMENTS, SURFACE]))
         .unwrap();
-    let physical = Surface {
+    let physical = FlatSurface {
         width: 2.0,
         ..Default::default()
     };
@@ -1075,7 +1075,7 @@ fn unavailable_canvas_mapping_suppresses_hierarchy_fallback_and_can_recover() {
         &mut host,
         grandparent,
         vec![
-            ComponentValue::Surface(physical),
+            ComponentValue::FlatSurface(physical),
             ComponentValue::WorldAttachment(WorldAttachment::surface(parent_output)),
         ],
     );

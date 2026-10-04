@@ -11,13 +11,15 @@
  * hugs its text.
  */
 import { Children, Entity } from "../components.js";
-import { Font, Layout } from "../gui/components.js";
+import { Style, Font, Layout } from "../gui/components.js";
 import { Arc, TURNING_SWEEP } from "./arc.js";
 import { useGuiKit } from "./kit.js";
 import { LAYOUT_ROW, Strut, type GuiKitLayout } from "./layout.js";
 import { TextLine, lineWidth } from "./text.js";
 
 export interface SpinnerProps {
+  /** Nonnegative layer offset applied once at this component root; zero inherits. */
+  readonly layer?: number;
   readonly id: string;
   /** The status text, such as Preparing…. */
   readonly label: string;
@@ -27,12 +29,13 @@ export interface SpinnerProps {
 /** Ring thickness: an eighth of the icon-sized ring, as the small progress ring. */
 const THICKNESS = 3;
 
-export function Spinner({ id, label, layout }: SpinnerProps) {
+export function Spinner({ id, layer = 0, label, layout }: SpinnerProps) {
   const kit = useGuiKit();
   const t = kit.tokens;
   const gap = t.inset / 2;
   return (
     <Entity id={id}>
+      <Style layer={layer} />
       <Layout
         kind={LAYOUT_ROW}
         width={kit.unit(t.icon + gap) + lineWidth(label, kit.typeSize("body"))}

@@ -18,6 +18,7 @@ use super::GuiInputError;
 use super::GuiRoutingDelivery;
 use super::routing::{
     GuiInputRouter, GuiRoutingContext, Target, current_target, locate_control, refresh,
+    surface_lifetimes,
 };
 use crate::services::gui_input::{GuiDeliveryError, GuiDeliveryPermit, GuiDeliveryTerminal};
 use crate::systems::canvas::CanvasHitKind;
@@ -65,9 +66,13 @@ impl GuiInputRouter {
                 continue;
             };
             let focus_part = (control.record.focus_parts > 1).then_some(part);
+            let Ok(lifetimes) = surface_lifetimes(host, view.publication, &path) else {
+                continue;
+            };
             let candidate = Target {
                 control,
                 path,
+                surface_lifetimes: lifetimes,
                 source: view.publication,
                 part: CanvasHitKind::Entity,
                 focus_part,

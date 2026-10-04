@@ -157,28 +157,33 @@ impl CanvasSystem {
         parent: Option<usize>,
     ) -> bool {
         let records = &self.state.walk.records;
-        let base = parent.map_or(0, |parent| records[parent].placed.layer);
-        let mut planes: Vec<(EntityId, u32)> = Vec::new();
+        let keys = &self.state.walk.layer_keys;
+        let base = parent
+            .and_then(|parent| keys.get(parent))
+            .cloned()
+            .unwrap_or_default();
+        let mut path: Vec<(EntityId, super::layers::CanvasLayerKey)> = Vec::new();
         records[root..records[root].subtree_end]
             .iter()
-            .all(|record| {
+            .enumerate()
+            .all(|(offset, record)| {
                 let parent = self::parent(world, record.entity);
-                while planes
+                while path
                     .last()
                     .is_some_and(|(ancestor, _)| Some(*ancestor) != parent)
                 {
-                    planes.pop();
+                    path.pop();
                 }
-                let authored = world
-                    .components
-                    .canvas_style(record.entity.index() as usize)
-                    .map_or(0, |style| style.layer);
-                let plane = super::layers::resolve(
-                    planes.last().map_or(base, |(_, plane)| *plane),
-                    authored,
-                );
-                planes.push((record.entity, plane));
-                plane == record.placed.layer
+                let position = root + offset;
+                let key =
+                    path.last()
+                        .map_or(&base, |(_, key)| key)
+                        .child(world, record.entity, position);
+                let unchanged = keys
+                    .get(position)
+                    .map_or_else(|| key == Default::default(), |previous| *previous == key);
+                path.push((record.entity, key));
+                unchanged
             })
     }
 

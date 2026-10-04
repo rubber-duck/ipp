@@ -104,7 +104,7 @@ impl<'a> QueryWalk<'a, '_> {
                         .host
                         .attached_publication(edge)
                         .ok_or(GuiQueryUnavailable::SpatialBranch)?;
-                    self.worlds.enter(child.world)?;
+                    self.paths.enter(child.world, &child_path)?;
                     pending.push((child.id, affine, child_path, branch_block));
                     continue;
                 }
@@ -115,51 +115,71 @@ impl<'a> QueryWalk<'a, '_> {
                     return Err(GuiQueryUnavailable::Data(ErrorReason::InvalidGeometry));
                 }
                 let local = affine.inverse_ray(&ray.ray);
-                if local.direction[2] >= 0.0 {
-                    continue;
-                }
                 let child = self.host.attached_publication(edge);
-                // A Surface separating its canvas's layers offers one plane per
-                // layer in use, at its id times the spacing, each holding only
-                // that layer's targets; candidates then meet the planes nearest
+                // A Surface separating its canvas's layers offers one shell per
+                // layer in use, at its rank times the spacing, each holding only
+                // that layer's targets; candidates then meet the surfaces nearest
                 // first and fall through empty ones.
-                let layers = layer_planes(self.host, edge, child);
-                for &layer in layers {
-                    let plane = f64::from(layer) * f64::from(edge.layer_spacing);
-                    let distance = (plane - local.origin[2]) / local.direction[2];
-                    if !distance.is_finite() || distance < ray.near || distance > ray.far {
-                        continue;
+                let layers = surface_layers(self.host, edge, child);
+                let geometry = edge
+                    .surface_geometry
+                    .as_ref()
+                    .ok_or(GuiQueryUnavailable::Data(ErrorReason::InvalidGeometry))?;
+                let offsets = surface_offset_range(self.host, edge, child);
+                geometry
+                    .validate_offsets(offsets)
+                    .map_err(GuiQueryUnavailable::Data)?;
+                for &layer in layers.iter().rev() {
+                    let offset = f64::from(layer) * f64::from(edge.layer_spacing);
+                    for hit in geometry
+                        .ray_intersections(
+                            &local,
+                            offset,
+                            crate::systems::surface::SurfaceDomain::Content,
+                        )
+                        .map_err(GuiQueryUnavailable::Data)?
+                    {
+                        let distance = hit.distance;
+                        if distance < ray.near
+                            || distance > ray.far
+                            || hit
+                                .front_normal
+                                .iter()
+                                .zip(local.direction)
+                                .map(|(normal, direction)| normal * direction)
+                                .sum::<f64>()
+                                >= 0.0
+                        {
+                            continue;
+                        }
+                        let point = [hit.content[0] / extent[0], hit.content[1] / extent[1]];
+                        if !point.iter().all(|value| (0.0..1.0).contains(value)) {
+                            continue;
+                        }
+                        let mut path = child_path.clone();
+                        path.last_mut().expect("Surface step").distance = Some(distance);
+                        let task = match (branch_block, child, edge.output) {
+                            (None, Some(child), Some(output)) => QueryTask::View(QueryView {
+                                output,
+                                publication: child.id,
+                                point: point.map(|value| value as f32),
+                                extent,
+                                path,
+                                layer: (layers.len() > 1).then_some(layer),
+                            }),
+                            (reason, _, _) => QueryTask::Outcome(GuiQueryOutcome::Blocked {
+                                reason: reason.unwrap_or(GuiQueryBlockReason::Unavailable),
+                                path,
+                            }),
+                        };
+                        candidates.push(Candidate {
+                            distance,
+                            blocker: false,
+                            world: publication.world,
+                            entity: edge.anchor,
+                            task,
+                        });
                     }
-                    let point = [
-                        (local.origin[0] + distance * local.direction[0]) / extent[0] + 0.5,
-                        0.5 - (local.origin[1] + distance * local.direction[1]) / extent[1],
-                    ];
-                    if !point.iter().all(|value| (0.0..1.0).contains(value)) {
-                        continue;
-                    }
-                    let mut path = child_path.clone();
-                    path.last_mut().expect("Surface step").distance = Some(distance);
-                    let task = match (branch_block, child, edge.output) {
-                        (None, Some(child), Some(output)) => QueryTask::View(QueryView {
-                            output,
-                            publication: child.id,
-                            point: point.map(|value| value as f32),
-                            extent,
-                            path,
-                            layer: (layers.len() > 1).then_some(layer),
-                        }),
-                        (reason, _, _) => QueryTask::Outcome(GuiQueryOutcome::Blocked {
-                            reason: reason.unwrap_or(GuiQueryBlockReason::Unavailable),
-                            path,
-                        }),
-                    };
-                    candidates.push(Candidate {
-                        distance,
-                        blocker: false,
-                        world: publication.world,
-                        entity: edge.anchor,
-                        task,
-                    });
                 }
             }
         }
@@ -176,9 +196,9 @@ impl<'a> QueryWalk<'a, '_> {
     }
 }
 
-/// Layers whose planes a Surface edge in a camera's domain presents: those its
-/// canvas uses when its layer spacing separates them, otherwise the base plane.
-pub(super) fn layer_planes<'a>(
+/// Occupied ranks whose shells a Surface edge in a camera's domain presents: those its
+/// canvas uses when its layer spacing separates them, otherwise the base Surface.
+pub(super) fn surface_layers<'a>(
     host: &'a crate::HostRuntime,
     edge: &crate::PublishedWorldAttachment,
     child: Option<&crate::WorldPublication>,
@@ -192,4 +212,18 @@ pub(super) fn layer_planes<'a>(
         .and_then(|(child, output)| host.output(child.id, output))
         .and_then(|chunk| chunk.data::<crate::systems::canvas::CanvasPublication>())
         .map_or(BASE, |canvas| &canvas.layers)
+}
+
+/// Complete occupied shell range, shared by hit/projection and keyboard readers.
+pub(crate) fn surface_offset_range(
+    host: &crate::HostRuntime,
+    edge: &crate::PublishedWorldAttachment,
+    child: Option<&crate::WorldPublication>,
+) -> [f64; 2] {
+    surface_layers(host, edge, child)
+        .iter()
+        .map(|&rank| f64::from(rank) * f64::from(edge.layer_spacing))
+        .fold([0.0_f64; 2], |range, offset| {
+            [range[0].min(offset), range[1].max(offset)]
+        })
 }

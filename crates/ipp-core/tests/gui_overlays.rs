@@ -743,7 +743,7 @@ fn a_closed_overlay_costs_nothing_and_opens_in_the_frame_that_shows_it() {
 }
 
 #[test]
-fn an_overlay_that_is_not_raised_is_reported_and_never_shown() {
+fn overlays_raise_without_a_style_offset_and_validate_mode_and_band() {
     let mut panel = panel();
     let root = panel.root_entity;
     let anchor = trigger(&mut panel, root, [20.0, 20.0], [60.0, 20.0]);
@@ -761,13 +761,17 @@ fn an_overlay_that_is_not_raised_is_reported_and_never_shown() {
         FieldValue::U32(0),
     );
     assert!(outcome.result.is_ok(), "{outcome:?}");
-    assert!(!appears(&panel.output(), list));
-    assert_eq!(
-        diagnostics(&mut panel),
-        [GuiEntityLayoutDiagnostic::OverlayNotRaised {
-            entity: list
-        }]
-    );
+    assert!(appears(&panel.output(), list));
+    assert!(diagnostics(&mut panel).is_empty());
+    for (band, accepted) in [(0, false), (1, true), (2, true), (3, true), (4, false)] {
+        let outcome = panel.set(
+            list,
+            ComponentValue::GUI_OVERLAY,
+            offset_of!(GuiOverlay, band),
+            FieldValue::U32(band),
+        );
+        assert_eq!(outcome.result.is_ok(), accepted, "{band}: {outcome:?}");
+    }
 
     // The four modes are manual, light, modal and hint; others are refused.
     for (mode, accepted) in [(1, true), (3, true), (4, false)] {
@@ -791,4 +795,181 @@ fn a_canvas_without_overlays_publishes_no_overlay_records() {
     assert!(diagnostics(&mut panel).is_empty());
     panel.frame();
     assert_eq!(panel.work().reflows, 0);
+}
+
+#[test]
+fn semantic_bands_order_complete_scopes_above_arbitrary_content_levels() {
+    let mut panel = panel();
+    let root = panel.root_entity;
+    let first = popup(
+        &mut panel,
+        Some(root),
+        GuiOverlay {
+            band: GuiOverlay::BAND_DIALOG,
+            ..overlay(4, 0)
+        },
+        [100.0, 100.0],
+        [0.0, 0.0],
+    );
+    let raised = trigger(&mut panel, first, [0.0, 0.0], [30.0, 30.0]);
+    panel.set(
+        raised,
+        ComponentValue::CANVAS_STYLE,
+        offset_of!(CanvasStyle, layer),
+        FieldValue::U32(u32::MAX),
+    );
+    let nested = popup(
+        &mut panel,
+        Some(first),
+        overlay(4, 0),
+        [40.0, 40.0],
+        [0.0, 0.0],
+    );
+    let nested_high = trigger(&mut panel, nested, [0.0, 0.0], [20.0, 20.0]);
+    panel.set(
+        nested_high,
+        ComponentValue::CANVAS_STYLE,
+        offset_of!(CanvasStyle, layer),
+        FieldValue::U32(u32::MAX),
+    );
+    let later = popup(
+        &mut panel,
+        Some(root),
+        GuiOverlay {
+            band: GuiOverlay::BAND_DIALOG,
+            ..overlay(4, 0)
+        },
+        [100.0, 100.0],
+        [0.0, 0.0],
+    );
+    let notification = popup(
+        &mut panel,
+        Some(first),
+        GuiOverlay {
+            band: GuiOverlay::BAND_NOTIFICATION,
+            ..overlay(4, 0)
+        },
+        [40.0, 40.0],
+        [0.0, 0.0],
+    );
+    let content = trigger(&mut panel, root, [0.0, 0.0], [100.0, 100.0]);
+    panel.set(
+        content,
+        ComponentValue::CANVAS_STYLE,
+        offset_of!(CanvasStyle, layer),
+        FieldValue::U32(u32::MAX),
+    );
+    let popup_scope = popup(
+        &mut panel,
+        Some(root),
+        overlay(4, 0),
+        [30.0, 30.0],
+        [0.0, 0.0],
+    );
+    panel.frame();
+    let output = panel.output();
+    let ordered = [
+        content,
+        popup_scope,
+        first,
+        raised,
+        nested,
+        nested_high,
+        later,
+        notification,
+    ]
+    .map(|entity| control_hit(&output, entity).layer);
+    assert!(
+        ordered.windows(2).all(|pair| pair[0] < pair[1]),
+        "{ordered:?}"
+    );
+    assert_eq!(ordered, [1, 2, 3, 4, 5, 6, 7, 8]);
+    // All skin decorations stay with their component root.
+    for entry in output.entries.iter() {
+        if let CanvasPaintEntry::Primitive {
+            primitive,
+            ..
+        } = entry.as_ref()
+        {
+            let style = primitive.style();
+            if style.identity.target.entity == raised {
+                assert_eq!(style.layer, 4);
+            }
+        }
+    }
+    // Band edits rebuild grouping, including descendant inheritance.
+    panel.set(
+        later,
+        ComponentValue::GUI_OVERLAY,
+        offset_of!(GuiOverlay, band),
+        FieldValue::U32(GuiOverlay::BAND_POPUP),
+    );
+    let changed = panel.output();
+    assert!(control_hit(&changed, later).layer < control_hit(&changed, first).layer);
+    assert!(control_hit(&changed, notification).layer > control_hit(&changed, nested_high).layer);
+}
+
+#[test]
+fn overlay_clip_escape_is_explicit_and_keeps_its_own_descendant_clips() {
+    let mut panel = panel();
+    let root = panel.root_entity;
+    let parent = trigger(&mut panel, root, [10.0, 10.0], [60.0, 20.0]);
+    panel.set(
+        parent,
+        ComponentValue::CANVAS_STYLE,
+        offset_of!(CanvasStyle, clipped),
+        FieldValue::Bool(true),
+    );
+    panel.set(
+        parent,
+        ComponentValue::CANVAS_STYLE,
+        offset_of!(CanvasStyle, clip_max_x),
+        FieldValue::F32(20.0),
+    );
+    panel.set(
+        parent,
+        ComponentValue::CANVAS_STYLE,
+        offset_of!(CanvasStyle, clip_max_y),
+        FieldValue::F32(20.0),
+    );
+    let overlay = popup(
+        &mut panel,
+        Some(parent),
+        overlay(0, 0),
+        [100.0, 50.0],
+        [0.0, 0.0],
+    );
+    panel.set(
+        overlay,
+        ComponentValue::CANVAS_STYLE,
+        offset_of!(CanvasStyle, layer),
+        FieldValue::U32(0),
+    );
+    panel.frame();
+    let output = panel.output();
+    assert_eq!(control_hit(&output, parent).clip, [10.0, 10.0, 30.0, 30.0]);
+    assert_eq!(control_hit(&output, overlay).clip, [0.0, 0.0, 300.0, 200.0]);
+    assert_eq!(hit_at(&output, [80.0, 40.0]), Some(overlay));
+    panel.set(
+        overlay,
+        ComponentValue::CANVAS_STYLE,
+        offset_of!(CanvasStyle, clipped),
+        FieldValue::Bool(true),
+    );
+    panel.set(
+        overlay,
+        ComponentValue::CANVAS_STYLE,
+        offset_of!(CanvasStyle, clip_max_x),
+        FieldValue::F32(40.0),
+    );
+    panel.set(
+        overlay,
+        ComponentValue::CANVAS_STYLE,
+        offset_of!(CanvasStyle, clip_max_y),
+        FieldValue::F32(20.0),
+    );
+    let child = trigger(&mut panel, overlay, [0.0, 0.0], [100.0, 50.0]);
+    panel.frame();
+    let output = panel.output();
+    assert_eq!(control_hit(&output, child).clip, [10.0, 30.0, 50.0, 50.0]);
 }

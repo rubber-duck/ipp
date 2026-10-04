@@ -157,16 +157,22 @@ pub(super) fn prepare(
         depth: 0.0,
     }));
 
-    draws.extend(surfaces.iter().enumerate().map(|(index, item)| RenderDraw {
-        index: RenderDrawIndex::Surface(index),
-        key: (item.entity, 2),
-        material: RenderMaterialKey::default(),
-        phase: 2,
-        depth: f64::from(view_projection[2]) * f64::from(item.model[12])
-            + f64::from(view_projection[6]) * f64::from(item.model[13])
-            + f64::from(view_projection[10]) * f64::from(item.model[14])
-            + f64::from(view_projection[14]),
-    }));
+    draws.extend(
+        surfaces
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| item.geometry.exact_affine(0.0).is_some())
+            .map(|(index, item)| RenderDraw {
+                index: RenderDrawIndex::Surface(index),
+                key: (item.entity, 2),
+                material: RenderMaterialKey::default(),
+                phase: 2,
+                depth: f64::from(view_projection[2]) * f64::from(item.model[12])
+                    + f64::from(view_projection[6]) * f64::from(item.model[13])
+                    + f64::from(view_projection[10]) * f64::from(item.model[14])
+                    + f64::from(view_projection[14]),
+            }),
+    );
     draws.extend(
         plot_planes
             .iter()

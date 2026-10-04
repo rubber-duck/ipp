@@ -1,4 +1,10 @@
-import type { GuiPageState, GuiScene, GuiSurfaceCacheMode } from "./scene.js";
+import type { SurfaceFacing } from "@ipp/client";
+import type {
+  GuiPageState,
+  GuiScene,
+  GuiSurfaceCacheMode,
+  GuiSurfaceShape,
+} from "./scene.js";
 import { sceneNodeLabel } from "./scene-tree.js";
 import { onlineCount, operationLabel } from "./station.js";
 import { useStoreValue } from "./store.js";
@@ -18,14 +24,49 @@ export function GuiControls({ scene }: GuiControlsProps) {
     scene.state,
     (state) => state.surfaceCache,
   );
+  const shape = useStoreValue(scene.state, (state) => state.surfaceShape);
+  const facing = useStoreValue(scene.state, (state) => state.surfaceFacing);
   return (
     <section aria-label="GUI demo controls">
       <h2>GUI Demo</h2>
       <p>
         Click, drag, scroll, type, or press Tab to operate the dashboard on the
         panel. Drag or zoom outside the panel to inspect it from another angle.
-        Reset camera restores the original view.
+        Reset camera frames the current flat or exploded view.
       </p>
+      <label className="mesh-select" htmlFor="gui-surface-shape">
+        <span>Panel shape</span>
+        <select
+          id="gui-surface-shape"
+          value={shape}
+          disabled={!scene.ready}
+          onChange={(event) =>
+            scene.selectSurfaceShape(
+              event.currentTarget.value as GuiSurfaceShape,
+            )
+          }
+        >
+          <option value="flat">Flat</option>
+          <option value="cylinder">Cylinder</option>
+          <option value="sphere">Sphere</option>
+        </select>
+      </label>
+      <label className="mesh-select" htmlFor="gui-surface-facing">
+        <span>Curved panel facing</span>
+        <select
+          id="gui-surface-facing"
+          value={facing}
+          disabled={!scene.ready || shape === "flat"}
+          onChange={(event) =>
+            scene.selectSurfaceFacing(
+              event.currentTarget.value as SurfaceFacing,
+            )
+          }
+        >
+          <option value="outside">Outside</option>
+          <option value="inside">Inside</option>
+        </select>
+      </label>
       <button
         id="gui-explode-toggle"
         className="secondary-button"
@@ -37,11 +78,11 @@ export function GuiControls({ scene }: GuiControlsProps) {
         {exploded ? "Flatten panel layers" : "Explode panel layers"}
       </button>
       <p>
-        The panels stay whole on the Surface; open overlays lift off it along
-        its normal, each on its own plane: lists, popovers, menus and tooltips
-        nearest the panels, the PURGE dialog above them and toasts on top. The
-        panel stays usable; an exploded panel draws directly, whatever its
-        presentation below.
+        See how the dashboard is assembled: complete panels separate with their
+        labels, borders and controls together. Menus, dialogs and notifications
+        float above them. Explode opens a side view; drag the background to
+        explore, or Reset camera to frame the stack again. Flatten returns to
+        the ordinary view. Curved panels separate into matching curved shells.
       </p>
       <button
         id="gui-vector-only"
@@ -68,8 +109,8 @@ export function GuiControls({ scene }: GuiControlsProps) {
         {shieldArmed ? "Lift input shield" : "Arm input shield"}
       </button>
       <p>
-        The hatched amber shield in front of PURGE is scene geometry with
-        picking geometry. Lifting it greys its frame and leaves it in place.
+        The amber cover follows PURGE, with four side walls that block oblique
+        clicks while armed. Lifting it greys its frame and lets clicks through.
       </p>
       <label className="mesh-select" htmlFor="gui-surface-cache">
         <span>Panel presentation</span>
@@ -89,10 +130,9 @@ export function GuiControls({ scene }: GuiControlsProps) {
         </select>
       </label>
       <p>
-        Automatic caching draws the panel directly near the authored view and
-        from a reduced-rate texture once the camera zooms out past 22 m. Focus,
-        hover and dragging on the panel always draw it directly, and so do
-        exploded layers, which one flat image cannot show.
+        Automatic caching can reuse distant flat panels. Exploded flat panels
+        draw directly; curved panels use a separate image for each shell and
+        keep interactive controls current.
       </p>
       <dl className="selection-summary">
         {READOUTS.map(([id, label, text]) => (

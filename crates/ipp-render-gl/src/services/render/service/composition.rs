@@ -25,6 +25,7 @@ struct OutputJob {
     projection_extent: [f64; 2],
     canvas: Option<CanvasView>,
     cache: Option<CanvasCacheRequest>,
+    projected: Option<super::super::scene::SceneOutputSurface>,
     visible: bool,
     interaction_eligible: bool,
 }
@@ -79,6 +80,7 @@ impl<D: RenderDevice> RenderService<D> {
                 projection_extent: [f64::from(viewport.width), f64::from(viewport.height)],
                 canvas,
                 cache: None,
+                projected: None,
                 visible: true,
                 interaction_eligible: world_interaction_eligible(host, selection.world()),
             },
@@ -126,10 +128,25 @@ impl<D: RenderDevice> RenderService<D> {
                                 CanvasScene::new(host, surface.selection, surface.publication)?;
                             let extent = child.canvas.logical_extent;
                             let [width, height] = surface.extent.map(f64::from);
-                            let content = plane_matrix(
-                                [-width * 0.5, height * 0.5],
-                                [width / f64::from(extent[0]), -height / f64::from(extent[1])],
-                            )?;
+                            let content = if surface.geometry.exact_affine(0.0).is_some() {
+                                ipp_core::systems::camera::multiply(
+                                    super::canvas_composition::affine_matrix(&*surface.geometry)?,
+                                    plane_matrix(
+                                        [0.0; 2],
+                                        [
+                                            width / f64::from(extent[0]),
+                                            height / f64::from(extent[1]),
+                                        ],
+                                    )?,
+                                )
+                            } else {
+                                // Only a quality estimate for descendants: projected
+                                // content itself uses sampled geometry, never this plane.
+                                plane_matrix(
+                                    [-width * 0.5, height * 0.5],
+                                    [width / f64::from(extent[0]), -height / f64::from(extent[1])],
+                                )?
+                            };
                             let plane = ipp_core::systems::camera::multiply(surface.model, content);
                             let clip = child.root_clip();
                             canvas = Some(CanvasView {
@@ -138,19 +155,22 @@ impl<D: RenderDevice> RenderService<D> {
                                 opacity: 1.0,
                                 camera,
                             });
-                            cache = surface.cache_policy.map(|policy| CanvasCacheRequest {
-                                owner: surface.entity.world,
-                                anchor: surface.entity.entity,
-                                token: surface.token.clone(),
-                                extent: surface.extent,
-                                policy,
-                                distance: distance(camera, plane, extent),
-                                clip,
-                                opacity: 1.0,
-                                visible,
-                                interaction: false,
-                                layered: surface.layered(),
-                            });
+                            cache = surface
+                                .cache_policy
+                                .filter(|_| surface.geometry.exact_affine(0.0).is_some())
+                                .map(|policy| CanvasCacheRequest {
+                                    owner: surface.entity.world,
+                                    anchor: surface.entity.entity,
+                                    token: surface.token.clone(),
+                                    extent: surface.extent,
+                                    policy,
+                                    distance: distance(camera, plane, extent),
+                                    clip,
+                                    opacity: 1.0,
+                                    visible,
+                                    interaction: false,
+                                    layered: surface.layered(),
+                                });
                         }
                         children.push(OutputJob {
                             selection: surface.selection,
@@ -159,6 +179,11 @@ impl<D: RenderDevice> RenderService<D> {
                             projection_extent: surface.extent.map(f64::from),
                             canvas,
                             cache,
+                            projected: surface
+                                .geometry
+                                .exact_affine(0.0)
+                                .is_none()
+                                .then(|| surface.clone()),
                             visible,
                             interaction_eligible,
                         });
@@ -241,6 +266,7 @@ impl<D: RenderDevice> RenderService<D> {
                             projection_extent: slot.physical_extent,
                             canvas,
                             cache,
+                            projected: None,
                             visible: job.visible,
                             interaction_eligible: job.interaction_eligible
                                 && world_interaction_eligible(host, selection.world()),
@@ -264,8 +290,14 @@ impl<D: RenderDevice> RenderService<D> {
                 requests.push((job.selection, job.publication, cache));
             }
         }
+        let required = prepared
+            .iter()
+            .filter_map(|job| job.projected.as_ref().map(|s| s.selection))
+            .collect();
+        self.retain_projected_outputs(&required);
         self.plan_canvas_caches(host, selection, &requests, presentation_time)?;
         let mut work = RenderFrameWork::default();
+        self.begin_projected_frame();
         for job in prepared {
             if !job.visible {
                 continue;
@@ -273,19 +305,66 @@ impl<D: RenderDevice> RenderService<D> {
             let selection = job.selection;
             if selection.kind() == OutputKind::Canvas {
                 let scene = CanvasScene::new(host, selection, job.publication)?;
-                self.paint_canvas_cache(scene, &mut work)?;
+                if let Some(surface) = job.projected {
+                    let interaction =
+                        super::super::canvas_scene::output_order(host, selection, job.publication)?
+                            .iter()
+                            .any(|(output, _)| interactive.contains(output));
+                    let result = self.prepare_projected_surface(
+                        host,
+                        surface,
+                        job.viewport,
+                        presentation_time,
+                        interaction,
+                        &mut work,
+                    );
+                    if result == Err(RenderError::ContextLost) {
+                        return result.map(|_| work);
+                    }
+                    if result.is_err() {
+                        work.failed_draw();
+                    }
+                } else {
+                    self.paint_canvas_cache(scene, &mut work)?;
+                }
                 continue;
             }
 
+            let mut camera_viewport = job.viewport;
+            if let Some(surface) = job.projected {
+                let result = self.prepare_projected_surface(
+                    host,
+                    surface,
+                    job.viewport,
+                    presentation_time,
+                    false,
+                    &mut work,
+                );
+                if result == Err(RenderError::ContextLost) {
+                    return result.map(|_| work);
+                }
+                if result.is_err() {
+                    self.camera_completed.remove(&selection);
+                    work.failed_draw();
+                    continue;
+                }
+                if let Some(size) = self.projected_size(selection) {
+                    camera_viewport.width = size[0];
+                    camera_viewport.height = size[1];
+                }
+            }
             match self.paint_camera_child(
                 host,
                 selection,
                 job.publication,
-                job.viewport,
+                camera_viewport,
                 job.projection_extent,
                 work,
             ) {
-                Ok(completed) => work = completed,
+                Ok(completed) => {
+                    work = completed;
+                    self.projected_camera_painted(selection);
+                }
                 Err(RenderError::ContextLost) => return Err(RenderError::ContextLost),
                 Err(_) => {
                     self.camera_completed.remove(&selection);

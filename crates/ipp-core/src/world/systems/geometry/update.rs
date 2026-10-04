@@ -322,7 +322,7 @@ impl<'a> GeometryReadAccess<'a> {
             if self.world.components.mesh_pose(index).is_some() {
                 return Ok(GeometryProgram::Dynamic);
             }
-            if self.world.components.surface(index).is_some() {
+            if crate::systems::surface::provider(&self.world.components, index).is_some() {
                 return Ok(GeometryProgram::Dynamic);
             }
             let mesh = self
@@ -565,9 +565,11 @@ impl<'a> GeometryReadAccess<'a> {
         entity: EntityId,
     ) -> Result<impl Iterator<Item = TransformedGeometryShape>, ErrorReason> {
         let index = entity.index() as usize;
-        let surface = if let Some(surface) = self.world.components.surface(index) {
+        let surface = if let Some(surface) =
+            crate::systems::surface::provider(&self.world.components, index)
+        {
             Some(TransformedGeometryShape {
-                shape: surface.local_bounding_geometry(),
+                shape: surface.bounds([0.0, 0.0])?,
                 transform: self.geometry_model(entity)?,
             })
         } else {

@@ -21,6 +21,7 @@ import {
 import { Children, Entity } from "@ipp/react";
 import {
   Box,
+  Behavior,
   Button,
   Layout,
   Overlay,
@@ -62,6 +63,8 @@ const green = ([r, g, b]: Rgb) => g > 150 && r < 90 && b < 90;
 const blue = ([r, g, b]: Rgb) => b > 150 && r < 90 && g < 90;
 const yellow = ([r, g, b]: Rgb) => r > 200 && g > 200 && b < 60;
 const magenta = ([r, g, b]: Rgb) => r > 150 && b > 150 && g < 90;
+const cyan = ([r, g, b]: Rgb) => g > 150 && b > 150 && r < 90;
+const white = ([r, g, b]: Rgb) => r > 220 && g > 220 && b > 220;
 const black = ([r, g, b]: Rgb) => r < 24 && g < 24 && b < 24;
 const grey = ([r, g, b]: Rgb) =>
   r > 90 && r < 230 && Math.abs(r - g) < 12 && Math.abs(r - b) < 12;
@@ -90,6 +93,7 @@ export async function guiOverlays(
             part,
             color: [...color, 1],
             corner_radius: [0, 0],
+            corner_cut: [0, 0, 0, 0],
             border_width: 0,
           },
         ],
@@ -146,7 +150,7 @@ export async function guiOverlays(
                     <Children>
                       <Entity id="overlay-list">
                         <Overlay side={0} align={3} />
-                        <Style y={2} layer={1} />
+                        <Style y={2} />
                         <Layout kind={2} />
                         <Children>
                           {item("first", [0, 1, 0])}
@@ -162,7 +166,7 @@ export async function guiOverlays(
           </Entity>
           <Entity id="overlay-later">
             <Layout width={VIEW[0]} height={20} align_x={-1} align_y={-1} />
-            <Style y={50} />
+            <Style y={50} layer={0xffff_ffff} />
             <Skin parts={solid([1, 1, 0])} />
             <Button label="" onPress={() => presses.push("later")} />
           </Entity>
@@ -170,10 +174,69 @@ export async function guiOverlays(
       </Entity>
       <Entity id="overlay-context">
         <Overlay side={1} align={0} />
-        <Style x={150} y={80} layer={1} />
+        <Style x={150} y={80} />
         <Layout width={40} height={30} />
         <Skin parts={solid([1, 0, 1])} />
         <Button label="" onPress={() => presses.push("context")} />
+      </Entity>
+    </>
+  );
+
+  /**
+   * Independent canvas rectangles: old dialog 8..128 x 8..104, its centred
+   * popup 18..118 x 26..86; later dialog 60..140 x 32..104, its centred
+   * popup 80..120 x 53..83; notification 88..136 x 64..104.
+   * All modes are manual so band priority is tested independently of modality.
+   */
+  const priorityScene = (later: boolean, notification: boolean) => (
+    <>
+      <Entity id="priority-content">
+        <Layout width={VIEW[0]} height={VIEW[1]} align_x={-1} align_y={-1} />
+        <Style layer={0xffff_ffff} red={0} green={0} blue={1} />
+        <Box width={VIEW[0]} height={VIEW[1]} />
+      </Entity>
+      <Entity id="priority-old-dialog">
+        <Overlay side={1} band={2} mode={0} />
+        <Layout width={120} height={96} align_x={-1} align_y={-1} />
+        <Style x={8} y={8} />
+        <Skin parts={solid([1, 0, 0])} />
+        <Button label="" onPress={() => presses.push("old-dialog")} />
+        <Children>
+          <Entity id="priority-old-raised">
+            <Style x={4} y={4} layer={0xffff_ffff} red={1} green={1} blue={1} />
+            <Box width={112} height={88} />
+          </Entity>
+          <Entity id="priority-old-popup">
+            <Overlay side={4} align={1} band={1} mode={0} />
+            <Layout width={100} height={60} />
+            <Skin parts={solid([0, 1, 0])} />
+            <Button label="" onPress={() => presses.push("old-popup")} />
+          </Entity>
+        </Children>
+      </Entity>
+      <Entity id="priority-later-dialog">
+        <Overlay side={1} band={2} mode={0} />
+        <Behavior visible={later} />
+        <Layout width={80} height={72} align_x={-1} align_y={-1} />
+        <Style x={60} y={32} />
+        <Skin parts={solid([1, 1, 0])} />
+        <Button label="" onPress={() => presses.push("later-dialog")} />
+        <Children>
+          <Entity id="priority-later-popup">
+            <Overlay side={4} align={1} band={1} mode={0} />
+            <Layout width={40} height={30} />
+            <Skin parts={solid([0, 1, 1])} />
+            <Button label="" onPress={() => presses.push("later-popup")} />
+          </Entity>
+        </Children>
+      </Entity>
+      <Entity id="priority-notification">
+        <Overlay side={1} band={3} mode={0} />
+        <Behavior visible={notification} />
+        <Layout width={48} height={40} />
+        <Style x={88} y={64} />
+        <Skin parts={solid([1, 0, 1])} />
+        <Button label="" onPress={() => presses.push("notification")} />
       </Entity>
     </>
   );
@@ -300,6 +363,40 @@ export async function guiOverlays(
       (await press(session, 48, 56)) === "second",
       `Press on the flipped list over the later sibling: ${presses}`,
     );
+    await root.render(priorityScene(true, true));
+    await captureUntil(session, "overlays-priority-scopes", [
+      ["huge content offset remains below a dialog", 10, 10, red],
+      ["raised old-dialog decoration", 16, 20, white],
+      ["nested popup inherits dialog band above raised owner", 24, 34, green],
+      ["later complete dialog above older nested popup", 68, 40, yellow],
+      ["later nested popup above its owner", 86, 60, cyan],
+      ["notification above both complete dialog scopes", 100, 80, magenta],
+      ["content outside overlays", 150, 114, blue],
+    ]);
+    for (const [x, y, target] of [
+      [24, 34, "old-popup"],
+      [68, 40, "later-dialog"],
+      [86, 60, "later-popup"],
+      [100, 80, "notification"],
+    ] as const)
+      check(
+        (await press(session, x, y)) === target,
+        `Scoped band input at ${x},${y} must reach ${target}: ${presses}`,
+      );
+    await root.render(priorityScene(true, false));
+    await captureUntil(session, "overlays-notification-closed", [
+      ["closing notification reveals later nested popup", 100, 80, cyan],
+      ["later dialog still contains the older scope", 68, 40, yellow],
+    ]);
+    await root.render(priorityScene(false, false));
+    await captureUntil(session, "overlays-later-scope-closed", [
+      ["closing dialog hides its complete nested scope", 100, 80, green],
+      ["older nested popup revealed", 68, 40, green],
+    ]);
+    check(
+      (await press(session, 100, 80)) === "old-popup",
+      `Closing later scopes must remove their input targets: ${presses}`,
+    );
     return {
       images,
       assertions: [
@@ -307,6 +404,10 @@ export async function guiOverlays(
         "press on a list row reaches the row, not the sibling beneath",
         "list flips above a trigger near the bottom edge, keeping its gap",
         "context overlay at a canvas point shifts inside the right edge",
+        "overlay bands outrank maximum content priorities independently of interaction mode",
+        "nested popups inherit the owner's band above all owner component layers",
+        "later dialogs outrank older complete scopes, notifications remain highest",
+        "closed overlays remove nested paint and input targets",
       ],
       failure: null,
     };

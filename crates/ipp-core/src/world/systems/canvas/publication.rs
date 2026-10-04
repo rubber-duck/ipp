@@ -82,10 +82,9 @@ pub struct CanvasPrimitiveStyle {
     pub opacity: f32,
     /// Fully intersected logical clip; empty clips remain empty.
     pub clip: CanvasClip,
-    /// Plane id of the producing entity's resolved layer, one of the
-    /// publication's `layers`. Painter order is layer first, then tree order;
-    /// a Surface presents each layer its id times its layer spacing along its
-    /// normal.
+    /// Compact physical rank of the producing entity's resolved group, one of
+    /// the publication's `layers`. Painter order is rank first, then tree order;
+    /// Surface separation is rank times layer spacing along its front normal.
     pub layer: u32,
 }
 
@@ -430,6 +429,8 @@ pub struct CanvasAttachmentSlot {
     pub anchor: EntityId,
     /// Exact Surface component lifetime.
     pub surface_incarnation: u64,
+    /// Registered provider of the slot extent.
+    pub surface_component: u16,
     /// Exact applied attachment write; join only to the same completed edge token.
     pub token: WorldAttachmentToken,
     /// Authored physical rectangle; presentation scaling does not rewrite it.
@@ -445,7 +446,7 @@ pub struct CanvasAttachmentSlot {
     /// Cached presentation must retain these same per-primitive semantics without applying it twice.
     /// Zero suppresses paint and hit eligibility, not attachment identity or availability.
     pub opacity: f32,
-    /// Plane id of the anchor's layer; the nested canvas presents on this
+    /// Compact rank of the anchor's group; the nested canvas presents on this
     /// layer's plane, and its own layers only order its content there.
     pub layer: u32,
 }
@@ -574,7 +575,7 @@ pub struct CanvasHit {
     /// targeting walks that list in reverse. Without layers it is the painter
     /// ordinal of the hit's paint.
     pub paint_order: u32,
-    /// Plane id of the target's layer, as on its paint.
+    /// Compact physical rank of the target's group, as on its paint.
     pub layer: u32,
     /// Final logical rectangle in minimum/maximum form.
     pub bounds: CanvasClip,
@@ -645,9 +646,9 @@ pub struct CanvasPublication {
     pub hits: Arc<[CanvasHit]>,
     /// Chart-local analytic marks placed through the same Canvas walk and clips.
     pub plot_hits: Arc<[crate::systems::plot::PlotCanvasHit]>,
-    /// Plane ids of the layers the canvas's entities resolve to, ascending and
-    /// never empty: only the base plane 0 without layers. Planes not in use
-    /// have no entry, and a plane keeps its id whatever others are in use.
+    /// Consecutive physical ranks of occupied shown-entity groups, ascending
+    /// and never empty. All-zero ordinary content uses only rank 0. Adding or
+    /// removing a group repacks later ranks deterministically.
     pub layers: Arc<[u32]>,
     /// Current local interaction priority, filtered by the composed router before use.
     pub interaction: CanvasInteractionPriority,

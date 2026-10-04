@@ -1,48 +1,79 @@
-//! Canvas layers: resolution of the authored `CanvasStyle.layer` plane ids and
-//! the painter and hit order they select.
-//!
-//! A layer is a plane id within the canvas. An entity whose layer is zero is on
-//! its parent's plane, the base plane 0 at the top level; a nonzero layer puts
-//! the entity on that plane, or one above its parent's plane when the parent's
-//! is not below it, so content never sits below its parent. Every entity that
-//! resolves to plane `n` shares that plane wherever it is declared. Paint and
-//! hits are stable-sorted by plane, keeping tree order within each plane. The
-//! publication lists the planes in use, ascending, and each primitive, hit and
-//! slot carries its plane id, so a plane keeps its id, and an exploded Surface
-//! its depth, whatever other planes come into or go out of use. A canvas whose
-//! layers are all zero resolves nothing and keeps its tree order unchanged.
+//! Relative component priorities and complete overlay scopes, resolved from
+//! the current core tree into compact physical ranks. Logical priorities are
+//! independent of Surface spacing and never allocate historical depth slots.
+//! Shown entities occupy groups even when they are structural/layout roots
+//! without paint. This keeps depth placement independent of resource readiness.
+//! Closed overlay subtrees are excluded by the caller.
 
 use crate::EntityId;
 use crate::world::WorldSimulationState;
 
-/// Resolved layers of one canvas walk, aligned with its tree order.
+/// An ordinary relative level within a semantic band and overlay scope.
+/// Lexicographic scope order puts every owner's level below its nested scopes,
+/// and an earlier complete scope below the next sibling scope.
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) struct CanvasLayerKey {
+    band: u32,
+    scope: Vec<usize>,
+    level: u64,
+}
+
+impl CanvasLayerKey {
+    pub fn child(&self, world: &WorldSimulationState, entity: EntityId, position: usize) -> Self {
+        let index = entity.index() as usize;
+        let mut key = self.clone();
+        if let Some(overlay) = world.components.gui_overlay(index) {
+            let band = key.band.max(overlay.band);
+            // Promotion starts a scope in the higher band. Tree position still
+            // identifies its ownership deterministically; ordinary ancestry
+            // remains intact for layout, focus and interaction.
+            if band != key.band {
+                key.scope.clear();
+            }
+            key.band = band;
+            key.scope.push(position);
+            key.level = 0;
+        }
+        let offset = world
+            .components
+            .canvas_style(index)
+            .map_or(0, |style| style.layer);
+        // A tree can contain at most u32::MAX indexed entities. Summing their
+        // u32 offsets fits u64 even when an authored priority exceeds u32.
+        key.level = key
+            .level
+            .checked_add(u64::from(offset))
+            .expect("Canvas relative layer sum exhausted");
+        key
+    }
+}
+
+/// Resolved physical ranks and logical keys aligned with the shown tree order.
 pub(super) struct CanvasLayers {
-    /// Plane id of the entity at each position of the tree order.
     layers: Vec<u32>,
-    /// Distinct plane ids in use, ascending.
     used: Vec<u32>,
+    pub keys: Vec<CanvasLayerKey>,
 }
 
 impl CanvasLayers {
-    /// Resolve the plane of every entity in `order`, a depth-first tree order.
-    /// `None` when every layer is zero, which leaves the whole canvas on the
-    /// base plane.
+    /// None for all-zero ordinary content, preserving the tree-order fast path.
     pub fn resolve(world: &WorldSimulationState, order: &[EntityId]) -> Option<Self> {
-        let authored = |entity: EntityId| {
+        if order.iter().all(|entity| {
+            let index = entity.index() as usize;
             world
                 .components
-                .canvas_style(entity.index() as usize)
-                .map_or(0, |style| style.layer)
-        };
-        if order.iter().all(|&entity| authored(entity) == 0) {
+                .canvas_style(index)
+                .is_none_or(|style| style.layer == 0)
+                && world.components.gui_overlay(index).is_none()
+        }) {
             return None;
         }
 
-        // Entities from the top level to the current one with their planes.
-        let mut path: Vec<(EntityId, u32)> = Vec::new();
-        let layers: Vec<u32> = order
+        let mut path: Vec<(EntityId, CanvasLayerKey)> = Vec::new();
+        let keys: Vec<_> = order
             .iter()
-            .map(|&entity| {
+            .enumerate()
+            .map(|(position, &entity)| {
                 let parent = world
                     .state
                     .links
@@ -54,46 +85,40 @@ impl CanvasLayers {
                 {
                     path.pop();
                 }
-                let layer = resolve(path.last().map_or(0, |(_, layer)| *layer), authored(entity));
-                path.push((entity, layer));
-                layer
+                let key = path
+                    .last()
+                    .map_or_else(CanvasLayerKey::default, |(_, key)| key.clone())
+                    .child(world, entity, position);
+                path.push((entity, key.clone()));
+                key
             })
             .collect();
-
-        let mut used = layers.clone();
-        used.sort_unstable();
-        used.dedup();
+        let mut groups = keys.clone();
+        groups.sort_unstable();
+        groups.dedup();
+        let layers = keys
+            .iter()
+            .map(|key| groups.binary_search(key).unwrap() as u32)
+            .collect();
+        let used = (0..groups.len() as u32).collect();
         Some(Self {
             layers,
             used,
+            keys,
         })
     }
 
-    /// Plane id of the entity at `position` in the resolved tree order.
     pub fn layer(&self, position: usize) -> u32 {
         self.layers[position]
     }
 
-    /// Distinct plane ids in use, ascending.
     pub fn used(&self) -> &[u32] {
         &self.used
     }
 }
 
-/// Plane of an entity authoring `layer` under a parent on plane `parent`: the
-/// parent's for zero, otherwise `layer` but never below one above the parent.
-/// An entity under the highest plane id stays on its parent's plane, after it
-/// in tree order.
-pub(super) fn resolve(parent: u32, layer: u32) -> u32 {
-    if layer == 0 {
-        parent
-    } else {
-        layer.max(parent.saturating_add(1))
-    }
-}
-
-/// Published index of each tree-order item on plane `layers`: by plane,
-/// keeping tree order within each plane. Hits keep their tree-order
+/// Published index of each tree-order item on rank `layers`: by rank,
+/// keeping tree order within each rank. Hits keep their tree-order
 /// `paint_order`.
 pub(super) fn layer_order(layers: impl Iterator<Item = u32>) -> Vec<u32> {
     let layers: Vec<u32> = layers.collect();
@@ -113,25 +138,4 @@ pub(super) fn in_layer_order<T>(items: Vec<T>, order: &[u32]) -> Vec<T> {
         published[at as usize] = Some(item);
     }
     published.into_iter().map(Option::unwrap).collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::resolve;
-
-    #[test]
-    fn zero_inherits_and_a_nonzero_layer_is_a_plane_id_above_its_parent() {
-        // Zero keeps the parent's plane, the base at the top level.
-        assert_eq!(resolve(0, 0), 0);
-        assert_eq!(resolve(2, 0), 2);
-        // The same id names the same plane from any depth below it.
-        assert_eq!(resolve(0, 3), 3);
-        assert_eq!(resolve(2, 3), 3);
-        // A raise never lands on or below its parent's plane.
-        assert_eq!(resolve(1, 1), 2);
-        assert_eq!(resolve(2, 1), 3);
-        assert_eq!(resolve(3, 3), 4);
-        // The highest plane id cannot rise further.
-        assert_eq!(resolve(u32::MAX, 1), u32::MAX);
-    }
 }

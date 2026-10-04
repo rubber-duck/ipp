@@ -301,7 +301,7 @@ fn nested_camera_demand_and_targets_follow_only_the_selected_root() {
         &mut host.world_mut(parent.world().id()).unwrap(),
         vec![
             ComponentValue::Transform(Default::default()),
-            ComponentValue::Surface(Default::default()),
+            ComponentValue::FlatSurface(Default::default()),
             ComponentValue::WorldAttachment(ipp_core::WorldAttachment::surface(child)),
         ],
     );

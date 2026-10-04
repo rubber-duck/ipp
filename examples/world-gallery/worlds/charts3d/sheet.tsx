@@ -9,7 +9,7 @@ import {
   Asset,
   AttachedWorld,
   Entity,
-  Surface,
+  FlatSurface,
   assetRef,
   createRoot,
   type ReactWorldRoot,
@@ -154,7 +154,7 @@ export async function openPlot3dSheet(
               </Entity>
               <Entity id={`view/${key}`}>
                 <Style x={x + 6} y={y + 66} />
-                <Surface width={732 / 96} height={348 / 96} />
+                <FlatSurface width={732 / 96} height={348 / 96} />
                 <AttachedWorld
                   anchor={`view/${key}`}
                   child={{ borrow: chart.world.reference }}

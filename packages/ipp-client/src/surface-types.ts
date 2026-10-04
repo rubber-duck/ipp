@@ -1,7 +1,7 @@
-// Surface plane mapping shared by clients that place content on a Surface.
+// Planar mapping helpers for FlatSurface; curved charts require their provider mapping.
 
 /**
- * Map a 2D point in Surface content coordinates ([0, width] x [0, height], +X right, +Y down)
+ * Map a 2D point in FlatSurface plane coordinates ([0, width] x [0, height], +X right, +Y down)
  * to centred entity-local 3D coordinates (+X right, +Y up, front +Z).
  */
 export function surfaceContentToEntityLocal(
@@ -16,7 +16,7 @@ export function surfaceContentToEntityLocal(
 }
 
 /**
- * Map a 2D point in centred entity-local coordinates to 2D Surface content coordinates.
+ * Map a 2D point in centred entity-local coordinates to 2D FlatSurface plane coordinates.
  */
 export function entityLocalToSurfaceContent(
   entityPoint: readonly [number, number],

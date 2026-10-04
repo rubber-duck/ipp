@@ -77,6 +77,8 @@ export function useContextMenu<Target>(): ContextMenuState<Target> {
 }
 
 export interface ContextMenuProps<Target> {
+  /** Nonnegative layer offset applied once at this component root; zero inherits. */
+  readonly layer?: number;
   /** Symbolic id of the menu's anchor; its surface and rows extend it. */
   readonly id: string;
   readonly menu: ContextMenuState<Target>;
@@ -90,6 +92,7 @@ export interface ContextMenuProps<Target> {
 
 export function ContextMenu<Target>({
   id,
+  layer = 0,
   menu,
   items,
   onSelect,
@@ -113,7 +116,7 @@ export function ContextMenu<Target>({
   );
   return (
     <Entity id={id}>
-      <Style x={point.current[0]} y={point.current[1]} />
+      <Style layer={layer} x={point.current[0]} y={point.current[1]} />
       <Children>
         <Floating
           id={`${id}/surface`}

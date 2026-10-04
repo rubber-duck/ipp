@@ -312,6 +312,7 @@ impl<D: RenderDevice> RenderService<D> {
                 &lighting,
                 &view_projection,
             );
+            self.append_projected_draws(&mut scratch.draws, &world.surfaces, &view_projection);
             let mut draws = scratch
                 .draws
                 .iter()
@@ -333,6 +334,21 @@ impl<D: RenderDevice> RenderService<D> {
                     Item::PlotPlane(plane) => {
                         self.device.borrow_mut().set_instances(&[])?;
                         self.draw_plot_plane(world, plane, view_projection, &mut stats)?;
+                        continue;
+                    }
+                    Item::SurfacePatch(surface, group, patch) => {
+                        if !world.surface_visible(surface, &frustum) {
+                            continue;
+                        }
+                        self.device.borrow_mut().set_instances(&[])?;
+                        self.draw_projected_patch(
+                            world.host,
+                            surface,
+                            group,
+                            patch,
+                            view_projection,
+                            &mut stats,
+                        )?;
                         continue;
                     }
                     Item::Surface(surface) => {

@@ -7,7 +7,7 @@
  */
 import { Entity } from "../components.js";
 import { Button } from "../gui/controls.js";
-import { Behavior, Font, Layout } from "../gui/components.js";
+import { Style, Behavior, Font, Layout } from "../gui/components.js";
 import { Skin } from "../gui/theme.js";
 import type {
   GuiFeedbackListeners,
@@ -19,6 +19,8 @@ import { LAYOUT_LEAF, type GuiKitLayout } from "./layout.js";
 import { textWidth } from "./text.js";
 
 export interface SecondaryButtonProps extends GuiFeedbackListeners {
+  /** Nonnegative layer offset applied once at this component root; zero inherits. */
+  readonly layer?: number;
   readonly id: string;
   readonly label: string;
   readonly onPress?: GuiPressListener;
@@ -31,6 +33,7 @@ export interface SecondaryButtonProps extends GuiFeedbackListeners {
 
 export function SecondaryButton({
   id,
+  layer = 0,
   label,
   onPress,
   ref,
@@ -44,6 +47,7 @@ export function SecondaryButton({
   const size = kit.typeSize("small");
   return (
     <Entity id={id}>
+      <Style layer={layer} />
       <Layout
         kind={LAYOUT_LEAF}
         width={textWidth(label, size) + kit.unit(2 * t.inset)}

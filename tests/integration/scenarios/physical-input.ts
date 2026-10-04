@@ -198,7 +198,10 @@ export async function preparePhysicalInput(
   const parentCommands: Command[] = [
     createEntity(1, "physical-root"),
     createEntity(2, "physical-anchor"),
-    insertComponent(parentClient, "Surface", anchor, { width: 96, height: 64 }),
+    insertComponent(parentClient, "FlatSurface", anchor, {
+      width: 96,
+      height: 64,
+    }),
     {
       kind: "insertComponent",
       entity: anchor,

@@ -67,7 +67,7 @@ const SHIELD_LIFTED: StationBadge = {
  * select what they show. */
 export function StatusPanel({ scene }: { readonly scene: GuiScene }) {
   return (
-    <Panel id="gui-status-panel" layout={{ height: STATUS_HEIGHT }}>
+    <Panel layer={2} id="gui-status-panel" layout={{ height: STATUS_HEIGHT }}>
       <PanelBody id="gui-status-content">
         <PanelHeader id="gui-status-header" title="STATUS" />
         <Entity id="gui-status-body">

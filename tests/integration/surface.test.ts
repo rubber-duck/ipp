@@ -82,6 +82,36 @@ test("Surface Canvas entities, field writes, animation and graph snapshots cross
           { encodeRowsTable: contract.encodeRowsTable },
         ),
       );
+      assert.equal(
+        (
+          await client.batch([
+            {
+              kind: "create",
+              alias: 81,
+              metadata: { symbolicId: "persist-cylinder", classes: [] },
+            },
+            contract.CylinderSurface.insert(contract.Entity.alias(81), {
+              width: 1.2,
+              height: 0.8,
+              curvature: 0.7,
+              layer_spacing: 0.04,
+            }),
+            {
+              kind: "create",
+              alias: 82,
+              metadata: { symbolicId: "persist-sphere", classes: [] },
+            },
+            contract.SphereSurface.insert(contract.Entity.alias(82), {
+              width: 1.4,
+              height: 0.9,
+              curvature: -0.6,
+              layer_spacing: -0.02,
+            }),
+          ])
+        ).ok,
+        true,
+        "Generated curved providers did not cross native transport",
+      );
       const bytes = await host.saveWorld(client.session);
       const before = await canvasSnapshot(
         result.canvasClient,
@@ -100,12 +130,36 @@ test("Surface Canvas entities, field writes, animation and graph snapshots cross
       assert.ok(canvasWorld, "World graph did not restore the Canvas World");
       const restored = await host.openWorld(loaded.root);
       const restoredCanvas = await host.openWorld(canvasWorld);
+      const restoredSnapshot = await restored.inspect();
+      for (const [symbol, component, expected] of [
+        [
+          "persist-cylinder",
+          restored.components.CylinderSurface!.id,
+          { width: 1.2, height: 0.8, curvature: 0.7, layer_spacing: 0.04 },
+        ],
+        [
+          "persist-sphere",
+          restored.components.SphereSurface!.id,
+          { width: 1.4, height: 0.9, curvature: -0.6, layer_spacing: -0.02 },
+        ],
+      ] as const) {
+        const provider = restoredSnapshot.entities
+          .find((entity) => entity.metadata.symbolicId === symbol)
+          ?.components.find((item) => item.component === component);
+        assert.ok(provider, `Graph transfer omitted ${symbol}`);
+        for (const [field, value] of Object.entries(expected))
+          assert.ok(
+            Math.abs(Number(provider.fields[field]) - value) < 1e-6,
+            `Graph transfer changed ${symbol}.${field}`,
+          );
+      }
+
       const restoredAnchor = (await restored.inspect()).entities.find(
         (entity) => entity.metadata.symbolicId === "surface-api",
       );
       assert.ok(restoredAnchor, "Restored Surface anchor disappeared");
       const restoredSurface = restoredAnchor.components.find(
-        (item) => item.component === restored.components.Surface!.id,
+        (item) => item.component === restored.components.FlatSurface!.id,
       );
       assert.ok(restoredSurface, "Restored Surface lost its dimensions");
       assert.equal(restoredSurface.fields.width, 4);

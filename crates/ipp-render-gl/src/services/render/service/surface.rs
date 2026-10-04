@@ -70,11 +70,27 @@ impl<D: RenderDevice> RenderService<D> {
         viewport: ipp_core::WorldViewport,
         stats: &mut RenderFrameWork,
     ) -> Result<(), RenderError> {
-        if self.draw_cached_canvas(scene, &mvp, clip, opacity, stats)? {
+        self.draw_canvas_group(scene, mvp, clip, opacity, layering, viewport, stats, None)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn draw_canvas_group(
+        &mut self,
+        scene: &CanvasScene<'_>,
+        mvp: [f32; 16],
+        clip: CanvasClip,
+        opacity: f32,
+        layering: CanvasLayering,
+        viewport: ipp_core::WorldViewport,
+        stats: &mut RenderFrameWork,
+        group: Option<u32>,
+    ) -> Result<(), RenderError> {
+        if group.is_none() && self.draw_cached_canvas(scene, &mvp, clip, opacity, stats)? {
             return Ok(());
         }
         self.prepare_surface_program()?;
         self.surface_missing.clear();
+        self.surface_missing_draws = 0;
         self.surface_analytic_text = false;
         self.surface_gui_unretained = false;
         let mut frames = Vec::new();
@@ -83,6 +99,15 @@ impl<D: RenderDevice> RenderService<D> {
             frames.push(
                 self.prepare_canvas_frame(*scene, mvp, clip, opacity, layering, viewport, stats)?,
             );
+            if let Some(group) = group {
+                let frame = frames.last_mut().expect("root frame");
+                frame.ops = frame
+                    .ops
+                    .by_ref()
+                    .filter(|op| op.layer() == group)
+                    .collect::<Vec<_>>()
+                    .into_iter();
+            }
             while let Some(frame) = frames.last_mut() {
                 let Some(op) = frame.ops.next() else {
                     let frame = frames.pop().expect("completed Canvas frame");
@@ -280,6 +305,7 @@ impl<D: RenderDevice> RenderService<D> {
                 else {
                     stats.failed_draw();
                     self.surface_missing.push(*font);
+                    self.surface_missing_draws += 1;
                     return Ok(());
                 };
 
@@ -414,6 +440,7 @@ impl<D: RenderDevice> RenderService<D> {
                 else {
                     stats.failed_draw();
                     self.surface_missing.push(*drawing);
+                    self.surface_missing_draws += 1;
                     return Ok(());
                 };
                 let placement = [
@@ -475,6 +502,7 @@ impl<D: RenderDevice> RenderService<D> {
                 else {
                     stats.failed_draw();
                     self.surface_missing.push(*bitmap);
+                    self.surface_missing_draws += 1;
                     return Ok(());
                 };
                 if self.surface_bitmap_program.is_none() {
@@ -1138,6 +1166,7 @@ impl<D: RenderDevice> RenderService<D> {
         let (entries, bytes) = self.surface_cache.resident();
         statistics.surface_cache_entries = entries;
         statistics.surface_cache_resident_bytes = bytes;
+        self.projected_statistics(statistics);
         statistics.glyph_page_retirements = self.glyph_atlas.take_retired_pages();
         statistics.glyph_pages = self.glyph_atlas.page_count();
         statistics.glyph_resident_bytes = self.glyph_atlas.resident_bytes();

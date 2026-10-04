@@ -551,6 +551,28 @@ pub trait RenderDevice: 'static {
     /// Release a target, tolerating invalid handles after context loss.
     fn delete_surface_cache_target(&mut self, _target: Self::SurfaceCacheTarget) {}
 
+    /// Draw an indexed patch of a retained sampled Surface mesh. Position is
+    /// attribute 0 and normalized top-left content is attribute 2. Images are
+    /// premultiplied, double-sided and depth-tested without depth writes.
+    /// `flip_image` distinguishes Camera target orientation from Canvas images.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_surface_image_mesh(
+        &mut self,
+        _program: &Self::Program,
+        _target: &Self::SurfaceCacheTarget,
+        _mesh: &Self::Mesh,
+        _mvp: &[f32; 16],
+        _size: &[f32; 2],
+        _clip: &[f32; 4],
+        _opacity: f32,
+        _flip_image: bool,
+        _indices: std::ops::Range<u32>,
+    ) -> Result<(), RenderError> {
+        Err(RenderError::RenderDevice(
+            "sampled Surface images unavailable".into(),
+        ))
+    }
+
     /// Allocate retained GUI storage for `capacity` records of `kind`, all zero.
     fn create_gui_batch(
         &mut self,

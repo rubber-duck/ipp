@@ -19,7 +19,12 @@ import {
 } from "@ipp/react";
 import type { GallerySceneContext } from "../../shared/scene.js";
 import type { Plot3dContract } from "../charts3d/content.js";
-import { CHART_CATALOG, CHART_SCHEMA, type ChartSpec } from "./catalog.js";
+import {
+  CHART_CATALOG,
+  CHART_SCHEMA,
+  CHART_SURFACE,
+  type ChartSpec,
+} from "./catalog.js";
 import { chartColumnDefinitions } from "./columns.js";
 import {
   aliasId,
@@ -40,8 +45,10 @@ import { declarePlot } from "./shared/declare-plot.js";
 
 export interface ChartSurface {
   readonly anchor: bigint;
+  readonly component: "CylinderSurface";
   readonly width: number;
   readonly height: number;
+  readonly curvature: number;
   readonly unitsPerMetre: number;
   readonly extent: readonly [number, number];
 }
@@ -73,7 +80,7 @@ export interface ChartHitIdentity {
   readonly rowId: bigint;
 }
 
-/** Flat charts own Canvas children; spatial charts share the runner's camera World. */
+/** Cylindrical Canvas charts own children; spatial charts share the runner's camera World. */
 export class ChartContent {
   readonly charts: GalleryChart[] = [];
   private readonly entities: {
@@ -131,11 +138,11 @@ export class ChartContent {
     const rootFont = await this.font(this.client, bytes);
     for (const spec of CHART_CATALOG) {
       this.context.signal.throwIfAborted();
-      const flat = spec.component.endsWith("2d");
+      const canvas = spec.component.endsWith("2d");
       let client = this.client,
         font = rootFont;
       let surface: ChartSurface | null = null;
-      if (flat) {
+      if (canvas) {
         const created = await this.context.canvas.host.createWorld({
           symbolicId: `gallery-charts/${this.client.session}/${spec.id}`,
           temporary: true,
@@ -212,15 +219,15 @@ export class ChartContent {
           ),
           insertComponent(
             this.client,
-            "Surface",
+            "CylinderSurface",
             { kind: "alias", alias: 1 },
-            { width: 10, height: 6 },
+            { ...CHART_SURFACE },
           ),
         ]);
         surface = {
           anchor,
-          width: 10,
-          height: 6,
+          component: "CylinderSurface",
+          ...CHART_SURFACE,
           unitsPerMetre: 60,
           extent: [600, 360],
         };
@@ -258,9 +265,9 @@ export class ChartContent {
         createEntity(1, `chart-${spec.id}`),
         insertComponent(
           client,
-          flat ? "CanvasStyle" : "Transform",
+          canvas ? "CanvasStyle" : "Transform",
           { kind: "alias", alias: 1 },
-          flat
+          canvas
             ? { x: 0, y: 0 }
             : {
                 x: spec.position[0],
@@ -274,7 +281,7 @@ export class ChartContent {
         ),
         insertComponent(
           client,
-          flat ? "PlotFrame2d" : "PlotFrame3d",
+          canvas ? "PlotFrame2d" : "PlotFrame3d",
           { kind: "alias", alias: 1 },
           { ...spec.frame, source: font.source },
         ),

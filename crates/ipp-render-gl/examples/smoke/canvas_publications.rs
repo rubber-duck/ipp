@@ -1,7 +1,7 @@
 //! Real raw-Canvas publication captures using the shared EGL scenario driver.
 
 use super::publications::{apply, apply_batch, assert_color, camera, create, mesh, save};
-use ipp_core::components::{CanvasBox, CanvasStyle, Surface, Transform};
+use ipp_core::components::{CanvasBox, CanvasStyle, FlatSurface, Transform};
 use ipp_core::{
     Command, ComponentValue, EntityId, EntityPlacementRef, EntityRef, HostRuntime, OutputRef,
     WorldAttachment, WorldId, WorldViewport,
@@ -68,7 +68,7 @@ pub(super) fn attach(
     extent: [f32; 2],
     clipped: bool,
 ) -> Result<EntityId> {
-    let surface = Surface {
+    let surface = FlatSurface {
         width: extent[0],
         height: extent[1],
         ..Default::default()
@@ -77,7 +77,7 @@ pub(super) fn attach(
         host,
         parent,
         vec![
-            ComponentValue::Surface(surface),
+            ComponentValue::FlatSurface(surface),
             ComponentValue::CanvasStyle(CanvasStyle {
                 x: position[0],
                 y: position[1],
@@ -222,7 +222,7 @@ pub fn run<D: RenderDevice>(
     let camera_world = host.create_world(Default::default(), &super::selection::scene())?;
     let camera_root = camera(&mut host, camera_world, 2.0)?;
     host.clear_root_output(parent);
-    let surface = Surface {
+    let surface = FlatSurface {
         width: 1.28,
         height: 1.28,
         ..Default::default()
@@ -231,7 +231,7 @@ pub fn run<D: RenderDevice>(
         &mut host,
         camera_world,
         vec![
-            ComponentValue::Surface(surface),
+            ComponentValue::FlatSurface(surface),
             ComponentValue::WorldAttachment(WorldAttachment::surface(root)),
         ],
     )?;

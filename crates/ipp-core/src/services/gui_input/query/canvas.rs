@@ -28,7 +28,7 @@ impl<'a> QueryWalk<'a, '_> {
             .and_then(|chunk| chunk.data::<GuiCanvasPublication>())
             .and_then(|gui| gui.views.get(&view.output));
         for hit in canvas.hits.iter() {
-            // A layer plane of a Surface separating layers holds only that layer's targets.
+            // Each occupied Surface shell holds only its corresponding rank's targets.
             if view.layer.is_some_and(|layer| hit.layer != layer) || !hit.contains(point) {
                 continue;
             }

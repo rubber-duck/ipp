@@ -7,7 +7,6 @@
  * locates them, so a layout regression moves the painted ink and input away
  * from the expected rectangles.
  */
-import { GUI_KIT_LAYERS } from "@ipp/react/gui-kit";
 import assert from "node:assert/strict";
 import type {
   GalleryGuiControl,
@@ -60,18 +59,16 @@ export const SURFACE_SIZE = [7.4, 4.8] as const;
 export const UNITS_PER_METRE = 140;
 export const CANVAS_SIZE = [1036, 672] as const;
 
-/**
- * The exploded view: Surface metres per plane id, and the plane of each kind
- * of entity. Panels and everything they hold stay whole on the base plane;
- * the kit's overlays float on its planes. A plane's depth is its id times
- * the spacing, whichever other planes are in use.
- */
+/** Independent physical ranks for the maintained exploded scenes: all four content levels are visible. */
 export const LAYERS = {
-  spacing: 0.2,
-  panel: 0,
-  anchored: GUI_KIT_LAYERS.anchored,
-  dialog: GUI_KIT_LAYERS.dialog,
-  toast: GUI_KIT_LAYERS.toast,
+  spacing: 0.9,
+  telemetry: 1,
+  panel: 2,
+  workbench: 3,
+  advanced: 3,
+  anchored: 4,
+  dialog: 4,
+  toast: 5,
 } as const;
 
 /** Symbolic ids of the dashboard's overlays. */

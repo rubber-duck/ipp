@@ -10,7 +10,7 @@ import {
   AttachedWorld,
   CanvasWorld,
   Entity,
-  Surface,
+  FlatSurface,
   createRoot,
   type AttachedWorldHandle,
   type CanvasWorldHandle,
@@ -106,7 +106,7 @@ export async function exerciseCanvasWorlds(
       React.createElement(
         Entity,
         { key: name, id: name },
-        React.createElement(Surface, { width: 2, height: 1 }),
+        React.createElement(FlatSurface, { width: 2, height: 1 }),
       );
     const handle = React.createRef<CanvasWorldHandle>();
     const panel = (extent: readonly [number, number], density?: number) =>

@@ -5,24 +5,17 @@ use ipp_schema_derive::SchemaComponent;
 /// comes from ordinary entities, such as an attached Canvas World.
 #[repr(C)]
 #[derive(Clone, Debug, PartialEq, SchemaComponent)]
-pub struct Surface {
+pub struct FlatSurface {
     /// Centred clipping width in metres.
     pub width: f32,
     /// Centred clipping height in metres.
     pub height: f32,
-    /// Metres between consecutive layer plane ids of a presented canvas along
-    /// the local +Z normal; zero keeps every layer on one plane. Layer `n`
-    /// presents `n * layer_spacing` in front of the plane, for an exploded
-    /// view, whatever other layers are in use.
-    ///
-    /// Only a Surface placed in a camera's 3D domain separates layers; a
-    /// Surface that is a slot of another canvas presents its canvas on its
-    /// slot's plane. Changing the spacing moves presentation and input planes
-    /// without repainting the canvas.
+    /// Metres separating consecutive occupied content ranks along the front normal.
+    /// Only camera-domain presentation applies physical separation.
     pub layer_spacing: f32,
 }
 
-impl Default for Surface {
+impl Default for FlatSurface {
     fn default() -> Self {
         Self {
             width: 1.0,
@@ -32,7 +25,7 @@ impl Default for Surface {
     }
 }
 
-impl Surface {
+impl FlatSurface {
     /// Conservative local-space enclosure used by headless geometry consumers.
     pub fn local_bounding_geometry(&self) -> crate::systems::geometry::GeometryShape {
         crate::systems::geometry::GeometryShape::Box {
@@ -74,7 +67,7 @@ impl Surface {
     }
 }
 
-impl ComponentLifecycle for Surface {
+impl ComponentLifecycle for FlatSurface {
     fn required_components() -> &'static [u16] {
         &[
             crate::ComponentValue::TRANSFORM,
@@ -95,17 +88,15 @@ impl ComponentLifecycle for Surface {
     }
 }
 
-/// Opt-in whole-Surface texture caching for the Surface on the same entity.
-///
-/// Absence keeps direct presentation. The component carries only authored
-/// thresholds; [`super::SurfaceCachePolicy`] documents the distance bands,
-/// hysteresis and refresh caps derived from them. Cached images, deadlines and
-/// interaction priority stay transient renderer state.
+/// Optional image quality and temporal refresh policy for Surface output presentation.
+/// Exact affine Canvas geometry draws directly when absent; non-affine geometry
+/// still requires current content images. Eligible distant content can use lower
+/// image resolution and refresh frequency without changing geometry or interaction.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, SchemaComponent)]
 pub struct SurfaceCache {
-    /// Camera-to-anchor distance in metres below which presentation stays
-    /// direct. Zero caches at every distance.
+    /// Camera-to-anchor distance in metres below which temporal caching is
+    /// disabled. Zero enables caching at every distance.
     pub direct_distance: f32,
     /// Cache texel density in the first cached band, per Surface metre.
     pub texels_per_metre: f32,
@@ -141,7 +132,7 @@ mod tests {
 
     #[test]
     fn surface_coordinates_top_left_y_down_conversions() {
-        let surface = Surface {
+        let surface = FlatSurface {
             width: 4.0,
             height: 2.0,
             ..Default::default()

@@ -3,7 +3,7 @@
 use super::canvas_publications::{attach, canvas, place};
 use super::publications::{apply, camera, create, mesh, save};
 use ipp_core::components::{
-    BoundingGeometry, CanvasBox, CanvasStyle, CanvasText, Surface, Transform,
+    BoundingGeometry, CanvasBox, CanvasStyle, CanvasText, FlatSurface, Transform,
 };
 use ipp_core::services::asset_management::{AssetSource, font::FONT_TYPE};
 use ipp_core::{
@@ -25,7 +25,7 @@ fn surface(
         host,
         parent,
         vec![
-            ComponentValue::Surface(Surface::default()),
+            ComponentValue::FlatSurface(FlatSurface::default()),
             ComponentValue::Transform(transform),
             ComponentValue::WorldAttachment(WorldAttachment::surface(output)),
         ],

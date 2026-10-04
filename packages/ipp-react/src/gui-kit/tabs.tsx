@@ -23,7 +23,7 @@
 import { useRef, useState, type ReactNode } from "react";
 import { Children, Entity } from "../components.js";
 import { Button } from "../gui/controls.js";
-import { Behavior, Font, Group, Layout } from "../gui/components.js";
+import { Style, Behavior, Font, Group, Layout } from "../gui/components.js";
 import { ScrollView } from "../gui/scroll.js";
 import { Skin } from "../gui/theme.js";
 import type { GuiVirtualRange } from "../gui/callbacks.js";
@@ -59,6 +59,8 @@ export interface TabItem {
 }
 
 export interface TabsProps extends ChoiceProps {
+  /** Nonnegative layer offset applied once at this component root; zero inherits. */
+  readonly layer?: number;
   /** Symbolic id of the root column; the strip and tabs extend it. */
   readonly id: string;
   readonly tabs: readonly TabItem[];
@@ -77,6 +79,7 @@ const SCROLL_HORIZONTAL = 0;
 
 export function Tabs({
   id,
+  layer = 0,
   tabs,
   overflowMenu = false,
   more,
@@ -120,6 +123,7 @@ export function Tabs({
   };
   return (
     <Entity id={id}>
+      <Style layer={layer} />
       <Layout kind={LAYOUT_COLUMN} {...layout} />
       <Font source={kit.font} font_size={kit.fontSize} />
       <Children>

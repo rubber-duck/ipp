@@ -24,6 +24,8 @@ import { useOverlayOpen, type OverlayOpenProps } from "./overlay.js";
 import { SelectList, SelectTrigger } from "./select-trigger.js";
 
 export interface DropdownProps extends ChoiceProps, OverlayOpenProps {
+  /** Nonnegative layer offset applied once at this component root; zero inherits. */
+  readonly layer?: number;
   /** Symbolic id of the trigger; the list and its rows extend it. */
   readonly id: string;
   readonly options: readonly SelectOption[];
@@ -55,6 +57,7 @@ export function useSelection({ value, defaultValue, onChange }: ChoiceProps) {
 
 export function Dropdown({
   id,
+  layer = 0,
   options,
   placeholder = "Select",
   label,
@@ -76,6 +79,7 @@ export function Dropdown({
   return (
     <SelectTrigger
       id={id}
+      layer={layer}
       text={selected?.label ?? placeholder}
       placeholder={!selected}
       open={overlay.open}

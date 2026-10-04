@@ -57,7 +57,9 @@ export type {
   PickingGeometryProps,
   BoundingGeometryProps,
   ComponentProps,
-  SurfaceProps,
+  FlatSurfaceProps,
+  CylinderSurfaceProps,
+  SphereSurfaceProps,
   SurfaceCacheProps,
 } from "./components.js";
 export {
@@ -77,7 +79,9 @@ export {
   Camera,
   PickingGeometry,
   BoundingGeometry,
-  Surface,
+  FlatSurface,
+  CylinderSurface,
+  SphereSurface,
   SurfaceCache,
 } from "./components.js";
 
@@ -385,3 +389,17 @@ export type {
   PlotPoints3dProps,
   PlotPie3dProps,
 } from "./plots.js";
+
+export {
+  curvedSurfaceFromRadius,
+  cylinderSurfaceFromAngles,
+  sphereSurfaceFromAngles,
+  surfaceCurvatureFromRadius,
+} from "@ipp/client";
+export type {
+  CurvedSurfaceFields,
+  SurfaceFacing,
+  SurfaceRadiusOptions,
+  CylinderSurfaceAngleOptions,
+  SphereSurfaceAngleOptions,
+} from "@ipp/client";

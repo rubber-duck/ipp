@@ -202,13 +202,6 @@ impl Evaluator<'_, '_> {
             parent: overlay.parent,
             inputs,
         });
-        if inputs.open && !inputs.raised {
-            self.view
-                .diagnostics
-                .push(GuiEntityLayoutDiagnostic::OverlayNotRaised {
-                    entity: overlay.entity,
-                });
-        }
         let Some(frame) = inputs.frame else {
             return;
         };
@@ -522,16 +515,15 @@ impl Evaluator<'_, '_> {
 
     fn intrinsic(&mut self, entity: EntityId, max_width: f32) -> [f32; 2] {
         let world = &*self.context.world;
-        let mut size =
-            world
-                .components
-                .surface(entity.index() as usize)
-                .map_or([0.0; 2], |surface| {
-                    [
-                        surface.width * self.view.density,
-                        surface.height * self.view.density,
-                    ]
-                });
+        let mut size = crate::systems::surface::provider(
+            &world.components,
+            entity.index() as usize,
+        )
+        .map_or([0.0; 2], |surface| {
+            surface
+                .physical_extent()
+                .map(|value| value as f32 * self.view.density)
+        });
         if let Some(gui) = self.gui
             && let Some((label, measured)) =
                 super::super::presentation::measurement::measure_control(

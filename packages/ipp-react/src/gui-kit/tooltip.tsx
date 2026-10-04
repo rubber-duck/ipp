@@ -17,6 +17,8 @@ import { Floating } from "./overlay.js";
 import { TextLine, lineWidth } from "./text.js";
 
 export interface TooltipProps {
+  /** Nonnegative layer offset applied once at this component root; zero inherits. */
+  readonly layer?: number;
   /** Symbolic id of the tooltip; its lines extend it. */
   readonly id: string;
   /** One or two lines of text. */
@@ -25,7 +27,7 @@ export interface TooltipProps {
   readonly side?: "top" | "bottom" | "left" | "right";
 }
 
-export function Tooltip({ id, text, side = "top" }: TooltipProps) {
+export function Tooltip({ id, layer = 0, text, side = "top" }: TooltipProps) {
   const kit = useGuiKit();
   const t = kit.tokens;
   const lines = typeof text === "string" ? [text] : text;
@@ -43,6 +45,7 @@ export function Tooltip({ id, text, side = "top" }: TooltipProps) {
   return (
     <Floating
       id={id}
+      layer={layer}
       side={side}
       align="centre"
       mode="hint"

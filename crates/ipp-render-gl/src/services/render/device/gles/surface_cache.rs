@@ -385,6 +385,84 @@ impl GlesRenderDevice {
         self.check_draw()
     }
 
+    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn draw_surface_image_mesh(
+        &mut self,
+        program: &GlesRenderProgram,
+        target: &GlesSurfaceCacheTarget,
+        mesh: &super::GlesRenderMesh,
+        mvp: &[f32; 16],
+        size: &[f32; 2],
+        clip: &[f32; 4],
+        opacity: f32,
+        flip_image: bool,
+        indices: std::ops::Range<u32>,
+    ) -> Result<(), RenderError> {
+        if self
+            .surface_cache_target
+            .as_ref()
+            .is_some_and(|bound| bound.framebuffer == target.framebuffer)
+            || indices.start > indices.end
+            || indices.end > mesh.indices as u32
+            || !indices.start.is_multiple_of(3)
+            || !indices.end.is_multiple_of(3)
+        {
+            return Err(RenderError::RenderDevice(
+                "invalid Surface image mesh draw".into(),
+            ));
+        }
+        if self.submission.blend.replace(Some(PREMULTIPLIED_BLEND)) != Some(PREMULTIPLIED_BLEND) {
+            // SAFETY: Scalar blend state belongs to this current context.
+            unsafe {
+                self.gl.enable(0x0BE2);
+                self.gl.blend_equation(0x8006);
+                self.gl.blend_func(1, 0x0303, 1, 0x0303);
+            }
+        }
+        self.set_depth_mask(false);
+        self.use_program(program.id);
+        self.program_mat4(program, program.mvp, mvp);
+        self.program_vec4(
+            program,
+            self.surface_location(program, c"u_placement"),
+            &[0.0, 0.0, size[0], size[1]],
+        );
+        self.program_vec4(program, self.surface_location(program, c"u_clip"), clip);
+        self.program_float(
+            program,
+            self.surface_location(program, c"u_opacity"),
+            opacity,
+        );
+        self.program_int(
+            program,
+            self.surface_location(program, c"u_image_flip"),
+            i32::from(flip_image),
+        );
+        self.program_int(
+            program,
+            self.surface_location(program, c"u_surface_cache"),
+            0,
+        );
+        self.bind_vertex_array(mesh.vao);
+        // SAFETY: Texture, VAO and index storage are live exclusive context-owned
+        // resources. The checked range names GPU index offsets, not CPU memory;
+        // GL retains no Rust borrow. The image is unbound before a later repaint.
+        unsafe {
+            self.gl.active_texture(0x84C0);
+            self.gl.bind_sampler(0, 0);
+            self.gl.bind_texture(TEXTURE_2D, target.texture);
+            self.gl.draw_elements(
+                0x0004,
+                (indices.end - indices.start) as i32,
+                0x1403,
+                (indices.start as usize * 2) as *const std::ffi::c_void,
+            );
+            self.gl.bind_texture(TEXTURE_2D, 0);
+        }
+        self.check_draw()
+    }
+
     pub(super) fn delete_surface_cache_target(&mut self, target: GlesSurfaceCacheTarget) {
         // Deleting the bound framebuffer would silently rebind framebuffer zero;
         // restore the saved host target first.

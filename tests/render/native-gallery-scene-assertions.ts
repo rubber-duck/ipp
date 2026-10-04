@@ -188,6 +188,14 @@ export async function exerciseNativeGalleryScene(
       assert.equal(current.options.autoscan, false);
       assert.equal(current.options.accent, "amber");
       assert.equal(current.options.exploded, true);
+      close(
+        field(current.state, "gallery-camera", "fov_y"),
+        (23 * Math.PI) / 180,
+      );
+      assert.ok(
+        Number(field(current.state, "gallery-camera", "x")) < -4,
+        "initial/restored exploded mode must frame the inspection stack",
+      );
       close(field(current.state, "gui-projector-light", "intensity"), 1.066);
       assert.ok(
         current.state.entities.some(
@@ -197,11 +205,28 @@ export async function exerciseNativeGalleryScene(
       );
     };
     await verify();
+    const settled = async () => {
+      const deadline = performance.now() + 15_000;
+      while (true) {
+        const current = await inspect(driver, signal);
+        if (
+          Math.abs(
+            Number(field(current.state, "gui-demo", "layer_spacing")) - 0.9,
+          ) < 1e-4
+        )
+          return;
+        if (performance.now() > deadline)
+          throw new Error("GUI exploded spacing did not settle");
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+    };
+    await settled();
     const amber = await capture("amber-exploded");
     visible(amber);
     changed(before, amber);
     await driver.call("reload", [], signal);
     await verify();
+    await settled();
     visible(await capture("reloaded"));
   } else if (scene === "platformer") {
     await action("setMode", "run");

@@ -59,8 +59,21 @@ for (const variant of ["development", "production"]) {
     throw new Error("Production GUI fixture bypasses public built exports");
   artifacts.push({ variant, inputs, ...(await artifact(path)) });
   const paint = resolve(output, `paint-${variant}.js`);
-  await bundleBrowser("tests/react/gui-paint.tsx", paint, variant);
-  artifacts.push({ variant, ...(await artifact(paint)) });
+  const painted = await bundleBrowser(
+    "tests/react/gui-paint.tsx",
+    paint,
+    variant,
+    { metafile: true },
+  );
+  const paintInputs = Object.keys(painted.metafile.inputs);
+  if (
+    variant === "production" &&
+    paintInputs.some((path) => path.includes("packages/ipp-react/src/"))
+  )
+    throw new Error(
+      "Production projected fixture bypasses public built exports",
+    );
+  artifacts.push({ variant, inputs: paintInputs, ...(await artifact(paint)) });
 }
 for (const name of ["gui-authoring", "gui-authoring.test"]) {
   const path = resolve(output, `${name}.js`);
@@ -79,6 +92,14 @@ for (const name of ["gui-authoring", "gui-authoring.test"]) {
   );
   artifacts.push(await artifact(path));
 }
+const oracleTest = resolve(output, "projected-oracle.test.js");
+await bundleBrowser(
+  "tests/react/projected-oracle.test.ts",
+  oracleTest,
+  "production",
+  { platform: "node", packages: "external", define: {} },
+);
+artifacts.push(await artifact(oracleTest));
 const paintTest = resolve(output, "gui-paint.test.js");
 await bundleBrowser("tests/react/gui-paint.test.ts", paintTest, "production", {
   platform: "node",

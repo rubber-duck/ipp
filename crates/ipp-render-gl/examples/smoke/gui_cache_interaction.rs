@@ -3,7 +3,7 @@
 use super::canvas_publications::{canvas, place};
 use super::publications::{assert_color, camera, create, save};
 use ipp_core::components::rows::Rows;
-use ipp_core::components::{GuiButton, GuiLayout, Scalar, Surface, SurfaceCache, Transform};
+use ipp_core::components::{FlatSurface, GuiButton, GuiLayout, Scalar, SurfaceCache, Transform};
 use ipp_core::services::gui_input::{
     GuiDeliveryError, GuiDeliveryPermit, GuiDeliveryTerminal, GuiInputContext, GuiInputLimits,
     GuiInputService, GuiInputSession, GuiPointerLease,
@@ -298,7 +298,7 @@ fn surface(
     extent: f32,
     cached: bool,
 ) -> Result<EntityId> {
-    let surface = Surface {
+    let surface = FlatSurface {
         width: extent,
         height: extent,
         ..Default::default()
@@ -308,7 +308,7 @@ fn surface(
             x,
             ..Default::default()
         }),
-        ComponentValue::Surface(surface),
+        ComponentValue::FlatSurface(surface),
         ComponentValue::WorldAttachment(WorldAttachment::surface(child)),
     ];
     if cached {

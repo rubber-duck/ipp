@@ -82,6 +82,23 @@ export async function setCameraView(
     view === "gui" ? -0.03 : view === "particles" ? -0.2 : lighting ? 0.5 : 0;
   const targetX = view === "gui" ? 0.5 : 0;
   const targetZ = view === "gui" ? 2.3 : 0;
+  await setCameraPose(
+    client,
+    id,
+    [x, y, z],
+    [targetX, targetY, targetZ],
+    view === "gui" ? (21 * Math.PI) / 180 : Math.PI / 4,
+  );
+}
+
+/** Frame a scene through the ordinary session camera; navigation remains enabled. */
+export async function setCameraPose(
+  client: CameraWorldClient,
+  id: bigint,
+  [x, y, z]: readonly [number, number, number],
+  [targetX, targetY, targetZ]: readonly [number, number, number],
+  fovY: number,
+): Promise<void> {
   const yaw = Math.atan2(x - targetX, z - targetZ) / 2;
   const pitch =
     -Math.atan2(y - targetY, Math.hypot(x - targetX, z - targetZ)) / 2;
@@ -97,7 +114,7 @@ export async function setCameraView(
     },
     Camera: {
       projection: 0,
-      fov_y: view === "gui" ? (21 * Math.PI) / 180 : Math.PI / 4,
+      fov_y: fovY,
       focus_distance: Math.hypot(x - targetX, y - targetY, z - targetZ),
     },
   };

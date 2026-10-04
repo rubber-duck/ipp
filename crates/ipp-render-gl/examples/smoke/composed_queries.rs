@@ -3,7 +3,7 @@
 use super::canvas_publications::{canvas, frame_at, place};
 use super::publications::{assert_color, camera, create, mesh, save};
 use ipp_core::components::rows::Rows;
-use ipp_core::components::{CanvasStyle, GuiButton, GuiLayout, Surface, Transform};
+use ipp_core::components::{CanvasStyle, FlatSurface, GuiButton, GuiLayout, Transform};
 use ipp_core::services::gui_input::query::{
     GuiQueryOutcome, project_composed_point, query_composed_input,
 };
@@ -29,7 +29,7 @@ pub fn run<D: RenderDevice>(
     let root = canvas(&mut host, parent, 1.0)?;
     let nested = camera(&mut host, camera_world, 2.0)?;
     let panel = canvas(&mut host, panel_world, 100.0)?;
-    let surface = Surface {
+    let surface = FlatSurface {
         width: 10_000_000.0,
         height: 1.0,
         ..Default::default()
@@ -38,7 +38,7 @@ pub fn run<D: RenderDevice>(
         &mut host,
         root,
         vec![
-            ComponentValue::Surface(surface),
+            ComponentValue::FlatSurface(surface),
             ComponentValue::CanvasStyle(CanvasStyle {
                 x: 28.0,
                 y: 78.0,
@@ -60,7 +60,7 @@ pub fn run<D: RenderDevice>(
         },
         [0.0, 0.5, 0.0],
     )?;
-    let surface = Surface {
+    let surface = FlatSurface {
         width: 2_000_000.0,
         height: 2.0,
         ..Default::default()
@@ -73,7 +73,7 @@ pub fn run<D: RenderDevice>(
                 x: 3_000_000.0,
                 ..Default::default()
             }),
-            ComponentValue::Surface(surface),
+            ComponentValue::FlatSurface(surface),
             ComponentValue::WorldAttachment(WorldAttachment::surface(panel)),
         ],
     )?;

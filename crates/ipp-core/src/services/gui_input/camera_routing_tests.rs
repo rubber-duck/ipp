@@ -7,6 +7,7 @@ use super::router_test_support::*;
 use super::*;
 use crate::components::{Camera, GuiCheckbox, GuiSlider, Transform};
 use crate::services::gui_input::router::*;
+use crate::{FieldValue, FieldWrite};
 
 /// A Camera root World at `z = 10` holding `build`'s panels, presented at
 /// `800 x 800` pixels.
@@ -423,4 +424,66 @@ fn back_facing_panels_follow_every_front_facing_panel_in_traversal() {
     );
     assert!(rig.rejected().is_empty(), "{:?}", rig.rejected());
     rig.finish();
+}
+
+#[test]
+fn captured_input_preserves_geometry_edits_but_rejects_flat_provider_replacement() {
+    for replacement in [false, true] {
+        let (mut rig, near, _) = near_and_far(
+            Camera::default(),
+            at(0.0, 0.0, 5.0),
+            ComponentValue::GuiSlider(GuiSlider {
+                value: 0.5,
+                min: 0.0,
+                max: 1.0,
+                ..Default::default()
+            }),
+        );
+        rig.send(press(31, [0.5, 0.5]));
+        let before = rig.value(near.world(), near.controls[0]);
+        let operations = if replacement {
+            vec![
+                Command::RemoveComponent {
+                    entity: EntityRef::Handle(near.anchor),
+                    component: ComponentValue::FLAT_SURFACE,
+                },
+                Command::insert_value(
+                    EntityRef::Handle(near.anchor),
+                    ComponentValue::FlatSurface(FlatSurface {
+                        width: 4.0,
+                        height: 3.0,
+                        ..Default::default()
+                    }),
+                ),
+            ]
+        } else {
+            vec![Command::SetField {
+                entity: EntityRef::Handle(near.anchor),
+                component: ComponentValue::FLAT_SURFACE,
+                field: FieldWrite {
+                    offset: std::mem::offset_of!(FlatSurface, width) as u32,
+                    value: FieldValue::F32(4.5),
+                },
+            }]
+        };
+        let parent = rig.root.world();
+        apply(&mut rig.host, parent, operations);
+        if replacement {
+            assert_eq!(
+                rig.route(movement(31, [0.7, 0.5])),
+                Err(GuiInputError::StalePath)
+            );
+            rig.frame();
+            assert_eq!(rig.value(near.world(), near.controls[0]), before);
+        } else {
+            rig.send(movement(31, [0.7, 0.5]));
+            assert_ne!(rig.value(near.world(), near.controls[0]), before);
+            assert!(
+                rig.snapshot(near.world(), near.controls[0])
+                    .interaction
+                    .captured
+            );
+        }
+        rig.finish();
+    }
 }

@@ -35,7 +35,7 @@ import type {
   GuiHsva,
   GuiScalarEvent,
 } from "../gui/callbacks.js";
-import { Behavior, Font, Group, Layout } from "../gui/components.js";
+import { Style, Behavior, Font, Group, Layout } from "../gui/components.js";
 import type { GuiControlHandle, GuiControlRef } from "../gui/control-ref.js";
 import { Button, Color, TextInput } from "../gui/controls.js";
 import { Skin } from "../gui/theme.js";
@@ -69,6 +69,8 @@ export interface ColorPreset {
 }
 
 export interface ColorPickerProps {
+  /** Nonnegative layer offset applied once at this component root; zero inherits. */
+  readonly layer?: number;
   /** Symbolic id of the picker's root entity; its parts extend it. */
   readonly id: string;
   /** The caption naming the colour, such as COLOR, in the accent. */
@@ -154,6 +156,7 @@ function geometry(kit: GuiKitScope, alpha: boolean) {
 
 export function ColorPicker({
   id,
+  layer = 0,
   label,
   value,
   defaultValue = WHITE,
@@ -255,6 +258,7 @@ export function ColorPicker({
 
   return (
     <Entity id={id}>
+      <Style layer={layer} />
       <Layout
         kind={LAYOUT_COLUMN}
         width={g.width}

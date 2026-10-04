@@ -114,6 +114,7 @@ export function SignalMonitor({ scene }: { readonly scene: GuiScene }) {
       {window === "closed" && <Behavior visible={false} />}
       <Children>
         <Panel
+          layer={2}
           id="gui-monitor-panel"
           minimized={minimized}
           layout={{ height: MONITOR_HEIGHT }}

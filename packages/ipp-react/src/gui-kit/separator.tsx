@@ -4,13 +4,15 @@
  * labelled separator that names a section.
  */
 import { Entity } from "../components.js";
-import { Layout } from "../gui/components.js";
+import { Style, Layout } from "../gui/components.js";
 import { Skin } from "../gui/theme.js";
 import { useGuiKit } from "./kit.js";
 import { LAYOUT_COLUMN, LAYOUT_ROW, Row, type GuiKitLayout } from "./layout.js";
 import { TextLine } from "./text.js";
 
 export interface SeparatorProps {
+  /** Nonnegative layer offset applied once at this component root; zero inherits. */
+  readonly layer?: number;
   readonly id: string;
   /**
    * `division` (neutral) divides a panel, `rule` (accent) underlines a
@@ -24,6 +26,7 @@ export interface SeparatorProps {
 
 export function Separator({
   id,
+  layer = 0,
   tone = "division",
   vertical = false,
   layout,
@@ -32,6 +35,7 @@ export function Separator({
   const thickness = kit.unit(kit.tokens.lineWidth);
   return (
     <Entity id={id}>
+      <Style layer={layer} />
       <Layout
         kind={vertical ? LAYOUT_COLUMN : LAYOUT_ROW}
         {...(vertical ? { width: thickness } : { height: thickness })}
@@ -43,6 +47,8 @@ export function Separator({
 }
 
 export interface LabelledSeparatorProps {
+  /** Nonnegative layer offset applied once at this component root; zero inherits. */
+  readonly layer?: number;
   readonly id: string;
   /** The section's label, in the accent at body size. */
   readonly label: string;
@@ -62,6 +68,7 @@ export interface LabelledSeparatorProps {
  */
 export function LabelledSeparator({
   id,
+  layer = 0,
   label,
   stub = true,
   layout,
@@ -71,7 +78,12 @@ export function LabelledSeparator({
   const gap = kit.unit(t.inset / 2);
   const line = { align_y: 0 };
   return (
-    <Row id={id} height={t.denseRow} {...(layout ? { layout } : {})}>
+    <Row
+      id={id}
+      layer={layer}
+      height={t.denseRow}
+      {...(layout ? { layout } : {})}
+    >
       {stub && (
         <Separator
           id={`${id}/stub`}

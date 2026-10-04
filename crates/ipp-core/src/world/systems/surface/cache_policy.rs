@@ -1,9 +1,11 @@
-//! Distance bands, texel density and refresh caps for opted-in Surface caches.
+//! Distance bands, texel density and refresh caps for optional Surface caching
+//! and required curved images.
 //!
 //! The metric is the World-space distance from the active camera's World
 //! translation to the evaluated Surface anchor (the entity centre). Distances
-//! below [`SurfaceCachePolicy::direct_distance`] select direct presentation
-//! (band 0). Cached band `k >= 1` covers
+//! below [`SurfaceCachePolicy::direct_distance`] select near/current quality
+//! (band 0): affine Surfaces may draw directly, while curved Surfaces retain
+//! required images without a refresh cap. Cached band `k >= 1` covers
 //! `[direct_distance * 2^(k-1), direct_distance * 2^k)`, and band
 //! [`SURFACE_CACHE_MAX_BANDS`] extends to infinity. Each band halves the
 //! texel density and the refresh cap of the previous one down to fixed
@@ -53,7 +55,8 @@ const REFRESH_HZ_FLOOR: f32 = 0.5;
 /// Validated prepared copy of an authored [`SurfaceCache`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SurfaceCachePolicy {
-    /// Camera-to-anchor distance in metres below which presentation stays direct.
+    /// Camera-to-anchor distance in metres below which presentation uses near/current
+    /// quality: affine Surfaces may draw directly; required curved images stay current.
     pub direct_distance: f32,
     /// Cache texel density in the first cached band, per Surface metre.
     pub texels_per_metre: f32,
@@ -85,9 +88,9 @@ impl SurfaceCachePolicy {
         })
     }
 
-    /// Band for a Surface without a previous selection: 0 is direct and
-    /// `1..=SURFACE_CACHE_MAX_BANDS` are cached. Non-finite or negative
-    /// distances select direct presentation.
+    /// Band for a Surface without a previous selection: 0 uses near/current quality
+    /// and `1..=SURFACE_CACHE_MAX_BANDS` select cached quality. Non-finite or negative
+    /// distances select band 0; required curved images never become direct paint.
     pub fn initial_band(&self, distance: f32) -> u8 {
         self.band_with_boundary_scale(distance, 1.0)
     }
@@ -118,7 +121,7 @@ impl SurfaceCachePolicy {
     }
 
     /// Minimum World-time interval between content repaints for a band, in
-    /// seconds; nondecreasing in band. Direct presentation (band 0) has none.
+    /// seconds; nondecreasing in band. Near/current quality (band 0) has no cap.
     pub fn refresh_interval_at(&self, band: u8) -> f64 {
         if band == 0 {
             return 0.0;

@@ -1,4 +1,4 @@
-import type { DatasetValue } from "@ipp/client";
+import { curvedSurfaceFromRadius, type DatasetValue } from "@ipp/client";
 
 export type ChartPoint = readonly [number, number, number];
 export interface ChartSpec {
@@ -143,6 +143,14 @@ export const CHART_RING = {
   center: [0, 6, 0] as ChartPoint,
   radius: 34,
 } as const;
+
+/** Canvas chart widths are arc lengths on the same cylinder as the exhibit arrangement. */
+export const CHART_SURFACE = curvedSurfaceFromRadius({
+  width: 10,
+  height: 6,
+  radius: CHART_RING.radius,
+  facing: "inside",
+});
 
 /** Rotate chart-local points about the exhibit's vertical axis. */
 export function rotateChartPoint(

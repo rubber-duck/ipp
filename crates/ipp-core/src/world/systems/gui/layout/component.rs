@@ -112,9 +112,12 @@ impl GuiLayout {
 ///
 /// The overlay is open while its `GuiBehavior.visible` field is set, which it
 /// requires; a closed overlay is not laid out, painted, hit or traversed. It
-/// must be raised by a nonzero `CanvasStyle.layer`, which stacks a nested
-/// overlay above the overlay it opens from; an overlay that is not raised is
-/// never shown and reports [`GuiEntityLayoutDiagnostic::OverlayNotRaised`].
+/// establishes its own priority and clipping scope, without a CanvasStyle.
+/// Popup, dialog and notification bands are independent of interaction mode.
+/// A nested overlay inherits at least its owner's band. Within the same band,
+/// a nested scope follows its owner's complete component layers; later sibling
+/// scopes follow the earlier scope and all of its nested overlays. Promotion
+/// to a higher band takes priority while preserving logical entity ancestry.
 ///
 /// Its `mode` decides what besides client writes opens and closes it, and how
 /// it takes input:
@@ -134,10 +137,8 @@ impl GuiLayout {
 /// moves to its first one and closing it returns focus to the control focused
 /// before, and Escape closes the topmost overlay of the focused control's
 /// canvas that is not manual. The input router documents these rules.
-///
-/// [`GuiEntityLayoutDiagnostic::OverlayNotRaised`]: super::GuiEntityLayoutDiagnostic::OverlayNotRaised
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq, SchemaComponent)]
+#[derive(Clone, Copy, Debug, PartialEq, SchemaComponent)]
 pub struct GuiOverlay {
     /// Side of the parent's box the overlay sits beside: bottom 0, top 1,
     /// right 2, left 3, or centred over it 4. Against the canvas, the edge
@@ -149,9 +150,32 @@ pub struct GuiOverlay {
     /// Who opens and closes it besides client writes of its visible field:
     /// manual 0, light 1, modal 2 or hint 3.
     pub mode: u32,
+    /// Priority band: popup 1, dialog 2 or notification 3. Structural and
+    /// independent of mode; a nested overlay inherits at least its owner's band.
+    pub band: u32,
+}
+
+impl Default for GuiOverlay {
+    fn default() -> Self {
+        Self {
+            side: 0,
+            align: 0,
+            mode: Self::MODE_MANUAL,
+            band: Self::BAND_POPUP,
+        }
+    }
 }
 
 impl GuiOverlay {
+    /// Popups above all ordinary content.
+    pub const BAND_POPUP: u32 = 1;
+
+    /// Dialog scopes above popups.
+    pub const BAND_DIALOG: u32 = 2;
+
+    /// Notifications above dialogs.
+    pub const BAND_NOTIFICATION: u32 = 3;
+
     /// Largest `side`: centred over the box.
     pub(super) const SIDE_CENTRE: u32 = 4;
 
@@ -184,6 +208,7 @@ impl ComponentLifecycle for GuiOverlay {
         if self.side > Self::SIDE_CENTRE
             || self.align > Self::ALIGN_STRETCH
             || self.mode > Self::MODE_HINT
+            || !(Self::BAND_POPUP..=Self::BAND_NOTIFICATION).contains(&self.band)
         {
             Err(ErrorReason::InvalidValue)
         } else {

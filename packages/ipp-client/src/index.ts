@@ -107,6 +107,7 @@ export * from "./dynamic-properties.js";
 export { clientAssetSource } from "./asset-sources.js";
 
 export * from "./surface-types.js";
+export * from "./surface-config.js";
 export * from "./gui-types.js";
 export {
   LifecycleWatchStartError,

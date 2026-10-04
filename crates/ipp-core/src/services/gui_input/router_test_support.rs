@@ -447,7 +447,7 @@ pub(super) fn attach(
     extent: [f32; 2],
     transform: Transform,
 ) -> EntityId {
-    let surface = Surface {
+    let surface = FlatSurface {
         width: extent[0],
         height: extent[1],
         ..Default::default()
@@ -457,7 +457,7 @@ pub(super) fn attach(
         parent,
         vec![
             ComponentValue::Transform(transform),
-            ComponentValue::Surface(surface),
+            ComponentValue::FlatSurface(surface),
             ComponentValue::WorldAttachment(WorldAttachment::surface(output)),
         ],
         None,

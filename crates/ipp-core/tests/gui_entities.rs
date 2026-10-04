@@ -3,7 +3,7 @@
 mod support;
 use support::task_scheduler::HostTaskTestDriver;
 
-use ipp_core::components::{GuiLayout, Surface};
+use ipp_core::components::{FlatSurface, GuiLayout};
 use ipp_core::systems::canvas::{
     CanvasBox, CanvasGlyph, CanvasPaintEntry, CanvasPrimitive, CanvasPublication, CanvasStyle,
     CanvasSystem, CanvasText,
@@ -383,7 +383,7 @@ fn nested_surface_reflows_with_gui_layout_and_keeps_physical_child_constraints()
     )
     .result
     .unwrap();
-    let surface = Surface {
+    let surface = FlatSurface {
         width: 2.0,
         ..Default::default()
     };
@@ -391,7 +391,7 @@ fn nested_surface_reflows_with_gui_layout_and_keeps_physical_child_constraints()
         &mut host,
         parent,
         vec![
-            ComponentValue::Surface(surface),
+            ComponentValue::FlatSurface(surface),
             ComponentValue::WorldAttachment(WorldAttachment::surface(child_output)),
             ComponentValue::GuiLayout(GuiLayout {
                 width: 30.0,
@@ -477,7 +477,7 @@ fn refused_layout_write_keeps_paint_and_attachments_unchanged() {
         &mut host,
         parent,
         vec![
-            ComponentValue::Surface(Surface::default()),
+            ComponentValue::FlatSurface(FlatSurface::default()),
             ComponentValue::WorldAttachment(WorldAttachment::surface(child_output)),
         ],
     );
@@ -882,7 +882,7 @@ fn padding_text_and_surface_hits_share_content_mapping_without_shifting_outer_cl
         &mut host,
         parent,
         vec![
-            ComponentValue::Surface(Surface::default()),
+            ComponentValue::FlatSurface(FlatSurface::default()),
             ComponentValue::WorldAttachment(WorldAttachment::surface(selected_child)),
             ComponentValue::GuiLayout(layout),
             ComponentValue::CanvasStyle(style),

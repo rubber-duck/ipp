@@ -500,6 +500,24 @@ impl RenderDevice for GlesRenderDevice {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn draw_surface_image_mesh(
+        &mut self,
+        program: &Self::Program,
+        target: &Self::SurfaceCacheTarget,
+        mesh: &Self::Mesh,
+        mvp: &[f32; 16],
+        size: &[f32; 2],
+        clip: &[f32; 4],
+        opacity: f32,
+        flip_image: bool,
+        indices: std::ops::Range<u32>,
+    ) -> Result<(), RenderError> {
+        self.draw_surface_image_mesh(
+            program, target, mesh, mvp, size, clip, opacity, flip_image, indices,
+        )
+    }
+
     fn create_mesh(&mut self, asset: &ipp_core::MeshAsset) -> Result<GlesRenderMesh, RenderError> {
         let count = i32::try_from(asset.indices().len())
             .map_err(|_| RenderError::RenderDevice("too many mesh indices".into()))?;

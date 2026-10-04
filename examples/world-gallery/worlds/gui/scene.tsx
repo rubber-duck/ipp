@@ -8,16 +8,21 @@ import type {
   ClientAssetSource,
   GuiPickingBlocker,
   GuiWorldClient,
+  SurfaceFacing,
   Inspection,
   WorldReference,
 } from "@ipp/client";
+import { curvedSurfaceFromRadius } from "@ipp/client";
 import {
+  CylinderSurface,
+  SphereSurface,
   Animation,
   CanvasWorld,
   Entity,
+  Children,
   FragmentShader,
   ShaderAsset,
-  Surface,
+  FlatSurface,
   SurfaceCache,
   Transform,
   VertexShader,
@@ -46,13 +51,21 @@ import GLOW_SHADER from "./projector-glow.glsl";
 import METAL_SHADER from "./projector-metal.glsl";
 import SHIELD_SHADER from "./input-shield.glsl";
 import SHIELD_VERTEX_SHADER from "./input-shield-vertex.glsl";
-import { InputShield, SHIELD_ENTITY } from "./shield.js";
+import {
+  InputShield,
+  SHIELD_ENTITY,
+  SHIELD_FIELDS,
+  SHIELD_SURFACES,
+  shieldMotion,
+  shieldTrackStart,
+} from "./shield.js";
 import { CANVAS_ENTITY, ProjectorDashboard } from "./dashboard.js";
 import { INITIAL_AUTOSCAN, INITIAL_CALLSIGN, INITIAL_GAIN } from "./monitor.js";
 import {
   CANVAS_HEIGHT,
   CANVAS_WIDTH,
   SURFACE_HEIGHT,
+  SURFACE_RADIUS,
   SURFACE_WIDTH,
   UNITS_PER_METRE,
 } from "./presentation.js";
@@ -118,6 +131,8 @@ export type WorkbenchTab = "nodes" | "controls" | "colour";
  * whole-Surface caching, `cached` caches at every distance for comparisons
  * at the authored camera, and `direct` removes the opt-in.
  */
+export type GuiSurfaceShape = "flat" | "cylinder" | "sphere";
+
 export type GuiSurfaceCacheMode = "automatic" | "cached" | "direct";
 
 /**
@@ -138,14 +153,11 @@ const GUI_SURFACE_CACHE = {
 } as const;
 
 /**
- * The exploded view: Surface metres per canvas plane id, and the seconds
- * the panel takes to separate or close. A plane stands its id times the
- * spacing in front of the base plane, so the toasts' plane stays in frame
- * while the anchored overlays' plane separates visibly. The Surface's scale
- * applies to the spacing, so planes stand 0.7 times as far apart in the
- * World.
+ * Surface metres between occupied ranks and the Host-clock travel duration.
+ * Each complete panel and overlay scope stays together as spacing separates
+ * its physical rank along the selected Surface implementation's normal.
  */
-export const LAYER_SPACING = 0.2;
+export const LAYER_SPACING = 0.9;
 export const LAYER_SECONDS = 0.6;
 
 /** Archived operator messages. Short ones fit one event log line; the
@@ -213,7 +225,8 @@ interface FieldTarget {
 /** The exploded view's clip: the Surface's layer spacing. */
 interface LayerAssets {
   readonly spacing: ClientAssetSource;
-  readonly spacingField: FieldTarget;
+  readonly spacingFields: Readonly<Record<GuiSurfaceShape, FieldTarget>>;
+  readonly shieldFields: readonly FieldTarget[];
 }
 
 type MotionAssets = ProjectorMotionAssets & WaveformMotionAssets & LayerAssets;
@@ -244,6 +257,8 @@ export interface GuiPageState extends StationState {
   readonly workbenchTab: WorkbenchTab;
   readonly autoscan: boolean;
   readonly surfaceCache: GuiSurfaceCacheMode;
+  readonly surfaceShape: GuiSurfaceShape;
+  readonly surfaceFacing: SurfaceFacing;
   readonly gain: number;
   readonly callsign: string;
   readonly pulseSequence: number;
@@ -279,6 +294,8 @@ export function openingSettings(): Omit<
     workbenchTab: "nodes",
     autoscan: INITIAL_AUTOSCAN,
     surfaceCache: "automatic",
+    surfaceShape: "flat",
+    surfaceFacing: "outside",
     gain: INITIAL_GAIN,
     callsign: INITIAL_CALLSIGN,
     lastCommand: "Awaiting command",
@@ -340,6 +357,8 @@ export interface GuiScene {
   readonly setAdvancedOpen: (open: boolean) => void;
   readonly setWorkbenchTab: (tab: WorkbenchTab) => void;
   readonly selectSurfaceCache: (mode: GuiSurfaceCacheMode) => void;
+  readonly selectSurfaceShape: (shape: GuiSurfaceShape) => void;
+  readonly selectSurfaceFacing: (facing: SurfaceFacing) => void;
   readonly toggleVectorOnly: () => void;
   readonly setAutoscan: (value: boolean) => void;
   readonly setGain: (value: number) => void;
@@ -360,6 +379,7 @@ function errorMessage(failure: unknown): string {
 function easedTrack(
   property: { readonly component: number; readonly offsets: readonly number[] },
   to: number,
+  from = 0,
 ): AnimationClipSource["tracks"][number] {
   const steps = 8;
   return {
@@ -368,7 +388,10 @@ function easedTrack(
       const t = step / steps;
       return {
         time: t * LAYER_SECONDS,
-        value: { kind: "f32" as const, value: to * t * t * (3 - 2 * t) },
+        value: {
+          kind: "f32" as const,
+          value: from + (to - from) * t * t * (3 - 2 * t),
+        },
         ...(step < steps ? { interpolation: { kind: "linear" as const } } : {}),
       };
     }),
@@ -381,8 +404,25 @@ async function createMotionAssets(
   const canvasStyle = client.components.CanvasStyle;
   const offset = canvasStyle?.fields.x?.offset;
   const material = client.components.CustomMaterial?.id;
-  const surface = client.components.Surface;
+  const surface = client.components.FlatSurface;
   const spacingOffset = surface?.fields.layer_spacing?.offset;
+  const spacingFields = Object.fromEntries(
+    (
+      [
+        ["flat", "FlatSurface"],
+        ["cylinder", "CylinderSurface"],
+        ["sphere", "SphereSurface"],
+      ] as const
+    ).map(([shape, name]) => {
+      const component = client.components[name];
+      const offset = component?.fields.layer_spacing?.offset;
+      if (component === undefined || offset === undefined)
+        throw new Error(
+          `The gallery GUI profile does not expose ${name} layer spacing`,
+        );
+      return [shape, { component: component.id, offset }];
+    }),
+  ) as Record<GuiSurfaceShape, FieldTarget>;
   const transform = client.components.Transform;
   const paint = client.components.CanvasPaint?.id;
   if (canvasStyle === undefined || offset === undefined)
@@ -425,8 +465,23 @@ async function createMotionAssets(
         },
       ],
     });
-    // The Surface's spacing: each plane stands its id times the spacing
-    // in front of the base plane.
+    const shieldFields = SHIELD_FIELDS.map((field) => ({
+      component: transform.id,
+      offset: transform.fields[field]!.offset,
+    }));
+    const shieldTracks = SHIELD_SURFACES.flatMap(([shape, facing]) => {
+      const from = shieldMotion(shape, facing, 0);
+      const to = shieldMotion(shape, facing, LAYER_SPACING);
+      return SHIELD_FIELDS.map((field, index) =>
+        easedTrack(
+          { component: transform.id, offsets: [shieldFields[index]!.offset] },
+          to[field],
+          from[field],
+        ),
+      );
+    });
+    // Surface spacing and shield pose share one Host playback time. The
+    // explicit bindings select only the current shape/facing's shield tracks.
     await create({
       duration: LAYER_SECONDS,
       tracks: [
@@ -434,6 +489,7 @@ async function createMotionAssets(
           { component: surface.id, offsets: [spacingOffset] },
           LAYER_SPACING,
         ),
+        ...shieldTracks,
       ],
     });
     await create(sweepClip(paint));
@@ -446,7 +502,8 @@ async function createMotionAssets(
       paintComponent: paint,
       translation,
       materialComponent: material,
-      spacingField: { component: surface.id, offset: spacingOffset },
+      spacingFields,
+      shieldFields,
     };
   } catch (failure) {
     await Promise.allSettled(
@@ -1222,6 +1279,10 @@ export function useGuiScene(
         state.update({ workbenchTab: tab }),
       selectSurfaceCache: (mode: GuiSurfaceCacheMode) =>
         state.update({ surfaceCache: mode }),
+      selectSurfaceShape: (shape: GuiSurfaceShape) =>
+        state.update({ surfaceShape: shape }),
+      selectSurfaceFacing: (facing: SurfaceFacing) =>
+        state.update({ surfaceFacing: facing }),
       setAutoscan: (value: boolean) => {
         state.update({ autoscan: value });
         if (changedValue("autoscan", value))
@@ -1395,7 +1456,7 @@ function GuiWorldContent({
       <ShaderAsset
         id="gui-input-shield-shader"
         recipe={{}}
-        parameters={{ size: "vec2", color: "vec4", hatch: "f32" }}
+        parameters={{ size: "vec3", color: "vec4", hatch: "f32" }}
       >
         <VertexShader>{SHIELD_VERTEX_SHADER}</VertexShader>
         <FragmentShader>{SHIELD_SHADER}</FragmentShader>
@@ -1403,7 +1464,6 @@ function GuiWorldContent({
       {!vectorOnly && (
         <>
           <HolographicProjector scene={scene} stagingX={stagingX} />
-          <Shield scene={scene} stagingX={stagingX} />
         </>
       )}
       <ProjectorPanel scene={scene} stagingX={stagingX} />
@@ -1412,9 +1472,17 @@ function GuiWorldContent({
 }
 
 /** The input shield, armed or lifted from the sidebar. */
-function Shield({ scene, stagingX }: { scene: GuiScene; stagingX: number }) {
+function Shield({
+  scene,
+  shape,
+  facing,
+}: {
+  scene: GuiScene;
+  shape: GuiSurfaceShape;
+  facing: SurfaceFacing;
+}) {
   const armed = useStoreValue(scene.state, (state) => state.shieldArmed);
-  return <InputShield armed={armed} stagingX={stagingX} />;
+  return <InputShield armed={armed} shape={shape} facing={facing} />;
 }
 
 /**
@@ -1476,22 +1544,54 @@ function PanelSurface({
     scene.state,
     (state) => state.surfaceCache,
   );
+  const shape = useStoreValue(scene.state, (state) => state.surfaceShape);
+  const vectorOnly = useStoreValue(scene.state, (state) => state.vectorOnly);
+  const facing = useStoreValue(scene.state, (state) => state.surfaceFacing);
+  // Animation alone owns spacing. The radius recipe's default spacing is
+  // intentionally omitted from these changing geometry declarations.
+  const { layer_spacing: _, ...curved } = curvedSurfaceFromRadius({
+    width: SURFACE_WIDTH,
+    height: SURFACE_HEIGHT,
+    radius: SURFACE_RADIUS,
+    facing,
+  });
+  const spacingField = motions.spacingFields[shape];
   const { reportFailure } = scene;
   const started = useRef(false);
   useEffect(() => {
     const handle = layers.current;
     if (!handle) return;
-    if (!started.current && !exploded) return;
+    const initialize = !started.current;
     started.current = true;
-    const action = reducedMotion
-      ? handle.seek(exploded ? LAYER_SECONDS : 0)
-      : handle.playAtSpeed(exploded ? 1 : -1);
-    void action.catch(reportFailure);
-  }, [exploded, reducedMotion, reportFailure]);
+    // A new shape's controller starts stopped: Seek moves its cursor but
+    // cannot sample it. Queue activation at zero speed, endpoint seek and
+    // pause in order so reduced motion still applies the Host-owned tracks.
+    const action =
+      reducedMotion || (initialize && !exploded)
+        ? Promise.all([
+            handle.playAtSpeed(0),
+            handle.seek(exploded ? LAYER_SECONDS : 0),
+            handle.pause(),
+          ])
+        : handle.playAtSpeed(exploded ? 1 : -1);
+    let live = true;
+    void action.catch((failure) => {
+      if (live) reportFailure(failure);
+    });
+    return () => {
+      live = false;
+    };
+  }, [exploded, reducedMotion, reportFailure, shape, facing, vectorOnly]);
   return (
     <Entity id={PANEL_ENTITY}>
       <Transform {...panelTransform} x={panelX + stagingX} />
-      <Surface width={SURFACE_WIDTH} height={SURFACE_HEIGHT} />
+      {shape === "flat" ? (
+        <FlatSurface width={SURFACE_WIDTH} height={SURFACE_HEIGHT} />
+      ) : shape === "cylinder" ? (
+        <CylinderSurface {...curved} />
+      ) : (
+        <SphereSurface {...curved} />
+      )}
       {surfaceCache !== "direct" && (
         <SurfaceCache
           {...GUI_SURFACE_CACHE}
@@ -1500,17 +1600,33 @@ function PanelSurface({
           }
         />
       )}
+      {!vectorOnly && (
+        <Children>
+          <Shield scene={scene} shape={shape} facing={facing} />
+        </Children>
+      )}
       <Animation
+        key={shape}
         ref={layers}
         source={motions.spacing.source}
         bindings={[
           {
             track: 0,
             property: {
-              component: motions.spacingField.component,
-              offsets: [motions.spacingField.offset],
+              component: spacingField.component,
+              offsets: [spacingField.offset],
             },
           },
+          ...(vectorOnly
+            ? []
+            : motions.shieldFields.map((field, index) => ({
+                track: shieldTrackStart(shape, facing) + index,
+                target: SHIELD_ENTITY,
+                property: {
+                  component: field.component,
+                  offsets: [field.offset],
+                },
+              }))),
         ]}
         autoPlay={false}
       />

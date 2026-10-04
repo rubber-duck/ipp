@@ -324,7 +324,7 @@ fn nested_panel(
     let child = world(host);
     let (output, output_entity) = canvas_root(host, child, 4.0, 4.0);
     let controls = build(host, child, output_entity);
-    let surface = Surface {
+    let surface = FlatSurface {
         width: 4.0,
         height: 4.0,
         ..Default::default()
@@ -333,7 +333,7 @@ fn nested_panel(
         host,
         root.world(),
         vec![
-            ComponentValue::Surface(surface),
+            ComponentValue::FlatSurface(surface),
             ComponentValue::WorldAttachment(WorldAttachment::surface(output)),
             sized(0, 4.0, 4.0),
         ],

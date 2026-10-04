@@ -27,6 +27,8 @@ pub struct DeviceState {
     pub program_deletes: Cell<u32>,
     pub failed_attempts_remaining: Cell<u32>,
     pub mesh_attempts: Cell<u32>,
+    pub fail_mesh_attempt: Cell<u32>,
+    pub projected_draws: RefCell<Vec<(std::ops::Range<u32>, bool)>>,
     /// Mesh draw submissions.
     pub mesh_draws: Cell<u32>,
     pub fail_shadow_allocation: Cell<bool>,
@@ -73,6 +75,8 @@ pub struct DeviceState {
     pub fail_cache_composite: RefCell<Option<RenderError>>,
     /// Curve-path draws, excluding analytic glyph instances.
     pub surface_path_draws: Cell<u32>,
+    /// Bitmap quads submitted by Canvas rasterization.
+    pub surface_bitmap_draws: Cell<u32>,
     /// Retained GUI draws of glyph records, each sampling an atlas page.
     pub glyph_batch_draws: Cell<u32>,
     /// Retained GUI draws of shape records.
@@ -93,7 +97,7 @@ pub struct DeviceState {
     pub gui_batch_kinds: RefCell<Vec<ipp_render_gl::GuiRecordKind>>,
     /// Ordered Surface work: `B`/`E` begin and end a cache target, `C` composites,
     /// `P` draws paths, `G` analytic glyphs, `T` retained GUI glyphs sampling an
-    /// atlas, `X` retained GUI shapes, `F` begins the frame.
+    /// atlas, `X` retained GUI shapes, `I` bitmaps, `F` begins the frame.
     pub surface_events: RefCell<String>,
 }
 
@@ -249,6 +253,11 @@ impl RenderDevice for TestDevice {
 
     fn create_mesh(&mut self, _asset: &MeshAsset) -> Result<(), RenderError> {
         self.0.mesh_attempts.set(self.0.mesh_attempts.get() + 1);
+        if self.0.fail_mesh_attempt.get() == self.0.mesh_attempts.get() {
+            return Err(RenderError::RenderDevice(
+                "injected mesh allocation failure".into(),
+            ));
+        }
         if self.0.failed_attempts_remaining.get() != 0 {
             self.0
                 .failed_attempts_remaining
@@ -341,6 +350,29 @@ impl RenderDevice for TestDevice {
         if !self.0.atlas_target_bound.get() {
             self.0.surface_events.borrow_mut().push('P');
         }
+        if self.0.fail_surface_draw.get() {
+            Err(RenderError::RenderDevice(
+                "injected Surface draw failure".into(),
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn draw_surface_bitmap(
+        &mut self,
+        _: &(),
+        _: &(),
+        _: &[f32; 16],
+        _: &[f32; 4],
+        _: &[f32; 4],
+        _: &[f32; 4],
+    ) -> Result<(), RenderError> {
+        assert!(self.0.surface_double_sided.get());
+        self.0
+            .surface_bitmap_draws
+            .set(self.0.surface_bitmap_draws.get() + 1);
+        self.0.surface_events.borrow_mut().push('I');
         if self.0.fail_surface_draw.get() {
             Err(RenderError::RenderDevice(
                 "injected Surface draw failure".into(),
@@ -513,6 +545,23 @@ impl RenderDevice for TestDevice {
             Some(error) => Err(error),
             None => Ok(()),
         }
+    }
+
+    fn draw_surface_image_mesh(
+        &mut self,
+        program: &(),
+        target: &u32,
+        _: &(),
+        mvp: &[f32; 16],
+        size: &[f32; 2],
+        clip: &[f32; 4],
+        opacity: f32,
+        flip: bool,
+        indices: std::ops::Range<u32>,
+    ) -> Result<(), RenderError> {
+        assert!(indices.start < indices.end && (indices.end - indices.start).is_multiple_of(3));
+        self.0.projected_draws.borrow_mut().push((indices, flip));
+        self.draw_surface_cache(program, target, mvp, size, clip, opacity)
     }
 
     fn delete_surface_cache_target(&mut self, _: u32) {

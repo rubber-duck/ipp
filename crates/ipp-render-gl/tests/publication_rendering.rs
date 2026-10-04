@@ -103,7 +103,7 @@ fn attach(host: &mut HostRuntime, parent: WorldId, output: OutputRef) -> ipp_cor
         &mut host.world_mut(parent).unwrap(),
         vec![
             ComponentValue::Transform(Transform::default()),
-            ComponentValue::Surface(Default::default()),
+            ComponentValue::FlatSurface(Default::default()),
             ComponentValue::WorldAttachment(ipp_core::WorldAttachment::surface(output)),
         ],
     )

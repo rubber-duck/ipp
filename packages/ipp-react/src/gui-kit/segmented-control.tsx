@@ -14,7 +14,7 @@
  */
 import { Children, Entity } from "../components.js";
 import { Button } from "../gui/controls.js";
-import { Behavior, Font, Group, Layout } from "../gui/components.js";
+import { Style, Behavior, Font, Group, Layout } from "../gui/components.js";
 import { Skin } from "../gui/theme.js";
 import {
   GROUP_HORIZONTAL,
@@ -36,6 +36,8 @@ export interface SegmentedOption {
 }
 
 export interface SegmentedControlProps extends ChoiceProps {
+  /** Nonnegative layer offset applied once at this component root; zero inherits. */
+  readonly layer?: number;
   /** Symbolic id of the control's frame; segments extend it. */
   readonly id: string;
   readonly options: readonly SegmentedOption[];
@@ -51,6 +53,7 @@ function segmentTheme(index: number, count: number): KitThemeName {
 
 export function SegmentedControl({
   id,
+  layer = 0,
   options,
   layout,
   ...props
@@ -59,6 +62,7 @@ export function SegmentedControl({
   const choice = useChoice(props);
   return (
     <Entity id={id}>
+      <Style layer={layer} />
       <Layout
         kind={LAYOUT_ROW}
         height={kit.unit(kit.tokens.controlHeight)}

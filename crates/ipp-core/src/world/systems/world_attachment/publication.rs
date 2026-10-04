@@ -48,11 +48,8 @@ impl WorldAttachmentSystem {
                     (None, placement)
                 }
             };
-            let surface = (value.mode != 0)
-                .then(|| world.world.components.surface(entity.index() as usize))
-                .flatten();
-            let surface_extent =
-                surface.map(|surface| [f64::from(surface.width), f64::from(surface.height)]);
+            let surface = (value.mode != 0).then(|| world.surface(entity)).flatten();
+            let surface_extent = surface.as_ref().map(|surface| surface.physical_extent());
             let surface_cache_policy = surface_extent
                 .and_then(|_| {
                     world
@@ -74,8 +71,14 @@ impl WorldAttachmentSystem {
                 placement_output,
                 placement,
                 surface_extent,
+                surface_incarnation: surface
+                    .as_ref()
+                    .and_then(|surface| world.component_incarnation(entity, surface.component())),
+                surface_geometry: surface.clone(),
                 surface_cache_policy,
-                layer_spacing: surface.map_or(0.0, |surface| surface.layer_spacing),
+                layer_spacing: surface
+                    .as_ref()
+                    .map_or(0.0, |surface| surface.layer_spacing()),
                 publication: None,
             });
         }

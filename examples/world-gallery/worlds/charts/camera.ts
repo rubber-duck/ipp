@@ -7,7 +7,12 @@ import {
   type Inspection,
 } from "@ipp/client";
 import { componentFields, successfulBatch } from "./shared/commands.js";
-import { CHART_CATALOG, CHART_RING, rotateChartPoint } from "./catalog.js";
+import {
+  CHART_CATALOG,
+  CHART_RING,
+  CHART_SURFACE,
+  rotateChartPoint,
+} from "./catalog.js";
 
 export type CameraPose = Record<
   "x" | "y" | "z" | "qx" | "qy" | "qz" | "qw",
@@ -87,16 +92,20 @@ export function chartCameraTarget(id: string, aspect = 1) {
     return framedTarget(CHART_RING.center, [0, 55, 75], [42, 8, 42], aspect);
   const chart = CHART_CATALOG.find((chart) => chart.id === id);
   if (!chart) throw new Error(`Unknown chart: ${id}`);
-  const flat = chart.component.endsWith("2d");
+  const canvas = chart.component.endsWith("2d");
   const pie = chart.component === "PlotPie3d";
-  const width = flat ? 10 : Number(chart.frame.width);
-  const height = flat ? 6 : Number(chart.frame.height);
-  const depth = flat ? 0 : Number(chart.frame.depth);
+  const width = canvas ? CHART_SURFACE.width : Number(chart.frame.width);
+  const height = canvas ? CHART_SURFACE.height : Number(chart.frame.height);
+  const depth = canvas ? 0 : Number(chart.frame.depth);
   return framedTarget(
     chart.center,
-    rotateChartPoint(flat ? [0, 0, 1] : [0, 7, 13], chart.yaw),
-    flat
-      ? [width / 2, height / 2, 0]
+    rotateChartPoint(canvas ? [0, 0, 1] : [0, 7, 13], chart.yaw),
+    canvas
+      ? [
+          width / 2,
+          height / 2,
+          CHART_RING.radius * (1 - Math.cos(width / (2 * CHART_RING.radius))),
+        ]
       : [width / 2 + 0.5, pie ? 3 : height / 2 + 1, depth / 2 + 0.5],
     aspect,
     chart.yaw,

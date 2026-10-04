@@ -52,10 +52,12 @@ pub use systems::canvas::canvas_state::{
 pub use systems::render::render_state::{RenderState, RenderStateChange, RenderStatePatch};
 
 pub use systems::surface::{
-    SEGMENTATION_SCOPE, Surface, SurfaceCache, SurfaceCachePolicy, TextCacheKey, TextCaret,
-    TextFont, TextGlyph, TextLayout, TextLine, TextLinePolicy, TextMaxWidth, TextMeasureRequest,
-    TextOutcome, TextRequestError, TextUnits, UNICODE_VERSION, grapheme_boundaries,
-    is_grapheme_boundary, measure_text, utf8_to_utf16_offset, utf16_to_utf8_offset,
+    CylinderSurface, FlatSurface, SEGMENTATION_SCOPE, SphereSurface, Surface, SurfaceCache,
+    SurfaceCachePolicy, SurfaceDomain, SurfaceGeometry, SurfaceIntersection, SurfaceSample,
+    TextCacheKey, TextCaret, TextFont, TextGlyph, TextLayout, TextLine, TextLinePolicy,
+    TextMaxWidth, TextMeasureRequest, TextOutcome, TextRequestError, TextUnits, UNICODE_VERSION,
+    grapheme_boundaries, is_grapheme_boundary, measure_text, utf8_to_utf16_offset,
+    utf16_to_utf8_offset,
 };
 
 pub use systems::gui::{

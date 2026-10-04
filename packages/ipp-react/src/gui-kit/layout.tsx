@@ -6,7 +6,7 @@
  */
 import type { ReactNode } from "react";
 import { Children, Entity, type ComponentFields } from "../components.js";
-import { Layout } from "../gui/components.js";
+import { Style, Layout } from "../gui/components.js";
 import { useGuiKit } from "./kit.js";
 
 /**
@@ -38,6 +38,8 @@ export function Strut({
 }
 
 export interface RowProps {
+  /** Nonnegative layer offset applied once at this component root; zero inherits. */
+  readonly layer?: number;
   readonly id: string;
   /** Height at the tokens' `em`; a row of body text by default. */
   readonly height?: number;
@@ -49,11 +51,12 @@ export interface RowProps {
  * A fixed-height row filling its container's width whose children centre
  * vertically on it, such as a row of a list or a line of label and value.
  */
-export function Row({ id, height, layout, children }: RowProps) {
+export function Row({ id, layer = 0, height, layout, children }: RowProps) {
   const kit = useGuiKit();
   const extent = layout?.height ?? kit.unit(height ?? kit.tokens.row);
   return (
     <Entity id={id}>
+      <Style layer={layer} />
       <Layout kind={LAYOUT_ROW} {...layout} height={extent} />
       <Children>
         <Strut

@@ -14,6 +14,8 @@ use crate::systems::canvas::CanvasHitKind;
 use crate::systems::gui::local::{
     GUI_GROUP_SELECT_NONE, GUI_GROUP_VERTICAL, GuiLocalAction, GuiLocalEffectKind,
 };
+use crate::{FieldValue, FieldWrite};
+use std::mem::offset_of;
 
 use GuiPhysicalKey::{BackTab, Down, Enter, Escape, Tab};
 
@@ -715,7 +717,7 @@ fn dialog() -> Dialog {
             host,
             root_world,
             vec![
-                ComponentValue::Surface(Surface {
+                ComponentValue::FlatSurface(FlatSurface {
                     width: 5.0,
                     height: 5.0,
                     ..Default::default()
@@ -759,6 +761,7 @@ fn dialog() -> Dialog {
                 side: CENTRE,
                 align: CENTRED,
                 mode: GuiOverlay::MODE_MODAL,
+                band: GuiOverlay::BAND_DIALOG,
             }),
             behavior(false, true),
             raised(2),
@@ -1306,6 +1309,18 @@ fn a_toast_stack_above_a_modal_dialog_takes_presses_and_one_below_it_does_not() 
     // A toast stack, a top-level manual overlay at the canvas's top edge
     // whose toast body is a button that takes no focus, shown over the field.
     let toasts = scene.overlay(None, GuiOverlay::MODE_MANUAL, 1, 3, sized(COLUMN, 4.0, 1.0));
+    apply(
+        &mut scene.rig.host,
+        scene.world,
+        vec![Command::SetField {
+            entity: EntityRef::Handle(toasts),
+            component: ComponentValue::GUI_OVERLAY,
+            field: FieldWrite {
+                offset: offset_of!(GuiOverlay, band) as u32,
+                value: FieldValue::U32(GuiOverlay::BAND_NOTIFICATION),
+            },
+        }],
+    );
     let toast = scene.button(toasts, false);
     scene.open(toasts, true);
     let dialog = create(
@@ -1316,6 +1331,7 @@ fn a_toast_stack_above_a_modal_dialog_takes_presses_and_one_below_it_does_not() 
                 side: CENTRE,
                 align: CENTRED,
                 mode: GuiOverlay::MODE_MODAL,
+                band: GuiOverlay::BAND_DIALOG,
             }),
             behavior(false, true),
             raised(2),
@@ -1347,12 +1363,19 @@ fn a_toast_stack_above_a_modal_dialog_takes_presses_and_one_below_it_does_not() 
     assert!(scene.is_open(toasts));
     assert_eq!(scene.focus(), Some((field, true)));
 
-    // A toast stack on a layer below the dialog lies under it and is
-    // blocked with the rest of the canvas.
+    // Moving the stack to the popup band puts it below the dialog, even
+    // though its authored component layer remains higher.
     apply(
         &mut scene.rig.host,
         scene.world,
-        vec![Command::insert_value(EntityRef::Handle(toasts), raised(1))],
+        vec![Command::SetField {
+            entity: EntityRef::Handle(toasts),
+            component: ComponentValue::GUI_OVERLAY,
+            field: FieldWrite {
+                offset: offset_of!(GuiOverlay, band) as u32,
+                value: FieldValue::U32(GuiOverlay::BAND_POPUP),
+            },
+        }],
     );
     scene.open(dialog, true);
     assert_eq!(scene.click(toast_at), GuiRoutingDisposition::Blocked);

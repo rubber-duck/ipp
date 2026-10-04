@@ -4,23 +4,26 @@
  * control-height row that fills its container's width.
  */
 import { Children, Entity } from "../components.js";
-import { Font, Layout } from "../gui/components.js";
+import { Style, Font, Layout } from "../gui/components.js";
 import { Skin } from "../gui/theme.js";
 import { useGuiKit } from "./kit.js";
 import { LAYOUT_STACK, type GuiKitLayout } from "./layout.js";
 import { TextLine } from "./text.js";
 
 export interface EmptyStateProps {
+  /** Nonnegative layer offset applied once at this component root; zero inherits. */
+  readonly layer?: number;
   readonly id: string;
   /** The message, such as No records. */
   readonly text: string;
   readonly layout?: GuiKitLayout;
 }
 
-export function EmptyState({ id, text, layout }: EmptyStateProps) {
+export function EmptyState({ id, layer = 0, text, layout }: EmptyStateProps) {
   const kit = useGuiKit();
   return (
     <Entity id={id}>
+      <Style layer={layer} />
       <Layout
         kind={LAYOUT_STACK}
         height={kit.unit(kit.tokens.controlHeight)}

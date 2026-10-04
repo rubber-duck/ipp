@@ -25,7 +25,9 @@ export type OverlayProps = ComponentProps & ComponentFields<"GuiOverlay">;
 /**
  * Lays its entity out of its parent's flow and places it against the parent's
  * box. Its `mode` decides what besides your writes of its `Behavior.visible`
- * opens and closes it: manual 0, light 1, modal 2 or hint 3.
+ * opens and closes it: manual 0, light 1, modal 2 or hint 3. Its independent
+ * `band` selects popup 1 (default), dialog 2 or notification 3. Ordinary
+ * relative component layers cannot outrank an overlay band.
  */
 export function Overlay(props: OverlayProps) {
   return createElement(componentContract.GuiOverlay.host, props);

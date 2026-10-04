@@ -14,7 +14,7 @@ import {
   Camera,
   Entity,
   Scalar,
-  Surface,
+  FlatSurface,
   createRoot,
   type AttachedWorldHandle,
   type ReactCompositionHost,
@@ -225,7 +225,7 @@ export async function exerciseAttachedWorlds(
         React.createElement(
           Entity,
           { id: "camera-anchor" },
-          React.createElement(Surface, { width: 1, height: 1 }),
+          React.createElement(FlatSurface, { width: 1, height: 1 }),
         ),
         React.createElement(
           AttachedWorld,
@@ -305,7 +305,7 @@ export async function exerciseAttachedWorlds(
         React.createElement(
           Entity,
           { id: "counted-anchor" },
-          React.createElement(Surface, { width: 1, height: 1 }),
+          React.createElement(FlatSurface, { width: 1, height: 1 }),
         ),
         React.createElement(
           AttachedWorld,
@@ -478,7 +478,7 @@ export async function exerciseAttachedWorlds(
             React.createElement(
               Entity,
               { id: `tracking-anchor-${mode}` },
-              React.createElement(Surface, { width: 1, height: 1 }),
+              React.createElement(FlatSurface, { width: 1, height: 1 }),
             ),
             React.createElement(
               AttachedWorld,

@@ -217,8 +217,8 @@ fn paint_target(
 fn main() -> Result<()> {
     use ipp_core::components::rows::Rows;
     use ipp_core::components::{
-        Camera, CanvasBox, CanvasDrawing, CanvasStyle, GuiButton, GuiFont, GuiLayout, GuiSkin,
-        GuiTheme, Surface, Transform,
+        Camera, CanvasBox, CanvasDrawing, CanvasStyle, FlatSurface, GuiButton, GuiFont, GuiLayout,
+        GuiSkin, GuiTheme, Transform,
     };
     use ipp_core::services::asset_management::{
         AssetSource, drawing::DRAWING_TYPE, font::FONT_TYPE,
@@ -260,7 +260,7 @@ fn main() -> Result<()> {
     let gui = host.create_world_with_options(Default::default(), options)?;
     let canvas = OutputRef::canvas(host.world_ref(gui).unwrap());
 
-    let surface = Surface {
+    let surface = FlatSurface {
         width: 4.0,
         height: 2.0,
         ..Default::default()
@@ -287,7 +287,7 @@ fn main() -> Result<()> {
         None,
         vec![
             ComponentValue::Transform(Transform::default()),
-            ComponentValue::Surface(surface),
+            ComponentValue::FlatSurface(surface),
             ComponentValue::WorldAttachment(WorldAttachment::surface(canvas)),
         ],
     )?;

@@ -163,72 +163,84 @@ impl HostRuntime {
         let placement = crate::systems::geometry::GeometryShapeTransform::new(edge.placement)?
             .then(&contribution.placement)?;
         let local = placement.inverse_ray(ray);
-        if local.direction[2] >= 0.0 {
-            return Ok(None);
-        }
         let canvas = self
             .output(child.id, output)
             .and_then(|chunk| chunk.data::<CanvasPublication>());
         let layers = canvas.map_or(&[0][..], |canvas| canvas.layers.as_ref());
+        let geometry = edge
+            .surface_geometry
+            .as_ref()
+            .ok_or(ErrorReason::InvalidGeometry)?;
+        let offsets = layers
+            .iter()
+            .map(|&rank| f64::from(rank) * f64::from(edge.layer_spacing))
+            .fold([0.0_f64; 2], |range, offset| {
+                [range[0].min(offset), range[1].max(offset)]
+            });
+        geometry.validate_offsets(offsets)?;
         let mut nearest: Option<PublishedSceneHit> = None;
         for &layer in layers.iter().rev() {
-            let z = f64::from(layer) * f64::from(edge.layer_spacing);
-            let distance = (z - local.origin[2]) / local.direction[2];
-            if distance < near
-                || distance > far
-                || nearest
-                    .as_ref()
-                    .is_some_and(|hit| hit.hit.distance <= distance)
+            let offset = f64::from(layer) * f64::from(edge.layer_spacing);
+            for intersection in
+                geometry.ray_intersections(&local, offset, crate::SurfaceDomain::Content)?
             {
-                continue;
-            }
-            let physical = [
-                local.origin[0] + distance * local.direction[0],
-                local.origin[1] + distance * local.direction[1],
-            ];
-            if physical[0].abs() > extent[0] * 0.5 || physical[1].abs() > extent[1] * 0.5 {
-                continue;
-            }
-            let point = [
-                (physical[0] / extent[0] + 0.5) as f32,
-                (0.5 - physical[1] / extent[1]) as f32,
-            ];
-            let mut path = contribution.path.clone();
-            path.push((contribution.publication.world, edge.anchor));
-            let hit = if let Some(canvas) = canvas {
-                self.pick_canvas_plot(
-                    child.id,
-                    output,
-                    [
-                        point[0] * canvas.logical_extent[0],
-                        point[1] * canvas.logical_extent[1],
-                    ],
-                    path,
-                    (edge.layer_spacing != 0.0).then_some(layer),
-                )?
-            } else if let Some(camera) = self
-                .output(child.id, output)
-                .and_then(|chunk| chunk.data::<crate::systems::camera::CameraPublication>())
-            {
-                let child_ray = camera.ray_for_extent(point, extent)?;
-                self.pick_publication(
-                    child.id,
-                    output,
-                    &child_ray.ray,
-                    child_ray.near,
-                    child_ray.far,
-                )?
-                .map(|mut hit| {
-                    path.append(&mut hit.path);
-                    hit.path = path;
-                    hit
-                })
-            } else {
-                None
-            };
-            if let Some(mut hit) = hit {
-                hit.hit.distance = distance;
-                nearest = Some(hit);
+                let distance = intersection.distance;
+                if distance < near
+                    || distance > far
+                    || intersection
+                        .front_normal
+                        .iter()
+                        .zip(local.direction)
+                        .map(|(normal, direction)| normal * direction)
+                        .sum::<f64>()
+                        >= 0.0
+                    || nearest
+                        .as_ref()
+                        .is_some_and(|hit| hit.hit.distance <= distance)
+                {
+                    continue;
+                }
+                let point = [
+                    (intersection.content[0] / extent[0]) as f32,
+                    (intersection.content[1] / extent[1]) as f32,
+                ];
+                let mut path = contribution.path.clone();
+                path.push((contribution.publication.world, edge.anchor));
+                let hit = if let Some(canvas) = canvas {
+                    self.pick_canvas_plot(
+                        child.id,
+                        output,
+                        [
+                            point[0] * canvas.logical_extent[0],
+                            point[1] * canvas.logical_extent[1],
+                        ],
+                        path,
+                        (edge.layer_spacing != 0.0).then_some(layer),
+                    )?
+                } else if let Some(camera) = self
+                    .output(child.id, output)
+                    .and_then(|chunk| chunk.data::<crate::systems::camera::CameraPublication>())
+                {
+                    let child_ray = camera.ray_for_extent(point, extent)?;
+                    self.pick_publication(
+                        child.id,
+                        output,
+                        &child_ray.ray,
+                        child_ray.near,
+                        child_ray.far,
+                    )?
+                    .map(|mut hit| {
+                        path.append(&mut hit.path);
+                        hit.path = path;
+                        hit
+                    })
+                } else {
+                    None
+                };
+                if let Some(mut hit) = hit {
+                    hit.hit.distance = distance;
+                    nearest = Some(hit);
+                }
             }
         }
         Ok(nearest)

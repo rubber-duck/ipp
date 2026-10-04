@@ -22,9 +22,27 @@ export const componentContract = {
     host: "ipp-streaming-data-source-binding",
     fields: { source: "string", windows: "bytes" },
   },
-  Surface: {
-    host: "ipp-surface",
+  FlatSurface: {
+    host: "ipp-flat-surface",
     fields: { width: "number", height: "number", layer_spacing: "number" },
+  },
+  CylinderSurface: {
+    host: "ipp-cylinder-surface",
+    fields: {
+      width: "number",
+      height: "number",
+      curvature: "number",
+      layer_spacing: "number",
+    },
+  },
+  SphereSurface: {
+    host: "ipp-sphere-surface",
+    fields: {
+      width: "number",
+      height: "number",
+      curvature: "number",
+      layer_spacing: "number",
+    },
   },
   SurfaceCache: {
     host: "ipp-surface-cache",
@@ -255,27 +273,44 @@ export interface ComponentProps {
   fields?: readonly (FieldWrite | AssetFieldWrite)[] | undefined;
 }
 
-export type SurfaceProps = ComponentProps & ComponentFields<"Surface">;
+export type FlatSurfaceProps = ComponentProps & ComponentFields<"FlatSurface">;
 
-export function Surface(props: SurfaceProps) {
-  return createElement(componentContract.Surface.host, props);
+export function FlatSurface(props: FlatSurfaceProps) {
+  return createElement(componentContract.FlatSurface.host, props);
+}
+
+/** Canonical cylindrical segment fields; use the shared client helpers for radius/angle authoring. */
+export type CylinderSurfaceProps = ComponentProps &
+  ComponentFields<"CylinderSurface">;
+
+export function CylinderSurface(props: CylinderSurfaceProps) {
+  return createElement(componentContract.CylinderSurface.host, props);
+}
+
+/** Canonical centred-equidistant spherical chart fields, independent of latitude/longitude. */
+export type SphereSurfaceProps = ComponentProps &
+  ComponentFields<"SphereSurface">;
+
+export function SphereSurface(props: SphereSurfaceProps) {
+  return createElement(componentContract.SphereSurface.host, props);
 }
 
 /**
- * Opt the Surface on the same entity into whole-Surface texture caching.
+ * Opt the Surface on the same entity into optional distant image caching.
  *
- * Without this component the Surface always presents directly. Cached
- * presentation is a renderer optimization for distant Surfaces: nearby
- * Surfaces and GUI content with focus, hover, press or capture still present
- * directly, and World, input and animation updates are never throttled.
+ * FlatSurface can present directly; curved providers require content images
+ * even without this component. The policy reduces distant image quality and
+ * refresh frequency. Nearby Surfaces and GUI content with focus, hover, press
+ * or capture use current presentation; curved providers retain required images.
+ * World, input and animation updates are never throttled.
  * Omitted props use the runtime defaults; the runtime rejects values outside
  * the documented ranges without changing other state. Only these authored
  * values persist in World snapshots; cached images and schedules do not.
  */
 export type SurfaceCacheProps = ComponentProps & {
   /**
-   * Camera-to-Surface distance in metres below which the Surface presents
-   * directly. Farther distances select cached bands that halve resolution
+   * Camera-to-Surface distance in metres below which current full-quality
+   * presentation is selected. Farther distances select bands that halve resolution
    * and refresh rate each time the distance doubles. `0` caches at every
    * distance. Finite and non-negative.
    */

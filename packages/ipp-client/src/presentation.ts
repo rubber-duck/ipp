@@ -108,7 +108,7 @@ export interface SurfaceRenderStatistics {
   totalSurfaceCacheDirect: number;
   totalSurfaceCacheFallbacks: number;
   totalSurfaceCacheAllocations: number;
-  /** Whole-Surface cache state of every opted-in Surface of the captured World. */
+  /** Optional cache and required curved-image state of Surfaces in the captured World. */
   surfaceCaches: SurfaceCacheRecord[];
 }
 
@@ -145,7 +145,7 @@ export interface RenderDeviceInfo {
   readonly [key: string]: unknown;
 }
 
-/** How an opted-in Surface was presented by the last completed frame. */
+/** How a Surface with optional caching or required curved images was presented by the last completed frame. */
 export type SurfaceCacheMode =
   | "near"
   | "interaction"
@@ -171,14 +171,14 @@ export const SURFACE_CACHE_MODES: readonly SurfaceCacheMode[] = [
 ];
 
 /**
- * Read-only whole-Surface cache state of one opted-in Surface, reported by
- * `RenderStatisticsSnapshot.surfaces`.
+ * Read-only optional cache or required curved-image state of one Surface,
+ * reported by `SurfaceRenderStatistics.surfaceCaches`.
  */
 export interface SurfaceCacheRecord {
   /** Generational entity identity within the captured World. */
   entity: bigint;
   mode: SurfaceCacheMode;
-  /** Selected distance band; 0 is direct. */
+  /** Selected distance band; 0 uses near/current quality, where affine Surfaces may draw directly. */
   band: number;
   /** Resident image size in texels; zero without an image. */
   width: number;

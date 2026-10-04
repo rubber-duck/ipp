@@ -28,6 +28,8 @@ use std::sync::Arc;
 pub(super) struct Target {
     pub(super) control: Arc<GuiControlObservation>,
     pub(super) path: Vec<WorldAttachmentToken>,
+    /// Completed provider lifetimes, parallel to path; value edits preserve these fences.
+    pub(super) surface_lifetimes: Vec<Option<(u16, u64)>>,
     pub(super) source: WorldPublicationId,
     pub(super) part: CanvasHitKind,
     /// The focus part of a control with several, such as a range's thumb,
@@ -609,6 +611,23 @@ impl GuiInputRouter {
                 if let Some(mut active) = context.pointers.get(&pointer).cloned() {
                     let identity = active.target.control.record.target;
                     if active.pressed {
+                        // A captured ray can miss a curved shell. Keep ownership and
+                        // the last drag coordinate until a valid continuation returns.
+                        if project_composed_point(
+                            host,
+                            query,
+                            &active.target.path,
+                            point,
+                            true,
+                            active.target.control.hit.layer,
+                        )
+                        .map_err(|_| GuiInputError::StalePath)?
+                        .is_none()
+                        {
+                            return Ok(GuiRoutingDisposition::Routed {
+                                target: identity,
+                            });
+                        }
                         match active.drag.clone() {
                             Some(Drag::Content {
                                 targets,
@@ -2049,11 +2068,45 @@ impl Drop for DispatchPermit {
     }
 }
 
+/// Provider lifetimes along one completed path, without retaining historical geometry.
+pub(super) fn surface_lifetimes(
+    host: &HostRuntime,
+    source: WorldPublicationId,
+    path: &[WorldAttachmentToken],
+) -> Result<Vec<Option<(u16, u64)>>, GuiInputError> {
+    let mut publication = host.publication(source).ok_or(GuiInputError::StalePath)?;
+    let mut lifetimes = Vec::with_capacity(path.len());
+    for token in path {
+        let edge = publication
+            .attachments
+            .iter()
+            .find(|edge| edge.token == *token)
+            .ok_or(GuiInputError::StalePath)?;
+        lifetimes.push(match edge.mode {
+            crate::WorldAttachmentMode::Spatial => None,
+            _ => Some((
+                edge.surface_geometry
+                    .as_ref()
+                    .ok_or(GuiInputError::StalePath)?
+                    .component(),
+                edge.surface_incarnation.ok_or(GuiInputError::StalePath)?,
+            )),
+        });
+        publication = host
+            .attached_publication(edge)
+            .ok_or(GuiInputError::StalePath)?;
+    }
+    Ok(lifetimes)
+}
+
 pub(super) fn refresh(
     host: &HostRuntime,
     view: ViewDescriptor,
     target: &Target,
 ) -> Result<Target, GuiInputError> {
+    if surface_lifetimes(host, view.publication, &target.path)? != target.surface_lifetimes {
+        return Err(GuiInputError::StalePath);
+    }
     let control = locate_control(host, view, &target.path, target.control.record.target)?;
     // A control that lost the named part, as a range made a single slider,
     // keeps its last part, or names none.
@@ -2069,6 +2122,7 @@ pub(super) fn refresh(
     Ok(Target {
         control,
         path: target.path.clone(),
+        surface_lifetimes: target.surface_lifetimes.clone(),
         source: view.publication,
         part: target.part.clone(),
         focus_part,
@@ -2269,6 +2323,14 @@ fn locate(
                 Some(control) => Located::Target(Target {
                     control: control.clone(),
                     path: hit.path.iter().map(|step| step.token.clone()).collect(),
+                    surface_lifetimes: surface_lifetimes(
+                        host,
+                        result.view.publication,
+                        &hit.path
+                            .iter()
+                            .map(|step| step.token.clone())
+                            .collect::<Vec<_>>(),
+                    )?,
                     source: result.view.publication,
                     part: hit.hit.kind.clone(),
                     focus_part: None,
@@ -2366,6 +2428,9 @@ fn append_scroll_targets(
     root: WorldPublicationId,
     targets: &mut Vec<Target>,
 ) -> bool {
+    let Ok(lifetimes) = surface_lifetimes(host, root, path) else {
+        return false;
+    };
     let Some(gui) = host
         .publication(source)
         .and_then(|publication| publication.chunk(CanvasSystem::ID))
@@ -2387,6 +2452,7 @@ fn append_scroll_targets(
             targets.push(Target {
                 control: control.clone(),
                 path: path.to_vec(),
+                surface_lifetimes: lifetimes.clone(),
                 source: root,
                 part: CanvasHitKind::Entity,
                 focus_part: None,

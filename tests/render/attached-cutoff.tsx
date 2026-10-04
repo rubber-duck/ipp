@@ -10,7 +10,7 @@ import {
   Camera,
   Entity,
   Scalar,
-  Surface,
+  FlatSurface,
   createRoot,
   type AttachedWorldHandle,
   type ReactCompositionHost,
@@ -153,7 +153,7 @@ export async function attachedInitializationCutoffs(
   const scene = (value: number, attached: boolean) => (
     <>
       <Entity id="cutoff-anchor">
-        <Surface width={1} height={1} />
+        <FlatSurface width={1} height={1} />
       </Entity>
       <Entity id="cutoff-next-anchor" />
       <Entity id="cutoff-unrelated">

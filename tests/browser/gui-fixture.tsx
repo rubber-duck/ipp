@@ -16,7 +16,7 @@ import {
   CanvasWorld,
   Children,
   Entity,
-  Surface,
+  FlatSurface,
   Transform,
   type CanvasWorldHandle,
 } from "../../packages/ipp-react/src/index.js";
@@ -395,7 +395,7 @@ function Application({
           {keyboardPanels ? <KeyboardOrderPanels tone={tone} /> : null}
           <Entity id="mounted-gui-panel">
             <Transform />
-            <Surface
+            <FlatSurface
               width={WIDTH / UNITS_PER_METRE}
               height={HEIGHT / UNITS_PER_METRE}
             />
@@ -501,7 +501,7 @@ function KeyboardOrderPanels({
     <>
       <Entity id={`mounted-gui-${name}-panel`}>
         {placement}
-        <Surface width={2} height={1} />
+        <FlatSurface width={2} height={1} />
       </Entity>
       <CanvasWorld
         presentation={{ anchor: `mounted-gui-${name}-panel` }}

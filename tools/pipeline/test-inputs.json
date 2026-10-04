@@ -535,28 +535,6 @@
       "browser"
     ]
   },
-  "dist/tests/render/gallery-gui.test.js": {
-    "builds": [
-      "typescript",
-      "gallery-fixtures"
-    ],
-    "requirements": [
-      "node",
-      "npm",
-      "browser"
-    ]
-  },
-  "dist/tests/render/gallery-gui-workbench.test.js": {
-    "builds": [
-      "typescript",
-      "gallery-fixtures"
-    ],
-    "requirements": [
-      "node",
-      "npm",
-      "browser"
-    ]
-  },
   "dist/tests/render/gallery-gui-camera.test.js": {
     "builds": [
       "typescript",
@@ -704,6 +682,11 @@
       "npm"
     ]
   },
+  "dist/packages/ipp-client/tests/surface-config.test.js": {
+    "builds": ["typescript"],
+    "requirements": ["node", "npm"],
+    "sourceRoots": ["packages/ipp-client/src/surface-config.ts", "packages/ipp-client/tests/surface-config.test.ts"]
+  },
   "dist/packages/ipp-client/tests/gui-semantics.test.js": {
     "builds": [
       "typescript"
@@ -755,22 +738,6 @@
       "node",
       "npm",
       "browser"
-    ]
-  },
-  "dist/tests/render/native-gallery.test.js": {
-    "builds": [
-      "typescript",
-      "gles-host",
-      "font-assets",
-      "gallery-assets",
-      "gallery-gui-assets",
-      "gallery-platformer-native-assets",
-      "shared-host"
-    ],
-    "requirements": [
-      "node",
-      "npm",
-      "gles"
     ]
   }
 }

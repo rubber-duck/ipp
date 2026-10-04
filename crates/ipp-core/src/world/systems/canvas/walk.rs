@@ -36,7 +36,7 @@ pub(super) struct Placement {
     pub clip: CanvasClip,
     pub available: bool,
     pub enabled: bool,
-    /// Plane id of the placed entity's layer; children replace it with theirs.
+    /// Compact physical rank; children replace it with their resolved rank.
     pub layer: u32,
 }
 
@@ -54,10 +54,8 @@ impl Placement {
         }
     }
 
-    /// Compose a child's style. A nonzero layer raises the child above its
-    /// parent and starts a new clip scope at the `canvas` extent before the
-    /// child's own clip applies.
-    fn child(self, style: Option<&CanvasStyle>, canvas: CanvasClip) -> Self {
+    /// Compose a child's style without changing its inherited clip scope.
+    fn child(self, style: Option<&CanvasStyle>) -> Self {
         let Some(style) = style else {
             return self;
         };
@@ -72,11 +70,7 @@ impl Placement {
                 self.color[3] * style.alpha,
             ],
             opacity: self.opacity * style.opacity,
-            clip: if style.layer == 0 {
-                self.clip
-            } else {
-                canvas
-            },
+            clip: self.clip,
             available: self.available,
             enabled: self.enabled,
             layer: self.layer,
@@ -328,10 +322,14 @@ impl CanvasSystem {
             inherited.position[1] += mapping.origin[1] * inherited.scale[1];
             inherited.available &= mapping.available;
         }
-        let mut placed = inherited.child(
-            world.components.canvas_style(entity.index() as usize),
-            canvas_clip,
-        );
+        if world
+            .components
+            .gui_overlay(entity.index() as usize)
+            .is_some()
+        {
+            inherited.clip = canvas_clip;
+        }
+        let mut placed = inherited.child(world.components.canvas_style(entity.index() as usize));
         placed.layer = layer;
         if gui.is_some()
             && let Some(behavior) = world.components.gui_behavior(entity.index() as usize)
@@ -844,7 +842,7 @@ impl CanvasSystem {
             walk.hits.push(CanvasHit {
                 target: CanvasTarget {
                     entity,
-                    component: ComponentValue::SURFACE,
+                    component: slot.surface_component,
                     incarnation: slot.surface_incarnation,
                 },
                 kind: CanvasHitKind::Attachment {

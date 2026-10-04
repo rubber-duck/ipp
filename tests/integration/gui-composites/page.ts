@@ -458,7 +458,7 @@ export async function openCompositePage(
     const [width, height] = spec.extent;
     parentCommands.push(
       createEntity(index + 2, `composite-${spec.name}-slot`),
-      insertComponent(parentClient, "Surface", slot, { width, height }),
+      insertComponent(parentClient, "FlatSurface", slot, { width, height }),
       insertComponent(parentClient, "GuiLayout", slot, {
         kind: 0,
         width,

@@ -1,15 +1,15 @@
 /**
  * Canvas layers through the generated client, React declarations and real
  * presentation: a flat root canvas whose raised content overlaps against tree
- * order and escapes a lower clip, and an exploded Surface whose layer planes
+ * order and preserves an ancestor clip, and an exploded Surface whose layer planes
  * separate along its normal in front, oblique and rear views and take
  * pointer presses on the plane nearest along the ray.
  *
- * Layers are plane ids: the green button is on plane 1 and its badge and
- * ring arc, declared inside it, on plane 3, so plane 2 is empty and the
- * badge sits three spacings out, leaving a gap. Exploded captures are judged
+ * Authored layers are relative priorities: the green component adds 1000000
+ * and its badge and ring arc add 3. The occupied groups become physical
+ * ranks 0, 1 and 2 with no empty spacing gaps. Exploded captures are judged
  * against an independent geometric oracle: the ray through each sampled pixel
- * meets each plane at its id times the spacing, and the authored rectangles
+ * meets each plane at its compact rank times the spacing, and the authored rectangles
  * and the ring arc on those planes decide the colour the view-depth order
  * must show.
  */
@@ -25,7 +25,7 @@ import {
   CanvasWorld,
   Children,
   Entity,
-  Surface,
+  FlatSurface,
   Transform,
 } from "@ipp/react";
 import { Box, Button, Layout, Skin, Style } from "@ipp/react/gui";
@@ -70,17 +70,20 @@ const SCENE_SYSTEMS = [
 /** Physical panel size in metres and its Canvas extent at 100 units per metre. */
 const PANEL = { size: [1.6, 1.2], extent: [160, 120] } as const;
 
-/** Base red button, plane-1 green button and its plane-3 blue badge, in content units. */
+/** Base red button, rank-1 green button and its rank-2 blue badge, in content units. */
 const RED: Rect = [16, 50, 72, 90];
 const GREEN: Rect = [45, 34, 125, 82];
 const BLUE: Rect = [101, 14, 137, 38];
 const CANVAS: Rect = [0, 0, PANEL.extent[0], PANEL.extent[1]];
 
-/** Plane ids of the raised green button and of its badge and ring arc. */
-const PLANES = { raised: 1, badge: 3 } as const;
+/** Resolved occupied groups compact into these physical ranks. */
+const PLANES = { raised: 1, badge: 2 } as const;
+
+/** Large relative offsets affect priority without leaving physical gaps. */
+const OFFSETS = { raised: 1_000_000, badge: 3 } as const;
 
 /**
- * A yellow plane-3 ring arc over the green button: 20 units out and 8 thick
+ * A yellow rank-2 ring arc over the green button: 20 units out and 8 thick
  * around (100, 62), from three o'clock clockwise to twelve, so the quarter
  * between twelve and three o'clock and the hollow show the planes beneath.
  */
@@ -164,10 +167,12 @@ function sample(frame: PresentedCapture, x: number, y: number): Rgb {
   return [pixels[offset]!, pixels[offset + 1]!, pixels[offset + 2]!];
 }
 
-/** Pose of the exploded panel: turned `angle` radians about +Y, plane ids `spacing` m apart. */
+/** Pose of the exploded panel: turned `angle` radians about +Y, occupied ranks `spacing` m apart. */
 interface PanelPose {
   angle: number;
   spacing: number;
+  /** Removing the middle occupied group repacks the badge onto rank 1. */
+  raised?: boolean;
 }
 
 /**
@@ -205,8 +210,8 @@ function contentAt(
 function planes(pose: PanelPose, pixel: readonly [number, number]) {
   return [
     contentAt(pose, pixel, 0),
-    contentAt(pose, pixel, PLANES.raised),
-    contentAt(pose, pixel, PLANES.badge),
+    pose.raised === false ? null : contentAt(pose, pixel, PLANES.raised),
+    contentAt(pose, pixel, pose.raised === false ? 1 : PLANES.badge),
   ] as const;
 }
 
@@ -399,11 +404,11 @@ export async function guiLayers(
   );
   const cleanup: (() => Promise<unknown>)[] = [];
 
-  /** The flat root canvas: tree order contradicted, and a clip escaped. */
+  /** The flat root canvas: relative equality, component inheritance and clips. */
   async function flatOverlap() {
     // A flat root canvas: the raised green box precedes the red one in tree
-    // order yet paints over it, and a raised blue child of a 16-unit clip paints
-    // outside it while its yellow sibling stays clipped.
+    // order yet paints over it. Raised and inherited children both preserve clips,
+    // and matching resolved priorities share order across unequal depths.
     const flatWorld = (
       await host.createWorld({ selectedSystems: [...PANEL_SYSTEMS] })
     ).reference;
@@ -420,7 +425,7 @@ export async function guiLayers(
         <Layout kind={3} width={96} height={64} align_x={-1} align_y={-1} />
         <Children>
           {box("flat-page", [0, 0], [96, 64], [0, 0, 0])}
-          {box("flat-raised", [28, 12], [40, 40], [0, 1, 0], 1)}
+          {box("flat-raised", [28, 12], [40, 40], [0, 1, 0], OFFSETS.raised)}
           {box("flat-later", [8, 4], [40, 40], [1, 0, 0])}
           <Entity id="flat-clip">
             <Layout width={16} height={16} align_x={-1} align_y={-1} />
@@ -428,6 +433,34 @@ export async function guiLayers(
             <Children>
               {box("flat-clipped", [0, 0], [32, 32], [1, 1, 0])}
               {box("flat-escaped", [8, 24], [24, 24], [0, 0, 1], 1)}
+            </Children>
+          </Entity>
+          <Entity id="flat-deep-root">
+            <Layout width={20} height={12} align_x={-1} align_y={-1} />
+            <Style x={4} y={48} layer={OFFSETS.raised / 2} />
+            <Children>
+              <Entity id="flat-deep-middle">
+                <Style layer={OFFSETS.raised / 2} />
+                <Children>
+                  <Entity id="flat-deep-control">
+                    <Layout width={20} height={12} align_x={-1} align_y={-1} />
+                    <Skin parts={solid([0, 1, 0, 1])} />
+                    <Button label="" onPress={() => presses.push("deep")} />
+                    <Children>
+                      {box("flat-deep-decoration", [2, 2], [6, 6], [0, 0, 1])}
+                    </Children>
+                  </Entity>
+                </Children>
+              </Entity>
+            </Children>
+          </Entity>
+          <Entity id="flat-shallow-control">
+            <Layout width={14} height={12} align_x={-1} align_y={-1} />
+            <Style x={12} y={48} layer={OFFSETS.raised} />
+            <Skin parts={solid([1, 1, 0, 1])} />
+            <Button label="" onPress={() => presses.push("shallow")} />
+            <Children>
+              {box("flat-shallow-decoration", [2, 2], [6, 6], [0, 0, 1])}
             </Children>
           </Entity>
         </Children>
@@ -443,7 +476,11 @@ export async function guiLayers(
       ["red outside the raised box", 14, 20, red],
       ["yellow inside its parent's clip", 80, 14, yellow],
       ["yellow clipped beyond its parent", 92, 14, black],
-      ["raised blue outside its parent's clip", 86, 44, blue],
+      ["raised blue still clipped by its parent", 86, 44, black],
+      ["deep control's inherited decoration", 8, 52, blue],
+      ["deep control outside its decoration", 8, 58, green],
+      ["later equal-level control wins across uneven depths", 22, 58, yellow],
+      ["shallow control's inherited decoration", 16, 52, blue],
       ["page", 60, 58, black],
     ];
     await captureUntil(flatSession, "layers-flat-overlap", (frame) => {
@@ -457,6 +494,12 @@ export async function guiLayers(
             .map(([label, x, y]) => `${label} ${sample(frame, x, y).join(",")}`)
             .join("; ");
     });
+    check(
+      (await press(flatSession, [18, 58])) === "shallow",
+      `Equal resolved levels must target the later complete control: ${presses}`,
+    );
+    await input?.close();
+    input = undefined;
   }
 
   // An exploded Surface in a 3D scene, presented to a perspective camera.
@@ -470,7 +513,7 @@ export async function guiLayers(
       </Entity>
       <Entity id="layers-panel">
         <Transform ry={pose.angle} />
-        <Surface
+        <FlatSurface
           width={PANEL.size[0]}
           height={PANEL.size[1]}
           layer_spacing={pose.spacing}
@@ -524,22 +567,33 @@ export async function guiLayers(
                 align_x={-1}
                 align_y={-1}
               />
-              <Style x={GREEN[0]} y={GREEN[1]} layer={PLANES.raised} />
-              <Skin parts={solid([0, 1, 0, 1])} />
-              <Button label="" onPress={() => presses.push("green")} />
+              <Style
+                x={GREEN[0]}
+                y={GREEN[1]}
+                layer={pose.raised === false ? 0 : OFFSETS.raised}
+              />
+              {pose.raised !== false && (
+                <>
+                  <Skin parts={solid([0, 1, 0, 1])} />
+                  <Button label="" onPress={() => presses.push("green")} />
+                </>
+              )}
               <Children>
                 {box(
                   "layers-blue",
                   [BLUE[0] - GREEN[0], BLUE[1] - GREEN[1]],
                   [BLUE[2] - BLUE[0], BLUE[3] - BLUE[1]],
                   [0, 0, 1],
-                  PLANES.badge,
+                  OFFSETS.badge + (pose.raised === false ? OFFSETS.raised : 0),
                 )}
                 <Entity id="layers-ring">
                   <Style
                     x={RING.center[0] - RING.outer - GREEN[0]}
                     y={RING.center[1] - RING.outer - GREEN[1]}
-                    layer={PLANES.badge}
+                    layer={
+                      OFFSETS.badge +
+                      (pose.raised === false ? OFFSETS.raised : 0)
+                    }
                   />
                   <Box width={2 * RING.outer} height={2 * RING.outer} />
                   <Skin parts={ringArc} />
@@ -561,9 +615,10 @@ export async function guiLayers(
     check(view, "The exploded scene has no presented view");
     if (!input) input = await host.input.open(view);
     presses.length = 0;
+    const { width, height } = view.binding.viewport;
     const point = [
-      (pixel[0] + 0.5) / VIEW[0],
-      (pixel[1] + 0.5) / VIEW[1],
+      (pixel[0] + 0.5) / width,
+      (pixel[1] + 0.5) / height,
     ] as const;
     for (const kind of ["pointerDown", "pointerUp"] as const) {
       const outcome = await input.send({ kind, pointer: 1n, point });
@@ -636,6 +691,18 @@ export async function guiLayers(
         if (layered && flat && layered !== flat) separated++;
       }
     check(separated >= 50, `Oblique planes barely separate: ${separated}`);
+    await exploded(
+      "layers-repacked-oblique",
+      { ...oblique, raised: false },
+      true,
+      ["red", "blue", "yellow"],
+    );
+    await exploded("layers-restored-oblique", oblique, true, [
+      "red",
+      "green",
+      "blue",
+      "yellow",
+    ]);
     // From behind, the base plane is nearest and its red button covers.
     await exploded(
       "layers-exploded-behind",
@@ -687,9 +754,11 @@ export async function guiLayers(
       images,
       assertions: [
         "raised paint over a later sibling against tree order",
-        "raised child outside its lower-layer parent's clip, sibling clipped",
+        "raised and inherited children retain their parent clip",
+        "unequal tree depths with equal resolved levels preserve complete controls and hit order",
         "exploded front, oblique and rear captures match the layer-plane oracle",
-        "the badge on plane 3 three spacings out, the empty plane 2 leaving a gap",
+        "large relative priorities compact into consecutive physical ranks",
+        "removing an occupied middle group repacks later ranks, and restoration is deterministic",
         "a raised ring arc on its layer plane, its hollow and open quarter showing the plane beneath",
         "oblique layer planes separate from the flat layout",
         "rear view draws the nearest base plane last",

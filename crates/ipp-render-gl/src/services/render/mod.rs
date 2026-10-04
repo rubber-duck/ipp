@@ -43,6 +43,7 @@ mod shader;
 mod shader_asset;
 mod surface_assets;
 mod surface_cache;
+mod surface_mesh;
 mod surface_path;
 mod template;
 

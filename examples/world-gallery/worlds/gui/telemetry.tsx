@@ -137,7 +137,11 @@ const READOUTS: readonly (readonly [
 export function Telemetry({ scene }: { readonly scene: GuiScene }) {
   const [view, setView] = useState<TelemetryView>("events");
   return (
-    <Panel id="gui-telemetry-panel" layout={{ height: TELEMETRY_HEIGHT }}>
+    <Panel
+      layer={1}
+      id="gui-telemetry-panel"
+      layout={{ height: TELEMETRY_HEIGHT }}
+    >
       <PanelBody id="gui-telemetry-content">
         <PanelHeader id="gui-telemetry-header" title="TELEMETRY" />
         <Entity id={TELEMETRY_ENTITY}>

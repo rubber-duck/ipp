@@ -241,7 +241,7 @@ export async function exerciseSurfaceLifecycle(
       insertComponent(client, "Transform", { kind: "alias", alias: 1 }),
       insertComponent(
         client,
-        "Surface",
+        "FlatSurface",
         { kind: "alias", alias: 1 },
         {
           width: 4,

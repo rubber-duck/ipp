@@ -8,9 +8,12 @@ import {
   type GuiInputRoutingOutcome,
   type GuiNativeEdit,
   type GuiTextFence,
+  type HostPhysicalInput,
 } from "../../ipp-client/src/host-input.js";
 import {
   attachCanvasGuiInput,
+  CanvasGuiInput,
+  type CanvasGuiInputOptions,
   DEFAULT_GUI_WHEEL_STEP,
   keyboardKeyToGuiKey,
   wheelDeltaToLogical,
@@ -148,7 +151,11 @@ class Dom {
   }
 }
 
-function harness(context: TestContext, wheelStep?: number) {
+function harness(
+  context: TestContext,
+  wheelStep?: number,
+  cleanup?: () => Promise<void> | undefined,
+) {
   const dom = new Dom();
   const previous = new Map(
     ["document", "window", "WheelEvent"].map((key) => [
@@ -211,7 +218,8 @@ function harness(context: TestContext, wheelStep?: number) {
     },
   );
   const area = dom.body.children[1]!.children[0]!;
-  context.after(() => {
+  context.after(async () => {
+    await cleanup?.();
     detach();
     for (const [key, descriptor] of previous) {
       if (descriptor) Object.defineProperty(globalThis, key, descriptor);
@@ -759,4 +767,354 @@ test("aborted and detached scene gestures cannot admit a replacement generation"
   settleUnhandledInputGateSubmission(gate, submission, miss);
   closeUnhandledInputGate(gate, replacement);
   assert.equal(await fresh, false);
+});
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((accept, refuse) => {
+    resolve = accept;
+    reject = refuse;
+  });
+  return { promise, resolve, reject };
+}
+
+function ownerHarness(test: TestContext) {
+  let owner: CanvasGuiInput | undefined;
+  const state = harness(test, undefined, () => owner?.close());
+  state.detach();
+  const opened: {
+    view: typeof state.input.view;
+    options: CanvasGuiInputOptions;
+  }[] = [];
+  const contexts: GuiPhysicalContext[] = [];
+  const closed: bigint[] = [];
+  let acquire: (() => Promise<GuiPhysicalContext>) | undefined;
+  let release: (() => Promise<void>) | undefined;
+  function create() {
+    const context = new GuiPhysicalContext(
+      BigInt(contexts.length + 1),
+      state.input.view,
+      async () => {
+        throw new Error("Unexpected wire request");
+      },
+      () => {},
+      physicalWireTag,
+    );
+    context.send = async () => miss;
+    context.close = async () => {
+      if (context.isClosed) return;
+      context.stop(new Error("Closed"));
+      closed.push(context.identity);
+      await release?.();
+    };
+    contexts.push(context);
+    return context;
+  }
+  const options = {
+    onError: (error: Error) => state.errors.push(error),
+    unhandledInputGate: state.gate,
+  };
+  owner = new CanvasGuiInput(
+    state.canvas as unknown as HTMLCanvasElement,
+    {
+      open: async (
+        view: typeof state.input.view,
+        options: CanvasGuiInputOptions,
+      ) => {
+        opened.push({ view, options });
+        return acquire ? acquire() : create();
+      },
+    } as unknown as HostPhysicalInput,
+    options,
+  );
+  return {
+    ...state,
+    owner,
+    options,
+    opened,
+    contexts,
+    closed,
+    create,
+    acquire(next: typeof acquire) {
+      acquire = next;
+    },
+    release(next: typeof release) {
+      release = next;
+    },
+  };
+}
+
+const blocker = {
+  world: { id: 1n, incarnation: 2n },
+  entity: 9n,
+  incarnation: 3n,
+};
+
+test("input option identity changes arm, lift and replace blockers while equivalent props preserve ownership", async (test) => {
+  const h = ownerHarness(test);
+  await h.owner.select(h.input.view);
+  await h.owner.update({ ...h.options, blockers: [blocker] });
+  assert.equal(h.opened.length, 2);
+  assert.deepEqual(h.opened[1]!.options.blockers, [blocker]);
+  const current = h.contexts[1]!;
+  current.send = async () => applied;
+  h.canvas.dispatch("pointerdown", {
+    pointerId: 4,
+    button: 0,
+    clientX: 40,
+    clientY: 40,
+  });
+  await h.owner.update({ ...h.options, blockers: structuredClone([blocker]) });
+  assert.equal(h.opened.length, 2);
+  assert.equal(current.isClosed, false);
+  assert.equal(h.canvas.hasPointerCapture(4), true);
+  const replacement = { ...blocker, incarnation: 4n };
+  await h.owner.update({ ...h.options, blockers: [replacement] });
+  assert.equal(current.isClosed, true);
+  assert.equal(h.canvas.hasPointerCapture(4), false);
+  await h.owner.update(h.options);
+  assert.deepEqual(h.opened[3]!.options.blockers, undefined);
+  assert.deepEqual(h.closed, [1n, 2n, 3n]);
+});
+
+test("callback refresh retains captured pointer and text owner and invokes current handlers", async (test) => {
+  const h = ownerHarness(test);
+  let first = 0;
+  let latest = 0;
+  await h.owner.update({ ...h.options, onUnhandled: () => first++ });
+  await h.owner.select(h.input.view);
+  const current = h.contexts[0]!;
+  current.send = async () => applied;
+  h.canvas.dispatch("pointerdown", {
+    pointerId: 4,
+    button: 0,
+    clientX: 40,
+    clientY: 40,
+  });
+  current.observeText({
+    fence,
+    text: "ab",
+    selectionStart: 2,
+    selectionEnd: 2,
+  });
+  const focused = h.dom.activeElement;
+  await h.owner.update({
+    ...h.options,
+    blockers: [],
+    onUnhandled: () => latest++,
+  });
+  assert.equal(h.opened.length, 1);
+  assert.equal(h.canvas.hasPointerCapture(4), true);
+  assert.equal(h.dom.activeElement, focused);
+  assert.equal(current.nativeText?.text, "ab");
+  current.send = async () => miss;
+  h.canvas.dispatch("pointermove", { pointerId: 4, clientX: 40, clientY: 40 });
+  await flush();
+  assert.equal(first, 0);
+  assert.equal(latest, 1);
+  await h.owner.update({ ...h.options, wheelStep: 0.5 });
+  assert.equal(current.isClosed, true);
+  assert.equal(current.nativeText, null);
+  assert.equal(h.canvas.hasPointerCapture(4), false);
+  assert.equal(h.dom.body.children.length, 2);
+});
+
+test("pending acquisition is closed before the latest configuration and view can open", async (test) => {
+  const h = ownerHarness(test);
+  const pending = deferred<GuiPhysicalContext>();
+  h.acquire(() => pending.promise);
+  const first = h.owner.select(h.input.view);
+  await flush();
+  const updated = h.owner.update({ ...h.options, blockers: [blocker] });
+  const latestView = { ...h.input.view, selection: 20n };
+  const selected = h.owner.select(latestView);
+  assert.equal(h.opened.length, 1);
+  h.acquire(undefined);
+  pending.resolve(h.create());
+  await Promise.all([first, updated, selected]);
+  assert.deepEqual(h.closed, [1n]);
+  assert.equal(h.opened.length, 2);
+  assert.equal(h.opened[1]!.view.selection, 20n);
+  assert.deepEqual(h.opened[1]!.options.blockers, [blocker]);
+  assert.equal(h.dom.body.children.length, 2);
+});
+
+test("disposal drains pending opens and releases without late listeners or reacquisition", async (test) => {
+  const h = ownerHarness(test);
+  const pending = deferred<GuiPhysicalContext>();
+  h.acquire(() => pending.promise);
+  const first = h.owner.select(h.input.view);
+  await flush();
+  const updated = h.owner.update({ ...h.options, blockers: [blocker] });
+  const closed = h.owner.close();
+  pending.resolve(h.create());
+  await Promise.all([first, updated, closed]);
+  await h.owner.update(h.options);
+  await h.owner.select(h.input.view);
+  assert.equal(h.opened.length, 1);
+  assert.deepEqual(h.closed, [1n]);
+  assert.equal(h.dom.body.children.length, 1);
+  assert.equal(h.canvas.style.touchAction, "pan-y");
+});
+
+test("configuration replacement waits for release and fences a concurrent close", async (test) => {
+  const h = ownerHarness(test);
+  await h.owner.select(h.input.view);
+  const release = deferred<void>();
+  h.release(() => release.promise);
+  const update = h.owner.update({ ...h.options, blockers: [blocker] });
+  await flush();
+  assert.equal(h.opened.length, 1);
+  const close = h.owner.close();
+  release.resolve();
+  await Promise.all([update, close]);
+  assert.equal(h.opened.length, 1);
+  assert.equal(h.dom.body.children.length, 1);
+});
+
+test("failed acquisition does not prevent a later update or disposal", async (test) => {
+  const h = ownerHarness(test);
+  h.acquire(async () => {
+    throw new Error("Open failed");
+  });
+  await assert.rejects(h.owner.select(h.input.view), /Open failed/);
+  h.acquire(undefined);
+  await h.owner.update({ ...h.options, blockers: [blocker] });
+  assert.equal(h.opened.length, 2);
+  await h.owner.close();
+  assert.deepEqual(h.closed, [1n]);
+});
+
+test("retryable release failure retains cleanup ownership before reacquisition or disposal", async (test) => {
+  const h = ownerHarness(test);
+  await h.owner.select(h.input.view);
+  const current = h.contexts[0]!;
+  let attempts = 0;
+  current.close = async () => {
+    current.stop(new Error("Closed locally"));
+    if (++attempts === 1) throw new Error("Release not sent");
+    h.closed.push(current.identity);
+  };
+  await assert.rejects(
+    h.owner.update({ ...h.options, blockers: [blocker] }),
+    /Release not sent/,
+  );
+  assert.equal(h.opened.length, 1);
+  await h.owner.select(h.input.view);
+  assert.equal(attempts, 2);
+  assert.deepEqual(h.closed, [1n]);
+  assert.equal(h.opened.length, 2);
+  const final = h.contexts[1]!;
+  let cleanupAttempts = 0;
+  final.close = async () => {
+    final.stop(new Error("Closed locally"));
+    if (++cleanupAttempts === 1) throw new Error("Release not sent");
+    h.closed.push(final.identity);
+  };
+  await assert.rejects(h.owner.close(), /Release not sent/);
+  await h.owner.close();
+  assert.equal(cleanupAttempts, 2);
+  assert.deepEqual(h.closed, [1n, 2n]);
+});
+
+test("gate replacement cancels only the retired gate and wheel changes reach new listeners", async (test) => {
+  const h = ownerHarness(test);
+  await h.owner.select(h.input.view);
+  const old = deferred<GuiInputRoutingOutcome>();
+  h.contexts[0]!.send = () => old.promise;
+  const oldAdmission = h.gate.pointerDown(
+    4,
+    "primary",
+    new AbortController().signal,
+  );
+  h.canvas.dispatch("pointerdown", {
+    pointerId: 4,
+    button: 0,
+    clientX: 40,
+    clientY: 40,
+  });
+  const nextGate = createGuiUnhandledInputGate();
+  await h.owner.update({
+    ...h.options,
+    unhandledInputGate: nextGate,
+    wheelStep: 0.5,
+  });
+  assert.equal(await oldAdmission, false);
+  const nextAdmission = nextGate.pointerDown(
+    4,
+    "primary",
+    new AbortController().signal,
+  );
+  h.canvas.dispatch("pointerdown", {
+    pointerId: 4,
+    button: 0,
+    clientX: 40,
+    clientY: 40,
+  });
+  assert.equal(await nextAdmission, true);
+  old.resolve(miss);
+  await flush();
+  const events: GuiPhysicalInput[] = [];
+  h.contexts[1]!.send = async (event) => {
+    events.push(event);
+    return applied;
+  };
+  h.canvas.dispatch("wheel", {
+    deltaX: 0,
+    deltaY: 100,
+    deltaMode: 0,
+    clientX: 40,
+    clientY: 40,
+  });
+  await flush();
+  assert.deepEqual(
+    events[0]?.kind === "wheel" ? events[0].delta : null,
+    [0, 0.5],
+  );
+});
+
+test("blocker snapshots include every lifetime field and survive caller mutation", async (test) => {
+  const h = ownerHarness(test);
+  const authored = structuredClone(blocker);
+  await h.owner.update({ ...h.options, blockers: [authored] });
+  await h.owner.select(h.input.view);
+  for (const mutate of [
+    () => authored.world.id++,
+    () => authored.world.incarnation++,
+    () => authored.entity++,
+    () => authored.incarnation++,
+  ]) {
+    const previous = h.opened.length;
+    mutate();
+    await h.owner.update({ ...h.options, blockers: [authored] });
+    assert.equal(h.opened.length, previous + 1);
+  }
+  assert.deepEqual(h.opened[0]!.options.blockers, [blocker]);
+});
+
+test("disposal completion waits for late acquisition and its release acknowledgement", async (test) => {
+  const h = ownerHarness(test);
+  const opening = deferred<GuiPhysicalContext>();
+  const release = deferred<void>();
+  h.acquire(() => opening.promise);
+  h.release(() => release.promise);
+  const selected = h.owner.select(h.input.view);
+  await flush();
+  let hostCanDispose = false;
+  const closed = h.owner.close().then(() => {
+    hostCanDispose = true;
+  });
+  await flush();
+  assert.equal(hostCanDispose, false);
+  assert.deepEqual(h.closed, []);
+  opening.resolve(h.create());
+  await flush();
+  assert.deepEqual(h.closed, [1n]);
+  assert.equal(hostCanDispose, false);
+  assert.equal(h.dom.body.children.length, 1);
+  release.resolve();
+  await Promise.all([selected, closed]);
+  assert.equal(hostCanDispose, true);
+  assert.equal(h.opened.length, 1);
 });

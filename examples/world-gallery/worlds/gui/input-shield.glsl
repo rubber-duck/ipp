@@ -1,9 +1,17 @@
 in vec2 shieldUv;
+in vec2 shieldSize;
+in float shieldFace;
 
 vec4 materialFragment() {
-  // Metres across the glass face and the distance to its nearest edge.
-  vec2 metres = shieldUv * p_size;
-  vec2 edges = min(metres, p_size - metres);
+  // Open against the panel, with four visible walls closing the side gap.
+  if (shieldFace < -0.5) return vec4(0.0);
+  vec2 metres = shieldUv * shieldSize;
+  if (abs(shieldFace) < 0.5) {
+    float stripe = step(0.5, fract((metres.x + metres.y) / 0.08));
+    return vec4(p_color.rgb * mix(0.3, 1.0, stripe), 1.0);
+  }
+  // Metres across the front cap and the distance to its nearest edge.
+  vec2 edges = min(metres, shieldSize - metres);
   float edge = min(edges.x, edges.y);
 
   // A hazard-striped frame around the edge.

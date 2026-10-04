@@ -27,7 +27,7 @@ import type {
   GuiFocusChangeListener,
   GuiScalarEvent,
 } from "../gui/callbacks.js";
-import { Behavior, Font, Layout } from "../gui/components.js";
+import { Style, Behavior, Font, Layout } from "../gui/components.js";
 import type { GuiControlRef } from "../gui/control-ref.js";
 import { TextInput } from "../gui/controls.js";
 import { InlineAlert } from "./inline-alert.js";
@@ -43,6 +43,8 @@ import { formatValue, useScalarValue, withUnits } from "./scalar-value.js";
 import { TextLine, lineWidth } from "./text.js";
 
 export interface NumericStepperProps {
+  /** Nonnegative layer offset applied once at this component root; zero inherits. */
+  readonly layer?: number;
   /** Symbolic id of the stepper's root entity; its parts extend it. */
   readonly id: string;
   /** The caption naming the number, such as EXPOSURE, in the accent. */
@@ -94,6 +96,7 @@ export function numericStepperHeight(
 
 export function NumericStepper({
   id,
+  layer = 0,
   label,
   min,
   max,
@@ -144,6 +147,7 @@ export function NumericStepper({
 
   return (
     <Entity id={id}>
+      <Style layer={layer} />
       <Layout
         kind={LAYOUT_COLUMN}
         height={kit.unit(numericStepperHeight(t, caption))}

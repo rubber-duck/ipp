@@ -2151,6 +2151,84 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
           return 1;
         });
       },
+      draw_surface_image_mesh(
+        programHandle: number,
+        handle: number,
+        meshHandle: number,
+        mvpPointer: number,
+        sizePointer: number,
+        clipPointer: number,
+        opacity: number,
+        flipImage: number,
+        firstIndex: number,
+        indexCount: number,
+      ): number {
+        return status(() => {
+          const program = programs.get(programHandle >>> 0);
+          const target = surfaceCacheTargets.get(handle >>> 0);
+          const mesh = meshes.get(meshHandle >>> 0);
+          firstIndex >>>= 0;
+          indexCount >>>= 0;
+          if (!program || !target || !mesh || !mesh.uv)
+            throw new Error("Stale Surface image mesh handle");
+          if (
+            surfaceCacheTarget?.handle === handle >>> 0 ||
+            firstIndex + indexCount > mesh.count ||
+            firstIndex % 3 ||
+            indexCount % 3
+          )
+            throw new Error("Invalid Surface image mesh draw");
+          if (blendMode !== 4) {
+            gl.enable(gl.BLEND);
+            gl.blendEquation(gl.FUNC_ADD);
+            gl.blendFuncSeparate(
+              gl.ONE,
+              gl.ONE_MINUS_SRC_ALPHA,
+              gl.ONE,
+              gl.ONE_MINUS_SRC_ALPHA,
+            );
+            blendMode = 4;
+          }
+          setDepthMask(false);
+          useProgram(program.object);
+          const uniform = (name: string) => parameterLocation(program, name);
+          programMatrixAt(program, program.mvp, mvpPointer >>> 0);
+          const size = floats(sizePointer >>> 0, 2);
+          programVec4(
+            program,
+            uniform("u_placement"),
+            0,
+            0,
+            size[0]!,
+            size[1]!,
+          );
+          const clip = floats(clipPointer >>> 0, 4);
+          programVec4(
+            program,
+            uniform("u_clip"),
+            clip[0]!,
+            clip[1]!,
+            clip[2]!,
+            clip[3]!,
+          );
+          programFloat(program, uniform("u_opacity"), opacity);
+          programInt(program, uniform("u_image_flip"), flipImage ? 1 : 0);
+          programInt(program, uniform("u_surface_cache"), 0);
+          gl.activeTexture(gl.TEXTURE0);
+          gl.bindSampler(0, null);
+          gl.bindTexture(gl.TEXTURE_2D, target.texture);
+          bindVertexArray(mesh.vao);
+          gl.drawElements(
+            gl.TRIANGLES,
+            indexCount,
+            gl.UNSIGNED_SHORT,
+            firstIndex * 2,
+          );
+          gl.bindTexture(gl.TEXTURE_2D, null);
+          checkDraw();
+          return 1;
+        });
+      },
       delete_surface_cache_target(handle: number): void {
         const target = surfaceCacheTargets.get(handle >>> 0);
         if (!target) return;

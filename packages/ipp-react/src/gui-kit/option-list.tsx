@@ -19,7 +19,7 @@
 import { useState } from "react";
 import { Children, Entity } from "../components.js";
 import { Button } from "../gui/controls.js";
-import { Behavior, Group, Layout } from "../gui/components.js";
+import { Style, Behavior, Group, Layout } from "../gui/components.js";
 import { ScrollView } from "../gui/scroll.js";
 import { Skin } from "../gui/theme.js";
 import type { GuiVirtualRange } from "../gui/callbacks.js";
@@ -48,6 +48,8 @@ export interface SelectOption {
 export type OptionListMark = "selected" | "check";
 
 export interface OptionListProps {
+  /** Nonnegative layer offset applied once at this component root; zero inherits. */
+  readonly layer?: number;
   /** Symbolic id of the list; rows extend it with their keys. */
   readonly id: string;
   readonly options: readonly SelectOption[];
@@ -91,6 +93,7 @@ export function optionListGeometry(
 
 export function OptionList({
   id,
+  layer = 0,
   options,
   selected = [],
   mark = "selected",
@@ -111,6 +114,7 @@ export function OptionList({
   const status = { padding_left: g.gap, padding_right: g.gap };
   return (
     <Entity id={id}>
+      <Style layer={layer} />
       <Layout kind={LAYOUT_STACK} height={g.height} {...layout} />
       <Skin theme={kit.theme("gridBody")} />
       <ScrollView

@@ -1,6 +1,6 @@
 use super::GuiInputError;
 use super::keyboard_panels::GuiKeyboardView;
-use super::routing::{Target, live};
+use super::routing::{Target, live, surface_lifetimes};
 use crate::services::gui_input::query::GuiQueryWorlds;
 use crate::systems::camera::CameraPublication;
 use crate::systems::canvas::{CanvasHitKind, CanvasPublication, CanvasSystem};
@@ -98,6 +98,11 @@ pub(super) fn targets(
                                     Task::Control(Target {
                                         control: control.clone(),
                                         path: view.path.clone(),
+                                        surface_lifetimes: surface_lifetimes(
+                                            host,
+                                            root.publication,
+                                            &view.path,
+                                        )?,
                                         source: root.publication,
                                         part: CanvasHitKind::Entity,
                                         focus_part: (parts > 1).then_some(part),
@@ -211,9 +216,17 @@ fn camera(
             if edge.mode == WorldAttachmentMode::Spatial {
                 enter(worlds, child.world)?;
                 spatial.push((child.id, affine, next_path));
-            } else if let (Some(extent), Some(output)) = (edge.surface_extent, edge.output)
-                && let Some((front, distance)) = camera.placement(&affine, extent)
+            } else if let (Some(geometry), Some(output)) =
+                (edge.surface_geometry.as_ref(), edge.output)
+                && let Some((front, distance)) = camera.placement(&affine, &**geometry)
             {
+                geometry
+                    .validate_offsets(crate::services::gui_input::query::surface_offset_range(
+                        host,
+                        edge,
+                        Some(child),
+                    ))
+                    .map_err(|_| GuiInputError::Unavailable)?;
                 panels.push((
                     !front,
                     distance,

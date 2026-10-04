@@ -10,7 +10,7 @@ use std::{collections::BTreeMap, path::Path};
 use ipp_core::{
     Batch, CanvasState, Command, ComponentValue, EntityId, EntityPlacementRef, EntityRef,
     HostRuntime, OutputRef, WorldAttachment, WorldCreateOptions, WorldId,
-    components::{CanvasBitmap, CanvasDrawing, CanvasStyle, CanvasText, Surface, Transform},
+    components::{CanvasBitmap, CanvasDrawing, CanvasStyle, CanvasText, FlatSurface, Transform},
     services::asset_management::{AssetSource, AssetTypeId, STREAM_CAPACITY},
 };
 use ipp_render_gl::{RenderDevice, RenderService};
@@ -197,7 +197,7 @@ pub(crate) fn run<D: RenderDevice>(
         )?,
     ];
 
-    let surface = Surface {
+    let surface = FlatSurface {
         width: EXTENT[0],
         height: EXTENT[1],
         ..Default::default()
@@ -208,7 +208,7 @@ pub(crate) fn run<D: RenderDevice>(
         None,
         vec![
             ComponentValue::Transform(Transform::default()),
-            ComponentValue::Surface(surface),
+            ComponentValue::FlatSurface(surface),
             ComponentValue::WorldAttachment(WorldAttachment::surface(canvas)),
         ],
     )?;

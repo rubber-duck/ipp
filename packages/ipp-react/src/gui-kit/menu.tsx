@@ -49,6 +49,8 @@ export interface MenuItem {
 }
 
 export interface MenuProps {
+  /** Nonnegative layer offset applied once at this component root; zero inherits. */
+  readonly layer?: number;
   /** Symbolic id of the list; rows extend it with their keys. */
   readonly id: string;
   readonly items: readonly MenuItem[];
@@ -89,7 +91,14 @@ function geometry(kit: GuiKitScope, items: readonly MenuItem[]) {
   };
 }
 
-export function Menu({ id, items, overlay, onSelect, layout }: MenuProps) {
+export function Menu({
+  id,
+  layer = 0,
+  items,
+  overlay,
+  onSelect,
+  layout,
+}: MenuProps) {
   const kit = useGuiKit();
   const g = geometry(kit, items);
   // Separators span the rows' width between their half-inset margins.
@@ -103,6 +112,7 @@ export function Menu({ id, items, overlay, onSelect, layout }: MenuProps) {
   };
   return (
     <Entity id={id}>
+      <Style layer={layer} />
       <Layout
         kind={LAYOUT_COLUMN}
         width={g.width}

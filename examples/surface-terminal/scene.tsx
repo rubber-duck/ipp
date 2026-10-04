@@ -5,7 +5,7 @@ import {
   CanvasWorld,
   Children,
   Entity,
-  Surface,
+  FlatSurface,
   SurfaceCache,
   Transform,
   type CanvasWorldHandle,
@@ -162,7 +162,7 @@ export function Terminal({
     <>
       <Entity id={id}>
         <Transform x={x} z={z} ry={angle} />
-        <Surface width={3.8} height={2.4} />
+        <FlatSurface width={3.8} height={2.4} />
         {cache ? <SurfaceCache {...cache} /> : null}
       </Entity>
       <CanvasWorld

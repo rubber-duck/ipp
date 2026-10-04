@@ -13,7 +13,7 @@
  */
 import { createContext, useContext, type ReactNode } from "react";
 import { Children, Entity } from "../components.js";
-import { Font, Layout } from "../gui/components.js";
+import { Style, Font, Layout } from "../gui/components.js";
 import { Skin } from "../gui/theme.js";
 import { useGuiKit } from "./kit.js";
 import { LAYOUT_COLUMN, Row, type GuiKitLayout } from "./layout.js";
@@ -23,6 +23,8 @@ import { TextLine } from "./text.js";
 const PanelContext = createContext({ minimized: false });
 
 export interface PanelProps {
+  /** Nonnegative layer offset applied once at this component root; zero inherits. */
+  readonly layer?: number;
   readonly id: string;
   /** Draw the frame unlit and only as tall as its header. */
   readonly minimized?: boolean;
@@ -34,12 +36,19 @@ export interface PanelProps {
  * The container frame. Its parts are laid out in a column inside its line,
  * so separators meet the frame without covering it.
  */
-export function Panel({ id, minimized = false, layout, children }: PanelProps) {
+export function Panel({
+  id,
+  layer = 0,
+  minimized = false,
+  layout,
+  children,
+}: PanelProps) {
   const kit = useGuiKit();
   const t = kit.tokens;
   const line = kit.unit(t.lineWidth);
   return (
     <Entity id={id}>
+      <Style layer={layer} />
       <Layout
         kind={LAYOUT_COLUMN}
         padding_left={line}
@@ -59,6 +68,8 @@ export function Panel({ id, minimized = false, layout, children }: PanelProps) {
 }
 
 export interface PanelHeaderProps {
+  /** Nonnegative layer offset applied once at this component root; zero inherits. */
+  readonly layer?: number;
   readonly id: string;
   readonly title: string;
   /** Docked buttons at the header's end, such as `WindowControls`. */
@@ -70,34 +81,48 @@ export interface PanelHeaderProps {
  * in the text colour while the panel is minimised, then its docked buttons,
  * and the division below it unless minimised.
  */
-export function PanelHeader({ id, title, children }: PanelHeaderProps) {
+export function PanelHeader({
+  id,
+  layer = 0,
+  title,
+  children,
+}: PanelHeaderProps) {
   const kit = useGuiKit();
   const t = kit.tokens;
   const { minimized } = useContext(PanelContext);
   return (
-    <>
-      <Row
-        id={id}
-        height={t.controlHeight}
-        layout={{
-          padding_left: kit.unit(t.inset),
-          padding_right: kit.unit((t.controlHeight - t.dockedHeight) / 2),
-        }}
-      >
-        <TextLine
-          id={`${id}/title`}
-          text={title}
-          tone={minimized ? "text" : "accent"}
-          layout={{ flex: 1 }}
-        />
-        {children}
-      </Row>
-      {!minimized && <Separator id={`${id}/separator`} />}
-    </>
+    <Entity id={id}>
+      <Style layer={layer} />
+      <Layout
+        kind={LAYOUT_COLUMN}
+        height={kit.unit(t.controlHeight + (minimized ? 0 : t.lineWidth))}
+      />
+      <Children>
+        <Row
+          id={`${id}/row`}
+          height={t.controlHeight}
+          layout={{
+            padding_left: kit.unit(t.inset),
+            padding_right: kit.unit((t.controlHeight - t.dockedHeight) / 2),
+          }}
+        >
+          <TextLine
+            id={`${id}/title`}
+            text={title}
+            tone={minimized ? "text" : "accent"}
+            layout={{ flex: 1 }}
+          />
+          {children}
+        </Row>
+        {!minimized && <Separator id={`${id}/separator`} />}
+      </Children>
+    </Entity>
   );
 }
 
 export interface PanelFooterProps {
+  /** Nonnegative layer offset applied once at this component root; zero inherits. */
+  readonly layer?: number;
   readonly id: string;
   /** The footer's row content, such as a count and secondary buttons. */
   readonly children?: ReactNode;
@@ -108,22 +133,29 @@ export interface PanelFooterProps {
  * with the content inset at either end. Give the body before it `flex: 1` to
  * hold it at the bottom of a taller panel.
  */
-export function PanelFooter({ id, children }: PanelFooterProps) {
+export function PanelFooter({ id, layer = 0, children }: PanelFooterProps) {
   const kit = useGuiKit();
   const t = kit.tokens;
   return (
-    <>
-      <Separator id={`${id}/separator`} />
-      <Row
-        id={id}
-        height={t.smallHeight + t.inset}
-        layout={{
-          padding_left: kit.unit(t.inset),
-          padding_right: kit.unit(t.inset),
-        }}
-      >
-        {children}
-      </Row>
-    </>
+    <Entity id={id}>
+      <Style layer={layer} />
+      <Layout
+        kind={LAYOUT_COLUMN}
+        height={kit.unit(t.smallHeight + t.inset + t.lineWidth)}
+      />
+      <Children>
+        <Separator id={`${id}/separator`} />
+        <Row
+          id={`${id}/row`}
+          height={t.smallHeight + t.inset}
+          layout={{
+            padding_left: kit.unit(t.inset),
+            padding_right: kit.unit(t.inset),
+          }}
+        >
+          {children}
+        </Row>
+      </Children>
+    </Entity>
   );
 }

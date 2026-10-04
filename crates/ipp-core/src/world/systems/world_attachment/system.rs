@@ -187,14 +187,14 @@ impl System for WorldAttachmentSystem {
         value.validate()?;
         context.topology.preflight_token()?;
         if value.mode != 0
-            && context
-                .staged
-                .input_value(
-                    &context.world_data.components,
-                    entity,
-                    ComponentValue::SURFACE,
-                )
-                .is_none()
+            && !crate::systems::surface::SURFACE_PROVIDERS
+                .iter()
+                .any(|&component| {
+                    context
+                        .staged
+                        .input_value(&context.world_data.components, entity, component)
+                        .is_some()
+                })
         {
             return Err(ErrorReason::MissingComponent);
         }

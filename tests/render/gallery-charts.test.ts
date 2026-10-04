@@ -43,6 +43,7 @@ test("unified charts compose one camera scene with free camera angles, two secon
               "charts-focus-straight",
               "charts-focus-grid-bars",
               "charts-free-angle",
+              "charts-inward-oblique",
             ].includes(label)
           )
             await g.page.screenshot({
@@ -251,6 +252,14 @@ test("unified charts compose one camera scene with free camera angles, two secon
         await reviewCapture(`review-ring-selected-${id}`);
       }
       await driver.action("clearSelection");
+      await focusChart(driver, "bars");
+      await driver.action("navigate", { kind: "zoom", amount: 0.3 });
+      await driver.action("navigate", {
+        kind: "rotate",
+        yaw: 0.4,
+        pitch: 0.16,
+      });
+      await reviewCapture("review-ring-inward-oblique");
       await focusChart(driver, "overview");
       await driver.action("navigate", {
         kind: "rotate",

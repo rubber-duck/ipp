@@ -9,7 +9,7 @@
  * Its width hugs its label.
  */
 import { Children, Entity } from "../components.js";
-import { Font, Layout } from "../gui/components.js";
+import { Style, Font, Layout } from "../gui/components.js";
 import { Skin } from "../gui/theme.js";
 import type { GuiKitIcon } from "./icons.js";
 import { useGuiKit, type GuiKitTone } from "./kit.js";
@@ -29,6 +29,8 @@ export type StatusBadgeStatus =
   | "error";
 
 export interface StatusBadgeProps {
+  /** Nonnegative layer offset applied once at this component root; zero inherits. */
+  readonly layer?: number;
   readonly id: string;
   readonly status: StatusBadgeStatus;
   /** The state's word, such as Online. */
@@ -64,7 +66,13 @@ const STATUSES: Readonly<
   error: { tone: "error", frame: "badgeError", marker: { icon: "error" } },
 };
 
-export function StatusBadge({ id, status, label, layout }: StatusBadgeProps) {
+export function StatusBadge({
+  id,
+  layer = 0,
+  status,
+  label,
+  layout,
+}: StatusBadgeProps) {
   const kit = useGuiKit();
   const t = kit.tokens;
   const { tone, frame, marker } = STATUSES[status];
@@ -77,6 +85,7 @@ export function StatusBadge({ id, status, label, layout }: StatusBadgeProps) {
     textWidth(label, kit.typeSize("small"));
   return (
     <Entity id={id}>
+      <Style layer={layer} />
       <Layout
         kind={LAYOUT_ROW}
         width={width}

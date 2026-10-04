@@ -26,7 +26,7 @@ pub use crate::systems::render::{
     BaseColorTexture, CustomMaterial, Light, MeshInstance, PbrMaterial, UnlitMaterial, UnlitTexture,
 };
 
-pub use crate::systems::surface::{Surface, SurfaceCache};
+pub use crate::systems::surface::{CylinderSurface, FlatSurface, SphereSurface, SurfaceCache};
 
 pub use crate::systems::canvas::{
     CanvasBitmap, CanvasBox, CanvasDrawing, CanvasGlyphRun, CanvasPaint, CanvasStyle, CanvasText,

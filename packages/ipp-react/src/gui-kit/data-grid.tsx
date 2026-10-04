@@ -29,7 +29,7 @@
 import { useCallback, type ReactNode } from "react";
 import { Children, Entity } from "../components.js";
 import { Button, TextInput } from "../gui/controls.js";
-import { Behavior, Font, Layout } from "../gui/components.js";
+import { Style, Behavior, Font, Layout } from "../gui/components.js";
 import { ScrollView, VirtualList } from "../gui/scroll.js";
 import { Skin } from "../gui/theme.js";
 import type { GuiContextMenuEvent } from "../gui/callbacks.js";
@@ -76,6 +76,8 @@ export interface DataGridSort {
 }
 
 interface DataGridCommonProps {
+  /** Nonnegative layer offset applied once at this component root; zero inherits. */
+  readonly layer?: number;
   readonly id: string;
   readonly columns: readonly DataGridColumn[];
   readonly sort?: DataGridSort;
@@ -139,7 +141,14 @@ function geometry(kit: GuiKitScope, scrolling: boolean) {
 }
 
 export function DataGrid(props: DataGridProps) {
-  const { id, columns, footer, emptyText = "No records", layout } = props;
+  const {
+    id,
+    layer = 0,
+    columns,
+    footer,
+    emptyText = "No records",
+    layout,
+  } = props;
   const kit = useGuiKit();
   const t = kit.tokens;
   const virtual = "rowCount" in props;
@@ -158,6 +167,7 @@ export function DataGrid(props: DataGridProps) {
   const rowProps = { grid: props, kit, g };
   return (
     <Entity id={id}>
+      <Style layer={layer} />
       <Layout
         kind={LAYOUT_COLUMN}
         {...(body === undefined || layout?.flex

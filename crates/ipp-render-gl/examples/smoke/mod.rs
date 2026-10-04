@@ -5,6 +5,8 @@ pub(crate) mod egl;
 pub(crate) mod frame_stats;
 #[allow(dead_code)]
 pub(crate) mod selection;
+#[allow(dead_code)]
+pub(crate) mod task_scheduler;
 pub(crate) mod world;
 
 #[allow(dead_code)]

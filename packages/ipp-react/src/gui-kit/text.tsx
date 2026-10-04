@@ -28,6 +28,8 @@ export function glyphSizeForWidth(width: number): number {
 }
 
 export interface TextLineProps {
+  /** Nonnegative layer offset applied once at this component root; zero inherits. */
+  readonly layer?: number;
   readonly id: string;
   readonly text: string;
   /** Palette role: accent for titles and labels, text for content, neutral for secondary. */
@@ -39,6 +41,7 @@ export interface TextLineProps {
 /** One line of text in a tone of the palette at a size of the type scale. */
 export function TextLine({
   id,
+  layer = 0,
   text,
   tone = "text",
   size = "body",
@@ -49,13 +52,21 @@ export function TextLine({
   return (
     <Entity id={id}>
       <Layout kind={LAYOUT_LEAF} align_y={0} {...layout} />
-      <Style red={color[0]} green={color[1]} blue={color[2]} alpha={color[3]} />
+      <Style
+        layer={layer}
+        red={color[0]}
+        green={color[1]}
+        blue={color[2]}
+        alpha={color[3]}
+      />
       <Text text={text} source={kit.font} font_size={kit.typeSize(size)} />
     </Entity>
   );
 }
 
 export interface IconProps {
+  /** Nonnegative layer offset applied once at this component root; zero inherits. */
+  readonly layer?: number;
   readonly id: string;
   readonly icon: GuiKitIcon;
   readonly tone?: GuiKitTone;
@@ -65,13 +76,26 @@ export interface IconProps {
 }
 
 /** One icon glyph of the shared font in a tone of the palette. */
-export function Icon({ id, icon, tone = "accent", size, layout }: IconProps) {
+export function Icon({
+  id,
+  layer = 0,
+  icon,
+  tone = "accent",
+  size,
+  layout,
+}: IconProps) {
   const kit = useGuiKit();
   const color = kit.color(tone);
   return (
     <Entity id={id}>
       <Layout kind={LAYOUT_LEAF} align_y={0} {...layout} />
-      <Style red={color[0]} green={color[1]} blue={color[2]} alpha={color[3]} />
+      <Style
+        layer={layer}
+        red={color[0]}
+        green={color[1]}
+        blue={color[2]}
+        alpha={color[3]}
+      />
       <Text
         text={GUI_KIT_ICONS[icon]}
         source={kit.font}
@@ -97,6 +121,8 @@ export function lineWidth(text: string, size: number): number {
 export const CHECK_MARK = 16;
 
 export interface CheckMarkProps {
+  /** Nonnegative layer offset applied once at this component root; zero inherits. */
+  readonly layer?: number;
   readonly id: string;
   /** Lit on the page, or the surface colour on a lit fill. */
   readonly tone?: "accent" | "surface";
@@ -111,6 +137,7 @@ export interface CheckMarkProps {
  */
 export function CheckMark({
   id,
+  layer = 0,
   tone = "accent",
   size = CHECK_MARK,
   layout,
@@ -118,6 +145,7 @@ export function CheckMark({
   const kit = useGuiKit();
   return (
     <Entity id={id}>
+      <Style layer={layer} />
       <Layout
         kind={LAYOUT_LEAF}
         width={kit.unit(size)}

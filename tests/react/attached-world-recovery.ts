@@ -94,7 +94,7 @@ async function fixture(host: HostClientBase<Client>) {
       ]),
     )
   ).aliases[0]!.id;
-  const surface = client.components.Surface!;
+  const surface = client.components.FlatSurface!;
   await requireSuccess(
     client.batch([
       {

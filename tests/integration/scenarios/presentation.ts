@@ -702,7 +702,7 @@ export async function retainedResize(
       return [
         createEntity(alias, name),
         insertComponent(parent, "CanvasStyle", entity, { y }),
-        insertComponent(parent, "Surface", entity, {
+        insertComponent(parent, "FlatSurface", entity, {
           width: 1,
           height: height / 96,
         }),

@@ -76,7 +76,7 @@ import {
   type TreeViewHandle,
   type TreeViewProps,
   Floating,
-  GUI_KIT_LAYERS,
+  GUI_KIT_OVERLAY_BANDS,
   Menu,
   useOverlayOpen,
   type MenuItem,
@@ -1499,15 +1499,18 @@ test("Expander declares its content after its header only while expanded", async
       summary: "3 options",
     }),
   );
-  assert.equal(world.fields("advanced", "GuiButton").get("label"), "");
+  assert.equal(world.fields("advanced/header", "GuiButton").get("label"), "");
   assert.equal(
-    world.fields("advanced", "GuiBehavior").get("semantic_label"),
+    world.fields("advanced/header", "GuiBehavior").get("semantic_label"),
     "Advanced settings",
   );
-  assert.equal(world.fields("advanced", "GuiBehavior").get("enabled"), true);
-  assert.equal(world.skin("advanced"), "expanderHeader");
-  assert.equal(world.fields("advanced", "GuiLayout").get("height"), 40);
-  assert.deepEqual(world.children("advanced"), [
+  assert.equal(
+    world.fields("advanced/header", "GuiBehavior").get("enabled"),
+    true,
+  );
+  assert.equal(world.skin("advanced/header"), "expanderHeader");
+  assert.equal(world.fields("advanced/header", "GuiLayout").get("height"), 40);
+  assert.deepEqual(world.children("advanced/header"), [
     "advanced/strut",
     "advanced/chevron",
     "advanced/label",
@@ -1525,7 +1528,7 @@ test("Expander declares its content after its header only while expanded", async
   await draw(
     expander({ id: "advanced", label: "Advanced settings", expanded: true }),
   );
-  assert.deepEqual(world.children("panel"), ["advanced", "gain"]);
+  assert.deepEqual(world.children("advanced"), ["advanced/header", "gain"]);
   assert.equal(
     world.fields("advanced/chevron", "CanvasText").get("text"),
     GUI_KIT_ICONS.expanded,
@@ -1541,14 +1544,17 @@ test("Expander declares its content after its header only while expanded", async
     }),
   );
   assert.equal(world.entities.has("gain"), false);
-  assert.equal(world.fields("advanced", "GuiBehavior").get("enabled"), false);
+  assert.equal(
+    world.fields("advanced/header", "GuiBehavior").get("enabled"),
+    false,
+  );
   assert.deepEqual(world.tone("advanced/label"), TOKENS.neutral);
 
   // Uncontrolled: the initial expansion.
   const { world: open } = await render(
     expander({ id: "other", label: "Other", defaultExpanded: true }),
   );
-  assert.deepEqual(open.children("panel"), ["other", "gain"]);
+  assert.deepEqual(open.children("other"), ["other/header", "gain"]);
 });
 
 /** Let effects, refs and animation controls reach their callbacks. */
@@ -1612,15 +1618,13 @@ test("Panel parts: a header strip with window controls, a labelled division and 
   assert.equal(world.skin("monitor"), "container");
   assert.deepEqual(world.children("monitor"), [
     "monitor/header",
-    "monitor/header/separator",
     "monitor/events",
-    "monitor/footer/separator",
     "monitor/footer",
   ]);
 
   // The header is a control-height strip: the title at the inset, the docked
   // buttons as far from its end as from its edges, then a division.
-  const header = world.fields("monitor/header", "GuiLayout");
+  const header = world.fields("monitor/header/row", "GuiLayout");
   assert.equal(header.get("height"), 80);
   assert.equal(header.get("padding_left"), 32);
   assert.equal(header.get("padding_right"), 16);
@@ -1675,7 +1679,7 @@ test("Panel parts: a header strip with window controls, a labelled division and 
   assert.deepEqual(world.tone("monitor/events/label"), TOKENS.accent);
 
   // The footer: small buttons in half-inset margins at the content inset.
-  const footer = world.fields("monitor/footer", "GuiLayout");
+  const footer = world.fields("monitor/footer/row", "GuiLayout");
   assert.equal(footer.get("height"), (32 + 16) * 2);
   assert.equal(footer.get("padding_left"), 32);
   assert.equal(footer.get("padding_right"), 32);
@@ -2148,39 +2152,15 @@ function clipKeys(world: KitWorld) {
   );
 }
 
-test("the kit's layer planes have one role each, a dialog's anchored overlays below the toasts", () => {
-  // The runtime's plane for `layer` under a parent on plane `parent`.
-  const resolve = (parent: number, layer: number) =>
-    layer === 0 ? parent : Math.max(layer, parent + 1);
-  const { anchored, dialog, toast } = GUI_KIT_LAYERS;
-  const content = 0;
-  const anchoredInDialog = resolve(dialog, anchored);
-
-  // Content, anchored overlays, dialogs, a dialog's anchored overlays and
-  // toasts each take a plane of their own, in that order.
-  const planes = [
-    content,
-    resolve(content, anchored),
-    resolve(content, dialog),
-    anchoredInDialog,
-    resolve(content, toast),
-  ];
-  assert.ok(
-    planes.every((plane, index) => index === 0 || plane > planes[index - 1]!),
-  );
-  assert.ok(Math.max(anchored, dialog + 1) < toast);
-
-  // A menu inside a popover inside a dialog reaches the toast plane, where
-  // tree order decides.
-  assert.equal(resolve(anchoredInDialog, anchored), toast);
-});
-
 test("ToastStack is a top-level manual overlay of toasts in stable order", async () => {
   const { world, draw } = await render(stack({ limit: 2 }));
   // On the toast layer, above dialogs.
   const style = world.fields("toasts", "CanvasStyle");
-  assert.equal(style.get("layer"), GUI_KIT_LAYERS.toast);
-  assert.ok(GUI_KIT_LAYERS.toast > GUI_KIT_LAYERS.dialog);
+  assert.equal(style.get("layer"), 0);
+  assert.equal(
+    world.fields("toasts", "GuiOverlay").get("band"),
+    GUI_KIT_OVERLAY_BANDS.notification,
+  );
   assert.equal(style.get("x"), -16);
   assert.equal(style.get("y"), -16);
   const overlay = world.fields("toasts", "GuiOverlay");
@@ -3466,10 +3446,8 @@ test("Menu: command rows that take no focus in a group, on a floating surface", 
   assert.equal(overlay.get("side"), 0);
   assert.equal(overlay.get("align"), 0);
   assert.equal(overlay.get("mode"), 1);
-  assert.equal(
-    world.fields("trigger/overlay", "CanvasStyle").get("layer"),
-    GUI_KIT_LAYERS.anchored,
-  );
+  assert.equal(overlay.get("band"), GUI_KIT_OVERLAY_BANDS.popup);
+  assert.equal(world.fields("trigger/overlay", "CanvasStyle").get("layer"), 0);
   assert.equal(
     world.fields("trigger/overlay", "GuiBehavior").get("visible"),
     true,
@@ -3748,7 +3726,6 @@ test("Popover: a trigger with a caret opens a titled light surface of the applic
   assert.equal(world.skin("options/popover"), "floating");
   assert.deepEqual(world.children("options/popover"), [
     "options/header",
-    "options/header/separator",
     "options/content",
   ]);
   assert.deepEqual(world.tone("options/header/title"), TOKENS.accent);
@@ -3858,16 +3835,13 @@ test("ConfirmationDialog: a modal centred dialog whose answer is reported once p
     [overlay.get("side"), overlay.get("align"), overlay.get("mode")],
     [4, 1, 2],
   );
-  assert.equal(
-    world.fields("confirm", "CanvasStyle").get("layer"),
-    GUI_KIT_LAYERS.dialog,
-  );
+  assert.equal(world.fields("confirm", "CanvasStyle").get("layer"), 0);
+  assert.equal(overlay.get("band"), GUI_KIT_OVERLAY_BANDS.dialog);
   assert.equal(world.fields("confirm", "GuiLayout").get("width"), 368);
   assert.equal(world.fields("confirm", "GuiFont").get("font_size"), 16);
   assert.equal(world.skin("confirm"), "floating");
   assert.deepEqual(world.children("confirm"), [
     "confirm/header",
-    "confirm/header/separator",
     "confirm/body",
   ]);
   // Close takes no focus, so Cancel, before the action, takes it first.

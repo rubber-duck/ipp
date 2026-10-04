@@ -1,5 +1,9 @@
 import type { RenderStatisticsSnapshot } from "@ipp/client/diagnostics";
 import { renderDiagnostics } from "../../packages/ipp-client/src/diagnostics.js";
+import {
+  BULK_CHUNK_BYTES,
+  BULK_PIPELINE_CHUNKS,
+} from "../../packages/ipp-client/src/bulk-reads.js";
 import type {
   Client,
   ComponentDescriptor,
@@ -39,16 +43,15 @@ export interface ViewerCapture extends ViewerObservation {
 }
 
 /**
- * Host draws a capture may take to arrive after the draw it returns. The Host
- * answers chunk reads between frames; a worker that never idles, as on a
- * software renderer, answers one window of reads per frame. The client reads
- * windows of 16 chunks of 64 KiB (`host-presentation.ts`). Two draws per window
- * and a few for completion allow a page thread slowed by machine load while
- * the worker keeps drawing. Reading one chunk per Host frame took 150-230
- * draws for a 1714x1259 capture of 132 chunks.
+ * The common bulk reader pipelines chunk requests but acknowledges each consumed
+ * chunk in order. Allow two draws for each ACK/read-window round trip and six
+ * for capture completion, release and the following frame. Exact source/lifetime
+ * checks below still establish which admitted content these pixels contain.
  */
 function maxCompletionFrames(bytes: number): number {
-  return 2 * Math.ceil(bytes / (16 * 65_536)) + 6;
+  const chunks = Math.ceil(bytes / BULK_CHUNK_BYTES);
+  const readWindows = Math.ceil(chunks / BULK_PIPELINE_CHUNKS);
+  return 2 * (chunks + readWindows) + 6;
 }
 
 export async function observeViewer(

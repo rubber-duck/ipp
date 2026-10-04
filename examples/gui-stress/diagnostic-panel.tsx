@@ -3,7 +3,7 @@ import {
   CanvasWorld,
   Children,
   Entity,
-  Surface,
+  FlatSurface,
   type CanvasWorldHandle,
 } from "@ipp/react";
 import { Box, Layout, Style } from "@ipp/react/gui";
@@ -26,7 +26,7 @@ export function GuiDiagnosticPanel({
   return (
     <>
       <Entity id="diagnostic-surface">
-        <Surface width={4} height={2.5} />
+        <FlatSurface width={4} height={2.5} />
       </Entity>
       <CanvasWorld
         presentation={{ anchor: "diagnostic-surface" }}

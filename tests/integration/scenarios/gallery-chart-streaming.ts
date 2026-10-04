@@ -5,6 +5,7 @@ import {
   assertChartImageChanged,
   chartCheck,
   chartTransform,
+  chartSurfaceLocalPoint,
   placePoint,
   projectChartPoint,
   focusChart,
@@ -244,11 +245,14 @@ function streamingLinePointer(state: StreamingChartsState, aspect: number) {
   return {
     ...projectChartPoint(
       state,
-      placePoint(chartTransform(state, chart), [
-        (x - width / 2) / chart.surface.unitsPerMetre,
-        (height / 2 - y) / chart.surface.unitsPerMetre,
-        0,
-      ]),
+      placePoint(
+        chartTransform(state, chart),
+        chartSurfaceLocalPoint(
+          state,
+          (x - width / 2) / chart.surface.unitsPerMetre,
+          (height / 2 - y) / chart.surface.unitsPerMetre,
+        ),
+      ),
       aspect,
     ),
     rowId: row.id,

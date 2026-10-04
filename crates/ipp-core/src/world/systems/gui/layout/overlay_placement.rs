@@ -7,7 +7,7 @@
 //! overlay, so no pass repeats.
 //!
 //! [`GuiOverlayInputs`] reads what one overlay's placement depends on: whether
-//! it is open and raised, the box it is placed against in canvas coordinates,
+//! it is open, the box it is placed against in canvas coordinates,
 //! and the canvas transform of its parent, composed from the ancestors' layout
 //! origins and `CanvasStyle` the same way the Canvas walk composes them. The
 //! layout keeps these inputs, and on a frame with no other layout work
@@ -92,9 +92,7 @@ pub(in crate::world::systems) struct GuiOverlayFrame {
 pub(in crate::world::systems) struct GuiOverlayInputs {
     /// The overlay's own `GuiBehavior.visible`, its open state.
     pub open: bool,
-    /// Whether its `CanvasStyle.layer` raises it above its parent.
-    pub raised: bool,
-    /// Placement frame, read only while the overlay is open and raised.
+    /// Placement frame, read only while the overlay is open.
     pub frame: Option<GuiOverlayFrame>,
 }
 
@@ -114,8 +112,7 @@ impl GuiOverlayInputs {
             .gui_behavior(index)
             .is_none_or(|behavior| behavior.visible);
         let style = world.components.canvas_style(index).copied();
-        let raised = style.is_some_and(|style| style.layer > 0);
-        let frame = (open && raised).then(|| {
+        let frame = open.then(|| {
             let style = style.unwrap_or_default();
             let (transform, anchor) = match parent {
                 None => (
@@ -138,7 +135,6 @@ impl GuiOverlayInputs {
         });
         Self {
             open,
-            raised,
             frame,
         }
     }

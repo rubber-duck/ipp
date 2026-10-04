@@ -440,38 +440,124 @@ export function attachCanvasGuiInput(
   };
 }
 
+/** Snapshot the configuration retained by a physical context and DOM listeners. */
+function inputConfiguration(
+  options: CanvasGuiInputOptions,
+): CanvasGuiInputOptions {
+  return {
+    ...options,
+    ...(options.blockers
+      ? {
+          blockers: options.blockers.map((blocker) => ({
+            ...blocker,
+            world: { ...blocker.world },
+          })),
+        }
+      : {}),
+  };
+}
+
+function sameInputConfiguration(
+  left: CanvasGuiInputOptions,
+  right: CanvasGuiInputOptions,
+): boolean {
+  const identities = (options: CanvasGuiInputOptions) =>
+    (options.blockers ?? [])
+      .map(
+        ({ world, entity, incarnation }) =>
+          `${world.id}:${world.incarnation}:${entity}:${incarnation}`,
+      )
+      .sort();
+  const a = identities(left);
+  const b = identities(right);
+  return (
+    Object.is(
+      left.wheelStep ?? DEFAULT_GUI_WHEEL_STEP,
+      right.wheelStep ?? DEFAULT_GUI_WHEEL_STEP,
+    ) &&
+    left.unhandledInputGate === right.unhandledInputGate &&
+    a.length === b.length &&
+    a.every((value, index) => value === b[index])
+  );
+}
+
 /** A physical view lifetime, independent of authoring sessions. */
 export class CanvasGuiInput {
   private generation = 0;
   private context: GuiPhysicalContext | undefined;
+  private readonly retiring = new Set<GuiPhysicalContext>();
   private detach: (() => void) | undefined;
   private stopped = false;
+  private view: PresentationView | null = null;
+  private pending: Promise<void> = Promise.resolve();
+  private configuration: CanvasGuiInputOptions;
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
     private readonly input: HostPhysicalInput,
-    private readonly options: CanvasGuiInputOptions,
-  ) {}
+    private options: CanvasGuiInputOptions,
+  ) {
+    this.configuration = inputConfiguration(options);
+  }
 
-  async select(view: PresentationView | null): Promise<void> {
+  /** Callback updates retain capture; physical configuration changes release it. */
+  update(options: CanvasGuiInputOptions): Promise<void> {
+    if (this.stopped) return this.pending;
+    this.options = options;
+    const configuration = inputConfiguration(options);
+    if (sameInputConfiguration(this.configuration, configuration))
+      return this.pending;
+    this.configuration = configuration;
+    return this.select(this.view);
+  }
+
+  select(view: PresentationView | null): Promise<void> {
+    this.view = this.stopped ? null : view;
     const generation = ++this.generation;
-    const previous = this.context;
+    const configuration = this.configuration;
+    const selected = this.view;
+    if (this.context) this.retiring.add(this.context);
     this.context = undefined;
     this.detach?.();
     this.detach = undefined;
-    const release = previous?.close();
-    if (release) void release.catch(this.options.onError);
-    if (!view || this.stopped) {
-      await release;
-      return;
-    }
-    const context = await this.input.open(view, this.options);
-    if (generation !== this.generation || this.stopped) {
+    // Serialize acquisitions and releases: a late open must close before a new
+    // one can own the same presented root. Detach native capture immediately.
+    const work = this.pending.then(async () => {
+      await this.releaseRetiring();
+      if (!selected || generation !== this.generation || this.stopped) return;
+      const context = await this.input.open(selected, configuration);
+      if (generation !== this.generation || this.stopped) {
+        this.retiring.add(context);
+        await this.releaseRetiring();
+        return;
+      }
+      this.context = context;
+      try {
+        this.detach = attachCanvasGuiInput(this.canvas, context, {
+          ...configuration,
+          onError: (error) => this.options.onError(error),
+          onUnhandled: (input, outcome) =>
+            this.options.onUnhandled?.(input, outcome),
+        });
+      } catch (error) {
+        this.context = undefined;
+        this.retiring.add(context);
+        await this.releaseRetiring();
+        throw error;
+      }
+    });
+    // Keep later cleanup runnable after an earlier failed acquisition.
+    this.pending = work.catch(() => {});
+    return work;
+  }
+
+  private async releaseRetiring(): Promise<void> {
+    for (const context of this.retiring) {
       await context.close();
-      return;
+      // A request not sent may be retried by the next select/close. Retain its
+      // ownership until release succeeds so acquisition cannot overtake it.
+      this.retiring.delete(context);
     }
-    this.context = context;
-    this.detach = attachCanvasGuiInput(this.canvas, context, this.options);
   }
 
   close(): Promise<void> {

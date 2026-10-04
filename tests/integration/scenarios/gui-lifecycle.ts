@@ -1815,7 +1815,7 @@ export async function presentGui(
     const rect = rects[index]!;
     commands.push(
       createEntity(index + 2, `gui-presentation-anchor-${index}`),
-      insertComponent(parent, "Surface", ref, {
+      insertComponent(parent, "FlatSurface", ref, {
         width: rect.width,
         height: rect.height,
       }),

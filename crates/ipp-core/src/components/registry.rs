@@ -28,7 +28,7 @@ ipp_schema_derive::component_registry! {
         ParticlePlayback = 22,
         ParticleSprite = 23,
         ParticleMesh = 24,
-        Surface = 25,
+        FlatSurface = 25,
         // 26 was GuiRoot; retired identities are never reused.
         SurfaceCache = 27,
         WorldAttachment = 28,
@@ -57,6 +57,8 @@ ipp_schema_derive::component_registry! {
         GuiGroup = 51,
         CanvasPaint = 52,
         GuiColor = 53,
+        CylinderSurface = 54,
+        SphereSurface = 55,
         BufferDataSourceBinding = 100,
         StreamingDataSourceBinding = 101,
         PlotFrame2d = 103,

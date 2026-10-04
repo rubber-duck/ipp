@@ -36,6 +36,8 @@ export { nativePresentationTransport } from "../../packages/ipp-client/src/nativ
 export { workerTransport } from "../../packages/ipp-client/src/worker.js";
 export { guiLayers } from "./gui-layers.js";
 export { guiOverlays } from "./gui-overlays.js";
+export { guiProjectedAdvanced } from "./gui-projected-advanced.js";
+export { guiProjectedSurfaces } from "./gui-projected-surfaces.js";
 
 export interface GuiPaintAssets {
   font: Uint8Array<ArrayBuffer>;

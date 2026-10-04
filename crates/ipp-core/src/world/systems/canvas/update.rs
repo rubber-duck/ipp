@@ -180,7 +180,7 @@ impl CanvasSystem {
         let assets = context.asset_resources();
         let inputs = self.walk_inputs(context, extent, density);
         let order = std::mem::take(&mut self.state.order);
-        // A closed or unraised overlay and its subtree have no paint, hits,
+        // A closed overlay and its subtree have no paint, hits,
         // controls or layer; a canvas without overlays walks its whole order.
         let shown = inputs.layout.as_ref().and_then(|view| {
             hidden_overlays(
@@ -263,6 +263,9 @@ impl CanvasSystem {
             ..Default::default()
         };
         self.state.walk = CanvasWalkState {
+            layer_keys: layers
+                .as_ref()
+                .map_or_else(Vec::new, |layers| layers.keys.clone()),
             positions,
             records,
             entry_order,
@@ -794,9 +797,9 @@ pub(super) fn attachment_slot(
     if attachment.mode == 0 {
         return None;
     }
-    let surface = world.components.surface(index)?;
+    let surface = crate::systems::surface::provider(&world.components, index)?;
     let units = f64::from(density);
-    let physical_extent = [f64::from(surface.width), f64::from(surface.height)];
+    let physical_extent = surface.physical_extent();
     let scale = [
         f64::from(placed.scale[0])
             * layout_size.map_or(units, |size| f64::from(size[0]) / physical_extent[0]),
@@ -805,7 +808,8 @@ pub(super) fn attachment_slot(
     ];
     Some(CanvasAttachmentSlot {
         anchor: entity,
-        surface_incarnation: incarnation(world, entity, ComponentValue::SURFACE)?,
+        surface_incarnation: incarnation(world, entity, surface.component())?,
+        surface_component: surface.component(),
         token: context
             .topology
             .tokens

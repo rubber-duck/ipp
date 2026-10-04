@@ -44,7 +44,7 @@ mod scenario {
     use ipp_core::systems::gui::presentation::GuiPaintPart;
     use ipp_core::{
         Batch, Command, ComponentValue, EntityId, EntityPlacementRef, EntityRef, FieldValue,
-        FieldWrite, HostRuntime, OutputKind, OutputRef, Surface, SurfaceCache, TEXTURE_TYPE,
+        FieldWrite, FlatSurface, HostRuntime, OutputKind, OutputRef, SurfaceCache, TEXTURE_TYPE,
         ViewQueryTarget, WorldAttachment, WorldId, WorldViewport,
     };
     use ipp_render_gl::{
@@ -132,6 +132,7 @@ mod scenario {
         renderer: &'a mut RenderService<GlesRenderDevice>,
         context: &'a smoke::egl::Context,
         host: HostRuntime,
+        tasks: Rc<smoke::task_scheduler::SmokeAssetTasks>,
         world: WorldId,
         root: OutputRef,
         camera: EntityId,
@@ -248,7 +249,7 @@ mod scenario {
         canvas: OutputRef,
         extent: [f32; 2],
     ) -> Result<EntityId> {
-        let surface = Surface {
+        let surface = FlatSurface {
             width: extent[0],
             height: extent[1],
             ..Default::default()
@@ -262,7 +263,7 @@ mod scenario {
                     z,
                     ..Default::default()
                 }),
-                ComponentValue::Surface(surface),
+                ComponentValue::FlatSurface(surface),
                 ComponentValue::WorldAttachment(WorldAttachment::surface(canvas)),
             ],
         )
@@ -337,6 +338,7 @@ mod scenario {
             evidence: &'a Path,
         ) -> Result<Self> {
             let mut host = HostRuntime::new();
+            let tasks = smoke::task_scheduler::SmokeAssetTasks::install(&mut host);
             renderer.install(&mut host)?;
             host.io_mut().register_stream("fixture://")?;
             let world = host.create_world(Default::default(), &smoke::selection::scene())?;
@@ -581,6 +583,7 @@ mod scenario {
                 renderer,
                 context,
                 host,
+                tasks,
                 world,
                 root,
                 camera,
@@ -771,7 +774,9 @@ mod scenario {
 
         /// One frame that may still skip draws while resources are re-uploaded.
         fn present(&mut self, dt: f64) -> Result<FrameStats> {
+            self.tasks.poll_ready();
             self.host.progress_assets();
+            self.tasks.poll_ready();
             for request in self.host.take_resource_requests() {
                 let bytes = self
                     .payloads
@@ -779,6 +784,7 @@ mod scenario {
                     .ok_or_else(|| format!("unexpected cache request {}", request.source))?;
                 self.host.complete_resource(request.id, Ok(bytes.clone()))?;
             }
+            self.tasks.poll_ready();
             let frame = self.host.frame(dt)?;
             if !frame.publication_errors.is_empty() {
                 return Err(format!("publication failures: {:?}", frame.publication_errors).into());
@@ -797,6 +803,7 @@ mod scenario {
                 .map(|(output, _, publication)| (output, publication));
             self.renderer.prepare(&mut self.host, selected)?;
             self.host.progress_assets();
+            self.tasks.poll_ready();
             Ok(self
                 .renderer
                 .draw_stats(&self.host, self.world, WIDTH, HEIGHT)?)

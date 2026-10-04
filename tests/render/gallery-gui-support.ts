@@ -1,11 +1,10 @@
 /**
  * Helpers the gallery GUI suites share: opening a settled dashboard, reading
- * its state, the oblique view and the exploded planes, and matching a
+ * its state and the exploded planes, and matching a
  * feature's plane by its projected depth in completed frames.
  */
 import type { Inspection } from "@ipp/client";
 import assert from "node:assert/strict";
-import { GUI_KIT_LAYERS } from "@ipp/react/gui-kit";
 import { openGallery } from "./gallery-driver.js";
 import {
   LAYERS,
@@ -96,6 +95,29 @@ export async function awaitStationIdle(g: Gallery, dismissToasts = true) {
 
 export type Gallery = Awaited<ReturnType<typeof openGallery>>;
 
+/** Lift the real scene cover and await the replacement physical input owner. */
+export async function liftInputShield(g: Gallery): Promise<void> {
+  const previous = await g.page
+    .locator('textarea[data-ipp-native-text="true"]')
+    .elementHandle();
+  assert.ok(previous, "the physical input context has no native bridge");
+  try {
+    await g.page.locator("#gui-shield-toggle").click();
+    await g.page.waitForFunction((old) => {
+      const current = document.querySelector(
+        'textarea[data-ipp-native-text="true"]',
+      );
+      return (
+        document.querySelector("#gui-shield")?.textContent === "lifted" &&
+        current !== old &&
+        current?.isConnected
+      );
+    }, previous);
+  } finally {
+    await previous.dispose();
+  }
+}
+
 export function decodeRegion(region: {
   width: number;
   height: number;
@@ -155,43 +177,6 @@ export async function brightness(
 
 export type BrightnessWindow = Awaited<ReturnType<typeof brightness>>;
 
-/**
- * Mean absolute brightness difference between `patch` moved by `shift`
- * pixels and the pixels of `window` beneath it, at the best alignment within
- * `slack` pixels either way, which absorbs rounding of projected positions.
- */
-export function patchDifference(
-  patch: BrightnessWindow,
-  window: BrightnessWindow,
-  shift: { readonly x: number; readonly y: number },
-  slack: number,
-) {
-  let best = Number.POSITIVE_INFINITY;
-  for (let dy = -slack; dy <= slack; dy++)
-    for (let dx = -slack; dx <= slack; dx++) {
-      const offsetX = patch.left + Math.round(shift.x) + dx - window.left;
-      const offsetY = patch.top + Math.round(shift.y) + dy - window.top;
-      let sum = 0;
-      let count = 0;
-      for (let row = 0; row < patch.height; row++) {
-        const y = row + offsetY;
-        if (y < 0 || y >= window.height) continue;
-        for (let column = 0; column < patch.width; column++) {
-          const x = column + offsetX;
-          if (x < 0 || x >= window.width) continue;
-          sum += Math.abs(
-            patch.values[row * patch.width + column]! -
-              window.values[y * window.width + x]!,
-          );
-          count += 1;
-        }
-      }
-      if (count >= (patch.width * patch.height) / 2)
-        best = Math.min(best, sum / count);
-    }
-  return best;
-}
-
 /** A feature of the panel for plane matching: a content point and its plane. */
 export interface PlaneFeature {
   readonly at: readonly [number, number];
@@ -209,24 +194,35 @@ export interface PlaneFeature {
  */
 export async function assertPlanes(
   g: Gallery,
-  flat: { readonly label: string; readonly frame: CaptureSize },
+  flat: {
+    readonly label: string;
+    readonly frame: CaptureSize;
+    readonly projection: unknown;
+  },
   exploded: { readonly label: string; readonly frame: CaptureSize },
   features: Readonly<Record<string, PlaneFeature>>,
 ) {
   // Every plane the kit uses, and the one above them.
-  const top = Math.max(...Object.values(GUI_KIT_LAYERS)) + 1;
+  const top =
+    Math.max(...Object.values(features).map(({ plane }) => plane)) + 1;
   const candidates = Array.from({ length: top + 1 }, (_, plane) => plane);
   const slack = 2;
   const shifts: Record<string, unknown> = {};
   for (const [name, { at, plane, radius = 18 }] of Object.entries(features)) {
-    const [base] = await projectContent(g, [at]);
+    const stencil = [at, [at[0] + 1, at[1]], [at[0], at[1] + 1]] as const;
+    const [base, flatX, flatY] = await g.call<readonly ProjectedPoint[]>(
+      "projectGalleryGuiContent",
+      stencil,
+      0,
+      flat.projection,
+    );
     const patch = await brightness(g, flat.label, flat.frame, base!, radius);
     assert.ok(patch.ink > 0, `the flat ${name} feature has no ink`);
     const scores: { plane: number; shift: object; difference: number }[] = [];
     for (const candidate of candidates) {
-      const [raised] = await projectContent(
+      const [raised, raisedX, raisedY] = await projectContent(
         g,
-        [at],
+        stencil,
         candidate * LAYERS.spacing,
       );
       const shift = {
@@ -238,12 +234,58 @@ export async function assertPlanes(
         exploded.label,
         exploded.frame,
         raised!,
-        radius + slack + 1,
+        radius * 2 + slack + 1,
       );
+      // Locally reproject each reference pixel between the independently
+      // observed cameras. A small stencil captures scale, skew and rotation;
+      // candidate depth still comes from the separate physical layer model.
+      const fx = (flatX!.x - base!.x) * flat.frame.width;
+      const fy = (flatX!.y - base!.y) * flat.frame.height;
+      const gx = (flatY!.x - base!.x) * flat.frame.width;
+      const gy = (flatY!.y - base!.y) * flat.frame.height;
+      const determinant = fx * gy - fy * gx;
+      let difference = Infinity;
+      for (let dy = -slack; dy <= slack; dy++)
+        for (let dx = -slack; dx <= slack; dx++) {
+          let sum = 0;
+          let count = 0;
+          for (let y = 0; y < patch.height; y++)
+            for (let x = 0; x < patch.width; x++) {
+              const px = patch.left + x + 0.5 - base!.x * flat.frame.width;
+              const py = patch.top + y + 0.5 - base!.y * flat.frame.height;
+              const u = (px * gy - py * gx) / determinant;
+              const v = (py * fx - px * fy) / determinant;
+              const wx =
+                Math.floor(
+                  (raised!.x +
+                    u * (raisedX!.x - raised!.x) +
+                    v * (raisedY!.x - raised!.x)) *
+                    exploded.frame.width +
+                    dx,
+                ) - window.left;
+              const wy =
+                Math.floor(
+                  (raised!.y +
+                    u * (raisedX!.y - raised!.y) +
+                    v * (raisedY!.y - raised!.y)) *
+                    exploded.frame.height +
+                    dy,
+                ) - window.top;
+              if (wx < 0 || wy < 0 || wx >= window.width || wy >= window.height)
+                continue;
+              sum += Math.abs(
+                patch.values[y * patch.width + x]! -
+                  window.values[wy * window.width + wx]!,
+              );
+              count++;
+            }
+          if (count >= patch.values.length / 2)
+            difference = Math.min(difference, sum / count);
+        }
       scores.push({
         plane: candidate,
         shift,
-        difference: patchDifference(patch, window, shift, slack),
+        difference,
       });
     }
     shifts[name] = { plane, scores };
@@ -256,7 +298,10 @@ export async function assertPlanes(
       `${name} matches plane ${best.plane}, not ${plane}: ${JSON.stringify(scores)}`,
     );
     if (plane > 0) {
-      const { x, y } = scores[plane]!.shift as { x: number; y: number };
+      const [zero] = await projectContent(g, [at], 0);
+      const [separated] = await projectContent(g, [at], plane * LAYERS.spacing);
+      const x = (separated!.x - zero!.x) * exploded.frame.width;
+      const y = (separated!.y - zero!.y) * exploded.frame.height;
       assert.ok(
         Math.hypot(x, y) > 6 * plane,
         `${name}'s plane barely separates: ${JSON.stringify({ x, y })}`,
@@ -267,37 +312,6 @@ export async function assertPlanes(
 }
 
 export type CaptureSize = { readonly width: number; readonly height: number };
-
-/**
- * Turn the panel to an oblique view: facing the camera, then 50 degrees
- * about its vertical axis, so planes along its normal separate on screen.
- * The caller releases the override.
- */
-export async function obliquePanel(g: Gallery) {
-  await g.page.mouse.move(1, 1);
-  await g.call("faceGalleryGuiToCamera", 0.7);
-  const faced = fieldsWith(await g.inspect(), PANEL_ENTITY, "qx");
-  const turn = (50 * Math.PI) / 180;
-  const [qx, qy, qz, qw] = multiply(
-    ["qx", "qy", "qz", "qw"].map((key) => Number(faced[key])),
-    [0, Math.sin(turn / 2), 0, Math.cos(turn / 2)],
-  );
-  // A replacing override restores every field it leaves out, so it names
-  // the faced position too.
-  await g.call(
-    "overrideGalleryGuiTransform",
-    {
-      x: Number(faced.x),
-      y: Number(faced.y),
-      z: Number(faced.z),
-      qx: qx!,
-      qy: qy!,
-      qz: qz!,
-      qw: qw!,
-    },
-    true,
-  );
-}
 
 /** Play the panel's layer spacing to `spacing` from the sidebar. */
 export async function toggleLayers(g: Gallery, exploded: boolean) {
@@ -332,21 +346,6 @@ export async function waitForGuiState(
   throw new Error(
     `GUI demo did not settle${lastError instanceof Error ? `: ${lastError.message}` : ""}`,
   );
-}
-
-/**
- * Quaternion product `left * right`, `[x, y, z, w]`: `right`'s rotation
- * applied in `left`'s frame.
- */
-export function multiply(left: readonly number[], right: readonly number[]) {
-  const [ax, ay, az, aw] = left as [number, number, number, number];
-  const [bx, by, bz, bw] = right as [number, number, number, number];
-  return [
-    aw * bx + ax * bw + ay * bz - az * by,
-    aw * by - ax * bz + ay * bw + az * bx,
-    aw * bz + ax * by - ay * bx + az * bw,
-    aw * bw - ax * bx - ay * by - az * bz,
-  ];
 }
 
 export function dynamicProperty(

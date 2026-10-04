@@ -349,7 +349,7 @@ async function themedSkinMotion(
       createEntity(2, "child-surface"),
       insertComponent(
         client,
-        "Surface",
+        "FlatSurface",
         { kind: "alias", alias: 2 },
         { width: 1, height: height / 96 },
       ),

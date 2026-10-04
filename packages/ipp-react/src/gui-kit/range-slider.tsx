@@ -24,7 +24,7 @@
  * thumb's centre and the upper one above, reaching past the column's centre.
  */
 import { Children, Entity } from "../components.js";
-import { Font, Layout } from "../gui/components.js";
+import { Style, Font, Layout } from "../gui/components.js";
 import { useGuiKit } from "./kit.js";
 import { LAYOUT_COLUMN, LAYOUT_ROW, LAYOUT_STACK, Row } from "./layout.js";
 import {
@@ -63,6 +63,7 @@ export interface RangeSliderProps extends SliderCompositeProps {
 export function RangeSlider(props: RangeSliderProps) {
   const {
     id,
+    layer = 0,
     label,
     min,
     max,
@@ -123,6 +124,7 @@ export function RangeSlider(props: RangeSliderProps) {
     const rows = (label === undefined ? 0 : 1) + (bounds ? 2 : 0);
     return (
       <Entity id={id}>
+        <Style layer={layer} />
         <Layout kind={LAYOUT_COLUMN} height={rows * g.row + rail} {...layout} />
         <Font source={kit.font} font_size={kit.fontSize} />
         <Children>
@@ -179,6 +181,7 @@ export function RangeSlider(props: RangeSliderProps) {
   const box = g.depth + g.row;
   return (
     <Entity id={id}>
+      <Style layer={layer} />
       <Layout
         kind={LAYOUT_COLUMN}
         height={(label === undefined ? 0 : g.row) + box}

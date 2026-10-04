@@ -602,6 +602,7 @@
       "dist/packages/ipp-client/tests/buffer-source.test.js",
       "dist/packages/ipp-client/tests/bulk-reads.test.js",
       "dist/packages/ipp-client/tests/gui-semantics.test.js",
+      "dist/packages/ipp-client/tests/surface-config.test.js",
       "dist/packages/ipp-client/tests/profile-worker.test.js",
       "dist/packages/ipp-client/tests/profiling.test.js",
       "dist/packages/ipp-client/tests/resource-worker.test.js",
@@ -1415,8 +1416,14 @@
   },
   "react-gui-authoring": {
     "description": "Ordinary React GUI entities, exact ACK control refs, generic links/rows and cleanup through native and worker transports",
-    "sourceRoots": ["packages/ipp-react/src/", "packages/ipp-react/tests/control-refs.test.ts", "packages/ipp-react/tests/gui-declaration.test.ts", "packages/ipp-react/tests/gui-callbacks.test.ts", "tests/react/gui-authoring.tsx", "tests/react/gui-callbacks.tsx", "tests/react/gui-scroll.tsx", "tests/react/control-ref-lifetimes.tsx", "tests/react/control-ref-scaling.tsx", "tests/react/control-ref-subsets.tsx", "tests/react/control-ref-cleanup.tsx", "tests/react/gui-root.test.ts", "tests/react/gui-paint.tsx", "tests/react/gui-layers.tsx", "tests/react/gui-overlays.tsx", "tests/react/gui-paint.test.ts"],
+    "sourceRoots": ["packages/ipp-react/src/", "packages/ipp-react/tests/control-refs.test.ts", "packages/ipp-react/tests/gui-declaration.test.ts", "packages/ipp-react/tests/gui-callbacks.test.ts", "tests/react/gui-authoring.tsx", "tests/react/gui-callbacks.tsx", "tests/react/gui-scroll.tsx", "tests/react/control-ref-lifetimes.tsx", "tests/react/control-ref-scaling.tsx", "tests/react/control-ref-subsets.tsx", "tests/react/control-ref-cleanup.tsx", "tests/react/gui-root.test.ts", "tests/react/gui-paint.tsx", "tests/react/gui-layers.tsx", "tests/react/gui-overlays.tsx", "tests/react/gui-projected-surfaces.tsx", "tests/react/gui-projected-advanced.tsx", "tests/react/projected-oracle.test.ts", "tests/react/gui-paint.test.ts"],
     "commands": [
+      {
+        "name": "projected-oracle",
+        "command": ["@node", "--test", "target/react-gui-authoring/projected-oracle.test.js"],
+        "builds": ["react-gui-authoring"],
+        "requirements": ["node", "npm"]
+      },
       {
         "name": "refs",
         "command": ["@node", "--test", "target/react-gui-authoring/control-refs.test.js", "target/react-gui-authoring/gui-declaration.test.js", "target/react-gui-authoring/gui-callbacks.test.js"],
@@ -1439,14 +1446,42 @@
         "name": "webgl",
         "command": ["@node", "target/react-gui-authoring/gui-paint.test.js", "--backend", "webgl"],
         "builds": ["react-gui-authoring", "browser:render", "surface-assets"],
-        "partitionExcludes": ["target/gles-host"],
+        "partitionExcludes": ["target/browser-build/render-instrumentation", "target/gles-host", "target/gles-host-instrumentation"],
         "requirements": ["node", "npm", "browser"]
       },
       {
         "name": "gles",
         "command": ["@node", "target/react-gui-authoring/gui-paint.test.js", "--backend", "gles", "--egl-dir", "@egl"],
         "builds": ["react-gui-authoring", "gles-host", "surface-assets"],
-        "partitionExcludes": ["target/browser-build/render"],
+        "partitionExcludes": ["target/browser-build/render", "target/browser-build/render-instrumentation", "target/gles-host-instrumentation"],
+        "requirements": ["node", "npm", "browser", "gles"]
+      },
+      {
+        "name": "projected-advanced-webgl",
+        "command": ["@node", "target/react-gui-authoring/gui-paint.test.js", "--backend", "webgl", "--projected", "advanced"],
+        "builds": ["react-gui-authoring", "browser:render", "surface-assets"],
+        "partitionExcludes": ["target/browser-build/render-instrumentation", "target/gles-host", "target/gles-host-instrumentation"],
+        "requirements": ["node", "npm", "browser"]
+      },
+      {
+        "name": "projected-advanced-gles",
+        "command": ["@node", "target/react-gui-authoring/gui-paint.test.js", "--backend", "gles", "--projected", "advanced", "--egl-dir", "@egl"],
+        "builds": ["react-gui-authoring", "gles-host", "surface-assets"],
+        "partitionExcludes": ["target/browser-build/render", "target/browser-build/render-instrumentation", "target/gles-host-instrumentation"],
+        "requirements": ["node", "npm", "browser", "gles"]
+      },
+      {
+        "name": "projected-recovery-webgl",
+        "command": ["@node", "target/react-gui-authoring/gui-paint.test.js", "--backend", "webgl", "--projected", "recovery"],
+        "builds": ["react-gui-authoring", "browser:render-instrumentation", "surface-assets"],
+        "partitionExcludes": ["target/browser-build/render", "target/gles-host", "target/gles-host-instrumentation"],
+        "requirements": ["node", "npm", "browser"]
+      },
+      {
+        "name": "projected-recovery-gles",
+        "command": ["@node", "target/react-gui-authoring/gui-paint.test.js", "--backend", "gles", "--projected", "recovery", "--egl-dir", "@egl"],
+        "builds": ["react-gui-authoring", "gles-host-instrumentation", "surface-assets"],
+        "partitionExcludes": ["target/browser-build/render", "target/browser-build/render-instrumentation", "target/gles-host"],
         "requirements": ["node", "npm", "browser", "gles"]
       }
     ]
@@ -1605,6 +1640,8 @@
       "packages/ipp-react/src/gui/theme.ts",
       "packages/ipp-client/tools/assemble.mjs",
       "tools/build/verify-browser.mjs",
+      "tests/render/gallery-gui.test.ts",
+      "tests/render/gallery-gui-workbench.test.ts",
       "tests/render/gallery-gui-panel.ts",
       "tests/render/gallery-gui-support.ts",
       "tests/render/viewer-browser-helper.ts",
@@ -1613,9 +1650,60 @@
       "tools/build_gallery_gui_assets.py",
       "tests/render/gallery-server.ts"
     ],
-    "files": [
-      "dist/tests/render/gallery-gui.test.js",
-      "dist/tests/render/gallery-gui-workbench.test.js"
+    "commands": [
+      {
+        "name": "dashboard",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern=^Gallery (runs|GUI (panel caches|settings panel|floats|input shield))",
+          "dist/tests/render/gallery-gui.test.js"
+        ],
+        "builds": [
+          "typescript",
+          "gallery-fixtures"
+        ],
+        "requirements": [
+          "node",
+          "npm",
+          "browser"
+        ]
+      },
+      {
+        "name": "exploded",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern=^Gallery GUI keeps its panels whole",
+          "dist/tests/render/gallery-gui.test.js"
+        ],
+        "builds": [
+          "typescript",
+          "gallery-fixtures"
+        ],
+        "requirements": [
+          "node",
+          "npm",
+          "browser"
+        ]
+      },
+      {
+        "name": "workbench",
+        "command": [
+          "@node",
+          "--test",
+          "dist/tests/render/gallery-gui-workbench.test.js"
+        ],
+        "builds": [
+          "typescript",
+          "gallery-fixtures"
+        ],
+        "requirements": [
+          "node",
+          "npm",
+          "browser"
+        ]
+      }
     ]
   },
   "gallery-gui-camera": {
@@ -2908,8 +2996,52 @@
       "tests/integration/scenarios/gallery-charts.ts",
       "tests/integration/scenarios/gallery-chart-streaming.ts"
     ],
-    "files": [
-      "dist/tests/render/native-gallery.test.js"
+    "commands": [
+      {
+        "name": "charts",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern=^native (unified charts|gallery streams bounded data windows)",
+          "dist/tests/render/native-gallery.test.js"
+        ],
+        "builds": [
+          "typescript",
+          "gles-host",
+          "font-assets",
+          "gallery-assets",
+          "gallery-platformer-native-assets",
+          "shared-host"
+        ],
+        "requirements": [
+          "node",
+          "npm",
+          "gles"
+        ]
+      },
+      {
+        "name": "scenes",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern=^native gallery (preserves|captures|explains)",
+          "dist/tests/render/native-gallery.test.js"
+        ],
+        "builds": [
+          "typescript",
+          "gles-host",
+          "font-assets",
+          "gallery-assets",
+          "gallery-gui-assets",
+          "gallery-platformer-native-assets",
+          "shared-host"
+        ],
+        "requirements": [
+          "node",
+          "npm",
+          "gles"
+        ]
+      }
     ]
   },
   "gallery-trace": {

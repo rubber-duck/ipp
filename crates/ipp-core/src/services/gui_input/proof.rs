@@ -163,15 +163,16 @@ impl GuiRoutedInputProof {
             check_scope(publication, containing, edge)?;
             live_policy(world, edge.anchor)?;
             if edge.mode != WorldAttachmentMode::Spatial {
-                let Some(ComponentValue::Surface(surface)) =
-                    world.effective_component(edge.anchor, ComponentValue::SURFACE)
-                else {
-                    return Err(GuiInputError::StalePath);
-                };
-                if ![surface.width, surface.height]
-                    .into_iter()
-                    .all(|size| size.is_finite() && size > 0.0)
-                {
+                let geometry = edge
+                    .surface_geometry
+                    .as_ref()
+                    .ok_or(GuiInputError::StalePath)?;
+                if !crate::systems::surface::publication_is_current(
+                    world,
+                    edge.anchor,
+                    geometry,
+                    edge.surface_incarnation,
+                ) {
                     return Err(GuiInputError::StalePath);
                 }
             }

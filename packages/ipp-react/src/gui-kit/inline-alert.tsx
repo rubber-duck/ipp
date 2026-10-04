@@ -7,7 +7,7 @@
  * that it moves only what lies below.
  */
 import { Children, Entity } from "../components.js";
-import { Font, Layout } from "../gui/components.js";
+import { Style, Font, Layout } from "../gui/components.js";
 import { Skin } from "../gui/theme.js";
 import type { GuiPressListener } from "../gui/callbacks.js";
 import type { GuiControlRef } from "../gui/control-ref.js";
@@ -27,6 +27,8 @@ export interface InlineAlertAction {
 }
 
 export interface InlineAlertProps {
+  /** Nonnegative layer offset applied once at this component root; zero inherits. */
+  readonly layer?: number;
   readonly id: string;
   readonly severity: InlineAlertSeverity;
   readonly text: string;
@@ -44,6 +46,7 @@ const SEVERITIES: Readonly<
 
 export function InlineAlert({
   id,
+  layer = 0,
   severity,
   text,
   action,
@@ -56,6 +59,7 @@ export function InlineAlert({
   // clear of the frame's cut.
   return (
     <Entity id={id}>
+      <Style layer={layer} />
       <Layout
         kind={LAYOUT_ROW}
         height={kit.unit(t.controlHeight)}

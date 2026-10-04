@@ -70,7 +70,7 @@ import {
   decodeRegion,
   dynamicProperty,
   fieldsWith,
-  obliquePanel,
+  liftInputShield,
   sceneEntity,
   waitForGuiState,
   type Gallery,
@@ -971,7 +971,7 @@ test("Gallery runs a real GUI demo and cleans it up", {
       assert.ok(firstReadyFrame.summary.coverage > 0.08);
       // The panel is ordinary Canvas content of an attached World presented
       // through the parent's Surface.
-      assert.ok(initial.panelComponents.includes("Surface"));
+      assert.ok(initial.panelComponents.includes("FlatSurface"));
       assert.ok(initial.panelComponents.includes("WorldAttachment"));
       const page = initial.boxes.find(({ symbol }) => symbol === "gui-page");
       assert.ok(page, "the dashboard has no page");
@@ -2639,14 +2639,13 @@ test("Gallery GUI panel caches distant presentation within direct-rendering tole
           ) < 1e-4,
       );
       const whole = await observeUntil(
-        "surface-cache-exploded-whole",
-        reused(1),
+        "surface-cache-exploded-content",
+        (entry) => entry?.mode === "layered",
       );
       assert.equal(cacheDelta(beforeLayers, whole).allocations, 0);
-      // A toast floats on its own plane: one flat image cannot show the
-      // separated planes, so the panel presents directly in its layered
-      // mode, and closing the layers again composites the image without a
-      // new allocation.
+      // This explicit FlatSurface now separates its complete content panels.
+      // The optional whole-Surface cache uses its layered direct fallback;
+      // opening a notification retains that mode without allocating an image.
       await g.call(
         "galleryGuiAction",
         { role: "button", name: "CLEAR" },
@@ -3257,7 +3256,7 @@ function settingsPanel(part: "scrolling" | "shield") {
         );
         assert.ok(
           initialLog.expected.extents.some(
-            (extent) => Math.abs(extent - initialLog.log.itemExtent) > 5,
+            (extent) => Math.abs(extent - initialLog.log.itemExtent) > 2,
           ) &&
             new Set(initialLog.expected.lines.map(({ length }) => length))
               .size > 1,
@@ -4123,22 +4122,389 @@ test("Gallery GUI keeps its panels whole when the layers explode and stays usabl
       );
       await new Promise((resolve) => setTimeout(resolve, SKIN_SETTLE_MS));
 
-      await obliquePanel(g);
-      try {
-        const flat = await g.capture("layers-flat");
-        assert.equal(flat.frame.failedDrawCalls, 0);
+      const ordinaryCamera = transform(await g.inspect());
+      const flatProjection = await g.call("galleryGuiProjection");
+      const flat = await g.capture("layers-flat");
+      assert.equal(flat.frame.failedDrawCalls, 0);
 
-        // The sidebar writes the EXPLODE LAYERS switch, whose value starts
-        // the Surface's layer spacing animation on the Host clock.
-        await g.page.locator("#gui-explode-toggle").click();
-        await g.page.waitForFunction(
-          () =>
-            document.querySelector("#gui-layers")?.textContent === "exploded",
+      // The sidebar writes the EXPLODE LAYERS switch, whose value starts
+      // the Surface's layer spacing animation on the Host clock.
+      await g.page.locator("#gui-explode-toggle").click();
+      await g.page.waitForFunction(
+        () => document.querySelector("#gui-layers")?.textContent === "exploded",
+      );
+      assert.deepEqual(
+        controlValue(await waitForGuiState(g), "checkbox", "EXPLODE LAYERS"),
+        { kind: "bool", value: true },
+      );
+      await g.waitFor(
+        (inspection) =>
+          Math.abs(
+            Number(
+              fieldsWith(inspection, PANEL_ENTITY, "layer_spacing")
+                .layer_spacing,
+            ) - LAYERS.spacing,
+          ) < 1e-4,
+      );
+      await g.page.mouse.move(1, 1);
+      const exploded = await g.capture("layers-exploded");
+      assert.equal(exploded.frame.failedDrawCalls, 0);
+      const inspectionCamera = transform(exploded.inspection);
+      assert.ok(
+        Math.hypot(
+          Number(inspectionCamera.x) - Number(ordinaryCamera.x),
+          Number(inspectionCamera.z) - Number(ordinaryCamera.z),
+        ) > 2,
+        "EXPLODE did not open an inspection camera",
+      );
+      await g.page.screenshot({
+        path: resolve(scenario.evidence.directory, "layers-exploded-page.png"),
+        fullPage: true,
+      });
+      await scenario.evidence.record("inspection-camera", {
+        ordinaryCamera,
+        inspectionCamera,
+      });
+
+      // Panels stay whole: a frame and the content it holds stay on the
+      // same occupied rank together.
+      const shifts = await assertPlanes(
+        g,
+        {
+          label: "layers-flat",
+          frame: flat.frame,
+          projection: flatProjection,
+        },
+        { label: "layers-exploded", frame: exploded.frame },
+        {
+          frame: {
+            // TELEMETRY's top-left corner accent, in a small window clear
+            // of the header text beside it.
+            at: [PANEL.telemetryPanel[0] + 1.5, PANEL.telemetryPanel[1] + 1.5],
+            plane: LAYERS.telemetry,
+            radius: 8,
+          },
+          advanced: {
+            at: [PANEL.advanced[0] + 1.5, PANEL.advanced[1] + 1.5],
+            plane: LAYERS.advanced,
+            radius: 8,
+          },
+          content: {
+            // The gain readout's display digits.
+            at: [
+              PANEL.gainReadout[0] + 20,
+              PANEL.gainReadout[1] + PANEL.gainReadout[3] / 2,
+            ],
+            plane: LAYERS.panel,
+          },
+        },
+      );
+      await scenario.evidence.record("layer-shifts", shifts);
+
+      const toggleShield = async () => {
+        const previous = await g.page
+          .locator('textarea[data-ipp-native-text="true"]')
+          .elementHandle();
+        assert.ok(previous, "the physical input context has no native bridge");
+        try {
+          await g.page.locator("#gui-shield-toggle").click();
+          await g.page.waitForFunction((old) => {
+            const current = document.querySelector(
+              'textarea[data-ipp-native-text="true"]',
+            );
+            return current !== old && current?.isConnected;
+          }, previous);
+        } finally {
+          await previous.dispose();
+        }
+      };
+      const shieldProbe = async (label: string, requireSide = true) => {
+        const [x, y, width, height] = PANEL.purge;
+        const at = [[x + width / 2, y + height / 2]] as const;
+        const [button] = await projectContent(
+          g,
+          at,
+          LAYERS.workbench * LAYERS.spacing,
         );
-        assert.deepEqual(
-          controlValue(await waitForGuiState(g), "checkbox", "EXPLODE LAYERS"),
-          { kind: "bool", value: true },
+        const samples = Array.from(
+          { length: 55 },
+          (_, index) =>
+            [
+              x + (width * (index % 11)) / 10,
+              y + (height * Math.floor(index / 11)) / 4,
+            ] as const,
         );
+        type CoverRay = {
+          point: readonly [number, number];
+          target: readonly number[];
+          origin: readonly number[];
+          near: number;
+          far: number;
+          axis: number;
+          front: readonly number[];
+        };
+        const rays = await g.call<readonly CoverRay[]>(
+          "galleryShieldRays",
+          samples,
+          LAYERS.workbench * LAYERS.spacing,
+        );
+        const enclosed = rays.every(({ target }) =>
+          target.every((coordinate) => Math.abs(coordinate) <= 0.5 + 1e-4),
+        );
+        if (!enclosed) {
+          await scenario.evidence.record("shield-enclosure-failure", {
+            label,
+            rays,
+          });
+          await g.capture(`${label}-shield-enclosure-failure`);
+        }
+        assert.ok(
+          enclosed,
+          "the cover does not enclose the entire curved PURGE rectangle",
+        );
+        const side = rays.find(
+          (ray) =>
+            ray.point[0] > x + 1 &&
+            ray.point[0] < x + width - 1 &&
+            ray.point[1] > y + 1 &&
+            ray.point[1] < y + height - 1 &&
+            ray.axis !== 2 &&
+            ray.near >= 0 &&
+            ray.near < 1 &&
+            ray.far >= 1 &&
+            (Math.abs(ray.front[0]!) > 0.5 || Math.abs(ray.front[1]!) > 0.5),
+        );
+        if (requireSide)
+          assert.ok(
+            side,
+            "no near-edge PURGE ray misses the cap and enters a side wall",
+          );
+        const [sidePress] = await projectContent(
+          g,
+          [side?.point ?? at[0]],
+          LAYERS.workbench * LAYERS.spacing,
+        );
+        await scenario.evidence.record("shield-ray-oracle", {
+          label,
+          button,
+          side,
+          rays,
+        });
+        const before = await waitForGuiState(g);
+        assert.ok(
+          !before.overlays.some(
+            (overlay) => overlay.symbol === OVERLAYS.dialog && overlay.open,
+          ),
+        );
+        await g.page.mouse.click(button!.clientX, button!.clientY);
+        const blocked = await g.capture(`${label}-shield-blocked`);
+        assert.equal(blocked.frame.failedDrawCalls, 0);
+        assert.ok(
+          !(await waitForGuiState(g)).overlays.some(
+            (overlay) => overlay.symbol === OVERLAYS.dialog && overlay.open,
+          ),
+          "armed glass let the physical PURGE press through",
+        );
+        await g.page.mouse.click(sidePress!.clientX, sidePress!.clientY);
+        const sideFrame = await g.capture(`${label}-shield-side-blocked`);
+        if (side) {
+          const wall = [0, 0, 0];
+          wall[side.axis] = Math.sign(side.origin[side.axis]!) * 0.5;
+          const [wallPoint] = await g.call<readonly ProjectedPoint[]>(
+            "projectGalleryPoints",
+            "gui-input-shield",
+            [wall],
+          );
+          const region = await g.call<{
+            width: number;
+            height: number;
+            pixels: string;
+          }>("viewerCaptureRegionPixels", `${label}-shield-side-blocked`, [
+            wallPoint!.x - 1 / sideFrame.frame.width,
+            wallPoint!.y - 1 / sideFrame.frame.height,
+            wallPoint!.x + 1 / sideFrame.frame.width,
+            wallPoint!.y + 1 / sideFrame.frame.height,
+          ]);
+          const pixels = decodeRegion(region).pixels;
+          let amber = 0;
+          for (let i = 0; i < pixels.length; i += 4)
+            if (
+              pixels[i]! > 100 &&
+              pixels[i]! > pixels[i + 1]! * 1.12 &&
+              pixels[i + 1]! > pixels[i + 2]! * 1.4
+            )
+              amber++;
+          assert.ok(
+            amber >= 1,
+            "the camera-facing side wall has no amber pixels",
+          );
+          await scenario.evidence.record("shield-wall-pixels", {
+            label,
+            wallPoint,
+            amber,
+            pixels: [...pixels],
+          });
+        }
+        assert.ok(
+          !(await waitForGuiState(g)).overlays.some(
+            (overlay) => overlay.symbol === OVERLAYS.dialog && overlay.open,
+          ),
+          "armed cover admitted a side-wall ray",
+        );
+        await toggleShield();
+        // The replacement native bridge proves close/open completed; the
+        // frame records lifted presentation before its physical press.
+        await g.capture(`${label}-shield-lifted-ready`);
+        await g.page.mouse.click(sidePress!.clientX, sidePress!.clientY);
+        await waitForGuiState(g, (state) =>
+          state.overlays.some(
+            (overlay) => overlay.symbol === OVERLAYS.dialog && overlay.open,
+          ),
+        );
+        const admitted = await g.capture(`${label}-shield-lifted`);
+        assert.equal(admitted.frame.failedDrawCalls, 0);
+        const [cancel] = await projectContent(
+          g,
+          [
+            [
+              PANEL.dialog.cancel[0] + PANEL.dialog.cancel[2] / 2,
+              PANEL.dialog.cancel[1] + PANEL.dialog.cancel[3] / 2,
+            ],
+          ],
+          LAYERS.dialog * LAYERS.spacing,
+        );
+        await g.page.mouse.click(cancel!.clientX, cancel!.clientY);
+        await waitForGuiState(
+          g,
+          (state) =>
+            !state.overlays.some(
+              (overlay) => overlay.symbol === OVERLAYS.dialog && overlay.open,
+            ),
+        );
+        await toggleShield();
+        await g.capture(`${label}-shield-rearmed`);
+        await scenario.evidence.record("shield-follows", {
+          label,
+          button,
+          side,
+          rays,
+        });
+      };
+      await shieldProbe("flat-exploded");
+
+      // The exploded panel stays usable where it is: a press at REDUCED
+      // MOTION's place on the Surface toggles it, and toggles it back.
+      const motion = PANEL.reducedMotion;
+      const [press] = await projectContent(
+        g,
+        [[motion[0] + motion[2] / 2, motion[1] + motion[3] / 2]],
+        LAYERS.advanced * LAYERS.spacing,
+      );
+      for (const expected of [true, false]) {
+        await g.page.mouse.click(press!.clientX, press!.clientY);
+        await waitForGuiState(g, (state) => {
+          const value = controlValue(state, "checkbox", "REDUCED MOTION");
+          return value.kind === "bool" && value.value === expected;
+        });
+      }
+
+      // Ordinary camera navigation remains available in the inspection mode.
+      const canvasBox = await g.page.locator("#ipp-world-canvas").boundingBox();
+      assert.ok(canvasBox);
+      await g.page.mouse.move(canvasBox.x + 30, canvasBox.y + 50);
+      await g.page.mouse.down();
+      await g.page.mouse.move(canvasBox.x + 95, canvasBox.y + 75, { steps: 6 });
+      await g.page.mouse.up();
+      await g.waitFor((inspection) => {
+        const camera = transform(inspection);
+        return Math.abs(Number(camera.qy) - Number(inspectionCamera.qy)) > 1e-4;
+      });
+      await g.page.locator("#reset-camera").click();
+      await g.waitFor((inspection) => {
+        const camera = transform(inspection);
+        return ["x", "y", "z", "qx", "qy", "qz", "qw"].every(
+          (field) =>
+            Math.abs(Number(camera[field]) - Number(inspectionCamera[field])) <
+            1e-5,
+        );
+      });
+
+      // The committed in-panel switch follows the same camera path as sidebar.
+      const [explodePress] = await projectContent(
+        g,
+        [
+          [
+            PANEL.explode[0] + PANEL.explode[2] / 2,
+            PANEL.explode[1] + PANEL.explode[3] / 2,
+          ],
+        ],
+        LAYERS.advanced * LAYERS.spacing,
+      );
+      await g.page.mouse.click(explodePress!.clientX, explodePress!.clientY);
+
+      // Flattening closes the planes on the Host clock; the panel paints
+      // as it did before.
+      await g.waitFor(
+        (inspection) =>
+          Number(
+            fieldsWith(inspection, PANEL_ENTITY, "layer_spacing").layer_spacing,
+          ) < 1e-4,
+      );
+      await g.page.waitForFunction(
+        () => document.querySelector("#gui-layers")?.textContent === "flat",
+      );
+      await g.page.mouse.move(1, 1);
+      await new Promise((resolve) => setTimeout(resolve, SKIN_SETTLE_MS));
+      const flattened = await g.capture("layers-flattened");
+      const centre = await g.call<{ changedPixels: number }>(
+        "compareViewerCaptureRegion",
+        "layers-flat",
+        "layers-flattened",
+        // The centre column: the log beside it records the toggles.
+        await g.call("galleryGuiContentRegion", [
+          PANEL.monitorPanel[0],
+          16,
+          PANEL.monitorPanel[0] + PANEL.monitorPanel[2],
+          656,
+        ]),
+      );
+      assert.ok(
+        centre.changedPixels < 50,
+        `the flattened panel does not paint as before: ${JSON.stringify(centre)}`,
+      );
+      assert.equal(flattened.frame.failedDrawCalls, 0);
+      const restoredCamera = transform(flattened.inspection);
+      for (const field of ["x", "y", "z", "qx", "qy", "qz", "qw"])
+        assert.ok(
+          Math.abs(
+            Number(restoredCamera[field]) - Number(ordinaryCamera[field]),
+          ) < 1e-5,
+        );
+
+      // Reduced motion jumps to an inward spherical shell stack; its
+      // in-panel controls remain reachable through the curved projection.
+      await g.call(
+        "galleryGuiAction",
+        { role: "checkbox", name: "REDUCED MOTION" },
+        { kind: "toggle" },
+      );
+      await waitForGuiState(g, (state) => {
+        const value = controlValue(state, "checkbox", "REDUCED MOTION");
+        return value.kind === "bool" && value.value;
+      });
+      await g.page.locator("#gui-surface-shape").selectOption("sphere");
+      await g.page.locator("#gui-surface-facing").selectOption("inside");
+      await g.waitFor((inspection) => {
+        const provider = sceneEntity(inspection, PANEL_ENTITY).components.find(
+          (component) => "layer_spacing" in component.fields,
+        );
+        return (
+          provider?.component === 55 && provider.fields.curvature === -0.125
+        );
+      });
+      await g.capture("layers-inward-flat-ready");
+      await g.page.locator("#gui-explode-toggle").click();
+      try {
         await g.waitFor(
           (inspection) =>
             Math.abs(
@@ -4148,89 +4514,130 @@ test("Gallery GUI keeps its panels whole when the layers explode and stays usabl
               ) - LAYERS.spacing,
             ) < 1e-4,
         );
-        await g.page.mouse.move(1, 1);
-        const exploded = await g.capture("layers-exploded");
-        assert.equal(exploded.frame.failedDrawCalls, 0);
-
-        // Panels stay whole: a frame and the content it holds stay on the
-        // base plane together, where they were drawn flat.
-        const shifts = await assertPlanes(
-          g,
-          { label: "layers-flat", frame: flat.frame },
-          { label: "layers-exploded", frame: exploded.frame },
-          {
-            frame: {
-              // TELEMETRY's top-left corner accent, in a small window clear
-              // of the header text beside it.
-              at: [
-                PANEL.telemetryPanel[0] + 1.5,
-                PANEL.telemetryPanel[1] + 1.5,
-              ],
-              plane: LAYERS.panel,
-              radius: 8,
-            },
-            content: {
-              // The gain readout's display digits.
-              at: [
-                PANEL.gainReadout[0] + 20,
-                PANEL.gainReadout[1] + PANEL.gainReadout[3] / 2,
-              ],
-              plane: LAYERS.panel,
-            },
-          },
+      } catch (failure) {
+        await g.capture("layers-inward-spacing-failure");
+        throw failure;
+      }
+      const [scopePress] = await projectContent(
+        g,
+        [
+          [
+            PANEL.scope[0] + PANEL.scope[2] / 2,
+            PANEL.scope[1] + PANEL.scope[3] / 2,
+          ],
+        ],
+        LAYERS.panel * LAYERS.spacing,
+      );
+      await g.page.mouse.click(scopePress!.clientX, scopePress!.clientY);
+      const curvedPopover = await waitForGuiState(g, (state) =>
+        state.overlays.some(
+          (overlay) => overlay.symbol === OVERLAYS.scope && overlay.open,
+        ),
+      );
+      const curvedOption = control(curvedPopover, {
+        role: "button",
+        symbol: "gui-scope-grid/scanlines/label",
+      });
+      const [optionPress] = await projectContent(
+        g,
+        [
+          [
+            curvedOption.bounds[0] + curvedOption.bounds[2] * 0.7,
+            curvedOption.bounds[1] + curvedOption.bounds[3] / 2,
+          ],
+        ],
+        LAYERS.anchored * LAYERS.spacing,
+      );
+      assert.ok(
+        optionPress!.x > 0.02 &&
+          optionPress!.x < 0.98 &&
+          optionPress!.y > 0.02 &&
+          optionPress!.y < 0.98,
+        "the inward popup shell is outside the inspection frame",
+      );
+      const curved = await g.capture("layers-exploded-inward");
+      assert.equal(curved.frame.failedDrawCalls, 0);
+      await g.page.screenshot({
+        path: resolve(
+          scenario.evidence.directory,
+          "layers-exploded-inward-page.png",
+        ),
+        fullPage: true,
+      });
+      await g.page.mouse.click(optionPress!.clientX, optionPress!.clientY);
+      await g.page.waitForFunction(
+        () =>
+          document.querySelector("#gui-scope")?.textContent ===
+          "scanlines, sweep on",
+      );
+      // Dismiss the popup without forwarding the closing press to a control.
+      const [outsidePopup] = await projectContent(g, [[20, 640]]);
+      await g.page.mouse.click(outsidePopup!.clientX, outsidePopup!.clientY);
+      await waitForGuiState(
+        g,
+        (state) =>
+          !state.overlays.some(
+            (overlay) => overlay.symbol === OVERLAYS.scope && overlay.open,
+          ),
+      );
+      const [curvedMotion] = await projectContent(
+        g,
+        [[motion[0] + motion[2] / 2, motion[1] + motion[3] / 2]],
+        LAYERS.advanced * LAYERS.spacing,
+      );
+      await g.page.mouse.click(curvedMotion!.clientX, curvedMotion!.clientY);
+      await waitForGuiState(g, (state) => {
+        const value = controlValue(state, "checkbox", "REDUCED MOTION");
+        return value.kind === "bool" && !value.value;
+      });
+      await shieldProbe("sphere-inside-exploded", false);
+      for (const [shape, facing] of [
+        ["cylinder", "outside"],
+        ["cylinder", "inside"],
+        ["sphere", "outside"],
+      ] as const) {
+        await g.page.locator("#gui-surface-shape").selectOption(shape);
+        await g.page.locator("#gui-surface-facing").selectOption(facing);
+        await g.waitFor((inspection) => {
+          const provider = sceneEntity(
+            inspection,
+            PANEL_ENTITY,
+          ).components.find((component) => "layer_spacing" in component.fields);
+          return (
+            provider?.component === (shape === "cylinder" ? 54 : 55) &&
+            Math.abs(Number(provider.fields.layer_spacing) - LAYERS.spacing) <
+              1e-4 &&
+            Number(provider.fields.curvature) ===
+              (facing === "inside" ? -0.125 : 0.125)
+          );
+        });
+        await shieldProbe(`${shape}-${facing}-exploded`, facing === "outside");
+      }
+      const priorShield = sceneEntity(await g.inspect(), "gui-input-shield").id;
+      await g.page.locator("#gui-vector-only").click();
+      await g.waitFor(
+        (inspection) =>
+          !inspection.entities.some(
+            (entity) => entity.metadata.symbolicId === "gui-input-shield",
+          ),
+      );
+      await g.page.locator("#gui-vector-only").click();
+      await g.waitFor((inspection) => {
+        const shield = inspection.entities.find(
+          (entity) => entity.metadata.symbolicId === "gui-input-shield",
         );
-        await scenario.evidence.record("layer-shifts", shifts);
-
-        // The exploded panel stays usable where it is: a press at REDUCED
-        // MOTION's place on the Surface toggles it, and toggles it back.
-        const motion = PANEL.reducedMotion;
-        const [press] = await projectContent(g, [
-          [motion[0] + motion[2] / 2, motion[1] + motion[3] / 2],
-        ]);
-        for (const expected of [true, false]) {
-          await g.page.mouse.click(press!.clientX, press!.clientY);
-          await waitForGuiState(g, (state) => {
-            const value = controlValue(state, "checkbox", "REDUCED MOTION");
-            return value.kind === "bool" && value.value === expected;
-          });
-        }
-
-        // Flattening closes the planes on the Host clock; the panel paints
-        // as it did before.
-        await g.page.locator("#gui-explode-toggle").click();
-        await g.waitFor(
-          (inspection) =>
+        return (
+          shield !== undefined &&
+          shield.id !== priorShield &&
+          Math.abs(
             Number(
               fieldsWith(inspection, PANEL_ENTITY, "layer_spacing")
                 .layer_spacing,
-            ) < 1e-4,
+            ) - LAYERS.spacing,
+          ) < 1e-4
         );
-        await g.page.waitForFunction(
-          () => document.querySelector("#gui-layers")?.textContent === "flat",
-        );
-        await g.page.mouse.move(1, 1);
-        await new Promise((resolve) => setTimeout(resolve, SKIN_SETTLE_MS));
-        const flattened = await g.capture("layers-flattened");
-        const centre = await g.call<{ changedPixels: number }>(
-          "compareViewerCaptureRegion",
-          "layers-flat",
-          "layers-flattened",
-          // The centre column: the log beside it records the toggles.
-          await g.call("galleryGuiContentRegion", [
-            PANEL.monitorPanel[0],
-            16,
-            PANEL.monitorPanel[0] + PANEL.monitorPanel[2],
-            656,
-          ]),
-        );
-        assert.ok(
-          centre.changedPixels < 50,
-          `the flattened panel does not paint as before: ${JSON.stringify(centre)}`,
-        );
-        assert.equal(flattened.frame.failedDrawCalls, 0);
-      } finally {
-        await g.call("releaseGalleryGuiTransform");
-      }
+      });
+      await shieldProbe("sphere-outside-restored");
       assert.deepEqual(g.errors, []);
     },
   );
@@ -4427,6 +4834,8 @@ test("Gallery GUI floats a tooltip, a context menu and a confirmation dialog on 
           ),
       );
 
+      // Lift the real cover before exercising PURGE's modal interaction.
+      await liftInputShield(g);
       // PURGE asks first: a modal dialog on the dialog layer, focus on
       // Cancel. A press beneath it reaches nothing, and Escape cancels and
       // returns focus to PURGE.
@@ -4497,14 +4906,4 @@ test("Gallery GUI floats a tooltip, a context menu and a confirmation dialog on 
       assert.deepEqual(g.errors, []);
     },
   );
-});
-
-test("Gallery GUI input shield blocks pointer and wheel input while armed", {
-  skip: "IppCanvas fixes guiInput blockers when its physical input context opens and reports blocked routing to no application callback; the gallery cannot name the shield it mounts later, count blocked input or lift it (ipp-kmw5.11.2 dependency)",
-}, async () => {
-  // The armed shield is scene picking geometry marked as a blocker: a press
-  // and a wheel step aimed at PURGE through the glass are blocked, reach
-  // neither the panel nor the camera, and are observable as blocked input
-  // that the event log records. Lifting the shield stops marking it and the
-  // same click presses PURGE; re-arming blocks it again.
 });

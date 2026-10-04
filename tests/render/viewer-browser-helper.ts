@@ -745,6 +745,52 @@ export async function galleryGuiThemeRow(
   return row;
 }
 
+/** Observe optional layout-root bounds through raw generated-client writes and a completed draw. */
+export async function galleryGuiLayoutBounds(symbols: readonly string[]) {
+  const panel = await galleryPanel();
+  const before = await panel.client.inspect();
+  const component = panel.client.components.CanvasBounds!;
+  const missing = symbols.filter((symbol) => {
+    const entity = before.entities.find(
+      (item) => item.metadata.symbolicId === symbol,
+    );
+    if (!entity) throw new Error(`Missing layout root ${symbol}`);
+    return !componentFields(panel.client, entity, "CanvasBounds");
+  });
+  if (missing.length) {
+    const outcome = await panel.client.batch(
+      missing.map((symbol) => ({
+        kind: "insertComponent" as const,
+        entity: { kind: "symbol" as const, symbol },
+        component: component.id,
+        fields: [],
+      })),
+    );
+    if (!outcome.ok)
+      throw new Error("Layout observer components were not inserted");
+  }
+  await captureCanvas(requireCanvas(), { waitForResources: true });
+  const after = await panel.client.inspect();
+  return Object.fromEntries(
+    symbols.map((symbol) => {
+      const entity = after.entities.find(
+        (item) => item.metadata.symbolicId === symbol,
+      )!;
+      const fields = componentFields(panel.client, entity, "CanvasBounds");
+      if (!fields) throw new Error(`Missing evaluated bounds ${symbol}`);
+      return [
+        symbol,
+        [
+          Number(fields.x),
+          Number(fields.y),
+          Number(fields.width),
+          Number(fields.height),
+        ],
+      ];
+    }),
+  );
+}
+
 /** Symbolic IDs of the Host's current Worlds. */
 export async function galleryWorlds(): Promise<string[]> {
   const worlds = await requireCanvas().host.listWorlds();
@@ -815,26 +861,138 @@ export async function galleryWaveform(flush = true): Promise<GalleryWaveform> {
  * corner, through the actual panel Surface and camera transforms: on the
  * Surface plane, or `depth` Surface metres in front of it along its normal,
  * where a layer plane of an exploded panel lies. */
-export async function projectGalleryGuiContent(
-  points: readonly (readonly [number, number])[],
-  depth = 0,
-) {
-  await requireCanvas().flush();
-  const [{ entity, camera, surface }, density] = await Promise.all([
+export async function galleryGuiProjection() {
+  const [placement, density] = await Promise.all([
     galleryGuiPlacement(),
     galleryGuiDensity(),
   ]);
-  const width = Number(surface.width);
-  const height = Number(surface.height);
+  return { ...placement, density };
+}
+
+export async function projectGalleryGuiContent(
+  points: readonly (readonly [number, number])[],
+  depth = 0,
+  projection?: Awaited<ReturnType<typeof galleryGuiProjection>>,
+) {
+  await requireCanvas().flush();
+  const { entity, camera, surface, shape, density } =
+    projection ?? (await galleryGuiProjection());
   return projectSnapshotPoints(
     entity,
     camera,
-    points.map(([x, y]) => [
-      x / density - width / 2,
-      height / 2 - y / density,
-      depth,
+    points.map((point) =>
+      guiSurfacePoint({ surface, shape, density }, point, depth),
+    ),
+  );
+}
+
+/** Test-owned chart oracle shared by frame projection and cover-ray checks. */
+function guiSurfacePoint(
+  {
+    surface,
+    shape,
+    density,
+  }: Pick<
+    Awaited<ReturnType<typeof galleryGuiProjection>>,
+    "surface" | "shape" | "density"
+  >,
+  [u, v]: readonly [number, number],
+  depth: number,
+): number[] {
+  const x = u / density - Number(surface.width) / 2;
+  const y = Number(surface.height) / 2 - v / density;
+  const k = shape === "FlatSurface" ? 0 : Number(surface.curvature);
+  if (k === 0) return [x, y, depth];
+  const angle =
+    k * (shape === "SphereSurface" ? Math.hypot(x, y) : Math.abs(x));
+  const sinc = angle === 0 ? 1 : Math.sin(angle) / angle;
+  const cosine = Math.cos(angle);
+  const factor = 1 + k * depth;
+  return [
+    x * sinc * factor,
+    shape === "SphereSurface" ? y * sinc * factor : y,
+    (cosine - 1) / k + depth * cosine,
+  ];
+}
+
+/** Independently intersect camera-to-content rays with the inspected cover's
+ * unit picking box. The first entry axis distinguishes a side wall from its
+ * front cap, and target coordinates prove protected-shell enclosure. */
+export async function galleryShieldRays(
+  points: readonly (readonly [number, number])[],
+  depth: number,
+) {
+  const projection = await galleryGuiProjection();
+  const client = requireCanvas().client;
+  const entities = (await client.inspect()).entities;
+  const shield = entities.find(
+    (entity) => entity.metadata.symbolicId === "gui-input-shield",
+  );
+  if (!shield) throw new Error("Shield is not mounted");
+  const parents: EntitySnapshot[] = [];
+  for (let at = shield.link.parent; at !== projection.entity.id; ) {
+    const parent = entities.find((entity) => entity.id === at);
+    if (!parent) throw new Error("Shield must inherit its Surface parent");
+    parents.push(parent);
+    at = parent.link.parent;
+  }
+  const frames = [...parents.reverse(), shield];
+  const inverse = (entity: EntitySnapshot, point: readonly number[]) => {
+    const transform = componentFields(client, entity, "Transform")!;
+    return rotateByQuaternion(
+      point.map(
+        (value, axis) => value - Number(transform[["x", "y", "z"][axis]!]),
+      ),
+      [
+        -Number(transform.qx),
+        -Number(transform.qy),
+        -Number(transform.qz),
+        Number(transform.qw),
+      ],
+    ).map(
+      (value, axis) => value / Number(transform[["sx", "sy", "sz"][axis]!]),
+    );
+  };
+  const camera = componentFields(client, projection.camera, "Transform")!;
+  const shieldLocal = (point: readonly number[]) =>
+    frames.reduce((at, frame) => inverse(frame, at), point);
+  const origin = shieldLocal(
+    inverse(projection.entity, [
+      Number(camera.x),
+      Number(camera.y),
+      Number(camera.z),
     ]),
   );
+  return points.map((point) => {
+    const target = shieldLocal(guiSurfacePoint(projection, point, depth));
+    const direction = target.map((value, axis) => value - origin[axis]!);
+    let near = -Infinity;
+    let far = Infinity;
+    let axis = -1;
+    for (let index = 0; index < 3; index++) {
+      if (Math.abs(direction[index]!) < 1e-12) {
+        if (Math.abs(origin[index]!) > 0.5) {
+          near = Infinity;
+          far = -Infinity;
+          break;
+        }
+        continue;
+      }
+      const a = (-0.5 - origin[index]!) / direction[index]!;
+      const b = (0.5 - origin[index]!) / direction[index]!;
+      const entry = Math.min(a, b);
+      if (entry > near) {
+        near = entry;
+        axis = index;
+      }
+      far = Math.min(far, Math.max(a, b));
+    }
+    const frontTime = (0.5 - origin[2]!) / direction[2]!;
+    const front = origin.map(
+      (value, index) => value + frontTime * direction[index]!,
+    );
+    return { point, origin, target, near, far, axis, front };
+  });
 }
 
 /** Project a content rectangle `[minX, minY, maxX, maxY]` into normalized
@@ -1379,7 +1537,24 @@ export async function projectGalleryPoints(
   await requireCanvas().flush();
   const [entity, camera] = await galleryEntities([symbol, "gallery-camera"]);
   if (!entity || !camera) throw new Error(`Missing gallery object ${symbol}`);
-  return projectSnapshotPoints(entity, camera, offsets);
+  const parents: EntitySnapshot[] = [];
+  let parent = entity.link.parent;
+  const seen = new Set<bigint>([entity.id]);
+  while (parent !== null) {
+    if (seen.has(parent)) throw new Error("Cyclic gallery entity placement");
+    seen.add(parent);
+    const page = await requireCanvas().client.inspectPage({
+      collection: "entities",
+      target: parent,
+      limit: 1,
+    });
+    const ancestor = page.entities[0];
+    if (!ancestor || ancestor.id !== parent)
+      throw new Error("Missing gallery placement ancestor");
+    parents.push(ancestor);
+    parent = ancestor.link.parent;
+  }
+  return projectSnapshotPoints(entity, camera, offsets, parents);
 }
 
 /** The GUI demo, its Surface and the gallery camera, read together. */
@@ -1391,9 +1566,16 @@ async function galleryGuiPlacement() {
   ]);
   if (!entity) throw new Error("Missing gallery GUI demo");
   if (!camera) throw new Error("Missing gallery camera");
-  const surface = componentFields(client, entity, "Surface");
-  if (!surface) throw new Error("Missing effective GUI demo Surface");
-  return { entity, camera, surface };
+  const selected = (
+    ["FlatSurface", "CylinderSurface", "SphereSurface"] as const
+  )
+    .map((shape) => ({
+      shape,
+      surface: componentFields(client, entity, shape),
+    }))
+    .find(({ surface }) => surface !== undefined);
+  if (!selected?.surface) throw new Error("Missing effective GUI demo Surface");
+  return { entity, camera, surface: selected.surface, shape: selected.shape };
 }
 
 function requireViewport() {
@@ -1407,13 +1589,17 @@ function projectSnapshotPoints(
   entity: EntitySnapshot,
   camera: EntitySnapshot,
   offsets: readonly (readonly number[])[],
+  parents: readonly EntitySnapshot[] = [],
 ) {
   const handle = requireCanvas();
   const fields = (entity: typeof camera, name: string) =>
     entity.components.find(
       (entry) => entry.component === handle.client.components[name]!.id,
     )!.fields;
-  const object = fields(entity, "Transform");
+  const objects = [entity, ...parents].flatMap((owner) => {
+    const transform = componentFields(handle.client, owner, "Transform");
+    return transform ? [transform] : [];
+  });
   const view = fields(camera, "Transform");
   const projection = fields(camera, "Camera");
   const viewport = requireViewport();
@@ -1421,15 +1607,15 @@ function projectSnapshotPoints(
     .querySelector<HTMLCanvasElement>("#ipp-world-canvas")!
     .getBoundingClientRect();
   return offsets.map((local) => {
-    const point = rotateByQuaternion(
-      local.map((v, axis) => v * Number(object[["sx", "sy", "sz"][axis]!])),
-      ["qx", "qy", "qz", "qw"].map((key) => Number(object[key])),
-    );
+    let point = [...local];
+    for (const object of objects) {
+      point = rotateByQuaternion(
+        point.map((v, axis) => v * Number(object[["sx", "sy", "sz"][axis]!])),
+        ["qx", "qy", "qz", "qw"].map((key) => Number(object[key])),
+      ).map((v, axis) => v + Number(object[["x", "y", "z"][axis]!]));
+    }
     const relative = point.map(
-      (v, axis) =>
-        v +
-        Number(object[["x", "y", "z"][axis]!]) -
-        Number(view[["x", "y", "z"][axis]!]),
+      (v, axis) => v - Number(view[["x", "y", "z"][axis]!]),
     );
     const cameraPoint = rotateByQuaternion(relative, [
       -Number(view.qx),

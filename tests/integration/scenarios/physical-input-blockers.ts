@@ -127,7 +127,7 @@ export async function preparePhysicalBlockers(
       }),
       insertComponent(camera, "Transform", alias(1), { z: 5 }),
       createEntity(2, "panel-anchor"),
-      insertComponent(camera, "Surface", alias(2), { width: 2, height: 2 }),
+      insertComponent(camera, "FlatSurface", alias(2), { width: 2, height: 2 }),
       {
         kind: "insertComponent",
         entity: alias(2),

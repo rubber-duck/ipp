@@ -15,7 +15,7 @@
  * `secondary-button.tsx`, `arc.tsx` (rings), `row-motion.tsx` (an entity's
  * own skin row and its Host-clock motion, still under reduced motion),
  * `choice.ts` (the selection of composites over a group), `overlay.tsx`
- * (overlay layers, the open state a client keeps in step with the runtime
+ * (overlay bands, the open state a client keeps in step with the runtime
  * and the floating surface), `menu.tsx` (the command rows of a menu),
  * `option-list.tsx` (the option rows of the selection controls),
  * `select-trigger.tsx` (their trigger and list surface), `slider-rail.tsx`
@@ -133,10 +133,11 @@ export {
 export { Tabs, type TabItem, type TabsProps } from "./gui-kit/tabs.js";
 export {
   Floating,
-  GUI_KIT_LAYERS,
+  GUI_KIT_OVERLAY_BANDS,
   useOverlayOpen,
   type FloatingProps,
   type GuiKitOverlayAlign,
+  type GuiKitOverlayBand,
   type GuiKitOverlayMode,
   type GuiKitOverlaySide,
   type OverlayOpen,

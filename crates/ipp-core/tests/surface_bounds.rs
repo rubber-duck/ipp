@@ -5,7 +5,7 @@ use support::WorldTestDriver;
 use support::selection::{RENDER, SURFACE, select};
 
 use ipp_core::{
-    Batch, Command, ComponentValue, EntityRef, FieldValue, FieldWrite, Surface, WorldLimits,
+    Batch, Command, ComponentValue, EntityRef, FieldValue, FieldWrite, FlatSurface, WorldLimits,
     components::{BoundingGeometry, MeshInstance, Transform},
     systems::{
         camera,
@@ -59,7 +59,7 @@ fn surface_bounds_follow_transform_and_dimension_changes_without_picking() {
         .unwrap();
     assert!(world.await_upload_for_test().assets[0].result.is_ok());
 
-    let surface = Surface {
+    let surface = FlatSurface {
         width: 4.0,
         height: 2.0,
         ..Default::default()
@@ -79,7 +79,7 @@ fn surface_bounds_follow_transform_and_dimension_changes_without_picking() {
                     ..Default::default()
                 }),
             ),
-            Command::insert_value(EntityRef::Alias(1), ComponentValue::Surface(surface)),
+            Command::insert_value(EntityRef::Alias(1), ComponentValue::FlatSurface(surface)),
             Command::insert_value(
                 EntityRef::Alias(1),
                 ComponentValue::MeshInstance(MeshInstance {
@@ -121,9 +121,9 @@ fn surface_bounds_follow_transform_and_dimension_changes_without_picking() {
         &mut world,
         vec![Command::SetField {
             entity: EntityRef::Handle(entity),
-            component: ComponentValue::SURFACE,
+            component: ComponentValue::FLAT_SURFACE,
             field: FieldWrite {
-                offset: std::mem::offset_of!(Surface, width) as u32,
+                offset: std::mem::offset_of!(FlatSurface, width) as u32,
                 value: FieldValue::F32(1.0),
             },
         }],
@@ -177,9 +177,9 @@ fn surface_bounds_follow_transform_and_dimension_changes_without_picking() {
         &mut world,
         vec![Command::SetField {
             entity: EntityRef::Handle(entity),
-            component: ComponentValue::SURFACE,
+            component: ComponentValue::FLAT_SURFACE,
             field: FieldWrite {
-                offset: std::mem::offset_of!(Surface, width) as u32,
+                offset: std::mem::offset_of!(FlatSurface, width) as u32,
                 value: FieldValue::F32(4.0),
             },
         }],
@@ -192,7 +192,7 @@ fn surface_bounds_follow_transform_and_dimension_changes_without_picking() {
         &mut world,
         vec![Command::RemoveComponent {
             entity: EntityRef::Handle(entity),
-            component: ComponentValue::SURFACE,
+            component: ComponentValue::FLAT_SURFACE,
         }],
     );
     assert_eq!(

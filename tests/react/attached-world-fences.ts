@@ -9,7 +9,7 @@ import {
   AttachedWorld,
   Camera,
   Entity,
-  Surface,
+  FlatSurface,
   createRoot,
   type AttachedWorldHandle,
   type ReactCompositionHost,
@@ -274,7 +274,7 @@ async function exerciseTypedSelectors(
         React.createElement(
           Entity,
           { key: bindTo, bindTo },
-          React.createElement(Surface, { width: 1, height: 1 }),
+          React.createElement(FlatSurface, { width: 1, height: 1 }),
         ),
       ),
       React.createElement(

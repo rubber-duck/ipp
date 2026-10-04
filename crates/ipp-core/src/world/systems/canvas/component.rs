@@ -11,18 +11,14 @@ use std::sync::Arc;
 /// Canvas entity. An entity without it paints with the identity style: no
 /// translation, unit scale, white tint, full opacity, no clip and its parent's
 /// layer. Tint and opacity multiply down the tree; translation and scale
-/// compose; clips intersect within a layer.
+/// compose; ordinary clips intersect through every ancestor.
 ///
-/// `layer` is a plane id within the canvas. Zero keeps the entity on its
-/// parent's plane, the base plane 0 at the top level; a nonzero id puts it on
-/// that plane, or one above its parent's when the parent's is not below it, so
-/// content never sits below its parent and every entity resolving to a plane
-/// shares it wherever it is declared. Paint follows plane, then tree order,
-/// and hit testing the reverse. An entity with a nonzero layer starts a new
-/// clip scope at the canvas extent, so lower-layer ancestors no longer clip
-/// it, while its own and its descendants' clips still apply. A Surface's
-/// `layer_spacing` presents each plane its id times the spacing along its
-/// normal.
+/// `layer` is a nonnegative parent-relative offset. Zero inherits its parent's
+/// level; equal sums share one group across ordinary trees in the same canvas.
+/// GUI overlays establish independent priority and clipping scopes. Logical
+/// sums use u64 so nested u32 offsets do not overflow; occupied groups are
+/// published as consecutive u32 physical ranks. Surface layer spacing applies
+/// to those ranks rather than authored offsets.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, SchemaComponent)]
 pub struct CanvasStyle {
@@ -54,10 +50,8 @@ pub struct CanvasStyle {
     pub clip_max_x: f32,
     /// Local clipping maximum Y.
     pub clip_max_y: f32,
-    /// Plane id of this entity's layer within its canvas. Zero keeps its
-    /// parent's plane; a nonzero id names a plane, raised to one above its
-    /// parent's when the parent's is not below it. Structural: animation never
-    /// writes it.
+    /// Nonnegative offset from the parent's resolved component layer.
+    /// Structural: animation never writes it. Zero inherits.
     pub layer: u32,
 }
 

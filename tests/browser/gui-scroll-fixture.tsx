@@ -8,7 +8,7 @@ import {
   CanvasWorld,
   Children,
   Entity,
-  Surface,
+  FlatSurface,
   Transform,
   type CanvasWorldHandle,
 } from "../../packages/ipp-react/src/index.js";
@@ -353,7 +353,7 @@ function Application({
         >
           <Entity id="scroll-panel">
             <Transform />
-            <Surface
+            <FlatSurface
               width={WIDTH / UNITS_PER_METRE}
               height={HEIGHT / UNITS_PER_METRE}
             />

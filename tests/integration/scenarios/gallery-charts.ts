@@ -56,8 +56,10 @@ export interface GalleryChartsState {
     controllers: readonly bigint[];
     surface: null | {
       anchor: bigint;
+      component: "CylinderSurface";
       width: number;
       height: number;
+      curvature: number;
       unitsPerMetre: number;
       extent: readonly number[];
     };
@@ -211,6 +213,57 @@ function assertRingLayout(state: GalleryChartsState) {
         Math.abs(normal[1]!) < 0.001,
       `${chart.id}: actual front normal faces inward toward the camera`,
     );
+    if (chart.surface) {
+      const anchor = state.world.entities.find(
+        (item) => item.id === chart.anchor,
+      );
+      const providers = anchor?.components.filter((item) =>
+        [25, 54, 55].includes(item.component),
+      );
+      const surface = providers?.[0]?.fields;
+      chartCheck(
+        providers?.length === 1 && providers[0]!.component === 54 && surface,
+        `${chart.id}: actual anchor declares only CylinderSurface`,
+      );
+      chartCheck(
+        chart.surface.component === "CylinderSurface" &&
+          Math.abs(Number(surface.curvature) + 1 / state.ring.radius) < 1e-8 &&
+          Math.abs(chart.surface.curvature - Number(surface.curvature)) <
+            1e-8 &&
+          Number(surface.width) === 10 &&
+          Number(surface.height) === 6 &&
+          Number(surface.layer_spacing) === 0,
+        `${chart.id}: actual cylindrical fields share the arrangement radius and physical extent`,
+      );
+      for (const u of [0, 0.25, 0.5, 0.75, 1]) {
+        const x = (u - 0.5) * chart.surface.width;
+        for (const y of [-3, 0, 3]) {
+          const point = placePoint(fields, chartSurfaceLocalPoint(state, x, y));
+          const radial = [
+            point[0]! - state.ring.center[0]!,
+            point[2]! - state.ring.center[2]!,
+          ];
+          const front = rotate(
+            [-Math.sin(x / radius), 0, Math.cos(x / radius)],
+            quaternion,
+          );
+          chartCheck(
+            Math.abs(Math.hypot(...radial) - radius) < 1e-4 &&
+              Math.abs(point[1]! - (state.ring.center[1]! + y)) < 1e-4,
+            `${chart.id}: edge/interior samples lie on the common ring cylinder`,
+          );
+          chartCheck(
+            -(front[0]! * radial[0]! + front[2]! * radial[1]!) / radius >
+              0.99999,
+            `${chart.id}: edge/interior normals face the ring center`,
+          );
+        }
+      }
+      chartCheck(
+        Math.abs(chartSurfaceLocalPoint(state, 5, 0)[2]! - 0.367) < 0.001,
+        `${chart.id}: panel edge sag uses radius34 rather than a visually exaggerated radius`,
+      );
+    }
     const size = chart.surface
       ? [chart.surface.width, chart.surface.height, 0]
       : [chart.frame.width!, chart.frame.height!, chart.frame.depth ?? 0];
@@ -324,22 +377,24 @@ export async function exerciseGalleryCharts(driver: GalleryChartsDriver) {
   chartCheck(
     initial.charts.length === ids.length &&
       ids.every((id) => initial.charts.some((chart) => chart.id === id)),
-    "One scene contains all ten flat and volumetric chart families",
+    "One scene contains all ten Canvas and volumetric chart families",
   );
   assertRingLayout(initial);
   assertCenterCamera(initial);
-  const flat = initial.charts.filter((chart) => chart.component.endsWith("2d"));
+  const canvas = initial.charts.filter((chart) =>
+    chart.component.endsWith("2d"),
+  );
   const spatial = initial.charts.filter((chart) =>
     chart.component.endsWith("3d"),
   );
   chartCheck(
-    flat.length === 5 && spatial.length === 5,
+    canvas.length === 5 && spatial.length === 5,
     "Five Canvas plots and five spatial plots share the camera scene",
   );
   chartCheck(
-    new Set(flat.map((chart) => String(chart.world.id))).size === 5 &&
-      flat.every((chart) => chart.world.id !== initial.worldReference.id),
-    "Each flat chart owns one distinct Canvas child World",
+    new Set(canvas.map((chart) => String(chart.world.id))).size === 5 &&
+      canvas.every((chart) => chart.world.id !== initial.worldReference.id),
+    "Each Canvas chart owns one distinct Canvas child World",
   );
   chartCheck(
     spatial.every(
@@ -372,9 +427,9 @@ export async function exerciseGalleryCharts(driver: GalleryChartsDriver) {
       attachments.every(
         ({ fields }) => Number(fields.mode) === 1 && fields.output === null,
       ),
-    "Five SurfaceCanvas attachments present the flat exhibits",
+    "Five SurfaceCanvas attachments present the curved Canvas exhibits",
   );
-  for (const chart of flat) {
+  for (const chart of canvas) {
     const attachment = attachments.find(
       ({ entity }) => entity.id === chart.anchor,
     );
@@ -513,6 +568,17 @@ export async function exerciseGalleryCharts(driver: GalleryChartsDriver) {
     const measurement = assertFocusedChartImage(focused, id);
     await driver.record(`charts-focus-${id}-pixels`, measurement);
   }
+  await driver.action("playback", { playing: false, time: 0 });
+  await focusChart(driver, "bars");
+  await driver.action("navigate", { kind: "zoom", amount: 0.3 });
+  await driver.action("navigate", { kind: "rotate", yaw: 0.4, pitch: 0.16 });
+  const curvedView = await driver.inspect();
+  const curvedFrame = await driver.capture("charts-inward-oblique");
+  assertFocusedChartImage(curvedFrame, "inward oblique bars");
+  await driver.record(
+    "charts-inward-oblique-probes",
+    assertCurvedChartPixels(curvedFrame, curvedView, "bars"),
+  );
   await focusChart(driver, "bars");
   const before = await driver.capture("charts-data-phase-zero");
   await driver.action("playback", { playing: false, time: 2 });
@@ -618,26 +684,301 @@ export function baselineBarPointer(state: GalleryChartsState, aspect: number) {
     (32.5 / (Number(frame.max_y) - Number(frame.min_y))) *
       (height - Number(frame.padding_top) - Number(frame.padding_bottom));
   const density = Number(chart.surface?.unitsPerMetre);
-  const point = rotate(
-    [
-      ((x - width / 2) / density) * Number(object.sx),
-      ((height / 2 - y) / density) * Number(object.sy),
-      0,
-    ],
-    [
-      Number(object.qx),
-      Number(object.qy),
-      Number(object.qz),
-      Number(object.qw),
-    ],
-  );
-  return projectChartPoint(
-    state,
-    point.map(
-      (value, index) => value + Number(object[["x", "y", "z"][index]!]),
+  const point = placePoint(
+    object,
+    chartSurfaceLocalPoint(
+      state,
+      (x - width / 2) / density,
+      (height / 2 - y) / density,
     ),
-    aspect,
   );
+  assertChartRay(
+    state,
+    chart,
+    point,
+    (x - width / 2) / density,
+    (height / 2 - y) / density,
+  );
+  return projectChartPoint(state, point, aspect);
+}
+
+/** Independent ring-cylinder geometry, derived from the arrangement rather than runtime sampling. */
+export function chartSurfaceLocalPoint(
+  state: GalleryChartsState,
+  x: number,
+  y: number,
+) {
+  const radius = state.ring.radius;
+  return [
+    radius * Math.sin(x / radius),
+    y,
+    radius * (1 - Math.cos(x / radius)),
+  ];
+}
+
+function assertChartRay(
+  state: GalleryChartsState,
+  chart: GalleryChartsState["charts"][number],
+  point: readonly number[],
+  x: number,
+  y: number,
+) {
+  const origin = [
+    state.camera.transform.x,
+    state.camera.transform.y,
+    state.camera.transform.z,
+  ];
+  const direction = point.map((v, i) => v - origin[i]!);
+  const ox = origin[0]! - state.ring.center[0]!,
+    oz = origin[2]! - state.ring.center[2]!;
+  const a = direction[0]! ** 2 + direction[2]! ** 2;
+  const b = 2 * (ox * direction[0]! + oz * direction[2]!);
+  const c = ox ** 2 + oz ** 2 - state.ring.radius ** 2;
+  const discriminant = b * b - 4 * a * c;
+  chartCheck(
+    discriminant >= 0,
+    "Projected pointer ray intersects the ring cylinder",
+  );
+  const roots = [
+    (-b - Math.sqrt(discriminant)) / (2 * a),
+    (-b + Math.sqrt(discriminant)) / (2 * a),
+  ];
+  const t = roots.find((value) => value > 0 && Math.abs(value - 1) < 1e-4);
+  chartCheck(
+    t !== undefined,
+    "Independent ray recovers the authored chart point",
+  );
+  const fields = chartTransform(state, chart);
+  const local = rotate(
+    origin.map(
+      (v, i) => v + t * direction[i]! - Number(fields[["x", "y", "z"][i]!]),
+    ),
+    [
+      -Number(fields.qx),
+      -Number(fields.qy),
+      -Number(fields.qz),
+      Number(fields.qw),
+    ],
+  );
+  chartCheck(
+    Math.abs(
+      state.ring.radius * Math.atan2(local[0]!, state.ring.radius - local[2]!) -
+        x,
+    ) < 1e-4 && Math.abs(local[1]! - y) < 1e-4,
+    "Independent ray inversion returns the same arc-length chart coordinates",
+  );
+}
+
+/** Compare completed pixels at independent curved-edge and data locations in an oblique view. */
+export function assertCurvedChartPixels(
+  frame: ChartImage,
+  state: GalleryChartsState,
+  id: string,
+) {
+  const chart = state.charts.find((chart) => chart.id === id)!;
+  chartCheck(chart.surface, "Curved pixel probe has a Canvas chart");
+  const object = chartTransform(state, chart),
+    aspect = frame.width / frame.height;
+  const probes = [0.05, 0.25, 0.75, 0.95].map((u) => {
+    const x = (u - 0.5) * chart.surface!.width;
+    const local = chartSurfaceLocalPoint(
+      state,
+      x,
+      chart.surface!.height * 0.35,
+    );
+    const projected = projectChartPoint(
+      state,
+      placePoint(object, local),
+      aspect,
+    );
+    const flat = projectChartPoint(
+      state,
+      placePoint(object, [x, local[1]!, 0]),
+      aspect,
+    );
+    const px = Math.round(projected.x * frame.width),
+      py = Math.round(projected.y * frame.height);
+    chartCheck(
+      px > 1 && px < frame.width - 2 && py > 1 && py < frame.height - 2,
+      "Curved edge probe is inside completed frame",
+    );
+    const rgb = [
+      ...frame.pixels.slice(
+        (py * frame.width + px) * 4,
+        (py * frame.width + px) * 4 + 3,
+      ),
+    ];
+    chartCheck(
+      rgb.every((v, i) => Math.abs(v - [33, 44, 56][i]!) < 15),
+      `${id}: inward-curved panel background at independent edge probe ${u}: ${rgb}`,
+    );
+    return {
+      u,
+      projected,
+      flat,
+      rgb,
+      displacement: Math.hypot(
+        (projected.x - flat.x) * frame.width,
+        (projected.y - flat.y) * frame.height,
+      ),
+    };
+  });
+  chartCheck(
+    Math.max(...probes.map((p) => p.displacement)) > 1,
+    "Actual-radius curvature shifts oblique edge probes by observable pixels",
+  );
+  const bar = baselineBarPointer(state, aspect);
+  const offset =
+    (Math.round(bar.y * frame.height) * frame.width +
+      Math.round(bar.x * frame.width)) *
+    4;
+  const rgb = [...frame.pixels.slice(offset, offset + 3)];
+  chartCheck(
+    rgb[1]! > 120 && rgb[2]! > 180 && rgb[0]! < 70,
+    `${id}: independently projected source-row interior is cyan: ${rgb}`,
+  );
+  const silhouette = curvedSilhouetteProbe(frame, state, chart);
+  return { probes, bar: { point: bar, rgb }, silhouette };
+}
+
+/** A silhouette pixel must belong to exactly one of the cylindrical and tangent-plane extents. */
+function curvedSilhouetteProbe(
+  frame: ChartImage,
+  state: GalleryChartsState,
+  chart: GalleryChartsState["charts"][number],
+) {
+  const fields = chartTransform(state, chart),
+    surface = chart.surface!;
+  const inverse = [
+    -Number(fields.qx),
+    -Number(fields.qy),
+    -Number(fields.qz),
+    Number(fields.qw),
+  ];
+  const origin = rotate(
+    [
+      state.camera.transform.x - Number(fields.x),
+      state.camera.transform.y - Number(fields.y),
+      state.camera.transform.z - Number(fields.z),
+    ],
+    inverse,
+  );
+  const cameraRotation = [
+    state.camera.transform.qx,
+    state.camera.transform.qy,
+    state.camera.transform.qz,
+    state.camera.transform.qw,
+  ];
+  const radius = state.ring.radius,
+    aspect = frame.width / frame.height;
+  const tangent = Math.tan(Number(state.camera.fields.fov_y) / 2);
+  chartCheck(
+    Number(state.camera.fields.projection) === 0 &&
+      [fields.sx, fields.sy, fields.sz].every((v) => Number(v) === 1),
+    "Silhouette oracle uses the actual perspective camera and unscaled exhibit",
+  );
+  const candidates = [];
+  for (const edge of [-1, 1]) {
+    const x = (edge * surface.width) / 2;
+    for (const y of [-1, 0, 1, 2.5]) {
+      const curved = projectChartPoint(
+        state,
+        placePoint(fields, chartSurfaceLocalPoint(state, x, y)),
+        aspect,
+      );
+      const planar = projectChartPoint(
+        state,
+        placePoint(fields, [x, y, 0]),
+        aspect,
+      );
+      for (const fraction of [0.25, 0.5, 0.75]) {
+        const px = Math.round(
+          (curved.x + fraction * (planar.x - curved.x)) * frame.width,
+        );
+        const py = Math.round(
+          (curved.y + fraction * (planar.y - curved.y)) * frame.height,
+        );
+        if (px < 0 || px >= frame.width || py < 0 || py >= frame.height)
+          continue;
+        // Unproject the exact sampled pixel, then independently intersect both possible providers.
+        const direction = rotate(
+          rotate(
+            [
+              (2 * ((px + 0.5) / frame.width) - 1) * tangent * aspect,
+              (1 - 2 * ((py + 0.5) / frame.height)) * tangent,
+              -1,
+            ],
+            cameraRotation,
+          ),
+          inverse,
+        );
+        const tPlane = -origin[2]! / direction[2]!;
+        const planePoint = origin.map((v, i) => v + tPlane * direction[i]!);
+        const a = direction[0]! ** 2 + direction[2]! ** 2;
+        const b =
+          2 *
+          (origin[0]! * direction[0]! + (origin[2]! - radius) * direction[2]!);
+        const c = origin[0]! ** 2 + (origin[2]! - radius) ** 2 - radius ** 2;
+        const d = b * b - 4 * a * c;
+        if (d < 0) continue;
+        const hits = [
+          (-b - Math.sqrt(d)) / (2 * a),
+          (-b + Math.sqrt(d)) / (2 * a),
+        ]
+          .filter((t) => t > 0)
+          .map((t) => {
+            const point = origin.map((v, i) => v + t * direction[i]!);
+            return [
+              radius * Math.atan2(point[0]!, radius - point[2]!),
+              point[1]!,
+            ];
+          });
+        const margin = 0.035;
+        const inside = (point: readonly number[]) =>
+          Math.abs(point[0]!) < surface.width / 2 - margin &&
+          Math.abs(point[1]!) < surface.height / 2 - margin;
+        const outside = (point: readonly number[]) =>
+          Math.abs(point[0]!) > surface.width / 2 + margin ||
+          Math.abs(point[1]!) > surface.height / 2 + margin;
+        const curvedInside = hits.some(inside),
+          planeInside = tPlane > 0 && inside(planePoint);
+        if (
+          !(curvedInside && outside(planePoint)) &&
+          !(planeInside && hits.every(outside))
+        )
+          continue;
+        const rgb = [
+          ...frame.pixels.slice(
+            (py * frame.width + px) * 4,
+            (py * frame.width + px) * 4 + 3,
+          ),
+        ];
+        const panel = rgb.every((v, i) => Math.abs(v - [33, 44, 56][i]!) < 15);
+        // RenderService's linear clear colour converts to this independent sRGB reference.
+        const background = rgb.every(
+          (v, i) => Math.abs(v - [10, 14, 20][i]!) < 4,
+        );
+        candidates.push({
+          px,
+          py,
+          curvedInside,
+          planeInside,
+          planePoint,
+          hits,
+          rgb,
+        });
+        chartCheck(
+          curvedInside ? panel : background,
+          `Cylindrical silhouette rejects planar presentation at ${px},${py}: ${rgb}`,
+        );
+      }
+    }
+  }
+  chartCheck(
+    candidates.length > 0,
+    "Actual-radius curved silhouette has a pixel distinguishable from the tangent plane",
+  );
+  return candidates;
 }
 
 export function projectChartPoint(

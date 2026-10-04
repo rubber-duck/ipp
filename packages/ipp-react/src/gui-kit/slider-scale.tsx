@@ -15,7 +15,7 @@
  * labelled slider composes one.
  */
 import { Children, Entity } from "../components.js";
-import { Layout } from "../gui/components.js";
+import { Style, Layout } from "../gui/components.js";
 import { Skin } from "../gui/theme.js";
 import { useGuiKit, type GuiKitScope } from "./kit.js";
 import { LAYOUT_LEAF, LAYOUT_STACK, type GuiKitLayout } from "./layout.js";
@@ -44,6 +44,8 @@ export interface SliderScaleMarks {
 }
 
 export interface SliderScaleProps extends SliderScaleMarks {
+  /** Nonnegative layer offset applied once at this component root; zero inherits. */
+  readonly layer?: number;
   readonly id: string;
   readonly min: number;
   readonly max: number;
@@ -116,6 +118,7 @@ export function scaleGeometry(
 
 export function SliderScale({
   id,
+  layer = 0,
   min,
   max,
   vertical = false,
@@ -130,6 +133,7 @@ export function SliderScale({
   const line = kit.unit(kit.tokens.lineWidth);
   return (
     <Entity id={id}>
+      <Style layer={layer} />
       <Layout
         kind={LAYOUT_STACK}
         {...(vertical

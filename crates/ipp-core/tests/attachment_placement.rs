@@ -745,14 +745,14 @@ fn surface_child_selection_and_physical_extent_remain_separate_from_placement_ow
         vec![
             Command::InsertComponent {
                 entity: EntityRef::Handle(anchor),
-                component: ComponentValue::SURFACE,
+                component: ComponentValue::FLAT_SURFACE,
                 fields: vec![
                     ipp_core::FieldWrite {
-                        offset: std::mem::offset_of!(ipp_core::Surface, width) as u32,
+                        offset: std::mem::offset_of!(ipp_core::FlatSurface, width) as u32,
                         value: ipp_core::FieldValue::F32(3.0),
                     },
                     ipp_core::FieldWrite {
-                        offset: std::mem::offset_of!(ipp_core::Surface, height) as u32,
+                        offset: std::mem::offset_of!(ipp_core::FlatSurface, height) as u32,
                         value: ipp_core::FieldValue::F32(2.0),
                     },
                 ],

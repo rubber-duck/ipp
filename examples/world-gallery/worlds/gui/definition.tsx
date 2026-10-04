@@ -8,6 +8,7 @@ import {
   type GallerySceneContext,
   type GallerySceneDefinition,
 } from "../../shared/scene.js";
+import { frameGuiCamera } from "./camera.js";
 import {
   PROJECTOR_MESH_SOURCES,
   PROJECTOR_TEXTURE_SOURCES,
@@ -28,6 +29,8 @@ const OPTION_KEYS = [
   "workbenchTab",
   "autoscan",
   "surfaceCache",
+  "surfaceShape",
+  "surfaceFacing",
   "gain",
   "callsign",
   "shieldArmed",
@@ -85,6 +88,8 @@ export const guiScene: GallerySceneDefinition = {
     "setAdvancedOpen",
     "setWorkbenchTab",
     "selectSurfaceCache",
+    "selectSurfaceShape",
+    "selectSurfaceFacing",
     "setAutoscan",
     "setGain",
     "setCallsign",
@@ -126,11 +131,50 @@ export const guiScene: GallerySceneDefinition = {
     const notify = () => {
       for (const listener of listeners) listener();
     };
+    let unsubscribeState: (() => void) | undefined;
+    let observedState: GuiScene["state"] | undefined;
+    let framedMode: boolean | undefined;
+    let cameraWork = Promise.resolve();
+    let framingRequest = 0;
+    const frameCurrentMode = (force = false) => {
+      if (!active || !controller?.ready) return cameraWork;
+      const mode = controller.state.current.exploded;
+      if (!force && mode === framedMode) return cameraWork;
+      framedMode = mode;
+      // Coalesce queued transitions; disposal drains an in-flight write before
+      // the next page can reuse the protected session camera.
+      const request = ++framingRequest;
+      cameraWork = cameraWork
+        .catch(() => {})
+        .then(async () => {
+          if (!active || context.signal.aborted || request !== framingRequest)
+            return;
+          await frameGuiCamera(
+            client,
+            camera,
+            controller!.state.current.exploded,
+          );
+        });
+      void cameraWork.catch((failure) => {
+        controller?.reportFailure(failure);
+        rejectReady(failure);
+      });
+      return cameraWork;
+    };
     const observe = (scene: GuiScene) => {
       controller = scene;
+      if (observedState !== scene.state) {
+        unsubscribeState?.();
+        observedState = scene.state;
+        unsubscribeState = scene.state.subscribe(() => {
+          void frameCurrentMode();
+          notify();
+        });
+      }
       notify();
       if (scene.error) rejectReady(new Error(scene.error));
-      else if (scene.ready) resolveReady();
+      else if (scene.ready)
+        void frameCurrentMode().then(resolveReady, rejectReady);
     };
     const actions = Object.fromEntries(
       guiScene.actions
@@ -190,7 +234,8 @@ export const guiScene: GallerySceneDefinition = {
       };
     }
     actions.resetCamera = async () => {
-      await setCameraView(client, camera, "gui");
+      await ready;
+      await frameCurrentMode(true);
     };
     const base = await mountGalleryScene(context, {
       output,
@@ -250,6 +295,14 @@ export const guiScene: GallerySceneDefinition = {
             scene.selectSurfaceCache(
               value as Parameters<GuiScene["selectSurfaceCache"]>[0],
             ),
+          surfaceShape: (value) =>
+            scene.selectSurfaceShape(
+              value as Parameters<GuiScene["selectSurfaceShape"]>[0],
+            ),
+          surfaceFacing: (value) =>
+            scene.selectSurfaceFacing(
+              value as Parameters<GuiScene["selectSurfaceFacing"]>[0],
+            ),
           gain: (value) => scene.writeControl("gain", Number(value)),
           callsign: (value) => scene.writeControl("callsign", String(value)),
           shieldArmed: (value) => {
@@ -276,6 +329,12 @@ export const guiScene: GallerySceneDefinition = {
         context.signal.removeEventListener("abort", abort);
         const failures: unknown[] = [];
         active = false;
+        unsubscribeState?.();
+        try {
+          await cameraWork;
+        } catch (failure) {
+          failures.push(failure);
+        }
         try {
           // Keep the nested World mounted while removing its declarations;
           // unmount intentionally releases their ownership without deleting.

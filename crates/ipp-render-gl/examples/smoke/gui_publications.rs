@@ -2,7 +2,7 @@
 
 use super::canvas_publications::{canvas, frame_at};
 use super::publications::{apply, assert_color, create, save};
-use ipp_core::components::{CanvasBox, CanvasStyle, CanvasText, GuiLayout, Surface};
+use ipp_core::components::{CanvasBox, CanvasStyle, CanvasText, FlatSurface, GuiLayout};
 use ipp_core::services::asset_management::{AssetSource, font::FONT_TYPE};
 use ipp_core::systems::canvas::{CanvasPaintEntry, CanvasPrimitive, CanvasPublication};
 use ipp_core::{
@@ -213,7 +213,7 @@ pub fn run<D: RenderDevice>(
             }),
         ],
     )?;
-    let surface = Surface {
+    let surface = FlatSurface {
         width: 1.0,
         height: 0.5,
         ..Default::default()
@@ -223,7 +223,7 @@ pub fn run<D: RenderDevice>(
         parent,
         column,
         vec![
-            ComponentValue::Surface(surface),
+            ComponentValue::FlatSurface(surface),
             ComponentValue::WorldAttachment(WorldAttachment::surface(nested)),
             ComponentValue::GuiLayout(GuiLayout {
                 width: 64.0,

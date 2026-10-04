@@ -9,7 +9,9 @@
 
 mod support;
 
-use ipp_core::components::{CanvasStyle, GuiBehavior, GuiLayout, GuiOverlay, Surface, Transform};
+use ipp_core::components::{
+    CanvasStyle, FlatSurface, GuiBehavior, GuiLayout, GuiOverlay, Transform,
+};
 use ipp_core::systems::canvas::CanvasBox;
 use ipp_core::{
     Command, ComponentValue, EntityId, EntityPlacementRef, EntityRef, FieldValue, FieldWrite,
@@ -82,7 +84,7 @@ fn spacing(host: &mut HostRuntime, surface: CanvasSurface, layer_spacing: f32) {
     edit(
         host,
         surface,
-        vec![ComponentValue::Surface(Surface {
+        vec![ComponentValue::FlatSurface(FlatSurface {
             layer_spacing,
             ..Default::default()
         })],
@@ -174,9 +176,9 @@ fn bounds_reach_the_deepest_plane() {
 }
 
 #[test]
-fn bounds_reach_the_highest_plane_id() {
-    // Plane 3 with plane 2 empty: a third of a metre apart, the raised plane
-    // is a metre out, not the third a compacted second plane would be.
+fn large_authored_offsets_do_not_expand_the_compact_rank_bounds() {
+    // A large authored offset occupies rank1: its physical depth is one
+    // spacing, so unoccupied priorities cannot expand the shell bounds.
     let (mut host, mut renderer, state, world, surface) = scene_on(3);
     edit(
         &mut host,
@@ -189,7 +191,7 @@ fn bounds_reach_the_highest_plane_id() {
     assert!(draws(&mut renderer, &state, &mut host, world).is_empty());
     spacing(&mut host, surface, 1.0 / 3.0);
     let draws = draws(&mut renderer, &state, &mut host, world);
-    assert_eq!(draws.len(), 2);
+    assert!(draws.is_empty());
 }
 
 /// An open overlay of `size` on plane `layer`, painting a box over its bounds.
@@ -233,14 +235,14 @@ fn set_open(host: &mut HostRuntime, surface: CanvasSurface, entity: EntityId, op
 }
 
 #[test]
-fn a_plane_keeps_its_depth_while_another_layer_opens_and_closes() {
+fn occupied_ranks_repack_when_an_overlay_opens_and_closes() {
     let mut host = support::task_scheduler::host();
     let (world, mut renderer, state) = setup(&mut host);
     let world_id = world.id();
     drop(world);
     let surface = CanvasSurface::new(&mut host, world_id, 0.0, plain_box([0.0, 0.0], 0));
-    // A top-level toast stack on plane 3 and, under the base box, a closed
-    // anchored overlay such as a tooltip on plane 1.
+    // A later sibling overlay scope and an initially closed earlier scope
+    // occupy compact ranks only while visible.
     canvas::add_content(&mut host, surface.output, overlay(0.3, 3));
     let tooltip = canvas::add_content(&mut host, surface.output, overlay(0.2, 1));
     panel_apply(
@@ -257,26 +259,26 @@ fn a_plane_keeps_its_depth_while_another_layer_opens_and_closes() {
     set_open(&mut host, surface, tooltip, false);
     spacing(&mut host, surface, 0.5);
     let shown = draws(&mut renderer, &state, &mut host, world_id);
-    assert_eq!(*surface.publication(&host).layers, [0, 3]);
+    assert_eq!(*surface.publication(&host).layers, [0, 1]);
     assert_eq!(shown.len(), 2);
     let base = shown[0];
-    // The toast sits its id times the spacing out, beyond the empty planes.
-    let toast = offset(base, 1.5);
+    // Only one overlay group is occupied above the base.
+    let toast = offset(base, 0.5);
     assert!(near(shown[1], toast));
 
-    // The tooltip opens on plane 1 between them; the toast does not move.
+    // Opening the earlier scope inserts a rank and moves the later scope.
     set_open(&mut host, surface, tooltip, true);
     let open = draws(&mut renderer, &state, &mut host, world_id);
-    assert_eq!(*surface.publication(&host).layers, [0, 1, 3]);
+    assert_eq!(*surface.publication(&host).layers, [0, 1, 2]);
     assert_eq!(open.len(), 3);
     assert!(near(open[0], base));
     assert!(near(open[1], offset(base, 0.5)));
-    assert!(near(open[2], toast));
+    assert!(near(open[2], offset(base, 1.0)));
 
-    // Closing it leaves the toast where it was.
+    // Closing the earlier scope repacks the later scope to rank1.
     set_open(&mut host, surface, tooltip, false);
     let closed = draws(&mut renderer, &state, &mut host, world_id);
-    assert_eq!(*surface.publication(&host).layers, [0, 3]);
+    assert_eq!(*surface.publication(&host).layers, [0, 1]);
     assert_eq!(closed.len(), 2);
     assert!(near(closed[0], base));
     assert!(near(closed[1], toast));
@@ -294,7 +296,7 @@ fn a_plane_keeps_its_depth_while_another_layer_opens_and_closes() {
     );
     let behind = draws(&mut renderer, &state, &mut host, world_id);
     assert_eq!(behind.len(), 2);
-    assert!(near(behind[0], offset(behind[1], 1.5)));
+    assert!(near(behind[0], offset(behind[1], 0.5)));
 }
 
 #[test]
@@ -331,9 +333,9 @@ fn a_cached_surface_that_separates_layers_presents_directly() {
 }
 
 #[test]
-fn a_cached_surface_whose_one_layer_is_above_the_base_presents_directly() {
-    // Every entity on plane 2: one plane, but out of the Surface's own plane
-    // under a spacing, which a flat image at the Surface cannot show.
+fn a_single_occupied_priority_is_rank_zero_and_can_cache() {
+    // Every entity at priority2: the only occupied group is physical rank0
+    // at every spacing, so one flat image remains an exact presentation.
     let mut host = support::task_scheduler::host();
     let (world, mut renderer, state) = setup(&mut host);
     let world_id = world.id();
@@ -355,13 +357,13 @@ fn a_cached_surface_whose_one_layer_is_above_the_base_presents_directly() {
         records[0].presentation
     };
     draws(&mut renderer, &state, &mut host, world_id);
-    assert_eq!(*surface.publication(&host).layers, [2]);
+    assert_eq!(*surface.publication(&host).layers, [0]);
     assert!(!presentation(&renderer).is_direct());
 
     spacing(&mut host, surface, 0.5);
     let exploded = draws(&mut renderer, &state, &mut host, world_id);
-    assert_eq!(presentation(&renderer), SurfaceCachePresentation::Layered);
-    assert_eq!(exploded.len(), 1);
+    assert!(!presentation(&renderer).is_direct());
+    assert!(exploded.is_empty());
 
     spacing(&mut host, surface, 0.0);
     draws(&mut renderer, &state, &mut host, world_id);

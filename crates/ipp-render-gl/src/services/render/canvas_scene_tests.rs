@@ -1,5 +1,5 @@
 use super::*;
-use ipp_core::components::{Camera, CanvasBox, CanvasStyle, Surface};
+use ipp_core::components::{Camera, CanvasBox, CanvasStyle, FlatSurface};
 use ipp_core::{
     Batch, Command, ComponentValue, EntityId, EntityPlacementRef, EntityRef, WorldAttachment,
     WorldId, WorldViewport,
@@ -129,7 +129,7 @@ fn attach(
     child: OutputRef,
     style: CanvasStyle,
 ) -> EntityId {
-    let surface = Surface {
+    let surface = FlatSurface {
         width: 2.0,
         height: 1.0,
         ..Default::default()
@@ -140,7 +140,7 @@ fn attach(
         parent.world().id(),
         None,
         vec![
-            ComponentValue::Surface(surface),
+            ComponentValue::FlatSurface(surface),
             ComponentValue::CanvasStyle(style),
             ComponentValue::WorldAttachment(WorldAttachment::surface(child)),
         ],
@@ -676,7 +676,7 @@ fn retained_publication_slot_cannot_resurrect_retired_write() {
                 },
                 Command::RemoveComponent {
                     entity: EntityRef::Handle(anchor),
-                    component: ComponentValue::SURFACE,
+                    component: ComponentValue::FLAT_SURFACE,
                 },
             ],
         },
@@ -702,7 +702,7 @@ fn retained_publication_slot_cannot_resurrect_retired_write() {
         parent,
         vec![Command::insert_value(
             EntityRef::Handle(anchor),
-            ComponentValue::Surface(Surface {
+            ComponentValue::FlatSurface(FlatSurface {
                 width: 2.0,
                 height: 1.0,
                 ..Default::default()
@@ -773,7 +773,7 @@ fn camera_domain_discovers_canvas_slots_but_not_unattached_canvases() {
         parent,
         None,
         vec![
-            ComponentValue::Surface(Surface::default()),
+            ComponentValue::FlatSurface(FlatSurface::default()),
             ComponentValue::WorldAttachment(WorldAttachment::surface(panel)),
         ],
     );

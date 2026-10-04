@@ -115,8 +115,8 @@ pub enum SurfaceCachePresentation {
     /// Direct presentation after budget pressure or a recoverable allocation or
     /// repaint failure.
     Fallback,
-    /// Direct presentation because this context cannot provide cache targets
-    /// or the Surface has no usable content size.
+    /// No usable image. Affine geometry presents directly; required projected
+    /// presentation remains unavailable without substituting affine geometry.
     Unavailable,
     /// Direct presentation because the Surface's paint changed and was repainted at
     /// its refresh cap on [`SURFACE_CACHE_ANIMATED_FRAMES`] consecutive frames; it
@@ -163,24 +163,25 @@ impl SurfaceCachePresentation {
     }
 }
 
-/// Read-only state of one opted-in Surface's cache on this context.
+/// Read-only state of one Surface's optional or required presentation images.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SurfaceCacheDiagnostic {
     /// Live generational entity identity within its World.
     pub entity: EntityId,
     /// Presentation selected by the last completed frame.
     pub presentation: SurfaceCachePresentation,
-    /// Selected distance band; 0 is direct.
+    /// Selected distance/quality band; 0 selects near quality. Affine optional
+    /// caching presents directly in band 0; projected geometry still uses images.
     pub band: u8,
-    /// Resident image width and height in texels; zero without an image.
+    /// Common resident image dimensions in texels; zero without an image.
     pub size: [u32; 2],
-    /// Repaints since the entry was created.
+    /// Image repaints since the entry was created, summed over separated layers.
     pub repaints: u32,
-    /// Frames composited from an unchanged image since the entry was created.
+    /// Image reuses since the entry was created, summed over separated layers.
     pub reuses: u32,
     /// Host presentation time in seconds of the last repaint.
     pub painted_at: f64,
-    /// Resident image bytes, four per texel.
+    /// Aggregate resident image bytes, four per texel across separated layers.
     pub resident_bytes: u32,
 }
 
@@ -344,6 +345,7 @@ impl<T> SurfaceCacheEntry<T> {
 /// Context-wide Surface cache store shared by every World on one context.
 pub(crate) struct SurfaceTextureCache<T> {
     budget_bytes: usize,
+    reserved_bytes: usize,
     resident_bytes: usize,
     /// Entries holding an image, maintained with `resident_bytes`.
     resident_images: usize,
@@ -361,6 +363,7 @@ impl<T> Default for SurfaceTextureCache<T> {
     fn default() -> Self {
         Self {
             budget_bytes: SURFACE_CACHE_BUDGET_BYTES,
+            reserved_bytes: 0,
             resident_bytes: 0,
             resident_images: 0,
             entries: BTreeMap::new(),
@@ -374,9 +377,12 @@ impl<T> Default for SurfaceTextureCache<T> {
 
 impl<T> SurfaceTextureCache<T> {
     /// Resident image budget; a lowered budget evicts at the next frame.
-    #[cfg(any(test, feature = "instrumentation"))]
     pub(crate) fn budget(&self) -> usize {
         self.budget_bytes
+    }
+
+    pub(crate) fn reserve_images(&mut self, bytes: usize) {
+        self.reserved_bytes = bytes;
     }
 
     /// Testing override of the renderer-owned budget.
@@ -454,7 +460,7 @@ impl<T> SurfaceTextureCache<T> {
         use SurfaceCachePresentation as P;
 
         let stamp = self.stamp;
-        let budget = self.budget_bytes;
+        let budget = self.budget_bytes.saturating_sub(self.reserved_bytes);
         let entry = self
             .entries
             .entry((world, input.entity))
@@ -598,7 +604,7 @@ impl<T> SurfaceTextureCache<T> {
             }
         }
 
-        if demand + idle <= self.budget_bytes {
+        if demand + idle <= self.budget_bytes.saturating_sub(self.reserved_bytes) {
             return;
         }
 
@@ -620,7 +626,7 @@ impl<T> SurfaceTextureCache<T> {
             let key = self.order[index].2;
             let entry = self.entries.get_mut(&key).expect("ordered entry");
             let bytes = image_bytes(entry.desired);
-            if admitted + bytes <= self.budget_bytes {
+            if admitted + bytes <= self.budget_bytes.saturating_sub(self.reserved_bytes) {
                 admitted += bytes;
                 continue;
             }
@@ -651,7 +657,7 @@ impl<T> SurfaceTextureCache<T> {
             .map(|(_, _, key)| self.entries[key].image.as_ref().map_or(0, |i| i.bytes()))
             .sum::<usize>();
         for index in 0..self.order.len() {
-            if admitted + idle <= self.budget_bytes {
+            if admitted + idle <= self.budget_bytes.saturating_sub(self.reserved_bytes) {
                 break;
             }
 

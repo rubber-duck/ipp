@@ -38,6 +38,8 @@ export const SLIDER_LENGTH = 128;
 
 /** What every slider composite takes besides its values. */
 export interface SliderCompositeProps {
+  /** Nonnegative layer offset applied once at this component root; zero inherits. */
+  readonly layer?: number;
   /** Symbolic id of the composite's root entity; its parts extend it. */
   readonly id: string;
   /** The caption naming the value, such as GAIN, in the accent. */

@@ -34,7 +34,7 @@ import {
   assertPlanes,
   awaitStationIdle,
   fieldsWith,
-  obliquePanel,
+  liftInputShield,
   toggleLayers,
   waitForGuiState,
   type Gallery,
@@ -421,69 +421,74 @@ test("Gallery GUI's workbench tabs, value controls, list and popover drive the s
         "the press that closed the popover reached PULSE",
       );
 
-      // In the exploded view the panels stay whole on the base plane and an
+      // In the exploded view complete panels occupy their authored ranks and an
       // open list floats on the anchored plane above its trigger; a press
       // there picks an option.
-      await obliquePanel(g);
-      try {
-        const trigger = control(await waitForGuiState(g), {
-          role: "button",
-          symbol: "gui-rate",
-        });
-        await pressAt(g, trigger.bounds as unknown as ContentRect);
-        const open = await waitForGuiState(g, (state) =>
-          overlayOpen(state, OVERLAYS.rate),
-        );
-        const slow = find(
-          open,
-          (candidate) =>
-            candidate.overlay === OVERLAYS.rate && candidate.label === "SLOW",
-          "SLOW option",
-        );
-        await g.page.mouse.move(1, 1);
-        await new Promise((resolve) => setTimeout(resolve, SKIN_SETTLE_MS));
-        const flat = await g.capture("workbench-list-flat");
-        await toggleLayers(g, true);
-        if (!overlayOpen(await waitForGuiState(g), OVERLAYS.rate))
-          await pressAt(g, trigger.bounds as unknown as ContentRect);
-        await waitForGuiState(g, (state) => overlayOpen(state, OVERLAYS.rate));
-        await g.page.mouse.move(1, 1);
-        await new Promise((resolve) => setTimeout(resolve, SKIN_SETTLE_MS));
-        const exploded = await g.capture("workbench-list-exploded");
-        const [sx, sy, sw, sh] = slow.bounds;
-        const shifts = await assertPlanes(
+      const trigger = control(await waitForGuiState(g), {
+        role: "button",
+        symbol: "gui-rate",
+      });
+      await pressAt(g, trigger.bounds as unknown as ContentRect);
+      const open = await waitForGuiState(g, (state) =>
+        overlayOpen(state, OVERLAYS.rate),
+      );
+      const slow = find(
+        open,
+        (candidate) =>
+          candidate.overlay === OVERLAYS.rate && candidate.label === "SLOW",
+        "SLOW option",
+      );
+      await g.page.mouse.move(1, 1);
+      await new Promise((resolve) => setTimeout(resolve, SKIN_SETTLE_MS));
+      const flatProjection = await g.call("galleryGuiProjection");
+      const flat = await g.capture("workbench-list-flat");
+      await toggleLayers(g, true);
+      if (!overlayOpen(await waitForGuiState(g), OVERLAYS.rate))
+        await pressAt(
           g,
-          { label: "workbench-list-flat", frame: flat.frame },
-          { label: "workbench-list-exploded", frame: exploded.frame },
-          {
-            panel: {
-              // The gain readout's display digits.
-              at: [
-                PANEL.gainReadout[0] + 20,
-                PANEL.gainReadout[1] + PANEL.gainReadout[3] / 2,
-              ],
-              plane: LAYERS.panel,
-            },
-            list: {
-              // The SLOW option's label.
-              at: [sx + 32, sy + sh / 2],
-              plane: LAYERS.anchored,
-              radius: 14,
-            },
+          trigger.bounds as unknown as ContentRect,
+          LAYERS.workbench * LAYERS.spacing,
+        );
+      await waitForGuiState(g, (state) => overlayOpen(state, OVERLAYS.rate));
+      await g.page.mouse.move(1, 1);
+      await new Promise((resolve) => setTimeout(resolve, SKIN_SETTLE_MS));
+      const exploded = await g.capture("workbench-list-exploded");
+      const [sx, sy, sw, sh] = slow.bounds;
+      const shifts = await assertPlanes(
+        g,
+        {
+          label: "workbench-list-flat",
+          frame: flat.frame,
+          projection: flatProjection,
+        },
+        { label: "workbench-list-exploded", frame: exploded.frame },
+        {
+          panel: {
+            // The gain readout's display digits.
+            at: [
+              PANEL.gainReadout[0] + 20,
+              PANEL.gainReadout[1] + PANEL.gainReadout[3] / 2,
+            ],
+            plane: LAYERS.panel,
           },
-        );
-        await scenario.evidence.record("list-planes", shifts);
-        await pressAt(g, [sx, sy, sw, sh], LAYERS.anchored * LAYERS.spacing);
-        await g.page.waitForFunction(
-          () =>
-            document
-              .querySelector("#gui-tuning")
-              ?.textContent?.endsWith(", slow") ?? false,
-        );
-        await toggleLayers(g, false);
-      } finally {
-        await g.call("releaseGalleryGuiTransform");
-      }
+          list: {
+            // The SLOW option's label.
+            at: [sx + 32, sy + sh / 2],
+            plane: LAYERS.anchored,
+            radius: 14,
+          },
+        },
+      );
+      await scenario.evidence.record("list-planes", shifts);
+      await pressAt(g, [sx, sy, sw, sh], LAYERS.anchored * LAYERS.spacing);
+      await g.page.waitForFunction(
+        () =>
+          document
+            .querySelector("#gui-tuning")
+            ?.textContent?.endsWith(", slow") ?? false,
+      );
+      await toggleLayers(g, false);
+
       assert.deepEqual(g.errors, []);
     },
   );
@@ -515,8 +520,12 @@ test("Gallery GUI's scene tree, FIND and colour picker name and light the scene"
       );
       await pressAt(g, PANEL.telemetryView(1));
       const tree = await waitForGuiState(g, (state) =>
-        state.controls.some(({ symbol }) =>
-          (symbol ?? "").startsWith("gui-scene-tree/row/core"),
+        state.controls.some(
+          ({ symbol, available, bounds }) =>
+            (symbol ?? "").startsWith("gui-scene-tree/row/core") &&
+            available &&
+            bounds[2] > 0 &&
+            bounds[3] > 0,
         ),
       );
       const core = find(
@@ -632,75 +641,214 @@ test("Gallery GUI lifts the dialog and the toasts to their planes and takes pres
         PANEL.toast(0, 1)[0] + 16 + 13 + 16 + 40,
         PANEL.toast(0, 1)[1] + PANEL.toast(0, 1)[3] / 2,
       ];
-      await obliquePanel(g);
-      try {
-        // The dialog on the dialog plane and the toast on the toast plane.
-        const purge = await projectContent(g, [
-          [
-            PANEL.purge[0] + PANEL.purge[2] / 2,
-            PANEL.purge[1] + PANEL.purge[3] / 2,
-          ],
-        ]);
-        await g.page.mouse.click(purge[0]!.clientX, purge[0]!.clientY);
-        await waitForGuiState(g, (state) =>
-          overlayOpen(state, OVERLAYS.dialog),
-        );
-        await g.page.mouse.move(1, 1);
-        await new Promise((resolve) => setTimeout(resolve, SKIN_SETTLE_MS));
-        const flat = await g.capture("planes-dialog-flat");
-        await toggleLayers(g, true);
-        await g.page.mouse.move(1, 1);
-        const exploded = await g.capture("planes-dialog-exploded");
-        // The dialog's feature is the amber action's left edge beside
-        // Cancel: edges on both axes fix a shift that a line of text, much
-        // like itself shifted along the line, leaves loose.
-        const action = PANEL.dialog.action;
-        const shifts = await assertPlanes(
-          g,
-          { label: "planes-dialog-flat", frame: flat.frame },
-          { label: "planes-dialog-exploded", frame: exploded.frame },
-          {
-            panel: {
-              at: [
-                PANEL.gainReadout[0] + 20,
-                PANEL.gainReadout[1] + PANEL.gainReadout[3] / 2,
-              ],
-              plane: LAYERS.panel,
-            },
-            dialog: {
-              at: [action[0], action[1] + action[3] / 2],
-              plane: LAYERS.dialog,
-            },
-            toast: { at: toastText, plane: LAYERS.toast },
+      // The cover is armed by default; lift it through the normal sidebar
+      // before pressing the protected control.
+      await liftInputShield(g);
+      // The dialog on the dialog plane and the toast on the toast plane.
+      const purge = await projectContent(g, [
+        [
+          PANEL.purge[0] + PANEL.purge[2] / 2,
+          PANEL.purge[1] + PANEL.purge[3] / 2,
+        ],
+      ]);
+      await g.page.mouse.click(purge[0]!.clientX, purge[0]!.clientY);
+      await waitForGuiState(g, (state) => overlayOpen(state, OVERLAYS.dialog));
+      await g.page.mouse.move(1, 1);
+      await new Promise((resolve) => setTimeout(resolve, SKIN_SETTLE_MS));
+      const flatProjection = await g.call("galleryGuiProjection");
+      const flat = await g.capture("planes-dialog-flat");
+      await toggleLayers(g, true);
+      await g.page.mouse.move(1, 1);
+      const exploded = await g.capture("planes-dialog-exploded");
+      // The dialog's feature is the amber action's left edge beside
+      // Cancel: edges on both axes fix a shift that a line of text, much
+      // like itself shifted along the line, leaves loose.
+      const action = PANEL.dialog.action;
+      const shifts = await assertPlanes(
+        g,
+        {
+          label: "planes-dialog-flat",
+          frame: flat.frame,
+          projection: flatProjection,
+        },
+        { label: "planes-dialog-exploded", frame: exploded.frame },
+        {
+          panel: {
+            at: [
+              PANEL.gainReadout[0] + 20,
+              PANEL.gainReadout[1] + PANEL.gainReadout[3] / 2,
+            ],
+            plane: LAYERS.panel,
           },
+          dialog: {
+            at: [action[0], action[1] + action[3] / 2],
+            plane: LAYERS.dialog,
+          },
+          toast: { at: toastText, plane: LAYERS.toast },
+        },
+      );
+      await scenario.evidence.record("dialog-planes", shifts);
+      // Input meets each plane nearest first: Cancel at its projection on
+      // the dialog's plane answers it.
+      await pressAt(g, PANEL.dialog.cancel, LAYERS.dialog * LAYERS.spacing);
+      await waitForGuiState(
+        g,
+        (state) =>
+          !overlayOpen(state, OVERLAYS.dialog) &&
+          (state.eventLog.items[0]?.text ?? "").endsWith(
+            "NODE PURGE CANCELLED",
+          ),
+      );
+      // The toast's close button on the toast's plane dismisses it.
+      const close = PANEL.toast(0, 1);
+      await pressAt(
+        g,
+        [close[0] + close[2] - 8 - 32, close[1], 32, close[3]],
+        (LAYERS.toast - 1) * LAYERS.spacing,
+      );
+      await waitForGuiState(
+        g,
+        (state) =>
+          !state.controls.some(({ label }) => label === "Log cleared."),
+      );
+      await toggleLayers(g, false);
+
+      assert.deepEqual(g.errors, []);
+    },
+  );
+});
+
+/** Whole-section Expander sizing and routed controls survive each concrete panel provider. */
+test("Gallery GUI keeps nested Expander bounds and controls across flat and curved shells", {
+  timeout: 240_000,
+}, async (context) => {
+  await runBrowserEnvironment(
+    "GUI Surface authoring",
+    environment("surface-authoring"),
+    context.signal,
+    async (scenario) => {
+      const g = await openDashboard(scenario);
+      await g.call(
+        "galleryGuiAction",
+        { role: "checkbox", name: "SCAN" },
+        { kind: "toggle" },
+      );
+      await g.page.locator("#gui-explode-toggle").click();
+      await g.waitFor(
+        (inspection) =>
+          Math.abs(
+            Number(
+              fieldsWith(inspection, "gui-demo", "layer_spacing").layer_spacing,
+            ) - LAYERS.spacing,
+          ) < 1e-4,
+      );
+      const root = "gui-advanced-header";
+      const header = `${root}/header`;
+      const rows = ["gui-accent-row", "gui-explode-row", "gui-motion-row"];
+      type Bounds = Record<string, readonly [number, number, number, number]>;
+      const near = (actual: readonly number[], expected: readonly number[]) =>
+        actual.forEach((v, i) =>
+          assert.ok(
+            Math.abs(v - expected[i]!) < 0.05,
+            `${JSON.stringify(actual)} differs from ${JSON.stringify(expected)}`,
+          ),
         );
-        await scenario.evidence.record("dialog-planes", shifts);
-        // Input meets each plane nearest first: Cancel at its projection on
-        // the dialog's plane answers it.
-        await pressAt(g, PANEL.dialog.cancel, LAYERS.dialog * LAYERS.spacing);
+      for (const [shape, facing] of [
+        ["flat", "outside"],
+        ["cylinder", "outside"],
+        ["cylinder", "inside"],
+        ["sphere", "outside"],
+        ["sphere", "inside"],
+      ] as const) {
+        await g.page.locator("#gui-surface-shape").selectOption(shape);
+        if (shape !== "flat")
+          await g.page.locator("#gui-surface-facing").selectOption(facing);
+        await g.waitFor((inspection) => {
+          const provider = inspection.entities
+            .find((entity) => entity.metadata.symbolicId === "gui-demo")
+            ?.components.find(
+              (component) => "layer_spacing" in component.fields,
+            );
+          return (
+            provider?.component ===
+              (shape === "flat" ? 25 : shape === "cylinder" ? 54 : 55) &&
+            Math.abs(Number(provider.fields.layer_spacing) - LAYERS.spacing) <
+              1e-4 &&
+            (shape === "flat" ||
+              Number(provider.fields.curvature) ===
+                (facing === "inside" ? -0.125 : 0.125))
+          );
+        });
+        const state = await waitForGuiState(g);
+        assert.equal(
+          control(state, { role: "button", name: "ADVANCED" }).symbol,
+          header,
+        );
+        const expanded = await g.call<Bounds>("galleryGuiLayoutBounds", [
+          root,
+          header,
+          ...rows,
+        ]);
+        near(expanded[header]!, PANEL.advanced);
+        near(expanded[root]!, [PANEL.advanced[0], PANEL.advanced[1], 288, 176]);
+        rows.forEach((row, index) =>
+          near(expanded[row]!, [
+            PANEL.advanced[0],
+            PANEL.advanced[1] + 48 + 44 * index,
+            288,
+            40,
+          ]),
+        );
+        const label = `${shape}-${facing}`;
+        const shown = await g.capture(`${label}-expanded`);
+        assert.equal(shown.frame.failedDrawCalls, 0);
+        const [point] = await projectContent(
+          g,
+          [[PANEL.advanced[0] + 144, PANEL.advanced[1] + 20]],
+          LAYERS.advanced * LAYERS.spacing,
+        );
+        await g.page.mouse.click(point!.clientX, point!.clientY);
         await waitForGuiState(
           g,
           (state) =>
-            !overlayOpen(state, OVERLAYS.dialog) &&
-            (state.eventLog.items[0]?.text ?? "").endsWith(
-              "NODE PURGE CANCELLED",
-            ),
+            !state.controls.some((item) => item.label === "EXPLODE LAYERS"),
         );
-        // The toast's close button on the toast's plane dismisses it.
-        const close = PANEL.toast(0, 1);
-        await pressAt(
-          g,
-          [close[0] + close[2] - 8 - 32, close[1], 32, close[3]],
-          LAYERS.toast * LAYERS.spacing,
+        const collapsed = await g.call<Bounds>("galleryGuiLayoutBounds", [
+          root,
+          header,
+        ]);
+        near(collapsed[root]!, PANEL.advanced);
+        near(collapsed[header]!, PANEL.advanced);
+        const hidden = await g.capture(`${label}-collapsed`);
+        assert.equal(hidden.frame.failedDrawCalls, 0);
+        const difference = await g.call<{ changedPixels: number }>(
+          "compareViewerCaptures",
+          `${label}-expanded`,
+          `${label}-collapsed`,
         );
-        await waitForGuiState(
-          g,
-          (state) =>
-            !state.controls.some(({ label }) => label === "Log cleared."),
+        assert.ok(
+          difference.changedPixels > 50,
+          "Expanded content was not visible in completed frames",
         );
-        await toggleLayers(g, false);
-      } finally {
-        await g.call("releaseGalleryGuiTransform");
+        await g.page.mouse.click(point!.clientX, point!.clientY);
+        await waitForGuiState(g, (state) =>
+          state.controls.some((item) => item.label === "EXPLODE LAYERS"),
+        );
+        const reopened = await g.call<Bounds>("galleryGuiLayoutBounds", [
+          root,
+          header,
+          ...rows,
+        ]);
+        near(reopened[root]!, expanded[root]!);
+        rows.forEach((row) => near(reopened[row]!, expanded[row]!));
+        await scenario.evidence.record("section-layout", {
+          shape,
+          facing,
+          expanded,
+          collapsed,
+          reopened,
+          difference,
+        });
       }
       assert.deepEqual(g.errors, []);
     },

@@ -36,12 +36,14 @@ pub(super) struct SceneOutputSurface {
     pub extent: [f32; 2],
     pub token: ipp_core::WorldAttachmentToken,
     pub cache_policy: Option<ipp_core::SurfaceCachePolicy>,
+    pub cache_distance: f32,
     pub interaction_eligible: bool,
-    /// Local Z between consecutive canvas layer plane ids.
+    /// Normal offset between consecutive compact Canvas ranks.
     pub layer_spacing: f32,
-    /// Local Z of the highest layer in use, its plane id times the spacing;
-    /// zero while the canvas's layers share the Surface's plane.
+    /// Highest occupied rank times spacing; zero for coincident content.
     pub layer_depth: f32,
+    pub geometry: ipp_core::systems::surface::SurfaceGeometry,
+    pub provider_incarnation: u64,
 }
 
 impl SceneOutputSurface {
@@ -176,6 +178,12 @@ impl<'a> RenderScene<'a> {
                 let Some(extent) = edge.surface_extent else {
                     continue;
                 };
+                let Some(geometry) = edge.surface_geometry.as_ref() else {
+                    continue;
+                };
+                let Some(provider_incarnation) = edge.surface_incarnation else {
+                    continue;
+                };
                 let placement = GeometryShapeTransform::new(edge.placement)
                     .and_then(|placement| placement.then(&contribution.placement))
                     .map_err(|_| RenderError::InvalidTransform)?;
@@ -210,9 +218,20 @@ impl<'a> RenderScene<'a> {
                     extent: extent.map(|value| value as f32),
                     token: edge.token.clone(),
                     cache_policy: edge.surface_cache_policy,
+                    cache_distance: scene
+                        .camera
+                        .pose
+                        .point([0.0; 3])
+                        .iter()
+                        .zip(placement.point([0.0; 3]))
+                        .map(|(a, b)| (a - b).powi(2))
+                        .sum::<f64>()
+                        .sqrt() as f32,
                     interaction_eligible,
                     layer_spacing: edge.layer_spacing,
                     layer_depth: (f64::from(deepest) * f64::from(edge.layer_spacing)) as f32,
+                    geometry: geometry.clone(),
+                    provider_incarnation,
                 });
             }
             for key in publication.resources() {
@@ -381,7 +400,7 @@ impl<'a> RenderScene<'a> {
         surface: &SceneOutputSurface,
         planes: &[GeometryPlane; 6],
     ) -> bool {
-        use ipp_core::systems::geometry::{GeometryBounds, GeometryShape};
+        use ipp_core::systems::geometry::GeometryBounds;
 
         if self.visible(surface.entity, planes) {
             return true;
@@ -389,13 +408,14 @@ impl<'a> RenderScene<'a> {
         if !surface.layered() {
             return false;
         }
-        let [width, height] = surface.extent.map(|value| f64::from(value) * 0.5);
         let depth = f64::from(surface.layer_depth);
-        let layers = GeometryShape::Box {
-            min: [-width, -height, depth.min(0.0)],
-            max: [width, height, depth.max(0.0)],
-        };
-        layers.intersects_frustum(&planes.map(|plane| surface.placement.local_plane(&plane)))
+        surface
+            .geometry
+            .bounds([depth.min(0.0), depth.max(0.0)])
+            .is_ok_and(|layers| {
+                layers
+                    .intersects_frustum(&planes.map(|plane| surface.placement.local_plane(&plane)))
+            })
     }
 
     pub fn visual_bounds(&self, entity: RenderEntity) -> Option<[[f64; 3]; 2]> {

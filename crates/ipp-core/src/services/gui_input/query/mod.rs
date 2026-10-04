@@ -6,6 +6,7 @@ mod canvas;
 mod projection;
 mod traversal;
 
+pub(crate) use camera::surface_offset_range;
 pub use projection::{GuiProjectedPoint, project_composed_point};
 pub(crate) use traversal::GuiQueryWorlds;
 pub use traversal::query_composed_input;

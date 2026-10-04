@@ -64,6 +64,10 @@ pub struct PublishedWorldAttachment {
     pub placement: [f64; 16],
     /// Physical Surface dimensions, never child Canvas logical units.
     pub surface_extent: Option<[f64; 2]>,
+    /// Complete immutable Surface mapping.
+    pub surface_geometry: Option<crate::systems::surface::SurfaceGeometry>,
+    /// Exact provider lifetime; replacement invalidates retained paths.
+    pub surface_incarnation: Option<u64>,
     /// Validated effective parent Surface policy, independent of child paint.
     /// Only optional Canvas caching consumes this policy, not Camera target selection.
     pub surface_cache_policy: Option<crate::systems::surface::SurfaceCachePolicy>,
@@ -254,6 +258,18 @@ impl super::HostRuntime {
         }
         if edge.mode != WorldAttachmentMode::Spatial {
             edge.surface_extent?;
+            let geometry = edge.surface_geometry.as_ref()?;
+            let parent = self
+                .worlds
+                .get(&edge.token.parent().id())?
+                .ingress_world_view();
+            crate::systems::surface::publication_is_current(
+                parent,
+                edge.anchor,
+                geometry,
+                edge.surface_incarnation,
+            )
+            .then_some(())?;
             self.output(publication.id, edge.output?)?;
         }
         Some(publication)

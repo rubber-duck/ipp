@@ -19,7 +19,7 @@
 import { useRef, useState, type Ref } from "react";
 import { Children, Entity } from "../components.js";
 import { TextInput } from "../gui/controls.js";
-import { Behavior, Font, Layout } from "../gui/components.js";
+import { Style, Behavior, Font, Layout } from "../gui/components.js";
 import type {
   GuiSubmitEvent,
   GuiTextCommitListener,
@@ -33,6 +33,8 @@ import { useOverlayOpen } from "./overlay.js";
 import { SELECT_WIDTH, SelectList, useControlRef } from "./select-trigger.js";
 
 export interface AutocompleteProps {
+  /** Nonnegative layer offset applied once at this component root; zero inherits. */
+  readonly layer?: number;
   /** Symbolic id of the field; the list and its rows extend it. */
   readonly id: string;
   /** The application's suggestions for the current text. */
@@ -61,6 +63,7 @@ export interface AutocompleteProps {
 
 export function Autocomplete({
   id,
+  layer = 0,
   suggestions,
   onInputChange,
   onSelect,
@@ -125,6 +128,7 @@ export function Autocomplete({
 
   return (
     <Entity id={id}>
+      <Style layer={layer} />
       <Layout
         kind={LAYOUT_LEAF}
         width={kit.unit(SELECT_WIDTH)}

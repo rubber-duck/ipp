@@ -13,7 +13,8 @@ pub struct RenderFrameSummary {
     pub triangles: u32,
     /// Instances skipped because their mesh could not acquire GPU residency.
     /// CPU geometry remains usable; resource reload permits another upload.
-    /// Also counts Surface primitives skipped for a missing resource, and each
+    /// Also counts Surface primitives skipped for a missing resource, including
+    /// those still omitted from a reused partial image, and each
     /// Surface submission, direct or into a cache image, whose retained GUI
     /// storage could not be allocated or written or is waiting to retry after
     /// such a failure: its boxes are skipped and its text draws analytically.
@@ -78,11 +79,12 @@ pub struct RenderStatistics {
     /// Resident bytes of retained analytic Surface glyph instance streams across every
     /// World presented through this context, sixteen `f32` lanes per instance.
     pub analytic_glyph_resident_bytes: u32,
-    /// Opted-in Surfaces repainted into their cache images during this submission,
+    /// Surface images repainted during this submission, including required projected
+    /// Canvas images counted separately for each separated layer,
     /// before the main pass. Each repaint also counts its primitive draws.
     pub surface_cache_repaints: u32,
-    /// Opted-in Surfaces composited from an unchanged cache image, without repainting.
-    /// A composite is one draw call of two triangles.
+    /// Surface images presented without repainting, including each separated
+    /// projected Canvas layer. Projected images may submit several mesh patches.
     pub surface_cache_reuses: u32,
     /// Opted-in visible Surfaces presented directly: inside their direct distance,
     /// under GUI interaction, after a fallback, while animated or without cache
@@ -99,10 +101,11 @@ pub struct RenderStatistics {
     /// Cache images created or resized during this submission; each is repainted
     /// before it is shown.
     pub surface_cache_allocations: u32,
-    /// Resident cache images across every World presented through this context,
+    /// Resident optional cache and required projected Canvas images across every
+    /// World presented through this context,
     /// after this submission's releases.
     pub surface_cache_entries: u32,
-    /// Resident bytes of cache images across every World presented through this
+    /// Resident bytes of optional cache and required projected Canvas images across this
     /// context, four per texel.
     pub surface_cache_resident_bytes: u32,
 }

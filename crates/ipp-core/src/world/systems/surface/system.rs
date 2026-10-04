@@ -1,4 +1,4 @@
-use super::Surface;
+use super::{SurfaceGeometry, provider};
 use crate::systems::{System, SystemFactory, SystemId, SystemInitContext, SystemInitError};
 
 /// Owner of the Surface and SurfaceCache component capabilities. Surface
@@ -23,7 +23,9 @@ impl SystemFactory for SurfaceSystemFactory {
     fn capabilities(&self) -> crate::systems::SystemCapabilities {
         crate::systems::SystemCapabilities::new(
             [
-                crate::ComponentValue::SURFACE,
+                crate::ComponentValue::FLAT_SURFACE,
+                crate::ComponentValue::CYLINDER_SURFACE,
+                crate::ComponentValue::SPHERE_SURFACE,
                 crate::ComponentValue::SURFACE_CACHE,
             ],
             [crate::systems::WorldOperation::Surface],
@@ -43,42 +45,67 @@ impl SystemFactory for SurfaceSystemFactory {
 }
 
 impl System for SurfaceSystem {
+    fn before_operation(
+        &mut self,
+        context: &mut crate::systems::SystemOperationContext<'_>,
+    ) -> Result<(), crate::ErrorReason> {
+        let (entity, component) = match context.command {
+            crate::Command::InsertComponent {
+                entity,
+                component,
+                ..
+            } if super::is_provider(*component) => (context.resolve_entity(entity)?, *component),
+            crate::Command::InsertComponentValue {
+                entity,
+                value,
+            } if super::is_provider(value.type_id()) => {
+                (context.resolve_entity(entity)?, value.type_id())
+            }
+            _ => return Ok(()),
+        };
+        if super::SURFACE_PROVIDERS.iter().any(|&other| {
+            other != component
+                && context
+                    .staged
+                    .input_value(&context.world_data.components, entity, other)
+                    .is_some()
+        }) {
+            return Err(crate::ErrorReason::InvalidValue);
+        }
+        Ok(())
+    }
+
     fn update(&mut self, _context: &mut crate::systems::SystemUpdateContext<'_, '_>) {}
 }
 
 impl crate::WorldContext<'_> {
     /// Inspect the current completed effective Surface value.
-    pub fn surface(&self, entity: crate::EntityId) -> Option<&Surface> {
+    pub fn surface(&self, entity: crate::EntityId) -> Option<SurfaceGeometry> {
         self.world.state.entities.get(&entity)?;
-        self.world.components.surface(entity.index() as usize)
+        provider(&self.world.components, entity.index() as usize)
     }
 
-    /// Conservative centred local rectangle for culling or plane interaction.
+    /// Conservative local enclosure of the base Surface.
     pub fn surface_bounding_geometry(
         &self,
         entity: crate::EntityId,
     ) -> Option<crate::systems::geometry::GeometryShape> {
-        Some(self.surface(entity)?.local_bounding_geometry())
+        self.surface(entity)?.bounds([0.0, 0.0]).ok()
     }
 
-    /// Map an entity-local XY plane hit to Surface content coordinates if within bounds.
-    pub fn surface_plane_hit(
-        &self,
-        entity: crate::EntityId,
-        entity_x: f32,
-        entity_y: f32,
-    ) -> Option<[f32; 2]> {
-        self.surface(entity)?
-            .plane_hit_to_content(entity_x, entity_y)
-    }
-
-    /// Map a Surface content point ([0, width] x [0, height], +X right, +Y down) to centred entity-local coordinates.
+    /// Sample the base Surface in entity-local coordinates from content metres (+X right, +Y down).
     pub fn surface_content_to_entity_local(
         &self,
         entity: crate::EntityId,
         x: f32,
         y: f32,
     ) -> Option<[f32; 3]> {
-        Some(self.surface(entity)?.content_to_entity_local(x, y))
+        Some(
+            self.surface(entity)?
+                .sample([f64::from(x), f64::from(y)], 0.0)
+                .ok()?
+                .position
+                .map(|value| value as f32),
+        )
     }
 }

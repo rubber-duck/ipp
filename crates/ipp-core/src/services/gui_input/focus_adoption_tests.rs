@@ -231,7 +231,7 @@ fn panel(
     let controls = (0..count)
         .map(|_| checkbox(host, child, output_entity))
         .collect();
-    let surface = Surface {
+    let surface = FlatSurface {
         width: 4.0,
         height: 4.0,
         ..Default::default()
@@ -240,7 +240,7 @@ fn panel(
         host,
         root.world(),
         vec![
-            ComponentValue::Surface(surface),
+            ComponentValue::FlatSurface(surface),
             ComponentValue::WorldAttachment(WorldAttachment::surface(output)),
             sized(0, 4.0, 4.0),
         ],

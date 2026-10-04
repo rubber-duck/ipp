@@ -1,5 +1,5 @@
 use super::{create, update};
-use ipp_core::components::{CanvasGlyphRun, CanvasStyle, Surface, Transform};
+use ipp_core::components::{CanvasGlyphRun, CanvasStyle, FlatSurface, Transform};
 use ipp_core::systems::canvas::{CanvasGlyphRow, CanvasPublication};
 use ipp_core::{
     Batch, Command, ComponentValue, EntityId, EntityRef, HostRuntime, OutputRef, WorldAttachment,
@@ -42,7 +42,7 @@ impl CanvasSurface {
                     z,
                     ..Default::default()
                 }),
-                ComponentValue::Surface(Surface::default()),
+                ComponentValue::FlatSurface(FlatSurface::default()),
                 ComponentValue::WorldAttachment(WorldAttachment::surface(output)),
             ],
         );

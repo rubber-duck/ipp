@@ -23,6 +23,29 @@ pub(super) fn plane_matrix(origin: [f64; 2], scale: [f64; 2]) -> Result<[f32; 16
     Ok(matrix)
 }
 
+/// Exact provider mapping, with its front normal supplying the offset column
+/// used by direct separated layers. Content translation/rotation/shear stay intact.
+pub(super) fn affine_matrix(
+    geometry: &dyn ipp_core::systems::surface::Surface,
+) -> Result<[f32; 16], RenderError> {
+    let extent = geometry.physical_extent();
+    let mut matrix = geometry
+        .exact_affine(0.0)
+        .ok_or(RenderError::UnavailableOutput)?
+        .map(|v| v as f32);
+    let normal = geometry
+        .sample(extent.map(|v| v * 0.5), 0.0)
+        .map_err(|_| RenderError::UnavailableOutput)?
+        .front_normal;
+    for (row, value) in normal.into_iter().enumerate() {
+        matrix[8 + row] = value as f32;
+    }
+    if matrix.iter().any(|v| !v.is_finite()) {
+        return Err(RenderError::InvalidTransform);
+    }
+    Ok(matrix)
+}
+
 /// Where the camera views a layered Canvas from, in its content space, whose
 /// Z is the Surface's local normal axis.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -38,7 +61,7 @@ pub(super) enum CanvasLayerEye {
 /// Each layer's draws translate its content by its plane id times `spacing`
 /// along content Z, folded into that draw's model-view-projection: retained
 /// geometry, vertex layouts and uploads stay unchanged when the spacing
-/// changes, and a layer keeps its depth whatever other layers are in use.
+/// changes, and completed compact ranks determine their physical offsets.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct CanvasLayering {
     /// Content Z between consecutive plane ids; zero keeps one plane.
@@ -88,19 +111,6 @@ impl CanvasLayering {
     }
 }
 
-/// The camera's view of a Surface's content space, through the Surface's
-/// placement in the camera's domain.
-pub(super) fn layer_eye(
-    camera: &ipp_core::systems::camera::CameraPublication,
-    placement: &ipp_core::systems::geometry::GeometryShapeTransform,
-) -> CanvasLayerEye {
-    if camera.projection.projection == 0 {
-        CanvasLayerEye::Point(placement.inverse_point(camera.pose.point([0.0; 3]))[2])
-    } else {
-        CanvasLayerEye::Direction(placement.inverse_vector(camera.pose.vector([0.0, 0.0, -1.0]))[2])
-    }
-}
-
 pub(super) enum CanvasChild<'a> {
     Canvas {
         scene: CanvasScene<'a>,
@@ -135,18 +145,44 @@ impl<D: RenderDevice> RenderService<D> {
         );
         let placed = camera::multiply(view_projection, surface.model);
         let [width, height] = surface.extent.map(f64::from);
+        let affine = affine_matrix(&*surface.geometry)?;
+        let normal = surface
+            .geometry
+            .sample([width * 0.5, height * 0.5], 0.0)
+            .map_err(|_| RenderError::UnavailableOutput)?
+            .front_normal;
         match surface.selection.kind() {
             OutputKind::Canvas => {
                 let scene = CanvasScene::new(host, surface.selection, surface.publication)?;
                 let extent = scene.canvas.logical_extent.map(f64::from);
-                let content = plane_matrix(
-                    [-width * 0.5, height * 0.5],
-                    [width / extent[0], -height / extent[1]],
-                )?;
+                let content = camera::multiply(
+                    affine,
+                    plane_matrix([0.0; 2], [width / extent[0], height / extent[1]])?,
+                );
                 let layering = if surface.layered() {
                     CanvasLayering {
                         spacing: surface.layer_spacing,
-                        eye: layer_eye(view, &surface.placement),
+                        eye: {
+                            let centre = surface
+                                .geometry
+                                .sample([width * 0.5, height * 0.5], 0.0)
+                                .map_err(|_| RenderError::UnavailableOutput)?
+                                .position;
+                            if view.projection.projection == 0 {
+                                let eye =
+                                    surface.placement.inverse_point(view.pose.point([0.0; 3]));
+                                CanvasLayerEye::Point(
+                                    (0..3).map(|i| (eye[i] - centre[i]) * normal[i]).sum(),
+                                )
+                            } else {
+                                let direction = surface
+                                    .placement
+                                    .inverse_vector(view.pose.vector([0.0, 0.0, -1.0]));
+                                CanvasLayerEye::Direction(
+                                    (0..3).map(|i| direction[i] * normal[i]).sum(),
+                                )
+                            }
+                        },
                     }
                 } else {
                     CanvasLayering::FLAT
@@ -162,7 +198,7 @@ impl<D: RenderDevice> RenderService<D> {
                 )
             }
             OutputKind::Camera => {
-                let content = plane_matrix([-width * 0.5, -height * 0.5], [1.0, 1.0])?;
+                let content = camera::multiply(affine, plane_matrix([0.0, height], [1.0, -1.0])?);
                 self.draw_camera_image(
                     surface.selection,
                     camera::multiply(placed, content),
@@ -250,59 +286,5 @@ pub(super) fn canvas_attachment<'a>(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn layering(spacing: f32, eye: CanvasLayerEye) -> CanvasLayering {
-        CanvasLayering {
-            spacing,
-            eye,
-        }
-    }
-
-    #[test]
-    fn layer_planes_draw_farthest_first_from_any_side() {
-        use CanvasLayerEye::{Direction, Point};
-
-        // A perspective eye in front, behind, and between layer planes 0, 1, 2 m.
-        let layers = [0, 1, 2];
-        assert_eq!(layering(1.0, Point(5.0)).draw_order(&layers), [0, 1, 2]);
-        assert_eq!(layering(1.0, Point(-5.0)).draw_order(&layers), [2, 1, 0]);
-        assert_eq!(layering(1.0, Point(1.2)).draw_order(&layers), [0, 2, 1]);
-        // Negative spacing stacks the layers behind the base plane.
-        assert_eq!(layering(-1.0, Point(5.0)).draw_order(&layers), [2, 1, 0]);
-        // Orthographic views looking down -Z from the front, and from behind.
-        assert_eq!(
-            layering(1.0, Direction(-0.5)).draw_order(&layers),
-            [0, 1, 2]
-        );
-        assert_eq!(layering(1.0, Direction(0.5)).draw_order(&layers), [2, 1, 0]);
-        // Coincident or edge-on planes keep painter order.
-        assert_eq!(CanvasLayering::FLAT.draw_order(&layers), [0, 1, 2]);
-        assert_eq!(layering(1.0, Direction(0.0)).draw_order(&layers), [0, 1, 2]);
-    }
-
-    #[test]
-    fn unused_layers_leave_a_gap_in_depth_order() {
-        use CanvasLayerEye::Point;
-
-        // Planes 0, 1 and 3 in use, 2 empty, an eye at 1.8 m: plane 3 lies
-        // 1.2 m away, farther than plane 1 at 0.8 m, so it draws before it.
-        // Compacted onto 2 it would lie 0.2 m away and draw last.
-        assert_eq!(layering(1.0, Point(1.8)).draw_order(&[0, 1, 3]), [0, 3, 1]);
-    }
-
-    #[test]
-    fn a_layer_translates_content_by_its_id_times_the_spacing() {
-        let mvp: [f32; 16] = std::array::from_fn(|index| index as f32 + 1.0);
-        assert_eq!(CanvasLayering::FLAT.layer_mvp(&mvp, 3), mvp);
-        let layered = layering(0.5, CanvasLayerEye::Point(1.0));
-        assert_eq!(layered.layer_mvp(&mvp, 0), mvp);
-        let raised = layered.layer_mvp(&mvp, 2);
-        // Column 3 gains one unit of column 2; the other columns are unchanged.
-        assert_eq!(raised[..12], mvp[..12]);
-        assert_eq!(raised[12..], [22.0, 24.0, 26.0, 28.0]);
-        // Plane 4 sits two units out whatever planes lie between it and the base.
-        assert_eq!(layered.layer_mvp(&mvp, 4)[12..], [31.0, 34.0, 37.0, 40.0]);
-    }
-}
+#[path = "canvas_composition_tests.rs"]
+mod tests;

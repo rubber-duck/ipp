@@ -37,7 +37,7 @@ export const chartScene: GallerySceneDefinition = {
   label: "Charts",
   shortLabel: "Charts",
   description:
-    "Turn toward animated flat and spatial charts around you, or focus any exhibit in two seconds.",
+    "Explore animated Canvas charts curved inward along their ring beside spatial plots, or focus any exhibit in two seconds.",
   defaultOptions: {
     dataMode: "buffer",
     dataWindow: "count",

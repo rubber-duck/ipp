@@ -1,5 +1,5 @@
 /**
- * What the kit's overlays share: the layer planes they are raised to, a client
+ * What the kit's overlays share: semantic priority bands, a client
  * open state kept in step with the runtime, and the floating surface that
  * menus, option lists, popovers, tooltips and dialogs are drawn on.
  *
@@ -22,33 +22,15 @@ import type {
 import { useGuiKit } from "./kit.js";
 import { LAYOUT_COLUMN, type GuiKitLayout } from "./layout.js";
 
-/**
- * `CanvasStyle.layer` plane ids of the kit's overlays. A layer is a plane of
- * the canvas that every entity naming it shares wherever it is declared;
- * zero keeps an entity on its parent's plane, and a nonzero id never puts it
- * on or below its parent's, rising to the plane above instead. Planes paint
- * and take hits in order, and an exploded Surface presents each at its id
- * times its layer spacing. Each plane has one role:
- *
- * - 0: ordinary content, so a panel and everything in it is one unit.
- * - 1: anchored overlays of the content (menus, option lists, popovers,
- *   context menus, tooltips), which all share it.
- * - 2: dialogs, top-level overlays of the canvas.
- * - 3: anchored overlays opened inside a dialog, which declare plane 1 and
- *   rise to the plane above the dialog's.
- * - 4: toast stacks, top-level overlays above everything else, so a toast
- *   stays usable while a modal dialog blocks what lies beneath it.
- *
- * Deeper nesting, such as a menu inside a popover inside a dialog, rises to
- * plane 4 and orders with the toasts by tree order. An application may lift
- * a whole panel as a unit by giving the panel a layer; overlays opened inside
- * it then still resolve above it.
- */
-export const GUI_KIT_LAYERS = {
-  anchored: 1,
+/** Semantic overlay priorities, independent of interaction mode and content offsets. */
+export const GUI_KIT_OVERLAY_BANDS = {
+  popup: 1,
   dialog: 2,
-  toast: 4,
+  notification: 3,
 } as const;
+
+/** An overlay's semantic ordering band; nested scopes inherit at least their owner's. */
+export type GuiKitOverlayBand = keyof typeof GUI_KIT_OVERLAY_BANDS;
 
 /** Where an overlay goes against its parent's box, or the canvas at the top level. */
 export type GuiKitOverlaySide = "bottom" | "top" | "right" | "left" | "centre";
@@ -169,10 +151,9 @@ export interface FloatingProps {
   /** At the start of that side by default. */
   readonly align?: GuiKitOverlayAlign;
   readonly mode: GuiKitOverlayMode;
-  /**
-   * Its layer plane id, raised above its parent's plane when not already
-   * above it; `GUI_KIT_LAYERS.anchored` by default.
-   */
+  /** Popup by default, independently of interaction mode. */
+  readonly band?: GuiKitOverlayBand;
+  /** Nonnegative relative component offset inside this overlay scope; zero inherits. */
   readonly layer?: number;
   /** Its `Behavior.visible` as declared. */
   readonly open: boolean;
@@ -198,7 +179,8 @@ export function Floating({
   side = "bottom",
   align = "start",
   mode,
-  layer = GUI_KIT_LAYERS.anchored,
+  band = "popup",
+  layer = 0,
   open,
   onVisibleChange,
   offset,
@@ -214,6 +196,7 @@ export function Floating({
         side={OVERLAY_SIDE[side]}
         align={OVERLAY_ALIGN[align]}
         mode={OVERLAY_MODE[mode]}
+        band={GUI_KIT_OVERLAY_BANDS[band]}
       />
       <Style
         layer={layer}

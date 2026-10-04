@@ -23,7 +23,11 @@ export function Workbench({
   readonly menu: NodeMenu;
 }) {
   return (
-    <Panel id="gui-workbench-panel" layout={{ height: WORKBENCH_HEIGHT }}>
+    <Panel
+      layer={3}
+      id="gui-workbench-panel"
+      layout={{ height: WORKBENCH_HEIGHT }}
+    >
       <Tabs
         id={WORKBENCH_TABS}
         tabs={[

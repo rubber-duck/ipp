@@ -1523,7 +1523,7 @@ async function exerciseGuiKeyboardEntry(host: GuiHost) {
       anchors.push(
         createEntity(index + 2, `gui-keyboard-${name}-anchor`),
         insertComponent(parent, "Transform", anchor, placement),
-        insertComponent(parent, "Surface", anchor, { width: 2, height: 1 }),
+        insertComponent(parent, "FlatSurface", anchor, { width: 2, height: 1 }),
         {
           kind: "insertComponent",
           entity: anchor,

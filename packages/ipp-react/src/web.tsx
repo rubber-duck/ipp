@@ -163,11 +163,23 @@ export function IppCanvas({
     error: Error;
   }>();
   const callbacks = useRef({ initialize, onReady, onViewChange, onError });
-  const inputs = useRef({ runtime, world, output });
+  const inputs = useRef({ runtime, world, output, guiInput });
+  const activeInput = useRef<
+    | {
+        owner: CanvasGuiInput;
+        report: (failure: unknown) => void;
+      }
+    | undefined
+  >(undefined);
   const dimensions = useRef<CanvasSize>({ width, height, devicePixelRatio: 1 });
   useLayoutEffect(() => {
     callbacks.current = { initialize, onReady, onViewChange, onError };
-    inputs.current = { runtime, world, output };
+    inputs.current = { runtime, world, output, guiInput };
+    const active = activeInput.current;
+    if (active)
+      void active.owner
+        .update({ ...guiInput, onError: active.report })
+        .catch(active.report);
   });
 
   useEffect(() => {
@@ -193,6 +205,7 @@ export function IppCanvas({
       else fallback(value);
     };
     const close = async (): Promise<void> => {
+      if (activeInput.current?.owner === input) activeInput.current = undefined;
       try {
         await input?.close();
       } finally {
@@ -236,10 +249,12 @@ export function IppCanvas({
         lifetime = new CanvasLifetime(host, true);
         startup.signal.throwIfAborted();
         const client = await lifetime.open(source, startup.signal);
+        startup.signal.throwIfAborted();
         input = new CanvasGuiInput(surface.canvas, host.input, {
-          ...guiInput,
+          ...inputs.current.guiInput,
           onError: report,
         });
+        activeInput.current = { owner: input, report };
         session = new CanvasWorldSession(
           {
             host,
@@ -274,8 +289,9 @@ export function IppCanvas({
     return () => {
       disposed = true;
       startup.abort();
-      void input?.close().catch(report);
-      if (session) void session.close().catch(() => {});
+      if (activeInput.current?.owner === input) activeInput.current = undefined;
+      // Drain physical ownership before session cleanup can dispose the Host.
+      void close().catch(report);
       void work.then(close).catch((error) => {
         if (!session) report(error);
       });

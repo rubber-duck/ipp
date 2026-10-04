@@ -30,7 +30,7 @@ import { useMemo, type ReactNode } from "react";
 import { Animation } from "../animation.js";
 import { AnimationAsset, assetRef } from "../assets.js";
 import { Children, Entity } from "../components.js";
-import { Font, Layout } from "../gui/components.js";
+import { Style, Font, Layout } from "../gui/components.js";
 import { Skin } from "../gui/theme.js";
 import { useGuiKit, type GuiKitTone } from "./kit.js";
 import {
@@ -60,6 +60,8 @@ export interface ProgressBarSegment {
 }
 
 export interface ProgressBarProps {
+  /** Nonnegative layer offset applied once at this component root; zero inherits. */
+  readonly layer?: number;
   readonly id: string;
   /** The task, such as Uploading. */
   readonly label: string;
@@ -123,6 +125,7 @@ function reportedParts(
 
 export function ProgressBar({
   id,
+  layer = 0,
   label,
   value,
   segments,
@@ -173,6 +176,7 @@ export function ProgressBar({
 
   return (
     <Entity id={id}>
+      <Style layer={layer} />
       <Layout
         kind={LAYOUT_COLUMN}
         height={kit.unit(t.denseRow + LABEL_GAP + t.smallHeight)}

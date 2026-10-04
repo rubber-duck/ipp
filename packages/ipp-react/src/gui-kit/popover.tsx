@@ -19,7 +19,7 @@
 import type { ReactNode } from "react";
 import { Children, Entity } from "../components.js";
 import { Button } from "../gui/controls.js";
-import { Behavior, Font, Layout } from "../gui/components.js";
+import { Style, Behavior, Font, Layout } from "../gui/components.js";
 import { Skin } from "../gui/theme.js";
 import { GUI_KIT_ICONS } from "./icons.js";
 import { useGuiKit } from "./kit.js";
@@ -36,6 +36,8 @@ import { WindowControl } from "./window-controls.js";
 const WIDTH = 240;
 
 export interface PopoverProps extends OverlayOpenProps {
+  /** Nonnegative layer offset applied once at this component root; zero inherits. */
+  readonly layer?: number;
   /** Symbolic id of the trigger; the popover and its parts extend it. */
   readonly id: string;
   /** The trigger's label; a caret follows it. */
@@ -54,6 +56,7 @@ export interface PopoverProps extends OverlayOpenProps {
 
 export function Popover({
   id,
+  layer = 0,
   label,
   title,
   closable = true,
@@ -70,6 +73,7 @@ export function Popover({
   const inset = kit.unit(t.inset);
   return (
     <Entity id={id}>
+      <Style layer={layer} />
       <Layout
         kind={LAYOUT_LEAF}
         width={textWidth(text, size) + 2 * inset}

@@ -36,6 +36,9 @@ impl CanvasSystem {
     fn changed(&mut self, entity: EntityId, component: u16, retained: bool, sample: bool) {
         let patch = &mut self.state.patch;
         match component {
+            // Optional bounds may be added to a retained layout-only entity.
+            // Populate a new store slot; retained system-owned writes are outputs.
+            ComponentValue::CANVAS_BOUNDS if !retained => self.state.dirty = true,
             ComponentValue::GUI_THEME => self.state.gui_dirty = true,
             ComponentValue::GUI_BEHAVIOR if sample => {
                 patch.subtrees.insert(entity);
@@ -370,18 +373,18 @@ impl System for CanvasSystem {
 }
 
 fn input_component(component: u16) -> bool {
-    matches!(
-        component,
-        ComponentValue::CANVAS_STYLE
-            | ComponentValue::CANVAS_TEXT
-            | ComponentValue::CANVAS_GLYPH_RUN
-            | ComponentValue::CANVAS_DRAWING
-            | ComponentValue::CANVAS_BITMAP
-            | ComponentValue::CANVAS_BOX
-            | ComponentValue::CANVAS_PAINT
-            | ComponentValue::SURFACE
-            | ComponentValue::WORLD_ATTACHMENT
-    )
+    crate::systems::surface::is_provider(component)
+        || matches!(
+            component,
+            ComponentValue::CANVAS_STYLE
+                | ComponentValue::CANVAS_TEXT
+                | ComponentValue::CANVAS_GLYPH_RUN
+                | ComponentValue::CANVAS_DRAWING
+                | ComponentValue::CANVAS_BITMAP
+                | ComponentValue::CANVAS_BOX
+                | ComponentValue::CANVAS_PAINT
+                | ComponentValue::WORLD_ATTACHMENT
+        )
 }
 
 fn gui_input_component(component: u16) -> bool {

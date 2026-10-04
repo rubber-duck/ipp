@@ -8,7 +8,7 @@ mod support;
 use ipp_core::{
     Batch, Command, ComponentValue, EntityId, EntityRef, SurfaceCache, WorldContext, WorldId,
 };
-use ipp_core::{Surface, components::Transform};
+use ipp_core::{FlatSurface, components::Transform};
 use ipp_render_gl::{RenderError, RenderService, SurfaceCacheDiagnostic, SurfaceCachePresentation};
 use support::canvas::{self, CanvasSurface};
 use support::selection::{ATTACHMENTS, CAMERA, RENDER, SURFACE, select};
@@ -229,6 +229,22 @@ fn observed_frame(
     child: ipp_core::OutputRef,
     dt: f64,
 ) -> [ipp_core::OutputPublicationObservation; 2] {
+    let (summary, observations) = observe_frame(renderer, host, world, child, dt);
+    assert!(!summary.invalid_camera);
+    assert_eq!(summary.failed_draw_calls, 0);
+    observations
+}
+
+fn observe_frame(
+    renderer: &mut RenderService<TestDevice>,
+    host: &mut ipp_core::HostRuntime,
+    world: WorldId,
+    child: ipp_core::OutputRef,
+    dt: f64,
+) -> (
+    ipp_render_gl::RenderFrameSummary,
+    [ipp_core::OutputPublicationObservation; 2],
+) {
     host.frame(dt).unwrap();
     let (output, viewport, publication) = host.root_output(world).unwrap();
     renderer.prepare(host, Some((output, publication))).unwrap();
@@ -247,9 +263,7 @@ fn observed_frame(
             &mut observations,
         )
         .unwrap();
-    assert!(!summary.invalid_camera);
-    assert_eq!(summary.failed_draw_calls, 0);
-    observations
+    (summary, observations)
 }
 
 #[test]
@@ -785,7 +799,7 @@ fn faulted_focus(location: FaultLocation) {
             create(
                 &mut host.world_mut(parent).unwrap(),
                 vec![
-                    ComponentValue::Surface(Surface::default()),
+                    ComponentValue::FlatSurface(FlatSurface::default()),
                     ComponentValue::Transform(Transform {
                         z: -1.0,
                         ..Default::default()
@@ -1830,7 +1844,7 @@ fn a_saturated_population_queue_refines_cached_text_only_at_the_refresh_cap() {
     create(
         &mut host.world_mut(camera_world).unwrap(),
         vec![
-            ComponentValue::Surface(Default::default()),
+            ComponentValue::FlatSurface(Default::default()),
             ComponentValue::WorldAttachment(ipp_core::WorldAttachment::surface(busy.output)),
         ],
     );
@@ -1885,4 +1899,512 @@ fn a_saturated_population_queue_refines_cached_text_only_at_the_refresh_cap() {
         "one frame after the queue reaches its glyphs, at the 10 Hz cap"
     );
     assert_eq!(refined, "TEBTEFCC");
+}
+
+fn projected(host: &mut ipp_core::HostRuntime, panel: CanvasSurface, curvature: f32, spacing: f32) {
+    canvas::apply(
+        host,
+        panel.parent,
+        vec![
+            Command::RemoveComponent {
+                entity: EntityRef::Handle(panel.anchor),
+                component: ComponentValue::FLAT_SURFACE,
+            },
+            Command::insert_value(
+                EntityRef::Handle(panel.anchor),
+                ComponentValue::CylinderSurface(ipp_core::CylinderSurface {
+                    width: 1.0,
+                    height: 1.0,
+                    curvature,
+                    layer_spacing: spacing,
+                }),
+            ),
+        ],
+    );
+}
+
+fn edit_projected(
+    host: &mut ipp_core::HostRuntime,
+    panel: CanvasSurface,
+    curvature: f32,
+    spacing: f32,
+) {
+    canvas::apply(
+        host,
+        panel.parent,
+        [
+            (
+                std::mem::offset_of!(ipp_core::CylinderSurface, curvature),
+                curvature,
+            ),
+            (
+                std::mem::offset_of!(ipp_core::CylinderSurface, layer_spacing),
+                spacing,
+            ),
+        ]
+        .into_iter()
+        .map(|(offset, value)| Command::SetField {
+            entity: EntityRef::Handle(panel.anchor),
+            component: ComponentValue::CYLINDER_SURFACE,
+            field: ipp_core::FieldWrite {
+                offset: offset as u32,
+                value: ipp_core::FieldValue::F32(value),
+            },
+        })
+        .collect(),
+    );
+}
+
+#[test]
+fn projected_geometry_and_placement_reuse_content_images_and_retained_work() {
+    let mut host = support::task_scheduler::host();
+    let (mut renderer, state, world, panel) = scene(&mut host);
+    projected(&mut host, panel, 0.5, 0.0);
+    let first = frame(&mut renderer, &mut host, world, 0.0);
+    assert_eq!(first.surface_cache_repaints, 1);
+    assert!(first.failed_draw_calls == 0 && !state.projected_draws.borrow().is_empty());
+    assert!(state.projected_draws.borrow().iter().all(|(_, flip)| !flip));
+    let begins = state.cache_begins.get();
+    let writes = state.gui_batch_writes.get();
+    let creates = state.cache_creates.get();
+    edit_projected(&mut host, panel, 0.8, 0.0);
+    move_surface(&mut host, panel, -0.3);
+    let changed = frame(&mut renderer, &mut host, world, 0.0);
+    assert_eq!(changed.surface_cache_repaints, 0);
+    assert_eq!(changed.surface_cache_reuses, 1);
+    assert_eq!(
+        (
+            state.cache_begins.get(),
+            state.gui_batch_writes.get(),
+            state.cache_creates.get()
+        ),
+        (begins, writes, creates)
+    );
+    assert_eq!(
+        record(&renderer, world, panel.anchor).presentation,
+        SurfaceCachePresentation::Reused
+    );
+    drop(renderer);
+    assert_eq!(state.cache_targets_live.get(), 0);
+}
+
+#[test]
+fn projected_refresh_cap_survives_multiple_dirty_frames_without_claiming_current_inclusion() {
+    let mut host = support::task_scheduler::host();
+    let (mut renderer, state, world, panel) = scene(&mut host);
+    projected(&mut host, panel, -0.5, 0.0);
+    cache_policy(&mut host, panel, Some(ALWAYS));
+    assert_eq!(
+        frame(&mut renderer, &mut host, world, 0.0).surface_cache_repaints,
+        1
+    );
+    let begins = state.cache_begins.get();
+    for step in 0..4 {
+        recolor(&mut host, panel, step);
+        let stats = frame(&mut renderer, &mut host, world, 0.01);
+        assert_eq!(stats.surface_cache_repaints, 0, "{step}: {stats:?}");
+        assert_eq!(stats.surface_cache_reuses, 1);
+    }
+    assert_eq!(state.cache_begins.get(), begins);
+    assert_eq!(
+        frame(&mut renderer, &mut host, world, 0.061).surface_cache_repaints,
+        1
+    );
+}
+
+#[test]
+fn projected_stale_nested_image_reuses_until_the_child_image_refreshes() {
+    let mut host = support::task_scheduler::host();
+    let (mut renderer, state, world, outer) = scene(&mut host);
+    projected(&mut host, outer, 0.8, 0.0);
+    let inner = CanvasSurface::new(
+        &mut host,
+        outer.output.world().id(),
+        0.0,
+        vec![ComponentValue::CanvasBox(Default::default())],
+    );
+    cache_policy(&mut host, outer, Some(ALWAYS));
+    cache_policy(
+        &mut host,
+        inner,
+        Some(SurfaceCache {
+            max_refresh_hz: 1.0,
+            ..ALWAYS
+        }),
+    );
+    assert!(
+        observed_frame(&mut renderer, &mut host, world, inner.output, 0.01)
+            .iter()
+            .all(|source| source.publication.is_some())
+    );
+    let inner_repaints = record(&renderer, inner.parent, inner.anchor).repaints;
+    let outer_repaints = record(&renderer, outer.parent, outer.anchor).repaints;
+    recolor(&mut host, inner, 42);
+    recolor(&mut host, outer, 43);
+    let stale = observed_frame(&mut renderer, &mut host, world, inner.output, 0.11);
+    assert_eq!(stale.map(|source| source.publication), [None, None]);
+    assert_eq!(
+        record(&renderer, outer.parent, outer.anchor).repaints,
+        outer_repaints + 1
+    );
+    // Even after the parent's interval, unchanged stale child pixels need no repaint.
+    for _ in 0..3 {
+        let reused = observed_frame(&mut renderer, &mut host, world, inner.output, 0.15);
+        assert_eq!(
+            reused.map(|source| source.publication),
+            [None, None],
+            "outer={:?}, inner={:?}",
+            record(&renderer, outer.parent, outer.anchor),
+            record(&renderer, inner.parent, inner.anchor)
+        );
+        assert_eq!(
+            record(&renderer, outer.parent, outer.anchor).repaints,
+            outer_repaints + 1
+        );
+        assert_eq!(
+            record(&renderer, inner.parent, inner.anchor).repaints,
+            inner_repaints
+        );
+    }
+    // Only the child's derived GPU image changes; no new authored paint is needed.
+    let refreshed = observed_frame(&mut renderer, &mut host, world, inner.output, 0.5);
+    assert_eq!(
+        record(&renderer, inner.parent, inner.anchor).repaints,
+        inner_repaints + 1
+    );
+    assert_eq!(
+        record(&renderer, outer.parent, outer.anchor).repaints,
+        outer_repaints + 2
+    );
+    assert!(refreshed.iter().all(|source| source.publication.is_some()));
+    // A culled parent cannot keep those optional image dependencies presented.
+    assert_eq!(state.cache_targets_live.get(), 2);
+    move_surface(&mut host, outer, 1000.0);
+    let hidden = observed_frame(&mut renderer, &mut host, world, inner.output, 0.1);
+    assert!(hidden[1].publication.is_none());
+    frame(&mut renderer, &mut host, world, 11.0);
+    assert_eq!(
+        record(&renderer, inner.parent, inner.anchor).resident_bytes,
+        0
+    );
+    assert_eq!(
+        state.cache_targets_live.get(),
+        1,
+        "only the required parent image remains"
+    );
+}
+
+#[test]
+fn projected_empty_separated_canvas_is_current_inclusion() {
+    let mut host = support::task_scheduler::host();
+    let (world, mut renderer, state) = setup(&mut host);
+    let world_id = world.id();
+    drop(world);
+    state.cache_limit.set(4096);
+    let panel = CanvasSurface::new(&mut host, world_id, 0.0, Vec::new());
+    projected(&mut host, panel, 0.8, 0.2);
+    host.frame(0.0).unwrap();
+    assert_eq!(panel.publication(&host).entries.len(), 0);
+    let observed = observed_frame(&mut renderer, &mut host, world_id, panel.output, 0.01);
+    assert!(observed.iter().all(|source| source.publication.is_some()));
+    assert_eq!(state.cache_targets_live.get(), 1);
+    assert!(!state.projected_draws.borrow().is_empty());
+    drop(renderer);
+    assert_eq!(state.cache_targets_live.get(), 0);
+}
+
+#[test]
+fn projected_missing_bitmap_preserves_ready_siblings_and_repaints_on_readiness() {
+    let mut host = support::task_scheduler::host();
+    host.io_mut().register_stream("fixture://").unwrap();
+    let (world, mut renderer, state) = setup(&mut host);
+    let world_id = world.id();
+    drop(world);
+    state.cache_limit.set(4096);
+    state.texture_readback_enabled.set(true);
+    let panel = CanvasSurface::new(
+        &mut host,
+        world_id,
+        0.0,
+        vec![ComponentValue::CanvasBox(Default::default())],
+    );
+    canvas::add_content(
+        &mut host,
+        panel.output,
+        vec![ComponentValue::CanvasBitmap(
+            ipp_core::components::CanvasBitmap {
+                source: "fixture:///bitmap.ippt".into(),
+                ..Default::default()
+            },
+        )],
+    );
+    projected(&mut host, panel, 0.8, 0.0);
+    cache_policy(&mut host, panel, Some(ALWAYS));
+    let deliver = |host: &mut ipp_core::HostRuntime| {
+        support::progress_assets(host);
+        let requests = host.take_resource_requests();
+        let mut image = b"IPPT".to_vec();
+        for word in [3u32, 1, 1] {
+            image.extend(word.to_le_bytes());
+        }
+        image.extend([255, 64, 16, 255]);
+        for request in &requests {
+            host.complete_resource(request.id, Ok(image.clone()))
+                .unwrap();
+        }
+        requests.len()
+    };
+    for _ in 0..16 {
+        deliver(&mut host);
+        host.frame(0.0).unwrap();
+        if panel.publication(&host).entries.len() == 2 {
+            break;
+        }
+    }
+    assert_eq!(panel.publication(&host).entries.len(), 2);
+    assert_eq!(
+        frame(&mut renderer, &mut host, world_id, 0.1).failed_draw_calls,
+        0
+    );
+    assert_eq!(state.surface_bitmap_draws.get(), 1);
+    let revisions = canvas_revisions(&host, panel);
+    renderer
+        .replace_device(&mut host, TestDevice(state.clone()))
+        .unwrap();
+    let shapes = state.gui_batch_draws.get();
+    let recovered = frame(&mut renderer, &mut host, world_id, 0.1);
+    assert_eq!(
+        recovered.failed_draw_calls, 1,
+        "missing resource remains diagnostic"
+    );
+    assert_eq!(
+        record(&renderer, world_id, panel.anchor).presentation,
+        SurfaceCachePresentation::Repainted
+    );
+    assert_eq!(
+        state.gui_batch_draws.get(),
+        shapes + 1,
+        "ready box still paints"
+    );
+    assert!(recovered.surface_cache_resident_bytes > 0);
+    for _ in 0..3 {
+        let reused = frame(&mut renderer, &mut host, world_id, 0.5);
+        assert_eq!(reused.surface_cache_repaints, 0);
+        assert_eq!(
+            reused.failed_draw_calls, 1,
+            "partial image stays diagnostic"
+        );
+    }
+    assert_eq!(state.gui_batch_draws.get(), shapes + 1);
+    let (summary, incomplete) =
+        observe_frame(&mut renderer, &mut host, world_id, panel.output, 0.0);
+    assert_eq!(summary.failed_draw_calls, 1);
+    assert_eq!(incomplete.map(|source| source.publication), [None, None]);
+    assert!(deliver(&mut host) > 0);
+    let arrived = frame(&mut renderer, &mut host, world_id, 0.0);
+    assert_eq!(arrived.failed_draw_calls, 0);
+    assert_eq!(arrived.surface_cache_repaints, 1);
+    assert_eq!(state.surface_bitmap_draws.get(), 2);
+    assert_eq!(state.gui_batch_draws.get(), shapes + 2);
+    assert_eq!(canvas_revisions(&host, panel), revisions);
+    assert!(
+        observed_frame(&mut renderer, &mut host, world_id, panel.output, 0.0)
+            .iter()
+            .all(|source| source.publication.is_some())
+    );
+    // Raster/device failures remain unavailable and release the required image.
+    recolor(&mut host, panel, 44);
+    state.fail_surface_draw.set(true);
+    assert!(frame(&mut renderer, &mut host, world_id, 0.2).failed_draw_calls > 0);
+    assert_eq!(
+        record(&renderer, world_id, panel.anchor).presentation,
+        SurfaceCachePresentation::Unavailable
+    );
+    assert_eq!(state.cache_targets_live.get(), 0);
+}
+
+#[test]
+fn projected_separated_layers_keep_independent_images_and_cleanup_partial_mesh_failures() {
+    let mut host = support::task_scheduler::host();
+    let (mut renderer, state, world, panel) = scene(&mut host);
+    projected(&mut host, panel, 0.5, 0.1);
+    canvas::add_content(
+        &mut host,
+        panel.output,
+        vec![
+            ComponentValue::CanvasBox(Default::default()),
+            ComponentValue::CanvasStyle(ipp_core::components::CanvasStyle {
+                layer: 1_000_000,
+                red: 0.0,
+                green: 1.0,
+                blue: 0.0,
+                alpha: 0.4,
+                ..Default::default()
+            }),
+        ],
+    );
+    let first = frame(&mut renderer, &mut host, world, 0.0);
+    assert_eq!(first.surface_cache_repaints, 2);
+    assert_eq!(first.surface_cache_entries, 2);
+    let diagnostic = record(&renderer, world, panel.anchor);
+    assert_eq!(
+        diagnostic.resident_bytes,
+        diagnostic.size[0] * diagnostic.size[1] * 4 * 2
+    );
+    assert_eq!(state.cache_targets_live.get(), 2);
+    let begins = state.cache_begins.get();
+    // A failure on the second mesh upload must clean both a locally transferred
+    // first image and the remaining old image without dropping raw handles.
+    state.fail_mesh_attempt.set(state.mesh_attempts.get() + 2);
+    edit_projected(&mut host, panel, -0.5, 0.1);
+    let failed = frame(&mut renderer, &mut host, world, 0.0);
+    assert!(failed.failed_draw_calls > 0);
+    assert_eq!(state.cache_targets_live.get(), 0);
+    assert_eq!(state.cache_begins.get(), begins);
+    assert_eq!(
+        record(&renderer, world, panel.anchor).presentation,
+        SurfaceCachePresentation::Unavailable
+    );
+    state.fail_mesh_attempt.set(0);
+    assert_eq!(
+        frame(&mut renderer, &mut host, world, 0.0).surface_cache_repaints,
+        2
+    );
+    // Removing the middle/upper occupied group repacks images from publication.
+    edit_projected(&mut host, panel, 0.5, 0.0);
+    assert_eq!(
+        frame(&mut renderer, &mut host, world, 0.0).surface_cache_entries,
+        1
+    );
+    assert_eq!(state.cache_targets_live.get(), 1);
+    drop(renderer);
+    assert_eq!(state.cache_targets_live.get(), 0);
+}
+
+#[test]
+fn projected_inclusion_acknowledges_equivalent_images_and_rejects_stale_content() {
+    let mut host = support::task_scheduler::host();
+    let (mut renderer, _, world, panel) = scene(&mut host);
+    projected(&mut host, panel, 0.8, 0.0);
+    cache_policy(&mut host, panel, Some(ALWAYS));
+    frame(&mut renderer, &mut host, world, 0.0);
+    let first = observed_frame(&mut renderer, &mut host, world, panel.output, 0.001);
+    assert!(first.iter().all(|o| o.publication.is_some()));
+    edit_projected(&mut host, panel, -0.8, 0.0);
+    let equivalent = observed_frame(&mut renderer, &mut host, world, panel.output, 0.001);
+    assert!(equivalent.iter().all(|o| o.publication.is_some()));
+    assert_ne!(first[1].publication, equivalent[1].publication);
+    assert_eq!(record(&renderer, world, panel.anchor).repaints, 1);
+    recolor(&mut host, panel, 42);
+    for _ in 0..3 {
+        let stale = observed_frame(&mut renderer, &mut host, world, panel.output, 0.01);
+        assert_eq!(stale.map(|o| o.publication), [None, None]);
+        assert_eq!(record(&renderer, world, panel.anchor).repaints, 1);
+    }
+    let fresh = observed_frame(&mut renderer, &mut host, world, panel.output, 0.2);
+    assert!(fresh.iter().all(|o| o.publication.is_some()));
+}
+
+#[test]
+fn projected_provider_replacement_context_recovery_and_affine_transition_retire_images() {
+    let mut host = support::task_scheduler::host();
+    let (mut renderer, state, world, panel) = scene(&mut host);
+    projected(&mut host, panel, 0.6, 0.0);
+    frame(&mut renderer, &mut host, world, 0.0);
+    let deleted = state.cache_deletes.get();
+    // Full component replacement creates a new provider lifetime even when equal.
+    canvas::apply(
+        &mut host,
+        panel.parent,
+        vec![Command::insert_value(
+            EntityRef::Handle(panel.anchor),
+            ComponentValue::CylinderSurface(ipp_core::CylinderSurface {
+                curvature: 0.6,
+                ..Default::default()
+            }),
+        )],
+    );
+    assert_eq!(
+        frame(&mut renderer, &mut host, world, 0.0).surface_cache_repaints,
+        1
+    );
+    assert_eq!(state.cache_deletes.get(), deleted + 1);
+    *state.fail_cache_begin.borrow_mut() = Some(RenderError::ContextLost);
+    recolor(&mut host, panel, 17);
+    assert_eq!(
+        try_frame(&mut renderer, &mut host, world, 0.0),
+        Err(RenderError::ContextLost)
+    );
+    assert_eq!(state.cache_targets_live.get(), 0);
+    *state.fail_cache_begin.borrow_mut() = None;
+    recover_context(&mut renderer, &mut host, world, &surface_font());
+    assert!(diagnostics(&renderer, world).is_empty());
+    assert_eq!(
+        frame(&mut renderer, &mut host, world, 0.0).surface_cache_repaints,
+        1
+    );
+    edit_projected(&mut host, panel, 0.0, 0.0);
+    let flat = frame(&mut renderer, &mut host, world, 0.0);
+    assert_eq!(flat.failed_draw_calls, 0);
+    assert_eq!(state.cache_targets_live.get(), 0);
+    assert!(diagnostics(&renderer, world).is_empty());
+}
+
+#[test]
+fn projected_live_focus_bypasses_optional_refresh_cap_with_current_images() {
+    use ipp_core::components::{GuiCheckbox, GuiLayout};
+    use ipp_core::systems::gui::local::GuiLocalAction;
+    let mut host = support::task_scheduler::host();
+    let (mut renderer, _, world, _) = scene(&mut host);
+    let panel = CanvasSurface::new(
+        &mut host,
+        world,
+        -1.0,
+        vec![
+            ComponentValue::GuiCheckbox(GuiCheckbox::default()),
+            ComponentValue::GuiLayout(GuiLayout {
+                width: 1.0,
+                height: 1.0,
+                ..Default::default()
+            }),
+        ],
+    );
+    projected(&mut host, panel, 0.8, 0.0);
+    cache_policy(&mut host, panel, Some(ALWAYS));
+    assert_eq!(
+        frame(&mut renderer, &mut host, world, 0.0).surface_cache_repaints,
+        1
+    );
+    checkbox_action(&mut host, panel, 1, GuiLocalAction::Focus(0));
+    let focused = frame(&mut renderer, &mut host, world, 0.001);
+    assert!(panel.publication(&host).interaction.focused);
+    assert_eq!(focused.surface_cache_repaints, 1);
+    assert_eq!(focused.surface_cache_direct, 0);
+    assert_eq!(
+        record(&renderer, world, panel.anchor).presentation,
+        SurfaceCachePresentation::Repainted
+    );
+}
+
+#[test]
+fn projected_budget_reduction_reclaims_live_images_without_affine_fallback() {
+    let mut host = support::task_scheduler::host();
+    let (mut renderer, state, world, panel) = scene(&mut host);
+    projected(&mut host, panel, 0.6, 0.0);
+    frame(&mut renderer, &mut host, world, 0.0);
+    assert_eq!(state.cache_targets_live.get(), 1);
+    renderer.set_surface_cache_budget(0);
+    let unavailable = frame(&mut renderer, &mut host, world, 0.0);
+    assert!(unavailable.failed_draw_calls > 0);
+    assert_eq!(unavailable.surface_cache_direct, 0);
+    assert_eq!(state.cache_targets_live.get(), 0);
+    assert_eq!(
+        record(&renderer, world, panel.anchor).presentation,
+        SurfaceCachePresentation::Unavailable
+    );
+    renderer.set_surface_cache_budget(ipp_render_gl::SURFACE_CACHE_BUDGET_BYTES);
+    assert_eq!(
+        frame(&mut renderer, &mut host, world, 0.0).surface_cache_repaints,
+        1
+    );
 }

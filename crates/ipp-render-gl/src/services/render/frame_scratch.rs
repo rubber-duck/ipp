@@ -8,6 +8,7 @@ pub(super) enum RenderDrawIndex {
     Visual(usize),
     Debug(usize),
     Surface(usize),
+    SurfacePatch(usize, Option<u32>, usize),
     PlotPlane(usize),
 }
 
@@ -15,6 +16,7 @@ pub(super) enum RenderDrawItem<'a> {
     Visual(&'a RenderItem<'a>),
     Debug(&'a DebugRenderItem),
     Surface(&'a super::scene::SceneOutputSurface),
+    SurfacePatch(&'a super::scene::SceneOutputSurface, Option<u32>, usize),
     PlotPlane(&'a super::scene::ScenePlotPlane<'a>),
 }
 
@@ -30,6 +32,9 @@ impl RenderDrawIndex {
             Self::Visual(index) => RenderDrawItem::Visual(&items[index]),
             Self::Debug(index) => RenderDrawItem::Debug(&debug[index]),
             Self::Surface(index) => RenderDrawItem::Surface(&surfaces[index]),
+            Self::SurfacePatch(index, group, patch) => {
+                RenderDrawItem::SurfacePatch(&surfaces[index], group, patch)
+            }
             Self::PlotPlane(index) => RenderDrawItem::PlotPlane(&plot_planes[index]),
         }
     }
@@ -38,6 +43,10 @@ impl RenderDrawIndex {
         match self {
             Self::Visual(index) | Self::Debug(index) => index,
             Self::Surface(index) | Self::PlotPlane(index) => index,
+            Self::SurfacePatch(_, group, patch) => group
+                .map_or(0, |rank| rank as usize)
+                .saturating_mul(256)
+                .saturating_add(patch),
         }
     }
 }

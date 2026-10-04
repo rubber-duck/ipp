@@ -20,6 +20,7 @@ mod frame;
 mod inclusion;
 mod lifecycle;
 mod plot_planes;
+mod projected_surface;
 mod shadow;
 mod surface;
 mod surface_cache;
@@ -121,6 +122,9 @@ pub struct RenderService<D: RenderDevice> {
     surface_instance_program: Option<D::Program>,
     surface_bitmap_program: Option<D::Program>,
     surface_cache_program: Option<D::Program>,
+    surface_image_program: Option<D::Program>,
+    projected_surfaces: BTreeMap<ipp_core::OutputRef, projected_surface::ProjectedSurface<D>>,
+    projected_repainting: Option<ipp_core::OutputRef>,
     /// Whole-Surface cache images shared by every World on this context.
     surface_cache: super::surface_cache::SurfaceTextureCache<D::SurfaceCacheTarget>,
     canvas_caches: BTreeMap<ipp_core::OutputRef, surface_cache::CanvasCacheState>,
@@ -128,6 +132,8 @@ pub struct RenderService<D: RenderDevice> {
     /// Resources whose primitives the last Surface submission skipped because
     /// they were not resident; a cache repaint records them as incomplete.
     surface_missing: Vec<ipp_core::services::asset_management::AssetKey>,
+    /// Failed submissions attributable only to nonresident primitive resources.
+    surface_missing_draws: u32,
     /// The last Surface submission drew a text run analytically because its
     /// atlas entries were not all resident.
     surface_analytic_text: bool,

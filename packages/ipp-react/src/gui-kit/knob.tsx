@@ -33,7 +33,7 @@
  */
 import type { ReactNode } from "react";
 import { Children, Entity } from "../components.js";
-import { Font, Layout } from "../gui/components.js";
+import { Style, Font, Layout } from "../gui/components.js";
 import { useGuiKit } from "./kit.js";
 import { LAYOUT_COLUMN, Row } from "./layout.js";
 import { numericStepperHeight } from "./numeric-stepper.js";
@@ -72,6 +72,7 @@ const TICK_INSET_EMS = 0.5;
 export function Knob(props: KnobProps) {
   const {
     id,
+    layer = 0,
     label,
     min,
     max,
@@ -142,6 +143,7 @@ export function Knob(props: KnobProps) {
 
   return (
     <Entity id={id}>
+      <Style layer={layer} />
       <Layout
         kind={LAYOUT_COLUMN}
         width={Math.max(side, caption)}

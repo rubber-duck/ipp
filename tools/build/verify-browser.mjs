@@ -19,6 +19,7 @@ const SURFACE_CACHE_BRIDGE_IMPORTS = [
   "begin_surface_cache_target",
   "end_surface_cache_target",
   "draw_surface_cache",
+  "draw_surface_image_mesh",
   "delete_surface_cache_target",
 ];
 const request = JSON.parse(await readFile(process.argv[2], "utf8"));

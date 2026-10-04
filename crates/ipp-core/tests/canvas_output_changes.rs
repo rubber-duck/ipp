@@ -6,7 +6,7 @@ mod support;
 use support::task_scheduler::HostTaskTestDriver;
 
 use ipp_core::components::rows::Rows;
-use ipp_core::components::{GuiBehavior, GuiLayout, GuiScrollView, Surface, SurfaceCache};
+use ipp_core::components::{FlatSurface, GuiBehavior, GuiLayout, GuiScrollView, SurfaceCache};
 use ipp_core::services::asset_management::{
     AssetSource, AssetUpload, AssetUploadIdentity, font::FONT_TYPE,
 };
@@ -63,6 +63,73 @@ fn revisions(view: &CanvasPublication) -> [u64; 3] {
 }
 
 #[test]
+fn optional_bounds_added_to_retained_layout_are_fresh_after_removal_and_reinsertion() {
+    let mut panel = GuiPanel::new(stack());
+    let node = panel.node(panel.root_entity, sized(80.0, 30.0));
+    panel.frame();
+    let read = |panel: &mut GuiPanel| {
+        panel
+            .host
+            .world_mut(panel.world)
+            .unwrap()
+            .inspect(node)
+            .unwrap()
+            .components
+            .into_iter()
+            .find_map(|value| match value {
+                ComponentValue::CanvasBounds(bounds) => {
+                    Some([bounds.x, bounds.y, bounds.width, bounds.height])
+                }
+                _ => None,
+            })
+    };
+    assert_eq!(read(&mut panel), None);
+
+    // Inserting only the observer component must publish its evaluated bounds.
+    panel
+        .apply(vec![Command::insert_value(
+            EntityRef::Handle(node),
+            ComponentValue::CanvasBounds(Default::default()),
+        )])
+        .result
+        .unwrap();
+    panel.frame();
+    assert_eq!(read(&mut panel), Some([0.0, 0.0, 80.0, 30.0]));
+    let stable = revisions(&panel.output());
+    panel.frame();
+    assert_eq!(revisions(&panel.output()), stable);
+
+    panel
+        .apply(vec![Command::RemoveComponent {
+            entity: EntityRef::Handle(node),
+            component: ComponentValue::CANVAS_BOUNDS,
+        }])
+        .result
+        .unwrap();
+    panel
+        .set(
+            node,
+            ComponentValue::GUI_LAYOUT,
+            offset_of!(GuiLayout, width),
+            FieldValue::F32(42.0),
+        )
+        .result
+        .unwrap();
+    panel.frame();
+    assert_eq!(read(&mut panel), None);
+
+    panel
+        .apply(vec![Command::insert_value(
+            EntityRef::Handle(node),
+            ComponentValue::CanvasBounds(Default::default()),
+        )])
+        .result
+        .unwrap();
+    panel.frame();
+    assert_eq!(read(&mut panel), Some([0.0, 0.0, 42.0, 30.0]));
+}
+
+#[test]
 fn surface_resize_advances_the_presented_canvas_revisions_and_identical_rewrites_do_not() {
     let mut host = crate::support::task_scheduler::host();
     let parent = host
@@ -72,7 +139,7 @@ fn surface_resize_advances_the_presented_canvas_revisions_and_identical_rewrites
     let (_, parent_root) = canvas_root(&mut host, parent, PANEL, None);
     let (canvas, canvas_entity) = canvas_root(&mut host, child, PANEL, None);
     let leaf = create(&mut host, child, Some(canvas_entity), shape(20.0, 10.0));
-    let surface = Surface {
+    let surface = FlatSurface {
         width: 2.0,
         height: 1.0,
         ..Default::default()
@@ -82,7 +149,7 @@ fn surface_resize_advances_the_presented_canvas_revisions_and_identical_rewrites
         parent,
         Some(parent_root),
         vec![
-            ComponentValue::Surface(surface),
+            ComponentValue::FlatSurface(surface),
             ComponentValue::WorldAttachment(WorldAttachment::surface(canvas)),
         ],
     );
@@ -123,9 +190,9 @@ fn surface_resize_advances_the_presented_canvas_revisions_and_identical_rewrites
             parent,
             vec![Command::SetField {
                 entity: EntityRef::Handle(anchor),
-                component: ComponentValue::SURFACE,
+                component: ComponentValue::FLAT_SURFACE,
                 field: FieldWrite {
-                    offset: offset_of!(Surface, width) as u32,
+                    offset: offset_of!(FlatSurface, width) as u32,
                     value: FieldValue::F32(width),
                 },
             }],
@@ -660,7 +727,7 @@ fn surface_cache_policy_survives_world_save_and_load_while_canvas_output_is_rebu
         world,
         None,
         vec![
-            ComponentValue::Surface(Surface::default()),
+            ComponentValue::FlatSurface(FlatSurface::default()),
             ComponentValue::SurfaceCache(policy),
         ],
     );

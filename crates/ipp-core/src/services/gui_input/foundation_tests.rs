@@ -1,5 +1,5 @@
 use super::*;
-use crate::components::{GuiButton, GuiLayout, Surface};
+use crate::components::{FlatSurface, GuiButton, GuiLayout};
 use crate::systems::canvas::test_support::CanvasTestHost;
 use crate::systems::gui::local::{
     GuiEntityTarget, GuiLocalEffect, GuiLocalEffectKind, GuiLocalEffectSource,
@@ -37,6 +37,9 @@ mod focusable_tests;
 
 #[path = "group_tests.rs"]
 mod group_tests;
+
+#[path = "surface_routing_tests.rs"]
+mod surface_routing_tests;
 
 #[path = "camera_routing_tests.rs"]
 mod camera_routing_tests;
@@ -762,7 +765,7 @@ fn scene() -> Scene {
     let (root, root_entity) = canvas(&mut host, parent);
     let (child, child_entity) = canvas(&mut host, child_world);
     let button = button(&mut host, child_world, Some(child_entity));
-    let surface = Surface {
+    let surface = FlatSurface {
         width: 100.0,
         height: 100.0,
         ..Default::default()
@@ -771,7 +774,7 @@ fn scene() -> Scene {
         &mut host,
         parent,
         vec![
-            ComponentValue::Surface(surface),
+            ComponentValue::FlatSurface(surface),
             ComponentValue::WorldAttachment(WorldAttachment::surface(child)),
         ],
         Some(root_entity),
@@ -1205,24 +1208,34 @@ fn still_available_nonlatest_child_source_remains_valid() {
 
 #[test]
 fn current_surface_removal_and_superseded_pending_token_reject_retained_path() {
-    for remove_surface in [true, false] {
+    for mutation in 0..3 {
         let mut scene = scene();
         let command = routed(&scene);
-        let operation = if remove_surface {
-            Command::RemoveComponent {
+        let mut operations = if mutation != 1 {
+            vec![Command::RemoveComponent {
                 entity: EntityRef::Handle(scene.anchor),
-                component: ComponentValue::SURFACE,
-            }
+                component: ComponentValue::FLAT_SURFACE,
+            }]
         } else {
-            Command::insert_value(
+            vec![Command::insert_value(
                 EntityRef::Handle(scene.anchor),
                 ComponentValue::WorldAttachment(WorldAttachment::surface(scene.child)),
-            )
+            )]
         };
+        if mutation == 2 {
+            operations.push(Command::insert_value(
+                EntityRef::Handle(scene.anchor),
+                ComponentValue::FlatSurface(FlatSurface {
+                    width: 100.0,
+                    height: 100.0,
+                    ..Default::default()
+                }),
+            ));
+        }
 
         // A failed root publication retains the superseded token's completed path.
         scene.state.lock().unwrap().fail_publication = Some(scene.root.world());
-        apply(&mut scene.host, scene.root.world(), vec![operation]);
+        apply(&mut scene.host, scene.root.world(), operations);
         assert_eq!(
             scene.host.attachment_retirement(&scene.token).unwrap(),
             crate::WorldAttachmentRetirement::Pending

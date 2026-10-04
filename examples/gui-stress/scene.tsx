@@ -3,7 +3,7 @@ import {
   CanvasWorld,
   Children,
   Entity,
-  Surface,
+  FlatSurface,
   SurfaceCache,
   Transform,
   type CanvasWorldHandle,
@@ -103,7 +103,7 @@ function Panel({
     <>
       <Entity id={`stress-panel-${panel}`}>
         <Transform x={positionX} y={positionY} />
-        <Surface width={PANEL_WIDTH} height={PANEL_HEIGHT} />
+        <FlatSurface width={PANEL_WIDTH} height={PANEL_HEIGHT} />
       </Entity>
       <CanvasWorld
         presentation={{ anchor: `stress-panel-${panel}` }}
@@ -300,7 +300,7 @@ function Panel({
           y={positionY + GUI_STRESS_WORKLOAD.layout.rawYOffset}
         />
         <SurfaceCache {...GUI_STRESS_WORKLOAD.rawSurfaceCache} />
-        <Surface
+        <FlatSurface
           width={PANEL_WIDTH}
           height={GUI_STRESS_WORKLOAD.layout.rawHeight}
         />

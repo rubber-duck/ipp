@@ -8,7 +8,7 @@ use support::task_scheduler::HostTaskTestDriver;
 
 use ipp_core::components::rows::Rows;
 use ipp_core::components::{
-    GuiBehavior, GuiCheckbox, GuiLayout, GuiScrollView, GuiSlider, GuiTextInput, Surface,
+    FlatSurface, GuiBehavior, GuiCheckbox, GuiLayout, GuiScrollView, GuiSlider, GuiTextInput,
 };
 use ipp_core::services::asset_management::{AssetSource, font::FONT_TYPE};
 use ipp_core::systems::canvas::{
@@ -1472,7 +1472,7 @@ impl PresentedPanel {
                 ..sized(-1.0, 20.0)
             },
         );
-        let surface = Surface {
+        let surface = FlatSurface {
             width: 4.0,
             height: 2.0,
             ..Default::default()
@@ -1482,7 +1482,7 @@ impl PresentedPanel {
             parent,
             Some(parent_root),
             vec![
-                ComponentValue::Surface(surface),
+                ComponentValue::FlatSurface(surface),
                 ComponentValue::WorldAttachment(WorldAttachment::surface(canvas)),
             ],
         );

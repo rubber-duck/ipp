@@ -488,7 +488,7 @@ fn camera_output_references_remap_exact_producers_without_restoring_root_present
         &mut host,
         root,
         vec![
-            ComponentValue::create(ComponentValue::SURFACE).unwrap(),
+            ComponentValue::create(ComponentValue::FLAT_SURFACE).unwrap(),
             ComponentValue::WorldAttachment(WorldAttachment::surface(output)),
         ],
     );
@@ -728,7 +728,7 @@ fn late_system_restore_failure_tears_down_all_private_worlds_without_publishing_
 
 #[test]
 fn real_canvas_graph_restores_selected_outputs_density_paint_and_sparse_systems() {
-    use ipp_core::components::Surface;
+    use ipp_core::components::FlatSurface;
     use ipp_core::systems::canvas::{
         CanvasBox, CanvasPaintEntry, CanvasPrimitive, CanvasPublication, CanvasStyle, CanvasSystem,
     };
@@ -815,7 +815,7 @@ fn real_canvas_graph_restores_selected_outputs_density_paint_and_sparse_systems(
         );
         place(&mut host, child, shape, child_canvas);
     }
-    let surface = Surface {
+    let surface = FlatSurface {
         width: 2.0,
         height: 0.5,
         ..Default::default()
@@ -829,7 +829,7 @@ fn real_canvas_graph_restores_selected_outputs_density_paint_and_sparse_systems(
                 y: 18.0,
                 ..Default::default()
             }),
-            ComponentValue::Surface(surface),
+            ComponentValue::FlatSurface(surface),
             ComponentValue::WorldAttachment(WorldAttachment::surface(child_output)),
         ],
     );
@@ -1033,4 +1033,75 @@ fn real_canvas_graph_restores_selected_outputs_density_paint_and_sparse_systems(
         );
         assert_eq!(host.list_worlds(), before);
     }
+}
+
+#[test]
+fn curved_provider_parameters_round_trip_and_conflicting_providers_fail_graph_validation() {
+    let mut host = support::task_scheduler::host();
+    let root = named(&mut host, "curved-providers", select(&[SURFACE]));
+    let cylinder = CylinderSurface {
+        width: 4.0,
+        height: 2.0,
+        curvature: -0.7,
+        layer_spacing: 0.1,
+    };
+    let sphere = SphereSurface {
+        width: 3.0,
+        height: 2.0,
+        curvature: 0.5,
+        layer_spacing: -0.2,
+    };
+    entity(
+        &mut host,
+        root,
+        vec![ComponentValue::CylinderSurface(cylinder.clone())],
+    );
+    entity(
+        &mut host,
+        root,
+        vec![ComponentValue::SphereSurface(sphere.clone())],
+    );
+    let graph = host.capture_world_graph(root, Default::default()).unwrap();
+    let bytes = graph.encode(71, Default::default()).unwrap();
+    let descriptor = inspect_world_graph(&bytes, 71, Default::default()).unwrap();
+    let loaded = host
+        .load_world(
+            &bytes,
+            71,
+            copy_names(&descriptor),
+            Default::default(),
+            Default::default(),
+        )
+        .unwrap();
+    host.frame(0.0).unwrap();
+    let restored = host
+        .capture_world_graph(loaded.root.id(), Default::default())
+        .unwrap();
+    let values: Vec<_> = restored
+        .nodes
+        .iter()
+        .flat_map(|node| &node.world.entities)
+        .flat_map(|entity| &entity.components)
+        .collect();
+    assert!(values.contains(&&ComponentValue::CylinderSurface(cylinder)));
+    assert!(values.contains(&&ComponentValue::SphereSurface(sphere)));
+    let world = host.world_mut(loaded.root.id()).unwrap();
+    for entity in world
+        .entities()
+        .iter()
+        .map(|entity| entity.id)
+        .collect::<Vec<_>>()
+    {
+        assert!(world.surface(entity).is_some());
+    }
+    drop(world);
+
+    let mut invalid = graph;
+    invalid.nodes[0].world.entities[0]
+        .components
+        .push(ComponentValue::FlatSurface(FlatSurface::default()));
+    assert_eq!(
+        invalid.encode(71, Default::default()).unwrap_err(),
+        "Multiple serialized Surface providers"
+    );
 }

@@ -964,7 +964,7 @@ fn nested<D: RenderDevice>(
     let middle_output = camera(&mut host, middle, 2.0)?;
     let mut parent_anchor = None;
     for (world, selection) in [(middle, child_output), (parent, middle_output)] {
-        let surface = ipp_core::components::Surface {
+        let surface = ipp_core::components::FlatSurface {
             width: 2.0,
             height: 2.0,
             ..Default::default()
@@ -974,7 +974,7 @@ fn nested<D: RenderDevice>(
             world,
             vec![
                 ComponentValue::Transform(Transform::default()),
-                ComponentValue::Surface(surface),
+                ComponentValue::FlatSurface(surface),
                 ComponentValue::WorldAttachment(WorldAttachment::surface(selection)),
             ],
         )?;

@@ -222,15 +222,16 @@ impl CameraNavigationCommand {
                 let parent = ingress
                     .world(publication.world)
                     .ok_or(ErrorReason::InvalidEntity)?;
-                let Some(crate::ComponentValue::Surface(surface)) =
-                    parent.effective_component(edge.anchor, crate::ComponentValue::SURFACE)
-                else {
-                    return Err(ErrorReason::InvalidEntity);
-                };
-                if !parent.component_is_active(edge.anchor, crate::ComponentValue::SURFACE)
-                    || Some([f64::from(surface.width), f64::from(surface.height)])
-                        != edge.surface_extent
-                {
+                let geometry = edge
+                    .surface_geometry
+                    .as_ref()
+                    .ok_or(ErrorReason::InvalidEntity)?;
+                if !crate::systems::surface::publication_is_current(
+                    parent,
+                    edge.anchor,
+                    geometry,
+                    edge.surface_incarnation,
+                ) {
                     return Err(ErrorReason::InvalidEntity);
                 }
             }

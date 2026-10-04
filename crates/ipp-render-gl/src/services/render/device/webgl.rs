@@ -214,6 +214,20 @@ unsafe extern "C" {
 
     fn delete_surface_cache_target(target: u32);
 
+    #[allow(clippy::too_many_arguments)]
+    fn draw_surface_image_mesh(
+        program: u32,
+        target: u32,
+        mesh: u32,
+        mvp: *const f32,
+        size: *const f32,
+        clip: *const f32,
+        opacity: f32,
+        flip_image: u32,
+        first_index: u32,
+        index_count: u32,
+    ) -> u32;
+
     fn create_gui_batch(byte_length: u32, layout_ptr: *const u32) -> u32;
 
     fn write_gui_batch(
@@ -875,6 +889,46 @@ impl RenderDevice for WebGlRenderDevice {
         // SAFETY: Only the scalar handle crosses the boundary; the bridge ignores
         // unknown handles, tolerates context loss and cannot reenter Rust.
         unsafe { delete_surface_cache_target(target) };
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_surface_image_mesh(
+        &mut self,
+        program: &Self::Program,
+        target: &Self::SurfaceCacheTarget,
+        mesh: &Self::Mesh,
+        mvp: &[f32; 16],
+        size: &[f32; 2],
+        clip: &[f32; 4],
+        opacity: f32,
+        flip_image: bool,
+        indices: std::ops::Range<u32>,
+    ) -> Result<(), RenderError> {
+        if indices.start > indices.end
+            || !indices.start.is_multiple_of(3)
+            || !indices.end.is_multiple_of(3)
+        {
+            return Err(RenderError::RenderDevice(
+                "invalid Surface image mesh draw".into(),
+            ));
+        }
+        // SAFETY: Fixed arrays remain live through this synchronous bridge call;
+        // JS copies uniforms and validates generational handles and index bounds,
+        // retaining neither memory views nor Rust references across growth/reentry.
+        self.check(unsafe {
+            draw_surface_image_mesh(
+                program.id,
+                *target,
+                *mesh,
+                mvp.as_ptr(),
+                size.as_ptr(),
+                clip.as_ptr(),
+                opacity,
+                u32::from(flip_image),
+                indices.start,
+                indices.end - indices.start,
+            )
+        })
     }
 
     fn create_gui_batch(

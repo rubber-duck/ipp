@@ -10,6 +10,7 @@ export const CLIENT_SUPPORT_MODULES = [
   "command-pages.ts",
   "dynamic-properties.ts",
   "gui-types.ts",
+  "surface-config.ts",
   "gui-observations.ts",
   "lifecycle-types.ts",
   "lifecycle-watches.ts",

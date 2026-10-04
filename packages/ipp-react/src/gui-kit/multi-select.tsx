@@ -22,6 +22,8 @@ import { SelectList, SelectTrigger, selectTextRoom } from "./select-trigger.js";
 import { textWidth } from "./text.js";
 
 export interface MultiSelectProps extends OverlayOpenProps {
+  /** Nonnegative layer offset applied once at this component root; zero inherits. */
+  readonly layer?: number;
   /** Symbolic id of the trigger; the list and its rows extend it. */
   readonly id: string;
   readonly options: readonly SelectOption[];
@@ -57,6 +59,7 @@ export function selectionSummary(
 
 export function MultiSelect({
   id,
+  layer = 0,
   options,
   value,
   defaultValue = [],
@@ -103,6 +106,7 @@ export function MultiSelect({
   return (
     <SelectTrigger
       id={id}
+      layer={layer}
       text={selected.length > 0 ? summary : placeholder}
       placeholder={selected.length === 0}
       open={overlay.open}

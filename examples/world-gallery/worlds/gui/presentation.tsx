@@ -63,6 +63,9 @@ export const BODY = TOKENS.textBody;
 export const SURFACE_WIDTH = 7.4;
 export const SURFACE_HEIGHT = 4.8;
 
+/** Shared curvature radius for the dashboard and its scene-geometry shield. */
+export const SURFACE_RADIUS = 8;
+
 /**
  * Canvas units per Surface metre. Body text is then 16 / 140 = 0.114 m, about
  * 13 pixels at the authored camera on a typical desktop canvas, and the panel

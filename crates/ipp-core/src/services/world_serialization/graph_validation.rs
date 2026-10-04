@@ -157,6 +157,15 @@ impl WorldGraphSnapshot {
             }
 
             for entity in &node.world.entities {
+                if entity
+                    .components
+                    .iter()
+                    .filter(|component| crate::systems::surface::is_provider(component.type_id()))
+                    .count()
+                    > 1
+                {
+                    return Err("Multiple serialized Surface providers".into());
+                }
                 let mut types = BTreeSet::new();
                 for component in &entity.components {
                     if !types.insert(component.type_id()) {
@@ -179,10 +188,9 @@ impl WorldGraphSnapshot {
                     }
                     if let ComponentValue::WorldAttachment(value) = component {
                         if value.mode != 0
-                            && !entity
-                                .components
-                                .iter()
-                                .any(|component| component.type_id() == ComponentValue::SURFACE)
+                            && !entity.components.iter().any(|component| {
+                                crate::systems::surface::is_provider(component.type_id())
+                            })
                         {
                             return Err("Surface attachment has no authored Surface".into());
                         }

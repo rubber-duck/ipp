@@ -122,6 +122,15 @@ impl HostIngressView<'_> {
         (publication.world == edge.child).then_some(())?;
         if edge.mode != WorldAttachmentMode::Spatial {
             edge.surface_extent?;
+            let geometry = edge.surface_geometry.as_ref()?;
+            let parent = self.world(edge.token.parent())?;
+            crate::systems::surface::publication_is_current(
+                parent,
+                edge.anchor,
+                geometry,
+                edge.surface_incarnation,
+            )
+            .then_some(())?;
             self.output(publication.id, edge.output?)?;
         }
         Some(publication)

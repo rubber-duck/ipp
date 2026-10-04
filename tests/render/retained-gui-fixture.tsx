@@ -2,7 +2,7 @@ import {
   CanvasWorld,
   Children,
   Entity,
-  Surface,
+  FlatSurface,
   Transform,
   type CanvasWorldHandle,
 } from "@ipp/react";
@@ -326,7 +326,7 @@ async function renderPanel() {
     <>
       <Entity key="gui" id="retained-gui-panel">
         <Transform ry={config.angle ?? 0} />
-        <Surface width={PANEL_EXTENT[0]} height={PANEL_EXTENT[1]} />
+        <FlatSurface width={PANEL_EXTENT[0]} height={PANEL_EXTENT[1]} />
         {surfaceFixture.cacheDeclaration("retained-gui-panel")}
       </Entity>
       <CanvasWorld

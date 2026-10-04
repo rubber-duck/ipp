@@ -21,12 +21,15 @@ pub struct GuiProjectedPoint {
     pub extent: [f64; 2],
 }
 
-/// Reproject a retained hit path, including captured points outside rectangles when requested.
+/// Project through producer-write tokens into the selected completed view.
+/// Tokens select that view's current provider; they are not historical provider proofs.
+/// Retained input targets separately fence provider incarnations before using this query.
+/// Content continuation allows points outside rectangles when requested.
 /// Front-facing and Camera near/far constraints always apply; there is no raw-coordinate fallback.
 /// Gating does not erase readable geometry. The input owner must separately validate capture/gates.
 ///
 /// Where a Surface in a camera's domain separates its canvas's layers, the ray
-/// meets the plane of the layer the path continues on: the next nested slot's
+/// meets the shell of the layer the path continues on: the next nested slot's
 /// layer, or `layer`, the target's own layer in the final canvas, at its id
 /// times the spacing.
 pub fn project_composed_point(
@@ -87,18 +90,40 @@ pub fn project_composed_point(
                     .ok_or(ErrorReason::InvalidEntity)?;
                 let ray = camera.ray_for_extent(point, extent)?;
                 let local = affine.inverse_ray(&ray.ray);
-                if local.direction[2] >= 0.0 {
-                    return Ok(None);
-                }
-                let plane = f64::from(plane_layer(host, edge, path.get(step + 1), layer)?)
+                let offset = f64::from(surface_layer(host, edge, path.get(step + 1), layer)?)
                     * f64::from(edge.layer_spacing);
-                let distance = (plane - local.origin[2]) / local.direction[2];
-                if !distance.is_finite() || distance < ray.near || distance > ray.far {
+                let geometry = edge
+                    .surface_geometry
+                    .as_ref()
+                    .ok_or(ErrorReason::InvalidGeometry)?;
+                let child = host.attached_publication(edge);
+                let offsets = super::surface_offset_range(host, edge, child);
+                geometry.validate_offsets(offsets)?;
+                let domain = if captured {
+                    crate::systems::surface::SurfaceDomain::Continuation
+                } else {
+                    crate::systems::surface::SurfaceDomain::Content
+                };
+                let Some(hit) = geometry
+                    .ray_intersections(&local, offset, domain)?
+                    .into_iter()
+                    .find(|hit| {
+                        hit.distance >= ray.near
+                            && hit.distance <= ray.far
+                            && hit
+                                .front_normal
+                                .iter()
+                                .zip(local.direction)
+                                .map(|(normal, direction)| normal * direction)
+                                .sum::<f64>()
+                                < 0.0
+                    })
+                else {
                     return Ok(None);
-                }
+                };
                 [
-                    local.origin[0] + distance * local.direction[0],
-                    local.origin[1] + distance * local.direction[1],
+                    hit.content[0] - physical[0] * 0.5,
+                    physical[1] * 0.5 - hit.content[1],
                 ]
             }
             OutputKind::Canvas => {
@@ -171,10 +196,10 @@ pub fn project_composed_point(
     }))
 }
 
-/// Layer whose plane a camera-domain Surface edge projects onto: zero without
+/// Occupied rank whose shell a camera-domain Surface edge projects onto: zero without
 /// layer separation, the layer of the `next` slot the path enters in its
 /// canvas, or the final target's `layer`.
-fn plane_layer(
+fn surface_layer(
     host: &HostRuntime,
     edge: &crate::PublishedWorldAttachment,
     next: Option<&WorldAttachmentToken>,

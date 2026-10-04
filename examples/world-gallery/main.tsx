@@ -40,6 +40,7 @@ import {
   type usePlatformerScene,
 } from "./worlds/platformer/controls.js";
 import { ChartControls } from "./worlds/charts/controls.js";
+import { useChartInteraction } from "./worlds/charts/interaction.js";
 import { ResponsiveControls, ScenePicker } from "./gallery-shell.js";
 import { galleryScene, gallerySceneFromHash } from "./scene-catalog.js";
 import { gallerySceneDefinition } from "./scene-registry.js";
@@ -150,8 +151,14 @@ export function Gallery() {
   useGalleryControls(
     gallery,
     picked,
-    page !== "platformer" && page !== "charts2d" && page !== "charts3d",
+    page !== "platformer" && page !== "charts",
     page === "gui" ? guiInputGate : undefined,
+  );
+  useChartInteraction(
+    canvas,
+    gallery.mount,
+    page === "charts",
+    gallery.reportChartError,
   );
   const worldError =
     error ?? animation?.error ?? platformer?.error ?? gui?.error;
@@ -207,7 +214,7 @@ export function Gallery() {
           }
         >
           <IppCanvas
-            key={page === "platformer" ? page : "authored"}
+            key={page === "platformer" || page === "charts" ? page : "authored"}
             world={scene.world(assets)}
             output={output}
             initialize={(client, signal, host) =>
@@ -315,12 +322,8 @@ export function Gallery() {
           platformer && <PlatformerControls demo={platformer} />
         ) : page === "gui" ? (
           gui && <GuiControls scene={gui} />
-        ) : page === "charts2d" || page === "charts3d" ? (
-          <ChartControls
-            mount={gallery.mount}
-            spatial={page === "charts3d"}
-            report={setError}
-          />
+        ) : page === "charts" ? (
+          <ChartControls mount={gallery.mount} report={setError} />
         ) : (
           <>
             <LightingControls

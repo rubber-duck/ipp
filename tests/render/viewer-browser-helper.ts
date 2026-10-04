@@ -2203,3 +2203,46 @@ export async function cancelGalleryTrace() {
     await hostProfiling(requireCanvas().host).release(galleryTraceCapture);
   galleryTraceCapture = undefined;
 }
+
+/** Scene diagnostics stay on the mounted production controller and its generated client. */
+export async function gallerySceneState() {
+  const scene = (
+    window as Window & {
+      ippGalleryScene?: { inspect(): Promise<unknown> };
+    }
+  ).ippGalleryScene;
+  if (!scene) throw new Error("No mounted gallery scene");
+  await requireCanvas().flush();
+  const state = await scene.inspect();
+  const world = (state as { world?: Inspection }).world;
+  if (world) plainRowsTables(world);
+  for (const chart of (
+    state as { charts?: readonly { inspection: Inspection }[] }
+  ).charts ?? [])
+    plainRowsTables(chart.inspection);
+  return state;
+}
+
+export async function gallerySceneAction(name: string, args?: unknown) {
+  const scene = (
+    window as Window & {
+      ippGalleryScene?: {
+        action(name: string, args?: unknown): Promise<unknown>;
+      };
+    }
+  ).ippGalleryScene;
+  if (!scene) throw new Error("No mounted gallery scene");
+  return scene.action(name, args);
+}
+
+/** Observe source disposal through the same production Host dataset connection. */
+export async function galleryDatasetExists(name: string): Promise<boolean> {
+  try {
+    await requireCanvas().host.datasets.read(name);
+    return true;
+  } catch (error) {
+    if (error instanceof Error && error.message === "MissingSource")
+      return false;
+    throw error;
+  }
+}

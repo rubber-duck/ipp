@@ -16,8 +16,7 @@ export type GallerySceneId =
   | "platformer"
   | "particles"
   | "gui"
-  | "charts2d"
-  | "charts3d";
+  | "charts";
 export type GalleryOptions = Readonly<Record<string, unknown>>;
 
 /** Platform asset access; identifiers retain their ordinary resource meaning. */

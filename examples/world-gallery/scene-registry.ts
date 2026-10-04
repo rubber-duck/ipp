@@ -5,8 +5,7 @@ import { particlesScene } from "./worlds/particles/scene.js";
 import { platformerScene } from "./worlds/platformer/scene.js";
 import { guiScene } from "./worlds/gui/definition.js";
 
-import { chart2dScene } from "./worlds/charts2d/scene.js";
-import { chart3dScene } from "./worlds/charts3d/scene.js";
+import { chartScene } from "./worlds/charts/scene.js";
 
 /** Application scene modules consumed by both browser and native runners. */
 export const GALLERY_SCENE_DEFINITIONS: readonly GallerySceneDefinition[] = [
@@ -15,8 +14,7 @@ export const GALLERY_SCENE_DEFINITIONS: readonly GallerySceneDefinition[] = [
   platformerScene,
   particlesScene,
   guiScene,
-  chart2dScene,
-  chart3dScene,
+  chartScene,
 ];
 
 export function gallerySceneDefinition(id: string): GallerySceneDefinition {

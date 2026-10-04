@@ -3,6 +3,8 @@ import { createElement as h } from "react";
 import type { AnimationWorldClient, RowPropertyValue } from "@ipp/client";
 import {
   BufferDataSourceBinding,
+  StreamingDataSourceBinding,
+  type DataWindow,
   DataSource,
   ColumnBindingAsset,
   assetRef,
@@ -46,6 +48,11 @@ export async function declarePlot(
   extra: Readonly<
     Record<string, number | boolean | string | Uint8Array<ArrayBuffer>>
   >,
+  parameters: Readonly<Record<string, number>> = { y2: 1 },
+  streaming?: {
+    windows: readonly DataWindow[];
+    encodeWindows: (windows: readonly DataWindow[]) => Uint8Array<ArrayBuffer>;
+  },
 ) {
   const root = createRoot(client);
   const seriesRows = {
@@ -84,6 +91,20 @@ export async function declarePlot(
           series: seriesRows,
           labels: labelRows,
         });
+  const bindingProps = {
+    source,
+    columns: Object.fromEntries(
+      Object.keys(definitions).map((output) => [
+        output,
+        {
+          definition: assetRef(output),
+          ...(parameters[output] !== undefined
+            ? { parameter: { kind: "f32" as const, value: parameters[output] } }
+            : {}),
+        },
+      ]),
+    ),
+  };
   try {
     await root.render(
       h(
@@ -96,25 +117,15 @@ export async function declarePlot(
           Entity,
           { bindTo: entity },
           h(component.endsWith("2d") ? PlotFrame2d : PlotFrame3d, {}),
-          h(BufferDataSourceBinding, {
-            source,
-            columns: Object.fromEntries(
-              Object.keys(definitions).map((output) => [
-                output,
-                {
-                  definition: assetRef(output),
-                  ...(output === "y2"
-                    ? { parameter: { kind: "f32" as const, value: 1 } }
-                    : {}),
-                },
-              ]),
-            ),
-          }),
+          streaming
+            ? h(StreamingDataSourceBinding, { ...bindingProps, ...streaming })
+            : h(BufferDataSourceBinding, bindingProps),
           chart,
         ),
       ),
     );
   } catch (error) {
+    await root.render(null).catch(() => {});
     await root.unmount().catch(() => {});
     throw error;
   }

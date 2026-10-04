@@ -3,12 +3,24 @@ import test from "node:test";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { Inspection } from "@ipp/client";
+import type { DatasetPage } from "@ipp/client";
 import type { HostContract, HostState } from "../../tools/shared-host/host.js";
 import type { RgbaImage } from "../../tools/shared-host/images.js";
 import { runNativeEnvironment } from "../integration/environment.js";
 import { NativeGalleryDriver } from "./native-gallery-driver.js";
 import { exerciseNativeGalleryScene } from "./native-gallery-scene-assertions.js";
+import {
+  exerciseGalleryCharts,
+  exerciseChartRow,
+  type GalleryChartsState,
+  type GalleryChartsDriver,
+} from "../integration/scenarios/gallery-charts.js";
+
+import {
+  exerciseStreamingCharts,
+  type StreamingChartsState,
+  type StreamingChartsDriver,
+} from "../integration/scenarios/gallery-chart-streaming.js";
 
 /** Content must cover a meaningful frame region, independent of the source's own geometry math. */
 function visiblePixels(frame: RgbaImage): number {
@@ -28,131 +40,6 @@ function visiblePixels(frame: RgbaImage): number {
   return visible;
 }
 
-/** Check chart bodies, excluding the sheet heading and panel titles. */
-function chartBodyPixels(frame: RgbaImage): readonly number[] {
-  return [0.24, 0.66].flatMap((top) =>
-    [0.12, 0.57].map((left) => {
-      let count = 0;
-      for (
-        let y = Math.floor(top * frame.height);
-        y < (top + 0.21) * frame.height;
-        y++
-      ) {
-        for (
-          let x = Math.floor(left * frame.width);
-          x < (left + 0.31) * frame.width;
-          x++
-        ) {
-          const index = (y * frame.width + x) * 4;
-          const channels = [...frame.pixels.slice(index, index + 3)];
-          if (
-            Math.max(...channels) > 110 &&
-            Math.max(...channels) - Math.min(...channels) > 50
-          )
-            count++;
-        }
-      }
-      return count;
-    }),
-  );
-}
-
-function changedPixels(before: RgbaImage, after: RgbaImage): number {
-  assert.equal(after.width, before.width);
-  assert.equal(after.height, before.height);
-  let count = 0;
-  for (let index = 0; index < before.pixels.length; index += 4) {
-    if (
-      [0, 1, 2].some(
-        (axis) =>
-          Math.abs(before.pixels[index + axis]! - after.pixels[index + axis]!) >
-          20,
-      )
-    )
-      count++;
-  }
-  return count;
-}
-
-async function exerciseChart(
-  driver: NativeGalleryDriver,
-  scene: string,
-  directory: string,
-  signal: AbortSignal,
-  initial: RgbaImage,
-) {
-  const occupancy = chartBodyPixels(initial);
-  assert.ok(
-    occupancy.every((count) => count > 40),
-    `${scene} renders coloured data in all four chart bodies: ${occupancy}`,
-  );
-  await driver.call("action", ["changeSamples"], signal);
-  const changed = await driver.capture(
-    join(directory, `${scene}-changed`),
-    signal,
-  );
-  assert.ok(
-    changedPixels(initial, changed) > 500,
-    `${scene} sample action changes actual chart pixels`,
-  );
-  if (scene === "charts2d")
-    await driver.call("action", ["setParameter", "0.4"], signal);
-  else await driver.call("action", ["rotate", "true"], signal);
-  const altered = await driver.capture(
-    join(directory, `${scene}-altered`),
-    signal,
-  );
-  assert.ok(
-    changedPixels(changed, altered) > 200,
-    `${scene} parameter or rotation changes rendered data`,
-  );
-  const state = await driver.call("inspect", [], signal);
-  assert.deepEqual(
-    state.report.options,
-    scene === "charts2d"
-      ? { changed: true, parameter: 0.4 }
-      : { changed: true, rotated: true },
-  );
-  if (scene === "charts2d") {
-    const verifyParameter = async (changed: boolean, parameter: number) => {
-      await driver.capture(
-        join(directory, `${scene}-samples-${changed}-parameter-${parameter}`),
-        signal,
-      );
-      const inspection = await driver.call("inspect", [], signal);
-      assert.deepEqual(inspection.report.options, { changed, parameter });
-      const world = (inspection.report.state as { world: Inspection }).world;
-      assert.equal(world.controllers?.length, 1);
-      const controller = world.controllers![0]!;
-      assert.equal(controller.state, "paused");
-      assert.ok(
-        Math.abs(controller.time - parameter) < 0.0001,
-        `acknowledged chart controller time ${controller.time} matches reported parameter ${parameter}`,
-      );
-    };
-    await driver.call("action", ["changeSamples"], signal);
-    await verifyParameter(true, 1);
-    await driver.call("options", ['{"changed":false,"parameter":1}'], signal);
-    await verifyParameter(false, 1);
-    await driver.call("options", ['{"changed":true,"parameter":0.4}'], signal);
-    await verifyParameter(true, 0.4);
-  }
-  await driver.call("reload", [], signal);
-  assert.deepEqual(
-    (await driver.call("inspect", [], signal)).report.options,
-    state.report.options,
-    `${scene} preserves chart controls through reload`,
-  );
-  const reloaded = await driver.capture(
-    join(directory, `${scene}-reloaded`),
-    signal,
-  );
-  assert.ok(
-    chartBodyPixels(reloaded).every((count) => count > 40),
-    `${scene} retains all chart bodies after reload`,
-  );
-}
-
 const eglDirectory = process.env.IPP_EGL_LIBRARY_DIR ?? "/lib64";
 const workspace = process.cwd();
 const product = resolve("target/gles-host");
@@ -167,6 +54,7 @@ async function runGallery(
     readonly worlds: () => Promise<
       readonly { readonly id: bigint; readonly symbolicId: string }[]
     >;
+    readonly readDataset: (name: string) => Promise<DatasetPage>;
     readonly record: (kind: string, value: unknown) => Promise<void>;
   }) => Promise<void>,
   mapped = true,
@@ -237,6 +125,7 @@ async function runGallery(
           directory,
           signal: environment.signal,
           worlds: () => observer.listWorlds(),
+          readDataset: (name) => observer.datasets.read(name),
           record: (kind, value) => environment.evidence.record(kind, value),
         });
       } catch (error) {
@@ -369,8 +258,7 @@ test("native gallery captures all shared scenes, including moving particles and 
         "particles",
         "platformer",
         "gui",
-        "charts2d",
-        "charts3d",
+        "charts",
       ]) {
         await driver.start(
           scene,
@@ -385,8 +273,6 @@ test("native gallery captures all shared scenes, including moving particles and 
           );
           const state = await driver.call("inspect", [], signal);
           assert.equal(state.report.scene, scene);
-          if (scene === "charts2d" || scene === "charts3d")
-            await exerciseChart(driver, scene, directory, signal, frame);
           if (scene === "particles") {
             const next = await driver.capture(
               join(directory, "particles-next"),
@@ -417,6 +303,59 @@ test("native gallery captures all shared scenes, including moving particles and 
   );
 });
 
+test("native unified charts navigate, animate and pick World-qualified source rows without leaked participants", {
+  timeout: 180_000,
+}, async (context) => {
+  await runGallery(
+    context.signal,
+    "charts",
+    async ({ driver, directory, signal, worlds, record }) => {
+      await driver.start(
+        "charts",
+        ["--width", "720", "--height", "480"],
+        signal,
+      );
+      assert.equal(
+        (await worlds()).length,
+        6,
+        "The root camera scene owns five Canvas chart children",
+      );
+      const chartsDriver: GalleryChartsDriver = {
+        inspect: async () =>
+          (await driver.call("inspect", [], signal)).report
+            .state as unknown as GalleryChartsState,
+        action: (name, args) =>
+          driver.call(
+            "action",
+            [name, ...(args === undefined ? [] : [JSON.stringify(args)])],
+            signal,
+          ),
+        capture: (label) => driver.capture(join(directory, label), signal),
+        record: async (label, value) => {
+          await writeFile(
+            join(directory, `${label}.json`),
+            `${JSON.stringify(value, (_key, item) => (typeof item === "bigint" ? String(item) : item), 2)}\n`,
+          );
+          await record(label, { artifact: `${label}.json` });
+        },
+      };
+      await exerciseGalleryCharts(chartsDriver);
+      await exerciseChartRow(chartsDriver, 720 / 480);
+      const previous = (await worlds())[0]!;
+      await driver.call("reload", [], signal);
+      assert.equal((await worlds()).length, 6);
+      assert.notEqual((await worlds())[0]!.id, previous.id);
+      await driver.capture(join(directory, "charts-reloaded"), signal);
+      await driver.close();
+      assert.equal(
+        (await worlds()).length,
+        0,
+        "Chart disposal releases root and all Canvas child Worlds",
+      );
+    },
+  );
+});
+
 test("native gallery explains missing saved asset mappings before creating a World", {
   timeout: 30_000,
 }, async (context) => {
@@ -435,5 +374,64 @@ test("native gallery explains missing saved asset mappings before creating a Wor
       });
     },
     false,
+  );
+});
+
+test("native gallery streams bounded data windows, expires picked rows and disposes sources on reload", {
+  timeout: 150_000,
+}, async (context) => {
+  await runGallery(
+    context.signal,
+    "streaming-charts",
+    async ({ driver, directory, signal, worlds, readDataset, record }) => {
+      await driver.start(
+        "charts",
+        ["--width", "720", "--height", "480"],
+        signal,
+      );
+      const charts: StreamingChartsDriver = {
+        inspect: async () =>
+          (await driver.call("inspect", [], signal)).report
+            .state as unknown as StreamingChartsState,
+        action: (name, args) =>
+          driver.call(
+            "action",
+            [name, ...(args === undefined ? [] : [JSON.stringify(args)])],
+            signal,
+          ),
+        capture: (label) => driver.capture(join(directory, label), signal),
+        record: async (label, value) => {
+          await writeFile(
+            join(directory, `${label}.json`),
+            `${JSON.stringify(value, (_key, item) => (typeof item === "bigint" ? String(item) : item), 2)}\n`,
+          );
+          await record(label, { artifact: `${label}.json` });
+        },
+      };
+      const result = await exerciseStreamingCharts(charts, 720 / 480);
+      for (let pass = 0; pass < 2; pass++) {
+        const previous = (await worlds()).map((world) => String(world.id));
+        await driver.call("reload", [], signal);
+        const replacements = await worlds();
+        assert.equal(replacements.length, 6);
+        assert.ok(
+          replacements.every((world) => !previous.includes(String(world.id))),
+        );
+        for (const name of result.sourceNames)
+          await assert.rejects(readDataset(name), /^Error: MissingSource$/);
+        const state = await charts.inspect();
+        assert.equal(state.data.mode, "buffer");
+        assert.equal(state.selection, null);
+        assert.equal(state.hover, null);
+        await charts.record(`stream-reload-${pass}`, state);
+      }
+      const finalSources = (await charts.inspect()).data.sources.map(
+        (source) => source.name,
+      );
+      await driver.close();
+      assert.equal((await worlds()).length, 0);
+      for (const name of finalSources)
+        await assert.rejects(readDataset(name), /^Error: MissingSource$/);
+    },
   );
 });

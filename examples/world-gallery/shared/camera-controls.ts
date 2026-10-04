@@ -26,6 +26,8 @@ interface Controls {
   ): Promise<PickInteraction | undefined>;
   pending(delta: number): void;
   error(failure: unknown): void;
+  /** Scene-owned navigation can first withdraw an active camera animation. */
+  navigate?(motion: CameraViewMotion, binding: RootBinding): Promise<void>;
   /** Application admission for scene input sharing a presented view. */
   admitPointer?(
     pointer: number,
@@ -208,8 +210,11 @@ export function installCameraControls(
     queued = undefined;
     if (!request || !bindingIsCurrent(request.binding)) return;
     controls.pending(1);
-    void controls.client
-      .navigateCamera(request)
+    void (
+      controls.navigate
+        ? controls.navigate(request.motion, request.binding)
+        : controls.client.navigateCamera(request)
+    )
       .catch((failure: unknown) => {
         if (bindingIsCurrent(request.binding)) controls.error(failure);
       })

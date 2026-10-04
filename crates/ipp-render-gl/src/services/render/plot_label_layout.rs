@@ -7,6 +7,9 @@
 //! Projected bounds belong to this presentation. Arranged planes are submitted
 //! independently of headless mesh/mark bounds, which remain picking authority;
 //! future plane culling must use these arranged bounds, never that enclosure.
+//! Only ink intersecting this view participates in fitting and collision history.
+//! Offscreen ink keeps its retained placement and ordinary GPU clipping; fitting
+//! must not turn an invisible neighbouring chart into a viewport annotation.
 
 use super::scene::ScenePlotPlane;
 use ipp_core::systems::canvas::CanvasTarget;
@@ -73,6 +76,13 @@ impl PlotLabelLayoutState {
             let Some(bounds) = project_bounds(plane.model, local_bounds, projection, size) else {
                 continue;
             };
+            if bounds[2] <= 0.0
+                || bounds[3] <= 0.0
+                || bounds[0] >= size[0] as f32
+                || bounds[1] >= size[1] as f32
+            {
+                continue;
+            }
             let perimeter = axis_perimeter(plane, bounds, projection, size);
             if let Some((offset, _)) = perimeter
                 && let Some(model) = shifted_model(staged.model, offset, projection, size)
@@ -145,6 +155,13 @@ impl PlotLabelLayoutState {
                     && candidate.target == connector.target
                     && candidate.plane.part == panel
             }) {
+                if !self.previous.contains_key(&(
+                    target.entity.world,
+                    target.target,
+                    target.plane.part,
+                )) {
+                    continue;
+                }
                 let endpoint =
                     if matches!(target.plane.placement, PlotPlanePlacement::Radial { .. }) {
                         // Attach on the panel edge facing its data station, never on
@@ -666,7 +683,15 @@ fn project(world: [f32; 3], projection: [f32; 16], size: [u32; 2]) -> Option<[f3
             + projection[8 + row] * world[2]
             + projection[12 + row]
     });
-    if clip[3] <= 0.0 || !clip.iter().all(|value| value.is_finite()) {
+    // Layout uses the same depth interval as GL clipping. Positive W alone
+    // admits near-eye stations with enormous, but finite, projected offsets.
+    // Keep X/Y unrestricted here: offscreen frame corners still define the
+    // perimeter of a partially visible chart, and ink may straddle a view edge.
+    if clip[3] <= 0.0
+        || !clip.iter().all(|value| value.is_finite())
+        || clip[2] < -clip[3]
+        || clip[2] > clip[3]
+    {
         return None;
     }
     let pixel = [

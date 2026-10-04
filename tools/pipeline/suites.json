@@ -1,4 +1,16 @@
 {
+  "gallery-charts": {
+    "description": "One camera scene with animated Canvas and volumetric charts, smooth focus, free camera navigation, source row hover/selection and disposal through worker WASM/WebGL",
+    "sourceRoots": [
+      "examples/world-gallery/worlds/charts/",
+      "tests/integration/scenarios/gallery-charts.ts",
+      "tests/integration/scenarios/gallery-chart-streaming.ts",
+      "tests/render/gallery-driver.ts",
+      "tests/render/viewer-browser-helper.ts",
+      "tests/render/gallery-charts.test.ts"
+    ],
+    "files": ["dist/tests/render/gallery-charts.test.js"]
+  },
   "headless-client": {
     "description": "Maintained headless example CLI against a real native Host with explicit World cleanup",
     "sourceRoots": [
@@ -2653,6 +2665,7 @@
       "tests/integration/scenarios/plots-3d.ts",
       "tests/integration/scenarios/react-plots.ts",
       "tests/integration/scenarios/plot-view-placement.ts",
+      "tests/integration/scenarios/plot-axis-support.ts",
       "packages/ipp-react/src/plots.ts",
       "packages/ipp-react/tests/plots.test.ts",
       "examples/chart-showcase/",
@@ -2833,6 +2846,53 @@
         "partitionExcludes": [
           "target/gles-host"
         ]
+      },
+      {
+        "name": "axis-native",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern=^axis Plot through native WebSocket/GLES",
+          "target/plots/plots-runtime.test.js"
+        ],
+        "builds": [
+          "plots-fixtures",
+          "gles-host",
+          "font-assets"
+        ],
+        "requirements": [
+          "rust",
+          "node",
+          "npm",
+          "gles"
+        ],
+        "partitionExcludes": [
+          "target/browser-build/render"
+        ]
+      },
+      {
+        "name": "axis-browser",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern=^axis Plot through worker WASM/WebGL",
+          "target/plots/plots-runtime.test.js"
+        ],
+        "builds": [
+          "plots-fixtures",
+          "browser:render",
+          "font-assets"
+        ],
+        "requirements": [
+          "rust",
+          "wasm",
+          "node",
+          "npm",
+          "browser"
+        ],
+        "partitionExcludes": [
+          "target/gles-host"
+        ]
       }
     ]
   },
@@ -2844,7 +2904,9 @@
       "tools/build/native-blender-import.mjs",
       "tests/render/native-gallery.test.ts",
       "tests/render/native-gallery-driver.ts",
-      "tests/render/native-gallery-scene-assertions.ts"
+      "tests/render/native-gallery-scene-assertions.ts",
+      "tests/integration/scenarios/gallery-charts.ts",
+      "tests/integration/scenarios/gallery-chart-streaming.ts"
     ],
     "files": [
       "dist/tests/render/native-gallery.test.js"

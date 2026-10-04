@@ -329,8 +329,7 @@ test("gallery fills desktop and phone viewports while picker and controls preser
           "world-platformer",
           "world-particles",
           "world-gui",
-          "world-charts2d",
-          "world-charts3d",
+          "world-charts",
         ],
       );
       await page.locator("#scene-search").fill("no matching world");
@@ -436,7 +435,7 @@ test("gallery fills desktop and phone viewports while picker and controls preser
       await page.waitForFunction(
         () => document.querySelector<HTMLDialogElement>("#scene-picker")?.open,
       );
-      const lastScene = page.locator("#world-charts3d");
+      const lastScene = page.locator("#world-charts");
       await lastScene.scrollIntoViewIfNeeded();
       const [pickerBounds, lastSceneBounds] = await Promise.all([
         page.locator("#scene-picker").boundingBox(),
@@ -454,18 +453,18 @@ test("gallery fills desktop and phone viewports while picker and controls preser
       await page.waitForFunction(
         () =>
           document.querySelector<HTMLElement>(".viewer-shell")?.dataset.page ===
-            "charts3d" &&
+            "charts" &&
           document.querySelector<HTMLOutputElement>("#status")?.dataset
             .state === "ready",
       );
-      assert.equal(await readSession(), desktop.session.toString());
       await g.navigate("gui");
+      const returnedSession = await readSession();
+      await g.navigate("shapes");
       assert.equal(
         await readSession(),
-        desktop.session.toString(),
-        "GUI navigation replaced the authored gallery session",
+        returnedSession,
+        "Ordinary gallery navigation preserves the current authoring session",
       );
-      await g.navigate("shapes");
       await tap("#controls-toggle");
       await waitForControls(true, true);
 
@@ -477,7 +476,7 @@ test("gallery fills desktop and phone viewports while picker and controls preser
       await page.locator("#mesh-select").selectOption("sphere");
       assert.equal(await page.locator("#mesh-select").inputValue(), "sphere");
       const returnedDesktop = await g.capture("responsive-desktop-returned");
-      assert.equal(returnedDesktop.session, desktop.session);
+      assert.equal(returnedDesktop.session.toString(), returnedSession);
       assertRenderedFrame(returnedDesktop, returnedDesktopLayout);
       await screenshot("responsive-desktop-returned");
       assert.deepEqual(g.errors, []);

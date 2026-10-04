@@ -118,13 +118,13 @@ export async function openGallery(
     return inspect();
   };
   const selectScene = async (
-    name: "shapes" | "lighting" | "particles" | "gui" | "platformer",
+    name: "shapes" | "lighting" | "particles" | "gui" | "platformer" | "charts",
   ) => {
     await page.locator("#scene-picker-trigger").click();
     await page.locator(`#world-${name}`).click();
   };
   const navigate = async (
-    name: "shapes" | "lighting" | "particles" | "gui" | "platformer",
+    name: "shapes" | "lighting" | "particles" | "gui" | "platformer" | "charts",
   ) => {
     await selectScene(name);
     const state = await page.waitForFunction((name) => {

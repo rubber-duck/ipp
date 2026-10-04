@@ -11,12 +11,34 @@ import { runBrowserEnvironment } from "../browser/environment.js";
 import { exercisePlot2d } from "./scenarios/plots-2d.js";
 import { exercisePlot3d } from "./scenarios/plots-3d.js";
 import { reactPlots } from "./scenarios/react-plots.js";
+import { exercisePlotAxisSupport } from "./scenarios/plot-axis-support.js";
 import { exercisePlotViewPlacement } from "./scenarios/plot-view-placement.js";
 import type { Plot2dContract } from "./plot-2d-scene.js";
 import type { Plot3dContract } from "./plot-3d-scene.js";
 
-for (const family of ["2d", "3d", "react", "view"] as const) {
-  test(`${family} Plot through native WebSocket/GLES`, {
+// Each view/viewport owns its fixture, operation budget and cleanup. Large
+// completed frames cross the real browser transport before image assertions.
+for (const [family, offscreen, transformed] of [
+  ["2d", undefined],
+  ["3d", undefined],
+  ["react", undefined],
+  ["view", undefined],
+  ["view", { width: 427, opposite: false }],
+  ["view", { width: 427, opposite: true }],
+  ["view", { width: 1280, opposite: false }],
+  ["view", { width: 1280, opposite: true }],
+  ["axis", undefined, false],
+  ["axis", undefined, true],
+] as const) {
+  const suffix = offscreen
+    ? ` offscreen ${offscreen.width} ${offscreen.opposite ? "opposite" : "front"}`
+    : family === "axis"
+      ? transformed
+        ? " transformed"
+        : " identity"
+      : "";
+  const caseName = `${family}${suffix.replaceAll(" ", "-")}`;
+  test(`${family} Plot through native WebSocket/GLES${suffix}`, {
     timeout: 180_000,
   }, async (context) => {
     const workspace = process.cwd();
@@ -38,7 +60,7 @@ for (const family of ["2d", "3d", "react", "view"] as const) {
       ),
     );
     await runNativeEnvironment(
-      `plots-${family}`,
+      `plots-${caseName}`,
       {
         executable: join(
           profile,
@@ -80,32 +102,42 @@ for (const family of ["2d", "3d", "react", "view"] as const) {
         };
         const record = (label: string, value: unknown) =>
           environment.evidence.record(label, value);
-        await environment.execute(`plots-${family}`, {}, async () =>
+        await environment.execute(`plots-${caseName}`, {}, async () =>
           family === "2d"
             ? exercisePlot2d(host, contract, font, capture, record)
             : family === "3d"
               ? exercisePlot3d(host, contract, font, capture)
-              : family === "view"
-                ? exercisePlotViewPlacement(
+              : family === "axis"
+                ? exercisePlotAxisSupport(
                     host,
                     contract,
                     font,
                     capture,
                     record,
+                    transformed ?? false,
                   )
-                : reactPlots(host, contract, font, capture, record),
+                : family === "view"
+                  ? exercisePlotViewPlacement(
+                      host,
+                      contract,
+                      font,
+                      capture,
+                      record,
+                      offscreen,
+                    )
+                  : reactPlots(host, contract, font, capture, record),
         );
       },
     );
   });
 
-  test(`${family} Plot through worker WASM/WebGL`, {
+  test(`${family} Plot through worker WASM/WebGL${suffix}`, {
     timeout: 180_000,
   }, async (context) => {
     const workspace = process.cwd();
     const profile = resolve(workspace, "target/browser-build/render");
     await runBrowserEnvironment(
-      `plots-${family}-webgl`,
+      `plots-${caseName}-webgl`,
       {
         workspace,
         build: {
@@ -144,15 +176,15 @@ for (const family of ["2d", "3d", "react", "view"] as const) {
             } else await environment.evidence.record(label, value);
           },
         );
-        await environment.execute(`plots-${family}-webgl`, {}, () =>
+        await environment.execute(`plots-${caseName}-webgl`, {}, () =>
           environment.page.evaluate(
-            async ({ urls, family }) => {
+            async ({ urls, family, offscreen, transformed }) => {
               const driver = await import(
                 `${urls.origin}/target/plots/plots-driver.js`
               );
-              return driver.workerPlots(urls, family);
+              return driver.workerPlots(urls, family, offscreen, transformed);
             },
-            { urls: environment.urls, family },
+            { urls: environment.urls, family, offscreen, transformed },
           ),
         );
       },

@@ -209,8 +209,7 @@ test("the release gallery is complete and renders at root and project URLs", {
           "lighting",
           "particles",
           "gui",
-          "charts2d",
-          "charts3d",
+          "charts",
           "shapes",
         ].entries()) {
           if (index > 0) await selectScene(page, scene);
@@ -245,11 +244,33 @@ test("the release gallery is complete and renders at root and project URLs", {
             `${scene}: captured frame is blank`,
           );
           assert.ok(frame.entities > 0, `${scene}: no World entities`);
-          if (scene === "charts2d" || scene === "charts3d") {
+          if (scene === "charts") {
             const controls = page.locator("#controls-toggle");
             if ((await controls.getAttribute("aria-expanded")) === "false")
               await controls.click();
-            // Controlled values commit only after the shared mount acknowledges updates.
+            await page.locator("#charts-playback").click();
+            await page.evaluate(async () => {
+              const deadline = performance.now() + 15_000;
+              while ((await window.ippGalleryScene.inspect()).playing) {
+                if (performance.now() > deadline)
+                  throw new Error("Chart playback did not pause");
+              }
+              const state = await window.ippGalleryScene.inspect();
+              const eye = state.camera.transform;
+              if (
+                state.camera.navigation !== "look" ||
+                Math.hypot(eye.x, eye.y - 6, eye.z) > 0.001
+              )
+                throw new Error(
+                  "The published ring must start with the camera at its center",
+                );
+              const worlds = await window.ippWorldCanvas.host.listWorlds();
+              if (worlds.length !== 6)
+                throw new Error(
+                  "Unified charts must own a camera World and five Canvas children",
+                );
+            });
+            const paused = await captureScene(page);
             await page.locator("#charts-changed").click();
             await page.waitForFunction(
               () => document.querySelector("#charts-changed")?.checked === true,
@@ -257,39 +278,55 @@ test("the release gallery is complete and renders at root and project URLs", {
             const changed = await captureScene(page);
             assert.notEqual(
               changed.png,
-              png,
-              `${scene}: dataset control did not change pixels`,
+              paused.png,
+              "Dataset control changes chart pixels",
             );
-            if (scene === "charts3d") {
-              await page.locator("#charts-rotated").click();
-              await page.waitForFunction(
-                () =>
-                  document.querySelector("#charts-rotated")?.checked === true,
-              );
-            } else {
-              await page.locator("#charts-parameter").evaluate((input) => {
-                Object.getOwnPropertyDescriptor(
-                  HTMLInputElement.prototype,
-                  "value",
-                ).set.call(input, "0.35");
-                input.dispatchEvent(new Event("input", { bubbles: true }));
-              });
-              await page.waitForFunction(
-                () =>
-                  document.querySelector('label[for="charts-parameter"] output')
-                    ?.textContent === "0.35",
-              );
-            }
+            await page.locator("#charts-focus-bars").click();
+            await page.evaluate(async () => {
+              const deadline = performance.now() + 15_000;
+              for (;;) {
+                const state = await window.ippGalleryScene.inspect();
+                if (
+                  state.focus?.chart === "bars" &&
+                  state.focus.time >= 1.999
+                ) {
+                  if (state.focus.duration !== 2)
+                    throw new Error("Chart focus must take two seconds");
+                  return;
+                }
+                if (performance.now() > deadline)
+                  throw new Error("Chart camera did not focus");
+              }
+            });
             const adjusted = await captureScene(page);
             assert.notEqual(
               adjusted.png,
               changed.png,
-              `${scene}: view control did not change pixels`,
+              "Focus control moves the rendered camera",
             );
             await writeFile(
               resolve(evidence, `${label}-${scene}-adjusted.png`),
               Buffer.from(adjusted.png.split(",")[1], "base64"),
             );
+            await page.locator("#charts-focus-center").click();
+            await page.evaluate(async () => {
+              const deadline = performance.now() + 15_000;
+              for (;;) {
+                const state = await window.ippGalleryScene.inspect();
+                const eye = state.camera.transform;
+                if (
+                  state.focus?.chart === "center" &&
+                  state.focus.time >= 1.999 &&
+                  state.camera.navigation === "look" &&
+                  Math.hypot(eye.x, eye.y - 6, eye.z) < 0.001
+                )
+                  return;
+                if (performance.now() > deadline)
+                  throw new Error(
+                    "Return to center did not restore the ring camera",
+                  );
+              }
+            });
           }
         }
         assert.deepEqual(errors, []);

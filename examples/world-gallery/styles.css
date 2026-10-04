@@ -1363,3 +1363,17 @@ output[data-state="error"] .status-light {
   margin-top: 0.6rem;
   color: #aeb4c3;
 }
+ .chart-focus-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.chart-focus-grid button {
+  white-space: normal;
+}
+
+.chart-focus-grid button[aria-pressed="true"] {
+  border-color: var(--accent, #00cfff);
+}

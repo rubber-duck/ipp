@@ -256,6 +256,119 @@ fn near_camera_overflow_is_not_admitted_to_projected_layout() {
 }
 
 #[test]
+fn finite_stations_outside_gl_depth_do_not_participate_in_layout() {
+    // Perspective near=1, far=11, W=-Z. X/Y may be offscreen: the caller
+    // admits actual ink bounds, rather than clipping individual anchor points.
+    let projection = [
+        1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, -1.2, -1.0, 0.0, 0.0, -2.2, 0.0,
+    ];
+    for z in [1.0, -0.001, -0.5, -12.0] {
+        assert!(project([0.0, 0.0, z], projection, [427, 600]).is_none());
+    }
+    assert!(project([20.0, 0.0, -5.0], projection, [427, 600]).is_some());
+}
+
+#[test]
+fn offscreen_ink_keeps_its_station_and_cannot_displace_visible_labels() {
+    let mut host = ipp_core::HostRuntime::new();
+    let id = host.create_world(Default::default(), &[]).unwrap();
+    host.frame(0.0).unwrap();
+    let world = host.world_ref(id).unwrap();
+    let publication = host.latest_publication(id).unwrap();
+    let entity = ipp_core::EntityId::from_bits((1 << 32) | 1);
+    let target = CanvasTarget {
+        entity,
+        component: ipp_core::ComponentValue::PLOT_POINTS3D,
+        incarnation: 1,
+    };
+    let source = Arc::new(PlotPreparedGeometry::default());
+    let mut model = IDENTITY;
+    model[5] = -1.0;
+    let label = ipp_core::systems::plot::PlotPublishedPlane {
+        part: 0,
+        model,
+        facing: ipp_core::systems::plot::PlotPlaneFacing::Camera,
+        layout: PlotPlaneLayout::Title(0),
+        placement: PlotPlanePlacement::Fixed,
+        bounds: Some([-0.1, -0.02, 0.1, 0.02]),
+        clip: [-100.0, -100.0, 100.0, 100.0],
+        primitives: Arc::from([]),
+    };
+    let visible = ipp_core::systems::plot::PlotPublishedPlane {
+        part: 1,
+        layout: PlotPlaneLayout::Callout,
+        ..label.clone()
+    };
+    let connector = ipp_core::systems::plot::PlotPublishedPlane {
+        part: 2,
+        layout: PlotPlaneLayout::Connector {
+            panel: 0,
+            endpoint: [0.1, 0.0],
+            width: 0.01,
+        },
+        ..label.clone()
+    };
+    let scene_plane = |plane| ScenePlotPlane {
+        entity: super::super::scene::RenderEntity {
+            world,
+            entity,
+            incarnation: 1,
+        },
+        target,
+        publication,
+        model,
+        chart_model: IDENTITY,
+        geometry: &source,
+        plane,
+    };
+    for width in [427, 1280] {
+        let viewport = WorldViewport {
+            width,
+            height: 600,
+            device_pixel_ratio: 1.0,
+        };
+        for translation in [[-1.2, 0.0], [1.2, 0.0], [0.0, -1.2], [0.0, 1.2]] {
+            let mut offscreen = scene_plane(&label);
+            offscreen.model[12..14].copy_from_slice(&translation);
+            let planes = [
+                offscreen.clone(),
+                scene_plane(&visible),
+                scene_plane(&connector),
+            ];
+            // Stale history from a previous visible frame cannot pull it back in.
+            let mut state = PlotLabelLayoutState {
+                viewport: [width, 600],
+                ..Default::default()
+            };
+            state.previous.insert(
+                (world, target, 0),
+                Previous {
+                    source: Arc::downgrade(&source),
+                    offset: [100.0, 100.0],
+                },
+            );
+            let arranged = state.arrange(&planes, IDENTITY, viewport);
+            let alone = PlotLabelLayoutState::default().arrange(&planes[1..2], IDENTITY, viewport);
+            assert_eq!(arranged[0].model, offscreen.model);
+            assert_eq!(arranged[1].model, alone[0].model);
+            assert_eq!(arranged[2].model, planes[2].model);
+            assert_eq!(state.previous.len(), 1);
+            assert!(!state.previous.contains_key(&(world, target, 0)));
+        }
+        // Ink crossing either horizontal edge is still fitted; clipping only
+        // its offscreen anchor would incorrectly suppress this useful label.
+        for x in [-1.05, 1.05] {
+            let mut partial = scene_plane(&label);
+            partial.model[12] = x;
+            let mut state = PlotLabelLayoutState::default();
+            let arranged = state.arrange(&[partial.clone()], IDENTITY, viewport);
+            assert_ne!(arranged[0].model, partial.model);
+            assert_eq!(state.previous.len(), 1);
+        }
+    }
+}
+
+#[test]
 fn title_lane_fits_near_view_edge_without_jumping_back_over_chart() {
     let title = [250.0, 330.0, 390.0, 342.0];
     let offset = place(title, PlotPlaneLayout::Title(0), [732, 348], &[], None);

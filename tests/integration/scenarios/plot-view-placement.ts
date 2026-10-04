@@ -15,8 +15,12 @@ import {
 } from "../plot-3d-scene.js";
 import {
   componentFields,
+  createEntity,
+  insertComponent,
+  aliasId,
   successfulBatch,
 } from "../../../examples/world-gallery/worlds/charts/shared/commands.js";
+import { declarePlot } from "../../../examples/world-gallery/worlds/charts/shared/declare-plot.js";
 
 interface Frame {
   readonly width: number;
@@ -26,6 +30,10 @@ interface Frame {
 
 type Capture = (label: string, binding: RootBinding) => Promise<Frame>;
 type RecordResult = (label: string, value: unknown) => Promise<void>;
+export interface PlotOffscreenCase {
+  width: 427 | 1280;
+  opposite: boolean;
+}
 const families = ["grid-bars", "height-surface", "variable-pie"] as const;
 const ORTHO_HEIGHT = 17;
 
@@ -301,6 +309,127 @@ async function pickBar(scene: Plot3dScene, eye: readonly number[]) {
   return result;
 }
 
+/** A nearby offscreen chart must produce the same pixels as a distant one.
+ * This compares real glyphs, grids and highlighted callout/connector placement,
+ * without relying on colour thresholds to overlook stray pale title text. */
+async function offscreenLabels(
+  scene: Plot3dScene,
+  capture: Capture,
+  record: RecordResult,
+  selection: PlotOffscreenCase,
+) {
+  const chart = scene.charts.find((entry) => entry.name === "grid-bars")!;
+  const client = chart.client;
+  const ref = { kind: "alias" as const, alias: 91 };
+  const id = aliasId(
+    await client.batch([
+      createEntity(91, "offscreen-label-neighbour"),
+      insertComponent(client, "Transform", ref, { x: 10000 }),
+      insertComponent(client, "PlotFrame3d", ref, {
+        width: 0.5,
+        height: 0.5,
+        depth: 0.5,
+        automatic_x: false,
+        automatic_y: false,
+        automatic_z: false,
+        ticks: 1,
+        source: chart.font,
+        font_size: 0.3,
+        x_title: "OFFSCREEN X",
+        y_title: "OFFSCREEN Y",
+        z_title: "OFFSCREEN Z",
+      }),
+    ]),
+    91,
+  );
+  const builder = new scene.contract.ExpressionBuilder();
+  const root = await declarePlot(
+    client,
+    scene.contract,
+    "offscreen-label-neighbour",
+    "PlotPoints3d",
+    chart.source,
+    { x: builder.encode(builder.input("column:x", "f32")) },
+    [],
+    [],
+    {},
+  );
+  const move = async (position: readonly number[]) => {
+    successfulBatch(
+      await client.batch(
+        componentFields(client, "Transform", {
+          x: position[0]!,
+          y: position[1]!,
+          z: position[2]!,
+          qy: Math.sin(0.4),
+          qw: Math.cos(0.4),
+        }).map((field) => ({
+          kind: "setField",
+          entity: { kind: "handle", id },
+          component: client.components.Transform!.id,
+          field,
+        })),
+      ),
+    );
+  };
+  try {
+    const deadline = performance.now() + 30_000;
+    for (;;) {
+      const binding = await scene.host.datasets.bindingView(client.session, id);
+      if (binding.availability.reason === "Ready" && !binding.dirty) break;
+      check(performance.now() < deadline, "Neighbour Plot did not prepare");
+    }
+    const extent = {
+      width: selection.width,
+      height: selection.width === 427 ? 600 : 960,
+    };
+    const binding = await scene.host.setRootOutput(chart.binding.output, {
+      ...extent,
+      devicePixelRatio: 1,
+    });
+    const eye = selection.opposite ? [-10, 8, -14] : [10, 8, 14];
+    const index = selection.opposite ? 1 : 0;
+    await placeCamera(scene, eye);
+    const name = `offscreen-${extent.width}-${index}`;
+    await move([10000, 0, 0]);
+    const baseline = await capture(`${name}-reference`, binding);
+    // Positive control proves the new label fixture actually renders.
+    await move([5, 7, 5]);
+    const visible = await capture(`${name}-visible-control`, binding);
+    check(
+      difference(baseline, visible) > 50,
+      `${name}: neighbour labels absent`,
+    );
+    const { yaw } = angles(eye);
+    const halfWidth = (ORTHO_HEIGHT * extent.width) / (2 * extent.height);
+    for (const side of [-1, 1]) {
+      // More than two metres clear of the viewport, even after the rotated
+      // half-metre frame and its retained text extents. Still within the old
+      // fitter's 336px reach on both sizes. The chart itself never moves in
+      // the camera's depth direction.
+      const right = side * (halfWidth + 3);
+      await move([5 + Math.cos(yaw) * right, 2, 5 - Math.sin(yaw) * right]);
+      const frame = await capture(`${name}-${side}`, binding);
+      const changed = difference(baseline, frame);
+      await record(`${name}-${side}`, { eye, extent, changed });
+      check(
+        changed === 0,
+        `${name}/${side}: offscreen labels changed ${changed} visible pixels`,
+      );
+    }
+  } finally {
+    await root.unmount();
+    successfulBatch(
+      await client.batch([{ kind: "delete", entity: { kind: "handle", id } }]),
+    );
+    await scene.host.setRootOutput(chart.binding.output, {
+      width: 960,
+      height: 760,
+      devicePixelRatio: 1,
+    });
+  }
+}
+
 /** Each driver owns a fresh Host/worker and capture budget for this view case. */
 export async function exercisePlotViewPlacement(
   host: HostClientBase<Client>,
@@ -308,6 +437,7 @@ export async function exercisePlotViewPlacement(
   font: Uint8Array<ArrayBuffer>,
   capture: Capture,
   record: RecordResult = async () => {},
+  offscreen?: PlotOffscreenCase,
 ) {
   const scene = await openPlot3d(host, contract, font, "plot-view-placement");
   try {
@@ -325,6 +455,10 @@ export async function exercisePlotViewPlacement(
         ),
       );
     await readyPlot3d(scene);
+    if (offscreen) {
+      await offscreenLabels(scene, capture, record, offscreen);
+      return { views: 1, offscreen, comparisons: 2 };
+    }
     const before = new Map(
       await Promise.all(
         families.map(

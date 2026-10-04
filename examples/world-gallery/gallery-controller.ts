@@ -7,7 +7,7 @@ import {
 } from "@ipp/client";
 import type { IppCanvasHandle } from "@ipp/react/web";
 import type { GuiUnhandledInputGate } from "@ipp/react/gui";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { type CameraView } from "./shared/camera.js";
 import { installCameraControls } from "./shared/camera-controls.js";
 import type {
@@ -20,6 +20,7 @@ import type {
 declare global {
   interface Window {
     ippWorldCanvas?: IppCanvasHandle;
+    ippGalleryScene?: GallerySceneMount;
   }
 }
 
@@ -82,6 +83,10 @@ export function useGallery(
   const page = scene.id;
   const [pendingPicks] = useState(() => new PendingRequests());
   const [error, setError] = useState<string>();
+  const reportChartError = useCallback(
+    (failure: unknown) => setError(message(failure)),
+    [],
+  );
   const currentOptions = useRef(options);
   currentOptions.current = options;
   const mountedRef = useRef<GallerySceneMount | undefined>(undefined);
@@ -118,6 +123,7 @@ export function useGallery(
       owned = mount;
       if (startup.signal.aborted) return;
       mountedRef.current = mount;
+      window.ippGalleryScene = mount;
       unsubscribe = mount.subscribe?.(() => changed((value) => value + 1));
       setMounted({ handle, mount });
       void mount.ready.then(() => {
@@ -131,6 +137,7 @@ export function useGallery(
       startup.abort();
       unsubscribe?.();
       mountedRef.current = undefined;
+      if (window.ippGalleryScene === owned) delete window.ippGalleryScene;
       cleanup = mounting.current
         .then(async () => {
           await owned?.dispose();
@@ -215,7 +222,12 @@ export function useGallery(
     cameraControls.current?.();
     setTransitioning(true);
     if (mounted && page !== "gui") retainOptions(page, mounted.mount.options);
-    if (page === "platformer" || nextPage === "platformer") {
+    if (
+      page === "platformer" ||
+      nextPage === "platformer" ||
+      page === "charts" ||
+      nextPage === "charts"
+    ) {
       try {
         // A new Canvas closes the previous Host. Remove declarations and
         // owned children while its old session can still acknowledge cleanup.
@@ -244,6 +256,7 @@ export function useGallery(
     viewChanged: setView,
     canvasFrame,
     cameraControls,
+    reportChartError,
     page,
     switching: transitioning || (!!handle && !sceneReady),
     pendingPicks,

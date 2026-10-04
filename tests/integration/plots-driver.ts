@@ -5,7 +5,11 @@ import { image, settled } from "../../tools/shared-host/presentation.js";
 import { exercisePlot2d } from "./scenarios/plots-2d.js";
 import { exercisePlot3d } from "./scenarios/plots-3d.js";
 import { reactPlots } from "./scenarios/react-plots.js";
-import { exercisePlotViewPlacement } from "./scenarios/plot-view-placement.js";
+import { exercisePlotAxisSupport } from "./scenarios/plot-axis-support.js";
+import {
+  exercisePlotViewPlacement,
+  type PlotOffscreenCase,
+} from "./scenarios/plot-view-placement.js";
 
 export async function workerPlots(
   urls: {
@@ -14,7 +18,9 @@ export async function workerPlots(
     wasm: string;
     origin: string;
   },
-  family: "2d" | "3d" | "react" | "view",
+  family: "2d" | "3d" | "react" | "view" | "axis",
+  offscreen?: PlotOffscreenCase,
+  transformed = false,
 ) {
   const contract = await import(urls.generated);
   const canvas = document.createElement("canvas");
@@ -76,15 +82,25 @@ export async function workerPlots(
       ? await exercisePlot2d(host, contract, font, capture, record)
       : family === "3d"
         ? await exercisePlot3d(host, contract, font, capture)
-        : family === "view"
-          ? await exercisePlotViewPlacement(
+        : family === "axis"
+          ? await exercisePlotAxisSupport(
               host,
               contract,
               font,
               capture,
               record,
+              transformed,
             )
-          : await reactPlots(host, contract, font, capture, record);
+          : family === "view"
+            ? await exercisePlotViewPlacement(
+                host,
+                contract,
+                font,
+                capture,
+                record,
+                offscreen,
+              )
+            : await reactPlots(host, contract, font, capture, record);
   } finally {
     try {
       await connection?.close();

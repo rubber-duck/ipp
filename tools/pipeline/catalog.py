@@ -96,6 +96,7 @@ REGRESSION_GROUPS = {
             "test:plots:browser",
             "test:plots:views-browser",
             "test:plots:3d-browser",
+            "test:plots:axis-browser",
             "test:react-gui-authoring:webgl",
             "test:presentation:webgl",
             "test:presentation:webgl-production",
@@ -125,6 +126,7 @@ REGRESSION_GROUPS = {
             "gallery-gui",
             "gallery-gui-camera",
             "gallery-particles",
+            "gallery-charts",
             "gallery-platformer",
             "native-gallery",
         ),
@@ -148,6 +150,7 @@ REGRESSION_GROUPS = {
             "test:plots:native",
             "test:plots:views-native",
             "test:plots:3d-native",
+            "test:plots:axis-native",
         ),
     ),
     "matrix": RegressionGroup(

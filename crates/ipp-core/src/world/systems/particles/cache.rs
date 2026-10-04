@@ -1,7 +1,7 @@
 use super::{Particle, ParticleRuntimeState};
 use crate::{
     ErrorReason,
-    services::asset_management::{Asset, AssetLoader, AssetTypeId, BufferedAssetLoader},
+    services::asset_management::{Asset, AssetLoader, AssetTypeId, AsyncAssetLoader},
 };
 
 /// IPPC immutable sampled particle data.
@@ -263,5 +263,102 @@ impl Asset for ParticleCache {
 }
 
 pub(crate) fn particle_cache_loader() -> impl AssetLoader<Data = ParticleCache> {
-    BufferedAssetLoader::new(|bytes| ParticleCache::decode(bytes).map_err(|e| e.to_string()))
+    AsyncAssetLoader::decode(|mut reader| async move {
+        ParticleCache::decode_reader(&mut *reader).await
+    })
+}
+
+impl ParticleCache {
+    /// Retain the typed directory, then decode its contiguous sample streams.
+    pub async fn decode_reader(
+        reader: &mut dyn crate::services::io::IoReader,
+    ) -> Result<Self, String> {
+        use crate::services::asset_management::decode::{AssetReader, push};
+        use std::num::NonZeroUsize;
+        let mut input = AssetReader::new(reader);
+        if input.array::<4>().await? != *b"IPPC" || input.u32().await? != 1 {
+            return Err("Invalid particle cache header".into());
+        }
+        let space = input.u32().await?;
+        let count = input.u32().await? as usize;
+        if space > 1 || count == 0 {
+            return Err("Invalid particle cache directory".into());
+        }
+        let mut offset = count
+            .checked_mul(12)
+            .and_then(|bytes| bytes.checked_add(16))
+            .ok_or("Particle cache length overflow")?;
+        let mut previous = f32::NEG_INFINITY;
+        let mut directory = Vec::new();
+        for _ in 0..count {
+            let time = input.f32().await?;
+            let start = input.u32().await? as usize;
+            let count = input.u32().await? as usize;
+            if time <= previous || start != offset {
+                return Err("Invalid particle cache frame".into());
+            }
+            offset = count
+                .checked_mul(60)
+                .and_then(|bytes| offset.checked_add(bytes))
+                .ok_or("Particle cache length overflow")?;
+            push(&mut directory, (time, count))?;
+            previous = time;
+        }
+        let mut identities = std::collections::BTreeMap::new();
+        let mut frames = Vec::new();
+        for (time, count) in directory {
+            let mut samples = Vec::new();
+            let mut last = None;
+            input
+                .records(NonZeroUsize::new(60).unwrap(), count, |record| {
+                    let id = u64::from_le_bytes(record[..8].try_into().unwrap());
+                    let values: [f32; 13] = std::array::from_fn(|index| {
+                        f32::from_le_bytes(
+                            record[8 + index * 4..12 + index * 4].try_into().unwrap(),
+                        )
+                    });
+                    let qlen = values[8..12].iter().map(|value| value * value).sum::<f32>();
+                    if last.is_some_and(|last| last >= id)
+                        || values.iter().any(|value| !value.is_finite())
+                        || values[0] >= values[1]
+                        || values[12] <= 0.0
+                        || (qlen - 1.0).abs() > 0.001
+                        || time < values[0]
+                        || time > values[1]
+                        || identities
+                            .insert(id, (values[0], values[1]))
+                            .is_some_and(|old| old != (values[0], values[1]))
+                    {
+                        return Err("Invalid particle cache sample".into());
+                    }
+                    push(
+                        &mut samples,
+                        ParticleCacheSample {
+                            id,
+                            birth: values[0],
+                            death: values[1],
+                            position: values[2..5].try_into().unwrap(),
+                            velocity: values[5..8].try_into().unwrap(),
+                            rotation: values[8..12].try_into().unwrap(),
+                            size: values[12],
+                        },
+                    )?;
+                    last = Some(id);
+                    Ok(())
+                })
+                .await?;
+            push(
+                &mut frames,
+                ParticleCacheFrame {
+                    time,
+                    samples,
+                },
+            )?;
+        }
+        input.finish().await?;
+        Ok(Self {
+            space,
+            frames,
+        })
+    }
 }

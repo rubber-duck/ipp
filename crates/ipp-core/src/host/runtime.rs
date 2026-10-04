@@ -31,6 +31,14 @@ impl HostRuntime {
         host
     }
 
+    /// Install Host-local task scheduling before any asset acquisition starts.
+    pub fn set_asset_load_scheduler(
+        &mut self,
+        scheduler: std::rc::Rc<dyn crate::services::asset_management::AssetLoadScheduler>,
+    ) {
+        self.assets.set_load_scheduler(scheduler);
+    }
+
     /// Stable identity of this runtime Host, including while it owns no Worlds.
     /// Matches the Host part of runtime publication and root-binding identities;
     /// it is observational metadata, not authority to construct runtime tokens.

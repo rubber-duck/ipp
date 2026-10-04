@@ -1,3 +1,4 @@
+import { BulkReadClient, type BulkReadDescriptor } from "./bulk-reads.js";
 /**
  * Schema-independent opening of an IPP connection and retrieval of the Host's
  * contract. Nothing here depends on a generated contract, so any client can
@@ -15,9 +16,8 @@
  *   nonzero connection identity u64. A standalone World session appends its
  *   World manifest.
  * - contract request: `IPCQ`, any number of times after the hello.
- * - contract reply: `IPCR` followed by the contract: `IPPB`, wire revision u32,
- *   compatibility hash u64 and the binary descriptors, the bytes the client
- *   generator consumes. The hash is FNV-1a 64 over the descriptors.
+ * - contract reply: `IPCR`, connection u64, read u64, exact length u64.
+ *   The common schema-independent bulk reader retrieves the contract.
  */
 import type { MessageTransport } from "./transport.js";
 
@@ -122,14 +122,20 @@ export function isHostContractReply(bytes: Uint8Array): boolean {
   return startsWith(bytes, CONTRACT_REPLY);
 }
 
-/** The contract carried by a contract reply, verified against its own hash. */
-export function readHostContractReply(
+/** The schema-independent descriptor carried by the bootstrap reply. */
+export function readHostContractDescriptor(
   bytes: Uint8Array,
-): Uint8Array<ArrayBuffer> {
-  if (!isHostContractReply(bytes)) throw new Error("Not an IPP contract reply");
-  const contract = bytes.slice(CONTRACT_REPLY.length);
-  contractIdentity(contract);
-  return contract;
+): BulkReadDescriptor {
+  if (!isHostContractReply(bytes) || bytes.length !== 28)
+    throw new Error("Invalid contract read descriptor");
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const reference = {
+    connection: view.getBigUint64(4, true),
+    read: view.getBigUint64(12, true),
+  };
+  if (reference.connection === 0n || reference.read === 0n)
+    throw new Error("Invalid contract read identity");
+  return { reference, length: view.getBigUint64(20, true) };
 }
 
 /** The identity a contract declares, after checking that its descriptors
@@ -166,6 +172,11 @@ export function readHostContract(
 }> {
   return new Promise((resolve, reject) => {
     let announcement: HostAnnouncement | undefined;
+    const reads = new BulkReadClient(
+      () => announcement?.connection ?? 0n,
+      (bytes) => transport.send(bytes),
+      options.timeoutMs,
+    );
     let settled = false;
     const finish = (
       outcome:
@@ -177,6 +188,7 @@ export function readHostContract(
     ) => {
       if (settled) return;
       settled = true;
+      reads.close(new Error("Contract reader finished"));
       clearTimeout(timer);
       options.signal?.removeEventListener("abort", abort);
       void transport
@@ -213,19 +225,26 @@ export function readHostContract(
         message: (bytes) => {
           if (settled) return;
           try {
+            if (reads.receive(bytes)) return;
             if (!announcement) {
               announcement = readHostAnnouncement(bytes).announcement;
               transport.send(hostContractRequest());
             } else if (isHostContractReply(bytes)) {
-              const contract = readHostContractReply(bytes);
-              if (
-                contractIdentity(contract).schemaHash !==
-                announcement.schemaHash
-              )
-                throw new Error(
-                  "Served contract differs from the announcement",
-                );
-              finish({ announcement, contract });
+              const descriptor = readHostContractDescriptor(bytes);
+              const expected = announcement;
+              void reads
+                .readAll(descriptor, { signal: options.signal })
+                .then((contract) => {
+                  if (
+                    contractIdentity(contract).schemaHash !==
+                    expected.schemaHash
+                  )
+                    throw new Error(
+                      "Served contract differs from the announcement",
+                    );
+                  finish({ announcement: expected, contract });
+                })
+                .catch((error) => finish({ error: asError(error) }));
             }
           } catch (error) {
             finish({ error: asError(error) });

@@ -36,6 +36,27 @@ impl WasmHostServices {
 impl HostServices for WasmHostServices {
     const NAME: &'static str = "wasm";
 
+    #[cfg(all(feature = "render", target_arch = "wasm32"))]
+    fn asset_gpu_formats(
+        &self,
+        kind: ipp_core::services::asset_management::AssetTypeId,
+    ) -> Vec<ipp_core::services::asset_management::export::AssetExportFormat> {
+        self.presentation.asset_gpu_formats(kind)
+    }
+
+    #[cfg(all(feature = "render", target_arch = "wasm32"))]
+    fn asset_gpu_export(
+        &mut self,
+        provider: &ipp_core::services::asset_management::AssetProvider,
+        format: ipp_core::services::asset_management::export::AssetExportFormat,
+        observer: std::rc::Rc<
+            dyn ipp_core::services::asset_management::export::AssetOutputObserver,
+        >,
+    ) -> Result<ipp_core::services::asset_management::export::AssetExportFuture, String> {
+        self.presentation
+            .asset_gpu_export(provider, format, observer)
+    }
+
     #[cfg(all(
         feature = "instrumentation",
         feature = "render",
@@ -73,7 +94,10 @@ impl HostServices for WasmHostServices {
         self.presentation.record_frame(host, frame);
     }
 
-    fn initialize(host: &mut HostRuntime) -> Result<Self, String> {
+    fn initialize(
+        host: &mut HostRuntime,
+        _schedulers: &ipp_host_session::services::task_scheduler::TaskSchedulers,
+    ) -> Result<Self, String> {
         for scheme in ["http", "https"] {
             host.register_stream_resource_provider(scheme)
                 .map_err(|error| error.to_string())?;
@@ -207,7 +231,10 @@ mod tests {
     #[test]
     fn browser_host_exposes_http_but_not_file_provider_requests() {
         let mut host = HostRuntime::new();
-        let mut platform = WasmHostServices::initialize(&mut host).unwrap();
+        let mut scheduler = ipp_host_session::services::task_scheduler::TaskSchedulerService::new();
+        host.set_asset_load_scheduler(std::rc::Rc::new(scheduler.schedulers().host()));
+        let mut platform =
+            WasmHostServices::initialize(&mut host, &scheduler.schedulers()).unwrap();
         let id = host
             .create_world(
                 Default::default(),
@@ -257,6 +284,7 @@ mod tests {
         world.step(0.0).unwrap();
         drop(world);
         host.progress_assets();
+        scheduler.poll_ready();
         platform.service_resources(&mut host).unwrap();
         host.progress_assets();
         let world = host.world_mut(id).unwrap();

@@ -4,6 +4,7 @@ import type {
 } from "@ipp/client/diagnostics";
 import { invoke, writeDataUrl, recordCapture } from "./evidence.js";
 import assert from "node:assert/strict";
+import { writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import type { ConsoleMessage, Page } from "playwright";
@@ -138,8 +139,8 @@ for (const variant of ["development", "production"] as const) {
               );
               assert.ok(
                 ingressNumber(checker.statistics, "sourcePeakBufferedBytes") <=
-                  2 * 65_536,
-                "one HTTP texture retains at most one JS chunk and one Rust pipe",
+                  3 * 65_536 + 16,
+                "HTTP input retains bounded JS, lookahead and prefetch storage",
               );
               assert.equal(checker.triangles, 12);
               assertProgramCounts(checker.statistics, 1, 1);
@@ -717,6 +718,106 @@ test("changed HTTP content cannot refresh an unloaded resource", {
   await assertLoopbackClosed(result.origin);
 });
 
+test("context loss during texture upload reopens the immutable source and restores the image", {
+  timeout: 45_000,
+}, async (context) => {
+  let attempts = 0;
+  let cancelled = false;
+  let reached!: () => void;
+  const partial = new Promise<void>((done) => {
+    reached = done;
+  });
+  const result = await runBrowserEnvironment(
+    "partial texture context recovery",
+    {
+      workspace,
+      build: render,
+      operationTimeoutMs: 15_000,
+      evidenceParent: resolve(
+        workspace,
+        "target/integration-artifacts/textures",
+      ),
+      beforeArtifactChunk: async (url, offset, signal) => {
+        if (!url.pathname.endsWith("/checker.texture")) return;
+        if (offset === 0) attempts += 1;
+        if (attempts !== 2 || offset !== 64 << 10) return;
+        reached();
+        await new Promise<void>((done) => {
+          const abort = () => {
+            cancelled = true;
+            done();
+          };
+          if (signal.aborted) abort();
+          else signal.addEventListener("abort", abort, { once: true });
+        });
+      },
+    },
+    context.signal,
+    async (scenario) => {
+      const moduleUrl = `${scenario.urls.origin}/target/texture-build/fixture.js`;
+      const invokeFixture = <T>(name: string, args: unknown[] = []) =>
+        invoke<T>(scenario.page, moduleUrl, name, args);
+      try {
+        await invokeFixture("initializeTextures", [
+          {
+            generatedModuleUrl: scenario.urls.generated,
+            workerScriptUrl: scenario.urls.workerScript,
+            wasmUrl: scenario.urls.wasm,
+            timeoutMs: 10_000,
+            assetBaseUrl: `${scenario.urls.origin}/target/texture-build`,
+          },
+        ]);
+        const captured = new Set<string>();
+        const before = await capture(
+          scenario.page,
+          moduleUrl,
+          scenario.evidence.directory,
+          captured,
+          "before-partial-recovery",
+        );
+        await invokeFixture("beginTextureRecovery");
+        await partial;
+        const loading = await invokeFixture<
+          import("@ipp/client").AssetResourceSnapshot
+        >("inspectPartialTextureRecovery");
+        assert.equal(loading.status, "progress");
+        assert.ok((loading.completed ?? 0n) >= 32768n);
+        // A second loss cancels the already uploaded first rows before input EOF.
+        await invokeFixture("beginTextureRecovery");
+        const after = await capture(
+          scenario.page,
+          moduleUrl,
+          scenario.evidence.directory,
+          captured,
+          "after-partial-recovery",
+        );
+        const difference = await invokeFixture<ImageDifference>(
+          "compareCaptured",
+          ["before-partial-recovery", "after-partial-recovery"],
+        );
+        assert.equal(difference.changedPixels, 0);
+        assert.ok(after.contextGeneration > before.contextGeneration);
+        assert.equal(after.resourceCount, before.resourceCount);
+        assert.equal(after.failedDrawCalls, 0);
+        assert.equal(after.drawCalls, 1);
+        assert.ok(attempts >= 3, "recovery must reopen I/O after cancellation");
+        assert.ok(cancelled, "superseded HTTP acquisition must be cancelled");
+        await scenario.evidence.record("partial_texture_recovery", {
+          loading,
+          attempts,
+          cancelled,
+          difference,
+        });
+        return { attempts, loading, before, after, difference };
+      } finally {
+        await invokeFixture("closeTextures");
+      }
+    },
+  );
+  assert.ok(result.value.attempts >= 3);
+  await assertLoopbackClosed(result.origin);
+});
+
 function verifyOptionalLayoutSamples(
   samples: readonly OptionalLayoutSample[],
 ): void {
@@ -860,6 +961,10 @@ async function capture(
     [label],
   );
   await saveCapture(page, moduleUrl, evidenceDirectory, captured, label);
+  await writeFile(
+    join(evidenceDirectory, `${label}-io.json`),
+    JSON.stringify(report.statistics?.ingress ?? {}, null, 2),
+  );
   return report;
 }
 
@@ -986,7 +1091,10 @@ function ingressNumber(
 ): number {
   const ingress = requireStatistics(statistics).ingress;
   if (!ingress) throw new Error("capture statistics omitted ingress counters");
-  return ingress[field];
+  const value = ingress[field];
+  if (typeof value !== "number")
+    throw new Error(`Missing numeric ingress counter ${field}`);
+  return value;
 }
 
 function receiptError(receipt: {

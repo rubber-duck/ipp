@@ -29,10 +29,6 @@ pub(super) struct HostWorldTransfer {
 }
 
 enum HostWorldTransferState {
-    Ready {
-        bytes: Vec<u8>,
-        offset: usize,
-    },
     Loading {
         expected: usize,
         bytes: Vec<u8>,
@@ -80,11 +76,7 @@ impl<P: HostServices> Host<P> {
         request: HostRequestBody,
     ) -> Result<HostResponseBody, String> {
         let job = match &request {
-            HostRequestBody::ReadWorldSave {
-                job,
-                ..
-            }
-            | HostRequestBody::WriteWorldLoad {
+            HostRequestBody::WriteWorldLoad {
                 job,
                 ..
             }
@@ -135,79 +127,38 @@ impl<P: HostServices> Host<P> {
                 session,
             } => {
                 Self::require_session(connection, session)?;
-                if connection.transfer.is_some() {
-                    return Err("A World transfer is already active on this connection".into());
-                }
                 let world = self
                     .session_world(session)
                     .ok_or("World session is closed")?;
                 let limits = self.connections.persistence.limits;
-                let (id, reservation) =
-                    self.connections.persistence.reserve(limits.max_bytes * 3)?;
-                match self
+                let scratch = limits
+                    .max_bytes
+                    .checked_mul(3)
+                    .ok_or("Persistence scratch overflow")?;
+                self.maintain_bulk_pressure(scratch);
+                self.connections.persistence.charge(scratch)?;
+                let result = self
                     .runtime
-                    .save_world(world, ipp_protocol::schema_hash(), limits)
-                {
-                    Ok(bytes) => {
-                        self.connections.persistence.reserved -= reservation - bytes.capacity();
-                        let reservation = bytes.capacity();
-                        connection.transfer = Some(HostWorldTransfer {
-                            id,
-                            origin: Some(session),
-                            reservation,
-                            progress: now,
-                            state: HostWorldTransferState::Ready {
-                                bytes,
-                                offset: 0,
-                            },
-                        });
-                        Ok(HostResponseBody::Transfer {
-                            job: id,
-                        })
-                    }
-                    Err(error) => {
-                        self.connections.persistence.reserved -= reservation;
-                        Err(error.to_string())
-                    }
-                }
-            }
-            HostRequestBody::ReadWorldSave {
-                job,
-                offset,
-            } => {
-                let transfer = connection
-                    .transfer
-                    .as_mut()
-                    .filter(|transfer| transfer.id == job)
-                    .ok_or("Unknown World transfer")?;
-                match &mut transfer.state {
-                    HostWorldTransferState::Ready {
-                        bytes,
-                        offset: expected,
-                    } => {
-                        if offset != *expected as u64 {
-                            return Err("World save offset mismatch".into());
-                        }
-                        let end = bytes.len().min(expected.saturating_add(64 << 10));
-                        let response = HostResponseBody::SaveChunk {
-                            job,
-                            offset,
-                            total: bytes.len() as u64,
-                            bytes: bytes[*expected..end].to_vec(),
-                        };
-                        if end > *expected {
-                            transfer.progress = now;
-                        }
-                        *expected = end;
-                        if end == bytes.len() {
-                            self.connections
-                                .persistence
-                                .release(connection.transfer.take());
-                        }
-                        Ok(response)
-                    }
-                    _ => Err("Transfer is a World load".into()),
-                }
+                    .save_world(world, ipp_protocol::schema_hash(), limits);
+                self.connections.persistence.reserved -= scratch;
+                let bytes = std::sync::Arc::new(result.map_err(|error| error.to_string())?);
+                self.maintain_bulk_pressure(bytes.capacity());
+                let (source, length) = self.connections.bulk.bytes(bytes)?;
+                let descriptor = self.connections.bulk.publish(
+                    source,
+                    Some(length),
+                    crate::services::bulk_read::BulkReadDestination {
+                        connection: connection.id,
+                        scheduler: self.scheduler.schedulers().host(),
+                        outbox: connection.outbox.clone(),
+                        budget: connection.reply_budget.clone(),
+                        leases: &mut connection.bulk_reads,
+                    },
+                )?;
+                Ok(HostResponseBody::Read {
+                    reference: descriptor.reference,
+                    length: descriptor.length,
+                })
             }
             HostRequestBody::BeginWorldLoad {
                 bytes,
@@ -569,6 +520,7 @@ impl<P: HostServices> Host<P> {
     /// Paused simulations still expire stalled transfers and congested connections.
     pub fn maintain_connections(&mut self, now: Duration) {
         self.connections.now = self.connections.now.max(now);
+        self.maintain_bulk_pressure(0);
         self.expire_command_batches();
         self.expire_dataset_transfers();
         self.expire_queued_presentations();

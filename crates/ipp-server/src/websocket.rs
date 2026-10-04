@@ -11,16 +11,17 @@ use tungstenite::protocol::{CloseFrame, WebSocketConfig, frame::coding::CloseCod
 use tungstenite::{Error, Message};
 
 use crate::services::NativeHostServices;
+use async_channel::{Receiver, Sender, TryRecvError, TrySendError};
+use ipp_host_session::services::task_scheduler::TaskHandle;
 use ipp_host_session::{
     Host, HostConnectionMessage, HostServices, ReliableResponse, ResponseLease,
 };
 use std::collections::{BTreeMap, VecDeque};
-use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
 
 /// Maximum simultaneous connections served by this small native host. Each connection may
 /// open any number of World sessions.
 ///
-/// Each connection owns a socket thread and its share of the Host's output budget; eight
+/// Each connection owns an I/O task and its share of the Host's output budget; eight
 /// covers a development client, tools and a few peers. A further connection is answered
 /// with HTTP 503 and closed before the WebSocket handshake.
 pub const MAX_CONNECTIONS: usize = 8;
@@ -28,14 +29,14 @@ pub const MAX_CONNECTIONS: usize = 8;
 /// Transport allocation limit: the protocol's complete application message budget.
 pub const MAX_MESSAGE_BYTES: usize = ipp_protocol::MAX_MESSAGE_BYTES;
 
-/// Socket bytes read per connection before yielding to the Host.
+/// Socket bytes read per connection before yielding to peer I/O tasks.
 ///
 /// A message can contain arbitrarily many empty continuation frames, so actual socket reads
-/// are limited, not only completed messages, and decoding yields to the Host. 64 KiB is a
+/// are limited, not only completed messages, and decoding yields to peer tasks. 64 KiB is a
 /// few TCP segments per pass; the next pass continues where this one stopped.
 const READ_BUDGET_BYTES: usize = 64 * 1024;
 
-/// Decoded messages a socket thread may hold for the Host thread, per connection.
+/// Decoded messages an I/O task may hold for the Host thread, per connection.
 ///
 /// The socket reads only while the Host admits the connection's input and this window has
 /// room, so a throttled Host backs its sender up through TCP instead of failing it. This is
@@ -44,32 +45,36 @@ const READ_BUDGET_BYTES: usize = 64 * 1024;
 /// connection's whole window, and each frame's per-connection service allowance drains it.
 const INGRESS_MESSAGES: usize = ipp_host_session::MAX_PENDING;
 
-/// Replies and events handed to a socket thread and not yet written, per connection.
+/// Replies and events handed to an I/O task and not yet written, per connection.
 ///
 /// Their bytes stay charged to the Host's reliable-output account until the socket flushes
 /// them, so this count bounds only the hand-off channel. Matching [`INGRESS_MESSAGES`] lets one
 /// flush pass hand over the replies to a full window of requests.
 const OUTPUT_MESSAGES: usize = INGRESS_MESSAGES;
 
-/// Connection lifecycle events waiting for the Host thread: each connection thread sends
-/// exactly one `Open` and one `Closed`, and threads beyond this wait for the Host to drain.
+/// Connection lifecycle events waiting for the Host thread: each connection task sends
+/// at most one `Open` and one `Closed`, and tasks beyond this wait for the Host to drain.
 const CONNECTION_EVENTS: usize = 2 * MAX_CONNECTIONS;
 
 #[derive(Debug)]
 struct BudgetedStream {
-    stream: TcpStream,
+    stream: async_io::Async<TcpStream>,
+    waiting_write: bool,
     remaining: usize,
     written: u64,
 }
 
 impl BudgetedStream {
-    fn new(stream: TcpStream) -> Self {
-        Self {
-            stream,
-            // The blocking HTTP upgrade precedes the runtime scheduling loop.
-            remaining: usize::MAX,
+    fn new(stream: TcpStream) -> io::Result<Self> {
+        stream.set_read_timeout(None)?;
+        stream.set_write_timeout(None)?;
+        Ok(Self {
+            stream: async_io::Async::new(stream)?,
+            waiting_write: false,
+            // The HTTP upgrade has its own timeout and bounded async turns.
+            remaining: READ_BUDGET_BYTES,
             written: 0,
-        }
+        })
     }
 
     fn begin_iteration(&mut self) {
@@ -89,7 +94,8 @@ impl Read for BudgetedStream {
         }
 
         let limit = buffer.len().min(self.remaining);
-        let count = self.stream.read(&mut buffer[..limit])?;
+        self.waiting_write = false;
+        let count = self.stream.get_ref().read(&mut buffer[..limit])?;
         self.remaining -= count;
         Ok(count)
     }
@@ -97,13 +103,14 @@ impl Read for BudgetedStream {
 
 impl Write for BudgetedStream {
     fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-        let count = self.stream.write(buffer)?;
+        self.waiting_write = true;
+        let count = self.stream.get_ref().write(buffer)?;
         self.written = self.written.saturating_add(count as u64);
         Ok(count)
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        self.stream.flush()
+        self.stream.get_ref().flush()
     }
 }
 
@@ -118,8 +125,9 @@ impl Drop for ConnectionGuard {
 enum HostConnectionEvent {
     Open {
         id: u64,
-        replies: SyncSender<Vec<u8>>,
-        failures: SyncSender<String>,
+        replies: Sender<Vec<u8>>,
+        notify: Sender<()>,
+        failures: Sender<String>,
         ingress: Receiver<HostConnectionMessage>,
         queued: Arc<AtomicUsize>,
         throttled: Arc<AtomicBool>,
@@ -132,8 +140,9 @@ enum HostConnectionEvent {
 }
 
 struct HostConnectionOutput {
-    sender: SyncSender<Vec<u8>>,
-    failures: SyncSender<String>,
+    sender: Sender<Vec<u8>>,
+    notify: Sender<()>,
+    failures: Sender<String>,
     pending: Option<ReliableResponse>,
     inflight: VecDeque<ResponseLease>,
     acknowledged: u64,
@@ -168,6 +177,7 @@ impl<P: HostServices> NativeConnectionHost<P> {
             HostConnectionEvent::Open {
                 id,
                 replies,
+                notify,
                 failures,
                 ingress,
                 queued,
@@ -191,6 +201,7 @@ impl<P: HostServices> NativeConnectionHost<P> {
                         id,
                         HostConnectionOutput {
                             sender: replies,
+                            notify,
                             failures,
                             pending: None,
                             inflight: VecDeque::new(),
@@ -231,7 +242,9 @@ impl<P: HostServices> NativeConnectionHost<P> {
             for _ in 0..INGRESS_MESSAGES {
                 let admit = self.host.connection_accepts_input(id);
                 let output = self.outputs.get(&id).expect("live connection");
-                output.throttled.store(!admit, Ordering::Release);
+                if output.throttled.swap(!admit, Ordering::AcqRel) != !admit {
+                    let _ = output.notify.try_send(());
+                }
                 if !admit {
                     break;
                 }
@@ -240,6 +253,7 @@ impl<P: HostServices> NativeConnectionHost<P> {
                     Err(_) => break,
                 };
                 output.queued.fetch_sub(1, Ordering::AcqRel);
+                let _ = output.notify.try_send(());
                 if let Err(error) = self.host.receive_connection_message(id, message) {
                     failure = Some(error);
                     break;
@@ -250,6 +264,7 @@ impl<P: HostServices> NativeConnectionHost<P> {
                     output.failed = true;
                     output.pending = None;
                     report_connection_failure(&output.failures, &error);
+                    let _ = output.notify.try_send(());
                 }
                 self.host.close_connection(id);
             }
@@ -259,6 +274,7 @@ impl<P: HostServices> NativeConnectionHost<P> {
                 output.failed = true;
                 output.pending = None;
                 report_connection_failure(&output.failures, &error);
+                let _ = output.notify.try_send(());
             }
             self.host.close_connection(id);
         }
@@ -291,12 +307,13 @@ impl<P: HostServices> NativeConnectionHost<P> {
                 match output.sender.try_send(bytes) {
                     Ok(()) => {
                         output.inflight.push_back(lease);
+                        let _ = output.notify.try_send(());
                     }
                     Err(TrySendError::Full(bytes)) => {
                         output.pending = Some(ReliableResponse::from_parts(bytes, lease));
                         break;
                     }
-                    Err(TrySendError::Disconnected(_)) => {
+                    Err(TrySendError::Closed(_)) => {
                         closed.push(id);
                         break;
                     }
@@ -319,25 +336,37 @@ impl<P: HostServices> Drop for NativeConnectionHost<P> {
             report_connection_failure(&output.failures, "Host closed");
             self.host.close_connection(id);
         }
-        while self
-            .outputs
-            .values()
-            .any(|output| !output.released.load(Ordering::Acquire))
-        {
-            std::thread::sleep(IO_POLL_INTERVAL);
+        for output in self.outputs.values() {
+            let _ = output.notify.try_send(());
         }
+        self.host.shutdown_tasks();
+        // Every cancelled transport drops its encoded output before Host leases.
+        debug_assert!(
+            self.outputs
+                .values()
+                .all(|output| output.released.load(Ordering::Acquire))
+        );
     }
 }
 
-struct SocketOutputLifetime(Arc<AtomicBool>);
+struct SocketOutputLifetime {
+    released: Arc<AtomicBool>,
+    events: Sender<HostConnectionEvent>,
+    id: u64,
+    host_thread: std::thread::Thread,
+}
 
 impl Drop for SocketOutputLifetime {
     fn drop(&mut self) {
-        self.0.store(true, Ordering::Release);
+        self.released.store(true, Ordering::Release);
+        let _ = self.events.try_send(HostConnectionEvent::Closed {
+            id: self.id,
+        });
+        self.host_thread.unpark();
     }
 }
 
-fn report_connection_failure(sender: &SyncSender<String>, error: &str) {
+fn report_connection_failure(sender: &Sender<String>, error: &str) {
     let end = error.floor_char_boundary(2048);
     let _ = sender.try_send(error[..end].to_owned());
 }
@@ -346,14 +375,16 @@ fn report_connection_failure(sender: &SyncSender<String>, error: &str) {
 #[derive(Default)]
 pub struct ServeOptions {
     /// Filesystem data source registered under its literal prefix.
-    pub file_access: Option<(String, crate::services::io::FileSystemIoSource)>,
+    pub file_access: Option<(String, std::path::PathBuf)>,
+    /// Explicit HTTP source namespaces; registration grants no export authority.
+    pub http_prefixes: Vec<String>,
     /// Soft target in bytes for completed assets kept after their last consumer;
     /// `None` keeps the Host default and 0 evicts on release.
     pub asset_cache_bytes: Option<usize>,
 }
 
 /// Serve world-scoped connections with one owner for all worlds and services.
-/// Socket threads perform transport I/O and decode World requests as they arrive,
+/// I/O tasks perform transport I/O and decode World requests as they arrive,
 /// in parallel with Host frames; the Host owns simulation clocks and all state.
 pub fn serve(
     listener: TcpListener,
@@ -378,16 +409,39 @@ pub fn serve_with<P: HostServices>(
             "the PoC host requires a loopback listener",
         ));
     }
-    listener.set_nonblocking(true)?;
+    let address = listener.local_addr()?;
+    let listener = async_io::Async::new(listener)?;
     let active = Arc::new(AtomicUsize::new(0));
     let seed = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(io::Error::other)?
         .as_nanos();
     let sessions = AtomicU64::new(u64::try_from(seed).map_err(io::Error::other)?);
-    let (events, incoming) = mpsc::sync_channel(CONNECTION_EVENTS);
+    let (events, incoming) = async_channel::bounded(CONNECTION_EVENTS);
     let mut host = NativeConnectionHost::<P>::new().map_err(io::Error::other)?;
-    if let Some((prefix, source)) = options.file_access {
+    if let Some((prefix, root)) = options.file_access {
+        let source = crate::services::io::FileSystemIoSource::new(
+            &prefix,
+            root,
+            false,
+            host.host.task_schedulers().io(),
+        )
+        .map_err(io::Error::other)?;
+        host.host
+            .runtime_mut()
+            .io_mut()
+            .register(&prefix, source)
+            .map_err(io::Error::other)?;
+    }
+
+    for prefix in options.http_prefixes {
+        if !prefix.starts_with("http://") && !prefix.starts_with("https://") {
+            return Err(io::Error::other(
+                "HTTP source prefix requires http:// or https://",
+            ));
+        }
+        let source = crate::services::http::HttpIoSource::new(host.host.task_schedulers().io())
+            .map_err(io::Error::other)?;
         host.host
             .runtime_mut()
             .io_mut()
@@ -402,22 +456,35 @@ pub fn serve_with<P: HostServices>(
             .set_idle_resident_bytes_target(bytes);
     }
     crate::diagnostics::install(log_level, 0);
-    ready(listener.local_addr()?)?;
+    let host_thread = std::thread::current();
+    let wake_thread = host_thread.clone();
+    host.host
+        .set_task_wakeup(Arc::new(move || wake_thread.unpark()));
+    let io = host.host.task_schedulers().io();
+    let (accepted, accepted_connections) = async_channel::bounded(MAX_CONNECTIONS);
+    let accept_thread = host_thread.clone();
+    let accept_task: TaskHandle<io::Result<()>> = io.spawn(async move {
+        loop {
+            let stream = listener.accept().await?.0.into_inner()?;
+            accepted
+                .send(stream)
+                .await
+                .map_err(|_| io::Error::other("Host listener closed"))?;
+            accept_thread.unpark();
+        }
+    });
+    let mut connection_tasks: Vec<TaskHandle<()>> = Vec::new();
+    ready(address)?;
     let mut last_frame = Instant::now();
     let mut next_frame = last_frame + FRAME_INTERVAL;
     loop {
         for _ in 0..MAX_CONNECTIONS {
-            let (mut stream, _) = match listener.accept() {
-                Ok(incoming) => incoming,
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
-                Err(error) => return Err(error),
+            let mut stream = match accepted_connections.try_recv() {
+                Ok(stream) => stream,
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Closed) => return Err(io::Error::other("Host listener closed")),
             };
-            if stream
-                .set_read_timeout(Some(Duration::from_secs(10)))
-                .and_then(|()| stream.set_write_timeout(Some(Duration::from_secs(10))))
-                .and_then(|()| stream.set_nodelay(true))
-                .is_err()
-            {
+            if stream.set_nodelay(true).is_err() {
                 continue;
             }
             if active
@@ -438,41 +505,37 @@ pub fn serve_with<P: HostServices>(
                 .fetch_update(Ordering::AcqRel, Ordering::Acquire, |id| id.checked_add(1))
                 .map_err(|_| io::Error::other("session identity space exhausted"))?;
             let events = events.clone();
-            let spawned = std::thread::Builder::new()
-                .name(format!("ipp-connection-{session_id}"))
-                .spawn(move || {
-                    let _guard = guard;
+            let thread = host_thread.clone();
+            connection_tasks.push(io.spawn(async move {
+                let _guard = guard;
+                if let Err(error) = connection(stream, session_id, &events, thread).await {
                     crate::diagnostics::install(log_level, session_id);
-                    if let Err(error) = connection(stream, session_id, &events) {
-                        diagnostic!(
-                            Error,
-                            "[IPP server] session.failed session={} reason={}",
-                            session_id,
-                            error
-                        );
-                    }
-                    let _ = events.send(HostConnectionEvent::Closed {
-                        id: session_id,
-                    });
-                });
-            // A failed spawn drops the captured stream and connection guard.
-            if let Err(error) = spawned {
-                diagnostic!(Warn, "[IPP server] connection setup failed: {}", error);
-                let _ = error;
-            }
+                    diagnostic!(
+                        Error,
+                        "[IPP server] session.failed session={} reason={}",
+                        session_id,
+                        error
+                    );
+                }
+            }));
         }
 
         for _ in 0..CONNECTION_EVENTS {
             let event = match incoming.try_recv() {
                 Ok(event) => event,
                 Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => {
+                Err(TryRecvError::Closed) => {
                     return Err(io::Error::other("Host ingress closed"));
                 }
             };
             host.receive(event);
         }
 
+        connection_tasks.retain(|task| !task.is_finished());
+        if accept_task.is_finished() {
+            return Err(io::Error::other("Host listener stopped"));
+        }
+        host.host.progress_resources().map_err(io::Error::other)?;
         let now = Instant::now();
         let frame_due = now >= next_frame;
         if frame_due {
@@ -484,50 +547,55 @@ pub fn serve_with<P: HostServices>(
         if frame_due {
             next_frame = advance_frame_deadline(next_frame, Instant::now());
         }
-        std::thread::sleep(
-            next_frame
-                .saturating_duration_since(Instant::now())
-                .min(IO_POLL_INTERVAL),
-        );
+        std::thread::park_timeout(next_frame.saturating_duration_since(Instant::now()));
     }
 }
 
-fn connection(
+async fn connection(
     stream: TcpStream,
     session_id: u64,
-    events: &SyncSender<HostConnectionEvent>,
+    events: &Sender<HostConnectionEvent>,
+    host_thread: std::thread::Thread,
 ) -> Result<(), String> {
     let released = Arc::new(AtomicBool::new(false));
-    let _output_lifetime = SocketOutputLifetime(released.clone());
+    let _output_lifetime = SocketOutputLifetime {
+        released: released.clone(),
+        events: events.clone(),
+        id: session_id,
+        host_thread: host_thread.clone(),
+    };
     let config = WebSocketConfig::default()
         .read_buffer_size(16 * 1024)
         .write_buffer_size(0)
         .max_write_buffer_size(MAX_MESSAGE_BYTES + 1024)
         .max_message_size(Some(MAX_MESSAGE_BYTES))
         .max_frame_size(Some(MAX_MESSAGE_BYTES));
-    let mut socket = tungstenite::accept_with_config(BudgetedStream::new(stream), Some(config))
-        .map_err(|error| error.to_string())?;
-    // Tungstenite retains partial frames and buffered writes across WouldBlock.
-    // This thread owns only the socket; world updates run on the shared Host.
-    socket
-        .get_mut()
-        .stream
-        .set_nonblocking(true)
-        .map_err(|error| error.to_string())?;
-    socket
-        .get_mut()
-        .stream
-        .set_read_timeout(None)
-        .map_err(|error| error.to_string())?;
-    socket
-        .get_mut()
-        .stream
-        .set_write_timeout(None)
-        .map_err(|error| error.to_string())?;
+    let handshake_deadline = Instant::now() + Duration::from_secs(10);
+    let mut upgrade = tungstenite::accept_with_config(
+        BudgetedStream::new(stream).map_err(|error| error.to_string())?,
+        Some(config),
+    );
+    let mut socket = loop {
+        match upgrade {
+            Ok(socket) => break socket,
+            Err(tungstenite::HandshakeError::Failure(error)) => return Err(error.to_string()),
+            Err(tungstenite::HandshakeError::Interrupted(mut pending)) => {
+                let stream = pending.get_ref().get_ref();
+                if stream.remaining == 0 {
+                    futures_lite::future::yield_now().await;
+                } else {
+                    wait_socket(stream, handshake_deadline).await?;
+                }
+                pending.get_mut().get_mut().begin_iteration();
+                upgrade = pending.handshake();
+            }
+        }
+    };
 
-    let (replies, responses): (_, Receiver<Vec<u8>>) = mpsc::sync_channel(OUTPUT_MESSAGES);
-    let (failures, failure) = mpsc::sync_channel(1);
-    let (input, ingress) = mpsc::sync_channel(INGRESS_MESSAGES);
+    let (replies, responses): (_, Receiver<Vec<u8>>) = async_channel::bounded(OUTPUT_MESSAGES);
+    let (notify, notified) = async_channel::bounded(1);
+    let (failures, failure) = async_channel::bounded(1);
+    let (input, ingress) = async_channel::bounded(INGRESS_MESSAGES);
     let queued = Arc::new(AtomicUsize::new(0));
     let throttled = Arc::new(AtomicBool::new(false));
     let completed = Arc::new(AtomicU64::new(0));
@@ -536,6 +604,7 @@ fn connection(
         .send(HostConnectionEvent::Open {
             id: session_id,
             replies,
+            notify,
             failures,
             ingress,
             queued: queued.clone(),
@@ -543,10 +612,11 @@ fn connection(
             completed: completed.clone(),
             released,
         })
+        .await
         .map_err(|_| "Host is closed")?;
+    host_thread.unpark();
     let mut ready = false;
     let connected_at = Instant::now();
-    let mut next_frame = connected_at + FRAME_INTERVAL;
     let mut blocked_since = None;
 
     loop {
@@ -591,8 +661,10 @@ fn connection(
                         queued.fetch_sub(1, Ordering::AcqRel);
                         return Err("connection ingress closed".into());
                     }
+                    host_thread.unpark();
+                    futures_lite::future::yield_now().await;
                 }
-                Ok(Message::Close(_)) => return finish_close(&mut socket),
+                Ok(Message::Close(_)) => return finish_close(&mut socket).await,
                 Ok(Message::Ping(_) | Message::Pong(_)) => {}
                 Ok(Message::Text(_)) => {
                     let _ = socket.close(Some(CloseFrame {
@@ -606,17 +678,11 @@ fn connection(
                 Err(Error::Io(error)) if error.kind() == io::ErrorKind::WouldBlock => break,
                 Err(error) => return Err(error.to_string()),
             }
-            if Instant::now() >= next_frame {
-                break;
-            }
         }
 
         let now = Instant::now();
         if !ready && now.duration_since(connected_at) >= Duration::from_secs(10) {
             return Err("IPP hello timed out".into());
-        }
-        if now >= next_frame {
-            next_frame = now + FRAME_INTERVAL;
         }
 
         let before_write = socket.get_ref().written;
@@ -628,12 +694,13 @@ fn connection(
         };
         if flushed {
             completed.store(submitted, Ordering::Release);
+            host_thread.unpark();
             blocked_since = None;
-            loop {
+            for _ in 0..OUTPUT_MESSAGES {
                 let reply = match responses.try_recv() {
                     Ok(reply) => reply,
                     Err(TryRecvError::Empty) => break,
-                    Err(TryRecvError::Disconnected) => return Err("Host closed the session".into()),
+                    Err(TryRecvError::Closed) => return Err("Host closed the session".into()),
                 };
                 ready = true;
                 submitted = submitted
@@ -642,6 +709,7 @@ fn connection(
                 match socket.send(Message::Binary(reply.into())) {
                     Ok(()) => {
                         completed.store(submitted, Ordering::Release);
+                        host_thread.unpark();
                     }
                     // This frame is already retained by Tungstenite: do not resend.
                     Err(Error::Io(error)) if error.kind() == io::ErrorKind::WouldBlock => {
@@ -666,17 +734,79 @@ fn connection(
             }
         }
 
-        // Small bounded polling is enough for this std-only host. A future I/O
-        // reactor can replace it without changing session scheduling or clients.
-        std::thread::sleep(
-            next_frame
-                .saturating_duration_since(Instant::now())
-                .min(IO_POLL_INTERVAL),
-        );
+        let readable = queued.load(Ordering::Acquire) < INGRESS_MESSAGES
+            && !throttled.load(Ordering::Acquire)
+            && blocked_since.is_none();
+        if readable && socket.get_ref().remaining == 0 {
+            futures_lite::future::yield_now().await;
+            continue;
+        }
+        let timeout = if !ready {
+            connected_at + Duration::from_secs(10)
+        } else if let Some(since) = blocked_since {
+            since + Duration::from_secs(30)
+        } else {
+            // No periodic connection polling: only readiness and Host notifications.
+            now + Duration::from_secs(24 * 60 * 60)
+        };
+        futures_lite::future::or(
+            async {
+                if readable {
+                    socket
+                        .get_ref()
+                        .stream
+                        .readable()
+                        .await
+                        .map_err(|error| error.to_string())
+                } else if blocked_since.is_some() {
+                    socket
+                        .get_ref()
+                        .stream
+                        .writable()
+                        .await
+                        .map_err(|error| error.to_string())
+                } else {
+                    std::future::pending().await
+                }
+            },
+            futures_lite::future::or(
+                async {
+                    notified
+                        .recv()
+                        .await
+                        .map(|_| ())
+                        .map_err(|_| "Host closed".to_string())
+                },
+                async {
+                    async_io::Timer::at(timeout).await;
+                    Ok(())
+                },
+            ),
+        )
+        .await?;
     }
 }
 
+async fn wait_socket(stream: &BudgetedStream, deadline: Instant) -> Result<(), String> {
+    futures_lite::future::or(
+        async {
+            if stream.waiting_write {
+                stream.stream.writable().await
+            } else {
+                stream.stream.readable().await
+            }
+            .map_err(|error| error.to_string())
+        },
+        async {
+            async_io::Timer::at(deadline).await;
+            Err("WebSocket I/O timed out".into())
+        },
+    )
+    .await
+}
+
 const FRAME_INTERVAL: Duration = Duration::from_nanos(16_666_667);
+#[cfg(test)]
 const IO_POLL_INTERVAL: Duration = Duration::from_millis(2);
 
 /// Keep the original 60 Hz cadence across wakeup jitter and frame work. On an
@@ -685,7 +815,7 @@ fn advance_frame_deadline(deadline: Instant, now: Instant) -> Instant {
     (deadline + FRAME_INTERVAL).max(now)
 }
 
-fn finish_close(socket: &mut tungstenite::WebSocket<BudgetedStream>) -> Result<(), String> {
+async fn finish_close(socket: &mut tungstenite::WebSocket<BudgetedStream>) -> Result<(), String> {
     let deadline = Instant::now() + Duration::from_secs(1);
     loop {
         match socket.flush() {
@@ -694,7 +824,7 @@ fn finish_close(socket: &mut tungstenite::WebSocket<BudgetedStream>) -> Result<(
                 if Instant::now() >= deadline {
                     return Err("WebSocket close timed out".into());
                 }
-                std::thread::sleep(IO_POLL_INTERVAL);
+                wait_socket(socket.get_ref(), deadline).await?;
             }
             Err(error) => return Err(error.to_string()),
         }

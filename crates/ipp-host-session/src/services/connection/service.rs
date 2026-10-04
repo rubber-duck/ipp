@@ -50,7 +50,24 @@ impl<P: HostServices> Host<P> {
 
     pub(crate) fn publish_presentation_responses(&mut self) -> Vec<(u64, String)> {
         let mut failures = Vec::new();
-        for (id, request, response) in self.presentation.take_completed() {
+        for (id, request, mut response) in self.presentation.take_completed() {
+            if let Some(bytes) = self.presentation.take_capture(id, request) {
+                response = match self.publish_connection_bytes(id, bytes) {
+                    Ok(descriptor) => {
+                        if let ipp_protocol::presentation::PresentationResponse::Capture {
+                            read,
+                            ..
+                        } = &mut response
+                        {
+                            *read = descriptor.reference;
+                        }
+                        response
+                    }
+                    Err(_) => ipp_protocol::presentation::PresentationResponse::Error(
+                        ipp_protocol::presentation::PresentationError::Capacity,
+                    ),
+                };
+            }
             if let Some(connection) = self.connections.states.get_mut(&id) {
                 connection.presentation_pending -= 1;
                 if let Err(error) =
@@ -85,6 +102,9 @@ impl<P: HostServices> Host<P> {
                 reply_reservations: BTreeMap::new(),
                 failure: None,
                 transfer: None,
+                bulk_reads: Default::default(),
+                #[cfg(feature = "instrumentation")]
+                bulk_test_inputs: Default::default(),
                 reply_budget: Default::default(),
                 progress_leases: Default::default(),
                 presentation_pending: 0,
@@ -139,9 +159,9 @@ impl<P: HostServices> Host<P> {
         let metadata = account.usage().bytes - backlog;
         let room = ORDINARY_OUTPUT_BYTES.saturating_sub(metadata);
         connection.throttled = if connection.throttled {
-            ingress >= crate::MAX_PENDING / 2 || backlog >= room / 2
+            ingress >= crate::MAX_PENDING / 2 || backlog != 0 && backlog >= room / 2
         } else {
-            ingress >= crate::MAX_PENDING * 3 / 4 || backlog >= room * 3 / 4
+            ingress >= crate::MAX_PENDING * 3 / 4 || backlog != 0 && backlog >= room * 3 / 4
         };
         !connection.throttled
     }
@@ -166,6 +186,13 @@ impl<P: HostServices> Host<P> {
             connection.ready = true;
             return Ok(());
         }
+        #[cfg(feature = "instrumentation")]
+        if bytes.starts_with(b"IPDT") {
+            return self.receive_bulk_test(id, bytes);
+        }
+        if bytes.starts_with(ipp_protocol::bulk_read::REQUEST_MAGIC) {
+            return self.receive_bulk_read(id, bytes);
+        }
         if bytes.starts_with(ipp_protocol::dataset::REQUEST_MAGIC) {
             return self.receive_dataset(id, bytes);
         }
@@ -182,20 +209,27 @@ impl<P: HostServices> Host<P> {
             if congested {
                 return Err(CONGESTED.into());
             }
-            let reply = ipp_protocol::contract_reply();
-            let reservation = connection.reserve_reply(reply.capacity())?;
+            let reservation = connection.reserve_reply(256)?;
+            let _ = connection;
+            let descriptor = self.publish_connection_bytes(id, {
+                static BACKING: std::sync::OnceLock<std::sync::Arc<Vec<u8>>> =
+                    std::sync::OnceLock::new();
+                BACKING
+                    .get_or_init(|| std::sync::Arc::new(ipp_protocol::export_contract().to_vec()))
+                    .clone()
+            })?;
+            let reply = ipp_protocol::bulk_read::contract_descriptor(descriptor)
+                .map_err(|error| error.to_string())?;
             reservation.borrow_mut().encoded(reply.capacity());
-            ipp_core::diagnostic!(
-                Info,
-                "[IPP {}] connection.contract connection={} bytes={}",
-                P::NAME,
-                id,
-                reply.len()
-            );
-            connection.outbox.push_back(ReliableResponse {
-                bytes: reply,
-                reservation,
-            });
+            self.connections
+                .states
+                .get(&id)
+                .expect("live connection")
+                .outbox
+                .push_back(ReliableResponse {
+                    bytes: reply,
+                    reservation,
+                });
             return Ok(());
         }
         if bytes.starts_with(host::HOST_REQUEST_MAGIC) {
@@ -207,6 +241,10 @@ impl<P: HostServices> Host<P> {
             if connection
                 .reply_reservations
                 .contains_key(&request.request_id)
+                || self
+                    .connections
+                    .exports
+                    .contains_pending_request(id, request.request_id)
             {
                 return Err("duplicate outstanding Host request".into());
             }
@@ -249,30 +287,6 @@ impl<P: HostServices> Host<P> {
                     )
                 };
                 return connection.reply(request.request_id, HostResponseBody::Profile(response));
-            }
-            // A completed capture is an immutable snapshot: reading or releasing it needs no
-            // frame boundary, like asset source transfers. Transfers answer at ingress, so they
-            // keep their arrival order and never wait behind requests queued for the next frame.
-            if let HostRequestBody::Presentation(
-                body @ (ipp_protocol::presentation::PresentationRequest::ReadCapture {
-                    ..
-                }
-                | ipp_protocol::presentation::PresentationRequest::ReleaseCapture(_)),
-            ) = request.body
-            {
-                let response = self
-                    .presentation
-                    .request(
-                        &mut self.runtime,
-                        &mut self.services,
-                        id,
-                        request.request_id,
-                        body,
-                        self.connections.now,
-                    )
-                    .expect("capture transfers complete immediately");
-                return connection
-                    .reply(request.request_id, HostResponseBody::Presentation(response));
             }
             connection
                 .pending
@@ -459,6 +473,7 @@ impl<P: HostServices> Host<P> {
         let Some(mut connection) = self.connections.states.remove(&id) else {
             return false;
         };
+        self.close_asset_exports(id);
         #[cfg(feature = "instrumentation")]
         self.profiling.disconnect(id);
 
@@ -602,6 +617,24 @@ impl<P: HostServices> Host<P> {
                     }
                     continue;
                 }
+                if let HostRequestBody::AssetExport(body) = request.body {
+                    match self.begin_asset_export(&mut connection, request.request_id, body) {
+                        Ok(None) => {}
+                        response => {
+                            let body = response
+                                .map(|response| {
+                                    HostResponseBody::AssetExport(
+                                        response.expect("immediate asset response"),
+                                    )
+                                })
+                                .unwrap_or_else(HostResponseBody::Error);
+                            if let Err(error) = connection.reply(request.request_id, body) {
+                                failures.push((id, error));
+                            }
+                        }
+                    }
+                    continue;
+                }
                 if let HostRequestBody::GuiInput(body) = request.body {
                     let reservation = connection
                         .reply_reservations
@@ -717,6 +750,9 @@ impl<P: HostServices> Host<P> {
         request: HostRequestBody,
     ) -> Result<HostResponseBody, String> {
         match request {
+            HostRequestBody::AssetExport(_) => {
+                Err("Asset exports require the async operation boundary".into())
+            }
             HostRequestBody::Profile(request) => Ok(HostResponseBody::Profile(
                 self.profile_control(connection.id, request),
             )),

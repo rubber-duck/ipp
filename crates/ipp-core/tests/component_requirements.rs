@@ -3,7 +3,7 @@
 mod support;
 
 use ipp_core::{
-    Batch, Command, ComponentValue, EntityId, EntityRef, HostRuntime, WorldContext,
+    Batch, Command, ComponentValue, EntityId, EntityRef, WorldContext,
     components::{BoundingGeometry, MeshInstance},
 };
 use support::WorldTestDriver;
@@ -59,7 +59,7 @@ fn has_mesh(world: &ipp_core::WorldContext<'_>, entity: EntityId) -> bool {
 
 #[test]
 fn required_defaults_are_ordinary_components_that_stay_after_their_dependent_is_removed() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host.create_world(Default::default(), RENDER).unwrap();
     let entity;
     let rendered = BoundingGeometry {

@@ -4,6 +4,7 @@
 #![allow(dead_code)]
 
 pub mod selection;
+pub mod task_scheduler;
 pub mod world_failures;
 
 use ipp_core::{ErrorReason, WorldContext, WorldUpdateReport};
@@ -64,10 +65,14 @@ impl WorldTestDriver for WorldContext<'_> {
     fn update_for_test(&mut self, dt: f64) -> Result<WorldUpdateReport, ErrorReason> {
         self.prepare_update(dt)?;
         self.poll_assets();
+        task_scheduler::poll_ready();
+        self.poll_assets();
         self.step(dt)
     }
 
     fn resource_requests_for_test(&mut self) -> Vec<ipp_core::AssetAcquisitionRequest> {
+        self.poll_assets();
+        task_scheduler::poll_ready();
         self.poll_assets();
         self.take_resource_requests()
     }
@@ -103,6 +108,8 @@ impl HostWorldTestDriver for ipp_core::HostRuntime {
         self.world_mut(world)
             .expect("fixture world")
             .prepare_update(dt)?;
+        self.progress_assets();
+        task_scheduler::poll_ready();
         self.progress_assets();
         let report = self.world_mut(world).expect("fixture world").step(dt)?;
         self.flush_resource_lifecycle();

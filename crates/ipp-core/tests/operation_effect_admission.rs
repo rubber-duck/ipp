@@ -180,7 +180,7 @@ fn capacity_failure_retains_aliases_and_receipts_before_the_failed_operation() {
     let callbacks = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let mut factories = ipp_core::systems::compiled_system_factories();
     factories.push(std::sync::Arc::new(CallbackObserver(callbacks.clone())));
-    let mut host = HostRuntime::with_system_factories(factories).unwrap();
+    let mut host = crate::support::task_scheduler::with_factories(factories).unwrap();
     let world = host
         .create_world(
             Default::default(),
@@ -230,7 +230,7 @@ fn capacity_failure_retains_aliases_and_receipts_before_the_failed_operation() {
 
 #[test]
 fn failed_operation_releases_unused_reservation_and_existing_tokens_are_deduplicated() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world = host.create_world(Default::default(), ATTACHMENTS).unwrap();
     let mut budget = Budget {
         slots: 1,
@@ -294,7 +294,7 @@ fn failed_operation_releases_unused_reservation_and_existing_tokens_are_deduplic
 
 #[test]
 fn subtree_reservation_accounts_every_token_and_fails_before_any_deletion() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world = host
         .create_world(Default::default(), &select(&[ATTACHMENTS, CONSTRAINTS]))
         .unwrap();
@@ -358,7 +358,7 @@ fn subtree_reservation_accounts_every_token_and_fails_before_any_deletion() {
 
 #[test]
 fn queued_receipt_release_is_revalidated_at_execution_and_preserves_prior_effects() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world = host.create_world(Default::default(), ATTACHMENTS).unwrap();
     let budget = Rc::new(RefCell::new(Budget {
         slots: 8,
@@ -402,7 +402,7 @@ fn queued_receipt_release_is_revalidated_at_execution_and_preserves_prior_effect
 
 #[test]
 fn foreign_receipt_and_unknown_receipt_fail_at_original_operation_index() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let source = host.create_world(Default::default(), ATTACHMENTS).unwrap();
     let target = host.create_world(Default::default(), ATTACHMENTS).unwrap();
     let mut budget = Budget {
@@ -441,7 +441,7 @@ fn foreign_receipt_and_unknown_receipt_fail_at_original_operation_index() {
 
 #[test]
 fn ordinary_component_removal_and_entity_deletion_reserve_existing_receipts() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world = host.create_world(Default::default(), ATTACHMENTS).unwrap();
     let created = apply(
         &mut host,

@@ -194,7 +194,7 @@ fn seek(world: &mut WorldContext<'_>, id: AnimationControllerId, time: f64) -> W
 
 #[test]
 fn structural_keys_place_once_and_stop_leaves_the_last_placement() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host
         .create_world(
             WorldLimits::default(),
@@ -388,7 +388,7 @@ fn structural_slots_reject_the_wire_absence_sentinel() {
 fn structural_binding_slots_round_trip_through_world_persistence() {
     use services::world_serialization::{WorldLoadOptions, WorldPersistenceLimits};
 
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host
         .create_world(WorldLimits::default(), &select(&[ASSETS, CONSTRAINTS]))
         .unwrap();
@@ -475,7 +475,7 @@ fn structural_binding_slots_round_trip_through_world_persistence() {
 
 #[test]
 fn equal_structural_keys_seek_and_loop_each_place_once() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host
         .create_world(WorldLimits::default(), &select(&[ASSETS, CONSTRAINTS]))
         .unwrap();
@@ -537,7 +537,7 @@ fn equal_structural_keys_seek_and_loop_each_place_once() {
 
 #[test]
 fn structural_and_numeric_tracks_keep_independent_contributions() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host
         .create_world(WorldLimits::default(), &select(&[ASSETS, CONSTRAINTS]))
         .unwrap();
@@ -583,7 +583,7 @@ fn structural_and_numeric_tracks_keep_independent_contributions() {
 
 #[test]
 fn pending_mixed_clip_with_bad_structural_slot_never_samples_numeric_driver() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host
         .create_world(WorldLimits::default(), &select(&[ASSETS, CONSTRAINTS]))
         .unwrap();
@@ -627,7 +627,7 @@ fn pending_mixed_clip_with_bad_structural_slot_never_samples_numeric_driver() {
 
 #[test]
 fn deleting_one_structural_target_stops_the_controller_and_leaves_the_other_placed() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host
         .create_world(
             WorldLimits::default(),
@@ -749,7 +749,7 @@ fn deleting_one_structural_target_stops_the_controller_and_leaves_the_other_plac
 
 #[test]
 fn structural_placement_under_an_aiming_parent_invalidates_the_aim_until_corrected() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host
         .create_world(
             WorldLimits::default(),
@@ -827,7 +827,7 @@ fn structural_placement_under_an_aiming_parent_invalidates_the_aim_until_correct
 
 #[test]
 fn deleting_a_structural_target_stops_without_retargeting_its_reused_slot() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host
         .create_world(WorldLimits::default(), &select(&[ASSETS, CONSTRAINTS]))
         .unwrap();
@@ -884,7 +884,7 @@ fn deleting_a_structural_target_stops_without_retargeting_its_reused_slot() {
 fn structural_track_unload_releases_typed_curve_and_holds_placement() {
     use support::HostWorldTestDriver;
 
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host
         .create_world(WorldLimits::default(), &select(&[ASSETS, CONSTRAINTS]))
         .unwrap();
@@ -956,7 +956,7 @@ fn structural_track_unload_releases_typed_curve_and_holds_placement() {
 
 #[test]
 fn player_clock_pauses_seeks_resumes_completes_and_stops_without_changing_base() {
-    let mut world_host = ipp_core::HostRuntime::new();
+    let mut world_host = crate::support::task_scheduler::host();
     let world_id = world_host
         .create_world(
             ipp_core::WorldLimits::default(),
@@ -1068,7 +1068,7 @@ fn bezier_solves_time_and_uses_value_handles_even_with_equal_endpoints() {
 
 #[test]
 fn replacement_in_failed_batch_invalidates_playback() {
-    let mut world_host = ipp_core::HostRuntime::new();
+    let mut world_host = crate::support::task_scheduler::host();
     let world_id = world_host
         .create_world(
             ipp_core::WorldLimits::default(),
@@ -1145,7 +1145,7 @@ fn integer_interpolation_preserves_adjacent_u64_endpoints() {
 
 #[test]
 fn constraints_read_animated_sources_in_the_next_frame() {
-    let mut world_host = ipp_core::HostRuntime::new();
+    let mut world_host = crate::support::task_scheduler::host();
     let world_id = world_host
         .create_world(
             ipp_core::WorldLimits::default(),
@@ -1227,7 +1227,7 @@ fn invalid_clips_reject_counts_curves_types_and_owned_size() {
 #[test]
 fn discrete_asset_sources_and_continuous_fields_keep_partial_updates() {
     use components::{MeshInstance, Transform};
-    let mut world_host = ipp_core::HostRuntime::new();
+    let mut world_host = crate::support::task_scheduler::host();
     let world_id = world_host
         .create_world(
             ipp_core::WorldLimits::default(),
@@ -1328,7 +1328,7 @@ fn discrete_asset_sources_and_continuous_fields_keep_partial_updates() {
 #[test]
 fn quaternion_tracks_normalize_endpoints_and_coordinate_writes_as_one_rotation() {
     use components::Transform;
-    let mut world_host = ipp_core::HostRuntime::new();
+    let mut world_host = crate::support::task_scheduler::host();
     let world_id = world_host
         .create_world(
             ipp_core::WorldLimits::default(),
@@ -1435,7 +1435,7 @@ fn quaternion_tracks_normalize_endpoints_and_coordinate_writes_as_one_rotation()
 #[test]
 fn discrete_driver_binding_and_continuous_source_share_the_frozen_seek_time() {
     use components::LinearDriver;
-    let mut world_host = ipp_core::HostRuntime::new();
+    let mut world_host = crate::support::task_scheduler::host();
     let world_id = world_host
         .create_world(
             ipp_core::WorldLimits::default(),
@@ -1534,7 +1534,7 @@ fn discrete_driver_binding_and_continuous_source_share_the_frozen_seek_time() {
 
 #[test]
 fn one_controller_samples_multiple_entities_at_one_exact_time() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host
         .create_world(WorldLimits::default(), &select(&[ASSETS, CONSTRAINTS]))
         .unwrap();
@@ -1561,7 +1561,7 @@ fn one_controller_samples_multiple_entities_at_one_exact_time() {
 
 #[test]
 fn queued_controllers_follow_entity_mutations_and_return_correlated_failures() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host
         .create_world(WorldLimits::default(), &select(&[ASSETS, CONSTRAINTS]))
         .unwrap();
@@ -1606,7 +1606,7 @@ fn queued_controllers_follow_entity_mutations_and_return_correlated_failures() {
 
 #[test]
 fn controllers_on_one_field_sum_and_each_removal_subtracts_its_own_contribution() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host
         .create_world(WorldLimits::default(), &select(&[ASSETS, CONSTRAINTS]))
         .unwrap();
@@ -1664,7 +1664,7 @@ fn controllers_on_one_field_sum_and_each_removal_subtracts_its_own_contribution(
 
 #[test]
 fn write_then_stop_in_the_same_boundary_subtracts_the_contribution_from_the_write() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host
         .create_world(WorldLimits::default(), &select(&[ASSETS, CONSTRAINTS]))
         .unwrap();
@@ -1759,7 +1759,7 @@ fn typed_tracks_retain_concrete_storage_and_indices_across_decode() {
 
 #[test]
 fn controller_update_rejects_track_type_mismatch_without_changing_clock_or_binding() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host
         .create_world(WorldLimits::default(), &select(&[ASSETS, CONSTRAINTS]))
         .unwrap();
@@ -1793,7 +1793,7 @@ fn controller_update_rejects_track_type_mismatch_without_changing_clock_or_bindi
 
 #[test]
 fn persistent_controllers_preserve_deleted_id_high_water_and_first_saved_sample() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host
         .create_world(WorldLimits::default(), &select(&[ASSETS, CONSTRAINTS]))
         .unwrap();
@@ -1837,7 +1837,7 @@ fn persistent_controllers_preserve_deleted_id_high_water_and_first_saved_sample(
 
 #[test]
 fn settings_updates_retain_clock_and_additive_driver_uses_its_reference() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host
         .create_world(WorldLimits::default(), &select(&[ASSETS, CONSTRAINTS]))
         .unwrap();
@@ -1864,7 +1864,7 @@ fn settings_updates_retain_clock_and_additive_driver_uses_its_reference() {
 }
 #[test]
 fn pending_clip_waits_without_advancing_and_samples_the_saved_seek_when_ready() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host
         .create_world(WorldLimits::default(), &select(&[ASSETS, CONSTRAINTS]))
         .unwrap();
@@ -1892,7 +1892,7 @@ fn pending_clip_waits_without_advancing_and_samples_the_saved_seek_when_ready() 
 
 #[test]
 fn controller_asset_demand_is_validated_when_the_controller_is_admitted() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host
         .create_world(WorldLimits::default(), &select(&[ASSETS, CONSTRAINTS]))
         .unwrap();
@@ -1923,7 +1923,7 @@ fn controller_asset_demand_is_validated_when_the_controller_is_admitted() {
 
 #[test]
 fn controller_descriptions_grow_while_ingress_remains_bounded() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host
         .create_world(
             WorldLimits {
@@ -1990,7 +1990,7 @@ fn controller_descriptions_grow_while_ingress_remains_bounded() {
 
 #[test]
 fn structural_bindings_count_toward_queued_controller_budget() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host
         .create_world(
             WorldLimits {
@@ -2048,7 +2048,7 @@ fn reservation_hints_have_no_estimated_byte_ceiling() {
             WorldSystemCapacityHints::new([("controllers", controllers)]),
         )]),
     };
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     // The AnimationSystem uses a BTreeMap and currently needs no preallocation.
     // Its former estimate rejected these hints despite reserving no controller storage.
     let id = host
@@ -2076,7 +2076,7 @@ fn reservation_hints_have_no_estimated_byte_ceiling() {
 
 #[test]
 fn client_write_during_animation_survives_stop_shifted_by_the_contribution() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host
         .create_world(WorldLimits::default(), &select(&[ASSETS, CONSTRAINTS]))
         .unwrap();
@@ -2119,7 +2119,7 @@ fn client_write_during_animation_survives_stop_shifted_by_the_contribution() {
 
 #[test]
 fn repeated_source_hints_allow_distinct_curves_for_distinct_targets() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host
         .create_world(WorldLimits::default(), &select(&[ASSETS, CONSTRAINTS]))
         .unwrap();
@@ -2142,7 +2142,7 @@ fn repeated_source_hints_allow_distinct_curves_for_distinct_targets() {
 #[test]
 fn failed_controller_keeps_successful_samples_without_restoring_prior_contributions() {
     use components::Transform;
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host
         .create_world(
             WorldLimits::default(),
@@ -2214,7 +2214,7 @@ fn failed_controller_keeps_successful_samples_without_restoring_prior_contributi
 #[test]
 fn indexed_clip_binding_survives_payload_unload_and_checked_reload() {
     use support::HostWorldTestDriver;
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host
         .create_world(WorldLimits::default(), &select(&[ASSETS, CONSTRAINTS]))
         .unwrap();
@@ -2285,7 +2285,7 @@ fn indexed_clip_binding_survives_payload_unload_and_checked_reload() {
 #[test]
 fn external_clip_source_hints_cannot_bypass_sampled_producer_namespace_isolation() {
     use components::{MeshInstance, Transform};
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let external = services::io::MemoryIoSource::default();
     host.io_mut()
         .register("https://example.test/", external.clone())
@@ -2374,7 +2374,7 @@ fn external_clip_source_hints_cannot_bypass_sampled_producer_namespace_isolation
 #[test]
 fn restored_producer_clip_preserves_its_original_nested_source_namespace() {
     use components::{MeshInstance, Transform};
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let first_id = host
         .create_world(
             WorldLimits::default(),
@@ -2476,7 +2476,7 @@ fn animation_tracks_and_keys_grow_beyond_former_quotas() {
     let clip = AnimationClip::new(32.0, vec![track; 300]).unwrap();
     let decoded = AnimationClip::decode(&clip.encode()).unwrap();
     assert_eq!(decoded.tracks().len(), 300);
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host
         .create_world(Default::default(), &select(&[ASSETS, CONSTRAINTS]))
         .unwrap();
@@ -2492,7 +2492,7 @@ fn animation_tracks_and_keys_grow_beyond_former_quotas() {
 
 #[test]
 fn repeating_driver_uses_shared_clock_and_persists_its_sampling_policy() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host
         .create_world(Default::default(), &select(&[ASSETS, CONSTRAINTS]))
         .unwrap();
@@ -2599,7 +2599,7 @@ fn compiled_numeric_frames_notify_once_per_batch_without_commit_hooks() {
     let trace = Arc::new(Mutex::new(Trace::default()));
     let mut factories = compiled_system_factories();
     factories.push(Arc::new(Factory(trace.clone())));
-    let mut host = HostRuntime::with_system_factories(factories).unwrap();
+    let mut host = crate::support::task_scheduler::with_factories(factories).unwrap();
     let id = host
         .create_world(
             Default::default(),
@@ -2718,7 +2718,7 @@ fn resource_owning_numeric_lanes_preserve_state_without_commit_hooks() {
     let commits = Arc::new(AtomicUsize::new(0));
     let mut factories = compiled_system_factories();
     factories.push(Arc::new(Factory(commits.clone())));
-    let mut host = HostRuntime::with_system_factories(factories).unwrap();
+    let mut host = crate::support::task_scheduler::with_factories(factories).unwrap();
     let id = host
         .create_world(
             Default::default(),
@@ -2954,7 +2954,7 @@ fn mixed_resource_and_numeric_drivers_commit_only_resource_transitions() {
     let commits = Arc::new(AtomicUsize::new(0));
     let mut factories = compiled_system_factories();
     factories.push(Arc::new(Factory(commits.clone())));
-    let mut host = HostRuntime::with_system_factories(factories).unwrap();
+    let mut host = crate::support::task_scheduler::with_factories(factories).unwrap();
     let world_id = host
         .create_world(
             Default::default(),
@@ -3096,7 +3096,7 @@ fn mixed_resource_and_numeric_drivers_commit_only_resource_transitions() {
 fn save_and_load_carry_the_applied_contribution_that_stop_subtracts() {
     use ipp_core::services::world_serialization::WorldLoadOptions;
 
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host
         .create_world(WorldLimits::default(), &select(&[ASSETS, CONSTRAINTS]))
         .unwrap();
@@ -3180,7 +3180,7 @@ fn save_and_load_carry_the_applied_contribution_that_stop_subtracts() {
 
 #[test]
 fn controller_over_a_constraint_applies_its_total_after_each_constraint_write() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host
         .create_world(WorldLimits::default(), &select(&[ASSETS, CONSTRAINTS]))
         .unwrap();
@@ -3239,7 +3239,7 @@ fn controller_over_a_constraint_applies_its_total_after_each_constraint_write() 
 #[test]
 fn rejected_contribution_is_retried_and_stop_restores_exactly() {
     use components::Transform;
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host
         .create_world(
             WorldLimits::default(),
@@ -3315,7 +3315,7 @@ fn rejected_contribution_is_retried_and_stop_restores_exactly() {
 #[test]
 fn rotation_contributions_compose_and_stop_restores_the_rotation() {
     use components::Transform;
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host
         .create_world(
             WorldLimits::default(),
@@ -3421,7 +3421,7 @@ fn rotation_contributions_compose_and_stop_restores_the_rotation() {
 
 #[test]
 fn a_discrete_driver_leaves_its_last_value_when_it_stops() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host
         .create_world(WorldLimits::default(), &select(&[ASSETS, CONSTRAINTS]))
         .unwrap();

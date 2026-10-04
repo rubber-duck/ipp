@@ -1,10 +1,15 @@
 //! Poll-based owned output, independent of executors, filesystems and transports.
 
-use std::task::{Context, Poll};
+use super::{IoError, IoPlatformSend};
+use std::{
+    future::Future,
+    pin::Pin,
+    task::{Context, Poll},
+};
 
 /// An output destination with explicit completion/publication. Pending writes do not
 /// retain the borrowed input; the job keeps it alive until progress is acknowledged.
-pub trait IoWriter {
+pub trait IoWriteBackend: IoPlatformSend {
     /// Accept a prefix of input. Pending accepts nothing; a nonempty zero write is an error.
     fn poll_write(&mut self, cx: &mut Context<'_>, bytes: &[u8]) -> Poll<Result<usize, String>>;
 
@@ -14,8 +19,90 @@ pub trait IoWriter {
     /// Publish the completed destination. This may itself require asynchronous progress.
     fn poll_finish(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), String>>;
 
+    /// Signal used to cancel source-scoped platform publication work.
+    fn cancellation(&self) -> Option<super::IoCancellation> {
+        None
+    }
+
     /// Cancel unpublished output and release destination staging.
     fn abort(&mut self);
+}
+
+/// Asynchronous output with explicit accepted-prefix and publication semantics.
+pub trait IoWriter: IoWriteBackend {
+    /// Await acceptance of a prefix. Cancelling cannot undo bytes already accepted.
+    fn write<'a>(&'a mut self, bytes: &'a [u8]) -> IoWriteFuture<'a>;
+
+    /// Await flushing accepted bytes without publishing incomplete output.
+    fn flush(&mut self) -> IoFlushFuture<'_>;
+
+    /// Await completed publication with the destination's guarantees.
+    fn finish(&mut self) -> IoFlushFuture<'_>;
+}
+
+impl<T: IoWriteBackend> IoWriter for T {
+    fn write<'a>(&'a mut self, bytes: &'a [u8]) -> IoWriteFuture<'a> {
+        IoWriteFuture {
+            writer: self,
+            bytes,
+        }
+    }
+
+    fn flush(&mut self) -> IoFlushFuture<'_> {
+        IoFlushFuture {
+            writer: self,
+            finishing: false,
+        }
+    }
+
+    fn finish(&mut self) -> IoFlushFuture<'_> {
+        IoFlushFuture {
+            writer: self,
+            finishing: true,
+        }
+    }
+}
+
+/// Allocation-free accepted-prefix future.
+pub struct IoWriteFuture<'a> {
+    writer: &'a mut dyn IoWriteBackend,
+    bytes: &'a [u8],
+}
+
+impl Future for IoWriteFuture<'_> {
+    type Output = Result<usize, IoError>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        this.writer.poll_write(cx, this.bytes).map(|result| {
+            result.and_then(|count| {
+                if count > this.bytes.len() || (count == 0 && !this.bytes.is_empty()) {
+                    Err("Invalid IO writer accepted prefix".into())
+                } else {
+                    Ok(count)
+                }
+            })
+        })
+    }
+}
+
+/// Allocation-free flush or completion future.
+pub struct IoFlushFuture<'a> {
+    writer: &'a mut dyn IoWriteBackend,
+    finishing: bool,
+}
+
+impl Future for IoFlushFuture<'_> {
+    type Output = Result<(), IoError>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        if this.finishing {
+            this.writer.poll_finish(cx)
+        } else {
+            this.writer.poll_flush(cx)
+        }
+    }
 }
 
 /// Bounded owned encoding waiting for partial writes, flush and publication.
@@ -145,7 +232,7 @@ impl MemoryIoWriter {
     }
 }
 
-impl IoWriter for MemoryIoWriter {
+impl IoWriteBackend for MemoryIoWriter {
     fn poll_write(&mut self, _cx: &mut Context<'_>, bytes: &[u8]) -> Poll<Result<usize, String>> {
         if self.complete || self.aborted {
             return Poll::Ready(Err("Output is closed".into()));
@@ -184,7 +271,11 @@ impl IoWriter for MemoryIoWriter {
     }
 }
 
-impl<W: IoWriter + ?Sized> IoWriter for Box<W> {
+impl<W: IoWriter + ?Sized> IoWriteBackend for Box<W> {
+    fn cancellation(&self) -> Option<super::IoCancellation> {
+        (**self).cancellation()
+    }
+
     fn poll_write(&mut self, cx: &mut Context<'_>, bytes: &[u8]) -> Poll<Result<usize, String>> {
         (**self).poll_write(cx, bytes)
     }

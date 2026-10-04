@@ -588,10 +588,21 @@ fn hello_announces_revision_hash_and_connection_and_rejects_only_foreign_input()
 }
 
 #[test]
-fn contract_reply_carries_the_exported_contract_headed_by_the_announcement() {
-    let reply = crate::contract_reply();
+fn contract_reply_carries_a_schema_independent_bulk_descriptor() {
+    let reply = crate::bulk_read::contract_descriptor(crate::bulk_read::BulkReadDescriptor {
+        reference: crate::bulk_read::BulkReadReference {
+            connection: 7,
+            read: 1,
+        },
+        length: Some(crate::export_contract().len() as u64),
+    })
+    .unwrap();
     assert_eq!(&reply[..4], &crate::CONTRACT_REPLY_MAGIC);
-    assert_eq!(&reply[4..], crate::export_contract());
+    assert_eq!(reply.len(), 28);
+    assert_eq!(
+        u64::from_le_bytes(reply[20..28].try_into().unwrap()),
+        crate::export_contract().len() as u64
+    );
     assert_eq!(reply.capacity(), reply.len());
     assert!(reply.len() <= crate::MAX_MESSAGE_BYTES);
 

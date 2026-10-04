@@ -84,7 +84,7 @@ fn close(actual: &[f32], expected: &[f32]) {
 
 #[test]
 fn nested_affine_composition_preserves_shear_and_local_values_in_reverse_allocation_order() {
-    let mut host = ipp_core::HostRuntime::default();
+    let mut host = crate::support::task_scheduler::host();
     let id = host.create_world(Default::default(), SPATIAL).unwrap();
     let mut world = host.world_mut(id).unwrap();
     let child_local = Transform {
@@ -175,7 +175,7 @@ fn nested_affine_composition_preserves_shear_and_local_values_in_reverse_allocat
 
 #[test]
 fn terminal_aim_tracks_through_affine_parent_and_finalizes_children_without_changing_trs() {
-    let mut host = ipp_core::HostRuntime::default();
+    let mut host = crate::support::task_scheduler::host();
     let id = host.create_world(Default::default(), SPATIAL).unwrap();
     let mut world = host.world_mut(id).unwrap();
     let root = create(
@@ -278,7 +278,7 @@ fn terminal_aim_tracks_through_affine_parent_and_finalizes_children_without_chan
 
 #[test]
 fn cycles_and_terminal_dependencies_retain_changes_and_recover_on_correction() {
-    let mut host = ipp_core::HostRuntime::default();
+    let mut host = crate::support::task_scheduler::host();
     let id = host.create_world(Default::default(), SPATIAL).unwrap();
     let mut world = host.world_mut(id).unwrap();
     let a = create(&mut world, Some(Transform::default()));
@@ -336,7 +336,7 @@ fn cycles_and_terminal_dependencies_retain_changes_and_recover_on_correction() {
 
 #[test]
 fn coincident_and_pole_targets_are_finite_and_runtime_fields_are_not_serialized() {
-    let mut host = ipp_core::HostRuntime::default();
+    let mut host = crate::support::task_scheduler::host();
     let id = host.create_world(Default::default(), SPATIAL).unwrap();
     let mut world = host.world_mut(id).unwrap();
     let tracker = create(&mut world, Some(Transform::default()));
@@ -398,7 +398,7 @@ fn deferred_parent_and_target_removal_refreshes_surviving_final_placement() {
     let removal = Removal::default();
     let mut factories = compiled_system_factories();
     factories.push(Arc::new(removal.clone()));
-    let mut host = ipp_core::HostRuntime::with_system_factories(factories).unwrap();
+    let mut host = crate::support::task_scheduler::with_factories(factories).unwrap();
     let id = host
         .create_world(
             Default::default(),
@@ -451,7 +451,7 @@ fn bone_parent_composes_pose_and_offset_and_recovers_without_object_fallback() {
         components::Skeleton,
         services::asset_management::{AssetUpload, AssetUploadIdentity, builtin},
     };
-    let mut host = ipp_core::HostRuntime::default();
+    let mut host = crate::support::task_scheduler::host();
     let id = host
         .create_world(Default::default(), &select(&[SKELETON, SPATIAL]))
         .unwrap();

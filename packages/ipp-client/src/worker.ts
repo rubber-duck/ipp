@@ -1,3 +1,7 @@
+import type {
+  SharedBufferPublication,
+  WorkerBufferSource,
+} from "./buffer-source.js";
 import {
   resourceUrlMappings,
   type ResourceUrlMapping,
@@ -33,6 +37,10 @@ export interface WorkerHost {
   connect(): MessageTransport;
   openPort(): WorkerEndpoint;
   close(): Promise<void>;
+  /** Transfer an ArrayBuffer or mount a sealed external shared publication. */
+  publishBuffer(
+    buffer: ArrayBuffer | SharedBufferPublication,
+  ): Promise<WorkerBufferSource>;
 }
 
 const MAX_ASSET_CACHE_BYTES = 0xffff_ffff;
@@ -67,6 +75,52 @@ export function createWorkerHost(
     { endpoint: WorkerEndpoint; transport?: PortTransport }
   >();
   const timeoutMs = options.timeoutMs ?? 10_000;
+  let resolveReady!: () => void;
+  let rejectReady!: (error: Error) => void;
+  const ready = new Promise<void>((resolve, reject) => {
+    resolveReady = resolve;
+    rejectReady = reject;
+  });
+  void ready.catch(() => {});
+  const sourceReplies = new Map<
+    string,
+    { resolve(): void; reject(error: Error): void }
+  >();
+  const sourceRequest = (
+    type: string,
+    source: string,
+    publication?: ArrayBuffer | SharedBufferPublication,
+  ) =>
+    new Promise<void>((resolve, reject) => {
+      if (failure || stopped || closing) {
+        reject(failure ?? new Error("Worker Host is closed"));
+        return;
+      }
+      const timer = setTimeout(() => {
+        sourceReplies.delete(source);
+        reject(new Error("Generated source operation timed out"));
+      }, timeoutMs);
+      sourceReplies.set(source, {
+        resolve() {
+          clearTimeout(timer);
+          resolve();
+        },
+        reject(error) {
+          clearTimeout(timer);
+          reject(error);
+        },
+      });
+      try {
+        control.port1.postMessage(
+          { type, source, publication },
+          publication instanceof ArrayBuffer ? [publication] : [],
+        );
+      } catch (error) {
+        clearTimeout(timer);
+        sourceReplies.delete(source);
+        reject(error);
+      }
+    });
   let nextConnection = 1n;
   let stopped = false;
   let failure: Error | undefined;
@@ -89,6 +143,10 @@ export function createWorkerHost(
   const terminate = () => {
     if (stopped) return;
     stopped = true;
+    const closedError = failure ?? new Error("Worker Host closed");
+    rejectReady(closedError);
+    for (const reply of sourceReplies.values()) reply.reject(closedError);
+    sourceReplies.clear();
     visibilityOwner?.removeEventListener("visibilitychange", visibilityChanged);
     worker.removeEventListener("error", failed);
     worker.removeEventListener("messageerror", messageFailed);
@@ -103,6 +161,9 @@ export function createWorkerHost(
     failure ??= error;
     for (const record of [...records.values()]) record.transport?.fail(error);
     diagnostics?.close(error);
+    rejectReady(error);
+    for (const reply of sourceReplies.values()) reply.reject(error);
+    sourceReplies.clear();
     if (records.size === 0) terminate();
   };
   const failed = (event: ErrorEvent) =>
@@ -117,7 +178,23 @@ export function createWorkerHost(
     }
     try {
       if (diagnostics?.receive(data as Record<string, unknown>)) return;
-      if (data.type === "ready") return;
+      if (data.type === "ready") {
+        resolveReady();
+        return;
+      }
+      if (
+        data.type === "buffer-source-result" &&
+        "source" in data &&
+        typeof data.source === "string"
+      ) {
+        const reply = sourceReplies.get(data.source);
+        if (!reply) return;
+        sourceReplies.delete(data.source);
+        if ("error" in data && typeof data.error === "string")
+          reply.reject(new Error(data.error));
+        else reply.resolve();
+        return;
+      }
       if (data.type === "closed") {
         terminate();
       } else if (
@@ -137,6 +214,26 @@ export function createWorkerHost(
   worker.addEventListener("messageerror", messageFailed);
 
   const owner: WorkerHost = {
+    async publishBuffer(buffer) {
+      await ready;
+      if (
+        !(buffer instanceof ArrayBuffer) &&
+        (!(buffer?.buffer instanceof SharedArrayBuffer) ||
+          !(buffer.control instanceof SharedArrayBuffer))
+      )
+        throw new TypeError(
+          "Generated source requires owned bytes or a shared publication",
+        );
+      const source = `js-buffer:${crypto.randomUUID().replaceAll("-", "")}`;
+      await sourceRequest("buffer-source-mount", source, buffer);
+      let release: Promise<void> | undefined;
+      return {
+        source,
+        release() {
+          return (release ??= sourceRequest("buffer-source-revoke", source));
+        },
+      };
+    },
     openPort() {
       if (failure) throw failure;
       if (stopped || closing) throw new Error("Worker Host is closed");

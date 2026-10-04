@@ -110,7 +110,7 @@ fn effective_property(
 
 #[test]
 fn removed_dynamic_properties_are_pruned_from_durable_animation_drivers() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world = host.create_world(WorldLimits::default(), RENDER).unwrap();
     let entity = apply(
         &mut host,

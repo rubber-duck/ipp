@@ -25,6 +25,14 @@ Services are Host-owned, shareable across Worlds and never required to be proces
 
 Worlds are independently created and destroyed and can exist without a parent or presentation target. World, connection and surface lifetimes remain independent under [session policy](protocol-and-schema.md#world-scoped-connections). [Frame order](#frame-order) owns scheduling; [rendering](rendering.md#outputs-and-composition) owns presentation and [assets](assets.md#assets-shared-between-worlds) owns shared demand.
 
+### Task scheduling
+
+A Host-owned TaskSchedulerService uses the Smol ecosystem to execute asynchronous service work. At the start of each Host update, before World mutation and evaluation, it polls ready Host tasks within a work budget. The platform event loop wakes the Host when work becomes ready; callbacks enqueue work without synchronous Host or World reentry. Service-only updates continue while simulation is paused or presentation is idle, without advancing World clocks or publishing frame outcomes.
+
+Tasks select a Host or I/O execution context. Host tasks remain on the Host thread and may retain thread-local state; native I/O tasks run on a worker executor, with blocking operations delegated to a thread pool and transferred futures/results satisfying Rust's thread-safety bounds. Browser WASM maps both contexts to the Host worker, awaiting browser operations through platform bridges. Awaiting another task does not move the awaiting task to that task's executor. Tasks retain owned requests and resource identities, never mutable World borrows across suspension; completed work enters existing service and mutation boundaries.
+
+Task handles own cancellation, and Host shutdown cancels and drains owned work. Cancellation fences late results without releasing buffers still used by an outstanding platform operation. Running blocking operations may finish after cancellation. Executor budgets bound polling turns, not the duration of an individual poll, so CPU work must cooperate and yield even when its I/O is immediately ready. [Platform dependency ownership](rust-workspace.md#third-party-dependency-policy) keeps native reactors and browser bridges outside core.
+
 ### World attachments
 
 An ordinary entity's WorldAttachment references another runtime World with an explicit Spatial, SurfaceCanvas or SurfaceCamera mode. The Host maintains the attachment graph and incoming-edge reservations. A World has at most one active parent attachment; self-links, cycles and competing parents are rejected. Entity links, animation targets and constraints remain World-local; cross-World composition uses this attachment boundary.

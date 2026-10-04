@@ -13,6 +13,7 @@ macro_rules! embedded_shader {
 pub(crate) use embedded_shader;
 
 mod analytic_glyphs;
+mod asset_context;
 mod assets;
 mod canvas_paint;
 mod canvas_scene;
@@ -78,7 +79,7 @@ pub use canvas_paint::{
 };
 pub use custom_material::CustomMaterialFallback;
 pub use lighting::RenderLightingFrame;
-pub use service::{RenderError, RenderService};
+pub use service::{RenderAssetExportDelay, RenderError, RenderService};
 pub use surface_cache::{
     SURFACE_CACHE_ANIMATED_FRAMES, SURFACE_CACHE_BUDGET_BYTES, SURFACE_CACHE_SETTLE_FRAMES,
     SurfaceCacheDiagnostic, SurfaceCachePresentation,

@@ -68,6 +68,40 @@ impl RenderDevice for GlesRenderDevice {
     type Mesh = GlesRenderMesh;
 
     type Texture = u32;
+    type TextureReadback = super::GlesTextureReadback;
+
+    fn texture_readback_supported(&self) -> bool {
+        true
+    }
+
+    fn begin_texture_readback(
+        &mut self,
+        texture: &u32,
+        width: u32,
+        height: u32,
+    ) -> Result<Self::TextureReadback, RenderError> {
+        self.stage_texture(*texture, width, height)
+    }
+
+    fn poll_texture_readback(
+        &mut self,
+        readback: &Self::TextureReadback,
+    ) -> Result<bool, RenderError> {
+        self.poll_texture_stage(readback)
+    }
+
+    fn copy_texture_readback(
+        &mut self,
+        readback: &Self::TextureReadback,
+        offset: usize,
+        destination: &mut [u8],
+    ) -> Result<(), RenderError> {
+        self.copy_texture_stage(readback, offset, destination)
+    }
+
+    fn delete_texture_readback(&mut self, readback: Self::TextureReadback) {
+        self.release_texture_stage(&readback);
+    }
 
     type SurfacePath = super::GlesSurfacePath;
 

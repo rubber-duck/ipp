@@ -198,7 +198,7 @@ impl Fixture {
     }
 
     fn with_systems(systems: &[ipp_core::systems::SystemId], control: ComponentValue) -> Self {
-        let mut host = HostRuntime::new();
+        let mut host = crate::support::task_scheduler::host();
         let world = host.create_world(Default::default(), systems).unwrap();
         let canvas = create(&mut host, world, vec![], None);
         let control = create(&mut host, world, vec![control, layout()], Some(canvas));

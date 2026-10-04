@@ -1,6 +1,7 @@
 //! Real headless Host graph and immutable output evidence; no transport or GPU claim.
 
 mod support;
+use support::task_scheduler::HostTaskTestDriver;
 
 use support::selection::SURFACE;
 use support::selection::{ATTACHMENTS, CAMERA, CONSTRAINTS, GEOMETRY, RENDER, SPATIAL, select};
@@ -41,7 +42,7 @@ fn apply(
             operations,
         })
         .unwrap();
-    host.frame(0.0)
+    host.frame_for_test(0.0)
         .unwrap()
         .worlds
         .remove(&world)
@@ -122,7 +123,7 @@ fn mesh(host: &mut HostRuntime, world: WorldId) -> (EntityId, AssetKey, AssetSou
     host.asset_resources_mut()
         .register_client_source(world, source.clone(), mesh_bytes())
         .unwrap();
-    host.progress_assets();
+    host.progress_assets_for_test();
     let key = host.asset_resources().find(&source).unwrap();
     assert!(
         host.asset_resources()
@@ -155,7 +156,7 @@ fn mesh(host: &mut HostRuntime, world: WorldId) -> (EntityId, AssetKey, AssetSou
 }
 
 fn frame(host: &mut HostRuntime) -> ipp_core::HostFrameReport {
-    let report = host.frame(0.25).unwrap();
+    let report = host.frame_for_test(0.25).unwrap();
     assert!(
         report.worlds.values().all(Result::is_ok),
         "{:?}",
@@ -223,7 +224,7 @@ fn faulted_deletion_drains_outcomes_without_republishing_stale_render_items() {
     let restorations = Arc::new(AtomicUsize::new(0));
     let mut factories = compiled_system_factories();
     factories.push(Arc::new(Factory(enabled.clone(), restorations.clone())));
-    let mut host = HostRuntime::with_system_factories(factories).unwrap();
+    let mut host = crate::support::task_scheduler::with_factories(factories).unwrap();
     let parent = host
         .create_world(Default::default(), &select(&[ATTACHMENTS, CAMERA]))
         .unwrap();
@@ -298,7 +299,7 @@ fn faulted_deletion_drains_outcomes_without_republishing_stale_render_items() {
             }],
         })
         .unwrap();
-    let report = host.frame(0.25).unwrap();
+    let report = host.frame_for_test(0.25).unwrap();
     let child_report = report.worlds[&child].as_ref().unwrap();
     assert_eq!(
         child_report
@@ -373,7 +374,7 @@ fn faulted_deletion_drains_outcomes_without_republishing_stale_render_items() {
             .iter()
             .any(|entry| entry.publication.id == previous)
     );
-    let next = host.frame(0.25).unwrap();
+    let next = host.frame_for_test(0.25).unwrap();
     assert!(next.worlds[&child].as_ref().unwrap().outcomes.is_empty());
     assert!(!next.evaluation_order.contains(&child) && !next.publication_order.contains(&child));
     assert_eq!(host.latest_publication(child), Some(previous));
@@ -384,7 +385,7 @@ fn faulted_deletion_drains_outcomes_without_republishing_stale_render_items() {
     assert!(host.publication(previous).is_none());
     assert!(host.publication_resource(previous, key).is_none());
     assert!(host.asset_resources().get(key).is_none());
-    let next = host.frame(0.25).unwrap();
+    let next = host.frame_for_test(0.25).unwrap();
     assert_eq!(host.latest_publication(child), None);
     assert!(!next.evaluation_order.contains(&child) && !next.publication_order.contains(&child));
     assert!(next.evaluation_order.contains(&parent) && next.evaluation_order.contains(&sibling));
@@ -409,7 +410,7 @@ fn stale_ancestor_keeps_retiring_child_reserved_until_every_reachable_edge_retir
 
 #[test]
 fn published_picking_errors_freeze_until_ready_without_click_through_or_visual_failure() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     host.register_stream_resource_provider("https").unwrap();
     let parent = host
         .create_world(Default::default(), &select(&[ATTACHMENTS, CAMERA, RENDER]))
@@ -481,7 +482,7 @@ fn published_picking_errors_freeze_until_ready_without_click_through_or_visual_f
             .len(),
         1
     );
-    host.progress_assets();
+    host.progress_assets_for_test();
     let requests = host.take_resource_requests();
     let request = requests
         .iter()
@@ -496,7 +497,7 @@ fn published_picking_errors_freeze_until_ready_without_click_through_or_visual_f
     .encode()
     .unwrap();
     host.complete_resource(request.id, Ok(definition)).unwrap();
-    host.progress_assets();
+    host.progress_assets_for_test();
     frame(&mut host);
     let current = host.root_output(parent).unwrap().2;
     let hit = host
@@ -530,7 +531,7 @@ fn published_picking_errors_freeze_until_ready_without_click_through_or_visual_f
     )
     .unwrap();
     frame(&mut host);
-    host.progress_assets();
+    host.progress_assets_for_test();
     let requests = host.take_resource_requests();
     let request = requests
         .iter()
@@ -541,7 +542,7 @@ fn published_picking_errors_freeze_until_ready_without_click_through_or_visual_f
         .unwrap();
     host.complete_resource(request.id, Ok(vec![1, 2, 3]))
         .unwrap();
-    host.progress_assets();
+    host.progress_assets_for_test();
     frame(&mut host);
     for query in [&ray, &miss] {
         assert_eq!(
@@ -641,7 +642,7 @@ fn branch_without_a_completed_publication_contributes_nothing() {
     host.set_root_output(root, viewport()).unwrap();
     mesh(&mut host, child);
     attach(&mut host, parent, child, 2.0);
-    let report = host.frame(0.25).unwrap();
+    let report = host.frame_for_test(0.25).unwrap();
     assert_eq!(
         report
             .publication_errors
@@ -733,7 +734,7 @@ fn stale_ancestor_detach(revoke: bool) {
     .unwrap();
     host.asset_resources_mut()
         .release_client_source(child, &child_source);
-    let report = host.frame(0.25).unwrap();
+    let report = host.frame_for_test(0.25).unwrap();
     assert_eq!(
         report
             .publication_errors
@@ -789,7 +790,7 @@ fn stale_ancestor_detach(revoke: bool) {
     );
     apply(&mut host, peer, vec![reattach()]).unwrap();
     if revoke {
-        host.frame(0.25).unwrap();
+        host.frame_for_test(0.25).unwrap();
         assert!(host.root_output(ancestor).is_none());
     } else {
         frame(&mut host);
@@ -821,7 +822,7 @@ fn stale_ancestor_detach(revoke: bool) {
 
 #[test]
 fn root_withdrawal_is_explicit_and_historical_output_is_not_a_presentation_path() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let parent = host.create_world(Default::default(), ATTACHMENTS).unwrap();
     let child = host.create_world(Default::default(), CAMERA).unwrap();
     let root = camera(&mut host, child);
@@ -857,8 +858,8 @@ fn root_withdrawal_is_explicit_and_historical_output_is_not_a_presentation_path(
 
 #[test]
 fn publication_runtime_identity_is_not_a_durable_host_namespace() {
-    let mut first = HostRuntime::new();
-    let mut second = HostRuntime::new();
+    let mut first = crate::support::task_scheduler::host();
+    let mut second = crate::support::task_scheduler::host();
     first.set_identity_namespace(42).unwrap();
     second.set_identity_namespace(42).unwrap();
     let first_world = first.create_world(Default::default(), &[]).unwrap();
@@ -874,7 +875,7 @@ fn publication_runtime_identity_is_not_a_durable_host_namespace() {
 
 #[test]
 fn generic_attachment_fields_have_dedicated_reference_kinds_and_graph_admission() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let parent = host.create_world(Default::default(), ATTACHMENTS).unwrap();
     let child = host.create_world(Default::default(), ATTACHMENTS).unwrap();
     let competing = host.create_world(Default::default(), ATTACHMENTS).unwrap();
@@ -1050,7 +1051,7 @@ fn retained_branch_keeps_owned_mesh_geometry_and_advances_parent_placement_and_s
         }],
     )
     .unwrap();
-    let second = host.frame(0.25).unwrap();
+    let second = host.frame_for_test(0.25).unwrap();
     assert!(
         second.evaluation_order.contains(&parent) && second.evaluation_order.contains(&sibling)
     );
@@ -1216,7 +1217,7 @@ fn output_selection_is_explicit_view_independent_and_incarnation_fenced() {
 
 #[test]
 fn published_anchor_deletion_releases_child_and_world_destruction_does_not_wait() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let parent = host
         .create_world(Default::default(), &select(&[ATTACHMENTS, SPATIAL]))
         .unwrap();
@@ -1307,7 +1308,7 @@ fn retained_publication_keeps_exact_mesh_then_explicit_revoke_invalidates_it_wit
     assert!(host.publication(publication).is_none());
     assert!(host.publication_resource(publication, key).is_none());
     assert!(host.asset_resources().get(key).is_none());
-    let next = host.frame(0.0).unwrap();
+    let next = host.frame_for_test(0.0).unwrap();
     assert!(next.publication_errors.contains_key(&child));
     assert!(next.evaluation_order.contains(&parent) && next.evaluation_order.contains(&peer));
     assert_eq!(host.latest_publication(child), None);
@@ -1330,7 +1331,7 @@ fn retained_publication_keeps_exact_mesh_then_explicit_revoke_invalidates_it_wit
 
 #[test]
 fn unselected_evaluators_have_explicit_absence_and_no_output_fallback() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world = host.create_world(Default::default(), &[]).unwrap();
     let entity = create(&mut host, world, Vec::new());
     let access = host.world_mut(world).unwrap();
@@ -1389,7 +1390,7 @@ fn unselected_evaluators_have_explicit_absence_and_no_output_fallback() {
 #[test]
 fn independent_saved_world_copies_share_durable_metadata_not_runtime_attachment_identity() {
     use ipp_core::services::world_serialization::{WorldLoadOptions, WorldPersistenceLimits};
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let original = host.create_world(Default::default(), &[]).unwrap();
     let bytes = host
         .save_world(original, 17, WorldPersistenceLimits::default())
@@ -1427,7 +1428,7 @@ fn independent_saved_world_copies_share_durable_metadata_not_runtime_attachment_
         publication.attachments[0].child,
         publication.attachments[1].child
     );
-    let mut other_host = HostRuntime::new();
+    let mut other_host = crate::support::task_scheduler::host();
     let same_id = other_host
         .create_world(Default::default(), ATTACHMENTS)
         .unwrap();
@@ -1494,7 +1495,7 @@ fn observed_host() -> (HostRuntime, FrameObservations) {
     let mut factories = compiled_system_factories();
     factories.push(Arc::new(Factory(observations.clone())));
     (
-        HostRuntime::with_system_factories(factories).unwrap(),
+        crate::support::task_scheduler::with_factories(factories).unwrap(),
         observations,
     )
 }
@@ -1722,7 +1723,7 @@ fn custom_material_lights_unknown_bounds_and_unchanged_chunks_are_owned() {
         DynamicValue,
         components::{CustomMaterial, Light},
     };
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world = host.create_world(Default::default(), RENDER).unwrap();
     let (entity, _, _) = mesh(&mut host, world);
     let mut custom = CustomMaterial::default();
@@ -1832,7 +1833,7 @@ fn parent_surface_cache_policy_is_owned_validated_and_current() {
     use ipp_core::components::{Surface, SurfaceCache};
     use ipp_core::systems::surface::SurfaceCachePolicy;
 
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let parent = host
         .create_world(Default::default(), &select(&[ATTACHMENTS, SURFACE]))
         .unwrap();

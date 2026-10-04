@@ -38,6 +38,24 @@ pub(crate) struct GlesHostServices {
 impl HostServices for GlesHostServices {
     const NAME: &'static str = "gles";
 
+    fn asset_gpu_formats(
+        &self,
+        kind: ipp_core::services::asset_management::AssetTypeId,
+    ) -> Vec<ipp_core::services::asset_management::export::AssetExportFormat> {
+        self.renderer.asset_export_formats(kind)
+    }
+
+    fn asset_gpu_export(
+        &mut self,
+        provider: &ipp_core::services::asset_management::AssetProvider,
+        format: ipp_core::services::asset_management::export::AssetExportFormat,
+        observer: std::rc::Rc<
+            dyn ipp_core::services::asset_management::export::AssetOutputObserver,
+        >,
+    ) -> Result<ipp_core::services::asset_management::export::AssetExportFuture, String> {
+        self.renderer.export_asset(provider, format, observer)
+    }
+
     #[cfg(feature = "instrumentation")]
     fn render_profile_start(
         &mut self,
@@ -87,10 +105,19 @@ impl HostServices for GlesHostServices {
         self.native.gui_input()
     }
 
-    fn initialize(host: &mut HostRuntime) -> Result<Self, String> {
-        let native = NativeHostServices::initialize(host)?;
+    fn initialize(
+        host: &mut HostRuntime,
+        schedulers: &ipp_host_session::services::task_scheduler::TaskSchedulers,
+    ) -> Result<Self, String> {
+        let native = NativeHostServices::initialize(host, schedulers)?;
         let setup = super::take_setup()?;
-        for (prefix, source) in setup.read_sources {
+        for (prefix, root) in setup.read_sources {
+            let source = ipp_server::services::io::FileSystemIoSource::new(
+                &prefix,
+                root,
+                false,
+                schedulers.io(),
+            )?;
             host.io_mut().register(&prefix, source)?;
         }
 
@@ -110,8 +137,11 @@ impl HostServices for GlesHostServices {
                     .to_owned()
             })
             .collect::<Vec<_>>();
-        let renderer = RenderService::new(context.device().map_err(|error| error.to_string())?)
+        let mut renderer = RenderService::new(context.device().map_err(|error| error.to_string())?)
             .map_err(|error| error.to_string())?;
+        renderer.set_asset_export_delay(std::rc::Rc::new(
+            ipp_host_session::services::task_scheduler::native_delay,
+        ));
         renderer.install(host).map_err(|error| error.to_string())?;
         renderer.set_asset_context_active(true);
 
@@ -235,6 +265,36 @@ impl HostServices for GlesHostServices {
             triangles: summary.triangles,
             failed_draw_calls: summary.failed_draw_calls,
         })
+    }
+
+    fn prepare_task_poll(&mut self, host: &mut HostRuntime) -> Result<(), String> {
+        if let Err(error) = self.context.ensure_current() {
+            self.renderer.set_asset_context_active(false);
+            // Invalidate publication authority before any already completed GPU
+            // export can detach. The inactive renderer lease skips unsafe GL deletes.
+            let keys: Vec<_> = host
+                .asset_resources()
+                .iter()
+                .filter(|provider| provider.graphics_ready().is_some())
+                .map(|provider| provider.key())
+                .collect();
+            for key in keys {
+                host.asset_resources_mut().invalidate_graphics(key);
+            }
+            host.flush_resource_lifecycle();
+            if self.active {
+                self.active = false;
+                let _ = self
+                    .output
+                    .send(PresentationOutput::Failure(error.to_string()));
+            }
+            // CPU and I/O tasks remain runnable. GPU loaders await recovery;
+            // unfinished typed exports lose availability and fail.
+            return Ok(());
+        }
+
+        self.receive_controls(host);
+        Ok(())
     }
 
     fn service_resources(&mut self, host: &mut HostRuntime) -> Result<(), String> {

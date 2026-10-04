@@ -62,8 +62,13 @@ class AssetInput implements AssetHostExports {
   ipp_resource_buffered_bytes() {
     return 0;
   }
+  ipp_resource_chunk_reserve(_session: bigint, _id: bigint, _length: number) {
+    return this.blocked ? 2 : 1;
+  }
+  ipp_resource_chunk_ptr() {
+    return 4096;
+  }
   ipp_resource_chunk(_session: bigint, _id: bigint, length: number) {
-    if (this.blocked) return 2;
     this.delivered.push(...new Uint8Array(this.memory.buffer, 4096, length));
     if (this.autoDrain) this.blocked = true;
     return 1;
@@ -80,6 +85,12 @@ class AssetInput implements AssetHostExports {
         new Uint8Array(this.memory.buffer, 4096, length),
       ),
     });
+    return 1;
+  }
+  ipp_buffer_source_register() {
+    return 1;
+  }
+  ipp_buffer_source_revoke() {
     return 1;
   }
   ipp_resource_input_reserve() {
@@ -183,6 +194,8 @@ test("multi-chunk HTTP input advances Host resources without frame calls and sta
     for (let turn = 0; turn < 20 && input.ended.length === 0; turn++) {
       await setImmediate();
       context.mock.timers.tick(0);
+      input.ipp_progress_resources();
+      worker.pumpAfterFrame();
     }
     assert.equal(input.delivered.length, payloadLength);
     assert.ok(input.delivered.every((byte, index) => byte === (index & 0xff)));
@@ -232,7 +245,7 @@ test("ready HTTP chunks ignore simulation cadence and suspend inactivity during 
     assert.equal(signal!.aborted, false, "a ready chunk is local backpressure");
     assert.deepEqual(input.delivered, []);
     input.blocked = false;
-    context.mock.timers.tick(4);
+    worker.pumpAfterFrame();
     await setImmediate();
     context.mock.timers.tick(0);
     assert.deepEqual(

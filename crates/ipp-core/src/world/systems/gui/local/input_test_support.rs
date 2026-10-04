@@ -37,7 +37,7 @@ impl Default for GuiTestHost {
         let service = Rc::new(GuiInputService::default());
         let session = service.open_session().unwrap();
         Self {
-            host: HostRuntime::new(),
+            host: crate::test_task_scheduler::host(),
             service,
             session,
             deliveries: Rc::default(),
@@ -68,6 +68,9 @@ impl GuiTestHost {
     /// Run one Host frame, keeping the outcomes of `GuiAction` batches and the
     /// effects published to this host's observers.
     pub fn frame_report(&mut self, dt: f64) -> crate::HostFrameReport {
+        self.host.progress_assets();
+        crate::test_task_scheduler::poll_ready();
+        self.host.progress_assets();
         let mut report = self.host.frame(dt).unwrap();
         for (&world, result) in &mut report.worlds {
             if let Ok(world_report) = result {

@@ -10,7 +10,7 @@ Crates enforce ownership/platform isolation. Related systems stay modules; share
 | --- | --- |
 | `ipp-core` | Headless state, lifecycle, evaluation and logical assets |
 | `ipp-protocol` | Hello and contract exchange, generated codecs and snapshot encoding |
-| `ipp-host-session` | Shared queues, frame dispatch, correlation and responses |
+| `ipp-host-session` | Host task execution, shared queues, frame dispatch, correlation and responses |
 | `ipp-render-gl` | WebGL/GLES rendering and GPU resources |
 | `ipp-wasm`, `ipp-server` | Platform clocks, transport, I/O, contexts and presentation |
 | `ipp-schema-derive`, `ipp-schema-gen` | Compile-time access and verified-target generation |
@@ -46,6 +46,8 @@ Follow [target compatibility](protocol-and-schema.md#build-compatibility): expli
 Use pinned stable Rust, reserving dated nightly for specific verification or measured experiments. Justify production dependencies by purpose, enabled/transitive features, maintenance and artifact cost. Prefer std/small glue when sufficient; established libraries when correctness/interoperability warrants them.
 
 Own networking in hosts, graphics in renderers and conversion outside viewers. Keep a runtime decoder only in the host targets that use it, versions central and lockfiles retained. Build release artifacts by package, target and axis selection to avoid hidden workspace feature unification. Measure WASM, JavaScript, shaders and native shims separately, reporting attribution and unknown costs without default size ceilings; validate the production and instrumentation builds of each host distribution through real integration, with scenarios on the production build unless they need a test control or the profiler. Compilation alone does not prove delivery.
+
+Native Hosts use Smol-compatible task and I/O libraries; browser Hosts retain their platform I/O bridges and connect completion to Rust futures. Select portable Smol task/executor components for Host scheduling without linking the native runtime/reactor into browser WASM. Core's asynchronous I/O contracts remain executor-independent. Validate actual target support and measure transitive and artifact costs before selecting concrete adapters; a shared async API does not imply a shared operating-system backend.
 
 ## Development tooling
 

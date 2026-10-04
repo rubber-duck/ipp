@@ -26,6 +26,47 @@ pub struct QuadraticContour {
     pub segments: Vec<QuadraticSegment>,
 }
 
+/// Decode contours in order; final typed segments are the only retained content.
+pub(super) async fn read_contours(
+    input: &mut super::decode::AssetReader<'_>,
+    count: u32,
+) -> Result<Vec<QuadraticContour>, String> {
+    let mut contours = Vec::new();
+    for _ in 0..count {
+        let start = input.floats().await?;
+        let segment_count = input.u32().await?;
+        if segment_count == 0 {
+            return Err("Empty asset contour".into());
+        }
+        let mut segments = Vec::new();
+        for _ in 0..segment_count {
+            let kind = input.u8().await?;
+            if input.array::<3>().await? != [0; 3] {
+                return Err("Invalid contour reserved bytes".into());
+            }
+            let segment = match kind {
+                0 => QuadraticSegment::Line {
+                    to: input.floats().await?,
+                },
+                1 => QuadraticSegment::Quadratic {
+                    control: input.floats().await?,
+                    to: input.floats().await?,
+                },
+                _ => return Err("Invalid contour segment".into()),
+            };
+            super::decode::push(&mut segments, segment)?;
+        }
+        super::decode::push(
+            &mut contours,
+            QuadraticContour {
+                start,
+                segments,
+            },
+        )?;
+    }
+    Ok(contours)
+}
+
 pub(super) struct Decoder<'a> {
     bytes: &'a [u8],
     offset: usize,

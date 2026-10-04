@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { once } from "node:events";
 import { readFile, stat } from "node:fs/promises";
 import {
   createServer,
@@ -56,10 +57,18 @@ export interface BrowserHarnessConfiguration {
   readonly hasTouch?: boolean;
   /** Whether the build presents frames; defaults to render-prefixed build names. */
   readonly rendering?: boolean;
+  /** Enable shared generated buffers in an explicitly isolated worker environment. */
+  readonly crossOriginIsolation?: boolean;
   readonly logLevel?: "trace" | "debug" | "info" | "warn" | "error" | "off";
   /** Gate actual HTTP responses; aborts when the requesting client disconnects. */
   readonly beforeArtifactResponse?: (
     url: URL,
+    signal: AbortSignal,
+  ) => Promise<void>;
+  /** Gate transport chunks by byte offset, including abort on reader cancellation. */
+  readonly beforeArtifactChunk?: (
+    url: URL,
+    offset: number,
     signal: AbortSignal,
   ) => Promise<void>;
   /** Observe real startup boundaries, for cancellation/failure scenarios. */
@@ -134,6 +143,8 @@ class LoopbackArtifactServer {
     workspace: string,
     evidence: EvidenceRecorder,
     private readonly beforeResponse?: BrowserHarnessConfiguration["beforeArtifactResponse"],
+    private readonly beforeChunk?: BrowserHarnessConfiguration["beforeArtifactChunk"],
+    private readonly isolated = false,
   ) {
     this.#workspace = workspace;
     this.#evidence = evidence;
@@ -141,6 +152,10 @@ class LoopbackArtifactServer {
 
   async start(): Promise<string> {
     const server = createServer((request, response) => {
+      if (this.isolated) {
+        response.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+        response.setHeader("Cross-Origin-Embedder-Policy", "require-corp");
+      }
       void this.#respond(request, response).catch((error: unknown) => {
         void this.#evidence.record("artifact_server_error", { error });
         if (!response.headersSent) response.writeHead(500);
@@ -269,7 +284,38 @@ class LoopbackArtifactServer {
     }
     try {
       const contents = await readFile(file);
-      send(response, method, 200, contentType(file), contents);
+      if (!this.beforeChunk || method === "HEAD") {
+        send(response, method, 200, contentType(file), contents);
+      } else {
+        const controller = new AbortController();
+        const closed = (): void => controller.abort();
+        response.once("close", closed);
+        response.writeHead(200, artifactHeaders(contentType(file), contents));
+        const aborted = new Promise<void>((done) =>
+          controller.signal.addEventListener("abort", () => done(), {
+            once: true,
+          }),
+        );
+        try {
+          for (let offset = 0; offset < contents.length; offset += 64 << 10) {
+            await Promise.race([
+              this.beforeChunk(requestUrl, offset, controller.signal),
+              aborted,
+            ]);
+            if (response.destroyed) return;
+            if (
+              !response.write(contents.subarray(offset, offset + (64 << 10)))
+            ) {
+              await once(response, "drain", { signal: controller.signal });
+            }
+          }
+          response.end();
+        } catch (error) {
+          if (!controller.signal.aborted) throw error;
+        } finally {
+          response.off("close", closed);
+        }
+      }
     } catch (error) {
       if (isNodeError(error) && error.code === "ENOENT") {
         response.writeHead(404, {
@@ -314,6 +360,8 @@ class BrowserEnvironment {
       configuration.workspace,
       evidence,
       configuration.beforeArtifactResponse,
+      configuration.beforeArtifactChunk,
+      configuration.crossOriginIsolation,
     );
   }
 
@@ -790,15 +838,19 @@ function send(
   type: string,
   contents: Buffer,
 ): void {
-  response.writeHead(status, {
+  response.writeHead(status, artifactHeaders(type, contents));
+  if (method === "HEAD") response.end();
+  else response.end(contents);
+}
+
+function artifactHeaders(type: string, contents: Buffer) {
+  return {
     "Cache-Control": "no-store",
     ETag: `"${createHash("sha256").update(contents).digest("hex")}"`,
     "Content-Length": contents.byteLength,
     "Content-Type": type,
     "Cross-Origin-Resource-Policy": "same-origin",
-  });
-  if (method === "HEAD") response.end();
-  else response.end(contents);
+  };
 }
 
 function contentType(path: string): string {

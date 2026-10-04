@@ -1,19 +1,21 @@
 //! Renderer-owned GPU providers for immutable Surface resources.
 
-use std::{any::Any, task::Poll};
+use std::any::Any;
 
 use ipp_core::services::asset_management::{
-    Asset, AssetLoader, BufferedAssetLoader, IoReader,
+    Asset, AssetLoadFailure, AssetLoader, AsyncAssetLoader,
     drawing::DrawingAsset,
     font::FontAsset,
     quadratic::{QuadraticContour, QuadraticSegment},
 };
 
+use super::asset_context::{RenderAssetContext, RenderAssetLease};
 use super::{assets::SharedRenderDevice, frame_statistics::RenderUploadCounter, surface_path};
 use crate::RenderDevice;
 
 pub(super) struct GlFontData<D: RenderDevice> {
     pub font: FontAsset,
+    asset_lease: RenderAssetLease,
     pub path: Option<D::SurfacePath>,
     pub ranges: Vec<super::device::SurfacePathDescriptor>,
     pub glyph_bounds: Vec<[f32; 4]>,
@@ -45,7 +47,9 @@ impl<D: RenderDevice> Asset for GlFontData<D> {
 
     fn invalidate_graphics(&mut self) {
         let mut device = self.device.borrow_mut();
-        if let Some(path) = self.path.take() {
+        if let Some(path) = self.path.take()
+            && self.asset_lease.is_current()
+        {
             device.delete_surface_path(path);
         }
         self.gpu_bytes = 0;
@@ -61,6 +65,7 @@ impl<D: RenderDevice> Drop for GlFontData<D> {
 
 pub(super) struct GlDrawingData<D: RenderDevice> {
     pub drawing: DrawingAsset,
+    asset_lease: RenderAssetLease,
     pub path: Option<D::SurfacePath>,
     pub ranges: Vec<super::device::SurfacePathDescriptor>,
     pub layer_bounds: Vec<[f32; 4]>,
@@ -92,7 +97,9 @@ impl<D: RenderDevice> Asset for GlDrawingData<D> {
 
     fn invalidate_graphics(&mut self) {
         let mut device = self.device.borrow_mut();
-        if let Some(path) = self.path.take() {
+        if let Some(path) = self.path.take()
+            && self.asset_lease.is_current()
+        {
             device.delete_surface_path(path);
         }
         self.gpu_bytes = 0;
@@ -106,220 +113,187 @@ impl<D: RenderDevice> Drop for GlDrawingData<D> {
     }
 }
 
-struct SurfaceLoader<D: RenderDevice, A: Asset> {
-    decoder: BufferedAssetLoader<A>,
-    device: SharedRenderDevice<D>,
-    uploads: RenderUploadCounter,
-    pending: Option<A>,
-    failed_font: Option<GlFontData<D>>,
-    failed_drawing: Option<GlDrawingData<D>>,
-}
-
 pub(super) fn font_loader<D: RenderDevice>(
     device: SharedRenderDevice<D>,
     uploads: RenderUploadCounter,
+    context: RenderAssetContext,
 ) -> impl AssetLoader<Data = GlFontData<D>> {
-    SurfaceLoader {
-        decoder: BufferedAssetLoader::new(|bytes| {
-            FontAsset::decode(bytes).map_err(|error| error.to_string())
-        }),
-        device,
-        uploads,
-        pending: None,
-        failed_font: None,
-        failed_drawing: None,
-    }
-}
-
-impl<D: RenderDevice> AssetLoader for SurfaceLoader<D, FontAsset> {
-    type Data = GlFontData<D>;
-
-    fn take_failed_data(&mut self) -> Option<Self::Data> {
-        self.failed_font.take()
-    }
-
-    fn poll_load(
-        &mut self,
-        reader: &mut dyn IoReader,
-        cx: &mut std::task::Context<'_>,
-    ) -> Poll<Result<Self::Data, String>> {
-        let font = match self.pending.take() {
-            Some(font) => font,
-            None => match self.decoder.poll_load(reader, cx) {
-                Poll::Pending => return Poll::Pending,
-                Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
-                Poll::Ready(Ok(font)) => font,
-            },
-        };
-        let normalized_contours: Vec<Vec<QuadraticContour>> = font
-            .glyphs()
-            .iter()
-            .map(|glyph| normalize_glyph_contours(&glyph.contours))
-            .collect();
-        let glyph_bounds: Vec<[f32; 4]> = font
-            .glyphs()
-            .iter()
-            .map(|glyph| {
-                let b = glyph.bounds;
-                [b[0], -b[3], b[2], -b[1]]
-            })
-            .collect();
-        let atlas = surface_path::pack_surface_paths(
+    AsyncAssetLoader::new(move |mut reader| async move {
+        let font = FontAsset::decode_reader(&mut *reader).await?;
+        let mut normalized = Vec::new();
+        let mut glyph_bounds = Vec::new();
+        let mut budget = ipp_core::services::asset_management::decode::DecodeBudget::default();
+        for glyph in font.glyphs() {
+            normalized.push(normalize_glyph_contours_async(&glyph.contours).await);
+            let bounds = glyph.bounds;
+            glyph_bounds.push([bounds[0], -bounds[3], bounds[2], -bounds[1]]);
+            budget.advance(0).await;
+        }
+        let atlas = surface_path::pack_surface_paths_async(
             glyph_bounds
                 .iter()
-                .zip(&normalized_contours)
+                .zip(&normalized)
                 .map(|(&bounds, contours)| (bounds, contours.as_slice())),
-        );
+        )
+        .await;
         let bytes = atlas.texels.byte_len();
-        let path = if atlas.texels.curves.is_empty() {
-            None
-        } else {
-            match self.device.borrow_mut().create_surface_path(&atlas.texels) {
-                Ok(path) => Some(path),
-                Err(crate::RenderError::ContextLost) => {
-                    self.pending = Some(font);
-                    return Poll::Pending;
-                }
-                Err(error) => {
-                    self.failed_font = Some(GlFontData {
+        loop {
+            let asset_lease = if atlas.texels.curves.is_empty() {
+                context.lease()
+            } else {
+                context.wait().await
+            };
+            let result = if atlas.texels.curves.is_empty() {
+                Ok(None)
+            } else {
+                device
+                    .borrow_mut()
+                    .create_surface_path(&atlas.texels)
+                    .map(Some)
+            };
+            if matches!(result, Err(crate::RenderError::ContextLost)) {
+                context.set_active(false);
+                continue;
+            }
+            match result {
+                Ok(path) => {
+                    uploads.add(bytes);
+                    return Ok(GlFontData {
                         font,
-                        path: None,
+                        asset_lease,
+                        path,
                         ranges: atlas.descriptors,
                         glyph_bounds,
-                        device: self.device.clone(),
-                        gpu_bytes: 0,
-                        graphics_prepared: false,
+                        device,
+                        gpu_bytes: bytes,
+                        graphics_prepared: true,
                     });
-                    return Poll::Ready(Err(error.to_string()));
+                }
+                Err(error) => {
+                    return Err(AssetLoadFailure::with_decoded(
+                        error.to_string(),
+                        GlFontData {
+                            font,
+                            asset_lease,
+                            path: None,
+                            ranges: atlas.descriptors,
+                            glyph_bounds,
+                            device,
+                            gpu_bytes: 0,
+                            graphics_prepared: false,
+                        },
+                    ));
                 }
             }
-        };
-        self.uploads.add(bytes);
-        Poll::Ready(Ok(GlFontData {
-            font,
-            path,
-            ranges: atlas.descriptors,
-            glyph_bounds,
-            device: self.device.clone(),
-            gpu_bytes: bytes,
-            graphics_prepared: true,
-        }))
-    }
+        }
+    })
 }
 
-fn normalize_glyph_contours(contours: &[QuadraticContour]) -> Vec<QuadraticContour> {
-    contours
-        .iter()
-        .map(|c| QuadraticContour {
-            start: [c.start[0], -c.start[1]],
-            segments: c
-                .segments
-                .iter()
-                .map(|s| match *s {
-                    QuadraticSegment::Line {
-                        to,
-                    } => QuadraticSegment::Line {
-                        to: [to[0], -to[1]],
-                    },
-                    QuadraticSegment::Quadratic {
-                        control,
-                        to,
-                    } => QuadraticSegment::Quadratic {
-                        control: [control[0], -control[1]],
-                        to: [to[0], -to[1]],
-                    },
-                })
-                .collect(),
-        })
-        .collect()
+async fn normalize_glyph_contours_async(contours: &[QuadraticContour]) -> Vec<QuadraticContour> {
+    let mut output = Vec::with_capacity(contours.len());
+    let mut budget = ipp_core::services::asset_management::decode::DecodeBudget::default();
+    for contour in contours {
+        let mut segments = Vec::with_capacity(contour.segments.len());
+        for segment in &contour.segments {
+            segments.push(match *segment {
+                QuadraticSegment::Line {
+                    to,
+                } => QuadraticSegment::Line {
+                    to: [to[0], -to[1]],
+                },
+                QuadraticSegment::Quadratic {
+                    control,
+                    to,
+                } => QuadraticSegment::Quadratic {
+                    control: [control[0], -control[1]],
+                    to: [to[0], -to[1]],
+                },
+            });
+            budget.advance(0).await;
+        }
+        output.push(QuadraticContour {
+            start: [contour.start[0], -contour.start[1]],
+            segments,
+        });
+    }
+    output
 }
 
 pub(super) fn drawing_loader<D: RenderDevice>(
     device: SharedRenderDevice<D>,
     uploads: RenderUploadCounter,
+    context: RenderAssetContext,
 ) -> impl AssetLoader<Data = GlDrawingData<D>> {
-    SurfaceLoader {
-        decoder: BufferedAssetLoader::new(|bytes| {
-            DrawingAsset::decode(bytes).map_err(|error| error.to_string())
-        }),
-        device,
-        uploads,
-        pending: None,
-        failed_font: None,
-        failed_drawing: None,
-    }
-}
-
-impl<D: RenderDevice> AssetLoader for SurfaceLoader<D, DrawingAsset> {
-    type Data = GlDrawingData<D>;
-
-    fn take_failed_data(&mut self) -> Option<Self::Data> {
-        self.failed_drawing.take()
-    }
-
-    fn poll_load(
-        &mut self,
-        reader: &mut dyn IoReader,
-        cx: &mut std::task::Context<'_>,
-    ) -> Poll<Result<Self::Data, String>> {
-        let drawing = match self.pending.take() {
-            Some(drawing) => drawing,
-            None => match self.decoder.poll_load(reader, cx) {
-                Poll::Pending => return Poll::Pending,
-                Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
-                Poll::Ready(Ok(drawing)) => drawing,
-            },
-        };
-        let layer_bounds: Vec<[f32; 4]> = drawing
-            .layers()
-            .iter()
-            .map(|layer| compute_layer_bounds(drawing.bounds(), layer))
-            .collect();
-        let atlas = surface_path::pack_surface_paths(
+    AsyncAssetLoader::new(move |mut reader| async move {
+        let drawing = DrawingAsset::decode_reader(&mut *reader).await?;
+        let mut layer_bounds = Vec::new();
+        let mut budget = ipp_core::services::asset_management::decode::DecodeBudget::default();
+        for layer in drawing.layers() {
+            layer_bounds.push(compute_layer_bounds_async(drawing.bounds(), layer).await);
+            budget.advance(0).await;
+        }
+        let atlas = surface_path::pack_surface_paths_async(
             drawing
                 .layers()
                 .iter()
                 .zip(&layer_bounds)
                 .map(|(layer, &bounds)| (bounds, layer.contours.as_slice())),
-        );
+        )
+        .await;
         let bytes = atlas.texels.byte_len();
-        let path = if atlas.texels.curves.is_empty() {
-            None
-        } else {
-            match self.device.borrow_mut().create_surface_path(&atlas.texels) {
-                Ok(path) => Some(path),
-                Err(crate::RenderError::ContextLost) => {
-                    self.pending = Some(drawing);
-                    return Poll::Pending;
-                }
-                Err(error) => {
-                    self.failed_drawing = Some(GlDrawingData {
+        loop {
+            let asset_lease = if atlas.texels.curves.is_empty() {
+                context.lease()
+            } else {
+                context.wait().await
+            };
+            let result = if atlas.texels.curves.is_empty() {
+                Ok(None)
+            } else {
+                device
+                    .borrow_mut()
+                    .create_surface_path(&atlas.texels)
+                    .map(Some)
+            };
+            if matches!(result, Err(crate::RenderError::ContextLost)) {
+                context.set_active(false);
+                continue;
+            }
+            match result {
+                Ok(path) => {
+                    uploads.add(bytes);
+                    return Ok(GlDrawingData {
                         drawing,
-                        path: None,
+                        asset_lease,
+                        path,
                         ranges: atlas.descriptors,
                         layer_bounds,
-                        device: self.device.clone(),
-                        gpu_bytes: 0,
-                        graphics_prepared: false,
+                        device,
+                        gpu_bytes: bytes,
+                        graphics_prepared: true,
                     });
-                    return Poll::Ready(Err(error.to_string()));
+                }
+                Err(error) => {
+                    return Err(AssetLoadFailure::with_decoded(
+                        error.to_string(),
+                        GlDrawingData {
+                            drawing,
+                            asset_lease,
+                            path: None,
+                            ranges: atlas.descriptors,
+                            layer_bounds,
+                            device,
+                            gpu_bytes: 0,
+                            graphics_prepared: false,
+                        },
+                    ));
                 }
             }
-        };
-        self.uploads.add(bytes);
-        Poll::Ready(Ok(GlDrawingData {
-            drawing,
-            path,
-            ranges: atlas.descriptors,
-            layer_bounds,
-            device: self.device.clone(),
-            gpu_bytes: bytes,
-            graphics_prepared: true,
-        }))
-    }
+        }
+    })
 }
 
-fn compute_layer_bounds(
+async fn compute_layer_bounds_async(
     drawing_bounds: [f32; 4],
     layer: &ipp_core::services::asset_management::drawing::DrawingLayer,
 ) -> [f32; 4] {
@@ -328,13 +302,16 @@ fn compute_layer_bounds(
     let mut max_x = f32::NEG_INFINITY;
     let mut max_y = f32::NEG_INFINITY;
 
+    let mut budget = ipp_core::services::asset_management::decode::DecodeBudget::default();
     for contour in &layer.contours {
+        budget.advance(0).await;
         min_x = min_x.min(contour.start[0]);
         min_y = min_y.min(contour.start[1]);
         max_x = max_x.max(contour.start[0]);
         max_y = max_y.max(contour.start[1]);
 
         for segment in &contour.segments {
+            budget.advance(0).await;
             match segment {
                 ipp_core::services::asset_management::quadratic::QuadraticSegment::Line {
                     to,

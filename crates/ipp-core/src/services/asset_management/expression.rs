@@ -1,10 +1,8 @@
 //! Immutable expression definitions shared by otherwise independent consumers.
 //! Consumer bindings, parameters and scratch remain outside the asset.
 
-use super::{Asset, AssetLoader, AssetTypeId, BufferedAssetLoader};
-use crate::expressions::{
-    EXPRESSION_MAX_BYTES, ExpressionCodecError, ExpressionDeclaration, PreparedExpression,
-};
+use super::{Asset, AssetLoader, AssetTypeId, AsyncAssetLoader};
+use crate::expressions::{ExpressionCodecError, ExpressionDeclaration, PreparedExpression};
 use std::any::Any;
 
 /// Generic CPU expression definition, independent of the consuming System.
@@ -56,16 +54,25 @@ impl Asset for ExpressionAsset {
     /// Retained payload storage: vector capacities, plan slices, owned input names
     /// and distinct text allocations. Text shared by the graph and plan counts once.
     /// Excludes the stable object, Arc control blocks and allocator metadata, encoded
-    /// recovery input owned by the provider, and consumer-owned plan clones/scratch.
+    /// source storage owned by I/O, and consumer-owned plan clones/scratch.
     fn resident_bytes(&self) -> usize {
         self.resident_bytes
     }
 }
 
-/// Construct the ordinary CPU loader, bounding buffered input before decoding.
+/// Decode and prepare directly from borrowed windows into private CPU storage.
 pub fn expression_asset_loader() -> impl AssetLoader<Data = ExpressionAsset> {
-    BufferedAssetLoader::bounded(EXPRESSION_MAX_BYTES, |bytes| {
-        ExpressionAsset::decode(bytes).map_err(|error| error.to_string())
+    AsyncAssetLoader::decode(|mut reader| async move {
+        let declaration = ExpressionDeclaration::decode_reader(&mut *reader).await?;
+        let prepared = PreparedExpression::prepare_async(&declaration)
+            .await
+            .map_err(|error| format!("Invalid expression declaration: {error:?}"))?;
+        let resident_bytes = crate::expressions::resident_bytes(&declaration, &prepared);
+        Ok(ExpressionAsset {
+            declaration,
+            prepared,
+            resident_bytes,
+        })
     })
 }
 

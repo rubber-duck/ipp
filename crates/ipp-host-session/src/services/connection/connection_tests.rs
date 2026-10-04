@@ -3,6 +3,9 @@ use super::*;
 #[path = "asset_sources_tests.rs"]
 mod asset_sources;
 
+#[path = "bulk_reads_tests.rs"]
+mod bulk_reads;
+
 #[path = "ended_session_tests.rs"]
 mod ended_sessions;
 
@@ -56,7 +59,10 @@ fn gui_action_payload(
 impl HostServices for TestHostServices {
     const NAME: &'static str = "connection-test";
 
-    fn initialize(_host: &mut ipp_core::HostRuntime) -> Result<Self, String> {
+    fn initialize(
+        _host: &mut ipp_core::HostRuntime,
+        _schedulers: &crate::services::task_scheduler::TaskSchedulers,
+    ) -> Result<Self, String> {
         Ok(Self)
     }
 
@@ -131,7 +137,8 @@ fn closing_peer_session_preserves_originating_save_and_world_lifetime() {
     else {
         panic!("second session")
     };
-    let HostResponseBody::Transfer {
+    let HostResponseBody::Read {
+        reference: read,
         ..
     } = control(
         &mut host,
@@ -153,13 +160,10 @@ fn closing_peer_session_preserves_originating_save_and_world_lifetime() {
         ),
         HostResponseBody::Complete
     ));
-    assert_eq!(
+    assert!(
         host.connections.states[&1]
-            .transfer
-            .as_ref()
-            .unwrap()
-            .origin,
-        Some(first)
+            .bulk_reads
+            .contains_key(&read.read)
     );
     assert!(host.sessions.contains_key(&first));
     assert!(matches!(
@@ -172,7 +176,11 @@ fn closing_peer_session_preserves_originating_save_and_world_lifetime() {
         ),
         HostResponseBody::Complete
     ));
-    assert!(host.connections.states[&1].transfer.is_none());
+    assert!(
+        host.connections.states[&1]
+            .bulk_reads
+            .contains_key(&read.read)
+    );
     assert!(host.runtime().world_ref(WorldId(reference.id)).is_some());
     assert_eq!(host.connections.persistence.reserved, 0);
 }
@@ -200,10 +208,7 @@ fn contract_requests_follow_the_hello_and_are_charged_as_replies_until_delivered
     assert!(refusal.contains("congestion"), "{refusal}");
     assert!((1..=crate::MAX_PENDING).contains(&admitted));
     assert_eq!(host.connections.states[&2].reply_entries(), admitted);
-    assert!(
-        host.connections.states[&2].reply_budget.0.usage().bytes
-            >= idle + admitted * ipp_protocol::export_contract().len()
-    );
+    assert!(host.connections.states[&2].reply_budget.0.usage().bytes >= idle + admitted * 28);
 
     // Each reply stays charged until the transport drops it after delivery.
     let replies: Vec<_> = std::iter::from_fn(|| host.take_connection_response(2)).collect();
@@ -211,7 +216,7 @@ fn contract_requests_follow_the_hello_and_are_charged_as_replies_until_delivered
     assert!(
         replies
             .iter()
-            .all(|reply| reply.bytes == ipp_protocol::contract_reply())
+            .all(|reply| reply.bytes.len() == 28 && &reply.bytes[..4] == b"IPCR")
     );
     assert!(
         host.receive_connection(2, &ipp_protocol::CONTRACT_REQUEST)
@@ -220,8 +225,23 @@ fn contract_requests_follow_the_hello_and_are_charged_as_replies_until_delivered
     drop(replies);
     assert_eq!(
         host.connections.states[&2].reply_budget.0.usage().bytes,
-        idle
+        idle + admitted * (256 + crate::reliable_output::RESPONSE_METADATA_BYTES)
     );
+    let reads: Vec<_> = host.connections.states[&2]
+        .bulk_reads
+        .keys()
+        .copied()
+        .collect();
+    for (index, read) in reads.iter().enumerate() {
+        let mut bytes = b"IPDR".to_vec();
+        bytes.extend(2u64.to_le_bytes());
+        bytes.extend((index as u64 + 1).to_le_bytes());
+        bytes.extend(read.to_le_bytes());
+        bytes.push(2);
+        host.receive_connection(2, &bytes).unwrap();
+        host.take_connection_response(2).unwrap();
+    }
+    host.progress_resources().unwrap();
     host.receive_connection(2, &ipp_protocol::CONTRACT_REQUEST)
         .unwrap();
 }
@@ -613,6 +633,7 @@ fn complete_source_delivery_progresses_while_a_world_batch_is_open() {
     };
     host.receive_connection(1, &world_frame(0, 1, &page(false)))
         .unwrap();
+    host.progress_resources().unwrap();
     host.tick(0.0).unwrap();
     while host.take_connection_response(1).is_some() {}
     let open_tick = host.session_mut(session).unwrap().world().tick();
@@ -650,12 +671,14 @@ fn complete_source_delivery_progresses_while_a_world_batch_is_open() {
         .unwrap();
     host.take_connection_response(1).unwrap();
 
+    host.progress_resources().unwrap();
     host.tick(0.0).unwrap();
     assert_eq!(
         host.session_mut(session).unwrap().world().tick(),
         open_tick + 1,
         "an open batch never holds its World"
     );
+    host.progress_resources().unwrap();
     let resources = host
         .session_mut(session)
         .unwrap()
@@ -667,6 +690,7 @@ fn complete_source_delivery_progresses_while_a_world_batch_is_open() {
 
     host.receive_connection(1, &world_frame(6, 1, &page(true)))
         .unwrap();
+    host.progress_resources().unwrap();
     host.tick(0.0).unwrap();
     let replies: Vec<_> = std::iter::from_fn(|| host.take_connection_response(1))
         .filter(|reply| reply[24] == 1)
@@ -728,7 +752,9 @@ fn named_source_delivery_preserves_literal_names_and_rejects_foreign_or_duplicat
     assert_eq!(send(&mut host, 1, &chunk), 0);
     assert!(host.sessions[&session].client_sources.is_empty());
     assert_eq!(send(&mut host, 2, &1u64.to_le_bytes()), 0);
+    host.progress_resources().unwrap();
     host.tick(0.0).unwrap();
+    host.progress_resources().unwrap();
     let resources = host
         .session_mut(session)
         .unwrap()
@@ -746,6 +772,7 @@ fn named_source_delivery_preserves_literal_names_and_rejects_foreign_or_duplicat
     foreign.extend(0u64.to_le_bytes());
     assert_eq!(send(&mut host, 0, &foreign), 1);
     assert_eq!(send(&mut host, 4, &descriptor(&name)), 0);
+    host.progress_resources().unwrap();
     host.tick(0.0).unwrap();
     assert!(
         host.session_mut(session)
@@ -1056,7 +1083,7 @@ fn expensive_persistence_is_fair_while_independent_host_discovery_progresses() {
             .connections
             .states
             .iter()
-            .filter(|(id, state)| !serviced.contains(*id) && state.transfer.is_some())
+            .filter(|(id, state)| !serviced.contains(*id) && !state.bulk_reads.is_empty())
             .map(|(&id, _)| id)
             .collect();
         assert_eq!(newly.len(), 1, "one expensive operation per Host frame");

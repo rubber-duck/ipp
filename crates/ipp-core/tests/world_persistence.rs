@@ -4,7 +4,7 @@ mod support;
 
 use support::selection::{ASSETS, CONSTRAINTS, RENDER, select};
 
-use ipp_core::services::io::{IoWriteJob, IoWriter, MemoryIoWriter};
+use ipp_core::services::io::{IoWriteBackend, IoWriteJob, MemoryIoWriter};
 use ipp_core::services::world_serialization::{
     WorldGraphSnapshot, WorldLoadOptions, WorldPersistenceLimits,
 };
@@ -15,7 +15,7 @@ use ipp_core::{
 use std::task::{Context, Poll, Waker};
 
 fn populated() -> (HostRuntime, ipp_core::WorldId) {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host
         .create_world_with_options(
             WorldLimits::default(),
@@ -69,7 +69,7 @@ fn save(host: &mut HostRuntime, id: ipp_core::WorldId) -> Vec<u8> {
 
 #[test]
 fn selected_systems_round_trip_independently_of_capacity_hints() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let selection = vec![ipp_core::systems::constraints::ConstraintSystem::ID];
     let id = host
         .create_world_with_options(
@@ -242,7 +242,7 @@ struct ShortWriter {
     pending: bool,
 }
 
-impl IoWriter for ShortWriter {
+impl IoWriteBackend for ShortWriter {
     fn poll_write(&mut self, cx: &mut Context<'_>, bytes: &[u8]) -> Poll<Result<usize, String>> {
         self.pending = !self.pending;
         if self.pending {
@@ -294,7 +294,7 @@ fn async_writer_handles_partial_progress_and_publication() {
 
 #[test]
 fn world_save_preserves_unavailable_resource_references_without_fetching_assets() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host.create_world(Default::default(), RENDER).unwrap();
     let mut world = host.world_mut(id).unwrap();
     let source = "https://unavailable.invalid/unchanged.mesh?variant=authored";
@@ -524,7 +524,7 @@ fn controller_state_and_durable_bindings_round_trip_without_loaded_clips() {
     .unwrap();
     assert_eq!(animation.next_id, next_id);
     assert_eq!(animation.controllers.len(), 1);
-    let mut restored_host = HostRuntime::new();
+    let mut restored_host = crate::support::task_scheduler::host();
     let restored = restored_host
         .load_world(
             &bytes,
@@ -563,7 +563,7 @@ fn controller_state_and_durable_bindings_round_trip_without_loaded_clips() {
     );
     let bytes = invalid.encode(123, limits).unwrap();
     assert!(
-        HostRuntime::new()
+        crate::support::task_scheduler::host()
             .load_world(&bytes, 123, Default::default(), Default::default(), limits)
             .is_err()
     );

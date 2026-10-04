@@ -1,10 +1,23 @@
 use super::*;
-use ipp_core::services::io::MemoryIoReader;
-use std::rc::Rc;
+use ipp_core::services::io::BufferIoReader;
+use std::{rc::Rc, task::Poll};
+
+#[derive(Default)]
+struct WakeCount(std::sync::atomic::AtomicUsize);
+
+impl std::task::Wake for WakeCount {
+    fn wake(self: std::sync::Arc<Self>) {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
 
 #[derive(Default)]
 struct Device {
     fail_path: bool,
+    deleted_paths: usize,
+    textures: usize,
+    uploaded_rows: usize,
+    deleted_textures: usize,
 }
 
 impl RenderDevice for Device {
@@ -15,6 +28,7 @@ impl RenderDevice for Device {
     type Program = ();
     type Mesh = ();
     type Texture = ();
+    type TextureReadback = ();
     type SurfacePath = ();
     type SurfaceCacheTarget = ();
     type SurfaceInstances = ();
@@ -73,6 +87,7 @@ impl RenderDevice for Device {
     }
 
     fn allocate_texture(&mut self, _: u32, _: u32) -> Result<(), crate::RenderError> {
+        self.textures += 1;
         Ok(())
     }
 
@@ -84,6 +99,7 @@ impl RenderDevice for Device {
         _: u32,
         _: &[u8],
     ) -> Result<(), crate::RenderError> {
+        self.uploaded_rows += 1;
         Ok(())
     }
 
@@ -96,6 +112,10 @@ impl RenderDevice for Device {
         } else {
             Ok(())
         }
+    }
+
+    fn delete_surface_path(&mut self, _: ()) {
+        self.deleted_paths += 1;
     }
 
     fn begin_frame(&mut self, _: u32, _: u32, _: &[f32; 4]) -> Result<(), crate::RenderError> {
@@ -120,7 +140,9 @@ impl RenderDevice for Device {
     }
 
     fn delete_mesh(&mut self, _: ()) {}
-    fn delete_texture(&mut self, _: ()) {}
+    fn delete_texture(&mut self, _: ()) {
+        self.deleted_textures += 1;
+    }
     fn delete_program(&mut self, _: ()) {}
 }
 
@@ -156,12 +178,15 @@ fn load(
 ) {
     let device = Rc::new(std::cell::RefCell::new(Device {
         fail_path,
+        ..Default::default()
     }));
-    let mut loader = drawing_loader(device, Default::default());
-    let mut reader = MemoryIoReader::new(bytes);
-    let waker = std::task::Waker::noop();
-    let mut context = std::task::Context::from_waker(waker);
-    let result = match loader.poll_load(&mut reader, &mut context) {
+    let mut loader = drawing_loader(device, Default::default(), Default::default());
+    loader
+        .start_load(Box::new(BufferIoReader::new(bytes)))
+        .unwrap();
+    let waker = std::task::Waker::from(std::sync::Arc::new(WakeCount::default()));
+    let mut context = std::task::Context::from_waker(&waker);
+    let result = match loader.poll_load(&mut context) {
         Poll::Ready(result) => result,
         Poll::Pending => panic!("memory drawing load unexpectedly pending"),
     };
@@ -188,4 +213,111 @@ fn gpu_failure_retains_decoded_drawing_as_failed_data() {
     assert_eq!(asset.drawing.layers()[0].contours.len(), 1);
     assert_eq!(asset.graphics_ready(), Some(false));
     assert!(asset.path.is_none());
+}
+
+#[test]
+fn lost_generation_drop_never_deletes_handles_in_a_replacement_context() {
+    let device = Rc::new(std::cell::RefCell::new(Device::default()));
+    let context = super::super::asset_context::RenderAssetContext::default();
+    let mut loader = drawing_loader(device.clone(), Default::default(), context.clone());
+    loader
+        .start_load(Box::new(BufferIoReader::new(drawing(true))))
+        .unwrap();
+    let count = std::sync::Arc::new(WakeCount::default());
+    let waker = std::task::Waker::from(count);
+    let mut cx = std::task::Context::from_waker(&waker);
+    let Poll::Ready(Ok(asset)) = loader.poll_load(&mut cx) else {
+        panic!("small fixture did not complete")
+    };
+    assert!(asset.path.is_some());
+    context.set_active(false);
+    context.set_active(true);
+    drop(asset);
+    assert_eq!(device.borrow().deleted_paths, 0);
+
+    let mut loader = drawing_loader(device.clone(), Default::default(), context);
+    loader
+        .start_load(Box::new(BufferIoReader::new(drawing(true))))
+        .unwrap();
+    let Poll::Ready(Ok(asset)) = loader.poll_load(&mut cx) else {
+        panic!("small fixture did not complete")
+    };
+    drop(asset);
+    assert_eq!(device.borrow().deleted_paths, 1);
+}
+
+fn texture() -> Vec<u8> {
+    let mut bytes = b"IPPT".to_vec();
+    for word in [3u32, 2, 2] {
+        bytes.extend(word.to_le_bytes());
+    }
+    bytes.extend([255u8; 16]);
+    bytes
+}
+
+#[test]
+fn cancelling_partial_texture_in_live_context_deletes_private_gpu_storage() {
+    use ipp_core::services::io::{IoReadOptions, StreamIoReader};
+    let device = Rc::new(std::cell::RefCell::new(Device::default()));
+    let context = super::super::asset_context::RenderAssetContext::default();
+    let mut loader =
+        super::super::assets::texture_asset_loader(device.clone(), Default::default(), context);
+    let (reader, input) = StreamIoReader::new(IoReadOptions {
+        max_bytes: None,
+        recovery: false,
+    });
+    loader.start_load(Box::new(reader)).unwrap();
+    let waker = std::task::Waker::from(std::sync::Arc::new(WakeCount::default()));
+    let mut cx = std::task::Context::from_waker(&waker);
+    assert!(loader.poll_load(&mut cx).is_pending());
+    assert!(input.push(&texture()[..24]).unwrap());
+    assert!(loader.poll_load(&mut cx).is_pending());
+    assert_eq!(device.borrow().uploaded_rows, 1);
+    drop(loader);
+    assert_eq!(device.borrow().deleted_textures, 1);
+    assert!(!input.is_open());
+}
+
+#[test]
+fn context_loss_during_texture_input_never_resumes_old_gpu_names() {
+    use ipp_core::services::io::{IoReadOptions, StreamIoReader};
+    let device = Rc::new(std::cell::RefCell::new(Device::default()));
+    let context = super::super::asset_context::RenderAssetContext::default();
+    let mut loader = super::super::assets::texture_asset_loader(
+        device.clone(),
+        Default::default(),
+        context.clone(),
+    );
+    let (reader, input) = StreamIoReader::new(IoReadOptions {
+        max_bytes: None,
+        recovery: false,
+    });
+    loader.start_load(Box::new(reader)).unwrap();
+    let waker = std::task::Waker::from(std::sync::Arc::new(WakeCount::default()));
+    let mut cx = std::task::Context::from_waker(&waker);
+    assert!(loader.poll_load(&mut cx).is_pending());
+    assert!(input.push(&texture()[..24]).unwrap());
+    assert!(loader.poll_load(&mut cx).is_pending());
+    assert_eq!(device.borrow().uploaded_rows, 1);
+    context.set_active(false);
+    context.set_active(true);
+    assert!(input.push(&texture()[24..]).unwrap());
+    input.finish(Ok(()));
+    assert!(matches!(loader.poll_load(&mut cx), Poll::Ready(Err(_))));
+    assert_eq!(device.borrow().uploaded_rows, 1);
+    assert_eq!(device.borrow().deleted_textures, 0);
+
+    // Recovery starts a new acquisition/decoder rather than resuming old names.
+    let mut reopened =
+        super::super::assets::texture_asset_loader(device.clone(), Default::default(), context);
+    reopened
+        .start_load(Box::new(BufferIoReader::new(texture())))
+        .unwrap();
+    let Poll::Ready(Ok(asset)) = reopened.poll_load(&mut cx) else {
+        panic!("reopened texture unavailable")
+    };
+    assert_eq!(device.borrow().textures, 2);
+    assert_eq!(device.borrow().uploaded_rows, 3);
+    drop(asset);
+    assert_eq!(device.borrow().deleted_textures, 1);
 }

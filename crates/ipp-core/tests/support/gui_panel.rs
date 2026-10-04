@@ -6,6 +6,8 @@
 //! component fields, identities from the completed Canvas publication and focus and
 //! pointer feedback from the GUI System queries.
 
+use super::task_scheduler::HostTaskTestDriver;
+
 use ipp_core::components::{GuiButton, GuiCheckbox, GuiLayout, GuiSlider, GuiTextInput};
 use ipp_core::systems::canvas::{
     CanvasHit, CanvasHitKind, CanvasPaintEntry, CanvasPart, CanvasPrimitive, CanvasPublication,
@@ -324,7 +326,7 @@ impl GuiPanel {
         canvas: CanvasState,
         layout: Option<GuiLayout>,
     ) -> Self {
-        let mut host = HostRuntime::new();
+        let mut host = super::task_scheduler::host();
         let world = host.create_world(Default::default(), systems).unwrap();
         let (root, root_entity) = canvas_root(&mut host, world, canvas, layout);
         Self {
@@ -421,7 +423,7 @@ impl GuiPanel {
     }
 
     pub fn frame_for(&mut self, dt: f64) {
-        let mut result = self.host.frame(dt).unwrap();
+        let mut result = self.host.frame_for_test(dt).unwrap();
         assert!(
             result.worlds.values().all(Result::is_ok),
             "{:?}",

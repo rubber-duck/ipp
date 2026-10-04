@@ -3,6 +3,7 @@
 //! including animation and World save/load.
 
 mod support;
+use support::task_scheduler::HostTaskTestDriver;
 
 use ipp_core::components::rows::Rows;
 use ipp_core::components::{GuiBehavior, GuiLayout, GuiScrollView, Surface, SurfaceCache};
@@ -63,7 +64,7 @@ fn revisions(view: &CanvasPublication) -> [u64; 3] {
 
 #[test]
 fn surface_resize_advances_the_presented_canvas_revisions_and_identical_rewrites_do_not() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let parent = host
         .create_world(Default::default(), &select(&[ATTACHMENTS, CANVAS, SURFACE]))
         .unwrap();
@@ -87,7 +88,7 @@ fn surface_resize_advances_the_presented_canvas_revisions_and_identical_rewrites
     );
     let frames = |host: &mut HostRuntime| {
         for _ in 0..2 {
-            host.frame(0.125).unwrap();
+            host.frame_for_test(0.125).unwrap();
         }
     };
     frames(&mut host);
@@ -188,7 +189,7 @@ fn numeric_leaf_animation_advances_the_paint_revision_until_the_clip_holds() {
         })
         .unwrap();
     for _ in 0..512 {
-        let report = panel.host.frame(0.0).unwrap();
+        let report = panel.host.frame_for_test(0.0).unwrap();
         if report.worlds[&panel.world]
             .as_ref()
             .unwrap()
@@ -643,7 +644,7 @@ fn canvas_leaf_inserts_and_live_writes_reject_out_of_domain_values_without_effec
 
 #[test]
 fn surface_cache_policy_survives_world_save_and_load_while_canvas_output_is_rebuilt() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world = host
         .create_world(Default::default(), &select(&[ATTACHMENTS, CANVAS, SURFACE]))
         .unwrap();
@@ -663,7 +664,7 @@ fn surface_cache_policy_survives_world_save_and_load_while_canvas_output_is_rebu
             ComponentValue::SurfaceCache(policy),
         ],
     );
-    host.frame(0.125).unwrap();
+    host.frame_for_test(0.125).unwrap();
     let original = output(&host, canvas);
 
     let bytes = host.save_world(world, 44, Default::default()).unwrap();
@@ -701,7 +702,7 @@ fn surface_cache_policy_survives_world_save_and_load_while_canvas_output_is_rebu
             .state,
         PANEL
     );
-    host.frame(0.125).unwrap();
+    host.frame_for_test(0.125).unwrap();
 
     // Derived Canvas output is evaluated again by the restored World.
     let rebuilt = output(&host, restored_canvas);
@@ -725,7 +726,7 @@ fn surface_cache_policy_survives_world_save_and_load_while_canvas_output_is_rebu
     )
     .result
     .unwrap();
-    host.frame(0.125).unwrap();
+    host.frame_for_test(0.125).unwrap();
     let attachment = host
         .publication(host.latest_publication(restored).unwrap())
         .unwrap()

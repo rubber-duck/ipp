@@ -1,80 +1,177 @@
-use super::*;
+//! Literal source routing with source-incarnation cancellation fences.
 
-/// Host-owned literal prefix routing and private asynchronous input delivery.
+use super::*;
+use std::{
+    collections::BTreeMap,
+    num::NonZeroUsize,
+    sync::{Arc, Mutex},
+    task::{Context, Poll},
+};
+
+/// Host-owned routing; asynchronous operations capture registrations before returning.
 #[derive(Default)]
 pub struct IoService {
     sources: BTreeMap<String, IoSourceRegistration>,
     next_registration: u64,
-    streams: reader::IoStreamProvider,
-    pending_input: BTreeMap<u64, (Vec<u8>, usize)>,
+    streams: stream_source::IoStreamProvider,
 }
 
-type IoReaderCell = RefCell<Option<Box<dyn IoReader>>>;
-type RegisteredIoReader = Rc<IoReaderCell>;
-type IoWriterCell = RefCell<Option<Box<dyn IoWriter>>>;
-type RegisteredIoWriter = Rc<IoWriterCell>;
+struct IoRegistrationLifetime {
+    revoked: IoCancellation,
+    acquisitions: Mutex<Vec<IoCancellation>>,
+}
+
+impl IoRegistrationLifetime {
+    fn attach(&self, cancellation: Option<IoCancellation>) {
+        if let Some(cancellation) = cancellation {
+            let mut acquisitions = self.acquisitions.lock().expect("IO registration lock");
+            acquisitions.retain(|active| !active.is_cancelled());
+            if self.revoked.is_cancelled() {
+                cancellation.cancel();
+            } else {
+                acquisitions.push(cancellation);
+            }
+        }
+    }
+
+    fn revoke(&self) {
+        self.revoked.cancel();
+        let acquisitions =
+            std::mem::take(&mut *self.acquisitions.lock().expect("IO registration lock"));
+        for acquisition in acquisitions {
+            acquisition.cancel();
+        }
+    }
+}
 
 struct IoSourceRegistration {
     id: IoSourceRegistrationId,
     source: Box<dyn IoSource>,
-    readers: Vec<Weak<IoReaderCell>>,
-    writers: Vec<Weak<IoWriterCell>>,
+    lifetime: Arc<IoRegistrationLifetime>,
 }
 
-struct SourceIoReader(RegisteredIoReader);
+struct SourceIoReader {
+    reader: Box<dyn IoReader>,
+    lifetime: Arc<IoRegistrationLifetime>,
+    revocation_waiter: super::IoCancellationWaiter,
+}
 
-impl IoReader for SourceIoReader {
-    fn request_id(&self) -> Option<u64> {
-        self.0.borrow().as_ref()?.request_id()
+impl IoReadBackend for SourceIoReader {
+    fn register_storage_waker(&mut self, waker: &std::task::Waker) {
+        self.reader.register_storage_waker(waker);
     }
 
-    fn poll_read(
+    fn retained_storage(&self) -> Option<crate::services::io::IoReaderStorage> {
+        self.reader.retained_storage()
+    }
+
+    fn request_id(&self) -> Option<u64> {
+        self.reader.request_id()
+    }
+
+    fn cancellation(&self) -> Option<IoCancellation> {
+        self.reader.cancellation()
+    }
+
+    fn poll_ready(
         &mut self,
         cx: &mut Context<'_>,
-        output: &mut [u8],
-    ) -> Poll<Result<usize, String>> {
-        self.0.borrow_mut().as_mut().map_or_else(
-            || Poll::Ready(Err("Data source registration was removed".into())),
-            |reader| reader.poll_read(cx, output),
-        )
+        minimum: NonZeroUsize,
+    ) -> Poll<Result<(), IoError>> {
+        self.revocation_waiter.register(cx.waker());
+        if self.lifetime.revoked.is_cancelled() {
+            return Poll::Ready(Err("Data source registration was removed".into()));
+        }
+        self.reader.poll_ready(cx, minimum)
+    }
+
+    fn window(&mut self) -> IoReadWindow<'_> {
+        self.reader.window()
     }
 }
 
-struct SourceIoWriter(RegisteredIoWriter);
+struct SourceIoWriter {
+    writer: Box<dyn IoWriter>,
+    lifetime: Arc<IoRegistrationLifetime>,
+    revocation_waiter: super::IoCancellationWaiter,
+}
 
-impl IoWriter for SourceIoWriter {
-    fn poll_write(&mut self, cx: &mut Context<'_>, input: &[u8]) -> Poll<Result<usize, String>> {
-        self.0.borrow_mut().as_mut().map_or_else(
-            || Poll::Ready(Err("Data source registration was removed".into())),
-            |writer| writer.poll_write(cx, input),
-        )
+impl SourceIoWriter {
+    fn live(&mut self, cx: &Context<'_>) -> Result<(), IoError> {
+        self.revocation_waiter.register(cx.waker());
+        if self.lifetime.revoked.is_cancelled() {
+            self.writer.abort();
+            Err("Data source registration was removed".into())
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl IoWriteBackend for SourceIoWriter {
+    fn poll_write(&mut self, cx: &mut Context<'_>, input: &[u8]) -> Poll<Result<usize, IoError>> {
+        if let Err(error) = self.live(cx) {
+            return Poll::Ready(Err(error));
+        }
+        self.writer.poll_write(cx, input)
     }
 
-    fn poll_flush(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), String>> {
-        self.0.borrow_mut().as_mut().map_or_else(
-            || Poll::Ready(Err("Data source registration was removed".into())),
-            |writer| writer.poll_flush(cx),
-        )
+    fn poll_flush(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), IoError>> {
+        if let Err(error) = self.live(cx) {
+            return Poll::Ready(Err(error));
+        }
+        self.writer.poll_flush(cx)
     }
 
-    fn poll_finish(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), String>> {
-        self.0.borrow_mut().as_mut().map_or_else(
-            || Poll::Ready(Err("Data source registration was removed".into())),
-            |writer| writer.poll_finish(cx),
-        )
+    fn poll_finish(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), IoError>> {
+        if let Err(error) = self.live(cx) {
+            return Poll::Ready(Err(error));
+        }
+        self.writer.poll_finish(cx)
     }
 
     fn abort(&mut self) {
-        if let Some(mut writer) = self.0.borrow_mut().take() {
-            writer.abort();
-        }
+        self.writer.abort();
     }
 }
 
 impl Drop for SourceIoWriter {
     fn drop(&mut self) {
-        self.abort();
+        self.writer.abort();
     }
+}
+
+struct SourceIoListing {
+    listing: Box<dyn IoListing>,
+    lifetime: Arc<IoRegistrationLifetime>,
+    revocation_waiter: super::IoCancellationWaiter,
+}
+
+impl IoListingBackend for SourceIoListing {
+    fn poll_next(&mut self, cx: &mut Context<'_>) -> Poll<Result<Option<String>, IoError>> {
+        self.revocation_waiter.register(cx.waker());
+        if self.lifetime.revoked.is_cancelled() {
+            Poll::Ready(Err("Data source registration was removed".into()))
+        } else {
+            self.listing.poll_next(cx)
+        }
+    }
+}
+
+async fn await_registration<T>(
+    mut operation: IoOperation<T>,
+    revoked: IoCancellation,
+) -> Result<T, IoError> {
+    let waiter = revoked.waiter();
+    std::future::poll_fn(|cx| {
+        waiter.register(cx.waker());
+        if revoked.is_cancelled() {
+            Poll::Ready(Err("Data source registration was removed".into()))
+        } else {
+            operation.as_mut().poll(cx)
+        }
+    })
+    .await
 }
 
 impl IoService {
@@ -83,12 +180,12 @@ impl IoService {
         Self::default()
     }
 
-    /// Register a disjoint literal prefix. No URI parsing or rewriting occurs.
+    /// Register a disjoint literal prefix; generic routing never interprets identifiers.
     pub fn register(
         &mut self,
         prefix: &str,
         source: impl IoSource + 'static,
-    ) -> Result<(), String> {
+    ) -> Result<(), IoError> {
         if self
             .sources
             .keys()
@@ -105,15 +202,17 @@ impl IoService {
             IoSourceRegistration {
                 id: IoSourceRegistrationId(next),
                 source: Box::new(source),
-                readers: Vec::new(),
-                writers: Vec::new(),
+                lifetime: Arc::new(IoRegistrationLifetime {
+                    revoked: IoCancellation::default(),
+                    acquisitions: Mutex::default(),
+                }),
             },
         );
         self.next_registration = next;
         Ok(())
     }
 
-    /// Resolve the exact source incarnation before retaining immutable recovery state.
+    /// Resolve the current exact registration for immutable recovery validation.
     pub fn registration_id(&self, identifier: &str) -> Option<IoSourceRegistrationId> {
         self.sources
             .iter()
@@ -121,66 +220,125 @@ impl IoService {
             .map(|(_, source)| source.id)
     }
 
-    /// Register a source whose I/O is supplied asynchronously by the Host.
-    pub fn register_stream(&mut self, prefix: &str) -> Result<(), String> {
+    /// Capture availability for one exact routing registration. This fence is
+    /// cancelled on removal; it never tracks a replacement registration.
+    pub fn registration_cancellation(
+        &self,
+        identifier: &str,
+        registration: IoSourceRegistrationId,
+    ) -> Option<IoCancellation> {
+        self.sources
+            .iter()
+            .find(|(prefix, source)| {
+                identifier.starts_with(prefix.as_str()) && source.id == registration
+            })
+            .map(|(_, source)| source.lifetime.revoked.clone())
+    }
+
+    /// Register source acquisition supplied by a Host platform bridge.
+    pub fn register_stream(&mut self, prefix: &str) -> Result<(), IoError> {
         self.register(prefix, self.streams.clone())
     }
 
-    /// Remove a registration and synchronously cancel its still-live I/O.
+    /// Revoke acquisition immediately while preserving backing borrowed by active windows.
     pub fn unregister(&mut self, prefix: &str) -> bool {
         let Some(source) = self.sources.remove(prefix) else {
             return false;
         };
-        for reader in source.readers {
-            if let Some(reader) = reader.upgrade() {
-                reader.borrow_mut().take();
-            }
-        }
-        for writer in source.writers {
-            if let Some(writer) = writer.upgrade()
-                && let Some(mut writer) = writer.borrow_mut().take()
-            {
-                writer.abort();
-            }
-        }
-        self.pending_input.retain(|id, _| {
-            self.streams
-                .writer(*id)
-                .is_some_and(|writer| writer.is_open())
-        });
+        source.lifetime.revoke();
         true
     }
 
-    fn source_mut(&mut self, identifier: &str) -> Result<&mut IoSourceRegistration, String> {
-        for (prefix, source) in &mut self.sources {
-            if identifier.starts_with(prefix) {
-                return Ok(source);
+    fn source_mut(&mut self, identifier: &str) -> Result<&mut IoSourceRegistration, IoError> {
+        self.sources
+            .iter_mut()
+            .find(|(prefix, _)| identifier.starts_with(prefix.as_str()))
+            .map(|(_, source)| source)
+            .ok_or_else(|| format!("Data source is unavailable for {identifier}"))
+    }
+
+    /// Capture registration synchronously, then await an incremental listing.
+    pub fn list(&mut self, identifier: &str) -> IoListFuture {
+        let source = match self.source_mut(identifier) {
+            Ok(source) => source,
+            Err(error) => return Box::pin(std::future::ready(Err(error))),
+        };
+        let operation = source.source.list(identifier);
+        let lifetime = source.lifetime.clone();
+        Box::pin(async move {
+            let listing = await_registration(operation, lifetime.revoked.clone()).await?;
+            if lifetime.revoked.is_cancelled() {
+                return Err("Data source registration was removed".into());
             }
-        }
-        Err(format!("Data source is unavailable for {identifier}"))
+            Ok(Box::new(SourceIoListing {
+                listing,
+                revocation_waiter: lifetime.revoked.waiter(),
+                lifetime,
+            }) as Box<dyn IoListing>)
+        })
     }
 
-    /// Enumerate through the selected source, forwarding the complete identifier.
-    pub fn list(&mut self, identifier: &str) -> Result<Vec<String>, String> {
-        self.source_mut(identifier)?.source.list(identifier)
+    /// Capture exact registration at this call, before any asynchronous suspension.
+    pub fn open_read(&mut self, identifier: &str, options: IoReadOptions) -> IoOpenReadFuture {
+        let source = match self.source_mut(identifier) {
+            Ok(source) => source,
+            Err(error) => return Box::pin(std::future::ready(Err(error))),
+        };
+        let operation = source.source.open_read(identifier, options);
+        let lifetime = source.lifetime.clone();
+        Box::pin(async move {
+            let reader = await_registration(operation, lifetime.revoked.clone()).await?;
+            if lifetime.revoked.is_cancelled() {
+                return Err("Data source registration was removed".into());
+            }
+            lifetime.attach(reader.cancellation());
+            Ok(Box::new(SourceIoReader {
+                reader,
+                revocation_waiter: lifetime.revoked.waiter(),
+                lifetime,
+            }) as Box<dyn IoReader>)
+        })
     }
 
-    /// Open input without any asset object or type registration.
-    pub fn open_read(
+    /// Open only the granted exact source registration. Capture happens at this
+    /// call; a replacement can neither inherit the grant nor retarget pending work.
+    /// Provider-local names remain immutable by their publication contract.
+    pub fn open_read_registered(
         &mut self,
         identifier: &str,
+        registration: IoSourceRegistrationId,
         options: IoReadOptions,
-    ) -> Result<Box<dyn IoReader>, String> {
-        let source = self.source_mut(identifier)?;
-        source.readers.retain(|reader| reader.strong_count() != 0);
-        let reader = Rc::new(RefCell::new(Some(
-            source.source.open_read(identifier, options)?,
-        )));
-        source.readers.push(Rc::downgrade(&reader));
-        Ok(Box::new(SourceIoReader(reader)))
+        grant: IoCancellation,
+    ) -> IoOpenReadFuture {
+        if self.registration_id(identifier) != Some(registration) {
+            return Box::pin(std::future::ready(Err(
+                "Granted source registration changed".into(),
+            )));
+        }
+        let mut operation = self.open_read(identifier, options);
+        Box::pin(async move {
+            let waiter = grant.waiter();
+            let reader = std::future::poll_fn(|cx| {
+                waiter.register(cx.waker());
+                if grant.is_cancelled() {
+                    Poll::Ready(Err("Source read grant was revoked".into()))
+                } else {
+                    operation.as_mut().poll(cx)
+                }
+            })
+            .await?;
+            if let Some(acquisition) = reader.cancellation() {
+                grant.link(&acquisition);
+            }
+            Ok(Box::new(GrantedIoReader {
+                reader,
+                grant,
+                waiter,
+            }) as Box<dyn IoReader>)
+        })
     }
 
-    /// Query destination capability without opening output.
+    /// Query explicit destination capability without opening output.
     pub fn can_write(&self, identifier: &str) -> bool {
         self.sources
             .iter()
@@ -188,25 +346,32 @@ impl IoService {
             .is_some_and(|(_, source)| source.source.can_write(identifier))
     }
 
-    /// Open output only when the selected source grants write access.
-    pub fn open_write(
-        &mut self,
-        identifier: &str,
-        max_bytes: usize,
-    ) -> Result<Box<dyn IoWriter>, String> {
-        let source = self.source_mut(identifier)?;
+    /// Capture destination capability and registration before asynchronous publication work.
+    pub fn open_write(&mut self, identifier: &str, max_bytes: usize) -> IoOpenWriteFuture {
+        let source = match self.source_mut(identifier) {
+            Ok(source) => source,
+            Err(error) => return Box::pin(std::future::ready(Err(error))),
+        };
         if !source.source.can_write(identifier) {
-            return Err("Data source is read-only".into());
+            return Box::pin(std::future::ready(Err("Data source is read-only".into())));
         }
-        source.writers.retain(|writer| writer.strong_count() != 0);
-        let writer = Rc::new(RefCell::new(Some(
-            source.source.open_write(identifier, max_bytes)?,
-        )));
-        source.writers.push(Rc::downgrade(&writer));
-        Ok(Box::new(SourceIoWriter(writer)))
+        let operation = source.source.open_write(identifier, max_bytes);
+        let lifetime = source.lifetime.clone();
+        Box::pin(async move {
+            let mut writer = await_registration(operation, lifetime.revoked.clone()).await?;
+            if lifetime.revoked.is_cancelled() {
+                writer.abort();
+                return Err("Data source registration was removed".into());
+            }
+            Ok(Box::new(SourceIoWriter {
+                writer,
+                revocation_waiter: lifetime.revoked.waiter(),
+                lifetime,
+            }) as Box<dyn IoWriter>)
+        })
     }
 
-    /// Drain newly opened asynchronous reads in opening order.
+    /// Drain platform acquisitions in opening order.
     pub fn take_requests(&self) -> Vec<IoReadRequest> {
         self.take_selected_requests(|_| true)
     }
@@ -215,101 +380,75 @@ impl IoService {
         &self,
         selected: impl FnMut(u64) -> bool,
     ) -> Vec<IoReadRequest> {
-        self.streams
-            .take_requests(selected)
-            .into_iter()
-            .map(|request| IoReadRequest {
-                id: request.id,
-                identifier: request.source,
-                max_bytes: request.max_bytes,
-                recovery: request.recovery,
-            })
-            .collect()
+        self.streams.take_requests(selected)
     }
 
-    /// Drain work whose originating readers have been dropped.
+    /// Drain cancelled acquisitions, preserving successful consumption as completion.
     pub fn take_cancellations(&self) -> Vec<u64> {
         self.streams.take_closed()
     }
 
-    /// Feed one bounded chunk. False requests retry after consumer progress.
-    pub fn input_chunk(&self, id: u64, bytes: &[u8]) -> Result<bool, String> {
+    /// Reserve exact reader storage before crossing the platform memory boundary.
+    pub fn reserve_input(
+        &self,
+        id: u64,
+        length: usize,
+    ) -> Result<Option<IoInputReservation>, IoError> {
         self.streams
-            .writer(id)
-            .map_or(Ok(true), |writer| writer.push(bytes))
+            .input(id)
+            .map_or(Ok(None), |input| input.reserve(length))
     }
 
-    /// Finish the exact reader; stale completion cannot reach a later operation.
-    pub fn input_end(&self, id: u64, result: Result<(), String>) {
-        if let Some(writer) = self.streams.writer(id) {
-            writer.finish(result);
+    /// Wait for exact acquisition capacity, registering the producer wakeup.
+    pub fn poll_reserve_input(
+        &self,
+        id: u64,
+        length: usize,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<Option<IoInputReservation>, IoError>> {
+        let Some(input) = self.streams.input(id) else {
+            return Poll::Ready(Ok(None));
+        };
+        input
+            .poll_reserve(cx, length)
+            .map(|result| result.map(Some))
+    }
+
+    /// Feed one admitted chunk; false requests retry with no input copy performed.
+    pub fn input_chunk(&self, id: u64, bytes: &[u8]) -> Result<bool, IoError> {
+        self.streams
+            .input(id)
+            .map_or(Ok(true), |input| input.push(bytes))
+    }
+
+    /// Finish this exact acquisition; stale identities never target new readers.
+    pub fn input_end(&self, id: u64, result: Result<(), IoError>) {
+        if let Some(input) = self.streams.input(id) {
+            input.finish(result);
         }
     }
 
-    /// Retained asynchronous input staging.
+    /// Retained stream storage, including outstanding windows and fill leases.
     pub fn input_bytes(&self) -> usize {
         self.streams.buffered_bytes()
     }
 
-    /// Accept a complete owned Host result for its originating reader.
+    /// Adopt a complete owned Host result directly, without a second staging queue.
     pub fn complete_read(
         &mut self,
         id: u64,
-        result: Result<Vec<u8>, String>,
-    ) -> Result<(), String> {
-        let Some(writer) = self
-            .streams
-            .writer(id)
-            .filter(reader::IoStreamWriter::is_open)
-        else {
+        result: Result<Vec<u8>, IoError>,
+    ) -> Result<(), IoError> {
+        let Some(input) = self.streams.input(id) else {
             return Ok(());
         };
-        if self.pending_input.contains_key(&id) {
-            return Ok(());
-        }
         match result {
+            Ok(bytes) => input.adopt_complete(bytes),
             Err(error) => {
-                if error.len() > 2048 {
-                    return Err("Data error byte budget exhausted".into());
-                }
-                writer.finish(Err(error));
-            }
-            Ok(bytes) => {
-                if writer.max_bytes().is_some_and(|limit| bytes.len() > limit) {
-                    return Err("Data input byte budget exhausted".into());
-                }
-                self.pending_input.insert(id, (bytes, 0));
+                input.finish(Err(error));
+                Ok(())
             }
         }
-        Ok(())
-    }
-
-    /// Progress retained input at the Host service boundary.
-    pub fn progress(&mut self) {
-        self.pending_input.retain(|id, (bytes, offset)| {
-            let Some(writer) = self
-                .streams
-                .writer(*id)
-                .filter(reader::IoStreamWriter::is_open)
-            else {
-                return false;
-            };
-            let end = bytes.len().min(*offset + STREAM_CAPACITY);
-            match writer.push(&bytes[*offset..end]) {
-                Ok(true) => *offset = end,
-                Ok(false) => return true,
-                Err(error) => {
-                    writer.finish(Err(error));
-                    return false;
-                }
-            }
-            if *offset == bytes.len() {
-                writer.finish(Ok(()));
-                false
-            } else {
-                true
-            }
-        });
     }
 }
 
@@ -318,5 +457,46 @@ impl Drop for IoService {
         while let Some(prefix) = self.sources.keys().next().cloned() {
             self.unregister(&prefix);
         }
+    }
+}
+
+struct GrantedIoReader {
+    reader: Box<dyn IoReader>,
+    grant: IoCancellation,
+    waiter: super::IoCancellationWaiter,
+}
+
+impl IoReadBackend for GrantedIoReader {
+    fn register_storage_waker(&mut self, waker: &std::task::Waker) {
+        self.reader.register_storage_waker(waker);
+    }
+
+    fn poll_ready(
+        &mut self,
+        cx: &mut Context<'_>,
+        minimum: std::num::NonZeroUsize,
+    ) -> Poll<Result<(), IoError>> {
+        self.waiter.register(cx.waker());
+        if self.grant.is_cancelled() {
+            Poll::Ready(Err("Source read grant was revoked".into()))
+        } else {
+            self.reader.poll_ready(cx, minimum)
+        }
+    }
+
+    fn window(&mut self) -> IoReadWindow<'_> {
+        self.reader.window()
+    }
+
+    fn retained_storage(&self) -> Option<super::IoReaderStorage> {
+        self.reader.retained_storage()
+    }
+
+    fn request_id(&self) -> Option<u64> {
+        self.reader.request_id()
+    }
+
+    fn cancellation(&self) -> Option<IoCancellation> {
+        self.reader.cancellation()
     }
 }

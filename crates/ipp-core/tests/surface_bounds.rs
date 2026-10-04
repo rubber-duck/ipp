@@ -5,8 +5,7 @@ use support::WorldTestDriver;
 use support::selection::{RENDER, SURFACE, select};
 
 use ipp_core::{
-    Batch, Command, ComponentValue, EntityRef, FieldValue, FieldWrite, HostRuntime, Surface,
-    WorldLimits,
+    Batch, Command, ComponentValue, EntityRef, FieldValue, FieldWrite, Surface, WorldLimits,
     components::{BoundingGeometry, MeshInstance, Transform},
     systems::{
         camera,
@@ -29,7 +28,7 @@ fn apply(world: &mut ipp_core::WorldContext<'_>, operations: Vec<Command>) {
 
 #[test]
 fn surface_bounds_follow_transform_and_dimension_changes_without_picking() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host
         .create_world(WorldLimits::default(), &select(&[RENDER, SURFACE]))
         .unwrap();

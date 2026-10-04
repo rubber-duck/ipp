@@ -56,6 +56,7 @@ function boundary() {
       if (binding?.generation.serial === expected.generation.serial)
         binding = null;
     },
+    reads: { release: async () => {} },
     presentation: {
       surface: async () => ({ ...surface }),
       select: async (
@@ -95,7 +96,6 @@ function boundary() {
         calls.push("clear-view");
         if (selected?.selection === expected.selection) selected = null;
       },
-      releaseCapture: async () => {},
     },
   };
   const controller = new CanvasPresentation(

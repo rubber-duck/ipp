@@ -2,6 +2,9 @@
 use ipp_core::services::io::*;
 use std::{
     cell::RefCell,
+    future::Future,
+    num::NonZeroUsize,
+    pin::pin,
     rc::Rc,
     task::{Context, Poll, Waker},
 };
@@ -13,35 +16,50 @@ fn options(max_bytes: usize) -> IoReadOptions {
     }
 }
 
+fn ready<F: Future>(future: F) -> F::Output {
+    match pin!(future).poll(&mut Context::from_waker(Waker::noop())) {
+        Poll::Ready(value) => value,
+        Poll::Pending => panic!("in-memory operation should be immediately ready"),
+    }
+}
+
 fn read(mut reader: Box<dyn IoReader>) -> Result<Vec<u8>, String> {
     let mut bytes = Vec::new();
-    let mut cx = Context::from_waker(Waker::noop());
     loop {
-        let mut chunk = [0; 7];
-        match reader.poll_read(&mut cx, &mut chunk) {
-            Poll::Ready(Ok(0)) => return Ok(bytes),
-            Poll::Ready(Ok(count)) => bytes.extend_from_slice(&chunk[..count]),
-            Poll::Ready(Err(error)) => return Err(error),
-            Poll::Pending => panic!("in-memory input should be available"),
+        let window = ready(reader.read(NonZeroUsize::new(7).unwrap()))?;
+        let count = window.bytes().len();
+        let finished = window.is_final();
+        bytes.extend_from_slice(window.bytes());
+        window.consume(count)?;
+        if finished {
+            return Ok(bytes);
         }
     }
+}
+
+fn list(mut entries: Box<dyn IoListing>) -> Vec<String> {
+    let mut values = Vec::new();
+    while let Some(value) = ready(entries.next()).unwrap() {
+        values.push(value);
+    }
+    values
 }
 
 struct RecordingSource(Rc<RefCell<Vec<String>>>);
 
 impl IoSource for RecordingSource {
-    fn list(&mut self, identifier: &str) -> Result<Vec<String>, String> {
+    fn list(&mut self, identifier: &str) -> IoListFuture {
         self.0.borrow_mut().push(identifier.into());
-        Ok(vec![identifier.into()])
+        Box::pin(std::future::ready(Ok(
+            Box::new(MemoryIoListing::new(vec![identifier.into()])) as Box<dyn IoListing>,
+        )))
     }
 
-    fn open_read(
-        &mut self,
-        identifier: &str,
-        _: IoReadOptions,
-    ) -> Result<Box<dyn IoReader>, String> {
+    fn open_read(&mut self, identifier: &str, _: IoReadOptions) -> IoOpenReadFuture {
         self.0.borrow_mut().push(identifier.into());
-        Ok(Box::new(MemoryIoReader::new(identifier.as_bytes())))
+        Box::pin(std::future::ready(Ok(
+            Box::new(BufferIoReader::new(identifier.as_bytes())) as Box<dyn IoReader>,
+        )))
     }
 }
 
@@ -58,13 +76,13 @@ fn disjoint_literal_prefixes_forward_identifiers_without_normalizing() {
         .unwrap();
     let identifier = "opaque//../a%2fb?x=1&x=2#literal";
     assert_eq!(
-        read(data.open_read(identifier, options(128)).unwrap()).unwrap(),
+        read(ready(data.open_read(identifier, options(128))).unwrap()).unwrap(),
         identifier.as_bytes()
     );
-    assert_eq!(data.list(identifier).unwrap(), [identifier]);
+    assert_eq!(list(ready(data.list(identifier)).unwrap()), [identifier]);
     assert_eq!(*seen.borrow(), [identifier, identifier]);
     assert!(!data.can_write(identifier));
-    assert!(data.open_write(identifier, 100).is_err());
+    assert!(ready(data.open_write(identifier, 100)).is_err());
 }
 
 #[test]
@@ -76,58 +94,51 @@ fn generic_memory_output_publishes_atomically_and_preserves_cancelled_destinatio
     let mut data = IoService::new();
     data.register("mem:", memory).unwrap();
     assert!(data.can_write("mem:world"));
-    let mut writer = data.open_write("mem:world", 10).unwrap();
-    let mut cx = Context::from_waker(Waker::noop());
-    assert!(matches!(
-        writer.poll_write(&mut cx, b"cancel"),
-        Poll::Ready(Ok(6))
-    ));
+    let mut writer = ready(data.open_write("mem:world", 10)).unwrap();
+    assert_eq!(ready(writer.write(b"cancel")).unwrap(), 6);
     writer.abort();
     assert_eq!(
-        read(data.open_read("mem:world", options(10)).unwrap()).unwrap(),
+        read(ready(data.open_read("mem:world", options(10))).unwrap()).unwrap(),
         b"previous"
     );
     let mut job = IoWriteJob::new(
         b"replaced".to_vec(),
-        data.open_write("mem:world", 10).unwrap(),
+        ready(data.open_write("mem:world", 10)).unwrap(),
     );
-    assert!(matches!(job.poll(&mut cx), Poll::Ready(Ok(()))));
+    assert!(matches!(
+        job.poll(&mut Context::from_waker(Waker::noop())),
+        Poll::Ready(Ok(()))
+    ));
     assert_eq!(
-        read(data.open_read("mem:world", options(10)).unwrap()).unwrap(),
+        read(ready(data.open_read("mem:world", options(10))).unwrap()).unwrap(),
         b"replaced"
     );
     assert!(
-        data.open_read(
+        ready(data.open_read(
             "mem:world",
             IoReadOptions {
                 max_bytes: Some(10),
                 recovery: true
             }
-        )
+        ))
         .is_err()
     );
-    assert_eq!(data.list("mem:").unwrap(), ["mem:world"]);
-    assert!(data.open_read("mem:world", options(2)).is_err());
+    assert_eq!(list(ready(data.list("mem:")).unwrap()), ["mem:world"]);
+    assert!(ready(data.open_read("mem:world", options(2))).is_err());
 }
 
 #[test]
 fn replacement_registration_cancels_old_readers_and_rejects_stale_completion() {
     let mut data = IoService::new();
     data.register_stream("https:").unwrap();
-    let mut first = data
-        .open_read("https://example.test/a?opaque=%2F", options(8))
-        .unwrap();
+    let mut first = ready(data.open_read("https://example.test/a?opaque=%2F", options(8))).unwrap();
     let request = data.take_requests().pop().unwrap();
     assert!(data.unregister("https:"));
     assert_eq!(data.take_cancellations(), [request.id]);
-    assert!(matches!(
-        first.poll_read(&mut Context::from_waker(Waker::noop()), &mut [0; 8]),
-        Poll::Ready(Err(_))
-    ));
+    assert!(ready(first.read(NonZeroUsize::new(8).unwrap())).is_err());
     data.register_stream("https:").unwrap();
-    let replacement = data
-        .open_read("https://example.test/a?opaque=%2F", options(8))
-        .unwrap();
+    let replacement =
+        ready(data.open_read("https://example.test/a?opaque=%2F", options(8))).unwrap();
     let next = data.take_requests().pop().unwrap();
     assert_ne!(next.id, request.id);
     assert!(data.input_chunk(request.id, b"stale").unwrap());
@@ -141,10 +152,7 @@ fn replacement_registration_cancels_old_readers_and_rejects_stale_completion() {
 fn asset_request_drain_preserves_independent_generic_reads() {
     let mut host = ipp_core::HostRuntime::new();
     host.io_mut().register_stream("world-data:").unwrap();
-    let _reader = host
-        .io_mut()
-        .open_read("world-data:saved", options(128))
-        .unwrap();
+    let _reader = ready(host.io_mut().open_read("world-data:saved", options(128))).unwrap();
     assert!(host.take_resource_requests().is_empty());
     let requests = host.io().take_requests();
     assert_eq!(requests.len(), 1);

@@ -48,7 +48,26 @@ impl<P: HostServices> Host<P> {
         }
         let request = asset_source::decode(bytes, session).map_err(|error| error.to_string())?;
         let reservation = state.reserve_reply(8192)?;
-        let result = self.apply_asset_source(session, request.id, request.operation);
+        let completed_source = if let SourceOperation::Finish {
+            transfer,
+        } = &request.operation
+        {
+            self.sessions
+                .get(&session)
+                .and_then(|session| session.source_transfers.get(transfer))
+                .map(|transfer| transfer.source.clone())
+        } else {
+            None
+        };
+        let result = self
+            .apply_asset_source(session, request.id, request.operation)
+            .and_then(|()| {
+                if let Some(source) = completed_source {
+                    let access = self.own_asset_access(source.kind);
+                    self.grant_asset_source(connection, source, access)?;
+                }
+                Ok(())
+            });
         let response = asset_source::response(session, request.id, result)
             .map_err(|error| error.to_string())?;
         reservation.borrow_mut().encoded(response.capacity());

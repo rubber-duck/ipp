@@ -6,7 +6,7 @@ import {
   replyToHostCreate,
 } from "./generated-client.mjs";
 
-const { codec, hostProtocol, hostPresentation } =
+const { codec, hostProtocol, hostPresentation, bulkReads } =
   await generateClient("host-lifecycle");
 
 function controlledTransport() {
@@ -271,10 +271,52 @@ function presentationFixture(options = {}) {
   };
   const returnedFrame = structuredClone(frame);
   if (options.frameMismatch === "view") returnedFrame.view.selection += 1n;
+  if (options.frameMismatch === "context")
+    returnedFrame.view.surface.context += 1n;
   if (options.frameMismatch === "sequence") returnedFrame.sequence = 11n;
   if (options.frameMismatch === "publication")
     returnedFrame.publication.revision -= 1n;
   const calls = [];
+  const reference = { connection: 23n, read: 17n };
+  const reads = new bulkReads.BulkReadClient(
+    () => reference.connection,
+    (bytes) => {
+      const request = new hostProtocol.HostWireReader(bytes);
+      assert.deepEqual(request.raw(4), new TextEncoder().encode("IPDR"));
+      assert.equal(request.u64(), reference.connection);
+      const id = request.u64();
+      assert.notEqual(id, 0n);
+      assert.equal(request.u64(), reference.read);
+      const operation = request.u8();
+      const response = new hostProtocol.HostWireWriter();
+      response.raw(new TextEncoder().encode("IPDS"));
+      response.u64(reference.connection);
+      response.u64(id);
+      response.u64(reference.read);
+      if (operation === 0) {
+        calls.push("read");
+        assert.equal(request.u64(), 0n);
+        if (options.chunkFailure)
+          throw new Error("injected capture chunk failure");
+        response.u8(0);
+        response.u64(0n);
+        response.u8(1);
+        response.bytes(new Uint8Array(24).fill(42));
+      } else if (operation === 1) {
+        calls.push("acknowledge");
+        assert.equal(request.u64(), 24n);
+        assert.equal(request.u8(), 1);
+        response.u8(1);
+      } else {
+        assert.equal(operation, 2);
+        calls.push("release");
+        if (options.releaseFailure) throw new Error("injected release failure");
+        response.u8(1);
+      }
+      request.end();
+      assert.equal(reads.receive(response.finish()), true);
+    },
+  );
   const writeFrame = (writer) => {
     writer.u64(returnedFrame.view.surface.id);
     writer.u64(returnedFrame.view.surface.context);
@@ -311,7 +353,8 @@ function presentationFixture(options = {}) {
       encode(request);
       const read = new hostProtocol.HostWireReader(request.finish());
       const operation = read.u8();
-      calls.push(operation);
+      assert.equal(operation, codec.WIRE.PRESENTATION_REQUEST_FRAME);
+      calls.push("frame");
       const response = new hostProtocol.HostWireWriter();
       response.u8(codec.WIRE.HOST_RESPONSE_PRESENTATION);
       if (operation === codec.WIRE.PRESENTATION_REQUEST_FRAME) {
@@ -321,36 +364,18 @@ function presentationFixture(options = {}) {
         } else {
           response.u8(codec.WIRE.PRESENTATION_RESPONSE_CAPTURE);
           writeFrame(response);
-          response.u64(17n);
+          response.u64(reference.connection);
+          response.u64(reference.read);
           response.u64(24n);
         }
-      } else if (operation === codec.WIRE.PRESENTATION_REQUEST_READ_CAPTURE) {
-        assert.equal(read.u64(), 17n);
-        assert.equal(read.u64(), 0n);
-        read.end();
-        if (options.chunkFailure)
-          throw new Error("injected capture chunk failure");
-        response.u8(codec.WIRE.PRESENTATION_RESPONSE_CHUNK);
-        response.u64(17n);
-        response.u64(0n);
-        response.bytes(new Uint8Array(24).fill(42));
-      } else {
-        assert.equal(
-          operation,
-          codec.WIRE.PRESENTATION_REQUEST_RELEASE_CAPTURE,
-        );
-        assert.equal(read.u64(), 17n);
-        read.end();
-        if (options.releaseFailure) throw new Error("injected release failure");
-        response.u8(codec.WIRE.PRESENTATION_RESPONSE_COMPLETE);
       }
       const bytes = response.finish();
       const omitted =
-        operation !== codec.WIRE.PRESENTATION_REQUEST_FRAME
-          ? 0
-          : options.truncated === "beforeCapture"
+        options.truncated === "beforeReference"
+          ? 24
+          : options.truncated === "insideReference"
             ? 16
-            : options.truncated === "afterCapture"
+            : options.truncated === "afterReference"
               ? 8
               : 0;
       return new hostProtocol.HostWireReader(
@@ -358,6 +383,7 @@ function presentationFixture(options = {}) {
       );
     },
     (name) => codec.WIRE[name],
+    reads,
   );
   return {
     presentation,
@@ -365,6 +391,7 @@ function presentationFixture(options = {}) {
     frame: returnedFrame,
     expectedFrame: frame,
     calls,
+    reference,
   };
 }
 
@@ -384,11 +411,7 @@ test("generated Host capture preserves exact root/context/publication stamp and 
     new Uint8Array(captured.pixels),
     new Uint8Array(24).fill(42),
   );
-  assert.deepEqual(fixture.calls, [
-    codec.WIRE.PRESENTATION_REQUEST_FRAME,
-    codec.WIRE.PRESENTATION_REQUEST_READ_CAPTURE,
-    codec.WIRE.PRESENTATION_REQUEST_RELEASE_CAPTURE,
-  ]);
+  assert.deepEqual(fixture.calls, ["frame", "read", "acknowledge"]);
 });
 
 test("generated Host capture reports typed headless rejection", async () => {
@@ -413,18 +436,16 @@ test("generated Host capture retains exact cleanup identity when read and releas
     fixture.presentation.capture(fixture.view),
     (error) =>
       error instanceof codec.CaptureTransferError &&
-      error.capture === 17n &&
+      error.reference.connection === fixture.reference.connection &&
+      error.reference.read === fixture.reference.read &&
       error.frame.sequence === 12n &&
       error.cause instanceof AggregateError &&
       error.cause.errors.length === 2,
   );
-  assert.equal(
-    fixture.calls.at(-1),
-    codec.WIRE.PRESENTATION_REQUEST_RELEASE_CAPTURE,
-  );
+  assert.equal(fixture.calls.at(-1), "release");
 });
 
-for (const frameMismatch of ["view", "sequence", "publication"]) {
+for (const frameMismatch of ["view", "context", "sequence", "publication"]) {
   for (const releaseFailure of [false, true]) {
     test(`generated capture rejects wrong ${frameMismatch} fence and releases acknowledged transfer; releaseFailure=${releaseFailure}`, async () => {
       const fixture = presentationFixture({ frameMismatch, releaseFailure });
@@ -437,12 +458,9 @@ for (const frameMismatch of ["view", "sequence", "publication"]) {
           () => assert.fail("Mismatched capture unexpectedly succeeded"),
           (error) => error,
         );
-      assert.deepEqual(fixture.calls, [
-        codec.WIRE.PRESENTATION_REQUEST_FRAME,
-        codec.WIRE.PRESENTATION_REQUEST_RELEASE_CAPTURE,
-      ]);
+      assert.deepEqual(fixture.calls, ["frame", "release"]);
       assert.ok(error instanceof codec.CaptureTransferError);
-      assert.equal(error.capture, 17n);
+      assert.deepEqual(error.reference, fixture.reference);
       assert.deepEqual(error.frame, fixture.frame);
       if (releaseFailure) {
         assert.ok(error.cause instanceof AggregateError);
@@ -456,26 +474,27 @@ for (const frameMismatch of ["view", "sequence", "publication"]) {
   }
 }
 
-for (const truncated of ["beforeCapture", "afterCapture"]) {
+for (const truncated of [
+  "beforeReference",
+  "insideReference",
+  "afterReference",
+]) {
   test(`generated capture truncated ${truncated} cleans only an acknowledged transfer`, async () => {
     const fixture = presentationFixture({ truncated });
     const error = await fixture.presentation.capture(fixture.view).then(
       () => assert.fail("Truncated capture unexpectedly succeeded"),
       (error) => error,
     );
-    if (truncated === "beforeCapture") {
+    if (truncated !== "afterReference") {
       assert.ok(!(error instanceof codec.CaptureTransferError));
       assert.match(error.message, /Truncated/);
-      assert.deepEqual(fixture.calls, [codec.WIRE.PRESENTATION_REQUEST_FRAME]);
+      assert.deepEqual(fixture.calls, ["frame"]);
     } else {
       assert.ok(error instanceof codec.CaptureTransferError);
-      assert.equal(error.capture, 17n);
+      assert.deepEqual(error.reference, fixture.reference);
       assert.deepEqual(error.frame, fixture.frame);
       assert.match(error.cause.message, /Truncated/);
-      assert.deepEqual(fixture.calls, [
-        codec.WIRE.PRESENTATION_REQUEST_FRAME,
-        codec.WIRE.PRESENTATION_REQUEST_RELEASE_CAPTURE,
-      ]);
+      assert.deepEqual(fixture.calls, ["frame", "release"]);
     }
   });
 }

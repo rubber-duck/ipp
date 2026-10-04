@@ -1,6 +1,7 @@
 //! Factory initialization, owned state, dependency borrowing and lifecycle on real Worlds.
 
 mod support;
+use support::task_scheduler::HostTaskTestDriver;
 
 use ipp_core::systems::{
     System, SystemCapabilities, SystemCapability, SystemCommitContext, SystemDependency,
@@ -161,7 +162,7 @@ fn factory(
 fn host(factories: Vec<Arc<dyn SystemFactory>>) -> HostRuntime {
     let mut selected = compiled_system_factories();
     selected.extend(factories);
-    HostRuntime::with_system_factories(selected).unwrap()
+    crate::support::task_scheduler::with_factories(selected).unwrap()
 }
 
 #[test]
@@ -327,7 +328,7 @@ fn invalid_limits_and_unknown_factories_do_not_initialize_anything() {
 
 #[test]
 fn selected_worlds_admit_only_supported_components_and_keep_selection_out_of_hints() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let empty = host
         .create_world_with_options(WorldLimits::default(), WorldCreateOptions::new([]))
         .unwrap();
@@ -409,7 +410,7 @@ fn selected_worlds_admit_only_supported_components_and_keep_selection_out_of_hin
 fn gui_domain_operation_does_not_imply_layout_or_physical_input() {
     use ipp_core::systems::{WorldOperation, gui::GuiSystem};
 
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host
         .create_world(
             WorldLimits::default(),
@@ -455,7 +456,7 @@ fn gui_operation_has_one_local_control_provider_in_minimal_and_full_compositions
         })
         .collect();
     assert_eq!(providers, [(GuiSystem::ID, Vec::new())]);
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     // Controls require CanvasBounds, so the smallest GUI World selects Canvas.
     let minimal = host
         .create_world(WorldLimits::default(), &[CanvasSystem::ID, GuiSystem::ID])
@@ -500,7 +501,7 @@ fn gui_operation_has_one_local_control_provider_in_minimal_and_full_compositions
 fn joint_animation_and_parent_joint_require_their_selected_evaluators() {
     use ipp_core::systems::{WorldOperation, animation::AnimationSystem};
 
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let basic = host
         .create_world(WorldLimits::default(), &[AnimationSystem::ID])
         .unwrap();
@@ -759,7 +760,7 @@ fn builtin_instances_cannot_be_hidden_under_an_extension_identity() {
 #[test]
 fn producer_assets_grow_and_world_teardown_preserves_other_consumers() {
     use ipp_core::{MeshKey, MeshUpload};
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let limits = WorldLimits {
         ..Default::default()
     };
@@ -796,7 +797,7 @@ fn producer_assets_grow_and_world_teardown_preserves_other_consumers() {
         }
         world.prepare_update(0.0).unwrap();
     }
-    host.progress_assets();
+    host.progress_assets_for_test();
     let first_report = host.world_mut(first).unwrap().step(0.0).unwrap();
     assert_eq!(first_report.assets.len(), 2);
     assert!(
@@ -827,7 +828,7 @@ fn producer_assets_grow_and_world_teardown_preserves_other_consumers() {
 #[test]
 fn destroying_one_consumer_preserves_another_worlds_in_flight_reader() {
     use ipp_core::{AssetResourceStatus, ComponentValue, EntityRef, components::MeshInstance};
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     host.register_stream_resource_provider("fixture").unwrap();
     let first = host.create_world(Default::default(), RENDER).unwrap();
     let second = host.create_world(Default::default(), RENDER).unwrap();
@@ -854,7 +855,7 @@ fn destroying_one_consumer_preserves_another_worlds_in_flight_reader() {
             .unwrap();
         assert!(world.step(0.0).unwrap().outcomes[0].result.is_ok());
     }
-    host.progress_assets();
+    host.progress_assets_for_test();
     let requests = host.take_resource_requests();
     assert_eq!(requests.len(), 1);
     let resource = host.world_mut(second).unwrap().resource_snapshots()[0].id;
@@ -862,7 +863,7 @@ fn destroying_one_consumer_preserves_another_worlds_in_flight_reader() {
     assert!(host.take_resource_cancellations().is_empty());
     host.complete_resource(requests[0].id, Err("fixture terminal result".into()))
         .unwrap();
-    host.progress_assets();
+    host.progress_assets_for_test();
     let mut surviving = host.world_mut(second).unwrap();
     surviving.step(0.0).unwrap();
     let observation = &surviving.resource_snapshots()[0];

@@ -101,6 +101,7 @@ impl GlesRenderDevice {
         });
 
         let device = Self {
+            readbacks: Vec::new(),
             gl,
             #[cfg(feature = "instrumentation")]
             gpu_queries,

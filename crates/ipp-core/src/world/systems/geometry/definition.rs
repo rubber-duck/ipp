@@ -31,6 +31,24 @@ impl From<GeometryShape> for GeometryShapePart {
     }
 }
 
+impl GeometryShapePart {
+    pub(crate) fn validate(&self) -> Result<(), ErrorReason> {
+        self.shape.validate()?;
+        self.transform.validate()?;
+        GeometryShapeTransform::from_matrix(crate::systems::camera::model_matrix(
+            &self.transform,
+        )?)?;
+        if let Some(joints) = self.joints
+            && (joints[0] >= MAX_JOINTS as u32
+                || joints[1] >= MAX_JOINTS as u32
+                || !matches!(self.shape, GeometryShape::Pill { start, end, .. } if start == [0.0; 3] && end == [0.0; 3]))
+        {
+            return Err(ErrorReason::InvalidGeometry);
+        }
+        Ok(())
+    }
+}
+
 /// Shared definition; one part is basic geometry, several form a compound union.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GeometryDefinition {
@@ -171,18 +189,7 @@ impl GeometryDefinition {
             return Err(ErrorReason::InvalidGeometry);
         }
         for part in &self.parts {
-            part.shape.validate()?;
-            part.transform.validate()?;
-            GeometryShapeTransform::from_matrix(crate::systems::camera::model_matrix(
-                &part.transform,
-            )?)?;
-            if let Some(joints) = part.joints
-                && (joints[0] >= MAX_JOINTS as u32
-                    || joints[1] >= MAX_JOINTS as u32
-                    || !matches!(part.shape, GeometryShape::Pill { start, end, .. } if start == [0.0; 3] && end == [0.0; 3]))
-            {
-                return Err(ErrorReason::InvalidGeometry);
-            }
+            part.validate()?;
         }
         Ok(())
     }
@@ -203,8 +210,8 @@ impl Asset for GeometryDefinition {
 }
 
 pub(crate) fn geometry_asset_loader() -> impl AssetLoader<Data = GeometryDefinition> {
-    BufferedAssetLoader::new(|bytes| {
-        GeometryDefinition::decode(bytes).map_err(|error| error.to_string())
+    AsyncAssetLoader::decode(|mut reader| async move {
+        GeometryDefinition::decode_reader(&mut *reader).await
     })
 }
 
@@ -214,5 +221,70 @@ impl crate::services::asset_management::writer::AssetEncoder for GeometryDefinit
             return Err("Asset output byte budget exhausted".into());
         }
         self.encode().map_err(|error| error.to_string())
+    }
+}
+
+impl GeometryDefinition {
+    /// Parse fixed shape records into private output, validating each part before retention.
+    pub async fn decode_reader(reader: &mut dyn IoReader) -> Result<Self, String> {
+        use crate::services::asset_management::decode::{AssetReader, push};
+        let mut input = AssetReader::new(reader);
+        if input.array::<4>().await? != *b"IPPG" || input.u32().await? != 1 {
+            return Err("Invalid geometry header".into());
+        }
+        let count = input.u32().await?;
+        if count == 0 {
+            return Err("Empty geometry definition".into());
+        }
+        let mut parts = Vec::new();
+        for _ in 0..count {
+            let record = input.array::<80>().await?;
+            let word = |offset| u32::from_le_bytes(record[offset..offset + 4].try_into().unwrap());
+            let values: [f64; 7] =
+                std::array::from_fn(|index| f64::from(f32::from_bits(word(4 + index * 4))));
+            let shape = match word(0) {
+                0 if values[6] == 0.0 => GeometryShape::Box {
+                    min: values[..3].try_into().unwrap(),
+                    max: values[3..6].try_into().unwrap(),
+                },
+                1 if values[4..].iter().all(|&value| value == 0.0) => GeometryShape::Sphere {
+                    center: values[..3].try_into().unwrap(),
+                    radius: values[3],
+                },
+                2 => GeometryShape::Pill {
+                    start: values[..3].try_into().unwrap(),
+                    end: values[3..6].try_into().unwrap(),
+                    radius: values[6],
+                },
+                _ => return Err("Invalid geometry shape".into()),
+            };
+            let transform = crate::services::asset_management::skeleton::transform(&record[32..72])
+                .map_err(|error| error.to_string())?;
+            let joints = [word(72), word(76)];
+            let part = GeometryShapePart {
+                shape,
+                transform,
+                joints: (joints != [u32::MAX; 2]).then_some(joints),
+            };
+            // The same domain validation applies to each independent shape part.
+            part.shape.validate().map_err(|error| error.to_string())?;
+            GeometryShapeTransform::from_matrix(
+                crate::systems::camera::model_matrix(&part.transform)
+                    .map_err(|error| error.to_string())?,
+            )
+            .map_err(|error| error.to_string())?;
+            if let Some(joints) = part.joints
+                && (joints[0] >= MAX_JOINTS as u32
+                    || joints[1] >= MAX_JOINTS as u32
+                    || !matches!(part.shape, GeometryShape::Pill { start, end, .. } if start == [0.0; 3] && end == [0.0; 3]))
+            {
+                return Err("Invalid geometry joint binding".into());
+            }
+            push(&mut parts, part)?;
+        }
+        input.finish().await?;
+        Ok(Self {
+            parts,
+        })
     }
 }

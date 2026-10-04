@@ -4,6 +4,7 @@
 mod support;
 use support::HostWorldTestDriver;
 use support::selection::{CONSTRAINTS, RENDER, select};
+use support::task_scheduler::HostTaskTestDriver;
 
 use ipp_core::{
     AssetResourceKind, AssetResourceStatus, Batch, Command, ComponentValue, EntityId, EntityRef,
@@ -51,7 +52,7 @@ fn resource_requests(
     host: &mut ipp_core::HostRuntime,
     world: ipp_core::WorldId,
 ) -> Vec<ipp_core::AssetAcquisitionRequest> {
-    host.progress_assets();
+    host.progress_assets_for_test();
     host.world_mut(world).unwrap().take_resource_requests()
 }
 
@@ -114,7 +115,7 @@ fn triangle() -> Vec<u8> {
 
 #[test]
 fn malformed_asset_rejection_preserves_shared_demand_recovery_and_publication_leases() {
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     host.asset_resources_mut().set_idle_resident_bytes_target(0);
     let memory = ipp_core::services::io::MemoryIoSource::default();
     let shared = "rejection:shared";
@@ -129,7 +130,7 @@ fn malformed_asset_rejection_preserves_shared_demand_recovery_and_publication_le
     let left_entity = create(&mut host, left, shared);
     let right_entity = create(&mut host, right, shared);
     for _ in 0..4 {
-        host.progress_assets();
+        host.progress_assets_for_test();
         apply(&mut host, left, vec![]);
         apply(&mut host, right, vec![]);
     }
@@ -231,7 +232,7 @@ fn malformed_asset_rejection_preserves_shared_demand_recovery_and_publication_le
     );
     assert!(host.asset_resources_mut().release_publication(publication));
     assert!(!host.asset_resources_mut().release_publication(publication));
-    host.progress_assets();
+    host.progress_assets_for_test();
     assert!(host.asset_resources().get(key).is_none());
     assert!(
         apply(
@@ -252,7 +253,7 @@ fn malformed_asset_rejection_preserves_shared_demand_recovery_and_publication_le
 #[test]
 fn rejected_unavailable_type_does_not_index_it_or_retain_a_replaced_selection() {
     use ipp_core::services::asset_management::{AssetSource, AssetTypeId};
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world = source_world(&mut host);
     let created = apply(
         &mut host,
@@ -328,7 +329,7 @@ fn rejected_unavailable_type_does_not_index_it_or_retain_a_replaced_selection() 
 
 #[test]
 fn whole_insert_validates_the_completed_source_not_overwritten_private_fields() {
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world = host.create_world(WorldLimits::default(), RENDER).unwrap();
     let report = apply(
         &mut host,
@@ -357,7 +358,7 @@ fn whole_insert_validates_the_completed_source_not_overwritten_private_fields() 
 
 #[test]
 fn invalid_custom_material_insert_does_not_install_a_component_or_demand() {
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world = source_world(&mut host);
     for typed in [false, true] {
         let value = ipp_core::components::CustomMaterial {
@@ -411,7 +412,7 @@ fn invalid_custom_material_insert_does_not_install_a_component_or_demand() {
 
 #[test]
 fn committed_pending_demand_shares_work_and_becomes_drawable_only_at_boundary() {
-    let mut fixture_host = ipp_core::HostRuntime::new();
+    let mut fixture_host = crate::support::task_scheduler::host();
     // This test proves eviction at final demand, so the Host keeps no idle cache.
     fixture_host
         .asset_resources_mut()
@@ -530,7 +531,7 @@ fn committed_pending_demand_shares_work_and_becomes_drawable_only_at_boundary() 
 
 #[test]
 fn builtin_query_sources_keep_exact_identity_and_publish_through_resource_manager() {
-    let mut fixture_host = ipp_core::HostRuntime::new();
+    let mut fixture_host = crate::support::task_scheduler::host();
     let world = source_world(&mut fixture_host);
     let reordered = "ipp://mesh/cube?length=6&width=2&height=4";
     let canonical = "ipp://mesh/cube?width=2&height=4&length=6";
@@ -594,7 +595,7 @@ fn builtin_query_sources_keep_exact_identity_and_publish_through_resource_manage
 #[test]
 fn structurally_valid_encoded_nul_reaches_builtin_provider_failure() {
     let uri = "ipp://mesh/sphere?radius=%00";
-    let mut fixture_host = ipp_core::HostRuntime::new();
+    let mut fixture_host = crate::support::task_scheduler::host();
     let world = source_world(&mut fixture_host);
     let entity = create(&mut fixture_host, world, uri);
     let request = resource_requests(&mut fixture_host, world).pop().unwrap();
@@ -654,7 +655,7 @@ fn structurally_valid_encoded_nul_reaches_builtin_provider_failure() {
 
 #[test]
 fn replacement_cancels_old_work_and_queued_or_late_completions_cannot_resurrect_it() {
-    let mut fixture_host = ipp_core::HostRuntime::new();
+    let mut fixture_host = crate::support::task_scheduler::host();
     let world = source_world(&mut fixture_host);
     let entity = create(&mut fixture_host, world, "file:///a.mesh");
     let old = resource_requests(&mut fixture_host, world)[0].id;
@@ -751,7 +752,7 @@ fn replacement_cancels_old_work_and_queued_or_late_completions_cannot_resurrect_
 
 #[test]
 fn failed_batches_keep_new_demand_and_ignore_cancelled_source_completions() {
-    let mut fixture_host = ipp_core::HostRuntime::new();
+    let mut fixture_host = crate::support::task_scheduler::host();
     let world = source_world(&mut fixture_host);
     let entity = create(
         &mut fixture_host,
@@ -816,7 +817,7 @@ fn malformed_and_failed_payloads_preserve_scene_and_do_not_block_ready_items() {
         Err("Unsupported provider".into()),
         Ok(b"not a mesh".to_vec()),
     ] {
-        let mut fixture_host = ipp_core::HostRuntime::new();
+        let mut fixture_host = crate::support::task_scheduler::host();
         let world = source_world(&mut fixture_host);
         let ready = create(&mut fixture_host, world, "ipp://ready");
         let request = resource_requests(&mut fixture_host, world)[0].id;
@@ -871,7 +872,7 @@ fn malformed_and_failed_payloads_preserve_scene_and_do_not_block_ready_items() {
 
 #[test]
 fn source_routing_preserves_opaque_names_and_owned_allocations() {
-    let mut fixture_host = ipp_core::HostRuntime::new();
+    let mut fixture_host = crate::support::task_scheduler::host();
     let world = source_world(&mut fixture_host);
     let entity = create(&mut fixture_host, world, "");
     assert!(resource_requests(&mut fixture_host, world).is_empty());
@@ -945,11 +946,8 @@ fn source_routing_preserves_opaque_names_and_owned_allocations() {
             .complete_resource(ticket, Err("x".repeat(2049))),
         Ok(())
     );
-    fixture_host
-        .world_mut(world)
-        .unwrap()
-        .complete_resource(ticket, Ok(triangle()))
-        .unwrap();
+    // The first complete delivery owns this exact acquisition; duplicates cannot
+    // replace its accepted prefix, including a later descriptor with less capacity.
     fixture_host.update_world_for_test(world, 0.0).unwrap();
     assert_eq!(
         fixture_host.world_mut(world).unwrap().render_items().len(),
@@ -959,7 +957,7 @@ fn source_routing_preserves_opaque_names_and_owned_allocations() {
 
 #[test]
 fn source_cache_releases_capacity_across_more_than_one_cacheful_of_replacements() {
-    let mut fixture_host = ipp_core::HostRuntime::new();
+    let mut fixture_host = crate::support::task_scheduler::host();
     let world = source_world(&mut fixture_host);
     let entity = create(&mut fixture_host, world, "ipp://first");
     for n in 0..300 {
@@ -1010,7 +1008,7 @@ fn source_cache_releases_capacity_across_more_than_one_cacheful_of_replacements(
 
 #[test]
 fn queued_batches_reconcile_only_the_final_boundary_demand() {
-    let mut fixture_host = ipp_core::HostRuntime::new();
+    let mut fixture_host = crate::support::task_scheduler::host();
     let world = source_world(&mut fixture_host);
     let entity = create(&mut fixture_host, world, "https://assets.test/initial.mesh");
     let initial = resource_requests(&mut fixture_host, world)[0].id;
@@ -1053,7 +1051,7 @@ fn queued_batches_reconcile_only_the_final_boundary_demand() {
 
 #[test]
 fn undrained_cancellations_do_not_limit_new_host_work() {
-    let mut fixture_host = ipp_core::HostRuntime::new();
+    let mut fixture_host = crate::support::task_scheduler::host();
     let world = source_world(&mut fixture_host);
     let entity = create(&mut fixture_host, world, "ipp://first");
     for n in 0..256 {
@@ -1092,7 +1090,7 @@ fn undrained_cancellations_do_not_limit_new_host_work() {
 
 #[test]
 fn replacing_the_only_resource_waits_for_its_host_release_barrier() {
-    let mut fixture_host = ipp_core::HostRuntime::new();
+    let mut fixture_host = crate::support::task_scheduler::host();
     let world = source_world(&mut fixture_host);
     let entity = create(&mut fixture_host, world, "ipc://original");
     let original = resource_requests(&mut fixture_host, world)[0].id;
@@ -1111,7 +1109,7 @@ fn replacing_the_only_resource_waits_for_its_host_release_barrier() {
         .unwrap()
         .prepare_update(0.0)
         .unwrap();
-    fixture_host.progress_assets();
+    fixture_host.progress_assets_for_test();
     let report = fixture_host.world_mut(world).unwrap().step(0.0).unwrap();
     assert!(report.outcomes[0].result.is_ok());
     assert_eq!(fixture_host.asset_resources().iter().count(), 2);
@@ -1141,7 +1139,7 @@ fn replacing_the_only_resource_waits_for_its_host_release_barrier() {
 
 #[test]
 fn completion_queue_and_world_demand_grow_past_former_quotas() {
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world = source_world(&mut host);
     for n in 0..300 {
         create(&mut host, world, &format!("ipp://mesh/{n}"));
@@ -1157,7 +1155,7 @@ fn completion_queue_and_world_demand_grow_past_former_quotas() {
 
 #[test]
 fn typed_demand_is_distinct_and_uv_incompatibility_does_not_poison_shared_mesh() {
-    let mut fixture_host = ipp_core::HostRuntime::new();
+    let mut fixture_host = crate::support::task_scheduler::host();
     let world = source_world(&mut fixture_host);
     let solid = create(&mut fixture_host, world, "https://assets.test/shared");
     let textured = create(&mut fixture_host, world, "https://assets.test/shared");

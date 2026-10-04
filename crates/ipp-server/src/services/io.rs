@@ -1,28 +1,46 @@
-//! Native filesystem access through generic data-source contracts.
+//! Native sources use asynchronous operations and the Host's shared IO pool.
+//!
+//! FileSystemIoSource confines literal names to its configured root. The shipped
+//! server enables HTTP only through repeatable `--http-prefix` options (none by
+//! default); Host registration rejects overlapping namespaces. An enabled source
+//! does not itself grant a connection asset-export authority.
+//!
+//! Linux SealedMappedIoSource lends immutable memfd bytes directly after kernel
+//! WRITE/GROW/SHRINK seals are verified. It does not support ordinary mutable-file
+//! mapping. File and HTTP streams fill one eventual lent buffer; HTTP/TLS library
+//! transport buffers are separate from that reader-storage accounting. External
+//! browser ArrayBuffer/SAB sources use one admitted copy into WASM storage, not
+//! native mapping or directly borrowed shared WebAssembly.Memory.
 
-use ipp_core::services::io::{IoReadOptions, IoReader, IoSource, IoWriter};
+use ipp_core::services::io::{
+    IoListFuture, IoListing, IoListingBackend, IoOpenReadFuture, IoOpenWriteFuture, IoReadOptions,
+    IoReader, IoSource, IoWriteBackend, IoWriter,
+};
+use ipp_host_session::services::task_scheduler::{IoScheduler, TaskHandle};
 use std::{
     fs::File,
-    io::Read,
     path::{Component, Path, PathBuf},
-    sync::{
-        Arc, Mutex,
-        mpsc::{Receiver, TryRecvError, sync_channel},
-    },
-    task::{Context, Poll, Waker},
+    task::{Context, Poll},
 };
 
 /// Root-confined filesystem source. Identifiers are literal paths after its prefix.
-/// Filesystem reads run on a worker and retain at most two 64 KiB input chunks.
+/// Reads use the shared blocking pool and lend one reusable, lookahead-sized buffer.
+#[derive(Clone)]
 pub struct FileSystemIoSource {
     prefix: String,
     root: PathBuf,
     writable: bool,
+    scheduler: IoScheduler,
 }
 
 impl FileSystemIoSource {
     /// Select the Host-authorized root and explicit write capability.
-    pub fn new(prefix: &str, root: impl AsRef<Path>, writable: bool) -> Result<Self, String> {
+    pub fn new(
+        prefix: &str,
+        root: impl AsRef<Path>,
+        writable: bool,
+        scheduler: IoScheduler,
+    ) -> Result<Self, String> {
         let root = root
             .as_ref()
             .canonicalize()
@@ -34,6 +52,7 @@ impl FileSystemIoSource {
             prefix: prefix.to_owned(),
             root,
             writable,
+            scheduler,
         })
     }
 
@@ -97,160 +116,155 @@ impl FileSystemIoSource {
 }
 
 impl IoSource for FileSystemIoSource {
-    fn list(&mut self, identifier: &str) -> Result<Vec<String>, String> {
-        let path = self.path(identifier, false)?;
-        let mut names = Vec::new();
-        for entry in std::fs::read_dir(path).map_err(|error| error.to_string())? {
-            if names.len() >= 4096 {
-                return Err("Filesystem listing budget exhausted".into());
-            }
-            let path = entry.map_err(|error| error.to_string())?.path();
-            let canonical = path.canonicalize().map_err(|error| error.to_string())?;
-            if !canonical.starts_with(&self.root) {
-                continue;
-            }
-            let relative = path
-                .strip_prefix(&self.root)
-                .map_err(|error| error.to_string())?;
-            names.push(format!(
-                "{}{}{}",
-                self.prefix,
-                self.separator(),
-                relative
-                    .to_str()
-                    .ok_or("Filesystem identifier is not UTF-8")?
-            ));
-        }
-        names.sort();
-        Ok(names)
+    fn list(&mut self, identifier: &str) -> IoListFuture {
+        let source = self.clone();
+        let listing_source = source.clone();
+        let identifier = identifier.to_owned();
+        let scheduler = self.scheduler.clone();
+        Box::pin(async move {
+            let directory = scheduler
+                .blocking(move || {
+                    let path = source.path(&identifier, false)?;
+                    std::fs::read_dir(path).map_err(|error| error.to_string())
+                })
+                .await
+                .map_err(|error| error.to_string())??;
+            Ok(Box::new(FileIoListing {
+                source: listing_source,
+                directory: Some(directory),
+                finished: false,
+                pending: None,
+            }) as Box<dyn IoListing>)
+        })
     }
 
-    fn open_read(
-        &mut self,
-        identifier: &str,
-        options: IoReadOptions,
-    ) -> Result<Box<dyn IoReader>, String> {
-        // A mutable filesystem path has no immutable-content validator. Explicitly
-        // fail recovery instead of silently accepting replacement file contents.
-        if options.recovery {
-            return Err("Filesystem recovery has no immutable content validator".into());
-        }
-        let path = self.path(identifier, false)?;
-        let (sender, receiver) = sync_channel(1);
-        let wake: Arc<Mutex<Option<Waker>>> = Arc::default();
-        let worker_wake = wake.clone();
-        std::thread::Builder::new()
-            .name("ipp-data-input".into())
-            .spawn(move || {
-                let result = (|| {
-                    let mut file = File::open(path).map_err(|error| error.to_string())?;
+    fn open_read(&mut self, identifier: &str, options: IoReadOptions) -> IoOpenReadFuture {
+        let source = self.clone();
+        let identifier = identifier.to_owned();
+        let scheduler = self.scheduler.clone();
+        Box::pin(async move {
+            if options.recovery {
+                return Err("Filesystem recovery has no immutable content validator".into());
+            }
+            let file = scheduler
+                .blocking(move || {
+                    let path = source.path(&identifier, false)?;
+                    let file = File::open(path).map_err(|error| error.to_string())?;
                     let length = file.metadata().map_err(|error| error.to_string())?.len();
                     if options.max_bytes.is_some_and(|limit| length > limit as u64) {
                         return Err("Filesystem input byte budget exhausted".into());
                     }
-                    let mut read = 0usize;
-                    loop {
-                        let mut bytes =
-                            vec![
-                                0;
-                                (64 << 10).min(options.max_bytes.map_or(64 << 10, |limit| {
-                                    limit.saturating_sub(read).saturating_add(1)
-                                }))
-                            ];
-                        let count = file.read(&mut bytes).map_err(|error| error.to_string())?;
-                        if count == 0 {
-                            return Ok(());
-                        }
-                        read += count;
-                        if options.max_bytes.is_some_and(|limit| read > limit) {
-                            return Err("Filesystem input byte budget exhausted".into());
-                        }
-                        bytes.truncate(count);
-                        if sender.send(Ok(bytes)).is_err() {
-                            return Ok(());
-                        }
-                        if let Some(waker) = worker_wake.lock().expect("input waker").take() {
-                            waker.wake();
-                        }
-                    }
-                })();
-                let _ = sender.send(result.map(|()| Vec::new()));
-                if let Some(waker) = worker_wake.lock().expect("input waker").take() {
-                    waker.wake();
-                }
-            })
-            .map_err(|error| error.to_string())?;
-        Ok(Box::new(FileIoReader {
-            receiver,
-            wake,
-            bytes: Vec::new(),
-            offset: 0,
-            ended: false,
-        }))
+                    Ok::<_, String>(file)
+                })
+                .await
+                .map_err(|error| error.to_string())??;
+            Ok(Box::new(super::stream_input::NativeStreamIoReader::new(
+                file, scheduler, options,
+            )) as Box<dyn IoReader>)
+        })
     }
 
     fn can_write(&self, identifier: &str) -> bool {
-        self.writable && self.path(identifier, true).is_ok()
+        self.writable
+            && identifier
+                .strip_prefix(&self.prefix)
+                .is_some_and(|relative| {
+                    let relative = if self.separator().is_empty() {
+                        relative
+                    } else {
+                        relative.strip_prefix('/').unwrap_or(relative)
+                    };
+                    !relative.is_empty()
+                        && Path::new(relative)
+                            .components()
+                            .all(|part| matches!(part, Component::Normal(_) | Component::CurDir))
+                })
     }
 
-    fn open_write(
-        &mut self,
-        identifier: &str,
-        max_bytes: usize,
-    ) -> Result<Box<dyn IoWriter>, String> {
-        if !self.writable {
-            return Err("Filesystem source is read-only".into());
-        }
-        let path = self.path(identifier, true)?;
-        Ok(Box::new(BoundedFileIoWriter {
-            writer: super::asset_output::NativeFileIoWriter::new(path)?,
-            remaining: max_bytes,
-        }))
+    fn open_write(&mut self, identifier: &str, max_bytes: usize) -> IoOpenWriteFuture {
+        let source = self.clone();
+        let identifier = identifier.to_owned();
+        let scheduler = self.scheduler.clone();
+        Box::pin(async move {
+            if !source.writable {
+                return Err("Filesystem source is read-only".into());
+            }
+            let path = scheduler
+                .blocking(move || source.path(&identifier, true))
+                .await
+                .map_err(|error| error.to_string())??;
+            let writer = super::asset_output::NativeFileIoWriter::new(path, scheduler).await?;
+            Ok(Box::new(BoundedFileIoWriter {
+                writer,
+                remaining: max_bytes,
+            }) as Box<dyn IoWriter>)
+        })
     }
 }
 
-struct FileIoReader {
-    receiver: Receiver<Result<Vec<u8>, String>>,
-    wake: Arc<Mutex<Option<Waker>>>,
-    bytes: Vec<u8>,
-    offset: usize,
-    ended: bool,
+type FileListingStep = (std::fs::ReadDir, Result<Option<String>, String>);
+
+struct FileIoListing {
+    source: FileSystemIoSource,
+    directory: Option<std::fs::ReadDir>,
+    finished: bool,
+    pending: Option<TaskHandle<FileListingStep>>,
 }
 
-impl IoReader for FileIoReader {
-    fn poll_read(
-        &mut self,
-        cx: &mut Context<'_>,
-        output: &mut [u8],
-    ) -> Poll<Result<usize, String>> {
-        if output.is_empty() || self.ended {
-            return Poll::Ready(Ok(0));
+impl IoListingBackend for FileIoListing {
+    fn poll_next(&mut self, cx: &mut Context<'_>) -> Poll<Result<Option<String>, String>> {
+        if self.finished {
+            return Poll::Ready(Ok(None));
         }
-        if self.offset == self.bytes.len() {
-            *self.wake.lock().expect("input waker") = Some(cx.waker().clone());
-            match self.receiver.try_recv() {
-                Ok(Ok(bytes)) => {
-                    self.bytes = bytes;
-                    self.offset = 0;
-                    if self.bytes.is_empty() {
-                        self.ended = true;
-                        return Poll::Ready(Ok(0));
+        if self.pending.is_none() {
+            let mut directory = self.directory.take().expect("filesystem listing");
+            let source = self.source.clone();
+            self.pending = Some(self.source.scheduler.blocking(move || {
+                let result = (|| {
+                    loop {
+                        let Some(entry) = directory.next() else {
+                            return Ok(None);
+                        };
+                        let path = entry.map_err(|error| error.to_string())?.path();
+                        let canonical = path.canonicalize().map_err(|error| error.to_string())?;
+                        if !canonical.starts_with(&source.root) {
+                            continue;
+                        }
+                        let relative = path
+                            .strip_prefix(&source.root)
+                            .map_err(|error| error.to_string())?;
+                        return Ok(Some(format!(
+                            "{}{}{}",
+                            source.prefix,
+                            source.separator(),
+                            relative
+                                .to_str()
+                                .ok_or("Filesystem identifier is not UTF-8")?
+                        )));
                     }
+                })();
+                (directory, result)
+            }));
+        }
+        use std::future::Future;
+        match std::pin::Pin::new(self.pending.as_mut().expect("pending filesystem listing"))
+            .poll(cx)
+        {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Err(error)) => {
+                self.pending = None;
+                self.finished = true;
+                Poll::Ready(Err(error.to_string()))
+            }
+            Poll::Ready(Ok((directory, result))) => {
+                self.pending = None;
+                self.finished = !matches!(result, Ok(Some(_)));
+                if !self.finished {
+                    self.directory = Some(directory);
                 }
-                Ok(Err(error)) => {
-                    self.ended = true;
-                    return Poll::Ready(Err(error));
-                }
-                Err(TryRecvError::Empty) => return Poll::Pending,
-                Err(TryRecvError::Disconnected) => {
-                    return Poll::Ready(Err("Filesystem reader ended without completion".into()));
-                }
+                Poll::Ready(result)
             }
         }
-        let count = output.len().min(self.bytes.len() - self.offset);
-        output[..count].copy_from_slice(&self.bytes[self.offset..self.offset + count]);
-        self.offset += count;
-        Poll::Ready(Ok(count))
     }
 }
 
@@ -259,7 +273,11 @@ struct BoundedFileIoWriter {
     remaining: usize,
 }
 
-impl IoWriter for BoundedFileIoWriter {
+impl IoWriteBackend for BoundedFileIoWriter {
+    fn cancellation(&self) -> Option<ipp_core::services::io::IoCancellation> {
+        self.writer.cancellation()
+    }
+
     fn poll_write(&mut self, cx: &mut Context<'_>, bytes: &[u8]) -> Poll<Result<usize, String>> {
         if bytes.len() > self.remaining {
             return Poll::Ready(Err("Filesystem output byte budget exhausted".into()));

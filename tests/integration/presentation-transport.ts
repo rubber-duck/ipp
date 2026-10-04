@@ -92,13 +92,25 @@ export function presentationTransport(
           new DataView(cancelled.buffer).setBigUint64(26, lastFrame!, true);
           transport.send(cancelled);
           return;
-        } else if (bytes[25] === wire.PRESENTATION_REQUEST_READ_CAPTURE) {
-          const capture = view.getBigUint64(26, true);
+        }
+      }
+      if (
+        bytes[0] === 0x49 &&
+        bytes[1] === 0x50 &&
+        bytes[2] === 0x44 &&
+        bytes[3] === 0x52
+      ) {
+        const view = new DataView(
+          bytes.buffer,
+          bytes.byteOffset,
+          bytes.byteLength,
+        );
+        const capture = view.getBigUint64(20, true);
+        if (bytes[28] === 0) {
           const offsets = reads.get(capture) ?? [];
-          offsets.push(view.getBigUint64(34, true));
+          offsets.push(view.getBigUint64(29, true));
           reads.set(capture, offsets);
-        } else if (bytes[25] === wire.PRESENTATION_REQUEST_RELEASE_CAPTURE) {
-          const capture = view.getBigUint64(26, true);
+        } else if (bytes[28] === 2 || (bytes[28] === 1 && bytes[37] === 1)) {
           releases.set(capture, (releases.get(capture) ?? 0) + 1);
         }
       }

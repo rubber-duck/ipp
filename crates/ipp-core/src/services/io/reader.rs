@@ -1,317 +1,200 @@
-//! Reader/provider contracts and a bounded host-fed asynchronous stream.
+//! Allocation-free read futures and scoped immutable windows.
 
-use super::{IoReadOptions, IoSource, STREAM_CAPACITY};
+use super::{IoError, IoPlatformSend};
 use std::{
-    cell::{Cell, RefCell},
-    collections::{BTreeMap, VecDeque},
-    rc::{Rc, Weak},
-    sync::Arc,
-    task::{Context, Poll, Waker},
+    future::Future,
+    num::NonZeroUsize,
+    pin::Pin,
+    sync::atomic::{AtomicU64, Ordering},
+    task::{Context, Poll},
 };
 
-/// Asynchronous owned input, independent of an executor or graphics backend.
-pub trait IoReader {
-    /// Host request correlation for asynchronous input, when present.
+/// Host-local storage identity for deduplicating retained memory accounting.
+/// This opaque token is not a transferable descriptor or client authority.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct IoStorageId(pub(crate) usize);
+
+impl IoStorageId {
+    /// Identify existing backing without exposing an address or creating authority.
+    pub fn of_backing<T: ?Sized>(backing: &std::sync::Arc<T>) -> Self {
+        Self(std::sync::Arc::as_ptr(backing) as *const () as usize)
+    }
+}
+
+/// Actual allocation retained by a reader, including borrowed and filling spans.
+#[derive(Clone, Copy)]
+pub struct IoReaderStorage {
+    /// Equal identities refer to the same retained allocation.
+    pub identity: IoStorageId,
+    /// Retained owned heap allocation, not only the current readable range.
+    pub bytes: usize,
+    /// File-backed virtual address space, distinct from owned heap pressure.
+    pub mapped_bytes: usize,
+}
+
+/// Dynamically dispatchable input with an independent logical cursor.
+pub trait IoReader: IoReadBackend {
+    /// Await a contiguous minimum, or a shorter explicitly final window.
+    fn read(&mut self, minimum: NonZeroUsize) -> IoReadFuture<'_>;
+}
+
+impl<T: IoReadBackend> IoReader for T {
+    fn read(&mut self, minimum: NonZeroUsize) -> IoReadFuture<'_> {
+        IoReadFuture::new(self, minimum)
+    }
+}
+
+/// Provider implementation boundary. Consumers use [`IoReader::read`].
+/// Readiness never consumes input. Success guarantees that the next window
+/// contains the requested minimum or is final. Pending work belongs to the reader.
+pub trait IoReadBackend: IoPlatformSend {
+    /// Prepare a window without exposing mutable storage to consumers.
+    fn poll_ready(
+        &mut self,
+        cx: &mut Context<'_>,
+        minimum: NonZeroUsize,
+    ) -> Poll<Result<(), IoError>>;
+
+    /// Lend the range prepared by a successful readiness poll.
+    fn window(&mut self) -> IoReadWindow<'_>;
+
+    /// Current retained backing. None means the provider cannot account its storage;
+    /// callers must preserve that distinction instead of recording a known zero.
+    /// Identity may change between polls. Storage changes outside poll_ready must
+    /// wake its registered read waiter so acquisition pressure remains observable.
+    fn retained_storage(&self) -> Option<IoReaderStorage> {
+        None
+    }
+
+    /// Observe retained storage independently of read readiness. Register before
+    /// sampling retained_storage to close the allocation/snapshot wake race.
+    /// Providers changing capacity or identity outside poll_ready must retain this
+    /// observer and wake it on every change, even without a pending read. The
+    /// default is valid only for immutable storage or changes inside poll_ready.
+    /// Registration never prepares a window or consumes input. Drop must detach
+    /// the observer if provider state survives the reader.
+    fn register_storage_waker(&mut self, _waker: &std::task::Waker) {}
+
+    /// Platform correlation for this exact acquisition, if any.
     fn request_id(&self) -> Option<u64> {
         None
     }
 
-    /// Fill a caller-owned buffer. Zero means EOF, Pending means await more input.
-    fn poll_read(&mut self, cx: &mut Context<'_>, output: &mut [u8])
-    -> Poll<Result<usize, String>>;
+    /// Cancels platform acquisition when the registration is revoked.
+    fn cancellation(&self) -> Option<super::IoCancellation> {
+        None
+    }
 }
 
-/// Reader over exclusively owned or shared immutable bytes.
-pub struct MemoryIoReader {
-    bytes: Arc<Vec<u8>>,
-    offset: usize,
+/// Provider-owned cursor and backing protected by an exclusive window borrow.
+pub trait IoWindowBackend: IoPlatformSend {
+    /// Currently lent immutable range.
+    fn bytes(&self) -> &[u8];
+
+    /// Whether no bytes follow this range.
+    fn is_final(&self) -> bool;
+
+    /// Advance an already checked prefix; failure must leave the cursor unchanged.
+    fn consume(&mut self, count: usize) -> Result<(), IoError>;
+
+    /// Release backing without consuming input and resume filling if needed.
+    fn release(&mut self) {}
 }
 
-impl MemoryIoReader {
-    /// Retain immutable input without copying it for each reader.
-    pub fn new(bytes: impl Into<Vec<u8>>) -> Self {
+/// Named read future with no allocation at dynamic reader boundaries.
+pub struct IoReadFuture<'a> {
+    backend: Option<&'a mut dyn IoReadBackend>,
+    minimum: NonZeroUsize,
+}
+
+impl<'a> IoReadFuture<'a> {
+    /// Construct a future over provider-owned readiness state.
+    pub fn new(backend: &'a mut dyn IoReadBackend, minimum: NonZeroUsize) -> Self {
         Self {
-            bytes: Arc::new(bytes.into()),
-            offset: 0,
+            backend: Some(backend),
+            minimum,
         }
     }
 }
 
-impl IoReader for MemoryIoReader {
-    fn poll_read(
-        &mut self,
-        _cx: &mut Context<'_>,
-        output: &mut [u8],
-    ) -> Poll<Result<usize, String>> {
-        let n = output.len().min(self.bytes.len() - self.offset);
-        output[..n].copy_from_slice(&self.bytes[self.offset..self.offset + n]);
-        self.offset += n;
-        Poll::Ready(Ok(n))
-    }
-}
+impl<'a> Future for IoReadFuture<'a> {
+    type Output = Result<IoReadWindow<'a>, IoError>;
 
-/// Host work referencing a specific input stream, never the manager's lifecycle.
-#[derive(Clone, Debug)]
-pub(crate) struct IoStreamRequest {
-    /// Private host stream correlation; a new reader receives a new value.
-    pub id: u64,
-    /// Named immutable input.
-    pub source: String,
-    /// Optional caller bound for this operation.
-    pub max_bytes: Option<usize>,
-    /// This reader must recover previously accepted content.
-    pub recovery: bool,
-}
-
-struct IoStreamBuffer {
-    bytes: VecDeque<u8>,
-    received: usize,
-    limit: Option<usize>,
-    end: Option<Result<(), String>>,
-    waker: Option<Waker>,
-}
-
-/// Writer tied directly to its originating reader. A dropped reader invalidates
-/// this writer, so delayed network input cannot reach a subsequent load.
-#[derive(Clone)]
-pub(crate) struct IoStreamWriter {
-    pipe: Weak<RefCell<IoStreamBuffer>>,
-    finished: Rc<Cell<bool>>,
-}
-
-impl IoStreamWriter {
-    /// Copy a bounded chunk. False means backpressure: keep the input and retry.
-    /// Data for a cancelled reader is harmless and considered consumed.
-    pub fn push(&self, bytes: &[u8]) -> Result<bool, String> {
-        if bytes.len() > STREAM_CAPACITY {
-            return Err("Asset chunk exceeds stream capacity".into());
-        }
-        let Some(pipe) = self.pipe.upgrade() else {
-            return Ok(true);
-        };
-        let mut pipe = pipe.borrow_mut();
-        if pipe.end.is_some() {
-            return Err("Asset input already ended".into());
-        }
-        if pipe
-            .limit
-            .is_some_and(|limit| bytes.len() > limit.saturating_sub(pipe.received))
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        match this
+            .backend
+            .as_mut()
+            .expect("completed IO read future")
+            .poll_ready(cx, this.minimum)
         {
-            return Err("Data input byte budget exhausted".into());
-        }
-        if bytes.len() > STREAM_CAPACITY - pipe.bytes.len() {
-            return Ok(false);
-        }
-        pipe.bytes
-            .try_reserve(bytes.len())
-            .map_err(|error| error.to_string())?;
-        pipe.bytes.extend(bytes);
-        pipe.received = pipe
-            .received
-            .checked_add(bytes.len())
-            .ok_or("Data input length overflow")?;
-        if let Some(waker) = pipe.waker.take() {
-            waker.wake();
-        }
-        Ok(true)
-    }
-
-    /// Mark EOF or failure; buffered bytes are consumed before successful EOF.
-    pub fn finish(&self, result: Result<(), String>) {
-        if let Some(pipe) = self.pipe.upgrade() {
-            let mut pipe = pipe.borrow_mut();
-            if pipe.end.is_none() {
-                pipe.end = Some(result.map_err(super::bounded_error));
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Err(error)) => {
+                this.backend.take();
+                Poll::Ready(Err(error))
             }
-            if let Some(waker) = pipe.waker.take() {
-                waker.wake();
+            Poll::Ready(Ok(())) => {
+                let window = this.backend.take().expect("ready IO reader").window();
+                if window.bytes().len() < this.minimum.get() && !window.is_final() {
+                    return Poll::Ready(Err(
+                        "IO provider returned less than the requested minimum".into(),
+                    ));
+                }
+                Poll::Ready(Ok(window))
             }
         }
     }
+}
 
-    /// Configured whole-input bound for this reader.
-    pub fn max_bytes(&self) -> Option<usize> {
-        self.pipe.upgrade().and_then(|pipe| pipe.borrow().limit)
+/// Scoped immutable range. Only explicit prefix consumption advances input.
+pub struct IoReadWindow<'a> {
+    backend: &'a mut dyn IoWindowBackend,
+    counter: Option<&'a AtomicU64>,
+}
+
+impl<'a> IoReadWindow<'a> {
+    /// Lend backing; this exclusive borrow prevents mutation, unmapping and reuse.
+    pub fn new(backend: &'a mut dyn IoWindowBackend) -> Self {
+        Self {
+            backend,
+            counter: None,
+        }
     }
 
-    /// Retained staging allocation, including space already consumed by the reader.
-    pub fn buffered_bytes(&self) -> usize {
-        self.pipe
-            .upgrade()
-            .map_or(0, |pipe| pipe.borrow().bytes.capacity())
+    pub(crate) fn count_into(mut self, counter: &'a AtomicU64) -> Self {
+        self.counter = Some(counter);
+        self
     }
 
-    /// Whether the originating resource still owns its reader.
-    pub fn is_open(&self) -> bool {
-        self.pipe.strong_count() != 0
+    /// Borrow bytes until this window is consumed or released.
+    pub fn bytes(&self) -> &[u8] {
+        self.backend.bytes()
+    }
+
+    /// No bytes follow this range; an empty final window is cursor EOF.
+    pub fn is_final(&self) -> bool {
+        self.backend.is_final()
+    }
+
+    /// Consume exactly this prefix. Invalid counts fail without advancement.
+    pub fn consume(self, count: usize) -> Result<(), IoError> {
+        if count > self.bytes().len() {
+            return Err("IO consumption exceeds the lent window".into());
+        }
+        self.backend.consume(count)?;
+        if let Some(counter) = self.counter {
+            counter.fetch_add(count as u64, Ordering::Relaxed);
+        }
+        Ok(())
     }
 }
 
-struct IoStreamReader {
-    id: u64,
-    pipe: Rc<RefCell<IoStreamBuffer>>,
-    finished: Rc<Cell<bool>>,
-}
-
-impl Drop for IoStreamReader {
+impl Drop for IoReadWindow<'_> {
     fn drop(&mut self) {
-        let pipe = self.pipe.borrow();
-        self.finished
-            .set(matches!(pipe.end, Some(Ok(()))) && pipe.bytes.is_empty());
+        self.backend.release();
     }
 }
 
-impl IoReader for IoStreamReader {
-    fn request_id(&self) -> Option<u64> {
-        Some(self.id)
-    }
-
-    fn poll_read(
-        &mut self,
-        cx: &mut Context<'_>,
-        output: &mut [u8],
-    ) -> Poll<Result<usize, String>> {
-        let mut pipe = self.pipe.borrow_mut();
-        if let Some(Err(error)) = &pipe.end {
-            return Poll::Ready(Err(error.clone()));
-        }
-        let n = output.len().min(pipe.bytes.len());
-        if n != 0 || output.is_empty() {
-            for destination in &mut output[..n] {
-                *destination = pipe.bytes.pop_front().expect("buffered byte");
-            }
-            return Poll::Ready(Ok(n));
-        }
-        if pipe.end.is_some() {
-            return Poll::Ready(Ok(0));
-        }
-        pipe.waker = Some(cx.waker().clone());
-        Poll::Pending
-    }
-}
-
-#[derive(Default)]
-struct IoStreamRegistry {
-    next_id: u64,
-    requests: VecDeque<IoStreamRequest>,
-    writers: BTreeMap<u64, IoStreamWriter>,
-}
-
-/// Bounded provider bridge shared with the owning host. It only routes bytes;
-/// source schemes and decoders remain separately registered.
-#[derive(Clone, Default)]
-pub(crate) struct IoStreamProvider {
-    streams: Rc<RefCell<IoStreamRegistry>>,
-}
-
-impl IoStreamProvider {
-    /// Take pending host I/O work in opening order.
-    pub fn take_requests(&self, mut selected: impl FnMut(u64) -> bool) -> Vec<IoStreamRequest> {
-        let mut streams = self.streams.borrow_mut();
-        let pending: Vec<_> = streams.requests.drain(..).collect();
-        let mut requests = Vec::new();
-        for request in pending {
-            if !streams
-                .writers
-                .get(&request.id)
-                .is_some_and(IoStreamWriter::is_open)
-            {
-                continue;
-            }
-            if selected(request.id) {
-                requests.push(request);
-            } else {
-                streams.requests.push_back(request);
-            }
-        }
-        requests
-    }
-
-    /// Obtain the writer for this exact reader, including when the host awaits I/O.
-    pub fn writer(&self, id: u64) -> Option<IoStreamWriter> {
-        self.streams.borrow().writers.get(&id).cloned()
-    }
-
-    /// Drain stream identities whose readers were consumed or cancelled.
-    pub fn take_closed(&self) -> Vec<u64> {
-        let mut streams = self.streams.borrow_mut();
-        let closed: Vec<_> = streams
-            .writers
-            .iter()
-            .filter(|(_, writer)| !writer.is_open())
-            .map(|(&id, _)| id)
-            .collect();
-        let cancelled = closed
-            .iter()
-            .filter(|id| !streams.writers[id].finished.get())
-            .copied()
-            .collect();
-        for id in &closed {
-            streams.writers.remove(id);
-        }
-        streams
-            .requests
-            .retain(|request| !closed.contains(&request.id));
-        cancelled
-    }
-
-    /// Aggregate retained input across concurrent streams.
-    pub fn buffered_bytes(&self) -> usize {
-        self.streams
-            .borrow()
-            .writers
-            .values()
-            .map(IoStreamWriter::buffered_bytes)
-            .sum()
-    }
-}
-
-impl IoSource for IoStreamProvider {
-    fn list(&mut self, _identifier: &str) -> Result<Vec<String>, String> {
-        Err("Source listing is unavailable".into())
-    }
-
-    fn open_read(
-        &mut self,
-        source: &str,
-        options: IoReadOptions,
-    ) -> Result<Box<dyn IoReader>, String> {
-        let IoReadOptions {
-            max_bytes,
-            recovery,
-        } = options;
-        let mut streams = self.streams.borrow_mut();
-        streams.writers.retain(|_, writer| !writer.finished.get());
-        let id = streams
-            .next_id
-            .checked_add(1)
-            .ok_or("Asset stream identity exhausted")?;
-        streams.next_id = id;
-        let pipe = Rc::new(RefCell::new(IoStreamBuffer {
-            bytes: VecDeque::new(),
-            received: 0,
-            limit: max_bytes,
-            end: None,
-            waker: None,
-        }));
-        let finished = Rc::new(Cell::new(false));
-        streams.writers.insert(
-            id,
-            IoStreamWriter {
-                pipe: Rc::downgrade(&pipe),
-                finished: finished.clone(),
-            },
-        );
-        streams.requests.push_back(IoStreamRequest {
-            id,
-            source: source.to_owned(),
-            max_bytes,
-            recovery,
-        });
-        Ok(Box::new(IoStreamReader {
-            id,
-            pipe,
-            finished,
-        }))
-    }
-}
+#[cfg(test)]
+#[path = "read_window_tests.rs"]
+mod tests;

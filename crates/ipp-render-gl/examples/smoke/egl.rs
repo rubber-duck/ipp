@@ -284,6 +284,21 @@ impl Context {
         Ok(())
     }
 
+    /// Establish this owned context before Host task polling or cancellation.
+    #[allow(dead_code)]
+    pub fn ensure_current(&self) -> Result<()> {
+        // SAFETY: This Context exclusively owns the live display, surface and
+        // context handles. The Host calls on their owning thread, and no handle
+        // is destroyed until Context drops after renderer and task cleanup.
+        if unsafe { (self.make_current)(self.display, self.surface, self.surface, self.context) }
+            == 0
+        {
+            return Err(self.failure("eglMakeCurrent"));
+        }
+
+        Ok(())
+    }
+
     pub fn device(&self) -> Result<GlesRenderDevice> {
         // SAFETY: This runner keeps Context alive/current on this thread until
         // after RenderService drops. It loads actual matching GLES symbols, and no

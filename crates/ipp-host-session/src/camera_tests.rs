@@ -39,7 +39,10 @@ impl ipp_core::systems::System for FrameCheckFailure {
 impl HostServices for CameraPlatform {
     const NAME: &'static str = "camera-test";
 
-    fn initialize(_: &mut ipp_core::HostRuntime) -> Result<Self, String> {
+    fn initialize(
+        _: &mut ipp_core::HostRuntime,
+        _schedulers: &crate::services::task_scheduler::TaskSchedulers,
+    ) -> Result<Self, String> {
         Ok(Self)
     }
 

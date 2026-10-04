@@ -1,4 +1,3 @@
-import { clientAssetSource } from "@ipp/client";
 import type { BoundingShape, GeometryEncoder } from "@ipp/client";
 import {
   BoundingGeometry,
@@ -19,7 +18,7 @@ import {
   meshSource,
   type GeometryParameters,
 } from "../../shared/geometry-catalog.js";
-import { BEAM_ASSET, beamPickingSource } from "./animation-assets.js";
+import { rigAssetSources } from "./animation-assets.js";
 import type {
   ObjectId,
   ObjectSettings,
@@ -260,11 +259,12 @@ function SkinnedBeam({
 }) {
   const canvas = useIppCanvas();
   if (!canvas) return null;
+  const rig = rigAssetSources(canvas.client);
   const [r, g, b] = hexToLinear(value.color);
   return (
     <ReadyGeometry
       id="lighting-skinning-pending"
-      mesh={clientAssetSource(canvas.client.session, 1, BEAM_ASSET).source}
+      mesh={rig.beam.source}
       texture={undefined}
     >
       {({ mesh }) => (
@@ -290,7 +290,7 @@ function SkinnedBeam({
           {/* Culling encloses the deformed mesh; picking follows the two bone pills. */}
           <BoundingGeometry />
           <PickingGeometry
-            source={beamPickingSource(canvas.client.session)}
+            source={rig.picking.source}
             outline
             is_rendered={selected}
             stroke={0.025}

@@ -89,6 +89,7 @@ impl RenderDevice for MockGuiDevice {
     type Program = u32;
     type Mesh = u32;
     type Texture = u32;
+    type TextureReadback = ();
     type SurfacePath = u32;
     type SurfaceCacheTarget = ();
     type SurfaceInstances = ();

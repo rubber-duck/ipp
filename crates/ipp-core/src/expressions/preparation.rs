@@ -299,3 +299,132 @@ fn validate_graph(
     }
     Ok((kinds, operations))
 }
+
+pub(super) async fn validate_declaration_async(
+    declaration: &ExpressionDeclaration,
+) -> Result<(Vec<Option<DynamicPropertyKind>>, Vec<usize>), ExpressionPrepareError> {
+    if declaration.inputs.len() > MAX_ITEMS || declaration.nodes.len() > MAX_ITEMS {
+        return Err(ExpressionPrepareError::TooComplex);
+    }
+
+    let mut budget = crate::services::asset_management::decode::DecodeBudget::default();
+    let mut names = HashSet::new();
+    for input in &declaration.inputs {
+        budget.advance(input.name.len()).await;
+        if input.name.is_empty() {
+            return Err(ExpressionPrepareError::EmptyInputName);
+        }
+        if !names.insert(input.name.as_str()) {
+            return Err(ExpressionPrepareError::DuplicateInputName);
+        }
+        if !supported(input.kind) {
+            return Err(ExpressionPrepareError::UnsupportedType);
+        }
+    }
+    if declaration.output >= declaration.nodes.len() {
+        return Err(ExpressionPrepareError::InvalidReference);
+    }
+
+    let (kinds, operations) = validate_graph_async(declaration).await?;
+    if operations[declaration.output] > MAX_ITEMS {
+        return Err(ExpressionPrepareError::TooComplex);
+    }
+    Ok((kinds, operations))
+}
+
+async fn validate_graph_async(
+    declaration: &ExpressionDeclaration,
+) -> Result<(Vec<Option<DynamicPropertyKind>>, Vec<usize>), ExpressionPrepareError> {
+    let count = declaration.nodes.len();
+    let mut kinds = vec![None; count];
+    let mut visiting = vec![false; count];
+    let mut heights = vec![0; count];
+    let mut operations = vec![0; count];
+    let mut stack = Vec::new();
+
+    let mut budget = crate::services::asset_management::decode::DecodeBudget::default();
+    for root in 0..count {
+        budget.advance(0).await;
+        if kinds[root].is_some() {
+            continue;
+        }
+        visiting[root] = true;
+        stack.push((root, 0));
+
+        while let Some(&(index, cursor)) = stack.last() {
+            budget.advance(0).await;
+            let node = &declaration.nodes[index];
+            let children = node.children();
+            if let Some(child) = children.get(cursor).copied().flatten() {
+                stack.last_mut().expect("active node").1 += 1;
+                if child >= count {
+                    return Err(ExpressionPrepareError::InvalidReference);
+                }
+                if visiting[child] {
+                    return Err(ExpressionPrepareError::Cycle);
+                }
+                if kinds[child].is_none() {
+                    if stack.len() >= MAX_DEPTH {
+                        return Err(ExpressionPrepareError::TooComplex);
+                    }
+                    visiting[child] = true;
+                    stack.push((child, 0));
+                }
+                continue;
+            }
+
+            // Cache subtree height as well as type. Cached children can conceal
+            // long paths when declaration order already matches dependencies.
+            let height = 1 + children
+                .iter()
+                .flatten()
+                .map(|&i| heights[i])
+                .max()
+                .unwrap_or(0);
+            if height > MAX_DEPTH {
+                return Err(ExpressionPrepareError::TooComplex);
+            }
+            heights[index] = height;
+            kinds[index] = Some(check_type(declaration, index, &kinds)?);
+
+            // The compiler emits each occurrence, including both lazy branches.
+            // Saturation makes even an exponentially shared DAG cheap to refuse
+            // before compilation without overflowing arithmetic or growing a plan.
+            operations[index] = children
+                .iter()
+                .flatten()
+                .fold(node.own_operation_count(), |total, &i| {
+                    (total + operations[i]).min(MAX_ITEMS + 1)
+                });
+            visiting[index] = false;
+            stack.pop();
+        }
+    }
+    Ok((kinds, operations))
+}
+
+impl PreparedExpression {
+    /// Validate and compile a complete private graph without monopolizing a Host task.
+    pub async fn prepare_async(
+        declaration: &ExpressionDeclaration,
+    ) -> Result<Self, ExpressionPrepareError> {
+        let (kinds, operations) = validate_declaration_async(declaration).await?;
+        let operation_count = operations[declaration.output];
+        let (instructions, slots, output) =
+            super::compilation::compile_async(declaration, operation_count).await;
+        let mut inputs = Vec::with_capacity(declaration.inputs.len());
+        let mut budget = crate::services::asset_management::decode::DecodeBudget::default();
+        for input in &declaration.inputs {
+            inputs.push(input.clone());
+            budget.advance(input.name.len()).await;
+        }
+        Ok(Self {
+            identity: Arc::new(()),
+            inputs: inputs.into(),
+            instructions: instructions.into(),
+            slots,
+            output,
+            output_kind: kinds[declaration.output].expect("output validated"),
+        })
+    }
+}

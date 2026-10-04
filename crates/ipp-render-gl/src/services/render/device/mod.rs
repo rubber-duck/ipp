@@ -136,6 +136,9 @@ mod gles;
 #[cfg(target_arch = "wasm32")]
 mod webgl;
 
+#[cfg(target_arch = "wasm32")]
+mod webgl_texture_readback;
+
 #[cfg(not(target_arch = "wasm32"))]
 pub use gles::GlesRenderDevice;
 
@@ -220,7 +223,10 @@ pub trait RenderDevice: 'static {
     type Mesh;
 
     /// Context-owned sRGB color texture.
-    type Texture;
+    type Texture: Clone;
+
+    /// Owned staging/fence state; handles may be retired only by their creating context.
+    type TextureReadback;
 
     /// Context-owned immutable quadratic path acceleration data.
     type SurfacePath;
@@ -688,6 +694,48 @@ pub trait RenderDevice: 'static {
         rows: u32,
         pixels: &[u8],
     ) -> Result<(), RenderError>;
+
+    /// Whether this device implements bounded asynchronous texture staging.
+    fn texture_readback_supported(&self) -> bool {
+        false
+    }
+
+    /// Submit texture storage to a pixel-pack buffer and flush its fence.
+    fn begin_texture_readback(
+        &mut self,
+        _texture: &Self::Texture,
+        _width: u32,
+        _height: u32,
+    ) -> Result<Self::TextureReadback, RenderError> {
+        Err(RenderError::RenderDevice(
+            "GPU texture export unsupported".into(),
+        ))
+    }
+
+    /// Check the submitted fence with zero timeout, without waiting for drawing.
+    fn poll_texture_readback(
+        &mut self,
+        _readback: &Self::TextureReadback,
+    ) -> Result<bool, RenderError> {
+        Err(RenderError::RenderDevice(
+            "GPU texture export unsupported".into(),
+        ))
+    }
+
+    /// Copy an already completed, checked byte range directly into final output.
+    fn copy_texture_readback(
+        &mut self,
+        _readback: &Self::TextureReadback,
+        _offset: usize,
+        _destination: &mut [u8],
+    ) -> Result<(), RenderError> {
+        Err(RenderError::RenderDevice(
+            "GPU texture export unsupported".into(),
+        ))
+    }
+
+    /// Release staging only while its creating context is current.
+    fn delete_texture_readback(&mut self, _readback: Self::TextureReadback) {}
 
     /// Set viewport, opaque depth/culling state and clear the host target.
     fn begin_frame(&mut self, width: u32, height: u32, clear: &[f32; 4])

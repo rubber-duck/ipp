@@ -975,7 +975,10 @@ function ingressNumber(
 ): number {
   const ingress = requireStatistics(statistics).ingress;
   if (!ingress) throw new Error("capture statistics omitted ingress counters");
-  return ingress[field];
+  const value = ingress[field];
+  if (typeof value !== "number")
+    throw new Error(`Missing numeric ingress counter ${field}`);
+  return value;
 }
 
 function recordConsoleError(message: ConsoleMessage, errors: string[]): void {

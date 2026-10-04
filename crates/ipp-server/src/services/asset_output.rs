@@ -1,45 +1,16 @@
-//! Native staged output. File I/O runs on an owned worker; only a completed file is renamed.
+//! Pool-backed sibling-file output with explicit atomic publication.
 
-use ipp_core::services::io::IoWriter;
+use ipp_core::services::io::{IoCancellation, IoWriteBackend};
+use ipp_host_session::services::task_scheduler::{IoScheduler, TaskHandle};
 use std::{
     fs::{File, OpenOptions},
+    future::Future,
     io::Write,
     path::{Path, PathBuf},
-    sync::{
-        Arc, Condvar, Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
-    task::{Context, Poll, Waker},
+    pin::Pin,
+    sync::atomic::{AtomicU64, Ordering},
+    task::{Context, Poll},
 };
-
-enum FileWriteOperation {
-    Write(Vec<u8>),
-    Flush,
-    Finish,
-}
-
-#[derive(Default)]
-struct FileWriteProgress {
-    operation: Option<FileWriteOperation>,
-    result: Option<Result<usize, String>>,
-    waker: Option<Waker>,
-    cancelled: bool,
-    published: bool,
-}
-
-/// An asynchronous sibling-file writer with atomic rename publication.
-///
-/// Accepted bytes and the file are synced before publication. Existing destinations
-/// survive errors and cancellation before the rename. Cancellation racing publication
-/// cannot undo a rename that has already committed. Directory crash durability is a
-/// separate platform policy; successful completion does not promise directory fsync.
-/// One worker and at most one 64 KiB chunk are retained by each active writer.
-pub struct NativeFileIoWriter {
-    shared: Arc<(Mutex<FileWriteProgress>, Condvar)>,
-    pending: Option<FileWriteKind>,
-    flushed: bool,
-    closed: bool,
-}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum FileWriteKind {
@@ -48,22 +19,58 @@ enum FileWriteKind {
     Finish,
 }
 
-impl NativeFileIoWriter {
-    /// Resolve destinations through trusted Host/application policy, never file contents.
-    pub fn new(destination: impl AsRef<Path>) -> Result<Self, String> {
-        let destination = destination.as_ref().to_path_buf();
-        if destination.file_name().is_none() {
-            return Err("Output destination must name a file".into());
+struct FileOutput {
+    file: Option<File>,
+    temporary: PathBuf,
+    destination: PathBuf,
+    published: bool,
+}
+
+impl Drop for FileOutput {
+    fn drop(&mut self) {
+        self.file.take();
+        if !self.published {
+            let _ = std::fs::remove_file(&self.temporary);
         }
-        let shared = Arc::new((Mutex::new(FileWriteProgress::default()), Condvar::new()));
-        let worker = shared.clone();
-        std::thread::Builder::new()
-            .name("ipp-asset-output".into())
-            .spawn(move || run_writer(destination, worker))
-            .map_err(|error| error.to_string())?;
+    }
+}
+
+/// Owned asynchronous file sink. Accepted chunks are synced before atomic rename.
+/// Existing destinations survive cancellation/errors before publication. Cancellation
+/// racing a committed rename cannot undo it; directory crash durability is not promised.
+pub struct NativeFileIoWriter {
+    output: Option<FileOutput>,
+    pending: Option<TaskHandle<(FileOutput, Result<FileWriteKind, String>)>>,
+    scheduler: IoScheduler,
+    cancellation: IoCancellation,
+    flushed: bool,
+    closed: bool,
+}
+
+impl NativeFileIoWriter {
+    /// Create private sibling staging through the Host's blocking pool.
+    pub async fn new(
+        destination: impl AsRef<Path>,
+        scheduler: IoScheduler,
+    ) -> Result<Self, String> {
+        let destination = destination.as_ref().to_path_buf();
+        let output = scheduler
+            .blocking(move || {
+                let (temporary, file) = temporary_file(&destination)?;
+                Ok::<_, String>(FileOutput {
+                    file: Some(file),
+                    temporary,
+                    destination,
+                    published: false,
+                })
+            })
+            .await
+            .map_err(|error| error.to_string())??;
         Ok(Self {
-            shared,
+            output: Some(output),
             pending: None,
+            scheduler,
+            cancellation: IoCancellation::default(),
             flushed: false,
             closed: false,
         })
@@ -73,42 +80,73 @@ impl NativeFileIoWriter {
         &mut self,
         cx: &mut Context<'_>,
     ) -> Poll<Result<Option<FileWriteKind>, String>> {
-        if self.closed {
+        self.cancellation.register(cx.waker());
+        if self.closed || self.cancellation.is_cancelled() {
             return Poll::Ready(Err("File output is closed".into()));
         }
-        let (lock, _) = &*self.shared;
-        let Ok(mut progress) = lock.try_lock() else {
-            cx.waker().wake_by_ref();
-            return Poll::Pending;
+        let Some(pending) = &mut self.pending else {
+            return Poll::Ready(Ok(None));
         };
-        progress.waker = Some(cx.waker().clone());
-        if let Some(result) = progress.result.take() {
-            let kind = self.pending.take();
-            if let Err(error) = result {
+        match Pin::new(pending).poll(cx) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Err(error)) => {
+                self.pending = None;
                 self.closed = true;
-                return Poll::Ready(Err(error));
+                Poll::Ready(Err(error.to_string()))
             }
-            if kind == Some(FileWriteKind::Flush) {
-                self.flushed = true;
+            Poll::Ready(Ok((output, result))) => {
+                self.pending = None;
+                self.output = Some(output);
+                match result {
+                    Err(error) => {
+                        self.abort();
+                        Poll::Ready(Err(error))
+                    }
+                    Ok(kind) => {
+                        if kind == FileWriteKind::Flush {
+                            self.flushed = true;
+                        }
+                        Poll::Ready(Ok(Some(kind)))
+                    }
+                }
             }
-            return Poll::Ready(Ok(kind));
-        }
-        if self.pending.is_some() {
-            Poll::Pending
-        } else {
-            Poll::Ready(Ok(None))
         }
     }
 
-    fn submit(&mut self, kind: FileWriteKind, operation: FileWriteOperation) {
-        let (lock, ready) = &*self.shared;
-        lock.lock().expect("file output mutex").operation = Some(operation);
-        self.pending = Some(kind);
-        ready.notify_one();
+    fn submit(&mut self, kind: FileWriteKind, bytes: Vec<u8>) {
+        let mut output = self.output.take().expect("file output ownership");
+        let cancellation = self.cancellation.clone();
+        self.pending = Some(self.scheduler.blocking(move || {
+            let result = (|| {
+                if cancellation.is_cancelled() {
+                    return Err("File output was cancelled".to_owned());
+                }
+                match kind {
+                    FileWriteKind::Write => {
+                        output.file.as_mut().expect("staged file").write_all(&bytes)
+                    }
+                    FileWriteKind::Flush => {
+                        let file = output.file.as_mut().expect("staged file");
+                        file.flush().and_then(|()| file.sync_all())
+                    }
+                    FileWriteKind::Finish => {
+                        std::fs::rename(&output.temporary, &output.destination)
+                            .map(|()| output.published = true)
+                    }
+                }
+                .map_err(|error| error.to_string())?;
+                Ok(kind)
+            })();
+            (output, result)
+        }));
     }
 }
 
-impl IoWriter for NativeFileIoWriter {
+impl IoWriteBackend for NativeFileIoWriter {
+    fn cancellation(&self) -> Option<IoCancellation> {
+        Some(self.cancellation.clone())
+    }
+
     fn poll_write(&mut self, cx: &mut Context<'_>, bytes: &[u8]) -> Poll<Result<usize, String>> {
         match self.poll_acknowledgement(cx) {
             Poll::Pending => return Poll::Pending,
@@ -123,13 +161,13 @@ impl IoWriter for NativeFileIoWriter {
         if count == 0 {
             return Poll::Ready(Ok(0));
         }
+        let mut accepted = Vec::new();
+        if let Err(error) = accepted.try_reserve_exact(count) {
+            return Poll::Ready(Err(error.to_string()));
+        }
+        accepted.extend_from_slice(&bytes[..count]);
         self.flushed = false;
-        self.submit(
-            FileWriteKind::Write,
-            FileWriteOperation::Write(bytes[..count].to_vec()),
-        );
-        // Ownership and progress are acknowledged together. A Pending call never
-        // copies or consumes the caller's bytes; it only waits for buffer space.
+        self.submit(FileWriteKind::Write, accepted);
         Poll::Ready(Ok(count))
     }
 
@@ -146,8 +184,8 @@ impl IoWriter for NativeFileIoWriter {
         if self.flushed {
             return Poll::Ready(Ok(()));
         }
-        self.submit(FileWriteKind::Flush, FileWriteOperation::Flush);
-        Poll::Pending
+        self.submit(FileWriteKind::Flush, Vec::new());
+        self.poll_flush(cx)
     }
 
     fn poll_finish(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), String>> {
@@ -160,21 +198,18 @@ impl IoWriter for NativeFileIoWriter {
             }
             Poll::Ready(Ok(_)) => {}
         }
-        if self.flushed {
-            self.submit(FileWriteKind::Finish, FileWriteOperation::Finish);
+        if !self.flushed {
+            self.submit(FileWriteKind::Flush, Vec::new());
         } else {
-            self.submit(FileWriteKind::Flush, FileWriteOperation::Flush);
+            self.submit(FileWriteKind::Finish, Vec::new());
         }
-        Poll::Pending
+        self.poll_finish(cx)
     }
 
     fn abort(&mut self) {
-        let (lock, ready) = &*self.shared;
-        let mut progress = lock.lock().expect("file output mutex");
-        progress.cancelled = true;
-        progress.operation = None;
-        progress.result = None;
-        ready.notify_one();
+        self.cancellation.cancel();
+        self.pending = None;
+        self.output = None;
         self.closed = true;
     }
 }
@@ -209,64 +244,6 @@ fn temporary_file(destination: &Path) -> Result<(PathBuf, File), String> {
         }
     }
     Err("Cannot reserve a unique output staging file".into())
-}
-
-fn run_writer(destination: PathBuf, shared: Arc<(Mutex<FileWriteProgress>, Condvar)>) {
-    let (lock, ready) = &*shared;
-    let (temporary, mut file) = match temporary_file(&destination) {
-        Ok(result) => result,
-        Err(error) => {
-            finish_operation(lock, Err(error));
-            return;
-        }
-    };
-    loop {
-        let mut progress = lock.lock().expect("file output mutex");
-        while progress.operation.is_none() && !progress.cancelled {
-            progress = ready.wait(progress).expect("file output mutex");
-        }
-        if progress.cancelled {
-            break;
-        }
-        let operation = progress.operation.take().expect("queued file operation");
-        if matches!(operation, FileWriteOperation::Finish) {
-            // Serialize cancellation against the publication point. The worker owns all
-            // file work and the caller never waits for writes or sync in a poll method.
-            let result = std::fs::rename(&temporary, &destination)
-                .map(|()| 0)
-                .map_err(|error| error.to_string());
-            progress.published = result.is_ok();
-            progress.result = Some(result);
-            if let Some(waker) = progress.waker.take() {
-                waker.wake();
-            }
-            break;
-        }
-        drop(progress);
-        let result = match operation {
-            FileWriteOperation::Write(bytes) => file.write_all(&bytes).map(|()| bytes.len()),
-            FileWriteOperation::Flush => file.flush().and_then(|()| file.sync_all()).map(|()| 0),
-            FileWriteOperation::Finish => unreachable!(),
-        }
-        .map_err(|error| error.to_string());
-        let failed = result.is_err();
-        finish_operation(lock, result);
-        if failed {
-            break;
-        }
-    }
-    drop(file);
-    if !lock.lock().expect("file output mutex").published {
-        let _ = std::fs::remove_file(temporary);
-    }
-}
-
-fn finish_operation(lock: &Mutex<FileWriteProgress>, result: Result<usize, String>) {
-    let mut progress = lock.lock().expect("file output mutex");
-    progress.result = Some(result);
-    if let Some(waker) = progress.waker.take() {
-        waker.wake();
-    }
 }
 
 #[cfg(test)]

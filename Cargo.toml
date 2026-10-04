@@ -24,6 +24,14 @@ ipp-protocol = { path = "crates/ipp-protocol", default-features = false }
 ipp-host-session = { path = "crates/ipp-host-session", default-features = false }
 ipp-render-gl = { path = "crates/ipp-render-gl", default-features = false }
 ipp-schema-derive = { path = "tools/ipp-schema-derive", default-features = false }
+# Smol components: portable task scheduling is shared; executors, reactors and
+# blocking pools are native-only. Defaults are disabled to keep WASM free of OS IO.
+async-task = { version = "=4.7.1", default-features = false, features = ["std"] }
+async-executor = { version = "=1.13.3", default-features = false }
+async-io = { version = "=2.6.0", default-features = false }
+async-channel = { version = "=2.5.0", default-features = false, features = ["std"] }
+blocking = { version = "=1.6.2", default-features = false }
+futures-lite = { version = "=2.6.1", default-features = false, features = ["std"] }
 tungstenite = { version = "=0.30.0", default-features = false, features = ["handshake"] }
 proc-macro2 = { version = "=1.0.107", default-features = false, features = ["proc-macro"] }
 quote = { version = "=1.0.47", default-features = false, features = ["proc-macro"] }
@@ -34,6 +42,14 @@ syn = { version = "=3.0.5", default-features = false, features = ["derive", "par
 # Maintained by unicode-rs with a stable API. Cost: small segmentation tables
 # linked into every build through ipp-core.
 unicode-segmentation = { version = "=1.12.0", default-features = false }
+
+# Native HTTP streams use a shared connection pool and the Host's blocking pool.
+# Rustls provides TLS without a system curl/OpenSSL runtime; gzip/JSON/cookies
+# are disabled. Pinned ring provider transitives and artifact cost are measured
+# with the native distribution, never linked into browser or core builds.
+memmap2 = { version = "=0.9.11", default-features = false }
+libc = { version = "=0.2.189", default-features = false, features = ["std"] }
+ureq = { version = "=3.4.2", default-features = false, features = ["rustls"] }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

@@ -411,8 +411,8 @@ impl crate::services::asset_management::Asset for MeshAsset {
 
 /// Construct a headless decoder; graphics Hosts may register their own loader.
 pub fn cpu_mesh_loader() -> impl super::AssetLoader<Data = MeshAsset> {
-    super::BufferedAssetLoader::new(move |bytes| {
-        MeshAsset::decode(bytes).map_err(|error| error.to_string())
+    super::AsyncAssetLoader::decode(|mut reader| async move {
+        MeshAsset::decode_reader(&mut *reader).await
     })
 }
 
@@ -475,5 +475,249 @@ impl super::writer::AssetEncoder for MeshAsset {
             bytes.extend_from_slice(&index.to_le_bytes());
         }
         Ok(bytes)
+    }
+}
+
+impl MeshAsset {
+    /// Decode each authored stream into private typed storage through borrowed windows.
+    pub async fn decode_reader(reader: &mut dyn super::IoReader) -> Result<Self, String> {
+        use super::decode::{AssetReader, DecodeBudget, push};
+        use std::num::NonZeroUsize;
+
+        let invalid = || "InvalidAsset: invalid mesh".to_string();
+        let mut input = AssetReader::new(reader);
+        let header = input.array::<16>().await?;
+        let version = read_u32(&header, 4);
+        let vertices = read_u32(&header, 8);
+        let indices = read_u32(&header, 12);
+        if &header[..4] != b"IPPM"
+            || vertices == 0
+            || vertices > MAX_MESH_VERTICES
+            || indices == 0
+            || !indices.is_multiple_of(3)
+        {
+            return Err(invalid());
+        }
+        indices.checked_mul(2).ok_or_else(invalid)?;
+        let mut mesh = Self {
+            metadata: Default::default(),
+            positions: Vec::new(),
+            joint_indices: None,
+            max_joint_index: None,
+            joint_weights: None,
+            joint_bounds: Vec::new(),
+            bounds: [[0.0; 3]; 2],
+            colors: None,
+            normals: None,
+            indices: Vec::new(),
+            uvs: None,
+            texture_weights: None,
+        };
+        match version {
+            1 | 2 => {
+                let stride = if version == 1 {
+                    24
+                } else {
+                    32
+                };
+                vertices
+                    .checked_mul(stride)
+                    .and_then(|bytes| bytes.checked_add(16))
+                    .ok_or_else(invalid)?;
+                let mut colors = Vec::new();
+                let mut uvs = Vec::new();
+                input
+                    .records(
+                        NonZeroUsize::new(stride as usize).unwrap(),
+                        vertices as usize,
+                        |record| {
+                            push(
+                                &mut mesh.positions,
+                                read_floats(&record[..12], false)
+                                    .map_err(|error| error.to_string())?,
+                            )?;
+                            push(
+                                &mut colors,
+                                read_floats(&record[12..24], true)
+                                    .map_err(|error| error.to_string())?,
+                            )?;
+                            if version == 2 {
+                                push(
+                                    &mut uvs,
+                                    read_floats(&record[24..32], false)
+                                        .map_err(|error| error.to_string())?,
+                                )?;
+                            }
+                            Ok(())
+                        },
+                    )
+                    .await?;
+                mesh.colors = Some(colors);
+                mesh.uvs = (version == 2).then_some(uvs);
+            }
+            3 => {
+                let count = input.u32().await? as usize;
+                if !(1..=7).contains(&count) {
+                    return Err(invalid());
+                }
+                let mut descriptors = Vec::new();
+                let mut streams = [false; 7];
+                let mut previous = None;
+                for _ in 0..count {
+                    let descriptor = input.array::<8>().await?;
+                    let semantic = descriptor[0];
+                    let (format, width) = match semantic {
+                        0 | 1 | 4 => (1, 12),
+                        2 => (2, 8),
+                        3 => (3, 1),
+                        5 => (4, 4),
+                        6 => (5, 16),
+                        _ => return Err(invalid()),
+                    };
+                    if previous.is_some_and(|value| value >= semantic)
+                        || descriptor[1] != format
+                        || descriptor[2..4] != [0, 0]
+                        || vertices.checked_mul(width) != Some(read_u32(&descriptor, 4))
+                    {
+                        return Err(invalid());
+                    }
+                    streams[semantic as usize] = true;
+                    descriptors.push((semantic, width));
+                    previous = Some(semantic);
+                }
+                if !streams[0] || (streams[3] && !streams[2]) || streams[5] != streams[6] {
+                    return Err(invalid());
+                }
+                for (semantic, width) in descriptors {
+                    match semantic {
+                        1 => mesh.colors = Some(Vec::new()),
+                        2 => mesh.uvs = Some(Vec::new()),
+                        3 => mesh.texture_weights = Some(Vec::new()),
+                        4 => mesh.normals = Some(Vec::new()),
+                        5 => mesh.joint_indices = Some(Vec::new()),
+                        6 => mesh.joint_weights = Some(Vec::new()),
+                        _ => {}
+                    }
+                    input
+                        .records(
+                            NonZeroUsize::new(width as usize).unwrap(),
+                            vertices as usize,
+                            |record| {
+                                let floats3 = |color| {
+                                    read_floats::<3>(record, color)
+                                        .map_err(|error| error.to_string())
+                                };
+                                match semantic {
+                                    0 => push(&mut mesh.positions, floats3(false)?)?,
+                                    1 => push(mesh.colors.as_mut().unwrap(), floats3(true)?)?,
+                                    2 => push(
+                                        mesh.uvs.as_mut().unwrap(),
+                                        read_floats(record, false)
+                                            .map_err(|error| error.to_string())?,
+                                    )?,
+                                    3 => push(mesh.texture_weights.as_mut().unwrap(), record[0])?,
+                                    4 => {
+                                        let value = floats3(false)?;
+                                        if value == [0.0; 3] {
+                                            return Err(invalid());
+                                        }
+                                        push(mesh.normals.as_mut().unwrap(), value)?;
+                                    }
+                                    5 => {
+                                        let joints: [u8; 4] = record.try_into().unwrap();
+                                        if joints
+                                            .iter()
+                                            .any(|&joint| joint as usize >= super::MAX_JOINTS)
+                                        {
+                                            return Err(invalid());
+                                        }
+                                        mesh.max_joint_index = Some(
+                                            mesh.max_joint_index
+                                                .unwrap_or(0)
+                                                .max(*joints.iter().max().unwrap()),
+                                        );
+                                        push(mesh.joint_indices.as_mut().unwrap(), joints)?;
+                                    }
+                                    6 => {
+                                        let mut weights: [f32; 4] = read_floats(record, true)
+                                            .map_err(|error| error.to_string())?;
+                                        let sum: f64 =
+                                            weights.iter().map(|&weight| f64::from(weight)).sum();
+                                        if sum <= 0.0 {
+                                            return Err(invalid());
+                                        }
+                                        for weight in &mut weights {
+                                            *weight = (f64::from(*weight) / sum) as f32;
+                                        }
+                                        push(mesh.joint_weights.as_mut().unwrap(), weights)?;
+                                    }
+                                    _ => unreachable!(),
+                                }
+                                Ok(())
+                            },
+                        )
+                        .await?;
+                }
+            }
+            _ => return Err(invalid()),
+        }
+        input
+            .records(NonZeroUsize::new(2).unwrap(), indices as usize, |record| {
+                let index = u16::from_le_bytes(record.try_into().unwrap());
+                if u32::from(index) >= vertices {
+                    return Err(invalid());
+                }
+                push(&mut mesh.indices, index)
+            })
+            .await?;
+        input.finish().await?;
+
+        let mut budget = DecodeBudget::default();
+        mesh.bounds = [mesh.positions[0]; 2];
+        if mesh.joint_indices.is_some() {
+            mesh.joint_bounds = vec![None; usize::from(mesh.max_joint_index.unwrap()) + 1];
+        }
+        for (index, position) in mesh.positions.iter().enumerate() {
+            for (axis, &coordinate) in position.iter().enumerate() {
+                mesh.bounds[0][axis] = mesh.bounds[0][axis].min(coordinate);
+                mesh.bounds[1][axis] = mesh.bounds[1][axis].max(coordinate);
+            }
+            if let (Some(joints), Some(weights)) = (&mesh.joint_indices, &mesh.joint_weights) {
+                for (&joint, &weight) in joints[index].iter().zip(&weights[index]) {
+                    if weight > 0.0 {
+                        let bounds =
+                            mesh.joint_bounds[joint as usize].get_or_insert([*position; 2]);
+                        for axis in 0..3 {
+                            bounds[0][axis] = bounds[0][axis].min(position[axis]);
+                            bounds[1][axis] = bounds[1][axis].max(position[axis]);
+                        }
+                    }
+                }
+            }
+            budget.advance(0).await;
+        }
+        let mut has_area = false;
+        for triangle in mesh.indices.as_chunks::<3>().0 {
+            let [a, b, c] = triangle.map(|index| mesh.positions[index as usize]);
+            let u = std::array::from_fn::<_, 3, _>(|axis| f64::from(b[axis]) - f64::from(a[axis]));
+            let v = std::array::from_fn::<_, 3, _>(|axis| f64::from(c[axis]) - f64::from(a[axis]));
+            if [
+                u[1] * v[2] - u[2] * v[1],
+                u[2] * v[0] - u[0] * v[2],
+                u[0] * v[1] - u[1] * v[0],
+            ]
+            .iter()
+            .any(|&area| area != 0.0)
+            {
+                has_area = true;
+                break;
+            }
+            budget.advance(0).await;
+        }
+        if !has_area {
+            return Err(invalid());
+        }
+        mesh.metadata = super::mesh_metadata::MeshMetadata::from_mesh_async(&mesh).await?;
+        Ok(mesh)
     }
 }

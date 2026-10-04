@@ -72,7 +72,7 @@ fn values(world: &ipp_core::WorldContext<'_>, id: EntityId) -> f32 {
 
 #[test]
 fn failed_batch_keeps_values_metadata_and_allocations_and_stops_execution() {
-    let mut world_host = ipp_core::HostRuntime::new();
+    let mut world_host = crate::support::task_scheduler::host();
     let world_id = world_host
         .create_world(ipp_core::WorldLimits::default(), CONSTRAINTS)
         .unwrap();
@@ -123,7 +123,7 @@ fn failed_batch_keeps_values_metadata_and_allocations_and_stops_execution() {
 
 #[test]
 fn delete_and_reuse_fence_stale_handles_and_remove_indexes() {
-    let mut world_host = ipp_core::HostRuntime::new();
+    let mut world_host = crate::support::task_scheduler::host();
     let world_id = world_host
         .create_world(ipp_core::WorldLimits::default(), CONSTRAINTS)
         .unwrap();
@@ -157,7 +157,7 @@ fn delete_and_reuse_fence_stale_handles_and_remove_indexes() {
 
 #[test]
 fn aliases_are_ordered_unique_and_batch_local() {
-    let mut world_host = ipp_core::HostRuntime::new();
+    let mut world_host = crate::support::task_scheduler::host();
     let world_id = world_host
         .create_world(ipp_core::WorldLimits::default(), CONSTRAINTS)
         .unwrap();
@@ -196,7 +196,7 @@ fn aliases_are_ordered_unique_and_batch_local() {
 
 #[test]
 fn metadata_uniqueness_and_class_order_survive_staged_deletion() {
-    let mut world_host = ipp_core::HostRuntime::new();
+    let mut world_host = crate::support::task_scheduler::host();
     let world_id = world_host
         .create_world(ipp_core::WorldLimits::default(), CONSTRAINTS)
         .unwrap();
@@ -235,7 +235,7 @@ fn metadata_uniqueness_and_class_order_survive_staged_deletion() {
 
 #[test]
 fn invalid_exact_fields_and_values_reject_atomically() {
-    let mut world_host = ipp_core::HostRuntime::new();
+    let mut world_host = crate::support::task_scheduler::host();
     let world_id = world_host
         .create_world(ipp_core::WorldLimits::default(), CONSTRAINTS)
         .unwrap();
@@ -287,7 +287,7 @@ fn invalid_exact_fields_and_values_reject_atomically() {
 
 #[test]
 fn default_ingress_preserves_large_indivisible_batches() {
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host.create_world(WorldLimits::default(), &[]).unwrap();
     let mut world = host.world_mut(id).unwrap();
     // Exceed both historical defaults: 256 operations and 64 KiB estimated bytes.
@@ -305,7 +305,7 @@ fn ingress_budgets_reject_complete_batches_and_allow_world_growth() {
         max_queued_batches: 1,
         ..WorldLimits::default()
     };
-    let mut world_host = ipp_core::HostRuntime::new();
+    let mut world_host = crate::support::task_scheduler::host();
     let world_id = world_host.create_world(limits, &[]).unwrap();
     let mut world = world_host.world_mut(world_id).unwrap();
     assert_eq!(
@@ -338,7 +338,7 @@ fn ingress_budgets_reject_complete_batches_and_allow_world_growth() {
 
 #[test]
 fn invalid_time_preserves_queue_and_clock() {
-    let mut world_host = ipp_core::HostRuntime::new();
+    let mut world_host = crate::support::task_scheduler::host();
     let world_id = world_host
         .create_world(ipp_core::WorldLimits::default(), &[])
         .unwrap();
@@ -365,7 +365,7 @@ fn invalid_time_preserves_queue_and_clock() {
 
 #[test]
 fn outcomes_keep_submission_order_across_failure_and_later_success() {
-    let mut world_host = ipp_core::HostRuntime::new();
+    let mut world_host = crate::support::task_scheduler::host();
     let world_id = world_host
         .create_world(ipp_core::WorldLimits::default(), CONSTRAINTS)
         .unwrap();
@@ -434,7 +434,7 @@ mod drivers {
 
     #[test]
     fn aliases_resolve_nested_driver_sources_and_base_is_retained() {
-        let mut world_host = ipp_core::HostRuntime::new();
+        let mut world_host = crate::support::task_scheduler::host();
         let world_id = world_host
             .create_world(ipp_core::WorldLimits::default(), CONSTRAINTS)
             .unwrap();
@@ -472,7 +472,7 @@ mod drivers {
 
     #[test]
     fn source_replacement_invalidates_and_explicit_reference_write_rebinds() {
-        let mut world_host = ipp_core::HostRuntime::new();
+        let mut world_host = crate::support::task_scheduler::host();
         let world_id = world_host
             .create_world(ipp_core::WorldLimits::default(), CONSTRAINTS)
             .unwrap();
@@ -541,7 +541,7 @@ mod drivers {
 
     #[test]
     fn failed_batch_keeps_source_removal_and_binding_invalidation() {
-        let mut world_host = ipp_core::HostRuntime::new();
+        let mut world_host = crate::support::task_scheduler::host();
         let world_id = world_host
             .create_world(ipp_core::WorldLimits::default(), CONSTRAINTS)
             .unwrap();
@@ -576,7 +576,7 @@ mod drivers {
 
     #[test]
     fn drivers_evaluate_in_dependency_order_and_cycles_stay_inactive_until_corrected() {
-        let mut world_host = ipp_core::HostRuntime::new();
+        let mut world_host = crate::support::task_scheduler::host();
         let world_id = world_host
             .create_world(ipp_core::WorldLimits::default(), CONSTRAINTS)
             .unwrap();
@@ -738,7 +738,7 @@ mod drivers {
 
 #[test]
 fn retained_metadata_grows_while_batch_allocation_bounds_include_spare_capacity() {
-    let mut world_host = ipp_core::HostRuntime::new();
+    let mut world_host = crate::support::task_scheduler::host();
     let world_id = world_host
         .create_world(
             WorldLimits {
@@ -784,7 +784,7 @@ fn retained_metadata_grows_while_batch_allocation_bounds_include_spare_capacity(
         }),
         Err(ErrorReason::Capacity)
     );
-    let mut world_host = ipp_core::HostRuntime::new();
+    let mut world_host = crate::support::task_scheduler::host();
     let world_id = world_host
         .create_world(ipp_core::WorldLimits::default(), CONSTRAINTS)
         .unwrap();

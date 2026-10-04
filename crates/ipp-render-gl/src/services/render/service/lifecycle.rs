@@ -2,11 +2,7 @@
 
 use super::{RenderError, RenderService};
 use crate::RenderDevice;
-use std::{
-    cell::{Cell, RefCell},
-    collections::BTreeMap,
-    rc::Rc,
-};
+use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
 impl<D: RenderDevice> RenderService<D> {
     /// Initialize empty context caches. Programs are compiled on first demand.
@@ -47,7 +43,10 @@ impl<D: RenderDevice> RenderService<D> {
             surface_paint: BTreeMap::new(),
             analytic_glyphs: BTreeMap::new(),
             device,
-            asset_context_active: Rc::new(Cell::new(true)),
+            asset_context_active: Default::default(),
+            asset_export_delay: None,
+            #[cfg(feature = "instrumentation")]
+            asset_export_staging_gate: false,
             particle_quad: None,
             recipe_scratch: Vec::new(),
             program_demand: None,
@@ -89,27 +88,16 @@ impl<D: RenderDevice> RenderService<D> {
         {
             let device = self.device.clone();
             let uploads = self.uploads.clone();
+            let context = self.asset_context_active.clone();
             world
                 .asset_resources_mut()
                 .register_graphics_loader(
                     ipp_core::services::asset_management::font::FONT_TYPE,
                     move || {
-                        super::super::surface_assets::font_loader(device.clone(), uploads.clone())
-                    },
-                )
-                .map_err(RenderError::RenderDevice)?;
-        }
-        {
-            let device = self.device.clone();
-            let uploads = self.uploads.clone();
-            world
-                .asset_resources_mut()
-                .register_graphics_loader(
-                    ipp_core::services::asset_management::drawing::DRAWING_TYPE,
-                    move || {
-                        super::super::surface_assets::drawing_loader(
+                        super::super::surface_assets::font_loader(
                             device.clone(),
                             uploads.clone(),
+                            context.clone(),
                         )
                     },
                 )
@@ -118,29 +106,51 @@ impl<D: RenderDevice> RenderService<D> {
         {
             let device = self.device.clone();
             let uploads = self.uploads.clone();
+            let context = self.asset_context_active.clone();
+            world
+                .asset_resources_mut()
+                .register_graphics_loader(
+                    ipp_core::services::asset_management::drawing::DRAWING_TYPE,
+                    move || {
+                        super::super::surface_assets::drawing_loader(
+                            device.clone(),
+                            uploads.clone(),
+                            context.clone(),
+                        )
+                    },
+                )
+                .map_err(RenderError::RenderDevice)?;
+        }
+        {
+            let device = self.device.clone();
+            let uploads = self.uploads.clone();
+            let context = self.asset_context_active.clone();
             world
                 .asset_resources_mut()
                 .register_graphics_loader(ipp_core::TEXTURE_TYPE, move || {
                     crate::services::render::assets::texture_asset_loader(
                         device.clone(),
                         uploads.clone(),
+                        context.clone(),
                     )
                 })
                 .map_err(RenderError::RenderDevice)?;
         }
         let device = self.device.clone();
+        let context = self.asset_context_active.clone();
         world
             .asset_resources_mut()
             .register_graphics_loader(
                 ipp_core::services::asset_management::shader::SHADER_TYPE,
-                move || super::super::shader_asset::loader(device.clone()),
+                move || super::super::shader_asset::loader(device.clone(), context.clone()),
             )
             .map_err(RenderError::RenderDevice)?;
         let device = self.device.clone();
+        let context = self.asset_context_active.clone();
         world
             .asset_resources_mut()
             .register_graphics_loader(super::super::program_assets::PROGRAM_TYPE, move || {
-                super::super::program_assets::loader(device.clone())
+                super::super::program_assets::loader(device.clone(), context.clone())
             })
             .map_err(RenderError::RenderDevice)?;
         world.set_renderer_asset_loading(true);
@@ -149,7 +159,7 @@ impl<D: RenderDevice> RenderService<D> {
 
     /// Gate loader device calls while the owning presentation context is detached.
     pub fn set_asset_context_active(&self, active: bool) {
-        self.asset_context_active.set(active);
+        self.asset_context_active.set_active(active);
     }
 
     /// Request release of this context's GPU payloads, including with no attached World.
@@ -244,7 +254,10 @@ impl<D: RenderDevice> RenderService<D> {
         host.flush_resource_lifecycle();
         #[cfg(feature = "instrumentation")]
         self.gpu_replace_context();
+        let active = self.asset_context_active.is_active();
+        self.asset_context_active.set_active(false);
         *self.device.borrow_mut() = device;
+        self.asset_context_active.set_active(active);
         Ok(())
     }
 

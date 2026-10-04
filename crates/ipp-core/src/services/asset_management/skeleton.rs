@@ -142,8 +142,8 @@ macro_rules! source_asset {
 
         /// Construct a CPU decoder without graphics allocation.
         pub fn $loader() -> impl AssetLoader<Data = $asset> {
-            BufferedAssetLoader::new(|bytes| {
-                <$asset>::decode(bytes).map_err(|error| error.to_string())
+            AsyncAssetLoader::decode(|mut reader| async move {
+                <$asset>::decode_reader(&mut *reader).await
             })
         }
     };
@@ -200,5 +200,63 @@ impl super::writer::AssetEncoder for PoseAsset {
             encode_transform(&mut bytes, joint);
         }
         Ok(bytes)
+    }
+}
+
+pub(crate) async fn read_header(
+    input: &mut super::decode::AssetReader<'_>,
+    magic: &[u8; 4],
+) -> Result<usize, String> {
+    if &input.array::<4>().await? != magic || input.u32().await? != 1 {
+        return Err("Invalid rig header".into());
+    }
+    let count = input.u32().await? as usize;
+    if !(1..=MAX_JOINTS).contains(&count) {
+        return Err("Invalid rig joint count".into());
+    }
+    Ok(count)
+}
+
+impl SkeletonAsset {
+    /// Decode bounded joint records without retaining their source encoding.
+    pub async fn decode_reader(reader: &mut dyn IoReader) -> Result<Self, String> {
+        let mut input = super::decode::AssetReader::new(reader);
+        let count = read_header(&mut input, b"IPPS").await?;
+        let mut joints = Vec::with_capacity(count);
+        for index in 0..count {
+            let record = input.array::<44>().await?;
+            let parent = u32_at(&record, 0);
+            let parent = if parent == u32::MAX {
+                None
+            } else if (parent as usize) < index {
+                Some(parent as usize)
+            } else {
+                return Err("Invalid skeleton parent".into());
+            };
+            joints.push(SkeletonJoint {
+                parent,
+                rest: transform(&record[4..]).map_err(|error| error.to_string())?,
+            });
+        }
+        input.finish().await?;
+        Ok(Self {
+            joints,
+        })
+    }
+}
+
+impl PoseAsset {
+    /// Decode bounded joint-local transforms through the common rig validator.
+    pub async fn decode_reader(reader: &mut dyn IoReader) -> Result<Self, String> {
+        let mut input = super::decode::AssetReader::new(reader);
+        let count = read_header(&mut input, b"IPPP").await?;
+        let mut joints = Vec::with_capacity(count);
+        for _ in 0..count {
+            joints.push(transform(&input.array::<40>().await?).map_err(|error| error.to_string())?);
+        }
+        input.finish().await?;
+        Ok(Self {
+            joints,
+        })
     }
 }

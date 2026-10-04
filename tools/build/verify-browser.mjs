@@ -176,9 +176,22 @@ for (const recipe of [
 // Every build logs and answers statistics; instrumentation adds the testing
 // controls and the profiler.
 assert.equal(imports("ipp_diagnostics"), true);
+assert.equal(imports("ipp_tasks"), true);
 assert.equal(typeof runtime.ipp_diagnostics_set_level, "function");
 assert.equal(embeds("batch.begin"), true);
 assert.equal(imports("ipp_profiling"), instrumentation);
+assert.equal(
+  typeof runtime.ipp_test_task_scheduler_start === "function",
+  instrumentation,
+);
+assert.equal(
+  typeof runtime.ipp_test_asset_export_world_tick === "function",
+  instrumentation,
+);
+assert.equal(
+  typeof runtime.ipp_test_asset_export_staging_gate === "function",
+  instrumentation && rendering,
+);
 for (const name of [
   "ipp_resource_poll",
   "ipp_resource_complete",

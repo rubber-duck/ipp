@@ -11,6 +11,9 @@ pub use gpu_profiling::{
     RenderGpuScope,
 };
 
+mod asset_export;
+pub use asset_export::RenderAssetExportDelay;
+
 mod canvas_composition;
 mod composition;
 mod frame;
@@ -22,11 +25,7 @@ mod surface;
 mod surface_cache;
 
 use std::fmt;
-use std::{
-    cell::{Cell, RefCell},
-    collections::BTreeMap,
-    rc::Rc,
-};
+use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
 use super::custom_material::CustomMaterialFallback;
 
@@ -84,7 +83,10 @@ impl std::error::Error for RenderError {}
 pub struct RenderService<D: RenderDevice> {
     inclusions: inclusion::OutputInclusions,
     pub(super) device: Rc<RefCell<D>>,
-    asset_context_active: Rc<Cell<bool>>,
+    asset_context_active: super::asset_context::RenderAssetContext,
+    asset_export_delay: Option<RenderAssetExportDelay>,
+    #[cfg(feature = "instrumentation")]
+    asset_export_staging_gate: bool,
     pub(super) recipe_scratch: Vec<(RenderShaderConfig, bool)>,
     pub(super) program_demand: Option<super::program_assets::ProgramDemand>,
     pub(super) prepared_output: Option<ipp_core::OutputRef>,

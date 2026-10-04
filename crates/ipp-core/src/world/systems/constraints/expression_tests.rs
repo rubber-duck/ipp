@@ -15,6 +15,8 @@ use std::mem::offset_of;
 fn step(world: &mut WorldContext<'_>) -> crate::WorldUpdateReport {
     world.prepare_update(0.0).unwrap();
     world.poll_assets();
+    crate::test_task_scheduler::poll_ready();
+    world.poll_assets();
     world.step(0.0).unwrap()
 }
 
@@ -64,6 +66,7 @@ fn declaration_candidate_work_is_operation_local_until_commit() {
 #[test]
 fn typed_row_result_range_guard_and_row_lifetime_use_shared_preparation() {
     let mut host = HostRuntime::new();
+    crate::test_task_scheduler::install(&mut host);
     let id = host
         .create_world(
             WorldLimits::default(),
@@ -303,6 +306,7 @@ fn dynamic_fixture() -> (HostRuntime, crate::WorldId, EntityId, u32, u32) {
         look_at::LookAtSystem, render::RenderSystem,
     };
     let mut host = HostRuntime::new();
+    crate::test_task_scheduler::install(&mut host);
     let id = host
         .create_world(
             WorldLimits::default(),

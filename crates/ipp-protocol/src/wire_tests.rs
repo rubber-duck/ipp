@@ -33,6 +33,10 @@ fn manifest_names_tags_and_layout_references_are_valid() {
         "profile-request",
         "profile-status",
         "profile-gpu-sampling",
+        "asset-export-request",
+        "asset-export-response",
+        "asset-representation",
+        "asset-export-format",
         "dataset-request",
         "dataset-response",
         "dataset-value",
@@ -110,6 +114,14 @@ fn manifest_names_tags_and_layout_references_are_valid() {
                 }
                 FieldEncoding::Variant | FieldEncoding::Union => {
                     assert!(tag_spaces.contains(field.target));
+                }
+                FieldEncoding::Utf8 | FieldEncoding::Bytes => {
+                    assert!(field.target.is_empty());
+                    assert_ne!(
+                        field.limit, 0,
+                        "unbounded text/bytes in {}.{}",
+                        layout.name, field.name
+                    );
                 }
                 _ => assert!(field.target.is_empty()),
             }
@@ -194,6 +206,10 @@ fn tag_space_name(space: TagSpace) -> &'static str {
         TagSpace::ProfileRequest => "profile-request",
         TagSpace::ProfileStatus => "profile-status",
         TagSpace::ProfileGpuSampling => "profile-gpu-sampling",
+        TagSpace::AssetExportRequest => "asset-export-request",
+        TagSpace::AssetExportResponse => "asset-export-response",
+        TagSpace::AssetRepresentation => "asset-representation",
+        TagSpace::AssetExportFormat => "asset-export-format",
     }
 }
 

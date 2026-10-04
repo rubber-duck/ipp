@@ -194,6 +194,17 @@ def check_graph(package, target, features, core_features, renderer_features=None
         "unicode-segmentation" in resolved,
         f"{label}: core text segmentation must be linked into every build",
     )
+    scheduled = package in (*HOSTS, HOST_SESSION)
+    require(
+        ("async-task" in resolved) == scheduled,
+        f"{label}: portable task scheduling belongs to Host packages only",
+    )
+    native_scheduled = scheduled and target != "wasm32-unknown-unknown"
+    for dependency in ("async-executor", "async-io", "blocking"):
+        require(
+            (dependency in resolved) == native_scheduled,
+            f"{label}: {dependency} must remain outside core and browser WASM",
+        )
     websocket = package == "ipp-server"
     require(
         ("tungstenite" in resolved) == websocket,

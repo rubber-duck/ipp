@@ -11,7 +11,10 @@ impl HostServices for Headless {
         Ok(())
     }
 
-    fn initialize(_: &mut ipp_core::HostRuntime) -> Result<Self, String> {
+    fn initialize(
+        _: &mut ipp_core::HostRuntime,
+        _schedulers: &crate::services::task_scheduler::TaskSchedulers,
+    ) -> Result<Self, String> {
         Ok(Self)
     }
 }

@@ -17,7 +17,9 @@
       "target/surface-assets",
       "target/font-assets"
     ],
-    "dependencies": ["build:surface-assets"],
+    "dependencies": [
+      "build:surface-assets"
+    ],
     "sourceRoots": [
       "Cargo.toml",
       "Cargo.lock",
@@ -75,7 +77,9 @@
       "target/render-fixtures/cube.mesh",
       "target/integration-artifacts/render/native"
     ],
-    "dependencies": ["build:render-fixtures"],
+    "dependencies": [
+      "build:render-fixtures"
+    ],
     "sourceRoots": [
       "crates/ipp-render-gl/examples/egl_smoke.rs",
       "crates/ipp-render-gl/examples/smoke/mod.rs",
@@ -99,7 +103,10 @@
       "target/texture-build/checker.texture",
       "target/shapes-build"
     ],
-    "dependencies": ["build:textures", "build:shapes"],
+    "dependencies": [
+      "build:textures",
+      "build:shapes"
+    ],
     "sourceRoots": [
       "crates/ipp-render-gl/examples/egl_smoke.rs",
       "crates/ipp-render-gl/examples/smoke/mod.rs",
@@ -121,7 +128,9 @@
       "target/render-fixtures/cube.mesh",
       "target/integration-artifacts/custom-materials/native"
     ],
-    "dependencies": ["build:render-fixtures"],
+    "dependencies": [
+      "build:render-fixtures"
+    ],
     "sourceRoots": [
       "crates/ipp-render-gl/examples/egl_custom_materials.rs",
       "crates/ipp-render-gl/examples/smoke/mod.rs",
@@ -143,7 +152,9 @@
       "target/skinning-build",
       "target/integration-artifacts/skinning-gles"
     ],
-    "dependencies": ["build:skinning-fixtures"],
+    "dependencies": [
+      "build:skinning-fixtures"
+    ],
     "sourceRoots": [
       "crates/ipp-render-gl/examples/egl_skinning.rs",
       "crates/ipp-render-gl/examples/smoke/mod.rs",
@@ -165,7 +176,9 @@
       "target/mesh-pose-build",
       "target/integration-artifacts/mesh-poses-gles"
     ],
-    "dependencies": ["build:mesh-pose-fixtures"],
+    "dependencies": [
+      "build:mesh-pose-fixtures"
+    ],
     "sourceRoots": [
       "crates/ipp-render-gl/examples/egl_mesh_poses.rs",
       "crates/ipp-render-gl/examples/smoke/mod.rs",
@@ -188,7 +201,9 @@
       "target/font-assets",
       "target/integration-artifacts/surfaces/gles"
     ],
-    "dependencies": ["build:surface-assets"],
+    "dependencies": [
+      "build:surface-assets"
+    ],
     "sourceRoots": [
       "crates/ipp-render-gl/examples/egl_surfaces.rs",
       "crates/ipp-render-gl/examples/smoke/mod.rs",
@@ -232,7 +247,9 @@
       "target/font-assets",
       "target/integration-artifacts/gui-layout/gles"
     ],
-    "dependencies": ["build:surface-assets"],
+    "dependencies": [
+      "build:surface-assets"
+    ],
     "sourceRoots": [
       "crates/ipp-render-gl/examples/egl_gui_layout.rs",
       "crates/ipp-render-gl/examples/smoke/mod.rs",
@@ -257,7 +274,9 @@
       "target/font-assets",
       "target/integration-artifacts/surface-cache/gles"
     ],
-    "dependencies": ["build:surface-assets"],
+    "dependencies": [
+      "build:surface-assets"
+    ],
     "sourceRoots": [
       "crates/ipp-render-gl/examples/egl_surface_cache.rs",
       "crates/ipp-render-gl/examples/smoke/surface_cache_target.rs",
@@ -267,12 +286,20 @@
   },
   {
     "id": "check:gles-retained-gui",
-    "command": ["@node", "target/surface-gui-build/retained-gui-native.js", "@egl"],
+    "command": [
+      "@node",
+      "target/surface-gui-build/retained-gui-native.js",
+      "@egl"
+    ],
     "dependencies": [
       "build:surface-gui-fixtures",
       "build:gles-host-instrumentation"
     ],
-    "requirements": ["node", "npm", "browser"],
+    "requirements": [
+      "node",
+      "npm",
+      "browser"
+    ],
     "sourceRoots": [
       "crates/ipp-server/examples/gles_host.rs",
       "crates/ipp-server/examples/gles_presentation/",
@@ -287,6 +314,27 @@
       "tests/render/tsconfig.retained-gui.json",
       "tools/build_surface_gui.mjs",
       "tests/render/surface-fixture.tsx"
+    ]
+  },
+  {
+    "id": "check:gles-asset-readback",
+    "command": [
+      "cargo",
+      "run",
+      "-p",
+      "ipp-render-gl",
+      "--example",
+      "egl_texture_readback",
+      "--locked",
+      "--",
+      "@egl"
+    ],
+    "dependencies": [],
+    "sourceRoots": [
+      "crates/ipp-render-gl/examples/egl_texture_readback.rs",
+      "crates/ipp-render-gl/examples/smoke/egl.rs",
+      "crates/ipp-render-gl/src/",
+      "crates/ipp-render-gl/Cargo.toml"
     ]
   }
 ]

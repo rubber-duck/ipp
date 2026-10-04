@@ -173,10 +173,6 @@ fn persistence_envelopes_preserve_owned_chunks_and_load_overrides() {
         HostRequestBody::SaveWorld {
             session: 11,
         },
-        HostRequestBody::ReadWorldSave {
-            job: 2,
-            offset: 65536,
-        },
         HostRequestBody::BeginWorldLoad {
             bytes: 65539,
         },
@@ -226,11 +222,12 @@ fn persistence_envelopes_preserve_owned_chunks_and_load_overrides() {
         HostResponseBody::Transfer {
             job: 2,
         },
-        HostResponseBody::SaveChunk {
-            job: 2,
-            offset: 65536,
-            total: 65539,
-            bytes: vec![1, 2, 3],
+        HostResponseBody::Read {
+            reference: crate::bulk_read::BulkReadReference {
+                connection: 5,
+                read: 2,
+            },
+            length: Some(65539),
         },
     ] {
         let response = HostResponse {

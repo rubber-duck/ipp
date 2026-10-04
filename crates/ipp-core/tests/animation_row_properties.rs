@@ -232,7 +232,7 @@ fn vec2_value(value: [f32; 2]) -> SchemaValue {
 }
 
 fn world() -> (HostRuntime, WorldId) {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     // Theme rows are asset-backed GUI state; no Canvas is needed to animate them.
     let id = host
         .create_world(

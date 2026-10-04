@@ -103,7 +103,7 @@ fn try_frame(
         host.root_output(world)
             .map(|(output, _, publication)| (output, publication)),
     )?;
-    host.progress_assets();
+    support::progress_assets(host);
     renderer.draw_stats(host, world, VIEWPORT, VIEWPORT)
 }
 
@@ -187,7 +187,7 @@ fn add_text_surface(host: &mut ipp_core::HostRuntime, parent: WorldId, z: f32) -
 
 #[test]
 fn absent_policies_make_no_cache_calls() {
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let (mut renderer, state, world_id, entity) = scene(&mut host);
 
     for _ in 0..3 {
@@ -232,7 +232,7 @@ fn observed_frame(
     host.frame(dt).unwrap();
     let (output, viewport, publication) = host.root_output(world).unwrap();
     renderer.prepare(host, Some((output, publication))).unwrap();
-    host.progress_assets();
+    support::progress_assets(host);
     let mut observations = [output, child].map(|output| ipp_core::OutputPublicationObservation {
         output,
         publication: None,
@@ -254,7 +254,7 @@ fn observed_frame(
 
 #[test]
 fn included_cache_witness_reuses_equivalent_content_but_never_relabels_stale_pixels() {
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let (mut renderer, _, world, surface) = scene(&mut host);
     cache_policy(&mut host, surface, Some(ALWAYS));
     frame(&mut renderer, &mut host, world, 0.01);
@@ -291,7 +291,7 @@ fn included_cache_witness_reuses_equivalent_content_but_never_relabels_stale_pix
 
 #[test]
 fn cache_preparation_of_an_uncomposited_output_is_not_inclusion() {
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let (mut renderer, _, world, surface) = scene(&mut host);
     cache_policy(&mut host, surface, Some(ALWAYS));
     assert!(
@@ -314,7 +314,7 @@ fn cache_preparation_of_an_uncomposited_output_is_not_inclusion() {
 
 #[test]
 fn stale_cached_sibling_does_not_hide_a_current_child_witness() {
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let (mut renderer, _, world, stale) = scene(&mut host);
     let healthy = add_text_surface(&mut host, world, -4.0);
     cache_policy(&mut host, stale, Some(ALWAYS));
@@ -328,7 +328,7 @@ fn stale_cached_sibling_does_not_hide_a_current_child_witness() {
 
 #[test]
 fn repaint_containing_a_stale_nested_image_cannot_claim_current_provenance() {
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let (mut renderer, _, world, outer) = scene(&mut host);
     let inner = CanvasSurface::new(
         &mut host,
@@ -368,7 +368,7 @@ fn repaint_containing_a_stale_nested_image_cannot_claim_current_provenance() {
 
 #[test]
 fn warm_frames_composite_the_image_without_surface_work() {
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let (mut renderer, state, world_id, entity) = scene(&mut host);
     cache_policy(&mut host, entity, Some(ALWAYS));
 
@@ -414,7 +414,7 @@ fn warm_frames_composite_the_image_without_surface_work() {
 
 #[test]
 fn placement_within_a_band_composites_and_crossing_a_band_resizes() {
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let (mut renderer, state, world_id, entity) = scene(&mut host);
     cache_policy(&mut host, entity, Some(BANDED));
 
@@ -456,7 +456,7 @@ fn placement_within_a_band_composites_and_crossing_a_band_resizes() {
 
 #[test]
 fn paint_edits_coalesce_to_the_refresh_interval_of_world_time() {
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let (mut renderer, _state, world_id, entity) = scene(&mut host);
     cache_policy(&mut host, entity, Some(ALWAYS));
 
@@ -502,7 +502,7 @@ fn paint_edits_coalesce_to_the_refresh_interval_of_world_time() {
 
 #[test]
 fn resource_revisions_repaint_immediately() {
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let (mut renderer, _state, world_id, entity) = scene(&mut host);
     cache_policy(&mut host, entity, Some(ALWAYS));
 
@@ -597,7 +597,7 @@ fn focus_takes_interaction_priority_until_the_control_is_disabled() {
     use ipp_core::components::{GuiBehavior, GuiCheckbox, GuiLayout};
     use ipp_core::systems::gui::local::GuiLocalAction;
 
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let (mut renderer, _state, world_id, _) = scene(&mut host);
     let panel = CanvasSurface::new(
         &mut host,
@@ -722,6 +722,7 @@ fn faulted_focus(location: FaultLocation) {
     let mut factories = compiled_system_factories();
     factories.push(Arc::new(Factory(enabled.clone())));
     let mut host = ipp_core::HostRuntime::with_system_factories(factories).unwrap();
+    support::task_scheduler::install(&mut host);
     // The scene World also holds the faulting Scalar oscillator.
     let systems = [scene_systems(&host), CONSTRAINTS.to_vec()].concat();
     let (mut renderer, state, parent, _) =
@@ -963,7 +964,7 @@ fn interaction_presents_directly_and_returns_only_to_current_images() {
         })
     };
 
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let (mut renderer, state, world_id, _) = scene(&mut host);
     let panel = CanvasSurface::new(
         &mut host,
@@ -1116,7 +1117,7 @@ fn published_paint_revisions_rebuild_retained_boxes_exactly_when_paint_changes()
             ..Default::default()
         })
     };
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let (mut renderer, _state, world_id, _) = scene(&mut host);
     let panel = CanvasSurface::new(
         &mut host,
@@ -1177,7 +1178,7 @@ fn published_paint_revisions_rebuild_retained_boxes_exactly_when_paint_changes()
 fn surfaces_repainting_every_frame_present_directly_until_their_paint_settles() {
     use ipp_render_gl::{SURFACE_CACHE_ANIMATED_FRAMES, SURFACE_CACHE_SETTLE_FRAMES};
 
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let (mut renderer, state, world_id, entity) = scene(&mut host);
     // A cap above the 60 Hz frame rate: every changed frame is due.
     cache_policy(
@@ -1236,7 +1237,7 @@ fn surfaces_repainting_every_frame_present_directly_until_their_paint_settles() 
 
 #[test]
 fn culled_surfaces_skip_repaints_and_refresh_stale_content_on_return() {
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let (mut renderer, state, world_id, entity) = scene(&mut host);
     cache_policy(&mut host, entity, Some(ALWAYS));
 
@@ -1288,7 +1289,7 @@ fn culled_surfaces_skip_repaints_and_refresh_stale_content_on_return() {
 
 #[test]
 fn removal_policy_removal_and_forgetting_the_world_release_images() {
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let (mut renderer, state, world_id, entity) = scene(&mut host);
     cache_policy(&mut host, entity, Some(ALWAYS));
 
@@ -1336,7 +1337,7 @@ fn removal_policy_removal_and_forgetting_the_world_release_images() {
 
 #[test]
 fn allocation_and_repaint_failures_fall_back_directly_and_recover() {
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let (mut renderer, state, world_id, entity) = scene(&mut host);
     cache_policy(&mut host, entity, Some(ALWAYS));
 
@@ -1387,7 +1388,7 @@ fn allocation_and_repaint_failures_fall_back_directly_and_recover() {
 
 #[test]
 fn a_repaint_without_gui_storage_presents_directly_and_recovers() {
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let (mut renderer, state, world_id, entity) = scene(&mut host);
     cache_policy(&mut host, entity, Some(ALWAYS));
 
@@ -1423,7 +1424,7 @@ fn a_repaint_without_gui_storage_presents_directly_and_recovers() {
 
 #[test]
 fn context_loss_fails_the_frame_and_recovery_repaints() {
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let (mut renderer, state, world_id, entity) = scene(&mut host);
     {
         cache_policy(&mut host, entity, Some(ALWAYS));
@@ -1484,7 +1485,7 @@ fn drawing_scene(
 
 /// Deliver pending resource requests with the drawing fixture.
 fn deliver_drawing(host: &mut ipp_core::HostRuntime) -> usize {
-    host.progress_assets();
+    support::progress_assets(host);
     let requests = host.take_resource_requests();
     for request in &requests {
         host.complete_resource(request.id, Ok(surface_drawing()))
@@ -1502,7 +1503,7 @@ fn drawing_primitives(host: &ipp_core::HostRuntime, entity: CanvasSurface) -> us
 
 #[test]
 fn an_image_missing_gpu_data_after_device_replacement_repaints_once_it_is_resident() {
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let (mut renderer, state, world_id, entity) = drawing_scene(&mut host);
     for _ in 0..16 {
         deliver_drawing(&mut host);
@@ -1573,7 +1574,7 @@ fn an_image_missing_gpu_data_after_device_replacement_repaints_once_it_is_reside
 
 #[test]
 fn a_drawing_still_loading_at_the_first_repaint_repaints_on_arrival() {
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let (mut renderer, state, world_id, entity) = drawing_scene(&mut host);
     assert_eq!(drawing_primitives(&host, entity), 0);
 
@@ -1605,7 +1606,7 @@ fn a_drawing_still_loading_at_the_first_repaint_repaints_on_arrival() {
 
 #[test]
 fn budget_pressure_evicts_idle_images_then_falls_back() {
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let (mut renderer, state, world_id, first) = scene(&mut host);
     let second = add_text_surface(&mut host, world_id, -1.0);
     cache_policy(&mut host, first, Some(ALWAYS));
@@ -1632,7 +1633,7 @@ fn budget_pressure_evicts_idle_images_then_falls_back() {
 
 #[test]
 fn worlds_share_the_context_budget() {
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     host.io_mut().register_stream("fixture://").unwrap();
     let (world, mut renderer, state) = setup(&mut host);
     let world_id = world.id();
@@ -1702,7 +1703,7 @@ fn worlds_share_the_context_budget() {
 
 #[test]
 fn mixed_cached_and_direct_surfaces_keep_painter_order() {
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let (mut renderer, state, world_id, near) = scene(&mut host);
     let far = add_text_surface(&mut host, world_id, -3.0);
     cache_policy(&mut host, far, Some(ALWAYS));
@@ -1727,7 +1728,7 @@ fn mixed_cached_and_direct_surfaces_keep_painter_order() {
 fn text_drawn_analytically_under_the_population_bound_refines_at_the_refresh_cap() {
     let budget = ipp_render_gl::GLYPH_MIN_POPULATES_PER_FRAME as u32;
     let ids: Vec<u32> = (0..budget + 8).collect();
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let (mut renderer, state, world_id, entity) =
         text_run_scene(&mut host, glyph_font(budget + 8, 1000, 1.0), &ids);
     // Only the per-frame floor populates, so the first repaint defers glyphs.
@@ -1769,7 +1770,7 @@ fn a_saturated_population_queue_refines_cached_text_only_at_the_refresh_cap() {
     const DT: f64 = 1.0 / 60.0;
     let busy_glyphs = ROWS * PER_ROW;
     let budget = ipp_render_gl::GLYPH_MIN_POPULATES_PER_FRAME as u32;
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let (mut renderer, state, world_id, busy) =
         text_run_scene(&mut host, glyph_font(busy_glyphs + 8, 1000, 1.0), &[0]);
     renderer.set_glyph_population_budget_ms(0.0);

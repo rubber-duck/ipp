@@ -183,7 +183,8 @@ export async function observeGpuFailure() {
   }
   return {
     entity: current.target,
-    selection: await current.fixture.activate(current.front),
+    // Keep the ready Camera binding selected while observing the unrelated failure.
+    selection: await current.fixture.pick(),
     rim: await current.fixture.pick(
       0.5 + (0.9 + 0.7 * 0.7) / ((4 * 320) / 240),
       0.5,

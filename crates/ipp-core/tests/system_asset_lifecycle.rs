@@ -1,10 +1,11 @@
 //! Actual Host-owned providers and Worlds establish the shared release barrier.
 
-use ipp_core::{HostRuntime, WorldLimits, services::asset_management::*, systems::*};
+mod support;
+
+use ipp_core::{WorldLimits, services::asset_management::*, systems::*};
 use std::{
     any::Any,
     sync::{Arc, Mutex},
-    task::{Context, Poll},
 };
 
 type Trace = Arc<Mutex<Vec<String>>>;
@@ -31,24 +32,14 @@ impl Drop for Payload {
     }
 }
 
-struct Loader(Trace);
-
-impl AssetLoader for Loader {
-    type Data = Payload;
-
-    fn poll_load(
-        &mut self,
-        reader: &mut dyn ipp_core::services::io::IoReader,
-        cx: &mut Context<'_>,
-    ) -> Poll<Result<Self::Data, String>> {
-        let mut byte = [0];
-        match reader.poll_read(cx, &mut byte) {
-            Poll::Ready(Ok(1)) => Poll::Ready(Ok(Payload(Arc::clone(&self.0)))),
-            Poll::Ready(Ok(_)) => Poll::Ready(Err("fixture input missing".into())),
-            Poll::Ready(Err(error)) => Poll::Ready(Err(error)),
-            Poll::Pending => Poll::Pending,
+fn loader(trace: Trace) -> impl AssetLoader<Data = Payload> {
+    crate::support::task_scheduler::blob_loader(move |bytes| {
+        if bytes.is_empty() {
+            Err("fixture input missing".into())
+        } else {
+            Ok(Payload(trace))
         }
-    }
+    })
 }
 
 struct ObserverFactory {
@@ -121,7 +112,7 @@ fn every_world_finishes_handlers_before_payload_drop_and_identity_reuse() {
             trace: Arc::clone(&trace),
         }));
     }
-    let mut host = HostRuntime::with_system_factories(factories).unwrap();
+    let mut host = crate::support::task_scheduler::with_factories(factories).unwrap();
     let first = host
         .create_world(
             WorldLimits::default(),
@@ -137,7 +128,7 @@ fn every_world_finishes_handlers_before_payload_drop_and_identity_reuse() {
     let loader_trace = Arc::clone(&trace);
     let kind = AssetTypeId(65000);
     host.asset_resources_mut()
-        .register_loader(kind, move || Loader(Arc::clone(&loader_trace)))
+        .register_loader(kind, move || loader(Arc::clone(&loader_trace)))
         .unwrap();
     let identity = AssetUploadIdentity {
         kind,
@@ -148,6 +139,8 @@ fn every_world_finishes_handlers_before_payload_drop_and_identity_reuse() {
         .asset_resources_mut()
         .upload(identity, vec![1])
         .unwrap();
+    host.progress_assets();
+    crate::support::task_scheduler::poll_ready();
     host.progress_assets();
     assert!(host.asset_resources().get_typed::<Payload>(key).is_some());
     host.asset_resources_mut().release(key);
@@ -231,7 +224,7 @@ fn update_requested_release_waits_for_live_phase_not_later_prepared_world() {
         id: SystemId("fixture.observer"),
         trace: trace.clone(),
     }));
-    let mut host = HostRuntime::with_system_factories(factories).unwrap();
+    let mut host = crate::support::task_scheduler::with_factories(factories).unwrap();
     let first = host
         .create_world(
             Default::default(),
@@ -253,7 +246,7 @@ fn update_requested_release_waits_for_live_phase_not_later_prepared_world() {
     let kind = AssetTypeId(65000);
     let output = trace.clone();
     host.asset_resources_mut()
-        .register_loader(kind, move || Loader(output.clone()))
+        .register_loader(kind, move || loader(output.clone()))
         .unwrap();
     let key = host
         .asset_resources_mut()
@@ -266,6 +259,8 @@ fn update_requested_release_waits_for_live_phase_not_later_prepared_world() {
             vec![1],
         )
         .unwrap();
+    host.progress_assets();
+    crate::support::task_scheduler::poll_ready();
     host.progress_assets();
     *request.lock().unwrap() = Some(key);
     host.world_mut(first).unwrap().prepare_update(0.0).unwrap();

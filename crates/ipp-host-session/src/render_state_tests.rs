@@ -6,7 +6,10 @@ struct HeadlessPlatform;
 impl HostServices for HeadlessPlatform {
     const NAME: &'static str = "render-state-test";
 
-    fn initialize(_world: &mut ipp_core::HostRuntime) -> Result<Self, String> {
+    fn initialize(
+        _world: &mut ipp_core::HostRuntime,
+        _schedulers: &crate::services::task_scheduler::TaskSchedulers,
+    ) -> Result<Self, String> {
         Ok(Self)
     }
 

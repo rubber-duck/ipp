@@ -109,7 +109,7 @@ pub fn host_with_world_failures() -> (HostRuntime, WorldFailures) {
     let mut factories = compiled_system_factories();
     factories.push(Arc::new(Factory(failures.clone())));
     (
-        HostRuntime::with_system_factories(factories).unwrap(),
+        super::task_scheduler::with_factories(factories).unwrap(),
         failures,
     )
 }

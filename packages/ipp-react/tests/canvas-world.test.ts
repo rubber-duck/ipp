@@ -119,6 +119,7 @@ function fakeHost() {
       if (binding?.generation.serial === expected.generation.serial)
         binding = null;
     },
+    reads: { release: async () => {} },
     presentation: {
       surface: async () => ({
         id: 1n,
@@ -131,7 +132,6 @@ function fakeHost() {
         selected: RootBinding,
       ) => ({ surface, binding: structuredClone(selected), selection: 1n }),
       clear: async () => {},
-      releaseCapture: async () => {},
     },
   };
   return {

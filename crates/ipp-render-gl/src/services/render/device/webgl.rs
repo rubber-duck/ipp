@@ -270,6 +270,7 @@ unsafe extern "C" {
 /// One bridge owns one canvas context.
 #[derive(Default)]
 pub struct WebGlRenderDevice {
+    pub(super) readbacks: Vec<std::rc::Weak<std::cell::Cell<Option<u32>>>>,
     uniform_epoch: u64,
     #[cfg(feature = "instrumentation")]
     gpu_queries: super::gpu_queries::GpuQueryPool<super::webgl_gpu_queries::WebGlGpuQueries>,
@@ -316,7 +317,7 @@ impl WebGlRenderDevice {
         RenderError::RenderDevice(String::from_utf8_lossy(&bytes[..count]).into_owned())
     }
 
-    fn check(&self, status: u32) -> Result<(), RenderError> {
+    pub(super) fn check(&self, status: u32) -> Result<(), RenderError> {
         if status == 0 {
             Err(self.error())
         } else {
@@ -445,6 +446,40 @@ impl RenderDevice for WebGlRenderDevice {
     type Mesh = u32;
 
     type Texture = u32;
+    type TextureReadback = super::webgl_texture_readback::WebGlTextureReadback;
+
+    fn texture_readback_supported(&self) -> bool {
+        true
+    }
+
+    fn begin_texture_readback(
+        &mut self,
+        texture: &u32,
+        width: u32,
+        height: u32,
+    ) -> Result<Self::TextureReadback, RenderError> {
+        self.stage_texture(*texture, width, height)
+    }
+
+    fn poll_texture_readback(
+        &mut self,
+        readback: &Self::TextureReadback,
+    ) -> Result<bool, RenderError> {
+        self.poll_texture_stage(readback)
+    }
+
+    fn copy_texture_readback(
+        &mut self,
+        readback: &Self::TextureReadback,
+        offset: usize,
+        destination: &mut [u8],
+    ) -> Result<(), RenderError> {
+        self.copy_texture_stage(readback, offset, destination)
+    }
+
+    fn delete_texture_readback(&mut self, readback: Self::TextureReadback) {
+        self.release_texture_stage(&readback);
+    }
 
     type SurfacePath = u32;
 

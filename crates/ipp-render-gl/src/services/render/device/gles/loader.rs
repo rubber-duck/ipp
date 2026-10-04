@@ -75,6 +75,13 @@ gl_functions! {
     bind_buffer: c"glBindBuffer"(arg0: u32, arg1: u32) -> () => State;
     buffer_data: c"glBufferData"(arg0: u32, arg1: isize, arg2: *const c_void, arg3: u32) -> () => Upload;
     buffer_sub_data: c"glBufferSubData"(arg0: u32, arg1: isize, arg2: isize, arg3: *const c_void) -> () => Upload;
+    map_buffer_range: c"glMapBufferRange"(arg0: u32, arg1: isize, arg2: isize, arg3: u32) -> *mut c_void => Other;
+    unmap_buffer: c"glUnmapBuffer"(arg0: u32) -> u8 => Other;
+    fence_sync: c"glFenceSync"(arg0: u32, arg1: u32) -> *mut c_void => Other;
+    client_wait_sync: c"glClientWaitSync"(arg0: *mut c_void, arg1: u32, arg2: u64) -> u32 => Other;
+    delete_sync: c"glDeleteSync"(arg0: *mut c_void) -> () => Other;
+    flush: c"glFlush"() -> () => Other;
+    read_pixels: c"glReadPixels"(arg0: i32, arg1: i32, arg2: i32, arg3: i32, arg4: u32, arg5: u32, arg6: *mut c_void) -> () => Other;
     delete_buffers: c"glDeleteBuffers"(arg0: i32, arg1: *const u32) -> () => Other;
     gen_vertex_arrays: c"glGenVertexArrays"(arg0: i32, arg1: *mut u32) -> () => Other;
     bind_vertex_array: c"glBindVertexArray"(arg0: u32) -> () => State;

@@ -45,7 +45,7 @@ fn tint(host: &mut HostRuntime, surface: &CanvasSurface, entity: EntityId, red: 
 
 #[test]
 fn a_patched_canvas_hashes_only_the_boxes_it_replaced() {
-    let mut host = HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let (context, mut renderer, _state) = setup(&mut host);
     let world = context.id();
     drop(context);

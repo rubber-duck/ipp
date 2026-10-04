@@ -381,3 +381,243 @@ fn f32_fraction_bits(value: f32) -> i32 {
 #[cfg(test)]
 #[path = "surface_path_tests.rs"]
 mod tests;
+
+pub(super) async fn pack_surface_paths_async<'a>(
+    paths: impl IntoIterator<Item = ([f32; 4], &'a [QuadraticContour])>,
+) -> SurfacePathAtlas {
+    let mut budget = ipp_core::services::asset_management::decode::DecodeBudget::default();
+    let mut points = Vec::new();
+    let mut ranges = Vec::new();
+    let mut bounds = Vec::new();
+    for (path_bounds, contours) in paths {
+        let start = points.len();
+        push_contour_texels_async(contours, &mut points).await;
+        ranges.push((start, points.len() - start));
+        bounds.push(path_bounds);
+    }
+
+    let (curves, curve_scale) = quantize_async(&points).await;
+    let extents = curve_extents_async(&points, &curves, curve_scale).await;
+
+    let mut bands = Vec::new();
+    let mut lists: [Vec<u32>; BAND_COUNT] = Default::default();
+    let mut descriptors = Vec::with_capacity(ranges.len());
+    for (&(start, count), path_bounds) in ranges.iter().zip(&bounds) {
+        let band_offset = bands.len();
+        bands.resize(band_offset + BAND_HEADER_TEXELS as usize, 0);
+        for (group, axis) in [1, 0].into_iter().enumerate() {
+            fill_band_lists_async(
+                &mut lists,
+                &extents[start..start + count],
+                path_bounds[axis],
+                path_bounds[axis + 2],
+                axis,
+            )
+            .await;
+            let mut previous: Option<(usize, &[u32])> = None;
+            for (band, list) in lists.iter().enumerate() {
+                // Adjacent bands often cross the same curves; share one list.
+                let list_offset = match previous {
+                    Some((offset, earlier)) if earlier == list.as_slice() => offset,
+                    _ => {
+                        let offset = bands.len() - band_offset;
+                        bands.extend_from_slice(list);
+                        offset
+                    }
+                };
+                previous = Some((list_offset, list));
+                let header = band_offset + (group * BAND_COUNT + band) * 2;
+                bands[header] = list_offset as u32;
+                bands[header + 1] = list.len() as u32;
+            }
+        }
+        budget.advance(0).await;
+        descriptors.push(SurfacePathDescriptor::new(
+            [start as u32, count as u32],
+            band_offset as u32,
+        ));
+    }
+
+    let bands = if bands.iter().all(|&value| value <= u32::from(u16::MAX)) {
+        {
+            let mut converted = Vec::with_capacity(bands.len());
+            for value in bands {
+                converted.push(value as u16);
+                budget.advance(0).await;
+            }
+            SurfaceBandTexels::Uint16(converted)
+        }
+    } else {
+        SurfaceBandTexels::Uint32(bands)
+    };
+
+    SurfacePathAtlas {
+        texels: SurfacePathTexels {
+            curves,
+            curve_scale,
+            bands,
+        },
+        descriptors,
+    }
+}
+
+async fn push_contour_texels_async(contours: &[QuadraticContour], points: &mut Vec<PointTexel>) {
+    let mut budget = ipp_core::services::asset_management::decode::DecodeBudget::default();
+    for contour in contours {
+        budget.advance(0).await;
+        if contour.segments.is_empty() {
+            continue;
+        }
+        let mut start = contour.start;
+        for segment in &contour.segments {
+            budget.advance(0).await;
+            let (control, end) = match *segment {
+                QuadraticSegment::Line {
+                    to,
+                } => (to, to),
+                QuadraticSegment::Quadratic {
+                    control,
+                    to,
+                } => (control, to),
+            };
+            points.push(PointTexel {
+                lanes: [start[0], start[1], control[0], control[1]],
+                terminator: false,
+            });
+            start = end;
+        }
+        if start != contour.start {
+            let to = contour.start;
+            points.push(PointTexel {
+                lanes: [start[0], start[1], to[0], to[1]],
+                terminator: false,
+            });
+        }
+        let end = contour.start;
+        points.push(PointTexel {
+            lanes: [end[0], end[1], end[0], end[1]],
+            terminator: true,
+        });
+    }
+}
+
+async fn fill_band_lists_async(
+    lists: &mut [Vec<u32>; BAND_COUNT],
+    extents: &[[f32; 4]],
+    low: f32,
+    high: f32,
+    axis: usize,
+) {
+    let mut budget = ipp_core::services::asset_management::decode::DecodeBudget::default();
+    let extent = high - low;
+    let band_low = |band: usize| low + extent * band as f32 / BAND_COUNT as f32;
+    let band_high = |band: usize| low + extent * (band + 1) as f32 / BAND_COUNT as f32;
+    let estimate = |value: f32| ((value - low) / extent * BAND_COUNT as f32).floor();
+    for list in lists.iter_mut() {
+        list.clear();
+    }
+    for (local, hull) in extents.iter().enumerate() {
+        budget.advance(0).await;
+        let (minimum, maximum) = (hull[axis], hull[axis + 2]);
+        if minimum > maximum {
+            continue;
+        }
+        // Estimate the bands, then widen by one on each side so the exact
+        // boundary comparisons below decide every rounding-sensitive case.
+        let (first, last) = match (estimate(minimum), estimate(maximum)) {
+            (first, last) if first.is_finite() && last.is_finite() => (
+                (first - 1.0).clamp(0.0, (BAND_COUNT - 1) as f32) as usize,
+                (last + 1.0).clamp(0.0, (BAND_COUNT - 1) as f32) as usize,
+            ),
+            _ => (0, BAND_COUNT - 1),
+        };
+        for (band, list) in lists.iter_mut().enumerate().take(last + 1).skip(first) {
+            if maximum >= band_low(band) && minimum <= band_high(band) {
+                list.push(local as u32);
+            }
+        }
+    }
+}
+
+async fn quantize_async(points: &[PointTexel]) -> (SurfaceCurveTexels, f32) {
+    let mut budget = ipp_core::services::asset_management::decode::DecodeBudget::default();
+    let mut largest = 0.0f64;
+    let mut fraction_bits = 0i32;
+    for point in points {
+        for value in point.lanes {
+            if value.is_finite() {
+                largest = largest.max(f64::from(value.abs()));
+                fraction_bits = fraction_bits.max(f32_fraction_bits(value));
+            }
+        }
+        budget.advance(0).await;
+    }
+    let range_bits = |limit: f64| {
+        if largest == 0.0 {
+            return 0;
+        }
+        let mut bits = (limit / largest).log2().floor() as i32;
+        while largest * 2f64.powi(bits) > limit {
+            bits -= 1;
+        }
+        bits.clamp(-120, 120)
+    };
+    let fixed = |bits: i32, value: f32| {
+        if value.is_finite() {
+            (f64::from(value) * 2f64.powi(bits)).round()
+        } else {
+            0.0
+        }
+    };
+    if fraction_bits <= range_bits(I16_LIMIT) {
+        let mut texels = Vec::with_capacity(points.len());
+        for point in points {
+            texels.push(point.lanes.map(|value| fixed(fraction_bits, value) as i16));
+            budget.advance(0).await;
+        }
+        (SurfaceCurveTexels::Int16(texels), 2f32.powi(-fraction_bits))
+    } else {
+        let bits = fraction_bits.min(range_bits(I32_LIMIT));
+        let mut texels = Vec::with_capacity(points.len());
+        for point in points {
+            texels.push(point.lanes.map(|value| fixed(bits, value) as i32));
+            budget.advance(0).await;
+        }
+        (SurfaceCurveTexels::Int32(texels), 2f32.powi(-bits))
+    }
+}
+
+async fn curve_extents_async(
+    points: &[PointTexel],
+    curves: &SurfaceCurveTexels,
+    curve_scale: f32,
+) -> Vec<[f32; 4]> {
+    let value = |texel: usize, lane: usize| match curves {
+        SurfaceCurveTexels::Int16(texels) => f32::from(texels[texel][lane]) * curve_scale,
+        SurfaceCurveTexels::Int32(texels) => texels[texel][lane] as f32 * curve_scale,
+    };
+    let mut output = Vec::with_capacity(points.len());
+    let mut budget = ipp_core::services::asset_management::decode::DecodeBudget::default();
+    for (texel, point) in points.iter().enumerate() {
+        let extent = if point.terminator {
+            [
+                f32::INFINITY,
+                f32::INFINITY,
+                f32::NEG_INFINITY,
+                f32::NEG_INFINITY,
+            ]
+        } else {
+            let [x1, y1, x2, y2] = [0, 1, 2, 3].map(|lane| value(texel, lane));
+            let [x3, y3] = [0, 1].map(|lane| value(texel + 1, lane));
+            [
+                x1.min(x2).min(x3),
+                y1.min(y2).min(y3),
+                x1.max(x2).max(x3),
+                y1.max(y2).max(y3),
+            ]
+        };
+        output.push(extent);
+        budget.advance(0).await;
+    }
+    output
+}

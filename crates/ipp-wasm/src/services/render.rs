@@ -91,8 +91,34 @@ impl RenderSurfaceService {
         self.statistics.record_frame(host, frame);
     }
 
+    #[cfg(feature = "instrumentation")]
+    pub(crate) fn set_asset_export_staging_gate(&mut self, enabled: bool) {
+        self.renderer.set_asset_export_staging_gate(enabled);
+    }
+
+    pub(crate) fn asset_gpu_formats(
+        &self,
+        kind: ipp_core::services::asset_management::AssetTypeId,
+    ) -> Vec<ipp_core::services::asset_management::export::AssetExportFormat> {
+        self.renderer.asset_export_formats(kind)
+    }
+
+    pub(crate) fn asset_gpu_export(
+        &self,
+        provider: &ipp_core::services::asset_management::AssetProvider,
+        format: ipp_core::services::asset_management::export::AssetExportFormat,
+        observer: std::rc::Rc<
+            dyn ipp_core::services::asset_management::export::AssetOutputObserver,
+        >,
+    ) -> Result<ipp_core::services::asset_management::export::AssetExportFuture, String> {
+        self.renderer.export_asset(provider, format, observer)
+    }
+
     pub(crate) fn new(world: &mut ipp_core::HostRuntime) -> Self {
-        let renderer = RenderService::new(WebGlRenderDevice::new()).expect("empty renderer");
+        let mut renderer = RenderService::new(WebGlRenderDevice::new()).expect("empty renderer");
+        renderer.set_asset_export_delay(std::rc::Rc::new(|duration| {
+            Box::pin(super::task_timer::BrowserTaskTimer::new(duration))
+        }));
         renderer.set_asset_context_active(false);
         renderer
             .install(world)

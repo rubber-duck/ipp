@@ -20,6 +20,8 @@ mod submission;
 mod surface;
 mod surface_cache;
 mod targets;
+mod texture_readback;
+pub use texture_readback::GlesTextureReadback;
 mod uniform_values;
 pub use surface_cache::GlesSurfaceCacheTarget;
 
@@ -46,6 +48,7 @@ use loader::Functions;
 /// detection of context destruction belong to the host.
 pub struct GlesRenderDevice {
     gl: Functions,
+    readbacks: Vec<std::rc::Weak<std::cell::RefCell<Option<texture_readback::ReadbackStorage>>>>,
     #[cfg(feature = "instrumentation")]
     gpu_queries: super::gpu_queries::GpuQueryPool<gpu_queries::GlesGpuQueries>,
     parameter_buffer: u32,

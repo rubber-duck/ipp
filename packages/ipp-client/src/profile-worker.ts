@@ -147,3 +147,27 @@ export function installProfiler(
     },
   };
 }
+
+/** Trusted scheduler controls; compiled only into instrumentation workers. */
+export function installTaskTesting(
+  exports: WebAssembly.Exports,
+  suspendFrames: () => void,
+): void {
+  const start = requireExport(exports, "ipp_test_task_scheduler_start");
+  const release = requireExport(exports, "ipp_test_task_scheduler_release");
+  const cancel = requireExport(exports, "ipp_test_task_scheduler_cancel");
+  const state = requireExport(exports, "ipp_test_task_scheduler_state");
+  Object.assign(globalThis, {
+    ippScheduler: {
+      start() {
+        suspendFrames();
+        if (Number(start()) !== 1)
+          throw new Error("Scheduler probe start failed");
+      },
+      release: () => release(),
+      cancel: () => cancel(),
+      state: () =>
+        Array.from({ length: 6 }, (_, field) => Number(state(field))),
+    },
+  });
+}

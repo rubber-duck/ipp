@@ -149,7 +149,7 @@ fn host_world() -> (HostRuntime, WorldId) {
 }
 
 fn host_world_with(parts: &[&[ipp_core::systems::SystemId]]) -> (HostRuntime, WorldId) {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world = host
         .create_world(WorldLimits::default(), &select(parts))
         .unwrap();

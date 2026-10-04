@@ -123,6 +123,13 @@ export interface IngressStatistics {
   /** Resource source bytes staged in the worker and runtime at the capture. */
   sourceBufferedBytes: number;
   sourcePeakBufferedBytes: number;
+  /** Separately measured transport allocations and reader-owned WASM storage. */
+  sourceJsBufferedBytes?: number;
+  sourceRuntimeBufferedBytes?: number;
+  sourceJsPeakBufferedBytes?: number;
+  sourceRuntimePeakBufferedBytes?: number;
+  /** Immutable external source storage, separate from transport staging. */
+  sourceBackingBytes?: number;
 }
 
 /** Identity and residency of the graphics device, as the WebGL bridge reports it. */

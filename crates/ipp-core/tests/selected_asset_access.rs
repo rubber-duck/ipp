@@ -1,5 +1,9 @@
 //! Host services remain usable independently of selected World dependency tracking.
 
+mod support;
+use support::task_scheduler::HostTaskTestDriver;
+use support::task_scheduler::WorldTaskTestDriver;
+
 use ipp_core::{
     ErrorReason, HostRuntime, WorldId, WorldLimits, services::asset_management::*,
     systems::animation::*,
@@ -37,7 +41,7 @@ fn selected_world(host: &mut HostRuntime, animation: bool) -> WorldId {
 #[test]
 fn selected_world_observes_real_host_resources_without_upload_queue() {
     for animation in [false, true] {
-        let mut host = HostRuntime::new();
+        let mut host = crate::support::task_scheduler::host();
         let world_id = selected_world(&mut host, animation);
         let peer = selected_world(&mut host, animation);
         let source = AssetSource {
@@ -48,7 +52,7 @@ fn selected_world_observes_real_host_resources_without_upload_queue() {
         host.asset_resources_mut()
             .register_client_source(world_id, source.clone(), clip_bytes())
             .unwrap();
-        host.progress_assets();
+        host.progress_assets_for_test();
         let key = host.asset_resources().find(&source).unwrap();
         assert!(
             host.asset_resources()
@@ -126,7 +130,7 @@ fn selected_world_observes_real_host_resources_without_upload_queue() {
 fn selected_world_stream_helpers_progress_and_complete_shared_loaders() {
     for animation in [false, true] {
         for chunked in [false, true] {
-            let mut host = HostRuntime::new();
+            let mut host = crate::support::task_scheduler::host();
             let id = selected_world(&mut host, animation);
             let mut world = host.world_mut(id).unwrap();
             world.register_stream_resource_provider("fixture").unwrap();
@@ -139,7 +143,7 @@ fn selected_world_stream_helpers_progress_and_complete_shared_loaders() {
                 })
                 .unwrap();
             world.set_renderer_asset_loading(true);
-            world.poll_assets();
+            world.poll_assets_for_test();
             let requests = world.take_resource_requests();
             assert_eq!(requests.len(), 1);
             assert_eq!(
@@ -155,6 +159,8 @@ fn selected_world_stream_helpers_progress_and_complete_shared_loaders() {
                 world.complete_resource(requests[0].id, Ok(bytes)).unwrap();
             }
             world.poll_all_assets();
+            support::task_scheduler::poll_ready();
+            world.poll_all_assets();
             assert!(
                 world
                     .asset_resources()
@@ -165,7 +171,7 @@ fn selected_world_stream_helpers_progress_and_complete_shared_loaders() {
             assert!(world.take_resource_requests().is_empty());
             assert!(world.take_asset_outcomes().is_empty());
             world.set_renderer_asset_loading(false);
-            world.poll_assets();
+            world.poll_assets_for_test();
             drop(world);
             host.flush_resource_lifecycle();
         }

@@ -630,7 +630,9 @@ class PlanningTests(unittest.TestCase):
             for record in GLES_CHECKS
             if record["command"][:3] == ["cargo", "run", "-p"]
             and record["command"][3] == "ipp-render-gl"
-        }
+        } - {"check:gles-asset-readback"}
+        # The readback probe includes only the EGL driver directly; changing the
+        # broader smoke module must not select this independent device check.
         for source, expected in (
             ("crates/ipp-render-gl/Cargo.toml", checks),
             ("crates/ipp-render-gl/examples/smoke/mod.rs", smoke_examples),
@@ -638,6 +640,24 @@ class PlanningTests(unittest.TestCase):
             with self.subTest(source=source):
                 ids, _ = affected([source], [])
                 self.assertTrue(expected.issubset(ids), expected - set(ids))
+
+    def test_asset_readback_check_follows_its_probe_driver_and_device(self):
+        readback = "check:gles-asset-readback"
+        for source in (
+            "crates/ipp-render-gl/examples/egl_texture_readback.rs",
+            "crates/ipp-render-gl/examples/smoke/egl.rs",
+            "crates/ipp-render-gl/src/services/render/device/gles/texture_readback.rs",
+        ):
+            with self.subTest(source=source):
+                ids, _ = affected([source], [])
+                self.assertIn(readback, ids)
+        ids, _ = affected(["crates/ipp-render-gl/examples/egl_texture_readback.rs"], [])
+        self.assertEqual(
+            [id_ for id_ in ids if id_.startswith("check:gles-")],
+            [readback],
+        )
+        ids, _ = affected(["crates/ipp-render-gl/examples/smoke/mod.rs"], [])
+        self.assertNotIn(readback, ids)
 
     def test_mapped_rust_test_targets_run_in_their_suites(self):
         # Selecting a suite for a Cargo test target is only useful when one of

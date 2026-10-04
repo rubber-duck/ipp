@@ -1,6 +1,7 @@
 //! Real headless Canvas production through Host composition; no transport or GPU claim.
 
 mod support;
+use support::task_scheduler::HostTaskTestDriver;
 
 use ipp_core::components::{Surface, Transform};
 use ipp_core::services::asset_management::{AssetSource, font::FONT_TYPE};
@@ -68,7 +69,7 @@ fn observing_host() -> (HostRuntime, FrameObservations) {
     let mut factories = ipp_core::systems::compiled_system_factories();
     factories.push(Arc::new(FrameProbeFactory(observed.clone())));
     (
-        HostRuntime::with_system_factories(factories).unwrap(),
+        crate::support::task_scheduler::with_factories(factories).unwrap(),
         observed,
     )
 }
@@ -128,7 +129,7 @@ fn submit(host: &mut HostRuntime, world: WorldId, operations: Vec<Command>) -> B
             operations,
         })
         .unwrap();
-    host.frame(0.0)
+    host.frame_for_test(0.0)
         .unwrap()
         .worlds
         .remove(&world)
@@ -235,7 +236,7 @@ fn shape(host: &mut HostRuntime, world: WorldId, parent: EntityId, style: Canvas
 }
 
 fn frame(host: &mut HostRuntime) {
-    let report = host.frame(0.125).unwrap();
+    let report = host.frame_for_test(0.125).unwrap();
     assert!(
         report.worlds.values().all(Result::is_ok),
         "{:?}",
@@ -280,7 +281,7 @@ fn slot(output: &CanvasPublication) -> &CanvasAttachmentSlot {
 
 #[test]
 fn raw_canvas_needs_neither_gui_nor_spatial_systems_and_retains_unchanged_chunks() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world = raw_world(&mut host);
     let (selected, selected_entity) = canvas(&mut host, world);
     let first = shape(
@@ -355,7 +356,7 @@ fn raw_canvas_needs_neither_gui_nor_spatial_systems_and_retains_unchanged_chunks
 /// presented World's canvas; the stored extent applies otherwise.
 #[test]
 fn viewport_constraints_apply_only_to_the_exact_selected_canvas() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world = raw_world(&mut host);
     let other_world = raw_world(&mut host);
     let (selected, _) = canvas(&mut host, world);
@@ -530,7 +531,7 @@ fn nested_surface_slot_uses_one_invertible_mapping_without_rewriting_physical_ex
 
 #[test]
 fn core_ancestry_visual_transforms_and_empty_clips_are_shared_by_paint_and_hits() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let parent = host
         .create_world(Default::default(), &select(&[ATTACHMENTS, CANVAS, SURFACE]))
         .unwrap();
@@ -589,7 +590,7 @@ fn core_ancestry_visual_transforms_and_empty_clips_are_shared_by_paint_and_hits(
 
 #[test]
 fn parent_tint_and_opacity_multiply_into_descendant_paint_without_their_own_style() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world = raw_world(&mut host);
     let (output, root) = canvas(&mut host, world);
     let group = create(
@@ -1105,7 +1106,7 @@ fn unavailable_canvas_mapping_suppresses_hierarchy_fallback_and_can_recover() {
 
 #[test]
 fn canvas_slots_and_hits_track_applied_write_tokens_not_just_component_incarnations() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let parent = host
         .create_world(Default::default(), &select(&[ATTACHMENTS, CANVAS, SURFACE]))
         .unwrap();
@@ -1264,7 +1265,7 @@ fn failed_cycle(host: &mut HostRuntime, world: WorldId, entity: EntityId, parent
 fn failed_structural_edits_preserve_canvas_and_camera_output_lifetimes() {
     for kind in [OutputKind::Canvas, OutputKind::Camera] {
         for attached in [false, true] {
-            let mut host = HostRuntime::new();
+            let mut host = crate::support::task_scheduler::host();
             let world = host
                 .create_world(
                     Default::default(),
@@ -1470,7 +1471,7 @@ fn cyclic_descendants_leave_the_canvas_and_their_spatial_attachments_until_corre
     ) {
         return;
     }
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let parent = host
         .create_world(
             Default::default(),
@@ -1583,7 +1584,7 @@ fn refused_canvas_update_keeps_its_attachments_scoped_beside_camera_contribution
 
 #[test]
 fn spatial_child_does_not_inherit_parent_camera_or_viewport_selection() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let parent = host
         .create_world(Default::default(), &select(&[ATTACHMENTS, CAMERA]))
         .unwrap();
@@ -1624,7 +1625,7 @@ fn spatial_child_does_not_inherit_parent_camera_or_viewport_selection() {
 
 #[test]
 fn replacing_leaf_components_changes_incarnation_not_reordered_identity() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world = raw_world(&mut host);
     let (selected, selected_entity) = canvas(&mut host, world);
     let entity = shape(&mut host, world, selected_entity, Default::default());
@@ -1655,7 +1656,7 @@ fn replacing_leaf_components_changes_incarnation_not_reordered_identity() {
 
 #[test]
 fn selected_manifest_requires_asset_dependencies_only_for_resource_components() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let raw = raw_world(&mut host);
     let ready = resource_world(&mut host);
     let entity = create(&mut host, raw, Vec::new());
@@ -1713,7 +1714,7 @@ fn selected_manifest_requires_asset_dependencies_only_for_resource_components() 
 
 #[test]
 fn ordinary_text_and_glyph_components_acquire_fonts_and_publish_after_readiness() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     host.register_stream_resource_provider("canvas-demand")
         .unwrap();
     let world = resource_world(&mut host);
@@ -1842,7 +1843,7 @@ fn measured_text_reuses_glyph_storage_and_host_retains_exact_source_lease() {
     host.asset_resources_mut()
         .register_client_source(world, source.clone(), font_bytes())
         .unwrap();
-    host.progress_assets();
+    host.progress_assets_for_test();
     let key = host.asset_resources().find(&source).unwrap();
     let entity = create(
         &mut host,

@@ -142,6 +142,7 @@ impl GlesRenderDevice {
 
 impl Drop for GlesRenderDevice {
     fn drop(&mut self) {
+        self.release_texture_readbacks();
         self.release_linear_target();
         // SAFETY: The embedding contract keeps the context and functions live
         // through device drop; this buffer is exclusively owned by the device.

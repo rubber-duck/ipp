@@ -3,6 +3,7 @@ use super::tests::{TEST_TIMEOUT, socket_pair};
 use super::*;
 use std::net::Shutdown;
 use std::sync::Mutex;
+use std::sync::mpsc::{self, SyncSender};
 use std::thread::JoinHandle;
 
 /// The Host's ordinary output share: its byte budget minus the reserve kept for one
@@ -34,13 +35,15 @@ struct Peers {
 #[test]
 fn physical_output_credit_survives_channel_handoff_until_socket_completion() {
     let mut host = NativeConnectionHost::<NativeHostServices>::new().unwrap();
-    let (replies, receiver) = mpsc::sync_channel(1);
-    let (failures, _failure_receiver) = mpsc::sync_channel(1);
-    let (_sender, ingress) = mpsc::sync_channel(1);
+    let (replies, receiver) = async_channel::bounded(1);
+    let (failures, _failure_receiver) = async_channel::bounded(1);
+    let (_sender, ingress) = async_channel::bounded(1);
+    let (notify, _notified) = async_channel::bounded(1);
     let completed = Arc::new(AtomicU64::new(0));
     host.receive(HostConnectionEvent::Open {
         id: 1,
         replies,
+        notify,
         failures,
         ingress,
         queued: Arc::new(AtomicUsize::new(0)),
@@ -103,30 +106,38 @@ impl Peers {
         let (samples, measurements) = mpsc::sync_channel::<SyncSender<Vec<OutputSample>>>(1);
         let (ready, initialized) = mpsc::sync_channel(1);
         let host = std::thread::spawn(move || {
-            let (events, incoming) = mpsc::sync_channel(MAX_CONNECTIONS * 64);
+            let (events, incoming) = async_channel::bounded(MAX_CONNECTIONS * 64);
+            let mut host = NativeConnectionHost::<NativeHostServices>::new().unwrap();
+            let owner = std::thread::current();
+            let wake = owner.clone();
+            host.host.set_task_wakeup(Arc::new(move || wake.unpark()));
+            let io = host.host.task_schedulers().io();
             let transports: Vec<_> = pairs
                 .into_iter()
                 .enumerate()
                 .map(|(index, (_, server))| {
                     let events = events.clone();
                     let failures = recorded_failures.clone();
-                    std::thread::spawn(move || {
-                        if let Err(reason) = connection(server, index as u64 + 1, &events) {
+                    let owner = owner.clone();
+                    io.spawn(async move {
+                        if let Err(reason) =
+                            connection(server, index as u64 + 1, &events, owner).await
+                        {
                             failures.lock().unwrap().insert(index as u64 + 1, reason);
                         }
-                        let _ = events.send(HostConnectionEvent::Closed {
-                            id: index as u64 + 1,
-                        });
                     })
                 })
                 .collect();
-            let mut host = NativeConnectionHost::<NativeHostServices>::new().unwrap();
             ready.send(fixture(&mut host)).unwrap();
             let mut last = Instant::now();
             while !stopping.load(Ordering::Acquire) {
-                for event in incoming.try_iter().take(MAX_CONNECTIONS * 64) {
+                for _ in 0..MAX_CONNECTIONS * 64 {
+                    let Ok(event) = incoming.try_recv() else {
+                        break;
+                    };
                     host.receive(event);
                 }
+                host.host.progress_resources().unwrap();
                 let now = Instant::now();
                 if now.duration_since(last) >= FRAME_INTERVAL {
                     host.tick(now.duration_since(last).as_secs_f64()).unwrap();
@@ -156,7 +167,7 @@ impl Peers {
                 std::thread::sleep(IO_POLL_INTERVAL);
             }
             for transport in transports {
-                transport.join().unwrap();
+                async_io::block_on(transport).unwrap();
             }
         });
         let sockets = clients

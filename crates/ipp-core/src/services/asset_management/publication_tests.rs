@@ -4,7 +4,6 @@ use crate::services::io::IoService;
 use std::{
     any::Any,
     collections::{BTreeMap, BTreeSet},
-    task::{Context, Waker},
 };
 
 struct Blob(Vec<u8>);
@@ -52,14 +51,15 @@ impl super::super::Asset for GraphicsBlob {
 
 fn fixture() -> (AssetManagementService, IoService) {
     let mut assets = AssetManagementService::empty();
+    crate::test_task_scheduler::install_assets(&mut assets);
     assets
         .register_loader(super::super::AssetTypeId(42), || {
-            super::super::BufferedAssetLoader::new(|bytes| Ok(Blob(bytes.to_vec())))
+            crate::test_task_scheduler::blob_loader(|bytes| Ok(Blob(bytes.to_vec())))
         })
         .unwrap();
     assets
         .register_loader(super::super::AssetTypeId(43), || {
-            super::super::BufferedAssetLoader::new(|bytes| {
+            crate::test_task_scheduler::blob_loader(|bytes| {
                 Ok(GraphicsBlob {
                     bytes: bytes.to_vec(),
                     graphics_resident: true,
@@ -82,8 +82,9 @@ fn source(uri: &str) -> super::super::AssetSource {
 }
 
 fn poll(assets: &mut AssetManagementService, data: &mut IoService) {
-    data.progress();
-    assets.poll_loads(data, &mut Context::from_waker(Waker::noop()));
+    assets.progress_loads(data);
+    crate::test_task_scheduler::poll_ready();
+    assets.progress_loads(data);
 }
 
 fn loaded_bytes(assets: &AssetManagementService, key: AssetKey) -> &[u8] {

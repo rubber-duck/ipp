@@ -104,21 +104,27 @@ fn read_budget_yields_inside_fragmented_message_and_resumes_exact_payload() {
     std::thread::scope(|scope| {
         let producer = scope.spawn(move || client.write_all(&wire));
         let mut socket = tungstenite::WebSocket::from_raw_socket(
-            BudgetedStream::new(server),
+            BudgetedStream::new(server).unwrap(),
             Role::Server,
             Some(WebSocketConfig::default().read_buffer_size(16 * 1024)),
         );
 
-        // Blocking TCP here makes each WouldBlock deterministic evidence of the
-        // adapter budget rather than a momentarily empty kernel receive buffer.
+        // Wait for real socket readiness separately from exhausted-budget yields.
         let mut yields = 0;
         let message = loop {
             socket.get_mut().begin_iteration();
             match socket.read() {
                 Err(Error::Io(error)) if error.kind() == io::ErrorKind::WouldBlock => {
-                    assert_eq!(socket.get_ref().remaining, 0);
-                    yields += 1;
-                    assert!(yields < 8, "fragment decoding must eventually complete");
+                    if socket.get_ref().remaining == 0 {
+                        yields += 1;
+                        assert!(yields < 8, "fragment decoding must eventually complete");
+                    } else {
+                        async_io::block_on(wait_socket(
+                            socket.get_ref(),
+                            Instant::now() + TEST_TIMEOUT,
+                        ))
+                        .unwrap();
+                    }
                 }
                 Ok(message) => break message,
                 Err(error) => panic!("fragment decode failed: {error}"),
@@ -143,14 +149,25 @@ impl RunningConnection {
     fn start() -> Self {
         let (client, server) = socket_pair();
         let host = std::thread::spawn(move || {
-            let (events, incoming) = mpsc::sync_channel(MAX_CONNECTIONS * 64);
-            let transport = std::thread::spawn(move || connection(server, 7, &events));
+            let (events, incoming) = async_channel::bounded(MAX_CONNECTIONS * 64);
             let mut host = NativeConnectionHost::<NativeHostServices>::new()?;
+            let owner = std::thread::current();
+            let wake = owner.clone();
+            host.host.set_task_wakeup(Arc::new(move || wake.unpark()));
+            let transport = host
+                .host
+                .task_schedulers()
+                .io()
+                .spawn(async move { connection(server, 7, &events, owner).await });
             let mut last = Instant::now();
             while !transport.is_finished() {
-                for event in incoming.try_iter().take(MAX_CONNECTIONS * 64) {
+                for _ in 0..MAX_CONNECTIONS * 64 {
+                    let Ok(event) = incoming.try_recv() else {
+                        break;
+                    };
                     host.receive(event);
                 }
+                host.host.progress_resources()?;
                 let now = Instant::now();
                 if now.duration_since(last) >= FRAME_INTERVAL {
                     host.tick(now.duration_since(last).as_secs_f64())?;
@@ -159,7 +176,7 @@ impl RunningConnection {
                 host.flush();
                 std::thread::sleep(IO_POLL_INTERVAL);
             }
-            transport.join().unwrap()
+            async_io::block_on(transport).map_err(|error| error.to_string())?
         });
         let (client, _) = match tungstenite::client("ws://127.0.0.1/", client) {
             Ok(upgraded) => upgraded,

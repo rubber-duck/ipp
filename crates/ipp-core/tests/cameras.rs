@@ -51,7 +51,7 @@ fn camera(world: &mut ipp_core::WorldContext<'_>, name: &str) -> EntityId {
 
 #[test]
 fn activation_is_explicit_ordered_and_failed_activation_preserves_selection() {
-    let mut world_host = ipp_core::HostRuntime::new();
+    let mut world_host = crate::support::task_scheduler::host();
     let world_id = world_host
         .create_world(ipp_core::WorldLimits::default(), CAMERA)
         .unwrap();
@@ -100,7 +100,7 @@ fn active_deletion_and_required_removal_are_accepted_and_leave_the_selection_unu
         Some(ComponentValue::CAMERA),
         Some(ComponentValue::TRANSFORM),
     ] {
-        let mut host = ipp_core::HostRuntime::new();
+        let mut host = crate::support::task_scheduler::host();
         let id = host.create_world(Default::default(), CAMERA).unwrap();
         let mut world = host.world_mut(id).unwrap();
         let first = camera(&mut world, "first");
@@ -152,7 +152,7 @@ fn active_deletion_and_required_removal_are_accepted_and_leave_the_selection_unu
 
 #[test]
 fn invalid_projection_updates_can_be_corrected_explicitly() {
-    let mut world_host = ipp_core::HostRuntime::new();
+    let mut world_host = crate::support::task_scheduler::host();
     let world_id = world_host
         .create_world(ipp_core::WorldLimits::default(), CAMERA)
         .unwrap();
@@ -245,7 +245,7 @@ fn invalid_projection_updates_can_be_corrected_explicitly() {
 
 #[test]
 fn activation_observes_prior_mutations_and_shares_queue_bounds() {
-    let mut world_host = ipp_core::HostRuntime::new();
+    let mut world_host = crate::support::task_scheduler::host();
     let world_id = world_host
         .create_world(
             WorldLimits {

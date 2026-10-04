@@ -263,7 +263,7 @@ fn pose_keys_blend_local_trs_shortest_arc_and_bezier_time() {
 
 #[test]
 fn independent_players_preserve_base_unkeyed_joints_and_pose_storage() {
-    let mut fixture_host = ipp_core::HostRuntime::new();
+    let mut fixture_host = crate::support::task_scheduler::host();
     let (mut world, a, b) = fixture(&mut fixture_host);
     let p = player(&mut world, a, &bend(), 100, Default::default());
     let q = player(&mut world, b, &bend(), 101, Default::default());
@@ -310,7 +310,7 @@ fn independent_players_preserve_base_unkeyed_joints_and_pose_storage() {
 #[test]
 fn skeleton_payload_residency_freezes_joint_playback_without_replacing_its_buffer() {
     use support::HostWorldTestDriver;
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let (mut world, entity, _) = fixture(&mut host);
     let world_id = world.id();
     let controller = player(&mut world, entity, &bend(), 100, Default::default());
@@ -386,7 +386,7 @@ fn skeleton_payload_residency_freezes_joint_playback_without_replacing_its_buffe
 #[test]
 fn changing_pose_source_suspends_prepared_joint_playback_until_the_new_pose_loads() {
     use support::HostWorldTestDriver;
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let (mut world, entity, _) = fixture(&mut host);
     let world_id = world.id();
     upload(
@@ -452,7 +452,7 @@ fn discrete_pose_inputs_rebase_unkeyed_locals_and_preserve_ordered_joint_samples
     // The joint driver adds half of its 9 change at t=1: onto the new pose's
     // 5 when the pose source is written first, onto the rest pose's 0 otherwise.
     for (pose_first, expected_x) in [(true, 9.5), (false, 4.5)] {
-        let mut fixture_host = ipp_core::HostRuntime::new();
+        let mut fixture_host = crate::support::task_scheduler::host();
         let (mut world, entity, _) = fixture(&mut fixture_host);
         let mut pose = builtin::rig(POSE_TYPE, "ipp://pose/rig-strip-bent").unwrap();
         pose[12..16].copy_from_slice(&5.0f32.to_le_bytes());
@@ -504,7 +504,7 @@ fn discrete_pose_inputs_rebase_unkeyed_locals_and_preserve_ordered_joint_samples
 
 #[test]
 fn joint_baseline_tracks_authored_pose_changes_without_accumulating_samples() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let (mut world, entity, _) = fixture(&mut host);
     let mut pose = builtin::rig(POSE_TYPE, "ipp://pose/rig-strip-bent").unwrap();
     pose[12..16].copy_from_slice(&5.0f32.to_le_bytes());
@@ -559,7 +559,7 @@ fn joint_baseline_tracks_authored_pose_changes_without_accumulating_samples() {
 
 #[test]
 fn source_replacement_in_failed_batch_invalidates_binding() {
-    let mut fixture_host = ipp_core::HostRuntime::new();
+    let mut fixture_host = crate::support::task_scheduler::host();
     let (mut world, a, _) = fixture(&mut fixture_host);
     let p = player(&mut world, a, &bend(), 100, Default::default());
     paused(&mut world, p, 1.0);
@@ -634,7 +634,7 @@ fn source_replacement_in_failed_batch_invalidates_binding() {
 
 #[test]
 fn animated_source_replacement_keeps_partial_samples_without_retrying_clocks() {
-    let mut fixture_host = ipp_core::HostRuntime::new();
+    let mut fixture_host = crate::support::task_scheduler::host();
     let (mut world, a, _) = fixture(&mut fixture_host);
     let p = player(&mut world, a, &bend(), 100, Default::default());
     let source = AnimationClip::new(
@@ -690,7 +690,7 @@ fn animated_source_replacement_keeps_partial_samples_without_retrying_clocks() {
 #[test]
 fn single_sampling_pass_reports_failures_without_rollback_or_retry() {
     use ipp_core::components::schema::FieldValue as Sample;
-    let mut fixture_host = ipp_core::HostRuntime::new();
+    let mut fixture_host = crate::support::task_scheduler::host();
     let (mut world, target, _) = fixture(&mut fixture_host);
     let scalar = |a, b| AnimationTrack {
         target: AnimationTrackTarget::AnimationProperty(AnimationProperty {
@@ -790,7 +790,7 @@ fn single_sampling_pass_reports_failures_without_rollback_or_retry() {
 fn joint_override_properties_reject_numeric_and_discrete_tracks_at_bind() {
     use ipp_core::components::{JointOverrideRow, rows::Rows};
 
-    let mut fixture_host = ipp_core::HostRuntime::new();
+    let mut fixture_host = crate::support::task_scheduler::host();
     let (mut world, a, _) = fixture(&mut fixture_host);
     let translation = Rows::<JointOverrideRow>::offset(0, 1, 0).unwrap();
     let rotation = Rows::<JointOverrideRow>::offset(0, 1, 1).unwrap();

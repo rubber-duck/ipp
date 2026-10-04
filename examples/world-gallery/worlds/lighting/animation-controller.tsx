@@ -1,4 +1,3 @@
-import { clientAssetSource } from "@ipp/client";
 import { createRef } from "react";
 import {
   Animation,
@@ -18,9 +17,6 @@ import type {
 import type { IppCanvasHandle } from "@ipp/react/canvas";
 import { ANIMATED_IDS, SCENE_OBJECTS, type ObjectId } from "./model.js";
 import {
-  beamPickingSource,
-  SKELETON_ASSET,
-  SKIN_ASSET,
   uploadRigAssets,
   animationClips,
   type AnimationModule,
@@ -69,7 +65,7 @@ export class AnimationSession {
     signal: AbortSignal,
   ) {
     const client = canvas.client as AnimationWorldClient;
-    await uploadRigAssets(client, module);
+    const rig = await uploadRigAssets(client, module);
     signal.throwIfAborted();
     const deadline = performance.now() + 10_000;
     let targets: bigint[];
@@ -110,14 +106,14 @@ export class AnimationSession {
     insert({ kind: "handle", id: beam }, "Skeleton", {
       source: {
         kind: "string",
-        value: clientAssetSource(client.session, 3, SKELETON_ASSET).source,
+        value: rig.skeleton.source,
       },
     });
     insert({ kind: "handle", id: beam }, "Skin", {
       skeleton: { kind: "entity", value: { kind: "handle", id: beam } },
       source: {
         kind: "string",
-        value: clientAssetSource(client.session, 5, SKIN_ASSET).source,
+        value: rig.skin.source,
       },
     });
     const outcome = await client.batch(operations);
@@ -136,9 +132,9 @@ export class AnimationSession {
         signal.throwIfAborted();
         const inspection = await client.inspect();
         const sources = new Set([
-          clientAssetSource(client.session, 3, SKELETON_ASSET).source,
-          clientAssetSource(client.session, 5, SKIN_ASSET).source,
-          beamPickingSource(client.session),
+          rig.skeleton.source,
+          rig.skin.source,
+          rig.picking.source,
         ]);
         const resources = inspection.resources.filter((resource) =>
           sources.has(resource.source),

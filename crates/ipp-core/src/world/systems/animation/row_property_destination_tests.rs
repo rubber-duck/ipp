@@ -122,6 +122,8 @@ fn submit(world: &mut WorldContext<'_>, operations: Vec<Command>) -> BatchOutcom
 fn update(world: &mut WorldContext<'_>, dt: f64) -> WorldUpdateReport {
     world.prepare_update(dt).unwrap();
     world.poll_assets();
+    crate::test_task_scheduler::poll_ready();
+    world.poll_assets();
     world.step(dt).unwrap()
 }
 
@@ -238,6 +240,7 @@ fn f32_value(value: f32) -> SchemaValue {
 
 fn world() -> (HostRuntime, crate::WorldId) {
     let mut host = HostRuntime::new();
+    crate::test_task_scheduler::install(&mut host);
     let id = host
         .create_world(
             WorldLimits::default(),

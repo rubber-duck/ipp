@@ -4,6 +4,7 @@
 //! entities carry no control behavior.
 
 mod support;
+use support::task_scheduler::HostTaskTestDriver;
 
 use ipp_core::components::rows::Rows;
 use ipp_core::components::{
@@ -1424,7 +1425,7 @@ struct PresentedPanel {
 
 impl PresentedPanel {
     fn new() -> Self {
-        let mut host = HostRuntime::new();
+        let mut host = crate::support::task_scheduler::host();
         let parent = host
             .create_world(Default::default(), &select(&[ATTACHMENTS, CANVAS, SURFACE]))
             .unwrap();
@@ -1503,7 +1504,7 @@ impl PresentedPanel {
     }
 
     fn frame(&mut self, dt: f64) {
-        let result = self.host.frame(dt).unwrap();
+        let result = self.host.frame_for_test(dt).unwrap();
         assert!(
             result.worlds.values().all(Result::is_ok),
             "{:?}",

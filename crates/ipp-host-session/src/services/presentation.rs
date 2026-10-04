@@ -34,11 +34,6 @@ const MAX_CAPTURE_BYTES: usize = PER_CONNECTION_CAPTURE_BYTES * PRESENTING_CONNE
 /// renderer fails the waiter with a timeout instead of holding its slot.
 const FRAME_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Unreleased capture lifetime: long enough to read a full capture in 64 KiB
-/// chunks, short enough that a client that never releases one gets its bytes
-/// back for further captures.
-const CAPTURE_TIMEOUT: Duration = Duration::from_secs(30);
-
 pub(crate) fn frame_deadline(received_at: Duration) -> Duration {
     received_at.saturating_add(FRAME_TIMEOUT)
 }
@@ -71,19 +66,13 @@ struct PendingFrame {
     outputs: Vec<(ipp_core::OutputRef, u64)>,
 }
 
-struct Capture {
-    bytes: Arc<Vec<u8>>,
-    expires: Duration,
-}
-
 #[derive(Default)]
 pub(crate) struct PresentationCoordinator {
     selected: Option<PresentationView>,
     selection: u64,
     sequence: u64,
-    next_capture: u64,
     pending: BTreeMap<(u64, u64), PendingFrame>,
-    captures: BTreeMap<(u64, u64), Capture>,
+    completed_captures: BTreeMap<(u64, u64), Arc<Vec<u8>>>,
     completed: Vec<(u64, u64, PresentationResponse)>,
 }
 
@@ -135,16 +124,37 @@ impl PresentationCoordinator {
         Ok(())
     }
 
-    fn used_bytes(&self) -> usize {
+    pub(crate) fn used_bytes(&self) -> usize {
         self.pending
             .values()
             .map(|pending| pending.capture_bytes)
             .sum::<usize>()
             + self
-                .captures
+                .completed_captures
                 .values()
-                .map(|capture| capture.bytes.len())
+                .map(|capture| capture.len())
                 .sum::<usize>()
+    }
+
+    pub(crate) fn retained_output_bytes(&self, bulk: &super::bulk_read::BulkReadService) -> usize {
+        // One draw destination serves every matching capture waiter. Completed
+        // recipients share one Arc; backing adopted by bulk is already charged.
+        let scratch = self
+            .pending
+            .values()
+            .map(|pending| pending.capture_bytes)
+            .max()
+            .unwrap_or(0);
+        let mut seen = std::collections::BTreeSet::new();
+        self.completed_captures
+            .values()
+            .fold(scratch, |bytes, capture| {
+                if seen.insert(ipp_core::services::io::IoStorageId::of_backing(capture)) {
+                    bytes.saturating_add(bulk.additional_backing(capture))
+                } else {
+                    bytes
+                }
+            })
     }
 
     /// Waiters, captures and capture bytes one connection holds.
@@ -155,10 +165,10 @@ impl PresentationCoordinator {
             .filter(|((owner, _), _)| *owner == connection)
             .map(|(_, pending)| pending.capture_bytes);
         let captures = self
-            .captures
+            .completed_captures
             .iter()
             .filter(|((owner, _), _)| *owner == connection)
-            .map(|(_, capture)| capture.bytes.len());
+            .map(|(_, capture)| capture.len());
         pending
             .chain(captures)
             .fold((0, 0), |(count, bytes), item| (count + 1, bytes + item))
@@ -294,7 +304,7 @@ impl PresentationCoordinator {
                 let (held, held_bytes) = self.connection_usage(connection);
                 if self.pending.contains_key(&(connection, request))
                     || held >= PER_CONNECTION
-                    || self.pending.len() + self.captures.len() >= MAX_REQUESTS
+                    || self.pending.len() + self.completed_captures.len() >= MAX_REQUESTS
                 {
                     return Err(PresentationError::Capacity);
                 }
@@ -324,33 +334,6 @@ impl PresentationCoordinator {
                     },
                 );
                 return Ok(None);
-            }
-            PresentationRequest::ReadCapture {
-                capture,
-                offset,
-            } => {
-                let snapshot = self
-                    .captures
-                    .get(&(connection, capture))
-                    .ok_or(PresentationError::Unavailable)?;
-                let offset = usize::try_from(offset).map_err(|_| PresentationError::Capacity)?;
-                if offset >= snapshot.bytes.len() {
-                    return Err(PresentationError::Unavailable);
-                }
-                Reply::Chunk {
-                    capture,
-                    offset: offset as u64,
-                    bytes: snapshot.bytes[offset
-                        ..snapshot
-                            .bytes
-                            .len()
-                            .min(offset.saturating_add(ipp_protocol::MAX_FIELD_BYTES))]
-                        .to_vec(),
-                }
-            }
-            PresentationRequest::ReleaseCapture(capture) => {
-                self.captures.remove(&(connection, capture));
-                Reply::Complete
             }
             PresentationRequest::CancelFrame {
                 request,
@@ -389,7 +372,6 @@ impl PresentationCoordinator {
     }
 
     pub(crate) fn expire(&mut self, now: Duration) {
-        self.captures.retain(|_, capture| capture.expires > now);
         let expired: Vec<_> = self
             .pending
             .iter()
@@ -409,8 +391,13 @@ impl PresentationCoordinator {
     /// Configuration is Host-owned; disconnect revokes only the connection's requests/data.
     pub(crate) fn disconnect(&mut self, connection: u64) {
         self.pending.retain(|(owner, _), _| *owner != connection);
-        self.captures.retain(|(owner, _), _| *owner != connection);
+        self.completed_captures
+            .retain(|(owner, _), _| *owner != connection);
         self.completed.retain(|(owner, _, _)| *owner != connection);
+    }
+
+    pub(crate) fn take_capture(&mut self, connection: u64, request: u64) -> Option<Arc<Vec<u8>>> {
+        self.completed_captures.remove(&(connection, request))
     }
 
     pub(crate) fn take_completed(&mut self) -> Vec<(u64, u64, PresentationResponse)> {
@@ -603,23 +590,15 @@ impl PresentationCoordinator {
                 })
                 .collect();
             let reply = if pending.capture_bytes != 0 {
-                match self.next_capture.checked_add(1) {
-                    Some(capture) => {
-                        self.next_capture = capture;
-                        self.captures.insert(
-                            (connection, capture),
-                            Capture {
-                                bytes: pixels.clone(),
-                                expires: now.saturating_add(CAPTURE_TIMEOUT),
-                            },
-                        );
-                        PresentationResponse::Capture {
-                            frame,
-                            capture,
-                            bytes: pixels.len() as u64,
-                        }
-                    }
-                    None => PresentationResponse::Error(PresentationError::Capacity),
+                self.completed_captures
+                    .insert((connection, request), pixels.clone());
+                PresentationResponse::Capture {
+                    frame,
+                    read: ipp_protocol::bulk_read::BulkReadReference {
+                        connection,
+                        read: 0,
+                    },
+                    bytes: u64::try_from(pixels.len()).expect("bounded capture length"),
                 }
             } else {
                 PresentationResponse::Frame(frame)

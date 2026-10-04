@@ -1,3 +1,8 @@
+import {
+  BulkReadClient,
+  readBulkReference,
+  type BulkReadReference,
+} from "./bulk-reads.js";
 /** Host surface configuration and completed-draw fences, never World evaluation ticks. */
 import { HostWireReader, HostWireWriter } from "./host-protocol.js";
 import {
@@ -9,16 +14,6 @@ import type { OutputReference, PublicationReference } from "./types.js";
 
 /** `MAX_PRESENTATION_SOURCES` of `ipp-protocol` (`presentation.rs`), checked by `tools/check_repo.py`. */
 const maxPresentationSources = Math.floor((1_048_576 - 1024) / 65);
-
-/** Capture chunks are full `MAX_FIELD_BYTES` pages of `ipp-protocol` (`lib.rs`), checked by `tools/check_repo.py`. */
-const captureChunkBytes = 65_536;
-/**
- * Capture reads in flight. The Host answers reads between its frames, so a busy
- * Host answers about one window per frame; 16 chunks keep a 1714x1259 capture
- * to nine windows while in-flight replies stay near 1 MiB of the connection's
- * reliable output.
- */
-const captureTransferWindow = 16;
 
 function outputKey(output: OutputReference): string {
   const producer = outputProducer(output);
@@ -100,14 +95,11 @@ export class PresentationError extends Error {
 /** A completed snapshot whose exact connection-owned transfer may still need release. */
 export class CaptureTransferError extends Error {
   constructor(
-    readonly capture: bigint,
+    readonly reference: BulkReadReference,
     readonly frame: PresentedFrame,
     cause: unknown,
   ) {
-    super(
-      "Capture transfer failed; release this exact capture if the Host remains live",
-      { cause },
-    );
+    super("Capture transfer failed", { cause });
     this.name = "CaptureTransferError";
   }
 }
@@ -204,6 +196,7 @@ export class HostPresentation {
   constructor(
     private readonly send: Send,
     private readonly tag: (name: string) => number,
+    private readonly reads: BulkReadClient,
   ) {}
 
   private async request(
@@ -394,12 +387,7 @@ export class HostPresentation {
     return frame;
   }
 
-  /**
-   * Pending captures are fenced at completion; completed bytes survive later rebind/loss.
-   * A decoded transfer ID is journaled before fence validation and released even on failure.
-   * Truncation before that ID cannot establish ownership: server expiry or connection
-   * teardown reclaims the unknown transfer instead of guessing a cleanup identity.
-   */
+  /** Read the detached stamped snapshot through the common output reader. */
   async capture(
     view: PresentationView,
     options: PresentationFrameOptions = {},
@@ -409,9 +397,7 @@ export class HostPresentation {
       options,
       true,
     );
-    const capture = reader.u64();
-    let failure: unknown;
-    let pixels: Uint8Array<ArrayBuffer> | undefined;
+    const reference = readBulkReference(reader);
     try {
       const total = reader.u64();
       reader.end();
@@ -422,69 +408,22 @@ export class HostPresentation {
         total !== BigInt(viewport.width) * BigInt(viewport.height) * 4n
       )
         throw new Error("Invalid capture byte length");
-      pixels = new Uint8Array(Number(total));
-      const target = pixels;
-      const read = async (offset: number) => {
-        const chunk = await this.request("READ_CAPTURE", "CHUNK", (writer) => {
-          writer.u64(capture);
-          writer.u64(BigInt(offset));
-        });
-        if (chunk.u64() !== capture || chunk.u64() !== BigInt(offset))
-          throw new Error("Capture chunk identity mismatch");
-        const bytes = chunk.bytes();
-        chunk.end();
-        if (
-          bytes.length !== Math.min(captureChunkBytes, target.length - offset)
-        )
-          throw new Error("Invalid capture chunk length");
-        target.set(bytes, offset);
-      };
-      // Every submitted read settles before release.
-      for (
-        let start = 0;
-        start < target.length;
-        start += captureChunkBytes * captureTransferWindow
-      ) {
-        const reads: Promise<void>[] = [];
-        for (let index = 0; index < captureTransferWindow; index++) {
-          const offset = start + index * captureChunkBytes;
-          if (offset >= target.length) break;
-          reads.push(read(offset));
-        }
-        const results = await Promise.allSettled(reads);
-        const rejected = results.find(
-          (result): result is PromiseRejectedResult =>
-            result.status === "rejected",
-        );
-        if (rejected) throw rejected.reason;
-      }
-    } catch (error) {
-      failure = error;
-    }
-    try {
-      await this.releaseCapture(capture);
-    } catch (error) {
-      failure =
-        failure === undefined
-          ? error
-          : new AggregateError([failure, error], "Capture and release failed");
-    }
-    if (failure !== undefined)
-      throw new CaptureTransferError(capture, frame, failure);
-    if (!pixels)
-      throw new CaptureTransferError(
-        capture,
-        frame,
-        new Error("Missing capture"),
+      const pixels = await this.reads.readAll(
+        { reference, length: total },
+        { maxBytes: 67_108_864 },
       );
-    return { ...frame, pixels: pixels.buffer };
-  }
-
-  async releaseCapture(capture: bigint): Promise<void> {
-    (
-      await this.request("RELEASE_CAPTURE", "COMPLETE", (writer) =>
-        writer.u64(capture),
-      )
-    ).end();
+      return { ...frame, pixels: pixels.buffer };
+    } catch (error) {
+      let cause = error;
+      try {
+        await this.reads.release(reference);
+      } catch (releaseError) {
+        cause = new AggregateError(
+          [error, releaseError],
+          "Capture read and release failed",
+        );
+      }
+      throw new CaptureTransferError(reference, frame, cause);
+    }
   }
 }

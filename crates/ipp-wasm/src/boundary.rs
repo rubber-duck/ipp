@@ -18,6 +18,7 @@ pub(crate) struct WasmHostBoundary {
     connections: BTreeMap<u64, ConnectionOutput>,
     host: Option<WasmHost>,
     input: Vec<u8>,
+    resource_reservation: Option<(u64, u64, ipp_core::services::io::IoInputReservation)>,
     output: Vec<u8>,
     borrowed_delivery: Option<(u64, u64)>,
 }
@@ -31,6 +32,7 @@ impl WasmHostBoundary {
             connections: BTreeMap::new(),
             host: None,
             input: Vec::new(),
+            resource_reservation: None,
             output: Vec::new(),
             borrowed_delivery: None,
         }
@@ -62,7 +64,10 @@ impl WasmHostBoundary {
         self.last_session = id;
         crate::diagnostics::set_session(id);
         match WasmHost::new() {
-            Ok(session) => {
+            Ok(mut session) => {
+                session.set_task_wakeup(std::sync::Arc::new(
+                    crate::services::task_wakeup::request_update,
+                ));
                 self.host = Some(session);
                 true
             }
@@ -184,17 +189,22 @@ impl WasmHostBoundary {
     }
 
     pub(crate) fn close(&mut self) {
+        #[cfg(all(feature = "instrumentation", target_arch = "wasm32"))]
+        crate::task_scheduler_testing::clear();
         if let Some(mut host) = self.host.take() {
             for &id in self.connections.keys() {
                 host.close_connection(id);
             }
         }
         self.input = Vec::new();
+        self.resource_reservation = None;
         self.release_output();
         self.connections.clear();
     }
 
     pub(crate) fn fail(&mut self, error: &str) -> bool {
+        #[cfg(all(feature = "instrumentation", target_arch = "wasm32"))]
+        crate::task_scheduler_testing::clear();
         diagnostic!(
             Error,
             "[IPP wasm] session.failed session={} reason={}",
@@ -202,6 +212,7 @@ impl WasmHostBoundary {
             error
         );
         self.input = Vec::new();
+        self.resource_reservation = None;
         self.release_output();
         if let Some(mut host) = self.host.take() {
             for (&id, connection) in &mut self.connections {
@@ -230,6 +241,7 @@ impl WasmHostBoundary {
         // Invalidate old input/output before allocating. A reservation is replaced,
         // never extended, and cannot expose bytes left over from another call.
         self.input = Vec::new();
+        self.resource_reservation = None;
         self.release_output();
         if self.host.is_none() {
             self.fail("session is closed");
@@ -483,30 +495,107 @@ impl WasmHostBoundary {
         true
     }
 
-    pub(crate) fn asset_chunk(&mut self, expected_session: u64, id: u64, len: usize) -> u32 {
+    pub(crate) fn buffer_source(
+        &mut self,
+        expected_session: u64,
+        len: usize,
+        revoke: bool,
+    ) -> bool {
         self.release_output();
-        if id == 0
-            || len == 0
-            || len > ipp_core::services::asset_management::STREAM_CAPACITY
-            || len != self.input.len()
+        if expected_session != self.last_session || len != self.input.len() {
+            return self.fail("invalid generated source reservation");
+        }
+        let name = match std::str::from_utf8(&self.input) {
+            Ok(name) => name.to_owned(),
+            Err(_) => return self.fail("invalid generated source UTF-8"),
+        };
+        self.input.clear();
+        if !name.starts_with("js-buffer:")
+            || name.len() != 42
+            || !name[10..].bytes().all(|byte| byte.is_ascii_hexdigit())
         {
-            self.fail("invalid asset chunk or reservation");
+            return self.fail("invalid generated source identity");
+        }
+        let Some(host) = self.host.as_mut() else {
+            return self.fail("session is closed");
+        };
+        let result = if revoke {
+            if let Err(error) = host.progress_resources() {
+                return self.fail(&error);
+            }
+            host.runtime_mut()
+                .asset_resources_mut()
+                .revoke_source_prefix(&name);
+            host.runtime_mut().flush_resource_lifecycle();
+            host.runtime_mut().io_mut().unregister(&name);
+            Ok(())
+        } else {
+            host.runtime_mut().io_mut().register_stream(&name)
+        };
+        match result {
+            Ok(()) => true,
+            Err(error) => self.fail(&error),
+        }
+    }
+
+    pub(crate) fn reserve_asset_chunk(
+        &mut self,
+        expected_session: u64,
+        id: u64,
+        len: usize,
+    ) -> u32 {
+        self.release_output();
+        self.resource_reservation = None;
+        if id == 0 || len == 0 || len > ipp_core::services::io::STREAM_CAPACITY {
+            self.fail("invalid resource chunk reservation");
             return 0;
         }
         if expected_session != self.last_session {
-            self.input.clear();
-            return 1;
+            return 3;
         }
         let Some(session) = &self.host else {
             self.fail("session is closed");
             return 0;
         };
-        match session.runtime().asset_input_chunk(id, &self.input) {
-            Ok(true) => {
-                self.input.clear();
+        let waker = std::task::Waker::from(std::sync::Arc::new(ResourceCapacityWake));
+        let mut cx = std::task::Context::from_waker(&waker);
+        match session.runtime().io().poll_reserve_input(id, len, &mut cx) {
+            std::task::Poll::Pending => 2,
+            std::task::Poll::Ready(Ok(None)) => 3,
+            std::task::Poll::Ready(Ok(Some(reservation))) => {
+                self.resource_reservation = Some((expected_session, id, reservation));
                 1
             }
-            Ok(false) => 2,
+            std::task::Poll::Ready(Err(error)) => {
+                self.fail(&error);
+                0
+            }
+        }
+    }
+
+    pub(crate) fn asset_chunk_ptr(&mut self) -> *mut u8 {
+        self.resource_reservation
+            .as_mut()
+            .map_or(std::ptr::null_mut(), |(_, _, reservation)| {
+                reservation.as_mut_ptr()
+            })
+    }
+
+    pub(crate) fn asset_chunk(&mut self, expected_session: u64, id: u64, len: usize) -> u32 {
+        self.release_output();
+        let Some((session, acquisition, reservation)) = self.resource_reservation.take() else {
+            self.fail("resource chunk has no admitted storage");
+            return 0;
+        };
+        if session != expected_session || acquisition != id || len != reservation.len() {
+            self.fail("resource chunk does not match its reservation");
+            return 0;
+        }
+        if expected_session != self.last_session {
+            return 1;
+        }
+        match reservation.commit(len) {
+            Ok(()) => 1,
             Err(error) => {
                 self.fail(&error);
                 0
@@ -583,5 +672,52 @@ impl WasmHostBoundary {
     #[cfg(test)]
     pub(crate) fn output(&self) -> &[u8] {
         self.output_bytes()
+    }
+}
+
+#[cfg(all(feature = "instrumentation", target_arch = "wasm32"))]
+impl WasmHostBoundary {
+    pub(crate) fn scheduler_testing_start(&mut self) -> bool {
+        self.host
+            .as_mut()
+            .is_some_and(crate::task_scheduler_testing::start)
+    }
+
+    pub(crate) fn scheduler_testing_tick(&mut self) -> u64 {
+        self.host
+            .as_mut()
+            .map_or(0, crate::task_scheduler_testing::world_tick)
+    }
+}
+
+struct ResourceCapacityWake;
+
+impl std::task::Wake for ResourceCapacityWake {
+    fn wake(self: std::sync::Arc<Self>) {
+        self.wake_by_ref();
+    }
+
+    fn wake_by_ref(self: &std::sync::Arc<Self>) {
+        crate::services::task_wakeup::request_update();
+    }
+}
+
+#[cfg(feature = "instrumentation")]
+impl WasmHostBoundary {
+    #[cfg(all(feature = "render", target_arch = "wasm32"))]
+    pub(crate) fn asset_export_testing_gate(&mut self, enabled: bool) {
+        if let Some(host) = self.host.as_mut() {
+            host.services_mut()
+                .presentation
+                .set_asset_export_staging_gate(enabled);
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn asset_export_testing_tick(&mut self, world: u64) -> u64 {
+        self.host
+            .as_mut()
+            .and_then(|host| host.runtime_mut().world_mut(ipp_core::WorldId(world)))
+            .map_or(0, |world| world.tick())
     }
 }

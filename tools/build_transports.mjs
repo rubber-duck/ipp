@@ -62,6 +62,9 @@ for (const name of [
   "lifecycle-target-transport",
   "scenarios/lifecycle-targets",
   "worker-startup",
+  "task-scheduler",
+  "bulk-read-worker",
+  "asset-export-browser",
 ]) {
   await bundleBrowser(
     `tests/integration/${name}.ts`,
@@ -69,6 +72,18 @@ for (const name of [
     "development",
   );
 }
+await bundleBrowser(
+  "tests/integration/bulk-read-worker.test.ts",
+  resolve(output, "bulk-read-worker.test.js"),
+  "development",
+  { platform: "node", packages: "external" },
+);
+await bundleBrowser(
+  "tests/integration/task-scheduler.test.ts",
+  resolve(output, "task-scheduler.test.js"),
+  "development",
+  { platform: "node", packages: "external" },
+);
 await bundleBrowser(
   "tests/integration/worker-startup.test.ts",
   resolve(output, "worker-startup.test.js"),
@@ -186,3 +201,28 @@ for (const name of ["gui-observer-endpoint", "worker-observer-delivery"]) {
     );
   }
 }
+
+await bundleBrowser(
+  "tests/integration/generated-buffers.ts",
+  resolve(output, "generated-buffers.js"),
+  "development",
+);
+await bundleBrowser(
+  "tests/integration/generated-buffers.test.ts",
+  resolve(output, "generated-buffers.test.js"),
+  "development",
+  { platform: "node", packages: "external" },
+);
+await bundleBrowser(
+  "tests/integration/native-http.test.ts",
+  resolve(output, "native-http.test.js"),
+  "development",
+  { platform: "node", packages: "external" },
+);
+
+await bundleBrowser(
+  "tests/integration/asset-exports.test.ts",
+  resolve(output, "asset-exports.test.js"),
+  "development",
+  { platform: "node", packages: "external" },
+);

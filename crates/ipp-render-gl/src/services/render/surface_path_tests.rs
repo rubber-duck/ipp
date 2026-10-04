@@ -167,3 +167,49 @@ fn fraction_bits_cover_exact_binary_fractions() {
     assert_eq!(f32_fraction_bits(3.375), 3);
     assert_eq!(f32_fraction_bits(f32::MIN_POSITIVE), 126);
 }
+
+#[test]
+fn async_packing_matches_exact_curve_and_band_formats_across_cooperative_yields() {
+    use std::{
+        future::Future,
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+        task::{Context, Poll, Wake, Waker},
+    };
+
+    struct Ready(AtomicBool);
+
+    impl Wake for Ready {
+        fn wake(self: Arc<Self>) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    for scale in [0.5, 1.0, 32768.0] {
+        let contours: Vec<_> = (0..1100)
+            .map(|_| {
+                contour(
+                    [0., 0.],
+                    vec![quadratic([scale, scale / 2.], [scale, 0.]), line([0., 0.])],
+                )
+            })
+            .collect();
+        let paths = [([0., 0., scale, scale], contours.as_slice())];
+        let expected = pack_surface_paths(paths);
+        let ready = Arc::new(Ready(AtomicBool::new(false)));
+        let waker = Waker::from(ready.clone());
+        let mut cx = Context::from_waker(&waker);
+        let mut future = std::pin::pin!(pack_surface_paths_async(paths));
+        let actual = loop {
+            ready.0.store(false, Ordering::SeqCst);
+            match future.as_mut().poll(&mut cx) {
+                Poll::Ready(result) => break result,
+                Poll::Pending => assert!(ready.0.load(Ordering::SeqCst)),
+            }
+        };
+        assert_eq!(actual.texels, expected.texels);
+        assert_eq!(actual.descriptors, expected.descriptors);
+    }
+}

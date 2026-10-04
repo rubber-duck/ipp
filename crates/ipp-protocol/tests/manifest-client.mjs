@@ -2888,6 +2888,23 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", asy
       fields,
     );
   const exchanges = [];
+  const bulkExchanges = [];
+  const bulkWord = (value) => {
+    const bytes = new Uint8Array(8);
+    new DataView(bytes.buffer).setBigUint64(0, value, true);
+    return bytes;
+  };
+  // The independent fixed bulk framing is shared by capture, save and contract
+  // outputs; it does not use the generated World/Host request envelope.
+  const bulkFrame = (magic, id, operation, body = []) =>
+    Uint8Array.of(
+      ...new TextEncoder().encode(magic),
+      ...bulkWord(7n),
+      ...bulkWord(id),
+      ...bulkWord(18n),
+      operation,
+      ...body,
+    );
   let transportEvents;
   let greeted = false;
   let nextRequest = 1n;
@@ -2903,6 +2920,13 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", asy
         const response = hostAnnouncement(codec);
         greeted = true;
         transportEvents.message(response);
+        return;
+      }
+      if (new TextDecoder().decode(bytes.subarray(0, 4)) === "IPDR") {
+        const exchange = bulkExchanges.shift();
+        assert.ok(exchange, "unexpected bulk request");
+        assert.deepEqual(bytes, exchange.request);
+        transportEvents.message(exchange.response);
         return;
       }
       const exchange = exchanges.shift();
@@ -3077,38 +3101,39 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", asy
     });
     assert.equal(await host.presentation.clear(presentationView), undefined);
     const pixels = Uint8Array.from({ length: 24 }, (_, index) => index);
-    exchanges.push(
+    exchanges.push({
+      request: presentationRequest("FRAME", {
+        view: encodedPresentationView,
+        after_sequence: 15n,
+        publication: layout("presentation-identity", {
+          host: 13n,
+          serial: 17n,
+        }),
+        capture: true,
+        after_outputs: [],
+      }),
+      response: presentationResponse("CAPTURE", {
+        frame: encodedPresentedFrame,
+        read: layout("bulk-read-reference", { connection: 7n, read: 18n }),
+        bytes: 24n,
+      }),
+    });
+    bulkExchanges.push(
       {
-        request: presentationRequest("FRAME", {
-          view: encodedPresentationView,
-          after_sequence: 15n,
-          publication: layout("presentation-identity", {
-            host: 13n,
-            serial: 17n,
-          }),
-          capture: true,
-          after_outputs: [],
-        }),
-        response: presentationResponse("CAPTURE", {
-          frame: encodedPresentedFrame,
-          capture: 18n,
-          bytes: 24n,
-        }),
+        request: bulkFrame("IPDR", 1n, 0, bulkWord(0n)),
+        response: bulkFrame("IPDS", 1n, 0, [
+          ...bulkWord(0n),
+          1, // Final EOF, independently of payload length.
+          24,
+          0,
+          0,
+          0,
+          ...pixels,
+        ]),
       },
       {
-        request: presentationRequest("READ_CAPTURE", {
-          capture: 18n,
-          offset: 0n,
-        }),
-        response: presentationResponse("CHUNK", {
-          capture: 18n,
-          offset: 0n,
-          bytes: pixels,
-        }),
-      },
-      {
-        request: presentationRequest("RELEASE_CAPTURE", { capture: 18n }),
-        response: presentationResponse("COMPLETE"),
+        request: bulkFrame("IPDR", 2n, 1, [...bulkWord(24n), 1]),
+        response: bulkFrame("IPDS", 2n, 1),
       },
     );
     assert.deepEqual(
@@ -3167,7 +3192,8 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", asy
       /trailing/i,
     );
     assert.equal(exchanges.length, 0);
-    assert.equal(nextRequest, 22n);
+    assert.equal(bulkExchanges.length, 0);
+    assert.equal(nextRequest, 20n);
   } finally {
     await host.close();
   }
@@ -3218,7 +3244,9 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", asy
           // appear only in the Host bind-output request.
           // Profiling nested controls use the generated Host reader in the
           // native/worker host-profiling suite, not World-envelope codecs.
-          ![23, 24, 25, 32, 60, 61, 62].includes(
+          // Asset-export domains have independent Rust codec fixtures and the
+          // maintained native/worker CPU/GPU export client scenarios.
+          ![23, 24, 25, 32, 60, 61, 62, 63, 64, 65, 66].includes(
             manifest.WIRE_TAG_LAYOUTS[name].space,
           ),
       )

@@ -1,8 +1,11 @@
 //! Real core mutation, binding and private restoration in selected Worlds.
 
+mod support;
+use support::task_scheduler::HostTaskTestDriver;
+
 use ipp_core::{
     Batch, BatchOutcome, Command, ComponentValue, EntityId, EntityPlacementRef, EntityRef,
-    ErrorReason, HostRuntime, WorldContext, WorldLimits,
+    ErrorReason, WorldContext, WorldLimits,
     components::Scalar,
     services::{
         asset_management::AssetSource,
@@ -80,7 +83,7 @@ fn persistent(description: AnimationControllerDescription) -> AnimationPersisten
 
 #[test]
 fn absent_animation_rejects_direct_and_queued_mutation_without_panicking() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host.create_world(WorldLimits::default(), &[]).unwrap();
     let mut world = host.world_mut(id).unwrap();
     let target = create(&mut world, Vec::new());
@@ -122,7 +125,7 @@ fn absent_animation_rejects_direct_and_queued_mutation_without_panicking() {
 
 #[test]
 fn selected_animation_rejects_unsupported_targets_before_resource_readiness() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host
         .create_world(WorldLimits::default(), &[AnimationSystem::ID])
         .unwrap();
@@ -173,7 +176,7 @@ fn selected_animation_rejects_unsupported_targets_before_resource_readiness() {
 
 #[test]
 fn structural_binding_runs_without_component_evaluators_and_leaves_its_last_placement() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host
         .create_world(WorldLimits::default(), &[AnimationSystem::ID])
         .unwrap();
@@ -208,7 +211,7 @@ fn structural_binding_runs_without_component_evaluators_and_leaves_its_last_plac
         .unwrap();
     let key = host.asset_resources().find(&source).unwrap();
     for _attempt in 0..512 {
-        host.progress_assets();
+        host.progress_assets_for_test();
         if host
             .asset_resources()
             .get_typed::<AnimationClip>(key)
@@ -255,7 +258,7 @@ fn structural_binding_runs_without_component_evaluators_and_leaves_its_last_plac
 
 #[test]
 fn scalar_constraints_require_selection_and_survive_private_restore() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let limited = host.create_world(WorldLimits::default(), &[]).unwrap();
     let mut world = host.world_mut(limited).unwrap();
     let source = create(&mut world, Vec::new());
@@ -380,7 +383,7 @@ fn scalar_constraints_require_selection_and_survive_private_restore() {
 
 #[test]
 fn selected_animation_snapshot_rebuilds_bindings_and_rejects_missing_target_evaluator() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host
         .create_world(
             WorldLimits::default(),
@@ -450,7 +453,7 @@ fn selected_animation_snapshot_rebuilds_bindings_and_rejects_missing_target_eval
 fn joint_targets_require_joint_animation_and_parent_joint_requires_hierarchy() {
     use ipp_core::systems::{asset_dependencies::AssetDependencySystem, skeleton::SkeletonSystem};
 
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host
         .create_world(
             WorldLimits::default(),

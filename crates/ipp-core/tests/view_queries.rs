@@ -91,7 +91,7 @@ fn plane() -> WorldPlane {
 
 #[test]
 fn root_queries_use_exact_selection_and_viewport_not_legacy_camera_state() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world = host.create_world(Default::default(), CAMERA).unwrap();
     let selected = camera(&mut host, world, 0.0);
     let other = camera(&mut host, world, 99.0);
@@ -131,7 +131,7 @@ fn root_queries_use_exact_selection_and_viewport_not_legacy_camera_state() {
 
 #[test]
 fn cleared_root_requires_explicit_history_and_stale_output_never_rebinds() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world = host.create_world(Default::default(), CAMERA).unwrap();
     let selected = camera(&mut host, world, 0.0);
     host.set_root_output(selected, viewport()).unwrap();
@@ -200,7 +200,7 @@ fn cleared_root_requires_explicit_history_and_stale_output_never_rebinds() {
 
 #[test]
 fn picks_use_published_child_geometry_and_world_qualified_publication_identity() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let parent = host
         .create_world(Default::default(), &select(&[ATTACHMENTS, CAMERA]))
         .unwrap();

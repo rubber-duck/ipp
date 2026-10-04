@@ -76,7 +76,7 @@ fn prepare(renderer: &mut RenderService<TestDevice>, host: &mut HostRuntime, out
 }
 
 fn fixture() -> (HostRuntime, RenderService<TestDevice>, Rc<DeviceState>) {
-    let mut host = HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let state = Rc::new(DeviceState::default());
     let renderer = RenderService::new(TestDevice(state.clone())).unwrap();
     renderer.install(&mut host).unwrap();
@@ -91,18 +91,18 @@ fn preparation_is_selected_not_all_roots_and_unchanged_demand_stays_warm() {
     host.frame(0.0).unwrap();
     let tick = host.world_mut(drawn.world().id()).unwrap().tick();
     prepare(&mut renderer, &mut host, empty);
-    host.progress_assets();
+    support::progress_assets(&mut host);
     assert!(programs(&host).is_empty());
     assert_eq!(state.program_creates.get(), 0);
     assert_eq!(host.world_mut(drawn.world().id()).unwrap().tick(), tick);
     prepare(&mut renderer, &mut host, drawn);
-    host.progress_assets();
+    support::progress_assets(&mut host);
     let original = programs(&host);
     assert_eq!(original.len(), 1);
     assert_eq!(state.program_creates.get(), 1);
     for _ in 0..3 {
         prepare(&mut renderer, &mut host, drawn);
-        host.progress_assets();
+        support::progress_assets(&mut host);
         assert_eq!(programs(&host), original);
     }
     assert_eq!(state.program_creates.get(), 1);
@@ -131,7 +131,7 @@ fn deselection_preserves_explicit_ownership_by_another_world() {
     let independent = root(&mut host, false);
     host.frame(0.0).unwrap();
     prepare(&mut renderer, &mut host, drawn);
-    host.progress_assets();
+    support::progress_assets(&mut host);
     let key = *programs(&host).first().unwrap();
     let source = host.asset_resources().get(key).unwrap().source().clone();
     host.asset_resources_mut()
@@ -153,7 +153,7 @@ fn stale_selection_and_destroyed_world_clear_own_demand_without_retiring_the_hos
     host.frame(0.0).unwrap();
     let previous = selected(&host, output);
     renderer.prepare(&mut host, previous).unwrap();
-    host.progress_assets();
+    support::progress_assets(&mut host);
     host.clear_root_output(output.world().id());
     assert!(host.output(previous.unwrap().1, output).is_some());
     assert_eq!(
@@ -169,7 +169,7 @@ fn stale_selection_and_destroyed_world_clear_own_demand_without_retiring_the_hos
         Err(RenderError::UnavailableOutput)
     );
     prepare(&mut renderer, &mut host, output);
-    host.progress_assets();
+    support::progress_assets(&mut host);
     assert_eq!(state.program_creates.get(), 2);
     assert!(host.destroy_world(output.world().id()));
     assert_eq!(
@@ -180,7 +180,7 @@ fn stale_selection_and_destroyed_world_clear_own_demand_without_retiring_the_hos
     let healthy = root(&mut host, true);
     host.frame(0.0).unwrap();
     prepare(&mut renderer, &mut host, healthy);
-    host.progress_assets();
+    support::progress_assets(&mut host);
     assert_eq!(programs(&host).len(), 1);
 }
 
@@ -190,13 +190,13 @@ fn foreign_host_world_id_collision_requires_explicit_deselection_without_mutatio
     let output = root(&mut first, true);
     first.frame(0.0).unwrap();
     prepare(&mut renderer, &mut first, output);
-    first.progress_assets();
+    support::progress_assets(&mut first);
     let publication = selected(&first, output).unwrap().1;
     renderer
         .draw(&first, output, publication, viewport(), 0.0)
         .unwrap();
     assert_eq!(state.live_meshes.get(), 1);
-    let mut second = HostRuntime::new();
+    let mut second = support::task_scheduler::host();
     renderer.install(&mut second).unwrap();
     let foreign = root(&mut second, false);
     assert_eq!(output.world().id(), foreign.world().id());
@@ -228,7 +228,7 @@ fn foreign_host_world_id_collision_requires_explicit_deselection_without_mutatio
     assert_eq!(second.asset_resources().find(&source), Some(key));
     assert_eq!(programs(&first).len(), 1);
     assert_eq!(state.live_meshes.get(), 1);
-    second.progress_assets();
+    support::progress_assets(&mut second);
     let foreign_status = second.asset_resources().get(key).unwrap().status().clone();
     let deleted_programs = state.program_deletes.get();
     assert_eq!(
@@ -274,12 +274,12 @@ fn destroyed_selected_world_then_none_releases_metadata_for_repeated_catalog_reu
     let state = Rc::new(DeviceState::default());
     let mut renderer = RenderService::new(TestDevice(state.clone())).unwrap();
     for _ in 0..32 {
-        let mut host = HostRuntime::new();
+        let mut host = support::task_scheduler::host();
         renderer.install(&mut host).unwrap();
         let output = root(&mut host, true);
         host.frame(0.0).unwrap();
         prepare(&mut renderer, &mut host, output);
-        host.progress_assets();
+        support::progress_assets(&mut host);
         assert_eq!(programs(&host).len(), 1);
         assert!(host.destroy_world(output.world().id()));
         assert!(programs(&host).is_empty());
@@ -308,7 +308,7 @@ fn nested_camera_demand_and_targets_follow_only_the_selected_root() {
     host.frame(0.0).unwrap();
     let selected = selected(&host, parent).unwrap();
     renderer.prepare(&mut host, Some(selected)).unwrap();
-    host.progress_assets();
+    support::progress_assets(&mut host);
     assert_eq!(programs(&host).len(), 1);
     renderer
         .draw(&host, selected.0, selected.1, viewport(), 0.0)

@@ -6,6 +6,7 @@ mod component_values;
 mod contribution;
 mod controller_commands;
 mod driver;
+mod encoding;
 mod gui_motion;
 mod lifecycle;
 mod math;

@@ -48,7 +48,7 @@ fn scene_on(
     WorldId,
     CanvasSurface,
 ) {
-    let mut host = HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let (world, renderer, state) = setup(&mut host);
     let world_id = world.id();
     drop(world);
@@ -234,7 +234,7 @@ fn set_open(host: &mut HostRuntime, surface: CanvasSurface, entity: EntityId, op
 
 #[test]
 fn a_plane_keeps_its_depth_while_another_layer_opens_and_closes() {
-    let mut host = HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let (world, mut renderer, state) = setup(&mut host);
     let world_id = world.id();
     drop(world);
@@ -334,7 +334,7 @@ fn a_cached_surface_that_separates_layers_presents_directly() {
 fn a_cached_surface_whose_one_layer_is_above_the_base_presents_directly() {
     // Every entity on plane 2: one plane, but out of the Surface's own plane
     // under a spacing, which a flat image at the Surface cannot show.
-    let mut host = HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let (world, mut renderer, state) = setup(&mut host);
     let world_id = world.id();
     drop(world);

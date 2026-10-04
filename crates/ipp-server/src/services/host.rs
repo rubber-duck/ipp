@@ -14,7 +14,10 @@ pub struct NativeHostServices {
 impl HostServices for NativeHostServices {
     const NAME: &'static str = "server";
 
-    fn initialize(host: &mut HostRuntime) -> Result<Self, String> {
+    fn initialize(
+        host: &mut HostRuntime,
+        _schedulers: &ipp_host_session::services::task_scheduler::TaskSchedulers,
+    ) -> Result<Self, String> {
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_err(|error| error.to_string())?
@@ -63,7 +66,10 @@ mod tests {
     #[test]
     fn native_host_installs_only_its_builtin_provider() {
         let mut host = HostRuntime::new();
-        let mut platform = NativeHostServices::initialize(&mut host).unwrap();
+        let mut scheduler = ipp_host_session::services::task_scheduler::TaskSchedulerService::new();
+        host.set_asset_load_scheduler(std::rc::Rc::new(scheduler.schedulers().host()));
+        let mut platform =
+            NativeHostServices::initialize(&mut host, &scheduler.schedulers()).unwrap();
         let id = host
             .create_world(
                 Default::default(),
@@ -113,7 +119,9 @@ mod tests {
         world.step(0.0).unwrap();
         drop(world);
         host.progress_assets();
+        scheduler.poll_ready();
         platform.service_resources(&mut host).unwrap();
+        scheduler.poll_ready();
         host.progress_assets();
         let mut world = host.world_mut(id).unwrap();
         world.step(0.0).unwrap();

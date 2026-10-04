@@ -71,6 +71,7 @@ export async function generateClient(name, transformContract) {
     hostPresentation: await import(
       pathToFileURL(resolve(output, "js/host-presentation.js"))
     ),
+    bulkReads: await import(pathToFileURL(resolve(output, "js/bulk-reads.js"))),
     manifest: await import(
       pathToFileURL(resolve(output, "js/generated-manifest.js"))
     ),

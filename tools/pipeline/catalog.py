@@ -43,7 +43,11 @@ REGRESSION_GROUPS = {
             "headless-client",
             "datasets",
         ),
-        ("test:presentation:host-wire",),
+        (
+            "test:presentation:host-wire",
+            "test:asset-exports:cpu-native",
+            "test:async-io:native-http",
+        ),
     ),
     "browser": RegressionGroup(
         "Chromium worker/WASM transport and lifecycle",
@@ -54,6 +58,10 @@ REGRESSION_GROUPS = {
             "test:presentation:diagnostics",
             "test:gui-local:worker",
             "test:multiplex:worker-startup",
+            "test:multiplex:task-scheduler",
+            "test:async-io:generated-buffers",
+            "test:multiplex:bulk-worker",
+            "test:asset-exports:gpu-browser",
             "test:react-gui-authoring:worker",
         ),
     ),
@@ -129,6 +137,7 @@ REGRESSION_GROUPS = {
     "gles": RegressionGroup(
         "All native GLES frame scenarios; requires configured EGL/GLES libraries",
         steps=(
+            "test:asset-exports:gpu-native",
             *tuple(record["id"] for record in GLES_CHECKS),
             "test:canvas:controller-gles",
             "test:host-profiling:native-gles",

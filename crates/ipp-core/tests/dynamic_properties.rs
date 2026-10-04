@@ -81,7 +81,7 @@ fn descriptor_and_value_roundtrip_preserves_keys_and_owned_textures() {
 
 #[test]
 fn named_base_writes_keep_sparse_overrides_and_latest_producer_value() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host.create_world(WorldLimits::default(), RENDER).unwrap();
     let mut world = host.world_mut(id).unwrap();
     let outcome = run(
@@ -161,7 +161,7 @@ fn material(world: &WorldContext<'_>, entity: EntityId) -> DynamicProperties {
 fn named_animation_interpolates_and_property_loss_preserves_sibling_binding() {
     use services::asset_management::{AssetUpload, AssetUploadIdentity};
     use systems::animation::*;
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host
         .create_world(WorldLimits::default(), &select(&[ASSETS, RENDER]))
         .unwrap();
@@ -328,7 +328,7 @@ fn named_animation_interpolates_and_property_loss_preserves_sibling_binding() {
 #[test]
 fn world_save_load_preserves_dynamic_descriptors_without_shader_availability() {
     use services::world_serialization::{WorldLoadOptions, WorldPersistenceLimits};
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host
         .create_world(WorldLimits::default(), &select(&[ASSETS, RENDER]))
         .unwrap();

@@ -68,7 +68,7 @@ fn allocations(work: impl FnOnce()) -> usize {
 
 #[test]
 fn actual_prepared_scalar_dynamic_and_invalid_drivers_allocate_nothing() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host
         .create_world(
             WorldLimits::default(),

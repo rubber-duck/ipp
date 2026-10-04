@@ -36,6 +36,7 @@ interface WasmHostExports extends WorkerConnectionExports {
   ipp_host_set_identity_namespace(namespace: bigint): number;
   ipp_host_set_asset_cache_bytes(bytes: number): number;
   ipp_host_close(): void;
+  ipp_task_timer_ready(id: bigint): void;
   ipp_tick(dt: number): number;
   ipp_host_time(seconds: number): number;
   ipp_progress_resources(): number;
@@ -56,6 +57,7 @@ function runtimeExports(instance: WebAssembly.Instance): WasmHostExports {
     "ipp_host_set_identity_namespace",
     "ipp_host_set_asset_cache_bytes",
     "ipp_host_close",
+    "ipp_task_timer_ready",
     "ipp_input_reserve",
     "ipp_receive",
     "ipp_tick",
@@ -115,6 +117,9 @@ globalThis.onmessage = (event: MessageEvent<unknown>) => {
   // The paired target contract's message budget arrives with init and is
   // validated before the runtime loads; nothing is accepted until then.
   let maxMessageBytes = 0;
+  const assetTimers = new Map<bigint, ReturnType<typeof setTimeout>>();
+  let holdAssetTimers = false;
+  const heldAssetTimers = new Map<bigint, () => void>();
   let closed = false;
   let initialized = false;
   let paused = "hidden" in init && init.hidden === true;
@@ -122,6 +127,7 @@ globalThis.onmessage = (event: MessageEvent<unknown>) => {
   let nextMaintenanceFrame = lastFrame + FRAME_INTERVAL_MS;
   let frameRequest: number | undefined;
   let frameTimer: ReturnType<typeof setTimeout> | undefined;
+  let taskTimer: ReturnType<typeof setTimeout> | undefined;
   let connections: WorkerConnections | undefined;
   const pendingPorts = new Map<bigint, MessagePort>();
   const loading = new AbortController();
@@ -185,7 +191,12 @@ globalThis.onmessage = (event: MessageEvent<unknown>) => {
   const finish = (error?: Error) => {
     if (!closed) {
       closed = true;
+      for (const timer of assetTimers.values()) clearTimeout(timer);
+      assetTimers.clear();
+      heldAssetTimers.clear();
       cancelFrame();
+      clearTimeout(taskTimer);
+      taskTimer = undefined;
       loading.abort();
       resources?.close();
       presentation?.close();
@@ -228,6 +239,23 @@ globalThis.onmessage = (event: MessageEvent<unknown>) => {
 
   const pumpInputs = () => connections?.pumpInputs();
   const publish = () => connections?.publish();
+
+  // Rust wakers only enqueue. A timer gives frames and peer/control messages a
+  // turn even when a task continually wakes itself; no synchronous WASM reentry.
+  const requestTaskUpdate = () => {
+    if (closed || taskTimer !== undefined) return;
+    taskTimer = setTimeout(() => {
+      taskTimer = undefined;
+      if (closed || !runtime) return;
+      try {
+        checkResult(runtime.ipp_progress_resources());
+        resources?.pumpAfterFrame();
+        publish();
+      } catch (error) {
+        finish(error instanceof Error ? error : new Error(String(error)));
+      }
+    }, 0);
+  };
 
   const evaluateFrame = (dt: number) => checkResult(runtime!.ipp_tick(dt));
   const runFrame = (dt: number) => {
@@ -287,6 +315,37 @@ globalThis.onmessage = (event: MessageEvent<unknown>) => {
     try {
       if (typeof data !== "object" || data === null || !("type" in data)) {
         throw new Error("Invalid worker envelope");
+      }
+      if (
+        (data.type === "buffer-source-mount" ||
+          data.type === "buffer-source-revoke") &&
+        "source" in data &&
+        typeof data.source === "string"
+      ) {
+        try {
+          if (!resources) throw new Error("Worker source service is not ready");
+          if (data.type === "buffer-source-mount") {
+            if (!("publication" in data))
+              throw new Error("Missing generated source publication");
+            resources.mountBuffer(
+              data.source,
+              data.publication as Parameters<
+                AssetWorkerService["mountBuffer"]
+              >[1],
+            );
+          } else resources.revokeBuffer(data.source);
+          port.postMessage({
+            type: "buffer-source-result",
+            source: data.source,
+          });
+        } catch (error) {
+          port.postMessage({
+            type: "buffer-source-result",
+            source: data.source,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+        return;
       }
       if (data.type === "shutdown") {
         if ((connections?.size ?? 0) !== 0 || pendingPorts.size !== 0)
@@ -414,6 +473,30 @@ globalThis.onmessage = (event: MessageEvent<unknown>) => {
         await response.arrayBuffer(),
         {
           ...presentation?.imports,
+          ipp_tasks: {
+            request_update: requestTaskUpdate,
+            timer_start(id: bigint, milliseconds: number) {
+              if (IPP_INSTRUMENTATION && holdAssetTimers) {
+                heldAssetTimers.set(id, () => {
+                  runtime?.ipp_task_timer_ready(id);
+                });
+                return;
+              }
+              if (closed) return;
+              const timer = setTimeout(() => {
+                if (assetTimers.get(id) !== timer) return;
+                assetTimers.delete(id);
+                if (!closed) runtime?.ipp_task_timer_ready(id);
+              }, milliseconds >>> 0);
+              assetTimers.set(id, timer);
+            },
+            timer_cancel(id: bigint) {
+              heldAssetTimers.delete(id);
+              const timer = assetTimers.get(id);
+              if (timer !== undefined) clearTimeout(timer);
+              assetTimers.delete(id);
+            },
+          },
           ...(IPP_INSTRUMENTATION
             ? { ipp_profiling: { now: () => performance.now() } }
             : {}),
@@ -434,11 +517,50 @@ globalThis.onmessage = (event: MessageEvent<unknown>) => {
       if (closed) return;
       runtime = runtimeExports(instance);
       if (IPP_INSTRUMENTATION) {
-        const { installProfiler } = await import("./profile-worker.js");
+        const { installProfiler, installTaskTesting } = await import(
+          "./profile-worker.js"
+        );
         if (closed) return;
         const timed = installProfiler(instance.exports, runtime.memory, {
           evaluate: evaluateFrame,
           run: runFrame,
+        });
+        installTaskTesting(instance.exports, cancelFrame);
+        Object.assign(globalThis, {
+          ippAssetExportTasks: {
+            hold() {
+              holdAssetTimers = true;
+              (
+                instance.exports.ipp_test_asset_export_staging_gate as (
+                  enabled: number,
+                ) => void
+              )(1);
+            },
+            waiting: () => heldAssetTimers.size,
+            suspend() {
+              cancelFrame();
+            },
+            release() {
+              (
+                instance.exports.ipp_test_asset_export_staging_gate as (
+                  enabled: number,
+                ) => void
+              )(0);
+              holdAssetTimers = false;
+              const held = [...heldAssetTimers.values()];
+              heldAssetTimers.clear();
+              for (const ready of held) ready();
+            },
+            tick: (world: bigint) =>
+              (
+                instance.exports.ipp_test_asset_export_world_tick as (
+                  world: bigint,
+                ) => bigint
+              )(world),
+            resume() {
+              scheduleFrame();
+            },
+          },
         });
         evaluate = timed.evaluate;
         step = timed.run;
@@ -467,6 +589,10 @@ globalThis.onmessage = (event: MessageEvent<unknown>) => {
         if (
           typeof instance.exports.ipp_resource_chunk !== "function" ||
           typeof instance.exports.ipp_resource_end !== "function" ||
+          typeof instance.exports.ipp_resource_chunk_reserve !== "function" ||
+          typeof instance.exports.ipp_resource_chunk_ptr !== "function" ||
+          typeof instance.exports.ipp_buffer_source_register !== "function" ||
+          typeof instance.exports.ipp_buffer_source_revoke !== "function" ||
           typeof instance.exports.ipp_resource_input_reserve !== "function" ||
           typeof instance.exports.ipp_resource_buffered_bytes !== "function"
         ) {

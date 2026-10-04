@@ -18,7 +18,10 @@ struct Platform {
 impl HostServices for Platform {
     const NAME: &'static str = "presentation-coordinator-test";
 
-    fn initialize(_: &mut HostRuntime) -> Result<Self, String> {
+    fn initialize(
+        _: &mut HostRuntime,
+        _schedulers: &crate::services::task_scheduler::TaskSchedulers,
+    ) -> Result<Self, String> {
         Ok(Self {
             input: Default::default(),
             surface: PresentationSurface {
@@ -205,7 +208,8 @@ fn only_explicit_selected_surface_draws_and_config_survives_connection_loss() {
     let first = root(&mut host);
     let second = root(&mut host);
     host.frame(0.0).unwrap();
-    let mut platform = Platform::initialize(&mut host).unwrap();
+    let scheduler = crate::services::task_scheduler::TaskSchedulerService::new();
+    let mut platform = Platform::initialize(&mut host, &scheduler.schedulers()).unwrap();
     let mut coordinator = PresentationCoordinator::default();
     coordinator.draw(&mut host, &mut platform, 0.0, Duration::ZERO);
     assert!(platform.draws.is_empty());
@@ -228,7 +232,8 @@ fn inclusion_cut_is_admitted_once_and_completes_at_the_next_evaluation() {
     let mut host = HostRuntime::new();
     let binding = root(&mut host);
     host.frame(0.0).unwrap();
-    let mut platform = Platform::initialize(&mut host).unwrap();
+    let scheduler = crate::services::task_scheduler::TaskSchedulerService::new();
+    let mut platform = Platform::initialize(&mut host, &scheduler.schedulers()).unwrap();
     let mut coordinator = PresentationCoordinator::default();
     let view = select(&mut coordinator, &mut host, &mut platform, binding);
     let output = binding.output.resolve(&host).unwrap();
@@ -273,7 +278,8 @@ fn inclusion_admission_never_retargets_a_replaced_output() {
     let binding = root(&mut host);
     let child = root(&mut host);
     host.frame(0.0).unwrap();
-    let mut platform = Platform::initialize(&mut host).unwrap();
+    let scheduler = crate::services::task_scheduler::TaskSchedulerService::new();
+    let mut platform = Platform::initialize(&mut host, &scheduler.schedulers()).unwrap();
     let mut coordinator = PresentationCoordinator::default();
     let view = select(&mut coordinator, &mut host, &mut platform, binding);
     assert_eq!(
@@ -340,7 +346,8 @@ fn inclusion_accepts_more_than_sixty_four_exact_targets_and_releases_them_on_can
     let mut host = HostRuntime::new();
     let binding = root(&mut host);
     let outputs: Vec<_> = (0..65).map(|_| root(&mut host).output).collect();
-    let mut platform = Platform::initialize(&mut host).unwrap();
+    let scheduler = crate::services::task_scheduler::TaskSchedulerService::new();
+    let mut platform = Platform::initialize(&mut host, &scheduler.schedulers()).unwrap();
     let mut coordinator = PresentationCoordinator::default();
     let view = select(&mut coordinator, &mut host, &mut platform, binding);
     assert_eq!(
@@ -439,7 +446,8 @@ fn rebind_cycle_and_stale_clear_do_not_relabel_pending_captures() {
     let mut host = HostRuntime::new();
     let binding = root(&mut host);
     host.frame(0.0).unwrap();
-    let mut platform = Platform::initialize(&mut host).unwrap();
+    let scheduler = crate::services::task_scheduler::TaskSchedulerService::new();
+    let mut platform = Platform::initialize(&mut host, &scheduler.schedulers()).unwrap();
     let mut coordinator = PresentationCoordinator::default();
     let old = select(&mut coordinator, &mut host, &mut platform, binding);
     queue(&mut coordinator, &mut host, &mut platform, old, 2, true);
@@ -489,7 +497,8 @@ fn context_loss_during_readback_fences_completion_but_completed_bytes_survive_lo
     let mut host = HostRuntime::new();
     let binding = root(&mut host);
     host.frame(0.0).unwrap();
-    let mut platform = Platform::initialize(&mut host).unwrap();
+    let scheduler = crate::services::task_scheduler::TaskSchedulerService::new();
+    let mut platform = Platform::initialize(&mut host, &scheduler.schedulers()).unwrap();
     let mut coordinator = PresentationCoordinator::default();
     let view = select(&mut coordinator, &mut host, &mut platform, binding);
     queue(&mut coordinator, &mut host, &mut platform, view, 2, true);
@@ -497,7 +506,7 @@ fn context_loss_during_readback_fences_completion_but_completed_bytes_survive_lo
     let completed = coordinator.take_completed();
     let PresentationResponse::Capture {
         ref frame,
-        capture,
+        read,
         bytes,
     } = completed[0].2
     else {
@@ -516,40 +525,13 @@ fn context_loss_during_readback_fences_completion_but_completed_bytes_survive_lo
             PresentationResponse::Error(PresentationError::StaleView)
         )]
     );
-    assert_eq!(
-        coordinator.request(
-            &mut host,
-            &mut platform,
-            7,
-            4,
-            PresentationRequest::ReadCapture {
-                capture,
-                offset: 0
-            },
-            Duration::ZERO
-        ),
-        Some(PresentationResponse::Chunk {
-            capture,
-            offset: 0,
-            bytes: vec![binding.output.world.id as u8; 24]
-        })
-    );
-    assert_eq!(
-        coordinator.request(
-            &mut host,
-            &mut platform,
-            8,
-            1,
-            PresentationRequest::ReadCapture {
-                capture,
-                offset: 0
-            },
-            Duration::ZERO
-        ),
-        Some(PresentationResponse::Error(PresentationError::Unavailable))
-    );
-    coordinator.expire(CAPTURE_TIMEOUT);
-    assert!(coordinator.captures.is_empty());
+    assert_eq!(read.connection, 7);
+    coordinator.expire(Duration::from_secs(60));
+    let retained = coordinator
+        .take_capture(7, 2)
+        .expect("detached completion bytes");
+    assert_eq!(*retained, vec![binding.output.world.id as u8; 24]);
+    assert!(coordinator.take_capture(8, 2).is_none());
 }
 
 #[test]
@@ -557,7 +539,8 @@ fn exact_publication_never_replays_history_and_future_sequence_expires() {
     let mut host = HostRuntime::new();
     let binding = root(&mut host);
     host.frame(0.0).unwrap();
-    let mut platform = Platform::initialize(&mut host).unwrap();
+    let scheduler = crate::services::task_scheduler::TaskSchedulerService::new();
+    let mut platform = Platform::initialize(&mut host, &scheduler.schedulers()).unwrap();
     let mut coordinator = PresentationCoordinator::default();
     let view = select(&mut coordinator, &mut host, &mut platform, binding);
     coordinator.request(
@@ -616,7 +599,8 @@ fn exact_publication_never_replays_history_and_future_sequence_expires() {
 fn viewport_is_exact_and_pending_and_transfer_budgets_are_bounded() {
     let mut host = HostRuntime::new();
     let binding = root(&mut host);
-    let mut platform = Platform::initialize(&mut host).unwrap();
+    let scheduler = crate::services::task_scheduler::TaskSchedulerService::new();
+    let mut platform = Platform::initialize(&mut host, &scheduler.schedulers()).unwrap();
     let mut coordinator = PresentationCoordinator::default();
     platform.surface.max_height = 2;
     let surface = platform.surface;
@@ -697,7 +681,8 @@ fn frame_for(
 fn a_connection_at_its_presentation_allowance_leaves_others_theirs() {
     let mut host = HostRuntime::new();
     let binding = root(&mut host);
-    let mut platform = Platform::initialize(&mut host).unwrap();
+    let scheduler = crate::services::task_scheduler::TaskSchedulerService::new();
+    let mut platform = Platform::initialize(&mut host, &scheduler.schedulers()).unwrap();
     let mut coordinator = PresentationCoordinator::default();
     let view = select(&mut coordinator, &mut host, &mut platform, binding);
     let capacity = Some(PresentationResponse::Error(PresentationError::Capacity));
@@ -764,7 +749,8 @@ fn capture_bytes_are_bounded_per_connection_before_the_host_pool() {
         .unwrap()
         .unwrap()
         .into();
-    let mut platform = Platform::initialize(&mut host).unwrap();
+    let scheduler = crate::services::task_scheduler::TaskSchedulerService::new();
+    let mut platform = Platform::initialize(&mut host, &scheduler.schedulers()).unwrap();
     let mut coordinator = PresentationCoordinator::default();
     let view = select(&mut coordinator, &mut host, &mut platform, binding);
     let capacity = Some(PresentationResponse::Error(PresentationError::Capacity));
@@ -1180,7 +1166,7 @@ fn resize_rebinds_and_reselects_the_same_output_without_an_unselected_draw() {
 }
 
 #[test]
-fn completed_capture_transfers_answer_at_ingress_without_waiting_for_host_frames() {
+fn completed_capture_reads_progress_without_world_frames_and_acknowledge_eof() {
     let (mut host, view, _, _) = connected_surface();
     control_replies(&mut host);
     control(
@@ -1197,90 +1183,43 @@ fn completed_capture_transfers_answer_at_ingress_without_waiting_for_host_frames
     host.tick_worlds(0.0).unwrap();
     let replies = control_replies(&mut host);
     let HostResponseBody::Presentation(PresentationResponse::Capture {
-        capture,
+        read,
         bytes,
         ..
     }) = replies[0].body
     else {
         panic!("capture")
     };
-    let read = |offset| {
-        HostRequestBody::Presentation(PresentationRequest::ReadCapture {
-            capture,
-            offset,
-        })
-    };
-
-    // Every chunk and the release answer at ingress, between Host frames.
-    let mut offset = 0;
-    let mut request = 5;
-    while offset < bytes {
-        control(&mut host, request, read(offset));
-        let replies = control_replies(&mut host);
-        let [
-            HostResponse {
-                request_id,
-                body:
-                    HostResponseBody::Presentation(PresentationResponse::Chunk {
-                        bytes,
-                        ..
-                    }),
-                ..
-            },
-        ] = replies.as_slice()
-        else {
-            panic!("immediate chunk")
-        };
-        assert_eq!(*request_id, request);
-        offset += bytes.len() as u64;
-        request += 1;
-    }
-    control(
-        &mut host,
-        request,
-        HostRequestBody::Presentation(PresentationRequest::ReleaseCapture(capture)),
-    );
+    let world = WorldId(view.binding.output.world.id);
+    let tick = host.runtime_mut().world_mut(world).unwrap().tick();
+    let mut request = b"IPDR".to_vec();
+    request.extend(7u64.to_le_bytes());
+    request.extend(1u64.to_le_bytes());
+    request.extend(read.read.to_le_bytes());
+    request.push(0);
+    request.extend(0u64.to_le_bytes());
+    host.receive_connection(7, &request).unwrap();
+    host.progress_resources().unwrap();
+    let response = host
+        .take_connection_response(7)
+        .expect("service-only chunk");
+    assert_eq!(&response[..4], b"IPDS");
+    assert_eq!(response[37], 1);
     assert_eq!(
-        control_replies(&mut host),
-        [HostResponse {
-            connection: 7,
-            request_id: request,
-            body: HostResponseBody::Presentation(PresentationResponse::Complete),
-        }]
+        u32::from_le_bytes(response[38..42].try_into().unwrap()) as u64,
+        bytes
     );
-
-    // A transfer never waits behind control requests queued for the next frame.
-    control(
-        &mut host,
-        20,
-        HostRequestBody::Presentation(PresentationRequest::Frame {
-            view,
-            after_sequence: None,
-            publication: None,
-            capture: true,
-            after_outputs: Vec::new(),
-        }),
-    );
-    control(&mut host, 21, read(0));
-    assert_eq!(
-        control_replies(&mut host),
-        [HostResponse {
-            connection: 7,
-            request_id: 21,
-            body: HostResponseBody::Presentation(PresentationResponse::Error(
-                PresentationError::Unavailable
-            )),
-        }]
-    );
-    host.tick_worlds(0.0).unwrap();
-    assert!(matches!(
-        control_replies(&mut host).as_slice(),
-        [HostResponse {
-            request_id: 20,
-            body: HostResponseBody::Presentation(PresentationResponse::Capture { .. }),
-            ..
-        }]
-    ));
+    assert_eq!(host.runtime_mut().world_mut(world).unwrap().tick(), tick);
+    drop(response);
+    let mut ack = b"IPDR".to_vec();
+    ack.extend(7u64.to_le_bytes());
+    ack.extend(2u64.to_le_bytes());
+    ack.extend(read.read.to_le_bytes());
+    ack.push(1);
+    ack.extend(bytes.to_le_bytes());
+    ack.push(1);
+    host.receive_connection(7, &ack).unwrap();
+    assert_eq!(host.take_connection_response(7).unwrap()[28], 1);
     host.close_connection(7);
 }
 
@@ -1631,7 +1570,7 @@ fn connection_cancel_completed_capture_retains_connection_owned_bytes() {
     assert_eq!(replies[0].request_id, 1000);
     let HostResponseBody::Presentation(PresentationResponse::Capture {
         ref frame,
-        capture,
+        read,
         bytes,
     }) = replies[0].body
     else {
@@ -1639,7 +1578,7 @@ fn connection_cancel_completed_capture_retains_connection_owned_bytes() {
     };
     assert_eq!(frame.view, view);
     assert_eq!(bytes, 24);
-    assert_eq!(host.presentation.used_bytes(), 24);
+    assert!(host.bulk_read_usage().backing_bytes >= 24);
     host.services_mut().surface.context += 1;
 
     for request in [1001, 1002] {
@@ -1647,25 +1586,56 @@ fn connection_cancel_completed_capture_retains_connection_owned_bytes() {
         terminal_wire(&mut host, 7, &presentation_reply(7, request, &[6]));
         host.maintain_connections(Duration::ZERO);
         assert!(host.take_connection_response(7).is_none());
-        assert_eq!(host.presentation.used_bytes(), 24);
+        assert!(host.bulk_read_usage().backing_bytes >= 24);
     }
-    let mut read = vec![5];
-    read.extend_from_slice(&capture.to_le_bytes());
-    read.extend_from_slice(&0_u64.to_le_bytes());
-    dispatch_wire(&mut host, 8, &presentation_wire(8, 1003, &read));
-    terminal_wire(&mut host, 8, &presentation_reply(8, 1003, &[7, 2]));
-    dispatch_wire(&mut host, 7, &presentation_wire(7, 1003, &read));
-    let mut chunk = read.clone();
-    chunk.extend_from_slice(&24_u32.to_le_bytes());
-    chunk.extend_from_slice(&[view.binding.output.world.id as u8; 24]);
-    terminal_wire(&mut host, 7, &presentation_reply(7, 1003, &chunk));
-    let mut release = vec![6];
-    release.extend_from_slice(&capture.to_le_bytes());
-    dispatch_wire(&mut host, 7, &presentation_wire(7, 1004, &release));
-    terminal_wire(&mut host, 7, &presentation_reply(7, 1004, &[6]));
-    assert_eq!(host.presentation.used_bytes(), 0);
-    dispatch_wire(&mut host, 7, &presentation_wire(7, 1005, &read));
-    terminal_wire(&mut host, 7, &presentation_reply(7, 1005, &[7, 2]));
+    let read_wire = |connection: u64, request: u64, operation: u8| {
+        let mut bytes = b"IPDR".to_vec();
+        bytes.extend(connection.to_le_bytes());
+        bytes.extend(request.to_le_bytes());
+        bytes.extend(read.read.to_le_bytes());
+        bytes.push(operation);
+        if operation == 0 {
+            bytes.extend(0u64.to_le_bytes());
+        }
+        bytes
+    };
+    host.receive_connection(8, &read_wire(8, 1003, 0)).unwrap();
+    assert_eq!(host.take_connection_response(8).unwrap()[28], 2);
+    host.receive_connection(7, &read_wire(7, 1003, 0)).unwrap();
+    host.progress_resources().unwrap();
+    let chunk = host.take_connection_response(7).unwrap();
+    assert_eq!(&chunk[42..], &[view.binding.output.world.id as u8; 24]);
+    drop(chunk);
+    host.receive_connection(7, &read_wire(7, 1004, 2)).unwrap();
+    assert_eq!(host.take_connection_response(7).unwrap()[28], 1);
+    host.progress_resources().unwrap();
+    assert_eq!(host.bulk_read_usage().backing_bytes, 0);
+    host.receive_connection(7, &read_wire(7, 1005, 0)).unwrap();
+    assert_eq!(host.take_connection_response(7).unwrap()[28], 2);
     assert!(host.close_connection(7));
     assert!(host.close_connection(8));
+}
+
+#[test]
+fn shared_completed_capture_backing_is_counted_once_and_adopted_bulk_storage_is_not_recharged() {
+    let mut presentation = PresentationCoordinator::default();
+    let mut bulk = super::super::bulk_read::BulkReadService::default();
+    let capture = Arc::new(vec![9; 4096]);
+    presentation
+        .completed_captures
+        .insert((1, 1), capture.clone());
+    presentation
+        .completed_captures
+        .insert((2, 2), capture.clone());
+    assert_eq!(
+        presentation.retained_output_bytes(&bulk),
+        capture.capacity()
+    );
+    let (source, _) = bulk.bytes(capture.clone()).unwrap();
+    assert_eq!(presentation.retained_output_bytes(&bulk), 0);
+    drop(source);
+    assert_eq!(
+        presentation.retained_output_bytes(&bulk),
+        capture.capacity()
+    );
 }

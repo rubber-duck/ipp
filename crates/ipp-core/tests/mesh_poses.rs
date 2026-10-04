@@ -114,7 +114,7 @@ fn entity(world: &mut WorldContext<'_>, weight: f32, target: &str) -> EntityId {
 
 #[test]
 fn shared_endpoints_have_independent_weights_and_conservative_interpolated_bounds() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world_id = host.create_world(Default::default(), RENDER).unwrap();
     let mut world = host.world_mut(world_id).unwrap();
     upload(&mut world, 1, 0.0, false);
@@ -162,7 +162,7 @@ fn shared_endpoints_have_independent_weights_and_conservative_interpolated_bound
 
 #[test]
 fn invalid_changes_preserve_prior_operations_and_allow_explicit_repair() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world_id = host.create_world(Default::default(), RENDER).unwrap();
     let mut world = host.world_mut(world_id).unwrap();
     upload(&mut world, 1, 0.0, false);
@@ -269,7 +269,7 @@ fn invalid_changes_preserve_prior_operations_and_allow_explicit_repair() {
 
 #[test]
 fn pending_target_recovers_without_resubmission_and_late_incompatibility_is_per_use() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world_id = host.create_world(Default::default(), RENDER).unwrap();
     let upload = |host: &mut HostRuntime, asset, shift, reversed| {
         host.world_mut(world_id)
@@ -329,7 +329,7 @@ fn pending_target_recovers_without_resubmission_and_late_incompatibility_is_per_
 
 #[test]
 fn pose_sources_remain_scoped_to_their_world_after_peer_teardown() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let first = host.create_world(Default::default(), RENDER).unwrap();
     let second = host.create_world(Default::default(), RENDER).unwrap();
     let mut targets = Vec::new();

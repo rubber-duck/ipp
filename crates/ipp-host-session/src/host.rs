@@ -39,10 +39,14 @@ impl<P: HostServices> Host<P> {
     ) -> Result<Self, String> {
         let mut runtime = ipp_core::HostRuntime::with_system_factories(factories)
             .map_err(|error| error.to_string())?;
-        let services = P::initialize(&mut runtime)?;
+        let scheduler = services::task_scheduler::TaskSchedulerService::new();
+        let schedulers = scheduler.schedulers();
+        runtime.set_asset_load_scheduler(std::rc::Rc::new(schedulers.host()));
+        let services = P::initialize(&mut runtime, &schedulers)?;
         Ok(Self {
             #[cfg(feature = "instrumentation")]
             profiling: Default::default(),
+            scheduler,
             connections: Default::default(),
             sessions: Default::default(),
             runtime,
@@ -122,6 +126,9 @@ impl<P: HostServices> Host<P> {
             return Err("Host presentation time exhausted".into());
         }
 
+        self.services.prepare_task_poll(&mut self.runtime)?;
+        self.scheduler.poll_ready();
+        self.progress_asset_exports();
         let mut failures = self.process_host_requests();
         #[cfg(feature = "instrumentation")]
         let _profile = self.runtime.profile_scope();
@@ -278,18 +285,44 @@ impl<P: HostServices> Host<P> {
 
     /// Progress Host-owned provider and loader work without stepping any World.
     pub fn progress_resources(&mut self) -> Result<(), String> {
-        self.service_resources()?;
+        self.services.prepare_task_poll(&mut self.runtime)?;
+        self.scheduler.poll_ready();
+        self.progress_asset_exports();
+        self.services.service_resources(&mut self.runtime)?;
         self.services.progress_resources(&mut self.runtime);
         // Loader progress can open dependent readers. Expose that provider work
         // before returning so an external pump does not need another World frame.
-        self.service_resources()?;
+        self.services.service_resources(&mut self.runtime)?;
+        self.progress_asset_exports();
         Ok(())
     }
 
     /// Expose Host-owned provider requests without polling shared loaders.
     pub fn service_resources(&mut self) -> Result<(), String> {
+        self.services.prepare_task_poll(&mut self.runtime)?;
+        self.scheduler.poll_ready();
+        self.progress_asset_exports();
         self.services.service_resources(&mut self.runtime)?;
+        self.progress_asset_exports();
         Ok(())
+    }
+
+    /// Scheduling contexts for owned service operations, independent of Worlds.
+    pub fn task_schedulers(&self) -> services::task_scheduler::TaskSchedulers {
+        self.scheduler.schedulers()
+    }
+
+    /// Request platform updates when tasks become ready; callbacks must only enqueue.
+    pub fn set_task_wakeup(&mut self, wakeup: std::sync::Arc<dyn Fn() + Send + Sync>) {
+        self.scheduler.set_wakeup(wakeup);
+    }
+
+    /// Cancel and drain asynchronous tasks before platform services are released.
+    pub fn shutdown_tasks(&mut self) {
+        // Platform preparation failure still releases logical task state; graphics
+        // adapters fence destruction when their context is permanently unavailable.
+        let _ = self.services.prepare_task_poll(&mut self.runtime);
+        self.scheduler.shutdown();
     }
 
     /// Read Host resource state without borrowing any world.
@@ -398,5 +431,11 @@ impl<P: HostServices> Host<P> {
             }
         }
         Some(session.world)
+    }
+}
+
+impl<P: HostServices> Drop for Host<P> {
+    fn drop(&mut self) {
+        self.shutdown_tasks();
     }
 }

@@ -1,4 +1,4 @@
-use crate::{Batch, Command, HostRuntime, services::asset_management::*, systems::*};
+use crate::{Batch, Command, services::asset_management::*, systems::*};
 use std::{
     any::Any,
     sync::{Arc, Mutex},
@@ -86,7 +86,8 @@ impl System for Observer {
 fn strengthening_redrains_every_world_while_prepared_or_queued() {
     let trace = Trace::default();
     let mut host =
-        HostRuntime::with_system_factories(vec![Arc::new(ObserverFactory(trace.clone()))]).unwrap();
+        crate::test_task_scheduler::with_factories(vec![Arc::new(ObserverFactory(trace.clone()))])
+            .unwrap();
     let first = host
         .create_world(Default::default(), &[SystemId("fixture.strengthening")])
         .unwrap();
@@ -98,7 +99,7 @@ fn strengthening_redrains_every_world_while_prepared_or_queued() {
     host.asset_resources_mut()
         .register_loader(kind, move || {
             let trace = trace_for_loader.clone();
-            BufferedAssetLoader::new(move |bytes| {
+            crate::test_task_scheduler::blob_loader(move |bytes| {
                 assert_eq!(bytes, [1]);
                 Ok(Payload(trace.clone()))
             })
@@ -110,6 +111,8 @@ fn strengthening_redrains_every_world_while_prepared_or_queued() {
         variant: 0,
     };
     let key = host.asset_resources_mut().upload(upload, vec![1]).unwrap();
+    host.progress_assets();
+    crate::test_task_scheduler::poll_ready();
     host.progress_assets();
     assert!(host.asset_resources().get_typed::<Payload>(key).is_some());
     let lease = host
@@ -159,6 +162,8 @@ fn strengthening_redrains_every_world_while_prepared_or_queued() {
     let replacement = host.asset_resources_mut().upload(upload, vec![1]).unwrap();
     assert_eq!(replacement.slot, key.slot);
     assert_ne!(replacement, key);
+    host.progress_assets();
+    crate::test_task_scheduler::poll_ready();
     host.progress_assets();
     assert!(
         host.asset_resources()

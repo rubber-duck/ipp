@@ -1,6 +1,7 @@
 //! Completed composed queries against real Camera, Canvas and spatial publications.
 
 mod support;
+use support::task_scheduler::HostTaskTestDriver;
 
 use support::CanvasTestHost;
 use support::selection::{
@@ -23,7 +24,7 @@ fn submit(host: &mut HostRuntime, world: WorldId, operations: Vec<Command>) -> B
             operations,
         })
         .unwrap();
-    host.frame(0.0)
+    host.frame_for_test(0.0)
         .unwrap()
         .worlds
         .remove(&world)
@@ -161,7 +162,7 @@ fn root(output: OutputRef) -> ViewQueryTarget {
 }
 
 fn frame(host: &mut HostRuntime) {
-    let report = host.frame(0.0).unwrap();
+    let report = host.frame_for_test(0.0).unwrap();
     assert!(
         report.worlds.values().all(Result::is_ok),
         "{:?}",
@@ -191,7 +192,7 @@ fn hit(host: &HostRuntime, output: OutputRef, point: [f32; 2]) -> GuiQueryHit<'_
 
 #[test]
 fn direct_canvas_reverse_paint_clip_and_exact_control_observation() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world = host.create_world(Default::default(), GUI_LAYOUT).unwrap();
     let output = canvas(&mut host, world);
     let back = control(&mut host, output, CanvasStyle::default());
@@ -223,7 +224,7 @@ fn direct_canvas_reverse_paint_clip_and_exact_control_observation() {
 
 #[test]
 fn nested_camera_physical_aspect_and_spatial_affine_keep_domain_distances() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let parent = host
         .create_world(Default::default(), &select(&[ATTACHMENTS, CAMERA, SURFACE]))
         .unwrap();
@@ -279,7 +280,7 @@ fn nested_camera_physical_aspect_and_spatial_affine_keep_domain_distances() {
 
 #[test]
 fn only_explicit_world_qualified_picking_blocks_panels() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let parent = host
         .create_world(Default::default(), &select(&[ATTACHMENTS, CAMERA, SURFACE]))
         .unwrap();
@@ -341,7 +342,7 @@ fn only_explicit_world_qualified_picking_blocks_panels() {
 #[test]
 fn bound_source_fences_equal_rebind_and_navigation_edits_explicit_producer() {
     use ipp_core::systems::camera::{CameraSystem, CameraViewMotion};
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world = host.create_world(Default::default(), CAMERA).unwrap();
     let selected = camera(&mut host, world);
     let other = camera(&mut host, world);
@@ -368,7 +369,7 @@ fn bound_source_fences_equal_rebind_and_navigation_edits_explicit_producer() {
         .unwrap()
         .enqueue_system_command_with_reply(CameraSystem::ID, 7, 10, command)
         .unwrap();
-    let report = host.frame(0.0).unwrap();
+    let report = host.frame_for_test(0.0).unwrap();
     assert_eq!(
         report.worlds[&world]
             .as_ref()
@@ -412,7 +413,7 @@ fn bound_source_fences_equal_rebind_and_navigation_edits_explicit_producer() {
         })
         .is_err()
     );
-    let report = host.frame(0.0).unwrap();
+    let report = host.frame_for_test(0.0).unwrap();
     assert_eq!(
         report.worlds[&world]
             .as_ref()
@@ -425,7 +426,7 @@ fn bound_source_fences_equal_rebind_and_navigation_edits_explicit_producer() {
 
 #[test]
 fn nested_canvas_maps_signed_scale_clip_and_frozen_logical_extent() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let parent = host
         .create_world(
             Default::default(),
@@ -492,7 +493,7 @@ fn nested_canvas_maps_signed_scale_clip_and_frozen_logical_extent() {
 #[test]
 fn nested_navigation_uses_physical_extent_and_rechecks_current_edge() {
     use ipp_core::systems::camera::{CameraPublication, CameraSystem, CameraViewMotion};
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let parent = host
         .create_world(Default::default(), &select(&[ATTACHMENTS, CAMERA, SURFACE]))
         .unwrap();
@@ -522,7 +523,7 @@ fn nested_navigation_uses_physical_extent_and_rechecks_current_edge() {
         .unwrap()
         .enqueue_system_command_with_reply(CameraSystem::ID, 8, 1, command)
         .unwrap();
-    let report = host.frame(0.0).unwrap();
+    let report = host.frame_for_test(0.0).unwrap();
     assert_eq!(
         report.worlds[&child]
             .as_ref()
@@ -564,7 +565,7 @@ fn nested_navigation_uses_physical_extent_and_rechecks_current_edge() {
             }],
         })
         .unwrap();
-    let report = host.frame(0.0).unwrap();
+    let report = host.frame_for_test(0.0).unwrap();
     assert_eq!(
         report.worlds[&child]
             .as_ref()
@@ -578,7 +579,7 @@ fn nested_navigation_uses_physical_extent_and_rechecks_current_edge() {
 #[test]
 fn current_bound_navigation_survives_advancing_frames_but_exact_source_does_not() {
     use ipp_core::systems::camera::{CameraSystem, CameraViewMotion};
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world = host.create_world(Default::default(), CAMERA).unwrap();
     let output = camera(&mut host, world);
     host.set_root_output(output, viewport()).unwrap();
@@ -611,7 +612,7 @@ fn current_bound_navigation_survives_advancing_frames_but_exact_source_does_not(
             .unwrap()
             .enqueue_system_command_with_reply(CameraSystem::ID, 7, request, command)
             .unwrap();
-        let report = host.frame(0.0).unwrap();
+        let report = host.frame_for_test(0.0).unwrap();
         assert_eq!(
             report.worlds[&world]
                 .as_ref()
@@ -664,7 +665,7 @@ fn navigation_of_an_animated_camera_lands_and_stop_subtracts_the_contribution() 
     use ipp_core::services::asset_management::{AssetUpload, AssetUploadIdentity};
     use ipp_core::systems::animation::*;
     use ipp_core::systems::camera::{CameraPublication, CameraSystem, CameraViewMotion};
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world = host
         .create_world(Default::default(), &select(&[ANIMATION, CAMERA]))
         .unwrap();
@@ -706,7 +707,7 @@ fn navigation_of_an_animated_camera_lands_and_stop_subtracts_the_contribution() 
         .unwrap();
     let mut uploaded = false;
     for _ in 0..512 {
-        let report = host.frame(0.0).unwrap();
+        let report = host.frame_for_test(0.0).unwrap();
         if let Some(asset) = report.worlds[&world].as_ref().unwrap().assets.first() {
             assert!(asset.result.is_ok());
             uploaded = true;
@@ -770,7 +771,7 @@ fn navigation_of_an_animated_camera_lands_and_stop_subtracts_the_contribution() 
         .unwrap()
         .enqueue_system_command_with_reply(CameraSystem::ID, 7, 1, command)
         .unwrap();
-    let report = host.frame(0.0).unwrap();
+    let report = host.frame_for_test(0.0).unwrap();
     assert_eq!(
         report.worlds[&world]
             .as_ref()
@@ -847,7 +848,7 @@ fn faulted_surface_keeps_its_footprint_and_blocks_without_clickthrough() {
             .unwrap()
             .is_some()
     );
-    host.frame(0.0).unwrap();
+    host.frame_for_test(0.0).unwrap();
     assert!(matches!(
         query_composed_input(&host, root(output), [0.5; 2], GuiQueryOptions::default())
             .unwrap()
@@ -893,7 +894,7 @@ fn layered_control(
 
 #[test]
 fn separated_layers_meet_layer_planes_nearest_first_and_fall_through() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let parent = host
         .create_world(Default::default(), &select(&[ATTACHMENTS, CAMERA, SURFACE]))
         .unwrap();
@@ -979,7 +980,7 @@ fn separated_layers_meet_layer_planes_nearest_first_and_fall_through() {
 
 #[test]
 fn a_layer_plane_keeps_its_depth_across_a_gap_as_other_planes_come_and_go() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let parent = host
         .create_world(Default::default(), &select(&[ATTACHMENTS, CAMERA, SURFACE]))
         .unwrap();
@@ -1073,7 +1074,7 @@ fn a_layer_plane_keeps_its_depth_across_a_gap_as_other_planes_come_and_go() {
 
 #[test]
 fn a_raised_canvas_slot_rises_over_later_base_content() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let parent = host
         .create_world(
             Default::default(),

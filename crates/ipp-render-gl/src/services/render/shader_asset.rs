@@ -5,13 +5,14 @@
 //! its parameters for the canvas program, which the
 //! [paint slots](super::canvas_paint) rebuild whenever their paints change.
 
+use super::asset_context::{RenderAssetContext, RenderAssetLease};
 use super::canvas_paint::{self, CanvasPaintSource};
 use super::{assets::SharedRenderDevice, custom_shader, shader::RenderShaderConfig};
 use crate::{RenderDevice, RenderError};
 use ipp_core::{
     DynamicProperties, DynamicValue,
     services::asset_management::{
-        Asset, AssetLoader, BufferedAssetLoader,
+        Asset, AssetLoader, AsyncAssetLoader,
         shader::{ShaderDefinition, ShaderParameterKind as Kind},
     },
 };
@@ -19,6 +20,7 @@ use std::any::Any;
 
 pub(super) struct GlShaderData<D: RenderDevice> {
     pub definition: ShaderDefinition,
+    asset_lease: RenderAssetLease,
     pub surface: Option<D::Program>,
     pub shadow: Option<D::Program>,
     pub custom_vertex: bool,
@@ -42,10 +44,14 @@ impl<D: RenderDevice> Asset for GlShaderData<D> {
     fn invalidate_graphics(&mut self) {
         self.paint_ready = false;
         let mut device = self.device.borrow_mut();
-        if let Some(program) = self.surface.take() {
+        if let Some(program) = self.surface.take()
+            && self.asset_lease.is_current()
+        {
             device.delete_program(program);
         }
-        if let Some(program) = self.shadow.take() {
+        if let Some(program) = self.shadow.take()
+            && self.asset_lease.is_current()
+        {
             device.delete_program(program);
         }
     }
@@ -114,58 +120,88 @@ fn defaults(definition: &ShaderDefinition) -> Result<DynamicProperties, String> 
 
 pub(super) fn loader<D: RenderDevice>(
     device: SharedRenderDevice<D>,
+    context: RenderAssetContext,
 ) -> impl AssetLoader<Data = GlShaderData<D>> {
-    BufferedAssetLoader::new(move |bytes| {
-        let mut definition = ShaderDefinition::decode(bytes)?;
-        if definition.is_paint() {
-            let paint = validate_paint(&device, &definition)?;
+    AsyncAssetLoader::decode(move |mut reader| async move {
+        let mut definition = ShaderDefinition::decode_reader(&mut *reader).await?;
+        loop {
+            let asset_lease = context.wait().await;
+            if definition.is_paint() {
+                match validate_paint(&device, &definition) {
+                    Ok(paint) => {
+                        definition.backends.clear();
+                        return Ok(GlShaderData {
+                            definition,
+                            asset_lease,
+                            surface: None,
+                            shadow: None,
+                            custom_vertex: false,
+                            paint: Some(paint),
+                            paint_ready: true,
+                            device,
+                        });
+                    }
+                    Err(RenderError::ContextLost) => {
+                        context.set_active(false);
+                        continue;
+                    }
+                    Err(error) => return Err(error.to_string()),
+                }
+            }
+            let config = config(&definition).map_err(|error| error.to_string())?;
+            let properties = defaults(&definition)?;
+            let (declarations, _, _) = custom_shader::parameter_layout(&definition, &properties)
+                .map_err(|error| error.to_string())?;
+            let flags = definition.recipe.features;
+            let compile = |shadow| {
+                let (vertex, fragment) = custom_shader::sources(
+                    config,
+                    &definition,
+                    &declarations,
+                    flags & 8 != 0,
+                    shadow,
+                )?;
+                device.borrow_mut().create_program(&vertex, &fragment)
+            };
+            let surface = match compile(false) {
+                Ok(surface) => surface,
+                Err(RenderError::ContextLost) => {
+                    context.set_active(false);
+                    continue;
+                }
+                Err(error) => return Err(error.to_string()),
+            };
+            let shadow = if flags & 16 != 0 {
+                match compile(true) {
+                    Ok(program) => Some(program),
+                    Err(RenderError::ContextLost) => {
+                        context.set_active(false);
+                        continue;
+                    }
+                    Err(error) => {
+                        device.borrow_mut().delete_program(surface);
+                        return Err(error.to_string());
+                    }
+                }
+            } else {
+                None
+            };
+            let custom_vertex = definition
+                .backends
+                .get(&definition.recipe.backend)
+                .is_some_and(|source| !source.vertex.trim().is_empty());
             definition.backends.clear();
             return Ok(GlShaderData {
                 definition,
-                surface: None,
-                shadow: None,
-                custom_vertex: false,
-                paint: Some(paint),
-                paint_ready: true,
-                device: device.clone(),
+                asset_lease,
+                surface: Some(surface),
+                shadow,
+                custom_vertex,
+                paint: None,
+                paint_ready: false,
+                device,
             });
         }
-        let config = config(&definition).map_err(|error| error.to_string())?;
-        let properties = defaults(&definition)?;
-        let (declarations, _, _) = custom_shader::parameter_layout(&definition, &properties)
-            .map_err(|error| error.to_string())?;
-        let flags = definition.recipe.features;
-        let compile = |shadow| {
-            let (vertex, fragment) =
-                custom_shader::sources(config, &definition, &declarations, flags & 8 != 0, shadow)?;
-            device.borrow_mut().create_program(&vertex, &fragment)
-        };
-        let surface = compile(false).map_err(|error| error.to_string())?;
-        let shadow = if flags & 16 != 0 {
-            match compile(true) {
-                Ok(program) => Some(program),
-                Err(error) => {
-                    device.borrow_mut().delete_program(surface);
-                    return Err(error.to_string());
-                }
-            }
-        } else {
-            None
-        };
-        let custom_vertex = definition
-            .backends
-            .get(&definition.recipe.backend)
-            .is_some_and(|source| !source.vertex.trim().is_empty());
-        definition.backends.clear();
-        Ok(GlShaderData {
-            definition,
-            surface: Some(surface),
-            shadow,
-            custom_vertex,
-            paint: None,
-            paint_ready: false,
-            device: device.clone(),
-        })
     })
 }
 
@@ -175,14 +211,18 @@ pub(super) fn loader<D: RenderDevice>(
 fn validate_paint<D: RenderDevice>(
     device: &SharedRenderDevice<D>,
     definition: &ShaderDefinition,
-) -> Result<CanvasPaintSource, String> {
+) -> Result<CanvasPaintSource, RenderError> {
     if definition.recipe.backend != canvas_paint::CANVAS_PAINT_BACKEND {
-        return Err("Unsupported shader backend".into());
+        return Err(RenderError::RenderDevice(
+            "Unsupported shader backend".into(),
+        ));
     }
     let body = definition
         .paint_body(canvas_paint::CANVAS_PAINT_BACKEND)
-        .ok_or("Paint definition has no GLSL ES paint body")?;
-    canvas_paint::check_paint_body(body)?;
+        .ok_or_else(|| {
+            RenderError::RenderDevice("Paint definition has no GLSL ES paint body".into())
+        })?;
+    canvas_paint::check_paint_body(body).map_err(RenderError::RenderDevice)?;
     let source = CanvasPaintSource {
         body: body.into(),
         parameters: definition
@@ -193,9 +233,7 @@ fn validate_paint<D: RenderDevice>(
     };
     let (vertex, fragment) = canvas_paint::validation_sources(&source);
     let mut device = device.borrow_mut();
-    let program = device
-        .create_program(&vertex, &fragment)
-        .map_err(|error| error.to_string())?;
+    let program = device.create_program(&vertex, &fragment)?;
     device.delete_program(program);
     Ok(source)
 }

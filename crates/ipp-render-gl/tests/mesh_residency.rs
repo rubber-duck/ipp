@@ -8,9 +8,7 @@ use ipp_core::{Batch, Command, EntityRef};
 use ipp_core::{
     ComponentValue, EntityId, MeshAsset, MeshKey, MeshUpload, WorldContext,
     components::{MeshInstance, Transform, UnlitMaterial},
-    services::asset_management::{
-        Asset, AssetLoadStatus, AssetTypeId, AssetUploadIdentity, BufferedAssetLoader,
-    },
+    services::asset_management::{Asset, AssetLoadStatus, AssetTypeId, AssetUploadIdentity},
 };
 use ipp_render_gl::RenderError;
 use ipp_render_gl::{RenderDevice, RenderService};
@@ -101,7 +99,7 @@ fn assert_cpu_usable(world: &mut WorldContext<'_>, asset: u64, _entity: EntityId
 
 #[test]
 fn frame_accounting_reports_between_frame_uploads_once() {
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let (mut world, mut renderer, _) = setup(&mut host);
     upload(&mut world, 1);
 
@@ -122,7 +120,7 @@ fn frame_accounting_reports_between_frame_uploads_once() {
 
 #[test]
 fn failed_shared_upload_is_cached_preserves_cpu_and_does_not_block_ready_draws() {
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let (mut world, mut renderer, state) = setup(&mut host);
     state.failed_attempts_remaining.set(1);
     upload(&mut world, 1);
@@ -213,7 +211,7 @@ impl Asset for Blob {
 
 #[test]
 fn cpu_residency_above_former_quota_does_not_suppress_mesh_upload() {
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let (mut world, mut renderer, state) = setup(&mut host);
     let bytes = 17 << 20;
     let blob = AssetUploadIdentity {
@@ -224,7 +222,7 @@ fn cpu_residency_above_former_quota_does_not_suppress_mesh_upload() {
     world
         .asset_resources_mut()
         .register_loader(blob.kind, move || {
-            BufferedAssetLoader::new(move |_| Ok(Blob(vec![0; bytes])))
+            support::task_scheduler::blob_loader(move |_| Ok(Blob(vec![0; bytes])))
         })
         .unwrap();
     let blob = world.asset_resources_mut().upload(blob, vec![0]).unwrap();
@@ -271,7 +269,7 @@ fn cpu_residency_above_former_quota_does_not_suppress_mesh_upload() {
 fn detached_demanded_mesh_publishes_cpu_metadata_and_requeues_gpu_recovery() {
     use ipp_core::services::asset_management::{AssetSource, mesh_metadata::MeshMetadata};
 
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     host.register_stream_resource_provider("https").unwrap();
     let (mut world, mut renderer, state) = setup(&mut host);
     renderer.set_asset_context_active(false);
@@ -288,7 +286,7 @@ fn detached_demanded_mesh_publishes_cpu_metadata_and_requeues_gpu_recovery() {
         ],
     );
     drop(world);
-    host.progress_evaluation_assets();
+    support::progress_evaluation_assets(&mut host);
     let request = host
         .take_resource_requests()
         .into_iter()
@@ -296,7 +294,7 @@ fn detached_demanded_mesh_publishes_cpu_metadata_and_requeues_gpu_recovery() {
         .expect("demanded mesh request");
     host.complete_resource(request.id, Ok(triangle())).unwrap();
 
-    host.progress_evaluation_assets();
+    support::progress_evaluation_assets(&mut host);
 
     let key = host
         .asset_resources()
@@ -326,11 +324,11 @@ fn detached_demanded_mesh_publishes_cpu_metadata_and_requeues_gpu_recovery() {
         "context invalidation retains evaluation metadata"
     );
     renderer.set_asset_context_active(true);
-    host.progress_assets();
+    support::progress_assets(&mut host);
     let recovery = host.take_resource_requests().pop().unwrap();
     assert!(recovery.recovery);
     host.complete_resource(recovery.id, Ok(triangle())).unwrap();
-    host.progress_assets();
+    support::progress_assets(&mut host);
 
     assert_eq!(state.mesh_attempts.get(), 1);
     let resource = host.asset_resources().get(key).unwrap();
@@ -344,7 +342,7 @@ fn detached_progress_defers_pending_font_and_drawing_gpu_preparation() {
         AssetLoadStatus, drawing::DRAWING_TYPE, font::FONT_TYPE,
     };
 
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let state = Rc::new(DeviceState::default());
     let renderer = RenderService::new(TestDevice(state.clone())).unwrap();
     renderer.install(&mut host).unwrap();
@@ -372,14 +370,14 @@ fn detached_progress_defers_pending_font_and_drawing_gpu_preparation() {
         .unwrap();
     state.context_lost.set(true);
 
-    host.progress_assets();
-    assert_eq!(state.surface_path_attempts.get(), 2);
+    support::progress_assets(&mut host);
+    assert_eq!(state.surface_path_attempts.get(), 1);
     for _ in 0..4 {
-        host.progress_evaluation_assets();
+        support::progress_evaluation_assets(&mut host);
     }
     assert_eq!(
         state.surface_path_attempts.get(),
-        2,
+        1,
         "detached progress must not retry graphics-owned Surface preparation"
     );
     assert_ne!(
@@ -392,8 +390,9 @@ fn detached_progress_defers_pending_font_and_drawing_gpu_preparation() {
     );
 
     state.context_lost.set(false);
-    host.progress_assets();
-    assert_eq!(state.surface_path_attempts.get(), 4);
+    renderer.set_asset_context_active(true);
+    support::progress_assets(&mut host);
+    assert_eq!(state.surface_path_attempts.get(), 3);
     assert_eq!(
         host.asset_resources().get(font).unwrap().status(),
         &AssetLoadStatus::Loaded
@@ -409,7 +408,7 @@ fn surface_draw_failure_restores_mesh_culling_state() {
     use ipp_core::components::CanvasDrawing;
     use support::canvas::CanvasSurface;
 
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     host.io_mut().register_stream("fixture://").unwrap();
     let (mut world, mut renderer, state) = setup(&mut host);
     renderable(&mut world, 41, 0.0);
@@ -426,7 +425,7 @@ fn surface_draw_failure_restores_mesh_culling_state() {
         })],
     );
     for _ in 0..16 {
-        host.progress_assets();
+        support::progress_assets(&mut host);
         for request in host.take_resource_requests() {
             host.complete_resource(request.id, Ok(surface_drawing()))
                 .unwrap();
@@ -469,7 +468,7 @@ fn surface_draw_failure_restores_mesh_culling_state() {
 #[test]
 fn shadow_pass_restores_target_after_error_reuses_storage_and_releases_on_unload() {
     use ipp_core::components::{Light, PbrMaterial};
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let (mut world, mut renderer, state) = setup(&mut host);
     create(
         &mut world,
@@ -543,7 +542,7 @@ fn shadow_pass_restores_target_after_error_reuses_storage_and_releases_on_unload
 #[test]
 fn excess_lights_keep_drawing_with_per_draw_shader_capacity() {
     use ipp_core::components::{Light, PbrMaterial};
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let (mut world, mut renderer, _) = setup(&mut host);
     create(
         &mut world,
@@ -589,7 +588,7 @@ fn excess_lights_keep_drawing_with_per_draw_shader_capacity() {
 
 #[test]
 fn device_replacement_releases_old_payloads() {
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let (mut world, mut renderer, old) = setup(&mut host);
     upload(&mut world, 1);
     renderable(&mut world, 1, 0.0);
@@ -650,7 +649,7 @@ fn non_program_residency(world: &WorldContext<'_>) -> usize {
 
 #[test]
 fn graphics_loss_and_failed_recovery_keep_cpu_picking_and_metadata_available() {
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let (mut world, mut renderer, state) = setup(&mut host);
     let entity = renderable(&mut world, 71, 0.0);
     upload(&mut world, 71);
@@ -701,7 +700,7 @@ fn graphics_loss_and_failed_recovery_keep_cpu_picking_and_metadata_available() {
 #[test]
 fn atlas_allocation_failure_keeps_lighting_and_does_not_retry_every_frame() {
     use ipp_core::components::{Light, PbrMaterial};
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let (mut world, mut renderer, state) = setup(&mut host);
     create(
         &mut world,
@@ -755,7 +754,7 @@ fn atlas_allocation_failure_keeps_lighting_and_does_not_retry_every_frame() {
 
 #[test]
 fn culled_text_surface_reuses_retained_glyphs_when_visible_again() {
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let (mut renderer, state, world_id, entity) = text_surface_scene(&mut host);
     let mut world = host.world_mut(world_id).unwrap();
 
@@ -811,7 +810,7 @@ fn culled_text_surface_reuses_retained_glyphs_when_visible_again() {
 
 #[test]
 fn recoverable_glyph_population_failure_keeps_analytic_text_and_backs_off() {
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let (mut renderer, state, world_id, _) = text_surface_scene(&mut host);
     let mut world = host.world_mut(world_id).unwrap();
 
@@ -846,7 +845,7 @@ fn recoverable_glyph_population_failure_keeps_analytic_text_and_backs_off() {
 
 #[test]
 fn glyph_population_context_loss_and_restore_failures_fail_the_frame() {
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let (mut renderer, state, world_id, _) = text_surface_scene(&mut host);
     let mut world = host.world_mut(world_id).unwrap();
 
@@ -873,7 +872,7 @@ fn glyph_population_context_loss_and_restore_failures_fail_the_frame() {
 
 #[test]
 fn cold_glyph_population_binds_each_atlas_page_once_and_restores_once() {
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     // Each glyph fills more than half a page, so three glyphs need three pages.
     let (mut renderer, state, world_id, _) =
         text_run_scene(&mut host, glyph_font(3, 10, 130.0), &[0, 1, 2]);
@@ -911,7 +910,7 @@ fn cold_glyph_population_binds_each_atlas_page_once_and_restores_once() {
 fn population_budget_defers_misses_and_resumes_next_frame() {
     let floor = ipp_render_gl::GLYPH_MIN_POPULATES_PER_FRAME as u32;
     let ids: Vec<u32> = (0..floor + 8).collect();
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let (mut renderer, state, world_id, _) =
         text_run_scene(&mut host, glyph_font(floor + 8, 1000, 1.0), &ids);
     renderer.set_glyph_population_budget_ms(0.0);
@@ -941,7 +940,7 @@ fn cold_text_within_the_time_budget_reaches_the_atlas_in_one_frame() {
     // More glyphs than the per-frame floor; the scene's Surface shows up to 50.
     let count = ipp_render_gl::GLYPH_MIN_POPULATES_PER_FRAME as u32 + 16;
     let ids: Vec<u32> = (0..count).collect();
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let (mut renderer, state, world_id, _) =
         text_run_scene(&mut host, glyph_font(count, 1000, 1.0), &ids);
     let world = host.world_mut(world_id).unwrap();
@@ -957,7 +956,7 @@ fn cold_text_within_the_time_budget_reaches_the_atlas_in_one_frame() {
 
 #[test]
 fn context_loss_during_glyph_population_reaches_recovery_and_repopulates() {
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let (mut renderer, state, world_id, _) = text_surface_scene(&mut host);
     let mut world = host.world_mut(world_id).unwrap();
 
@@ -997,7 +996,7 @@ fn context_loss_during_glyph_population_reaches_recovery_and_repopulates() {
 
 #[test]
 fn context_loss_during_gui_storage_write_reaches_recovery() {
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let (mut renderer, state, world_id, _) = text_surface_scene(&mut host);
     let mut world = host.world_mut(world_id).unwrap();
 
@@ -1029,7 +1028,7 @@ fn context_loss_during_gui_storage_write_reaches_recovery() {
 
 #[test]
 fn recoverable_gui_storage_failure_skips_only_its_surface_and_backs_off() {
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let (mut renderer, state, world_id, failing) = text_surface_scene(&mut host);
     let mut world = host.world_mut(world_id).unwrap();
 
@@ -1113,7 +1112,7 @@ const ANALYTIC_VIEWPORT: u32 = 1000;
 #[test]
 fn analytic_text_uploads_its_instances_once_and_draws_them_every_frame() {
     let ids: Vec<u32> = (0..4).collect();
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let (mut renderer, state, world_id, _) =
         text_run_scene(&mut host, glyph_font(4, 1000, 1.0), &ids);
     canvas::set_viewport(&mut host, world_id, ANALYTIC_VIEWPORT, ANALYTIC_VIEWPORT);
@@ -1155,7 +1154,7 @@ fn analytic_text_uploads_its_instances_once_and_draws_them_every_frame() {
 fn analytic_text_streams_release_with_their_surface_world_and_context() {
     let ids: Vec<u32> = (0..4).collect();
     let font = glyph_font(4, 1000, 1.0);
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let (mut renderer, state, world_id, entity) = text_run_scene(&mut host, font.clone(), &ids);
     canvas::set_viewport(&mut host, world_id, ANALYTIC_VIEWPORT, ANALYTIC_VIEWPORT);
     let mut world = host.world_mut(world_id).unwrap();
@@ -1211,7 +1210,7 @@ fn analytic_text_streams_release_with_their_surface_world_and_context() {
     drop(world);
 
     // Forgetting a World releases every stream it still holds.
-    let mut other_host = ipp_core::HostRuntime::new();
+    let mut other_host = support::task_scheduler::host();
     let (mut other, other_state, other_id, other_surface) =
         text_run_scene(&mut other_host, font, &ids);
     canvas::set_viewport(

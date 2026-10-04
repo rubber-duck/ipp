@@ -88,7 +88,7 @@ fn numeric_patch_keeps_old_storage_until_observers_finish_and_rejects_invalid_ed
     let shared = Arc::new(Mutex::new(Shared::default()));
     let mut factories = compiled_system_factories();
     factories.push(Arc::new(Factory(Arc::clone(&shared))));
-    let mut host = HostRuntime::with_system_factories(factories).unwrap();
+    let mut host = crate::support::task_scheduler::with_factories(factories).unwrap();
     let world_id = host
         .create_world(
             Default::default(),

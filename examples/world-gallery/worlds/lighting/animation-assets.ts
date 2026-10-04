@@ -1,5 +1,6 @@
-import { clientAssetSource } from "@ipp/client";
 import type {
+  Client,
+  ClientAssetSource,
   AnimationWorldClient,
   AnimationClipSource,
   AnimationTrack,
@@ -8,12 +9,6 @@ import type {
 import { INITIAL_OBJECTS, type Vec3 } from "./model.js";
 
 export const ANIMATION_DURATION = 8;
-export const BEAM_ASSET = 920010n;
-export const SKELETON_ASSET = 920011n;
-export const SKIN_ASSET = 920012n;
-export const BEAM_PICKING_ASSET = 920013n;
-export const beamPickingSource = (session: bigint) =>
-  clientAssetSource(session, 6, BEAM_PICKING_ASSET).source;
 type Four = [number, number, number, number];
 interface MeshData {
   positions: Vec3[];
@@ -33,101 +28,126 @@ export interface AnimationModule {
     source: readonly { joint: number; inverseBind: number[] }[],
   ): Uint8Array<ArrayBuffer>;
 }
-const uploaded = new WeakMap<AnimationWorldClient, Promise<void>>();
+interface RigAssets {
+  readonly beam: ClientAssetSource;
+  readonly skeleton: ClientAssetSource;
+  readonly skin: ClientAssetSource;
+  readonly picking: ClientAssetSource;
+}
+
+interface RigPublication {
+  pending?: Promise<RigAssets>;
+  assets?: RigAssets;
+}
+
+const uploaded = new WeakMap<Client, RigPublication>();
+
+/** Exact prepared sources for this rig incarnation; released names are never reused. */
+export function rigAssetSources(client: Client): RigAssets {
+  const assets = uploaded.get(client)?.assets;
+  if (!assets) throw new Error("Lighting rig assets have not been prepared");
+  return assets;
+}
 
 /** Upload the closed 3D rig; AnimationAsset declarations supply its motion. */
 export function uploadRigAssets(
   client: AnimationWorldClient,
   module: AnimationModule,
 ) {
-  let pending = uploaded.get(client);
-  if (!pending) {
-    pending = (async () => {
-      const upload = async (
-        kind: number,
-        asset: bigint,
-        bytes: Uint8Array<ArrayBuffer>,
-      ) => {
-        const result = clientAssetSource(client.session, kind, asset);
-        await client.registerAsset(result, bytes.buffer);
-      };
-      await upload(1, BEAM_ASSET, module.encodeSkinnedMesh(createBeam()));
-      await upload(
-        3,
-        SKELETON_ASSET,
-        module.encodeSkeletonAsset([
-          { parent: null, translation: [0, -1, 0] },
-          { parent: 0, translation: [0, 1, 0] },
-          // The tip follows the bend joint without adding a skin influence.
-          { parent: 1, translation: [0, 1, 0] },
-        ]),
-      );
-      await upload(
-        5,
-        SKIN_ASSET,
-        module.encodeSkinAsset(
-          [0, 1].map((joint) => ({
-            joint,
-            inverseBind: [
-              1,
-              0,
-              0,
-              0,
-              0,
-              1,
-              0,
-              0,
-              0,
-              0,
-              1,
-              0,
-              0,
-              joint === 0 ? 1 : 0,
-              0,
-              1,
-            ],
-          })),
-        ),
-      );
-      // One pill per bone, thick enough for the square cross-section's corners.
-      // These authored pick volumes also supply the selected debug contour.
-      const radius = Math.hypot(0.25, 0.25);
-      await upload(
-        module.GEOMETRY_TYPE,
-        BEAM_PICKING_ASSET,
-        module.encodeBoundingShape({
-          type: "compound",
-          parts: [
-            { type: "pill", joints: [0, 1], radius },
-            { type: "pill", joints: [1, 2], radius },
-          ],
-        }),
-      );
-    })();
-    uploaded.set(client, pending);
+  let publication = uploaded.get(client);
+  if (!publication) {
+    publication = {};
+    uploaded.set(client, publication);
   }
-  return pending;
+  if (!publication.pending) {
+    const current = publication;
+    publication.pending = (async () => {
+      const owned: ClientAssetSource[] = [];
+      const upload = async (kind: number, bytes: Uint8Array<ArrayBuffer>) => {
+        const source = await client.createAsset(kind, bytes.buffer);
+        owned.push(source);
+        return source;
+      };
+      try {
+        const beam = await upload(1, module.encodeSkinnedMesh(createBeam()));
+        const skeleton = await upload(
+          3,
+          module.encodeSkeletonAsset([
+            { parent: null, translation: [0, -1, 0] },
+            { parent: 0, translation: [0, 1, 0] },
+            // The tip follows the bend joint without adding a skin influence.
+            { parent: 1, translation: [0, 1, 0] },
+          ]),
+        );
+        const skin = await upload(
+          5,
+          module.encodeSkinAsset(
+            [0, 1].map((joint) => ({
+              joint,
+              inverseBind: [
+                1,
+                0,
+                0,
+                0,
+                0,
+                1,
+                0,
+                0,
+                0,
+                0,
+                1,
+                0,
+                0,
+                joint === 0 ? 1 : 0,
+                0,
+                1,
+              ],
+            })),
+          ),
+        );
+        // One pill per bone, thick enough for the square cross-section's corners.
+        // These authored pick volumes also supply the selected debug contour.
+        const radius = Math.hypot(0.25, 0.25);
+        const picking = await upload(
+          module.GEOMETRY_TYPE,
+          module.encodeBoundingShape({
+            type: "compound",
+            parts: [
+              { type: "pill", joints: [0, 1], radius },
+              { type: "pill", joints: [1, 2], radius },
+            ],
+          }),
+        );
+        current.assets = { beam, skeleton, skin, picking };
+        return current.assets;
+      } catch (failure) {
+        const results = await Promise.allSettled(
+          owned.map((source) => client.releaseAsset(source)),
+        );
+        const failures = results.flatMap((result) =>
+          result.status === "rejected" ? [result.reason] : [],
+        );
+        if (failures.length)
+          throw new AggregateError(
+            [failure, ...failures],
+            "Lighting rig setup cleanup failed",
+          );
+        throw failure;
+      }
+    })();
+  }
+  return publication.pending;
 }
 
 /** Release this producer's uploaded rig; scene consumers release their own demand. */
 export async function releaseRigAssets(client: AnimationWorldClient) {
-  const pending = uploaded.get(client);
-  if (!pending) return;
+  const publication = uploaded.get(client);
+  if (!publication?.pending) return;
   uploaded.delete(client);
-  await pending.catch(() => {});
+  const assets = await publication.pending.catch(() => undefined);
+  if (!assets) return;
   const results = await Promise.allSettled(
-    (
-      [
-        [1, BEAM_ASSET],
-        [3, SKELETON_ASSET],
-        [5, SKIN_ASSET],
-        [6, BEAM_PICKING_ASSET],
-      ] as const
-    ).map(([kind, id]) =>
-      client.releaseAsset(
-        clientAssetSource(client.session, Number(kind!), id!),
-      ),
-    ),
+    Object.values(assets).map((source) => client.releaseAsset(source)),
   );
   const failures = results.flatMap((result) =>
     result.status === "rejected" ? [result.reason] : [],

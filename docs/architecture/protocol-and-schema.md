@@ -10,6 +10,12 @@ Account ingress admission and reliable-output delivery separately per connection
 
 World frame notifications report supersedable completed tick/time progress, not a history of every evaluation. Bound their outstanding delivery through physical completion and retain only the latest deferred progress, draining it fairly across sessions without requiring another World evaluation. Deferred progress never overtakes older semantic responses or moves observed time backwards. Correlated outcomes, resources and lifecycle/GUI effects retain their reliable ordering and are not coalesced with progress. Field-value observations are supersedable state under the same rule: while an earlier value record is still in delivery, newer values wait in the World's queue, where each observed member keeps only its latest; lifecycle and GUI effects are not.
 
+## Host-to-client bulk reads
+
+Host bulk operations return connection-bound read references and representation metadata through control replies. Schema-independent data-plane framing carries sequential reads, bounded ordered chunks, cumulative consumed-prefix acknowledgements and release over the existing transport. Progress is independent of World evaluation. Readers may pipeline bounded chunks; acknowledgement of the complete prefix and final EOF releases that connection's lease. Sending the final chunk alone does not. Explicit release abandons unread content, and disconnect releases that connection's leases. Other connections and producer ownership releases cannot consume them. Host-derived severe memory pressure may revoke leases with explicit read failure; ordinary cache eviction cannot. Asset consumers retain independently.
+
+Application acknowledgement and physical delivery are separate lifetimes. Charge payloads, transport copies and bookkeeping through physical completion, and retain output backing until acknowledgement or release. Admission reserves response/error capacity before accepting work; fair bulk progress preserves control reply reservations and semantic-event delivery. Acknowledgement, cancellation and pressure cannot free memory still borrowed or referenced by an outstanding delivery. [Asset read authority and lifetime](assets.md#client-read-authority-and-output-lifetime) define source access and detached output publication.
+
 ## World-scoped connections
 
 ```mermaid

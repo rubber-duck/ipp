@@ -34,7 +34,7 @@ fn fixture() -> (
     EntityId,
     AnimationControllerId,
 ) {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world_id = host
         .create_world(WorldLimits::default(), &select(&[ASSETS, CONSTRAINTS]))
         .unwrap();
@@ -153,7 +153,7 @@ fn effective_scalar(world: &WorldContext<'_>, target: EntityId) -> f32 {
 
 #[test]
 fn delayed_reverse_restart_uses_ready_duration_and_explicit_seek_is_preserved() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world_id = host
         .create_world(WorldLimits::default(), &select(&[ASSETS, CONSTRAINTS]))
         .unwrap();

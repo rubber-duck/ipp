@@ -15,7 +15,13 @@ const imports = {};
 // Throwing imports prove that inspecting target layouts performs no host I/O.
 for (const item of WebAssembly.Module.imports(module)) {
   assert.ok(
-    ["ipp_gl", "ipp_presentation", "ipp_diagnostics"].includes(item.module),
+    [
+      "ipp_gl",
+      "ipp_presentation",
+      "ipp_diagnostics",
+      "ipp_profiling",
+      "ipp_tasks",
+    ].includes(item.module),
   );
   assert.equal(item.kind, "function");
   imports[item.module] ??= {};

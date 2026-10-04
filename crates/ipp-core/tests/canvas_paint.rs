@@ -145,7 +145,7 @@ fn painted_box(host: &mut HostRuntime) -> (WorldId, OutputRef, EntityId) {
 
 #[test]
 fn a_painted_box_names_its_paint_and_the_publication_carries_the_instance() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let (world, output, entity) = painted_box(&mut host);
     let canvas = publication(&host, output);
 
@@ -192,7 +192,7 @@ fn a_painted_box_names_its_paint_and_the_publication_carries_the_instance() {
 
 #[test]
 fn property_writes_change_only_the_paint_instance() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let (world, output, entity) = painted_box(&mut host);
     let before = publication(&host, output);
 
@@ -218,7 +218,7 @@ fn property_writes_change_only_the_paint_instance() {
 
 #[test]
 fn an_animated_property_reaches_the_paint_instance_and_persists() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let (world, output, entity) = painted_box(&mut host);
     let target = AnimationTrackTarget::DynamicProperty {
         component: ComponentValue::CANVAS_PAINT,

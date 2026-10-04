@@ -200,7 +200,7 @@ fn fixture() -> (HostRuntime, Arc<Mutex<Observations>>) {
     let mut factories = compiled_system_factories();
     factories.push(Arc::new(ProbeFactory(shared.clone())));
     (
-        HostRuntime::with_system_factories(factories).unwrap(),
+        crate::test_task_scheduler::with_factories(factories).unwrap(),
         shared,
     )
 }
@@ -465,6 +465,7 @@ fn declared_deleted_and_foreign_host_borrows_fail_closed() {
     let stale = world(&mut host);
     assert!(host.destroy_world(stale.id()));
     let mut other = HostRuntime::new();
+    crate::test_task_scheduler::install(&mut other);
     let foreign = world(&mut other);
     for reference in [stale, foreign] {
         queue(
@@ -587,7 +588,9 @@ fn retained_source_is_not_latest_and_pending_asset_release_is_not_availability()
     );
     let kind = AssetTypeId(65000);
     host.asset_resources_mut()
-        .register_loader(kind, || BufferedAssetLoader::new(|_| Ok(Payload)))
+        .register_loader(kind, || {
+            crate::test_task_scheduler::blob_loader(|_| Ok(Payload))
+        })
         .unwrap();
     let key = host
         .asset_resources_mut()
@@ -600,6 +603,8 @@ fn retained_source_is_not_latest_and_pending_asset_release_is_not_availability()
             vec![1],
         )
         .unwrap();
+    host.progress_assets();
+    crate::test_task_scheduler::poll_ready();
     host.progress_assets();
     shared.lock().unwrap().retained = Some(key);
     host.frame(0.0).unwrap();

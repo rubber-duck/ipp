@@ -1,11 +1,12 @@
 //! Built-in program recipes use ordinary resource loading and recovery.
 
+use super::asset_context::{RenderAssetContext, RenderAssetLease};
 use super::{assets::SharedRenderDevice, shader::RenderShaderConfig};
 use crate::{RenderDevice, RenderError, RenderService};
 use ipp_core::{
     HostRuntime, OutputKind, OutputRef, WorldPublicationId, WorldRef,
     services::asset_management::{
-        Asset, AssetKey, AssetLoader, AssetSource, AssetTypeId, BufferedAssetLoader,
+        Asset, AssetKey, AssetLoader, AssetSource, AssetTypeId, AsyncAssetLoader,
     },
 };
 use std::any::Any;
@@ -43,6 +44,7 @@ impl ProgramDemand {
 
 pub(super) struct GlProgramData<D: RenderDevice> {
     pub program: Option<D::Program>,
+    asset_lease: RenderAssetLease,
     device: SharedRenderDevice<D>,
 }
 
@@ -56,7 +58,9 @@ impl<D: RenderDevice> Asset for GlProgramData<D> {
     }
 
     fn invalidate_graphics(&mut self) {
-        if let Some(program) = self.program.take() {
+        if let Some(program) = self.program.take()
+            && self.asset_lease.is_current()
+        {
             self.device.borrow_mut().delete_program(program);
         }
     }
@@ -76,7 +80,9 @@ impl<D: RenderDevice> Asset for GlProgramData<D> {
 
 impl<D: RenderDevice> Drop for GlProgramData<D> {
     fn drop(&mut self) {
-        if let Some(program) = self.program.take() {
+        if let Some(program) = self.program.take()
+            && self.asset_lease.is_current()
+        {
             self.device.borrow_mut().delete_program(program);
         }
     }
@@ -84,9 +90,13 @@ impl<D: RenderDevice> Drop for GlProgramData<D> {
 
 pub(super) fn loader<D: RenderDevice>(
     device: SharedRenderDevice<D>,
+    context: RenderAssetContext,
 ) -> impl AssetLoader<Data = GlProgramData<D>> {
-    BufferedAssetLoader::new(move |bytes| {
-        let bits = u32::from_le_bytes(bytes.try_into().map_err(|_| "Invalid program recipe")?);
+    AsyncAssetLoader::decode(move |mut reader| async move {
+        let mut input =
+            ipp_core::services::asset_management::decode::AssetReader::new(&mut *reader);
+        let bits = input.u32().await?;
+        input.finish().await?;
         let config = RenderShaderConfig::from_recipe_bits(bits);
         let sources = if bits & (1 << 9) != 0 {
             config.shadow_sources()
@@ -94,14 +104,21 @@ pub(super) fn loader<D: RenderDevice>(
             config.sources()
         };
         let (vertex, fragment) = sources.map_err(|error| error.to_string())?;
-        let program = device
-            .borrow_mut()
-            .create_program(&vertex, &fragment)
-            .map_err(|error| error.to_string())?;
-        Ok(GlProgramData {
-            program: Some(program),
-            device: device.clone(),
-        })
+        loop {
+            let asset_lease = context.wait().await;
+            let result = device.borrow_mut().create_program(&vertex, &fragment);
+            match result {
+                Ok(program) => {
+                    return Ok(GlProgramData {
+                        program: Some(program),
+                        asset_lease,
+                        device,
+                    });
+                }
+                Err(RenderError::ContextLost) => context.set_active(false),
+                Err(error) => return Err(error.to_string()),
+            }
+        }
     })
 }
 

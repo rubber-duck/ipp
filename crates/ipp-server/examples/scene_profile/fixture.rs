@@ -9,6 +9,7 @@ use std::{collections::BTreeMap, path::Path, time::Instant};
 
 pub(super) struct Scene {
     pub host: HostRuntime,
+    tasks: ipp_host_session::services::task_scheduler::TaskSchedulerService,
     pub world: WorldId,
     pub controllers: Vec<AnimationControllerId>,
     pub entities: BTreeMap<String, EntityId>,
@@ -20,11 +21,18 @@ pub(super) struct Scene {
 impl Scene {
     pub fn load(bundle: &Path, renderer: &Renderer) -> Result<Self> {
         let mut host = HostRuntime::new();
+        let tasks = ipp_host_session::services::task_scheduler::TaskSchedulerService::new();
+        host.set_asset_load_scheduler(std::rc::Rc::new(tasks.schedulers().host()));
         renderer.install(&mut host)?;
         let prefix = "https://stress.ipp.invalid/";
         host.io_mut().register(
             prefix,
-            ipp_server::services::io::FileSystemIoSource::new(prefix, bundle, false)?,
+            ipp_server::services::io::FileSystemIoSource::new(
+                prefix,
+                bundle,
+                false,
+                tasks.schedulers().io(),
+            )?,
         )?;
         let world = host.load_world(
             &std::fs::read(bundle.join("benchmark.ipp"))?,
@@ -77,6 +85,7 @@ impl Scene {
         drop(view);
         let mut scene = Self {
             host,
+            tasks,
             world,
             entities,
             bounds,
@@ -128,6 +137,7 @@ impl Scene {
     }
 
     pub fn update(&mut self, dt: f64) -> Result<()> {
+        self.tasks.poll_ready();
         self.host.progress_assets();
         let frame = self.host.frame(dt)?;
         self.presentation_time += dt;

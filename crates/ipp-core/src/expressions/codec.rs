@@ -491,3 +491,213 @@ fn decode_binary(tag: u8) -> Result<BinaryOperator, ExpressionCodecError> {
         _ => return Err(ExpressionCodecError::InvalidTag),
     })
 }
+
+impl ExpressionDeclaration {
+    /// Decode a bounded IPPE graph from windows into its private typed declaration.
+    pub async fn decode_reader(
+        reader: &mut dyn crate::services::io::IoReader,
+    ) -> Result<Self, String> {
+        use crate::services::asset_management::decode::{AssetReader, push};
+        async fn count(input: &mut AssetReader<'_>) -> Result<usize, String> {
+            let count = input.u32().await?;
+            if count > EXPRESSION_MAX_ITEMS {
+                return Err(ExpressionCodecError::LimitExceeded.to_string());
+            }
+            Ok(count as usize)
+        }
+        async fn text(input: &mut AssetReader<'_>) -> Result<String, String> {
+            let length = input.u32().await? as usize;
+            if length > EXPRESSION_MAX_STRING_BYTES
+                || input
+                    .position()
+                    .checked_add(length as u64)
+                    .is_none_or(|end| end > EXPRESSION_MAX_BYTES as u64)
+            {
+                return Err(ExpressionCodecError::LimitExceeded.to_string());
+            }
+            input.text(length).await
+        }
+        async fn value(input: &mut AssetReader<'_>) -> Result<DynamicValue, String> {
+            let tag = input.u8().await?;
+            let kind = decode_kind(tag).map_err(|error| error.to_string())?;
+            if kind == DynamicPropertyKind::Text {
+                return Ok(DynamicValue::Text(Arc::from(text(input).await?)));
+            }
+            let mut record = [0; 65];
+            record[0] = tag;
+            input.fill(&mut record[1..1 + kind.byte_len()]).await?;
+            DynamicValue::decode(&record[..1 + kind.byte_len()])
+                .map_err(|_| ExpressionCodecError::InvalidValue.to_string())
+        }
+        let mut input = AssetReader::new(reader);
+        if input.array::<4>().await? != EXPRESSION_FORMAT_MAGIC {
+            return Err(ExpressionCodecError::InvalidHeader.to_string());
+        }
+        if input.u32().await? != EXPRESSION_FORMAT_VERSION {
+            return Err(ExpressionCodecError::UnsupportedVersion.to_string());
+        }
+        let input_count = count(&mut input).await?;
+        let node_count = count(&mut input).await?;
+        let output = input.u32().await? as usize;
+        if output >= node_count {
+            return Err("Invalid expression output reference".into());
+        }
+        let mut inputs = Vec::new();
+        for _ in 0..input_count {
+            let name = text(&mut input).await?;
+            let kind = decode_kind(input.u8().await?).map_err(|error| error.to_string())?;
+            push(
+                &mut inputs,
+                ExpressionInput {
+                    name,
+                    kind,
+                },
+            )?;
+        }
+        let mut nodes = Vec::new();
+        for _ in 0..node_count {
+            let node = match input.u8().await? {
+                0 => ExpressionNode::Input(input.u32().await? as usize),
+                1 => ExpressionNode::Constant(value(&mut input).await?),
+                2 => ExpressionNode::Unary {
+                    operator: decode_unary(input.u8().await?).map_err(|error| error.to_string())?,
+                    operand: input.u32().await? as usize,
+                },
+                3 => ExpressionNode::Binary {
+                    operator: decode_binary(input.u8().await?)
+                        .map_err(|error| error.to_string())?,
+                    left: input.u32().await? as usize,
+                    right: input.u32().await? as usize,
+                },
+                4 => ExpressionNode::Clamp {
+                    value: input.u32().await? as usize,
+                    minimum: input.u32().await? as usize,
+                    maximum: input.u32().await? as usize,
+                },
+                5 => ExpressionNode::Ternary {
+                    condition: input.u32().await? as usize,
+                    then_node: input.u32().await? as usize,
+                    else_node: input.u32().await? as usize,
+                },
+                6 => ExpressionNode::Fallback {
+                    value: input.u32().await? as usize,
+                    replacement: input.u32().await? as usize,
+                },
+                _ => return Err(ExpressionCodecError::InvalidTag.to_string()),
+            };
+            if matches!(&node, ExpressionNode::Input(slot) if *slot >= input_count)
+                || node
+                    .children()
+                    .iter()
+                    .flatten()
+                    .any(|&child| child >= node_count)
+            {
+                return Err("Invalid expression reference".into());
+            }
+            push(&mut nodes, node)?;
+            if input.position() > EXPRESSION_MAX_BYTES as u64 {
+                return Err(ExpressionCodecError::LimitExceeded.to_string());
+            }
+        }
+        input.finish().await?;
+        let declaration = Self {
+            inputs,
+            nodes,
+            output,
+        };
+        super::preparation::validate_declaration_async(&declaration)
+            .await
+            .map_err(|error| format!("Invalid expression declaration: {error:?}"))?;
+        Ok(declaration)
+    }
+}
+
+impl ExpressionDeclaration {
+    pub(crate) async fn encode_output(
+        &self,
+        output: &mut crate::services::asset_management::export::AssetOutput,
+    ) -> Result<(), String> {
+        output.write(&EXPRESSION_FORMAT_MAGIC).await?;
+        output.u32(EXPRESSION_FORMAT_VERSION).await?;
+        output.count(self.inputs.len()).await?;
+        output.count(self.nodes.len()).await?;
+        output.count(self.output).await?;
+        for input in &self.inputs {
+            output.text(&input.name).await?;
+            output
+                .byte(encode_kind(input.kind).map_err(|error| error.to_string())?)
+                .await?;
+        }
+        for node in &self.nodes {
+            match node {
+                ExpressionNode::Input(slot) => {
+                    output.byte(0).await?;
+                    output.count(*slot).await?;
+                }
+                ExpressionNode::Constant(value) => {
+                    output.byte(1).await?;
+                    if let DynamicValue::Text(text) = value {
+                        output
+                            .byte(encode_kind(value.kind()).map_err(|error| error.to_string())?)
+                            .await?;
+                        output.text(text).await?;
+                    } else {
+                        let mut bytes = Vec::with_capacity(65);
+                        Writer {
+                            bytes: Some(&mut bytes),
+                            length: 0,
+                        }
+                        .value(value)
+                        .map_err(|error| error.to_string())?;
+                        output.write(&bytes).await?;
+                    }
+                }
+                ExpressionNode::Unary {
+                    operator,
+                    operand,
+                } => {
+                    output.write(&[2, encode_unary(*operator)]).await?;
+                    output.count(*operand).await?;
+                }
+                ExpressionNode::Binary {
+                    operator,
+                    left,
+                    right,
+                } => {
+                    output.write(&[3, encode_binary(*operator)]).await?;
+                    output.count(*left).await?;
+                    output.count(*right).await?;
+                }
+                ExpressionNode::Clamp {
+                    value,
+                    minimum,
+                    maximum,
+                } => {
+                    output.byte(4).await?;
+                    for index in [value, minimum, maximum] {
+                        output.count(*index).await?;
+                    }
+                }
+                ExpressionNode::Ternary {
+                    condition,
+                    then_node,
+                    else_node,
+                } => {
+                    output.byte(5).await?;
+                    for index in [condition, then_node, else_node] {
+                        output.count(*index).await?;
+                    }
+                }
+                ExpressionNode::Fallback {
+                    value,
+                    replacement,
+                } => {
+                    output.byte(6).await?;
+                    output.count(*value).await?;
+                    output.count(*replacement).await?;
+                }
+            }
+        }
+        Ok(())
+    }
+}

@@ -6,7 +6,7 @@
 //! paint guides, `CUSTOM_MATERIALS.md` and `CANVAS_PAINTS.md` beside its render
 //! service, own the backend interfaces.
 
-use super::{Asset, AssetLoader, AssetTypeId, BufferedAssetLoader};
+use super::{Asset, AssetLoader, AssetTypeId, AsyncAssetLoader};
 use crate::{DynamicProperties, DynamicPropertyKind, DynamicValue};
 use std::collections::BTreeMap;
 
@@ -324,8 +324,8 @@ impl Asset for ShaderDefinition {
 }
 
 pub(crate) fn shader_asset_loader() -> impl AssetLoader<Data = ShaderDefinition> {
-    BufferedAssetLoader::new(|bytes| {
-        ShaderDefinition::decode(bytes)?;
+    AsyncAssetLoader::decode(|mut reader| async move {
+        ShaderDefinition::decode_reader(&mut *reader).await?;
         Err("Shader programs require a rendering Host".into())
     })
 }
@@ -337,5 +337,53 @@ impl super::writer::AssetEncoder for ShaderDefinition {
             return Err("Shader output byte budget exhausted".into());
         }
         Ok(bytes)
+    }
+}
+
+impl ShaderDefinition {
+    /// Decode immutable strings directly into semantic fields, without encoded staging.
+    pub async fn decode_reader(reader: &mut dyn super::IoReader) -> Result<Self, String> {
+        use super::decode::AssetReader;
+        async fn text(input: &mut AssetReader<'_>) -> Result<String, String> {
+            let length = input.u32().await? as usize;
+            input.text(length).await
+        }
+        let mut input = AssetReader::new(reader);
+        if input.array::<8>().await? != *b"IPPH\x03\0\0\0" {
+            return Err("Unsupported shader definition".into());
+        }
+        let recipe = ShaderRecipe {
+            features: input.u32().await?,
+            backend: text(&mut input).await?,
+        };
+        let required_attributes = input.u32().await?;
+        let mut definition = Self {
+            recipe,
+            required_attributes,
+            ..Default::default()
+        };
+        let count = input.u32().await?;
+        for _ in 0..count {
+            let name = text(&mut input).await?;
+            let kind = ShaderParameterKind::from_tag(input.u8().await?)?;
+            if definition.parameters.insert(name, kind).is_some() {
+                return Err("Duplicate shader parameter".into());
+            }
+        }
+        let count = input.u32().await?;
+        for _ in 0..count {
+            let backend = text(&mut input).await?;
+            let source = ShaderBackendSource {
+                vertex: text(&mut input).await?,
+                fragment: text(&mut input).await?,
+                paint: text(&mut input).await?,
+            };
+            if definition.backends.insert(backend, source).is_some() {
+                return Err("Duplicate shader backend".into());
+            }
+        }
+        input.finish().await?;
+        definition.validate()?;
+        Ok(definition)
     }
 }

@@ -13,6 +13,7 @@ export async function instantiate(path) {
         "ipp_presentation",
         "ipp_diagnostics",
         "ipp_profiling",
+        "ipp_tasks",
       ].includes(item.module),
     );
     assert.equal(item.kind, "function");

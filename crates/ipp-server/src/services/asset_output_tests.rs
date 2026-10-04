@@ -1,39 +1,33 @@
 use super::*;
 use ipp_core::services::io::IoWriteJob;
-use std::task::Wake;
-
-struct WriterWake(std::thread::Thread);
-
-impl Wake for WriterWake {
-    fn wake(self: Arc<Self>) {
-        self.0.unpark();
-    }
-}
+use ipp_host_session::services::task_scheduler::TaskSchedulerService;
 
 fn finish(mut job: IoWriteJob<NativeFileIoWriter>) -> Result<(), String> {
-    let waker = Waker::from(Arc::new(WriterWake(std::thread::current())));
-    let mut cx = Context::from_waker(&waker);
-    loop {
-        match job.poll(&mut cx) {
-            Poll::Ready(result) => return result,
-            Poll::Pending => std::thread::park_timeout(std::time::Duration::from_secs(2)),
-        }
-    }
+    futures_lite::future::block_on(std::future::poll_fn(|cx| job.poll(cx)))
 }
 
 #[test]
 fn staged_file_publication_replaces_only_completed_output() {
+    let tasks = TaskSchedulerService::new();
     let destination = std::env::temp_dir().join(format!("ipp-output-{}.ippw", std::process::id()));
     std::fs::write(&destination, b"previous").unwrap();
     let bytes = vec![42; 180_000];
     finish(IoWriteJob::new(
         bytes.clone(),
-        NativeFileIoWriter::new(&destination).unwrap(),
+        futures_lite::future::block_on(NativeFileIoWriter::new(
+            &destination,
+            tasks.schedulers().io(),
+        ))
+        .unwrap(),
     ))
     .unwrap();
     assert_eq!(std::fs::read(&destination).unwrap(), bytes);
-    let mut cancelled = NativeFileIoWriter::new(&destination).unwrap();
-    let mut cx = Context::from_waker(Waker::noop());
+    let mut cancelled = futures_lite::future::block_on(NativeFileIoWriter::new(
+        &destination,
+        tasks.schedulers().io(),
+    ))
+    .unwrap();
+    let mut cx = Context::from_waker(std::task::Waker::noop());
     let _ = cancelled.poll_write(&mut cx, b"partial");
     cancelled.abort();
     drop(cancelled);
@@ -43,13 +37,18 @@ fn staged_file_publication_replaces_only_completed_output() {
 
 #[test]
 fn failed_publication_preserves_destination() {
+    let tasks = TaskSchedulerService::new();
     let directory =
         std::env::temp_dir().join(format!("ipp-output-directory-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
     assert!(
         finish(IoWriteJob::new(
             vec![1, 2, 3],
-            NativeFileIoWriter::new(&directory).unwrap()
+            futures_lite::future::block_on(NativeFileIoWriter::new(
+                &directory,
+                tasks.schedulers().io()
+            ))
+            .unwrap()
         ))
         .is_err()
     );
@@ -59,6 +58,7 @@ fn failed_publication_preserves_destination() {
 
 #[test]
 fn authored_world_state_round_trips_through_native_file_publication() {
+    let tasks = TaskSchedulerService::new();
     use ipp_core::services::world_serialization::WorldPersistenceLimits;
     use ipp_core::{Batch, Command, ComponentValue, EntityRef, HostRuntime, WorldCreateOptions};
     let limits = WorldPersistenceLimits::default();
@@ -99,7 +99,11 @@ fn authored_world_state_round_trips_through_native_file_publication() {
         std::env::temp_dir().join(format!("ipp-world-round-trip-{}.ippw", std::process::id()));
     finish(IoWriteJob::new(
         captured,
-        NativeFileIoWriter::new(&destination).unwrap(),
+        futures_lite::future::block_on(NativeFileIoWriter::new(
+            &destination,
+            tasks.schedulers().io(),
+        ))
+        .unwrap(),
     ))
     .unwrap();
     let bytes = std::fs::read(&destination).unwrap();

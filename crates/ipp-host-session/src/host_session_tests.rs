@@ -5,7 +5,10 @@ struct TestPlatform;
 impl HostServices for TestPlatform {
     const NAME: &'static str = "test";
 
-    fn initialize(_world: &mut ipp_core::HostRuntime) -> Result<Self, String> {
+    fn initialize(
+        _world: &mut ipp_core::HostRuntime,
+        _schedulers: &crate::services::task_scheduler::TaskSchedulers,
+    ) -> Result<Self, String> {
         Ok(Self)
     }
 
@@ -23,7 +26,10 @@ struct ResourceProgressPlatform {
 impl HostServices for ResourceProgressPlatform {
     const NAME: &'static str = "resource-progress-test";
 
-    fn initialize(_: &mut ipp_core::HostRuntime) -> Result<Self, String> {
+    fn initialize(
+        _: &mut ipp_core::HostRuntime,
+        _schedulers: &crate::services::task_scheduler::TaskSchedulers,
+    ) -> Result<Self, String> {
         Ok(Self::default())
     }
 
@@ -184,7 +190,10 @@ struct PresentationPlatform {
 impl HostServices for PresentationPlatform {
     const NAME: &'static str = "presentation-test";
 
-    fn initialize(_: &mut ipp_core::HostRuntime) -> Result<Self, String> {
+    fn initialize(
+        _: &mut ipp_core::HostRuntime,
+        _schedulers: &crate::services::task_scheduler::TaskSchedulers,
+    ) -> Result<Self, String> {
         Ok(Self {
             failing: None,
             input_failure: None,

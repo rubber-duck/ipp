@@ -547,6 +547,35 @@ export async function recoverTextureContext(beforeLabel: string): Promise<{
   };
 }
 
+/** Restore the surface without waiting for a pending source to finish loading. */
+export async function beginTextureRecovery(): Promise<void> {
+  const state = requireActive();
+  const testing = presentationTesting(state.presentation.diagnostics);
+  testing.loseContext();
+  await compositorBarrier();
+  testing.restoreContext();
+  await recoverRestoredContext(state.presentation);
+}
+
+/** Observe a partially delivered source after at least one GPU row was uploaded. */
+export async function inspectPartialTextureRecovery(): Promise<AssetResourceSnapshot> {
+  const state = requireActive();
+  const deadline = performance.now() + 10_000;
+  for (;;) {
+    const inspection = await state.client.inspect();
+    const resource = inspection.resources.find(
+      (candidate) => candidate.source === state.sources.checker,
+    );
+    if (resource?.status === "failed")
+      throw new Error(resource.error ?? "partial texture failed");
+    if (resource?.status === "progress" && (resource.completed ?? 0n) >= 32768n)
+      return resource;
+    if (performance.now() >= deadline)
+      throw new Error("texture never consumed its first transport chunk");
+    await state.client.waitForFrame(inspection.tick);
+  }
+}
+
 /** A changed HTTP endpoint must fail recovery while preserving logical identity. */
 export async function rejectedTextureRecovery(): Promise<{
   before: AssetResourceSnapshot;

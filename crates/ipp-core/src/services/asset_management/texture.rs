@@ -113,9 +113,38 @@ impl crate::services::asset_management::Asset for TextureAsset {
 
 /// Construct a headless decoder; graphics Hosts may register their own loader.
 pub fn cpu_texture_loader() -> impl super::AssetLoader<Data = TextureAsset> {
-    super::BufferedAssetLoader::new(move |bytes| {
-        TextureAsset::decode(bytes).map_err(|error| error.to_string())
+    super::AsyncAssetLoader::decode(|mut reader| async move {
+        TextureAsset::decode_reader(&mut *reader).await
     })
+}
+
+impl TextureAsset {
+    /// Decode private CPU pixels without retaining an encoded source copy.
+    pub async fn decode_reader(reader: &mut dyn super::IoReader) -> Result<Self, String> {
+        let mut decoder = TextureDecoder::new();
+        let info = decoder.read_header(reader).await?;
+        let mut pixels = Vec::new();
+        pixels
+            .try_reserve_exact(info.pixel_bytes as usize)
+            .map_err(|error| error.to_string())?;
+        let mut offset = 0;
+        let mut budget = super::decode::DecodeBudget::default();
+        while offset < info.pixel_bytes as usize {
+            let end = (info.pixel_bytes as usize).min(offset + (64 << 10));
+            pixels.resize(end, 0);
+            let count = decoder
+                .read_pixels(reader, &mut pixels[offset..end])
+                .await?;
+            offset += count;
+            budget.advance(count).await;
+        }
+        decoder.read_pixels(reader, &mut []).await?;
+        Ok(Self {
+            width: info.width,
+            height: info.height,
+            pixels,
+        })
+    }
 }
 
 /// Validated streaming RGBA8 dimensions and payload size.
@@ -132,8 +161,6 @@ pub struct TextureHeader {
 /// Incremental IPPT framing. Consumers choose CPU storage or GPU row uploads.
 #[derive(Default)]
 pub struct TextureDecoder {
-    header: [u8; 16],
-    header_bytes: usize,
     info: Option<TextureHeader>,
     received: u32,
 }
@@ -141,95 +168,60 @@ pub struct TextureDecoder {
 impl TextureDecoder {
     /// Validate decoded dimensions before allocating a representation.
     pub fn new() -> Self {
-        Self {
-            header: [0; 16],
-            header_bytes: 0,
-            info: None,
-            received: 0,
-        }
+        Self::default()
     }
 
-    /// Read and validate only the fixed-size header.
-    pub fn poll_header(
+    /// Read and validate the fixed header directly from one scoped input window.
+    pub async fn read_header(
         &mut self,
-        reader: &mut dyn crate::services::asset_management::IoReader,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<TextureHeader, String>> {
-        use std::task::Poll;
+        reader: &mut dyn super::IoReader,
+    ) -> Result<TextureHeader, String> {
         if let Some(info) = self.info {
-            return Poll::Ready(Ok(info));
+            return Ok(info);
         }
-        while self.header_bytes < 16 {
-            match reader.poll_read(cx, &mut self.header[self.header_bytes..]) {
-                Poll::Pending => return Poll::Pending,
-                Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
-                Poll::Ready(Ok(0)) => return Poll::Ready(Err("Incomplete IPPT header".into())),
-                Poll::Ready(Ok(n)) if n <= 16 - self.header_bytes => self.header_bytes += n,
-                Poll::Ready(Ok(_)) => return Poll::Ready(Err("Invalid reader byte count".into())),
-            }
-        }
-        let read = |offset| {
-            u32::from_le_bytes(
-                self.header[offset..offset + 4]
-                    .try_into()
-                    .expect("fixed header"),
-            )
-        };
-        if &self.header[..4] != b"IPPT" || read(4) != 3 {
-            return Poll::Ready(Err("InvalidAsset: unsupported IPPT header".into()));
+        let mut input = super::decode::AssetReader::new(reader);
+        let header = input.array::<16>().await?;
+        let read = |offset| u32::from_le_bytes(header[offset..offset + 4].try_into().unwrap());
+        if &header[..4] != b"IPPT" || read(4) != 3 {
+            return Err("InvalidAsset: unsupported IPPT header".into());
         }
         let width = read(8);
         let height = read(12);
-        let pixels = match pixel_bytes(width, height) {
-            Ok(bytes) => bytes,
-            Err(error) => return Poll::Ready(Err(error.to_string())),
-        };
         let info = TextureHeader {
             width,
             height,
-            pixel_bytes: pixels,
+            pixel_bytes: pixel_bytes(width, height).map_err(|error| error.to_string())?,
         };
         self.info = Some(info);
-        Poll::Ready(Ok(info))
+        Ok(info)
     }
 
-    /// Read packed pixels and verify exact EOF after the declared payload.
-    pub fn poll_pixels(
+    /// Copy into the consumer's final storage and verify exact final EOF.
+    pub async fn read_pixels(
         &mut self,
-        reader: &mut dyn crate::services::asset_management::IoReader,
-        cx: &mut std::task::Context<'_>,
+        reader: &mut dyn super::IoReader,
         output: &mut [u8],
-    ) -> std::task::Poll<Result<usize, String>> {
-        use std::task::Poll;
-        let Some(info) = self.info else {
-            return Poll::Ready(Err("Texture header has not been read".into()));
-        };
+    ) -> Result<usize, String> {
+        let info = self.info.ok_or("Texture header has not been read")?;
         if self.received == info.pixel_bytes {
-            return match reader.poll_read(cx, &mut [0]) {
-                Poll::Ready(Ok(0)) => Poll::Ready(Ok(0)),
-                Poll::Ready(Ok(_)) => {
-                    Poll::Ready(Err("InvalidAsset: trailing texture bytes".into()))
-                }
-                result => result,
-            };
+            super::decode::AssetReader::new(reader).finish().await?;
+            return Ok(0);
         }
         let length = output
             .len()
-            .min((info.pixel_bytes - self.received) as usize);
-        if length == 0 {
-            return Poll::Ready(Err("Texture consumer supplied an empty buffer".into()));
+            .min((info.pixel_bytes - self.received) as usize)
+            .min(64 << 10);
+        let minimum = std::num::NonZeroUsize::new(length)
+            .ok_or("Texture consumer supplied an empty buffer")?;
+        let window = reader.read(minimum).await?;
+        let count = window.bytes().len().min(length);
+        if count == 0 {
+            return Err("InvalidAsset: incomplete texture pixels".into());
         }
-        match reader.poll_read(cx, &mut output[..length]) {
-            Poll::Ready(Ok(0)) => {
-                Poll::Ready(Err("InvalidAsset: incomplete texture pixels".into()))
-            }
-            Poll::Ready(Ok(n)) if n <= length => {
-                self.received += n as u32;
-                Poll::Ready(Ok(n))
-            }
-            Poll::Ready(Ok(_)) => Poll::Ready(Err("Invalid reader byte count".into())),
-            result => result,
-        }
+        output[..count].copy_from_slice(&window.bytes()[..count]);
+        window.consume(count)?;
+        self.received += count as u32;
+        Ok(count)
     }
 }
 

@@ -1,6 +1,6 @@
 //! Generated parameter adapters execute against real Host-owned Systems and services.
 
-use ipp_core::{HostRuntime, systems::*};
+use ipp_core::systems::*;
 use std::{
     marker::PhantomData,
     sync::{Arc, Mutex},
@@ -168,7 +168,7 @@ fn typed_parameters_generate_order_and_borrow_independent_mutable_services() {
         bindings,
         count: 0,
     }));
-    let mut host = HostRuntime::with_system_factories(factories).unwrap();
+    let mut host = crate::support::task_scheduler::with_factories(factories).unwrap();
     let one = host
         .create_world(
             Default::default(),
@@ -205,7 +205,7 @@ fn optional_parameter_absence_is_valid_but_required_metadata_rejects_it() {
             absent: output.clone(),
         }
     }));
-    let mut host = HostRuntime::with_system_factories(factories).unwrap();
+    let mut host = crate::support::task_scheduler::with_factories(factories).unwrap();
     let world = host
         .create_world(Default::default(), &[SystemId("test.optional")])
         .unwrap();
@@ -218,7 +218,7 @@ fn optional_parameter_absence_is_valid_but_required_metadata_rejects_it() {
         seen: Seen::default(),
     }));
     assert!(matches!(
-        HostRuntime::with_system_factories(factories),
+        crate::support::task_scheduler::with_factories(factories),
         Err(SystemScheduleError::MissingRequired {
             required: Source::ID,
             ..
@@ -234,7 +234,7 @@ fn duplicate_service_parameters_reject_during_initialization() {
             bindings,
         }
     }));
-    let mut host = HostRuntime::with_system_factories(factories).unwrap();
+    let mut host = crate::support::task_scheduler::with_factories(factories).unwrap();
     assert!(
         host.create_world(Default::default(), &[SystemId("test.duplicate")])
             .is_err()
@@ -249,7 +249,7 @@ fn extension_system_state_round_trips_through_generic_world_file_sections() {
         bindings,
         count: 0,
     }));
-    let mut host = HostRuntime::with_system_factories(factories).unwrap();
+    let mut host = crate::support::task_scheduler::with_factories(factories).unwrap();
     let original = host
         .create_world(Default::default(), &[Source::ID])
         .unwrap();
@@ -442,7 +442,7 @@ mod effective_observations {
                 seen: observed_values.clone(),
             },
         ));
-        let mut host = HostRuntime::with_system_factories(factories).unwrap();
+        let mut host = crate::support::task_scheduler::with_factories(factories).unwrap();
         let id = host
             .create_world(
                 Default::default(),

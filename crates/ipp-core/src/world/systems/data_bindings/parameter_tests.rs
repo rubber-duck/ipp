@@ -16,6 +16,7 @@ use crate::{
 #[test]
 fn numeric_parameter_invalidation_reads_the_live_typed_store_and_runtime_clone_is_empty() {
     let mut host = HostRuntime::new();
+    crate::test_task_scheduler::install(&mut host);
     let world = host
         .create_world(
             WorldLimits::default(),
@@ -98,6 +99,9 @@ fn numeric_parameter_invalidation_reads_the_live_typed_store_and_runtime_clone_i
             ],
         })
         .unwrap();
+    host.progress_assets();
+    crate::test_task_scheduler::poll_ready();
+    host.progress_assets();
     host.frame(0.0).unwrap();
     let mut context = host.world_mut(world).unwrap();
     let entity = context.lookup_id("binding").unwrap();
@@ -146,6 +150,9 @@ fn numeric_parameter_invalidation_reads_the_live_typed_store_and_runtime_clone_i
     );
     assert!(!before.dirty);
     drop(context);
+    host.progress_assets();
+    crate::test_task_scheduler::poll_ready();
+    host.progress_assets();
     host.frame(0.0).unwrap();
     let context = host.world_mut(world).unwrap();
     let after = context

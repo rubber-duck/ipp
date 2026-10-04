@@ -193,6 +193,8 @@ pub struct HostRequest {
 /// Host-visible discovery and lifecycle. World authoring remains in ordinary requests.
 #[derive(Clone, Debug, PartialEq)]
 pub enum HostRequestBody {
+    /// Authorized original source and explicit typed semantic export controls.
+    AssetExport(crate::asset_export::AssetExportRequest),
     /// Optional Host measurement controls; production explicitly reports unavailability.
     Profile(crate::profiling::ProfileRequest),
     /// List the next page of published Worlds in identity order.
@@ -262,13 +264,6 @@ pub enum HostRequestBody {
     SaveWorld {
         /// Originating connection-owned World session.
         session: u64,
-    },
-    /// Read an ordered chunk of a ready save; Pending is a normal result.
-    ReadWorldSave {
-        /// Connection-scoped transfer identity.
-        job: u64,
-        /// Expected byte offset in the complete file.
-        offset: u64,
     },
     /// Reserve a private inbound file transfer; it does not create a World.
     BeginWorldLoad {
@@ -340,6 +335,8 @@ pub struct HostResponse {
 /// Host results have no simulation tick and do not imply resource/render readiness.
 #[derive(Clone, Debug, PartialEq)]
 pub enum HostResponseBody {
+    /// Authority or delivery reference for an explicit asset export operation.
+    AssetExport(crate::asset_export::AssetExportResponse),
     /// Optional profiling status or an immutable diagnostic artifact page.
     Profile(crate::profiling::ProfileResponse),
     /// Current root configuration; not a presentation fence.
@@ -426,16 +423,12 @@ pub enum HostResponseBody {
         /// Connection-scoped transfer identity.
         job: u64,
     },
-    /// Ordered bytes of a completed file, with exact total length.
-    SaveChunk {
-        /// Connection-scoped transfer identity.
-        job: u64,
-        /// Expected byte offset in the complete file.
-        offset: u64,
-        /// Exact completed file byte length.
-        total: u64,
-        /// Owned payload or expected complete byte length.
-        bytes: Vec<u8>,
+    /// Detached completed output published through the common bulk data plane.
+    Read {
+        /// Connection-owned immutable read reference.
+        reference: crate::bulk_read::BulkReadReference,
+        /// Exact length when known.
+        length: Option<u64>,
     },
 }
 
@@ -447,6 +440,7 @@ pub fn decode_host_request(bytes: &[u8], connection: u64) -> Result<HostRequest,
         return Err(ProtocolError::Malformed("zero Host request"));
     }
     let body = match reader.u8()? {
+        HOST_REQUEST_ASSET_EXPORT => HostRequestBody::AssetExport(reader.asset_export_request()?),
         HOST_REQUEST_LIST_WORLDS => HostRequestBody::ListWorlds {
             after: reader.u64()?,
         },
@@ -501,10 +495,6 @@ pub fn decode_host_request(bytes: &[u8], connection: u64) -> Result<HostRequest,
         },
         HOST_REQUEST_SAVE_WORLD => HostRequestBody::SaveWorld {
             session: reader.u64()?,
-        },
-        HOST_REQUEST_READ_WORLD_SAVE => HostRequestBody::ReadWorldSave {
-            job: reader.u64()?,
-            offset: reader.u64()?,
         },
         HOST_REQUEST_BEGIN_WORLD_LOAD => HostRequestBody::BeginWorldLoad {
             bytes: reader.u64()?,
@@ -573,6 +563,10 @@ pub fn encode_host_request(request: &HostRequest) -> Result<Vec<u8>, ProtocolErr
         return Err(ProtocolError::Malformed("zero Host request"));
     }
     match &request.body {
+        HostRequestBody::AssetExport(body) => {
+            writer.u8(HOST_REQUEST_ASSET_EXPORT)?;
+            writer.asset_export_request(body)?;
+        }
         HostRequestBody::ListWorlds {
             after,
         } => {
@@ -679,14 +673,6 @@ pub fn encode_host_request(request: &HostRequest) -> Result<Vec<u8>, ProtocolErr
         } => {
             writer.u8(HOST_REQUEST_SAVE_WORLD)?;
             writer.u64(*session)?;
-        }
-        HostRequestBody::ReadWorldSave {
-            job,
-            offset,
-        } => {
-            writer.u8(HOST_REQUEST_READ_WORLD_SAVE)?;
-            writer.u64(*job)?;
-            writer.u64(*offset)?;
         }
         HostRequestBody::BeginWorldLoad {
             bytes,
@@ -798,6 +784,10 @@ fn write_host_response(response: &HostResponse, writer: &mut Writer) -> Result<(
     writer.u64(response.connection)?;
     writer.u64(response.request_id)?;
     match &response.body {
+        HostResponseBody::AssetExport(body) => {
+            writer.u8(HOST_RESPONSE_ASSET_EXPORT)?;
+            writer.asset_export_response(body)?;
+        }
         HostResponseBody::RootBinding(binding) => {
             writer.u8(HOST_RESPONSE_ROOT_BINDING)?;
             writer.u8(u8::from(binding.is_some()))?;
@@ -922,17 +912,17 @@ fn write_host_response(response: &HostResponse, writer: &mut Writer) -> Result<(
             writer.u8(HOST_RESPONSE_TRANSFER)?;
             writer.u64(*job)?;
         }
-        HostResponseBody::SaveChunk {
-            job,
-            offset,
-            total,
-            bytes,
+        HostResponseBody::Read {
+            reference,
+            length,
         } => {
-            writer.u8(HOST_RESPONSE_SAVE_CHUNK)?;
-            writer.u64(*job)?;
-            writer.u64(*offset)?;
-            writer.u64(*total)?;
-            writer.bytes(bytes)?;
+            writer.u8(HOST_RESPONSE_READ)?;
+            writer.u64(reference.connection)?;
+            writer.u64(reference.read)?;
+            writer.u8(u8::from(length.is_some()))?;
+            if let Some(length) = length {
+                writer.u64(*length)?;
+            }
         }
     }
     Ok(())
@@ -943,6 +933,9 @@ pub fn decode_host_response(bytes: &[u8], connection: u64) -> Result<HostRespons
     let mut reader = host_reader(bytes, HOST_RESPONSE_MAGIC, connection)?;
     let request_id = reader.u64()?;
     let body = match reader.u8()? {
+        HOST_RESPONSE_ASSET_EXPORT => {
+            HostResponseBody::AssetExport(reader.asset_export_response()?)
+        }
         HOST_RESPONSE_ROOT_BINDING => HostResponseBody::RootBinding(if reader.boolean()? {
             Some(reader.root_binding()?)
         } else {
@@ -1035,11 +1028,16 @@ pub fn decode_host_response(bytes: &[u8], connection: u64) -> Result<HostRespons
         HOST_RESPONSE_TRANSFER => HostResponseBody::Transfer {
             job: reader.u64()?,
         },
-        HOST_RESPONSE_SAVE_CHUNK => HostResponseBody::SaveChunk {
-            job: reader.u64()?,
-            offset: reader.u64()?,
-            total: reader.u64()?,
-            bytes: reader.bytes()?,
+        HOST_RESPONSE_READ => HostResponseBody::Read {
+            reference: crate::bulk_read::BulkReadReference {
+                connection: reader.u64()?,
+                read: reader.u64()?,
+            },
+            length: if reader.boolean()? {
+                Some(reader.u64()?)
+            } else {
+                None
+            },
         },
         tag => return Err(ProtocolError::Unsupported(tag)),
     };

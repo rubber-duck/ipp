@@ -114,7 +114,7 @@ fn named(host: &mut HostRuntime, name: &str, systems: Vec<SystemId>) -> WorldId 
 }
 
 fn fixture() -> (HostRuntime, WorldId, [WorldId; 2]) {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let root = named(&mut host, "root", select(&[ATTACHMENTS]));
     let first = named(&mut host, "left", select(&[CAMERA, CONSTRAINTS]));
     entity(
@@ -282,7 +282,7 @@ fn graph_local_nodes_preserve_sibling_copies_and_acknowledge_every_independent_w
 
 #[test]
 fn graph_byte_budget_bounds_the_combined_cut_and_decoded_nodes() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let root = named(&mut host, "budget-root", select(&[ATTACHMENTS]));
     let limits = WorldPersistenceLimits {
         max_bytes: 50_000,
@@ -418,7 +418,7 @@ fn descriptor_bounds_names_and_failed_graph_validation_publish_nothing() {
 
 #[test]
 fn selected_none_world_survives_graph_load_without_extra_factories() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let root = host
         .create_world_with_options(
             Default::default(),
@@ -454,7 +454,7 @@ fn selected_none_world_survives_graph_load_without_extra_factories() {
 
 #[test]
 fn camera_output_references_remap_exact_producers_without_restoring_root_presentation() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let root = named(&mut host, "scene", select(&[ATTACHMENTS, CAMERA, SURFACE]));
     let child = named(&mut host, "camera-child", select(&[CAMERA, CONSTRAINTS]));
     let root_camera = entity(
@@ -648,7 +648,7 @@ fn late_system_restore_failure_tears_down_all_private_worlds_without_publishing_
     let probe = Arc::new(DurableProbe::default());
     let mut factories = compiled_system_factories();
     factories.push(Arc::new(DurableFactory(probe.clone())));
-    let mut host = HostRuntime::with_system_factories(factories).unwrap();
+    let mut host = crate::support::task_scheduler::with_factories(factories).unwrap();
     let durable = SystemId("fixture.graph-durable");
     let root = named(
         &mut host,
@@ -758,7 +758,7 @@ fn real_canvas_graph_restores_selected_outputs_density_paint_and_sparse_systems(
         );
     }
 
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let mut worlds = Vec::new();
     for (name, systems, canvas) in [
         (

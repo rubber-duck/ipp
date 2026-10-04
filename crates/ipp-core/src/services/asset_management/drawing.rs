@@ -1,6 +1,6 @@
 //! Paint-ordered solid drawing layers over shared quadratic contours.
 
-use super::{Asset, AssetLoader, AssetTypeId, BufferedAssetLoader, quadratic::Decoder};
+use super::{Asset, AssetLoader, AssetTypeId, AsyncAssetLoader, quadratic::Decoder};
 use crate::ErrorReason;
 
 /// Compiled identity for portable IPPD drawing assets.
@@ -130,7 +130,56 @@ impl Asset for DrawingAsset {
 
 /// Construct a streaming buffered CPU loader.
 pub fn cpu_drawing_loader() -> impl AssetLoader<Data = DrawingAsset> {
-    BufferedAssetLoader::new(|bytes| DrawingAsset::decode(bytes).map_err(|error| error.to_string()))
+    AsyncAssetLoader::decode(
+        |mut reader| async move { DrawingAsset::decode_reader(&mut *reader).await },
+    )
+}
+
+impl DrawingAsset {
+    /// Decode IPPD layers and contours directly into their private final vectors.
+    pub async fn decode_reader(reader: &mut dyn super::IoReader) -> Result<Self, String> {
+        use super::decode::{AssetReader, push};
+        let mut input = AssetReader::new(reader);
+        if input.array::<4>().await? != *b"IPPD" || input.u32().await? != 1 {
+            return Err("Invalid drawing header".into());
+        }
+        let view_box = input.bounds().await?;
+        let bounds = input.bounds().await?;
+        let quadratic_tolerance = input.f32().await?;
+        if quadratic_tolerance <= 0.0 {
+            return Err("Invalid drawing tolerance".into());
+        }
+        let layer_count = input.u32().await?;
+        let mut layers = Vec::new();
+        for _ in 0..layer_count {
+            let color = input.array().await?;
+            let fill_rule = match input.u8().await? {
+                0 => FillRule::NonZero,
+                1 => FillRule::EvenOdd,
+                _ => return Err("Invalid drawing fill rule".into()),
+            };
+            if input.array::<3>().await? != [0; 3] {
+                return Err("Invalid drawing reserved bytes".into());
+            }
+            let contour_count = input.u32().await?;
+            let contours = super::quadratic::read_contours(&mut input, contour_count).await?;
+            push(
+                &mut layers,
+                DrawingLayer {
+                    color,
+                    fill_rule,
+                    contours,
+                },
+            )?;
+        }
+        input.finish().await?;
+        Ok(Self {
+            view_box,
+            bounds,
+            quadratic_tolerance,
+            layers,
+        })
+    }
 }
 
 #[cfg(test)]

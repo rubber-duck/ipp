@@ -12,6 +12,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut file_root = None;
     let mut file_prefix = None;
     let mut asset_cache_bytes = None;
+    let mut http_prefixes = Vec::new();
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -27,6 +28,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         .ok_or("--file-prefix requires a literal prefix")?,
                 )
             }
+            "--http-prefix" => {
+                http_prefixes.push(
+                    args.next()
+                        .ok_or("--http-prefix requires a literal prefix")?,
+                );
+            }
             "--asset-cache-bytes" => {
                 asset_cache_bytes = Some(
                     args.next()
@@ -36,7 +43,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
             "--help" | "-h" => {
                 println!(
-                    "ipp-server [--bind LOOPBACK_IP:PORT] [--file-root DIRECTORY --file-prefix PREFIX] [--asset-cache-bytes BYTES]\n\nBinary IPP WebSocket sessions; use port 0 for an ephemeral endpoint. The Host keeps up to 64 MiB of unused completed assets by default; --asset-cache-bytes sets that target and 0 evicts on release."
+                    "ipp-server [--bind LOOPBACK_IP:PORT] [--file-root DIRECTORY --file-prefix PREFIX] [--asset-cache-bytes BYTES] [--http-prefix PREFIX]...\n\nBinary IPP WebSocket sessions; use port 0 for an ephemeral endpoint. The Host keeps up to 64 MiB of unused completed assets by default; --asset-cache-bytes sets that target and 0 evicts on release."
                 );
                 return Ok(());
             }
@@ -54,14 +61,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             if prefix.is_empty() {
                 return Err("--file-prefix must not be empty".into());
             }
-            let source = ipp_server::services::io::FileSystemIoSource::new(&prefix, root, false)?;
-            Some((prefix, source))
+            Some((prefix, std::path::PathBuf::from(root)))
         }
         _ => return Err("--file-root and --file-prefix must be provided together".into()),
     };
     let listener = TcpListener::bind(bind)?;
     let options = ipp_server::websocket::ServeOptions {
         file_access,
+        http_prefixes,
         asset_cache_bytes,
     };
     ipp_server::websocket::serve(listener, options, |address| {

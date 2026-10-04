@@ -682,6 +682,15 @@
       "npm"
     ]
   },
+  "dist/packages/ipp-client/tests/bulk-reads.test.js": {
+    "requirements": ["node", "npm"],
+    "builds": ["typescript"],
+    "sourceRoots": ["packages/ipp-client/tests/bulk-reads.test.ts", "packages/ipp-client/src/bulk-reads.ts"]
+  },
+  "dist/packages/ipp-client/tests/buffer-source.test.js": {
+    "builds": ["typescript"],
+    "requirements": ["node", "npm"]
+  },
   "dist/packages/ipp-client/tests/asset-sources.test.js": {
     "builds": [
       "typescript"

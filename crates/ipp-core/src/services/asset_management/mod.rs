@@ -19,14 +19,19 @@ pub use publication::AssetPublicationId;
 
 mod resource;
 
-mod buffered;
+mod load_scheduler;
+pub use load_scheduler::{AssetLoadScheduler, AssetLoadTask};
 
+mod loader;
+pub use loader::{AssetLoadFailure, AsyncAssetLoader};
+
+pub mod decode;
+
+pub mod export;
 pub mod writer;
 
 /// Shared private geometry builders and optional procedural source recipes.
 pub mod builtin;
-
-pub use buffered::BufferedAssetLoader;
 
 pub use resource::AssetProvider;
 
@@ -171,6 +176,12 @@ pub trait Asset: Any {
     /// Decoded representation for headless validation and CPU consumers.
     fn decoded(&self) -> &dyn Any;
 
+    /// Share an actual immutable CPU payload for an owned encoding operation.
+    /// Graphics metadata alone never implies a complete CPU representation.
+    fn cpu_snapshot(&self) -> Option<std::rc::Rc<dyn Any>> {
+        None
+    }
+
     /// Compact CPU information available independently of bulk decoded streams.
     fn metadata(&self) -> &dyn Any {
         self.decoded()
@@ -204,12 +215,11 @@ pub trait AssetLoader: 'static {
         None
     }
 
-    /// Consume available input without blocking or retaining borrowed buffers.
-    fn poll_load(
-        &mut self,
-        reader: &mut dyn IoReader,
-        cx: &mut Context<'_>,
-    ) -> Poll<Result<Self::Data, String>>;
+    /// Hand one reader to the owned asynchronous loading operation.
+    fn start_load(&mut self, reader: Box<dyn IoReader>) -> Result<(), String>;
+
+    /// Poll with the owning Host task's waker, without borrowing service state.
+    fn poll_load(&mut self, cx: &mut Context<'_>) -> Poll<Result<Self::Data, String>>;
 }
 
 /// Joints one skeleton, pose, skin binding or pill part may address.

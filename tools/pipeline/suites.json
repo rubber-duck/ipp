@@ -587,6 +587,8 @@
     "description": "Generated client codecs, events and correlation",
     "files": [
       "dist/packages/ipp-client/tests/asset-sources.test.js",
+      "dist/packages/ipp-client/tests/buffer-source.test.js",
+      "dist/packages/ipp-client/tests/bulk-reads.test.js",
       "dist/packages/ipp-client/tests/gui-semantics.test.js",
       "dist/packages/ipp-client/tests/profile-worker.test.js",
       "dist/packages/ipp-client/tests/profiling.test.js",
@@ -726,14 +728,75 @@
       "tests/integration/multiplex.test.ts",
       "tests/integration/worker-startup.ts",
       "tests/integration/worker-startup.test.ts",
-      "tools/build_transports.mjs"
+      "tests/integration/task-scheduler.ts",
+      "tests/integration/task-scheduler.test.ts",
+      "crates/ipp-host-session/src/services/task_scheduler/",
+      "tools/build_transports.mjs",
+      "crates/ipp-host-session/src/services/bulk_read.rs",
+      "crates/ipp-host-session/src/services/connection/bulk_reads.rs",
+      "crates/ipp-host-session/src/services/connection/bulk_reads_tests.rs",
+      "crates/ipp-protocol/src/bulk_read.rs",
+      "packages/ipp-client/src/bulk-reads.ts",
+      "tests/integration/scenarios/bulk-reads.ts",
+      "tests/integration/bulk-read-worker.ts",
+      "tests/integration/bulk-read-worker.test.ts",
+      "crates/ipp-host-session/src/services/connection/bulk_read_testing.rs"
     ],
     "commands": [
       {
-        "name": "worker-startup",
-        "command": ["@node", "--test", "target/multiplex-tests/worker-startup.test.js"],
-        "builds": ["browser:headless", "transport-fixtures"],
+        "name": "bulk-worker",
+        "command": ["@node", "--test", "target/multiplex-tests/bulk-read-worker.test.js"],
+        "builds": ["browser:render-instrumentation", "transport-fixtures"],
         "requirements": ["node", "npm", "browser"]
+      },
+      {
+        "name": "bulk-ownership",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "ipp-host-session",
+          "--locked",
+          "bulk_reads::"
+        ],
+        "builds": [],
+        "requirements": [
+          "rust"
+        ]
+      },
+      {
+        "name": "task-scheduler",
+        "command": [
+          "@node",
+          "--test",
+          "target/multiplex-tests/task-scheduler.test.js"
+        ],
+        "builds": [
+          "browser:render-instrumentation",
+          "transport-fixtures"
+        ],
+        "requirements": [
+          "node",
+          "npm",
+          "browser"
+        ]
+      },
+      {
+        "name": "worker-startup",
+        "command": [
+          "@node",
+          "--test",
+          "target/multiplex-tests/worker-startup.test.js"
+        ],
+        "builds": [
+          "browser:headless",
+          "transport-fixtures"
+        ],
+        "requirements": [
+          "node",
+          "npm",
+          "browser"
+        ]
       },
       {
         "name": "transports",
@@ -2851,6 +2914,128 @@
           "shared-host"
         ],
         "requirements": [
+          "node",
+          "npm",
+          "browser",
+          "gles"
+        ]
+      }
+    ]
+  },
+  "async-io": {
+    "description": "Native HTTP scheduling and generated-buffer source ownership through real Host/client IO",
+    "sourceRoots": [
+      "tests/integration/generated-buffers.ts",
+      "tests/integration/generated-buffers.test.ts",
+      "packages/ipp-client/src/buffer-source.ts",
+      "packages/ipp-client/src/resource-worker.ts",
+      "crates/ipp-core/src/services/io/",
+      "crates/ipp-server/src/services/",
+      "tests/integration/native-http.test.ts"
+    ],
+    "commands": [
+      {
+        "name": "generated-buffers",
+        "command": [
+          "@node",
+          "--test",
+          "target/multiplex-tests/generated-buffers.test.js"
+        ],
+        "builds": [
+          "browser:render-instrumentation",
+          "transport-fixtures"
+        ],
+        "requirements": [
+          "node",
+          "npm",
+          "browser"
+        ]
+      },
+      {
+        "name": "native-http",
+        "command": [
+          "@node",
+          "--test",
+          "target/multiplex-tests/native-http.test.js"
+        ],
+        "builds": [
+          "transport-fixtures"
+        ],
+        "requirements": [
+          "node",
+          "npm"
+        ]
+      }
+    ]
+  },
+  "asset-exports": {
+    "description": "Connection-scoped original and semantic CPU/GPU reads through generated clients, real delivery and reloaded images",
+    "sourceRoots": [
+      "crates/ipp-core/src/services/asset_management/export/",
+      "crates/ipp-host-session/src/services/connection/asset_exports.rs",
+      "crates/ipp-host-session/src/services/connection/asset_export_testing.rs",
+      "crates/ipp-protocol/src/asset_export.rs",
+      "crates/ipp-render-gl/src/services/render/service/asset_export.rs",
+      "packages/ipp-client/src/asset-exports.ts",
+      "tests/integration/scenarios/asset-exports.ts",
+      "tests/integration/asset-export-browser.ts",
+      "tests/integration/asset-exports.test.ts"
+    ],
+    "commands": [
+      {
+        "name": "cpu-native",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern=native CPU",
+          "target/multiplex-tests/asset-exports.test.js"
+        ],
+        "builds": [
+          "world-hosts",
+          "transport-fixtures"
+        ],
+        "partitionExcludes": ["target/browser-build/render-instrumentation", "target/gles-host-instrumentation"],
+        "requirements": [
+          "rust",
+          "node",
+          "npm"
+        ]
+      },
+      {
+        "name": "gpu-browser",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern=browser GPU",
+          "target/multiplex-tests/asset-exports.test.js"
+        ],
+        "builds": [
+          "browser:render-instrumentation",
+          "transport-fixtures"
+        ],
+        "partitionExcludes": ["target/gles-host-instrumentation", "target/world-host-build/native"],
+        "requirements": [
+          "rust",
+          "node",
+          "npm",
+          "browser"
+        ]
+      },
+      {
+        "name": "gpu-native",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern=native GPU",
+          "target/multiplex-tests/asset-exports.test.js"
+        ],
+        "builds": [
+          "gles-host-instrumentation",
+          "transport-fixtures"
+        ],
+        "partitionExcludes": ["target/browser-build/render-instrumentation", "target/world-host-build/native"],
+        "requirements": [
+          "rust",
           "node",
           "npm",
           "browser",

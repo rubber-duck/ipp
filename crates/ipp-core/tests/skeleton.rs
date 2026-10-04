@@ -138,7 +138,7 @@ fn set(entity: EntityId, component: u16, offset: usize, value: FieldValue) -> Co
 
 #[test]
 fn rest_inverse_binds_mapping_and_independent_poses_have_stable_buffers() {
-    let mut fixture_host = ipp_core::HostRuntime::new();
+    let mut fixture_host = crate::support::task_scheduler::host();
     let (mut world, a, b) = fixture(&mut fixture_host);
     let identity = camera::model_matrix(&Transform::default()).unwrap();
     assert_eq!(world.skin_palette(a).unwrap(), &[identity, identity]);
@@ -187,7 +187,7 @@ fn repeated_numeric_commits_hide_palettes_until_each_skinning_pass() {
     use ipp_core::components::CustomMaterial;
     use ipp_core::systems::animation::AnimationSystem;
 
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let (mut world, a, b) = fixture(&mut host);
     let report = apply(
         &mut world,
@@ -231,7 +231,7 @@ fn repeated_numeric_commits_hide_palettes_until_each_skinning_pass() {
 
 #[test]
 fn failed_pose_propagation_hides_outputs_and_reuses_buffers_after_recovery() {
-    let mut fixture_host = ipp_core::HostRuntime::new();
+    let mut fixture_host = crate::support::task_scheduler::host();
     let (mut world, entity, _) = fixture(&mut fixture_host);
     let pose_address = world.skeleton_pose(entity).unwrap().as_ptr();
     let palette_address = world.skin_palette(entity).unwrap().as_ptr();
@@ -271,7 +271,7 @@ fn failed_pose_propagation_hides_outputs_and_reuses_buffers_after_recovery() {
 
 #[test]
 fn mesh_and_skeleton_spaces_are_converted_and_deleted_targets_do_not_rebind() {
-    let mut fixture_host = ipp_core::HostRuntime::new();
+    let mut fixture_host = crate::support::task_scheduler::host();
     let (mut world, a, b) = fixture(&mut fixture_host);
     let report = apply(
         &mut world,
@@ -318,7 +318,7 @@ fn mesh_and_skeleton_spaces_are_converted_and_deleted_targets_do_not_rebind() {
 
 #[test]
 fn invalid_override_keeps_neighbor_edits_and_malformed_assets_reject() {
-    let mut fixture_host = ipp_core::HostRuntime::new();
+    let mut fixture_host = crate::support::task_scheduler::host();
     let (mut world, a, _) = fixture(&mut fixture_host);
 
     let report = apply(
@@ -437,7 +437,7 @@ fn joint_overrides(values: &[(u32, Transform)]) -> FieldValue {
 fn shared_geometry_maps_two_final_joint_origins_and_scales_radius_for_both_components() {
     use components::{BoundingGeometry, PickingGeometry};
     use geometry::{GEOMETRY_TYPE, GeometryBounds, GeometryRay, GeometryShape};
-    let mut fixture_host = ipp_core::HostRuntime::new();
+    let mut fixture_host = crate::support::task_scheduler::host();
     let (mut world, a, b) = fixture(&mut fixture_host);
     upload(&mut world, GEOMETRY_TYPE, 50, mapped_geometry());
     let mut commands = Vec::new();
@@ -545,7 +545,7 @@ fn shared_geometry_maps_two_final_joint_origins_and_scales_radius_for_both_compo
 #[test]
 fn mapped_geometry_invalidates_on_skeleton_replacement_until_explicitly_rebound() {
     use components::PickingGeometry;
-    let mut fixture_host = ipp_core::HostRuntime::new();
+    let mut fixture_host = crate::support::task_scheduler::host();
     let (mut world, a, _) = fixture(&mut fixture_host);
     let geometry = PickingGeometry {
         geometry: mapped_geometry(),
@@ -606,7 +606,7 @@ fn mapped_geometry_invalidates_on_skeleton_replacement_until_explicitly_rebound(
 fn generated_bounds_enclose_every_blended_vertex_after_pose_and_nonuniform_scale() {
     use components::BoundingGeometry;
     use geometry::{GeometryBounds, GeometryShapeTransform};
-    let mut fixture_host = ipp_core::HostRuntime::new();
+    let mut fixture_host = crate::support::task_scheduler::host();
     let (mut world, a, _) = fixture(&mut fixture_host);
     apply(
         &mut world,
@@ -764,7 +764,7 @@ fn skeleton_value(world: &ipp_core::WorldContext<'_>, entity: EntityId) -> Skele
 #[test]
 fn rotation_only_override_keeps_pose_translation_and_scale_until_cleared() {
     const ROTATION: u32 = 1;
-    let mut fixture_host = ipp_core::HostRuntime::new();
+    let mut fixture_host = crate::support::task_scheduler::host();
     let (mut world, a, _) = fixture(&mut fixture_host);
     let report = apply(
         &mut world,
@@ -868,7 +868,7 @@ fn rotation_only_override_keeps_pose_translation_and_scale_until_cleared() {
 fn partial_joint_overrides_survive_world_persistence() {
     use ipp_core::services::world_serialization::{WorldLoadOptions, WorldPersistenceLimits};
 
-    let mut fixture_host = ipp_core::HostRuntime::new();
+    let mut fixture_host = crate::support::task_scheduler::host();
     let (mut world, a, _) = fixture(&mut fixture_host);
     let report = apply(
         &mut world,

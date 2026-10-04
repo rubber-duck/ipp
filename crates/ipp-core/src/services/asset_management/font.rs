@@ -1,6 +1,6 @@
 //! Immutable static font metrics and quadratic glyph outlines.
 
-use super::{Asset, AssetLoader, AssetTypeId, BufferedAssetLoader, quadratic::Decoder};
+use super::{Asset, AssetLoader, AssetTypeId, AsyncAssetLoader, quadratic::Decoder};
 use crate::ErrorReason;
 
 /// Compiled identity for portable IPPF font assets.
@@ -236,7 +236,93 @@ impl Asset for FontAsset {
 
 /// Construct a streaming buffered CPU loader.
 pub fn cpu_font_loader() -> impl AssetLoader<Data = FontAsset> {
-    BufferedAssetLoader::new(|bytes| FontAsset::decode(bytes).map_err(|error| error.to_string()))
+    AsyncAssetLoader::decode(
+        |mut reader| async move { FontAsset::decode_reader(&mut *reader).await },
+    )
+}
+
+impl FontAsset {
+    /// Decode IPPF in source order without retaining the original encoding.
+    pub async fn decode_reader(reader: &mut dyn super::IoReader) -> Result<Self, String> {
+        use super::decode::{AssetReader, push};
+        let mut input = AssetReader::new(reader);
+        if input.array::<4>().await? != *b"IPPF" || input.u32().await? != 1 {
+            return Err("Invalid font header".into());
+        }
+        let units_per_em = input.u32().await?;
+        if units_per_em == 0 {
+            return Err("Invalid font units".into());
+        }
+        let ascender = input.f32().await?;
+        let descender = input.f32().await?;
+        let line_gap = input.f32().await?;
+        let glyph_count = input.u32().await?;
+        let cmap_count = input.u32().await?;
+        let kerning_count = input.u32().await?;
+        if glyph_count == 0 || glyph_count > 1_000_000 {
+            return Err("Invalid font glyph count".into());
+        }
+        let mut glyphs = Vec::new();
+        for _ in 0..glyph_count {
+            let advance = input.f32().await?;
+            let left_side_bearing = input.f32().await?;
+            let bounds = input.bounds().await?;
+            let contour_count = input.u32().await?;
+            let contours = super::quadratic::read_contours(&mut input, contour_count).await?;
+            push(
+                &mut glyphs,
+                FontGlyph {
+                    advance,
+                    left_side_bearing,
+                    bounds,
+                    contours,
+                },
+            )?;
+        }
+        let mut cmap: Vec<FontCmapEntry> = Vec::new();
+        for _ in 0..cmap_count {
+            let entry = FontCmapEntry {
+                codepoint: input.u32().await?,
+                glyph_id: input.u32().await?,
+            };
+            if entry.codepoint > 0x10ffff
+                || entry.glyph_id >= glyph_count
+                || cmap
+                    .last()
+                    .is_some_and(|previous| previous.codepoint >= entry.codepoint)
+            {
+                return Err("Invalid font character mapping".into());
+            }
+            push(&mut cmap, entry)?;
+        }
+        let mut kerning: Vec<FontKerningPair> = Vec::new();
+        for _ in 0..kerning_count {
+            let pair = FontKerningPair {
+                left: input.u32().await?,
+                right: input.u32().await?,
+                adjustment: input.f32().await?,
+            };
+            if pair.left >= glyph_count
+                || pair.right >= glyph_count
+                || kerning.last().is_some_and(|previous| {
+                    (previous.left, previous.right) >= (pair.left, pair.right)
+                })
+            {
+                return Err("Invalid font kerning".into());
+            }
+            push(&mut kerning, pair)?;
+        }
+        input.finish().await?;
+        Ok(Self {
+            units_per_em,
+            ascender,
+            descender,
+            line_gap,
+            glyphs,
+            cmap,
+            kerning,
+        })
+    }
 }
 
 #[cfg(test)]

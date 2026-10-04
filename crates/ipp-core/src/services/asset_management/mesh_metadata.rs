@@ -31,6 +31,30 @@ impl MeshMetadata {
         }
     }
 
+    pub(super) async fn from_mesh_async(mesh: &MeshAsset) -> Result<Self, String> {
+        let mut metadata = Self {
+            bounds: [mesh.bounds().0, mesh.bounds().1],
+            vertices: mesh.vertex_count(),
+            indices: mesh.indices().len(),
+            attributes: u32::from(mesh.colors().is_some())
+                | (u32::from(mesh.uvs().is_some()) << 1)
+                | (u32::from(mesh.normals().is_some()) << 2)
+                | (u32::from(mesh.texture_weights().is_some()) << 3),
+            maximum_joint: mesh.max_joint_index(),
+            ..Default::default()
+        };
+        let mut budget = super::decode::DecodeBudget::default();
+        for &index in mesh.indices() {
+            super::decode::push(&mut metadata.topology, index)?;
+            budget.advance(2).await;
+        }
+        for &bounds in mesh.joint_bounds() {
+            super::decode::push(&mut metadata.joint_bounds, bounds)?;
+            budget.advance(std::mem::size_of_val(&bounds)).await;
+        }
+        Ok(metadata)
+    }
+
     /// Move compact facts out after the loader has consumed all upload streams.
     pub fn from_owned_mesh(mesh: MeshAsset) -> Self {
         mesh.into_metadata()

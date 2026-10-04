@@ -1,11 +1,12 @@
 //! RenderService-owned concrete resource factories and GPU allocation lifetimes.
 
+use super::asset_context::{RenderAssetContext, RenderAssetLease};
 use super::frame_statistics::RenderUploadCounter;
 use crate::RenderDevice;
 use ipp_core::{MeshAsset, services::asset_management::*};
 use std::{
     any::Any,
-    cell::{Cell, Ref, RefCell},
+    cell::{Ref, RefCell},
     rc::Rc,
 };
 
@@ -14,6 +15,7 @@ pub(crate) type SharedRenderDevice<D> = Rc<RefCell<D>>;
 pub(crate) struct GlMeshData<D: RenderDevice> {
     pub(crate) mesh: ipp_core::services::asset_management::mesh_metadata::MeshMetadata,
     gpu_bytes: usize,
+    asset_lease: Option<RenderAssetLease>,
     gpu: RefCell<Option<D::Mesh>>,
     device: SharedRenderDevice<D>,
 }
@@ -31,6 +33,7 @@ impl<D: RenderDevice> GlMeshData<D> {
                     mesh,
                 ),
             gpu_bytes: bytes,
+            asset_lease: None,
             gpu: RefCell::new(Some(gpu)),
             device,
         })
@@ -52,7 +55,12 @@ impl<D: RenderDevice> Asset for GlMeshData<D> {
     }
 
     fn invalidate_graphics(&mut self) {
-        if let Some(gpu) = self.gpu.get_mut().take() {
+        if let Some(gpu) = self.gpu.get_mut().take()
+            && self
+                .asset_lease
+                .as_ref()
+                .is_none_or(RenderAssetLease::is_current)
+        {
             self.device.borrow_mut().delete_mesh(gpu);
         }
         self.gpu_bytes = 0;
@@ -73,7 +81,12 @@ impl<D: RenderDevice> Asset for GlMeshData<D> {
 
 impl<D: RenderDevice> Drop for GlMeshData<D> {
     fn drop(&mut self) {
-        if let Some(gpu) = self.gpu.get_mut().take() {
+        if let Some(gpu) = self.gpu.get_mut().take()
+            && self
+                .asset_lease
+                .as_ref()
+                .is_none_or(RenderAssetLease::is_current)
+        {
             self.device.borrow_mut().delete_mesh(gpu);
         }
     }
@@ -82,96 +95,40 @@ impl<D: RenderDevice> Drop for GlMeshData<D> {
 pub(crate) fn mesh_asset_loader<D: RenderDevice>(
     device: SharedRenderDevice<D>,
     uploads: RenderUploadCounter,
-    context_active: Rc<Cell<bool>>,
+    context: RenderAssetContext,
 ) -> impl AssetLoader<Data = GlMeshData<D>> {
-    GlMeshLoader {
-        decoder: BufferedAssetLoader::new(|bytes| {
-            MeshAsset::decode(bytes).map_err(|error| error.to_string())
-        }),
-        device,
-        uploads,
-        failed_data: None,
-        pending_mesh: None,
-        context_active,
-    }
-}
-
-struct GlMeshLoader<D: RenderDevice> {
-    decoder: BufferedAssetLoader<MeshAsset>,
-    device: SharedRenderDevice<D>,
-    uploads: RenderUploadCounter,
-    failed_data: Option<GlMeshData<D>>,
-    pending_mesh: Option<MeshAsset>,
-    context_active: Rc<Cell<bool>>,
-}
-
-impl<D: RenderDevice> AssetLoader for GlMeshLoader<D> {
-    type Data = GlMeshData<D>;
-
-    fn take_failed_data(&mut self) -> Option<Self::Data> {
-        self.failed_data.take()
-    }
-
-    fn poll_load(
-        &mut self,
-        reader: &mut dyn IoReader,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<Self::Data, String>> {
-        use std::task::Poll;
-        let mesh = match self.pending_mesh.take() {
-            Some(mesh) => mesh,
-            None => match self.decoder.poll_load(reader, cx) {
-                Poll::Pending => return Poll::Pending,
-                Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
-                Poll::Ready(Ok(mesh)) => mesh,
-            },
-        };
+    AsyncAssetLoader::new(move |mut reader| async move {
+        let mesh = MeshAsset::decode_reader(&mut *reader).await?;
         let gpu_bytes = mesh.vertex_bytes() + std::mem::size_of_val(mesh.indices());
-        if !self.context_active.get() {
-            return Poll::Ready(Ok(GlMeshData {
-                mesh: ipp_core::services::asset_management::mesh_metadata::MeshMetadata::from_owned_mesh(
-                    mesh,
-                ),
-                gpu_bytes: 0,
-                gpu: RefCell::new(None),
-                device: self.device.clone(),
-            }));
+        if !context.is_active() {
+            return Ok(GlMeshData { mesh: ipp_core::services::asset_management::mesh_metadata::MeshMetadata::from_owned_mesh(mesh), gpu_bytes: 0, asset_lease: None, gpu: RefCell::new(None), device });
         }
-        let gpu = self.device.borrow_mut().create_mesh(&mesh);
-        if matches!(gpu, Err(crate::RenderError::ContextLost)) {
-            // Detach cancels this loader and keeps any previously decoded asset.
-            // A transient context loss must not become a permanent resource failure.
-            self.pending_mesh = Some(mesh);
-            return Poll::Pending;
-        }
-        let mut data = GlMeshData {
-            mesh:
-                ipp_core::services::asset_management::mesh_metadata::MeshMetadata::from_owned_mesh(
-                    mesh,
-                ),
-            gpu_bytes: 0,
-            gpu: RefCell::new(None),
-            device: self.device.clone(),
-        };
-        match gpu {
-            Ok(gpu) => {
-                self.uploads.add(gpu_bytes);
-                data.gpu_bytes = gpu_bytes;
-                *data.gpu.get_mut() = Some(gpu);
-                Poll::Ready(Ok(data))
+        loop {
+            let asset_lease = context.wait().await;
+            let gpu = device.borrow_mut().create_mesh(&mesh);
+            if matches!(gpu, Err(crate::RenderError::ContextLost)) {
+                context.set_active(false);
+                continue;
             }
-            Err(error) => {
-                self.failed_data = Some(data);
-                Poll::Ready(Err(error.to_string()))
+            let mut data = GlMeshData { mesh: ipp_core::services::asset_management::mesh_metadata::MeshMetadata::from_owned_mesh(mesh), gpu_bytes: 0, asset_lease: Some(asset_lease), gpu: RefCell::new(None), device };
+            match gpu {
+                Ok(gpu) => {
+                    uploads.add(gpu_bytes);
+                    data.gpu_bytes = gpu_bytes;
+                    *data.gpu.get_mut() = Some(gpu);
+                    return Ok(data);
+                }
+                Err(error) => return Err(AssetLoadFailure::with_decoded(error.to_string(), data)),
             }
         }
-    }
+    })
 }
 
 pub(crate) struct GlTextureData<D: RenderDevice> {
     pub(crate) info: ipp_core::TextureHeader,
     pub(crate) gpu: Option<D::Texture>,
-    device: SharedRenderDevice<D>,
+    pub(crate) asset_lease: RenderAssetLease,
+    pub(crate) device: SharedRenderDevice<D>,
 }
 
 impl<D: RenderDevice> Asset for GlTextureData<D> {
@@ -184,7 +141,9 @@ impl<D: RenderDevice> Asset for GlTextureData<D> {
     }
 
     fn invalidate_graphics(&mut self) {
-        if let Some(gpu) = self.gpu.take() {
+        if let Some(gpu) = self.gpu.take()
+            && self.asset_lease.is_current()
+        {
             self.device.borrow_mut().delete_texture(gpu);
         }
     }
@@ -208,7 +167,9 @@ impl<D: RenderDevice> Asset for GlTextureData<D> {
 
 impl<D: RenderDevice> Drop for GlTextureData<D> {
     fn drop(&mut self) {
-        if let Some(gpu) = self.gpu.take() {
+        if let Some(gpu) = self.gpu.take()
+            && self.asset_lease.is_current()
+        {
             self.device.borrow_mut().delete_texture(gpu);
         }
     }
@@ -217,99 +178,48 @@ impl<D: RenderDevice> Drop for GlTextureData<D> {
 pub(crate) fn texture_asset_loader<D: RenderDevice>(
     device: SharedRenderDevice<D>,
     uploads: RenderUploadCounter,
+    context: RenderAssetContext,
 ) -> impl AssetLoader<Data = GlTextureData<D>> {
-    GlTextureLoader {
-        device,
-        uploads,
-        decoder: ipp_core::TextureDecoder::new(),
-        data: None,
-        row: Vec::new(),
-        filled: 0,
-        row_index: 0,
-    }
-}
-
-struct GlTextureLoader<D: RenderDevice> {
-    device: SharedRenderDevice<D>,
-    uploads: RenderUploadCounter,
-    decoder: ipp_core::TextureDecoder,
-    data: Option<GlTextureData<D>>,
-    row: Vec<u8>,
-    filled: usize,
-    row_index: u32,
-}
-
-impl<D: RenderDevice> AssetLoader for GlTextureLoader<D> {
-    type Data = GlTextureData<D>;
-
-    fn poll_load(
-        &mut self,
-        reader: &mut dyn IoReader,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<Self::Data, String>> {
-        use std::task::Poll;
-        if self.data.is_none() {
-            let info = match self.decoder.poll_header(reader, cx) {
-                Poll::Pending => return Poll::Pending,
-                Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
-                Poll::Ready(Ok(info)) => info,
-            };
-            let row_bytes = info.width as usize * 4;
-            if let Err(error) = self.row.try_reserve_exact(row_bytes) {
-                return Poll::Ready(Err(error.to_string()));
+    AsyncAssetLoader::decode(move |mut reader| async move {
+        let mut decoder = ipp_core::TextureDecoder::new();
+        let info = decoder.read_header(&mut *reader).await?;
+        let asset_lease = context.wait().await;
+        let gpu = device
+            .borrow_mut()
+            .allocate_texture(info.width, info.height)
+            .map_err(|error| error.to_string())?;
+        let data = GlTextureData {
+            info,
+            gpu: Some(gpu),
+            asset_lease,
+            device: device.clone(),
+        };
+        let row_bytes = info.width as usize * 4;
+        let mut row = Vec::new();
+        row.try_reserve_exact(row_bytes)
+            .map_err(|error| error.to_string())?;
+        row.resize(row_bytes, 0);
+        let mut budget = decode::DecodeBudget::default();
+        for index in 0..info.height {
+            let mut filled = 0;
+            while filled < row.len() {
+                filled += decoder
+                    .read_pixels(&mut *reader, &mut row[filled..])
+                    .await?;
+                budget.advance(0).await;
             }
-            let gpu = match self
-                .device
+            context.wait().await;
+            if !data.asset_lease.is_current() {
+                return Err("Texture creating context was lost".into());
+            }
+            device
                 .borrow_mut()
-                .allocate_texture(info.width, info.height)
-            {
-                Ok(gpu) => gpu,
-                Err(error) => return Poll::Ready(Err(error.to_string())),
-            };
-            self.data = Some(GlTextureData {
-                info,
-                gpu: Some(gpu),
-                device: self.device.clone(),
-            });
-            self.row.resize(row_bytes, 0);
+                .upload_texture_rows(data.gpu.as_ref().unwrap(), info.width, index, 1, &row)
+                .map_err(|error| error.to_string())?;
+            uploads.add(row.len());
+            budget.advance(row.len()).await;
         }
-
-        // Private storage receives at most 64 KiB of uploads per poll. Data only
-        // becomes usable after the complete payload and EOF have been validated.
-        let mut consumed = 0;
-        while consumed < STREAM_CAPACITY {
-            let end = self.row.len().min(self.filled + STREAM_CAPACITY - consumed);
-            match self
-                .decoder
-                .poll_pixels(reader, cx, &mut self.row[self.filled..end])
-            {
-                Poll::Pending => return Poll::Pending,
-                Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
-                Poll::Ready(Ok(0)) => {
-                    return Poll::Ready(Ok(self.data.take().expect("validated texture")));
-                }
-                Poll::Ready(Ok(n)) => {
-                    self.filled += n;
-                    consumed += n;
-                }
-            }
-            if self.filled == self.row.len() {
-                let data = self.data.as_ref().expect("provisional allocation");
-                if let Err(error) = self.device.borrow_mut().upload_texture_rows(
-                    data.gpu.as_ref().expect("owned GPU texture"),
-                    data.info.width,
-                    self.row_index,
-                    1,
-                    &self.row,
-                ) {
-                    return Poll::Ready(Err(error.to_string()));
-                }
-                self.uploads.add(self.row.len());
-                self.row_index += 1;
-                self.filled = 0;
-            }
-        }
-        cx.waker().wake_by_ref();
-        Poll::Pending
-    }
+        decoder.read_pixels(&mut *reader, &mut []).await?;
+        Ok(data)
+    })
 }

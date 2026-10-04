@@ -85,7 +85,7 @@ fn detach(expected: &WorldAttachmentToken) -> Command {
 
 #[test]
 fn applied_receipt_survives_failure_and_same_value_writes_supersede_without_aba() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let parent = host.create_world(Default::default(), ATTACHMENTS).unwrap();
     let child = host.create_world(Default::default(), &[]).unwrap();
     let (anchor, first) = attach(&mut host, parent, child);
@@ -201,7 +201,7 @@ fn applied_receipt_survives_failure_and_same_value_writes_supersede_without_aba(
 
 #[test]
 fn selected_attachment_system_owns_receipts_and_foreign_world_cleanup_is_rejected() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let parent = host
         .create_world(
             Default::default(),
@@ -328,7 +328,7 @@ fn replacement_preserves_old_fence_until_old_path_retires() {
 
 #[test]
 fn ordinary_removal_generation_reuse_and_destruction_do_not_retarget_receipts() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let parent = host.create_world(Default::default(), ATTACHMENTS).unwrap();
     let child = host.create_world(Default::default(), &[]).unwrap();
     let (anchor, original) = attach(&mut host, parent, child);
@@ -371,7 +371,7 @@ fn ordinary_removal_generation_reuse_and_destruction_do_not_retarget_receipts() 
         Ok(WorldAttachmentRetirement::Pending)
     );
 
-    let mut foreign = HostRuntime::new();
+    let mut foreign = crate::support::task_scheduler::host();
     let foreign_parent = foreign
         .create_world(Default::default(), ATTACHMENTS)
         .unwrap();

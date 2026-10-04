@@ -85,6 +85,10 @@ pub(crate) enum TagSpace {
     ProfileRequest = 60,
     ProfileStatus = 61,
     ProfileGpuSampling = 62,
+    AssetExportRequest = 63,
+    AssetExportResponse = 64,
+    AssetRepresentation = 65,
+    AssetExportFormat = 66,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -213,6 +217,17 @@ layouts! {
     "profile-status-invalid-capture" => [field!("tag", Variant => "profile-status")];
     "profile-status-capacity" => [field!("tag", Variant => "profile-status")];
     "profile-status-incomplete" => [field!("tag", Variant => "profile-status")];
+    "asset-export-format-value" => [field!("value", Variant => "asset-export-format")];
+    "asset-read-capability" => [field!("connection", U64), field!("grant", U64)];
+    "asset-export-source" => [field!("kind", U16), field!("uri", Utf8, FIELD_BYTES), field!("variant", U32)];
+    "asset-export-find" => [field!("tag", Variant => "asset-export-request"), field!("source", Named => "asset-export-source")];
+    "asset-export-read" => [field!("tag", Variant => "asset-export-request"), field!("capability", Named => "asset-read-capability"), field!("representation", Variant => "asset-representation"), field!("format", Option => "asset-export-format-value")];
+    "asset-export-revoke" => [field!("tag", Variant => "asset-export-request"), field!("capability", Named => "asset-read-capability")];
+    "asset-export-capability" => [field!("tag", Variant => "asset-export-response"), field!("capability", Named => "asset-read-capability"), field!("source", Named => "asset-export-source"), field!("original", Bool), field!("cpu", List, 10 => "asset-export-format"), field!("gpu", List, 10 => "asset-export-format")];
+    "asset-export-opened" => [field!("tag", Variant => "asset-export-response"), field!("reference", Named => "bulk-read-reference"), field!("length", Option => "u64"), field!("representation", Variant => "asset-representation"), field!("format", Option => "asset-export-format-value")];
+    "asset-export-revoked" => [field!("tag", Variant => "asset-export-response")];
+    "host-request-asset-export" => [field!("magic", U64), field!("connection", U64), field!("request_id", U64), field!("tag", Variant => "host-request"), field!("body", Union => "asset-export-request")];
+    "host-response-asset-export" => [field!("magic", U64), field!("connection", U64), field!("request_id", U64), field!("tag", Variant => "host-response"), field!("body", Union => "asset-export-response")];
     "host-request-profile" => [field!("magic", U64), field!("connection", U64), field!("request_id", U64), field!("tag", Variant => "host-request"), field!("body", Union => "profile-request")];
     "host-response-profile" => [field!("magic", U64), field!("connection", U64), field!("request_id", U64), field!("tag", Variant => "host-response"), field!("status", Variant => "profile-status"), field!("capture", U64), field!("total_bytes", U64), field!("offset", U64), field!("bytes", Bytes, FIELD_BYTES)];
     "dataset-value-f32" => [field!("tag", Variant => "dataset-value"), field!("value_bits", U32)];
@@ -284,14 +299,11 @@ layouts! {
     "presentation-request-resize" => [field!("tag", Variant => "presentation-request"), field!("view", Named => "presentation-view"), field!("width", U32), field!("height", U32), field!("device_pixel_ratio", NonnegativeFiniteF64)];
     "presentation-request-clear" => [field!("tag", Variant => "presentation-request"), field!("view", Named => "presentation-view")];
     "presentation-request-frame" => [field!("tag", Variant => "presentation-request"), field!("view", Named => "presentation-view"), field!("after_sequence", Option => "u64"), field!("publication", Option => "presentation-identity"), field!("capture", Bool), field!("after_outputs", List, crate::presentation::MAX_PRESENTATION_SOURCES as u32 => "output-reference")];
-    "presentation-request-read-capture" => [field!("tag", Variant => "presentation-request"), field!("capture", U64), field!("offset", U64)];
-    "presentation-request-release-capture" => [field!("tag", Variant => "presentation-request"), field!("capture", U64)];
     "presentation-request-cancel-frame" => [field!("tag", Variant => "presentation-request"), field!("request", U64)];
     "presentation-response-surface" => [field!("tag", Variant => "presentation-response"), field!("surface", Named => "presentation-surface")];
     "presentation-response-view" => [field!("tag", Variant => "presentation-response"), field!("view", Named => "presentation-view")];
     "presentation-response-frame" => [field!("tag", Variant => "presentation-response"), field!("frame", Named => "presented-frame")];
-    "presentation-response-capture" => [field!("tag", Variant => "presentation-response"), field!("frame", Named => "presented-frame"), field!("capture", U64), field!("bytes", U64)];
-    "presentation-response-chunk" => [field!("tag", Variant => "presentation-response"), field!("capture", U64), field!("offset", U64), field!("bytes", Bytes, FIELD_BYTES)];
+    "presentation-response-capture" => [field!("tag", Variant => "presentation-response"), field!("frame", Named => "presented-frame"), field!("read", Named => "bulk-read-reference"), field!("bytes", U64)];
     "presentation-response-complete" => [field!("tag", Variant => "presentation-response")];
     "presentation-response-error" => [field!("tag", Variant => "presentation-response"), field!("error", Union => "presentation-error")];
     "presentation-error-unsupported" => [field!("tag", Variant => "presentation-error")];
@@ -375,7 +387,6 @@ layouts! {
     "host-request-detach-world" => [field!("magic", U64), field!("connection", U64), field!("request_id", U64), field!("tag", Variant => "host-request"), field!("session", U64)];
     "host-request-set-capacity-hints" => [field!("magic", U64), field!("connection", U64), field!("request_id", U64), field!("tag", Variant => "host-request"), field!("session", U64), field!("hints", Named => "host-hints-patch")];
     "host-request-save-world" => [field!("magic", U64), field!("connection", U64), field!("request_id", U64), field!("tag", Variant => "host-request"), field!("session", U64)];
-    "host-request-read-world-save" => [field!("magic", U64), field!("connection", U64), field!("request_id", U64), field!("tag", Variant => "host-request"), field!("job", U64), field!("offset", U64)];
     "host-request-begin-world-load" => [field!("magic", U64), field!("connection", U64), field!("request_id", U64), field!("tag", Variant => "host-request"), field!("bytes", U64)];
     "host-request-write-world-load" => [field!("magic", U64), field!("connection", U64), field!("request_id", U64), field!("tag", Variant => "host-request"), field!("job", U64), field!("offset", U64), field!("bytes", Bytes, FIELD_BYTES)];
     "host-request-finish-world-load" => [field!("magic", U64), field!("connection", U64), field!("request_id", U64), field!("tag", Variant => "host-request"), field!("job", U64), field!("symbolic_id", Option => "utf8-65536"), field!("hints", Named => "host-hints-patch")];
@@ -398,7 +409,8 @@ layouts! {
     "host-response-error" => [field!("magic", U64), field!("connection", U64), field!("request_id", U64), field!("tag", Variant => "host-response"), field!("message", Utf8, FIELD_BYTES)];
     "host-response-detached" => [field!("magic", U64), field!("connection", U64), field!("request_id", U64), field!("tag", Variant => "host-response"), field!("session", U64), field!("reason", Utf8, FIELD_BYTES)];
     "host-response-transfer" => [field!("magic", U64), field!("connection", U64), field!("request_id", U64), field!("tag", Variant => "host-response"), field!("job", U64)];
-    "host-response-save-chunk" => [field!("magic", U64), field!("connection", U64), field!("request_id", U64), field!("tag", Variant => "host-response"), field!("job", U64), field!("offset", U64), field!("total", U64), field!("bytes", Bytes, FIELD_BYTES)];
+    "bulk-read-reference" => [field!("connection", U64), field!("read", U64)];
+    "host-response-read" => [field!("magic", U64), field!("connection", U64), field!("request_id", U64), field!("tag", Variant => "host-response"), field!("reference", Named => "bulk-read-reference"), field!("length", Option => "u64")];
     "host-world" => [field!("id", U64), field!("symbolic_id", Utf8, FIELD_BYTES), field!("persistent_id_low", U64), field!("persistent_id_high", U64), field!("entities", U32), field!("systems", List, 1024 => "host-system-hints")];
     "host-hints-patch" => [field!("entities", Option => "u32"), field!("systems", List, 1024 => "host-system-hints")];
     "host-system-hints" => [field!("system", Utf8, FIELD_BYTES), field!("values", List, 1024 => "host-capacity-hint")];
@@ -1361,15 +1373,12 @@ tags! {
     PresentationRequest PRESENTATION_REQUEST_SELECT = 2 => "presentation-request-select";
     PresentationRequest PRESENTATION_REQUEST_CLEAR = 3 => "presentation-request-clear";
     PresentationRequest PRESENTATION_REQUEST_FRAME = 4 => "presentation-request-frame";
-    PresentationRequest PRESENTATION_REQUEST_READ_CAPTURE = 5 => "presentation-request-read-capture";
-    PresentationRequest PRESENTATION_REQUEST_RELEASE_CAPTURE = 6 => "presentation-request-release-capture";
     PresentationRequest PRESENTATION_REQUEST_CANCEL_FRAME = 7 => "presentation-request-cancel-frame";
     PresentationRequest PRESENTATION_REQUEST_RESIZE = 8 => "presentation-request-resize";
     PresentationResponse PRESENTATION_RESPONSE_SURFACE = 1 => "presentation-response-surface";
     PresentationResponse PRESENTATION_RESPONSE_VIEW = 2 => "presentation-response-view";
     PresentationResponse PRESENTATION_RESPONSE_FRAME = 3 => "presentation-response-frame";
     PresentationResponse PRESENTATION_RESPONSE_CAPTURE = 4 => "presentation-response-capture";
-    PresentationResponse PRESENTATION_RESPONSE_CHUNK = 5 => "presentation-response-chunk";
     PresentationResponse PRESENTATION_RESPONSE_COMPLETE = 6 => "presentation-response-complete";
     PresentationResponse PRESENTATION_RESPONSE_ERROR = 7 => "presentation-response-error";
     PresentationError PRESENTATION_ERROR_UNSUPPORTED = 1 => "presentation-error-unsupported";
@@ -1397,6 +1406,27 @@ tags! {
     ProfileStatus PROFILE_STATUS_INVALID_CAPTURE = 3 => "profile-status-invalid-capture";
     ProfileStatus PROFILE_STATUS_INCOMPLETE = 4 => "profile-status-incomplete";
     ProfileStatus PROFILE_STATUS_CAPACITY = 5 => "profile-status-capacity";
+    HostRequest HOST_REQUEST_ASSET_EXPORT = 27 => "host-request-asset-export";
+    HostResponse HOST_RESPONSE_ASSET_EXPORT = 21 => "host-response-asset-export";
+    AssetExportRequest ASSET_EXPORT_FIND = 1 => "asset-export-find";
+    AssetExportRequest ASSET_EXPORT_READ = 2 => "asset-export-read";
+    AssetExportRequest ASSET_EXPORT_REVOKE = 3 => "asset-export-revoke";
+    AssetExportResponse ASSET_EXPORT_CAPABILITY = 1 => "asset-export-capability";
+    AssetExportResponse ASSET_EXPORT_OPENED = 2 => "asset-export-opened";
+    AssetExportResponse ASSET_EXPORT_REVOKED = 3 => "asset-export-revoked";
+    AssetRepresentation ASSET_REPRESENTATION_ORIGINAL = 0 => "empty";
+    AssetRepresentation ASSET_REPRESENTATION_CPU = 1 => "empty";
+    AssetRepresentation ASSET_REPRESENTATION_GPU = 2 => "empty";
+    AssetExportFormat ASSET_FORMAT_MESH_V3 = 1 => "empty";
+    AssetExportFormat ASSET_FORMAT_TEXTURE_V3 = 2 => "empty";
+    AssetExportFormat ASSET_FORMAT_SKELETON_V1 = 3 => "empty";
+    AssetExportFormat ASSET_FORMAT_POSE_V1 = 4 => "empty";
+    AssetExportFormat ASSET_FORMAT_SKIN_V1 = 5 => "empty";
+    AssetExportFormat ASSET_FORMAT_SHADER_V3 = 6 => "empty";
+    AssetExportFormat ASSET_FORMAT_ANIMATION_V4 = 7 => "empty";
+    AssetExportFormat ASSET_FORMAT_GEOMETRY_V1 = 8 => "empty";
+    AssetExportFormat ASSET_FORMAT_PARTICLE_CACHE_V1 = 9 => "empty";
+    AssetExportFormat ASSET_FORMAT_EXPRESSION_V1 = 10 => "empty";
     HostRequest HOST_REQUEST_PROFILE = 26 => "host-request-profile";
     HostResponse HOST_RESPONSE_PROFILE = 20 => "host-response-profile";
     HostRequest HOST_REQUEST_GUI_INPUT = 25 => "host-request-gui-input";
@@ -1418,7 +1448,6 @@ tags! {
     HostRequest HOST_REQUEST_DETACH_WORLD = 6 => "host-request-detach-world";
     HostRequest HOST_REQUEST_SET_CAPACITY_HINTS = 7 => "host-request-set-capacity-hints";
     HostRequest HOST_REQUEST_SAVE_WORLD = 8 => "host-request-save-world";
-    HostRequest HOST_REQUEST_READ_WORLD_SAVE = 9 => "host-request-read-world-save";
     HostRequest HOST_REQUEST_BEGIN_WORLD_LOAD = 10 => "host-request-begin-world-load";
     HostRequest HOST_REQUEST_WRITE_WORLD_LOAD = 11 => "host-request-write-world-load";
     HostRequest HOST_REQUEST_FINISH_WORLD_LOAD = 12 => "host-request-finish-world-load";
@@ -1437,7 +1466,7 @@ tags! {
     HostResponse HOST_RESPONSE_ERROR = 5 => "host-response-error";
     HostResponse HOST_RESPONSE_DETACHED = 6 => "host-response-detached";
     HostResponse HOST_RESPONSE_TRANSFER = 7 => "host-response-transfer";
-    HostResponse HOST_RESPONSE_SAVE_CHUNK = 9 => "host-response-save-chunk";
+    HostResponse HOST_RESPONSE_READ = 9 => "host-response-read";
     WorldSelector WORLD_SELECTOR_ID = 0 => "world-selector-id";
     WorldSelector WORLD_SELECTOR_SYMBOL = 1 => "world-selector-symbol";
     AnimationTarget ANIMATION_TARGET_PROPERTY = 0 => "animation-target-property";

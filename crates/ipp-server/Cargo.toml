@@ -11,6 +11,14 @@ ipp-core.workspace = true
 ipp-host-session.workspace = true
 ipp-protocol.workspace = true
 tungstenite.workspace = true
+async-io.workspace = true
+async-channel.workspace = true
+futures-lite.workspace = true
+ureq.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+memmap2.workspace = true
+libc.workspace = true
 
 [features]
 default = []

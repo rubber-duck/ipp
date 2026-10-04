@@ -56,7 +56,7 @@ export {
   isHostContractReply,
   readHostAnnouncement,
   readHostContract,
-  readHostContractReply,
+  readHostContractDescriptor,
 } from "./host-contract.js";
 export type { ContractIdentity, HostAnnouncement } from "./host-contract.js";
 export { webSocketTransport } from "./transport.js";
@@ -128,3 +128,26 @@ export type {
   DatasetValue,
   DatasetValueKind,
 } from "./datasets.js";
+
+export {
+  BulkReadClient,
+  type BulkReadReference,
+  type BulkReadDescriptor,
+  type BulkReadOptions,
+} from "./bulk-reads.js";
+
+export { SharedBufferProducer } from "./buffer-source.js";
+export type {
+  SharedBufferPublication,
+  WorkerBufferSource,
+} from "./buffer-source.js";
+
+export { HostAssets } from "./asset-exports.js";
+export type {
+  AssetReadCapability,
+  AssetReadSelection,
+  AssetReadRepresentation,
+  AssetExportFormat,
+  AssetExportRead,
+  AuthorizedAssetSource,
+} from "./asset-exports.js";

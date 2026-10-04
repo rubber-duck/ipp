@@ -58,7 +58,7 @@ struct PaintScene {
 impl PaintScene {
     /// A presented canvas holding one ordinary box and an ordinary button.
     fn new() -> Self {
-        let mut host = HostRuntime::new();
+        let mut host = support::task_scheduler::host();
         host.io_mut().register_stream("fixture://").unwrap();
         let (world, renderer, state) = setup(&mut host);
         let world_id = world.id();
@@ -151,7 +151,7 @@ impl PaintScene {
     /// Serve every requested shader definition, then render a frame.
     fn render(&mut self) -> FrameStats {
         for _ in 0..8 {
-            self.host.progress_assets();
+            support::progress_assets(&mut self.host);
             let requests = self.host.take_resource_requests();
             if requests.is_empty() {
                 break;

@@ -9,7 +9,6 @@ use std::{
     any::Any,
     collections::{BTreeMap, BTreeSet, VecDeque},
     rc::Rc,
-    task::Context,
 };
 
 pub(super) struct AssetSlot {
@@ -46,6 +45,7 @@ impl AssetManagementService {
             next_release_revision: 0,
             lifecycle_events: VecDeque::new(),
             renderer_driven: false,
+            load_scheduler: None,
         }
     }
 
@@ -426,31 +426,26 @@ impl AssetManagementService {
     }
 
     /// Progress loading at the Host's selected phase with borrowed generic I/O.
-    pub fn poll_loads(&mut self, sources: &mut IoService, cx: &mut Context<'_>) {
+    pub fn progress_loads(&mut self, sources: &mut IoService) {
         #[cfg(feature = "instrumentation")]
         let _allocation_scope = crate::profiling::AllocationScope::new(211, "assets.poll");
         // Polling cannot insert, remove or reuse catalog slots. Loader callbacks
         // receive only their resource and the I/O service; lifecycle work is queued.
         for slot in 0..self.assets.len() {
             if let Some(key) = self.assets[slot].provider.as_ref().map(AssetProvider::key) {
-                self.poll_load_key(sources, key, cx);
+                self.progress_load_key(sources, key);
             }
         }
     }
 
     /// Progress selected representations without duplicating lifecycle state.
-    pub fn poll_selected_loads(
-        &mut self,
-        sources: &mut IoService,
-        keys: &BTreeSet<AssetKey>,
-        cx: &mut Context<'_>,
-    ) {
+    pub fn progress_selected_loads(&mut self, sources: &mut IoService, keys: &BTreeSet<AssetKey>) {
         for &key in keys {
-            self.poll_load_key(sources, key, cx);
+            self.progress_load_key(sources, key);
         }
     }
 
-    fn poll_load_key(&mut self, sources: &mut IoService, key: AssetKey, cx: &mut Context<'_>) {
+    fn progress_load_key(&mut self, sources: &mut IoService, key: AssetKey) {
         if self.pending_releases.contains_key(&key) || self.get(key).is_none() {
             return;
         }
@@ -459,7 +454,7 @@ impl AssetManagementService {
             .provider
             .as_mut()
             .expect("checked slot")
-            .poll_load(sources, cx, &mut events);
+            .progress_load(sources, self.load_scheduler.as_deref(), &mut events);
         for event in events {
             self.load_progress(event);
         }

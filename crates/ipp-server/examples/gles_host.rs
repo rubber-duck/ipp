@@ -48,9 +48,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     .next()
                     .ok_or("--io-read requires a prefix and directory")?;
                 let directory = args.next().ok_or("--io-read requires a directory")?;
-                let source =
-                    ipp_server::services::io::FileSystemIoSource::new(&prefix, directory, false)?;
-                read_sources.push((prefix, source));
+                read_sources.push((prefix, PathBuf::from(directory)));
             }
             _ => return Err(format!("unknown argument: {arg}").into()),
         }

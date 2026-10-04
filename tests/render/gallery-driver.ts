@@ -292,8 +292,13 @@ export async function openGallery(
     const deadline = performance.now() + galleryEnvironment.operationTimeoutMs;
     while (!(await call<boolean>("queryReplyHeld"))) {
       await inspect();
-      if (performance.now() > deadline)
+      if (performance.now() > deadline) {
+        await scenario.evidence.record("held-reply-timeout", {
+          status: await page.locator("#status").textContent(),
+          outcome: await call("heldReplyOutcome"),
+        });
         throw new Error("The held reply did not arrive");
+      }
     }
   };
   await page.goto(

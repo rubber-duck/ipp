@@ -464,10 +464,72 @@ fn any_connection_pulls_the_contract_after_its_hello() {
     assert!(send(&mut boundary, &ipp_protocol::HELLO));
     assert!(boundary.poll());
     assert_eq!(&boundary.output()[..16], &ipp_protocol::announcement());
+    let mut previous_read = 0;
     for _ in 0..2 {
         assert!(send(&mut boundary, &ipp_protocol::CONTRACT_REQUEST));
         assert!(boundary.poll());
-        assert_eq!(boundary.output(), ipp_protocol::contract_reply());
+        let descriptor = boundary.output().to_vec();
+        assert_eq!(descriptor.len(), 28);
+        assert_eq!(&descriptor[..4], b"IPCR");
+        assert_eq!(&descriptor[4..12], &2u64.to_le_bytes());
+        let read = u64::from_le_bytes(descriptor[12..20].try_into().unwrap());
+        assert!(read > previous_read);
+        previous_read = read;
+        let length = u64::from_le_bytes(descriptor[20..28].try_into().unwrap());
+        assert_eq!(length, ipp_protocol::export_contract().len() as u64);
+
+        // Bootstrap framing needs no generated World schema. Read and consume
+        // each bounded chunk through service-only progress, without a World or
+        // a frame tick. Physical delivery completion alone is not consumption.
+        let mut contract = Vec::new();
+        let mut id = 1u64;
+        loop {
+            let mut request = b"IPDR".to_vec();
+            request.extend(2u64.to_le_bytes());
+            request.extend(id.to_le_bytes());
+            request.extend(read.to_le_bytes());
+            request.push(0);
+            request.extend((contract.len() as u64).to_le_bytes());
+            assert!(send(&mut boundary, &request));
+            assert!(boundary.progress_resources());
+            assert!(boundary.poll());
+            let response = boundary.output().to_vec();
+            assert_eq!(&response[..4], b"IPDS");
+            assert_eq!(&response[4..12], &2u64.to_le_bytes());
+            assert_eq!(&response[12..20], &id.to_le_bytes());
+            assert_eq!(&response[20..28], &read.to_le_bytes());
+            assert_eq!(response[28], 0);
+            assert_eq!(&response[29..37], &(contract.len() as u64).to_le_bytes());
+            let eof = response[37] != 0;
+            let count = u32::from_le_bytes(response[38..42].try_into().unwrap()) as usize;
+            assert!(count <= ipp_protocol::bulk_read::CHUNK_BYTES);
+            assert_eq!(response.len(), 42 + count);
+            contract.extend_from_slice(&response[42..]);
+
+            id += 1;
+            let mut acknowledgement = b"IPDR".to_vec();
+            acknowledgement.extend(2u64.to_le_bytes());
+            acknowledgement.extend(id.to_le_bytes());
+            acknowledgement.extend(read.to_le_bytes());
+            acknowledgement.push(1);
+            acknowledgement.extend((contract.len() as u64).to_le_bytes());
+            acknowledgement.push(u8::from(eof));
+            assert!(send(&mut boundary, &acknowledgement));
+            assert!(boundary.poll());
+            assert_eq!(boundary.output().len(), 29);
+            assert_eq!(&boundary.output()[..4], b"IPDS");
+            assert_eq!(&boundary.output()[12..20], &id.to_le_bytes());
+            assert_eq!(&boundary.output()[20..28], &read.to_le_bytes());
+            assert_eq!(boundary.output()[28], 1);
+            boundary.complete();
+            assert!(boundary.progress_resources());
+            id += 1;
+            if eof {
+                break;
+            }
+        }
+        assert_eq!(contract.len() as u64, length);
+        assert_eq!(contract, ipp_protocol::export_contract());
     }
     assert!(!boundary.poll());
 

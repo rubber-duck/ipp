@@ -456,9 +456,20 @@ export async function wasmSchemaHash(wasmUrl: string): Promise<bigint> {
       `WASM fetch failed: ${response.status} ${response.statusText}`,
     );
   }
-  // Every build imports its log sink; reading the hash writes nothing.
+  // Every build imports diagnostics and task wakeups; reading the hash uses neither.
   const result = await WebAssembly.instantiate(await response.arrayBuffer(), {
     ipp_diagnostics: { write: () => {} },
+    ipp_tasks: {
+      request_update: () => {
+        throw new Error("Schema inspection attempted task scheduling");
+      },
+      timer_start: () => {
+        throw new Error("Schema inspection attempted a task timer");
+      },
+      timer_cancel: () => {
+        throw new Error("Schema inspection attempted a task timer");
+      },
+    },
   });
   const schemaHash = result.instance.exports.ipp_schema_hash;
   if (typeof schemaHash !== "function") {

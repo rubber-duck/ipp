@@ -15,3 +15,8 @@ pub(crate) mod render_statistics;
     target_arch = "wasm32"
 ))]
 mod render_profiling;
+
+pub(crate) mod task_wakeup;
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) mod task_timer;

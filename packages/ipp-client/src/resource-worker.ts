@@ -1,3 +1,4 @@
+import type { SharedBufferPublication } from "./buffer-source.js";
 import { SourceAvailability } from "./source-availability.js";
 import { resourceFetchUrl, type ResourceUrlMapping } from "./resource-urls.js";
 /** Host I/O bridge. Only the synchronous host pump calls WASM exports. */
@@ -16,6 +17,12 @@ export interface AssetHostExports {
   ipp_asset_error_max_bytes(): number;
   /** Rust-owned source staging, for ingress statistics. */
   ipp_resource_buffered_bytes(): number;
+  ipp_resource_chunk_reserve(
+    session: bigint,
+    id: bigint,
+    length: number,
+  ): number;
+  ipp_resource_chunk_ptr(): number;
   ipp_resource_chunk(session: bigint, id: bigint, length: number): number;
   ipp_resource_end(
     session: bigint,
@@ -24,6 +31,8 @@ export interface AssetHostExports {
     length: number,
   ): number;
   ipp_resource_input_reserve(length: number): number;
+  ipp_buffer_source_register(session: bigint, length: number): number;
+  ipp_buffer_source_revoke(session: bigint, length: number): number;
   ipp_output_ptr(): number;
   ipp_output_len(): number;
 }
@@ -48,16 +57,30 @@ interface Acquisition {
   reading: boolean;
   received: number;
   reader?: ReadableStreamBYOBReader;
-  chunk?: Uint8Array<ArrayBuffer>;
+  chunk?: Uint8Array<ArrayBufferLike>;
   done?: boolean;
   error?: string;
   timer?: ReturnType<typeof setTimeout>;
+  bufferSource?: {
+    readonly bytes: Uint8Array<ArrayBufferLike>;
+    readonly control?: Int32Array<SharedArrayBuffer>;
+    readonly generation?: number;
+  };
 }
 
 export class AssetWorkerService {
   private readonly requests = new Map<bigint, Acquisition>();
   // Strong HTTP validators pin recovery to the original content. Evicted or
   // absent validators make recovery fail explicitly instead of refreshing data.
+  private readonly publishedBufferNames = new Set<string>();
+  private readonly buffers = new Map<
+    string,
+    {
+      readonly bytes: Uint8Array<ArrayBufferLike>;
+      readonly control?: Int32Array<SharedArrayBuffer>;
+      readonly generation?: number;
+    }
+  >();
   private readonly validators = new Map<string, string | null>();
   private readonly availability = new Map<string, SourceAvailability>();
   private closed = false;
@@ -84,13 +107,111 @@ export class AssetWorkerService {
     this.statistics = options.statistics;
   }
 
+  /** Install transferred ownership or a cooperatively sealed external SAB source. */
+  mountBuffer(
+    source: string,
+    publication: ArrayBuffer | SharedBufferPublication,
+  ): void {
+    if (
+      this.closed ||
+      !/^js-buffer:[0-9a-f]{32}$/.test(source) ||
+      this.publishedBufferNames.has(source)
+    )
+      throw new Error("Invalid or duplicate generated source");
+    let control: Int32Array<SharedArrayBuffer> | undefined;
+    let bytes: Uint8Array<ArrayBufferLike>;
+    if (publication instanceof ArrayBuffer) bytes = new Uint8Array(publication);
+    else {
+      if (
+        !(publication.buffer instanceof SharedArrayBuffer) ||
+        !(publication.control instanceof SharedArrayBuffer) ||
+        publication.control.byteLength !== 8
+      )
+        throw new Error("Invalid shared publication guard");
+      if (
+        !Number.isSafeInteger(publication.offset) ||
+        !Number.isSafeInteger(publication.length) ||
+        publication.offset < 0 ||
+        publication.length < 0 ||
+        publication.offset > publication.buffer.byteLength ||
+        publication.length > publication.buffer.byteLength - publication.offset
+      )
+        throw new Error("Invalid shared publication range");
+      control = new Int32Array(publication.control);
+      if (
+        !Number.isInteger(publication.generation) ||
+        publication.generation <= 0 ||
+        publication.generation > 0x7fffffff ||
+        Atomics.load(control, 1) !== publication.generation
+      )
+        throw new Error("Stale shared publication generation");
+      if (Atomics.compareExchange(control, 0, 2, 3) !== 2)
+        throw new Error("Shared bytes have not been exclusively published");
+      bytes = new Uint8Array(
+        publication.buffer,
+        publication.offset,
+        publication.length,
+      );
+    }
+    try {
+      const name = new TextEncoder().encode(source);
+      this.copyInput(name);
+      this.check(
+        this.runtime.ipp_buffer_source_register(this.session, name.length),
+      );
+      this.buffers.set(source, {
+        bytes,
+        ...(control
+          ? {
+              control,
+              generation: (publication as SharedBufferPublication).generation,
+            }
+          : {}),
+      });
+      this.publishedBufferNames.add(source);
+      if (this.statistics)
+        this.statistics.sourceBackingBytes = this.sourceBackingBytes;
+    } catch (error) {
+      if (control) Atomics.store(control, 0, 0);
+      throw error;
+    }
+  }
+
+  /** Existing source cursors are fenced before releasing producer write access. */
+  revokeBuffer(source: string): void {
+    const buffer = this.buffers.get(source);
+    if (!buffer) return;
+    const name = new TextEncoder().encode(source);
+    this.copyInput(name);
+    this.prepareProgress();
+    this.check(
+      this.runtime.ipp_buffer_source_revoke(this.session, name.length),
+    );
+    for (const request of this.requests.values())
+      if (request.source === source) this.release(request);
+    this.buffers.delete(source);
+    if (this.statistics)
+      this.statistics.sourceBackingBytes = this.sourceBackingBytes;
+    if (buffer.control) Atomics.store(buffer.control, 0, 0);
+  }
+
+  /** Original external storage is separate from bounded transport staging. */
+  get sourceBackingBytes(): number {
+    let bytes = 0;
+    for (const source of this.buffers.values())
+      bytes += source.bytes.buffer.byteLength;
+    return bytes;
+  }
+
   /** Real retained JS staging; each active reader holds at most one bounded chunk. */
   get bufferedBytes(): number {
     let bytes = 0;
     for (const request of this.requests.values())
       bytes += request.reading
         ? CHUNK_BYTES
-        : (request.chunk?.buffer.byteLength ?? 0);
+        : request.bufferSource
+          ? 0
+          : (request.chunk?.buffer.byteLength ?? 0);
     return bytes;
   }
 
@@ -121,26 +242,32 @@ export class AssetWorkerService {
         continue;
       }
       if (request.chunk) {
-        this.copyInput(request.chunk);
-        let result = this.runtime.ipp_resource_chunk(
+        const admission = this.runtime.ipp_resource_chunk_reserve(
           this.session,
           request.id,
           request.chunk.byteLength,
         );
-        if (result === 2) {
-          this.progressResources();
-          this.copyInput(request.chunk);
-          result = this.runtime.ipp_resource_chunk(
+        if (admission === 2) continue;
+        if (admission === 3) {
+          this.release(request);
+          continue;
+        }
+        this.check(admission);
+        const pointer = this.runtime.ipp_resource_chunk_ptr() >>> 0;
+        // Reservation owns the original storage across memory.grow and JS entry.
+        // Reacquire the current linear-memory buffer immediately before copying.
+        new Uint8Array(
+          this.runtime.memory.buffer,
+          pointer,
+          request.chunk.byteLength,
+        ).set(request.chunk);
+        this.check(
+          this.runtime.ipp_resource_chunk(
             this.session,
             request.id,
             request.chunk.byteLength,
-          );
-          if (result === 2) {
-            this.schedulePump(4);
-            continue;
-          }
-        }
-        this.check(result);
+          ),
+        );
         receivedInput = true;
         if (this.statistics)
           this.statistics.sourceBytes += request.chunk.byteLength;
@@ -158,7 +285,11 @@ export class AssetWorkerService {
           success: true,
         }));
         this.release(request);
-      } else if (request.reader && !request.reading && !request.chunk) {
+      } else if (
+        (request.reader || request.bufferSource) &&
+        !request.reading &&
+        !request.chunk
+      ) {
         void this.readNext(request);
       }
     }
@@ -255,8 +386,19 @@ export class AssetWorkerService {
 
   /** Presenting workers sample staging at each pump to record its peak. */
   private measureBuffers(statistics: IngressStatistics): void {
+    statistics.sourceJsBufferedBytes = this.bufferedBytes;
+    statistics.sourceRuntimeBufferedBytes =
+      this.runtime.ipp_resource_buffered_bytes();
+    statistics.sourceJsPeakBufferedBytes = Math.max(
+      statistics.sourceJsPeakBufferedBytes ?? 0,
+      statistics.sourceJsBufferedBytes,
+    );
+    statistics.sourceRuntimePeakBufferedBytes = Math.max(
+      statistics.sourceRuntimePeakBufferedBytes ?? 0,
+      statistics.sourceRuntimeBufferedBytes,
+    );
     statistics.sourceBufferedBytes =
-      this.bufferedBytes + this.runtime.ipp_resource_buffered_bytes();
+      statistics.sourceJsBufferedBytes + statistics.sourceRuntimeBufferedBytes;
     statistics.sourcePeakBufferedBytes = Math.max(
       statistics.sourcePeakBufferedBytes,
       statistics.sourceBufferedBytes,
@@ -268,6 +410,9 @@ export class AssetWorkerService {
     clearTimeout(this.pumpTimer);
     for (const request of this.requests.values()) this.release(request);
     this.validators.clear();
+    for (const source of this.buffers.values())
+      if (source.control) Atomics.store(source.control, 0, 0);
+    this.buffers.clear();
     for (const monitor of this.availability.values()) monitor.close();
     this.availability.clear();
   }
@@ -289,6 +434,14 @@ export class AssetWorkerService {
       resource: request.id,
       source: request.source,
     }));
+    const buffer = this.buffers.get(request.source);
+    if (buffer) {
+      request.bufferSource = buffer;
+      if (buffer.bytes.byteLength === 0) request.done = true;
+      else void this.readNext(request);
+      this.schedulePump();
+      return;
+    }
     this.awaitProgress(request);
     try {
       const url = new URL(request.source);
@@ -367,6 +520,26 @@ export class AssetWorkerService {
   }
 
   private async readNext(request: Acquisition): Promise<void> {
+    if (request.bufferSource) {
+      if (
+        request.bufferSource.control &&
+        (Atomics.load(request.bufferSource.control, 0) !== 3 ||
+          Atomics.load(request.bufferSource.control, 1) !==
+            request.bufferSource.generation)
+      ) {
+        request.error = "Shared publication guard changed before release";
+        this.schedulePump();
+        return;
+      }
+      const bytes = request.bufferSource.bytes;
+      const end = Math.min(bytes.byteLength, request.received + CHUNK_BYTES);
+      // This view allocates no backing and remains under the publication guard.
+      request.chunk = bytes.subarray(request.received, end);
+      request.received = end;
+      request.done = end === bytes.byteLength;
+      this.schedulePump();
+      return;
+    }
     request.reading = true;
     this.awaitProgress(request);
     try {
@@ -388,7 +561,7 @@ export class AssetWorkerService {
     }
   }
 
-  private copyInput(bytes: Uint8Array<ArrayBuffer>): void {
+  private copyInput(bytes: Uint8Array<ArrayBufferLike>): void {
     // Wasm i32 results are signed in JS even for addresses above 2 GiB.
     const pointer =
       this.runtime.ipp_resource_input_reserve(bytes.byteLength) >>> 0;

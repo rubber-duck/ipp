@@ -1,5 +1,8 @@
 //! Real local Host, assets and Data Service evidence, independent of transports.
 
+mod support;
+use support::task_scheduler::HostTaskTestDriver;
+
 use ipp_core::{
     Batch, Command, ComponentValue as C, DynamicPropertyKind as K, DynamicValue as V, EntityId,
     EntityMetadata, EntityRef, ErrorReason, FieldValue, FieldWrite, HostRuntime, WorldId,
@@ -82,7 +85,7 @@ fn apply(
             operations,
         })
         .unwrap();
-    host.frame(0.0)
+    host.frame_for_test(0.0)
         .unwrap()
         .worlds
         .remove(&world)
@@ -190,7 +193,7 @@ fn exact_raw_identity_preserves_all_source_kinds_and_float_bits_after_edits() {
         lanes.iter().map(|value| value.to_bits()).collect()
     }
 
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world = host
         .create_world(
             WorldLimits::default(),
@@ -301,7 +304,7 @@ fn exact_raw_identity_preserves_all_source_kinds_and_float_bits_after_edits() {
                     }],
                 )
                 .unwrap();
-            host.frame(0.0).unwrap();
+            host.frame_for_test(0.0).unwrap();
         }
         let output = view(&mut host, world, entity);
         assert_eq!(output.row_ids, [DataRowId(1)]);
@@ -331,13 +334,13 @@ fn exact_raw_identity_preserves_all_source_kinds_and_float_bits_after_edits() {
         )
         .unwrap_err();
     assert_eq!(error.reason, DataError::InvalidRow);
-    host.frame(0.0).unwrap();
+    host.frame_for_test(0.0).unwrap();
     assert_eq!(view(&mut host, world, entity).row_ids, [DataRowId(1)]);
 }
 
 #[test]
 fn parameter_identity_and_general_identity_shaped_graph_keep_evaluator_semantics() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world = world(&mut host);
     let source = producer(
         &mut host,
@@ -412,7 +415,7 @@ fn parameter_identity_and_general_identity_shaped_graph_keep_evaluator_semantics
 
 #[test]
 fn buffer_projects_typed_values_and_preserves_row_identity_through_edits_and_insertions() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world = world(&mut host);
     let producer = producer(
         &mut host,
@@ -482,7 +485,7 @@ fn buffer_projects_typed_values_and_preserves_row_identity_through_edits_and_ins
         .unwrap();
     // Queries observe the last completed cut until the Host evaluates.
     assert_eq!(view(&mut host, world, entity), first);
-    host.frame(0.0).unwrap();
+    host.frame_for_test(0.0).unwrap();
     let second = view(&mut host, world, entity);
     assert_eq!(second.row_ids, [DataRowId(1), DataRowId(3), DataRowId(2)]);
     assert_eq!(
@@ -499,7 +502,7 @@ fn buffer_projects_typed_values_and_preserves_row_identity_through_edits_and_ins
 
 #[test]
 fn explicit_invalidity_and_parameter_writes_use_shared_expression_assets() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world = world(&mut host);
     let producer = producer(
         &mut host,
@@ -566,7 +569,7 @@ fn explicit_invalidity_and_parameter_writes_use_shared_expression_assets() {
 
 #[test]
 fn stream_demand_precedes_outcome_and_union_release_is_exact_across_worlds() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let left = world(&mut host);
     let right = world(&mut host);
     let producer = producer(
@@ -611,7 +614,7 @@ fn stream_demand_precedes_outcome_and_union_release_is_exact_across_worlds() {
             .len(),
         4
     );
-    host.frame(0.0).unwrap();
+    host.frame_for_test(0.0).unwrap();
     assert_eq!(
         view(&mut host, left, left_entity).row_ids,
         [DataRowId(4), DataRowId(5)]
@@ -696,7 +699,7 @@ fn set_buffer_source(entity: EntityId, source: &str) -> Command {
 #[test]
 fn retained_window_handoff_preserves_final_union_and_expires_after_failed_shrink() {
     for replace_incoming in [false, true] {
-        let mut host = HostRuntime::new();
+        let mut host = crate::support::task_scheduler::host();
         let world = world(&mut host);
         let source = producer(
             &mut host,
@@ -732,7 +735,7 @@ fn retained_window_handoff_preserves_final_union_and_expires_after_failed_shrink
             source,
             (1..=3).map(|n| vec![V::U32(n)]).collect(),
         );
-        host.frame(0.0).unwrap();
+        host.frame_for_test(0.0).unwrap();
         let a_before = view(&mut host, world, a);
         let b_before = view(&mut host, world, b);
         assert_eq!(a_before.row_ids, [DataRowId(1), DataRowId(2), DataRowId(3)]);
@@ -806,7 +809,7 @@ fn retained_window_handoff_preserves_final_union_and_expires_after_failed_shrink
 
 #[test]
 fn retained_detached_buffer_source_swap_preserves_incarnations_and_collects_after_error() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world = world(&mut host);
     let expression = identity(&mut host, world, 1, "x", K::U32);
     let mut sources = Vec::new();
@@ -903,7 +906,7 @@ fn retained_detached_buffer_source_swap_preserves_incarnations_and_collects_afte
 
 #[test]
 fn sole_stream_replacement_preserves_history_and_retires_demand_after_failed_tail() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world = world(&mut host);
     let source = producer(
         &mut host,
@@ -929,7 +932,7 @@ fn sole_stream_replacement_preserves_history_and_retires_demand_after_failed_tai
         source,
         (1..=3).map(|n| vec![V::U32(n)]).collect(),
     );
-    host.frame(0.0).unwrap();
+    host.frame_for_test(0.0).unwrap();
     let before = view(&mut host, world, entity);
     assert_eq!(before.row_ids, [DataRowId(2), DataRowId(3)]);
     let outcome = apply(
@@ -976,7 +979,7 @@ fn sole_stream_replacement_preserves_history_and_retires_demand_after_failed_tai
 
 #[test]
 fn detached_buffer_replacement_preserves_source_and_fences_old_presentation() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world = host
         .create_world(
             WorldLimits::default(),
@@ -1071,7 +1074,7 @@ fn detached_buffer_replacement_preserves_source_and_fences_old_presentation() {
 
 #[test]
 fn detached_source_kind_switch_stays_unavailable_until_a_new_compatible_incarnation() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world = world(&mut host);
     let source = producer(
         &mut host,
@@ -1135,7 +1138,7 @@ fn detached_source_kind_switch_stays_unavailable_until_a_new_compatible_incarnat
         vec![DataColumn::new("x", K::U32)],
     );
     append(&mut host, next, vec![vec![V::U32(9)]]);
-    host.frame(0.0).unwrap();
+    host.frame_for_test(0.0).unwrap();
     let ready = view(&mut host, world, entity);
     assert_eq!(ready.source, Some(next.source()));
     assert_eq!(ready.binding_incarnation, mismatch.binding_incarnation);
@@ -1146,7 +1149,7 @@ fn detached_source_kind_switch_stays_unavailable_until_a_new_compatible_incarnat
 
 #[test]
 fn source_reincarnation_revalidates_kind_and_schema_without_reusing_rows() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world = world(&mut host);
     let source = producer(
         &mut host,
@@ -1170,7 +1173,7 @@ fn source_reincarnation_revalidates_kind_and_schema_without_reusing_rows() {
         DataSourceKind::Streaming,
         vec![DataColumn::new("x", K::F32)],
     );
-    host.frame(0.0).unwrap();
+    host.frame_for_test(0.0).unwrap();
     let mismatch = view(&mut host, world, entity);
     assert_eq!(
         mismatch.availability,
@@ -1188,7 +1191,7 @@ fn source_reincarnation_revalidates_kind_and_schema_without_reusing_rows() {
         vec![DataColumn::new("x", K::U32)],
     );
     append(&mut host, wrong_type, vec![vec![V::U32(9)]]);
-    host.frame(0.0).unwrap();
+    host.frame_for_test(0.0).unwrap();
     assert!(matches!(
         view(&mut host, world, entity).availability,
         DataBindingAvailability::Unavailable(DataBindingUnavailable::InputType { .. })
@@ -1201,7 +1204,7 @@ fn source_reincarnation_revalidates_kind_and_schema_without_reusing_rows() {
         vec![DataColumn::new("x", K::F32)],
     );
     append(&mut host, recovered, vec![vec![V::F32(7.0)]]);
-    host.frame(0.0).unwrap();
+    host.frame_for_test(0.0).unwrap();
     let current = view(&mut host, world, entity);
     assert_eq!(current.availability, DataBindingAvailability::Ready);
     assert_eq!(current.row_ids, [DataRowId(1)]);
@@ -1212,7 +1215,7 @@ fn source_reincarnation_revalidates_kind_and_schema_without_reusing_rows() {
 
 #[test]
 fn one_binding_per_entity_and_window_admission_fail_before_component_changes() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world = world(&mut host);
     let expression = identity(&mut host, world, 1, "x", K::U32);
     let value = stream(
@@ -1326,7 +1329,7 @@ fn one_binding_per_entity_and_window_admission_fail_before_component_changes() {
 
 #[test]
 fn raw_range_windows_intersect_count_and_latest_anchor_never_rewinds() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world = world(&mut host);
     let source = producer(
         &mut host,
@@ -1381,7 +1384,7 @@ fn raw_range_windows_intersect_count_and_latest_anchor_never_rewinds() {
             vec![V::F32(3.0)],
         ],
     );
-    host.frame(0.0).unwrap();
+    host.frame_for_test(0.0).unwrap();
     let output = view(&mut host, world, entity);
     assert_eq!(output.row_ids, [DataRowId(3), DataRowId(5)]);
     assert_eq!(
@@ -1399,7 +1402,7 @@ fn raw_range_windows_intersect_count_and_latest_anchor_never_rewinds() {
 
 #[test]
 fn final_notification_boundary_catches_data_and_host_time_after_prepared_update() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world = world(&mut host);
     let source = producer(
         &mut host,
@@ -1427,16 +1430,16 @@ fn final_notification_boundary_catches_data_and_host_time_after_prepared_update(
     );
     host.world_mut(world).unwrap().prepare_update(0.0).unwrap();
     append(&mut host, source, vec![vec![V::F32(0.0)]]);
-    host.frame(0.0).unwrap();
+    host.frame_for_test(0.0).unwrap();
     assert_eq!(view(&mut host, world, entity).row_ids, [DataRowId(1)]);
     host.world_mut(world).unwrap().prepare_update(0.0).unwrap();
-    host.frame(2.0).unwrap();
+    host.frame_for_test(2.0).unwrap();
     assert!(view(&mut host, world, entity).row_ids.is_empty());
 }
 
 #[test]
 fn default_stream_cap_lives_in_data_service_and_explicit_windows_bypass_it() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     host.data_sources_mut().configure(DataServiceConfig {
         default_stream_bytes: 0,
     });
@@ -1473,14 +1476,14 @@ fn default_stream_cap_lives_in_data_service_and_explicit_windows_bypass_it() {
         )),
     );
     append(&mut host, source, vec![vec![V::U32(2)]]);
-    host.frame(0.0).unwrap();
+    host.frame_for_test(0.0).unwrap();
     assert!(view(&mut host, world, default).row_ids.is_empty());
     assert_eq!(view(&mut host, world, explicit).row_ids, [DataRowId(2)]);
 }
 
 #[test]
 fn unavailable_assets_inputs_and_source_names_remain_observable_and_recover() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world = world(&mut host);
     let missing = AssetSource {
         kind: EXPRESSION_TYPE,
@@ -1506,7 +1509,7 @@ fn unavailable_assets_inputs_and_source_names_remain_observable_and_recover() {
         vec![DataColumn::new("raw", K::F32)],
     );
     append(&mut host, source, vec![vec![V::F32(7.0)]]);
-    host.frame(0.0).unwrap();
+    host.frame_for_test(0.0).unwrap();
     assert!(matches!(
         view(&mut host, world, entity).availability,
         DataBindingAvailability::Unavailable(DataBindingUnavailable::MissingAsset { .. })
@@ -1597,7 +1600,7 @@ fn unavailable_assets_inputs_and_source_names_remain_observable_and_recover() {
 
 #[test]
 fn typed_projection_outputs_cover_vectors_booleans_and_text_without_source_schema_changes() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world = world(&mut host);
     let source = producer(
         &mut host,
@@ -1673,7 +1676,7 @@ fn typed_projection_outputs_cover_vectors_booleans_and_text_without_source_schem
 
 #[test]
 fn query_pages_are_bounded_by_rows_and_payload_and_never_trigger_evaluation() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world = world(&mut host);
     let source = producer(
         &mut host,
@@ -1767,7 +1770,7 @@ fn query_pages_are_bounded_by_rows_and_payload_and_never_trigger_evaluation() {
             }],
         )
         .unwrap();
-    host.frame(0.0).unwrap();
+    host.frame_for_test(0.0).unwrap();
     assert_eq!(
         host.world_mut(world)
             .unwrap()
@@ -1778,7 +1781,7 @@ fn query_pages_are_bounded_by_rows_and_payload_and_never_trigger_evaluation() {
 
 #[test]
 fn graphics_only_release_preserves_completed_cpu_view_and_acknowledged_dirty() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world = host
         .create_world(
             WorldLimits::default(),
@@ -1840,7 +1843,7 @@ fn graphics_only_release_preserves_completed_cpu_view_and_acknowledged_dirty() {
         host.flush_resource_lifecycle();
         assert!(host.asset_resources().get(key).unwrap().decoded_available());
         assert_eq!(view(&mut host, world, entity), before);
-        host.frame(0.0).unwrap();
+        host.frame_for_test(0.0).unwrap();
         assert_eq!(view(&mut host, world, entity), before); // No rebuild or new dirty handoff.
     }
 }
@@ -1915,7 +1918,7 @@ fn cpu_release_invalidates_binding_before_payload_or_identity_is_released() {
     for revoke in [false, true] {
         let mut factories = compiled_system_factories();
         factories.push(std::sync::Arc::new(ReleaseObserverFactory));
-        let mut host = HostRuntime::with_system_factories(factories).unwrap();
+        let mut host = crate::support::task_scheduler::with_factories(factories).unwrap();
         let world = host
             .create_world(
                 WorldLimits::default(),
@@ -1977,7 +1980,7 @@ fn cpu_release_invalidates_binding_before_payload_or_identity_is_released() {
             assert!(host.asset_resources().get(key).is_none());
         } else {
             assert!(!host.asset_resources().get(key).unwrap().decoded_available());
-            host.frame(0.0).unwrap();
+            host.frame_for_test(0.0).unwrap();
             assert_eq!(
                 view(&mut host, world, entity).columns[0].values,
                 [R::Valid(V::U32(7))]
@@ -1988,7 +1991,7 @@ fn cpu_release_invalidates_binding_before_payload_or_identity_is_released() {
 
 #[test]
 fn active_asset_demand_survives_producer_release_and_unload_invalidates_frozen_views() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world = world(&mut host);
     let source = producer(
         &mut host,
@@ -2028,7 +2031,7 @@ fn active_asset_demand_survives_producer_release_and_unload_invalidates_frozen_v
         DataBindingAvailability::Unavailable(DataBindingUnavailable::MissingAsset { .. })
     ));
     assert!(view(&mut host, world, entity).row_ids.is_empty());
-    host.frame(0.0).unwrap();
+    host.frame_for_test(0.0).unwrap();
     assert_eq!(
         view(&mut host, world, entity).availability,
         DataBindingAvailability::Ready
@@ -2055,7 +2058,7 @@ fn active_asset_demand_survives_producer_release_and_unload_invalidates_frozen_v
 #[test]
 fn bindings_persist_metadata_and_restore_empty_until_source_and_definitions_are_resupplied() {
     for streaming in [false, true] {
-        let mut host = HostRuntime::new();
+        let mut host = crate::support::task_scheduler::host();
         let world = world(&mut host);
         let kind = if streaming {
             DataSourceKind::Streaming
@@ -2100,7 +2103,7 @@ fn bindings_persist_metadata_and_restore_empty_until_source_and_definitions_are_
             source,
             vec![vec![V::Text("NEVER_PERSIST_SOURCE_PAYLOAD".into())]],
         );
-        host.frame(0.0).unwrap();
+        host.frame_for_test(0.0).unwrap();
         assert_eq!(
             view(&mut host, world, entity).columns[0].values,
             [R::Valid(V::F32(12.5))]
@@ -2117,7 +2120,7 @@ fn bindings_persist_metadata_and_restore_empty_until_source_and_definitions_are_
         assert!(!encoded.contains("NEVER_PERSIST_SOURCE_PAYLOAD"));
         assert!(!encoded.contains("payload_only_column"));
         assert!(!bytes.windows(4).any(|part| part == b"IPPE"));
-        let mut restored_host = HostRuntime::new();
+        let mut restored_host = crate::support::task_scheduler::host();
         let restored = restored_host
             .load_world(
                 &bytes,
@@ -2151,7 +2154,7 @@ fn bindings_persist_metadata_and_restore_empty_until_source_and_definitions_are_
                 .entities,
             captured.entities
         );
-        restored_host.frame(0.0).unwrap();
+        restored_host.frame_for_test(0.0).unwrap();
         assert_eq!(
             view(&mut restored_host, restored, restored_entity).availability,
             DataBindingAvailability::Unavailable(DataBindingUnavailable::Source(
@@ -2166,7 +2169,7 @@ fn bindings_persist_metadata_and_restore_empty_until_source_and_definitions_are_
         );
         append(&mut restored_host, resupplied, vec![vec![V::U32(3)]]);
         identity(&mut restored_host, restored, 1, "different_schema", K::U32);
-        restored_host.frame(0.0).unwrap();
+        restored_host.frame_for_test(0.0).unwrap();
         let after = view(&mut restored_host, restored, restored_entity);
         assert_eq!(after.availability, DataBindingAvailability::Ready);
         assert_eq!(after.columns[0].kind, K::U32);
@@ -2177,7 +2180,7 @@ fn bindings_persist_metadata_and_restore_empty_until_source_and_definitions_are_
 #[cfg(feature = "instrumentation")]
 #[test]
 fn queries_keep_dirty_and_notifications_until_success_and_source_or_parameter_changes_redirty() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world = world(&mut host);
     let source = producer(
         &mut host,
@@ -2215,7 +2218,7 @@ fn queries_keep_dirty_and_notifications_until_success_and_source_or_parameter_ch
     let first = view(&mut host, world, entity);
     assert!(first.dirty);
     assert!(view(&mut host, world, entity).dirty);
-    host.frame(0.0).unwrap();
+    host.frame_for_test(0.0).unwrap();
     assert!(view(&mut host, world, entity).dirty);
     host.world_mut(world)
         .unwrap()
@@ -2228,13 +2231,13 @@ fn queries_keep_dirty_and_notifications_until_success_and_source_or_parameter_ch
         assert!(!observation.dirty);
         assert_eq!(observation.row_ids, [DataRowId(1)]);
     }
-    host.frame(0.0).unwrap();
+    host.frame_for_test(0.0).unwrap();
     assert!(view(&mut host, world, entity).dirty);
     host.world_mut(world)
         .unwrap()
         .acknowledge_data_binding_for_test(entity, first.binding_incarnation)
         .unwrap();
-    host.frame(0.0).unwrap();
+    host.frame_for_test(0.0).unwrap();
     assert!(!view(&mut host, world, entity).dirty);
     apply(
         &mut host,
@@ -2281,7 +2284,7 @@ fn queries_keep_dirty_and_notifications_until_success_and_source_or_parameter_ch
 
 #[test]
 fn presentation_success_is_fenced_by_the_single_registered_component_lifetime() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world = host
         .create_world(
             WorldLimits::default(),
@@ -2395,7 +2398,7 @@ fn composition_admission_exposes_registry_ids_and_does_not_require_animation() {
     assert_eq!(C::STREAMING_DATA_SOURCE_BINDING, 101);
     assert!(C::supports_dynamic_properties(100));
     assert!(C::supports_dynamic_properties(101));
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let selected = world(&mut host);
     assert_eq!(
         host.world_mut(selected)
@@ -2428,7 +2431,7 @@ fn composition_admission_exposes_registry_ids_and_does_not_require_animation() {
 
 #[test]
 fn shared_source_and_definition_keep_independent_world_parameter_outputs() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let left = world(&mut host);
     let right = world(&mut host);
     let source = producer(
@@ -2471,7 +2474,7 @@ fn shared_source_and_definition_keep_independent_world_parameter_outputs() {
     r.properties.set("scaled_parameter", V::F32(3.0)).unwrap();
     let l_entity = create(&mut host, left, "left", C::BufferDataSourceBinding(l));
     let r_entity = create(&mut host, right, "right", C::BufferDataSourceBinding(r));
-    host.frame(0.0).unwrap();
+    host.frame_for_test(0.0).unwrap();
     let key = host.asset_resources().find(&shared).unwrap();
     assert!(
         host.world_mut(left)
@@ -2526,7 +2529,7 @@ fn shared_source_and_definition_keep_independent_world_parameter_outputs() {
 #[test]
 fn absent_parameters_preserve_lazy_fallback_and_reached_missing_input_results() {
     for streaming in [false, true] {
-        let mut host = HostRuntime::new();
+        let mut host = crate::support::task_scheduler::host();
         let world = world(&mut host);
         let source = producer(
             &mut host,
@@ -2601,7 +2604,7 @@ fn absent_parameters_preserve_lazy_fallback_and_reached_missing_input_results() 
             source,
             vec![vec![V::Bool(false)], vec![V::Bool(true)]],
         );
-        host.frame(0.0).unwrap();
+        host.frame_for_test(0.0).unwrap();
         let result = view(&mut host, world, entity);
         assert_eq!(result.availability, DataBindingAvailability::Ready);
         assert_eq!(result.row_ids, [DataRowId(1), DataRowId(2)]);
@@ -2634,7 +2637,7 @@ fn absent_parameters_preserve_lazy_fallback_and_reached_missing_input_results() 
 
 #[test]
 fn optional_parameter_removal_recreation_and_retype_rebuild_input_descriptors() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world = world(&mut host);
     let source = producer(
         &mut host,
@@ -2837,7 +2840,7 @@ impl ipp_core::systems::System for ConsumerTestSystem {
 fn ordinary_system_reads_completed_views_and_acknowledges_only_success() {
     let mut factories = ipp_core::systems::compiled_system_factories();
     factories.push(std::sync::Arc::new(ConsumerTestFactory));
-    let mut host = HostRuntime::with_system_factories(factories).unwrap();
+    let mut host = crate::support::task_scheduler::with_factories(factories).unwrap();
     let world = host
         .create_world(
             WorldLimits::default(),
@@ -2883,10 +2886,10 @@ fn ordinary_system_reads_completed_views_and_acknowledges_only_success() {
             .unwrap();
     };
     set_mode(&mut host, ConsumerTestMode::Fail);
-    host.frame(0.0).unwrap();
+    host.frame_for_test(0.0).unwrap();
     assert!(view(&mut host, world, entity).dirty);
     set_mode(&mut host, ConsumerTestMode::Succeed);
-    host.frame(0.0).unwrap();
+    host.frame_for_test(0.0).unwrap();
     assert!(!view(&mut host, world, entity).dirty);
     host.world_mut(world)
         .unwrap()
@@ -2910,10 +2913,10 @@ fn ordinary_system_reads_completed_views_and_acknowledges_only_success() {
         .unwrap();
     set_mode(&mut host, ConsumerTestMode::Skip);
     append(&mut host, source, vec![vec![V::U32(4)]]);
-    host.frame(0.0).unwrap();
+    host.frame_for_test(0.0).unwrap();
     assert!(view(&mut host, world, entity).dirty);
     set_mode(&mut host, ConsumerTestMode::Succeed);
-    host.frame(0.0).unwrap();
+    host.frame_for_test(0.0).unwrap();
     assert!(!view(&mut host, world, entity).dirty);
     // Replacing the existing consumer rebuilds initial state and rejects its old handle.
     set_mode(&mut host, ConsumerTestMode::Skip);

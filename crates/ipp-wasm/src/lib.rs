@@ -38,6 +38,9 @@ mod host;
 
 mod services;
 
+#[cfg(all(feature = "instrumentation", target_arch = "wasm32"))]
+mod task_scheduler_testing;
+
 #[cfg(test)]
 mod wasm_host_tests;
 
@@ -219,8 +222,20 @@ pub extern "C" fn ipp_resource_complete(session: u64, id: u64, success: u32, len
     })
 }
 
-/// Feed one bounded source chunk. Returns 1 accepted, 2 backpressure, 0 fatal.
-// SAFETY: Unique symbol; scalar arguments index the exclusively owned input reservation.
+/// Admit source bytes directly into eventual reader storage.
+/// Returns 1 when ready, 2 for capacity backpressure, 3 for a stale acquisition.
+#[unsafe(no_mangle)]
+pub extern "C" fn ipp_resource_chunk_reserve(session: u64, id: u64, len: usize) -> u32 {
+    BOUNDARY.with_borrow_mut(|boundary| boundary.reserve_asset_chunk(session, id, len))
+}
+
+/// Address of the current admitted span. No Rust reference survives this call.
+#[unsafe(no_mangle)]
+pub extern "C" fn ipp_resource_chunk_ptr() -> *mut u8 {
+    BOUNDARY.with_borrow_mut(|boundary| boundary.asset_chunk_ptr())
+}
+
+/// Commit the exact admitted source span; no additional byte copy occurs.
 #[unsafe(no_mangle)]
 pub extern "C" fn ipp_resource_chunk(session: u64, id: u64, len: usize) -> u32 {
     BOUNDARY.with_borrow_mut(|boundary| boundary.asset_chunk(session, id, len))
@@ -350,3 +365,15 @@ pub extern "C" fn ipp_accepts_input(connection: u64) -> u32 {
 
 #[cfg(feature = "instrumentation")]
 mod profiling;
+
+/// Register one Host-owned generated buffer source using the reserved UTF-8 name.
+#[unsafe(no_mangle)]
+pub extern "C" fn ipp_buffer_source_register(session: u64, len: usize) -> u32 {
+    BOUNDARY.with_borrow_mut(|boundary| u32::from(boundary.buffer_source(session, len, false)))
+}
+
+/// Revoke the exact generated source before releasing its external storage.
+#[unsafe(no_mangle)]
+pub extern "C" fn ipp_buffer_source_revoke(session: u64, len: usize) -> u32 {
+    BOUNDARY.with_borrow_mut(|boundary| u32::from(boundary.buffer_source(session, len, true)))
+}

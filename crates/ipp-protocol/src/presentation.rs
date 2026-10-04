@@ -161,15 +161,6 @@ pub enum PresentationRequest {
         /// Observe post-admission completed content from these exact outputs.
         after_outputs: Vec<OutputReference>,
     },
-    /// Read a bounded chunk of an immutable completed snapshot.
-    ReadCapture {
-        /// Connection-owned capture identity.
-        capture: u64,
-        /// Absolute byte offset in the RGBA8 snapshot.
-        offset: u64,
-    },
-    /// Idempotent exact connection-owned snapshot cleanup.
-    ReleaseCapture(u64),
     /// Cancel an outstanding request without changing Host configuration.
     CancelFrame {
         /// Original correlation on this connection.
@@ -191,18 +182,9 @@ pub enum PresentationResponse {
         /// Immutable source stamp retained across later selection/context changes.
         frame: PresentedFrame,
         /// Connection-owned read/release identity.
-        capture: u64,
+        read: crate::bulk_read::BulkReadReference,
         /// Exact RGBA8 byte length.
         bytes: u64,
-    },
-    /// At most one message-sized transfer page.
-    Chunk {
-        /// Exact connection-owned snapshot identity.
-        capture: u64,
-        /// Echoed absolute byte offset.
-        offset: u64,
-        /// Owned snapshot bytes.
-        bytes: Vec<u8>,
     },
     /// Cleanup completed; never implies a draw.
     Complete,
@@ -307,13 +289,6 @@ impl Reader<'_> {
                         .collect::<Result<_, _>>()?
                 },
             },
-            PRESENTATION_REQUEST_READ_CAPTURE => PresentationRequest::ReadCapture {
-                capture: self.u64()?,
-                offset: self.u64()?,
-            },
-            PRESENTATION_REQUEST_RELEASE_CAPTURE => {
-                PresentationRequest::ReleaseCapture(self.u64()?)
-            }
             PRESENTATION_REQUEST_CANCEL_FRAME => PresentationRequest::CancelFrame {
                 request: self.u64()?,
             },
@@ -330,13 +305,11 @@ impl Reader<'_> {
             PRESENTATION_RESPONSE_FRAME => PresentationResponse::Frame(self.presented_frame()?),
             PRESENTATION_RESPONSE_CAPTURE => PresentationResponse::Capture {
                 frame: self.presented_frame()?,
-                capture: self.u64()?,
+                read: crate::bulk_read::BulkReadReference {
+                    connection: self.u64()?,
+                    read: self.u64()?,
+                },
                 bytes: self.u64()?,
-            },
-            PRESENTATION_RESPONSE_CHUNK => PresentationResponse::Chunk {
-                capture: self.u64()?,
-                offset: self.u64()?,
-                bytes: self.bytes()?.to_vec(),
             },
             PRESENTATION_RESPONSE_COMPLETE => PresentationResponse::Complete,
             PRESENTATION_RESPONSE_ERROR => PresentationResponse::Error(match self.u8()? {
@@ -457,18 +430,6 @@ impl Writer {
                 }
                 Ok(())
             }
-            PresentationRequest::ReadCapture {
-                capture,
-                offset,
-            } => {
-                self.u8(PRESENTATION_REQUEST_READ_CAPTURE)?;
-                self.u64(*capture)?;
-                self.u64(*offset)
-            }
-            PresentationRequest::ReleaseCapture(capture) => {
-                self.u8(PRESENTATION_REQUEST_RELEASE_CAPTURE)?;
-                self.u64(*capture)
-            }
             PresentationRequest::CancelFrame {
                 request,
             } => {
@@ -497,23 +458,14 @@ impl Writer {
             }
             PresentationResponse::Capture {
                 frame,
-                capture,
+                read,
                 bytes,
             } => {
                 self.u8(PRESENTATION_RESPONSE_CAPTURE)?;
                 self.presented_frame(frame)?;
-                self.u64(*capture)?;
+                self.u64(read.connection)?;
+                self.u64(read.read)?;
                 self.u64(*bytes)
-            }
-            PresentationResponse::Chunk {
-                capture,
-                offset,
-                bytes,
-            } => {
-                self.u8(PRESENTATION_RESPONSE_CHUNK)?;
-                self.u64(*capture)?;
-                self.u64(*offset)?;
-                self.bytes(bytes)
             }
             PresentationResponse::Complete => self.u8(PRESENTATION_RESPONSE_COMPLETE),
             PresentationResponse::Error(error) => {

@@ -8,7 +8,6 @@ use crate::services::io::IoService;
 use crate::services::io::MemoryIoSource;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
-use std::task::{Context, Waker};
 
 /// Compiled resource type identity, extensible through registered factories.
 pub type AssetResourceKind = AssetTypeId;
@@ -130,6 +129,7 @@ pub struct AssetManagementService {
     pub(super) next_release_revision: u64,
     pub(super) lifecycle_events: VecDeque<super::lifecycle::AssetLifecycleEvent>,
     pub(crate) renderer_driven: bool,
+    pub(super) load_scheduler: Option<std::rc::Rc<dyn AssetLoadScheduler>>,
 }
 
 #[derive(Clone, Copy)]
@@ -160,6 +160,11 @@ impl Default for AssetManagementService {
 }
 
 impl AssetManagementService {
+    /// Supply the Host task executor before starting owned resource operations.
+    pub fn set_load_scheduler(&mut self, scheduler: std::rc::Rc<dyn AssetLoadScheduler>) {
+        self.load_scheduler = Some(scheduler);
+    }
+
     /// Default soft memory target (64 MiB) for completed resources without active users.
     ///
     /// Retaining unused immutable content while the cache has space is the documented
@@ -611,8 +616,7 @@ impl AssetManagementService {
     }
 
     pub(crate) fn poll(&mut self, data: &mut IoService) {
-        data.progress();
-        self.poll_loads(data, &mut Context::from_waker(Waker::noop()));
+        self.progress_loads(data);
     }
 
     pub(crate) fn set_evaluation_meshes(
@@ -631,7 +635,6 @@ impl AssetManagementService {
     }
 
     pub(crate) fn poll_evaluation_assets(&mut self, data: &mut IoService) {
-        data.progress();
         let keys = self
             .iter()
             .filter(|asset| {
@@ -655,7 +658,7 @@ impl AssetManagementService {
             })
             .map(|asset| asset.key())
             .collect();
-        self.poll_selected_loads(data, &keys, &mut Context::from_waker(Waker::noop()));
+        self.progress_selected_loads(data, &keys);
     }
 
     pub(crate) fn snapshots(&self, world: crate::WorldId) -> Vec<AssetResourceSnapshot> {

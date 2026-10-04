@@ -324,6 +324,10 @@ fn manifest_tag_space(space: TagSpace) -> &'static str {
         TagSpace::ProfileRequest => "profile-request",
         TagSpace::ProfileStatus => "profile-status",
         TagSpace::ProfileGpuSampling => "profile-gpu-sampling",
+        TagSpace::AssetExportRequest => "asset-export-request",
+        TagSpace::AssetExportResponse => "asset-export-response",
+        TagSpace::AssetRepresentation => "asset-representation",
+        TagSpace::AssetExportFormat => "asset-export-format",
     }
 }
 

@@ -1,3 +1,4 @@
+import type { BulkReadReference } from "@ipp/client";
 import type {
   Client,
   HostClientBase,
@@ -23,7 +24,7 @@ export interface CanvasSize {
 export interface CanvasPresentationJournal {
   readonly bindings: readonly RootBinding[];
   readonly views: readonly PresentationView[];
-  readonly captures: readonly bigint[];
+  readonly captures: readonly BulkReadReference[];
   readonly unknownMutations: readonly unknown[];
 }
 
@@ -38,7 +39,7 @@ export class CanvasPresentation {
   private readonly operations = new Set<Promise<unknown>>();
   private readonly bindings = new Set<RootBinding>();
   private readonly views = new Set<PresentationView>();
-  private readonly captures = new Set<bigint>();
+  private readonly captures = new Set<BulkReadReference>();
   private readonly unknownMutations: unknown[] = [];
   private current:
     | {
@@ -340,10 +341,10 @@ export class CanvasPresentation {
         if (
           error &&
           typeof error === "object" &&
-          "capture" in error &&
-          typeof error.capture === "bigint"
+          "reference" in error &&
+          typeof error.reference === "object"
         )
-          this.captures.add(error.capture);
+          this.captures.add(error.reference as BulkReadReference);
         throw error;
       }),
     );
@@ -406,7 +407,7 @@ export class CanvasPresentation {
     }
     for (const capture of this.captures) {
       try {
-        await this.host.presentation.releaseCapture(capture);
+        await this.host.reads.release(capture);
         this.captures.delete(capture);
       } catch (error) {
         errors.push(error);

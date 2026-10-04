@@ -244,13 +244,17 @@ fn tag_space_name(id: u8) -> Result<&'static str, String> {
         60 => Ok("profile-request"),
         61 => Ok("profile-status"),
         62 => Ok("profile-gpu-sampling"),
+        63 => Ok("asset-export-request"),
+        64 => Ok("asset-export-response"),
+        65 => Ok("asset-representation"),
+        66 => Ok("asset-export-format"),
 
         _ => Err("unknown wire tag space".into()),
     }
 }
 
 fn is_tag_space_name(name: &str) -> bool {
-    (1..=62).any(|id| tag_space_name(id).is_ok_and(|candidate| candidate == name))
+    (1..=66).any(|id| tag_space_name(id).is_ok_and(|candidate| candidate == name))
 }
 
 impl WireEncoding {
@@ -369,8 +373,21 @@ mod tests {
         assert_eq!(tag_space_name(61).unwrap(), "profile-status");
         assert_eq!(tag_space_name(62).unwrap(), "profile-gpu-sampling");
         assert!(is_tag_space_name("profile-gpu-sampling"));
-        assert!(tag_space_name(63).is_err());
+        for (id, name) in [
+            (63, "asset-export-request"),
+            (64, "asset-export-response"),
+            (65, "asset-representation"),
+            (66, "asset-export-format"),
+        ] {
+            assert_eq!(tag_space_name(id).unwrap(), name);
+            assert!(is_tag_space_name(name));
+        }
+        assert!(tag_space_name(67).is_err());
         assert!(!is_tag_space_name("animation-transition-unknown"));
         assert!(!is_tag_space_name("lifecycle-watch-unknown"));
     }
 }
+
+#[cfg(test)]
+#[path = "wire_export_tests.rs"]
+mod export_tests;

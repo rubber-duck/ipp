@@ -1,3 +1,4 @@
+import { readBulkReference } from "./bulk-reads.js";
 import type { Client } from "./client.js";
 import { HostClientBase } from "./host-client.js";
 import type { WorldCapacityHintsPatch } from "./host-protocol.js";
@@ -99,60 +100,20 @@ export abstract class WorldPersistenceHostClient<
     options: WorldTransferOptions = {},
   ): Promise<Uint8Array<ArrayBuffer>> {
     const maxBytes = this.beginTransfer(options);
-    let job: bigint | undefined;
     try {
       const accepted = await this.request(
         this.hostTag("HOST_REQUEST_SAVE_WORLD"),
         (writer) => writer.u64(session),
       );
-      this.expect(accepted, this.hostTag("HOST_RESPONSE_TRANSFER"));
-      job = accepted.u64();
+      this.expect(accepted, this.hostTag("HOST_RESPONSE_READ"));
+      const reference = readBulkReference(accepted);
+      const length = accepted.boolean() ? accepted.u64() : undefined;
       accepted.end();
-      let output: Uint8Array<ArrayBuffer> | undefined;
-      const readChunk = async (offset: number) => {
-        const reader = await this.request(
-          this.hostTag("HOST_REQUEST_READ_WORLD_SAVE"),
-          (writer) => {
-            writer.u64(job!);
-            writer.u64(BigInt(offset));
-          },
-        );
-        const tag = reader.u8();
-        if (
-          tag !== this.hostTag("HOST_RESPONSE_SAVE_CHUNK") ||
-          reader.u64() !== job ||
-          reader.u64() !== BigInt(offset)
-        )
-          throw new Error("Invalid save chunk");
-        const total = reader.u64();
-        if (total < 32n || total > BigInt(maxBytes))
-          throw new Error("Saved World exceeds byte budget");
-        output ??= new Uint8Array(Number(total));
-        if (output.length !== Number(total))
-          throw new Error("Save length changed");
-        const bytes = reader.bytes();
-        reader.end();
-        if (bytes.length !== Math.min(CHUNK_BYTES, output.length - offset))
-          throw new Error("Invalid save progress");
-        output.set(bytes, offset);
-      };
-      options.signal?.throwIfAborted();
-      await readChunk(0);
-      await transferChunks(
-        CHUNK_BYTES,
-        output!.length,
-        options.signal,
-        readChunk,
+      return await this.reads.readAll(
+        { reference, length },
+        { maxBytes, signal: options.signal },
       );
-      job = undefined;
-      options.signal?.throwIfAborted();
-      return output!;
     } finally {
-      if (job !== undefined)
-        await this.complete(
-          this.hostTag("HOST_REQUEST_CANCEL_WORLD_TRANSFER"),
-          (writer) => writer.u64(job!),
-        ).catch(() => {});
       this.transferring = false;
     }
   }

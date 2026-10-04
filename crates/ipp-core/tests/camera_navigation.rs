@@ -113,7 +113,7 @@ fn project(
 #[test]
 fn repeated_local_orbits_preserve_the_implied_pivot_with_nonuniform_scale() {
     for projection in [0, 1] {
-        let mut world_host = ipp_core::HostRuntime::new();
+        let mut world_host = crate::support::task_scheduler::host();
         let world_id = world_host
             .create_world(ipp_core::WorldLimits::default(), CAMERA)
             .unwrap();
@@ -175,7 +175,7 @@ fn repeated_local_orbits_preserve_the_implied_pivot_with_nonuniform_scale() {
 
 #[test]
 fn yaw_then_pitch_uses_camera_local_axes_and_reverses_in_reverse_order() {
-    let mut world_host = ipp_core::HostRuntime::new();
+    let mut world_host = crate::support::task_scheduler::host();
     let world_id = world_host
         .create_world(ipp_core::WorldLimits::default(), CAMERA)
         .unwrap();
@@ -237,7 +237,7 @@ fn yaw_then_pitch_uses_camera_local_axes_and_reverses_in_reverse_order() {
 #[test]
 fn projection_pan_tracks_the_cursor_and_zoom_preserves_the_pivot() {
     for projection in [0, 1] {
-        let mut world_host = ipp_core::HostRuntime::new();
+        let mut world_host = crate::support::task_scheduler::host();
         let world_id = world_host
             .create_world(ipp_core::WorldLimits::default(), CAMERA)
             .unwrap();
@@ -326,7 +326,7 @@ fn projection_pan_tracks_the_cursor_and_zoom_preserves_the_pivot() {
 
 #[test]
 fn navigation_selection_and_base_writes_follow_one_ordered_queue() {
-    let mut world_host = ipp_core::HostRuntime::new();
+    let mut world_host = crate::support::task_scheduler::host();
     let world_id = world_host
         .create_world(ipp_core::WorldLimits::default(), CAMERA)
         .unwrap();
@@ -384,7 +384,7 @@ fn navigation_selection_and_base_writes_follow_one_ordered_queue() {
 
 #[test]
 fn invalid_and_unrepresentable_navigation_preserves_every_component() {
-    let mut world_host = ipp_core::HostRuntime::new();
+    let mut world_host = crate::support::task_scheduler::host();
     let world_id = world_host
         .create_world(ipp_core::WorldLimits::default(), CAMERA)
         .unwrap();
@@ -514,7 +514,7 @@ fn invalid_and_unrepresentable_navigation_preserves_every_component() {
 
 #[test]
 fn navigation_shares_queue_bounds_and_invalid_time_preserves_pending_commands() {
-    let mut world_host = ipp_core::HostRuntime::new();
+    let mut world_host = crate::support::task_scheduler::host();
     let world_id = world_host
         .create_world(
             WorldLimits {

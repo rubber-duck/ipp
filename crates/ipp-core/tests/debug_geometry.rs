@@ -77,7 +77,7 @@ fn unit_geometry() -> BoundingGeometry {
 
 #[test]
 fn sparse_updates_preserve_omission_reject_atomically_and_keep_submission_order() {
-    let mut world_host = ipp_core::HostRuntime::new();
+    let mut world_host = crate::support::task_scheduler::host();
     let world_id = world_host
         .create_world(ipp_core::WorldLimits::default(), RENDER)
         .unwrap();
@@ -160,7 +160,7 @@ fn sparse_updates_preserve_omission_reject_atomically_and_keep_submission_order(
         world.render_state().unwrap().debug_geometry_color,
         [0.2, 0.3, 0.4]
     );
-    let mut fresh_host = ipp_core::HostRuntime::new();
+    let mut fresh_host = crate::support::task_scheduler::host();
     let fresh = fresh_host.create_world(Default::default(), RENDER).unwrap();
     assert_eq!(
         fresh_host.world_mut(fresh).unwrap().render_state().unwrap(),
@@ -170,7 +170,7 @@ fn sparse_updates_preserve_omission_reject_atomically_and_keep_submission_order(
 
 #[test]
 fn state_notifications_omit_unchanged_fields_and_retain_each_changed_transition() {
-    let mut world_host = ipp_core::HostRuntime::new();
+    let mut world_host = crate::support::task_scheduler::host();
     let world_id = world_host
         .create_world(ipp_core::WorldLimits::default(), RENDER)
         .unwrap();
@@ -212,7 +212,7 @@ fn state_notifications_omit_unchanged_fields_and_retain_each_changed_transition(
 
 #[test]
 fn render_state_and_batches_share_the_bounded_control_queue() {
-    let mut world_host = ipp_core::HostRuntime::new();
+    let mut world_host = crate::support::task_scheduler::host();
     let world_id = world_host
         .create_world(
             WorldLimits {
@@ -282,7 +282,7 @@ fn boolean_schema_uses_exact_types_offsets_and_canonical_defaults() {
     true.write_default(&mut bytes);
     assert_eq!(bytes, [0, 1]);
 
-    let mut world_host = ipp_core::HostRuntime::new();
+    let mut world_host = crate::support::task_scheduler::host();
     let world_id = world_host
         .create_world(ipp_core::WorldLimits::default(), GEOMETRY)
         .unwrap();
@@ -314,7 +314,7 @@ fn boolean_schema_uses_exact_types_offsets_and_canonical_defaults() {
 fn shapes_validate_without_acquiring_assets_and_global_state_preserves_authored_values() {
     for shape in 0..3 {
         for outline in [false, true] {
-            let mut world_host = ipp_core::HostRuntime::new();
+            let mut world_host = crate::support::task_scheduler::host();
             let world_id = world_host
                 .create_world(ipp_core::WorldLimits::default(), RENDER)
                 .unwrap();
@@ -365,7 +365,7 @@ fn shapes_validate_without_acquiring_assets_and_global_state_preserves_authored_
             ..unit_geometry()
         },
     ] {
-        let mut world_host = ipp_core::HostRuntime::new();
+        let mut world_host = crate::support::task_scheduler::host();
         let world_id = world_host
             .create_world(ipp_core::WorldLimits::default(), RENDER)
             .unwrap();
@@ -389,7 +389,7 @@ fn shapes_validate_without_acquiring_assets_and_global_state_preserves_authored_
 
 #[test]
 fn debug_items_are_independent_of_visual_materials_meshes_and_picking() {
-    let mut world_host = ipp_core::HostRuntime::new();
+    let mut world_host = crate::support::task_scheduler::host();
     let world_id = world_host
         .create_world(ipp_core::WorldLimits::default(), RENDER)
         .unwrap();
@@ -449,7 +449,7 @@ fn publication_retains_all_parts_and_individual_debug_policy() {
     use ipp_core::components::PickingGeometry;
     use ipp_core::systems::render::{RenderPublication, RenderSystem};
 
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host.create_world(Default::default(), RENDER).unwrap();
     let compound = GeometryDefinition {
         parts: vec![
@@ -591,7 +591,7 @@ fn private_generator_rejects_unrepresentable_arrowheads_and_collapsed_dimensions
 
 #[test]
 fn ambient_updates_accept_hdr_preserve_omission_and_reject_atomically() {
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host.create_world(Default::default(), RENDER).unwrap();
     let mut world = host.world_mut(id).unwrap();
     assert_eq!(world.render_state().unwrap().ambient_light, [0.0; 3]);

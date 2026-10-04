@@ -20,7 +20,7 @@ const SESSION: u64 = 1;
 
 #[test]
 fn later_world_reconciliation_preserves_completed_release_observations() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     host.io_mut().register_stream("fixture://").unwrap();
     let first = host
         .create_world(Default::default(), &select(&[LIFECYCLE, RENDER]))
@@ -111,7 +111,7 @@ fn later_world_reconciliation_preserves_completed_release_observations() {
     for world in [first, second] {
         host.world_mut(world).unwrap().prepare_update(0.0).unwrap();
     }
-    host.progress_assets();
+    support::task_scheduler::progress(&mut host);
 
     // The first World drops its last reference and drains its ordinary resource
     // report. Its subscription still needs the eventual shared release event.
@@ -152,7 +152,7 @@ fn later_world_reconciliation_preserves_completed_release_observations() {
 
 #[test]
 fn release_deferred_by_a_publication_lease_still_reaches_the_departed_consumer() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     // This test proves eviction at final demand, so the Host keeps no idle cache.
     host.asset_resources_mut().set_idle_resident_bytes_target(0);
     host.io_mut().register_stream("fixture://").unwrap();
@@ -202,6 +202,7 @@ fn release_deferred_by_a_publication_lease_still_reaches_the_departed_consumer()
     };
     let mut events = Vec::new();
     for _ in 0..16 {
+        support::task_scheduler::progress(&mut host);
         host.frame(0.0).unwrap();
         events.extend(drain(&mut host, world));
         for request in host.take_resource_requests() {
@@ -217,6 +218,7 @@ fn release_deferred_by_a_publication_lease_still_reaches_the_departed_consumer()
         }
     }
     let key = host.asset_resources().find(&source).unwrap();
+    support::task_scheduler::progress(&mut host);
     host.frame(0.0).unwrap();
     events.extend(drain(&mut host, world));
     assert!(events.iter().any(|event| matches!(event,
@@ -239,6 +241,7 @@ fn release_deferred_by_a_publication_lease_still_reaches_the_departed_consumer()
     // completed publication still leases the mesh; the release follows later.
     let mut events = Vec::new();
     for _ in 0..4 {
+        support::task_scheduler::progress(&mut host);
         host.frame(0.0).unwrap();
         events.extend(drain(&mut host, world));
     }
@@ -260,7 +263,7 @@ fn frame(host: &mut HostRuntime, worlds: [WorldId; 2]) {
     for world in worlds {
         host.world_mut(world).unwrap().prepare_update(0.0).unwrap();
     }
-    host.progress_assets();
+    support::task_scheduler::progress(host);
     for world in worlds {
         host.world_mut(world).unwrap().step(0.0).unwrap();
     }

@@ -206,10 +206,6 @@ fn stale_graph_jobs_and_overlapping_begin_never_cancel_a_newer_published_graph()
             HostRequestBody::CancelWorldTransfer {
                 job: old,
             },
-            HostRequestBody::ReadWorldSave {
-                job: old,
-                offset: 0,
-            },
             HostRequestBody::InspectWorldLoad {
                 job: old,
                 offset: 0,

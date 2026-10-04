@@ -11,7 +11,7 @@ use ipp_core::{
 
 #[test]
 fn invalid_light_batch_keeps_prior_components_and_light_order_is_stable() {
-    let mut world_host = ipp_core::HostRuntime::new();
+    let mut world_host = crate::support::task_scheduler::host();
     let world_id = world_host
         .create_world(ipp_core::WorldLimits::default(), RENDER)
         .unwrap();

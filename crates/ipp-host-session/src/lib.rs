@@ -41,6 +41,27 @@ pub trait HostServices {
     /// Short diagnostic identity such as `server` or `wasm`.
     const NAME: &'static str;
 
+    /// Supported semantic GPU encodings for this compiled Host/device.
+    fn asset_gpu_formats(
+        &self,
+        _kind: ipp_core::services::asset_management::AssetTypeId,
+    ) -> Vec<ipp_core::services::asset_management::export::AssetExportFormat> {
+        Vec::new()
+    }
+
+    /// Capture an owned renderer operation without graphics calls at this factory boundary.
+    /// The Host scheduler establishes current context before polling and cancellation cleanup.
+    fn asset_gpu_export(
+        &mut self,
+        _provider: &ipp_core::services::asset_management::AssetProvider,
+        _format: ipp_core::services::asset_management::export::AssetExportFormat,
+        _observer: std::rc::Rc<
+            dyn ipp_core::services::asset_management::export::AssetOutputObserver,
+        >,
+    ) -> Result<ipp_core::services::asset_management::export::AssetExportFuture, String> {
+        Err("GPU asset export is unsupported by this Host".into())
+    }
+
     /// Start optional renderer measurements at an accepted capture boundary.
     #[cfg(feature = "instrumentation")]
     fn render_profile_start(
@@ -71,9 +92,18 @@ pub trait HostServices {
     fn render_profile_cancel(&mut self, _capture: u64) {}
 
     /// Initialize shared facilities before publishing any world.
-    fn initialize(host: &mut ipp_core::HostRuntime) -> Result<Self, String>
+    fn initialize(
+        host: &mut ipp_core::HostRuntime,
+        _schedulers: &crate::services::task_scheduler::TaskSchedulers,
+    ) -> Result<Self, String>
     where
         Self: Sized;
+
+    /// Prepare platform context for ready task polls and cancellation destructors.
+    /// This boundary must not mutate or evaluate Worlds.
+    fn prepare_task_poll(&mut self, _host: &mut ipp_core::HostRuntime) -> Result<(), String> {
+        Ok(())
+    }
 
     /// Current rendered surface dimensions; headless hosts accept query dimensions.
     fn render_viewport(&self) -> Option<(u32, u32)> {
@@ -252,6 +282,7 @@ pub(crate) use session::next_ingress_id;
 pub struct Host<P: HostServices> {
     #[cfg(feature = "instrumentation")]
     profiling: profiling::HostProfiling,
+    scheduler: services::task_scheduler::TaskSchedulerService,
     connections: services::connection::HostConnectionService,
     sessions: std::collections::BTreeMap<u64, WorldSession>,
     runtime: ipp_core::HostRuntime,
@@ -279,3 +310,6 @@ mod render_state_tests;
 #[cfg(test)]
 mod command_batches_tests;
 mod gui_observations;
+
+/// Trusted Host public-source policy identity; copying it grants no client authority.
+pub use services::connection::PublicAssetSourceId;

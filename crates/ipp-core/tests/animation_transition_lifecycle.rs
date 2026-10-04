@@ -5,7 +5,7 @@ mod support;
 use std::mem::offset_of;
 
 use ipp_core::{
-    Batch, Command, ComponentValue, EntityId, EntityRef, HostRuntime, WorldContext, WorldLimits,
+    Batch, Command, ComponentValue, EntityId, EntityRef, WorldContext, WorldLimits,
     components::Scalar,
     components::schema::FieldValue,
     services::asset_management::{AssetUpload, AssetUploadIdentity},
@@ -165,7 +165,7 @@ fn scalar(world: &WorldContext<'_>, target: EntityId) -> f32 {
 
 #[test]
 fn removing_and_reusing_a_source_only_component_does_not_rebind_the_transition() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world_id = host
         .create_world(WorldLimits::default(), &select(&[ASSETS, CONSTRAINTS]))
         .unwrap();
@@ -217,7 +217,7 @@ fn removing_and_reusing_a_source_only_component_does_not_rebind_the_transition()
 
 #[test]
 fn pending_frozen_source_only_replacement_invalidates_the_held_program() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world_id = host
         .create_world(WorldLimits::default(), &select(&[ASSETS, CONSTRAINTS]))
         .unwrap();
@@ -308,7 +308,7 @@ fn material_properties(world: &WorldContext<'_>, entity: EntityId) -> ipp_core::
 
 #[test]
 fn pending_frozen_material_property_reuse_does_not_write_through_old_descriptor() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world_id = host.create_world(WorldLimits::default(), RENDER).unwrap();
     let mut world = host.world_mut(world_id).unwrap();
     let set = |name: &str, value: f32| Command::SetDynamicProperty {
@@ -460,7 +460,7 @@ fn pending_frozen_material_property_reuse_does_not_write_through_old_descriptor(
 #[test]
 fn interrupted_disjoint_union_restores_every_original_on_stop_and_delete() {
     for delete in [false, true] {
-        let mut host = HostRuntime::new();
+        let mut host = crate::support::task_scheduler::host();
         let world_id = host
             .create_world(WorldLimits::default(), &select(&[ASSETS, CONSTRAINTS]))
             .unwrap();
@@ -501,7 +501,7 @@ fn interrupted_disjoint_union_restores_every_original_on_stop_and_delete() {
 fn outgoing_asset_unload_holds_transition_until_reload_then_target_removal_stops_it() {
     use support::HostWorldTestDriver;
 
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world_id = host
         .create_world(WorldLimits::default(), &select(&[ASSETS, CONSTRAINTS]))
         .unwrap();
@@ -591,7 +591,7 @@ fn outgoing_asset_unload_holds_transition_until_reload_then_target_removal_stops
 
 #[test]
 fn interrupted_disjoint_union_round_trips_with_only_destination_asset_and_resumes() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world_id = host
         .create_world(WorldLimits::default(), &select(&[ASSETS, CONSTRAINTS]))
         .unwrap();
@@ -619,7 +619,7 @@ fn interrupted_disjoint_union_round_trips_with_only_destination_asset_and_resume
 
     drop(world);
 
-    let mut restored_host = HostRuntime::new();
+    let mut restored_host = crate::support::task_scheduler::host();
     let restored_world_id = restored_host
         .create_world(WorldLimits::default(), &select(&[ASSETS, CONSTRAINTS]))
         .unwrap();

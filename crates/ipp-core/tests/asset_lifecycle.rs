@@ -1,12 +1,7 @@
 //! Real slot-backed assets and generic asynchronous data flow.
+mod support;
 use ipp_core::services::{asset_management::*, io::*};
-use std::{
-    any::Any,
-    cell::Cell,
-    collections::BTreeSet,
-    rc::Rc,
-    task::{Context, Waker},
-};
+use std::{any::Any, cell::Cell, collections::BTreeSet, rc::Rc};
 
 struct Blob(Vec<u8>);
 
@@ -25,7 +20,7 @@ impl Asset for Blob {
 }
 
 fn blob_loader() -> impl AssetLoader<Data = Blob> {
-    BufferedAssetLoader::new(|bytes| Ok(Blob(bytes.to_vec())))
+    crate::support::task_scheduler::blob_loader(|bytes| Ok(Blob(bytes.to_vec())))
 }
 
 struct GraphicsBlob {
@@ -60,7 +55,7 @@ impl Asset for GraphicsBlob {
 }
 
 fn graphics_blob_loader() -> impl AssetLoader<Data = GraphicsBlob> {
-    BufferedAssetLoader::new(|bytes| {
+    crate::support::task_scheduler::blob_loader(|bytes| {
         Ok(GraphicsBlob {
             bytes: bytes.to_vec(),
             graphics_bytes: 16,
@@ -70,6 +65,7 @@ fn graphics_blob_loader() -> impl AssetLoader<Data = GraphicsBlob> {
 
 fn fixture() -> (AssetManagementService, IoService) {
     let mut assets = AssetManagementService::empty();
+    crate::support::task_scheduler::install_assets(&mut assets);
     // Retention mechanics need an unbounded budget so the default soft target
     // never evicts during these tests.
     assets.set_idle_resident_bytes_target(usize::MAX);
@@ -85,6 +81,7 @@ fn fixture() -> (AssetManagementService, IoService) {
 #[test]
 fn idle_cache_retains_by_default_and_remains_host_configurable() {
     let mut assets = AssetManagementService::empty();
+    crate::support::task_scheduler::install_assets(&mut assets);
     assert_eq!(
         AssetManagementService::DEFAULT_IDLE_RESIDENT_BYTES_TARGET,
         64 * 1024 * 1024
@@ -94,7 +91,7 @@ fn idle_cache_retains_by_default_and_remains_host_configurable() {
         AssetManagementService::DEFAULT_IDLE_RESIDENT_BYTES_TARGET
     );
     assert_eq!(
-        ipp_core::HostRuntime::new()
+        crate::support::task_scheduler::host()
             .asset_resources()
             .idle_resident_bytes_target(),
         AssetManagementService::DEFAULT_IDLE_RESIDENT_BYTES_TARGET
@@ -116,13 +113,14 @@ fn source(uri: &str) -> AssetSource {
 }
 
 fn poll(assets: &mut AssetManagementService, data: &mut IoService) {
-    data.progress();
-    assets.poll_loads(data, &mut Context::from_waker(Waker::noop()));
+    assets.progress_loads(data);
+    crate::support::task_scheduler::poll_ready();
+    assets.progress_loads(data);
 }
 
 #[test]
 fn detached_progress_runs_cpu_loaders_but_defers_graphics_owned_loaders() {
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let cpu_polls = Rc::new(Cell::new(0));
     let graphics_polls = Rc::new(Cell::new(0));
     host.asset_resources_mut()
@@ -130,7 +128,7 @@ fn detached_progress_runs_cpu_loaders_but_defers_graphics_owned_loaders() {
             let polls = cpu_polls.clone();
             move || {
                 let polls = polls.clone();
-                BufferedAssetLoader::new(move |bytes| {
+                crate::support::task_scheduler::blob_loader(move |bytes| {
                     polls.set(polls.get() + 1);
                     Ok(Blob(bytes.to_vec()))
                 })
@@ -142,7 +140,7 @@ fn detached_progress_runs_cpu_loaders_but_defers_graphics_owned_loaders() {
             let polls = graphics_polls.clone();
             move || {
                 let polls = polls.clone();
-                BufferedAssetLoader::new(move |bytes| {
+                crate::support::task_scheduler::blob_loader(move |bytes| {
                     polls.set(polls.get() + 1);
                     Ok(Blob(bytes.to_vec()))
                 })
@@ -174,6 +172,8 @@ fn detached_progress_runs_cpu_loaders_but_defers_graphics_owned_loaders() {
 
     for _ in 0..4 {
         host.progress_evaluation_assets();
+        crate::support::task_scheduler::poll_ready();
+        host.progress_evaluation_assets();
     }
 
     assert_eq!(cpu_polls.get(), 1);
@@ -181,6 +181,8 @@ fn detached_progress_runs_cpu_loaders_but_defers_graphics_owned_loaders() {
     assert!(host.asset_resources().get_typed::<Blob>(cpu).is_some());
     assert!(host.asset_resources().get_typed::<Blob>(graphics).is_none());
 
+    host.progress_assets();
+    crate::support::task_scheduler::poll_ready();
     host.progress_assets();
 
     assert_eq!(graphics_polls.get(), 1);
@@ -447,7 +449,7 @@ fn cached_external_identity_can_become_a_standalone_producer_upload() {
 
 #[test]
 fn cached_external_identity_can_become_a_producer_upload_across_host_barriers() {
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     host.asset_resources_mut()
         .set_idle_resident_bytes_target(usize::MAX);
     host.asset_resources_mut()
@@ -466,9 +468,13 @@ fn cached_external_identity_can_become_a_producer_upload_across_host_barriers() 
         .unwrap();
     host.asset_resources_mut().set_used(BTreeSet::from([key]));
     host.progress_assets();
+    crate::support::task_scheduler::poll_ready();
+    host.progress_assets();
     let request = host.take_resource_requests().pop().unwrap();
     host.complete_resource(request.id, Ok(b"external".to_vec()))
         .unwrap();
+    host.progress_assets();
+    crate::support::task_scheduler::poll_ready();
     host.progress_assets();
     host.asset_resources_mut().set_used(BTreeSet::new());
     host.asset_resources_mut().free_unused();
@@ -481,6 +487,8 @@ fn cached_external_identity_can_become_a_producer_upload_across_host_barriers() 
         key
     );
     host.flush_resource_lifecycle();
+    host.progress_assets();
+    crate::support::task_scheduler::poll_ready();
     host.progress_assets();
     assert_eq!(
         host.asset_resources().get_typed::<Blob>(key).unwrap().0,
@@ -548,8 +556,9 @@ fn input_backpressure_and_reader_drop_bound_staging() {
         data.input_chunk(request.id, &vec![7; STREAM_CAPACITY])
             .unwrap()
     );
-    assert!(!data.input_chunk(request.id, &[8]).unwrap());
-    assert_eq!(data.input_bytes(), STREAM_CAPACITY);
+    assert!(data.input_chunk(request.id, &[8]).unwrap());
+    assert!(!data.input_chunk(request.id, &[9]).unwrap());
+    assert_eq!(data.input_bytes(), STREAM_CAPACITY + 1);
     assets.free_unused();
     assert!(assets.get(key).is_none());
     assert_eq!(data.input_bytes(), 0);
@@ -767,7 +776,7 @@ fn named_source_ownership_is_shared_and_revision_identifiers_are_literal() {
 
 #[test]
 fn shared_world_ownership_survives_one_teardown_and_private_content_dies_with_the_last() {
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     host.asset_resources_mut()
         .register_loader(AssetTypeId(42), blob_loader)
         .unwrap();
@@ -780,6 +789,8 @@ fn shared_world_ownership_survives_one_teardown_and_private_content_dies_with_th
     host.asset_resources_mut()
         .retain_prepared_source(second_world, &source)
         .unwrap();
+    host.progress_assets();
+    crate::support::task_scheduler::poll_ready();
     host.progress_assets();
     let key = host.asset_resources().find(&source).unwrap();
 
@@ -794,7 +805,7 @@ fn shared_world_ownership_survives_one_teardown_and_private_content_dies_with_th
 
 #[test]
 fn private_preparation_reclaimed_before_the_release_barrier_preserves_identity() {
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     host.asset_resources_mut()
         .register_loader(AssetTypeId(42), blob_loader)
         .unwrap();
@@ -807,6 +818,8 @@ fn private_preparation_reclaimed_before_the_release_barrier_preserves_identity()
     host.asset_resources_mut()
         .retain_internal_sources(world, &[key])
         .unwrap();
+    host.progress_assets();
+    crate::support::task_scheduler::poll_ready();
     host.progress_assets();
     assert_eq!(host.asset_resources().find(&source), Some(key));
     assert!(
@@ -827,6 +840,8 @@ fn private_preparation_reclaimed_before_the_release_barrier_preserves_identity()
         .unwrap();
     assert_eq!(prepared, key);
     host.progress_assets();
+    crate::support::task_scheduler::poll_ready();
+    host.progress_assets();
     assert_eq!(host.asset_resources().find(&source), Some(key));
     assert_eq!(
         host.asset_resources().get_typed::<Blob>(key).unwrap().0,
@@ -834,13 +849,15 @@ fn private_preparation_reclaimed_before_the_release_barrier_preserves_identity()
     );
     host.destroy_world(world);
     host.progress_assets();
+    crate::support::task_scheduler::poll_ready();
+    host.progress_assets();
     assert!(host.asset_resources().find(&source).is_none());
 }
 
 #[test]
 fn headless_shader_sources_are_retained_without_claiming_gpu_readiness() {
     use shader::{SHADER_TYPE, ShaderBackendSource, ShaderDefinition};
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world = host.create_world(Default::default(), &[]).unwrap();
     let source = AssetSource {
         kind: SHADER_TYPE,
@@ -863,6 +880,8 @@ fn headless_shader_sources_are_retained_without_claiming_gpu_readiness() {
         .register_client_source(world, source.clone(), definition.encode().unwrap())
         .unwrap();
     host.progress_assets();
+    crate::support::task_scheduler::poll_ready();
+    host.progress_assets();
     let key = host.asset_resources().find(&source).unwrap();
     assert!(
         matches!(host.asset_resources().get(key).unwrap().status(), AssetLoadStatus::Failed(error) if error.contains("rendering Host"))
@@ -877,6 +896,8 @@ fn headless_shader_sources_are_retained_without_claiming_gpu_readiness() {
             > 0
     );
     host.asset_resources_mut().unload(key);
+    host.progress_assets();
+    crate::support::task_scheduler::poll_ready();
     host.progress_assets();
     assert_eq!(host.asset_resources().find(&source), Some(key));
 }

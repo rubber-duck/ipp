@@ -6,12 +6,10 @@ use support::selection::CAMERA;
 
 use ipp_core::components::{Camera, Transform};
 use ipp_core::systems::{camera::CameraPublication, geometry::GeometryShapeTransform};
-use ipp_core::{
-    Batch, Command, ComponentValue, EntityRef, ErrorReason, HostRuntime, OutputKind, WorldPlane,
-};
+use ipp_core::{Batch, Command, ComponentValue, EntityRef, ErrorReason, OutputKind, WorldPlane};
 
 fn publication(camera: Camera) -> CameraPublication {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world = host.create_world(Default::default(), CAMERA).unwrap();
     host.world_mut(world)
         .unwrap()

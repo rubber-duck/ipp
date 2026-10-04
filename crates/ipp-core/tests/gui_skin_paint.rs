@@ -6,6 +6,7 @@
 //! and the control geometry constants, never read back from the implementation.
 
 mod support;
+use support::task_scheduler::HostTaskTestDriver;
 
 use ipp_core::components::rows::Rows;
 use ipp_core::components::{
@@ -78,7 +79,7 @@ fn apply(host: &mut HostRuntime, world: WorldId, operations: Vec<Command>) -> Ba
         })
         .unwrap();
 
-    host.frame(0.0)
+    host.frame_for_test(0.0)
         .unwrap()
         .worlds
         .remove(&world)
@@ -204,7 +205,7 @@ fn painted_box(primitive: &CanvasPrimitive) -> PaintedBox {
 
 impl Panel {
     fn new() -> Self {
-        let mut host = HostRuntime::new();
+        let mut host = crate::support::task_scheduler::host();
         let world = host
             .create_world(Default::default(), &select(&[ASSETS, GUI_LAYOUT]))
             .unwrap();
@@ -330,8 +331,8 @@ impl Panel {
     fn frame(&mut self) {
         // Advance every loader as a render-capable Host's service phase does;
         // headless evaluation progress alone never loads texture payloads.
-        self.host.progress_assets();
-        let frame = self.host.frame(0.1).unwrap();
+        self.host.progress_assets_for_test();
+        let frame = self.host.frame_for_test(0.1).unwrap();
         assert!(
             frame.worlds.values().all(Result::is_ok),
             "{:?}",
@@ -1995,7 +1996,7 @@ fn unloading_a_retained_skin_asset_cancels_its_recovery_once_paint_drops_it() {
     // service may ask to recover it; the next publication drops the retained
     // paint, which cancels that recovery instead of re-acquiring the drawing.
     panel.host.asset_resources_mut().unload(ready_key);
-    panel.host.progress_assets();
+    panel.host.progress_assets_for_test();
     let recovery: Vec<_> = panel
         .host
         .take_resource_requests()

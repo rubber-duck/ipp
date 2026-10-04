@@ -1,3 +1,4 @@
+import { createWebGlTextureReadback } from "./webgl_texture_readback.js";
 import { createWebGlCallCounts } from "./webgl_call_counts.js";
 import { createWebGlGpuQueries } from "./webgl_gpu_queries.js";
 declare const IPP_INSTRUMENTATION: boolean;
@@ -960,6 +961,16 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     checkDraw();
   }
 
+  const textureReadback = createWebGlTextureReadback(gl, {
+    texture: (id) => textures.get(id),
+    id,
+    live,
+    check,
+    memory: buffer,
+    target: () => ({ draw: drawFramebuffer, read: readFramebuffer }),
+    bind: bindFramebuffers,
+  });
+
   function lost(event: Event): void {
     linearTarget = undefined;
     presentationTarget = undefined;
@@ -986,6 +997,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     invalidateSubmission();
     programs.clear();
     meshes.clear();
+    textureReadback.reset(true);
     textures.clear();
     shadows.clear();
     shadowTarget = undefined;
@@ -1001,6 +1013,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     depthWrite = gl.getParameter(gl.DEPTH_WRITEMASK) as boolean;
     programs.clear();
     meshes.clear();
+    textureReadback.reset(true);
     textures.clear();
     surfacePaths.clear();
     surfaceQuadVao = null;
@@ -2800,6 +2813,22 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
   {
     imports.create_mesh_uv = createMesh;
     imports.draw_textured = drawMesh;
+    imports.texture_readback_begin = (
+      texture: number,
+      width: number,
+      height: number,
+    ): number => status(() => textureReadback.begin(texture, width, height));
+    imports.texture_readback_poll = (id: number): number =>
+      status(() => textureReadback.poll(id));
+    imports.texture_readback_copy = (
+      id: number,
+      offset: number,
+      pointer: number,
+      length: number,
+    ): number =>
+      status(() => textureReadback.copy(id, offset, pointer, length));
+    imports.texture_readback_delete = (id: number): void =>
+      textureReadback.remove(id >>> 0, disposed || gl.isContextLost());
     imports.create_texture = (
       width: number,
       height: number,
@@ -2978,6 +3007,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
       canvas.removeEventListener("webglcontextlost", lost);
       canvas.removeEventListener("webglcontextrestored", restored);
       if (!gl.isContextLost()) {
+        textureReadback.reset(false);
         releaseLinearTarget();
         gl.deleteBuffer(parameterBuffer);
         parameterBuffer = null;
@@ -3023,6 +3053,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
       surfaceCacheTargets.clear();
       surfaceCacheTarget = undefined;
       meshes.clear();
+      textureReadback.reset(true);
       textures.clear();
       shadows.clear();
       shadowTarget = undefined;

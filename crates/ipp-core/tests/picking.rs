@@ -110,7 +110,7 @@ fn query(x: f32, y: f32) -> GeometryPickQuery {
 #[test]
 fn requested_view_planes_use_camera_forward_independent_of_pointer_and_scale() {
     for projection in [0, 1] {
-        let mut fixture_host = ipp_core::HostRuntime::new();
+        let mut fixture_host = crate::support::task_scheduler::host();
         let (mut world, active) = setup(&mut fixture_host);
         let selected = target(
             &mut world,
@@ -176,7 +176,7 @@ fn requested_view_planes_use_camera_forward_independent_of_pointer_and_scale() {
 
 #[test]
 fn view_plane_uses_final_camera_when_activation_follows_query() {
-    let mut fixture_host = ipp_core::HostRuntime::new();
+    let mut fixture_host = crate::support::task_scheduler::host();
     let (mut world, _) = setup(&mut fixture_host);
     let second = camera(
         &mut world,
@@ -275,7 +275,7 @@ fn resource_geometry(source: &str) -> PickingGeometry {
 
 #[test]
 fn queries_observe_final_camera_and_mutations_regardless_of_submission_position() {
-    let mut fixture_host = ipp_core::HostRuntime::new();
+    let mut fixture_host = crate::support::task_scheduler::host();
     let (mut world, first) = setup(&mut fixture_host);
     let second = camera(
         &mut world,
@@ -332,7 +332,7 @@ fn queries_observe_final_camera_and_mutations_regardless_of_submission_position(
 
 #[test]
 fn box_nearest_distance_scale_and_entity_ties_are_world_space() {
-    let mut fixture_host = ipp_core::HostRuntime::new();
+    let mut fixture_host = crate::support::task_scheduler::host();
     let (mut world, _) = setup(&mut fixture_host);
     let first = target(
         &mut world,
@@ -368,7 +368,7 @@ fn box_nearest_distance_scale_and_entity_ties_are_world_space() {
 
 #[test]
 fn clipping_uses_camera_planes_and_does_not_invent_clipped_box_surfaces() {
-    let mut fixture_host = ipp_core::HostRuntime::new();
+    let mut fixture_host = crate::support::task_scheduler::host();
     let (mut world, camera) = setup(&mut fixture_host);
     let target = target(
         &mut world,
@@ -416,7 +416,7 @@ fn clipping_uses_camera_planes_and_does_not_invent_clipped_box_surfaces() {
 
 #[test]
 fn perspective_aspect_and_rotated_pose_agree_with_shared_projection() {
-    let mut fixture_host = ipp_core::HostRuntime::new();
+    let mut fixture_host = crate::support::task_scheduler::host();
     let (mut world, camera) = setup(&mut fixture_host);
     run(
         &mut world,
@@ -484,7 +484,7 @@ fn target_at_origin(world: &mut ipp_core::WorldContext<'_>) {
 
 #[test]
 fn compound_geometry_preserves_holes_and_authored_part_identity_after_transforms() {
-    let mut fixture_host = ipp_core::HostRuntime::new();
+    let mut fixture_host = crate::support::task_scheduler::host();
     let (mut world, _) = setup(&mut fixture_host);
     let entity = target(
         &mut world,
@@ -517,7 +517,7 @@ fn compound_geometry_preserves_holes_and_authored_part_identity_after_transforms
 
 #[test]
 fn missing_geometry_cannot_prove_a_miss_and_failed_payloads_remain_unavailable() {
-    let mut fixture_host = ipp_core::HostRuntime::new();
+    let mut fixture_host = crate::support::task_scheduler::host();
     let (mut world, _) = setup(&mut fixture_host);
     let entity = target(
         &mut world,
@@ -554,7 +554,7 @@ fn missing_geometry_cannot_prove_a_miss_and_failed_payloads_remain_unavailable()
 
 #[test]
 fn picking_loads_shared_geometry_even_when_renderer_drives_other_resources() {
-    let mut fixture_host = ipp_core::HostRuntime::new();
+    let mut fixture_host = crate::support::task_scheduler::host();
     let (mut world, _) = setup(&mut fixture_host);
     world.set_renderer_asset_loading(true);
     let first = target(
@@ -612,7 +612,7 @@ fn picking_loads_shared_geometry_even_when_renderer_drives_other_resources() {
 
 #[test]
 fn query_validation_is_correlated_and_observes_surface_size_at_evaluation() {
-    let mut world_host = ipp_core::HostRuntime::new();
+    let mut world_host = crate::support::task_scheduler::host();
     let world_id = world_host
         .create_world(ipp_core::WorldLimits::default(), &select(&[CAMERA, RENDER]))
         .unwrap();
@@ -632,7 +632,7 @@ fn query_validation_is_correlated_and_observes_surface_size_at_evaluation() {
     ] {
         assert_eq!(pick(&mut world, invalid), Err(ErrorReason::InvalidViewport));
     }
-    let mut fixture_host = ipp_core::HostRuntime::new();
+    let mut fixture_host = crate::support::task_scheduler::host();
     let (mut world, _) = setup(&mut fixture_host);
     world.enqueue_geometry_pick(3, query(0.5, 0.5)).unwrap();
     world.set_render_viewport(Some((200, 100)));
@@ -648,7 +648,7 @@ fn query_validation_is_correlated_and_observes_surface_size_at_evaluation() {
 #[test]
 fn camera_projection_preserves_plane_coordinates_for_both_projections_and_outside_capture() {
     for projection in [0, 1] {
-        let mut fixture_host = ipp_core::HostRuntime::new();
+        let mut fixture_host = crate::support::task_scheduler::host();
         let (mut world, active) = setup(&mut fixture_host);
         run(
             &mut world,
@@ -698,7 +698,7 @@ fn camera_projection_preserves_plane_coordinates_for_both_projections_and_outsid
 
 #[test]
 fn camera_projection_handles_invalid_parallel_and_backward_planes_without_mutation() {
-    let mut fixture_host = ipp_core::HostRuntime::new();
+    let mut fixture_host = crate::support::task_scheduler::host();
     let (mut world, _) = setup(&mut fixture_host);
     let before = world.entities();
     for (point, normal, expected) in [
@@ -737,7 +737,7 @@ fn camera_projection_handles_invalid_parallel_and_backward_planes_without_mutati
 
 #[test]
 fn automatic_picking_bounds_start_mesh_cpu_loading_without_a_renderer_poll() {
-    let mut fixture_host = ipp_core::HostRuntime::new();
+    let mut fixture_host = crate::support::task_scheduler::host();
     let (mut world, _) = setup(&mut fixture_host);
     world.set_renderer_asset_loading(true);
     let entity = create(

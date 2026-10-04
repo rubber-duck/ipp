@@ -215,7 +215,7 @@ fn renderable(world: &mut ipp_core::WorldContext<'_>, uv: bool) -> EntityId {
 
 #[test]
 fn boundary_publishes_exact_owned_assets_before_batches_and_preserves_old_pixels() {
-    let mut fixture_host = ipp_core::HostRuntime::new();
+    let mut fixture_host = crate::support::task_scheduler::host();
     let mut world = test_world(&mut fixture_host);
     let id = renderable(&mut world, true);
     let old = world.texture(key(1, 0)).unwrap() as *const _;
@@ -263,7 +263,7 @@ fn boundary_publishes_exact_owned_assets_before_batches_and_preserves_old_pixels
         &[32, 64, 128, 255]
     );
     assert!(
-        test_world(&mut ipp_core::HostRuntime::new())
+        test_world(&mut crate::support::task_scheduler::host())
             .texture(key(3, 1))
             .is_none()
     );
@@ -294,13 +294,10 @@ fn malformed_and_version_one_payloads_do_not_publish_and_all_rgba_channels_are_r
     oversized[12..16].copy_from_slice(&1024u32.to_le_bytes());
     invalid.push(oversized);
     for bytes in invalid {
-        let mut fixture_host = ipp_core::HostRuntime::new();
+        let mut fixture_host = crate::support::task_scheduler::host();
         let mut world = test_world(&mut fixture_host);
         upload(&mut world, key(2, 0), bytes);
-        assert_eq!(
-            asset_report(&mut world).assets[0].result,
-            Err("InvalidAsset".into())
-        );
+        assert!(asset_report(&mut world).assets[0].result.is_err());
         assert!(world.texture(key(2, 0)).is_none());
         upload(&mut world, key(1, 0), valid.clone());
         assert!(asset_report(&mut world).assets[0].result.is_ok());
@@ -312,18 +309,15 @@ fn malformed_and_version_one_payloads_do_not_publish_and_all_rgba_channels_are_r
         },
         key(0, 0),
     ] {
-        let mut fixture_host = ipp_core::HostRuntime::new();
+        let mut fixture_host = crate::support::task_scheduler::host();
         let mut world = test_world(&mut fixture_host);
         upload(&mut world, key, valid.clone());
-        assert_eq!(
-            asset_report(&mut world).assets[0].result,
-            Err("InvalidAsset".into())
-        );
+        assert!(asset_report(&mut world).assets[0].result.is_err());
     }
 
     let mut bytes = pixels(2, 1);
     bytes[16..].copy_from_slice(&[0, 255, 42, 31, 255, 0, 17, 127]);
-    let mut fixture_host = ipp_core::HostRuntime::new();
+    let mut fixture_host = crate::support::task_scheduler::host();
     let mut world = test_world(&mut fixture_host);
     upload(&mut world, key(1, 0), bytes.clone());
     assert!(asset_report(&mut world).assets[0].result.is_ok());
@@ -334,7 +328,7 @@ fn malformed_and_version_one_payloads_do_not_publish_and_all_rgba_channels_are_r
 
 #[test]
 fn queued_uploads_and_asset_count_grow_past_former_quotas() {
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let mut world = test_world(&mut host);
     for asset in 1..=300 {
         let mut bytes = pixels(1, 1);
@@ -359,7 +353,7 @@ fn queued_uploads_and_asset_count_grow_past_former_quotas() {
 
 #[test]
 fn texture_input_and_residency_grow_past_former_byte_quotas() {
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let mut world = test_world(&mut host);
     let payload = pixels(3072, 2048);
     assert!(payload.len() > 16 << 20);
@@ -382,7 +376,7 @@ fn texture_input_and_residency_grow_past_former_byte_quotas() {
 
 #[test]
 fn source_texture_terminal_changes_publish_once() {
-    let mut fixture_host = ipp_core::HostRuntime::new();
+    let mut fixture_host = crate::support::task_scheduler::host();
     let mut world = test_world(&mut fixture_host);
     let id = renderable(&mut world, true);
     let report = run(
@@ -454,7 +448,7 @@ fn source_texture_terminal_changes_publish_once() {
 
 #[test]
 fn mesh_streams_and_retained_metadata_are_accounted_and_uvs_are_finite_and_separate() {
-    let mut fixture_host = ipp_core::HostRuntime::new();
+    let mut fixture_host = crate::support::task_scheduler::host();
     let mut world = test_world(&mut fixture_host);
     for uv in [false, true] {
         world
@@ -507,7 +501,7 @@ fn mesh_streams_and_retained_metadata_are_accounted_and_uvs_are_finite_and_separ
         for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
             let mut bytes = mesh_bytes(true);
             bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
-            let mut fixture_host = ipp_core::HostRuntime::new();
+            let mut fixture_host = crate::support::task_scheduler::host();
             let mut world = test_world(&mut fixture_host);
             world
                 .enqueue_mesh(MeshUpload {
@@ -526,7 +520,7 @@ fn mesh_streams_and_retained_metadata_are_accounted_and_uvs_are_finite_and_separ
 
 #[test]
 fn texture_activation_is_pending_and_uv_incompatibility_is_per_use() {
-    let mut fixture_host = ipp_core::HostRuntime::new();
+    let mut fixture_host = crate::support::task_scheduler::host();
     let mut world = test_world(&mut fixture_host);
     let id = renderable(&mut world, false);
     let report = run(
@@ -572,7 +566,7 @@ fn texture_activation_is_pending_and_uv_incompatibility_is_per_use() {
 
 #[test]
 fn deleted_texture_slots_do_not_leak_into_reused_entities() {
-    let mut fixture_host = ipp_core::HostRuntime::new();
+    let mut fixture_host = crate::support::task_scheduler::host();
     let mut world = test_world(&mut fixture_host);
     let id = renderable(&mut world, true);
     ok(

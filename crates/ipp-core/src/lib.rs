@@ -110,3 +110,12 @@ pub use host::{WorldAttachmentEffect, WorldAttachmentRetirement, WorldAttachment
 pub mod profiling;
 #[cfg(feature = "instrumentation")]
 pub mod profiling_trace;
+
+#[cfg(test)]
+#[allow(dead_code)]
+mod test_task_scheduler {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/support/task_scheduler.rs"
+    ));
+}

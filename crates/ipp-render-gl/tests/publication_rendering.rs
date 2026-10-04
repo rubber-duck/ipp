@@ -46,12 +46,12 @@ fn frame(host: &mut HostRuntime, renderer: &mut RenderService<TestDevice>, world
                 .map(|(output, _, publication)| (output, publication)),
         )
         .unwrap();
-    host.progress_assets();
+    support::progress_assets(host);
 }
 
 #[test]
 fn root_draw_rejects_cleared_reselected_and_superseded_publications() {
-    let mut host = HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let state = Rc::new(DeviceState::default());
     let mut renderer = RenderService::new(TestDevice(state.clone())).unwrap();
     renderer.install(&mut host).unwrap();
@@ -111,7 +111,7 @@ fn attach(host: &mut HostRuntime, parent: WorldId, output: OutputRef) -> ipp_cor
 
 #[test]
 fn root_draw_rejects_viewport_dimensions_and_pixel_ratio_without_reselecting() {
-    let mut host = HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let state = Rc::new(DeviceState::default());
     let mut renderer = RenderService::new(TestDevice(state.clone())).unwrap();
     renderer.install(&mut host).unwrap();
@@ -170,7 +170,7 @@ fn root_draw_rejects_viewport_dimensions_and_pixel_ratio_without_reselecting() {
 
 #[test]
 fn nested_output_is_not_an_independent_root_before_or_after_detach() {
-    let mut host = HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let state = Rc::new(DeviceState::default());
     state.cache_limit.set(256);
     let mut renderer = RenderService::new(TestDevice(state.clone())).unwrap();
@@ -228,7 +228,7 @@ fn nested_output_is_not_an_independent_root_before_or_after_detach() {
 
 #[test]
 fn forgetting_world_releases_only_its_camera_target_without_prepare() {
-    let mut host = HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let state = Rc::new(DeviceState::default());
     state.cache_limit.set(256);
     let mut renderer = RenderService::new(TestDevice(state.clone())).unwrap();
@@ -465,7 +465,7 @@ fn deep_canvas_chain_draws_on_a_bounded_native_stack() {
         .stack_size(512 * 1024)
         .spawn(|| {
             use ipp_core::components::CanvasBox;
-            let mut host = HostRuntime::new();
+            let mut host = support::task_scheduler::host();
             let state = Rc::new(DeviceState::default());
             let mut renderer = RenderService::new(TestDevice(state.clone())).unwrap();
             renderer.install(&mut host).unwrap();
@@ -512,7 +512,7 @@ fn deep_canvas_chain_draws_on_a_bounded_native_stack() {
 fn forgotten_descendant_releases_canvas_image_without_another_prepare() {
     use ipp_core::{Batch, Command, EntityRef, components::SurfaceCache};
 
-    let mut host = HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let state = Rc::new(DeviceState::default());
     state.cache_limit.set(256);
     let mut renderer = RenderService::new(TestDevice(state.clone())).unwrap();

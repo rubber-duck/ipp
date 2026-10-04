@@ -80,11 +80,6 @@ fn presentation_contract_roundtrips_exact_identities_and_rejects_truncation() {
             capture: true,
             after_outputs: vec![root.output; 65],
         },
-        PresentationRequest::ReadCapture {
-            capture: 41,
-            offset: 65536,
-        },
-        PresentationRequest::ReleaseCapture(41),
         PresentationRequest::CancelFrame {
             request: 19,
         },
@@ -147,13 +142,11 @@ fn presentation_contract_roundtrips_exact_identities_and_rejects_truncation() {
         HostResponseBody::Presentation(PresentationResponse::Frame(frame.clone())),
         HostResponseBody::Presentation(PresentationResponse::Capture {
             frame,
-            capture: 41,
+            read: crate::bulk_read::BulkReadReference {
+                connection: 7,
+                read: 41,
+            },
             bytes: 640 * 480 * 4,
-        }),
-        HostResponseBody::Presentation(PresentationResponse::Chunk {
-            capture: 41,
-            offset: 65536,
-            bytes: vec![42; 65536],
         }),
         HostResponseBody::Presentation(PresentationResponse::Complete),
     ];

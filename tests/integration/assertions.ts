@@ -76,7 +76,11 @@ export function contractClientsServed(
   hostSchemaHash: bigint,
   foreignSchemaHash: bigint,
 ): void {
-  const { pulled, refusal, ignored } = observation;
+  const { pulled, refusal, ignored, bulk } = observation;
+  assert.equal(bulk.bytes, pulled.contractBytes);
+  assert.equal(bulk.peerIsolated, true);
+  assert.equal(bulk.withheldEofRetained, true);
+  assert.equal(bulk.staleFenced, true);
   assert.equal(pulled.announcedHash, hostSchemaHash.toString());
   assert.equal(pulled.contractHash, pulled.announcedHash);
   assert.ok(

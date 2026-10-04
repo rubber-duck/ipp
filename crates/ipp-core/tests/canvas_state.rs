@@ -28,7 +28,7 @@ fn state(host: &mut HostRuntime, world: WorldId) -> CanvasState {
 
 #[test]
 fn creation_seeds_the_state_and_absence_selects_the_defaults() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let seeded = CanvasState {
         extent: [320.0, 200.0],
         units_per_metre: 400.0,
@@ -51,7 +51,7 @@ fn creation_seeds_the_state_and_absence_selects_the_defaults() {
 
 #[test]
 fn creation_refuses_state_for_an_unselected_system_or_invalid_values() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let refused = host.create_world_with_options(
         WorldLimits::default(),
         WorldCreateOptions {
@@ -113,7 +113,7 @@ fn creation_refuses_state_for_an_unselected_system_or_invalid_values() {
 
 #[test]
 fn sparse_updates_apply_in_order_and_an_invalid_update_has_no_effect() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world = canvas_world(&mut host, None);
     let mut context = host.world_mut(world).unwrap();
     for update in [
@@ -158,7 +158,7 @@ fn sparse_updates_apply_in_order_and_an_invalid_update_has_no_effect() {
 
 #[test]
 fn state_persists_and_a_missing_payload_restores_the_defaults() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let saved = CanvasState {
         extent: [96.0, 48.0],
         units_per_metre: 12.5,

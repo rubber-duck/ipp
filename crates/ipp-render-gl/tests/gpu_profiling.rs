@@ -46,7 +46,7 @@ fn unsupported_queries_preserve_rendering_and_bound_capture_records() {
 
 #[test]
 fn replacement_context_uses_new_generation_and_prior_samples_keep_origin() {
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = support::task_scheduler::host();
     let mut renderer = RenderService::new(TestDevice(Rc::new(DeviceState::default()))).unwrap();
     let viewport = ipp_core::WorldViewport {
         width: 32,

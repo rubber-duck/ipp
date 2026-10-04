@@ -93,6 +93,14 @@ export class HostWireWriter {
     this.raw(Uint8Array.of(value));
   }
 
+  u16(value: number): void {
+    if (!Number.isInteger(value) || value < 0 || value > 0xffff)
+      throw new RangeError("Expected unsigned 16-bit value");
+    const bytes = new Uint8Array(2);
+    new DataView(bytes.buffer).setUint16(0, value, true);
+    this.raw(bytes);
+  }
+
   u32(value: number): void {
     if (!Number.isInteger(value) || value < 0 || value > 0xffff_ffff)
       throw new RangeError("Expected unsigned 32-bit value");

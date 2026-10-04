@@ -91,34 +91,6 @@ pub(crate) struct ParticleEmissionSurface {
     pub area: f32,
 }
 
-impl ParticleEmissionSurface {
-    pub fn new(mesh: &crate::MeshAsset) -> Self {
-        let mut area = 0.0;
-        let triangles = mesh
-            .indices()
-            .as_chunks::<3>()
-            .0
-            .iter()
-            .filter_map(|indices| {
-                let [a, b, c] = std::array::from_fn(|i| mesh.positions()[indices[i] as usize]);
-                let u = sub(b, a);
-                let v = sub(c, a);
-                let n = cross(u, v);
-                let weight = (n.iter().map(|v| v * v).sum::<f32>()).sqrt() * 0.5;
-                if weight <= 0.0 {
-                    return None;
-                }
-                area += weight;
-                Some((a, b, c, area))
-            })
-            .collect();
-        Self {
-            triangles,
-            area,
-        }
-    }
-}
-
 fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     std::array::from_fn(|i| a[i] - b[i])
 }
@@ -344,12 +316,27 @@ impl crate::services::asset_management::Asset for ParticleEmissionSurface {
 
 pub(crate) fn particle_surface_loader()
 -> impl crate::services::asset_management::AssetLoader<Data = ParticleEmissionSurface> {
-    crate::services::asset_management::BufferedAssetLoader::new(|bytes| {
-        let mesh = crate::MeshAsset::decode(bytes).map_err(|e| e.to_string())?;
-        let surface = ParticleEmissionSurface::new(&mesh);
-        if !surface.area.is_finite() || surface.area <= 0.0 {
+    crate::services::asset_management::AsyncAssetLoader::decode(|mut reader| async move {
+        let mesh = crate::MeshAsset::decode_reader(&mut *reader).await?;
+        let mut area = 0.0;
+        let mut triangles = Vec::new();
+        let mut budget = crate::services::asset_management::decode::DecodeBudget::default();
+        for indices in mesh.indices().as_chunks::<3>().0 {
+            let [a, b, c] = std::array::from_fn(|index| mesh.positions()[indices[index] as usize]);
+            let normal = cross(sub(b, a), sub(c, a));
+            let weight = normal.iter().map(|value| value * value).sum::<f32>().sqrt() * 0.5;
+            if weight > 0.0 {
+                area += weight;
+                crate::services::asset_management::decode::push(&mut triangles, (a, b, c, area))?;
+            }
+            budget.advance(0).await;
+        }
+        if !area.is_finite() || area <= 0.0 {
             return Err("Particle emission mesh has invalid area".into());
         }
-        Ok(surface)
+        Ok(ParticleEmissionSurface {
+            triangles,
+            area,
+        })
     })
 }

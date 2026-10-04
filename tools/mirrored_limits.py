@@ -91,10 +91,10 @@ VERIFIED_COPIES = (
         r"pub const MAX_PRESENTATION_SOURCES: usize = ([^;]+);",
     ),
     (
-        "packages/ipp-client/src/host-presentation.ts",
-        r"const captureChunkBytes = ([\d_]+);",
-        "crates/ipp-protocol/src/lib.rs",
-        r"pub const MAX_FIELD_BYTES: usize = ([\d_]+);",
+        "packages/ipp-client/src/bulk-reads.ts",
+        r"export const BULK_CHUNK_BYTES = ([\d_]+);",
+        "crates/ipp-protocol/src/bulk_read.rs",
+        r"pub const CHUNK_BYTES: usize = ([\d_ *]+);",
     ),
     (
         "packages/ipp-client/src/world-persistence-client.ts",

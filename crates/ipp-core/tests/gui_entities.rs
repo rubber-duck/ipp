@@ -1,6 +1,7 @@
 //! Ordinary entity layout and Canvas production through real headless Host frames.
 
 mod support;
+use support::task_scheduler::HostTaskTestDriver;
 
 use ipp_core::components::{GuiLayout, Surface};
 use ipp_core::systems::canvas::{
@@ -56,7 +57,7 @@ fn host() -> (HostRuntime, Observations) {
     let mut factories = systems::compiled_system_factories();
     factories.push(Arc::new(ProbeFactory(observed.clone())));
     (
-        HostRuntime::with_system_factories(factories).unwrap(),
+        crate::support::task_scheduler::with_factories(factories).unwrap(),
         observed,
     )
 }
@@ -70,7 +71,7 @@ fn apply(host: &mut HostRuntime, world: WorldId, operations: Vec<Command>) -> Ba
         })
         .unwrap();
 
-    host.frame(0.0)
+    host.frame_for_test(0.0)
         .unwrap()
         .worlds
         .remove(&world)
@@ -166,7 +167,7 @@ fn shape(
 }
 
 fn frame(host: &mut HostRuntime) {
-    let result = host.frame(0.125).unwrap();
+    let result = host.frame_for_test(0.125).unwrap();
     assert!(
         result.worlds.values().all(Result::is_ok),
         "{:?}",
@@ -208,7 +209,7 @@ fn box_geometry(entry: &CanvasPaintEntry) -> (EntityId, [f32; 2], [f32; 2]) {
 
 #[test]
 fn ordinary_row_measures_fixed_before_flex_but_paints_in_core_order_without_transform() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world = host
         .create_world(
             Default::default(),
@@ -528,7 +529,7 @@ fn glyphs(entry: &CanvasPaintEntry) -> &Arc<[CanvasGlyph]> {
 
 #[test]
 fn ordinary_text_demands_resources_and_reuses_measurement_until_constraints_change() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     host.register_stream_resource_provider("gui-layout")
         .unwrap();
     let world = host
@@ -681,7 +682,7 @@ fn ordinary_text_demands_resources_and_reuses_measurement_until_constraints_chan
 
 #[test]
 fn core_reorder_and_layout_removal_reuse_leaf_identity_without_retaining_a_layout_boundary() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world = host.create_world(Default::default(), GUI_LAYOUT).unwrap();
     let (root, root_entity) = canvas(
         &mut host,
@@ -754,7 +755,7 @@ fn core_reorder_and_layout_removal_reuse_leaf_identity_without_retaining_a_layou
 #[test]
 fn padding_offsets_own_leaf_content_but_preserves_outer_sizing_and_clip() {
     for explicit in [false, true] {
-        let mut host = HostRuntime::new();
+        let mut host = crate::support::task_scheduler::host();
         let world = host.create_world(Default::default(), GUI_LAYOUT).unwrap();
         let (root, root_entity) = canvas(&mut host, world, None);
         let layout = GuiLayout {
@@ -971,7 +972,7 @@ fn padding_text_and_surface_hits_share_content_mapping_without_shifting_outer_cl
 #[test]
 fn excessive_managed_layout_depth_is_observable_and_recovers_after_core_reparenting() {
     use ipp_core::systems::gui::layout::{GuiEntityLayoutDiagnostic, MAX_LAYOUT_DEPTH};
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world = host.create_world(Default::default(), GUI_LAYOUT).unwrap();
     let (root, root_entity) = canvas(&mut host, world, Some(GuiLayout::default()));
     let mut parent = root_entity;
@@ -1020,7 +1021,7 @@ fn excessive_managed_layout_depth_is_observable_and_recovers_after_core_reparent
 #[test]
 fn counters_identify_full_dirty_reflow_and_retain_text_runs() {
     use ipp_core::systems::gui::layout::GuiEntityLayoutWork;
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let world = host
         .create_world(Default::default(), &select(&[CANVAS_CONTENT, GUI_LAYOUT]))
         .unwrap();

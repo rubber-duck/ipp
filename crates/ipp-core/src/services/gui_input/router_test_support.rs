@@ -88,6 +88,9 @@ impl Rig {
     }
 
     pub(super) fn frame(&mut self) {
+        self.host.progress_assets();
+        crate::test_task_scheduler::poll_ready();
+        self.host.progress_assets();
         let report = self.host.frame(0.0).unwrap();
         assert!(
             report.worlds.values().all(Result::is_ok),

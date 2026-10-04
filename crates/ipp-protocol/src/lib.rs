@@ -3,8 +3,10 @@
 
 mod codec;
 
+pub mod asset_export;
 pub mod asset_source;
 pub mod attachment_receipts;
+pub mod bulk_read;
 mod data_authoring;
 pub mod dataset;
 pub mod host;
@@ -47,7 +49,7 @@ pub const HELLO: [u8; 4] = MAGIC;
 /// Schema-independent request for the Host's full contract.
 pub const CONTRACT_REQUEST: [u8; 4] = *b"IPCQ";
 
-/// Marker of the reply to [`CONTRACT_REQUEST`]; the contract follows it.
+/// Marker of the fixed read-descriptor reply to [`CONTRACT_REQUEST`].
 pub const CONTRACT_REPLY_MAGIC: [u8; 4] = *b"IPCR";
 
 /// Maximum complete application message, before decoding or allocation.
@@ -484,14 +486,4 @@ pub fn export_contract() -> &'static [u8] {
         write_contract(&mut bytes);
         bytes
     })
-}
-
-/// The reply to [`CONTRACT_REQUEST`]: [`CONTRACT_REPLY_MAGIC`] followed by
-/// the whole [`export_contract`], allocated exactly.
-pub fn contract_reply() -> Vec<u8> {
-    let contract = export_contract();
-    let mut reply = Vec::with_capacity(CONTRACT_REPLY_MAGIC.len() + contract.len());
-    reply.extend_from_slice(&CONTRACT_REPLY_MAGIC);
-    reply.extend_from_slice(contract);
-    reply
 }

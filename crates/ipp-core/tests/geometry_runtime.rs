@@ -6,7 +6,7 @@ use support::selection::RENDER;
 
 use ipp_core::{
     Batch, Command, ComponentValue, EntityId, EntityRef, ErrorReason, FieldValue, FieldWrite,
-    HostRuntime, WorldContext,
+    WorldContext,
     components::schema::SchemaComponent,
     components::{BoundingGeometry, Transform},
     systems::geometry::{GeometryDefinition, GeometryShape},
@@ -68,7 +68,7 @@ fn declaration() -> BoundingGeometry {
 
 #[test]
 fn evaluated_geometry_reuses_storage_and_authored_copies_get_independent_results() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host.create_world(Default::default(), RENDER).unwrap();
     let mut world = host.world_mut(id).unwrap();
     let entity = create(&mut world, declaration(), 0.0);
@@ -144,7 +144,7 @@ fn evaluated_geometry_reuses_storage_and_authored_copies_get_independent_results
 
 #[test]
 fn mesh_generated_geometry_reuses_its_component_allocation() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host.create_world(Default::default(), RENDER).unwrap();
     let mut world = host.world_mut(id).unwrap();
     let mut bytes = b"IPPM".to_vec();

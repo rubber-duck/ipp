@@ -120,7 +120,7 @@ fn each_supported_layout_retains_only_authored_streams_and_exact_bytes() {
         &[0, 2, 3, 4],
         &[0, 1, 2, 3, 4],
     ] {
-        let mut fixture_host = ipp_core::HostRuntime::new();
+        let mut fixture_host = crate::support::task_scheduler::host();
         let mut world = test_world(&mut fixture_host);
         let bytes = payload(semantics);
         let source_bytes = bytes.len();
@@ -240,7 +240,7 @@ fn malformed_descriptors_lengths_geometry_and_trailing_data_never_publish() {
     cases.push(degenerate);
 
     for (case, bytes) in cases.into_iter().enumerate() {
-        let mut fixture_host = ipp_core::HostRuntime::new();
+        let mut fixture_host = crate::support::task_scheduler::host();
         let mut world = test_world(&mut fixture_host);
         assert_eq!(
             publish(&mut world, 2, bytes),
@@ -261,7 +261,7 @@ fn malformed_descriptors_lengths_geometry_and_trailing_data_never_publish() {
 #[test]
 fn weighted_payloads_validate_uvs_formats_and_unaligned_index_tail() {
     let valid = payload(&[0, 2, 3]);
-    let mut fixture_host = ipp_core::HostRuntime::new();
+    let mut fixture_host = crate::support::task_scheduler::host();
     let mut world = test_world(&mut fixture_host);
     let stats = publish(&mut world, 1, valid.clone()).unwrap();
     assert_eq!(
@@ -297,7 +297,7 @@ fn weighted_payloads_validate_uvs_formats_and_unaligned_index_tail() {
 
 #[test]
 fn v3_retained_memory_counts_actual_streams_beyond_former_quota() {
-    let mut fixture_host = ipp_core::HostRuntime::new();
+    let mut fixture_host = crate::support::task_scheduler::host();
     let mut world = test_world(&mut fixture_host);
     assert_eq!(
         publish(&mut world, 1000, vec![0; (1 << 20) + 1]),
@@ -358,7 +358,7 @@ fn texture_activation(material_type: u16, texture_type: u16) {
     };
     use std::mem::offset_of;
 
-    let mut fixture_host = ipp_core::HostRuntime::new();
+    let mut fixture_host = crate::support::task_scheduler::host();
     let mut world = test_world(&mut fixture_host);
     publish(&mut world, 1, payload(&[0])).unwrap();
     publish(&mut world, 2, payload(&[0, 2])).unwrap();
@@ -541,7 +541,7 @@ fn invalid_normals_reject_without_publishing_partial_geometry() {
     cases.push(payload(&[0, 4, 4]));
     cases.push(payload(&[4, 0]));
     for bytes in cases {
-        let mut fixture_host = ipp_core::HostRuntime::new();
+        let mut fixture_host = crate::support::task_scheduler::host();
         let mut world = test_world(&mut fixture_host);
         assert_eq!(
             publish(&mut world, 1, bytes),
@@ -567,7 +567,7 @@ fn mesh_input_above_one_mib_loads_through_owned_ingress() {
         bytes.extend(index.to_le_bytes());
     }
     assert!(bytes.len() > 1 << 20);
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let mut world = test_world(&mut host);
     world
         .enqueue_mesh(MeshUpload {

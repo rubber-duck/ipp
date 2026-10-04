@@ -272,6 +272,7 @@ fn placement(parent: Option<EntityId>, before: Option<EntityId>) -> EntityPlacem
 #[test]
 fn world_next_sibling_follows_root_and_child_reordering() {
     let mut host = HostRuntime::default();
+    crate::test_task_scheduler::install(&mut host);
     let id = host.create_world(Default::default(), &[]).unwrap();
     let mut world = host.world_mut(id).unwrap();
     let entities = create(&mut world, &["parent", "other", "first", "second"]);
@@ -310,6 +311,7 @@ fn world_next_sibling_follows_root_and_child_reordering() {
 #[test]
 fn invalid_branch_recovers_and_final_transform_storage_survives_growth() {
     let mut host = HostRuntime::default();
+    crate::test_task_scheduler::install(&mut host);
     let id = host
         .create_world(Default::default(), SPATIAL_SYSTEMS)
         .unwrap();
@@ -407,6 +409,7 @@ fn invalid_branch_recovers_and_final_transform_storage_survives_growth() {
 #[test]
 fn snapshot_preserves_links_and_durable_tie_order() {
     let mut host = HostRuntime::default();
+    crate::test_task_scheduler::install(&mut host);
     let original = host.create_world(Default::default(), &[]).unwrap();
     let snapshot = {
         let mut world = host.world_mut(original).unwrap();
@@ -459,6 +462,7 @@ fn snapshot_preserves_links_and_durable_tie_order() {
 #[test]
 fn snapshot_rejects_missing_parents_and_cycles_before_restore() {
     let mut host = HostRuntime::default();
+    crate::test_task_scheduler::install(&mut host);
     let original = host.create_world(Default::default(), &[]).unwrap();
     let snapshot = {
         let mut world = host.world_mut(original).unwrap();
@@ -499,6 +503,7 @@ fn joint_selection_and_look_at_share_the_effective_parent_frame() {
     use crate::services::asset_management::{AssetUpload, AssetUploadIdentity, builtin};
 
     let mut host = HostRuntime::default();
+    crate::test_task_scheduler::install(&mut host);
     let id = host
         .create_world(Default::default(), SKELETON_AND_SPATIAL_SYSTEMS)
         .unwrap();
@@ -581,6 +586,8 @@ fn joint_selection_and_look_at_share_the_effective_parent_frame() {
         .unwrap();
     for _ in 0..64 {
         world.prepare_update(0.0).unwrap();
+        world.poll_assets();
+        crate::test_task_scheduler::poll_ready();
         world.poll_assets();
         world.step(0.0).unwrap();
         if world.world_matrix(child).is_ok() {

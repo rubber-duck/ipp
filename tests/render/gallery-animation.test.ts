@@ -115,10 +115,16 @@ test("combined scene animates radial, orbital and sun motion plus a solid skinne
       const beam = entity(bent.inspection, "lighting-skinning");
       assert.ok(beam.components.some((entry) => "roughness" in entry.fields));
       assert.ok(beam.components.some((entry) => "skeleton" in entry.fields));
+      const originalBeamSource = beam.components.find(
+        (entry) =>
+          typeof entry.fields.source === "string" &&
+          entry.fields.source.includes("/assets/1/generated-"),
+      )?.fields.source;
+      assert.equal(typeof originalBeamSource, "string");
       assert.ok(
         bent.inspection.resources.some(
           (resource) =>
-            resource.source.endsWith("/assets/1/920010#immutable") &&
+            resource.source === originalBeamSource &&
             resource.status === "loaded",
         ),
       );
@@ -167,7 +173,15 @@ test("combined scene animates radial, orbital and sun motion plus a solid skinne
         const pending = await g.inspect();
         await scenario.evidence.record("held-player-setup", pending);
         assert.ok((pending.controllers?.length ?? 0) >= 1);
-        await g.navigate("shapes");
+        // Commit navigation while the real creation reply is still held. The
+        // next scene becomes ready only after canceled setup can finish cleanup.
+        await g.selectScene("shapes");
+        await g.page.waitForFunction(
+          () =>
+            document.querySelector<HTMLElement>(".viewer-shell")?.dataset
+              .page === "shapes",
+        );
+        assert.equal(await g.call("queryReplyHeld"), true);
         await g.call("releaseQuery");
         await g.waitFor((inspection) => !inspection.controllers?.length);
         assert.equal(
@@ -180,6 +194,21 @@ test("combined scene animates radial, orbital and sun motion plus a solid skinne
       await g.navigate("lighting");
       await g.seek(0);
       const reentered = await g.capture("combined-reentered");
+      const reenteredBeam = entity(reentered.inspection, "lighting-skinning");
+      const reenteredBeamSource = reenteredBeam.components.find(
+        (entry) =>
+          typeof entry.fields.source === "string" &&
+          entry.fields.source.includes("/assets/1/generated-"),
+      )?.fields.source;
+      assert.equal(typeof reenteredBeamSource, "string");
+      assert.notEqual(reenteredBeamSource, originalBeamSource);
+      assert.ok(
+        reentered.inspection.resources.some(
+          (resource) =>
+            resource.source === reenteredBeamSource &&
+            resource.status === "loaded",
+        ),
+      );
       assert.equal(reentered.inspection.controllers?.length, 4);
       assert.ok(
         reentered.inspection.controllers!.every(

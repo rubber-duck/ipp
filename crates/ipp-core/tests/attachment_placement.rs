@@ -168,7 +168,7 @@ fn fixture() -> (
             primary,
         }));
     }
-    let mut host = HostRuntime::with_system_factories(factories).unwrap();
+    let mut host = crate::support::task_scheduler::with_factories(factories).unwrap();
     // The parent also anchors Surfaces and joint-parented placements.
     let mut parts = vec![ATTACHMENTS, CAMERA];
     parts.push(support::selection::SURFACE);

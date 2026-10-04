@@ -11,7 +11,14 @@ use std::{cell::RefCell, rc::Rc};
 
 pub(crate) mod scope;
 
+#[cfg(feature = "instrumentation")]
+mod asset_export_testing;
+mod asset_exports;
 pub(crate) mod asset_sources;
+#[cfg(feature = "instrumentation")]
+mod bulk_read_testing;
+mod bulk_reads;
+pub use asset_exports::PublicAssetSourceId;
 mod datasets;
 mod messages;
 mod persistence;
@@ -25,6 +32,10 @@ pub(crate) struct HostConnectionService {
     pub(crate) now: std::time::Duration,
     last_persistence_connection: u64,
     persistence: persistence::HostPersistenceService,
+    bulk: super::bulk_read::BulkReadService,
+    exports: asset_exports::AssetExportService,
+    #[cfg(feature = "instrumentation")]
+    asset_export_policy: Option<PublicAssetSourceId>,
 }
 
 pub(crate) struct HostConnectionState {
@@ -45,6 +56,9 @@ pub(crate) struct HostConnectionState {
     reply_reservations: BTreeMap<u64, SharedReplyReservation>,
     pub(crate) failure: Option<String>,
     transfer: Option<persistence::HostWorldTransfer>,
+    bulk_reads: BTreeMap<u64, super::bulk_read::BulkReadLease>,
+    #[cfg(feature = "instrumentation")]
+    bulk_test_inputs: BTreeMap<u64, ipp_core::services::io::IoStreamInput>,
     reply_budget: crate::attachment_receipts::SharedReplyBudget,
     progress_leases: Rc<std::cell::Cell<usize>>,
     presentation_pending: usize,

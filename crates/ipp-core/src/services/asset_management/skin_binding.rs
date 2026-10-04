@@ -81,3 +81,37 @@ impl super::writer::AssetEncoder for SkinAsset {
         Ok(bytes)
     }
 }
+
+impl SkinAsset {
+    /// Decode bounded inverse-bind records through the same matrix validation.
+    pub async fn decode_reader(reader: &mut dyn IoReader) -> Result<Self, String> {
+        let mut input = super::decode::AssetReader::new(reader);
+        let count = super::skeleton::read_header(&mut input, b"IPPB").await?;
+        let mut joints = Vec::with_capacity(count);
+        for _ in 0..count {
+            let record = input.array::<68>().await?;
+            let joint = u32_at(&record, 0) as usize;
+            let inverse_bind = std::array::from_fn(|i| f32::from_bits(u32_at(&record, 4 + i * 4)));
+            if joint >= MAX_JOINTS
+                || !inverse_bind.iter().all(|value| value.is_finite())
+                || [
+                    inverse_bind[3],
+                    inverse_bind[7],
+                    inverse_bind[11],
+                    inverse_bind[15],
+                ] != [0.0, 0.0, 0.0, 1.0]
+                || !crate::systems::camera::invertible(inverse_bind)
+            {
+                return Err("Invalid skin inverse bind".into());
+            }
+            joints.push(SkinJoint {
+                joint,
+                inverse_bind,
+            });
+        }
+        input.finish().await?;
+        Ok(Self {
+            joints,
+        })
+    }
+}

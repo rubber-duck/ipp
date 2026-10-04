@@ -181,15 +181,15 @@ impl crate::services::asset_management::Asset for Resource {
 
 #[test]
 fn revoked_exact_resource_cannot_be_authorized_by_retained_source_identity() {
-    use crate::services::asset_management::{
-        AssetTypeId, AssetUploadIdentity, BufferedAssetLoader,
-    };
+    use crate::services::asset_management::{AssetTypeId, AssetUploadIdentity};
     let mut scene = scene();
     let kind = AssetTypeId(65000);
     scene
         .host
         .asset_resources_mut()
-        .register_loader(kind, || BufferedAssetLoader::new(|_| Ok(Resource)))
+        .register_loader(kind, || {
+            crate::test_task_scheduler::blob_loader(|_| Ok(Resource))
+        })
         .unwrap();
     let key = scene
         .host
@@ -203,6 +203,8 @@ fn revoked_exact_resource_cannot_be_authorized_by_retained_source_identity() {
             vec![1],
         )
         .unwrap();
+    scene.host.progress_assets();
+    crate::test_task_scheduler::poll_ready();
     scene.host.progress_assets();
     scene.state.lock().unwrap().retained = Some(key);
     scene.host.frame(0.0).unwrap();
@@ -444,7 +446,7 @@ fn host() -> (HostRuntime, Arc<Mutex<ProbeState>>) {
     let mut factories = compiled_system_factories();
     factories.push(Arc::new(ProbeFactory(state.clone())));
     (
-        HostRuntime::with_system_factories(factories).unwrap(),
+        crate::test_task_scheduler::with_factories(factories).unwrap(),
         state,
     )
 }

@@ -33,6 +33,7 @@ impl RenderDevice for MockDevice {
     type Program = ();
     type Mesh = ();
     type Texture = ();
+    type TextureReadback = ();
     type SurfacePath = ();
     type SurfaceCacheTarget = ();
     type SurfaceInstances = usize;

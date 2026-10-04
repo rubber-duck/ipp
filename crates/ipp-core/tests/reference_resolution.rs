@@ -53,7 +53,7 @@ fn apply(
 
 #[test]
 fn stale_world_failure_retains_prefix_aliases_and_prior_attachment_receipt() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let parent = host.create_world(Default::default(), ATTACHMENTS).unwrap();
     let child = host.create_world(Default::default(), &[]).unwrap();
     let child_ref = host.world_ref(child).unwrap();
@@ -86,7 +86,7 @@ fn stale_world_failure_retains_prefix_aliases_and_prior_attachment_receipt() {
 
 #[test]
 fn queued_reference_is_revalidated_after_child_destruction() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let parent = host.create_world(Default::default(), ATTACHMENTS).unwrap();
     let child = host.create_world(Default::default(), &[]).unwrap();
     let child_ref = host.world_ref(child).unwrap();
@@ -118,7 +118,7 @@ fn queued_reference_is_revalidated_after_child_destruction() {
 
 #[test]
 fn local_output_checks_current_prefix_and_foreign_output_checks_live_producer() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let parent = host.create_world(Default::default(), ATTACHMENTS).unwrap();
     let child = host
         .create_world(Default::default(), &select(&[ATTACHMENTS, CAMERA]))

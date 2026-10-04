@@ -1,3 +1,5 @@
+import { HostAssets } from "./asset-exports.js";
+import { BulkReadClient } from "./bulk-reads.js";
 import { bindHostProfiling, HostProfiling } from "./profiling.js";
 import { ClientDatasets, type DatasetContract } from "./datasets.js";
 import { isAssetSourceResponse } from "./asset-sources.js";
@@ -79,10 +81,9 @@ export abstract class HostClientBase<T extends Client> {
     (name) => this.hostTag(name),
     (name) => this.hostLimit(name),
   );
-  readonly presentation = new HostPresentation(
-    (tag, encode) => this.request(tag, encode),
-    (name) => this.hostTag(name),
-  );
+  readonly reads: BulkReadClient;
+  readonly assets: HostAssets;
+  readonly presentation: HostPresentation;
   private connection = 0n;
   private nextRequest = 1n;
   private readonly pending = new Map<bigint, HostRequestWaiter>();
@@ -98,6 +99,21 @@ export abstract class HostClientBase<T extends Client> {
     protected readonly options: ConnectOptions = {},
   ) {
     this.timeoutMs = options.timeoutMs ?? 10_000;
+    this.reads = new BulkReadClient(
+      () => this.connection,
+      (bytes) => this.transport.send(bytes),
+      this.timeoutMs,
+    );
+    this.assets = new HostAssets(
+      (tag, encode) => this.request(tag, encode),
+      (name) => this.hostTag(name),
+      this.reads,
+    );
+    this.presentation = new HostPresentation(
+      (tag, encode) => this.request(tag, encode),
+      (name) => this.hostTag(name),
+      this.reads,
+    );
     bindHostProfiling(
       this,
       new HostProfiling(
@@ -571,6 +587,7 @@ export abstract class HostClientBase<T extends Client> {
   }
 
   private receive(bytes: Uint8Array): void {
+    if (this.reads.receive(bytes)) return;
     if (this.datasetClient?.receive(bytes)) return;
     if (this.hostMagic(true).every((value, index) => bytes[index] === value)) {
       const reader = new HostWireReader(bytes);
@@ -655,6 +672,7 @@ export abstract class HostClientBase<T extends Client> {
     if (this.stopped) return;
     this.stopped = true;
     this.input.stop(error);
+    this.reads.close(error);
     this.datasetClient?.close(error);
     for (const session of [...this.attachments.keys()])
       this.invalidateAttachment(session, error);

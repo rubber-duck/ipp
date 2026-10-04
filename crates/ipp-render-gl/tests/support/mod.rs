@@ -5,6 +5,7 @@
 
 pub mod canvas;
 pub mod selection;
+pub mod task_scheduler;
 
 use ipp_core::{
     Batch, Command, ComponentValue, EntityId, EntityRef, MeshAsset, WorldContext,
@@ -16,6 +17,12 @@ use std::{cell::Cell, rc::Rc};
 
 #[derive(Default)]
 pub struct DeviceState {
+    pub texture_readback_enabled: Cell<bool>,
+    pub texture_readback_ready: Cell<bool>,
+    pub texture_readback_begins: Cell<u32>,
+    pub texture_readback_deletes: Cell<u32>,
+    pub texture_readback_stages: RefCell<std::collections::BTreeMap<u32, Vec<u8>>>,
+    pub texture_pixels: RefCell<Vec<u8>>,
     pub program_creates: Cell<u32>,
     pub program_deletes: Cell<u32>,
     pub failed_attempts_remaining: Cell<u32>,
@@ -106,6 +113,50 @@ impl RenderDevice for TestDevice {
     type Program = ();
     type Mesh = ();
     type Texture = ();
+    type TextureReadback = u32;
+
+    fn texture_readback_supported(&self) -> bool {
+        self.0.texture_readback_enabled.get()
+    }
+
+    fn begin_texture_readback(&mut self, _: &(), _: u32, _: u32) -> Result<u32, RenderError> {
+        let id = self.0.texture_readback_begins.get() + 1;
+        self.0.texture_readback_begins.set(id);
+        self.0
+            .texture_readback_stages
+            .borrow_mut()
+            .insert(id, self.0.texture_pixels.borrow().clone());
+        Ok(id)
+    }
+
+    fn poll_texture_readback(&mut self, _: &u32) -> Result<bool, RenderError> {
+        Ok(self.0.texture_readback_ready.get())
+    }
+
+    fn copy_texture_readback(
+        &mut self,
+        stage: &u32,
+        offset: usize,
+        destination: &mut [u8],
+    ) -> Result<(), RenderError> {
+        let stages = self.0.texture_readback_stages.borrow();
+        let bytes = stages.get(stage).unwrap();
+        destination.copy_from_slice(&bytes[offset..offset + destination.len()]);
+        Ok(())
+    }
+
+    fn delete_texture_readback(&mut self, stage: u32) {
+        assert!(
+            self.0
+                .texture_readback_stages
+                .borrow_mut()
+                .remove(&stage)
+                .is_some()
+        );
+        self.0
+            .texture_readback_deletes
+            .set(self.0.texture_readback_deletes.get() + 1);
+    }
 
     type ShadowMap = ();
     /// Index of the allocation in [`DeviceState::gui_batch_kinds`].
@@ -216,11 +267,24 @@ impl RenderDevice for TestDevice {
         _height: u32,
         _pixels: &[u8],
     ) -> Result<(), RenderError> {
-        panic!("mesh-only scenarios never create textures");
+        if self.0.texture_readback_enabled.get() {
+            *self.0.texture_pixels.borrow_mut() = _pixels.to_vec();
+            Ok(())
+        } else {
+            panic!("mesh-only scenarios never create textures");
+        }
     }
 
     fn allocate_texture(&mut self, _width: u32, _height: u32) -> Result<(), RenderError> {
-        panic!("mesh-only scenarios never allocate textures");
+        if self.0.texture_readback_enabled.get() {
+            self.0
+                .texture_pixels
+                .borrow_mut()
+                .resize(_width as usize * _height as usize * 4, 0);
+            Ok(())
+        } else {
+            panic!("mesh-only scenarios never allocate textures");
+        }
     }
 
     fn upload_texture_rows(
@@ -231,7 +295,14 @@ impl RenderDevice for TestDevice {
         _rows: u32,
         _pixels: &[u8],
     ) -> Result<(), RenderError> {
-        panic!("mesh-only scenarios never upload textures");
+        if self.0.texture_readback_enabled.get() {
+            let offset = _first_row as usize * _width as usize * 4;
+            self.0.texture_pixels.borrow_mut()[offset..offset + _pixels.len()]
+                .copy_from_slice(_pixels);
+            Ok(())
+        } else {
+            panic!("mesh-only scenarios never upload textures");
+        }
     }
 
     fn create_surface_path(
@@ -606,7 +677,9 @@ impl RenderDevice for TestDevice {
     }
 
     fn delete_texture(&mut self, _texture: ()) {
-        panic!("mesh-only scenarios never delete textures");
+        if !self.0.texture_readback_enabled.get() {
+            panic!("mesh-only scenarios never delete textures");
+        }
     }
 
     fn delete_program(&mut self, _program: ()) {
@@ -762,6 +835,8 @@ pub fn update(
 ) -> Result<ipp_core::WorldUpdateReport, ipp_core::ErrorReason> {
     world.prepare_update(0.0)?;
     world.poll_all_assets();
+    task_scheduler::poll_ready();
+    world.poll_all_assets();
     world.step(0.0)
 }
 
@@ -771,6 +846,8 @@ pub fn advance(
     dt: f64,
 ) -> Result<ipp_core::WorldUpdateReport, ipp_core::ErrorReason> {
     world.prepare_update(dt)?;
+    world.poll_all_assets();
+    task_scheduler::poll_ready();
     world.poll_all_assets();
     world.step(dt)
 }
@@ -862,6 +939,7 @@ pub fn render_frame<D: RenderDevice>(
     width: u32,
     height: u32,
 ) -> Result<FrameStats, String> {
+    progress_assets(host);
     host.frame(0.0).map_err(|error| error.to_string())?;
     renderer
         .prepare(
@@ -870,7 +948,7 @@ pub fn render_frame<D: RenderDevice>(
                 .map(|(output, _, publication)| (output, publication)),
         )
         .map_err(|error| error.to_string())?;
-    host.progress_assets();
+    progress_assets(host);
     renderer
         .draw_stats(host, world, width, height)
         .map_err(|error| error.to_string())
@@ -935,7 +1013,7 @@ pub fn text_run_scene_with(
 pub fn resolve_text(host: &mut ipp_core::HostRuntime, world_id: ipp_core::WorldId, font: &[u8]) {
     assert!(host.world_ref(world_id).is_some());
     for _ in 0..16 {
-        host.progress_assets();
+        progress_assets(host);
         for request in host.take_resource_requests() {
             host.complete_resource(request.id, Ok(font.to_vec()))
                 .unwrap();
@@ -1003,4 +1081,17 @@ pub fn recover_context(
     host.flush_resource_lifecycle();
     renderer.set_asset_context_active(true);
     resolve_text(host, world_id, font);
+}
+
+/// Host service boundary progresses owned futures with their registered wakers.
+pub fn progress_assets(host: &mut ipp_core::HostRuntime) {
+    host.progress_assets();
+    task_scheduler::poll_ready();
+    host.progress_assets();
+}
+
+pub fn progress_evaluation_assets(host: &mut ipp_core::HostRuntime) {
+    host.progress_evaluation_assets();
+    task_scheduler::poll_ready();
+    host.progress_evaluation_assets();
 }

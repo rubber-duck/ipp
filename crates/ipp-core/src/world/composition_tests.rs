@@ -1,6 +1,5 @@
 use crate::{
-    Batch, Command, ComponentValue, EntityRef, ErrorReason, HostRuntime, WorldAttachment, WorldId,
-    systems::*,
+    Batch, Command, ComponentValue, EntityRef, ErrorReason, WorldAttachment, WorldId, systems::*,
 };
 use std::sync::{Arc, Mutex};
 
@@ -52,7 +51,7 @@ fn attachment_producer_edits_cannot_change_the_traversal_inside_evaluation() {
     let probe = Arc::new(Mutex::new(Probe::default()));
     let mut factories = compiled_system_factories();
     factories.push(Arc::new(Factory(probe.clone())));
-    let mut host = HostRuntime::with_system_factories(factories).unwrap();
+    let mut host = crate::test_task_scheduler::with_factories(factories).unwrap();
     let parent = host
         .create_world(
             Default::default(),
@@ -227,7 +226,7 @@ fn strengthened_release(graphics: bool) {
 
     let trace = Trace::default();
     let selected = Arc::new(Mutex::new(None));
-    let mut host = HostRuntime::with_system_factories(vec![Arc::new(Factory(
+    let mut host = crate::test_task_scheduler::with_factories(vec![Arc::new(Factory(
         trace.clone(),
         selected.clone(),
     ))])
@@ -243,7 +242,7 @@ fn strengthened_release(graphics: bool) {
     host.asset_resources_mut()
         .register_loader(kind, move || {
             let trace = loader_trace.clone();
-            BufferedAssetLoader::new(move |_: &[u8]| Ok(Payload(trace.clone())))
+            crate::test_task_scheduler::blob_loader(move |_: &[u8]| Ok(Payload(trace.clone())))
         })
         .unwrap();
     let identity = AssetUploadIdentity {
@@ -256,6 +255,8 @@ fn strengthened_release(graphics: bool) {
         .upload(identity, vec![1])
         .unwrap();
     *selected.lock().unwrap() = Some(key);
+    host.progress_assets();
+    crate::test_task_scheduler::poll_ready();
     host.progress_assets();
     host.frame(0.1).unwrap();
     let first_output = host.latest_publication(first).unwrap();
@@ -301,6 +302,8 @@ fn strengthened_release(graphics: bool) {
         .unwrap();
     assert_eq!(replacement.slot, key.slot);
     assert_ne!(replacement, key);
+    host.progress_assets();
+    crate::test_task_scheduler::poll_ready();
     host.progress_assets();
     assert!(
         host.publication_resource(first_output, replacement)

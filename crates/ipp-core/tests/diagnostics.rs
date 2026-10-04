@@ -131,7 +131,7 @@ mod enabled {
     #[test]
     fn entity_effects_include_partial_failures_and_transient_recycled_handles() {
         configure(Level::Debug, Some(sink));
-        let mut world_host = ipp_core::HostRuntime::new();
+        let mut world_host = crate::support::task_scheduler::host();
         let world_id = world_host
             .create_world(ipp_core::WorldLimits::default(), &[])
             .unwrap();
@@ -215,7 +215,7 @@ mod enabled {
     #[test]
     fn direct_core_enqueue_budget_rejection_warns_without_effects() {
         configure(Level::Warn, Some(sink));
-        let mut world_host = ipp_core::HostRuntime::new();
+        let mut world_host = crate::support::task_scheduler::host();
         let world_id = world_host
             .create_world(
                 ipp_core::WorldLimits {
@@ -253,7 +253,7 @@ mod enabled {
         use ipp_core::{CameraMotion, EntityId, RenderStatePatch};
 
         configure(Level::Debug, Some(sink));
-        let mut world_host = ipp_core::HostRuntime::new();
+        let mut world_host = crate::support::task_scheduler::host();
         let world_id = world_host
             .create_world(
                 ipp_core::WorldLimits::default(),

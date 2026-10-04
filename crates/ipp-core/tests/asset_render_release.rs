@@ -1,13 +1,14 @@
 //! Resource release invalidates only draw rows that reference the released identity.
 
 mod support;
+use support::task_scheduler::HostTaskTestDriver;
 
 use support::selection::RENDER;
 
 use ipp_core::{components::MeshInstance, services::asset_management::AssetKey, *};
 
 fn host_with_meshes() -> HostRuntime {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let memory = services::io::MemoryIoSource::default();
     for width in [1, 2] {
         memory
@@ -69,7 +70,7 @@ fn update_worlds(host: &mut HostRuntime, worlds: &[WorldId]) {
     for &world in worlds {
         host.world_mut(world).unwrap().prepare_update(0.0).unwrap();
     }
-    host.progress_assets();
+    host.progress_assets_for_test();
     for &world in worlds {
         host.world_mut(world).unwrap().step(0.0).unwrap();
     }

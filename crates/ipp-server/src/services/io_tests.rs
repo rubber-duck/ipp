@@ -1,109 +1,109 @@
 use super::*;
-use ipp_core::services::io::{IoService, IoWriteJob};
-use std::task::Wake;
-
-struct ThreadWake(std::thread::Thread);
-
-impl Wake for ThreadWake {
-    fn wake(self: Arc<Self>) {
-        self.0.unpark();
-    }
-}
-
-fn context() -> Waker {
-    Waker::from(Arc::new(ThreadWake(std::thread::current())))
-}
+use ipp_core::services::io::IoService;
+use ipp_host_session::services::task_scheduler::TaskSchedulerService;
+use std::num::NonZeroUsize;
 
 #[test]
 fn generic_filesystem_reader_writer_and_listing_use_real_files() {
+    let tasks = TaskSchedulerService::new();
     let root = std::env::temp_dir().join(format!("ipp-file-source-{}", std::process::id()));
     std::fs::create_dir_all(&root).unwrap();
     let mut sources = IoService::new();
     sources
         .register(
             "disk:",
-            FileSystemIoSource::new("disk:", &root, true).unwrap(),
+            FileSystemIoSource::new("disk:", &root, true, tasks.schedulers().io()).unwrap(),
         )
         .unwrap();
     let bytes = vec![42; 180_000];
-    let waker = context();
-    let mut cx = Context::from_waker(&waker);
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    let mut write = IoWriteJob::new(
-        bytes.clone(),
-        sources.open_write("disk:world.ippw", bytes.len()).unwrap(),
-    );
-    loop {
-        match write.poll(&mut cx) {
-            Poll::Ready(result) => {
-                result.unwrap();
-                break;
-            }
-            Poll::Pending => {
-                assert!(std::time::Instant::now() < deadline);
-                std::thread::park_timeout(std::time::Duration::from_millis(10));
-            }
+    futures_lite::future::block_on(async {
+        let mut writer = sources
+            .open_write("disk:world.ippw", bytes.len())
+            .await
+            .unwrap();
+        let mut offset = 0;
+        while offset < bytes.len() {
+            offset += writer.write(&bytes[offset..]).await.unwrap();
         }
-    }
-    assert_eq!(sources.list("disk:").unwrap(), ["disk:world.ippw"]);
-    let mut reader = sources
-        .open_read(
-            "disk:world.ippw",
-            IoReadOptions {
-                max_bytes: Some(bytes.len()),
-                recovery: false,
-            },
-        )
-        .unwrap();
-    let mut result = Vec::new();
-    loop {
-        let mut buffer = [0; 8192];
-        match reader.poll_read(&mut cx, &mut buffer) {
-            Poll::Ready(Ok(0)) => break,
-            Poll::Ready(Ok(count)) => result.extend_from_slice(&buffer[..count]),
-            Poll::Ready(Err(error)) => panic!("{error}"),
-            Poll::Pending => {
-                assert!(std::time::Instant::now() < deadline);
-                std::thread::park_timeout(std::time::Duration::from_millis(10));
-            }
-        }
-    }
-    assert_eq!(result, bytes);
-    assert!(
-        sources
-            .open_read(
-                "disk:../outside",
-                IoReadOptions {
-                    max_bytes: Some(128),
-                    recovery: false
-                }
-            )
-            .is_err()
-    );
-    assert!(!sources.can_write("disk:../outside"));
-    assert!(sources.open_write("disk:/absolute", 128).is_err());
-    assert!(
-        sources
+        writer.flush().await.unwrap();
+        writer.finish().await.unwrap();
+        let mut listing = sources.list("disk:").await.unwrap();
+        assert_eq!(
+            listing.next().await.unwrap(),
+            Some("disk:world.ippw".into())
+        );
+        assert_eq!(listing.next().await.unwrap(), None);
+        let mut reader = sources
             .open_read(
                 "disk:world.ippw",
                 IoReadOptions {
                     max_bytes: Some(bytes.len()),
-                    recovery: true
-                }
+                    recovery: false,
+                },
             )
-            .is_err()
-    );
+            .await
+            .unwrap();
+        let mut result = Vec::new();
+        loop {
+            let window = reader
+                .read(NonZeroUsize::new(100_000).unwrap())
+                .await
+                .unwrap();
+            let count = window.bytes().len();
+            let done = window.is_final();
+            result.extend_from_slice(window.bytes());
+            window.consume(count).unwrap();
+            if done {
+                break;
+            }
+        }
+        assert_eq!(result, bytes);
+        assert!(
+            sources
+                .open_read(
+                    "disk:../outside",
+                    IoReadOptions {
+                        max_bytes: None,
+                        recovery: false
+                    }
+                )
+                .await
+                .is_err()
+        );
+        assert!(!sources.can_write("disk:../outside"));
+        assert!(sources.open_write("disk:/absolute", 128).await.is_err());
+        assert!(
+            sources
+                .open_read(
+                    "disk:world.ippw",
+                    IoReadOptions {
+                        max_bytes: Some(bytes.len()),
+                        recovery: true
+                    }
+                )
+                .await
+                .is_err()
+        );
+    });
     std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
 fn filesystem_root_prefix_preserves_path_boundaries_and_listing() {
+    let tasks = TaskSchedulerService::new();
     let root = std::env::temp_dir().join(format!("ipp-file-prefix-{}", std::process::id()));
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join("bar.mesh"), [1, 2, 3]).unwrap();
     let prefix = "file://path/foo";
-    let mut source = FileSystemIoSource::new(prefix, &root, true).unwrap();
-    assert_eq!(source.list(prefix).unwrap(), ["file://path/foo/bar.mesh"]);
+    let mut source = FileSystemIoSource::new(prefix, &root, true, tasks.schedulers().io()).unwrap();
+    futures_lite::future::block_on(async {
+        let mut listing = source.list(prefix).await.unwrap();
+        assert_eq!(
+            listing.next().await.unwrap(),
+            Some("file://path/foo/bar.mesh".into())
+        );
+        assert_eq!(listing.next().await.unwrap(), None);
+    });
     assert_eq!(
         source.path("file://path/foo/bar.mesh", false).unwrap(),
         root.canonicalize().unwrap().join("bar.mesh")
@@ -118,21 +118,26 @@ fn filesystem_root_prefix_preserves_path_boundaries_and_listing() {
 #[cfg(unix)]
 #[test]
 fn filesystem_symlinks_cannot_escape_the_authorized_root() {
+    let tasks = TaskSchedulerService::new();
     let root = std::env::temp_dir().join(format!("ipp-file-symlink-{}", std::process::id()));
     std::fs::create_dir_all(&root).unwrap();
     std::os::unix::fs::symlink(std::env::temp_dir(), root.join("escape")).unwrap();
-    let mut source = FileSystemIoSource::new("disk:", &root, true).unwrap();
-    assert!(!source.can_write("disk:escape/outside"));
-    assert!(
-        source
-            .open_read(
-                "disk:escape/",
-                IoReadOptions {
-                    max_bytes: Some(128),
-                    recovery: false
-                }
-            )
-            .is_err()
-    );
+    let mut source =
+        FileSystemIoSource::new("disk:", &root, true, tasks.schedulers().io()).unwrap();
+    futures_lite::future::block_on(async {
+        assert!(source.open_write("disk:escape/outside", 128).await.is_err());
+        assert!(
+            source
+                .open_read(
+                    "disk:escape/",
+                    IoReadOptions {
+                        max_bytes: None,
+                        recovery: false
+                    }
+                )
+                .await
+                .is_err()
+        );
+    });
     std::fs::remove_dir_all(root).unwrap();
 }

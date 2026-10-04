@@ -1,3 +1,5 @@
+import { bulkReadLeases } from "./bulk-reads.js";
+import { BulkReadClient } from "../../../packages/ipp-client/src/bulk-reads.js";
 /**
  * Clients without a generated SDK on any transport: the Host announces its
  * contract and serves it, and checks no claim at the hello. Results are plain
@@ -10,7 +12,7 @@ import {
   isHostContractReply,
   readHostAnnouncement,
   readHostContract,
-  readHostContractReply,
+  readHostContractDescriptor,
 } from "../../../packages/ipp-client/src/host-contract.js";
 import { HostWireWriter } from "../../../packages/ipp-client/src/host-protocol.js";
 import type { MessageTransport } from "../../../packages/ipp-client/src/transport.js";
@@ -95,6 +97,11 @@ export function continueDespiteDifference(
     let step: "hello" | "contract" | "list" | "invalid" | "done" = "hello";
     let announcedHash = 0n;
     let connection = 0n;
+    const reads = new BulkReadClient(
+      () => connection,
+      (bytes) => transport.send(bytes),
+      timeoutMs,
+    );
     let contractServed = false;
     let listedWorlds = false;
     const timer = setTimeout(
@@ -145,6 +152,7 @@ export function continueDespiteDifference(
       closed: () => ended(new Error("Host closed the connection")),
       message: (bytes) => {
         try {
+          if (reads.receive(bytes)) return;
           if (step === "hello") {
             const { announcement } = readHostAnnouncement(bytes);
             announcedHash = announcement.schemaHash;
@@ -154,16 +162,22 @@ export function continueDespiteDifference(
             step = "contract";
             transport.send(hostContractRequest());
           } else if (step === "contract" && isHostContractReply(bytes)) {
-            const served = contractIdentity(readHostContractReply(bytes));
-            contractServed = served.schemaHash === announcedHash;
-            step = "list";
-            const list = new HostWireWriter();
-            list.raw(HOST_REQUEST_MAGIC);
-            list.u64(connection);
-            list.u64(1n);
-            list.u8(foreign.WIRE.HOST_REQUEST_LIST_WORLDS);
-            list.u64(0n);
-            transport.send(list.finish());
+            const descriptor = readHostContractDescriptor(bytes);
+            void reads
+              .readAll(descriptor)
+              .then((contract) => {
+                const served = contractIdentity(contract);
+                contractServed = served.schemaHash === announcedHash;
+                step = "list";
+                const list = new HostWireWriter();
+                list.raw(HOST_REQUEST_MAGIC);
+                list.u64(connection);
+                list.u64(1n);
+                list.u8(foreign.WIRE.HOST_REQUEST_LIST_WORLDS);
+                list.u64(0n);
+                transport.send(list.finish());
+              })
+              .catch(fail);
           } else if (step === "list") {
             const view = new DataView(
               bytes.buffer,
@@ -233,6 +247,7 @@ export interface ContractClientsObservation {
   readonly ignored: IgnoredDifference;
   /** A matching generated client opened a World session afterwards. */
   readonly matchingSession: string;
+  readonly bulk: Awaited<ReturnType<typeof bulkReadLeases>>;
 }
 
 /**
@@ -250,6 +265,7 @@ export async function hostServesClientsWithAndWithoutItsContract(
   selectedSystems: readonly string[],
   timeoutMs: number,
 ): Promise<ContractClientsObservation> {
+  const bulk = await bulkReadLeases(connect, builtContract, timeoutMs);
   const pulled = await pullContractWithoutSdk(
     connect(),
     builtContract,
@@ -281,6 +297,7 @@ export async function hostServesClientsWithAndWithoutItsContract(
   try {
     return {
       pulled,
+      bulk,
       refusal,
       ignored,
       matchingSession: client.session.toString(),

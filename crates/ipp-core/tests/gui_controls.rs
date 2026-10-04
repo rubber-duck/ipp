@@ -1,6 +1,7 @@
 //! Real headless control paint and same-publication semantic/hit joins; no transport admission claim.
 
 mod support;
+use support::task_scheduler::HostTaskTestDriver;
 
 #[path = "support/gui_interaction.rs"]
 mod interaction;
@@ -43,7 +44,7 @@ impl Default for ControlHost {
         let session = input.open_session().unwrap();
         Self {
             next_request: 0,
-            host: HostRuntime::new(),
+            host: crate::support::task_scheduler::host(),
             input,
             session,
         }
@@ -88,7 +89,7 @@ fn apply(host: &mut HostRuntime, world: WorldId, operations: Vec<Command>) -> Ba
         })
         .unwrap();
 
-    host.frame(0.0)
+    host.frame_for_test(0.0)
         .unwrap()
         .worlds
         .remove(&world)
@@ -146,7 +147,7 @@ fn fixture() -> (ControlHost, WorldId, OutputRef) {
 }
 
 fn frame(host: &mut HostRuntime) {
-    let frame = host.frame(0.1).unwrap();
+    let frame = host.frame_for_test(0.1).unwrap();
     assert!(
         frame.worlds.values().all(Result::is_ok),
         "{:?}",

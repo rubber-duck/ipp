@@ -12,10 +12,11 @@ use ipp_core::systems::constraints::*;
 use ipp_core::*;
 use std::mem::offset_of;
 use support::selection::{ASSETS, CONSTRAINTS, RENDER, select};
+use support::task_scheduler::HostTaskTestDriver;
 use support::{HostWorldTestDriver, WorldTestDriver};
 
 fn host() -> (HostRuntime, WorldId) {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host
         .create_world(
             WorldLimits::default(),
@@ -1134,7 +1135,7 @@ fn unload_and_recovery_drop_runtime_access_and_rebuild_without_reauthoring() {
     let tick = world.tick();
     drop(world);
     for _ in 0..16 {
-        host.progress_assets();
+        host.progress_assets_for_test();
         if host
             .world_mut(id)
             .unwrap()

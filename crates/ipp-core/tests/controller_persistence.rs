@@ -11,7 +11,6 @@ use ipp_core::services::world_serialization::{
 use ipp_core::systems::animation::*;
 use ipp_core::{
     Batch, Command, ComponentValue, EntityId, EntityMetadata, EntityPersistentId, EntityRef,
-    HostRuntime,
 };
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -76,7 +75,7 @@ fn driver(target: EntityId, source: String) -> AnimationDriverDescription {
 
 #[test]
 fn rejected_capture_does_not_allocate_the_controller_graph() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host
         .create_world(Default::default(), &select(&[ASSETS, CONSTRAINTS]))
         .unwrap();
@@ -136,7 +135,7 @@ fn rejected_capture_does_not_allocate_the_controller_graph() {
 
 #[test]
 fn many_controllers_resolve_late_durable_targets_and_reject_excluded_references() {
-    let mut host = HostRuntime::new();
+    let mut host = crate::support::task_scheduler::host();
     let id = host
         .create_world(Default::default(), &select(&[ASSETS, CONSTRAINTS]))
         .unwrap();

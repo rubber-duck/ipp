@@ -43,9 +43,9 @@ mod scenario {
     use ipp_core::systems::gui::local::{GuiEntityTarget, GuiLocalAction, GuiLocalEffect};
     use ipp_core::systems::gui::presentation::GuiPaintPart;
     use ipp_core::{
-        Batch, Command, ComponentValue, EntityId, EntityPlacementRef, EntityRef, FieldValue,
-        FieldWrite, FlatSurface, HostRuntime, OutputKind, OutputRef, SurfaceCache, TEXTURE_TYPE,
-        ViewQueryTarget, WorldAttachment, WorldId, WorldViewport,
+        Batch, Command, ComponentValue, CylinderSurface, EntityId, EntityPlacementRef, EntityRef,
+        FieldValue, FieldWrite, FlatSurface, HostRuntime, OutputKind, OutputRef, SphereSurface,
+        SurfaceCache, TEXTURE_TYPE, ViewQueryTarget, WorldAttachment, WorldId, WorldViewport,
     };
     use ipp_render_gl::{
         GlesRenderDevice, RenderService, SurfaceCacheDiagnostic, SurfaceCachePresentation,
@@ -71,7 +71,7 @@ mod scenario {
     /// Band 1 matches the 80 px/m screen density, so its texels align with pixels.
     const POLICY: SurfaceCache = SurfaceCache {
         direct_distance: 4.0,
-        texels_per_metre: 80.0,
+        resolution_scale: 1.0,
         max_refresh_hz: 10.0,
     };
 
@@ -84,7 +84,7 @@ mod scenario {
     /// Panel content size in metres and its expected band-1 and band-2 images.
     const PANEL: [f32; 2] = [4.0, 2.0];
     const BAND1_SIZE: [u32; 2] = [320, 160];
-    const BAND2_SIZE: [u32; 2] = [160, 80];
+    const BAND2_SIZE: [u32; 2] = BAND1_SIZE;
 
     /// Direct-versus-cached tolerance per region at matched density (plan §5):
     /// bilinear sampling at texel centres reproduces direct coverage except for
@@ -97,7 +97,7 @@ mod scenario {
     /// few pixels (observed three), which bilinear sampling keeps.
     const MATCHED_OUTLIERS: u32 = 8;
 
-    /// Band 2 halves the density: a loose bound on resampled edges only.
+    /// Band 2 keeps orthographic density: a loose bound on resampled edges only.
     const REDUCED_MEAN: f64 = 16.0;
 
     /// Recovered glyph atlas slots may round coverage by one level at glyph edges.
@@ -997,10 +997,11 @@ mod scenario {
         ) -> Result<SurfaceCacheDiagnostic> {
             let record = self.record()?;
             self.note(format!(
-                "{label}: mode={:?} band={} size={:?} repaints={}/{} reuses={} allocations={} direct={} fallbacks={} entries={} bytes={} uploaded={}",
+                "{label}: mode={:?} band={} size={:?} capacity={:?} repaints={}/{} reuses={} allocations={} direct={} fallbacks={} entries={} bytes={} uploaded={}",
                 record.presentation,
                 record.band,
                 record.size,
+                record.capacity,
                 stats.surface_cache_repaints,
                 record.repaints,
                 stats.surface_cache_reuses,
@@ -1094,7 +1095,7 @@ mod scenario {
                 1,
                 1,
             )?;
-            let bytes = BAND1_SIZE[0] * BAND1_SIZE[1] * 4;
+            let bytes = record.capacity[0] * record.capacity[1] * 4;
             if record.band != 1
                 || record.size != BAND1_SIZE
                 || record.resident_bytes != bytes
@@ -1246,10 +1247,10 @@ mod scenario {
             }
             self.settle(&[replacement])?;
 
-            // Band crossing: halved density at band 2, then hysteresis.
+            // Band crossing: unchanged orthographic quality at band 2, then hysteresis.
             self.camera_distance(BAND2)?;
             let stats = self.frame(DT)?;
-            let record = self.expect("band2", &stats, SurfaceCachePresentation::Repainted, 1, 1)?;
+            let record = self.expect("band2", &stats, SurfaceCachePresentation::Reused, 0, 0)?;
             if record.band != 2 || record.size != BAND2_SIZE {
                 return Err(format!("band-2 image {record:?}").into());
             }
@@ -1276,9 +1277,9 @@ mod scenario {
             let record = self.expect(
                 "band1-return",
                 &stats,
-                SurfaceCachePresentation::Repainted,
-                1,
-                1,
+                SurfaceCachePresentation::Reused,
+                0,
+                0,
             )?;
             if record.band != 1 || record.size != BAND1_SIZE {
                 return Err(format!("band-1 return {record:?}").into());
@@ -1468,6 +1469,103 @@ mod scenario {
                 true,
             )?;
             self.frame(DT)?;
+
+            // Exercise real curved mappings, allocation headroom, the cap and UV cropping.
+            let mut provider = ComponentValue::FLAT_SURFACE;
+            for (name, next, value) in [
+                (
+                    "cylinder",
+                    ComponentValue::CYLINDER_SURFACE,
+                    ComponentValue::CylinderSurface(CylinderSurface {
+                        width: PANEL[0],
+                        height: PANEL[1],
+                        curvature: 0.25,
+                        layer_spacing: 0.0,
+                    }),
+                ),
+                (
+                    "sphere",
+                    ComponentValue::SPHERE_SURFACE,
+                    ComponentValue::SphereSurface(SphereSurface {
+                        width: PANEL[0],
+                        height: PANEL[1],
+                        curvature: 0.25,
+                        layer_spacing: 0.0,
+                    }),
+                ),
+                (
+                    "flat",
+                    ComponentValue::FLAT_SURFACE,
+                    ComponentValue::FlatSurface(FlatSurface {
+                        width: PANEL[0],
+                        height: PANEL[1],
+                        ..Default::default()
+                    }),
+                ),
+            ] {
+                self.batch(vec![
+                    Command::RemoveComponent {
+                        entity: EntityRef::Handle(self.panel),
+                        component: provider,
+                    },
+                    Command::insert_value(EntityRef::Handle(self.panel), value),
+                ])?;
+                provider = next;
+                self.frame(DT)?;
+                let first = self.capture(&format!("quality-{name}"))?;
+                let warm = self.frame(DT)?;
+                let again = self.capture(&format!("quality-{name}-reused"))?;
+                if warm.surface_cache_repaints != 0 || max_difference(&first, &again) != 0 {
+                    return Err(format!("{name}: warm image changed: {warm:?}").into());
+                }
+                let colours = first
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .filter(|p| p[0].abs_diff(p[2]) > 20)
+                    .count();
+                if colours < 1000 {
+                    return Err(format!("{name}: insufficient visible content: {colours}").into());
+                }
+                let record = self.record()?;
+                self.note(format!("quality-{name}: viewport={WIDTH}x{HEIGHT} DPR=1 scale=1 active={:?} capacity={:?} bytes={}", record.size, record.capacity, record.resident_bytes));
+            }
+            let restored_reference = self.capture("quality-flat-reference")?;
+            for scale in [10.0, 1.0] {
+                self.batch(vec![
+                    field(
+                        self.panel,
+                        ComponentValue::TRANSFORM,
+                        offset_of!(Transform, sx),
+                        scale,
+                    ),
+                    field(
+                        self.panel,
+                        ComponentValue::TRANSFORM,
+                        offset_of!(Transform, sy),
+                        scale,
+                    ),
+                ])?;
+                self.frame(DT)?;
+                let record = self.record()?;
+                self.note(format!("quality-scale: viewport={WIDTH}x{HEIGHT} DPR=1 scale={scale} active={:?} capacity={:?} bytes={}", record.size, record.capacity, record.resident_bytes));
+                if scale == 10.0 && record.size[0] != 2048 {
+                    return Err(format!("cap not applied: {record:?}").into());
+                }
+                self.capture(if scale == 10.0 {
+                    "quality-capped"
+                } else {
+                    "quality-shrunk"
+                })?;
+            }
+            let shrunk = self.capture("quality-shrunk-comparison")?;
+            self.compare(
+                "capacity-padding-crop",
+                &restored_reference,
+                &shrunk,
+                MATCHED_MEAN,
+                true,
+            )?;
 
             // Lifetimes: policy removal, re-add, entity deletion and forget_world.
             self.opt_in(false)?;

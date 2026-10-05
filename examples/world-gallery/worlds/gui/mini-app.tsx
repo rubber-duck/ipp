@@ -76,7 +76,7 @@ const CARD_BACKGROUND = CONTRACT.GuiTheme.encodeParts({
       0,
       {
         part: CONTRACT.guiPaintPartIndex({ part: "background" }),
-        color: TOKENS.page,
+        color: [0.008, 0.018, 0.023, 1],
       },
     ],
   ]),
@@ -108,10 +108,14 @@ function Caption({
   id,
   text,
   width,
+  marginTop = 0,
+  marginBottom = 0,
 }: {
   readonly id: string;
   readonly text: string;
   readonly width?: number;
+  readonly marginTop?: number;
+  readonly marginBottom?: number;
 }) {
   return (
     <TextLine
@@ -119,7 +123,12 @@ function Caption({
       text={text}
       tone="neutral"
       size="small"
-      layout={{ height: 24, ...(width === undefined ? {} : { width }) }}
+      layout={{
+        height: 24,
+        margin_top: marginTop,
+        margin_bottom: marginBottom,
+        ...(width === undefined ? {} : { width }),
+      }}
     />
   );
 }
@@ -185,7 +194,7 @@ function Login({ scene }: { readonly scene: GuiScene }) {
       <BoxLayout
         kind={COLUMN}
         width={400}
-        height={392}
+        height={420}
         alignX={0}
         alignY={0}
         padding={[24, 24, 24, 24]}
@@ -210,7 +219,7 @@ function Login({ scene }: { readonly scene: GuiScene }) {
           id="gui-login-line"
           layout={{ margin_top: 12, margin_bottom: 20 }}
         />
-        <Caption id="gui-login-user-label" text="OPERATOR" />
+        <Caption id="gui-login-user-label" text="OPERATOR" marginBottom={4} />
         <Entity id="gui-callsign">
           <BoxLayout kind={LEAF} width={352} height={40} />
           <Behavior enabled={app.phase === "login"} />
@@ -221,7 +230,12 @@ function Login({ scene }: { readonly scene: GuiScene }) {
             onSubmit={scene.app.login}
           />
         </Entity>
-        <Caption id="gui-login-password-label" text="ACCESS PHRASE" />
+        <Caption
+          id="gui-login-password-label"
+          text="ACCESS PHRASE"
+          marginTop={8}
+          marginBottom={4}
+        />
         <Entity id={APP_CONTROLS.password}>
           <BoxLayout kind={LEAF} width={352} height={40} />
           <Behavior enabled={app.phase === "login"} />
@@ -233,7 +247,7 @@ function Login({ scene }: { readonly scene: GuiScene }) {
             onSubmit={scene.app.login}
           />
         </Entity>
-        <Row id="gui-login-reveal-row" height={32} margin={[8, 0, 12, 0]}>
+        <Row id="gui-login-reveal-row" height={32} margin={[12, 0, 12, 0]}>
           <Check
             id={APP_CONTROLS.reveal}
             label="REVEAL PHRASE"
@@ -251,6 +265,7 @@ function Login({ scene }: { readonly scene: GuiScene }) {
         <Caption
           id="gui-login-demo-copy"
           text="Demo only. No account or connection required."
+          marginTop={8}
         />
       </Children>
       <Animation
@@ -339,7 +354,7 @@ function Connecting({ scene }: { readonly scene: GuiScene }) {
       <BoxLayout
         kind={COLUMN}
         width={560}
-        height={330}
+        height={388}
         alignX={0}
         alignY={0}
         padding={[24, 24, 24, 24]}
@@ -363,7 +378,7 @@ function Connecting({ scene }: { readonly scene: GuiScene }) {
           id="gui-login-progress"
           label="CONNECTION"
           value={app.progress}
-          layout={{ margin_top: 12, margin_bottom: 16 }}
+          layout={{ margin_top: 16, margin_bottom: 20 }}
         />
         <Terminal
           active={app.phase === "connecting"}
@@ -829,7 +844,7 @@ function Settings({ scene }: { readonly scene: GuiScene }) {
   const presentation = useStoreValue(scene.state, (s) => s.presentationTab);
   const displayHelp = {
     layers:
-      "Resting gap: 0.10 m. LAYER STEP sets the spacing when EXPLODE is on.",
+      "Layers coincide at rest. LAYER STEP sets the spacing when EXPLODE is on.",
     shell: "Choose the window curvature, facing direction and drawing policy.",
     style: "Choose the accent and reduce animation across this window.",
   }[presentation];
@@ -1011,7 +1026,7 @@ export function ScannerApp({ scene }: { readonly scene: GuiScene }) {
             id="gui-page"
             width={CANVAS_WIDTH}
             height={CANVAS_HEIGHT}
-            color={[0.008, 0.018, 0.023, 0.93]}
+            color={[0.008, 0.018, 0.023, phase === "workspace" ? 0.93 : 0.9]}
           />
           {phase !== "workspace" ? (
             <>

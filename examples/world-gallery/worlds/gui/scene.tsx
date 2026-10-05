@@ -144,19 +144,14 @@ export type GuiSurfaceShape = "flat" | "cylinder" | "sphere";
 export type GuiSurfaceCacheMode = "automatic" | "cached" | "direct";
 
 /**
- * Whole-Surface cache policy for the GUI panel. The authored camera sits
- * about 16.7 m from the panel centre, so it presents directly; dollying out
- * past 22 m (the 20 m boundary plus hysteresis) caches the panel. 80 texels
- * per content metre (about 592x384 texels, 0.87 MiB) roughly matches the on-screen
- * density of a 720-pixel-high canvas at that boundary, and each further
- * distance doubling halves density and refresh. The scanning trace changes
- * paint every frame, so a cap near the host frame rate would repaint the
- * image on every frame at more than the cost of drawing directly; 15 Hz
- * keeps the distant trace readable at about half the repaints.
+ * Distant panels reuse images sized from their projected pixels. The resolution
+ * scale requests one texel per visible pixel; 15 Hz refresh keeps the distant
+ * scanner readable without repainting every Host frame. Near affine panels present
+ * directly, while the explicit cached mode removes that distance boundary.
  */
 const GUI_SURFACE_CACHE = {
   direct_distance: 20,
-  texels_per_metre: 80,
+  resolution_scale: 1,
   max_refresh_hz: 15,
 } as const;
 
@@ -638,7 +633,7 @@ async function awaitCompleteSceneFrame(
             "gui-projector-emitter",
             "gui-projector-beam",
             "gui-projector-dust",
-            ...(surface.app.phase === "workspace" ? [SHIELD_ENTITY] : []),
+            SHIELD_ENTITY,
           ]
     ).map(
       (symbolicId) =>
@@ -1136,16 +1131,19 @@ export function useGuiScene(
       // exact picking geometry so the canvas can mark it as a GUI input
       // blocker.
       const request = ++shieldRequest.current;
+      const currentGeneration = generation.current;
+      const current = () =>
+        shieldRequest.current === request &&
+        generation.current === currentGeneration;
       void resolveShieldBlocker(canvas.client).then(
         (blocker) => {
-          if (shieldRequest.current !== request) return;
+          if (!current()) return;
           if (blocker === undefined)
             setError("The GUI input shield is not mounted");
           else state.update({ shieldBlocker: blocker });
         },
         (failure: unknown) => {
-          if (shieldRequest.current === request)
-            setError(errorMessage(failure));
+          if (current()) setError(errorMessage(failure));
         },
       );
     }
@@ -1637,7 +1635,12 @@ function GuiWorldContent({
       <ShaderAsset
         id="gui-input-shield-shader"
         recipe={{}}
-        parameters={{ size: "vec3", color: "vec4", hatch: "f32" }}
+        parameters={{
+          size: "vec3",
+          color: "vec4",
+          hatch: "f32",
+          visible: "f32",
+        }}
       >
         <VertexShader>{SHIELD_VERTEX_SHADER}</VertexShader>
         <FragmentShader>{SHIELD_SHADER}</FragmentShader>
@@ -1657,13 +1660,22 @@ function Shield({
   scene,
   shape,
   facing,
+  visible,
 }: {
   scene: GuiScene;
   shape: GuiSurfaceShape;
   facing: SurfaceFacing;
+  visible: boolean;
 }) {
   const armed = useStoreValue(scene.state, (state) => state.shieldArmed);
-  return <InputShield armed={armed} shape={shape} facing={facing} />;
+  return (
+    <InputShield
+      armed={armed}
+      shape={shape}
+      facing={facing}
+      visible={visible}
+    />
+  );
 }
 
 /**
@@ -1703,7 +1715,7 @@ const ProjectorPanel = memo(function ProjectorPanel({
 /**
  * The Surface entity that presents the panel World. The exploded view is an
  * ordinary animation of the Surface's layer spacing on the Host clock, played
- * forward to separate the planes and backward to close them.
+ * retargeted from its current contribution to the requested spacing.
  */
 function PanelSurface({
   scene,
@@ -1742,39 +1754,24 @@ function PanelSurface({
   });
   const spacingField = motions.spacingFields[shape];
   const { reportFailure } = scene;
-  const started = useRef(false);
   useEffect(() => {
     const handle = layers.current;
     if (!handle) return;
-    const initialize = !started.current;
-    started.current = true;
-    // A new shape's controller starts stopped: Seek moves its cursor but
-    // cannot sample it. Queue activation at zero speed, endpoint seek and
-    // pause in order so reduced motion still applies the Host-owned tracks.
-    const action =
-      reducedMotion || (initialize && !exploded)
-        ? Promise.all([
-            handle.playAtSpeed(0),
-            handle.seek(exploded ? LAYER_SECONDS : 0),
-            handle.pause(),
-          ])
-        : handle.playAtSpeed(exploded ? 1 : -1);
+    // Hold the endpoint sample; Host transitions blend its target contribution
+    // from the current physical value, including interrupted dial/explode edits.
     let live = true;
-    void action.catch((failure) => {
-      if (live) reportFailure(failure);
-    });
+    void Promise.all([handle.playAtSpeed(0), handle.seek(LAYER_SECONDS)]).catch(
+      (failure) => {
+        if (live) reportFailure(failure);
+      },
+    );
     return () => {
       live = false;
     };
-  }, [
-    exploded,
-    reducedMotion,
-    reportFailure,
-    shape,
-    facing,
-    vectorOnly,
-    workspace,
-  ]);
+  }, [reportFailure, shape, facing]);
+  const weight = exploded
+    ? Math.min(1, Math.max(0, layerStep / LAYER_STEP_MAX))
+    : 0;
   return (
     <Entity id={PANEL_ENTITY}>
       <Transform {...panelTransform} x={panelX + stagingX} />
@@ -1797,50 +1794,43 @@ function PanelSurface({
           }
         />
       )}
-      {!vectorOnly && workspace && (
-        <Children>
-          <Shield scene={scene} shape={shape} facing={facing} />
-        </Children>
-      )}
+      <Children>
+        <Shield
+          scene={scene}
+          shape={shape}
+          facing={facing}
+          visible={!vectorOnly && workspace}
+        />
+      </Children>
       <Animation
-        key={shape}
+        key={`${shape}:${facing}`}
         ref={layers}
         source={motions.spacing.source}
         bindings={[
           {
             track: 0,
-            weight: Math.min(
-              1,
-              Math.max(
-                0,
-                (layerStep - REST_LAYER_SPACING) /
-                  (LAYER_STEP_MAX - REST_LAYER_SPACING),
-              ),
-            ),
+            weight,
             property: {
               component: spacingField.component,
               offsets: [spacingField.offset],
             },
           },
-          ...(vectorOnly || !workspace
-            ? []
-            : motions.shieldFields.map((field, index) => ({
-                track: shieldTrackStart(shape, facing) + index,
-                weight: Math.min(
-                  1,
-                  Math.max(
-                    0,
-                    (layerStep - REST_LAYER_SPACING) /
-                      (LAYER_STEP_MAX - REST_LAYER_SPACING),
-                  ),
-                ),
-                target: SHIELD_ENTITY,
-                property: {
-                  component: field.component,
-                  offsets: [field.offset],
-                },
-              }))),
+          ...motions.shieldFields.map((field, index) => ({
+            track: shieldTrackStart(shape, facing) + index,
+            weight,
+            target: SHIELD_ENTITY,
+            property: {
+              component: field.component,
+              offsets: [field.offset],
+            },
+          })),
         ]}
+        speed={0}
+        transition={{
+          duration: reducedMotion ? 0 : LAYER_SECONDS,
+          easing: "smoothstep",
+          startTime: { policy: "seek", time: LAYER_SECONDS },
+        }}
         autoPlay={false}
       />
     </Entity>

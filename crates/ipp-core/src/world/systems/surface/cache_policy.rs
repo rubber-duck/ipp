@@ -1,32 +1,16 @@
-//! Distance bands, texel density and refresh caps for optional Surface caching
-//! and required curved images.
+//! Distance bands and refresh caps for optional Surface caching and required images.
 //!
-//! The metric is the World-space distance from the active camera's World
-//! translation to the evaluated Surface anchor (the entity centre). Distances
-//! below [`SurfaceCachePolicy::direct_distance`] select near/current quality
-//! (band 0): affine Surfaces may draw directly, while curved Surfaces retain
-//! required images without a refresh cap. Cached band `k >= 1` covers
-//! `[direct_distance * 2^(k-1), direct_distance * 2^k)`, and band
-//! [`SURFACE_CACHE_MAX_BANDS`] extends to infinity. Each band halves the
-//! texel density and the refresh cap of the previous one down to fixed
-//! floors, so neither increases with distance. A zero direct distance caches
-//! at every distance in band 1.
+//! The metric is the World-space distance from the active camera to the Surface
+//! anchor. Band 0 selects near/current presentation; affine Surfaces draw directly
+//! and curved Surfaces retain current images. Cached band `k >= 1` covers
+//! `[direct_distance * 2^(k-1), direct_distance * 2^k)`, ending in an unbounded
+//! band. Each farther band halves the refresh cap down to a fixed floor.
 //!
-//! Band changes use hysteresis: leaving the previous band requires crossing
-//! its boundary by [`SURFACE_CACHE_BAND_HYSTERESIS`] of the boundary distance,
-//! so small camera movements around a boundary keep the current band and its
-//! cache resolution. Orthographic cameras use the same distance rule.
-//!
-//! Band density is per Surface metre and ignores the presenting viewport's
-//! device-pixel ratio, an accepted limit: a density authored for a 1x view is
-//! magnified on high-DPR viewports, where cached text is softer than direct
-//! text at the same distance. The `surface-cache` browser suite measures it
-//! with Playwright device scale factors: the band-1 terminal image that matches
-//! direct presentation exactly at DPR 1 keeps about three quarters of the
-//! direct glyph edge energy at DPR 2, with a mean channel difference under 3.
-//! Authors who need high-DPR sharpness raise `texels_per_metre` or
-//! `direct_distance`; scaling bands by the viewport ratio would change band
-//! semantics and requires architecture review.
+//! Band changes use distance hysteresis. Raster quality is independent of bands:
+//! RenderService measures projected Surface pixel demand in the containing
+//! device-pixel viewport, applies the authored resolution scale and its bounded
+//! curvature allowance, and stabilizes image sizes before allocation. Distance
+//! reduces perspective pixel demand naturally; orthographic quality stays fixed.
 
 use super::SurfaceCache;
 use crate::ErrorReason;
@@ -40,14 +24,11 @@ pub const SURFACE_CACHE_BAND_HYSTERESIS: f32 = 0.1;
 /// Largest accepted direct distance, in metres.
 pub const SURFACE_CACHE_MAX_DIRECT_DISTANCE: f32 = 100_000.0;
 
-/// Largest accepted first-band texel density, per metre.
-pub const SURFACE_CACHE_MAX_TEXELS_PER_METRE: f32 = 16_384.0;
+/// Largest accepted multiplier of projected device-pixel demand.
+pub const SURFACE_CACHE_MAX_RESOLUTION_SCALE: f32 = 4.0;
 
 /// Largest accepted first-band refresh cap, in hertz.
 pub const SURFACE_CACHE_MAX_REFRESH_HZ: f32 = 240.0;
-
-/// Density below which farther bands stop halving, unless authored lower.
-const TEXELS_PER_METRE_FLOOR: f32 = 16.0;
 
 /// Refresh cap below which farther bands stop halving, unless authored lower.
 const REFRESH_HZ_FLOOR: f32 = 0.5;
@@ -58,24 +39,24 @@ pub struct SurfaceCachePolicy {
     /// Camera-to-anchor distance in metres below which presentation uses near/current
     /// quality: affine Surfaces may draw directly; required curved images stay current.
     pub direct_distance: f32,
-    /// Cache texel density in the first cached band, per Surface metre.
-    pub texels_per_metre: f32,
+    /// Multiplier of projected device-pixel demand; 1 matches presentation density.
+    pub resolution_scale: f32,
     /// Maximum content refresh rate in the first cached band, in hertz.
     pub max_refresh_hz: f32,
 }
 
 impl SurfaceCachePolicy {
     /// Validate an authored component: a finite direct distance in
-    /// `0..=SURFACE_CACHE_MAX_DIRECT_DISTANCE`, and positive finite density
+    /// `0..=SURFACE_CACHE_MAX_DIRECT_DISTANCE`, and positive finite resolution scale
     /// and refresh values no larger than their maxima.
     pub fn new(component: &SurfaceCache) -> Result<Self, ErrorReason> {
         let SurfaceCache {
             direct_distance,
-            texels_per_metre,
+            resolution_scale,
             max_refresh_hz,
         } = *component;
         if !(0.0..=SURFACE_CACHE_MAX_DIRECT_DISTANCE).contains(&direct_distance)
-            || !(texels_per_metre > 0.0 && texels_per_metre <= SURFACE_CACHE_MAX_TEXELS_PER_METRE)
+            || !(resolution_scale > 0.0 && resolution_scale <= SURFACE_CACHE_MAX_RESOLUTION_SCALE)
             || !(max_refresh_hz > 0.0 && max_refresh_hz <= SURFACE_CACHE_MAX_REFRESH_HZ)
         {
             return Err(ErrorReason::InvalidValue);
@@ -83,7 +64,7 @@ impl SurfaceCachePolicy {
 
         Ok(Self {
             direct_distance,
-            texels_per_metre,
+            resolution_scale,
             max_refresh_hz,
         })
     }
@@ -113,11 +94,6 @@ impl SurfaceCachePolicy {
         }
 
         previous
-    }
-
-    /// Cache texel density for a band, per Surface metre; nonincreasing in band.
-    pub fn texels_per_metre_at(&self, band: u8) -> f32 {
-        halved(self.texels_per_metre, TEXELS_PER_METRE_FLOOR, band)
     }
 
     /// Minimum World-time interval between content repaints for a band, in

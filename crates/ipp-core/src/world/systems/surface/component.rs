@@ -98,8 +98,8 @@ pub struct SurfaceCache {
     /// Camera-to-anchor distance in metres below which temporal caching is
     /// disabled. Zero enables caching at every distance.
     pub direct_distance: f32,
-    /// Cache texel density in the first cached band, per Surface metre.
-    pub texels_per_metre: f32,
+    /// Multiplier of projected device-pixel demand; 1 matches presentation density.
+    pub resolution_scale: f32,
     /// Maximum content refresh rate in the first cached band, in hertz.
     pub max_refresh_hz: f32,
 }
@@ -108,7 +108,7 @@ impl Default for SurfaceCache {
     fn default() -> Self {
         Self {
             direct_distance: 4.0,
-            texels_per_metre: 512.0,
+            resolution_scale: 1.0,
             max_refresh_hz: 30.0,
         }
     }

@@ -66,8 +66,8 @@ export const SURFACE_HEIGHT = 4.8;
 /** Shared curvature radius for the dashboard and its scene-geometry shield. */
 export const SURFACE_RADIUS = 8;
 
-/** A real resting gap makes the login lift visible without moving other groups. */
-export const REST_LAYER_SPACING = 0.1;
+/** Ordinary layers retain painter/input priority on coincident physical planes. */
+export const REST_LAYER_SPACING = 0;
 
 /**
  * Canvas units per Surface metre. Body text is then 16 / 140 = 0.114 m, about

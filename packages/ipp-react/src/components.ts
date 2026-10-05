@@ -48,7 +48,7 @@ export const componentContract = {
     host: "ipp-surface-cache",
     fields: {
       direct_distance: "number",
-      texels_per_metre: "number",
+      resolution_scale: "number",
       max_refresh_hz: "number",
     },
   },
@@ -320,7 +320,7 @@ export type SurfaceCacheProps = ComponentProps & {
    */
   direct_distance?: number | undefined;
   /** Cache texel density per Surface metre in the nearest cached band; positive. */
-  texels_per_metre?: number | undefined;
+  resolution_scale?: number | undefined;
   /**
    * Maximum content refresh rate in hertz in the nearest cached band;
    * positive. Pending content changes wait for the next refresh.

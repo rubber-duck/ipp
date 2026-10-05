@@ -509,8 +509,22 @@ pub trait RenderDevice: 'static {
         ))
     }
 
+    /// Select the active raster rectangle within allocated texture capacity.
+    /// This changes no storage. Sampling clamps to active texel centres before
+    /// mapping into capacity, so unused padding never enters linear filtering.
+    fn set_surface_cache_target_active_size(
+        &mut self,
+        _target: &mut Self::SurfaceCacheTarget,
+        _width: u32,
+        _height: u32,
+    ) -> Result<(), RenderError> {
+        Err(RenderError::RenderDevice(
+            "Surface cache active size unavailable".into(),
+        ))
+    }
+
     /// Save the current draw/read targets, viewport and Surface antialiasing
-    /// viewport, bind the target at its full size with scissor, stencil and
+    /// viewport, bind the target at its active size with scissor, stencil and
     /// depth writes disabled, and clear it to transparent black.
     ///
     /// Surface draws until [`Self::end_surface_cache_target`] use the target's

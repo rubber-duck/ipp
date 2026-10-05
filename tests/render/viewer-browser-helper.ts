@@ -2461,6 +2461,169 @@ export async function gallerySceneAction(name: string, args?: unknown) {
   return scene.action(name, args);
 }
 
+/** Observe ordinary Host transitions through generated reads; actions retarget the
+ * same controller before its previous transition settles. No client clock drives it. */
+export async function captureGalleryLayerMotion(
+  label: string,
+  actions: readonly { name: string; args: unknown }[],
+  capture = true,
+) {
+  const canvas = requireCanvas();
+  const client = canvas.client;
+  const panel = await galleryEntityId(GUI_PANEL_ENTITY);
+  if (panel === undefined) throw new Error("No projected GUI Surface");
+  const initial = await client.inspect();
+  const controllerId = initial.controllers!.find(({ description }) =>
+    description.drivers.some((driver) => driver.target === panel),
+  )!.id;
+  const shieldId = initial.entities.find(
+    (e) => e.metadata.symbolicId === "gui-input-shield",
+  )!.id;
+  const frameId = initial.entities.find(
+    (e) => e.metadata.symbolicId === "gui-input-shield-frame",
+  )!.id;
+  const read = async () => {
+    // Full inspection walks resources and diagnostics over independent pages;
+    // those unrelated queries can outlast a short transition on a software GPU.
+    const [surfacePage, controllerPage, shieldPage, framePage] =
+      await Promise.all([
+        client.inspectPage({ collection: "entities", target: panel, limit: 1 }),
+        client.inspectPage({
+          collection: "controllers",
+          target: controllerId,
+          limit: 1,
+        }),
+        client.inspectPage({
+          collection: "entities",
+          target: shieldId,
+          limit: 1,
+        }),
+        client.inspectPage({
+          collection: "entities",
+          target: frameId,
+          limit: 1,
+        }),
+      ]);
+    const surface = surfacePage.entities[0]!;
+    return {
+      time: surfacePage.time,
+      tick: surfacePage.tick,
+      spacing: Number(
+        surface.components.find((c) => "layer_spacing" in c.fields)!.fields
+          .layer_spacing,
+      ),
+      controller: controllerPage.controllers![0]!,
+      shield: shieldPage.entities[0]!,
+      shieldFrame: framePage.entities[0]!,
+    };
+  };
+  const events: unknown[] = [];
+  const unsubscribe = (client as AnimationWorldClient).onPlaybackEvent(
+    (event) => events.push(event),
+  );
+  const segments = [];
+  let captured: Awaited<ReturnType<typeof captureUnflushedViewer>> | undefined;
+  for (const action of actions) {
+    const before = await read();
+    const app = galleryGuiApplicationState().state as {
+      exploded: boolean;
+      layerStep: number;
+    };
+    const target =
+      action.name === "setExploded"
+        ? action.args
+          ? app.layerStep
+          : 0
+        : app.exploded
+          ? Number(action.args)
+          : 0;
+    // Sample while the ordinary scene action flushes; awaiting its whole
+    // authoring queue first can consume a short transition on a busy worker.
+    const pendingAction = gallerySceneAction(action.name, action.args);
+    const samples = [];
+    const deadline = performance.now() + 5_000;
+    for (;;) {
+      const sample = await read();
+      samples.push(sample);
+      if (
+        sample.controller.transition &&
+        sample.controller.transition.elapsed >= 0.12 &&
+        Math.abs(
+          Number(sample.controller.description.drivers[0]!.weight) - target,
+        ) < 1e-5
+      ) {
+        if (capture && !captured && actions.length === 1)
+          captured = await captureUnflushedViewer(label, true);
+        break;
+      }
+      if (
+        !sample.controller.transition &&
+        Math.abs(sample.spacing - target) < 1e-5 &&
+        samples.length > 1
+      )
+        break;
+      if (performance.now() >= deadline)
+        throw new Error(
+          `Layer motion was not observed: ${JSON.stringify({ before, last: samples.at(-1), events }, (_key, value) => (typeof value === "bigint" ? String(value) : value))}`,
+        );
+      await client.waitForFrame(sample.tick);
+    }
+    await pendingAction;
+    segments.push({ action, before, samples });
+  }
+  unsubscribe();
+  return { segments, captured, events };
+}
+
+/** A targeted first observation avoids unrelated inspection pagination. */
+export function galleryLayerControllerState(target: bigint) {
+  return requireCanvas().client.inspectPage({
+    collection: "controllers",
+    target,
+    limit: 1,
+  });
+}
+
+/** Observe the loading tail from one coherent entity page before submit. */
+export async function captureGalleryLoadingTail(label: string, target: bigint) {
+  const panel = await galleryPanel();
+  const deadline = performance.now() + 15_000;
+  let last: unknown;
+  for (;;) {
+    const page = await panel.client.inspectPage({
+      collection: "entities",
+      target,
+      limit: 1,
+    });
+    const terminal = page.entities[0];
+    const fields = terminal?.components.find(
+      (c) => "capacity_y" in c.fields && "offset_y" in c.fields,
+    )?.fields;
+    last = { tick: page.tick, time: page.time, terminal };
+    if (
+      fields &&
+      Number(fields.capacity_y) > 0 &&
+      Math.abs(Number(fields.offset_y) - Number(fields.capacity_y)) < 1
+    ) {
+      return {
+        terminal: terminal!,
+        tick: page.tick,
+        time: page.time,
+        captured: await captureUnflushedViewer(label, true),
+      };
+    }
+    if (
+      performance.now() >= deadline ||
+      (galleryGuiApplicationState().state as { app: { phase: string } }).app
+        .phase === "workspace"
+    )
+      throw new Error(
+        `Loading terminal tail was not observed: ${JSON.stringify(last, (_key, v) => (typeof v === "bigint" ? String(v) : v))}`,
+      );
+    await panel.client.waitForFrame(page.tick);
+  }
+}
+
 /** Sample a naturally playing login lift without controlling either Host clock. */
 export async function captureGalleryLoginLift(
   label: string,

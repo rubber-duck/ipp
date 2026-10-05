@@ -29,6 +29,7 @@ pub struct GlesSurfaceCacheTarget {
     depth: u32,
     width: u32,
     height: u32,
+    active: [u32; 2],
 }
 
 /// State saved by `begin_surface_cache_target` and restored by its end.
@@ -96,6 +97,7 @@ impl GlesRenderDevice {
             depth: 0,
             width,
             height,
+            active: [width, height],
         };
 
         let previous = self.current_target();
@@ -185,6 +187,22 @@ impl GlesRenderDevice {
         self.check()?;
         target.width = width;
         target.height = height;
+        target.active = [width, height];
+        Ok(())
+    }
+
+    pub(super) fn set_surface_cache_target_active_size(
+        &mut self,
+        target: &mut GlesSurfaceCacheTarget,
+        width: u32,
+        height: u32,
+    ) -> Result<(), RenderError> {
+        if width == 0 || height == 0 || width > target.width || height > target.height {
+            return Err(RenderError::RenderDevice(
+                "active Surface image exceeds capacity".into(),
+            ));
+        }
+        target.active = [width, height];
         Ok(())
     }
 
@@ -266,12 +284,12 @@ impl GlesRenderDevice {
         });
 
         // Box, path and glyph antialiasing now sizes pixels from the target.
-        self.surface_viewport = [target.width as f32, target.height as f32];
+        self.surface_viewport = target.active.map(|v| v as f32);
 
         // The target's framebuffer is live and owned by this context; end
         // restores the saved host bindings.
         self.bind_framebuffers(target.framebuffer, target.framebuffer);
-        self.set_viewport([0, 0, target.width as i32, target.height as i32]);
+        self.set_viewport([0, 0, target.active[0] as i32, target.active[1] as i32]);
         self.set_depth_mask(false);
         // SAFETY: Scalar context state in the current context only.
         unsafe {
@@ -366,6 +384,16 @@ impl GlesRenderDevice {
         self.program_vec4(program, location(c"u_placement"), &rectangle);
         self.program_vec4(program, location(c"u_clip"), clip);
         self.program_float(program, location(c"u_opacity"), opacity);
+        self.program_vec4(
+            program,
+            location(c"u_image_area"),
+            &[
+                target.active[0] as f32,
+                target.active[1] as f32,
+                target.width as f32,
+                target.height as f32,
+            ],
+        );
         self.program_int(program, location(c"u_surface_cache"), 0);
         self.bind_vertex_array(self.surface_quad_vao);
 
@@ -438,6 +466,16 @@ impl GlesRenderDevice {
             program,
             self.surface_location(program, c"u_image_flip"),
             i32::from(flip_image),
+        );
+        self.program_vec4(
+            program,
+            self.surface_location(program, c"u_image_area"),
+            &[
+                target.active[0] as f32,
+                target.active[1] as f32,
+                target.width as f32,
+                target.height as f32,
+            ],
         );
         self.program_int(
             program,

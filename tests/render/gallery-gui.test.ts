@@ -22,6 +22,7 @@ import {
   find,
   press,
   waitApp,
+  spacing,
 } from "./gallery-scanner-support.js";
 import {
   compareFrames,
@@ -198,13 +199,17 @@ test("Gallery GUI panel caches curved scanner presentation within direct-renderi
         canvasShare: 1,
       });
       await enterWorkspace(g);
-      await press(g, await find(g, "gui-scan"), 0.2);
+      await press(g, await find(g, "gui-scan"), 2 * (await spacing(g)));
       await waitApp(g, (v) => !v.state.autoscan);
       await openSettings(g);
-      await press(g, await find(g, "gui-vector-only"), 0.5);
+      await press(g, await find(g, "gui-vector-only"), 5 * (await spacing(g)));
       await waitApp(g, (v) => v.state.vectorOnly);
       await selectPresentationPage(g, "STYLE");
-      await press(g, await find(g, "gui-reduced-motion"), 0.5);
+      await press(
+        g,
+        await find(g, "gui-reduced-motion"),
+        5 * (await spacing(g)),
+      );
       await waitApp(g, (v) => v.state.reducedMotion);
       await selectPresentationPage(g, "SURFACE");
       await dropdown(g, "gui-surface-shape", "CYLINDER");
@@ -214,7 +219,11 @@ test("Gallery GUI panel caches curved scanner presentation within direct-renderi
         await selectPresentationPage(g, "SURFACE");
         if ((await guiApplication(g)).state.surfaceCache !== mode)
           await dropdown(g, "gui-surface-cache", mode.toUpperCase());
-        await press(g, await find(g, "gui-settings-close"), 0.4);
+        await press(
+          g,
+          await find(g, "gui-settings-close"),
+          4 * (await spacing(g)),
+        );
         await waitApp(g, (v) => !v.state.app.settings);
         await g.page.mouse.click(1, 1);
         await g.page.mouse.move(1, 1);
@@ -290,7 +299,7 @@ test("Gallery GUI panel caches curved scanner presentation within direct-renderi
             [518, 0],
             [518, 672],
           ],
-          0.3,
+          3 * (await spacing(g)),
         );
         const rect = [
           Math.min(...corners.map((p) => p.x)),
@@ -347,7 +356,7 @@ test("Gallery GUI panel caches curved scanner presentation within direct-renderi
                 Number(bounds.y) + Number(bounds.height),
               ],
             ],
-            rank * 0.1,
+            0,
           );
           const region = [
             Math.min(...points.map((p) => p.x)) - 1 / direct.frame.width,

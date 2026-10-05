@@ -12,7 +12,7 @@ pub mod text;
 
 pub use cache_policy::{
     SURFACE_CACHE_BAND_HYSTERESIS, SURFACE_CACHE_MAX_BANDS, SURFACE_CACHE_MAX_DIRECT_DISTANCE,
-    SURFACE_CACHE_MAX_REFRESH_HZ, SURFACE_CACHE_MAX_TEXELS_PER_METRE, SurfaceCachePolicy,
+    SURFACE_CACHE_MAX_REFRESH_HZ, SURFACE_CACHE_MAX_RESOLUTION_SCALE, SurfaceCachePolicy,
 };
 pub use component::{FlatSurface, SurfaceCache};
 pub use curved_components::{CylinderSurface, SphereSurface};

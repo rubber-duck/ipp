@@ -121,6 +121,9 @@ pub(in crate::world) fn fixed_range(component: u16, offset: u32) -> Option<Numer
         ComponentValue::CAMERA if fields!(Camera; fov_y) => Some(CameraAngle),
         ComponentValue::CAMERA if fields!(Camera; ortho_height) => Some(Positive),
         ComponentValue::SCALAR if fields!(Scalar; value) => Some(Finite),
+        ComponentValue::FLAT_SURFACE if fields!(FlatSurface; layer_spacing) => Some(Finite),
+        ComponentValue::CYLINDER_SURFACE if fields!(CylinderSurface; layer_spacing) => Some(Finite),
+        ComponentValue::SPHERE_SURFACE if fields!(SphereSurface; layer_spacing) => Some(Finite),
         _ => None,
     }
 }

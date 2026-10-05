@@ -199,6 +199,8 @@ unsafe extern "C" {
 
     fn resize_surface_cache_target(target: u32, width: u32, height: u32) -> u32;
 
+    fn set_surface_cache_target_active_size(target: u32, width: u32, height: u32) -> u32;
+
     fn begin_surface_cache_target(target: u32) -> u32;
 
     fn begin_camera_target(target: u32, clear: *const f32) -> u32;
@@ -843,6 +845,17 @@ impl RenderDevice for WebGlRenderDevice {
     ) -> Result<(), RenderError> {
         // SAFETY: Only scalars cross the boundary; the bridge validates the handle.
         self.check(unsafe { resize_surface_cache_target(*target, width, height) })
+    }
+
+    fn set_surface_cache_target_active_size(
+        &mut self,
+        target: &mut Self::SurfaceCacheTarget,
+        width: u32,
+        height: u32,
+    ) -> Result<(), RenderError> {
+        // SAFETY: Only scalars cross the synchronous bridge; it validates the
+        // owned handle and active dimensions, retaining no Rust memory.
+        self.check(unsafe { set_surface_cache_target_active_size(*target, width, height) })
     }
 
     fn begin_surface_cache_target(

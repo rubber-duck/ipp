@@ -298,6 +298,15 @@ impl RenderDevice for GlesRenderDevice {
         self.resize_surface_cache_target(target, width, height)
     }
 
+    fn set_surface_cache_target_active_size(
+        &mut self,
+        target: &mut Self::SurfaceCacheTarget,
+        width: u32,
+        height: u32,
+    ) -> Result<(), RenderError> {
+        self.set_surface_cache_target_active_size(target, width, height)
+    }
+
     fn begin_surface_cache_target(
         &mut self,
         target: &Self::SurfaceCacheTarget,

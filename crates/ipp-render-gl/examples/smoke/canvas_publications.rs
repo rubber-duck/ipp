@@ -394,7 +394,7 @@ fn opacity_cache<D: RenderDevice>(
                 EntityRef::Handle(anchor),
                 ComponentValue::SurfaceCache(ipp_core::components::SurfaceCache {
                     direct_distance: 0.0,
-                    texels_per_metre: 200.0,
+                    resolution_scale: 1.0,
                     max_refresh_hz: 1.0,
                 }),
             )],
@@ -547,7 +547,7 @@ fn nested_cache_refresh<D: RenderDevice>(
                     EntityRef::Handle(anchor),
                     ComponentValue::SurfaceCache(ipp_core::components::SurfaceCache {
                         direct_distance: 0.0,
-                        texels_per_metre: 200.0,
+                        resolution_scale: 1.0,
                         max_refresh_hz: if index == 0 {
                             4.0
                         } else {

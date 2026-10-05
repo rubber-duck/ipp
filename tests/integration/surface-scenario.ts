@@ -26,7 +26,7 @@ export interface SurfaceRowsEncoder {
 /** Cache policy the lifecycle scenario leaves authored for snapshot checks. */
 export const SURFACE_CACHE_POLICY = {
   direct_distance: 0.5,
-  texels_per_metre: 128,
+  resolution_scale: 1,
   max_refresh_hz: 2,
 } as const;
 
@@ -106,9 +106,9 @@ export async function surfaceCachePolicy(
     (item) => item.component === descriptor.id,
   );
   if (!component) return undefined;
-  const { direct_distance, texels_per_metre, max_refresh_hz } =
+  const { direct_distance, resolution_scale, max_refresh_hz } =
     component.fields;
-  return { direct_distance, texels_per_metre, max_refresh_hz };
+  return { direct_distance, resolution_scale, max_refresh_hz };
 }
 
 /**
@@ -122,7 +122,7 @@ export async function exerciseSurfaceCachePolicy(
   entity: bigint,
   authored: {
     direct_distance: number;
-    texels_per_metre: number;
+    resolution_scale: number;
     max_refresh_hz: number;
   },
 ) {
@@ -137,7 +137,7 @@ export async function exerciseSurfaceCachePolicy(
   );
   const initial = {
     direct_distance: 2,
-    texels_per_metre: 256,
+    resolution_scale: 1,
     max_refresh_hz: 10,
   };
   successfulBatch(
@@ -149,7 +149,7 @@ export async function exerciseSurfaceCachePolicy(
   );
   for (const [field, value] of [
     ["direct_distance", -1],
-    ["texels_per_metre", 0],
+    ["resolution_scale", 0],
     ["max_refresh_hz", 1e6],
   ] as const) {
     const outcome = await client.batch([
@@ -184,7 +184,7 @@ export async function exerciseSurfaceCachePolicy(
   expect(
     same(await surfaceCachePolicy(client, entity), {
       direct_distance: 4,
-      texels_per_metre: 512,
+      resolution_scale: 1,
       max_refresh_hz: 30,
     }),
     "Reinserted SurfaceCache did not use the runtime defaults",

@@ -26,6 +26,9 @@ pub(super) fn bind_frozen_f32(
     let index = identity.entity.index() as usize;
     let base = match property.component {
         ComponentValue::SCALAR => storage.scalar_ptr(index)?.cast::<u8>(),
+        ComponentValue::FLAT_SURFACE => storage.flat_surface_ptr(index)?.cast::<u8>(),
+        ComponentValue::CYLINDER_SURFACE => storage.cylinder_surface_ptr(index)?.cast::<u8>(),
+        ComponentValue::SPHERE_SURFACE => storage.sphere_surface_ptr(index)?.cast::<u8>(),
         ComponentValue::TRANSFORM => storage.transform_ptr(index)?.cast::<u8>(),
         ComponentValue::UNLIT_MATERIAL => storage.unlit_material_ptr(index)?.cast::<u8>(),
         ComponentValue::PBR_MATERIAL => storage.pbr_material_ptr(index)?.cast::<u8>(),

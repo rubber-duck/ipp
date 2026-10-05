@@ -96,7 +96,7 @@ const RECORD_WORDS = 42;
 const RECORD_LAYOUT = 1;
 
 /** Words per exported Surface cache record; see `ipp-wasm` `services/render.rs`. */
-const SURFACE_CACHE_RECORD_WORDS = 10;
+const SURFACE_CACHE_RECORD_WORDS = 12;
 
 function pick<K extends keyof typeof RECORD>(
   words: Uint32Array,
@@ -434,6 +434,8 @@ export class RenderWorkerService {
         reuses: words[at + 7]!,
         paintedAtMs: words[at + 8]!,
         residentBytes: words[at + 9]!,
+        capacityWidth: words[at + 10]!,
+        capacityHeight: words[at + 11]!,
       });
     }
     return records;

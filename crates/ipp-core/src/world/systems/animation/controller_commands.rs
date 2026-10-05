@@ -321,8 +321,12 @@ impl AnimationAccess<'_, '_> {
                 .ok_or(ErrorReason::MissingComponent)?;
             let value = self.read().read_animation_target(property, &component)?;
             match value {
-                AnimationValue::Field(crate::components::schema::FieldValue::F32(_))
-                | AnimationValue::Rotation(_) => {}
+                AnimationValue::Field(crate::components::schema::FieldValue::F32(_)) => {
+                    if !super::driver::frozen_transition_target_supported(property, &value) {
+                        return Err(ErrorReason::InvalidField);
+                    }
+                }
+                AnimationValue::Rotation(_) => {}
                 AnimationValue::Field(crate::components::schema::FieldValue::Dynamic(value))
                     if !matches!(
                         value,

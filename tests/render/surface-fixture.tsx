@@ -784,7 +784,7 @@ export async function surfaceCacheDeclarations() {
   await policyRoot.render(panel({ direct_distance: 1.5, max_refresh_hz: 4 }));
   await observe();
   await policyRoot.render(
-    panel({ direct_distance: 0, texels_per_metre: 64, max_refresh_hz: 4 }),
+    panel({ direct_distance: 0, resolution_scale: 1, max_refresh_hz: 4 }),
   );
   await observe();
   await policyRoot.render(panel());
@@ -1144,7 +1144,7 @@ export async function close() {
 /** Authored `SurfaceCache` fields; see `ipp_core::SurfaceCachePolicy`. */
 export interface SurfaceCachePolicy {
   direct_distance: number;
-  texels_per_metre: number;
+  resolution_scale: number;
   max_refresh_hz: number;
 }
 

@@ -5,9 +5,13 @@ import { writeDataUrl } from "./evidence.js";
 import { resolve } from "node:path";
 import test from "node:test";
 import { runBrowserEnvironment } from "../browser/environment.js";
-import { openGallery } from "./gallery-driver.js";
+import { openGallery, transform } from "./gallery-driver.js";
 import { projectContent } from "./gallery-gui-panel.js";
-import { guiApplication, waitForGuiState } from "./gallery-gui-support.js";
+import {
+  dynamicProperty,
+  guiApplication,
+  waitForGuiState,
+} from "./gallery-gui-support.js";
 import {
   environment,
   waitApp,
@@ -41,6 +45,38 @@ test("Gallery scanner logs in with a masked editor and opens the live workspace"
       const initial = await waitApp(g, (value) => value.ready);
       assert.equal(initial.state.app.phase, "login");
       assert.equal(initial.error, undefined);
+      assert.equal(await spacing(g), 0);
+      const initialCamera = transform(await g.inspect());
+      const panelAtLogin = await g.call<Inspection>("inspectGalleryPanel");
+      const projectionFill = panelAtLogin.entities.find(
+        (e) => e.metadata.symbolicId === "gui-page",
+      )!;
+      const projectionAlpha = Number(
+        projectionFill.components.find((c) => "alpha" in c.fields)!.fields
+          .alpha,
+      );
+      assert.ok(
+        projectionAlpha >= 0.89 && projectionAlpha <= 0.91,
+        "login projection must suppress rays behind the canvas",
+      );
+      const cornersAtLogin = await projectContent(g, [
+        [0, 0],
+        [1036, 672],
+      ]);
+      const canvasAtLogin = await g.page
+        .locator("#ipp-world-canvas")
+        .boundingBox();
+      assert.ok(canvasAtLogin);
+      assert.ok(
+        cornersAtLogin.every(
+          (p) =>
+            p.clientX > canvasAtLogin.x &&
+            p.clientX < canvasAtLogin.x + canvasAtLogin.width &&
+            p.clientY > canvasAtLogin.y &&
+            p.clientY < canvasAtLogin.y + canvasAtLogin.height,
+        ),
+        "default login camera crops the holographic Surface",
+      );
       const login = await g.capture("scanner-login-ready");
       assert.equal(login.frame.failedDrawCalls, 0);
       await g.page.screenshot({
@@ -48,8 +84,8 @@ test("Gallery scanner logs in with a masked editor and opens the live workspace"
         fullPage: true,
       });
       const password = await find(g, "gui-password");
-      expected(password, [342, 349.25, 352, 40]);
-      await press(g, password, 0.1);
+      expected(password, [342, 351.25, 352, 40]);
+      await press(g, password, await spacing(g));
       await g.page.waitForFunction(
         () =>
           document.querySelectorAll("textarea").length === 1 &&
@@ -59,7 +95,7 @@ test("Gallery scanner logs in with a masked editor and opens the live workspace"
       await waitApp(g, (value) => value.state.app.password === "demo phrase");
       await g.capture("scanner-login-masked");
       const reveal = await find(g, "gui-reveal-password");
-      await press(g, reveal, 0.1);
+      await press(g, reveal, await spacing(g));
       await waitApp(g, (value) => value.state.app.reveal);
       const revealed = await find(g, "gui-password");
       assert.deepEqual(
@@ -69,8 +105,8 @@ test("Gallery scanner logs in with a masked editor and opens the live workspace"
       );
       assert.deepEqual(revealed.value, { kind: "text", value: "demo phrase" });
       await g.capture("scanner-login-revealed");
-      await press(g, reveal, 0.1);
-      await press(g, revealed, 0.1);
+      await press(g, reveal, await spacing(g));
+      await press(g, revealed, await spacing(g));
       const loginPanel = await g.call<Inspection>("inspectGalleryPanel");
       const card = loginPanel.entities.find(
         (e) => e.metadata.symbolicId === "gui-login-card",
@@ -80,6 +116,16 @@ test("Gallery scanner logs in with a masked editor and opens the live workspace"
         c.description.drivers.some((d) => d.target === card.id),
       );
       assert.ok(driver);
+      const terminal = loginPanel.entities.find(
+        (e) => e.metadata.symbolicId === "gui-login-terminal",
+      );
+      assert.ok(terminal);
+      const loadingTail = g.call<{
+        terminal: EntitySnapshot;
+        tick: bigint;
+        time: number;
+        captured: { dataUrl: string; frame: { failedDrawCalls: number } };
+      }>("captureGalleryLoadingTail", "scanner-connecting-dialog", terminal.id);
       const liftSample = g.call<{
         card: EntitySnapshot;
         samples: unknown[];
@@ -125,25 +171,29 @@ test("Gallery scanner logs in with a masked editor and opens the live workspace"
         false,
         "Fading login subtree still accepts input",
       );
-      await waitApp(
-        g,
-        (value) =>
-          value.state.app.phase === "connecting" &&
-          value.state.app.progress >= 0.65,
+      const loaded = await loadingTail;
+      const scroll = loaded.terminal.components.find(
+        (c) => "capacity_y" in c.fields && "offset_y" in c.fields,
+      )!.fields;
+      assert.ok(Number(scroll.capacity_y) > 0);
+      assert.ok(
+        Math.abs(Number(scroll.offset_y) - Number(scroll.capacity_y)) < 1,
       );
-      const loaded = await waitForGuiState(g, (state) =>
-        state.controls.some(
-          (c) =>
-            c.symbol === "gui-login-terminal" &&
-            c.scroll &&
-            c.value.kind === "scroll" &&
-            c.scroll.capacity[1] > 0 &&
-            Math.abs(c.value.offset[1] - c.scroll.capacity[1]) < 1,
-        ),
+      await scenario.evidence.record("loading-terminal-tail", {
+        terminal: loaded.terminal,
+        tick: loaded.tick,
+        time: loaded.time,
+      });
+      assert.deepEqual(
+        transform(await g.inspect()),
+        initialCamera,
+        "loading stole the camera",
       );
-      await scenario.evidence.record(
-        "loading-terminal-tail",
-        loaded.controls.find((c) => c.symbol === "gui-login-terminal"),
+      const connectingCapture = loaded.captured;
+      assert.equal(connectingCapture.frame.failedDrawCalls, 0);
+      await writeDataUrl(
+        resolve(scenario.evidence.directory, "scanner-connecting-dialog.png"),
+        connectingCapture.dataUrl,
       );
       await g.capture("scanner-connecting");
       await g.page.screenshot({
@@ -162,6 +212,18 @@ test("Gallery scanner logs in with a masked editor and opens the live workspace"
       assert.equal(complete.state.declarationIssue, undefined);
       const workspace = await g.capture("scanner-workspace-ready");
       assert.equal(workspace.frame.failedDrawCalls, 0);
+      assert.deepEqual(
+        transform(await g.inspect()),
+        initialCamera,
+        "workspace stole the camera",
+      );
+      await g.page.screenshot({
+        path: resolve(
+          scenario.evidence.directory,
+          "scanner-workspace-page.png",
+        ),
+        fullPage: true,
+      });
       // Independent scanner rectangle: its 416-unit paint sits at (65.25,121.25).
       // Sample well inside it so the oracle distinguishes a radar from a white fallback.
       const corners = await projectContent(
@@ -170,7 +232,7 @@ test("Gallery scanner logs in with a masked editor and opens the live workspace"
           [115.25, 171.25],
           [431.25, 487.25],
         ],
-        0.1,
+        await spacing(g),
       );
       const region = await g.call<{
         pixels: string;
@@ -224,7 +286,7 @@ test("Gallery scanner logs in with a masked editor and opens the live workspace"
         eligibility,
       });
       const pause = await find(g, "gui-scan");
-      await press(g, pause, 0.2);
+      await press(g, pause, await spacing(g));
       await waitApp(g, (value) => !value.state.autoscan);
       const settings = await find(g, "gui-settings-open");
       await press(g, settings, await spacing(g));
@@ -340,11 +402,11 @@ test("Gallery scanner protects pulse, keeps a live log and excludes input under 
         "footer actions overlap the radar status",
       );
       // Pause the sweep and change actual range through the vertical rail.
-      await press(g, await find(g, "gui-scan"), 0.2);
+      await press(g, await find(g, "gui-scan"), await spacing(g));
       await waitApp(g, (v) => !v.state.autoscan);
       await g.capture("scanner-range-wide");
       const range = await find(g, "gui-scan-range/slider");
-      await press(g, range, 0.1);
+      await press(g, range, await spacing(g));
       await g.page.keyboard.press("Home");
       await waitApp(g, (v) => v.state.app.range === 1);
       await waitForGuiState(g, (v) =>
@@ -360,7 +422,7 @@ test("Gallery scanner protects pulse, keeps a live log and excludes input under 
           [65.25, 121.25],
           [481.25, 537.25],
         ],
-        0.1,
+        await spacing(g),
       );
       const rect = [corners[0]!.x, corners[0]!.y, corners[1]!.x, corners[1]!.y];
       const readRadar = async (name: string) => {
@@ -405,10 +467,10 @@ test("Gallery scanner protects pulse, keeps a live log and excludes input under 
         state: await guiApplication(g),
       });
       const strength = await find(g, "gui-pulse-strength/slider");
-      await press(g, strength, 0.2);
+      await press(g, strength, await spacing(g));
       await g.page.keyboard.press("End");
       await waitApp(g, (v) => v.state.app.strength === 1);
-      await press(g, await find(g, "gui-charge"), 0.2);
+      await press(g, await find(g, "gui-charge"), await spacing(g));
       const charging = await waitApp(
         g,
         (v) =>
@@ -427,7 +489,7 @@ test("Gallery scanner protects pulse, keeps a live log and excludes input under 
       });
       await waitApp(g, (v) => v.state.app.charge.phase === "ready");
       // Editing the strength invalidates prepared energy, without firing it.
-      await press(g, strength, 0.2);
+      await press(g, strength, await spacing(g));
       await g.page.keyboard.press("Home");
       await waitApp(
         g,
@@ -438,11 +500,15 @@ test("Gallery scanner protects pulse, keeps a live log and excludes input under 
       assert.equal((await find(g, "gui-pulse")).enabled, false);
       await g.page.keyboard.press("ArrowRight");
       await waitApp(g, (v) => Math.abs(v.state.app.strength - 0.15) < 1e-5);
-      await press(g, await find(g, "gui-charge"), 0.2);
+      await press(g, await find(g, "gui-charge"), await spacing(g));
       await waitApp(g, (v) => v.state.app.charge.phase === "ready");
       const pulse = await find(g, "gui-pulse");
       expected(pulse, [818.75, 547.75, 128, 40]);
-      const [point] = await projectContent(g, [[882.75, 567.75]], 0.3);
+      const [point] = await projectContent(
+        g,
+        [[882.75, 567.75]],
+        3 * (await spacing(g)),
+      );
       assert.equal(
         pulse.enabled,
         true,
@@ -466,9 +532,13 @@ test("Gallery scanner protects pulse, keeps a live log and excludes input under 
         blocked.outcomes.some((outcome) => outcome.disposition === "blocked"),
         "physical shield must block the ray",
       );
-      await press(g, await find(g, "gui-pulse-interlock"), 0.2);
+      await press(
+        g,
+        await find(g, "gui-pulse-interlock"),
+        2 * (await spacing(g)),
+      );
       await waitApp(g, (v) => !v.state.shieldArmed);
-      await press(g, pulse, 0.3);
+      await press(g, pulse, 3 * (await spacing(g)));
       const firing = await waitApp(
         g,
         (v) =>
@@ -486,7 +556,11 @@ test("Gallery scanner protects pulse, keeps a live log and excludes input under 
       });
       await scenario.evidence.record("pulse-effect", firing);
       await waitApp(g, (v) => v.state.pulse.state !== "running");
-      await press(g, await find(g, "gui-pulse-interlock"), 0.2);
+      await press(
+        g,
+        await find(g, "gui-pulse-interlock"),
+        2 * (await spacing(g)),
+      );
       await waitApp(g, (v) => v.state.shieldArmed);
       await openSettings(g);
       assert.equal(
@@ -494,11 +568,17 @@ test("Gallery scanner protects pulse, keeps a live log and excludes input under 
         true,
         "modal opening forgot armed preference",
       );
+      const hiddenShield = (await g.inspect()).entities.find(
+        (e) => e.metadata.symbolicId === "gui-input-shield",
+      );
       assert.ok(
-        !(await g.inspect()).entities.some(
-          (e) => e.metadata.symbolicId === "gui-input-shield",
-        ),
-        "physical shield obscures settings",
+        hiddenShield,
+        "shield must retain its animation target while hidden",
+      );
+      assert.equal((await guiApplication(g)).state.shieldBlocker, undefined);
+      assert.equal(
+        dynamicProperty(await g.inspect(), "gui-input-shield", "visible").value,
+        0,
       );
       await g.capture("scanner-modal-ready");
       await g.page.screenshot({
@@ -535,7 +615,7 @@ test("Gallery scanner protects pulse, keeps a live log and excludes input under 
       )!;
       assert.ok(tail.scroll!.capacity[1] > 0);
       // CLEAR changes only events/lastCommand; the drawer must update immediately.
-      await press(g, await find(g, "gui-clear-log"), 0.2);
+      await press(g, await find(g, "gui-clear-log"), await spacing(g));
       await waitApp(
         g,
         (v) =>
@@ -559,7 +639,7 @@ test("Gallery scanner protects pulse, keeps a live log and excludes input under 
       const [logPoint] = await projectContent(
         g,
         [[log.bounds[0] + 200, log.bounds[1] + 80]],
-        0.2,
+        await spacing(g),
       );
       await g.page.mouse.move(logPoint!.clientX, logPoint!.clientY);
       await g.page.mouse.wheel(0, -1200);
@@ -600,7 +680,7 @@ test("Gallery scanner protects pulse, keeps a live log and excludes input under 
         ],
         0,
       );
-      await press(g, await find(g, "gui-charge"), 0.2);
+      await press(g, await find(g, "gui-charge"), await spacing(g));
       const beforeClose = await waitApp(
         g,
         (v) =>

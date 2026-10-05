@@ -1,5 +1,11 @@
 /** Scanner settings exercise real scene authoring, curved layers and recovery. */
 import assert from "node:assert/strict";
+import type {
+  AnimationControllerSnapshot,
+  EntitySnapshot,
+  Inspection,
+} from "@ipp/client";
+import { transform } from "./gallery-driver.js";
 import { resolve } from "node:path";
 import test from "node:test";
 import { writeDataUrl } from "./evidence.js";
@@ -44,6 +50,7 @@ test("Gallery GUI keeps stage selections valid and corrects rejected scene edits
       await g.call("gallerySceneAction", "setReducedMotion", true);
       await g.call("gallerySceneAction", "setExploded", true);
       await waitSpacing(g, 0.9);
+      await g.page.locator("#reset-camera").click();
       await openSettings(g, "scene");
       await g.call("galleryIndependentWorld", "open");
       try {
@@ -288,13 +295,151 @@ test("Gallery GUI retains presentation layer controls through animation and isol
         canvasShare: 1,
       });
       await enterWorkspace(g);
+      assert.equal(await spacing(g), 0, "resting layers must coincide exactly");
+      const camera = transform(await g.inspect());
+      type MotionSample = {
+        time: number;
+        spacing: number;
+        controller: AnimationControllerSnapshot;
+        shield: EntitySnapshot;
+        shieldFrame: EntitySnapshot;
+      };
+      const observeMotion = async (
+        label: string,
+        actions: { name: string; args: unknown }[],
+        capture = true,
+      ) => {
+        const motion = await g.call<{
+          segments: { before: MotionSample; samples: MotionSample[] }[];
+          captured?: { dataUrl: string; frame: { failedDrawCalls: number } };
+        }>("captureGalleryLayerMotion", label, actions, capture);
+        await scenario.evidence.record(label, motion.segments);
+        for (const segment of motion.segments) {
+          const intermediate = segment.samples.find(
+            (sample) =>
+              sample.controller.transition &&
+              sample.controller.transition.elapsed > 0 &&
+              sample.controller.transition.elapsed < 0.6,
+          );
+          assert.ok(
+            intermediate,
+            `${label}: missing intermediate Host transition ${JSON.stringify(segment.samples.map((s) => ({ time: s.time, spacing: s.spacing, transition: s.controller.transition, weight: s.controller.description.drivers[0]?.weight })))}`,
+          );
+          const target =
+            intermediate.controller.description.drivers[0]!.weight!;
+          if (!segment.before.controller.transition) {
+            // Inspection reports controller time for this Host boundary and
+            // component values from its completed predecessor. Bracket by
+            // adjacent observations instead of treating both as one instant.
+            const index = segment.samples.indexOf(intermediate);
+            const previous =
+              index > 0 ? segment.samples[index - 1]! : segment.before;
+            const evaluated = (elapsed: number) => {
+              const p = Math.min(1, Math.max(0, elapsed / 0.6));
+              return (
+                segment.before.spacing +
+                (target - segment.before.spacing) * p * p * (3 - 2 * p)
+              );
+            };
+            const a = evaluated(previous.controller.transition?.elapsed ?? 0);
+            const b = evaluated(intermediate.controller.transition!.elapsed);
+            assert.ok(
+              intermediate.spacing >= Math.min(a, b) - 2e-5 &&
+                intermediate.spacing <= Math.max(a, b) + 2e-5,
+              `${label}: spacing jumped instead of following Host interpolation`,
+            );
+          } else {
+            const elapsed = intermediate.time - segment.before.time;
+            assert.ok(
+              Math.abs(intermediate.spacing - segment.before.spacing) <=
+                2.5 * elapsed + 2e-5,
+              `${label}: retarget jumped away from its current spacing`,
+            );
+          }
+          assert.ok(intermediate.spacing > 0 && intermediate.spacing < 1);
+          const pose = (entity: EntitySnapshot) =>
+            entity.components.find((c) => "sx" in c.fields && "qx" in c.fields)!
+              .fields;
+          const beforeShield = pose(segment.before.shield);
+          const beforeFrame = pose(segment.before.shieldFrame);
+          const shield = pose(intermediate.shield);
+          const frame = pose(intermediate.shieldFrame);
+          const shieldDepth = (
+            p: Record<string, unknown>,
+            f: Record<string, unknown>,
+          ) => Number(f.z) + Number(f.sz) * Number(p.z);
+          assert.ok(
+            Math.abs(
+              shieldDepth(shield, frame) -
+                3 * intermediate.spacing -
+                (shieldDepth(beforeShield, beforeFrame) -
+                  3 * segment.before.spacing),
+            ) < 3e-5,
+            "shield's visible/picking pose diverged from rank3 during animation",
+          );
+        }
+        if (motion.captured) {
+          assert.equal(motion.captured.frame.failedDrawCalls, 0);
+          await writeDataUrl(
+            resolve(scenario.evidence.directory, `${label}.png`),
+            motion.captured.dataUrl,
+          );
+        }
+        if (capture)
+          assert.deepEqual(
+            transform(await g.inspect()),
+            camera,
+            "layer motion stole the camera",
+          );
+        return motion.segments.at(-1)!.samples.at(-1)!.controller.id;
+      };
+      await observeMotion("scanner-layer-open-intermediate", [
+        { name: "setExploded", args: true },
+      ]);
+      await waitSpacing(g, 0.9);
+      await observeMotion("scanner-layer-dial-intermediate", [
+        { name: "setLayerStep", args: 0.15 },
+      ]);
+      await waitSpacing(g, 0.15);
+      await observeMotion("scanner-layer-rapid-retarget", [
+        { name: "setLayerStep", args: 1 },
+        { name: "setExploded", args: false },
+        { name: "setExploded", args: true },
+        { name: "setLayerStep", args: 0.35 },
+      ]);
+      await waitSpacing(g, 0.35);
+      const reducedController = await observeMotion(
+        "scanner-layer-reduced-midflight",
+        [{ name: "setLayerStep", args: 1 }],
+        false,
+      );
+      await g.call("gallerySceneAction", "setReducedMotion", true);
+      const snapped = await g.call<Inspection>(
+        "galleryLayerControllerState",
+        reducedController,
+      );
+      assert.equal(
+        snapped.controllers![0]!.transition,
+        undefined,
+        "reduced motion left the previous transition running after its action",
+      );
+      await scenario.evidence.record(
+        "scanner-layer-reduced-first-observation",
+        snapped,
+      );
+      await waitSpacing(g, 1);
+      await g.call("gallerySceneAction", "setExploded", false);
+      await waitSpacing(g, 0);
+      await g.call("gallerySceneAction", "setReducedMotion", false);
+      await g.call("gallerySceneAction", "setLayerStep", 0.9);
       await openSettings(g);
       const dial = await find(g, "gui-layer-step/dial");
-      await press(g, dial, 0.5);
+      await press(g, dial, 5 * (await spacing(g)));
       await g.page.keyboard.press("End");
       await waitApp(g, (v) => Math.abs(v.state.layerStep - 1) < 1e-5);
-      await press(g, await find(g, "gui-explode"), 0.5);
+      await press(g, await find(g, "gui-explode"), 5 * (await spacing(g)));
       await waitSpacing(g, 1);
+      await g.page.locator("#reset-camera").click();
       assert.deepEqual(
         (await find(g, "gui-layer-step/dial")).target,
         dial.target,
@@ -321,8 +466,8 @@ test("Gallery GUI retains presentation layer controls through animation and isol
       await waitApp(g, (v) => v.state.reducedMotion);
       await selectPresentationPage(g, "LAYERS");
       await press(g, await find(g, "gui-explode"), 5 * (await spacing(g)));
-      await waitSpacing(g, 0.1);
-      await press(g, await find(g, "gui-vector-only"), 0.5);
+      await waitSpacing(g, 0);
+      await press(g, await find(g, "gui-vector-only"), 5 * (await spacing(g)));
       await waitApp(g, (v) => v.state.vectorOnly);
       await g.waitFor(
         (i) =>
@@ -330,12 +475,12 @@ test("Gallery GUI retains presentation layer controls through animation and isol
             (e) => e.metadata.symbolicId === "gui-projector-beam",
           ),
       );
-      await press(g, await find(g, "gui-vector-only"), 0.5);
+      await press(g, await find(g, "gui-vector-only"), 5 * (await spacing(g)));
       await waitApp(g, (v) => !v.state.vectorOnly);
       await g.waitFor((i) =>
         i.entities.some((e) => e.metadata.symbolicId === "gui-projector-beam"),
       );
-      await press(g, await find(g, "gui-explode"), 0.5);
+      await press(g, await find(g, "gui-explode"), 5 * (await spacing(g)));
       await waitSpacing(g, 0.15);
       const frame = await g.capture("scanner-exploded-settings");
       assert.equal(frame.frame.failedDrawCalls, 0);
@@ -410,8 +555,9 @@ test("Gallery GUI retains presentation on all curved Surface modes with posed be
         assert.ok(captured.summary.coverage > 0.08);
       }
       await selectPresentationPage(g, "LAYERS");
-      await press(g, await find(g, "gui-explode"), 0.5);
+      await press(g, await find(g, "gui-explode"), 5 * (await spacing(g)));
       await waitSpacing(g, 0.9);
+      await g.page.locator("#reset-camera").click();
       await g.capture("scanner-curved-exploded");
       await g.page.screenshot({
         path: resolve(
@@ -421,7 +567,11 @@ test("Gallery GUI retains presentation on all curved Surface modes with posed be
         fullPage: true,
       });
       // The raised presentation control remains reachable at its physical rank.
-      await press(g, await find(g, "gui-layer-step/dial"), 4.5);
+      await press(
+        g,
+        await find(g, "gui-layer-step/dial"),
+        5 * (await spacing(g)),
+      );
       await g.page.keyboard.press("Home");
       await waitSpacing(g, 0.15);
       assert.equal(

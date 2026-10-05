@@ -26,6 +26,9 @@ impl<D: RenderDevice> RenderService<D> {
             surface_bitmap_program: None,
             surface_cache_program: None,
             surface_image_program: None,
+            required_image_demand: Default::default(),
+            camera_used: Default::default(),
+            projected_visible: Default::default(),
             projected_surfaces: Default::default(),
             projected_repainting: None,
             surface_cache: Default::default(),
@@ -240,7 +243,7 @@ impl<D: RenderDevice> RenderService<D> {
         }
         self.custom_fallbacks.clear();
         self.light_selections.clear();
-        for (_, (target, _)) in std::mem::take(&mut self.camera_targets) {
+        for (_, (target, _, _)) in std::mem::take(&mut self.camera_targets) {
             self.device.borrow_mut().delete_surface_cache_target(target);
         }
         self.camera_completed.clear();
@@ -297,7 +300,7 @@ impl<D: RenderDevice> RenderService<D> {
                 .copied()
                 .collect();
             for selection in retired {
-                if let Some((target, _)) = self.camera_targets.remove(&selection) {
+                if let Some((target, _, _)) = self.camera_targets.remove(&selection) {
                     self.device.borrow_mut().delete_surface_cache_target(target);
                 }
             }
@@ -376,7 +379,7 @@ impl<D: RenderDevice> RenderService<D> {
             self.retain_canvas_outputs(outputs);
             self.retain_projected_outputs(outputs);
             for selection in retired {
-                if let Some((target, _)) = self.camera_targets.remove(&selection) {
+                if let Some((target, _, _)) = self.camera_targets.remove(&selection) {
                     self.device.borrow_mut().delete_surface_cache_target(target);
                 }
                 self.camera_completed.remove(&selection);
@@ -430,7 +433,7 @@ impl<D: RenderDevice> Drop for RenderService<D> {
             let mut device = self.device.borrow_mut();
             self.surface_cache
                 .clear(&mut super::surface_cache::DeviceCacheTargets(&mut *device));
-            for (_, (target, _)) in std::mem::take(&mut self.camera_targets) {
+            for (_, (target, _, _)) in std::mem::take(&mut self.camera_targets) {
                 device.delete_surface_cache_target(target);
             }
         }

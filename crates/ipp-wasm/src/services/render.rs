@@ -38,7 +38,7 @@ pub(crate) struct RenderSurfaceService {
 /// Words per exported Surface cache record: entity low and high words,
 /// presentation code, band, width, height, repaints, reuses, World time of the
 /// last repaint in milliseconds, and resident bytes.
-const SURFACE_CACHE_RECORD_WORDS: usize = 10;
+const SURFACE_CACHE_RECORD_WORDS: usize = 12;
 
 impl RenderSurfaceService {
     #[cfg(feature = "instrumentation")]
@@ -257,6 +257,8 @@ impl RenderSurfaceService {
                 diagnostic.reuses,
                 painted_at_ms,
                 diagnostic.resident_bytes,
+                diagnostic.capacity[0],
+                diagnostic.capacity[1],
             ]);
         }
 

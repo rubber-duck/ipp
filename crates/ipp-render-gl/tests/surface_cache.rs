@@ -17,10 +17,10 @@ use support::*;
 
 const VIEWPORT: u32 = 100;
 
-/// Cached at every distance: band 1, 64 texels per metre, 10 Hz.
+/// Cached at every distance: band 1, presented pixel density, 10 Hz.
 const ALWAYS: SurfaceCache = SurfaceCache {
     direct_distance: 0.0,
-    texels_per_metre: 64.0,
+    resolution_scale: 1.0,
     max_refresh_hz: 10.0,
 };
 
@@ -393,7 +393,7 @@ fn warm_frames_composite_the_image_without_surface_work() {
             cold.surface_cache_entries,
             cold.surface_cache_resident_bytes
         ),
-        (1, 4 * 64 * 64)
+        (1, 4 * 36 * 36)
     );
     // Atlas population precedes the repaint, which precedes the main pass.
     assert_eq!(take_events(&state), format!("B{TEXT}EFC"));
@@ -420,25 +420,25 @@ fn warm_frames_composite_the_image_without_surface_work() {
     assert_eq!(diagnostic.entity, entity.anchor);
     assert_eq!(diagnostic.presentation, SurfaceCachePresentation::Reused);
     assert_eq!(diagnostic.presentation.code(), 5);
-    assert_eq!((diagnostic.band, diagnostic.size), (1, [64, 64]));
+    assert_eq!((diagnostic.band, diagnostic.size), (1, [32, 32]));
     assert_eq!((diagnostic.repaints, diagnostic.reuses), (1, 3));
     assert!((diagnostic.painted_at - 0.1).abs() < 1e-9);
-    assert_eq!(diagnostic.resident_bytes, 4 * 64 * 64);
+    assert_eq!(diagnostic.resident_bytes, 4 * 36 * 36);
 }
 
 #[test]
-fn placement_within_a_band_composites_and_crossing_a_band_resizes() {
+fn tiny_placement_reuses_and_larger_projected_demand_resizes() {
     let mut host = support::task_scheduler::host();
     let (mut renderer, state, world_id, entity) = scene(&mut host);
     cache_policy(&mut host, entity, Some(BANDED));
 
-    // Five metres: band 2 at 32 texels per metre.
+    // Five metres: projected demand selects 32×32 in band 2.
     frame(&mut renderer, &mut host, world_id, 0.1);
     assert_eq!(diagnostics(&renderer, world_id)[0].size, [32, 32]);
     let revisions_before = canvas_revisions(&host, entity);
 
-    // Moving inside the band, and just past its boundary, only composites.
-    for z in [-1.0, 0.5, 1.2, 0.8] {
+    // Tiny camera-relative placement changes stay inside the quality window.
+    for z in [-0.01, 0.01, 0.02, 0.0] {
         move_surface(&mut host, entity, z);
         let stats = frame(&mut renderer, &mut host, world_id, 0.1);
         assert_eq!(work(&stats), [0, 1, 0, 0, 0], "z {z}: {stats:?}");
@@ -450,8 +450,8 @@ fn placement_within_a_band_composites_and_crossing_a_band_resizes() {
     move_surface(&mut host, entity, 2.0);
     let nearer = frame(&mut renderer, &mut host, world_id, 0.1);
     assert_eq!(work(&nearer), [1, 0, 0, 0, 1], "{nearer:?}");
-    assert_eq!(diagnostics(&renderer, world_id)[0].size, [64, 64]);
-    assert_eq!(nearer.surface_cache_resident_bytes, 4 * 64 * 64);
+    assert_eq!(diagnostics(&renderer, world_id)[0].size, [48, 48]);
+    assert_eq!(nearer.surface_cache_resident_bytes, 4 * 53 * 53);
     assert_eq!(
         (state.cache_creates.get(), state.cache_resizes.get()),
         (1, 1)
@@ -465,7 +465,10 @@ fn placement_within_a_band_composites_and_crossing_a_band_resizes() {
         presentation(&renderer, world_id),
         SurfaceCachePresentation::Near
     );
-    assert_eq!(take_events(&state).chars().last(), Some(TEXT));
+    assert!(matches!(
+        take_events(&state).chars().last(),
+        Some(TEXT | 'G')
+    ));
 }
 
 #[test]
@@ -1232,7 +1235,7 @@ fn surfaces_repainting_every_frame_present_directly_until_their_paint_settles() 
     // The image stays resident for the return.
     assert_eq!(
         diagnostic.resident_bytes,
-        4 * diagnostic.size[0] * diagnostic.size[1]
+        4 * diagnostic.capacity[0] * diagnostic.capacity[1]
     );
 
     // Once the paint holds, the stale image repaints and is reused.
@@ -1625,12 +1628,12 @@ fn budget_pressure_evicts_idle_images_then_falls_back() {
     let second = add_text_surface(&mut host, world_id, -1.0);
     cache_policy(&mut host, first, Some(ALWAYS));
     cache_policy(&mut host, second, Some(ALWAYS));
-    renderer.set_surface_cache_budget(4 * 64 * 64);
+    renderer.set_surface_cache_budget(4 * 32 * 32);
 
     // Only one image fits: entity order admits the first, the second falls back.
     let both = frame(&mut renderer, &mut host, world_id, 0.1);
     assert_eq!(work(&both), [1, 0, 1, 1, 1], "{both:?}");
-    assert_eq!(both.surface_cache_resident_bytes, 4 * 64 * 64);
+    assert_eq!(both.surface_cache_resident_bytes, 4 * 32 * 32);
 
     // With the first culled, its idle image makes room for the second.
     move_surface(&mut host, first, 10.0);
@@ -1641,7 +1644,7 @@ fn budget_pressure_evicts_idle_images_then_falls_back() {
     let size = |entity| records.iter().find(|r| r.entity == entity).unwrap().size;
     assert_eq!(
         (size(first.anchor), size(second.anchor)),
-        ([0, 0], [64, 64])
+        ([0, 0], [24, 24])
     );
 }
 
@@ -1674,7 +1677,7 @@ fn worlds_share_the_context_budget() {
     assert_ne!(first.output.world(), second.output.world());
     cache_policy(&mut host, first, Some(ALWAYS));
     cache_policy(&mut host, second, Some(ALWAYS));
-    renderer.set_surface_cache_budget(4 * 64 * 64);
+    renderer.set_surface_cache_budget(4 * 32 * 32);
 
     frame(&mut renderer, &mut host, world_id, 0.1);
     move_surface(&mut host, first, 10.0);
@@ -1686,12 +1689,12 @@ fn worlds_share_the_context_budget() {
             stats.surface_cache_entries,
             stats.surface_cache_resident_bytes
         ),
-        (1, 4 * 64 * 64)
+        (1, 4 * 32 * 32)
     );
     assert_eq!(record(&renderer, first_owner, first.anchor).size, [0, 0]);
     assert_eq!(
         record(&renderer, second_owner, second.anchor).size,
-        [64, 64]
+        [32, 32]
     );
 
     renderer.set_surface_cache_budget(ipp_render_gl::SURFACE_CACHE_BUDGET_BYTES);
@@ -1707,7 +1710,7 @@ fn worlds_share_the_context_budget() {
     assert!(diagnostics(&renderer, first_owner).is_empty());
     assert_eq!(
         record(&renderer, second_owner, second.anchor).size,
-        [64, 64]
+        [32, 32]
     );
     assert!(host.destroy_world(second_owner));
     renderer.forget_world(second_owner);
@@ -1735,7 +1738,7 @@ fn mixed_cached_and_direct_surfaces_keep_painter_order() {
     move_surface(&mut host, near, -6.0);
     move_surface(&mut host, far, 0.0);
     frame(&mut renderer, &mut host, world_id, 0.1);
-    assert_eq!(take_events(&state), format!("F{TEXT}C"));
+    assert_eq!(take_events(&state), format!("B{TEXT}EF{TEXT}C"));
 }
 
 #[test]
@@ -1851,10 +1854,20 @@ fn a_saturated_population_queue_refines_cached_text_only_at_the_refresh_cap() {
     canvas::apply(
         &mut host,
         world_id,
-        vec![Command::insert_value(
-            EntityRef::Handle(busy.anchor),
-            ComponentValue::WorldAttachment(ipp_core::WorldAttachment::surface(camera_output)),
-        )],
+        vec![
+            Command::insert_value(
+                EntityRef::Handle(busy.anchor),
+                ComponentValue::FlatSurface(FlatSurface {
+                    width: 4.0,
+                    height: 4.0,
+                    ..Default::default()
+                }),
+            ),
+            Command::insert_value(
+                EntityRef::Handle(busy.anchor),
+                ComponentValue::WorldAttachment(ipp_core::WorldAttachment::surface(camera_output)),
+            ),
+        ],
     );
     let cached = CanvasSurface::new(
         &mut host,
@@ -1967,8 +1980,8 @@ fn projected_geometry_and_placement_reuse_content_images_and_retained_work() {
     let begins = state.cache_begins.get();
     let writes = state.gui_batch_writes.get();
     let creates = state.cache_creates.get();
-    edit_projected(&mut host, panel, 0.8, 0.0);
-    move_surface(&mut host, panel, -0.3);
+    edit_projected(&mut host, panel, 0.55, 0.0);
+    move_surface(&mut host, panel, -0.01);
     let changed = frame(&mut renderer, &mut host, world, 0.0);
     assert_eq!(changed.surface_cache_repaints, 0);
     assert_eq!(changed.surface_cache_reuses, 1);
@@ -2089,8 +2102,8 @@ fn projected_stale_nested_image_reuses_until_the_child_image_refreshes() {
     );
     assert_eq!(
         state.cache_targets_live.get(),
-        1,
-        "only the required parent image remains"
+        0,
+        "both optional and required images release after the idle timeout"
     );
 }
 
@@ -2249,7 +2262,7 @@ fn projected_separated_layers_keep_independent_images_and_cleanup_partial_mesh_f
     let diagnostic = record(&renderer, world, panel.anchor);
     assert_eq!(
         diagnostic.resident_bytes,
-        diagnostic.size[0] * diagnostic.size[1] * 4 * 2
+        diagnostic.capacity[0] * diagnostic.capacity[1] * 4 * 2
     );
     assert_eq!(state.cache_targets_live.get(), 2);
     let begins = state.cache_begins.get();
@@ -2405,6 +2418,229 @@ fn projected_budget_reduction_reclaims_live_images_without_affine_fallback() {
     renderer.set_surface_cache_budget(ipp_render_gl::SURFACE_CACHE_BUDGET_BYTES);
     assert_eq!(
         frame(&mut renderer, &mut host, world, 0.0).surface_cache_repaints,
+        1
+    );
+}
+
+#[test]
+fn physical_viewport_resizes_affine_and_curved_images_and_preserves_reuse() {
+    for curved in [false, true] {
+        let mut host = support::task_scheduler::host();
+        let (mut renderer, state, world, panel) = scene(&mut host);
+        if curved {
+            projected(&mut host, panel, 0.5, 0.0);
+        }
+        cache_policy(
+            &mut host,
+            panel,
+            Some(SurfaceCache {
+                max_refresh_hz: 0.5,
+                ..ALWAYS
+            }),
+        );
+        frame(&mut renderer, &mut host, world, 0.0);
+        let first = record(&renderer, world, panel.anchor);
+        let output = host.root_output(world).unwrap().0;
+        host.set_root_output(
+            output,
+            ipp_core::WorldViewport {
+                width: 400,
+                height: 400,
+                device_pixel_ratio: 1.0,
+            },
+        )
+        .unwrap();
+        let resized = render_frame(&mut renderer, &mut host, world, 400, 400).unwrap();
+        let larger = record(&renderer, world, panel.anchor);
+        assert!(
+            larger.size[0] >= first.size[0] * 3,
+            "{first:?} → {larger:?}"
+        );
+        assert_eq!(resized.surface_cache_repaints, 1);
+        assert!(resized.surface_cache_allocations > 0);
+        let allocations = state.cache_creates.get() + state.cache_resizes.get();
+        let warm = render_frame(&mut renderer, &mut host, world, 400, 400).unwrap();
+        assert_eq!(warm.surface_cache_repaints, 0);
+        assert_eq!(warm.surface_cache_reuses, 1);
+        assert_eq!(
+            state.cache_creates.get() + state.cache_resizes.get(),
+            allocations
+        );
+        assert_eq!(record(&renderer, world, panel.anchor).size, larger.size);
+    }
+}
+
+#[test]
+fn projected_quality_recovers_after_budget_is_freed_without_camera_edits() {
+    let mut host = support::task_scheduler::host();
+    let (mut renderer, _, world, panel) = scene(&mut host);
+    projected(&mut host, panel, 0.5, 0.0);
+    frame(&mut renderer, &mut host, world, 0.0);
+    let original = record(&renderer, world, panel.anchor).size;
+    renderer.set_surface_cache_budget(4 * 16 * 16);
+    frame(&mut renderer, &mut host, world, 0.0);
+    assert!(record(&renderer, world, panel.anchor).size[0] < original[0]);
+    renderer.set_surface_cache_budget(ipp_render_gl::SURFACE_CACHE_BUDGET_BYTES);
+    let recovered = frame(&mut renderer, &mut host, world, 0.0);
+    assert_eq!(record(&renderer, world, panel.anchor).size, original);
+    assert_eq!(recovered.surface_cache_repaints, 1);
+}
+
+#[test]
+fn mixed_canvas_camera_images_preserve_active_quality_before_padding_and_release_idle() {
+    let mut host = support::task_scheduler::host();
+    let (mut renderer, state, world, panel) = scene(&mut host);
+    projected(&mut host, panel, 0.1, 0.0);
+    let mut camera_anchors = Vec::new();
+    for _ in 0..2 {
+        let child = host
+            .create_world(
+                Default::default(),
+                &select(&[ATTACHMENTS, CAMERA, RENDER, SURFACE]),
+            )
+            .unwrap();
+        let camera = create(
+            &mut host.world_mut(child).unwrap(),
+            vec![
+                ComponentValue::Camera(Default::default()),
+                ComponentValue::Transform(Transform {
+                    z: 5.0,
+                    ..Default::default()
+                }),
+            ],
+        );
+        let output = host
+            .bind_output(
+                host.world_ref(child).unwrap(),
+                camera,
+                ipp_core::OutputKind::Camera,
+            )
+            .unwrap();
+        let anchor = create(
+            &mut host.world_mut(world).unwrap(),
+            vec![
+                ComponentValue::CylinderSurface(ipp_core::CylinderSurface {
+                    width: 1.0,
+                    height: 1.0,
+                    curvature: 0.1,
+                    layer_spacing: 0.0,
+                }),
+                ComponentValue::Transform(Default::default()),
+                ComponentValue::WorldAttachment(ipp_core::WorldAttachment::surface(output)),
+            ],
+        );
+        camera_anchors.push(anchor);
+    }
+    frame(&mut renderer, &mut host, world, 0.0);
+    assert_eq!(state.cache_targets_live.get(), 3);
+    let active: Vec<_> = state
+        .cache_active_sizes
+        .borrow()
+        .values()
+        .copied()
+        .collect();
+    let exact_budget: usize = active
+        .iter()
+        .map(|s| s[0] as usize * s[1] as usize * 4)
+        .sum();
+    renderer.set_surface_cache_budget(exact_budget);
+    frame(&mut renderer, &mut host, world, 0.0);
+    assert_eq!(state.cache_targets_live.get(), 3);
+    assert_eq!(
+        state
+            .cache_active_sizes
+            .borrow()
+            .values()
+            .copied()
+            .collect::<Vec<_>>(),
+        active
+    );
+    let resident: usize = state
+        .cache_capacities
+        .borrow()
+        .values()
+        .map(|s| s[0] as usize * s[1] as usize * 4)
+        .sum();
+    assert!(resident <= exact_budget, "{resident} > {exact_budget}");
+    renderer.set_surface_cache_budget(0);
+    frame(&mut renderer, &mut host, world, 0.0);
+    assert_eq!(state.cache_targets_live.get(), 0);
+    renderer.set_surface_cache_budget(exact_budget / 2);
+    frame(&mut renderer, &mut host, world, 0.0);
+    assert_eq!(
+        state.cache_targets_live.get(),
+        3,
+        "budget reductions retain usable reduced images"
+    );
+    let reduced: usize = state
+        .cache_capacities
+        .borrow()
+        .values()
+        .map(|s| s[0] as usize * s[1] as usize * 4)
+        .sum();
+    assert!(reduced <= exact_budget / 2);
+    renderer.set_surface_cache_budget(ipp_render_gl::SURFACE_CACHE_BUDGET_BYTES);
+    for anchor in camera_anchors {
+        place(&mut host.world_mut(world).unwrap(), anchor, 1000.0);
+    }
+    move_surface(&mut host, panel, 1000.0);
+    frame(&mut renderer, &mut host, world, 0.1);
+    frame(&mut renderer, &mut host, world, 11.0);
+    assert_eq!(state.cache_targets_live.get(), 0);
+}
+
+#[test]
+fn nested_images_follow_parent_quality_scale_at_an_unchanged_view() {
+    let mut host = support::task_scheduler::host();
+    let (mut renderer, _, world, outer) = scene(&mut host);
+    projected(&mut host, outer, 0.8, 0.0);
+    let inner = CanvasSurface::new(
+        &mut host,
+        outer.output.world().id(),
+        0.0,
+        vec![ComponentValue::CanvasBox(Default::default())],
+    );
+    cache_policy(&mut host, outer, Some(ALWAYS));
+    cache_policy(&mut host, inner, Some(ALWAYS));
+    frame(&mut renderer, &mut host, world, 0.0);
+    let before = record(&renderer, inner.parent, inner.anchor).size;
+    cache_policy(
+        &mut host,
+        outer,
+        Some(SurfaceCache {
+            resolution_scale: 2.0,
+            ..ALWAYS
+        }),
+    );
+    frame(&mut renderer, &mut host, world, 0.0);
+    let after = record(&renderer, inner.parent, inner.anchor).size;
+    assert!(after[0] > before[0], "{before:?} → {after:?}");
+    assert_eq!(after, record(&renderer, outer.parent, outer.anchor).size);
+}
+
+#[test]
+fn failed_required_padding_resize_deletes_partial_storage_and_recovers() {
+    let mut host = support::task_scheduler::host();
+    let (mut renderer, state, world, panel) = scene(&mut host);
+    projected(&mut host, panel, 0.1, 0.0);
+    frame(&mut renderer, &mut host, world, 0.0);
+    let original = record(&renderer, world, panel.anchor);
+    let budget = original.size[0] as usize * original.size[1] as usize * 4;
+    let deletes = state.cache_deletes.get();
+    *state.fail_cache_resize.borrow_mut() = Some(RenderError::RenderDevice(
+        "partially resized storage".into(),
+    ));
+    renderer.set_surface_cache_budget(budget);
+    frame(&mut renderer, &mut host, world, 0.0);
+    assert!(state.fail_cache_resize.borrow().is_none());
+    assert_eq!(state.cache_deletes.get(), deletes + 1);
+    assert_eq!(state.cache_targets_live.get(), 1);
+    let current = record(&renderer, world, panel.anchor);
+    assert_eq!(current.size, original.size);
+    assert_eq!(current.capacity, original.size);
+    assert_eq!(current.resident_bytes as usize, budget);
+    assert_eq!(
+        frame(&mut renderer, &mut host, world, 0.0).surface_cache_reuses,
         1
     );
 }

@@ -4,7 +4,7 @@ export const GUI_STRESS_WORKLOAD = {
   diagnosticPanelEntities: [51, 136, 1001],
   rawSurfaceCache: {
     direct_distance: 0,
-    texels_per_metre: 128,
+    resolution_scale: 1,
     max_refresh_hz: 240,
   },
   seed: 0x19770517,

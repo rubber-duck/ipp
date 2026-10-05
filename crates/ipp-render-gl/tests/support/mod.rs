@@ -60,6 +60,8 @@ pub struct DeviceState {
     pub fail_gui_batch_write: RefCell<Option<RenderError>>,
     /// Largest cache target dimension; zero (the default) disables caching.
     pub cache_limit: Cell<u32>,
+    pub cache_capacities: RefCell<std::collections::BTreeMap<u32, [u32; 2]>>,
+    pub cache_active_sizes: RefCell<std::collections::BTreeMap<u32, [u32; 2]>>,
     pub cache_targets_live: Cell<u32>,
     pub cache_creates: Cell<u32>,
     pub cache_deletes: Cell<u32>,
@@ -69,6 +71,7 @@ pub struct DeviceState {
     pub cache_target_bound: Cell<bool>,
     pub bound_cache_target: Cell<Option<u32>>,
     pub camera_target_bound: Cell<bool>,
+    pub fail_cache_resize: RefCell<Option<RenderError>>,
     pub fail_cache_create: RefCell<Option<RenderError>>,
     pub fail_cache_begin: RefCell<Option<RenderError>>,
     pub fail_cache_end: RefCell<Option<RenderError>>,
@@ -452,12 +455,17 @@ impl RenderDevice for TestDevice {
         self.0
             .cache_targets_live
             .set(self.0.cache_targets_live.get() + 1);
-        Ok(self.0.cache_creates.get())
+        let handle = self.0.cache_creates.get();
+        self.0
+            .cache_capacities
+            .borrow_mut()
+            .insert(handle, [width, height]);
+        Ok(handle)
     }
 
     fn resize_surface_cache_target(
         &mut self,
-        _: &mut u32,
+        target: &mut u32,
         width: u32,
         height: u32,
     ) -> Result<(), RenderError> {
@@ -467,6 +475,13 @@ impl RenderDevice for TestDevice {
             "cache targets stay within the device limit"
         );
         self.0.cache_resizes.set(self.0.cache_resizes.get() + 1);
+        self.0
+            .cache_capacities
+            .borrow_mut()
+            .insert(*target, [width, height]);
+        if let Some(error) = self.0.fail_cache_resize.borrow_mut().take() {
+            return Err(error);
+        }
         Ok(())
     }
 
@@ -477,6 +492,21 @@ impl RenderDevice for TestDevice {
         self.0.bound_cache_target.set(Some(*target));
         self.0.camera_target_bound.set(true);
         self.0.cache_begins.set(self.0.cache_begins.get() + 1);
+        Ok(())
+    }
+
+    fn set_surface_cache_target_active_size(
+        &mut self,
+        target: &mut Self::SurfaceCacheTarget,
+        width: u32,
+        height: u32,
+    ) -> Result<(), RenderError> {
+        let capacity = self.0.cache_capacities.borrow()[target];
+        assert!(width > 0 && height > 0 && width <= capacity[0] && height <= capacity[1]);
+        self.0
+            .cache_active_sizes
+            .borrow_mut()
+            .insert(*target, [width, height]);
         Ok(())
     }
 
@@ -564,8 +594,10 @@ impl RenderDevice for TestDevice {
         self.draw_surface_cache(program, target, mvp, size, clip, opacity)
     }
 
-    fn delete_surface_cache_target(&mut self, _: u32) {
+    fn delete_surface_cache_target(&mut self, target: u32) {
         self.0.cache_deletes.set(self.0.cache_deletes.get() + 1);
+        self.0.cache_capacities.borrow_mut().remove(&target);
+        self.0.cache_active_sizes.borrow_mut().remove(&target);
         self.0
             .cache_targets_live
             .set(self.0.cache_targets_live.get() - 1);

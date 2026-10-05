@@ -7,7 +7,6 @@ export async function frameGuiCamera(
   client: CameraWorldClient,
   camera: bigint,
   exploded: boolean,
-  login = false,
 ): Promise<void> {
   const { qx, qy, qz, qw } = panel;
   const worldPoint = ([x, y, z]: readonly [number, number, number]): [
@@ -31,9 +30,7 @@ export async function frameGuiCamera(
   await setCameraPose(
     client,
     camera,
-    worldPoint(
-      exploded ? [-9, 0.8, 9.5] : login ? [-0.3, 0.12, 8] : [-0.8, 0.25, 11],
-    ),
+    worldPoint(exploded ? [-9, 0.8, 9.5] : [-0.8, 0.25, 11]),
     worldPoint(exploded ? [0, 0, 1.6] : [0, 0, 0.1]),
     (23 * Math.PI) / 180,
   );

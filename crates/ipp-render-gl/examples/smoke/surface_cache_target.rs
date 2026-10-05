@@ -41,7 +41,14 @@ pub(crate) fn run(
     )?;
     let white = device.create_texture(1, 1, &[255; 4])?;
     let mut target = device.create_surface_cache_target(16, 8)?;
-    device.resize_surface_cache_target(&mut target, 64, 32)?;
+    device.resize_surface_cache_target(&mut target, 128, 64)?;
+    device.set_surface_cache_target_active_size(&mut target, 64, 32)?;
+    if device
+        .set_surface_cache_target_active_size(&mut target, 129, 64)
+        .is_ok()
+    {
+        return Err("active Surface image beyond capacity was accepted".into());
+    }
 
     // Repaint before the frame, as the service pre-pass does. The content
     // mapping keeps texture row zero at the content top.

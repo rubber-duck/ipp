@@ -288,6 +288,7 @@ test("actual Animation JSX accepts transition declarations", async () => {
     AnimationWorldClient;
   let created: AnimationControllerDescription | undefined;
   let transitioned: AnimationControllerTransition | undefined;
+  let transitions = 0;
   client.createAnimationController = async (description) => {
     created = description;
     return 501n;
@@ -295,18 +296,19 @@ test("actual Animation JSX accepts transition declarations", async () => {
   client.updateAnimationController = async () => {};
   client.transitionAnimationController = async (_id, transition) => {
     transitioned = transition;
+    transitions++;
   };
   client.deleteAnimationController = async () => {};
   client.controlAnimationController = async () => {};
   client.onPlaybackEvent = () => () => {};
   const root = createRoot(client);
-  const declaration = (source: string) =>
+  const declaration = (source: string, duration = 0.32) =>
     createElement(Animation, {
       source,
       target: 200n,
       bindings: [{ track: 0, property: { component: 17, offsets: [12] } }],
       transition: {
-        duration: 0.32,
+        duration,
         easing: "smoothstep" as const,
         startTime: { policy: "matchPhase" as const },
       },
@@ -332,6 +334,19 @@ test("actual Animation JSX accepts transition declarations", async () => {
   assert.equal(
     transitioned?.description.drivers[0]?.source,
     "memory:replacement",
+  );
+  await settle(client, root.render(declaration("memory:replacement", 0)));
+  assert.equal(
+    transitions,
+    2,
+    "same destination must honor changed motion policy",
+  );
+  assert.equal(transitioned?.duration, 0);
+  await settle(client, root.render(declaration("memory:replacement", 0)));
+  assert.equal(
+    transitions,
+    2,
+    "unchanged policy must not restart its transition",
   );
   await settle(client, root.unmount());
 });
@@ -1351,7 +1366,7 @@ test("SurfaceCache opts in through the connected contract and removal returns to
       id: 27,
       fields: {
         direct_distance: { offset: 0, kind: 1 },
-        texels_per_metre: { offset: 4, kind: 1 },
+        resolution_scale: { offset: 4, kind: 1 },
         max_refresh_hz: { offset: 8, kind: 1 },
       },
     },
@@ -1365,7 +1380,7 @@ test("SurfaceCache opts in through the connected contract and removal returns to
       cache
         ? createElement(SurfaceCache, {
             ...cache,
-            texels_per_metre: 128,
+            resolution_scale: 1,
           })
         : null,
     );
@@ -1376,7 +1391,7 @@ test("SurfaceCache opts in through the connected contract and removal returns to
   assert.ok(policy && policy.kind === "insertComponent");
   assert.deepEqual(policy.fields, [
     { offset: 0, value: { kind: "f32", value: 2 } },
-    { offset: 4, value: { kind: "f32", value: 128 } },
+    { offset: 4, value: { kind: "f32", value: 1 } },
   ]);
   await settle(client, root.render(world({ direct_distance: 0 })));
   const panel = { kind: "handle" as const, id: 100n };

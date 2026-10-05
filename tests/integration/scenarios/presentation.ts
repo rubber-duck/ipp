@@ -732,7 +732,7 @@ export async function retainedResize(
           { kind: "alias", alias: 1 },
           {
             direct_distance: 0,
-            texels_per_metre: 96,
+            resolution_scale: 1,
             max_refresh_hz: 1,
           },
         ),

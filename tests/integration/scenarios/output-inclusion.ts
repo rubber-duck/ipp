@@ -210,7 +210,7 @@ export async function composedOutputInclusion(
       await parent.batch([
         insertComponent(parent, "SurfaceCache", anchor, {
           direct_distance: 0,
-          texels_per_metre: 96,
+          resolution_scale: 1,
           max_refresh_hz: 1,
         }),
       ]),

@@ -1,3 +1,4 @@
+import { surfaceSpacingTransitions } from "./scenarios/surface-animation.js";
 import {
   commandBatches,
   byteLimitedCommandBuffers,
@@ -58,6 +59,11 @@ export const worldHostCases: ReadonlyArray<{
     host: HostClientBase<Client>,
   ): Promise<unknown>;
 }> = [
+  {
+    name: "Surface spacing transitions interpolate and retarget at held clip endpoints",
+    run: (_client, contract, record, host) =>
+      surfaceSpacingTransitions(host, contract, record),
+  },
   {
     name: "asset source delivery bypasses open command batches and command byte limits",
     run: (client, contract, record) =>

@@ -364,7 +364,7 @@ fn a_cached_surface_that_separates_layers_presents_directly() {
         surface,
         vec![ComponentValue::SurfaceCache(SurfaceCache {
             direct_distance: 0.0,
-            texels_per_metre: 64.0,
+            resolution_scale: 1.0,
             max_refresh_hz: 10.0,
         })],
     );
@@ -403,7 +403,7 @@ fn a_single_occupied_priority_is_rank_zero_and_can_cache() {
         surface,
         vec![ComponentValue::SurfaceCache(SurfaceCache {
             direct_distance: 0.0,
-            texels_per_metre: 64.0,
+            resolution_scale: 1.0,
             max_refresh_hz: 10.0,
         })],
     );

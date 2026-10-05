@@ -180,7 +180,7 @@ export interface SurfaceCacheRecord {
   mode: SurfaceCacheMode;
   /** Selected distance band; 0 uses near/current quality, where affine Surfaces may draw directly. */
   band: number;
-  /** Resident image size in texels; zero without an image. */
+  /** Active raster size in texels; zero without an image. */
   width: number;
   height: number;
   /** Repaints and unchanged-image reuses since the entry was created. */
@@ -188,7 +188,10 @@ export interface SurfaceCacheRecord {
   reuses: number;
   /** World time of the last repaint, in milliseconds. */
   paintedAtMs: number;
-  /** Resident image bytes. */
+  /** Allocated dimensions, including growth headroom. */
+  capacityWidth: number;
+  capacityHeight: number;
+  /** Resident allocation bytes across separated images. */
   residentBytes: number;
 }
 

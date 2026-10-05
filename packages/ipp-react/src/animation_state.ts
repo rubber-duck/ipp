@@ -13,6 +13,7 @@ type Entry = {
   id?: bigint;
   signature?: string;
   driverSignature?: string;
+  transitionSignature?: string;
   pending: AnimationPlaybackControl[];
 };
 
@@ -149,17 +150,25 @@ export class ReactAnimationRegistry {
       };
       const signature = animationSignature(description);
       const driverSignature = animationSignature(description.drivers);
+      const transitionSignature = animationSignature(declaration.transition);
       if (entry.id === undefined) {
         entry.id = await this.client.createAnimationController!(description);
       } else {
         const transition = declaration.transition;
-        const mutation = animationMutation(
-          entry.signature,
-          entry.driverSignature,
-          signature,
-          driverSignature,
-          transition !== undefined,
-        );
+        // A changed policy is an explicit retarget, even when its destination
+        // is unchanged: reduced motion can finish an in-flight transition.
+        const policyChanged =
+          transition !== undefined &&
+          entry.transitionSignature !== transitionSignature;
+        const mutation = policyChanged
+          ? "transition"
+          : animationMutation(
+              entry.signature,
+              entry.driverSignature,
+              signature,
+              driverSignature,
+              transition !== undefined,
+            );
         if (mutation === "transition") {
           if (!transition) throw new Error("Missing Animation transition");
           if (!this.client.transitionAnimationController)
@@ -176,6 +185,7 @@ export class ReactAnimationRegistry {
       }
       entry.signature = signature;
       entry.driverSignature = driverSignature;
+      entry.transitionSignature = transitionSignature;
       // Creation acknowledgement may arrive after local unmount. Retain the ID
       // for queued cleanup, but never start obsolete playback.
       if (!this.live() || !this.desired.has(declaration.identity)) continue;

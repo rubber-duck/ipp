@@ -155,7 +155,7 @@ export const SURFACE_CACHE_COUNTERS = [
  */
 export const BENCHMARK_SURFACE_CACHE_POLICY = {
   direct_distance: 0,
-  texels_per_metre: 160,
+  resolution_scale: 1,
   max_refresh_hz: 240,
 } as const;
 

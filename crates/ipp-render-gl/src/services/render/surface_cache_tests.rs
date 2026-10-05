@@ -43,11 +43,11 @@ impl SurfaceCacheTargets for Targets {
     }
 }
 
-/// Direct below 4 m, 100 texels per metre and 10 Hz in the first band.
+/// Direct below 4 m, projected pixel demand and 10 Hz in the first band.
 fn policy() -> SurfaceCachePolicy {
     SurfaceCachePolicy {
         direct_distance: 4.0,
-        texels_per_metre: 100.0,
+        resolution_scale: 1.0,
         max_refresh_hz: 10.0,
     }
 }
@@ -60,7 +60,7 @@ fn input(index: u64, distance: f32, paint: u64, resource: u64) -> SurfaceCacheIn
     SurfaceCacheInput {
         entity: entity(index),
         policy: policy(),
-        clip_size: [1.0, 0.5],
+        pixel_demand: [104.0, 52.0],
         paint_revision: paint,
         resource_revision: resource,
         interaction: false,
@@ -155,20 +155,6 @@ fn counts(
 }
 
 #[test]
-fn cache_size_preserves_aspect_within_the_limit() {
-    assert_eq!(cache_size([1.0, 0.5], 100.0, 2048), Some([100, 50]));
-    assert_eq!(cache_size([40.0, 10.0], 100.0, 2048), Some([2048, 512]));
-    assert_eq!(cache_size([30.0, 40.0], 100.0, 1000), Some([750, 1000]));
-    assert_eq!(cache_size([1.0, 0.000_001], 100.0, 2048), Some([100, 1]));
-    assert_eq!(cache_size([0.0, 1.0], 100.0, 2048), None);
-    assert_eq!(cache_size([f32::NAN, 1.0], 100.0, 2048), None);
-    assert_eq!(cache_size([1.0, 1.0], 100.0, 0), None);
-    // `2.4_f32 * 80` exceeds 192 by representation error only.
-    assert_eq!(cache_size([3.8, 2.4], 80.0, 2048), Some([304, 192]));
-    assert_eq!(cache_size([1.0, 0.5], 100.3, 2048), Some([101, 51]));
-}
-
-#[test]
 fn first_frame_repaints_and_unchanged_frames_reuse() {
     let mut store = Store::new();
 
@@ -188,10 +174,10 @@ fn first_frame_repaints_and_unchanged_frames_reuse() {
     let diagnostic = store.diagnostic(1);
     assert_eq!(diagnostic.presentation, SurfaceCachePresentation::Reused);
     assert_eq!(diagnostic.band, 1);
-    assert_eq!(diagnostic.size, [100, 50]);
+    assert_eq!(diagnostic.size, [104, 52]);
     assert_eq!((diagnostic.repaints, diagnostic.reuses), (1, 2));
-    assert_eq!(diagnostic.resident_bytes, 4 * 100 * 50);
-    assert_eq!(store.cache.resident(), (1, 4 * 100 * 50));
+    assert_eq!(diagnostic.resident_bytes, 4 * 115 * 58);
+    assert_eq!(store.cache.resident(), (1, 4 * 115 * 58));
     assert_eq!(store.targets.creates, 1);
 }
 
@@ -329,7 +315,7 @@ fn incomplete_images_keep_coalescing_paint_edits() {
 }
 
 #[test]
-fn band_changes_resize_with_hysteresis() {
+fn bands_change_refresh_without_resizing_equal_pixel_demand() {
     let mut store = Store::new();
     store.frame(0.0, &[input(1, 5.0, 1, 1)]);
 
@@ -338,23 +324,23 @@ fn band_changes_resize_with_hysteresis() {
         store.frame(0.1, &[input(1, 8.5, 1, 1)]),
         counts(0, 1, 0, 0, 0)
     );
-    assert_eq!(store.diagnostic(1).size, [100, 50]);
+    assert_eq!(store.diagnostic(1).size, [104, 52]);
 
-    // 9 m leaves band 1; the image halves in density and repaints before use.
+    // Orthographic/equal demand stays at the same density in a farther band.
     assert_eq!(
         store.frame(0.2, &[input(1, 9.0, 1, 1)]),
-        counts(1, 0, 0, 0, 1)
+        counts(0, 1, 0, 0, 0)
     );
     assert_eq!(store.diagnostic(1).band, 2);
-    assert_eq!(store.diagnostic(1).size, [50, 25]);
-    assert_eq!(store.targets.resizes, 1);
+    assert_eq!(store.diagnostic(1).size, [104, 52]);
+    assert_eq!(store.targets.resizes, 0);
 
     // Oscillating around 8 m keeps band 2 until 7.2 m.
     for distance in [7.5, 8.4, 7.3, 8.0] {
         assert_eq!(store.frame(0.3, &[input(1, distance, 1, 1)]).reuses, 1);
     }
 
-    assert_eq!(store.frame(0.4, &[input(1, 7.0, 1, 1)]).allocations, 1);
+    assert_eq!(store.frame(0.4, &[input(1, 7.0, 1, 1)]).allocations, 0);
     assert_eq!(store.diagnostic(1).band, 1);
     assert_eq!(store.targets.creates, 1);
 }
@@ -435,7 +421,7 @@ fn culled_surfaces_do_no_work_and_repaint_stale_content_on_return() {
 #[test]
 fn budget_fallback_admits_entities_in_order() {
     let mut store = Store::new();
-    store.cache.set_budget(2 * 4 * 100 * 50);
+    store.cache.set_budget(2 * 4 * 104 * 52);
     let inputs = [
         input(1, 5.0, 1, 1),
         input(2, 5.0, 1, 1),
@@ -447,7 +433,7 @@ fn budget_fallback_admits_entities_in_order() {
         store.diagnostic(3).presentation,
         SurfaceCachePresentation::Fallback
     );
-    assert_eq!(store.cache.resident(), (2, 2 * 4 * 100 * 50));
+    assert_eq!(store.cache.resident(), (2, 2 * 4 * 104 * 52));
 
     // A stable over-budget set does not churn allocations.
     assert_eq!(store.frame(0.1, &inputs), counts(0, 2, 1, 1, 0));
@@ -457,7 +443,7 @@ fn budget_fallback_admits_entities_in_order() {
 #[test]
 fn budget_pressure_evicts_the_least_recently_presented_image() {
     let mut store = Store::new();
-    store.cache.set_budget(2 * 4 * 100 * 50);
+    store.cache.set_budget(2 * 4 * 104 * 52);
     let hidden = |index| SurfaceCacheInput {
         visible: false,
         ..input(index, 5.0, 1, 1)
@@ -470,15 +456,15 @@ fn budget_pressure_evicts_the_least_recently_presented_image() {
     let frame = store.frame(0.2, &[hidden(1), hidden(2), input(3, 5.0, 1, 1)]);
     assert_eq!(frame, counts(1, 0, 0, 0, 1));
     assert_eq!(store.diagnostic(1).size, [0, 0]);
-    assert_eq!(store.diagnostic(2).size, [100, 50]);
-    assert_eq!(store.cache.resident(), (2, 2 * 4 * 100 * 50));
+    assert_eq!(store.diagnostic(2).size, [104, 52]);
+    assert_eq!(store.cache.resident(), (2, 2 * 4 * 104 * 52));
     assert_eq!(store.targets.live.len(), 2);
 
     // Lowering the budget releases idle images at the next frame first.
-    store.cache.set_budget(4 * 100 * 50);
+    store.cache.set_budget(4 * 104 * 52);
     store.frame(0.3, &[hidden(1), hidden(2), input(3, 5.0, 1, 1)]);
     assert_eq!(store.diagnostic(2).size, [0, 0]);
-    assert_eq!(store.cache.resident(), (1, 4 * 100 * 50));
+    assert_eq!(store.cache.resident(), (1, 4 * 104 * 52));
 
     // Zero disables caching.
     store.cache.set_budget(0);
@@ -557,21 +543,21 @@ fn failed_frames_do_not_count_as_presented() {
 #[test]
 fn worlds_share_the_budget_and_forget_only_their_own_entries() {
     let mut store = Store::new();
-    store.cache.set_budget(4 * 100 * 50);
+    store.cache.set_budget(4 * 104 * 52);
     let other = WorldId(2);
 
     store.frame_in(WORLD, 0.0, &[input(1, 5.0, 1, 1)]);
     let frame = store.frame_in(other, 0.0, &[input(1, 5.0, 1, 1)]);
     assert_eq!(frame.repaints, 1);
     assert_eq!(store.diagnostic(1).size, [0, 0]);
-    assert_eq!(store.cache.resident(), (1, 4 * 100 * 50));
+    assert_eq!(store.cache.resident(), (1, 4 * 104 * 52));
 
     store.cache.set_budget(SURFACE_CACHE_BUDGET_BYTES);
     store.frame_in(WORLD, 0.1, &[input(1, 5.0, 1, 1)]);
     assert_eq!(store.cache.resident().0, 2);
 
     store.cache.forget_world(other, &mut store.targets);
-    assert_eq!(store.cache.resident(), (1, 4 * 100 * 50));
+    assert_eq!(store.cache.resident(), (1, 4 * 115 * 58));
     let mut out = Vec::new();
     store.cache.diagnostics(other, &mut out);
     assert!(out.is_empty());
@@ -608,7 +594,18 @@ fn allocation_failures_fall_back_and_retry_after_the_back_off() {
 
     // A failed resize releases the image.
     store.targets.fail_resize = Some(RenderError::RenderDevice("injected".into()));
-    assert_eq!(store.frame(1.1, &[input(1, 9.0, 1, 1)]).fallbacks, 1);
+    assert_eq!(
+        store
+            .frame(
+                1.1,
+                &[SurfaceCacheInput {
+                    pixel_demand: [208.0, 104.0],
+                    ..input(1, 9.0, 1, 1)
+                }]
+            )
+            .fallbacks,
+        1
+    );
     assert!(store.targets.live.is_empty());
     assert_eq!(store.cache.resident(), (0, 0));
 }
@@ -657,7 +654,7 @@ fn a_failed_composite_is_not_counted_as_a_reuse() {
 fn device_limits_cap_the_image_size() {
     let mut store = Store::new();
     let mut large = input(1, 5.0, 1, 1);
-    large.clip_size = [100.0, 50.0];
+    large.pixel_demand = [10_000.0, 5_000.0];
     store
         .cache
         .plan(WORLD, 0.0, 1024, &[large], &mut store.targets)
@@ -903,4 +900,55 @@ fn composed_plan_reserves_all_world_images_before_allocating_and_finishes_indepe
         store.cache.action(other, entity(1)),
         Some(SurfaceCacheAction::Reuse)
     );
+}
+
+#[test]
+fn projected_quality_changes_repaint_before_the_refresh_interval() {
+    let mut store = Store::new();
+    let first = input(1, 5.0, 1, 1);
+    store.frame(0.0, &[first]);
+    let larger = SurfaceCacheInput {
+        pixel_demand: [208.0, 104.0],
+        ..first
+    };
+    assert_eq!(store.frame(0.01, &[larger]), counts(1, 0, 0, 0, 1));
+    assert_eq!(store.diagnostic(1).size, [208, 104]);
+    let tiny = SurfaceCacheInput {
+        pixel_demand: [207.0, 103.5],
+        ..first
+    };
+    assert_eq!(store.frame(0.02, &[tiny]), counts(0, 1, 0, 0, 0));
+}
+
+#[test]
+fn active_growth_within_headroom_and_shrink_repaint_without_allocating() {
+    let mut store = Store::new();
+    let first = input(1, 5.0, 1, 1);
+    store.frame(0.0, &[first]);
+    let initial = store.diagnostic(1);
+    assert_eq!(initial.capacity, [115, 58]);
+    let grown = SurfaceCacheInput {
+        pixel_demand: [112.0, 56.0],
+        ..first
+    };
+    assert_eq!(store.frame(0.01, &[grown]), counts(1, 0, 0, 0, 0));
+    assert_eq!(store.diagnostic(1).size, [112, 56]);
+    let smaller = SurfaceCacheInput {
+        pixel_demand: [56.0, 28.0],
+        ..first
+    };
+    assert_eq!(store.frame(0.02, &[smaller]), counts(1, 0, 0, 0, 0));
+    assert_eq!(store.diagnostic(1).size, [56, 28]);
+    assert_eq!(store.diagnostic(1).capacity, initial.capacity);
+    assert_eq!(store.diagnostic(1).resident_bytes, initial.resident_bytes);
+    let larger = SurfaceCacheInput {
+        pixel_demand: [208.0, 104.0],
+        ..first
+    };
+    assert_eq!(store.frame(0.03, &[larger]), counts(1, 0, 0, 0, 1));
+    assert_eq!(store.diagnostic(1).capacity, [229, 115]);
+    store.cache.set_budget(4 * 208 * 104);
+    assert_eq!(store.frame(0.04, &[larger]), counts(1, 0, 0, 0, 1));
+    assert_eq!(store.diagnostic(1).capacity, [208, 104]);
+    assert_eq!(store.diagnostic(1).resident_bytes, 4 * 208 * 104);
 }

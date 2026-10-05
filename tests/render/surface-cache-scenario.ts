@@ -36,6 +36,8 @@ export interface CacheRecord {
   reuses: number;
   paintedAtMs: number;
   residentBytes: number;
+  capacityWidth: number;
+  capacityHeight: number;
 }
 
 export interface SurfaceCacheDriver {
@@ -57,7 +59,7 @@ export interface SurfaceCacheDriver {
  */
 export const TERMINAL_POLICY = {
   direct_distance: 4,
-  texels_per_metre: 80,
+  resolution_scale: 1,
   max_refresh_hz: 10,
 } as const;
 
@@ -67,14 +69,14 @@ export const SLOW_POLICY = { ...TERMINAL_POLICY, max_refresh_hz: 0.5 } as const;
 /** GUI panels render into a 640 x 480 view: 160 px/m. */
 export const GUI_POLICY = {
   ...TERMINAL_POLICY,
-  texels_per_metre: 160,
+  resolution_scale: 1,
 } as const;
 
 const DISTANCE = { near: 2, band1: 6, moved: 7, band2: 12 } as const;
 
-/** The 3.8 x 2.4 m terminal at band 1 and at the halved band-2 density. */
+/** The 3.8 x 2.4 m terminal at band 1 and at unchanged orthographic density in band 2. */
 const BAND1_SIZE = [304, 192] as const;
-const BAND2_SIZE = [152, 96] as const;
+const BAND2_SIZE = BAND1_SIZE;
 
 /**
  * Cached versus direct captures at matched density. The orthographic camera
@@ -97,7 +99,7 @@ export const CACHE_TOLERANCE = {
  */
 const TRANSLUCENT_OVERLAP = [40, 96, 168, 128] as const;
 
-/** Band 2 halves the density; only resampled edges may differ, loosely. */
+/** Band 2 lowers refresh frequency; only resampled edges may differ, loosely. */
 export const REDUCED_TOLERANCE = { meanChannelDifference: 16 } as const;
 
 /** Recovered glyph atlas slots may round coverage by one level at glyph edges. */
@@ -276,7 +278,14 @@ export async function exerciseSurfaceCache(driver: SurfaceCacheDriver) {
     [cold.record.band, cold.record.width, cold.record.height],
     [1, ...BAND1_SIZE],
   );
-  assert.equal(cold.record.residentBytes, BAND1_SIZE[0] * BAND1_SIZE[1] * 4);
+  assert.equal(
+    cold.record.residentBytes,
+    cold.record.capacityWidth * cold.record.capacityHeight * 4,
+  );
+  assert.ok(
+    cold.record.capacityWidth >= cold.record.width &&
+      cold.record.capacityHeight >= cold.record.height,
+  );
   assert.equal(counter(cold.frame, "surfaceCacheEntries"), 1);
   assert.equal(
     counter(cold.frame, "surfaceCacheResidentBytes"),
@@ -404,7 +413,7 @@ export async function exerciseSurfaceCache(driver: SurfaceCacheDriver) {
     `continuous edits repainted ${continuous} times in ${elapsed} ms (cap ${cap})`,
   );
 
-  // Band crossing halves the density; hysteresis keeps the band near its boundary.
+  // Band crossing keeps orthographic density; hysteresis keeps the band near its boundary.
   await call("cacheTerminal", [{}]);
   await call("cameraDistance", [DISTANCE.band2]);
   const band2 = await until(
@@ -711,13 +720,7 @@ export type CacheDensityReport = Awaited<
   ReturnType<typeof measureCacheDensity>
 >;
 
-/**
- * Cached versus direct terminal text at the page's device-pixel ratio, with
- * the drawing buffer sized to the 320 x 240 CSS view times that ratio. Band
- * density is authored per Surface metre and ignores the ratio, so the
- * {@link TERMINAL_POLICY} image matches the 80 px/m view at DPR 1 and is
- * magnified at higher ratios; `cache_policy.rs` records that accepted limit.
- */
+/** Device-pixel viewport demand keeps terminal text sharp at DPR 1 and 2. */
 export async function measureCacheDensity(driver: SurfaceCacheDriver) {
   const { call } = driver;
   await call("cacheTerminal", [{ devicePixels: true }]);
@@ -754,12 +757,12 @@ export async function measureCacheDensity(driver: SurfaceCacheDriver) {
     CACHE_TOLERANCE.maxChannelDifference,
   );
   const energy = { direct: edgeEnergy(expected), cached: edgeEnergy(actual) };
-  // The image density follows the policy, whatever the drawing buffer.
+  // Physical viewport pixels, including DPR, determine image density.
   assert.deepEqual(
     [record.band, record.width, record.height],
-    [1, ...BAND1_SIZE],
+    [1, ...BAND1_SIZE.map((size) => size * (direct.width / 320))],
   );
-  if (direct.devicePixelRatio === 1)
+  if (direct.devicePixelRatio >= 1)
     assert.ok(
       difference.maxChannelDifference <= CACHE_TOLERANCE.maxChannelDifference &&
         difference.meanChannelDifference <=
@@ -776,7 +779,13 @@ export async function measureCacheDensity(driver: SurfaceCacheDriver) {
     devicePixelRatio: direct.devicePixelRatio,
     viewport: [direct.width, direct.height],
     screenPixelsPerMetre: (80 * direct.width) / 320,
-    cache: { band: record.band, width: record.width, height: record.height },
+    cache: {
+      band: record.band,
+      width: record.width,
+      height: record.height,
+      capacityWidth: record.capacityWidth,
+      capacityHeight: record.capacityHeight,
+    },
     difference,
     edgeEnergy: { ...energy, cachedToDirect: energy.cached / energy.direct },
   };

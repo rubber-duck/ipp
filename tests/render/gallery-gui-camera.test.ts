@@ -27,6 +27,7 @@ import {
   selectPresentationPage,
   spacing,
   waitApp,
+  waitSpacing,
 } from "./gallery-scanner-support.js";
 import { guiApplication } from "./gallery-gui-support.js";
 
@@ -37,17 +38,6 @@ const environment = {
 
 /** Gallery panel cache policy, restated independently of scene.tsx. */
 const CACHE_DIRECT_DISTANCE = 20;
-const CACHE_TEXELS_PER_METRE = 80;
-
-/** Cache image size in a band; Surface sizes are f32 fields, rounded up with the renderer's 1e-4 texel tolerance. */
-function expectedCacheSize(band: number): readonly [number, number] {
-  const density = CACHE_TEXELS_PER_METRE / 2 ** (band - 1);
-  return [
-    Math.ceil(Math.fround(7.4) * density - 1e-4),
-    Math.ceil(Math.fround(4.8) * density - 1e-4),
-  ];
-}
-
 /** World distance from the camera to the panel anchor, from public inspection. */
 function panelDistance(inspection: Inspection): number {
   const camera = transform(inspection);
@@ -113,8 +103,7 @@ test("Scanner GUI owns panel gestures and admits background camera gestures", {
         await g.page.mouse.move(0, 0);
         await g.capture(`camera-${shape.toLowerCase()}-ready`);
       };
-      // Curved presentation caches each occupied layer. Its near band owns
-      // images, while a flat panel with separated layers presents directly.
+      // Curved presentation caches the coincident workspace as one image.
       await chooseShape("CYLINDER");
       await g.page.locator("#ipp-world-canvas").scrollIntoViewIfNeeded();
       const canvas = await g.page.locator("#ipp-world-canvas").boundingBox();
@@ -247,8 +236,8 @@ test("Scanner GUI owns panel gestures and admits background camera gestures", {
 
       let edge = await panelEdge();
 
-      // Camera-only motion over the cached panel composites the existing
-      // image: no repaint and no upload. Static content makes counts exact.
+      // Camera motion changes projected resolution. Unchanged frames reuse
+      // the resulting image without repainting or uploading.
       const cacheState = async (label: string) => {
         const panel = (await g.inspect()).entities.find(
           ({ metadata }) => metadata.symbolicId === "gui-demo",
@@ -304,17 +293,16 @@ test("Scanner GUI owns panel gestures and admits background camera gestures", {
       const near = await cacheUntil("camera-cache-near", reusedBand(0));
       const layerImages =
         near.record!.residentBytes /
-        (4 * near.record!.width * near.record!.height);
+        (4 * near.record!.capacityWidth * near.record!.capacityHeight);
       assert.equal(
         layerImages,
-        4,
-        "workspace should cache its four occupied layers",
+        1,
+        "coincident workspace layers should share one cache image",
       );
       const bandOneDistance = await dollyOut(CACHE_DIRECT_DISTANCE * 1.2);
       assert.ok(bandOneDistance < 2 * CACHE_DIRECT_DISTANCE);
       const bandOne = await cacheUntil("camera-cache-band1", reusedBand(1));
-      assert.equal(bandOne.allocations - near.allocations, layerImages);
-      assert.equal(bandOne.repaints - near.repaints, layerImages);
+      assert.ok(bandOne.repaints - near.repaints >= layerImages);
       edge = await panelEdge();
       const beforeOrbit = transform(await g.inspect());
       await g.drag(edge.outside, [
@@ -326,31 +314,40 @@ test("Scanner GUI owns panel gestures and admits background camera gestures", {
       assert.ok(cameraChanged(beforeOrbit, await g.inspect()));
       assert.equal(orbited.record?.mode, "reused");
       assert.equal(orbited.record?.band, 1);
-      assert.deepEqual(
-        [orbited.record?.width, orbited.record?.height],
-        expectedCacheSize(1),
+      // Resolution follows projected pixels, including camera orientation.
+      // A second unchanged frame must reuse that allocation without uploads.
+      const orbitReuse = await cacheUntil(
+        "camera-cache-orbit-reuse",
+        reusedBand(1),
       );
-      assert.equal(orbited.repaints - bandOne.repaints, 0);
-      assert.equal(orbited.allocations - bandOne.allocations, 0);
-      assert.equal(orbited.uploaded - bandOne.uploaded, 0);
-      assert.equal(
-        orbited.statistics!.surfaces!.surfaceCacheReuses,
-        layerImages,
-      );
-      assert.equal(orbited.statistics!.frame.uploadedBytes, 0);
-      // Dollying past the next boundary resizes the same image once.
+      assert.equal(orbitReuse.repaints, orbited.repaints);
+      assert.equal(orbitReuse.allocations, orbited.allocations);
+      assert.equal(orbitReuse.uploaded, orbited.uploaded);
+      assert.equal(orbitReuse.statistics!.frame.uploadedBytes, 0);
       edge = await panelEdge();
       await dollyOut(2 * CACHE_DIRECT_DISTANCE * 1.2);
       const bandTwo = await cacheUntil("camera-cache-band2", reusedBand(2));
-      assert.equal(bandTwo.allocations - orbited.allocations, layerImages);
-      assert.equal(bandTwo.repaints - orbited.repaints, layerImages);
-      assert.deepEqual(
-        [bandTwo.record?.width, bandTwo.record?.height],
-        expectedCacheSize(2),
-      );
+      assert.ok(bandTwo.repaints - orbited.repaints >= layerImages);
+      assert.ok(bandTwo.record!.width < near.record!.width);
+      assert.ok(bandTwo.record!.height < near.record!.height);
+      for (const state of [near, bandOne, orbited, bandTwo]) {
+        assert.equal(
+          Math.max(state.record!.width, state.record!.height) % 8,
+          0,
+        );
+        assert.ok(state.record!.width <= state.record!.capacityWidth);
+        assert.ok(state.record!.height <= state.record!.capacityHeight);
+        assert.equal(
+          state.record!.residentBytes,
+          4 *
+            layerImages *
+            state.record!.capacityWidth *
+            state.record!.capacityHeight,
+        );
+      }
       assert.equal(
         bandTwo.statistics!.surfaces!.surfaceCacheResidentBytes,
-        4 * layerImages * expectedCacheSize(2)[0] * expectedCacheSize(2)[1],
+        bandTwo.record!.residentBytes,
       );
       await g.page.locator("#reset-camera").click();
       await cacheUntil("camera-cache-reset", reusedBand(0));
@@ -731,6 +728,13 @@ test("Scanner GUI owns panel gestures and admits background camera gestures", {
       assert.deepEqual(transform(await g.settle()), beforeMinimum);
       await assertGain(0);
 
+      const manualPose = transform(await g.inspect());
+      await g.call("gallerySceneAction", "setExploded", true);
+      await waitSpacing(g, (await guiApplication(g)).state.layerStep);
+      assert.deepEqual(transform(await g.settle()), manualPose);
+      await g.call("gallerySceneAction", "setExploded", false);
+      await waitSpacing(g, 0);
+      assert.deepEqual(transform(await g.settle()), manualPose);
       const beforeLogout = transform(await g.inspect());
       await press(g, await find(g, "gui-scanner-close"), 0);
       await waitApp(g, (app) => app.state.app.phase === "login");

@@ -45,6 +45,7 @@ mod surface_assets;
 mod surface_cache;
 mod surface_mesh;
 mod surface_path;
+mod surface_quality;
 mod template;
 
 pub(crate) mod glyph_atlas;

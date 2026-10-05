@@ -314,7 +314,7 @@ fn surface(
     if cached {
         values.push(ComponentValue::SurfaceCache(SurfaceCache {
             direct_distance: 0.0,
-            texels_per_metre: 128.0,
+            resolution_scale: 1.0,
             max_refresh_hz: 10.0,
         }));
     }

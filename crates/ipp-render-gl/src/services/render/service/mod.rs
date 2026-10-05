@@ -76,6 +76,8 @@ impl fmt::Display for RenderError {
 
 impl std::error::Error for RenderError {}
 
+type CameraTarget<T> = (T, [u32; 2], [u32; 2]);
+
 /// Host-owned rendering of evaluated World inputs through one graphics context.
 ///
 /// Resource providers prepare GPU representations before graphics readiness.
@@ -110,7 +112,7 @@ pub struct RenderService<D: RenderDevice> {
     particle_quad: Option<GlMeshData<D>>,
     shadow_map: Option<D::ShadowMap>,
     shadow_map_size: u32,
-    pub(super) camera_targets: BTreeMap<ipp_core::OutputRef, (D::SurfaceCacheTarget, [u32; 2])>,
+    pub(super) camera_targets: BTreeMap<ipp_core::OutputRef, CameraTarget<D::SurfaceCacheTarget>>,
     pub(super) camera_completed: std::collections::BTreeSet<ipp_core::OutputRef>,
     debug: crate::services::render::debug_geometry::DebugGeometryRenderCache<D>,
     generated_paths: super::generated_paths::GeneratedPathCache<D>,
@@ -123,6 +125,9 @@ pub struct RenderService<D: RenderDevice> {
     surface_bitmap_program: Option<D::Program>,
     surface_cache_program: Option<D::Program>,
     surface_image_program: Option<D::Program>,
+    required_image_demand: BTreeMap<ipp_core::OutputRef, usize>,
+    camera_used: BTreeMap<ipp_core::OutputRef, f64>,
+    projected_visible: std::collections::BTreeSet<ipp_core::OutputRef>,
     projected_surfaces: BTreeMap<ipp_core::OutputRef, projected_surface::ProjectedSurface<D>>,
     projected_repainting: Option<ipp_core::OutputRef>,
     /// Whole-Surface cache images shared by every World on this context.

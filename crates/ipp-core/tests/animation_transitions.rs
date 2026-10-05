@@ -2,10 +2,10 @@
 
 mod support;
 use support::WorldTestDriver;
-use support::selection::{ASSETS, CONSTRAINTS, GEOMETRY, SPATIAL, select};
+use support::selection::{ASSETS, CONSTRAINTS, GEOMETRY, SPATIAL, SURFACE, select};
 
 use ipp_core::{
-    components::Scalar,
+    components::{CylinderSurface, FlatSurface, Scalar, SphereSurface},
     services::asset_management::{AssetUpload, AssetUploadIdentity},
     systems::{animation::*, geometry::BoundingGeometry},
     *,
@@ -1001,4 +1001,321 @@ fn queued_transition_does_not_leak_its_held_source_into_same_boundary_staging() 
         .unwrap();
     world.update_for_test(0.0).unwrap();
     assert_eq!(transform(&world), (100.0, 3.0));
+}
+
+fn surface_targets() -> [(ComponentValue, u16, u32, Vec<u32>); 3] {
+    [
+        (
+            ComponentValue::FlatSurface(FlatSurface::default()),
+            ComponentValue::FLAT_SURFACE,
+            offset_of!(FlatSurface, layer_spacing) as u32,
+            vec![
+                offset_of!(FlatSurface, width) as u32,
+                offset_of!(FlatSurface, height) as u32,
+            ],
+        ),
+        (
+            ComponentValue::CylinderSurface(CylinderSurface::default()),
+            ComponentValue::CYLINDER_SURFACE,
+            offset_of!(CylinderSurface, layer_spacing) as u32,
+            vec![
+                offset_of!(CylinderSurface, width) as u32,
+                offset_of!(CylinderSurface, height) as u32,
+                offset_of!(CylinderSurface, curvature) as u32,
+            ],
+        ),
+        (
+            ComponentValue::SphereSurface(SphereSurface::default()),
+            ComponentValue::SPHERE_SURFACE,
+            offset_of!(SphereSurface, layer_spacing) as u32,
+            vec![
+                offset_of!(SphereSurface, width) as u32,
+                offset_of!(SphereSurface, height) as u32,
+                offset_of!(SphereSurface, curvature) as u32,
+            ],
+        ),
+    ]
+}
+
+fn create_surface(world: &mut WorldContext<'_>, value: ComponentValue) -> EntityId {
+    submit(
+        world,
+        vec![
+            Command::Create {
+                alias: 1,
+                metadata: Default::default(),
+                adopt: false,
+            },
+            Command::insert_value(EntityRef::Alias(1), value),
+        ],
+    )
+    .result
+    .unwrap()[0]
+        .1
+}
+
+fn surface_spacing(world: &WorldContext<'_>, target: EntityId) -> f32 {
+    world
+        .inspect(target)
+        .unwrap()
+        .components
+        .iter()
+        .find_map(|value| match value {
+            ComponentValue::FlatSurface(value) => Some(value.layer_spacing),
+            ComponentValue::CylinderSurface(value) => Some(value.layer_spacing),
+            ComponentValue::SphereSurface(value) => Some(value.layer_spacing),
+            _ => None,
+        })
+        .unwrap()
+}
+
+fn surface_clip(property: &AnimationTrackTarget) -> AnimationClip {
+    AnimationClip::new(
+        0.6,
+        vec![AnimationTrack {
+            target: property.clone(),
+            keys: vec![
+                key(0.0, 0.0),
+                AnimationKeyframe {
+                    interpolation: AnimationInterpolation::Step,
+                    ..key(0.6, 1.0)
+                },
+            ],
+        }],
+    )
+    .unwrap()
+}
+
+fn surface_description(
+    target: EntityId,
+    property: &AnimationTrackTarget,
+    asset: u64,
+    weight: f32,
+) -> AnimationControllerDescription {
+    let mut driver = driver(target, asset);
+    driver.property = property.clone();
+    driver.weight = weight;
+    AnimationControllerDescription {
+        drivers: vec![driver],
+        speed: 0.0,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn surface_spacing_weight_transitions_advance_at_held_endpoint_and_retarget_current_composite() {
+    for (value, component, offset, _) in surface_targets() {
+        let (mut host, world_id) = host_world_with(&[SURFACE]);
+        let mut world = host.world_mut(world_id).unwrap();
+        let target = create_surface(&mut world, value);
+        let property = AnimationTrackTarget::AnimationProperty(AnimationProperty {
+            component,
+            offsets: vec![offset],
+        });
+        let source = surface_clip(&property);
+        upload(&mut world, 1, &source);
+        let controller = world
+            .create_animation_controller(surface_description(target, &property, 1, 0.0))
+            .unwrap();
+        play_at(&mut world, controller, 0.6);
+        world
+            .transition_animation_controller(
+                controller,
+                transition(
+                    surface_description(target, &property, 1, 0.9),
+                    0.6,
+                    AnimationTransitionStartTime::Seek(0.6),
+                ),
+            )
+            .unwrap();
+        world.update_for_test(0.0).unwrap();
+        let fade = world
+            .animation_controller(controller)
+            .unwrap()
+            .transition
+            .unwrap();
+        assert!(
+            !fade.pending,
+            "Surface {component} transition failed to bind"
+        );
+        assert_eq!(fade.elapsed, 0.0);
+        close(surface_spacing(&world, target), 0.0);
+
+        world.update_for_test(0.3).unwrap();
+        close(surface_spacing(&world, target), 0.45);
+        assert_eq!(world.animation_controller(controller).unwrap().time, 0.6);
+        world
+            .transition_animation_controller(
+                controller,
+                transition(
+                    surface_description(target, &property, 1, 0.15),
+                    0.6,
+                    AnimationTransitionStartTime::Seek(0.6),
+                ),
+            )
+            .unwrap();
+        world.update_for_test(0.0).unwrap();
+        close(surface_spacing(&world, target), 0.45);
+        world.update_for_test(0.3).unwrap();
+        close(surface_spacing(&world, target), 0.3);
+        world.update_for_test(0.3).unwrap();
+        close(surface_spacing(&world, target), 0.15);
+        assert!(
+            world
+                .animation_controller(controller)
+                .unwrap()
+                .transition
+                .is_none()
+        );
+
+        world
+            .transition_animation_controller(
+                controller,
+                transition(
+                    surface_description(target, &property, 1, 0.7),
+                    0.0,
+                    AnimationTransitionStartTime::Seek(0.6),
+                ),
+            )
+            .unwrap();
+        world.update_for_test(0.0).unwrap();
+        close(surface_spacing(&world, target), 0.7);
+        world
+            .control_animation_controller(controller, AnimationPlaybackControl::Stop)
+            .unwrap();
+        world.update_for_test(0.0).unwrap();
+        close(surface_spacing(&world, target), 0.0);
+    }
+}
+
+#[test]
+fn surface_transition_rejects_coupled_fields_but_waits_for_missing_spacing_source() {
+    for (value, component, offset, unsupported) in surface_targets() {
+        let (mut host, world_id) = host_world_with(&[SURFACE]);
+        let mut world = host.world_mut(world_id).unwrap();
+        let target = create_surface(&mut world, value);
+        let property = AnimationTrackTarget::AnimationProperty(AnimationProperty {
+            component,
+            offsets: vec![offset],
+        });
+        let controller = world
+            .create_animation_controller(surface_description(target, &property, 99, 0.0))
+            .unwrap();
+        for offset in unsupported {
+            let unsupported = AnimationTrackTarget::AnimationProperty(AnimationProperty {
+                component,
+                offsets: vec![offset],
+            });
+            assert_eq!(
+                world.transition_animation_controller(
+                    controller,
+                    transition(
+                        surface_description(target, &unsupported, 99, 1.0),
+                        0.6,
+                        AnimationTransitionStartTime::Seek(0.6)
+                    )
+                ),
+                Err(ErrorReason::InvalidField)
+            );
+            assert!(
+                world
+                    .animation_controller(controller)
+                    .unwrap()
+                    .transition
+                    .is_none()
+            );
+        }
+        world
+            .transition_animation_controller(
+                controller,
+                transition(
+                    surface_description(target, &property, 99, 0.8),
+                    0.6,
+                    AnimationTransitionStartTime::Seek(0.6),
+                ),
+            )
+            .unwrap();
+        world.update_for_test(2.0).unwrap();
+        let fade = world
+            .animation_controller(controller)
+            .unwrap()
+            .transition
+            .unwrap();
+        assert!(fade.pending);
+        assert_eq!(fade.elapsed, 0.0);
+        close(surface_spacing(&world, target), 0.0);
+        let source = surface_clip(&property);
+        upload(&mut world, 99, &source);
+        world
+            .control_animation_controller(controller, AnimationPlaybackControl::Play)
+            .unwrap();
+        world.update_for_test(0.0).unwrap();
+        assert!(
+            !world
+                .animation_controller(controller)
+                .unwrap()
+                .transition
+                .unwrap()
+                .pending
+        );
+        world.update_for_test(0.3).unwrap();
+        close(surface_spacing(&world, target), 0.4);
+    }
+}
+
+#[test]
+fn surface_transition_binding_is_invalidated_before_component_replacement() {
+    for (value, component, offset, _) in surface_targets() {
+        let (mut host, world_id) = host_world_with(&[SURFACE]);
+        let mut world = host.world_mut(world_id).unwrap();
+        let target = create_surface(&mut world, value.clone());
+        let property = AnimationTrackTarget::AnimationProperty(AnimationProperty {
+            component,
+            offsets: vec![offset],
+        });
+        let source = surface_clip(&property);
+        upload(&mut world, 1, &source);
+        let controller = world
+            .create_animation_controller(surface_description(target, &property, 1, 0.0))
+            .unwrap();
+        play_at(&mut world, controller, 0.6);
+        world
+            .transition_animation_controller(
+                controller,
+                transition(
+                    surface_description(target, &property, 1, 0.8),
+                    0.6,
+                    AnimationTransitionStartTime::Seek(0.6),
+                ),
+            )
+            .unwrap();
+        world.update_for_test(0.0).unwrap();
+        world.update_for_test(0.3).unwrap();
+        close(surface_spacing(&world, target), 0.4);
+        submit(
+            &mut world,
+            vec![
+                Command::RemoveComponent {
+                    entity: EntityRef::Handle(target),
+                    component,
+                },
+                Command::insert_value(EntityRef::Handle(target), value),
+                Command::SetField {
+                    entity: EntityRef::Handle(target),
+                    component,
+                    field: FieldWrite {
+                        offset,
+                        value: FieldValue::F32(0.25),
+                    },
+                },
+            ],
+        )
+        .result
+        .unwrap();
+        world.update_for_test(1.0).unwrap();
+        close(surface_spacing(&world, target), 0.25);
+        let snapshot = world.animation_controller(controller).unwrap();
+        assert_eq!(snapshot.state, AnimationPlaybackStatus::Stopped);
+        assert!(snapshot.transition.is_none());
+    }
 }

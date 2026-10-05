@@ -16,6 +16,8 @@ struct CanvasView {
     clip: CanvasClip,
     opacity: f32,
     camera: Option<[f64; 3]>,
+    raster_mvp: [f32; 16],
+    raster_viewport: WorldViewport,
 }
 
 struct OutputJob {
@@ -26,6 +28,8 @@ struct OutputJob {
     canvas: Option<CanvasView>,
     cache: Option<CanvasCacheRequest>,
     projected: Option<super::super::scene::SceneOutputSurface>,
+    projected_mvp: [f32; 16],
+    projected_viewport: WorldViewport,
     visible: bool,
     interaction_eligible: bool,
 }
@@ -67,6 +71,14 @@ impl<D: RenderDevice> RenderService<D> {
                 clip: scene.root_clip(),
                 opacity: 1.0,
                 camera: None,
+                raster_mvp: plane_matrix(
+                    [-1.0, 1.0],
+                    [
+                        2.0 / f64::from(scene.canvas.logical_extent[0]),
+                        -2.0 / f64::from(scene.canvas.logical_extent[1]),
+                    ],
+                )?,
+                raster_viewport: viewport,
             })
         } else {
             None
@@ -81,6 +93,8 @@ impl<D: RenderDevice> RenderService<D> {
                 canvas,
                 cache: None,
                 projected: None,
+                projected_mvp: [0.0; 16],
+                projected_viewport: viewport,
                 visible: true,
                 interaction_eligible: world_interaction_eligible(host, selection.world()),
             },
@@ -101,13 +115,11 @@ impl<D: RenderDevice> RenderService<D> {
                 OutputKind::Camera => {
                     let scene = RenderScene::new(host, job.selection, job.publication)?;
                     let camera = Some(scene.camera.pose.point([0.0; 3]));
-                    let frustum = scene
-                        .camera
-                        .prepare_for_extent(job.projection_extent)
-                        .ok()
-                        .map(|camera| {
-                            ipp_core::systems::geometry::frustum_planes(camera.view_projection)
-                        });
+                    let prepared_camera =
+                        scene.camera.prepare_for_extent(job.projection_extent).ok();
+                    let frustum = prepared_camera.as_ref().map(|camera| {
+                        ipp_core::systems::geometry::frustum_planes(camera.view_projection)
+                    });
                     for surface in &scene.surfaces {
                         let interaction_eligible = job.interaction_eligible
                             && surface.interaction_eligible
@@ -116,9 +128,42 @@ impl<D: RenderDevice> RenderService<D> {
                             && frustum
                                 .as_ref()
                                 .is_none_or(|planes| scene.surface_visible(surface, planes));
-                        let Ok(viewport) = self.camera_viewport(surface.extent, job.viewport)
-                        else {
+                        let Some(camera_view) = prepared_camera.as_ref() else {
                             continue;
+                        };
+                        let projected_mvp = ipp_core::systems::camera::multiply(
+                            camera_view.view_projection,
+                            surface.model,
+                        );
+                        let pixel_demand = super::super::surface_quality::surface_demand(
+                            &*surface.geometry,
+                            &[0.0, f64::from(surface.layer_depth)],
+                            projected_mvp,
+                            job.viewport,
+                        )?;
+                        let Some(size) = super::super::surface_quality::image_size(
+                            pixel_demand,
+                            surface.cache_policy.map_or(1.0, |p| p.resolution_scale),
+                            self.device.borrow().surface_cache_limit(),
+                            (surface.selection.kind() == OutputKind::Camera)
+                                .then(|| {
+                                    self.camera_targets
+                                        .get(&surface.selection)
+                                        .map(|(_, size, _)| *size)
+                                })
+                                .flatten(),
+                        ) else {
+                            continue;
+                        };
+                        let size = if surface.geometry.exact_affine(0.0).is_none() {
+                            self.projected_raster_size(host, surface, projected_mvp, job.viewport)?
+                        } else {
+                            size
+                        };
+                        let viewport = WorldViewport {
+                            width: size[0],
+                            height: size[1],
+                            ..job.viewport
                         };
 
                         let mut canvas = None;
@@ -154,6 +199,11 @@ impl<D: RenderDevice> RenderService<D> {
                                 clip,
                                 opacity: 1.0,
                                 camera,
+                                raster_mvp: plane_matrix(
+                                    [-1.0, 1.0],
+                                    [2.0 / f64::from(extent[0]), -2.0 / f64::from(extent[1])],
+                                )?,
+                                raster_viewport: viewport,
                             });
                             cache = surface
                                 .cache_policy
@@ -162,7 +212,7 @@ impl<D: RenderDevice> RenderService<D> {
                                     owner: surface.entity.world,
                                     anchor: surface.entity.entity,
                                     token: surface.token.clone(),
-                                    extent: surface.extent,
+                                    pixel_demand,
                                     policy,
                                     distance: distance(camera, plane, extent),
                                     clip,
@@ -184,6 +234,8 @@ impl<D: RenderDevice> RenderService<D> {
                                 .exact_affine(0.0)
                                 .is_none()
                                 .then(|| surface.clone()),
+                            projected_mvp,
+                            projected_viewport: job.viewport,
                             visible,
                             interaction_eligible,
                         });
@@ -207,17 +259,67 @@ impl<D: RenderDevice> RenderService<D> {
                             continue;
                         };
 
-                        let extent = slot.physical_extent.map(|value| value as f32);
-                        let Ok(viewport) = self.camera_viewport(extent, job.viewport) else {
-                            continue;
-                        };
-
                         let Some(child) =
                             canvas_attachment(&scene, index, view.plane, view.clip, view.opacity)?
                         else {
                             continue;
                         };
 
+                        let Some(raster_child) = canvas_attachment(
+                            &scene,
+                            index,
+                            view.raster_mvp,
+                            view.clip,
+                            view.opacity,
+                        )?
+                        else {
+                            continue;
+                        };
+                        let raster_mvp = match raster_child {
+                            CanvasChild::Canvas {
+                                mvp,
+                                ..
+                            }
+                            | CanvasChild::Camera {
+                                mvp,
+                                ..
+                            } => mvp,
+                        };
+                        let logical_extent = match &child {
+                            CanvasChild::Canvas {
+                                scene,
+                                ..
+                            } => scene.canvas.logical_extent,
+                            CanvasChild::Camera {
+                                extent,
+                                ..
+                            } => *extent,
+                        };
+                        let pixel_demand = super::super::surface_quality::plane_demand(
+                            logical_extent,
+                            raster_mvp,
+                            view.raster_viewport,
+                        )?;
+                        let policy = attachment.edge.and_then(|edge| edge.surface_cache_policy);
+                        let Some(size) = super::super::surface_quality::image_size(
+                            pixel_demand,
+                            policy.map_or(1.0, |p| p.resolution_scale),
+                            self.device.borrow().surface_cache_limit(),
+                            (selection.kind() == OutputKind::Camera)
+                                .then(|| {
+                                    self.camera_targets
+                                        .get(&selection)
+                                        .map(|(_, size, _)| *size)
+                                })
+                                .flatten(),
+                        ) else {
+                            continue;
+                        };
+                        let viewport = WorldViewport {
+                            width: size[0],
+                            height: size[1],
+                            ..job.viewport
+                        };
                         let (canvas, cache) = match child {
                             CanvasChild::Canvas {
                                 scene: child,
@@ -230,6 +332,8 @@ impl<D: RenderDevice> RenderService<D> {
                                     clip,
                                     opacity,
                                     camera: view.camera,
+                                    raster_mvp,
+                                    raster_viewport: view.raster_viewport,
                                 });
 
                                 let cache = attachment
@@ -239,7 +343,7 @@ impl<D: RenderDevice> RenderService<D> {
                                         owner: scene.publication.world,
                                         anchor: slot.anchor,
                                         token: slot.token.clone(),
-                                        extent,
+                                        pixel_demand,
                                         policy,
                                         distance: distance(
                                             view.camera,
@@ -267,6 +371,8 @@ impl<D: RenderDevice> RenderService<D> {
                             canvas,
                             cache,
                             projected: None,
+                            projected_mvp: [0.0; 16],
+                            projected_viewport: viewport,
                             visible: job.visible,
                             interaction_eligible: job.interaction_eligible
                                 && world_interaction_eligible(host, selection.world()),
@@ -295,9 +401,58 @@ impl<D: RenderDevice> RenderService<D> {
             .filter_map(|job| job.projected.as_ref().map(|s| s.selection))
             .collect();
         self.retain_projected_outputs(&required);
-        self.plan_canvas_caches(host, selection, &requests, presentation_time)?;
+        let visible = prepared
+            .iter()
+            .filter(|job| job.visible)
+            .map(|job| job.selection)
+            .collect();
+        self.begin_projected_frame(presentation_time, &visible);
+        // Reserve visible required active images before optional admission. Idle
+        // optional capacity and padding must not lower required raster quality.
+        let mut required_bytes = 0usize;
+        self.required_image_demand.clear();
+        for job in prepared.iter().filter(|job| job.visible) {
+            let count = if job.selection.kind() == OutputKind::Camera {
+                1
+            } else if let Some(surface) = &job.projected {
+                if surface.layer_spacing == 0.0 {
+                    1
+                } else {
+                    let scene = CanvasScene::new(host, job.selection, job.publication)?;
+                    scene
+                        .canvas
+                        .entries
+                        .iter()
+                        .map(|entry| entry.layer())
+                        .collect::<std::collections::BTreeSet<_>>()
+                        .len()
+                        .max(1)
+                }
+            } else {
+                0
+            };
+            let bytes = count * job.viewport.width as usize * job.viewport.height as usize * 4;
+            self.required_image_demand.insert(job.selection, bytes);
+            required_bytes = required_bytes.saturating_add(bytes);
+        }
+        if required_bytes > self.surface_cache.budget() {
+            // Active quality cannot all fit. Reserve bounded proportional shares
+            // so future requests allow downshifts instead of excluding every image.
+            let ratio = self.surface_cache.budget() as f64 / required_bytes as f64;
+            for bytes in self.required_image_demand.values_mut() {
+                *bytes = ((*bytes as f64 * ratio) as usize / 4 * 4).max(4);
+            }
+        }
+        self.reclaim_inactive_images();
+        self.reclaim_required_padding()?;
+        self.plan_canvas_caches(
+            host,
+            selection,
+            &requests,
+            presentation_time,
+            required_bytes,
+        )?;
         let mut work = RenderFrameWork::default();
-        self.begin_projected_frame();
         for job in prepared {
             if !job.visible {
                 continue;
@@ -313,7 +468,8 @@ impl<D: RenderDevice> RenderService<D> {
                     let result = self.prepare_projected_surface(
                         host,
                         surface,
-                        job.viewport,
+                        job.projected_mvp,
+                        job.projected_viewport,
                         presentation_time,
                         interaction,
                         &mut work,
@@ -335,7 +491,8 @@ impl<D: RenderDevice> RenderService<D> {
                 let result = self.prepare_projected_surface(
                     host,
                     surface,
-                    job.viewport,
+                    job.projected_mvp,
+                    job.projected_viewport,
                     presentation_time,
                     false,
                     &mut work,
@@ -375,47 +532,17 @@ impl<D: RenderDevice> RenderService<D> {
         Ok(work)
     }
 
-    fn camera_viewport(
-        &self,
-        extent: [f32; 2],
-        viewport: WorldViewport,
-    ) -> Result<WorldViewport, RenderError> {
-        let limit = self.device.borrow().surface_cache_limit();
-        if limit == 0
-            || extent
-                .iter()
-                .any(|value| !value.is_finite() || *value <= 0.0)
-        {
-            return Err(RenderError::InvalidViewport);
-        }
-
-        let ratio = f64::from(extent[0]) / f64::from(extent[1]);
-        let width = viewport.width.min(limit).max(1);
-        let height = (f64::from(width) / ratio)
-            .round()
-            .clamp(1.0, f64::from(limit)) as u32;
-        let width = (f64::from(height) * ratio)
-            .round()
-            .clamp(1.0, f64::from(limit)) as u32;
-        Ok(WorldViewport {
-            width,
-            height,
-            ..viewport
-        })
-    }
-
     fn paint_camera_child(
         &mut self,
         host: &HostRuntime,
         output: (OutputRef, WorldPublicationId),
-        viewport: WorldViewport,
+        mut viewport: WorldViewport,
         projection_extent: [f64; 2],
         work: RenderFrameWork,
         presentation_time: f64,
     ) -> Result<RenderFrameWork, RenderError> {
         let (selection, publication) = output;
         let scene = RenderScene::new(host, selection, publication)?;
-        let (width, height) = (viewport.width, viewport.height);
         let camera = Some(
             scene
                 .camera
@@ -427,18 +554,65 @@ impl<D: RenderDevice> RenderService<D> {
         }
 
         let previous = self.camera_targets.remove(&selection);
-        let mut target = match previous {
-            Some((target, size)) if size == [width, height] => target,
-            other => {
-                if let Some((target, _)) = other {
+        let available = self.surface_cache.budget().saturating_sub(
+            self.projected_image_bytes()
+                + self.surface_cache.resident().1 as usize
+                + self.remaining_required_bytes(selection),
+        );
+        let mut size = [viewport.width, viewport.height];
+        while size[0] as usize * size[1] as usize * 4 > available {
+            if size == [1, 1] {
+                if let Some((target, _, _)) = previous {
                     self.device.borrow_mut().delete_surface_cache_target(target);
                 }
-
-                self.device
-                    .borrow_mut()
-                    .create_surface_cache_target(width, height)?
+                return Err(RenderError::UnavailableOutput);
             }
+            size = size.map(|v| (v / 2).max(1));
+        }
+        let (width, height) = (size[0], size[1]);
+        viewport.width = width;
+        viewport.height = height;
+        let mut capacity = previous
+            .as_ref()
+            .filter(|(_, _, capacity)| super::super::surface_quality::fits(size, *capacity))
+            .map_or_else(
+                || {
+                    super::super::surface_quality::image_capacity(
+                        size,
+                        self.device.borrow().surface_cache_limit(),
+                    )
+                },
+                |(_, _, capacity)| *capacity,
+            );
+        if capacity[0] as usize * capacity[1] as usize * 4 > available {
+            capacity = size;
+        }
+        let mut target = match previous {
+            Some((target, _, old_capacity)) if old_capacity == capacity => target,
+            Some((mut target, _, _)) => {
+                if let Err(error) = self.device.borrow_mut().resize_surface_cache_target(
+                    &mut target,
+                    capacity[0],
+                    capacity[1],
+                ) {
+                    self.device.borrow_mut().delete_surface_cache_target(target);
+                    return Err(error);
+                }
+                target
+            }
+            None => self
+                .device
+                .borrow_mut()
+                .create_surface_cache_target(capacity[0], capacity[1])?,
         };
+        if let Err(error) = self
+            .device
+            .borrow_mut()
+            .set_surface_cache_target_active_size(&mut target, width, height)
+        {
+            self.device.borrow_mut().delete_surface_cache_target(target);
+            return Err(error);
+        }
 
         let parent_sources = std::mem::take(&mut self.inclusions.active);
         self.inclusions.active.collect_image = true;
@@ -460,8 +634,9 @@ impl<D: RenderDevice> RenderService<D> {
             self.inclusions.record(selection, publication);
             self.inclusions.save_image(selection, parent_sources);
             self.camera_targets
-                .insert(selection, (target, [width, height]));
+                .insert(selection, (target, [width, height], capacity));
             self.camera_completed.insert(selection);
+            self.camera_used.insert(selection, presentation_time);
         } else {
             self.inclusions.active = parent_sources;
             self.device.borrow_mut().delete_surface_cache_target(target);
@@ -494,7 +669,7 @@ impl<D: RenderDevice> RenderService<D> {
         } else {
             None
         };
-        let Some((target, _)) = self.camera_targets.get(&selection) else {
+        let Some((target, _, _)) = self.camera_targets.get(&selection) else {
             return Ok(());
         };
 

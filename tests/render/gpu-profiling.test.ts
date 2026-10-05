@@ -79,7 +79,7 @@ async function exercise(
           cursor: true,
           cache: {
             direct_distance: 0,
-            texels_per_metre: 80,
+            resolution_scale: 1,
             max_refresh_hz: 60,
           },
         },

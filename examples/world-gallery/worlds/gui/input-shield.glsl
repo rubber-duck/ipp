@@ -3,6 +3,7 @@ in vec2 shieldSize;
 in float shieldFace;
 
 vec4 materialFragment() {
+  if (p_visible < 0.5) return vec4(0.0);
   // Open against the panel, with four visible walls closing the side gap.
   if (shieldFace < -0.5) return vec4(0.0);
   vec2 metres = shieldUv * shieldSize;

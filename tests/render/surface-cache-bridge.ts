@@ -195,7 +195,16 @@ export async function probeSurfaceCacheBridge(bridgeUrl: string, gui: boolean) {
       ...bytes(new Uint8Array([255, 255, 255, 255])),
     );
     const target = ok("create_surface_cache_target", 16, 8);
-    ok("resize_surface_cache_target", target, 64, 32);
+    ok("resize_surface_cache_target", target, 128, 64);
+    ok("set_surface_cache_target_active_size", target, 64, 32);
+    report.activeCapacity = { active: [64, 32], capacity: [128, 64] };
+    rejected(
+      "active rectangle beyond capacity",
+      "set_surface_cache_target_active_size",
+      target,
+      129,
+      64,
+    );
     if (live() !== 1) throw new Error(`Live targets ${live()} after create`);
 
     const content = floats(CONTENT);
@@ -397,7 +406,8 @@ export async function probeSurfaceCacheBridge(bridgeUrl: string, gui: boolean) {
     });
     const batch = ok("create_gui_batch", record.length * 4, words(layout));
     ok("write_gui_batch", batch, 0, floats(record), record.length * 4);
-    const small = ok("create_surface_cache_target", 32, 16);
+    const small = ok("create_surface_cache_target", 64, 32);
+    ok("set_surface_cache_target_active_size", small, 32, 16);
     ok("begin_surface_cache_target", small);
     ok("set_surface_double_sided", 1);
     ok("draw_gui_batch", boxProgram, batch, 0, floats(CONTENT), 0, 1);

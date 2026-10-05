@@ -274,6 +274,8 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
       depth?: WebGLRenderbuffer;
       width: number;
       height: number;
+      activeWidth: number;
+      activeHeight: number;
     }
   >();
   /** The bound cache target and the host state saved when it was bound. */
@@ -1932,6 +1934,8 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
             framebuffer,
             width,
             height,
+            activeWidth: width,
+            activeHeight: height,
           });
           return handle;
         });
@@ -1983,7 +1987,31 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
           }
           target.width = width;
           target.height = height;
+          target.activeWidth = width;
+          target.activeHeight = height;
           check();
+          return 1;
+        });
+      },
+      set_surface_cache_target_active_size(
+        handle: number,
+        width: number,
+        height: number,
+      ): number {
+        return status(() => {
+          const target = surfaceCacheTargets.get(handle >>> 0);
+          width >>>= 0;
+          height >>>= 0;
+          if (
+            !target ||
+            width === 0 ||
+            height === 0 ||
+            width > target.width ||
+            height > target.height
+          )
+            throw new Error("Active Surface image exceeds capacity");
+          target.activeWidth = width;
+          target.activeHeight = height;
           return 1;
         });
       },
@@ -1997,12 +2025,12 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
             throw new Error("Surface cache target inside atlas population");
           surfaceCacheTarget = {
             handle: handle >>> 0,
-            width: target.width,
-            height: target.height,
+            width: target.activeWidth,
+            height: target.activeHeight,
             saved: currentTarget(),
           };
           bindFramebuffers(target.framebuffer, target.framebuffer);
-          setViewport([0, 0, target.width, target.height]);
+          setViewport([0, 0, target.activeWidth, target.activeHeight]);
           gl.disable(gl.SCISSOR_TEST);
           gl.disable(gl.STENCIL_TEST);
           setDepthMask(false);
@@ -2027,14 +2055,14 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
             throw new Error("Unavailable Camera target");
           surfaceCacheTarget = {
             handle: handle >>> 0,
-            width: target.width,
-            height: target.height,
+            width: target.activeWidth,
+            height: target.activeHeight,
             saved: currentTarget(),
           };
           try {
             invalidateSubmission();
             bindFramebuffers(target.framebuffer, target.framebuffer);
-            setViewport([0, 0, target.width, target.height]);
+            setViewport([0, 0, target.activeWidth, target.activeHeight]);
             if (!target.depth) {
               const depth = gl.createRenderbuffer();
               if (!depth) throw new Error("Camera depth allocation failed");
@@ -2143,6 +2171,14 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
             clip[3]!,
           );
           programFloat(program, uniform("u_opacity"), opacity);
+          programVec4(
+            program,
+            uniform("u_image_area"),
+            target.activeWidth,
+            target.activeHeight,
+            target.width,
+            target.height,
+          );
           programInt(program, uniform("u_surface_cache"), 0);
           gl.activeTexture(gl.TEXTURE0);
           gl.bindTexture(gl.TEXTURE_2D, target.texture);
@@ -2217,6 +2253,14 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
           );
           programFloat(program, uniform("u_opacity"), opacity);
           programInt(program, uniform("u_image_flip"), flipImage ? 1 : 0);
+          programVec4(
+            program,
+            uniform("u_image_area"),
+            target.activeWidth,
+            target.activeHeight,
+            target.width,
+            target.height,
+          );
           programInt(program, uniform("u_surface_cache"), 0);
           gl.activeTexture(gl.TEXTURE0);
           gl.bindSampler(0, null);

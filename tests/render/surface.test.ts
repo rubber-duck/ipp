@@ -225,8 +225,8 @@ test("Surface terminal renders crisp small text, drawings and RGBA through a gen
         );
         assert.deepEqual(cache.observed, [
           null,
-          { direct_distance: 1.5, texels_per_metre: 512, max_refresh_hz: 4 },
-          { direct_distance: 0, texels_per_metre: 64, max_refresh_hz: 4 },
+          { direct_distance: 1.5, resolution_scale: 1, max_refresh_hz: 4 },
+          { direct_distance: 0, resolution_scale: 1, max_refresh_hz: 4 },
           null,
         ]);
         assert.equal(cache.released, true);

@@ -1865,7 +1865,7 @@ fn parent_surface_cache_policy_is_owned_validated_and_current() {
 
     let replacement = SurfaceCache {
         direct_distance: 12.0,
-        texels_per_metre: 512.0,
+        resolution_scale: 1.0,
         max_refresh_hz: 15.0,
     };
     apply(

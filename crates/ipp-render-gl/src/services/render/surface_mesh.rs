@@ -21,6 +21,7 @@ pub(super) struct SurfaceMeshPatch {
 
 pub(super) struct SurfaceMeshData {
     pub asset: ipp_core::MeshAsset,
+    pub cells: usize,
     pub patches: Vec<SurfaceMeshPatch>,
     pub bytes: usize,
 }
@@ -147,6 +148,7 @@ pub(super) fn tessellate(
     let bytes = asset.vertex_bytes() + std::mem::size_of_val(asset.indices());
     Ok(SurfaceMeshData {
         asset,
+        cells,
         patches,
         bytes,
     })

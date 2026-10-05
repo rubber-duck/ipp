@@ -80,7 +80,7 @@ export async function enterWorkspace(g: Gallery) {
   );
   await waitApp(g, (value) => value.ready);
   const password = await find(g, "gui-password");
-  await press(g, password, 0.1);
+  await press(g, password, await spacing(g));
   await waitForGuiState(g, (s) =>
     s.controls.some((c) => c.symbol === "gui-password" && c.focused),
   );

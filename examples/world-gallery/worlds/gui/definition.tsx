@@ -137,44 +137,14 @@ export const guiScene: GallerySceneDefinition = {
     };
     let unsubscribeState: (() => void) | undefined;
     let observedState: GuiScene["state"] | undefined;
-    let framedMode: string | undefined;
-    let authoredCameraPose: Readonly<Record<string, unknown>> | undefined;
-    const cameraPose = async () => {
-      const entity = (await client.inspect()).entities.find(
-        (entity) => entity.id === camera,
-      );
-      if (!entity) throw new Error("The gallery session camera is not mounted");
-      return Object.fromEntries(
-        ["Transform", "Camera"].flatMap((name) => {
-          const fields = entity.components.find(
-            (component) => component.component === client.components[name]!.id,
-          )?.fields;
-          if (!fields) throw new Error(`The gallery camera is missing ${name}`);
-          return Object.entries(fields).map(([field, value]) => [
-            `${name}.${field}`,
-            value,
-          ]);
-        }),
-      );
-    };
+    let framed = false;
     let cameraWork = Promise.resolve();
     let framingRequest = 0;
     const frameCurrentMode = (force = false) => {
       if (!active || !controller?.ready) return cameraWork;
-      const state = controller.state.current;
-      const mode = state.exploded
-        ? "exploded"
-        : state.app.phase === "workspace"
-          ? "workspace"
-          : "login";
-      const phaseChanged =
-        framedMode !== undefined &&
-        mode !== "exploded" &&
-        framedMode !== "exploded" &&
-        mode !== framedMode;
-      if (!force && mode === framedMode) return cameraWork;
-      framedMode = mode;
-      // Coalesce queued transitions; disposal drains an in-flight write before
+      if (!force && framed) return cameraWork;
+      framed = true;
+      // Coalesce queued camera resets; disposal drains an in-flight write before
       // the next page can reuse the protected session camera.
       const request = ++framingRequest;
       cameraWork = cameraWork
@@ -182,26 +152,12 @@ export const guiScene: GallerySceneDefinition = {
         .then(async () => {
           if (!active || context.signal.aborted || request !== framingRequest)
             return;
-          // An initial/reset view is explicit. A phase handoff preserves a
-          // manual pose instead of continually taking the camera from its user.
-          if (!force && phaseChanged && authoredCameraPose) {
-            const current = await cameraPose();
-            if (
-              Object.entries(authoredCameraPose).some(
-                ([key, value]) =>
-                  typeof value === "number" &&
-                  Math.abs(Number(current[key]) - value) > 1e-5,
-              )
-            )
-              return;
-          }
+          // Scene state never takes the camera from its user. Reset is explicit.
           await frameGuiCamera(
             client,
             camera,
             controller!.state.current.exploded,
-            controller!.state.current.app.phase !== "workspace",
           );
-          authoredCameraPose = await cameraPose();
         });
       void cameraWork.catch((failure) => {
         controller?.reportFailure(failure);

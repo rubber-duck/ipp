@@ -19,7 +19,7 @@ pub(super) struct CanvasCacheRequest {
     pub owner: WorldRef,
     pub anchor: EntityId,
     pub token: WorldAttachmentToken,
-    pub extent: [f32; 2],
+    pub pixel_demand: [f64; 2],
     pub policy: SurfaceCachePolicy,
     pub distance: f32,
     pub clip: CanvasClip,
@@ -114,6 +114,7 @@ impl<D: RenderDevice> RenderService<D> {
         root: OutputRef,
         requests: &[(OutputRef, ipp_core::WorldPublicationId, CanvasCacheRequest)],
         time: f64,
+        required_bytes: usize,
     ) -> Result<(), RenderError> {
         self.canvas_cache_frame = CanvasCacheFrame {
             root: Some(root),
@@ -212,7 +213,7 @@ impl<D: RenderDevice> RenderService<D> {
                 SurfaceCacheInput {
                     entity: request.anchor,
                     policy: request.policy,
-                    clip_size: request.extent,
+                    pixel_demand: request.pixel_demand,
                     paint_revision: state.paint_revision,
                     resource_revision: state.resource_revision,
                     interaction: request.interaction,
@@ -242,7 +243,7 @@ impl<D: RenderDevice> RenderService<D> {
         let mut device = self.device.borrow_mut();
         let limit = device.surface_cache_limit();
         self.surface_cache
-            .reserve_images(self.projected_image_bytes());
+            .reserve_images(self.projected_image_bytes().max(required_bytes));
         self.surface_cache.plan_outputs(
             &self.canvas_cache_frame.worlds,
             time,
@@ -268,7 +269,8 @@ impl<D: RenderDevice> RenderService<D> {
         }
 
         let request = self.canvas_caches[&selection].request.clone();
-        let Some((target, size)) = self.surface_cache.take_image(world, anchor) else {
+        let Some((mut target, size, capacity)) = self.surface_cache.take_image(world, anchor)
+        else {
             return Ok(());
         };
 
@@ -284,7 +286,8 @@ impl<D: RenderDevice> RenderService<D> {
         let begun = {
             let mut device = self.device.borrow_mut();
             device
-                .set_surface_double_sided(true)
+                .set_surface_cache_target_active_size(&mut target, size[0], size[1])
+                .and_then(|()| device.set_surface_double_sided(true))
                 .and_then(|()| device.begin_surface_cache_target(&target))
         };
 
@@ -338,7 +341,8 @@ impl<D: RenderDevice> RenderService<D> {
         state.painted_outputs = painted_outputs;
         state.represented_images = represented_images;
         self.canvas_cache_frame.repainting = None;
-        self.surface_cache.put_image(world, anchor, target, size);
+        self.surface_cache
+            .put_image(world, anchor, target, size, capacity);
         self.canvas_caches
             .get_mut(&selection)
             .expect("painted cache state")

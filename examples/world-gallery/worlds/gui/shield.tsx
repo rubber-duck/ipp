@@ -167,8 +167,10 @@ export function InputShield({
   armed,
   shape,
   facing,
+  visible,
 }: {
   armed: boolean;
+  visible: boolean;
   shape: GuiSurfaceShape;
   facing: SurfaceFacing;
 }) {
@@ -186,9 +188,9 @@ export function InputShield({
       <Children>
         <Entity id={SHIELD_ENTITY}>
           <Transform />
+          <PickingGeometry geometry={encodeBoundingShape(SHIELD_PICKING)} />
           <MeshInstance source={SHIELD_MESH} />
           <BoundingGeometry />
-          <PickingGeometry geometry={encodeBoundingShape(SHIELD_PICKING)} />
           <CustomMaterial
             source={assetRef("gui-input-shield-shader")}
             size={size}
@@ -196,6 +198,7 @@ export function InputShield({
             // in front of the button.
             color={armed ? [1, 0.62, 0.12, 1] : [0.38, 0.42, 0.46, 1]}
             hatch={armed ? 1 : 0}
+            visible={visible ? 1 : 0}
             // Cutout marks write depth, so the translucent panel drawn behind
             // them never washes them out; the glass between them is cut away.
             alpha_mode={1}

@@ -219,7 +219,7 @@ export async function guiLayerTransitions(
         {delayed && (
           <SurfaceCache
             direct_distance={0}
-            texels_per_metre={250}
+            resolution_scale={1}
             max_refresh_hz={0.001}
           />
         )}

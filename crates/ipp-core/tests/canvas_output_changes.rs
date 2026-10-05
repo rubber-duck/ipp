@@ -719,7 +719,7 @@ fn surface_cache_policy_survives_world_save_and_load_while_canvas_output_is_rebu
     create(&mut host, world, Some(canvas_entity), shape(20.0, 10.0));
     let policy = SurfaceCache {
         direct_distance: 0.5,
-        texels_per_metre: 128.0,
+        resolution_scale: 1.0,
         max_refresh_hz: 2.0,
     };
     create(

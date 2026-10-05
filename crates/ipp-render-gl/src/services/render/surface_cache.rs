@@ -53,13 +53,17 @@
 //! failure) never refines. Paint changes follow the ordinary rules above,
 //! including the switch to direct presentation for animated paint.
 //!
-//! Resolution is the band's texel density times the content size, scaled
-//! uniformly to fit `min(device limit, SURFACE_CACHE_MAX_DIMENSION)`. The
+//! Resolution follows shared projected device-pixel demand and stable selection
+//! in [`super::surface_quality`], bounded by the device and dimension cap. The
 //! refresh clock is Host presentation time supplied by the Host, never frame counts.
 //!
 //! # Memory
 //!
-//! Images count four bytes per texel against a context-wide budget the renderer
+//! Active raster dimensions are separate from allocation capacity. Growth reserves
+//! about 10% headroom within device and budget limits; active quality changes
+//! repaint without reallocating while they fit. Shrinking keeps capacity until
+//! idle release or memory pressure, which reclaims headroom before denying active
+//! quality. Images count four bytes per allocated texel against the budget the renderer
 //! owns ([`SURFACE_CACHE_BUDGET_BYTES`]); hosts do not configure it. GL exposes no
 //! memory size, so the budget is a documented heuristic while the device's target
 //! limit bounds each image's dimensions. Surfaces presented cached
@@ -175,6 +179,8 @@ pub struct SurfaceCacheDiagnostic {
     pub band: u8,
     /// Common resident image dimensions in texels; zero without an image.
     pub size: [u32; 2],
+    /// Allocated texture capacity, including growth headroom; zero without an image.
+    pub capacity: [u32; 2],
     /// Image repaints since the entry was created, summed over separated layers.
     pub repaints: u32,
     /// Image reuses since the entry was created, summed over separated layers.
@@ -205,8 +211,8 @@ pub(crate) trait SurfaceCacheTargets {
 pub(crate) struct SurfaceCacheInput {
     pub entity: EntityId,
     pub policy: SurfaceCachePolicy,
-    /// Content rectangle width and height in metres.
-    pub clip_size: [f32; 2],
+    /// Projected device-pixel demand, with uniform content density.
+    pub pixel_demand: [f64; 2],
     pub paint_revision: u64,
     pub resource_revision: u64,
     /// Live GUI interaction on the Surface's root.
@@ -265,11 +271,12 @@ struct SurfaceCachePaint {
 struct SurfaceCacheImage<T> {
     target: T,
     size: [u32; 2],
+    capacity: [u32; 2],
 }
 
 impl<T> SurfaceCacheImage<T> {
     fn bytes(&self) -> usize {
-        image_bytes(self.size)
+        image_bytes(self.capacity)
     }
 }
 
@@ -305,6 +312,7 @@ struct SurfaceCacheEntry<T> {
     // Frame-local selection.
     action: SurfaceCacheAction,
     desired: [u32; 2],
+    desired_capacity: [u32; 2],
     revisions: (u64, u64),
 }
 
@@ -330,6 +338,7 @@ impl<T> SurfaceCacheEntry<T> {
             reuses: 0,
             action: SurfaceCacheAction::Direct,
             desired: [0, 0],
+            desired_capacity: [0, 0],
             revisions: (0, 0),
         }
     }
@@ -496,10 +505,11 @@ impl<T> SurfaceTextureCache<T> {
 
         let desired = direct.map_or_else(
             || {
-                cache_size(
-                    input.clip_size,
-                    input.policy.texels_per_metre_at(entry.band),
+                super::surface_quality::image_size(
+                    input.pixel_demand,
+                    input.policy.resolution_scale,
                     limit,
+                    entry.image.as_ref().map(|image| image.size),
                 )
             },
             |_| None,
@@ -531,6 +541,14 @@ impl<T> SurfaceTextureCache<T> {
         }
 
         entry.desired = desired;
+        entry.desired_capacity = entry
+            .image
+            .as_ref()
+            .filter(|image| super::surface_quality::fits(desired, image.capacity))
+            .map_or_else(
+                || super::surface_quality::image_capacity(desired, limit),
+                |image| image.capacity,
+            );
         let resized = entry
             .image
             .as_ref()
@@ -598,7 +616,7 @@ impl<T> SurfaceTextureCache<T> {
         let mut idle = 0;
         for entry in self.entries.values() {
             if entry.live == stamp && entry.cached() {
-                demand += image_bytes(entry.desired);
+                demand += image_bytes(entry.desired_capacity);
             } else if let Some(image) = &entry.image {
                 idle += image.bytes();
             }
@@ -606,6 +624,29 @@ impl<T> SurfaceTextureCache<T> {
 
         if demand + idle <= self.budget_bytes.saturating_sub(self.reserved_bytes) {
             return;
+        }
+
+        // Under pressure remove optional headroom before denying active quality.
+        // Reallocation invalidates the retained paint even when active size holds.
+        {
+            for entry in self.entries.values_mut() {
+                if entry.live == stamp
+                    && entry.cached()
+                    && (demand > self.budget_bytes.saturating_sub(self.reserved_bytes)
+                        || entry.image.is_none())
+                {
+                    entry.desired_capacity = entry.desired;
+                    if entry
+                        .image
+                        .as_ref()
+                        .is_some_and(|image| image.capacity != entry.desired_capacity)
+                    {
+                        entry.action = SurfaceCacheAction::Repaint;
+                        entry.presentation = SurfaceCachePresentation::Repainted;
+                        entry.painted = None;
+                    }
+                }
+            }
         }
 
         // Images already at their size first, each group in entity order.
@@ -625,7 +666,7 @@ impl<T> SurfaceTextureCache<T> {
         for index in 0..self.order.len() {
             let key = self.order[index].2;
             let entry = self.entries.get_mut(&key).expect("ordered entry");
-            let bytes = image_bytes(entry.desired);
+            let bytes = image_bytes(entry.desired_capacity);
             if admitted + bytes <= self.budget_bytes.saturating_sub(self.reserved_bytes) {
                 admitted += bytes;
                 continue;
@@ -688,10 +729,14 @@ impl<T> SurfaceTextureCache<T> {
             }
 
             let desired = entry.desired;
+            let capacity = entry.desired_capacity;
             let allocated = match entry.image.as_mut() {
-                Some(image) if image.size == desired => continue,
-                Some(image) => targets.resize(&mut image.target, desired).map(|()| None),
-                None => targets.create(desired).map(Some),
+                Some(image) if image.capacity == capacity => {
+                    image.size = desired;
+                    continue;
+                }
+                Some(image) => targets.resize(&mut image.target, capacity).map(|()| None),
+                None => targets.create(capacity).map(Some),
             };
 
             match allocated {
@@ -700,14 +745,16 @@ impl<T> SurfaceTextureCache<T> {
                         entry.image = Some(SurfaceCacheImage {
                             target,
                             size: desired,
+                            capacity,
                         });
                         self.resident_images += 1;
                     } else if let Some(image) = entry.image.as_mut() {
                         resident -= image.bytes();
                         image.size = desired;
+                        image.capacity = capacity;
                     }
 
-                    resident += image_bytes(desired);
+                    resident += image_bytes(capacity);
                     entry.painted = None;
                     self.counts.allocations += 1;
                 }
@@ -755,11 +802,15 @@ impl<T> SurfaceTextureCache<T> {
             .map(|image| (&image.target, image.size))
     }
 
-    pub(crate) fn take_image(&mut self, world: WorldId, entity: EntityId) -> Option<(T, [u32; 2])> {
+    pub(crate) fn take_image(
+        &mut self,
+        world: WorldId,
+        entity: EntityId,
+    ) -> Option<(T, [u32; 2], [u32; 2])> {
         let image = self.entries.get_mut(&(world, entity))?.image.take()?;
         self.resident_bytes -= image.bytes();
         self.resident_images -= 1;
-        Some((image.target, image.size))
+        Some((image.target, image.size, image.capacity))
     }
 
     pub(crate) fn put_image(
@@ -768,6 +819,7 @@ impl<T> SurfaceTextureCache<T> {
         entity: EntityId,
         target: T,
         size: [u32; 2],
+        capacity: [u32; 2],
     ) {
         let entry = self
             .entries
@@ -777,8 +829,9 @@ impl<T> SurfaceTextureCache<T> {
         entry.image = Some(SurfaceCacheImage {
             target,
             size,
+            capacity,
         });
-        self.resident_bytes += image_bytes(size);
+        self.resident_bytes += image_bytes(capacity);
         self.resident_images += 1;
     }
 
@@ -995,6 +1048,7 @@ impl<T> SurfaceTextureCache<T> {
                     presentation: entry.presentation,
                     band: entry.band,
                     size: entry.image.as_ref().map_or([0, 0], |image| image.size),
+                    capacity: entry.image.as_ref().map_or([0, 0], |image| image.capacity),
                     repaints: entry.repaints,
                     reuses: entry.reuses,
                     painted_at: entry.painted_at,
@@ -1019,33 +1073,6 @@ fn world_range(world: WorldId) -> std::ops::RangeInclusive<(WorldId, EntityId)> 
 /// Resident bytes of an image, four per texel.
 fn image_bytes(size: [u32; 2]) -> usize {
     4 * size[0] as usize * size[1] as usize
-}
-
-/// Texels within this fraction of a whole count round down to it, so a size and
-/// density whose product is whole in decimal (2.4 m at 80 texels per metre) is
-/// not enlarged by the `f32` representation error of its factors.
-const SURFACE_CACHE_SIZE_TOLERANCE: f64 = 1e-4;
-
-/// Image size for a content rectangle at a texel density, scaled uniformly to
-/// fit `limit`; `None` for an empty or non-finite rectangle.
-pub(crate) fn cache_size(
-    clip_size: [f32; 2],
-    texels_per_metre: f32,
-    limit: u32,
-) -> Option<[u32; 2]> {
-    let width = f64::from(clip_size[0]) * f64::from(texels_per_metre);
-    let height = f64::from(clip_size[1]) * f64::from(texels_per_metre);
-    if !(width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0) || limit == 0 {
-        return None;
-    }
-
-    let scale = (f64::from(limit) / width.max(height)).min(1.0);
-    let axis = |texels: f64| {
-        (texels * scale - SURFACE_CACHE_SIZE_TOLERANCE)
-            .ceil()
-            .clamp(1.0, f64::from(limit)) as u32
-    };
-    Some([axis(width), axis(height)])
 }
 
 #[cfg(test)]

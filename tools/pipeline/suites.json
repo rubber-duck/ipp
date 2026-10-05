@@ -1671,6 +1671,7 @@
       "tests/render/gallery-scanner.test.ts",
       "tests/render/gallery-scanner-support.ts",
       "tests/render/gallery-gui-workbench.test.ts",
+      "tests/render/gallery-gui-shield.test.ts",
       "tests/render/gallery-gui-panel.ts",
       "tests/render/gallery-gui-support.ts",
       "tests/render/viewer-browser-helper.ts",
@@ -1713,6 +1714,16 @@
       {
         "name": "presentation",
         "command": ["@node", "--test", "--test-name-pattern=^Gallery GUI retains presentation on all", "dist/tests/render/gallery-gui-workbench.test.js"],
+        "builds": ["typescript", "gallery-fixtures"],
+        "requirements": ["node", "npm", "browser"]
+      },
+      {
+        "name": "shield",
+        "command": [
+          "@node",
+          "--test",
+          "dist/tests/render/gallery-gui-shield.test.js"
+        ],
         "builds": ["typescript", "gallery-fixtures"],
         "requirements": ["node", "npm", "browser"]
       }
@@ -2538,7 +2549,7 @@
           "-p",
           "ipp-render-gl",
           "--lib",
-          "surface_cache",
+          "surface_",
           "--locked"
         ],
         "builds": [],

@@ -1,16 +1,16 @@
 //! Layered Canvas presentation through real Worlds and the recording render
-//! device: layer planes offset along the Surface normal by their id times the
-//! spacing through each draw's model-view-projection without rewriting
+//! device: layer planes offset along the Surface normal by their published
+//! coordinate times the spacing through each draw's model-view-projection without rewriting
 //! retained GUI geometry, a plane's depth unchanged while another layer opens
 //! and closes, view-depth plane order from the front and from behind, bounds
-//! grown to the highest plane id, and direct presentation for cached Surfaces
+//! grown to the highest physical coordinate, and direct presentation for cached Surfaces
 //! that separate layers. The maintained GLES and WebGL scenarios own the image
 //! evidence.
 
 mod support;
 
 use ipp_core::components::{
-    CanvasStyle, FlatSurface, GuiBehavior, GuiLayout, GuiOverlay, Transform,
+    CanvasLayerTransition, CanvasStyle, FlatSurface, GuiBehavior, GuiLayout, GuiOverlay, Transform,
 };
 use ipp_core::systems::canvas::CanvasBox;
 use ipp_core::{
@@ -118,13 +118,69 @@ fn near(left: [f32; 16], right: [f32; 16]) -> bool {
         .all(|(left, right)| (left - right).abs() <= 1e-4 * (1.0 + right.abs()))
 }
 
+fn planes(host: &HostRuntime, surface: CanvasSurface) -> Vec<(u32, f64)> {
+    surface
+        .publication(host)
+        .layers
+        .iter()
+        .map(|plane| (plane.id, plane.offset))
+        .collect()
+}
+
+#[test]
+fn fractional_transition_moves_retained_draws_and_expands_culling_bounds() {
+    let (mut host, mut renderer, state, world, surface) = scene();
+    let mut values = plain_box([0.5, 0.5], 2);
+    values.push(ComponentValue::CanvasLayerTransition(
+        CanvasLayerTransition {
+            previous_layer: 4,
+            progress: 0.125,
+        },
+    ));
+    let moving = canvas::add_content(&mut host, surface.output, values);
+    let flat = draws(&mut renderer, &state, &mut host, world);
+    spacing(&mut host, surface, 0.25);
+    let writes = state.gui_batch_writes.get();
+    let from = draws(&mut renderer, &state, &mut host, world);
+    assert_eq!(planes(&host, surface), [(0, 0.0), (1, 1.0), (2, 2.875)]);
+    assert!(near(from[2], offset(flat[0], 2.875 * 0.25)));
+    let revision = surface.publication(&host).paint_revision;
+    panel_apply(
+        &mut host,
+        surface,
+        vec![Command::SetField {
+            entity: EntityRef::Handle(moving),
+            component: ComponentValue::CANVAS_LAYER_TRANSITION,
+            field: FieldWrite {
+                offset: std::mem::offset_of!(CanvasLayerTransition, progress) as u32,
+                value: FieldValue::F32(0.25),
+            },
+        }],
+    );
+    let moved = draws(&mut renderer, &state, &mut host, world);
+    assert_eq!(surface.publication(&host).paint_revision, revision);
+    assert_eq!(state.gui_batch_writes.get(), writes);
+    assert!(near(moved[2], offset(flat[0], 2.75 * 0.25)));
+
+    // Coordinate2.75 crosses the far plane while opaque ID2 would remain culled.
+    edit(
+        &mut host,
+        surface,
+        vec![ComponentValue::Transform(Transform {
+            z: -95.6,
+            ..Default::default()
+        })],
+    );
+    assert_eq!(draws(&mut renderer, &state, &mut host, world).len(), 3);
+}
+
 #[test]
 fn layer_planes_move_through_draw_matrices_without_rewriting_geometry() {
     let (mut host, mut renderer, state, world, surface) = scene();
 
     // Without spacing both layers draw on the Surface plane, base first.
     let flat = draws(&mut renderer, &state, &mut host, world);
-    assert_eq!(*surface.publication(&host).layers, [0, 1]);
+    assert_eq!(planes(&host, surface), [(0, 0.0), (1, 1.0)]);
     assert_eq!(flat.len(), 2, "one retained range per layer");
     assert_eq!(flat[0], flat[1]);
 
@@ -259,7 +315,7 @@ fn occupied_ranks_repack_when_an_overlay_opens_and_closes() {
     set_open(&mut host, surface, tooltip, false);
     spacing(&mut host, surface, 0.5);
     let shown = draws(&mut renderer, &state, &mut host, world_id);
-    assert_eq!(*surface.publication(&host).layers, [0, 1]);
+    assert_eq!(planes(&host, surface), [(0, 0.0), (1, 1.0)]);
     assert_eq!(shown.len(), 2);
     let base = shown[0];
     // Only one overlay group is occupied above the base.
@@ -269,7 +325,7 @@ fn occupied_ranks_repack_when_an_overlay_opens_and_closes() {
     // Opening the earlier scope inserts a rank and moves the later scope.
     set_open(&mut host, surface, tooltip, true);
     let open = draws(&mut renderer, &state, &mut host, world_id);
-    assert_eq!(*surface.publication(&host).layers, [0, 1, 2]);
+    assert_eq!(planes(&host, surface), [(0, 0.0), (1, 1.0), (2, 2.0)]);
     assert_eq!(open.len(), 3);
     assert!(near(open[0], base));
     assert!(near(open[1], offset(base, 0.5)));
@@ -278,7 +334,7 @@ fn occupied_ranks_repack_when_an_overlay_opens_and_closes() {
     // Closing the earlier scope repacks the later scope to rank1.
     set_open(&mut host, surface, tooltip, false);
     let closed = draws(&mut renderer, &state, &mut host, world_id);
-    assert_eq!(*surface.publication(&host).layers, [0, 1]);
+    assert_eq!(planes(&host, surface), [(0, 0.0), (1, 1.0)]);
     assert_eq!(closed.len(), 2);
     assert!(near(closed[0], base));
     assert!(near(closed[1], toast));
@@ -357,7 +413,7 @@ fn a_single_occupied_priority_is_rank_zero_and_can_cache() {
         records[0].presentation
     };
     draws(&mut renderer, &state, &mut host, world_id);
-    assert_eq!(*surface.publication(&host).layers, [0]);
+    assert_eq!(planes(&host, surface), [(0, 0.0)]);
     assert!(!presentation(&renderer).is_direct());
 
     spacing(&mut host, surface, 0.5);

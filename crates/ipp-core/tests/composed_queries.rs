@@ -1029,7 +1029,9 @@ fn occupied_layer_ranks_repack_depth_and_capture_when_a_group_disappears() {
             .and_then(|chunk| chunk.data::<ipp_core::systems::canvas::CanvasPublication>())
             .unwrap()
             .layers
-            .to_vec()
+            .iter()
+            .map(|plane| plane.offset)
+            .collect::<Vec<_>>()
     };
     let path = vec![hit(&host, output, at(-0.05)).path[0].token.clone()];
     let assert_top = |host: &HostRuntime, rank: u32| {
@@ -1050,7 +1052,7 @@ fn occupied_layer_ranks_repack_depth_and_capture_when_a_group_disappears() {
         assert!(near(captured.point[0], content_x));
     };
 
-    assert_eq!(layers(&host), [0, 1, 2]);
+    assert_eq!(layers(&host), [0.0, 1.0, 2.0]);
     assert_top(&host, 2);
     // Where rank 2 holds nothing (content 75), the ray falls through to
     // rank 1's control at content 85.
@@ -1068,7 +1070,7 @@ fn occupied_layer_ranks_repack_depth_and_capture_when_a_group_disappears() {
         }],
     );
     frame(&mut host);
-    assert_eq!(layers(&host), [0, 1]);
+    assert_eq!(layers(&host), [0.0, 1.0]);
     assert_top(&host, 1);
     let selected = hit(&host, output, at(0.45));
     assert_eq!(selected.hit.target.entity, base);

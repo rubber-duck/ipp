@@ -14,6 +14,14 @@ export function Style(props: StyleProps) {
   return createElement(componentContract.CanvasStyle.host, props);
 }
 
+export type LayerTransitionProps = ComponentProps &
+  ComponentFields<"CanvasLayerTransition">;
+
+/** Explicit layer endpoints; animate progress with the ordinary driver. */
+export function LayerTransition(props: LayerTransitionProps) {
+  return createElement(componentContract.CanvasLayerTransition.host, props);
+}
+
 export type LayoutProps = ComponentProps & ComponentFields<"GuiLayout">;
 
 export function Layout(props: LayoutProps) {

@@ -3,7 +3,7 @@ import test from "node:test";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { DatasetPage } from "@ipp/client";
+import type { DatasetPage, Inspection } from "@ipp/client";
 import type { HostContract, HostState } from "../../tools/shared-host/host.js";
 import type { RgbaImage } from "../../tools/shared-host/images.js";
 import { runNativeEnvironment } from "../integration/environment.js";
@@ -55,6 +55,10 @@ async function runGallery(
     readonly worlds: () => Promise<
       readonly { readonly id: bigint; readonly symbolicId: string }[]
     >;
+    readonly independentWorld: (
+      work: (probe: () => Promise<void>) => Promise<void>,
+    ) => Promise<void>;
+    readonly readGuiPanel: () => Promise<Inspection>;
     readonly readDataset: (name: string) => Promise<DatasetPage>;
     readonly record: (kind: string, value: unknown) => Promise<void>;
   }) => Promise<void>,
@@ -126,6 +130,51 @@ async function runGallery(
           directory,
           signal: environment.signal,
           worlds: () => observer.listWorlds(),
+          readGuiPanel: async () => {
+            const panels = (await observer.listWorlds()).filter(
+              ({ symbolicId }) => symbolicId.startsWith("gui-demo-panel/"),
+            );
+            assert.equal(
+              panels.length,
+              1,
+              "one current scanner Canvas World is attached",
+            );
+            const reference = await observer.resolveWorld(panels[0]!.id);
+            const client = await observer.openWorld(reference);
+            try {
+              const before = await client.inspect();
+              await client.waitForFrame(before.tick);
+              return await client.inspect();
+            } finally {
+              await client.close();
+            }
+          },
+          independentWorld: async (work) => {
+            const peer = await observer.createWorld({
+              selectedSystems: [],
+              temporary: true,
+            });
+            const client = await observer.openWorld(peer.reference);
+            try {
+              await work(async () => {
+                const before = await client.inspect();
+                await client.waitForFrame(before.tick);
+                const after = await client.inspect();
+                assert.ok(
+                  after.tick > before.tick,
+                  "independent World continues evaluating after GUI selection",
+                );
+                await environment.evidence.record("gui-independent-world", {
+                  world: peer.reference,
+                  before: before.tick,
+                  after: after.tick,
+                });
+              });
+            } finally {
+              await client.close();
+              await observer.destroyWorld(peer.reference);
+            }
+          },
           readDataset: (name) => observer.datasets.read(name),
           record: (kind, value) => environment.evidence.record(kind, value),
         });
@@ -252,7 +301,15 @@ test("native gallery captures all shared scenes, including moving particles and 
   await runGallery(
     context.signal,
     "scenes",
-    async ({ driver, directory, signal, worlds, record }) => {
+    async ({
+      driver,
+      directory,
+      signal,
+      worlds,
+      record,
+      independentWorld,
+      readGuiPanel,
+    }) => {
       for (const scene of [
         "shapes",
         "lighting",
@@ -284,7 +341,19 @@ test("native gallery captures all shared scenes, including moving particles and 
               "running particles need no stationary-pixel barrier",
             );
           }
-          await exerciseNativeGalleryScene(driver, scene, directory, signal);
+          if (scene === "gui")
+            await independentWorld((probe) =>
+              exerciseNativeGalleryScene(
+                driver,
+                scene,
+                directory,
+                signal,
+                probe,
+                readGuiPanel,
+              ),
+            );
+          else
+            await exerciseNativeGalleryScene(driver, scene, directory, signal);
           await record("gallery_native_scene", {
             scene,
             worlds: await worlds(),

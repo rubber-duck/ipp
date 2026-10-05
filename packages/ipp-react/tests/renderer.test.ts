@@ -49,6 +49,7 @@ import {
   Transform,
   UnlitMaterial,
   MeshInstance,
+  MeshPose,
   SurfaceCache,
   UnlitTexture,
 } from "../src/index.js";
@@ -1188,6 +1189,67 @@ test("world declarations retain typed target fields through acknowledgement, spa
     2,
     "equal typed values must not cause another commit",
   );
+  await settle(client, root.unmount());
+});
+
+test("mesh pose declarations switch immutable targets, return to Basis and remove the component", async () => {
+  const client = new DeliveryBoundary();
+  client.components = {
+    ...client.components,
+    MeshPose: {
+      id: 47,
+      fields: {
+        source: { offset: 12, kind: 5 },
+        variant: { offset: 36, kind: 3 },
+        weight: { offset: 40, kind: 1 },
+      },
+    },
+  };
+  const root = createRoot(client);
+  const pose = (source: string, weight: number, visible = true) =>
+    createElement(
+      Entity,
+      { id: "beam" },
+      visible && createElement(MeshPose, { source, variant: 0, weight }),
+    );
+  await settle(client, root.render(pose("memory:cylinder", 1)));
+  assert.deepEqual(client.calls[0]!.at(-1), {
+    kind: "insertComponent",
+    entity: { kind: "alias", alias: 1 },
+    component: 47,
+    adopt: true,
+    fields: [
+      { offset: 12, value: { kind: "string", value: "memory:cylinder" } },
+      { offset: 36, value: { kind: "u32", value: 0 } },
+      { offset: 40, value: { kind: "f32", value: 1 } },
+    ],
+  });
+  await settle(client, root.render(pose("memory:sphere", 1)));
+  assert.deepEqual(client.calls[1], [
+    {
+      kind: "setField",
+      entity: { kind: "handle", id: 100n },
+      component: 47,
+      field: { offset: 12, value: { kind: "string", value: "memory:sphere" } },
+    },
+  ]);
+  await settle(client, root.render(pose("memory:sphere", 0)));
+  assert.deepEqual(client.calls[2], [
+    {
+      kind: "setField",
+      entity: { kind: "handle", id: 100n },
+      component: 47,
+      field: { offset: 40, value: { kind: "f32", value: 0 } },
+    },
+  ]);
+  await settle(client, root.render(pose("memory:sphere", 0, false)));
+  assert.deepEqual(client.calls[3], [
+    {
+      kind: "removeComponent",
+      entity: { kind: "handle", id: 100n },
+      component: 47,
+    },
+  ]);
   await settle(client, root.unmount());
 });
 

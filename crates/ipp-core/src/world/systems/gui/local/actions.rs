@@ -470,6 +470,7 @@ impl GuiSystem {
                         control.target,
                         formatted.clone(),
                         state.fence.generation,
+                        input.masked,
                     );
                     effect.kind = GuiLocalEffectKind::Submitted(formatted.clone());
                     value = (committed != input.value).then_some(committed);

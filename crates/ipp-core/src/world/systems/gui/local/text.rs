@@ -33,6 +33,8 @@ pub struct GuiNativeTextState {
     /// The control's `text` field, shared with the component store, or a
     /// numeric input's edit text, which no field holds.
     pub text: Arc<str>,
+    /// Whether the native adapter presents the text as masked.
+    pub masked: bool,
     /// UTF-8 anchor and caret in `text`.
     pub selection: [u32; 2],
     /// Provisional composition, if any.
@@ -140,6 +142,7 @@ impl GuiNativeText {
         target: GuiEntityTarget,
         text: Arc<str>,
         generation: u64,
+        masked: bool,
     ) -> GuiNativeTextState {
         GuiNativeTextState {
             fence: GuiTextFence {
@@ -149,6 +152,7 @@ impl GuiNativeText {
             selection: [text.len() as u32; 2],
             text,
             composition: None,
+            masked,
         }
     }
 
@@ -161,12 +165,14 @@ impl GuiNativeText {
         generation: u64,
     ) -> Self {
         let basis = input.numeric.then(|| input.formatted());
+        let state = Self::state(
+            target,
+            basis.clone().unwrap_or_else(|| input.text.clone()),
+            generation,
+            input.masked,
+        );
         GuiNativeText {
-            state: Self::state(
-                target,
-                basis.clone().unwrap_or_else(|| input.text.clone()),
-                generation,
-            ),
+            state,
             owner,
             basis,
         }

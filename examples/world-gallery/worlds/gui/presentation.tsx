@@ -66,10 +66,13 @@ export const SURFACE_HEIGHT = 4.8;
 /** Shared curvature radius for the dashboard and its scene-geometry shield. */
 export const SURFACE_RADIUS = 8;
 
+/** A real resting gap makes the login lift visible without moving other groups. */
+export const REST_LAYER_SPACING = 0.1;
+
 /**
  * Canvas units per Surface metre. Body text is then 16 / 140 = 0.114 m, about
  * 13 pixels at the authored camera on a typical desktop canvas, and the panel
- * holds 1036 by 672 units: three columns of panels at the language's sizes.
+ * holds the scanner's 1036 by 672-unit window.
  */
 export const UNITS_PER_METRE = 140;
 

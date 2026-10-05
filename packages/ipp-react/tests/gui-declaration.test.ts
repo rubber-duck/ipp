@@ -3,6 +3,7 @@ import test from "node:test";
 import { FieldKind, encodeShaderDefinition } from "@ipp/client";
 import type { ReactWorldClient } from "../src/contract.js";
 import { componentNames } from "../src/components.js";
+import { LayerTransition } from "../src/gui/components.js";
 import { Color, Slider } from "../src/gui/controls.js";
 import {
   FRAGMENT_SHADER_HOST_TYPE,
@@ -54,6 +55,13 @@ function client(): ReactWorldClient {
           value: { offset: 8, kind: FieldKind.F32 },
           alpha: { offset: 12, kind: FieldKind.F32 },
           alpha_rail: { offset: 16, kind: FieldKind.Bool },
+        },
+      },
+      CanvasLayerTransition: {
+        id: 56,
+        fields: {
+          previous_layer: { offset: 0, kind: FieldKind.U32 },
+          progress: { offset: 4, kind: FieldKind.F32 },
         },
       },
       CanvasPaint: {
@@ -436,4 +444,28 @@ test("A PaintShader stage makes a ShaderAsset a canvas paint definition", () => 
       encodeShaderDefinition({ ...paint, parameters: { image: "texture2D" } }),
     /float scalars or vectors/,
   );
+});
+
+test("LayerTransition declares explicit endpoints without a second entity or runtime store", () => {
+  const tree = new ReactWorldTree(client());
+  const owner = tree.instance("ipp-entity", { id: "moving" });
+  const declaration = LayerTransition({ previous_layer: 100, progress: 0.25 });
+  owner.children.push(
+    tree.instance(declaration.type as ReactWorldElementType, {
+      ...declaration.props,
+    }),
+  );
+  tree.children.push(owner);
+  const description = tree.describe();
+  assert.equal(description.entities.length, 1);
+  assert.equal(description.components.length, 1);
+  assert.equal(description.components[0]!.component, 56);
+  assert.deepEqual(description.components[0]!.fields.get(0), {
+    kind: "u32",
+    value: 100,
+  });
+  assert.deepEqual(description.components[0]!.fields.get(4), {
+    kind: "f32",
+    value: 0.25,
+  });
 });

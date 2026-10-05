@@ -29,6 +29,7 @@ import {
 } from "./attached-world.js";
 import { attachmentIdentity } from "./attachment-identity.js";
 import { CanvasContext } from "./canvas-context.js";
+import { notify } from "./error-reporting.js";
 import type {
   CanvasWorldSession,
   OwnedCanvasWorld,
@@ -233,6 +234,12 @@ function RootCanvasWorld({
         fallback(asError(thrown));
       }
     };
+    const reportDeclaration = (failure: Error): void => {
+      const observer = latest.current.onError;
+      if (active && observer)
+        notify(() => observer(failure), session.reportDeclaration);
+      else session.reportDeclaration(failure);
+    };
     let world: OwnedCanvasWorld;
     try {
       world = session.openCanvasWorld(
@@ -249,6 +256,7 @@ function RootCanvasWorld({
             report(asError(thrown));
           }
         },
+        reportDeclaration,
       );
     } catch (failure) {
       report(asError(failure));

@@ -1,6 +1,10 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { runBrowserEnvironment } from "../browser/environment.js";
+import {
+  assertSeparators,
+  measureSeparators,
+} from "./surface-separators-scenario.js";
 import { invoke } from "./evidence.js";
 import { encodePng, type RgbaFrame } from "./retained-gui-images.js";
 import {
@@ -134,6 +138,12 @@ export async function runSurfaceCache(
       `surface-cache-${variant}`,
       1,
       async (driver, page) => {
+        const separators = await measureSeparators(driver);
+        await writeFile(
+          resolve(page.evidence, "separators.json"),
+          JSON.stringify(separators, null, 2),
+        );
+        assertSeparators(separators);
         const report = await exerciseSurfaceCache(driver);
         await writeFile(
           resolve(page.evidence, "surface-cache.json"),

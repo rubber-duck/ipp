@@ -65,7 +65,7 @@ export const LAYERS = {
   telemetry: 1,
   panel: 2,
   workbench: 3,
-  advanced: 3,
+  presentation: 3,
   anchored: 4,
   dialog: 4,
   toast: 5,
@@ -297,11 +297,14 @@ const PURGE_RECT: ContentRect = [
   L.small,
 ];
 
-/** ADVANCED: the expander under NODE STATUS and its three setting rows. */
-const ADVANCED_TOP = TOP + 448 + L.inset;
-const settingRow = (index: number) =>
-  ADVANCED_TOP + L.control + L.inset / 2 + index * (L.control + 4);
-const SETTING_END = RIGHT + 288 - L.inset;
+/** Presentation panel and its retained tab sections. */
+const PRESENTATION_TOP = TOP + 448 + L.inset;
+const PRESENTATION_WIDTH = 288 - 2 * L.line;
+const PRESENTATION_X = RIGHT + L.line + L.inset;
+const PRESENTATION_BODY_TOP =
+  PRESENTATION_TOP + L.control + L.line + L.inset / 4;
+const PRESENTATION_END = RIGHT + 288 - L.line - L.inset;
+const presentationRow = (index: number) => PRESENTATION_BODY_TOP + index * 44;
 
 /** The dashboard at zero scroll. */
 export const PANEL = {
@@ -456,20 +459,57 @@ export const PANEL = {
   ] as ContentRect,
   purge: PURGE_RECT,
 
-  advanced: [RIGHT, ADVANCED_TOP, 288, L.control] as ContentRect,
-  cyan: [SETTING_END - 160, settingRow(0), 80, L.control] as ContentRect,
-  amber: [SETTING_END - 80, settingRow(0), 80, L.control] as ContentRect,
+  presentationPanel: [RIGHT, PRESENTATION_TOP, 288, 176] as ContentRect,
+  presentationTab: (index: 0 | 1 | 2): ContentRect => [
+    RIGHT + L.line + (index * PRESENTATION_WIDTH) / 3,
+    PRESENTATION_TOP,
+    PRESENTATION_WIDTH / 3,
+    L.control,
+  ],
+  layerStep: [
+    PRESENTATION_X + 16,
+    PRESENTATION_BODY_TOP + 24,
+    64,
+    88,
+  ] as ContentRect,
   explode: [
-    SETTING_END - 72,
-    settingRow(1) + (L.control - L.small) / 2,
-    72,
-    L.small,
+    PRESENTATION_END - 24,
+    PRESENTATION_BODY_TOP + 28,
+    24,
+    24,
+  ] as ContentRect,
+  vectorOnly: [
+    PRESENTATION_END - 24,
+    PRESENTATION_BODY_TOP + 64,
+    24,
+    24,
+  ] as ContentRect,
+  shield: [
+    PRESENTATION_END - 24,
+    PRESENTATION_BODY_TOP + 100,
+    24,
+    24,
+  ] as ContentRect,
+  shape: [PRESENTATION_X + 72, presentationRow(0), 181.5, 40] as ContentRect,
+  facing: [PRESENTATION_X + 72, presentationRow(1), 181.5, 40] as ContentRect,
+  cache: [PRESENTATION_X + 72, presentationRow(2), 181.5, 40] as ContentRect,
+  cyan: [
+    PRESENTATION_END - 160,
+    PRESENTATION_BODY_TOP + 24,
+    80,
+    40,
+  ] as ContentRect,
+  amber: [
+    PRESENTATION_END - 80,
+    PRESENTATION_BODY_TOP + 24,
+    80,
+    40,
   ] as ContentRect,
   reducedMotion: [
-    SETTING_END - L.small,
-    settingRow(2) + (L.control - L.small) / 2,
-    L.small,
-    L.small,
+    PRESENTATION_END - 24,
+    PRESENTATION_BODY_TOP + 72,
+    24,
+    24,
   ] as ContentRect,
 
   /**
@@ -560,8 +600,18 @@ export function controlRect(selector: GalleryGuiSelector): ContentRect {
           return PANEL.minimize;
         case "Close":
           return PANEL.close;
-        case "ADVANCED":
-          return PANEL.advanced;
+        case "LAYERS":
+          return PANEL.presentationTab(0);
+        case "SURFACE":
+          return PANEL.presentationTab(1);
+        case "STYLE":
+          return PANEL.presentationTab(2);
+        case "PANEL SHAPE":
+          return PANEL.shape;
+        case "CURVED FACING":
+          return PANEL.facing;
+        case "PRESENTATION":
+          return PANEL.cache;
         case "CYAN":
           return PANEL.cyan;
         case "AMBER":
@@ -588,12 +638,16 @@ export function controlRect(selector: GalleryGuiSelector): ContentRect {
           return PANEL.scan;
         case "EXPLODE LAYERS":
           return PANEL.explode;
+        case "GUI ONLY":
+          return PANEL.vectorOnly;
+        case "INPUT SHIELD":
+          return PANEL.shield;
         case "REDUCED MOTION":
           return PANEL.reducedMotion;
       }
       break;
     case "slider":
-      return PANEL.gain;
+      return selector.name === "LAYER STEP" ? PANEL.layerStep : PANEL.gain;
     case "text":
       return selector.name === "FIND" ? PANEL.find : PANEL.callsign;
     case "scrollView":
@@ -618,11 +672,14 @@ export function projectContent(
   g: Gallery,
   points: readonly (readonly [number, number])[],
   depth = 0,
+  flush = true,
 ) {
   return g.call<readonly ProjectedPoint[]>(
     "projectGalleryGuiContent",
     points,
     depth,
+    undefined,
+    flush,
   );
 }
 

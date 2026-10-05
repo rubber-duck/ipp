@@ -1,3 +1,4 @@
+import { asError, notify } from "./error-reporting.js";
 import type {
   Client,
   LogLevel,
@@ -16,8 +17,6 @@ import {
 } from "react";
 import {
   CanvasWorldSession,
-  asError,
-  notify,
   type IppCanvasHandle,
 } from "./canvas-world-session.js";
 import { CanvasLifetime, type CanvasWorldSource } from "./canvas-lifetime.js";
@@ -204,6 +203,11 @@ export function IppCanvas({
       if (observer) notify(() => observer(value), fallback);
       else fallback(value);
     };
+    const reportDeclaration = (error: Error): void => {
+      const observer = disposed ? capturedError : callbacks.current.onError;
+      if (observer) notify(() => observer(error), console.error);
+      else console.error(error);
+    };
     const close = async (): Promise<void> => {
       if (activeInput.current?.owner === input) activeInput.current = undefined;
       try {
@@ -260,6 +264,7 @@ export function IppCanvas({
             host,
             client,
             onError: report,
+            onDeclarationError: reportDeclaration,
             onViewChange: (view) => {
               if (!disposed) void input?.select(view).catch(report);
               if (!disposed) callbacks.current.onViewChange?.(view);

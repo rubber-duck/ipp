@@ -313,7 +313,9 @@
       "tests/render/retained-gui-fixture.tsx",
       "tests/render/tsconfig.retained-gui.json",
       "tools/build_surface_gui.mjs",
-      "tests/render/surface-fixture.tsx"
+      "tests/render/surface-fixture.tsx",
+      "tests/render/surface-separators-fixture.ts",
+      "tests/render/surface-separators-scenario.ts"
     ]
   },
   {

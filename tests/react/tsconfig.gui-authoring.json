@@ -21,6 +21,7 @@
     "../../packages/ipp-react/tests/gui-declaration.test.ts",
     "../../packages/ipp-react/tests/control-refs.test.ts",
     "../../packages/ipp-react/tests/gui-callbacks.test.ts",
-    "gui-projected-advanced.tsx"
+    "gui-projected-advanced.tsx",
+    "gui-layer-transitions.tsx"
   ]
 }

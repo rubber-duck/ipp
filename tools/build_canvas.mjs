@@ -86,6 +86,14 @@ await bundleBrowser(
   { platform: "node", packages: "external" },
 );
 artifacts.push({ environment: "units", ...(await artifact(units)) });
+const worldUnits = resolve(output, "canvas-world.test.js");
+await bundleBrowser(
+  "packages/ipp-react/tests/canvas-world.test.ts",
+  worldUnits,
+  "production",
+  { platform: "node", packages: "external" },
+);
+artifacts.push({ environment: "units", ...(await artifact(worldUnits)) });
 await writeFile(
   resolve(output, "build-report.json"),
   `${JSON.stringify({ scope: "Public IppCanvas and World through generated client, worker, WASM, and WebGL", dependencies: { react: await packageVersion("react"), reactDom: await packageVersion("react-dom"), reactReconciler: await packageVersion("react-reconciler") }, artifacts }, null, 2)}\n`,

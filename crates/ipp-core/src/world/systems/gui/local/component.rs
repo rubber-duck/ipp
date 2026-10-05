@@ -370,6 +370,9 @@ pub struct GuiTextInput {
     pub placeholder: Arc<str>,
     /// Committed single-line text, written by clients and by the GUI System.
     pub text: Arc<str>,
+    /// Present one bullet per grapheme without changing text, composition or editing.
+    /// Also masks a numeric input's formatted number and pending edit.
+    pub masked: bool,
     /// Whether the input holds the number `value` rather than `text`.
     pub numeric: bool,
     /// A numeric input's committed number, written by clients and by the GUI
@@ -399,6 +402,7 @@ impl Default for GuiTextInput {
         Self {
             placeholder: Arc::default(),
             text: Arc::default(),
+            masked: false,
             numeric: false,
             value: 0.0,
             min: f32::MIN,

@@ -937,3 +937,97 @@ test("saved World HTTP assets fetch through connection mappings without changing
     },
   );
 });
+
+for (const variant of ["development", "production"] as const) {
+  for (const kind of ["World", "CanvasWorld"] as const) {
+    for (const explicit of [false, true]) {
+      test(`${variant}: ${kind} ordinary rejection recovers with ${explicit ? "explicit" : "default"} reporting`, {
+        timeout: 40_000,
+      }, async (context) => {
+        const pageErrors: string[] = [];
+        await runBrowserEnvironment(
+          `${variant} ${kind} declaration recovery ${explicit}`,
+          {
+            workspace,
+            build: render,
+            operationTimeoutMs: 20_000,
+            evidenceParent: resolve(
+              workspace,
+              "target/integration-artifacts/canvas-recovery",
+            ),
+          },
+          context.signal,
+          async (scenario) => {
+            scenario.page.on("pageerror", (error) =>
+              pageErrors.push(error.message),
+            );
+            try {
+              const report = await invoke<{
+                errors: string[];
+                childErrors: string[];
+                healthyCallbacks: number;
+                callbacks: number[];
+                independentWidth: number;
+                initialPixels: number;
+                failurePixels: number;
+                correctedPixels: number;
+                initial: { id: bigint; width: number };
+                afterFailure: { id: bigint; width: number };
+                corrected: { id: bigint; width: number };
+              }>(
+                scenario.page,
+                fixtureUrl(scenario.urls.origin, variant),
+                "declarationRecovery",
+                [
+                  {
+                    generatedModuleUrl: scenario.urls.generated,
+                    workerScriptUrl: scenario.urls.workerScript,
+                    wasmUrl: scenario.urls.wasm,
+                    timeoutMs: 10_000,
+                  },
+                  kind,
+                  explicit,
+                ],
+              );
+              assert.ok(report.errors.length > 0);
+              assert.ok(
+                report.errors.every((error) => error.includes("InvalidValue")),
+              );
+              assert.deepEqual(report.childErrors, []);
+              assert.equal(report.healthyCallbacks, 2);
+              assert.deepEqual(report.callbacks, [0, 2]);
+              assert.equal(report.independentWidth, 20);
+              assert.deepEqual(report.afterFailure, report.initial);
+              assert.equal(report.corrected.width, 60);
+              assert.equal(report.failurePixels, report.initialPixels);
+              assert.ok(report.correctedPixels > report.failurePixels + 300);
+              assert.deepEqual(pageErrors, []);
+              scenario.evidence.record(
+                "ordinary rejected authoring and correction",
+                report,
+              );
+            } finally {
+              const evidence = await invoke<{
+                images: Record<string, string>;
+                observations: Record<string, unknown>;
+              }>(
+                scenario.page,
+                fixtureUrl(scenario.urls.origin, variant),
+                "recoveryEvidence",
+              );
+              scenario.evidence.record(
+                "declaration recovery completed frames",
+                evidence.observations,
+              );
+              for (const [label, dataUrl] of Object.entries(evidence.images))
+                await writeDataUrl(
+                  join(scenario.evidence.directory, `${label}.png`),
+                  dataUrl,
+                );
+            }
+          },
+        );
+      });
+    }
+  }
+}

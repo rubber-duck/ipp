@@ -9,6 +9,10 @@ import {
   type BrowserEnvironmentContext,
 } from "../browser/environment.js";
 import { runNativeEnvironment } from "../integration/environment.js";
+import {
+  assertSeparators,
+  measureSeparators,
+} from "./surface-separators-scenario.js";
 import { invoke } from "./evidence.js";
 import {
   differenceImage,
@@ -22,6 +26,7 @@ import {
   exerciseRetainedGui,
   type RetainedGuiOptions,
   type RetainedGuiReport,
+  type RetainedGuiDriver,
   TIMING_DEFINITIONS,
   type WorkloadFrame,
 } from "./retained-gui-scenario.js";
@@ -132,44 +137,51 @@ export async function runRetainedGui(
         await call("initialize", [
           { generatedModuleUrl: env.urls.generated, ...connection },
         ]);
-        const report = await exerciseRetainedGui(
-          {
-            call,
-            capture: async (label, next = false) => {
-              const result = await call<WorkloadFrame>("capture", [
-                label,
-                { next },
-              ]);
-              // Keep pixels for cross-build comparison and record the artifact path;
-              // PNG data would exhaust the event log.
-              await env.execute(`write ${label}.png`, [label], async () => {
-                const { width, height, pixels } = await invoke<{
-                  width: number;
-                  height: number;
-                  pixels: string;
-                }>(env.page, module, "capturePixels", [label]);
-                const frame = {
-                  width,
-                  height,
-                  pixels: new Uint8Array(Buffer.from(pixels, "base64")),
-                };
-                captured.set(label, frame);
-                const path = resolve(env.evidence.directory, `${label}.png`);
-                await writeFile(path, encodePng(frame));
-                return path;
-              });
-              return result;
-            },
-            pixels: (label) => {
-              const frame = captured.get(label);
-              if (!frame) throw new Error(`No capture labelled ${label}`);
-              return frame;
-            },
+        const driver: RetainedGuiDriver = {
+          call,
+          capture: async (label, next = false) => {
+            const result = await call<WorkloadFrame>("capture", [
+              label,
+              { next },
+            ]);
+            // Keep pixels for cross-build comparison and record the artifact path;
+            // PNG data would exhaust the event log.
+            await env.execute(`write ${label}.png`, [label], async () => {
+              const { width, height, pixels } = await invoke<{
+                width: number;
+                height: number;
+                pixels: string;
+              }>(env.page, module, "capturePixels", [label]);
+              const frame = {
+                width,
+                height,
+                pixels: new Uint8Array(Buffer.from(pixels, "base64")),
+              };
+              captured.set(label, frame);
+              const path = resolve(env.evidence.directory, `${label}.png`);
+              await writeFile(path, encodePng(frame));
+              return path;
+            });
+            return result;
           },
+          pixels: (label) => {
+            const frame = captured.get(label);
+            if (!frame) throw new Error(`No capture labelled ${label}`);
+            return frame;
+          },
+        };
+        const report = await exerciseRetainedGui(
+          driver,
           retained,
           iterations,
           options,
         );
+        const separators = await measureSeparators(driver);
+        await writeFile(
+          resolve(env.evidence.directory, "separators.json"),
+          JSON.stringify(separators, null, 2),
+        );
+        assertSeparators(separators);
         const device = Object.fromEntries(
           Object.entries(report.warm.statistics?.device ?? {}).filter(
             ([, value]) => typeof value === "string",

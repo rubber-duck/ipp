@@ -197,8 +197,14 @@ impl<'a> RenderScene<'a> {
                     .then(|| host.output(child.id, selection))
                     .flatten()
                     .and_then(|chunk| chunk.data::<CanvasPublication>())
-                    .and_then(|canvas| canvas.layers.last().copied())
-                    .unwrap_or(0);
+                    .map(|canvas| {
+                        canvas
+                            .layers
+                            .iter()
+                            .map(|plane| plane.offset)
+                            .fold(0.0, f64::max)
+                    })
+                    .unwrap_or(0.0);
                 scene.surfaces.push(SceneOutputSurface {
                     entity: RenderEntity {
                         world: publication.world,
@@ -229,7 +235,7 @@ impl<'a> RenderScene<'a> {
                         .sqrt() as f32,
                     interaction_eligible,
                     layer_spacing: edge.layer_spacing,
-                    layer_depth: (f64::from(deepest) * f64::from(edge.layer_spacing)) as f32,
+                    layer_depth: (deepest * f64::from(edge.layer_spacing)) as f32,
                     geometry: geometry.clone(),
                     provider_incarnation,
                 });

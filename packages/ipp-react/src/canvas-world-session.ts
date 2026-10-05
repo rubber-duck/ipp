@@ -1,3 +1,4 @@
+import { asError, notify } from "./error-reporting.js";
 import { createElement, type ReactNode } from "react";
 import { CanvasContext } from "./canvas-context.js";
 import { canvasStateUpdate } from "./canvas-world.js";
@@ -46,6 +47,8 @@ export interface CanvasSessionOptions {
   readonly client: Client;
   readonly ownsClient?: boolean;
   readonly onError?: (error: Error) => void;
+  /** Observe rejected declarations separately from presentation/lifecycle errors. */
+  readonly onDeclarationError?: (error: Error) => void;
   readonly onViewChange?: (view: PresentationView | null) => void;
 }
 
@@ -56,6 +59,7 @@ export class CanvasWorldSession implements IppCanvasHandle {
   readonly closed: Promise<void>;
   readonly cleanup: CanvasLifetime;
   readonly report: (error: Error) => void;
+  readonly reportDeclaration: (error: Error) => void;
   private readonly presentation: CanvasPresentation;
   private readonly worlds = new Set<CanvasWorldBinding>();
   private tail: Promise<void> = Promise.resolve();
@@ -81,6 +85,7 @@ export class CanvasWorldSession implements IppCanvasHandle {
     this.host = options.host;
     this.client = options.client;
     this.report = options.onError ?? ((error) => console.error(error));
+    this.reportDeclaration = options.onDeclarationError ?? this.report;
     this.cleanup = lifetime ?? new CanvasLifetime(this.host, false);
     if (!lifetime) this.cleanup.adopt(this.client, options.ownsClient ?? false);
     this.presentation = new CanvasPresentation(this.host, (view) => {
@@ -201,9 +206,17 @@ export class CanvasWorldSession implements IppCanvasHandle {
     request: CanvasStateRequest,
     report: (error: Error) => void,
     ready: (world: WorldReference, closed: Promise<void>) => void,
+    reportDeclaration: (error: Error) => void = report,
   ): OwnedCanvasWorld {
     if (this.isClosing) throw new Error("The Canvas is closing");
-    return new OwnedCanvasWorld(this, create, request, report, ready);
+    return new OwnedCanvasWorld(
+      this,
+      create,
+      request,
+      report,
+      ready,
+      reportDeclaration,
+    );
   }
 
   recoverPresentation(): Promise<void> {
@@ -211,7 +224,7 @@ export class CanvasWorldSession implements IppCanvasHandle {
   }
 
   createRoot(): ReactWorldRoot {
-    const binding = this.attach(this.report);
+    const binding = this.attach(this.reportDeclaration);
     return {
       ...binding.root,
       render: (element) =>
@@ -458,6 +471,7 @@ export class OwnedCanvasWorld {
     private request: CanvasStateRequest,
     private readonly report: (error: Error) => void,
     ready: (world: WorldReference, closed: Promise<void>) => void,
+    private readonly reportDeclaration: (error: Error) => void,
   ) {
     this.closed = new Promise<void>((resolve, reject) => {
       this.resolveClosed = resolve;
@@ -495,7 +509,7 @@ export class OwnedCanvasWorld {
     if (this.stopped) return;
     this.client = await this.session.host.openWorld(this.world);
     if (this.stopped) return;
-    this.binding = this.session.attach(this.report, {
+    this.binding = this.session.attach(this.reportDeclaration, {
       world: this.world,
       client: this.client,
     });
@@ -546,22 +560,5 @@ export class OwnedCanvasWorld {
     this.removal = removal;
     void removal.then(this.resolveClosed, this.rejectClosed);
     return removal;
-  }
-}
-
-export function asError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
-}
-
-export function notify(
-  callback: () => void | Promise<void>,
-  report: (error: Error) => void,
-): void {
-  try {
-    void Promise.resolve(callback()).catch((error: unknown) =>
-      report(asError(error)),
-    );
-  } catch (error) {
-    report(asError(error));
   }
 }

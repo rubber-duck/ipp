@@ -15,7 +15,7 @@ import {
   type SurfaceCacheProps,
 } from "@ipp/react";
 import { CanvasWorldSession } from "@ipp/react/web";
-import { Drawing, Style } from "@ipp/react/gui";
+import { Box, Drawing, Style } from "@ipp/react/gui";
 import {
   terminalWorkloadLayers,
   type TerminalGlyphRowsCodec,
@@ -24,6 +24,7 @@ import {
 import { clientAssetSource, entityLocalToSurfaceContent } from "@ipp/client";
 import { compareGlyph } from "./surface-glyph-oracle.js";
 import { probeErrorCheckBridge } from "./error-check-bridge.js";
+import { SEPARATOR_CASES } from "./surface-separators-fixture.js";
 import { probeSurfaceCacheBridge } from "./surface-cache-bridge.js";
 import type {
   OutputReference,
@@ -1231,6 +1232,33 @@ export async function cacheTerminal(config: {
       onWorld={observeCanvas("surface-terminal")}
     >
       {layers}
+    </Terminal>
+  ));
+}
+
+/** Authored subpixel rectangles on an opaque backing, through the real Canvas World. */
+export async function cacheSeparators() {
+  await resizePresentation(320, 240, window.devicePixelRatio);
+  await presentCached(() => (
+    <Terminal
+      assets={assets}
+      cache={cachePolicies.get("surface-terminal")}
+      onWorld={observeCanvas("surface-terminal")}
+    >
+      <Entity id="separator-backing">
+        <Style red={0} green={0} blue={0} />
+        <Box width={3.8} height={2.4} />
+      </Entity>
+      <Entity id="separator-corner-oracle">
+        <Style x={120.25 / 80} y={172.25 / 80} />
+        <Box width={12.5 / 80} height={8.5 / 80} />
+      </Entity>
+      {SEPARATOR_CASES.map(({ id, x, y, width, height, scale }) => (
+        <Entity key={id} id={id}>
+          <Style x={x / 80} y={y / 80} scale_x={scale} scale_y={scale} />
+          <Box width={width / (80 * scale)} height={height / (80 * scale)} />
+        </Entity>
+      ))}
     </Terminal>
   ));
 }

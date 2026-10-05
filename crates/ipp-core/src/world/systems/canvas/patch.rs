@@ -223,11 +223,11 @@ impl CanvasSystem {
                 walk.seed(ancestor, &self.state.walk.records[ancestor]);
             }
             for position in root.position..subtree_end {
-                let (entity, layer) = {
+                let (entity, layer, priority) = {
                     let record = &self.state.walk.records[position];
-                    (record.entity, record.placed.layer)
+                    (record.entity, record.placed.layer, record.placed.priority)
                 };
-                self.visit(&inputs, &mut walk, position, entity, layer);
+                self.visit(&inputs, &mut walk, position, entity, layer, priority);
             }
             self.unwind(&mut walk, None, subtree_end);
             output.layout |= walk.layout_changed;

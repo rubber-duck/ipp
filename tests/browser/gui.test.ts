@@ -1630,3 +1630,162 @@ test("a mounted React VirtualList declares its wanted range and scrolls in compl
     },
   );
 });
+
+test("masked input keeps Unicode text and reveals the same control through worker WASM", {
+  timeout: 60000,
+}, async (context) => {
+  const workspace = resolve(process.cwd());
+  const profile = resolve(workspace, "target/browser-build/render");
+  await runBrowserEnvironment(
+    "gui-masked-text",
+    {
+      workspace,
+      build: {
+        name: "render",
+        generatedModule: resolve(profile, "generated.js"),
+        runtimeWasm: resolve(profile, "runtime.wasm"),
+        contractArtifact: resolve(profile, "contract.bin"),
+      },
+      operationTimeoutMs: 20000,
+      evidenceParent: resolve(
+        workspace,
+        "target/integration-artifacts/gui/browser",
+      ),
+    },
+    context.signal,
+    async (env) => {
+      const fixture = `${env.urls.origin}/target/react-build/gui-fixture.js`;
+      await env.page.evaluate(
+        async ({ fixture, urls }) => {
+          await (await import(fixture)).mountGuiCanvas({
+            generatedModuleUrl: urls.generated,
+            workerScriptUrl: urls.workerScript,
+            wasmUrl: urls.wasm,
+            timeoutMs: 20000,
+            logLevel: "off",
+          });
+        },
+        { fixture, urls: env.urls },
+      );
+      try {
+        await env.page
+          .locator("#mounted-gui-canvas")
+          .click({ position: { x: 120, y: 45 } });
+        await env.page.waitForFunction(
+          () => document.activeElement === document.querySelector("textarea"),
+        );
+        const observe = () =>
+          env.page.evaluate(
+            async (url) => (await import(url)).observation(),
+            fixture,
+          );
+        const paint = (): Promise<TextInputPaint> =>
+          env.page.evaluate(
+            async (url) => (await import(url)).textInputPaint(),
+            fixture,
+          );
+        const toggle = (masked: boolean) =>
+          env.page.evaluate(
+            async ({ fixture, masked }) =>
+              (await import(fixture)).setMasked(masked),
+            { fixture, masked },
+          );
+        const waitMasked = async (masked: boolean) => {
+          const deadline = performance.now() + 5000;
+          let state = await observe();
+          while (
+            (state.masked !== masked ||
+              state.nativeMask !== (masked ? "disc" : "none")) &&
+            performance.now() < deadline
+          ) {
+            await new Promise<void>((resolve) => setTimeout(resolve, 25));
+            state = await observe();
+          }
+          assert.equal(state.masked, masked);
+          assert.equal(state.nativeMask, masked ? "disc" : "none");
+        };
+        const initial = await observe();
+        const plain = await paint();
+        await toggle(true);
+        await waitMasked(true);
+        const masked = await observe();
+        const maskedPaint = await paint();
+        const bright = columns(maskedPaint, 2, (x, y) =>
+          rgb(maskedPaint, x, y).every((channel) => channel > 200),
+        );
+        const runs = bright.filter(
+          (x, index) => index === 0 || x > bright[index - 1]! + 1,
+        );
+        assert.equal(
+          runs.length,
+          4,
+          "expected three separated bullet regions plus the caret",
+        );
+        await env.page.screenshot({
+          path: resolve(env.evidence.directory, "masked-input.png"),
+        });
+        assert.equal(masked.masked, true);
+        assert.equal(masked.nativeMask, "disc");
+        assert.equal(masked.text, "a😀b");
+        assert.equal(masked.editorValue, "a😀b");
+        assert.equal(masked.textEntity, initial.textEntity);
+        assert.equal(masked.focusGeneration, initial.focusGeneration);
+        assert.deepEqual(masked.focusSelection, initial.focusSelection);
+        assert.notDeepEqual(
+          maskedPaint.pixels,
+          plain.pixels,
+          "masking kept the source glyphs painted",
+        );
+
+        // Equal grapheme counts produce exactly the same retained mask pixels,
+        // even though the authoritative text and UTF-8 length differ.
+        await env.page.evaluate(
+          async (url) => (await import(url)).replaceText("Wéé́"),
+          fixture,
+        );
+        await env.page.waitForFunction(
+          async (url) =>
+            (await (await import(url)).observation()).editorValue === "Wéé́",
+          fixture,
+        );
+        const alternate = await paint();
+        assert.deepEqual(alternate.pixels, maskedPaint.pixels);
+        await env.page.keyboard.press("Backspace");
+        await env.page.waitForFunction(
+          async (url) =>
+            (await (await import(url)).observation()).text === "Wé",
+          fixture,
+        );
+        const edited = await observe();
+        assert.deepEqual(edited.focusSelection, [3, 3]);
+        await toggle(false);
+        await waitMasked(false);
+        const revealed = await observe();
+        assert.equal(revealed.masked, false);
+        assert.equal(revealed.nativeMask, "none");
+        assert.equal(revealed.text, "Wé");
+        assert.equal(revealed.editorValue, "Wé");
+        assert.equal(revealed.textEntity, initial.textEntity);
+        assert.equal(revealed.focusGeneration, edited.focusGeneration);
+        assert.deepEqual(revealed.focusSelection, edited.focusSelection);
+        assert.equal(revealed.sameEditor, true);
+        assert.equal(revealed.activeEditor, true);
+        assert.deepEqual(revealed.errors, []);
+        await env.page.screenshot({
+          path: resolve(env.evidence.directory, "revealed-input.png"),
+        });
+        env.evidence.record("masked Unicode input", {
+          initial,
+          masked,
+          edited,
+          revealed,
+        });
+      } finally {
+        await env.page.evaluate(
+          async (url) => (await import(url)).closeGuiCanvas(),
+          fixture,
+        );
+      }
+    },
+  );
+});

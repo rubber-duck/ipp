@@ -23,7 +23,7 @@ use std::{cell::RefCell, collections::LinkedList, rc::Rc};
 mod delivery_tests;
 
 struct Owner {
-    native_fence: Option<ipp_core::systems::gui::local::GuiTextFence>,
+    native_presentation: Option<(ipp_core::systems::gui::local::GuiTextFence, bool)>,
     connection: u64,
     id: u64,
     view: PresentationView,
@@ -364,7 +364,7 @@ impl GuiHostInputService {
                     .map_err(|error| error.to_string())?;
                 self.next = next;
                 self.owner = Some(Owner {
-                    native_fence: None,
+                    native_presentation: None,
                     connection,
                     id: next,
                     view,
@@ -564,8 +564,8 @@ impl GuiHostInputService {
             });
         let cancellation = self.router.synchronize(host, &mut owner.context, view);
         self.router.with_native_text(host, &owner.context, |state| {
-            let fence = state.map(|state| state.fence);
-            if fence == owner.native_fence {
+            let presentation = state.map(|state| (state.fence, state.masked));
+            if presentation == owner.native_presentation {
                 return;
             }
             let result = (|| {
@@ -599,7 +599,7 @@ impl GuiHostInputService {
                     bytes,
                     reservation: Rc::new(RefCell::new(reservation)),
                 });
-                owner.native_fence = fence;
+                owner.native_presentation = presentation;
                 Ok::<(), ()>(())
             })();
             if result.is_err() {

@@ -9,6 +9,7 @@ import { encodePng } from "../../tools/shared-host/png.js";
 import { runNativeEnvironment } from "./environment.js";
 import { runBrowserEnvironment } from "../browser/environment.js";
 import { exercisePlot2d } from "./scenarios/plots-2d.js";
+import { exerciseDenseLines } from "./scenarios/dense-lines.js";
 import { exercisePlot3d } from "./scenarios/plots-3d.js";
 import { reactPlots } from "./scenarios/react-plots.js";
 import { exercisePlotAxisSupport } from "./scenarios/plot-axis-support.js";
@@ -16,11 +17,13 @@ import { exercisePlotAxisMotion } from "./scenarios/plot-axis-motion.js";
 import { exercisePlotViewPlacement } from "./scenarios/plot-view-placement.js";
 import type { Plot2dContract } from "./plot-2d-scene.js";
 import type { Plot3dContract } from "./plot-3d-scene.js";
+import type { ChartContract } from "../performance/chart-data-scenario.js";
 
 // Each view/viewport owns its fixture, operation budget and cleanup. Large
 // completed frames cross the real browser transport before image assertions.
 for (const [family, offscreen, transformed] of [
   ["2d", undefined],
+  ["dense", undefined],
   ["3d", undefined],
   ["react", undefined],
   ["view", undefined],
@@ -48,7 +51,8 @@ for (const [family, offscreen, transformed] of [
     const contract = (await import(
       pathToFileURL(join(profile, "generated.js")).href
     )) as Plot2dContract &
-      Plot3dContract & {
+      Plot3dContract &
+      ChartContract & {
         IppHostClient: {
           connectWebSocket(
             url: string,
@@ -105,29 +109,37 @@ for (const [family, offscreen, transformed] of [
         await environment.execute(`plots-${caseName}`, {}, async () =>
           family === "2d"
             ? exercisePlot2d(host, contract, font, capture, record)
-            : family === "3d"
-              ? exercisePlot3d(host, contract, font, capture)
-              : family === "axis-motion"
-                ? exercisePlotAxisMotion(host, contract, font, capture, record)
-                : family === "axis"
-                  ? exercisePlotAxisSupport(
+            : family === "dense"
+              ? exerciseDenseLines(host, contract, font, capture, record)
+              : family === "3d"
+                ? exercisePlot3d(host, contract, font, capture)
+                : family === "axis-motion"
+                  ? exercisePlotAxisMotion(
                       host,
                       contract,
                       font,
                       capture,
                       record,
-                      transformed ?? false,
                     )
-                  : family === "view"
-                    ? exercisePlotViewPlacement(
+                  : family === "axis"
+                    ? exercisePlotAxisSupport(
                         host,
                         contract,
                         font,
                         capture,
                         record,
-                        offscreen,
+                        transformed ?? false,
                       )
-                    : reactPlots(host, contract, font, capture, record),
+                    : family === "view"
+                      ? exercisePlotViewPlacement(
+                          host,
+                          contract,
+                          font,
+                          capture,
+                          record,
+                          offscreen,
+                        )
+                      : reactPlots(host, contract, font, capture, record),
         );
       },
     );

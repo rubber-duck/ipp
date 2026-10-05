@@ -8,7 +8,7 @@ pub(super) enum RenderDrawIndex {
     Visual(usize),
     Debug(usize),
     Surface(usize),
-    SurfacePatch(usize, Option<u32>, usize),
+    SurfacePatch(usize, Option<u32>, usize, usize),
     PlotPlane(usize),
 }
 
@@ -32,21 +32,18 @@ impl RenderDrawIndex {
             Self::Visual(index) => RenderDrawItem::Visual(&items[index]),
             Self::Debug(index) => RenderDrawItem::Debug(&debug[index]),
             Self::Surface(index) => RenderDrawItem::Surface(&surfaces[index]),
-            Self::SurfacePatch(index, group, patch) => {
+            Self::SurfacePatch(index, group, _, patch) => {
                 RenderDrawItem::SurfacePatch(&surfaces[index], group, patch)
             }
             Self::PlotPlane(index) => RenderDrawItem::PlotPlane(&plot_planes[index]),
         }
     }
 
-    pub fn order(self) -> usize {
+    pub fn order(self) -> (usize, usize) {
         match self {
-            Self::Visual(index) | Self::Debug(index) => index,
-            Self::Surface(index) | Self::PlotPlane(index) => index,
-            Self::SurfacePatch(_, group, patch) => group
-                .map_or(0, |rank| rank as usize)
-                .saturating_mul(256)
-                .saturating_add(patch),
+            Self::Visual(index) | Self::Debug(index) => (index, 0),
+            Self::Surface(index) | Self::PlotPlane(index) => (index, 0),
+            Self::SurfacePatch(_, _, painter_order, patch) => (painter_order, patch),
         }
     }
 }
@@ -107,6 +104,16 @@ impl RenderFrameScratch {
 mod tests {
     use super::*;
     use crate::services::render::device::{SurfacePathDescriptor, SurfacePathInstance};
+
+    #[test]
+    fn projected_patch_ties_follow_logical_order_instead_of_plane_ids() {
+        // Plane IDs change with physical position; a patch's paint priority
+        // remains the destination entry order. Patch order is a separate tie.
+        let upper_id = RenderDrawIndex::SurfacePatch(0, Some(8), 1, 300);
+        let lower_id = RenderDrawIndex::SurfacePatch(0, Some(0), 2, 0);
+        assert!(upper_id.order() < lower_id.order());
+        assert!(RenderDrawIndex::SurfacePatch(0, Some(8), 1, 299).order() < upper_id.order());
+    }
 
     #[test]
     fn clear_preserves_surface_buffer_capacity() {

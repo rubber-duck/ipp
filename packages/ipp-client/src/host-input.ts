@@ -23,6 +23,8 @@ export interface GuiTextFence {
 export interface GuiNativeTextState {
   readonly fence: GuiTextFence;
   readonly text: string;
+  /** Presentation only; offsets and edits still index the original text. */
+  readonly masked: boolean;
   readonly selectionStart: number;
   readonly selectionEnd: number;
   readonly composition?: {
@@ -59,6 +61,7 @@ function readNative(reader: HostWireReader): GuiNativeTextState {
   const text = reader.string();
   const selectionStart = reader.u32();
   const selectionEnd = reader.u32();
+  const masked = reader.boolean();
   const composition = reader.boolean()
     ? {
         text: reader.string(),
@@ -85,6 +88,7 @@ function readNative(reader: HostWireReader): GuiNativeTextState {
       generation,
     },
     text,
+    masked,
     selectionStart,
     selectionEnd,
     ...(composition ? { composition } : {}),
@@ -346,7 +350,9 @@ export class GuiPhysicalContext {
       state.fence.target.world.id === previous.fence.target.world.id &&
       state.fence.target.world.incarnation ===
         previous.fence.target.world.incarnation &&
-      state.fence.generation <= previous.fence.generation
+      (state.fence.generation < previous.fence.generation ||
+        (state.fence.generation === previous.fence.generation &&
+          state.masked === previous.masked))
     )
       return;
     if (state === null && previous === null) return;

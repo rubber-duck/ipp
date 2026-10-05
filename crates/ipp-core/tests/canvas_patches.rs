@@ -413,7 +413,14 @@ fn a_change_the_patch_cannot_apply_walks_the_whole_canvas() {
     );
     scene.panel.frame();
     let raised = scene.panel.output();
-    assert_eq!(&raised.layers[..], &[0, 1]);
+    assert_eq!(
+        raised
+            .layers
+            .iter()
+            .map(|plane| plane.offset)
+            .collect::<Vec<_>>(),
+        [0.0, 1.0]
+    );
 
     // A style write on the raised layer patches in place, though the
     // published order is by layer.
@@ -441,5 +448,14 @@ fn a_change_the_patch_cannot_apply_walks_the_whole_canvas() {
     };
     let work = scene.change(vec![layered]);
     assert!(work.full, "{work:?}");
-    assert_eq!(&scene.panel.output().layers[..], &[0, 1, 2]);
+    assert_eq!(
+        scene
+            .panel
+            .output()
+            .layers
+            .iter()
+            .map(|plane| plane.offset)
+            .collect::<Vec<_>>(),
+        [0.0, 1.0, 2.0]
+    );
 }

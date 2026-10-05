@@ -1,3 +1,7 @@
+export {
+  declarationRecovery,
+  recoveryEvidence,
+} from "./canvas-recovery-fixture.js";
 import { presentationTesting } from "../../packages/ipp-client/src/testing.js";
 import {
   type CanvasRuntimeInput,

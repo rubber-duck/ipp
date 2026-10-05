@@ -1429,7 +1429,7 @@
   },
   "react-gui-authoring": {
     "description": "Ordinary React GUI entities, exact ACK control refs, generic links/rows and cleanup through native and worker transports",
-    "sourceRoots": ["packages/ipp-react/src/", "packages/ipp-react/tests/control-refs.test.ts", "packages/ipp-react/tests/gui-declaration.test.ts", "packages/ipp-react/tests/gui-callbacks.test.ts", "tests/react/gui-authoring.tsx", "tests/react/gui-callbacks.tsx", "tests/react/gui-scroll.tsx", "tests/react/control-ref-lifetimes.tsx", "tests/react/control-ref-scaling.tsx", "tests/react/control-ref-subsets.tsx", "tests/react/control-ref-cleanup.tsx", "tests/react/gui-root.test.ts", "tests/react/gui-paint.tsx", "tests/react/gui-layers.tsx", "tests/react/gui-overlays.tsx", "tests/react/gui-projected-surfaces.tsx", "tests/react/gui-projected-advanced.tsx", "tests/react/projected-oracle.test.ts", "tests/react/gui-paint.test.ts"],
+    "sourceRoots": ["packages/ipp-react/src/", "packages/ipp-react/tests/control-refs.test.ts", "packages/ipp-react/tests/gui-declaration.test.ts", "packages/ipp-react/tests/gui-callbacks.test.ts", "tests/react/gui-authoring.tsx", "tests/react/gui-callbacks.tsx", "tests/react/gui-scroll.tsx", "tests/react/control-ref-lifetimes.tsx", "tests/react/control-ref-scaling.tsx", "tests/react/control-ref-subsets.tsx", "tests/react/control-ref-cleanup.tsx", "tests/react/gui-root.test.ts", "tests/react/gui-paint.tsx", "tests/react/gui-layers.tsx", "tests/react/gui-overlays.tsx", "tests/react/gui-projected-surfaces.tsx", "tests/react/gui-projected-advanced.tsx", "tests/react/gui-layer-transitions.tsx", "tests/react/projected-oracle.test.ts", "tests/react/gui-paint.test.ts"],
     "commands": [
       {
         "name": "projected-oracle",
@@ -1479,6 +1479,20 @@
       {
         "name": "projected-advanced-gles",
         "command": ["@node", "target/react-gui-authoring/gui-paint.test.js", "--backend", "gles", "--projected", "advanced", "--egl-dir", "@egl"],
+        "builds": ["react-gui-authoring", "gles-host", "surface-assets"],
+        "partitionExcludes": ["target/browser-build/render", "target/browser-build/render-instrumentation", "target/gles-host-instrumentation"],
+        "requirements": ["node", "npm", "browser", "gles"]
+      },
+      {
+        "name": "projected-transitions-webgl",
+        "command": ["@node", "target/react-gui-authoring/gui-paint.test.js", "--backend", "webgl", "--projected", "transitions"],
+        "builds": ["react-gui-authoring", "browser:render", "surface-assets"],
+        "partitionExcludes": ["target/browser-build/render-instrumentation", "target/gles-host", "target/gles-host-instrumentation"],
+        "requirements": ["node", "npm", "browser"]
+      },
+      {
+        "name": "projected-transitions-gles",
+        "command": ["@node", "target/react-gui-authoring/gui-paint.test.js", "--backend", "gles", "--projected", "transitions", "--egl-dir", "@egl"],
         "builds": ["react-gui-authoring", "gles-host", "surface-assets"],
         "partitionExcludes": ["target/browser-build/render", "target/browser-build/render-instrumentation", "target/gles-host-instrumentation"],
         "requirements": ["node", "npm", "browser", "gles"]
@@ -1537,7 +1551,7 @@
     "commands": [
       {
         "name": "lifecycle",
-        "command": ["@node", "--test", "target/canvas-build/canvas-presentation.test.js"],
+        "command": ["@node", "--test", "target/canvas-build/canvas-presentation.test.js", "target/canvas-build/canvas-world.test.js"],
         "builds": ["canvas-fixtures"],
         "requirements": ["node", "npm"]
       },
@@ -1646,7 +1660,7 @@
     ]
   },
   "gallery-gui": {
-    "description": "GUI dashboard controls, overlays, native input, re-theming, exploded layers, scrolling, rendering and lifecycle cleanup",
+    "description": "Scanner login, native editing, workspace, settings, recovery, curved layers, texture caching and cleanup",
     "sourceRoots": [
       "examples/world-gallery/worlds/gui/",
       "packages/ipp-react/src/gui-kit/",
@@ -1654,6 +1668,8 @@
       "packages/ipp-client/tools/assemble.mjs",
       "tools/build/verify-browser.mjs",
       "tests/render/gallery-gui.test.ts",
+      "tests/render/gallery-scanner.test.ts",
+      "tests/render/gallery-scanner-support.ts",
       "tests/render/gallery-gui-workbench.test.ts",
       "tests/render/gallery-gui-panel.ts",
       "tests/render/gallery-gui-support.ts",
@@ -1665,57 +1681,40 @@
     ],
     "commands": [
       {
-        "name": "dashboard",
-        "command": [
-          "@node",
-          "--test",
-          "--test-name-pattern=^Gallery (runs|GUI (panel caches|settings panel|floats|input shield))",
-          "dist/tests/render/gallery-gui.test.js"
-        ],
-        "builds": [
-          "typescript",
-          "gallery-fixtures"
-        ],
-        "requirements": [
-          "node",
-          "npm",
-          "browser"
-        ]
+        "name": "scanner",
+        "command": ["@node", "--test", "--test-name-pattern=^Gallery scanner logs in", "dist/tests/render/gallery-scanner.test.js"],
+        "builds": ["typescript", "gallery-fixtures"],
+        "requirements": ["node", "npm", "browser"]
+      },
+      {
+        "name": "workspace",
+        "command": ["@node", "--test", "--test-name-pattern=^Gallery scanner protects", "dist/tests/render/gallery-scanner.test.js"],
+        "builds": ["typescript", "gallery-fixtures"],
+        "requirements": ["node", "npm", "browser"]
+      },
+      {
+        "name": "cache",
+        "command": ["@node", "--test", "--test-name-pattern=^Gallery GUI panel caches", "dist/tests/render/gallery-gui.test.js"],
+        "builds": ["typescript", "gallery-fixtures"],
+        "requirements": ["node", "npm", "browser"]
       },
       {
         "name": "exploded",
-        "command": [
-          "@node",
-          "--test",
-          "--test-name-pattern=^Gallery GUI keeps its panels whole",
-          "dist/tests/render/gallery-gui.test.js"
-        ],
-        "builds": [
-          "typescript",
-          "gallery-fixtures"
-        ],
-        "requirements": [
-          "node",
-          "npm",
-          "browser"
-        ]
+        "command": ["@node", "--test", "--test-name-pattern=^Gallery GUI retains presentation layer", "dist/tests/render/gallery-gui-workbench.test.js"],
+        "builds": ["typescript", "gallery-fixtures"],
+        "requirements": ["node", "npm", "browser"]
       },
       {
-        "name": "workbench",
-        "command": [
-          "@node",
-          "--test",
-          "dist/tests/render/gallery-gui-workbench.test.js"
-        ],
-        "builds": [
-          "typescript",
-          "gallery-fixtures"
-        ],
-        "requirements": [
-          "node",
-          "npm",
-          "browser"
-        ]
+        "name": "recovery",
+        "command": ["@node", "--test", "--test-name-pattern=^Gallery GUI keeps stage selections", "dist/tests/render/gallery-gui-workbench.test.js"],
+        "builds": ["typescript", "gallery-fixtures"],
+        "requirements": ["node", "npm", "browser"]
+      },
+      {
+        "name": "presentation",
+        "command": ["@node", "--test", "--test-name-pattern=^Gallery GUI retains presentation on all", "dist/tests/render/gallery-gui-workbench.test.js"],
+        "builds": ["typescript", "gallery-fixtures"],
+        "requirements": ["node", "npm", "browser"]
       }
     ]
   },
@@ -1725,6 +1724,8 @@
       "examples/world-gallery/worlds/gui/",
       "packages/ipp-react/src/gui-kit/",
       "tests/render/gallery-gui-panel.ts",
+      "tests/render/gallery-gui-support.ts",
+      "tests/render/gallery-scanner-support.ts",
       "tests/render/viewer-browser-helper.ts",
       "tests/render/viewer-observation.ts",
       "tests/render/gallery-driver.ts",
@@ -1865,6 +1866,8 @@
       "tools/build_surfaces.mjs",
       "tests/render/tsconfig.surfaces.json",
       "tests/render/surface-fixture.tsx",
+      "tests/render/surface-separators-fixture.ts",
+      "tests/render/surface-separators-scenario.ts",
       "tests/render/surface.test.ts",
       "tests/integration/surface-scenario.ts",
       "tests/integration/surface.test.ts"
@@ -2411,6 +2414,8 @@
       "tests/render/tsconfig.retained-gui.json",
       "tools/build_surface_gui.mjs",
       "tests/render/surface-fixture.tsx",
+      "tests/render/surface-separators-fixture.ts",
+      "tests/render/surface-separators-scenario.ts",
       "tests/performance/retained-gui.ts",
       "tests/integration/surface-scenario.ts"
     ],
@@ -2515,6 +2520,8 @@
       "tests/render/surface-cache-scenario.ts",
       "tests/render/surface-cache.test.ts",
       "tests/render/surface-fixture.tsx",
+      "tests/render/surface-separators-fixture.ts",
+      "tests/render/surface-separators-scenario.ts",
       "tests/render/retained-gui-fixture.tsx",
       "tools/build_surfaces.mjs",
       "tools/build_surface_gui.mjs",
@@ -2764,6 +2771,8 @@
       "tests/integration/plot-3d-scene.ts",
       "tests/integration/plot-capture.ts",
       "tests/integration/scenarios/plots-2d.ts",
+      "tests/integration/scenarios/dense-lines.ts",
+      "tests/performance/chart-data-scenario.ts",
       "tests/integration/scenarios/plots-3d.ts",
       "tests/integration/scenarios/react-plots.ts",
       "tests/integration/scenarios/plot-view-placement.ts",
@@ -2834,11 +2843,58 @@
         ]
       },
       {
+        "name": "dense-native",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern=^dense Plot through native WebSocket/GLES",
+          "target/plots/plots-runtime.test.js"
+        ],
+        "builds": [
+          "plots-fixtures",
+          "gles-host",
+          "font-assets"
+        ],
+        "requirements": [
+          "rust",
+          "node",
+          "npm",
+          "gles"
+        ],
+        "partitionExcludes": [
+          "target/browser-build/render"
+        ]
+      },
+      {
         "name": "browser",
         "command": [
           "@node",
           "--test",
           "--test-name-pattern=^(2d|react) Plot through worker WASM/WebGL",
+          "target/plots/plots-runtime.test.js"
+        ],
+        "builds": [
+          "plots-fixtures",
+          "browser:render",
+          "font-assets"
+        ],
+        "requirements": [
+          "rust",
+          "wasm",
+          "node",
+          "npm",
+          "browser"
+        ],
+        "partitionExcludes": [
+          "target/gles-host"
+        ]
+      },
+      {
+        "name": "dense-browser",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern=^dense Plot through worker WASM/WebGL",
           "target/plots/plots-runtime.test.js"
         ],
         "builds": [

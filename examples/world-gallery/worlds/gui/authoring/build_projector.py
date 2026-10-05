@@ -20,6 +20,11 @@ ROOT = AUTHORING.parents[4]
 ASSETS = ROOT / "target" / "gallery-gui-assets" / "projector"
 ARTIFACTS = ROOT / "target" / "projector-authoring"
 PARTS = {}
+POSES = tuple(
+    f"{shape}-{facing}"
+    for shape in ("cylinder", "sphere")
+    for facing in ("outside", "inside")
+)
 PROJECTION = {
     "cubeScale": 2.2,
     "frustumScale": 1,
@@ -31,6 +36,8 @@ PROJECTION = {
     "farCornerSpan": [0.119, 0.119],
     "cornerCurve": "quadratic-bezier",
     "cornerSegments": 6,
+    "edgeSegments": 32,
+    "surfaceRadius": 8,
     "uv": "U around the perimeter, V from 0 at the port to 1 at the panel",
 }
 COMPOSITION = {
@@ -586,7 +593,7 @@ def rounded_profile(half_size, corner_span):
         ((-width, -height + ry), (-width, -height), (-width + rx, -height)),
     ]
     points = []
-    for start, control, end in corners:
+    for index, (start, control, end) in enumerate(corners):
         for step in range(PROJECTION["cornerSegments"] + 1):
             t = step / PROJECTION["cornerSegments"]
             points.append(
@@ -597,7 +604,25 @@ def rounded_profile(half_size, corner_span):
                     for i in range(2)
                 )
             )
+        next_start = corners[(index + 1) % len(corners)][0]
+        for step in range(1, PROJECTION["edgeSegments"]):
+            t = step / PROJECTION["edgeSegments"]
+            points.append(tuple((1 - t) * end[i] + t * next_start[i] for i in range(2)))
     return points
+
+
+def curved_endpoint(point, shape, facing):
+    """Apply the Surface chart before the shared panel scale and rigid placement."""
+    x, y = point
+    radius = PROJECTION["surfaceRadius"] * COMPOSITION["surface"]["scale"]
+    curvature = (1 if facing == "outside" else -1) / radius
+    angle = curvature * (x if shape == "cylinder" else math.hypot(x, y))
+    sinc = math.sin(angle) / angle if angle else 1
+    return (
+        x * sinc,
+        y if shape == "cylinder" else y * sinc,
+        PROJECTION["farZ"] - 2 * math.sin(angle / 2) ** 2 / curvature,
+    )
 
 
 def build_frustum():
@@ -615,29 +640,50 @@ def build_frustum():
         for profile, z in [(near_profile, near), (far_profile, far)]
         for x, y in profile
     ]
-    faces = [
-        (i, (i + 1) % count, (i + 1) % count + count, i + count) for i in range(count)
-    ]
+    # Explicit triangles freeze correspondence even when a target bends the quads.
+    faces = []
+    for i in range(count):
+        j = (i + 1) % count
+        faces.extend(((i, j + count, j), (i, i + count, j + count)))
     perimeter = [0.0]
     for i, point in enumerate(far_profile):
         other = far_profile[(i + 1) % count]
         perimeter.append(perimeter[-1] + math.dist(point, other))
     mat = material("Runtime projection volume", (0.04, 0.6, 0.8))
     mat["ipp_unlit"] = True
-    obj = mesh("frustum", vertices, faces, mat)
+    data = bpy.data.meshes.new("frustum")
+    data.from_pydata([blender_point(v) for v in vertices], [], faces)
+    data.materials.append(mat)
+    data.update()
+    obj = bpy.data.objects.new("frustum", data)
+    bpy.context.collection.objects.link(obj)
     obj["ipp_id"] = "gui-projector-frustum"
     layer = obj.data.uv_layers.new(name="Projection coordinates")
     for face in obj.data.polygons:
         for loop_index in face.loop_indices:
             vertex = obj.data.vertices[obj.data.loops[loop_index].vertex_index]
-            next_corner = vertex.index % count != face.index
-            u = perimeter[face.index + int(next_corner)] / perimeter[-1]
+            side = face.index // 2
+            next_corner = vertex.index % count != side
+            u = perimeter[side + int(next_corner)] / perimeter[-1]
             # The maintained exporter flips Blender V to runtime's top-left basis.
             layer.data[loop_index].uv = (u, 1 - (-vertex.co.y - near) / (far - near))
     PARTS["frustum"] = obj
+    for pose in POSES:
+        shape, facing = pose.split("-")
+        target = obj.copy()
+        target.data = obj.data.copy()
+        target.name = f"frustum-{pose}"
+        target["ipp_id"] = f"gui-projector-{target.name}"
+        bpy.context.collection.objects.link(target)
+        target.shape_key_add(name="Basis")
+        key = target.shape_key_add(name=f"{shape.title()} {facing}")
+        key.value = 0
+        for index, point in enumerate(far_profile, count):
+            key.data[index].co = blender_point(curved_endpoint(point, shape, facing))
+        PARTS[target.name] = target
 
 
-def mesh_report(data, projection=False):
+def mesh_report(data, projection=False, pose=False):
     version, count, indices, attributes = struct.unpack_from("<4I", data, 4)
     assert data[:4] == b"IPPM" and version == 3 and count == indices
     offset = 20 + attributes * 8
@@ -649,7 +695,7 @@ def mesh_report(data, projection=False):
         assert reserved == 0 and fmt in (1, 2)
         streams[semantic] = struct.unpack_from(f"<{size // 4}f", data, offset)
         offset += size
-    assert set(streams) == {0, 2, 4}
+    assert set(streams) == ({0, 4} if pose else {0, 2, 4})
     assert len(data) == offset + indices * 2
     assert all(math.isfinite(v) for stream in streams.values() for v in stream)
     normals = streams[4]
@@ -657,10 +703,22 @@ def mesh_report(data, projection=False):
         abs(sum(normals[i + j] ** 2 for j in range(3)) - 1) < 2e-4
         for i in range(0, len(normals), 3)
     )
-    assert all(-1e-5 <= value <= 1.00001 for value in streams[2])
+    assert all(-1e-5 <= value <= 1.00001 for value in streams.get(2, ()))
     positions = streams[0]
+    if projection or pose:
+        # Camera rays shade the exit wall only: every ordinary triangle faces inward.
+        for triangle in range(0, count, 3):
+            points = [
+                positions[(triangle + index) * 3 : (triangle + index + 1) * 3]
+                for index in range(3)
+            ]
+            a = [points[1][axis] - points[0][axis] for axis in range(3)]
+            b = [points[2][axis] - points[0][axis] for axis in range(3)]
+            normal = (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2])
+            centre = [sum(point[axis] for point in points) / 3 for axis in range(2)]
+            assert sum(normal[axis] * centre[axis] for axis in range(2)) < 0
     if projection:
-        assert count == 24 * (PROJECTION["cornerSegments"] + 1)
+        assert count == 24 * (PROJECTION["cornerSegments"] + PROJECTION["edgeSegments"])
         # The runtime dust sprites address the frustum's vertices by index.
         assert struct.unpack_from(f"<{indices}H", data, offset) == tuple(range(indices))
         for triangle in range(0, count, 3):
@@ -681,8 +739,51 @@ def mesh_report(data, projection=False):
             [min(positions[axis::3]) for axis in range(3)],
             [max(positions[axis::3]) for axis in range(3)],
         ],
-        "attributes": ["position", "uv", "normal"],
+        "attributes": ["position", "normal"] if pose else ["position", "uv", "normal"],
     }
+
+
+def verify_pose(basis, target, pose):
+    """Verify emitted corners independently of the authoring transform recipe."""
+
+    def positions(data):
+        _, count, indices, attributes = struct.unpack_from("<4I", data, 4)
+        offset = 20 + 8 * attributes
+        position_bytes = struct.unpack_from("<I", data, 24)[0]
+        values = struct.unpack_from(f"<{position_bytes // 4}f", data, offset)
+        payload_end = offset + sum(
+            struct.unpack_from("<I", data, 24 + i * 8)[0] for i in range(attributes)
+        )
+        return list(zip(*(iter(values),) * 3)), data[payload_end:], count, indices
+
+    base, base_indices, count, indices = positions(basis)
+    posed, target_indices, target_count, target_count_indices = positions(target)
+    assert (target_count, target_count_indices) == (count, indices)
+    assert target_indices == base_indices
+    shape, facing = pose.split("-")
+    scale = COMPOSITION["surface"]["scale"]
+    radius = PROJECTION["surfaceRadius"]
+    sign = 1 if facing == "outside" else -1
+    far_count = 0
+    for original, actual in zip(base, posed, strict=True):
+        x, y, z = original
+        if abs(z - PROJECTION["nearZ"]) < 1e-5:
+            assert original == actual
+            continue
+        assert abs(z - PROJECTION["farZ"]) < 1e-5
+        x, y = x / scale, y / scale
+        arc = x if shape == "cylinder" else math.hypot(x, y)
+        angle = arc / radius
+        chord = radius * math.sin(angle)
+        ratio = chord / arc if arc else 1
+        expected = (
+            x * ratio * scale,
+            (y if shape == "cylinder" else y * ratio) * scale,
+            PROJECTION["farZ"] + sign * radius * (math.cos(angle) - 1) * scale,
+        )
+        assert max(abs(a - b) for a, b in zip(actual, expected, strict=True)) < 2e-6
+        far_count += 1
+    assert far_count == count // 2
 
 
 def export(output_directory=ASSETS, verify=False, projection_only=False):
@@ -692,7 +793,7 @@ def export(output_directory=ASSETS, verify=False, projection_only=False):
     payloads = {}
 
     def write_asset(path, data):
-        if verify or (projection_only and path.name != "frustum.ippm"):
+        if verify or (projection_only and not path.name.startswith("frustum")):
             assert path.read_bytes() == data, f"Regenerated asset differs: {path.name}"
         else:
             path.write_bytes(data)
@@ -725,6 +826,7 @@ def export(output_directory=ASSETS, verify=False, projection_only=False):
             "excluded": ["projector", "frustum", "panel"],
         },
         "parts": {},
+        "poses": {},
     }
     for entity in snapshot["entities"]:
         name = entity["name"]
@@ -745,6 +847,23 @@ def export(output_directory=ASSETS, verify=False, projection_only=False):
             1.0,
         ]
         data = payloads[entity["mesh"]["source"]]
+        if name.startswith("frustum-"):
+            # Each authoring object has exactly one key; the ordinary exporter owns
+            # endpoint extraction. Their bases must be byte-identical, not remeshed.
+            assert data == (output_directory / "frustum.ippm").read_bytes()
+            target_data = payloads[entity["mesh_pose"]["source"]]
+            assert entity["mesh_pose"]["weight"] == 0
+            pose_name = name.removeprefix("frustum-")
+            verify_pose(data, target_data, pose_name)
+            report = mesh_report(target_data, pose=True)
+            report.update(
+                mesh=f"{name}.ippm",
+                bytes=len(target_data),
+                sha256=hashlib.sha256(target_data).hexdigest(),
+            )
+            write_asset(output_directory / report["mesh"], target_data)
+            manifest["poses"][pose_name] = report
+            continue
         path = output_directory / f"{name}.ippm"
         write_asset(path, data)
         report = mesh_report(data, projection=name == "frustum")
@@ -778,7 +897,7 @@ def export(output_directory=ASSETS, verify=False, projection_only=False):
     if verify:
         assert json.loads((output_directory / "projector.json").read_text()) == manifest
         print(
-            "PROJECTOR_VERIFY all seven meshes and three textures match the saved blend"
+            "PROJECTOR_VERIFY seven basis meshes, four poses and three textures match the saved blend"
         )
     else:
         (output_directory / "projector.json").write_text(
@@ -801,18 +920,29 @@ def main():
         args.output_directory.mkdir(parents=True, exist_ok=True)
     if args.refresh_projection:
         bpy.context.preferences.filepaths.save_version = 0
-        bpy.data.objects.remove(bpy.data.objects["frustum"], do_unlink=True)
+        for name in ("frustum", *(f"frustum-{pose}" for pose in POSES)):
+            if name in bpy.data.objects:
+                bpy.data.objects.remove(bpy.data.objects[name], do_unlink=True)
         build_frustum()
         for name in ("shell", "trim", "aperture", "lens", "base", "floor"):
             PARTS[name] = bpy.data.objects[name]
         hidden = {obj.name: obj.hide_render for obj in bpy.context.scene.objects}
         export(args.output_directory, projection_only=True)
         for obj in bpy.context.scene.objects:
-            obj.hide_render = hidden[obj.name] or obj.name == "frustum"
+            obj.hide_render = hidden[obj.name] or obj.name.startswith("frustum")
         bpy.ops.wm.save_as_mainfile(filepath=str(AUTHORING / "projector.blend"))
         return
     if args.verify_export or args.export_only:
-        for name in ("shell", "trim", "aperture", "lens", "base", "floor", "frustum"):
+        for name in (
+            "shell",
+            "trim",
+            "aperture",
+            "lens",
+            "base",
+            "floor",
+            "frustum",
+            *(f"frustum-{pose}" for pose in POSES),
+        ):
             PARTS[name] = bpy.data.objects[name]
         export(args.output_directory, verify=args.verify_export)
         return
@@ -876,7 +1006,7 @@ def main():
     build_frustum()
     export(args.output_directory)
     for obj in scene.objects:
-        obj.hide_render = obj.name == "frustum"
+        obj.hide_render = obj.name.startswith("frustum")
     # Preview uses the baked scenery as emission so it is not lit twice.
     for mat in (base_material, floor_material, live):
         nodes, links = mat.node_tree.nodes, mat.node_tree.links

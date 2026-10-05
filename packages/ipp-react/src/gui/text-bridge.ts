@@ -64,6 +64,8 @@ export interface TextBridgeCommitted {
   readonly caretUtf8: number;
   readonly anchorUtf8: number | null;
   readonly composing?: boolean;
+  /** Mask native presentation while preserving the editable Unicode buffer. */
+  readonly masked?: boolean;
   /** Runtime fence stamped on edits made against this text. */
   readonly fence?: GuiTextFence;
 }
@@ -268,6 +270,7 @@ export function createTextBridgeModel(session: bigint): TextBridgeModel {
     left.fence.target.incarnation === right.fence.target.incarnation &&
     left.fence.generation === right.fence.generation &&
     left.text === right.text &&
+    left.masked === right.masked &&
     left.selectionStart === right.selectionStart &&
     left.selectionEnd === right.selectionEnd &&
     left.composition?.text === right.composition?.text &&
@@ -298,11 +301,13 @@ export function createTextBridgeModel(session: bigint): TextBridgeModel {
           anchorUtf8:
             start + clampUtf8Offset(composition.text, composition.caretStart),
           composing: true,
+          masked: current.masked,
           fence: textFenceOf(current),
         };
       }
       return {
         text: current.text,
+        masked: current.masked,
         caretUtf8: clampUtf8Offset(current.text, current.selectionEnd),
         anchorUtf8: clampUtf8Offset(current.text, current.selectionStart),
         fence: textFenceOf(current),
@@ -628,6 +633,7 @@ export function attachTextBridge(
         lastSentSelection = null;
         withSuppressedSelection(() => {
           area.value = "";
+          area.style.removeProperty("-webkit-text-security");
         });
         return true;
       }
@@ -637,6 +643,10 @@ export function attachTextBridge(
         end: committed.caretUtf8,
       };
       withSuppressedSelection(() => {
+        area.style.setProperty(
+          "-webkit-text-security",
+          committed.masked ? "disc" : "none",
+        );
         if (
           committed.composing &&
           ime.isComposing() &&

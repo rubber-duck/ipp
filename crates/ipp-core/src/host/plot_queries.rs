@@ -24,7 +24,7 @@ impl HostRuntime {
             .iter()
             .enumerate()
             .filter(|(_, hit)| layer.is_none_or(|layer| hit.layer == layer))
-            .map(|(index, hit)| (hit.layer, hit.order, true, index))
+            .map(|(index, hit)| (hit.order, true, index))
             .collect();
         candidates.extend(
             canvas
@@ -35,13 +35,13 @@ impl HostRuntime {
                     CanvasPaintEntry::Attachment(slot)
                         if layer.is_none_or(|layer| slot.layer == layer) =>
                     {
-                        Some((slot.layer, index as u32, false, index))
+                        Some((index as u32, false, index))
                     }
                     _ => None,
                 }),
         );
-        candidates.sort_by_key(|candidate| (candidate.0, candidate.1));
-        for (_, _, plot, index) in candidates.into_iter().rev() {
+        candidates.sort_by_key(|candidate| candidate.0);
+        for (_, plot, index) in candidates.into_iter().rev() {
             if plot {
                 let mark = &canvas.plot_hits[index];
                 if let Some(row) = mark.pick(point) {
@@ -166,21 +166,27 @@ impl HostRuntime {
         let canvas = self
             .output(child.id, output)
             .and_then(|chunk| chunk.data::<CanvasPublication>());
-        let layers = canvas.map_or(&[0][..], |canvas| canvas.layers.as_ref());
+        let base = [crate::systems::canvas::CanvasLayerPlane {
+            id: 0,
+            offset: 0.0,
+        }];
+        let layers = canvas
+            .filter(|_| edge.layer_spacing != 0.0)
+            .map_or(&base[..], |canvas| canvas.layers.as_ref());
         let geometry = edge
             .surface_geometry
             .as_ref()
             .ok_or(ErrorReason::InvalidGeometry)?;
         let offsets = layers
             .iter()
-            .map(|&rank| f64::from(rank) * f64::from(edge.layer_spacing))
+            .map(|plane| plane.offset * f64::from(edge.layer_spacing))
             .fold([0.0_f64; 2], |range, offset| {
                 [range[0].min(offset), range[1].max(offset)]
             });
         geometry.validate_offsets(offsets)?;
         let mut nearest: Option<PublishedSceneHit> = None;
-        for &layer in layers.iter().rev() {
-            let offset = f64::from(layer) * f64::from(edge.layer_spacing);
+        for layer in layers.iter().rev() {
+            let offset = layer.offset * f64::from(edge.layer_spacing);
             for intersection in
                 geometry.ray_intersections(&local, offset, crate::SurfaceDomain::Content)?
             {
@@ -215,7 +221,7 @@ impl HostRuntime {
                             point[1] * canvas.logical_extent[1],
                         ],
                         path,
-                        (edge.layer_spacing != 0.0).then_some(layer),
+                        (edge.layer_spacing != 0.0).then_some(layer.id),
                     )?
                 } else if let Some(camera) = self
                     .output(child.id, output)

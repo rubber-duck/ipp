@@ -188,6 +188,7 @@ test("native close listeners observe terminal state before reentrant sends", asy
       generation: 1n,
     },
     text: "owned",
+    masked: false,
     selectionStart: 5,
     selectionEnd: 5,
   });

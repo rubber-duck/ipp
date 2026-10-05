@@ -10,6 +10,17 @@ import {
 } from "../browser/environment.js";
 import { encodePng } from "../render/retained-gui-images.js";
 
+interface TransitionImage {
+  label: string;
+  width: number;
+  height: number;
+  pixels: number[];
+  sequence: bigint;
+}
+interface TransitionFrames {
+  ippTransitionImages?: (TransitionImage | null)[];
+}
+
 const { values } = parseArgs({
   options: {
     backend: { type: "string" },
@@ -24,9 +35,10 @@ const projected = values.projected;
 if (
   projected !== undefined &&
   projected !== "advanced" &&
-  projected !== "recovery"
+  projected !== "recovery" &&
+  projected !== "transitions"
 )
-  throw new Error("Select --projected advanced or recovery");
+  throw new Error("Select --projected advanced, recovery or transitions");
 const instrumentation = projected === "recovery";
 const eglDirectory = values["egl-dir"];
 if (native && !eglDirectory)
@@ -66,78 +78,155 @@ for (const variant of native || instrumentation
           operationTimeoutMs: 210_000,
         },
         context.signal,
-        async (environment) =>
-          environment.execute("react-gui-authoring-paint", {}, () =>
-            environment.page.evaluate(
-              async ({ urls, native, variant, projected }) => {
-                const contract = await import(urls.generated);
-                const scenario = await import(
-                  `${urls.origin}/target/react-gui-authoring/paint-${variant}.js`
-                );
-                const transport = native
-                  ? scenario.nativePresentationTransport(
-                      native.url,
-                      native.presentationUrl,
-                    )
-                  : scenario.workerTransport(
-                      urls.workerScript,
-                      urls.wasm,
-                      contract.MAX_MESSAGE_BYTES,
-                      { canvas: new OffscreenCanvas(96, 64) },
-                    );
-                const host =
-                  await contract.IppHostClient.connectTransport(transport);
-                try {
-                  const load = async (path: string) =>
-                    new Uint8Array(
-                      await (
-                        await fetch(`${urls.origin}/${path}`)
-                      ).arrayBuffer(),
-                    );
-                  const assets = {
-                    font: await load("target/font-assets/shure-tech-mono.ippf"),
-                    drawing: await load("target/surface-assets/icon.ippd"),
-                    bitmap: await load("target/surface-assets/badge.ippt"),
-                  };
-                  if (projected)
-                    return {
-                      advanced: await scenario.guiProjectedAdvanced(
-                        host,
-                        contract,
-                        assets,
-                        projected === "recovery",
-                      ),
-                    };
-                  const paint = await scenario.guiPaint(host, contract, assets);
-                  const layers = paint.failure
-                    ? null
-                    : await scenario.guiLayers(host, contract);
-                  const overlays = layers?.failure
-                    ? null
-                    : await scenario.guiOverlays(host, contract);
-                  const projectedResult = overlays?.failure
-                    ? null
-                    : await scenario.guiProjectedSurfaces(
-                        host,
-                        contract,
-                        assets,
+        async (environment) => {
+          const value = await environment.execute(
+            "react-gui-authoring-paint",
+            {},
+            () =>
+              environment.page.evaluate(
+                async ({ urls, native, variant, projected }) => {
+                  const contract = await import(urls.generated);
+                  const scenario = await import(
+                    `${urls.origin}/target/react-gui-authoring/paint-${variant}.js`
+                  );
+                  const transport = native
+                    ? scenario.nativePresentationTransport(
+                        native.url,
+                        native.presentationUrl,
+                      )
+                    : scenario.workerTransport(
+                        urls.workerScript,
+                        urls.wasm,
+                        contract.MAX_MESSAGE_BYTES,
+                        { canvas: new OffscreenCanvas(96, 64) },
                       );
-                  return {
-                    ...paint,
-                    layers,
-                    overlays,
-                    projected: projectedResult,
-                  };
-                } finally {
-                  await host.close();
-                }
-              },
-              { urls: environment.urls, native, variant, projected },
-            ),
-          ),
+                  const host =
+                    await contract.IppHostClient.connectTransport(transport);
+                  try {
+                    const load = async (path: string) =>
+                      new Uint8Array(
+                        await (
+                          await fetch(`${urls.origin}/${path}`)
+                        ).arrayBuffer(),
+                      );
+                    const assets = {
+                      font: await load(
+                        "target/font-assets/shure-tech-mono.ippf",
+                      ),
+                      drawing: await load("target/surface-assets/icon.ippd"),
+                      bitmap: await load("target/surface-assets/badge.ippt"),
+                    };
+                    if (projected === "transitions") {
+                      const transitions = await scenario
+                        .guiLayerTransitions(host, contract)
+                        .catch((error: unknown) => ({
+                          failure: `Scenario setup or cleanup failed: ${error instanceof Error ? error.message : String(error)}`,
+                          images: [],
+                          observations: [
+                            {
+                              error:
+                                error instanceof Error
+                                  ? error.stack
+                                  : String(error),
+                            },
+                          ],
+                        }));
+                      // Keep large pixel arrays outside CDP's by-value result graph.
+                      // The owned browser transfers one frame at a time below.
+                      (globalThis as TransitionFrames).ippTransitionImages =
+                        transitions.images;
+                      return {
+                        transitions: {
+                          ...transitions,
+                          images: transitions.images.map(
+                            ({ pixels, ...image }: TransitionImage) => image,
+                          ),
+                        },
+                      };
+                    }
+                    if (projected)
+                      return {
+                        advanced: await scenario.guiProjectedAdvanced(
+                          host,
+                          contract,
+                          assets,
+                          projected === "recovery",
+                        ),
+                      };
+                    const paint = await scenario.guiPaint(
+                      host,
+                      contract,
+                      assets,
+                    );
+                    const layers = paint.failure
+                      ? null
+                      : await scenario.guiLayers(host, contract);
+                    const overlays = layers?.failure
+                      ? null
+                      : await scenario.guiOverlays(host, contract);
+                    const projectedResult = overlays?.failure
+                      ? null
+                      : await scenario.guiProjectedSurfaces(
+                          host,
+                          contract,
+                          assets,
+                        );
+                    return {
+                      ...paint,
+                      layers,
+                      overlays,
+                      projected: projectedResult,
+                    };
+                  } finally {
+                    await host.close();
+                  }
+                },
+                { urls: environment.urls, native, variant, projected },
+              ),
+          );
+          if (value?.transitions) {
+            const captures = resolve(
+              environment.evidence.directory,
+              "captures",
+            );
+            await mkdir(captures, { recursive: true });
+            for (
+              let index = 0;
+              index < value.transitions.images.length;
+              index++
+            ) {
+              const frame = await environment.page.evaluate((index) => {
+                const images = (globalThis as TransitionFrames)
+                  .ippTransitionImages!;
+                const image = images[index]!;
+                images[index] = null;
+                // A byte string avoids serializing half a million JS numbers.
+                let encoded = "";
+                for (let start = 0; start < image.pixels.length; start += 8192)
+                  encoded += String.fromCharCode(
+                    ...image.pixels.slice(start, start + 8192),
+                  );
+                const { pixels, ...metadata } = image;
+                return { ...metadata, pixelsBase64: btoa(encoded) };
+              }, index);
+              await writeFile(
+                resolve(captures, `${frame.label}.png`),
+                encodePng({
+                  ...frame,
+                  pixels: Buffer.from(frame.pixelsBase64, "base64"),
+                }),
+              );
+            }
+            await environment.page.evaluate(() => {
+              delete (globalThis as TransitionFrames).ippTransitionImages;
+            });
+          }
+          return value;
+        },
       );
+      assert.ok(result.value, "Browser did not serialize the scenario result");
       const captures = resolve(result.evidenceDirectory, "captures");
-      await mkdir(captures);
+      await mkdir(captures, { recursive: true });
       for (const image of [
         ...(result.value.images ?? []),
         ...(result.value.advanced?.images ?? []),
@@ -150,6 +239,15 @@ for (const variant of native || instrumentation
           resolve(captures, `${image.label}.png`),
           encodePng({ ...image, pixels: Uint8Array.from(image.pixels) }),
         );
+      if (result.value.transitions) {
+        await writeFile(
+          resolve(captures, "transition-observations.json"),
+          `${JSON.stringify(result.value.transitions.observations, (_, value) => (typeof value === "bigint" ? value.toString() : value), 2)}\n`,
+        );
+        assert.equal(result.value.transitions.failure, null);
+        assert.equal(result.value.transitions.images.length, 31);
+        return;
+      }
       if (result.value.advanced) {
         await writeFile(
           resolve(captures, "advanced-observations.json"),

@@ -140,6 +140,8 @@ unsafe extern "C" {
 
     fn set_surface_double_sided(enabled: u32) -> u32;
 
+    fn surface_path_texture_limit() -> u32;
+
     fn create_surface_path(
         curves: *const u8,
         curve_count: usize,
@@ -646,6 +648,12 @@ impl RenderDevice for WebGlRenderDevice {
     fn set_surface_double_sided(&mut self, enabled: bool) -> Result<(), RenderError> {
         // SAFETY: The import changes only the current context's scalar rasterization state.
         self.check(unsafe { set_surface_double_sided(u32::from(enabled)) })
+    }
+
+    fn surface_path_texture_limit(&self) -> u32 {
+        // SAFETY: The import reads cached scalar device state, borrows no Rust
+        // memory and cannot retain pointers or reenter Rust.
+        unsafe { surface_path_texture_limit() }
     }
 
     fn create_surface_path(

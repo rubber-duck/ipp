@@ -216,6 +216,7 @@ for (const directory of ["target/gles-host", "target/browser-build/render"]) {
       text: "éa",
       selection_start: 2,
       selection_end: 3,
+      masked: true,
       composition: layout("gui-native-composition", {
         text: "b",
         selection_start: 0,
@@ -241,6 +242,7 @@ for (const directory of ["target/gles-host", "target/browser-build/render"]) {
       text: "éa",
       selectionStart: 2,
       selectionEnd: 3,
+      masked: true,
       composition: { text: "b", caretStart: 0, caretEnd: 1 },
     });
     const edits = [

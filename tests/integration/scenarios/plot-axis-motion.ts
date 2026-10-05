@@ -377,11 +377,13 @@ export async function exercisePlotAxisMotion(
     await readyPlot3d(scene);
     const original = await plot3dView(scene, chart.name),
       binding = await host.setRootOutput(chart.binding.output, EXTENT);
+    // A 10 m view keeps a quarter tick at least 35px inside the 480px viewport
+    // over either complete X/Z boundary route; the numeric glyph is 13px high.
     const cases = [
       {
         axis: 0,
-        initial: camera([5, 0, 10], 0, -0.4, 6),
-        target: camera([5, 5, 0], 2.7, -0.4, 6),
+        initial: camera([5, 0, 10], 0, -0.4, 10),
+        target: camera([5, 5, 0], 2.7, -0.4, 10),
       },
       {
         axis: 1,
@@ -390,8 +392,8 @@ export async function exercisePlotAxisMotion(
       },
       {
         axis: 2,
-        initial: camera([0, 5, 5], -1.2, -0.4, 6),
-        target: camera([10, 0, 5], 1.2, 0.4, 6),
+        initial: camera([0, 5, 5], -1.2, -0.4, 10),
+        target: camera([10, 0, 5], 1.2, 0.4, 10),
       },
     ];
     for (const item of cases) {

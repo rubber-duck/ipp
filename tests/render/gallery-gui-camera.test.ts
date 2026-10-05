@@ -13,18 +13,22 @@ import {
   transform,
 } from "./gallery-driver.js";
 import {
-  PANEL,
   control,
-  controlPoint,
-  controlRegion,
-  gainFraction,
   projectContent,
   type ProjectedPoint,
 } from "./gallery-gui-panel.js";
-import type {
-  GalleryGuiSelector,
-  GalleryGuiState,
-} from "./viewer-browser-helper.js";
+import type { GalleryGuiState } from "./viewer-browser-helper.js";
+import {
+  dropdown,
+  enterWorkspace,
+  find,
+  openSettings,
+  press,
+  selectPresentationPage,
+  spacing,
+  waitApp,
+} from "./gallery-scanner-support.js";
+import { guiApplication } from "./gallery-gui-support.js";
 
 const environment = {
   ...galleryEnvironment,
@@ -62,7 +66,7 @@ function cameraChanged(before: Record<string, unknown>, after: Inspection) {
   );
 }
 
-test("GUI demo routing owns panel gestures and admits background camera gestures", {
+test("Scanner GUI owns panel gestures and admits background camera gestures", {
   timeout: 120_000,
 }, async (context) => {
   await runBrowserEnvironment(
@@ -71,46 +75,47 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
     context.signal,
     async (scenario) => {
       const g = await openGallery(scenario, { initialPage: "gui" });
-      await g.page.waitForFunction(
-        () =>
-          document.querySelector<HTMLElement>(".viewer-shell")?.dataset.page ===
-            "gui" &&
-          document.querySelector<HTMLOutputElement>("#status")?.dataset
-            .state === "ready",
-      );
-      // The station's first node sync and its toast end before counts
-      // start: their progress and countdown change the panel's paint.
-      await g.page.waitForFunction(
-        () =>
-          document.querySelector("#gui-operation")?.textContent ===
-          "Node sync: complete",
-      );
-      for (const deadline = performance.now() + 15_000; ; ) {
-        const state = await g.call<GalleryGuiState>("galleryGuiState");
-        const closes = state.controls.filter(({ symbol }) =>
-          /^gui-toasts\/[^/]+\/close$/.test(symbol ?? ""),
+      await enterWorkspace(g);
+      await press(g, await find(g, "gui-scan"), 2 * (await spacing(g)));
+      await waitApp(g, (app) => !app.state.autoscan);
+      const chooseShape = async (shape: "FLAT" | "CYLINDER") => {
+        await openSettings(g);
+        // Reduced motion and the paused scanner provide stable cached pixels
+        // for exact camera-only cache work counts.
+        if (
+          shape === "CYLINDER" ||
+          (await guiApplication(g)).state.reducedMotion
+        ) {
+          await selectPresentationPage(g, "STYLE");
+          await press(
+            g,
+            await find(g, "gui-reduced-motion"),
+            5 * (await spacing(g)),
+          );
+          await waitApp(
+            g,
+            (app) => app.state.reducedMotion === (shape === "CYLINDER"),
+          );
+        }
+        await selectPresentationPage(g, "SURFACE");
+        await dropdown(g, "gui-surface-shape", shape);
+        await waitApp(
+          g,
+          (app) => app.state.surfaceShape === shape.toLowerCase(),
         );
-        if (closes.length === 0) break;
-        if (closes.length === 1)
-          try {
-            await g.call(
-              "galleryGuiAction",
-              { role: "button", name: "Dismiss" },
-              { kind: "press" },
-            );
-          } catch (failure) {
-            // The toast may dismiss itself at the end of its time first.
-            if (
-              !(
-                failure instanceof Error &&
-                failure.message.includes("StaleTarget")
-              )
-            )
-              throw failure;
-          }
-        assert.ok(performance.now() < deadline, "the station's toasts stayed");
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      }
+        await press(
+          g,
+          await find(g, "gui-settings-close"),
+          4 * (await spacing(g)),
+        );
+        await waitApp(g, (app) => !app.state.app.settings);
+        await g.page.keyboard.press("Escape");
+        await g.page.mouse.move(0, 0);
+        await g.capture(`camera-${shape.toLowerCase()}-ready`);
+      };
+      // Curved presentation caches each occupied layer. Its near band owns
+      // images, while a flat panel with separated layers presents directly.
+      await chooseShape("CYLINDER");
       await g.page.locator("#ipp-world-canvas").scrollIntoViewIfNeeded();
       const canvas = await g.page.locator("#ipp-world-canvas").boundingBox();
       assert.ok(canvas);
@@ -118,27 +123,42 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
       // their extent in the scene at any canvas size.
       const span = (share: number) => canvas.width * share;
 
-      const point = (
-        role: GalleryGuiSelector["role"],
-        name?: string,
-        x = 0.5,
-      ) =>
-        controlPoint(
+      const point = async (
+        symbol: string,
+        fractionX = 0.5,
+        fractionY = 0.5,
+      ) => {
+        const target = await find(g, symbol);
+        const [x, y, width, height] = target.bounds;
+        const rank =
+          symbol === "gui-pulse"
+            ? 3
+            : symbol === "gui-gain/dial" || symbol === "gui-scan"
+              ? 2
+              : symbol === "gui-password" ||
+                  symbol === "gui-callsign" ||
+                  symbol === "gui-log-open" ||
+                  symbol === "gui-settings-open"
+                ? 1
+                : 0;
+        const [projected] = await projectContent(
           g,
-          { role, ...(name === undefined ? {} : { name }) },
-          x,
-          0.5,
+          [[x + width * fractionX, y + height * fractionY]],
+          rank * (await spacing(g)),
         );
+        assert.ok(projected);
+        return projected;
+      };
       const panelEdge = async () => {
-        const corners = await g.call<ProjectedPoint[]>(
-          "projectGalleryPoints",
-          "gui-demo",
+        const corners = await projectContent(
+          g,
           [
-            [-3.7, 2.4, 0],
-            [3.7, 2.4, 0],
-            [-3.7, -2.4, 0],
-            [3.7, -2.4, 0],
+            [0, 0],
+            [1036, 0],
+            [0, 672],
+            [1036, 672],
           ],
+          3 * (await spacing(g)),
         );
         const bounds = await g.page.locator("#ipp-world-canvas").boundingBox();
         assert.ok(bounds);
@@ -279,26 +299,22 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
         }
         throw new Error(`Camera did not dolly beyond ${minimum} m`);
       };
-      await g.call(
-        "galleryGuiAction",
-        { role: "checkbox", name: "SCAN" },
-        { kind: "toggle" },
-      );
-      await g.page.waitForFunction(
-        () =>
-          document.querySelector("#gui-autoscan")?.textContent === "standby",
-      );
       await new Promise((resolve) => setTimeout(resolve, 550));
       assert.ok(panelDistance(await g.inspect()) < CACHE_DIRECT_DISTANCE);
-      const near = await cacheUntil(
-        "camera-cache-near",
-        (record) => record?.mode === "near",
+      const near = await cacheUntil("camera-cache-near", reusedBand(0));
+      const layerImages =
+        near.record!.residentBytes /
+        (4 * near.record!.width * near.record!.height);
+      assert.equal(
+        layerImages,
+        4,
+        "workspace should cache its four occupied layers",
       );
       const bandOneDistance = await dollyOut(CACHE_DIRECT_DISTANCE * 1.2);
       assert.ok(bandOneDistance < 2 * CACHE_DIRECT_DISTANCE);
       const bandOne = await cacheUntil("camera-cache-band1", reusedBand(1));
-      assert.equal(bandOne.allocations - near.allocations, 1);
-      assert.equal(bandOne.repaints - near.repaints, 1);
+      assert.equal(bandOne.allocations - near.allocations, layerImages);
+      assert.equal(bandOne.repaints - near.repaints, layerImages);
       edge = await panelEdge();
       const beforeOrbit = transform(await g.inspect());
       await g.drag(edge.outside, [
@@ -317,47 +333,49 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
       assert.equal(orbited.repaints - bandOne.repaints, 0);
       assert.equal(orbited.allocations - bandOne.allocations, 0);
       assert.equal(orbited.uploaded - bandOne.uploaded, 0);
-      assert.equal(orbited.statistics!.surfaces!.surfaceCacheReuses, 1);
+      assert.equal(
+        orbited.statistics!.surfaces!.surfaceCacheReuses,
+        layerImages,
+      );
       assert.equal(orbited.statistics!.frame.uploadedBytes, 0);
       // Dollying past the next boundary resizes the same image once.
       edge = await panelEdge();
       await dollyOut(2 * CACHE_DIRECT_DISTANCE * 1.2);
       const bandTwo = await cacheUntil("camera-cache-band2", reusedBand(2));
-      assert.equal(bandTwo.allocations - orbited.allocations, 1);
-      assert.equal(bandTwo.repaints - orbited.repaints, 1);
+      assert.equal(bandTwo.allocations - orbited.allocations, layerImages);
+      assert.equal(bandTwo.repaints - orbited.repaints, layerImages);
       assert.deepEqual(
         [bandTwo.record?.width, bandTwo.record?.height],
         expectedCacheSize(2),
       );
       assert.equal(
         bandTwo.statistics!.surfaces!.surfaceCacheResidentBytes,
-        4 * expectedCacheSize(2)[0] * expectedCacheSize(2)[1],
+        4 * layerImages * expectedCacheSize(2)[0] * expectedCacheSize(2)[1],
       );
       await g.page.locator("#reset-camera").click();
-      await cacheUntil(
-        "camera-cache-reset",
-        (record) => record?.mode === "near",
-      );
-      await g.call(
-        "galleryGuiAction",
-        { role: "checkbox", name: "SCAN" },
-        { kind: "toggle" },
-      );
-      await g.page.waitForFunction(
-        () =>
-          document.querySelector("#gui-autoscan")?.textContent === "enabled",
-      );
-
-      const [titleX, titleY, titleWidth, titleHeight] = PANEL.telemetryTitle;
-      const [header] = await projectContent(g, [
-        [titleX + titleWidth / 2, titleY + titleHeight / 2],
-      ]);
+      await cacheUntil("camera-cache-reset", reusedBand(0));
+      await chooseShape("FLAT");
+      // Decorative header content owns a press even though it is no control.
+      const [header] = await projectContent(g, [[220, 46]]);
       assert.ok(header);
       edge = await panelEdge();
       await unchangedAfterDrag([header.clientX, header.clientY], edge.outside);
 
-      const sliderStart = await point("slider", undefined, gainFraction(0.25));
-      const sliderEnd = await point("slider", undefined, gainFraction(0.75));
+      const gainSelector = {
+        role: "slider",
+        symbol: "gui-gain/dial",
+      } as const;
+      const dial = await find(g, gainSelector.symbol);
+      const [dialX, dialY, dialWidth, dialHeight] = dial.bounds;
+      // A dial spans its range over 2.5 sides of vertical pointer travel.
+      const dialTravel = 2.5 * Math.min(dialWidth, dialHeight);
+      const sliderStart = await point(gainSelector.symbol);
+      const [sliderEnd] = await projectContent(
+        g,
+        [[dialX + dialWidth / 2, dialY + dialHeight / 2 - 0.65 * dialTravel]],
+        2 * (await spacing(g)),
+      );
+      assert.ok(sliderEnd);
       await unchangedAfterDrag(
         [sliderStart.clientX, sliderStart.clientY],
         [sliderEnd.clientX, sliderEnd.clientY],
@@ -366,19 +384,26 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
       // Keep a real browser pointer held while replaying a high-rate move
       // stream. Six Playwright drag steps did not expose the request backlog
       // caused by updating hundreds of waveform decoration nodes per gain edit.
-      await g.call(
-        "galleryGuiAction",
-        { role: "slider" },
-        { kind: "scalar", value: 0.1 },
-      );
+      await g.call("galleryGuiAction", gainSelector, {
+        kind: "scalar",
+        value: 0.1,
+      });
       const beforeStream = transform(await g.inspect());
       await g.capture("sustained-slider-before");
-      const sliderRegion = await controlRegion(
+      const dialCorners = await projectContent(
         g,
-        { role: "slider" },
-        0.02,
-        0.08,
+        [
+          [dialX, dialY],
+          [dialX + dialWidth, dialY + dialHeight],
+        ],
+        2 * (await spacing(g)),
       );
+      const sliderRegion = [
+        Math.min(...dialCorners.map((p) => p.x)),
+        Math.min(...dialCorners.map((p) => p.y)),
+        Math.max(...dialCorners.map((p) => p.x)),
+        Math.max(...dialCorners.map((p) => p.y)),
+      ];
       // Accumulated render work since the worker started, read at a frame.
       const renderTotals = async (label: string) => {
         const { frame } = await g.call<{
@@ -449,16 +474,9 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
       }>("finishGalleryGuiInputObservation");
       await scenario.evidence.record("sustained-slider-input", inputStream);
 
-      // Each drag frame commits a slider value, and GUI input frames restore
-      // animated values before admitting it. Neither may repaint or
-      // re-upload panels the drag did not touch: per frame, rebuilds stay
-      // within the slider's own background, fill and focus-ring boxes, and
-      // uploads beyond the idle baseline come only from rebuilt batches: a
-      // box rewrites one 192-byte record per quad and the value label
-      // rewrites its glyph batch, one 64-byte record per glyph. Measured on
-      // SwiftShader with separate shape and glyph records (ipp-sfgq.14, run
-      // 2026-10-02): 0.56 rebuilds per drag frame at about 1.6 kB each, so
-      // the bound below holds a margin of about two.
+      // The dial's fill and pointer are retained parameterized shapes;
+      // the readout updates its glyph batch. Keep the former rail scenario's
+      // bounds on per-frame rebuilds and bytes per rebuild for this stream.
       const sliderBoxes = 3;
       const maxBoxUploadBytes = 3072;
       const idleUploadPerTick =
@@ -486,14 +504,16 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
         `${dragExtraUploads} bytes beyond idle for ${dragRebuilds} rebuilt boxes`,
       );
       assert.ok(inputStream.sent >= 362);
+      assert.ok(
+        inputStream.peakPending <= 64,
+        `sustained input retained ${inputStream.peakPending} pending requests`,
+      );
       assert.deepEqual(inputStream.errors, []);
       assert.equal(inputStream.completed, inputStream.sent);
       assert.deepEqual(transform(await g.settle()), beforeStream);
-      await g.page.waitForFunction(
-        () => document.querySelector("#gui-gain")?.textContent === "75%",
-      );
+      await waitApp(g, (app) => Math.abs(app.state.gain - 0.75) < 1e-6);
       const streamed = await g.call<GalleryGuiState>("galleryGuiState");
-      const gain = control(streamed, { role: "slider" }).value;
+      const gain = control(streamed, gainSelector).value;
       assert.equal(gain.kind, "scalar");
       assert.ok(Math.abs(gain.value - 0.75) < 1e-6);
       assert.equal(
@@ -511,12 +531,6 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
       assert.ok(
         sliderPixels.changedPixels > 80,
         "streamed slider value did not reach the rendered thumb",
-      );
-
-      const input = await point("text", "CALLSIGN");
-      await unchangedAfterDrag(
-        [input.clientX - span(0.014), input.clientY],
-        [input.clientX + span(0.033), input.clientY],
       );
 
       await g.call("observeGalleryGuiInput");
@@ -545,9 +559,9 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
       );
 
       edge = await panelEdge();
-      // No ScrollView consumes a wheel over the PULSE button, so the
+      // No ScrollView consumes a wheel over the LOG button, so the
       // runtime reports it unhandled and the camera zooms over the panel.
-      const pulse = await point("button", "PULSE");
+      const pulse = await point("gui-log-open");
       const beforePanelWheel = transform(await g.inspect());
       await g.page.mouse.move(pulse.clientX, pulse.clientY);
       await g.page.mouse.wheel(0, 120);
@@ -563,14 +577,14 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
         cameraChanged(beforeOutsideWheel, inspection),
       );
 
-      const first = await point("button", "PULSE");
-      const second = await point("button", "SYNC");
+      const first = await point("gui-log-open");
+      const second = await point("gui-settings-open");
       // The semantic interaction state names the one hovered control; the
       // skin paints that state, so a stale hover would also keep its look.
-      const hovered = async (name: string) =>
+      const hovered = async (symbol: string) =>
         control(await g.call<GalleryGuiState>("galleryGuiState"), {
           role: "button",
-          name,
+          symbol,
         }).interaction.hovered;
       const burstStarted = performance.now();
       await g.page.locator("#ipp-world-canvas").evaluate(
@@ -606,7 +620,7 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
         ],
       );
       for (;;) {
-        if (await hovered("SYNC")) break;
+        if (await hovered("gui-settings-open")) break;
         assert.ok(
           performance.now() - burstStarted < 550,
           "rapid hover burst retained a stale control",
@@ -614,7 +628,7 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
         await new Promise((resolve) => setTimeout(resolve, 16));
       }
       assert.equal(
-        await hovered("PULSE"),
+        await hovered("gui-log-open"),
         false,
         "rapid hover burst left the earlier control hovered",
       );
@@ -669,12 +683,12 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
         const deadline = performance.now() + 10_000;
         for (;;) {
           const state = await g.call<GalleryGuiState>("galleryGuiState");
-          const slider = control(state, { role: "slider" });
-          const label = await g.page.locator("#gui-gain").textContent();
+          const slider = control(state, gainSelector);
+          const app = await guiApplication(g);
           if (
             slider.value.kind === "scalar" &&
             Math.abs(slider.value.value - expected) < 1e-6 &&
-            label === `${Math.round(expected * 100)}%`
+            Math.abs(app.state.gain - expected) < 1e-6
           )
             return;
           assert.ok(
@@ -685,24 +699,26 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
         }
       };
       const dragBeyondSlider = async (direction: "min" | "max") => {
-        const minimum = await point("slider", undefined, 0.08);
-        const maximum = await point("slider", undefined, 0.92);
-        const vector = [
-          maximum.clientX - minimum.clientX,
-          maximum.clientY - minimum.clientY,
-        ] as const;
-        const start = direction === "max" ? minimum : maximum;
-        const end =
-          direction === "max"
-            ? ([
-                maximum.clientX + vector[0] * 0.45,
-                maximum.clientY + vector[1] * 0.45,
-              ] as const)
-            : ([
-                minimum.clientX - vector[0] * 0.45,
-                minimum.clientY - vector[1] * 0.45,
-              ] as const);
-        await g.drag([start.clientX, start.clientY], end);
+        const target = await find(g, gainSelector.symbol);
+        const [x, y, width, height] = target.bounds;
+        const start = await point(gainSelector.symbol);
+        const [end] = await projectContent(
+          g,
+          [
+            [
+              x + width / 2,
+              y +
+                height / 2 +
+                (direction === "max" ? -1 : 1) * 1.3 * dialTravel,
+            ],
+          ],
+          2 * (await spacing(g)),
+        );
+        assert.ok(end);
+        await g.drag(
+          [start.clientX, start.clientY],
+          [end.clientX, end.clientY],
+        );
       };
       const beforeMaximum = transform(await g.inspect());
       await dragBeyondSlider("max");
@@ -714,6 +730,22 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
       await assertGain(0);
       assert.deepEqual(transform(await g.settle()), beforeMinimum);
       await assertGain(0);
+
+      const beforeLogout = transform(await g.inspect());
+      await press(g, await find(g, "gui-scanner-close"), 0);
+      await waitApp(g, (app) => app.state.app.phase === "login");
+      assert.deepEqual(
+        transform(await g.settle()),
+        beforeLogout,
+        "logging out changed the manual camera pose",
+      );
+      await g.capture("camera-login-after-logout");
+      const input = await point("gui-callsign");
+      await unchangedAfterDrag(
+        [input.clientX - span(0.014), input.clientY],
+        [input.clientX + span(0.033), input.clientY],
+      );
+      await g.capture("camera-login-text-capture");
 
       edge = await panelEdge();
       await g.page.mouse.move(...edge.outside);

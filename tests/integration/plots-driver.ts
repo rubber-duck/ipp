@@ -3,6 +3,7 @@ import type { Client, HostClientBase } from "@ipp/client";
 import { createWorkerHost } from "../../packages/ipp-client/src/worker.js";
 import { createPlotCapture } from "./plot-capture.js";
 import { exercisePlot2d } from "./scenarios/plots-2d.js";
+import { exerciseDenseLines } from "./scenarios/dense-lines.js";
 import { exercisePlot3d } from "./scenarios/plots-3d.js";
 import { reactPlots } from "./scenarios/react-plots.js";
 import { exercisePlotAxisSupport } from "./scenarios/plot-axis-support.js";
@@ -26,7 +27,7 @@ export async function workerPlots(
     wasm: string;
     origin: string;
   },
-  family: "2d" | "3d" | "react" | "view" | "axis" | "axis-motion",
+  family: "2d" | "dense" | "3d" | "react" | "view" | "axis" | "axis-motion",
   offscreen?: PlotOffscreenCase,
   transformed = false,
 ) {
@@ -83,29 +84,37 @@ export async function workerPlots(
     );
     return family === "2d"
       ? await exercisePlot2d(host, contract, font, capture, record)
-      : family === "3d"
-        ? await exercisePlot3d(host, contract, font, capture)
-        : family === "axis-motion"
-          ? await exercisePlotAxisMotion(host, contract, font, capture, record)
-          : family === "axis"
-            ? await exercisePlotAxisSupport(
+      : family === "dense"
+        ? await exerciseDenseLines(host, contract, font, capture, record)
+        : family === "3d"
+          ? await exercisePlot3d(host, contract, font, capture)
+          : family === "axis-motion"
+            ? await exercisePlotAxisMotion(
                 host,
                 contract,
                 font,
                 capture,
                 record,
-                transformed,
               )
-            : family === "view"
-              ? await exercisePlotViewPlacement(
+            : family === "axis"
+              ? await exercisePlotAxisSupport(
                   host,
                   contract,
                   font,
                   capture,
                   record,
-                  offscreen,
+                  transformed,
                 )
-              : await reactPlots(host, contract, font, capture, record);
+              : family === "view"
+                ? await exercisePlotViewPlacement(
+                    host,
+                    contract,
+                    font,
+                    capture,
+                    record,
+                    offscreen,
+                  )
+                : await reactPlots(host, contract, font, capture, record);
   } finally {
     try {
       await connection?.close();

@@ -285,6 +285,14 @@ impl GuiLocalState {
             None => !input.numeric && Arc::ptr_eq(&input.text, &native.state.text),
         };
         if unchanged {
+            if native.state.masked != input.masked {
+                self.native_text
+                    .as_mut()
+                    .expect("native text record")
+                    .state
+                    .masked = input.masked;
+                self.presentation_changed(true);
+            }
             return;
         }
         self.discard_native_edit();

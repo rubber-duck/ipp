@@ -873,8 +873,9 @@ export async function projectGalleryGuiContent(
   points: readonly (readonly [number, number])[],
   depth = 0,
   projection?: Awaited<ReturnType<typeof galleryGuiProjection>>,
+  flush = true,
 ) {
-  await requireCanvas().flush();
+  if (flush) await requireCanvas().flush();
   const { entity, camera, surface, shape, density } =
     projection ?? (await galleryGuiProjection());
   return projectSnapshotPoints(
@@ -921,10 +922,39 @@ function guiSurfacePoint(
 export async function galleryShieldRays(
   points: readonly (readonly [number, number])[],
   depth: number,
+  atLayer?: number,
 ) {
-  const projection = await galleryGuiProjection();
   const client = requireCanvas().client;
+  const density = await galleryGuiDensity();
+  // One public snapshot keeps the animated Surface and shield at the same tick.
   const entities = (await client.inspect()).entities;
+  const entity = entities.find(
+    (item) => item.metadata.symbolicId === GUI_PANEL_ENTITY,
+  );
+  const cameraEntity = entities.find(
+    (item) => item.metadata.symbolicId === "gallery-camera",
+  );
+  if (!entity || !cameraEntity) throw new Error("Missing GUI presentation");
+  const selected = (
+    ["FlatSurface", "CylinderSurface", "SphereSurface"] as const
+  )
+    .map((shape) => ({
+      shape,
+      surface: componentFields(client, entity, shape),
+    }))
+    .find((item) => item.surface !== undefined);
+  if (!selected?.surface) throw new Error("Missing GUI Surface");
+  const projection = {
+    entity,
+    camera: cameraEntity,
+    surface: selected.surface,
+    shape: selected.shape,
+    density,
+  };
+  const effectiveDepth =
+    atLayer === undefined
+      ? depth
+      : atLayer * Number(selected.surface.layer_spacing);
   const shield = entities.find(
     (entity) => entity.metadata.symbolicId === "gui-input-shield",
   );
@@ -964,7 +994,9 @@ export async function galleryShieldRays(
     ]),
   );
   return points.map((point) => {
-    const target = shieldLocal(guiSurfacePoint(projection, point, depth));
+    const target = shieldLocal(
+      guiSurfacePoint(projection, point, effectiveDepth),
+    );
     const direction = target.map((value, axis) => value - origin[axis]!);
     let near = -Infinity;
     let far = Infinity;
@@ -2036,7 +2068,10 @@ export async function captureViewer(
 
 /** Capture presented state without waiting for React reconciliation: the
  * completed draw includes content already admitted when it is requested. */
-export async function captureUnflushedViewer(label: string) {
+export async function captureUnflushedViewer(
+  label: string,
+  includeDataUrl = false,
+) {
   if (!label) throw new Error("Capture label must be nonempty");
   const handle = requireCanvas();
   const view = handle.view;
@@ -2055,7 +2090,12 @@ export async function captureUnflushedViewer(label: string) {
   );
   captures.set(label, { ...frame, pixels: frame.pixels.slice(0) });
   const { pixels: _pixels, ...metadata } = frame;
-  return { label, frame: metadata, summary: summarizeImage(frame) };
+  return {
+    label,
+    frame: metadata,
+    summary: summarizeImage(frame),
+    ...(includeDataUrl ? { dataUrl: await frameDataUrl(frame) } : {}),
+  };
 }
 
 export function analyzePlaneCapture(label: string) {
@@ -2421,6 +2461,83 @@ export async function gallerySceneAction(name: string, args?: unknown) {
   return scene.action(name, args);
 }
 
+/** Sample a naturally playing login lift without controlling either Host clock. */
+export async function captureGalleryLoginLift(
+  label: string,
+  target: bigint,
+  controller: bigint,
+) {
+  const panel = await galleryPanel();
+  const deadline = performance.now() + 5_000;
+  const samples: unknown[] = [];
+  while (performance.now() < deadline) {
+    const [inspection, playback] = await Promise.all([
+      panel.client.inspectPage({ collection: "entities", target, limit: 1 }),
+      panel.client.inspectPage({
+        collection: "controllers",
+        target: controller,
+        limit: 1,
+      }),
+    ]);
+    const card = inspection.entities[0];
+    const transition = card?.components.find(
+      (c) => "previous_layer" in c.fields,
+    )?.fields;
+    samples.push({
+      tick: inspection.tick,
+      time: inspection.time,
+      card,
+      controller: playback.controllers?.[0],
+    });
+    if (samples.length > 8) samples.shift();
+    if (transition && Number(transition.progress) > 0) {
+      const captured = await captureUnflushedViewer(label, true);
+      return { card, captured, samples, app: galleryGuiApplicationState() };
+    }
+    if (
+      galleryGuiApplicationState().state &&
+      (galleryGuiApplicationState().state as { app: { phase: string } }).app
+        .phase === "workspace"
+    )
+      break;
+    await panel.client.waitForFrame(inspection.tick);
+  }
+  throw new Error(
+    "The natural login lift was not observed before workspace opened",
+  );
+}
+
+/** Read-only application observations from the current production mount. */
+export function galleryGuiOptions(): Readonly<Record<string, unknown>> {
+  const scene = (
+    window as Window & {
+      ippGalleryScene?: { options: Readonly<Record<string, unknown>> };
+    }
+  ).ippGalleryScene;
+  if (!scene) throw new Error("No mounted gallery scene");
+  return scene.options;
+}
+
+export function galleryGuiApplicationState() {
+  const scene = (
+    window as Window & {
+      ippGalleryScene?: {
+        controller?: {
+          state: { current: unknown };
+          ready: boolean;
+          error?: string;
+        };
+      };
+    }
+  ).ippGalleryScene;
+  if (!scene?.controller) throw new Error("No mounted GUI controller");
+  return {
+    state: scene.controller.state.current,
+    ready: scene.controller.ready,
+    error: scene.controller.error,
+  };
+}
+
 /** Observe source disposal through the same production Host dataset connection. */
 export async function galleryDatasetExists(name: string): Promise<boolean> {
   try {
@@ -2431,4 +2548,96 @@ export async function galleryDatasetExists(name: string): Promise<boolean> {
       return false;
     throw error;
   }
+}
+
+/** A separate test-owned World stays open while GUI edits are acknowledged. */
+let guiSurvivor:
+  | Awaited<ReturnType<IppCanvasHandle["host"]["openWorld"]>>
+  | undefined;
+let guiSurvivorWorld: WorldReference | undefined;
+
+export async function galleryIndependentWorld(
+  operation: "open" | "observe" | "close",
+) {
+  const host = requireCanvas().host;
+  if (operation === "open") {
+    if (guiSurvivor) throw new Error("GUI survivor World is already open");
+    const created = await host.createWorld({
+      selectedSystems: [],
+      temporary: true,
+    });
+    guiSurvivorWorld = created.reference;
+    guiSurvivor = await host.openWorld(created.reference);
+  }
+  if (!guiSurvivor || !guiSurvivorWorld)
+    throw new Error("GUI survivor World is not open");
+  if (operation === "close") {
+    await guiSurvivor.close();
+    await host.destroyWorld(guiSurvivorWorld);
+    guiSurvivor = undefined;
+    guiSurvivorWorld = undefined;
+    return;
+  }
+  const before = await guiSurvivor.inspect();
+  await guiSurvivor.waitForFrame(before.tick);
+  const after = await guiSurvivor.inspect();
+  if (after.tick <= before.tick)
+    throw new Error("Independent World did not advance on Host frames");
+  return { world: guiSurvivorWorld, before: before.tick, after: after.tick };
+}
+
+/** Brightening evidence excludes the projected panel on the canvas's right. */
+export function galleryStageBrightening(before: string, after: string) {
+  const a = requireCapture(before),
+    b = requireCapture(after);
+  if (a.width !== b.width || a.height !== b.height)
+    throw new Error("Stage comparison changed viewport");
+  const first = new Uint8Array(a.pixels),
+    second = new Uint8Array(b.pixels);
+  let brightened = 0,
+    darkened = 0;
+  for (let y = Math.floor(a.height * 0.5); y < a.height; y++) {
+    for (let x = 0; x < a.width * 0.45; x++) {
+      const at = (y * a.width + x) * 4;
+      const delta = [0, 1, 2].map(
+        (axis) => second[at + axis]! - first[at + axis]!,
+      );
+      if (
+        delta.every((value) => value >= 0) &&
+        delta.reduce((sum, value) => sum + value, 0) > 12
+      )
+        brightened++;
+      if (
+        delta.every((value) => value <= 0) &&
+        delta.reduce((sum, value) => sum + value, 0) < -12
+      )
+        darkened++;
+    }
+  }
+  return { brightened, darkened, width: a.width, height: a.height };
+}
+
+/** Bounded read-only layout evidence for routed-input fixture diagnosis. */
+export async function galleryGuiBoundsEvidence(symbol: string) {
+  const panel = await galleryPanel();
+  const inspection = await panel.client.inspect();
+  const byId = new Map(
+    inspection.entities.map((entity) => [entity.id, entity]),
+  );
+  let entity = inspection.entities.find(
+    (entity) => entity.metadata.symbolicId === symbol,
+  );
+  const ancestry: unknown[] = [];
+  while (entity) {
+    ancestry.push({
+      symbol: entity.metadata.symbolicId,
+      components: entity.components,
+    });
+    entity =
+      entity.link.parent === null ? undefined : byId.get(entity.link.parent);
+  }
+  return {
+    canvas: (await panel.client.inspectPage({ collection: "canvas" })).canvas,
+    ancestry,
+  };
 }

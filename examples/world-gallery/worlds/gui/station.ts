@@ -652,6 +652,10 @@ export function useStation(state: Store<StationView>, inputs: StationInputs) {
       answerPurge,
       uplink,
       startPulse,
+      cancelPulse: () => {
+        pulseRun.current += 1;
+        state.update({ pulse: { state: "idle", value: 0 } });
+      },
       pressRow,
       findNode,
       editNode,

@@ -1,855 +1,435 @@
-/**
- * The gallery dashboard's tools beyond the first panels: the workbench's
- * tabs and the CONTROLS tab's value and selection controls, the SCOPE
- * popover, the TELEMETRY scene tree, FIND and the COLOUR tab's picker,
- * each through real routed input and checked by its effect on the panel,
- * the scope or the 3D scene; and the exploded planes the overlays take.
- *
- * Controls the independent restatement places (the tabs, the TELEMETRY view
- * choice, FIND, the SCOPE trigger) are pressed where it puts them, and their
- * evaluated bounds must agree with it. Controls inside the CONTROLS tab's
- * scrolling column and the overlays' rows are pressed at the bounds the
- * runtime reports, which change with scrolling; their outcome is what the
- * checks assert.
- */
-import type { Inspection } from "@ipp/client";
+/** Scanner settings exercise real scene authoring, curved layers and recovery. */
 import assert from "node:assert/strict";
 import { resolve } from "node:path";
 import test from "node:test";
+import { writeDataUrl } from "./evidence.js";
 import { runBrowserEnvironment } from "../browser/environment.js";
-import { galleryEnvironment, openGallery } from "./gallery-driver.js";
+import { openGallery } from "./gallery-driver.js";
+import { projectContent } from "./gallery-gui-panel.js";
 import {
-  LAYERS,
-  OVERLAYS,
-  PANEL,
-  control,
-  projectContent,
-  type ContentRect,
-  type LogicalRect,
-} from "./gallery-gui-panel.js";
-import {
-  PIXEL_COVERAGE_CANVAS_SHARE,
   dynamicProperty,
-  SKIN_SETTLE_MS,
-  assertPlanes,
-  awaitStationIdle,
   fieldsWith,
-  liftInputShield,
-  toggleLayers,
+  guiApplication,
+  sceneEntity,
   waitForGuiState,
-  type Gallery,
-  type RegionStats,
 } from "./gallery-gui-support.js";
-import type {
-  GalleryGuiControl,
-  GalleryGuiState,
-  GalleryWaveform,
-} from "./viewer-browser-helper.js";
+import {
+  environment,
+  enterWorkspace,
+  find,
+  press,
+  waitApp,
+  openSettings,
+  selectSettingsPage,
+  selectPresentationPage,
+  dropdown,
+  spacing,
+  waitSpacing,
+} from "./gallery-scanner-support.js";
 
-const environment = (name: string) => ({
-  ...galleryEnvironment,
-  evidenceParent: resolve(`target/integration-artifacts/gallery-gui/${name}`),
-});
-
-/** Open the GUI page and wait for the station's first sync, toasts gone. */
-async function openDashboard(
-  scenario: Parameters<Parameters<typeof runBrowserEnvironment>[3]>[0],
-) {
-  const g = await openGallery(scenario, {
-    initialPage: "gui",
-    canvasShare: PIXEL_COVERAGE_CANVAS_SHARE,
-  });
-  await g.page.waitForFunction(
-    () =>
-      document.querySelector<HTMLOutputElement>("#status")?.dataset.state ===
-      "ready",
-  );
-  await awaitStationIdle(g);
-  return g;
-}
-
-/** Press at the centre of a canvas rectangle, on the plane `depth` metres out. */
-async function pressAt(g: Gallery, rect: ContentRect, depth = 0) {
-  const [point] = await projectContent(
-    g,
-    [[rect[0] + rect[2] / 2, rect[1] + rect[3] / 2]],
-    depth,
-  );
-  await g.page.mouse.click(point!.clientX, point!.clientY);
-}
-
-/** The one control `predicate` names. */
-function find(
-  state: GalleryGuiState,
-  predicate: (control: GalleryGuiControl) => boolean,
-  description: string,
-): GalleryGuiControl {
-  const matches = state.controls.filter(predicate);
-  assert.equal(matches.length, 1, `expected one ${description}`);
-  return matches[0]!;
-}
-
-const bySymbol = (symbol: string) => (control: GalleryGuiControl) =>
-  control.symbol === symbol;
-
-const overlayOpen = (state: GalleryGuiState, symbol: string) =>
-  state.overlays.find((overlay) => overlay.symbol === symbol)?.visible === true;
-
-const sidebar = (g: Gallery, selector: string) =>
-  g.page.locator(selector).textContent();
-
-/** A custom material's `energy`, one of its dynamic properties. */
-function energy(inspection: Inspection, symbolicId: string): number {
-  const value = dynamicProperty(inspection, symbolicId, "energy");
-  assert.equal(value.kind, "f32", `${symbolicId}'s energy is not a number`);
-  return Number(value.value);
-}
-
-/** Agree with the restatement to within rounding. */
-function assertAt(control: GalleryGuiControl, expected: ContentRect) {
-  control.bounds.forEach((value, axis) =>
-    assert.ok(
-      Math.abs(value - expected[axis]!) < 0.05,
-      `${control.symbol} lies at ${JSON.stringify(control.bounds)}, not ${JSON.stringify(expected)}`,
-    ),
-  );
-}
-
-/** A label's ink region inside a control rectangle. */
-function labelRegion([x, y, width, height]: ContentRect): LogicalRect {
-  return [x + 12, y + 10, x + width - 12, y + height - 10];
-}
-
-/** Text in the accent (cyan) rather than the text colour (white). */
-function accentText(stats: RegionStats): boolean {
-  return stats.max[0] < 170 && stats.max[1] > 200;
-}
-
-test("Gallery GUI's workbench tabs, value controls, list and popover drive the scene", {
-  timeout: 240_000,
+test("Gallery GUI keeps stage selections valid and corrects rejected scene edits", {
+  timeout: 180_000,
 }, async (context) => {
   await runBrowserEnvironment(
-    "GUI workbench",
-    environment("workbench"),
+    "Scanner declaration recovery",
+    environment("recovery"),
     context.signal,
     async (scenario) => {
-      const g = await openDashboard(scenario);
-      const text = (selector: string) => sidebar(g, selector);
-
-      // The tabs hug their labels where the restatement puts them; the
-      // selected one shows its label in the accent. A press on CONTROLS
-      // selects it, and its label takes the accent from NODES.
-      const tabs = await waitForGuiState(g);
-      (["NODES", "CONTROLS", "COLOUR"] as const).forEach((name, index) =>
-        assertAt(
-          control(tabs, { role: "button", name }),
-          PANEL.tab(index as 0 | 1 | 2),
-        ),
-      );
-      await g.page.mouse.move(1, 1);
-      await new Promise((resolve) => setTimeout(resolve, SKIN_SETTLE_MS));
-      await g.capture("workbench-nodes");
-      await pressAt(g, PANEL.tab(1));
-      await g.page.waitForFunction(
-        () => document.querySelector("#gui-tab")?.textContent === "controls",
-      );
-      await g.page.mouse.move(1, 1);
-      await new Promise((resolve) => setTimeout(resolve, SKIN_SETTLE_MS));
-      await g.capture("workbench-controls");
-      const labels = {
-        nodes: labelRegion(PANEL.tab(0)),
-        controls: labelRegion(PANEL.tab(1)),
-      };
-      const [before, after] = await Promise.all(
-        ["workbench-nodes", "workbench-controls"].map((label) =>
-          g.call<Record<keyof typeof labels, RegionStats>>(
-            "galleryGuiRegionStats",
-            label,
-            labels,
-          ),
-        ),
-      );
-      await scenario.evidence.record("tab-labels", { before, after });
-      assert.ok(accentText(before!.nodes), "NODES is not shown selected");
-      assert.ok(!accentText(before!.controls), "CONTROLS is shown selected");
-      assert.ok(accentText(after!.controls), "CONTROLS is not shown selected");
-      assert.ok(!accentText(after!.nodes), "NODES is still shown selected");
-
-      // BEAM: a relative drag up the knob raises the value; its paired
-      // stepper shows it, and the beam's energy follows.
-      const beamBefore = energy(await g.inspect(), "gui-projector-beam");
-      const controls = await waitForGuiState(g);
-      const knob = control(controls, { role: "slider", name: "BEAM" });
-      const [dial] = await projectContent(g, [
-        [
-          knob.bounds[0] + knob.bounds[2] / 2,
-          knob.bounds[1] + knob.bounds[3] / 2,
-        ],
-      ]);
-      await g.page.mouse.move(dial!.clientX, dial!.clientY);
-      await g.page.mouse.down();
-      await g.page.mouse.move(dial!.clientX, dial!.clientY - 60, {
-        steps: 8,
+      const g = await openGallery(scenario, {
+        initialPage: "gui",
+        canvasShare: 1,
       });
-      await g.page.mouse.up();
-      const raised = await waitForGuiState(g, (state) => {
-        const value = control(state, { role: "slider", name: "BEAM" }).value;
-        return value.kind === "scalar" && value.value > 100;
-      });
-      const beam = control(raised, { role: "slider", name: "BEAM" }).value;
-      assert.equal(beam.kind, "scalar");
-      const percent = beam.kind === "scalar" ? beam.value : Number.NaN;
-      await g.page.waitForFunction(
-        (value) =>
-          document
-            .querySelector("#gui-tuning")
-            ?.textContent?.startsWith(`beam ${value}%`) ?? false,
-        percent,
-      );
-      const stepper = find(
-        await waitForGuiState(g),
-        (candidate) =>
-          candidate.kind === "text" &&
-          (candidate.symbol ?? "").startsWith("gui-beam/input"),
-        "BEAM stepper field",
-      );
-      assert.deepEqual(stepper.value, { kind: "scalar", value: percent });
-      // The child controls and DOM readout can commit before the parent
-      // World's separate React root acknowledges the projected energy.
-      const projected = await g.waitFor(
-        (inspection) =>
-          Math.abs(
-            energy(inspection, "gui-projector-beam") / beamBefore -
-              percent / 100,
-          ) < 1e-3,
-      );
-      const beamAfter = energy(projected, "gui-projector-beam");
-      assert.ok(
-        Math.abs(beamAfter / beamBefore - percent / 100) < 1e-3,
-        `the beam's energy went from ${beamBefore} to ${beamAfter} at ${percent}%`,
-      );
-
-      // The sweep band crosses the whole scope with each scan loop at the
-      // first SWEEP range: near the scope's left edge early in the loop and
-      // near its right edge late in it. The sweep and scan clips hold at the
-      // Host times the test seeks, so only the band moves between the two
-      // captures: per column of the scope, the light the early capture has
-      // over the late one peaks at the early band and dips at the late one.
-      const motion = await g.call<GalleryWaveform>("galleryWaveform");
-      const sweeping = motion.controllers.find(({ description }) =>
-        description.drivers.some(
-          ({ property }) => "name" in property && property.name === "phase",
-        ),
-      );
-      assert.ok(sweeping, "the sweep band has no controller");
-      assert.equal(sweeping.state, "playing");
-      const held = [sweeping.id, motion.scan.controller!.id];
-      await g.call("controlGalleryAnimation", held, { action: "pause" }, true);
-      await g.page.mouse.move(1, 1);
-      const [scopeX, scopeY, scopeWidth, scopeHeight] = PANEL.waveform;
-      const columns = 48;
-      const rows = 12;
-      const scopePoints = Array.from(
-        { length: rows * columns },
-        (_, index) =>
-          [
-            scopeX + (scopeWidth * ((index % columns) + 0.5)) / columns,
-            scopeY + (scopeHeight * (Math.floor(index / columns) + 0.5)) / rows,
-          ] as const,
-      );
-      // Mean light, the sum of the channels, of each column at a share of
-      // the 2.4 s scan loop.
-      const sweepAt = async (label: string, share: number) => {
-        const time = share * 2.4;
-        await g.call(
-          "controlGalleryAnimation",
-          sweeping.id,
-          { action: "seek", time },
-          true,
+      await enterWorkspace(g);
+      await g.call("gallerySceneAction", "setAutoscan", false);
+      await g.call("gallerySceneAction", "setReducedMotion", true);
+      await g.call("gallerySceneAction", "setExploded", true);
+      await waitSpacing(g, 0.9);
+      await openSettings(g, "scene");
+      await g.call("galleryIndependentWorld", "open");
+      try {
+        const initial = await g.inspect();
+        const identities = [
+          "gui-projector-floor",
+          "gui-projector-base",
+          "gui-demo",
+        ].map((id) => sceneEntity(initial, id).id);
+        const survivor = await g.call<{ before: bigint; after: bigint }>(
+          "galleryIndependentWorld",
+          "observe",
         );
-        const seeked = (
-          await g.call<GalleryWaveform>("galleryWaveform")
-        ).controllers.find(({ id }) => id === sweeping.id);
-        assert.ok(
-          seeked?.state === "paused" && Math.abs(seeked.time - time) < 1e-6,
-          `the sweep did not hold at ${time} s: ${seeked?.state} ${seeked?.time}`,
-        );
-        await g.capture(label);
-        const samples = await g.call<readonly (readonly number[])[]>(
-          "sampleGalleryGuiCapture",
-          label,
-          scopePoints,
-        );
-        return Array.from({ length: columns }, (_, column) => {
-          let light = 0;
-          for (let row = 0; row < rows; row++) {
-            const [red, green, blue] = samples[row * columns + column]!;
-            light += red! + green! + blue!;
-          }
-          return light / rows;
-        });
-      };
-      const early = await sweepAt("sweep-early", 0.05);
-      const late = await sweepAt("sweep-late", 0.95);
-      await g.call("controlGalleryAnimation", held, { action: "play" }, true);
-      const lift = early.map((light, column) => light - late[column]!);
-      const earlyColumn = lift.indexOf(Math.max(...lift));
-      const lateColumn = lift.indexOf(Math.min(...lift));
-      const travel = {
-        early: (earlyColumn + 0.5) / columns,
-        late: (lateColumn + 0.5) / columns,
-        lift: [lift[earlyColumn]!, lift[lateColumn]!],
-      };
-      await scenario.evidence.record("sweep-travel", travel);
-      assert.ok(
-        travel.early < 0.15 &&
-          travel.late > 0.85 &&
-          travel.lift[0]! > 100 &&
-          travel.lift[1]! < -100,
-        `the sweep band does not cross the scope edge to edge: ${JSON.stringify(travel)}`,
-      );
-
-      // SWEEP: the upper thumb dragged from the end of the rail to its
-      // middle narrows the band's travel to the scope's left half, which the
-      // scope paint takes. The column scrolls to its end first, which shows
-      // SWEEP and RATE.
-      await g.call(
-        "galleryGuiAction",
-        { role: "scrollView", name: "CONTROLS" },
-        { kind: "scrollTo", offset: [0, 10_000] },
-      );
-      const range = control(await waitForGuiState(g), {
-        role: "slider",
-        name: "SWEEP",
-      });
-      const [x, y, width, height] = range.bounds;
-      const edge = 0.75 * Math.min(width, height);
-      const thumb = (value: number) =>
-        x + edge / 2 + (value / 100) * (width - edge);
-      const [from, to] = await projectContent(g, [
-        [thumb(100), y + height / 2],
-        [thumb(50), y + height / 2],
-      ]);
-      await g.page.mouse.move(from!.clientX, from!.clientY);
-      await g.page.mouse.down();
-      await g.page.mouse.move(to!.clientX, to!.clientY, { steps: 8 });
-      await g.page.mouse.up();
-      await g.page.waitForFunction(
-        () =>
-          document
-            .querySelector("#gui-tuning")
-            ?.textContent?.includes("sweep 0-50%") ?? false,
-      );
-
-      // RATE: the list opens from its trigger on the anchored plane; FAST
-      // closes it, logs the rate and doubles the scan's and sweep's speed.
-      const scrolled = await waitForGuiState(g);
-      const rate = find(scrolled, bySymbol("gui-rate"), "RATE trigger");
-      await pressAt(g, rate.bounds as unknown as ContentRect);
-      const listed = await waitForGuiState(g, (state) =>
-        overlayOpen(state, OVERLAYS.rate),
-      );
-      const fast = find(
-        listed,
-        (candidate) =>
-          candidate.overlay === OVERLAYS.rate && candidate.label === "FAST",
-        "FAST option",
-      );
-      await pressAt(g, fast.bounds as unknown as ContentRect);
-      await waitForGuiState(
-        g,
-        (state) =>
-          !overlayOpen(state, OVERLAYS.rate) &&
-          (state.eventLog.items[0]?.text ?? "").endsWith("SCAN RATE FAST"),
-      );
-      assert.match((await text("#gui-tuning")) ?? "", /, fast$/);
-      const waveform = await g.call<GalleryWaveform>("galleryWaveform");
-      assert.equal(waveform.scan.controller?.description.speed, 2);
-      const sweep = waveform.controllers.filter((candidate) =>
-        candidate.description.drivers.some(
-          (driver) =>
-            "name" in driver.property && driver.property.name === "phase",
-        ),
-      );
-      assert.deepEqual(
-        sweep.map(({ description }) => description.speed),
-        [2],
-      );
-
-      // SCOPE: the popover opens from the monitor's header; SCANLINES
-      // changes the scope paint's pattern; a press outside closes it and
-      // reaches nothing beneath it.
-      assertAt(
-        control(await waitForGuiState(g), { role: "button", name: "SCOPE" }),
-        PANEL.scope,
-      );
-      await pressAt(g, PANEL.scope);
-      const popover = await waitForGuiState(g, (state) =>
-        overlayOpen(state, OVERLAYS.scope),
-      );
-      // An option is its radio mark and, beside it, its label, a second
-      // Button as wide as its word. A press on the word's last letters,
-      // past the mark's width, selects the option.
-      const option = (part: "mark" | "label") =>
-        control(popover, {
-          role: "button",
-          symbol: `gui-scope-grid/scanlines/${part}`,
-        }).bounds;
-      const mark = option("mark");
-      const word = option("label");
-      assert.ok(
-        word[0] >= mark[0] + mark[2] && word[2] > 2 * mark[2],
-        `SCANLINES label ${word.join(",")} beside mark ${mark.join(",")}`,
-      );
-      await pressAt(g, [
-        word[0] + word[2] * 0.6,
-        word[1],
-        word[2] * 0.3,
-        word[3],
-      ]);
-      await g.page.waitForFunction(
-        () =>
-          document.querySelector("#gui-scope")?.textContent ===
-          "scanlines, sweep on",
-      );
-      const command = await text("#gui-command");
-      await pressAt(g, PANEL.pulse);
-      await waitForGuiState(g, (state) => !overlayOpen(state, OVERLAYS.scope));
-      assert.equal(
-        await text("#gui-command"),
-        command,
-        "the press that closed the popover reached PULSE",
-      );
-
-      // In the exploded view complete panels occupy their authored ranks and an
-      // open list floats on the anchored plane above its trigger; a press
-      // there picks an option.
-      const trigger = control(await waitForGuiState(g), {
-        role: "button",
-        symbol: "gui-rate",
-      });
-      await pressAt(g, trigger.bounds as unknown as ContentRect);
-      const open = await waitForGuiState(g, (state) =>
-        overlayOpen(state, OVERLAYS.rate),
-      );
-      const slow = find(
-        open,
-        (candidate) =>
-          candidate.overlay === OVERLAYS.rate && candidate.label === "SLOW",
-        "SLOW option",
-      );
-      await g.page.mouse.move(1, 1);
-      await new Promise((resolve) => setTimeout(resolve, SKIN_SETTLE_MS));
-      const flatProjection = await g.call("galleryGuiProjection");
-      const flat = await g.capture("workbench-list-flat");
-      await toggleLayers(g, true);
-      if (!overlayOpen(await waitForGuiState(g), OVERLAYS.rate))
-        await pressAt(
+        await press(
           g,
-          trigger.bounds as unknown as ContentRect,
-          LAYERS.workbench * LAYERS.spacing,
+          await find(g, "gui-scene-tree/row/stage/chevron"),
+          4 * (await spacing(g)),
         );
-      await waitForGuiState(g, (state) => overlayOpen(state, OVERLAYS.rate));
-      await g.page.mouse.move(1, 1);
-      await new Promise((resolve) => setTimeout(resolve, SKIN_SETTLE_MS));
-      const exploded = await g.capture("workbench-list-exploded");
-      const [sx, sy, sw, sh] = slow.bounds;
-      const shifts = await assertPlanes(
-        g,
-        {
-          label: "workbench-list-flat",
-          frame: flat.frame,
-          projection: flatProjection,
-        },
-        { label: "workbench-list-exploded", frame: exploded.frame },
-        {
-          panel: {
-            // The gain readout's display digits.
-            at: [
-              PANEL.gainReadout[0] + 20,
-              PANEL.gainReadout[1] + PANEL.gainReadout[3] / 2,
+        await g.capture("scanner-stage-expanded");
+        // Completed bounds already include ancestor scrolling. Move the tree's
+        // actual wheel chain so its lower child rows enter the viewport.
+        const tree = await find(g, "gui-scene-tree");
+        const [treePoint] = await projectContent(
+          g,
+          [
+            [
+              tree.bounds[0] + tree.bounds[2] / 2,
+              tree.bounds[1] + tree.bounds[3] / 2,
             ],
-            plane: LAYERS.panel,
-          },
-          list: {
-            // The SLOW option's label.
-            at: [sx + 32, sy + sh / 2],
-            plane: LAYERS.anchored,
-            radius: 14,
-          },
-        },
-      );
-      await scenario.evidence.record("list-planes", shifts);
-      await pressAt(g, [sx, sy, sw, sh], LAYERS.anchored * LAYERS.spacing);
-      await g.page.waitForFunction(
-        () =>
-          document
-            .querySelector("#gui-tuning")
-            ?.textContent?.endsWith(", slow") ?? false,
-      );
-      await toggleLayers(g, false);
-
-      assert.deepEqual(g.errors, []);
-    },
-  );
-});
-
-test("Gallery GUI's scene tree, FIND and colour picker name and light the scene", {
-  timeout: 240_000,
-}, async (context) => {
-  await runBrowserEnvironment(
-    "GUI scene tools",
-    environment("scene-tools"),
-    context.signal,
-    async (scenario) => {
-      const g = await openDashboard(scenario);
-      const text = (selector: string) => sidebar(g, selector);
-
-      // SCENE: the TELEMETRY view choice swaps the event log for the scene
-      // tree; CORE names itself in the FOCUS readout and lights the
-      // projector's rim in the projection colour.
-      const resting = await waitForGuiState(g);
-      assertAt(
-        control(resting, { role: "button", name: "SCENE" }),
-        PANEL.telemetryView(1),
-      );
-      const trimBefore = fieldsWith(
-        await g.inspect(),
-        "gui-projector-trim",
-        "r",
-      );
-      await pressAt(g, PANEL.telemetryView(1));
-      const tree = await waitForGuiState(g, (state) =>
-        state.controls.some(
-          ({ symbol, available, bounds }) =>
-            (symbol ?? "").startsWith("gui-scene-tree/row/core") &&
-            available &&
-            bounds[2] > 0 &&
-            bounds[3] > 0,
-        ),
-      );
-      const core = find(
-        tree,
-        (candidate) =>
-          candidate.kind === "button" &&
-          candidate.symbol === "gui-scene-tree/row/core",
-        "CORE row",
-      );
-      await pressAt(g, core.bounds as unknown as ContentRect);
-      await g.page.waitForFunction(
-        () => document.querySelector("#gui-focus")?.textContent === "CORE",
-      );
-      const focused = await waitForGuiState(g);
-      assert.equal(
-        focused.texts.find(({ symbol }) => symbol === "gui-readout-focus-value")
-          ?.text,
-        "CORE",
-      );
-      const trim = fieldsWith(await g.inspect(), "gui-projector-trim", "r");
-      assert.notEqual(Number(trim.r), Number(trimBefore.r));
-      assert.ok(Number(trim.b) > Number(trim.r), "the rim is not lit in cyan");
-
-      // FIND: typing suggests the nodes whose names hold the text; Enter
-      // finds the first, selects it and scrolls the grid's body to it.
-      assertAt(control(focused, { role: "text", name: "FIND" }), PANEL.find);
-      await pressAt(g, PANEL.find);
-      await waitForGuiState(
-        g,
-        (state) => control(state, { role: "text", name: "FIND" }).focused,
-      );
-      await g.page.keyboard.insertText("fox");
-      await waitForGuiState(g, (state) => overlayOpen(state, OVERLAYS.find));
-      await g.page.keyboard.press("Enter");
-      await g.page.waitForFunction(
-        () =>
-          document
-            .querySelector("#gui-nodes")
-            ?.textContent?.endsWith("foxtrot selected") ?? false,
-      );
-      const found = await waitForGuiState(g, (state) => {
-        const body = state.controls.find(
-          ({ symbol }) => symbol === "gui-nodes/body",
+          ],
+          4 * (await spacing(g)),
         );
-        return body?.value.kind === "scroll" && body.value.offset[1] > 0;
-      });
-      const body = found.controls.find(
-        ({ symbol }) => symbol === "gui-nodes/body",
-      )!;
-      assert.ok(body.scroll);
-      assert.equal(
-        body.value.kind === "scroll" ? body.value.offset[1] : 0,
-        body.scroll.capacity[1],
-        "FIND did not scroll the last node into view",
-      );
-
-      // COLOUR: a preset swatch sets the projection colour, which the
-      // projector's light takes; choosing the AMBER accent sets the accent's.
-      await pressAt(g, PANEL.tab(2));
-      const picker = await waitForGuiState(g, (state) =>
-        state.controls.some(({ label }) => label === "Magenta"),
-      );
-      const magenta = find(
-        picker,
-        (candidate) => candidate.label === "Magenta",
-        "Magenta preset",
-      );
-      await pressAt(g, magenta.bounds as unknown as ContentRect);
-      await g.page.waitForFunction(
-        () => document.querySelector("#gui-colour")?.textContent === "#F4449F",
-      );
-      const light = fieldsWith(await g.inspect(), "gui-projector-light", "r");
-      assert.ok(
-        Number(light.r) > Number(light.g) && Number(light.b) > Number(light.g),
-        `the projector light is not magenta: ${JSON.stringify(light)}`,
-      );
-      await pressAt(g, PANEL.amber);
-      await g.page.waitForFunction(
-        () => document.querySelector("#gui-colour")?.textContent === "#FFC450",
-      );
-      assert.equal(await text("#gui-accent"), "amber");
-      assert.deepEqual(g.errors, []);
-    },
-  );
-});
-
-test("Gallery GUI lifts the dialog and the toasts to their planes and takes presses there", {
-  timeout: 240_000,
-}, async (context) => {
-  // Exploded depth is a plane's id times the spacing, whichever other
-  // planes are in use: the dialog and the toasts keep their depths.
-  await runBrowserEnvironment(
-    "GUI overlay planes",
-    environment("overlay-planes"),
-    context.signal,
-    async (scenario) => {
-      const g = await openDashboard(scenario);
-      await g.call(
-        "galleryGuiAction",
-        { role: "checkbox", name: "SCAN" },
-        { kind: "toggle" },
-      );
-      // A toast that stays: CLEAR's, with UNDO.
-      await g.call(
-        "galleryGuiAction",
-        { role: "button", name: "CLEAR" },
-        { kind: "press" },
-      );
-      await waitForGuiState(g, (state) =>
-        state.controls.some(({ label }) => label === "Log cleared."),
-      );
-      const toastText: readonly [number, number] = [
-        PANEL.toast(0, 1)[0] + 16 + 13 + 16 + 40,
-        PANEL.toast(0, 1)[1] + PANEL.toast(0, 1)[3] / 2,
-      ];
-      // The cover is armed by default; lift it through the normal sidebar
-      // before pressing the protected control.
-      await liftInputShield(g);
-      // The dialog on the dialog plane and the toast on the toast plane.
-      const purge = await projectContent(g, [
-        [
-          PANEL.purge[0] + PANEL.purge[2] / 2,
-          PANEL.purge[1] + PANEL.purge[3] / 2,
-        ],
-      ]);
-      await g.page.mouse.click(purge[0]!.clientX, purge[0]!.clientY);
-      await waitForGuiState(g, (state) => overlayOpen(state, OVERLAYS.dialog));
-      await g.page.mouse.move(1, 1);
-      await new Promise((resolve) => setTimeout(resolve, SKIN_SETTLE_MS));
-      const flatProjection = await g.call("galleryGuiProjection");
-      const flat = await g.capture("planes-dialog-flat");
-      await toggleLayers(g, true);
-      await g.page.mouse.move(1, 1);
-      const exploded = await g.capture("planes-dialog-exploded");
-      // The dialog's feature is the amber action's left edge beside
-      // Cancel: edges on both axes fix a shift that a line of text, much
-      // like itself shifted along the line, leaves loose.
-      const action = PANEL.dialog.action;
-      const shifts = await assertPlanes(
-        g,
-        {
-          label: "planes-dialog-flat",
-          frame: flat.frame,
-          projection: flatProjection,
-        },
-        { label: "planes-dialog-exploded", frame: exploded.frame },
-        {
-          panel: {
-            at: [
-              PANEL.gainReadout[0] + 20,
-              PANEL.gainReadout[1] + PANEL.gainReadout[3] / 2,
-            ],
-            plane: LAYERS.panel,
-          },
-          dialog: {
-            at: [action[0], action[1] + action[3] / 2],
-            plane: LAYERS.dialog,
-          },
-          toast: { at: toastText, plane: LAYERS.toast },
-        },
-      );
-      await scenario.evidence.record("dialog-planes", shifts);
-      // Input meets each plane nearest first: Cancel at its projection on
-      // the dialog's plane answers it.
-      await pressAt(g, PANEL.dialog.cancel, LAYERS.dialog * LAYERS.spacing);
-      await waitForGuiState(
-        g,
-        (state) =>
-          !overlayOpen(state, OVERLAYS.dialog) &&
-          (state.eventLog.items[0]?.text ?? "").endsWith(
-            "NODE PURGE CANCELLED",
-          ),
-      );
-      // The toast's close button on the toast's plane dismisses it.
-      const close = PANEL.toast(0, 1);
-      await pressAt(
-        g,
-        [close[0] + close[2] - 8 - 32, close[1], 32, close[3]],
-        (LAYERS.toast - 1) * LAYERS.spacing,
-      );
-      await waitForGuiState(
-        g,
-        (state) =>
-          !state.controls.some(({ label }) => label === "Log cleared."),
-      );
-      await toggleLayers(g, false);
-
-      assert.deepEqual(g.errors, []);
-    },
-  );
-});
-
-/** Whole-section Expander sizing and routed controls survive each concrete panel provider. */
-test("Gallery GUI keeps nested Expander bounds and controls across flat and curved shells", {
-  timeout: 240_000,
-}, async (context) => {
-  await runBrowserEnvironment(
-    "GUI Surface authoring",
-    environment("surface-authoring"),
-    context.signal,
-    async (scenario) => {
-      const g = await openDashboard(scenario);
-      await g.call(
-        "galleryGuiAction",
-        { role: "checkbox", name: "SCAN" },
-        { kind: "toggle" },
-      );
-      await g.page.locator("#gui-explode-toggle").click();
-      await g.waitFor(
-        (inspection) =>
-          Math.abs(
-            Number(
-              fieldsWith(inspection, "gui-demo", "layer_spacing").layer_spacing,
-            ) - LAYERS.spacing,
-          ) < 1e-4,
-      );
-      const root = "gui-advanced-header";
-      const header = `${root}/header`;
-      const rows = ["gui-accent-row", "gui-explode-row", "gui-motion-row"];
-      type Bounds = Record<string, readonly [number, number, number, number]>;
-      const near = (actual: readonly number[], expected: readonly number[]) =>
-        actual.forEach((v, i) =>
+        await g.page.mouse.move(treePoint!.clientX, treePoint!.clientY);
+        await g.page.mouse.wheel(0, 300);
+        await g.capture("scanner-tree-scrolled");
+        await g.call("gallerySceneAction", "tuning", {
+          method: "setFocus",
+          args: [],
+        });
+        const closeSettings = async () => {
+          await press(
+            g,
+            await find(g, "gui-settings-close"),
+            4 * (await spacing(g)),
+          );
+          await waitApp(g, (value) => !value.state.app.settings);
+          await g.page.mouse.move(1, 1);
+        };
+        // Compare the same unobstructed workspace for every selection. The
+        // settings tree changes focus/selection paint over the stage pixels.
+        await closeSettings();
+        await g.page.mouse.move(1, 1);
+        await g.capture("stage-unselected");
+        for (const selected of ["floor", "base", "stage"] as const) {
+          await openSettings(g, "scene");
+          await press(
+            g,
+            await find(g, `gui-scene-tree/row/${selected}`),
+            4 * (await spacing(g)),
+          );
+          await waitApp(g, (v) => v.state.tuning.focus === selected);
+          const current = await g.inspect();
+          for (const part of ["floor", "base"] as const) {
+            const gain = dynamicProperty(
+              current,
+              `gui-projector-${part}`,
+              "gain",
+            );
+            assert.equal(gain.kind, "f32");
+            assert.ok(
+              Math.abs(
+                Number(gain.value) -
+                  (selected === part || selected === "stage" ? 1.35 : 1),
+              ) < 1e-5,
+            );
+          }
+          assert.deepEqual(
+            ["gui-projector-floor", "gui-projector-base", "gui-demo"].map(
+              (id) => sceneEntity(current, id).id,
+            ),
+            identities,
+          );
+          await closeSettings();
+          await g.page.mouse.move(1, 1);
+          const frame = await g.capture(`stage-${selected}-selected`);
+          assert.equal(frame.frame.failedDrawCalls, 0);
+          const pixels = await g.call<{ brightened: number; darkened: number }>(
+            "galleryStageBrightening",
+            "stage-unselected",
+            `stage-${selected}-selected`,
+          );
+          await scenario.evidence.record(`highlight-${selected}`, pixels);
           assert.ok(
-            Math.abs(v - expected[i]!) < 0.05,
-            `${JSON.stringify(actual)} differs from ${JSON.stringify(expected)}`,
-          ),
+            pixels.brightened > 64,
+            `${selected} has no visible highlight`,
+          );
+          assert.ok(pixels.brightened > pixels.darkened * 4);
+          assert.equal(
+            (await guiApplication(g)).state.declarationIssue,
+            undefined,
+          );
+          if (selected === "floor")
+            await g.page.screenshot({
+              path: resolve(
+                scenario.evidence.directory,
+                "floor-selection-page.png",
+              ),
+              fullPage: true,
+            });
+        }
+        await openSettings(g, "scene");
+        // One known, finite invalid authoring value after the recovery fix.
+        await g.call("gallerySceneAction", "tuning", {
+          method: "setLight",
+          args: [-1],
+        });
+        const rejected = await waitApp(g, (v) =>
+          Boolean(v.state.declarationIssue),
         );
-      for (const [shape, facing] of [
+        assert.equal(rejected.ready, true);
+        assert.equal(rejected.error, undefined);
+        await waitForGuiState(
+          g,
+          (s) =>
+            s.texts.some(
+              (t) =>
+                t.symbol === "gui-settings-issue/text" &&
+                t.text.includes("SCENE UPDATE REJECTED"),
+            ),
+          false,
+        );
+        const rejectedFrame = await g.call<{
+          dataUrl: string;
+          frame: { failedDrawCalls: number };
+        }>("captureUnflushedViewer", "scene-rejection-visible", true);
+        assert.equal(rejectedFrame.frame.failedDrawCalls, 0);
+        await writeDataUrl(
+          resolve(scenario.evidence.directory, "scene-rejection-visible.png"),
+          rejectedFrame.dataUrl,
+        );
+        await scenario.evidence.record("rejected-frame", rejectedFrame.frame);
+        await g.page.screenshot({
+          path: resolve(
+            scenario.evidence.directory,
+            "scene-rejection-page.png",
+          ),
+          fullPage: true,
+        });
+        await scenario.evidence.record("rejected-observation", rejected);
+        // This child World's real tree callback must work during primary rejection.
+        await press(
+          g,
+          await find(g, "gui-scene-tree/row/floor", false),
+          4 * (await spacing(g)),
+          false,
+        );
+        await waitApp(g, (v) => v.state.tuning.focus === "floor");
+        assert.ok(
+          (await guiApplication(g)).state.declarationIssue,
+          "invalid source lost its warning",
+        );
+        await selectSettingsPage(g, "projection", false);
+        const projectionWarning = await g.call<{
+          dataUrl: string;
+          frame: { failedDrawCalls: number };
+        }>("captureUnflushedViewer", "projection-rejection-visible", true);
+        assert.equal(projectionWarning.frame.failedDrawCalls, 0);
+        await writeDataUrl(
+          resolve(
+            scenario.evidence.directory,
+            "projection-rejection-visible.png",
+          ),
+          projectionWarning.dataUrl,
+        );
+        await g.page.screenshot({
+          path: resolve(
+            scenario.evidence.directory,
+            "projection-rejection-page.png",
+          ),
+          fullPage: true,
+        });
+        await press(
+          g,
+          await find(g, "gui-light/slider", false),
+          4 * (await spacing(g)),
+          false,
+        );
+        await g.page.keyboard.press("Home");
+        await g.page.keyboard.press("ArrowUp");
+        const corrected = await waitApp(
+          g,
+          (v) =>
+            v.state.tuning.light >= 0 && v.state.declarationIssue === undefined,
+        );
+        assert.equal(corrected.ready, true);
+        assert.equal(corrected.error, undefined);
+        const frame = await g.capture("scene-corrected");
+        assert.equal(frame.frame.failedDrawCalls, 0);
+        const correctedInspection = await g.inspect();
+        assert.deepEqual(
+          ["gui-projector-floor", "gui-projector-base", "gui-demo"].map(
+            (id) => sceneEntity(correctedInspection, id).id,
+          ),
+          identities,
+        );
+        await g.page.screenshot({
+          path: resolve(
+            scenario.evidence.directory,
+            "scene-corrected-page.png",
+          ),
+          fullPage: true,
+        });
+        const alive = await g.call<{ before: bigint; after: bigint }>(
+          "galleryIndependentWorld",
+          "observe",
+        );
+        assert.ok(survivor.after > survivor.before);
+        assert.ok(alive.after > alive.before);
+        assert.ok(alive.after > survivor.after);
+        await scenario.evidence.record("independent-world-progress", {
+          survivor,
+          alive,
+        });
+        assert.deepEqual(g.errors, []);
+      } finally {
+        await g.call("galleryIndependentWorld", "close");
+      }
+    },
+  );
+});
+
+test("Gallery GUI retains presentation layer controls through animation and isolation", {
+  timeout: 180_000,
+}, async (context) => {
+  await runBrowserEnvironment(
+    "Scanner layer controls",
+    environment("layers"),
+    context.signal,
+    async (scenario) => {
+      const g = await openGallery(scenario, {
+        initialPage: "gui",
+        canvasShare: 1,
+      });
+      await enterWorkspace(g);
+      await openSettings(g);
+      const dial = await find(g, "gui-layer-step/dial");
+      await press(g, dial, 0.5);
+      await g.page.keyboard.press("End");
+      await waitApp(g, (v) => Math.abs(v.state.layerStep - 1) < 1e-5);
+      await press(g, await find(g, "gui-explode"), 0.5);
+      await waitSpacing(g, 1);
+      assert.deepEqual(
+        (await find(g, "gui-layer-step/dial")).target,
+        dial.target,
+      );
+      await press(g, await find(g, "gui-layer-step/dial"), 5);
+      await g.page.keyboard.press("Home");
+      await waitApp(g, (v) => Math.abs(v.state.layerStep - 0.15) < 1e-5);
+      await waitSpacing(g, 0.15);
+      for (const key of ["End", "Home", "End", "Home"]) {
+        await g.page.keyboard.press(key);
+        await waitApp(
+          g,
+          (v) =>
+            Math.abs(v.state.layerStep - (key === "End" ? 1 : 0.15)) < 1e-5,
+        );
+        await waitSpacing(g, key === "End" ? 1 : 0.15);
+      }
+      await selectPresentationPage(g, "STYLE");
+      await press(
+        g,
+        await find(g, "gui-reduced-motion"),
+        5 * (await spacing(g)),
+      );
+      await waitApp(g, (v) => v.state.reducedMotion);
+      await selectPresentationPage(g, "LAYERS");
+      await press(g, await find(g, "gui-explode"), 5 * (await spacing(g)));
+      await waitSpacing(g, 0.1);
+      await press(g, await find(g, "gui-vector-only"), 0.5);
+      await waitApp(g, (v) => v.state.vectorOnly);
+      await g.waitFor(
+        (i) =>
+          !i.entities.some(
+            (e) => e.metadata.symbolicId === "gui-projector-beam",
+          ),
+      );
+      await press(g, await find(g, "gui-vector-only"), 0.5);
+      await waitApp(g, (v) => !v.state.vectorOnly);
+      await g.waitFor((i) =>
+        i.entities.some((e) => e.metadata.symbolicId === "gui-projector-beam"),
+      );
+      await press(g, await find(g, "gui-explode"), 0.5);
+      await waitSpacing(g, 0.15);
+      const frame = await g.capture("scanner-exploded-settings");
+      assert.equal(frame.frame.failedDrawCalls, 0);
+      await g.page.screenshot({
+        path: resolve(scenario.evidence.directory, "scanner-exploded-page.png"),
+        fullPage: true,
+      });
+      assert.deepEqual(g.errors, []);
+    },
+  );
+});
+
+test("Gallery GUI retains presentation on all curved Surface modes with posed beam", {
+  timeout: 180_000,
+}, async (context) => {
+  await runBrowserEnvironment(
+    "Scanner curved presentation",
+    environment("curved"),
+    context.signal,
+    async (scenario) => {
+      const g = await openGallery(scenario, {
+        initialPage: "gui",
+        canvasShare: 1,
+      });
+      await enterWorkspace(g);
+      await openSettings(g);
+      await selectPresentationPage(g, "SURFACE");
+      const modes = [
         ["flat", "outside"],
         ["cylinder", "outside"],
         ["cylinder", "inside"],
         ["sphere", "outside"],
         ["sphere", "inside"],
-      ] as const) {
-        await g.page.locator("#gui-surface-shape").selectOption(shape);
-        if (shape !== "flat")
-          await g.page.locator("#gui-surface-facing").selectOption(facing);
-        await g.waitFor((inspection) => {
-          const provider = inspection.entities
-            .find((entity) => entity.metadata.symbolicId === "gui-demo")
-            ?.components.find(
-              (component) => "layer_spacing" in component.fields,
-            );
-          return (
-            provider?.component ===
-              (shape === "flat" ? 25 : shape === "cylinder" ? 54 : 55) &&
-            Math.abs(Number(provider.fields.layer_spacing) - LAYERS.spacing) <
-              1e-4 &&
-            (shape === "flat" ||
-              Number(provider.fields.curvature) ===
-                (facing === "inside" ? -0.125 : 0.125))
-          );
-        });
-        const state = await waitForGuiState(g);
-        assert.equal(
-          control(state, { role: "button", name: "ADVANCED" }).symbol,
-          header,
-        );
-        const expanded = await g.call<Bounds>("galleryGuiLayoutBounds", [
-          root,
-          header,
-          ...rows,
-        ]);
-        near(expanded[header]!, PANEL.advanced);
-        near(expanded[root]!, [PANEL.advanced[0], PANEL.advanced[1], 288, 176]);
-        rows.forEach((row, index) =>
-          near(expanded[row]!, [
-            PANEL.advanced[0],
-            PANEL.advanced[1] + 48 + 44 * index,
-            288,
-            40,
-          ]),
-        );
-        const label = `${shape}-${facing}`;
-        const shown = await g.capture(`${label}-expanded`);
-        assert.equal(shown.frame.failedDrawCalls, 0);
-        const [point] = await projectContent(
-          g,
-          [[PANEL.advanced[0] + 144, PANEL.advanced[1] + 20]],
-          LAYERS.advanced * LAYERS.spacing,
-        );
-        await g.page.mouse.click(point!.clientX, point!.clientY);
-        await waitForGuiState(
-          g,
-          (state) =>
-            !state.controls.some((item) => item.label === "EXPLODE LAYERS"),
-        );
-        const collapsed = await g.call<Bounds>("galleryGuiLayoutBounds", [
-          root,
-          header,
-        ]);
-        near(collapsed[root]!, PANEL.advanced);
-        near(collapsed[header]!, PANEL.advanced);
-        const hidden = await g.capture(`${label}-collapsed`);
-        assert.equal(hidden.frame.failedDrawCalls, 0);
-        const difference = await g.call<{ changedPixels: number }>(
-          "compareViewerCaptures",
-          `${label}-expanded`,
-          `${label}-collapsed`,
-        );
+      ] as const;
+      let beam: bigint | undefined;
+      for (const [shape, facing] of modes) {
+        if ((await guiApplication(g)).state.surfaceShape !== shape)
+          await dropdown(g, "gui-surface-shape", shape.toUpperCase());
+        if (
+          shape !== "flat" &&
+          (await guiApplication(g)).state.surfaceFacing !== facing
+        )
+          await dropdown(g, "gui-surface-facing", facing.toUpperCase());
+        const current = await g.inspect();
+        const entity = sceneEntity(current, "gui-projector-beam");
+        beam ??= entity.id;
+        assert.equal(entity.id, beam);
+        const pose = entity.components.find(
+          (c) => "weight" in c.fields && "source" in c.fields,
+        )?.fields;
+        assert.ok(pose, "beam has no authored MeshPose");
+        assert.equal(pose.weight, shape === "flat" ? 0 : 1);
         assert.ok(
-          difference.changedPixels > 50,
-          "Expanded content was not visible in completed frames",
+          String(pose.source).endsWith(
+            `frustum-${shape === "flat" ? "cylinder" : shape}-${facing}.ippm`,
+          ),
         );
-        await g.page.mouse.click(point!.clientX, point!.clientY);
-        await waitForGuiState(g, (state) =>
-          state.controls.some((item) => item.label === "EXPLODE LAYERS"),
+        const curve = dynamicProperty(
+          current,
+          "gui-projector-beam",
+          "curvature",
         );
-        const reopened = await g.call<Bounds>("galleryGuiLayoutBounds", [
-          root,
-          header,
-          ...rows,
-        ]);
-        near(reopened[root]!, expanded[root]!);
-        rows.forEach((row) => near(reopened[row]!, expanded[row]!));
-        await scenario.evidence.record("section-layout", {
-          shape,
-          facing,
-          expanded,
-          collapsed,
-          reopened,
-          difference,
-        });
+        assert.equal(curve.kind, "vec2");
+        const k = shape === "flat" ? 0 : (facing === "inside" ? -1 : 1) / 5.6;
+        assert.ok(Math.abs((curve.value as readonly number[])[0]! - k) < 1e-6);
+        assert.equal(
+          (curve.value as readonly number[])[1],
+          shape === "sphere" ? 1 : 0,
+        );
+        const captured = await g.capture(`scanner-${shape}-${facing}`);
+        assert.equal(captured.frame.failedDrawCalls, 0);
+        assert.ok(captured.summary.coverage > 0.08);
       }
+      await selectPresentationPage(g, "LAYERS");
+      await press(g, await find(g, "gui-explode"), 0.5);
+      await waitSpacing(g, 0.9);
+      await g.capture("scanner-curved-exploded");
+      await g.page.screenshot({
+        path: resolve(
+          scenario.evidence.directory,
+          "scanner-curved-exploded-page.png",
+        ),
+        fullPage: true,
+      });
+      // The raised presentation control remains reachable at its physical rank.
+      await press(g, await find(g, "gui-layer-step/dial"), 4.5);
+      await g.page.keyboard.press("Home");
+      await waitSpacing(g, 0.15);
+      assert.equal(
+        Number(
+          fieldsWith(await g.inspect(), "gui-demo", "curvature").curvature,
+        ) < 0,
+        true,
+      );
       assert.deepEqual(g.errors, []);
     },
   );

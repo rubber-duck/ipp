@@ -902,3 +902,142 @@ fn focus_and_native_text_survive_their_font_unloading() {
     let typed = edit(&mut host, GuiTextEdit::Insert("V".into()));
     assert_eq!(text(&typed), "Ve");
 }
+
+fn mask(host: &mut GuiRoutedHost, entity: EntityId, masked: bool) {
+    let world = host.world.id();
+    let written = set_field(
+        &mut host.gui,
+        world,
+        entity,
+        ComponentValue::GUI_TEXT_INPUT,
+        std::mem::offset_of!(GuiTextInput, masked),
+        crate::FieldValue::Bool(masked),
+    );
+    assert!(written.result.is_ok(), "{written:?}");
+    host.frame();
+    host.terminals();
+}
+
+#[test]
+fn masking_measures_one_glyph_per_grapheme_with_original_caret_offsets() {
+    let (mut host, entity) = focused("ae\u{301}V");
+    mask(&mut host, entity, true);
+    assert_eq!(label(&host, entity).0, [0, 0, 0]);
+    assert_eq!(&*stored(&mut host, entity), "ae\u{301}V");
+    assert!(host.native().unwrap().masked);
+
+    edit(&mut host, GuiTextEdit::Selection([1, 4]));
+    assert_close(
+        rect(&host, entity, CanvasPart::Selection).unwrap(),
+        placed([UNMAPPED, 0.0, UNMAPPED, LINE]),
+    );
+    assert_close(
+        rect(&host, entity, CanvasPart::Caret).unwrap(),
+        placed([2.0 * UNMAPPED, 0.0, TEXT_MARK, LINE]),
+    );
+
+    // Pointer selection also maps the painted mask back to source bytes.
+    host.tap([ORIGIN[0] + 2.0 * UNMAPPED, 10.0]);
+    assert_eq!(host.native().unwrap().selection, [4, 4]);
+    host.terminals();
+    edit(&mut host, GuiTextEdit::Backspace);
+    assert_eq!(&*stored(&mut host, entity), "aV");
+    assert_eq!(label(&host, entity).0, [0, 0]);
+}
+
+#[test]
+fn reveal_preserves_native_fence_selection_and_provisional_composition() {
+    let (mut host, entity) = focused("aV");
+    mask(&mut host, entity, true);
+    edit(&mut host, GuiTextEdit::Selection([1, 2]));
+    let before = edit(
+        &mut host,
+        GuiTextEdit::Compose(GuiTextComposition {
+            text: "e\u{301}".into(),
+            selection: [0, 3],
+        }),
+    );
+    assert_eq!(label(&host, entity).0, [0, 0]);
+    assert_close(
+        rect(&host, entity, CanvasPart::Composition).unwrap(),
+        placed([UNMAPPED, LINE - TEXT_MARK, UNMAPPED, TEXT_MARK]),
+    );
+    mask(&mut host, entity, false);
+    let after = host.native().unwrap();
+    assert_eq!(
+        after,
+        GuiNativeTextState {
+            masked: false,
+            ..before.clone()
+        }
+    );
+    assert!(host.snapshot(entity).focused);
+    assert_eq!(&*stored(&mut host, entity), "aV");
+    edit(&mut host, GuiTextEdit::CommitComposition);
+    assert_eq!(&*stored(&mut host, entity), "ae\u{301}");
+}
+
+#[test]
+fn masked_placeholder_is_readable_and_empty_composition_is_masked() {
+    let mut host = GuiRoutedHost::new();
+    let entity = host.create(vec![
+        ComponentValue::GuiTextInput(GuiTextInput {
+            masked: true,
+            placeholder: "aV".into(),
+            ..Default::default()
+        }),
+        ComponentValue::GuiLayout(GuiLayout {
+            width: ROUTED_EXTENT,
+            height: INPUT_HEIGHT,
+            ..Default::default()
+        }),
+    ]);
+    assert_eq!(label(&host, entity).0, [GLYPH_A, GLYPH_V]);
+    host.tap([50.0, 10.0]);
+    host.terminals();
+    edit(
+        &mut host,
+        GuiTextEdit::Compose(GuiTextComposition {
+            text: "e\u{301}".into(),
+            selection: [3, 3],
+        }),
+    );
+    assert_eq!(label(&host, entity).0, [0]);
+    assert_eq!(&*stored(&mut host, entity), "");
+}
+
+#[test]
+fn masked_numeric_commits_and_steps_keep_their_number_semantics() {
+    let mut host = GuiRoutedHost::new();
+    let entity = host.create(vec![
+        ComponentValue::GuiTextInput(GuiTextInput {
+            masked: true,
+            numeric: true,
+            value: 10.0,
+            ..Default::default()
+        }),
+        ComponentValue::GuiLayout(GuiLayout {
+            width: ROUTED_EXTENT,
+            height: INPUT_HEIGHT,
+            ..Default::default()
+        }),
+    ]);
+    host.tap([50.0, 10.0]);
+    host.terminals();
+    assert_eq!(&*host.native().unwrap().text, "10");
+    assert_eq!(label(&host, entity).0, [0, 0]);
+    edit(&mut host, GuiTextEdit::SelectAll);
+    edit(&mut host, GuiTextEdit::Insert("12".into()));
+    let fence = host.native().unwrap().fence;
+    host.edit(fence, GuiTextEdit::Submit).unwrap();
+    host.terminals();
+    assert_eq!(&*host.native().unwrap().text, "12");
+    assert!(host.native().unwrap().masked);
+    host.route(GuiPhysicalInput::Key {
+        key: GuiPhysicalKey::Up,
+        shift: false,
+    })
+    .unwrap();
+    assert_eq!(&*host.native().unwrap().text, "13");
+    assert!(host.native().unwrap().masked);
+}

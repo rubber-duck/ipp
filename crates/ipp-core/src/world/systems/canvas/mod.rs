@@ -54,6 +54,7 @@ pub mod canvas_state;
 pub use canvas_state::{CanvasEvaluatedExtent, CanvasState, CanvasStateRecord, CanvasStateUpdate};
 mod component;
 mod diagnostics;
+mod layer_transition;
 mod layers;
 mod patch;
 mod publication;
@@ -70,11 +71,13 @@ pub use component::{
     CanvasStyle, CanvasText,
 };
 pub use diagnostics::CanvasWork;
+pub use layer_transition::CanvasLayerTransition;
 pub use publication::{
     CanvasAttachmentSlot, CanvasAxis, CanvasBoxShape, CanvasClip, CanvasGlyph, CanvasHit,
-    CanvasHitKind, CanvasInteractionPriority, CanvasPaintChanges, CanvasPaintEntry,
-    CanvasPaintInstance, CanvasPart, CanvasPrimitive, CanvasPrimitiveId, CanvasPrimitiveStyle,
-    CanvasPublication, CanvasShapeChecker, CanvasShapeFill, CanvasShapeGlow, CanvasTarget,
+    CanvasHitKind, CanvasInteractionPriority, CanvasLayerPlane, CanvasPaintChanges,
+    CanvasPaintEntry, CanvasPaintInstance, CanvasPart, CanvasPrimitive, CanvasPrimitiveId,
+    CanvasPrimitiveStyle, CanvasPublication, CanvasShapeChecker, CanvasShapeFill, CanvasShapeGlow,
+    CanvasTarget,
 };
 pub use system::{CanvasSystem, CanvasSystemFactory};
 pub(in crate::world::systems) use system_state::CanvasGeometry;

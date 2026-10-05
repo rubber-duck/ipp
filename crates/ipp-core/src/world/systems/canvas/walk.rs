@@ -36,8 +36,9 @@ pub(super) struct Placement {
     pub clip: CanvasClip,
     pub available: bool,
     pub enabled: bool,
-    /// Compact physical rank; children replace it with their resolved rank.
+    /// Current-publication physical plane ID.
     pub layer: u32,
+    pub priority: u32,
 }
 
 impl Placement {
@@ -51,6 +52,7 @@ impl Placement {
             available: true,
             enabled: true,
             layer: 0,
+            priority: 0,
         }
     }
 
@@ -74,6 +76,7 @@ impl Placement {
             available: self.available,
             enabled: self.enabled,
             layer: self.layer,
+            priority: self.priority,
         };
         if style.clipped {
             let bounds = placed.bounds([
@@ -273,6 +276,7 @@ impl CanvasSystem {
         position: usize,
         entity: EntityId,
         layer: u32,
+        priority: u32,
     ) {
         let context = inputs.context;
         let world = &*context.world;
@@ -331,6 +335,7 @@ impl CanvasSystem {
         }
         let mut placed = inherited.child(world.components.canvas_style(entity.index() as usize));
         placed.layer = layer;
+        placed.priority = priority;
         if gui.is_some()
             && let Some(behavior) = world.components.gui_behavior(entity.index() as usize)
         {
@@ -368,6 +373,7 @@ impl CanvasSystem {
                 parent,
                 mode: overlay.mode,
                 layer: placed.layer,
+                priority: placed.priority,
                 order: walk.entry_index(),
                 bounds,
             });
@@ -390,6 +396,7 @@ impl CanvasSystem {
                     kind: CanvasHitKind::Overlay,
                     paint_order: walk.entry_index(),
                     layer: placed.layer,
+                    priority: placed.priority,
                     bounds,
                     clip,
                     position: placed.position,
@@ -522,6 +529,7 @@ impl CanvasSystem {
                 kind: CanvasHitKind::Entity,
                 paint_order: walk.entry_index(),
                 layer: placed.layer,
+                priority: placed.priority,
                 bounds,
                 clip: placed.clip,
                 position: placed.position,
@@ -851,6 +859,7 @@ impl CanvasSystem {
                 },
                 paint_order: walk.entry_index(),
                 layer: slot.layer,
+                priority: content_placement.priority,
                 bounds: content_placement.bounds([
                     0.0,
                     0.0,

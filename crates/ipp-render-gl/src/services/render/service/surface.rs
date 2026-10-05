@@ -123,7 +123,12 @@ impl<D: RenderDevice> RenderService<D> {
                     continue;
                 };
                 self.device.borrow_mut().set_surface_double_sided(true)?;
-                let mvp = frame.layering.layer_mvp(&frame.mvp, op.layer());
+                let coordinate = frame
+                    .scene
+                    .canvas
+                    .layer_offset(op.layer())
+                    .ok_or(RenderError::UnavailableOutput)?;
+                let mvp = frame.layering.layer_mvp(&frame.mvp, coordinate);
                 match op {
                     SurfaceOp::Gui(range, _) => self.draw_gui_work(
                         frame.scene.canvas.selection,
@@ -230,21 +235,24 @@ impl<D: RenderDevice> RenderService<D> {
         self.populate_glyph_misses(&scene)?;
         let mut ops = std::mem::take(&mut self.surface_ops);
         self.prepare_gui_work(&scene, paint, &mut ops, stats, clip)?;
-        // Separated layer planes draw farthest first; each keeps painter
-        // order. Positions index the ascending layers in use, not plane ids.
-        let layers = &scene.canvas.layers;
-        if layering.spacing != 0.0 && layers.len() > 1 {
-            let mut position = vec![0; layers.len()];
-            for (index, layer) in layering.draw_order(layers).into_iter().enumerate() {
-                if let Ok(slot) = layers.binary_search(&layer) {
-                    position[slot] = index;
-                }
-            }
-            ops.sort_by_key(|op| {
-                layers
-                    .binary_search(&op.layer())
-                    .map_or(usize::MAX, |slot| position[slot])
-            });
+        // The operations already follow logical painter order. Stable sorting
+        // moves only separated planes; depth ties retain their interleaving.
+        if ops
+            .iter()
+            .any(|op| scene.canvas.layer_offset(op.layer()).is_none())
+        {
+            return Err(RenderError::UnavailableOutput);
+        }
+        if layering.spacing != 0.0 {
+            let depth = |op: &SurfaceOp| {
+                layering.view_depth(
+                    scene
+                        .canvas
+                        .layer_offset(op.layer())
+                        .expect("validated current plane"),
+                )
+            };
+            ops.sort_by(|left, right| depth(right).total_cmp(&depth(left)));
         }
         Ok(CanvasDrawFrame {
             scene,
@@ -847,8 +855,11 @@ impl<D: RenderDevice> RenderService<D> {
                 units_per_em: data.font.units_per_em(),
                 glyphs,
             };
+            let Some(coordinate) = scene.canvas.layer_offset(style.layer) else {
+                continue;
+            };
             let height = projected_glyph_height(
-                &layering.layer_mvp(&mvp, style.layer),
+                &layering.layer_mvp(&mvp, coordinate),
                 style.position,
                 *font_size * style.scale[1],
                 (viewport.width, viewport.height),

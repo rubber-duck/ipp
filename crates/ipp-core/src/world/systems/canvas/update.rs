@@ -41,7 +41,7 @@ pub(super) struct CanvasOutputChanges<'a> {
     /// Replacement hits, when the hits or the GUI observations changed.
     pub hits: Option<Arc<[CanvasHit]>>,
     pub plot_hits: Option<Arc<[crate::systems::plot::PlotCanvasHit]>>,
-    pub layers: &'a [u32],
+    pub layers: &'a [CanvasLayerPlane],
     pub interaction: CanvasInteractionPriority,
     pub paints: Option<Arc<[CanvasPaintInstance]>>,
     pub resources: Option<Arc<[AssetKey]>>,
@@ -203,7 +203,10 @@ impl CanvasSystem {
         let mut walk = CanvasWalk::new();
         for (position, &entity) in walked.iter().enumerate() {
             let layer = layers.as_ref().map_or(0, |layers| layers.layer(position));
-            self.visit(&inputs, &mut walk, position, entity, layer);
+            let priority = layers
+                .as_ref()
+                .map_or(0, |layers| layers.priority(position));
+            self.visit(&inputs, &mut walk, position, entity, layer, priority);
         }
         self.unwind(&mut walk, None, walked.len());
         let positions: BTreeMap<_, _> = walked
@@ -227,29 +230,43 @@ impl CanvasSystem {
         } = walk;
         layout_changed |= walked_layout;
         self.state.bounds.extend(bounds);
-        let used = layers.as_ref().map_or(&[0][..], |layers| layers.used());
-        let (entries, hits, overlays, entry_order, hit_order, overlay_order) = if used.len() > 1 {
-            let entry_order = super::layers::layer_order(entries.iter().map(|entry| entry.layer()));
-            let hit_order = super::layers::layer_order(hits.iter().map(|hit| hit.layer));
-            let overlay_order =
-                super::layers::layer_order(overlays.iter().map(|overlay| overlay.layer));
-            (
-                super::layers::in_layer_order(entries, &entry_order),
-                super::layers::in_layer_order(hits, &hit_order),
-                super::layers::in_layer_order(overlays, &overlay_order),
-                entry_order,
-                hit_order,
-                overlay_order,
-            )
-        } else {
-            (entries, hits, overlays, Vec::new(), Vec::new(), Vec::new())
-        };
+        let base = [CanvasLayerPlane {
+            id: 0,
+            offset: 0.0,
+        }];
+        let used = layers.as_ref().map_or(&base[..], |layers| layers.used());
+        let (entries, hits, overlays, entry_order, hit_order, overlay_order) =
+            if let Some(layers) = &layers {
+                let entry_order = super::layers::layer_order(entries.iter().map(|entry| {
+                    let entity = match entry.as_ref() {
+                        CanvasPaintEntry::Primitive {
+                            primitive,
+                            ..
+                        } => primitive.style().identity.target.entity,
+                        CanvasPaintEntry::Attachment(slot) => slot.anchor,
+                    };
+                    layers.priority(positions[&entity])
+                }));
+                let hit_order = super::layers::layer_order(hits.iter().map(|hit| hit.priority));
+                let overlay_order =
+                    super::layers::layer_order(overlays.iter().map(|overlay| overlay.priority));
+                (
+                    super::layers::in_layer_order(entries, &entry_order),
+                    super::layers::in_layer_order(hits, &hit_order),
+                    super::layers::in_layer_order(overlays, &overlay_order),
+                    entry_order,
+                    hit_order,
+                    overlay_order,
+                )
+            } else {
+                (entries, hits, overlays, Vec::new(), Vec::new(), Vec::new())
+            };
         for hit in &mut plot_hits {
             if let Some(&order) = entry_order.get(hit.order as usize) {
                 hit.order = order;
             }
         }
-        plot_hits.sort_by_key(|hit| (hit.layer, hit.order));
+        plot_hits.sort_by_key(|hit| hit.order);
         let paints = paint_instances(world, assets, &entries);
         let resources = retained_resources(&entries, &paints);
         let interaction = records.iter().fold([0; 4], |counts, record| {
@@ -276,9 +293,7 @@ impl CanvasSystem {
 
         let previous = self.state.publication.take();
         let same_frame = previous.as_ref().is_some_and(|previous| {
-            previous.logical_extent == extent
-                && previous.units_per_metre == density
-                && *previous.layers == *used
+            previous.logical_extent == extent && previous.units_per_metre == density
         });
         let replaced = previous
             .as_ref()
@@ -312,7 +327,9 @@ impl CanvasSystem {
             .as_ref()
             .is_none_or(|previous| *previous.paints != *paints);
         let changed_input = previous.as_ref().is_none_or(|previous| {
-            previous.hits.as_ref() != hits || previous.plot_hits.as_ref() != plot_hits
+            previous.layers.as_ref() != used
+                || previous.hits.as_ref() != hits
+                || previous.plot_hits.as_ref() != plot_hits
         }) || self.state.gui.differs(&controls, &overlays);
         let input_revision = self.install(
             selection,

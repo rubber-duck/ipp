@@ -56,15 +56,11 @@ pub(super) enum CanvasLayerEye {
     Direction(f64),
 }
 
-/// How one Canvas presentation separates its layers along its normal.
-///
-/// Each layer's draws translate its content by its plane id times `spacing`
-/// along content Z, folded into that draw's model-view-projection: retained
-/// geometry, vertex layouts and uploads stay unchanged when the spacing
-/// changes, and completed compact ranks determine their physical offsets.
+/// How one Canvas presentation separates completed physical plane positions.
+/// Retained geometry stays unchanged while its normal coordinate moves.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct CanvasLayering {
-    /// Content Z between consecutive plane ids; zero keeps one plane.
+    /// Content Z per resolved normal coordinate; zero keeps one plane.
     pub spacing: f32,
     /// Viewer choosing the order in which layer planes draw.
     pub eye: CanvasLayerEye,
@@ -77,14 +73,9 @@ impl CanvasLayering {
         eye: CanvasLayerEye::Direction(-1.0),
     };
 
-    /// Content Z of `layer`'s plane.
-    fn depth(&self, layer: u32) -> f64 {
-        f64::from(layer) * f64::from(self.spacing)
-    }
-
-    /// Content model-view-projection of `layer`'s plane.
-    pub fn layer_mvp(&self, mvp: &[f32; 16], layer: u32) -> [f32; 16] {
-        let offset = self.depth(layer) as f32;
+    /// Content model-view-projection at a completed physical coordinate.
+    pub fn layer_mvp(&self, mvp: &[f32; 16], coordinate: f64) -> [f32; 16] {
+        let offset = (coordinate * f64::from(self.spacing)) as f32;
         let mut placed = *mvp;
         if offset != 0.0 {
             for row in 0..4 {
@@ -94,20 +85,14 @@ impl CanvasLayering {
         placed
     }
 
-    /// The ascending plane ids `layers` in view-depth order, farthest plane
-    /// first, so translucent planes compose from the front and from behind.
-    /// Coincident planes keep plane order, which is painter order.
-    pub fn draw_order(&self, layers: &[u32]) -> Vec<u32> {
-        let mut order = layers.to_vec();
-        if self.spacing == 0.0 {
-            return order;
+    /// Distance used for back-to-front translucent drawing. Equal distances
+    /// keep the original logical painter order, independently of plane IDs.
+    pub fn view_depth(&self, coordinate: f64) -> f64 {
+        let depth = coordinate * f64::from(self.spacing);
+        match self.eye {
+            CanvasLayerEye::Point(eye) => (depth - eye).abs(),
+            CanvasLayerEye::Direction(direction) => depth * direction,
         }
-        let depth = |layer: u32| match self.eye {
-            CanvasLayerEye::Point(eye) => (self.depth(layer) - eye).abs(),
-            CanvasLayerEye::Direction(direction) => self.depth(layer) * direction,
-        };
-        order.sort_by(|left, right| depth(*right).total_cmp(&depth(*left)).then(left.cmp(right)));
-        order
     }
 }
 

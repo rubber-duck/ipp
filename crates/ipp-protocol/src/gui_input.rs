@@ -528,6 +528,7 @@ impl Writer {
         self.string(&state.text)?;
         self.u32(state.selection[0])?;
         self.u32(state.selection[1])?;
+        self.u8(u8::from(state.masked))?;
         self.u8(u8::from(state.composition.is_some()))?;
         if let Some(composition) = &state.composition {
             self.string(&composition.text)?;

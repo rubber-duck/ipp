@@ -117,7 +117,7 @@ impl<'a> QueryWalk<'a, '_> {
                 let local = affine.inverse_ray(&ray.ray);
                 let child = self.host.attached_publication(edge);
                 // A Surface separating its canvas's layers offers one shell per
-                // layer in use, at its rank times the spacing, each holding only
+                // plane in use, at its offset times the spacing, each holding only
                 // that layer's targets; candidates then meet the surfaces nearest
                 // first and fall through empty ones.
                 let layers = surface_layers(self.host, edge, child);
@@ -129,8 +129,8 @@ impl<'a> QueryWalk<'a, '_> {
                 geometry
                     .validate_offsets(offsets)
                     .map_err(GuiQueryUnavailable::Data)?;
-                for &layer in layers.iter().rev() {
-                    let offset = f64::from(layer) * f64::from(edge.layer_spacing);
+                for layer in layers.iter().rev() {
+                    let offset = layer.offset * f64::from(edge.layer_spacing);
                     for hit in geometry
                         .ray_intersections(
                             &local,
@@ -165,7 +165,7 @@ impl<'a> QueryWalk<'a, '_> {
                                 point: point.map(|value| value as f32),
                                 extent,
                                 path,
-                                layer: (layers.len() > 1).then_some(layer),
+                                layer: (edge.layer_spacing != 0.0).then_some(layer.id),
                             }),
                             (reason, _, _) => QueryTask::Outcome(GuiQueryOutcome::Blocked {
                                 reason: reason.unwrap_or(GuiQueryBlockReason::Unavailable),
@@ -196,14 +196,18 @@ impl<'a> QueryWalk<'a, '_> {
     }
 }
 
-/// Occupied ranks whose shells a Surface edge in a camera's domain presents: those its
+/// Occupied planes whose shells a Surface edge in a camera's domain presents: those its
 /// canvas uses when its layer spacing separates them, otherwise the base Surface.
 pub(super) fn surface_layers<'a>(
     host: &'a crate::HostRuntime,
     edge: &crate::PublishedWorldAttachment,
     child: Option<&crate::WorldPublication>,
-) -> &'a [u32] {
-    const BASE: &[u32] = &[0];
+) -> &'a [crate::systems::canvas::CanvasLayerPlane] {
+    const BASE: &[crate::systems::canvas::CanvasLayerPlane] =
+        &[crate::systems::canvas::CanvasLayerPlane {
+            id: 0,
+            offset: 0.0,
+        }];
     if edge.layer_spacing == 0.0 {
         return BASE;
     }
@@ -222,7 +226,7 @@ pub(crate) fn surface_offset_range(
 ) -> [f64; 2] {
     surface_layers(host, edge, child)
         .iter()
-        .map(|&rank| f64::from(rank) * f64::from(edge.layer_spacing))
+        .map(|plane| plane.offset * f64::from(edge.layer_spacing))
         .fold([0.0_f64; 2], |range, offset| {
             [range[0].min(offset), range[1].max(offset)]
         })

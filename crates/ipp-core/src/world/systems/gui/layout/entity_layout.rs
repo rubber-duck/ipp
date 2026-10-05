@@ -298,7 +298,9 @@ impl GuiEntityLayoutState {
             .as_ref()
             .and_then(|view| view.control_labels.get(&entity));
         match (current, previous) {
-            (Some((text, axis, steps)), Some(previous)) => !previous.measures(&text, axis, steps),
+            (Some((text, axis, steps, masked)), Some(previous)) => {
+                !previous.measures(&text, axis, steps, masked)
+            }
             (None, None) => false,
             _ => true,
         }

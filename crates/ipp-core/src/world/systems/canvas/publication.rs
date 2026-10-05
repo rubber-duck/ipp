@@ -82,9 +82,8 @@ pub struct CanvasPrimitiveStyle {
     pub opacity: f32,
     /// Fully intersected logical clip; empty clips remain empty.
     pub clip: CanvasClip,
-    /// Compact physical rank of the producing entity's resolved group, one of
-    /// the publication's `layers`. Painter order is rank first, then tree order;
-    /// Surface separation is rank times layer spacing along its front normal.
+    /// Opaque plane ID in the completed publication. Painter order follows
+    /// destination logical priority; Surface separation uses the plane's offset.
     pub layer: u32,
 }
 
@@ -446,7 +445,7 @@ pub struct CanvasAttachmentSlot {
     /// Cached presentation must retain these same per-primitive semantics without applying it twice.
     /// Zero suppresses paint and hit eligibility, not attachment identity or availability.
     pub opacity: f32,
-    /// Compact rank of the anchor's group; the nested canvas presents on this
+    /// Opaque plane ID of the anchor; the nested canvas presents on this
     /// layer's plane, and its own layers only order its content there.
     pub layer: u32,
 }
@@ -522,7 +521,7 @@ pub enum CanvasPaintEntry {
 }
 
 impl CanvasPaintEntry {
-    /// Plane id of the entry's producing entity's layer.
+    /// Opaque current-publication plane ID of the producing entity.
     pub fn layer(&self) -> u32 {
         match self {
             Self::Primitive {
@@ -563,6 +562,16 @@ pub enum CanvasHitKind {
     Overlay,
 }
 
+/// One physical plane in a completed Canvas publication. IDs are local to that
+/// publication; only `offset` determines Surface separation along its normal.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CanvasLayerPlane {
+    /// Opaque plane identity, shared only by exact coincidence within one scope.
+    pub id: u32,
+    /// Current resolved normal coordinate, multiplied by Surface layer spacing.
+    pub offset: f64,
+}
+
 /// Immutable routing geometry supplied after local evaluation.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CanvasHit {
@@ -571,11 +580,13 @@ pub struct CanvasHit {
     /// Local action or nested output classification.
     pub kind: CanvasHitKind,
     /// Ordinal in the canvas's tree-order paint walk, which keyboard traversal
-    /// follows. Publication hits are listed by layer, then this ordinal; pointer
+    /// follows. Publication hits are listed by destination priority, then this ordinal; pointer
     /// targeting walks that list in reverse. Without layers it is the painter
     /// ordinal of the hit's paint.
     pub paint_order: u32,
-    /// Compact physical rank of the target's group, as on its paint.
+    /// Destination logical priority, independent of current physical placement.
+    pub priority: u32,
+    /// Opaque current-publication plane ID, as on its paint.
     pub layer: u32,
     /// Final logical rectangle in minimum/maximum form.
     pub bounds: CanvasClip,
@@ -638,18 +649,18 @@ pub struct CanvasPublication {
     pub resource_revision: u64,
     /// Hit/traversal/attachment-token revision within this output incarnation.
     pub input_revision: u64,
-    /// Immutable entries in painter order, layer first and then tree order,
+    /// Immutable entries in destination logical priority then tree order,
     /// sharing unchanged primitive storage.
     pub entries: Arc<[Arc<CanvasPaintEntry>]>,
-    /// Evaluated hit records by layer, then tree order; raw content creates no
+    /// Evaluated hit records by destination priority, then tree order; raw content creates no
     /// GUI control behavior.
     pub hits: Arc<[CanvasHit]>,
     /// Chart-local analytic marks placed through the same Canvas walk and clips.
     pub plot_hits: Arc<[crate::systems::plot::PlotCanvasHit]>,
-    /// Consecutive physical ranks of occupied shown-entity groups, ascending
-    /// and never empty. All-zero ordinary content uses only rank 0. Adding or
-    /// removing a group repacks later ranks deterministically.
-    pub layers: Arc<[u32]>,
+    /// Current planes, ordered by discrete scope then physical offset; never
+    /// empty. Entries and hits retain independent logical painter order.
+    /// IDs and offsets are recomputed from the current authored endpoints.
+    pub layers: Arc<[CanvasLayerPlane]>,
     /// Current local interaction priority, filtered by the composed router before use.
     pub interaction: CanvasInteractionPriority,
     /// The custom paints the entries' paint fills name, by target.
@@ -707,5 +718,15 @@ impl CanvasPublication {
             .binary_search_by_key(&target, |paint| paint.target)
             .ok()
             .map(|index| &self.paints[index])
+    }
+}
+
+impl CanvasPublication {
+    /// Physical normal coordinate of one current-publication opaque plane ID.
+    pub fn layer_offset(&self, id: u32) -> Option<f64> {
+        self.layers
+            .get(id as usize)
+            .filter(|plane| plane.id == id)
+            .map(|plane| plane.offset)
     }
 }

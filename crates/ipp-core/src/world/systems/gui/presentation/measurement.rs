@@ -65,6 +65,8 @@ pub(in crate::world::systems) struct GuiControlLabel {
     /// Whether a numeric text input shows its step parts, between which its
     /// line is centred.
     steps: bool,
+    /// Whether this layout measures mask glyphs using source text offsets.
+    masked: bool,
     /// Content box `[x, y, width, height]` in control-local logical units.
     pub content: [f32; 4],
     /// The control's laid-out size.
@@ -80,8 +82,12 @@ impl GuiControlLabel {
         text: &Arc<str>,
         axis: usize,
         steps: bool,
+        masked: bool,
     ) -> bool {
-        same_text(&self.text, text) && self.axis == axis && self.steps == steps
+        same_text(&self.text, text)
+            && self.axis == axis
+            && self.steps == steps
+            && self.masked == masked
     }
 
     /// Record the content box of a control of `size` with `padding`
@@ -151,14 +157,34 @@ pub(in crate::world::systems::gui) fn label_inputs(
     context: &SystemRuntimeAccess<'_>,
     gui: &GuiSystem,
     entity: EntityId,
-) -> Option<(Arc<str>, usize, bool)> {
+) -> Option<(Arc<str>, usize, bool, bool)> {
     let world = &*context.world;
     let control = entity_control(world, &world.state, entity)?;
     Some((
         control_text(world, gui, control.target, control.kind),
         control_axis(world, entity, control.kind),
         control_steps(world, entity, control.kind),
+        control_masked(world, gui, control.target, control.kind),
     ))
+}
+
+/// Whether the input masks its displayed text, including numeric edits.
+fn control_masked(
+    world: &crate::world::WorldSimulationState,
+    gui: &GuiSystem,
+    target: GuiEntityTarget,
+    kind: GuiControlKind,
+) -> bool {
+    kind == GuiControlKind::TextInput
+        && world
+            .components
+            .gui_text_input(target.entity.index() as usize)
+            .is_some_and(|input| {
+                input.masked
+                    && (gui.native_text_state(target).is_some()
+                        || input.numeric
+                        || !input.text.is_empty())
+            })
 }
 
 /// Whether a numeric text input shows its step parts.
@@ -246,6 +272,7 @@ pub(in crate::world::systems::gui) fn measure_control(
     let text = control_text(world, gui, target, kind);
     let axis = control_axis(world, entity, kind);
     let steps = control_steps(world, entity, kind);
+    let masked = control_masked(world, gui, target, kind);
     let font_size = typography.map_or(super::GUI_DEFAULT_FONT_SIZE, |font| font.font_size);
     let assets = context.asset_resources();
     let font = typography
@@ -263,15 +290,19 @@ pub(in crate::world::systems::gui) fn measure_control(
         });
     if let Some(previous) = previous.filter(|previous| {
         previous.target == target
-            && previous.measures(&text, axis, steps)
+            && previous.measures(&text, axis, steps, masked)
             && previous.font == font
             && previous.font_size == font_size
     }) {
         return Some((previous.clone(), false));
     }
     let layout = font.and_then(|key| {
+        let source_boundaries = masked.then(|| crate::systems::surface::grapheme_boundaries(&text));
+        let mask = source_boundaries
+            .as_ref()
+            .map(|boundaries| "•".repeat(boundaries.len().saturating_sub(1)));
         let request = TextMeasureRequest::new(
-            &text,
+            mask.as_deref().unwrap_or(&text),
             TextFont::Ready {
                 key,
                 font: assets.get_typed::<FontAsset>(key)?,
@@ -281,9 +312,20 @@ pub(in crate::world::systems::gui) fn measure_control(
             TextMaxWidth::Unbounded,
         )
         .ok()?;
-        let TextOutcome::Measured(layout) = measure_text(&request) else {
+        let TextOutcome::Measured(mut layout) = measure_text(&request) else {
             return None;
         };
+        if let Some(boundaries) = source_boundaries {
+            // Each mask glyph covers one source grapheme. Geometry stays measured
+            // from the mask, while all editing and routing offsets index source text.
+            for (glyph, range) in layout.glyphs.iter_mut().zip(boundaries.windows(2)) {
+                glyph.source_range = [range[0], range[1]];
+            }
+            for line in &mut layout.lines {
+                line.source_range = [0, text.len() as u32];
+            }
+            layout.grapheme_boundaries = boundaries;
+        }
         Some(Arc::new(layout))
     });
     let geometry = layout.as_ref().and_then(|layout| {
@@ -354,6 +396,7 @@ pub(in crate::world::systems::gui) fn measure_control(
             intrinsic,
             axis,
             steps,
+            masked,
             content: [0.0; 4],
             size: [0.0; 2],
         },

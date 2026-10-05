@@ -859,6 +859,19 @@ function nativeEditor(): HTMLTextAreaElement | null {
   );
 }
 
+/** Toggle presentation on the same runtime input. */
+export async function setMasked(masked: boolean): Promise<void> {
+  const control = textRef.current;
+  if (control === null) throw new Error("GUI fixture is not ready");
+  const current = (await control.read()).masked;
+  if (
+    typeof current !== "boolean" ||
+    !(await control.compareAndSet("masked", current, masked))
+  )
+    throw new Error("Mask update failed");
+  await handle?.flush();
+}
+
 export async function observation(): Promise<{
   readonly text: string;
   readonly editorValue: string | null;
@@ -876,6 +889,10 @@ export async function observation(): Promise<{
   readonly domSelection: readonly [number, number] | null;
   readonly focusSelection: readonly [number, number] | null;
   readonly textTrace: readonly string[];
+  readonly masked: boolean;
+  readonly nativeMask: string;
+  readonly textEntity: string;
+  readonly focusGeneration: string | null;
 }> {
   const current = handle;
   const control = textRef.current;
@@ -906,6 +923,10 @@ export async function observation(): Promise<{
     focusSelection:
       focus === null ? null : [focus.selectionStart, focus.selectionEnd],
     textTrace: [...textTrace],
+    masked: focus?.masked ?? false,
+    nativeMask: editor?.style.getPropertyValue("-webkit-text-security") ?? "",
+    textEntity: control.target.entity.toString(),
+    focusGeneration: focus?.fence.generation.toString() ?? null,
   };
 }
 

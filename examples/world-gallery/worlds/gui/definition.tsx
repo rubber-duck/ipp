@@ -12,7 +12,7 @@ import { frameGuiCamera } from "./camera.js";
 import {
   PROJECTOR_MESH_SOURCES,
   PROJECTOR_TEXTURE_SOURCES,
-} from "./projector.js";
+} from "./projector-assets.js";
 import {
   GuiWorld,
   openingSettings,
@@ -25,7 +25,8 @@ const OPTION_KEYS = [
   "exploded",
   "reducedMotion",
   "monitorWindow",
-  "advancedOpen",
+  "presentationTab",
+  "layerStep",
   "workbenchTab",
   "autoscan",
   "surfaceCache",
@@ -68,10 +69,9 @@ function GuiController({
 
 export const guiScene: GallerySceneDefinition = {
   id: "gui",
-  label: "GUI Demo",
-  shortLabel: "GUI Demo",
-  description:
-    "Operate a projected React GUI with live runtime-owned controls.",
+  label: "VESPER Scanner",
+  shortLabel: "Scanner",
+  description: "Log in to a local scanner projected into the scene.",
   defaultOptions: DEFAULT_OPTIONS,
   actions: [
     "pulse",
@@ -85,7 +85,10 @@ export const guiScene: GallerySceneDefinition = {
     "setExploded",
     "setReducedMotion",
     "setMonitorWindow",
-    "setAdvancedOpen",
+    "setPresentationTab",
+    "setLayerStep",
+    "setShieldArmed",
+    "setVectorOnly",
     "setWorkbenchTab",
     "selectSurfaceCache",
     "selectSurfaceShape",
@@ -95,6 +98,7 @@ export const guiScene: GallerySceneDefinition = {
     "setCallsign",
     "tuning",
     "station",
+    "app",
     "resetCamera",
   ],
   resources: [
@@ -133,12 +137,41 @@ export const guiScene: GallerySceneDefinition = {
     };
     let unsubscribeState: (() => void) | undefined;
     let observedState: GuiScene["state"] | undefined;
-    let framedMode: boolean | undefined;
+    let framedMode: string | undefined;
+    let authoredCameraPose: Readonly<Record<string, unknown>> | undefined;
+    const cameraPose = async () => {
+      const entity = (await client.inspect()).entities.find(
+        (entity) => entity.id === camera,
+      );
+      if (!entity) throw new Error("The gallery session camera is not mounted");
+      return Object.fromEntries(
+        ["Transform", "Camera"].flatMap((name) => {
+          const fields = entity.components.find(
+            (component) => component.component === client.components[name]!.id,
+          )?.fields;
+          if (!fields) throw new Error(`The gallery camera is missing ${name}`);
+          return Object.entries(fields).map(([field, value]) => [
+            `${name}.${field}`,
+            value,
+          ]);
+        }),
+      );
+    };
     let cameraWork = Promise.resolve();
     let framingRequest = 0;
     const frameCurrentMode = (force = false) => {
       if (!active || !controller?.ready) return cameraWork;
-      const mode = controller.state.current.exploded;
+      const state = controller.state.current;
+      const mode = state.exploded
+        ? "exploded"
+        : state.app.phase === "workspace"
+          ? "workspace"
+          : "login";
+      const phaseChanged =
+        framedMode !== undefined &&
+        mode !== "exploded" &&
+        framedMode !== "exploded" &&
+        mode !== framedMode;
       if (!force && mode === framedMode) return cameraWork;
       framedMode = mode;
       // Coalesce queued transitions; disposal drains an in-flight write before
@@ -149,11 +182,26 @@ export const guiScene: GallerySceneDefinition = {
         .then(async () => {
           if (!active || context.signal.aborted || request !== framingRequest)
             return;
+          // An initial/reset view is explicit. A phase handoff preserves a
+          // manual pose instead of continually taking the camera from its user.
+          if (!force && phaseChanged && authoredCameraPose) {
+            const current = await cameraPose();
+            if (
+              Object.entries(authoredCameraPose).some(
+                ([key, value]) =>
+                  typeof value === "number" &&
+                  Math.abs(Number(current[key]) - value) > 1e-5,
+              )
+            )
+              return;
+          }
           await frameGuiCamera(
             client,
             camera,
             controller!.state.current.exploded,
+            controller!.state.current.app.phase !== "workspace",
           );
+          authoredCameraPose = await cameraPose();
         });
       void cameraWork.catch((failure) => {
         controller?.reportFailure(failure);
@@ -178,7 +226,9 @@ export const guiScene: GallerySceneDefinition = {
     };
     const actions = Object.fromEntries(
       guiScene.actions
-        .filter((name) => !["resetCamera", "tuning", "station"].includes(name))
+        .filter(
+          (name) => !["resetCamera", "tuning", "station", "app"].includes(name),
+        )
         .map((name) => [
           name,
           async (args?: unknown) => {
@@ -190,6 +240,7 @@ export const guiScene: GallerySceneDefinition = {
               setCallsign: "callsign",
               setExploded: "exploded",
               setReducedMotion: "reducedMotion",
+              setLayerStep: "layerStep",
             } as const;
             const control = controls[name as keyof typeof controls];
             if (control)
@@ -217,7 +268,7 @@ export const guiScene: GallerySceneDefinition = {
           },
         ]),
     );
-    for (const group of ["tuning", "station"] as const) {
+    for (const group of ["tuning", "station", "app"] as const) {
       actions[group] = async (args?: unknown) => {
         await ready;
         const { method, args: parameters = [] } = args as {
@@ -285,7 +336,11 @@ export const guiScene: GallerySceneDefinition = {
             scene.setMonitorWindow(
               value as Parameters<GuiScene["setMonitorWindow"]>[0],
             ),
-          advancedOpen: (value) => scene.setAdvancedOpen(Boolean(value)),
+          presentationTab: (value) =>
+            scene.setPresentationTab(
+              value as Parameters<GuiScene["setPresentationTab"]>[0],
+            ),
+          layerStep: (value) => scene.writeControl("layerStep", Number(value)),
           workbenchTab: (value) =>
             scene.setWorkbenchTab(
               value as Parameters<GuiScene["setWorkbenchTab"]>[0],

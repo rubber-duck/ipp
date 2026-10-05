@@ -183,6 +183,10 @@ export const componentContract = {
     host: "ipp-mesh-instance",
     fields: { source: "string", variant: "number" },
   },
+  MeshPose: {
+    host: "ipp-mesh-pose",
+    fields: { source: "string", variant: "number", weight: "number" },
+  },
   UnlitTexture: {
     host: "ipp-unlit-texture",
     fields: { source: "string", variant: "number" },
@@ -354,6 +358,7 @@ export type UnlitMaterialProps = ComponentProps &
   ComponentFields<"UnlitMaterial">;
 export type MeshInstanceProps = ComponentProps &
   ComponentFields<"MeshInstance">;
+export type MeshPoseProps = ComponentProps & ComponentFields<"MeshPose">;
 export type UnlitTextureProps = ComponentProps &
   ComponentFields<"UnlitTexture">;
 export type CameraProps = ComponentProps & ComponentFields<"Camera">;
@@ -432,6 +437,11 @@ export function UnlitMaterial(props: UnlitMaterialProps) {
 
 export function MeshInstance(props: MeshInstanceProps) {
   return createElement(componentContract.MeshInstance.host, props);
+}
+
+/** Interpolate an ordinary base MeshInstance toward a corresponding mesh asset. */
+export function MeshPose(props: MeshPoseProps) {
+  return createElement(componentContract.MeshPose.host, props);
 }
 
 export function UnlitTexture(props: UnlitTextureProps) {

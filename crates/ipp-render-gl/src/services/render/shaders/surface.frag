@@ -77,8 +77,18 @@ void accumulate(vec2 sample_position, vec2 pixels_per_unit, out float xcov, out 
     xcov = 0.0; ycov = 0.0; xwgt = 0.0; ywgt = 0.0;
     vec2 extent = max(v_bounds.zw - v_bounds.xy, vec2(1.0 / 65536.0));
     ivec2 band = clamp(ivec2((sample_position - v_bounds.xy) / extent * 16.0), ivec2(0), ivec2(15));
-    int list = v_band_offset + band_value(v_band_offset + band.y * 2);
-    int count = band_value(v_band_offset + band.y * 2 + 1);
+    int horizontal = v_band_offset + band.y * 2;
+    int vertical = v_band_offset + 32 + band.x * 2;
+    int grid = band_value(v_band_offset + 64);
+    // A tile margin covers the entire pixel footprint. Retain full band
+    // winding for minification, including oblique/projected presentation.
+    if (grid > 0 && all(lessThanEqual(1.0 / pixels_per_unit, extent / float(grid)))) {
+        ivec2 tile = clamp(ivec2((sample_position - v_bounds.xy) / extent * float(grid)), ivec2(0), ivec2(grid - 1));
+        horizontal = v_band_offset + band_value(v_band_offset + 65) + (tile.y * grid + tile.x) * 4;
+        vertical = horizontal + 2;
+    }
+    int list = v_band_offset + band_value(horizontal);
+    int count = band_value(horizontal + 1);
     for (int index = 0; index < count; ++index) {
         int curve = v_curve_start + band_value(list + index);
         vec4 p12; vec2 p3; vec2 a; vec2 b; bool line;
@@ -90,8 +100,8 @@ void accumulate(vec2 sample_position, vec2 pixels_per_unit, out float xcov, out 
             if (code > 1u) { xcov -= clamp(r.y + 0.5, 0.0, 1.0); xwgt = max(xwgt, clamp(1.0 - abs(r.y) * 2.0, 0.0, 1.0)); }
         }
     }
-    list = v_band_offset + band_value(v_band_offset + 32 + band.x * 2);
-    count = band_value(v_band_offset + 32 + band.x * 2 + 1);
+    list = v_band_offset + band_value(vertical);
+    count = band_value(vertical + 1);
     for (int index = 0; index < count; ++index) {
         int curve = v_curve_start + band_value(list + index);
         vec4 p12; vec2 p3; vec2 a; vec2 b; bool line;

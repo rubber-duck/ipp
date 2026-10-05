@@ -291,6 +291,14 @@ assert.deepEqual(target.paintKeys, native.paintKeys);
 assert.deepEqual(target.skinLooks, native.skinLooks);
 assert.deepEqual(target.skinTokens, native.skinTokens);
 for (const schema of [native, target]) {
+  const transition = schema.components.find(
+    (component) => component.name === "CanvasLayerTransition",
+  );
+  assert.equal(transition.id, 56);
+  assert.equal(transition.fields.previous_layer.kind, 3);
+  assert.equal(transition.fields.previous_layer.default, 0);
+  assert.equal(transition.fields.progress.kind, 1);
+  assert.equal(transition.fields.progress.default, 0);
   assert.ok(schema.paintKeys.length > 0);
   const keys = new Set(schema.paintKeys.map((key) => key.index));
   for (const name of ["button", "checkbox", "slider", "textInput", "scroll"])

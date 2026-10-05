@@ -59,6 +59,7 @@ ipp_schema_derive::component_registry! {
         GuiColor = 53,
         CylinderSurface = 54,
         SphereSurface = 55,
+        CanvasLayerTransition = 56,
         BufferDataSourceBinding = 100,
         StreamingDataSourceBinding = 101,
         PlotFrame2d = 103,

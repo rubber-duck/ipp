@@ -470,8 +470,12 @@ impl GuiSystem {
         prepared.commit_with_publication(
             || {
                 if resets && let Some(native) = local.native_text.as_mut() {
-                    native.state =
-                        super::text::GuiNativeText::state(target, formatted.clone(), generation);
+                    native.state = super::text::GuiNativeText::state(
+                        target,
+                        formatted.clone(),
+                        generation,
+                        native.state.masked,
+                    );
                     native.basis = Some(formatted);
                     local.native_generation = generation;
                     local.presentation_revision = presentation_revision;

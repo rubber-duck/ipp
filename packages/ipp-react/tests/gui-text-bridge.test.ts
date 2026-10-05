@@ -28,6 +28,7 @@ function focus(
   return {
     fence: FENCE,
     text: "a😀b",
+    masked: false,
     selectionStart: 1,
     selectionEnd: 5,
     ...overrides,
@@ -82,6 +83,7 @@ test("authoritative focus supplies text and UTF-8 selection", () => {
   const before = model.token();
   assert.equal(model.observe(focus()), true);
   assert.deepEqual(model.committed(), {
+    masked: false,
     text: "a😀b",
     caretUtf8: 5,
     anchorUtf8: 1,
@@ -115,6 +117,7 @@ test("selection-only and composition updates reconcile without a text commit", (
     true,
   );
   assert.deepEqual(model.committed(), {
+    masked: false,
     text: "a😀b",
     caretUtf8: 6,
     anchorUtf8: 5,
@@ -128,6 +131,7 @@ test("selection-only and composition updates reconcile without a text commit", (
     true,
   );
   assert.deepEqual(model.committed(), {
+    masked: false,
     text: "aéb",
     caretUtf8: 3,
     anchorUtf8: 3,
@@ -146,6 +150,7 @@ test("local activations and selections fence delayed clipboard work", () => {
   model.noteLocalSelection(0, 6);
   assert.notEqual(model.token(), activated);
   assert.deepEqual(model.committed(), {
+    masked: false,
     text: "a😀b",
     caretUtf8: 6,
     anchorUtf8: 0,
@@ -206,4 +211,16 @@ test("a replaced focused text moves the fence and resynchronizes", () => {
     ...FENCE,
     generation: 4n,
   });
+});
+
+test("reveal changes presentation without changing the native editing identity", () => {
+  const model = createTextBridgeModel(1n);
+  model.observe(focus({ masked: true }));
+  const masked = model.committed();
+  assert.equal(masked?.masked, true);
+  assert.equal(masked?.text, "a😀b");
+  const token = model.token();
+  assert.equal(model.observe(focus({ masked: false })), true);
+  assert.equal(model.token(), token);
+  assert.deepEqual(model.committed(), { ...masked, masked: false });
 });

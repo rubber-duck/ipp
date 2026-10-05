@@ -117,6 +117,7 @@ function Badges({ scene }: { readonly scene: GuiScene }) {
 
 /** The one alert worth saying now, with its recovery action. */
 function Alert({ scene }: { readonly scene: GuiScene }) {
+  const issue = useStoreValue(scene.state, (state) => state.declarationIssue);
   const kind = useStoreValue(scene.state, stationAlertKind);
   const text = useStoreValue(scene.state, stationAlertText);
   const action =
@@ -127,11 +128,13 @@ function Alert({ scene }: { readonly scene: GuiScene }) {
         : undefined;
   return (
     <InlineAlert
-      key={kind}
+      key={issue ? "declaration" : kind}
       id="gui-alert"
-      severity={ALERT_SEVERITY[kind]}
-      text={text}
-      {...(action ? { action } : {})}
+      severity={issue ? "error" : ALERT_SEVERITY[kind]}
+      text={
+        issue ? "SCENE UPDATE REJECTED. CHANGE THE SETTING TO CONTINUE." : text
+      }
+      {...(!issue && action ? { action } : {})}
       layout={{ margin_top: BADGE_GAP }}
     />
   );

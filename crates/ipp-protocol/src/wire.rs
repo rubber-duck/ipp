@@ -371,7 +371,7 @@ layouts! {
     "gui-physical-target" => [field!("world", Named => "world-reference"), field!("entity", U64), field!("component", U16), field!("incarnation", U64)];
     "gui-native-buffer" => [field!("byte_length", U32), field!("state", Named => "gui-native-state")];
     "gui-native-composition" => [field!("text", Utf8, FIELD_BYTES), field!("selection_start", U32), field!("selection_end", U32)];
-    "gui-native-state" => [field!("target", Named => "gui-physical-target"), field!("generation", U64), field!("text", Utf8, FIELD_BYTES), field!("selection_start", U32), field!("selection_end", U32), field!("composition", Option => "gui-native-composition")];
+    "gui-native-state" => [field!("target", Named => "gui-physical-target"), field!("generation", U64), field!("text", Utf8, FIELD_BYTES), field!("selection_start", U32), field!("selection_end", U32), field!("masked", Bool), field!("composition", Option => "gui-native-composition")];
     "host-request-gui-input" => [field!("magic", U64), field!("connection", U64), field!("request_id", U64), field!("tag", Variant => "host-request"), field!("body_bytes", U32), field!("body", Union => "gui-physical-request")];
     "host-response-gui-input" => [field!("magic", U64), field!("connection", U64), field!("request_id", U64), field!("tag", Variant => "host-response"), field!("body_bytes", U32), field!("body", Union => "gui-physical-response")];
     "host-request-get-root-output-binding" => [field!("magic", U64), field!("connection", U64), field!("request_id", U64), field!("tag", Variant => "host-request"), field!("world", Named => "world-reference")];

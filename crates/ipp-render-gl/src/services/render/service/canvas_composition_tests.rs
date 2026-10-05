@@ -7,47 +7,61 @@ fn layering(spacing: f32, eye: CanvasLayerEye) -> CanvasLayering {
     }
 }
 
+fn draw_order(layering: CanvasLayering, offsets: &[f64]) -> Vec<usize> {
+    let mut order: Vec<_> = (0..offsets.len()).collect();
+    if layering.spacing != 0.0 {
+        order.sort_by(|left, right| {
+            layering
+                .view_depth(offsets[*right])
+                .total_cmp(&layering.view_depth(offsets[*left]))
+        });
+    }
+    order
+}
+
 #[test]
-fn layer_planes_draw_farthest_first_from_any_side() {
+fn physical_planes_draw_farthest_first_from_any_side() {
     use CanvasLayerEye::{Direction, Point};
 
-    // A perspective eye in front, behind, and between layer planes 0, 1, 2 m.
-    let layers = [0, 1, 2];
-    assert_eq!(layering(1.0, Point(5.0)).draw_order(&layers), [0, 1, 2]);
-    assert_eq!(layering(1.0, Point(-5.0)).draw_order(&layers), [2, 1, 0]);
-    assert_eq!(layering(1.0, Point(1.2)).draw_order(&layers), [0, 2, 1]);
-    // Negative spacing stacks the layers behind the base plane.
-    assert_eq!(layering(-1.0, Point(5.0)).draw_order(&layers), [2, 1, 0]);
-    // Orthographic views looking down -Z from the front, and from behind.
+    let offsets = [0.0, 0.75, 2.0];
+    assert_eq!(draw_order(layering(1.0, Point(5.0)), &offsets), [0, 1, 2]);
+    assert_eq!(draw_order(layering(1.0, Point(-5.0)), &offsets), [2, 1, 0]);
+    assert_eq!(draw_order(layering(1.0, Point(1.2)), &offsets), [0, 2, 1]);
+    assert_eq!(draw_order(layering(-1.0, Point(5.0)), &offsets), [2, 1, 0]);
     assert_eq!(
-        layering(1.0, Direction(-0.5)).draw_order(&layers),
+        draw_order(layering(1.0, Direction(-0.5)), &offsets),
         [0, 1, 2]
     );
-    assert_eq!(layering(1.0, Direction(0.5)).draw_order(&layers), [2, 1, 0]);
-    // Coincident or edge-on planes keep painter order.
-    assert_eq!(CanvasLayering::FLAT.draw_order(&layers), [0, 1, 2]);
-    assert_eq!(layering(1.0, Direction(0.0)).draw_order(&layers), [0, 1, 2]);
+    assert_eq!(
+        draw_order(layering(1.0, Direction(0.5)), &offsets),
+        [2, 1, 0]
+    );
 }
 
 #[test]
-fn compact_ranks_order_shells_with_the_eye_between_them() {
-    use CanvasLayerEye::Point;
-    assert_eq!(layering(1.0, Point(1.8)).draw_order(&[0, 1, 2]), [0, 1, 2]);
-    assert_eq!(layering(1.0, Point(1.8)).draw_order(&[0, 1]), [0, 1]);
+fn physical_ids_do_not_reorder_coincident_logical_entries() {
+    use CanvasLayerEye::{Direction, Point};
+
+    // Logical paint order visits plane1, plane0, plane1. Flattening must keep
+    // the middle entry between the two paints on the same physical plane.
+    let offsets = [2.0, 0.0, 2.0];
+    assert_eq!(draw_order(CanvasLayering::FLAT, &offsets), [0, 1, 2]);
+    assert_eq!(
+        draw_order(layering(1.0, Direction(0.0)), &offsets),
+        [0, 1, 2]
+    );
+    assert_eq!(draw_order(layering(1.0, Point(1.0)), &offsets), [0, 1, 2]);
 }
 
 #[test]
-fn a_layer_translates_content_by_its_id_times_the_spacing() {
+fn a_fractional_position_translates_content_by_the_spacing() {
     let mvp: [f32; 16] = std::array::from_fn(|index| index as f32 + 1.0);
-    assert_eq!(CanvasLayering::FLAT.layer_mvp(&mvp, 3), mvp);
+    assert_eq!(CanvasLayering::FLAT.layer_mvp(&mvp, 3.75), mvp);
     let layered = layering(0.5, CanvasLayerEye::Point(1.0));
-    assert_eq!(layered.layer_mvp(&mvp, 0), mvp);
-    let raised = layered.layer_mvp(&mvp, 2);
-    // Column 3 gains one unit of column 2; the other columns are unchanged.
+    assert_eq!(layered.layer_mvp(&mvp, 0.0), mvp);
+    let raised = layered.layer_mvp(&mvp, 1.5);
     assert_eq!(raised[..12], mvp[..12]);
-    assert_eq!(raised[12..], [22.0, 24.0, 26.0, 28.0]);
-    // Occupied rank4 sits two units out with four intervals from the base.
-    assert_eq!(layered.layer_mvp(&mvp, 4)[12..], [31.0, 34.0, 37.0, 40.0]);
+    assert_eq!(raised[12..], [19.75, 21.5, 23.25, 25.0]);
 }
 
 #[derive(Debug)]
@@ -172,15 +186,16 @@ fn generic_affine_provider_preserves_shift_rotation_scale_and_normal_offsets() {
     let mapping = affine_matrix(&provider).unwrap();
     let content = camera::multiply(mapping, plane_matrix([0.0; 2], [0.01, 0.01]).unwrap());
     for logical in [[0.0, 0.0], [400.0, 200.0], [130.0, 80.0]] {
-        for rank in [0, 2] {
-            let mvp = layering(0.25, CanvasLayerEye::Direction(-1.0)).layer_mvp(&content, rank);
+        for coordinate in [0.0, 1.375, 2.0] {
+            let mvp =
+                layering(0.25, CanvasLayerEye::Direction(-1.0)).layer_mvp(&content, coordinate);
             let actual: [f64; 3] = std::array::from_fn(|i| {
                 f64::from(mvp[i]) * logical[0]
                     + f64::from(mvp[4 + i]) * logical[1]
                     + f64::from(mvp[12 + i])
             });
             let expected = provider
-                .sample(logical.map(|v| v * 0.01), f64::from(rank) * 0.25)
+                .sample(logical.map(|v| v * 0.01), coordinate * 0.25)
                 .unwrap()
                 .position;
             for (a, e) in actual.into_iter().zip(expected) {

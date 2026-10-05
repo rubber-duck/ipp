@@ -28,6 +28,7 @@ import {
 } from "../src/attached-world.js";
 import type { CanvasHost } from "../src/canvas-presentation.js";
 import { createRoot, Entity } from "../src/index.js";
+import { World } from "../src/canvas-scope.js";
 
 const CANVAS_SELECTION = ["ipp.canvas"] as const;
 const size = { width: 80, height: 60, devicePixelRatio: 1 };
@@ -47,6 +48,7 @@ class FakeWorldClient {
   readonly schemaHash = 1n;
   readonly closed = new Promise<never>(() => {});
   private nextEntity = 100n;
+  rejectNext = false;
 
   constructor(
     readonly session: bigint,
@@ -55,6 +57,18 @@ class FakeWorldClient {
 
   async batch(operations: Command[]): Promise<BatchOutcome> {
     this.batches.push(operations);
+    if (this.rejectNext) {
+      this.rejectNext = false;
+      return {
+        ok: false,
+        batchId: BigInt(this.batches.length),
+        tick: 1n,
+        aliases: [],
+        symbols: [],
+        effects: [],
+        error: { scope: "operation", operation: 0, reason: "InvalidValue" },
+      };
+    }
     return {
       ok: true,
       batchId: BigInt(this.batches.length),
@@ -353,4 +367,132 @@ test("closing the Canvas releases a root CanvasWorld without destroying its Worl
   assert.equal(client.closedCount, 1);
   await parent.unmount();
   assert.deepEqual(errors, []);
+});
+
+for (const kind of ["World", "CanvasWorld"] as const) {
+  for (const handler of ["default", "explicit", "throwing"] as const) {
+    test(`${kind} reports a rejected declaration through ${handler} observation and accepts correction`, async () => {
+      const boundary = fakeHost();
+      const declarations: Error[] = [];
+      const lifecycle: Error[] = [];
+      const explicit: Error[] = [];
+      const canvas = new CanvasWorldSession({
+        host: boundary.host,
+        client: boundary.canvas as unknown as Client,
+        onError: (error) => lifecycle.push(error),
+        onDeclarationError: (error) => declarations.push(error),
+      });
+      const parentErrors: Error[] = [];
+      const parent = createRoot(boundary.canvas as unknown as Client, {
+        onError: (error) => parentErrors.push(error),
+      });
+      let committed = 0;
+      let ready: CanvasWorldHandle | undefined;
+      const errorHandler =
+        handler === "default"
+          ? undefined
+          : (error: Error) => {
+              explicit.push(error);
+              if (handler === "throwing")
+                throw new Error("Error observer failed");
+            };
+      const tree = (name: string) =>
+        createElement(
+          CanvasContext,
+          { value: canvas },
+          kind === "World"
+            ? createElement(
+                World,
+                {
+                  onCommit: () => {
+                    committed++;
+                  },
+                  ...(errorHandler ? { onError: errorHandler } : {}),
+                },
+                createElement(Entity, { id: name }),
+              )
+            : createElement(
+                CanvasWorld,
+                {
+                  create: { selectedSystems: CANVAS_SELECTION },
+                  presentation: { root: true },
+                  onReady: (handle) => {
+                    ready = handle;
+                  },
+                  ...(errorHandler ? { onError: errorHandler } : {}),
+                },
+                createElement(Entity, { id: name }),
+              ),
+        );
+      try {
+        await parent.render(tree("initial"));
+        await turns();
+        await canvas.flush();
+        const authored =
+          kind === "World"
+            ? boundary.canvas
+            : [...boundary.sessions.values()].find(
+                (client) => client.worldReference.id === ready!.world.id,
+              )!;
+        authored.rejectNext = true;
+        await parent.render(tree("rejected"));
+        await turns();
+        await assert.rejects(canvas.flush(), /InvalidValue/);
+        const batches = authored.batches.length;
+        await assert.rejects(canvas.flush(), /InvalidValue/);
+        assert.equal(
+          authored.batches.length,
+          batches,
+          "flush cannot retry the invalid declaration",
+        );
+        if (handler === "default")
+          assert.match(declarations.at(-1)?.message ?? "", /InvalidValue/);
+        else assert.match(explicit.at(-1)?.message ?? "", /InvalidValue/);
+        if (handler === "throwing")
+          assert.match(declarations.at(-1)?.message ?? "", /observer failed/);
+        assert.deepEqual(lifecycle, []);
+        assert.deepEqual(parentErrors, []);
+        await parent.render(tree("corrected"));
+        await turns();
+        await canvas.flush();
+        assert.ok(authored.batches.length > batches);
+        if (kind === "World") assert.equal(committed, 2);
+        assert.equal(
+          boundary.created.length,
+          kind === "World" ? 0 : 1,
+          "correction keeps the owned World",
+        );
+        assert.deepEqual(boundary.destroyed, []);
+      } finally {
+        await parent.unmount();
+        await canvas.close();
+      }
+    });
+  }
+}
+
+test("Canvas presentation failures retain their lifecycle observer", async () => {
+  const boundary = fakeHost();
+  const lifecycle: Error[] = [];
+  const declarations: Error[] = [];
+  const canvas = new CanvasWorldSession({
+    host: boundary.host,
+    client: boundary.canvas as unknown as Client,
+    onError: (error) => lifecycle.push(error),
+    onDeclarationError: (error) => declarations.push(error),
+  });
+  try {
+    await canvas.selectOutput(null, size);
+    const release = canvas.claimRoot(
+      canvasOutput(boundary.canvas.worldReference),
+    );
+    await turns();
+    await canvas.selectOutput(null, size).catch(() => {});
+    release();
+    await turns();
+    assert.match(lifecycle[0]?.message ?? "", /explicit output/);
+    assert.deepEqual(declarations, []);
+  } finally {
+    await canvas.close();
+  }
 });

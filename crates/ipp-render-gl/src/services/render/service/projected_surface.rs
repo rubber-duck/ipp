@@ -1,7 +1,7 @@
 //! Required content images and sampled Surface geometry, independent of temporal caching.
 //!
-//! Images use the ordinary Canvas rasterizer. Separated ranks retain all their
-//! paint, including hidden paint; coincident ranks share an image. Geometry and
+//! Images use the ordinary Canvas rasterizer. Separated planes retain all their
+//! paint, including hidden paint; coincident planes share an image. Geometry and
 //! placement are absent from image stamps. A stable requested quality keeps the
 //! selected image size while the provider's half-texel approximation still fits.
 //! Otherwise image dimensions halve until the bounded mesh fits, never changing
@@ -30,7 +30,9 @@ const MESH_BUDGET: usize = 16 << 20;
 
 struct ProjectedGroup<D: RenderDevice> {
     device: Rc<RefCell<D>>,
-    rank: Option<u32>,
+    plane: Option<u32>,
+    offset: f64,
+    painter_order: usize,
     target: Option<D::SurfaceCacheTarget>,
     mesh: GlMeshData<D>,
     patches: Vec<SurfaceMeshPatch>,
@@ -48,6 +50,8 @@ impl<D: RenderDevice> Drop for ProjectedGroup<D> {
 pub(super) struct ProjectedSurface<D: RenderDevice> {
     surface: SceneOutputSurface,
     groups: Vec<ProjectedGroup<D>>,
+    /// Ordered image membership, independent of positions and refresh timing.
+    plane_membership: Vec<u32>,
     requested: [u32; 2],
     size: [u32; 2],
     band: u8,
@@ -164,29 +168,39 @@ impl<D: RenderDevice> RenderService<D> {
             let scale = (f64::from(limit) / dimensions[0].max(dimensions[1])).min(1.0);
             requested = dimensions.map(|v| (v * scale).round().max(1.0) as u32);
         }
-        let mut ranks = if selection.kind() == OutputKind::Canvas && surface.layer_spacing != 0.0 {
+        let mut planes = Vec::new();
+        let mut plane_membership = Vec::new();
+        if selection.kind() == OutputKind::Canvas && surface.layer_spacing != 0.0 {
             let scene = CanvasScene::new(host, selection, surface.publication)?;
-            scene
-                .canvas
-                .entries
-                .iter()
-                .map(|e| Some(e.layer()))
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect::<Vec<_>>()
-        } else {
-            vec![None]
-        };
-        // Empty Canvas outputs still participate in frame inclusion. One
-        // transparent composite represents all unpainted structural groups.
-        if ranks.is_empty() {
-            ranks.push(None);
+            let mut used = BTreeSet::new();
+            for (order, entry) in scene.canvas.entries.iter().enumerate() {
+                let id = entry.layer();
+                plane_membership.push(id);
+                if used.insert(id) {
+                    let coordinate = scene
+                        .canvas
+                        .layer_offset(id)
+                        .ok_or(RenderError::UnavailableOutput)?;
+                    planes.push((
+                        Some(id),
+                        coordinate * f64::from(surface.layer_spacing),
+                        order,
+                    ));
+                }
+            }
+        }
+        // Root/zero-spacing presentations composite the complete logical entry
+        // sequence. Grouping nonadjacent entries by plane would reorder paint.
+        // Empty outputs also need a transparent image for frame inclusion.
+        if planes.is_empty() {
+            planes.push((None, 0.0, 0));
         }
         let stamp = OutputContentStamp::read(host, selection, surface.publication)?;
         let raster_dependencies = self.canvas_image_generations(&stamp, selection);
         let mut state = previous.unwrap_or_else(|| ProjectedSurface {
             surface: surface.clone(),
             groups: Vec::new(),
+            plane_membership: Vec::new(),
             requested,
             size: [0; 2],
             band,
@@ -207,8 +221,18 @@ impl<D: RenderDevice> RenderService<D> {
         });
         let result = (|| {
             let geometry_changed = state.surface.geometry != surface.geometry
-                || state.surface.layer_spacing != surface.layer_spacing;
-            let groups_changed = state.groups.iter().map(|g| g.rank).collect::<Vec<_>>() != ranks;
+                || state.surface.layer_spacing != surface.layer_spacing
+                || state
+                    .groups
+                    .iter()
+                    .map(|g| g.offset)
+                    .ne(planes.iter().map(|p| p.1));
+            let groups_changed = state.plane_membership != plane_membership
+                || state
+                    .groups
+                    .iter()
+                    .map(|g| g.plane)
+                    .ne(planes.iter().map(|p| p.0));
             let quality_changed = state.requested != requested;
             if geometry_changed
                 || groups_changed
@@ -224,10 +248,7 @@ impl<D: RenderDevice> RenderService<D> {
                 } else {
                     requested
                 };
-                let offsets: Vec<_> = ranks
-                    .iter()
-                    .map(|rank| f64::from(rank.unwrap_or(0)) * f64::from(surface.layer_spacing))
-                    .collect();
+                let offsets: Vec<_> = planes.iter().map(|p| p.1).collect();
                 let mut candidate = candidate;
                 let (size, meshes) = loop {
                     let (size, meshes) = select_quality(&*surface.geometry, &offsets, candidate)?;
@@ -239,7 +260,7 @@ impl<D: RenderDevice> RenderService<D> {
                     let (_, optional_bytes) = self.surface_cache.resident();
                     let other_images = self.projected_image_bytes();
                     let image_count = if selection.kind() == OutputKind::Canvas {
-                        ranks.len()
+                        planes.len()
                     } else {
                         0
                     };
@@ -260,7 +281,7 @@ impl<D: RenderDevice> RenderService<D> {
                 let mut groups = Vec::new();
                 // Allocate geometry first so a failed upload cannot pair a new
                 // image with a stale mesh. All handles remain context-owned.
-                for (rank, data) in ranks.iter().zip(meshes) {
+                for ((plane, offset, painter_order), data) in planes.iter().zip(meshes) {
                     let mesh = GlMeshData::private_mesh(self.device.clone(), data.asset)?;
                     stats.uploaded(data.bytes);
                     let target = if let Some(mut group) = old.next() {
@@ -277,7 +298,9 @@ impl<D: RenderDevice> RenderService<D> {
                     };
                     groups.push(ProjectedGroup {
                         device: self.device.clone(),
-                        rank: *rank,
+                        plane: *plane,
+                        offset: *offset,
+                        painter_order: *painter_order,
                         target,
                         mesh,
                         patches: data.patches,
@@ -292,6 +315,10 @@ impl<D: RenderDevice> RenderService<D> {
                 }
                 state.size = size;
             }
+            for (group, (_, _, order)) in state.groups.iter_mut().zip(&planes) {
+                group.painter_order = *order;
+            }
+            state.plane_membership = plane_membership;
             state.requested = requested;
             state.band = band;
             state.surface = surface.clone();
@@ -357,7 +384,7 @@ impl<D: RenderDevice> RenderService<D> {
                                 device_pixel_ratio: 1.0,
                             },
                             stats,
-                            group.rank,
+                            group.plane,
                         );
                         let end = self.device.borrow_mut().end_surface_cache_target();
                         result.and(end)?;
@@ -447,7 +474,12 @@ impl<D: RenderDevice> RenderService<D> {
                 for (patch, shape) in group.patches.iter().enumerate() {
                     let p = shape.centre;
                     draws.push(RenderDraw {
-                        index: RenderDrawIndex::SurfacePatch(index, group.rank, patch),
+                        index: RenderDrawIndex::SurfacePatch(
+                            index,
+                            group.plane,
+                            group.painter_order,
+                            patch,
+                        ),
                         key: (surface.entity, 2),
                         material: RenderMaterialKey::default(),
                         phase: 2,
@@ -486,7 +518,7 @@ impl<D: RenderDevice> RenderService<D> {
         let Some(state) = self.projected_surfaces.get(&surface.selection) else {
             return Ok(());
         };
-        let Some(group) = state.groups.iter().find(|g| g.rank == rank) else {
+        let Some(group) = state.groups.iter().find(|g| g.plane == rank) else {
             return Ok(());
         };
         let Some(shape) = group.patches.get(patch) else {

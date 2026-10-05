@@ -16,6 +16,7 @@ import {
   CANVAS_WIDTH,
   UNITS_PER_METRE,
   SURFACE_RADIUS,
+  REST_LAYER_SPACING,
 } from "./presentation.js";
 import { PANEL_SCALE } from "./projector.js";
 import type { GuiSurfaceShape } from "./scene.js";
@@ -136,7 +137,7 @@ export function shieldMotion(
   facing: SurfaceFacing,
   spacing: number,
 ) {
-  const base = shieldPose(shape, facing, 0);
+  const base = shieldPose(shape, facing, REST_LAYER_SPACING);
   const pose = shieldPose(shape, facing, spacing);
   const { qx, qy, qw } = base;
   const axes = [
@@ -171,7 +172,7 @@ export function InputShield({
   shape: GuiSurfaceShape;
   facing: SurfaceFacing;
 }) {
-  const pose = shieldPose(shape, facing, 0);
+  const pose = shieldPose(shape, facing, REST_LAYER_SPACING);
   const size = [
     pose.sx * PANEL_SCALE,
     pose.sy * PANEL_SCALE,

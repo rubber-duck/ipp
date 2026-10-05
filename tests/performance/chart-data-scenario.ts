@@ -1,5 +1,4 @@
 /** Deterministic authoring and assertions, independent of process launch and wire layout. */
-import assert from "node:assert/strict";
 import type {
   AnimationWorldClient,
   Client,
@@ -20,6 +19,20 @@ import {
   insertComponent,
   successfulBatch,
 } from "../../examples/world-gallery/worlds/charts/shared/commands.js";
+
+function check(
+  value: unknown,
+  message = "Chart fixture invariant",
+): asserts value {
+  if (!value) throw new Error(message);
+}
+
+function equal(actual: unknown, expected: unknown) {
+  check(
+    Object.is(actual, expected),
+    `Chart fixture: ${String(actual)} != ${String(expected)}`,
+  );
+}
 
 export type ChartContract = Pick<
   typeof Generated,
@@ -123,7 +136,7 @@ export async function openWorkload(
   workload: Workload,
   nonce: string,
 ) {
-  assert.ok(
+  check(
     workload.rows <= 100000 && workload.bindings <= 4 && workload.labels <= 128,
   );
   const spatial = workload.component.endsWith("3d");
@@ -227,7 +240,7 @@ export async function openWorkload(
         "buffer",
         SCHEMA,
       );
-      assert.equal(
+      equal(
         (
           await host.datasets.update(visualProducer, [
             {
@@ -321,7 +334,7 @@ export async function openWorkload(
               ? { bar_width: 0.04, bar_depth: 0.04 }
               : {}),
           });
-          assert.equal(command.kind, "insertComponent");
+          equal(command.kind, "insertComponent");
           if (command.kind !== "insertComponent")
             throw new Error("Expected insert");
           return {
@@ -369,7 +382,7 @@ export async function openWorkload(
           ),
         },
       ]);
-      assert.equal(outcome.failure, undefined);
+      equal(outcome.failure, undefined);
     }
     if (spatial) {
       camera = aliasId(
@@ -444,6 +457,7 @@ export async function openWorkload(
     let parameter = 1;
     let contribution = 0;
     return {
+      client,
       binding,
       source,
       entities,
@@ -475,7 +489,7 @@ export async function openWorkload(
                   },
                 ],
           );
-          assert.equal(outcome.failure, undefined);
+          equal(outcome.failure, undefined);
           if (workload.stream) appended += 64;
         } else if (mode === "parameter") {
           parameter = cycle % 2 ? 1 : 2;
@@ -499,26 +513,25 @@ export async function openWorkload(
       },
       async verify() {
         const page = await host.datasets.read(source, { limit: 1 });
-        assert.equal(page.memory.retainedRows, BigInt(workload.rows));
-        assert.ok(page.memory.allocatedBytes >= page.memory.retainedBytes);
-        if (workload.stream)
-          assert.equal(page.rows[0]!.id, BigInt(appended + 1));
+        equal(page.memory.retainedRows, BigInt(workload.rows));
+        check(page.memory.allocatedBytes >= page.memory.retainedBytes);
+        if (workload.stream) equal(page.rows[0]!.id, BigInt(appended + 1));
         for (const [index, entity] of entities.entries()) {
           const projection = await host.datasets.bindingView(
             client.session,
             entity,
             { limit: 1 },
           );
-          assert.equal(projection.availability.reason, "Ready");
-          assert.equal(projection.totalRows, BigInt(workload.rows));
-          assert.equal(projection.sourceIncarnation, producer.incarnation);
-          assert.equal(projection.rows[0]!.id, page.rows[0]!.id);
+          equal(projection.availability.reason, "Ready");
+          equal(projection.totalRows, BigInt(workload.rows));
+          equal(projection.sourceIncarnation, producer.incarnation);
+          equal(projection.rows[0]!.id, page.rows[0]!.id);
           const y = projection.columns.findIndex(
             (column) => column.name === "y",
           );
           const actual = projection.rows[0]!.values[y]!;
-          assert.ok(actual.valid && actual.value.kind === "f32");
-          assert.equal(
+          check(actual.valid && actual.value.kind === "f32");
+          equal(
             actual.value.value,
             Math.fround(
               (page.rows[0]!.values[1] as { value: number }).value *

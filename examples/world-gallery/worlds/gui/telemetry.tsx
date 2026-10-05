@@ -280,7 +280,13 @@ function TelemetryFooter({ scene }: { readonly scene: GuiScene }) {
  * The scene's nodes in a tree as tall as the event log. Its selection is the
  * scene's focus; the operator's expansion stays while the view is shown.
  */
-function SceneTree({ scene }: { readonly scene: GuiScene }) {
+export function SceneTree({
+  scene,
+  height = EVENT_LOG_HEIGHT,
+}: {
+  readonly scene: GuiScene;
+  readonly height?: number;
+}) {
   const tuning = scene.tuning;
   const focus = useStoreValue(scene.state, (state) => state.tuning.focus);
   return (
@@ -290,7 +296,7 @@ function SceneTree({ scene }: { readonly scene: GuiScene }) {
       defaultExpanded={SCENE_TREE_EXPANDED}
       {...(focus === undefined ? {} : { value: focus })}
       onChange={(key) => tuning.setFocus(key, sceneNodeLabel(key))}
-      layout={{ height: EVENT_LOG_HEIGHT }}
+      layout={{ height }}
     />
   );
 }

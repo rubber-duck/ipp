@@ -64,6 +64,7 @@ COMPONENTS = [
     "GuiColor",
     "CylinderSurface",
     "SphereSurface",
+    "CanvasLayerTransition",
     "BufferDataSourceBinding",
     "StreamingDataSourceBinding",
     "PlotFrame2d",

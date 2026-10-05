@@ -2,12 +2,15 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { BatchOutcome, Command, ClientClosure } from "@ipp/client";
 import { ReactWorldCommits } from "../src/commits.js";
+import { ReactWorldContainer } from "../src/reconciler.js";
+import { ReactAttachmentGroup } from "../src/attachment-state.js";
 import { ReactWorldTree } from "../src/tree.js";
 import type { ReactWorldClient } from "../src/contract.js";
 import { attachmentIdentity } from "../src/attachment-identity.js";
 import {
   AttachedWorldSlot,
   describeAttachedWorld,
+  type ReactCompositionHost,
 } from "../src/attached-world.js";
 
 test("attachment identities preserve primitive types and canonical field order", () => {
@@ -152,3 +155,87 @@ test("synchronous closure fences submission before its notification microtask", 
   assert.equal(submitCount, 0);
   await commits.dispose();
 });
+
+for (const typed of [true, false]) {
+  test(`an attachment waiting for ${typed ? "rejected declarations" : "a lost outcome"} preserves the reporting owner`, async () => {
+    const parentErrors: Error[] = [];
+    const childErrors: Error[] = [];
+    let failing = true;
+    const parent = clientWith(async (operations) => {
+      if (!failing) return outcome(operations, [32n]);
+      if (!typed) throw new Error("lost outcome");
+      return {
+        ...outcome(),
+        ok: false,
+        error: { scope: "operation", operation: 0, reason: "InvalidValue" },
+      };
+    });
+    const child = Object.assign(
+      clientWith(async () => outcome()),
+      {
+        closed: new Promise<never>(() => {}),
+        close: async () => {},
+      },
+    );
+    const tree = new ReactWorldTree(parent);
+    const anchor = tree.instance("ipp-entity", { id: "anchor" });
+    const slot = new AttachedWorldSlot();
+    tree.children.push(
+      anchor,
+      tree.instance("ipp-attached-world", {
+        slot,
+        anchor: "anchor",
+        child: { borrow: { id: 2n, incarnation: 1n } },
+        attachment: { mode: "spatial" },
+        onError: (error: Error) => childErrors.push(error),
+      }),
+    );
+    const options = { onError: (error: Error) => parentErrors.push(error) };
+    const commits = new ReactWorldCommits(parent, options);
+    const container = new ReactWorldContainer(tree, commits);
+    const host = {
+      openWorld: async () => child,
+    } as unknown as ReactCompositionHost;
+    const group = new ReactAttachmentGroup(host, container, parent, options);
+    try {
+      container.capture();
+      container.publish();
+      await assert.rejects(
+        commits.checkpoint(),
+        typed ? /InvalidValue/ : /lost outcome/,
+      );
+      for (let i = 0; i < 8; i++)
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      if (typed) {
+        assert.equal(parentErrors.length, 1);
+        assert.equal(childErrors.length, 0);
+      } else {
+        assert.ok(parentErrors.length > 0);
+        assert.ok(
+          childErrors.length > 0,
+          "unclassified failures retain the child boundary path",
+        );
+        assert.ok(
+          [...parentErrors, ...childErrors].every(
+            (error) => error.message === "lost outcome",
+          ),
+        );
+      }
+      assert.equal(slot.error, undefined);
+      assert.ok(slot.container, "healthy child scope stays available");
+      if (typed) {
+        failing = false;
+        anchor.props = { id: "corrected-anchor" };
+        tree.restructure();
+        container.capture();
+        container.publish();
+        await group.settled();
+        assert.equal(parentErrors.length, 1);
+        assert.equal(childErrors.length, 0);
+      }
+    } finally {
+      group.fence();
+      await group.dispose();
+    }
+  });
+}

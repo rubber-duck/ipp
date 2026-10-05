@@ -717,7 +717,14 @@ fn a_closed_overlay_costs_nothing_and_opens_in_the_frame_that_shows_it() {
     let closed = panel.output();
     let flat = bare.output();
     assert!(!appears(&closed, list) && !appears(&closed, row));
-    assert_eq!(*closed.layers, [0]);
+    assert_eq!(
+        closed
+            .layers
+            .iter()
+            .map(|plane| plane.offset)
+            .collect::<Vec<_>>(),
+        [0].map(f64::from)
+    );
     assert_eq!(closed.hits, flat.hits);
     assert_eq!(closed.entries.len(), flat.entries.len());
     assert!(overlays(&panel).is_empty());
@@ -730,14 +737,27 @@ fn a_closed_overlay_costs_nothing_and_opens_in_the_frame_that_shows_it() {
     // Opening it lays it out, raises it and publishes it in the same frame.
     set_visible(&mut panel, list, true);
     let open = panel.output();
-    assert_eq!(*open.layers, [0, 1]);
+    assert_eq!(
+        open.layers
+            .iter()
+            .map(|plane| plane.offset)
+            .collect::<Vec<_>>(),
+        [0, 1].map(f64::from)
+    );
     assert_eq!(bounds(&open, list), [20.0, 40.0, 80.0, 130.0]);
     assert_eq!(hit_at(&open, [30.0, 65.0]), Some(row));
     assert_eq!(overlays(&panel).len(), 1);
 
     set_visible(&mut panel, list, false);
     let closed = panel.output();
-    assert_eq!(*closed.layers, [0]);
+    assert_eq!(
+        closed
+            .layers
+            .iter()
+            .map(|plane| plane.offset)
+            .collect::<Vec<_>>(),
+        [0].map(f64::from)
+    );
     assert_eq!(closed.hits, flat.hits);
     assert!(overlays(&panel).is_empty());
 }

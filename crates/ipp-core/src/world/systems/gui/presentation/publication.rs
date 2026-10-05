@@ -317,10 +317,12 @@ pub struct GuiOverlayObservation {
     pub parent: Option<EntityId>,
     /// Its `GuiOverlay.mode`.
     pub mode: u32,
-    /// Plane id of the layer it paints on.
+    /// Destination logical priority, independent of physical placement.
+    pub priority: u32,
+    /// Current-publication plane ID of the layer it paints on.
     pub layer: u32,
     /// Its ordinal in the canvas's tree-order paint walk, as a hit's
-    /// `paint_order`: a control below its layer, or on its layer with a
+    /// `paint_order`: a control below its priority, or at its priority with a
     /// smaller ordinal, lies under it.
     pub order: u32,
     /// Final canvas bounds of its laid-out box.
@@ -342,12 +344,12 @@ impl GuiOverlayObservation {
     }
 
     /// Whether a modal overlay keeps `control` from input: the control is
-    /// not inside it and lies under it, on a lower layer or earlier on its
-    /// layer.
+    /// not inside it and lies under it, at a lower priority or earlier at its
+    /// priority.
     pub fn blocks(&self, control: &GuiControlObservation) -> bool {
         self.mode == crate::components::GuiOverlay::MODE_MODAL
             && !self.contains(&control.record.ancestry)
-            && (control.hit.layer, control.hit.paint_order) < (self.layer, self.order)
+            && (control.hit.priority, control.hit.paint_order) < (self.priority, self.order)
     }
 }
 

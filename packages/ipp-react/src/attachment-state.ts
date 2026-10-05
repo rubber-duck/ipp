@@ -632,6 +632,13 @@ class AttachmentRecord {
           if (desired() && this.ready === ready)
             this.notify(() => this.description.onReady?.(ready));
         } catch (error) {
+          // The originating scope reports rejected declaration batches. An
+          // attachment waiting for that acknowledgement has no new failure.
+          if (
+            !dependenciesSettled &&
+            error instanceof ReactWorldBatchRejectedError
+          )
+            return;
           if (
             current() &&
             (dependenciesSettled ||

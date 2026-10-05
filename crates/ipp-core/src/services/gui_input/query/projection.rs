@@ -30,8 +30,8 @@ pub struct GuiProjectedPoint {
 ///
 /// Where a Surface in a camera's domain separates its canvas's layers, the ray
 /// meets the shell of the layer the path continues on: the next nested slot's
-/// layer, or `layer`, the target's own layer in the final canvas, at its id
-/// times the spacing.
+/// plane, or `layer`, the target's current-publication plane ID in the final
+/// canvas. The plane table supplies its offset, multiplied by spacing.
 pub fn project_composed_point(
     host: &HostRuntime,
     target: ViewQueryTarget,
@@ -90,7 +90,7 @@ pub fn project_composed_point(
                     .ok_or(ErrorReason::InvalidEntity)?;
                 let ray = camera.ray_for_extent(point, extent)?;
                 let local = affine.inverse_ray(&ray.ray);
-                let offset = f64::from(surface_layer(host, edge, path.get(step + 1), layer)?)
+                let offset = surface_layer_offset(host, edge, path.get(step + 1), layer)?
                     * f64::from(edge.layer_spacing);
                 let geometry = edge
                     .surface_geometry
@@ -196,21 +196,18 @@ pub fn project_composed_point(
     }))
 }
 
-/// Occupied rank whose shell a camera-domain Surface edge projects onto: zero without
+/// Current plane offset whose shell a camera-domain Surface edge projects onto: zero without
 /// layer separation, the layer of the `next` slot the path enters in its
 /// canvas, or the final target's `layer`.
-fn surface_layer(
+fn surface_layer_offset(
     host: &HostRuntime,
     edge: &crate::PublishedWorldAttachment,
     next: Option<&WorldAttachmentToken>,
     layer: u32,
-) -> Result<u32, ErrorReason> {
+) -> Result<f64, ErrorReason> {
     if edge.layer_spacing == 0.0 {
-        return Ok(0);
+        return Ok(0.0);
     }
-    let Some(next) = next else {
-        return Ok(layer);
-    };
     let child = host
         .attached_publication(edge)
         .ok_or(ErrorReason::InvalidEntity)?;
@@ -219,14 +216,19 @@ fn surface_layer(
         .and_then(|output| host.output(child.id, output))
         .and_then(|chunk| chunk.data::<CanvasPublication>())
     else {
-        return Ok(0);
+        return Ok(0.0);
     };
-    canvas
-        .entries
-        .iter()
-        .find_map(|entry| match entry.as_ref() {
-            CanvasPaintEntry::Attachment(slot) if slot.token == *next => Some(slot.layer),
-            _ => None,
-        })
-        .ok_or(ErrorReason::InvalidEntity)
+    let plane = if let Some(next) = next {
+        canvas
+            .entries
+            .iter()
+            .find_map(|entry| match entry.as_ref() {
+                CanvasPaintEntry::Attachment(slot) if slot.token == *next => Some(slot.layer),
+                _ => None,
+            })
+            .ok_or(ErrorReason::InvalidEntity)?
+    } else {
+        layer
+    };
+    canvas.layer_offset(plane).ok_or(ErrorReason::InvalidEntity)
 }

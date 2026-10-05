@@ -110,6 +110,7 @@ impl SystemFactory for CanvasSystemFactory {
         let mut capabilities = SystemCapabilities::new(
             [
                 ComponentValue::CANVAS_STYLE,
+                ComponentValue::CANVAS_LAYER_TRANSITION,
                 ComponentValue::CANVAS_BOX,
                 ComponentValue::CANVAS_BOUNDS,
             ],
@@ -377,6 +378,7 @@ fn input_component(component: u16) -> bool {
         || matches!(
             component,
             ComponentValue::CANVAS_STYLE
+                | ComponentValue::CANVAS_LAYER_TRANSITION
                 | ComponentValue::CANVAS_TEXT
                 | ComponentValue::CANVAS_GLYPH_RUN
                 | ComponentValue::CANVAS_DRAWING

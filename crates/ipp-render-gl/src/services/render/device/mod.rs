@@ -367,6 +367,11 @@ pub trait RenderDevice: 'static {
         ))
     }
 
+    /// Maximum texture edge for path atlases; zero disables optional tiling.
+    fn surface_path_texture_limit(&self) -> u32 {
+        0
+    }
+
     /// Upload the textures of a packed path atlas; see [`crate::pack_surface_paths`].
     fn create_surface_path(
         &mut self,

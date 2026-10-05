@@ -41,6 +41,10 @@ export const guiComponentContract = {
       layer: "number",
     },
   },
+  CanvasLayerTransition: {
+    host: "ipp-canvas-layer-transition",
+    fields: { previous_layer: "number", progress: "number" },
+  },
   CanvasText: {
     host: "ipp-canvas-text",
     fields: {
@@ -167,6 +171,7 @@ export const guiComponentContract = {
     fields: {
       placeholder: "string",
       text: "string",
+      masked: "boolean",
       numeric: "boolean",
       value: "number",
       min: "number",

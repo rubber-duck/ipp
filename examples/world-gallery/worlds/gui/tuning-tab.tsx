@@ -1,5 +1,5 @@
 /**
- * The workbench's CONTROLS tab: the projection's value and selection
+ * The settings BEAM & STUDIO panel: the projection's value and selection
  * controls in a frameless scrolling column, so each keeps its natural size.
  *
  * - BEAM, a knob with its paired numeric stepper, scales the beam's energy.
@@ -28,14 +28,7 @@ import {
   SearchableDropdown,
   TextLine,
 } from "@ipp/react/gui-kit";
-import {
-  BoxLayout,
-  COLUMN,
-  LEAF,
-  ROW,
-  TOKENS,
-  WORKBENCH_WIDTH,
-} from "./presentation.js";
+import { BoxLayout, COLUMN, LEAF, ROW, TOKENS } from "./presentation.js";
 import type { GuiScene } from "./scene.js";
 import { useStoreValue } from "./store.js";
 import { FRAMELESS_SCROLL_THEME } from "./telemetry.js";
@@ -69,9 +62,8 @@ const KNOB_WIDTH = 104;
 /** The scroll bar's column at the tab's right edge. */
 const BAR_COLUMN = 3 * TOKENS.bar;
 
-/** The column's width: the tab's content at the inset, less the bar column. */
-const CONTENT_WIDTH =
-  WORKBENCH_WIDTH - 2 * TOKENS.lineWidth - 2 * TOKENS.inset - BAR_COLUMN;
+/** The padded settings body's width, less the scroll bar column. */
+const CONTENT_WIDTH = 313.5 - BAR_COLUMN;
 
 /** Captions of the selection rows, and the controls after them. */
 const CAPTION_WIDTH = 80;

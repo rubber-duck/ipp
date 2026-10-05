@@ -1493,6 +1493,10 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
       },
     },
     ...{
+      surface_path_texture_limit(): number {
+        return disposed || gl.isContextLost() ? 0 : maxTextureSize;
+      },
+
       create_surface_path(
         curvePointer: number,
         count: number,

@@ -7,16 +7,22 @@ import {
   Entity,
   Light,
   MeshInstance,
+  MeshPose,
   PbrMaterial,
   Transform,
-  UnlitMaterial,
-  UnlitTexture,
   assetRef,
   texture2D,
   type AnimationHandle,
 } from "@ipp/react";
 import { useEffect, useRef } from "react";
-import type { Accent, GuiScene } from "./scene.js";
+import type { Accent, GuiScene, GuiPageState } from "./scene.js";
+import { SURFACE_RADIUS } from "./presentation.js";
+import {
+  ASSET_ROOT,
+  PROJECTOR_MESH_SOURCES,
+  PROJECTOR_POSE_SOURCES,
+  PROJECTOR_TEXTURE_SOURCES,
+} from "./projector-assets.js";
 import { focusGain } from "./scene-tree.js";
 import { useStoreValue } from "./store.js";
 import {
@@ -29,7 +35,6 @@ import {
 type Color = readonly [number, number, number];
 type Point = readonly [number, number, number];
 
-const ASSET_ROOT = "/target/gallery-gui-assets/projector/";
 const BACKGROUND_MESH = "ipp://mesh/cube?width=1&height=1&length=1";
 const PROJECTOR_CENTER: Point = [0, 0.3, 0];
 const BASE_CENTER: Point = [0, 0, 0];
@@ -83,22 +88,6 @@ export const ACCENT_HSV: Readonly<Record<Accent, ProjectionColor>> = {
   amber: projectionColor(ACCENT_COLORS.amber),
 };
 
-export const PROJECTOR_MESH_SOURCES = [
-  `${ASSET_ROOT}shell.ippm`,
-  `${ASSET_ROOT}trim.ippm`,
-  `${ASSET_ROOT}aperture.ippm`,
-  `${ASSET_ROOT}lens.ippm`,
-  `${ASSET_ROOT}frustum.ippm`,
-  `${ASSET_ROOT}base.ippm`,
-  `${ASSET_ROOT}floor.ippm`,
-] as const;
-
-export const PROJECTOR_TEXTURE_SOURCES = [
-  `${ASSET_ROOT}metal-base.ippt`,
-  `${ASSET_ROOT}base-baked.ippt`,
-  `${ASSET_ROOT}floor-baked.ippt`,
-] as const;
-
 export interface ProjectorAssets {
   readonly shell: string;
   readonly trim: string;
@@ -130,6 +119,7 @@ export function projectorAssets(assets: GalleryAssets): ProjectorAssets {
 
 export function projectorResourceSources(
   adapter: GalleryAssets,
+  surface: Pick<GuiPageState, "surfaceShape" | "surfaceFacing">,
 ): readonly ClientAssetSource[] {
   const assets = projectorAssets(adapter);
   return [
@@ -142,6 +132,11 @@ export function projectorResourceSources(
       assets.beam,
       assets.base,
       assets.floor,
+      adapter.url(
+        PROJECTOR_POSE_SOURCES[
+          `${surface.surfaceShape === "flat" ? "cylinder" : surface.surfaceShape}-${surface.surfaceFacing}`
+        ],
+      ),
     ].map((source) => ({ kind: 1, source })),
     ...[assets.metal, assets.baseBaked, assets.floorBaked].map((source) => ({
       kind: 2,
@@ -223,14 +218,36 @@ export function HolographicProjector({
 }) {
   const dust = useRef<AnimationHandle>(null);
   const gain = useStoreValue(scene.state, (state) => state.gain);
+  const pulse = useStoreValue(scene.state, (state) => state.pulse);
+  const pulseStrength = useStoreValue(
+    scene.state,
+    (state) => state.pulseStrength,
+  );
   // The projection colour is the COLOUR tab's; choosing an accent sets it.
   const color = useStoreValue(scene.state, (state) => state.tuning.color);
   const channels = useStoreValue(scene.state, (state) => state.tuning.channels);
   const selected = useStoreValue(scene.state, (state) => state.tuning.focus);
   const light = useStoreValue(scene.state, (state) => state.tuning.light);
   const beam = useStoreValue(scene.state, (state) => state.tuning.beam);
+  const shape = useStoreValue(scene.state, (state) => state.surfaceShape);
+  const facing = useStoreValue(scene.state, (state) => state.surfaceFacing);
+  const pose =
+    PROJECTOR_POSE_SOURCES[
+      `${shape === "flat" ? "cylinder" : shape}-${facing}`
+    ];
+  const curvature: readonly [number, number] = [
+    shape === "flat"
+      ? 0
+      : (facing === "inside" ? -1 : 1) / (SURFACE_RADIUS * PANEL_SCALE),
+    shape === "sphere" ? 1 : 0,
+  ];
   const accent = linearColor(color);
-  const energy = 0.38 + gain * 0.62;
+  const energy =
+    (0.38 + gain * 0.62) *
+    (1 +
+      (pulse.state === "running"
+        ? Math.sin(Math.PI * pulse.value) * 0.8 * pulseStrength
+        : 0));
   const energized = scaled(accent, energy);
   // CHANNELS switch parts off; the scene tree's selection brightens its node.
   const channel = (key: Channel) => (channels.includes(key) ? 1 : 0);
@@ -272,11 +289,13 @@ export function HolographicProjector({
         <Transform {...basePlaced(stagingX)} sx={1.55} sy={1.55} sz={1.55} />
         <MeshInstance source={assets.floor} />
         <BoundingGeometry />
-        <UnlitTexture source={assets.floorBaked} />
-        <UnlitMaterial
-          r={stage("floor")}
-          g={stage("floor")}
-          b={stage("floor")}
+        <CustomMaterial
+          source={assetRef("gui-projector-stage-shader")}
+          base={texture2D(assets.floorBaked)}
+          gain={stage("floor")}
+          receives_light={false}
+          receives_shadows={false}
+          casts_shadows={false}
         />
       </Entity>
 
@@ -284,8 +303,14 @@ export function HolographicProjector({
         <Transform {...basePlaced(stagingX)} sx={1.55} sy={1.55} sz={1.55} />
         <MeshInstance source={assets.base} />
         <BoundingGeometry />
-        <UnlitTexture source={assets.baseBaked} />
-        <UnlitMaterial r={stage("base")} g={stage("base")} b={stage("base")} />
+        <CustomMaterial
+          source={assetRef("gui-projector-stage-shader")}
+          base={texture2D(assets.baseBaked)}
+          gain={stage("base")}
+          receives_light={false}
+          receives_shadows={false}
+          casts_shadows={false}
+        />
       </Entity>
 
       <Entity id="gui-projector-core">
@@ -372,9 +397,14 @@ export function HolographicProjector({
       <Entity id="gui-projector-beam">
         <Transform {...placed(PROJECTOR_CENTER, stagingX)} />
         <MeshInstance source={assets.beam} />
+        <MeshPose
+          source={scene.assets.url(pose)}
+          weight={shape === "flat" ? 0 : 1}
+        />
         <BoundingGeometry />
         <CustomMaterial
           source={assetRef("gui-projector-beam-shader")}
+          curvature={curvature}
           section={scene.beamSection!.halfSize}
           depth={scene.beamSection!.depth}
           accent={[accent[0], accent[1], accent[2], 1]}

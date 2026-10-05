@@ -1,7 +1,7 @@
 //! Retained derived path resources using the shared analytic contour packing/device.
 
 use super::assets::SharedRenderDevice;
-use super::surface_path::pack_surface_paths;
+use super::surface_path::pack_surface_paths_with_limit;
 use crate::{RenderDevice, RenderError, SurfacePathDescriptor};
 use ipp_core::systems::canvas::CanvasPrimitiveId;
 use ipp_core::systems::plot::PlotPath;
@@ -61,7 +61,10 @@ impl<D: RenderDevice> GeneratedPathCache<D> {
         // Derived contours already use the Canvas +Y-down coordinates. The shared
         // analytic shader evaluates supplied coordinates directly; no source SVG/font
         // normalization or second Y flip applies to these runtime paths.
-        let atlas = pack_surface_paths([(source.bounds, source.contours.as_ref())]);
+        let atlas = pack_surface_paths_with_limit(
+            [(source.bounds, source.contours.as_ref())],
+            self.device.borrow().surface_path_texture_limit(),
+        );
         let uploaded = atlas.texels.byte_len();
         let gpu = self
             .device

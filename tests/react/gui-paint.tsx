@@ -34,6 +34,7 @@ import { CanvasWorldSession } from "@ipp/react/web";
 import { check, deferred, type GuiContract } from "./gui-authoring.js";
 export { nativePresentationTransport } from "../../packages/ipp-client/src/native-presentation.js";
 export { workerTransport } from "../../packages/ipp-client/src/worker.js";
+export { guiLayerTransitions } from "./gui-layer-transitions.js";
 export { guiLayers } from "./gui-layers.js";
 export { guiOverlays } from "./gui-overlays.js";
 export { guiProjectedAdvanced } from "./gui-projected-advanced.js";

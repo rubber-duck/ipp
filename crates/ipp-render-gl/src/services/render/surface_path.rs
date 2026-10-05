@@ -30,15 +30,26 @@
 //! entries are curve texel indices relative to the path's first curve texel.
 //! The atlas uses 16-bit bands when every value fits and 32-bit bands
 //! otherwise; the encoding is the same.
+//!
+//! Dense collections of closed contours also have a two-dimensional lookup.
+//! The final two header lanes contain the grid size and relative tile-header
+//! offset (zero grid size selects ordinary bands). Each tile has horizontal
+//! and vertical offset/count pairs. A list retains original curve order, but
+//! omits entire contours beyond the ray's antialiasing footprint: their closed
+//! winding cancels and their edge weight is zero. No contours are split into
+//! separately blended draws. Minified paths use the original bands. GPU callers
+//! also retain bands when optional tiles exceed the device's texture extent.
 
 use ipp_core::services::asset_management::quadratic::{QuadraticContour, QuadraticSegment};
 
 use super::device::SurfacePathDescriptor;
 
 pub(super) const BAND_COUNT: usize = 16;
+pub(super) const TILE_COUNT: usize = 64;
+const TILE_METADATA: usize = BAND_COUNT * 4;
 
 /// Header texels per path: an offset and count for each horizontal and vertical band.
-pub(super) const BAND_HEADER_TEXELS: u32 = (BAND_COUNT * 2 * 2) as u32;
+pub(super) const BAND_HEADER_TEXELS: u32 = (BAND_COUNT * 2 * 2 + 2) as u32;
 
 const I16_LIMIT: f64 = i16::MAX as f64;
 const I32_LIMIT: f64 = i32::MAX as f64;
@@ -137,6 +148,36 @@ pub struct SurfacePathAtlas {
 pub fn pack_surface_paths<'a>(
     paths: impl IntoIterator<Item = ([f32; 4], &'a [QuadraticContour])>,
 ) -> SurfacePathAtlas {
+    pack_surface_paths_inner(paths, true)
+}
+
+/// Prefer tiles only when their atlas fits the device's texture extent. Unknown
+/// limits retain the original bands; the device still validates actual uploads.
+pub(super) fn pack_surface_paths_with_limit<'a>(
+    paths: impl IntoIterator<Item = ([f32; 4], &'a [QuadraticContour])>,
+    texture_edge: u32,
+) -> SurfacePathAtlas {
+    if texture_edge == 0 {
+        return pack_surface_paths_inner(paths, false);
+    }
+
+    let paths: Vec<_> = paths.into_iter().collect();
+    let atlas = pack_surface_paths_inner(paths.iter().copied(), true);
+    let capacity = u64::from(texture_edge).pow(2);
+    if atlas.texels.bands.len() as u64 <= capacity {
+        return atlas;
+    }
+
+    // Repack every descriptor together: removing tile lists changes subsequent
+    // paths' band offsets. Drop the oversized allocation before rebuilding.
+    drop(atlas);
+    pack_surface_paths_inner(paths, false)
+}
+
+fn pack_surface_paths_inner<'a>(
+    paths: impl IntoIterator<Item = ([f32; 4], &'a [QuadraticContour])>,
+    tiles_enabled: bool,
+) -> SurfacePathAtlas {
     let mut points = Vec::new();
     let mut ranges = Vec::new();
     let mut bounds = Vec::new();
@@ -179,6 +220,26 @@ pub fn pack_surface_paths<'a>(
                 let header = band_offset + (group * BAND_COUNT + band) * 2;
                 bands[header] = list_offset as u32;
                 bands[header + 1] = list.len() as u32;
+            }
+        }
+        // Bound extra lookup storage relative to the existing band lists. Large
+        // spanning contours can make tiling less useful; they keep exact bands.
+        let budget = (bands.len() - band_offset).saturating_mul(8);
+        if let Some(tiles) = tiles_enabled
+            .then(|| fill_tile_lists(&extents[start..start + count], *path_bounds, budget))
+            .flatten()
+        {
+            let header = bands.len();
+            bands[band_offset + TILE_METADATA] = TILE_COUNT as u32;
+            bands[band_offset + TILE_METADATA + 1] = (header - band_offset) as u32;
+            bands.resize(header + TILE_COUNT * TILE_COUNT * 4, 0);
+            for (tile, lists) in tiles.iter().enumerate() {
+                for (axis, list) in lists.iter().enumerate() {
+                    let index = header + tile * 4 + axis * 2;
+                    bands[index] = (bands.len() - band_offset) as u32;
+                    bands[index + 1] = list.len() as u32;
+                    bands.extend_from_slice(list);
+                }
             }
         }
         descriptors.push(SurfacePathDescriptor::new(
@@ -278,6 +339,98 @@ fn fill_band_lists(
             }
         }
     }
+}
+
+/// Conservative closed-contour ray candidates for each tile, in curve order.
+/// Empty hulls terminate contours. The ray margin covers one full tile;
+/// the shader selects these lists only when its pixel footprint fits a tile.
+fn fill_tile_lists(
+    extents: &[[f32; 4]],
+    bounds: [f32; 4],
+    budget: usize,
+) -> Option<Vec<[Vec<u32>; 2]>> {
+    if extents.len() < 8192 || extents.iter().filter(|hull| hull[0] > hull[2]).count() < 128 {
+        return None;
+    }
+    let size = [bounds[2] - bounds[0], bounds[3] - bounds[1]];
+    if !bounds.iter().all(|value| value.is_finite())
+        || size
+            .iter()
+            .any(|&value| !value.is_finite() || value < 1.0 / 65536.0)
+    {
+        return None;
+    }
+    let cell = size.map(|value| value / TILE_COUNT as f32);
+    let range = |hull: [f32; 4], axis: usize, margin: f32| {
+        let estimate = |value: f32| ((value - bounds[axis]) / cell[axis]).floor();
+        // Widen before exact tests, including rounding at cell boundaries.
+        let first =
+            (estimate(hull[axis]) - margin - 1.0).clamp(0.0, (TILE_COUNT - 1) as f32) as usize;
+        let last =
+            (estimate(hull[axis + 2]) + margin + 1.0).clamp(0.0, (TILE_COUNT - 1) as f32) as usize;
+        first..=last
+    };
+    let meets = |hull: [f32; 4], axis: usize, index: usize, margin: f32| {
+        let low = bounds[axis] + cell[axis] * (index as f32 - margin);
+        let high = bounds[axis] + cell[axis] * (index as f32 + 1.0 + margin);
+        hull[axis + 2] >= low && hull[axis] <= high
+    };
+    let mut tiles: Vec<[Vec<u32>; 2]> = (0..TILE_COUNT * TILE_COUNT)
+        .map(|_| Default::default())
+        .collect();
+    let mut entries = TILE_COUNT * TILE_COUNT * 4;
+    let mut first = 0;
+    for (end, hull) in extents.iter().enumerate() {
+        if hull[0] <= hull[2] {
+            continue;
+        }
+        let contour = extents[first..end].iter().fold(
+            [
+                f32::INFINITY,
+                f32::INFINITY,
+                f32::NEG_INFINITY,
+                f32::NEG_INFINITY,
+            ],
+            |bounds, curve| {
+                [
+                    bounds[0].min(curve[0]),
+                    bounds[1].min(curve[1]),
+                    bounds[2].max(curve[2]),
+                    bounds[3].max(curve[3]),
+                ]
+            },
+        );
+        for (local, curve) in extents.iter().enumerate().take(end).skip(first) {
+            // Horizontal rays filter a curve's Y hull and its whole
+            // contour's X hull; vertical rays exchange the axes.
+            for (axis, ray) in [
+                [contour[0], curve[1], contour[2], curve[3]],
+                [curve[0], contour[1], curve[2], contour[3]],
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                // Root eligibility uses the sample centre on the perpendicular
+                // axis; only the ray axis has antialiasing support to pad.
+                let margin = if axis == 0 {
+                    [1.0, 0.0]
+                } else {
+                    [0.0, 1.0]
+                };
+                for y in range(ray, 1, margin[1]).filter(|&y| meets(ray, 1, y, margin[1])) {
+                    for x in range(ray, 0, margin[0]).filter(|&x| meets(ray, 0, x, margin[0])) {
+                        entries += 1;
+                        if entries > budget {
+                            return None;
+                        }
+                        tiles[y * TILE_COUNT + x][axis].push(local as u32);
+                    }
+                }
+            }
+        }
+        first = end + 1;
+    }
+    Some(tiles)
 }
 
 /// Append shared-endpoint texels for `contours`, closing open contours with a line.

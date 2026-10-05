@@ -623,7 +623,7 @@ pub fn bounds(publication: &CanvasPublication, entity: EntityId) -> [f32; 4] {
     control_hit(publication, entity).bounds
 }
 
-/// Reverse-painter target of a Canvas-local point; the highest-layered, latest
+/// Reverse-painter target of a Canvas-local point; the highest-priority, latest
 /// painted eligible hit wins.
 pub fn hit_at(publication: &CanvasPublication, point: [f32; 2]) -> Option<EntityId> {
     publication
@@ -631,7 +631,7 @@ pub fn hit_at(publication: &CanvasPublication, point: [f32; 2]) -> Option<Entity
         .iter()
         .enumerate()
         .filter(|(_, hit)| hit.contains(point))
-        .max_by_key(|(index, hit)| (hit.layer, hit.paint_order, *index))
+        .max_by_key(|(index, hit)| (hit.priority, hit.paint_order, *index))
         .map(|(_, hit)| hit.target.entity)
 }
 

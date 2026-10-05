@@ -92,6 +92,14 @@ vec2 band_coverage(vec2 x, vec2 half_extent, vec2 footprint) {
         - clamp((-half_extent - x) / footprint + 0.5, 0.0, 1.0);
 }
 
+// Separable pixel area for a sharp rectangle, including rectangles narrower than
+// one footprint. A zero inset extent leaves no fill, so a full-width border stays
+// a border instead of admitting a half-covered residual interior.
+float rectangle_coverage(vec2 p, vec2 half_size, vec2 footprint) {
+    vec2 band = band_coverage(p, half_size, footprint);
+    return band.x * band.y;
+}
+
 float band_coverage(float x, float half_extent, float footprint) {
     return clamp((half_extent - x) / footprint + 0.5, 0.0, 1.0)
         - clamp((-half_extent - x) / footprint + 0.5, 0.0, 1.0);
@@ -250,6 +258,21 @@ void box_coverage(bool checker, out float outer, out float shape_cov, out float 
     shape_cov = clamp(0.5 - outer / edge, 0.0, 1.0);
     fill_cov = min(shape_cov, clamp(0.5 - inner / inner_edge, 0.0, 1.0));
 
+    // Differentiating abs(p) can cancel across a quad straddling a thin box's
+    // centre: both neighboring fragments report the same distance, so the box
+    // disappears or overestimates its area. Differentiate unfolded coordinates
+    // and integrate the two opposing edges instead. Rounded/cut contours keep
+    // their distance coverage; only the limiting sharp rectangle is separable.
+    bool sharp = max4(cut) <= 0.0 && min(corner.x, corner.y) <= 1.0 / 65536.0;
+    vec2 footprint = max(vec2(
+        length(vec2(dFdx(p.x), dFdy(p.x))),
+        length(vec2(dFdx(p.y), dFdy(p.y)))
+    ), vec2(1.0 / 65536.0));
+    if (sharp) {
+        shape_cov = rectangle_coverage(p, half_size, footprint);
+        fill_cov = min(shape_cov, rectangle_coverage(p, max(half_size - border_width, vec2(0.0)), footprint));
+    }
+
     vec4 span = v_corner_accent;
     if (!checker && max4(span) > 0.0) {
         float accent_width = max(v_shape.w, 0.0);
@@ -266,7 +289,9 @@ void box_coverage(bool checker, out float outer, out float shape_cov, out float 
         float accent = min4(mix(vec4(FAR), reach, greaterThan(span, vec4(0.0))));
         float accent_inner_edge = max(length(vec2(dFdx(accent_inner), dFdy(accent_inner))), 1.0 / 65536.0);
         float accent_edge = max(length(vec2(dFdx(accent), dFdy(accent))), 1.0 / 65536.0);
-        float accent_fill = min(shape_cov, clamp(0.5 - accent_inner / accent_inner_edge, 0.0, 1.0));
+        float accent_fill = min(shape_cov, sharp
+            ? rectangle_coverage(p, max(half_size - accent_width, vec2(0.0)), footprint)
+            : clamp(0.5 - accent_inner / accent_inner_edge, 0.0, 1.0));
         fill_cov = mix(fill_cov, accent_fill, clamp(0.5 - accent / accent_edge, 0.0, 1.0));
     }
 }

@@ -1,11 +1,10 @@
 /**
  * A small observable record for application state that more than one React
- * root shows. The GUI page's sidebar renders through React DOM and its panel
- * through the panel World's own React root, so the page keeps its state here
- * rather than in either tree's component state. Each component selects the
- * values it shows with `useStoreValue` and re-renders only when they change:
- * moving GAIN re-renders the gain readouts, the waveform, the node rows and
- * the projector, and no other part of the panel.
+ * root shows. The panel World's controls and the gallery World's projector
+ * read the page's state here rather than in either tree's component state.
+ * Each component selects the values it shows with `useStoreValue` and
+ * re-renders only when they change. The scanner, readouts and projector
+ * subscribe to their own tuning and presentation values.
  */
 import { useSyncExternalStore } from "react";
 

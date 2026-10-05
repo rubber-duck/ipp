@@ -1,5 +1,5 @@
 import type { CameraWorldClient } from "@ipp/client";
-import { setCameraPose, setCameraView } from "../../shared/camera.js";
+import { setCameraPose } from "../../shared/camera.js";
 import { PROJECTED_PANEL_TRANSFORM as panel } from "./projector.js";
 
 /** Inspect the whole stack from its left side, with space for popup/dialog shells. */
@@ -7,8 +7,8 @@ export async function frameGuiCamera(
   client: CameraWorldClient,
   camera: bigint,
   exploded: boolean,
+  login = false,
 ): Promise<void> {
-  if (!exploded) return setCameraView(client, camera, "gui");
   const { qx, qy, qz, qw } = panel;
   const worldPoint = ([x, y, z]: readonly [number, number, number]): [
     number,
@@ -31,8 +31,10 @@ export async function frameGuiCamera(
   await setCameraPose(
     client,
     camera,
-    worldPoint([-9, 0.8, 9.5]),
-    worldPoint([0, 0, 1.6]),
+    worldPoint(
+      exploded ? [-9, 0.8, 9.5] : login ? [-0.3, 0.12, 8] : [-0.8, 0.25, 11],
+    ),
+    worldPoint(exploded ? [0, 0, 1.6] : [0, 0, 0.1]),
     (23 * Math.PI) / 180,
   );
 }

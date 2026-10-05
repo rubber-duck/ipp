@@ -200,6 +200,10 @@ impl RenderDevice for GlesRenderDevice {
         self.check_draw()
     }
 
+    fn surface_path_texture_limit(&self) -> u32 {
+        self.max_texture_size
+    }
+
     fn create_surface_path(
         &mut self,
         texels: &crate::SurfacePathTexels,

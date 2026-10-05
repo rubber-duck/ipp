@@ -6,8 +6,8 @@ use super::query::{
 use super::router_test_support::*;
 use super::*;
 use crate::{
-    CylinderSurface, SphereSurface, Surface, SurfaceDomain, SurfaceGeometry, SurfaceIntersection,
-    SurfaceSample,
+    CylinderSurface, FieldValue, FieldWrite, SphereSurface, Surface, SurfaceDomain,
+    SurfaceGeometry, SurfaceIntersection, SurfaceSample,
     components::{Camera, GuiSlider, Transform},
     systems::geometry::{GeometryRay, GeometryShape},
 };
@@ -595,4 +595,280 @@ fn curved_queries_follow_rotated_nonuniform_parent_placements() {
             rig.finish();
         }
     }
+}
+
+#[test]
+fn captured_curved_input_refreshes_target_plane_after_transition_reorders_ids() {
+    use crate::components::{CanvasLayerTransition, CanvasStyle};
+    for (index, component) in components(0.5, 0.2).into_iter().enumerate() {
+        let (mut rig, panel) = scene(component);
+        let world = panel.world();
+        create(&mut rig.host, world, Vec::new(), None);
+        create(
+            &mut rig.host,
+            world,
+            vec![ComponentValue::CanvasStyle(CanvasStyle {
+                layer: 20,
+                ..Default::default()
+            })],
+            None,
+        );
+        apply(
+            &mut rig.host,
+            world,
+            vec![
+                Command::insert_value(
+                    EntityRef::Handle(panel.controls[0]),
+                    ComponentValue::CanvasStyle(CanvasStyle {
+                        layer: 30,
+                        ..Default::default()
+                    }),
+                ),
+                Command::insert_value(
+                    EntityRef::Handle(panel.controls[0]),
+                    ComponentValue::CanvasLayerTransition(CanvasLayerTransition {
+                        previous_layer: 10,
+                        progress: 0.0,
+                    }),
+                ),
+            ],
+        );
+        rig.frame();
+        let pixel = independent_pixel(index == 1, 0.5, [2.0, 1.5], f64::from(0.2_f32));
+        let hit = query_composed_input(&rig.host, rig.query(), pixel, GuiQueryOptions::default())
+            .unwrap();
+        let GuiQueryOutcome::Hit(hit) = hit.outcome else {
+            panic!("missing initial moving hit")
+        };
+        assert_eq!(hit.hit.layer, 1);
+        let initial_target = hit.hit.target;
+        rig.send(press(73, pixel));
+        apply(
+            &mut rig.host,
+            world,
+            vec![Command::SetField {
+                entity: EntityRef::Handle(panel.controls[0]),
+                component: ComponentValue::CANVAS_LAYER_TRANSITION,
+                field: FieldWrite {
+                    offset: std::mem::offset_of!(CanvasLayerTransition, progress) as u32,
+                    value: FieldValue::F32(1.0),
+                },
+            }],
+        );
+        rig.frame();
+        let publication = rig.host.latest_publication(world.id()).unwrap();
+        let semantic = rig
+            .host
+            .publication(publication)
+            .unwrap()
+            .chunk(crate::systems::canvas::CanvasSystem::ID)
+            .unwrap()
+            .data::<crate::systems::gui::presentation::GuiCanvasPublication>()
+            .unwrap();
+        let slider = semantic.views[&panel.output]
+            .controls
+            .iter()
+            .find(|control| control.record.target.entity == panel.controls[0])
+            .unwrap()
+            .slider
+            .unwrap();
+        let x = f64::from(
+            slider.thumb_centers[0] + 0.75 * (slider.thumb_centers[1] - slider.thumb_centers[0]),
+        );
+        let pixel = independent_pixel(index == 1, 0.5, [x, 1.5], 3.0 * f64::from(0.2_f32));
+        let hit = query_composed_input(&rig.host, rig.query(), pixel, GuiQueryOptions::default())
+            .unwrap();
+        let GuiQueryOutcome::Hit(hit) = hit.outcome else {
+            panic!("missing completed moving hit")
+        };
+        assert_eq!(hit.hit.layer, 2);
+        assert_eq!(hit.hit.target, initial_target);
+        rig.send(movement(73, pixel));
+        let GuiTestValue::Scalar(value) = rig.value(world, panel.controls[0]) else {
+            panic!("missing slider value")
+        };
+        assert!((value - 0.75).abs() < 1e-5, "{value}");
+        assert!(rig.snapshot(world, panel.controls[0]).interaction.captured);
+        rig.finish();
+    }
+}
+
+#[test]
+fn zero_spacing_surface_queries_preserve_destination_order_when_plane_ids_reverse_it() {
+    use crate::components::{CanvasLayerTransition, CanvasStyle};
+    let (mut rig, panel) = scene(components(0.5, 0.0)[0].clone());
+    let world = panel.world();
+    create(&mut rig.host, world, Vec::new(), None);
+    apply(
+        &mut rig.host,
+        world,
+        vec![
+            Command::insert_value(
+                EntityRef::Handle(panel.controls[0]),
+                ComponentValue::CanvasStyle(CanvasStyle {
+                    layer: 10,
+                    ..Default::default()
+                }),
+            ),
+            Command::insert_value(
+                EntityRef::Handle(panel.controls[0]),
+                ComponentValue::CanvasLayerTransition(CanvasLayerTransition {
+                    previous_layer: 30,
+                    progress: 0.0,
+                }),
+            ),
+        ],
+    );
+    let other = create(
+        &mut rig.host,
+        world,
+        vec![
+            sized(2, 4.0, 3.0),
+            ComponentValue::GuiSlider(GuiSlider::default()),
+            ComponentValue::CanvasStyle(CanvasStyle {
+                layer: 20,
+                ..Default::default()
+            }),
+        ],
+        None,
+    );
+    rig.frame();
+    let canvas = rig
+        .host
+        .output(
+            rig.host.latest_publication(world.id()).unwrap(),
+            panel.output,
+        )
+        .unwrap()
+        .data::<crate::systems::canvas::CanvasPublication>()
+        .unwrap();
+    let first = canvas
+        .hits
+        .iter()
+        .find(|hit| hit.target.entity == panel.controls[0])
+        .unwrap();
+    let second = canvas
+        .hits
+        .iter()
+        .find(|hit| hit.target.entity == other)
+        .unwrap();
+    assert!(first.layer > second.layer);
+    assert!(first.priority < second.priority);
+    let pixel = independent_pixel(false, 0.5, [2.0, 1.5], 0.0);
+    let result =
+        query_composed_input(&rig.host, rig.query(), pixel, GuiQueryOptions::default()).unwrap();
+    let GuiQueryOutcome::Hit(hit) = result.outcome else {
+        panic!("missing coincident hit")
+    };
+    assert_eq!(hit.hit.target.entity, other);
+    rig.finish();
+}
+
+#[test]
+fn captured_nested_input_refreshes_moving_slot_plane_from_current_publication() {
+    use crate::components::{CanvasLayerTransition, CanvasStyle};
+    let (mut rig, outer) = scene(components(0.5, 0.2)[0].clone());
+    let inner = panel(
+        &mut rig.host,
+        outer.world(),
+        at(0.0, 0.0, 0.0),
+        ComponentValue::GuiSlider(GuiSlider {
+            value: 0.5,
+            ..Default::default()
+        }),
+    );
+    create(&mut rig.host, outer.world(), Vec::new(), None);
+    create(
+        &mut rig.host,
+        outer.world(),
+        vec![ComponentValue::CanvasStyle(CanvasStyle {
+            layer: 20,
+            ..Default::default()
+        })],
+        None,
+    );
+    apply(
+        &mut rig.host,
+        outer.world(),
+        vec![
+            Command::insert_value(
+                EntityRef::Handle(inner.anchor),
+                ComponentValue::CanvasStyle(CanvasStyle {
+                    layer: 30,
+                    ..Default::default()
+                }),
+            ),
+            Command::insert_value(
+                EntityRef::Handle(inner.anchor),
+                ComponentValue::CanvasLayerTransition(CanvasLayerTransition {
+                    previous_layer: 10,
+                    progress: 0.0,
+                }),
+            ),
+        ],
+    );
+    rig.frame();
+    let initial = independent_pixel(false, 0.5, [2.0, 1.5], f64::from(0.2_f32));
+    let result =
+        query_composed_input(&rig.host, rig.query(), initial, GuiQueryOptions::default()).unwrap();
+    let GuiQueryOutcome::Hit(hit) = result.outcome else {
+        panic!("missing nested hit")
+    };
+    assert_eq!(hit.output, inner.output);
+    assert_eq!(hit.path.len(), 2);
+    let path: Vec<_> = hit.path.iter().map(|step| step.token.clone()).collect();
+    let identity = hit.hit.target;
+    rig.send(press(74, initial));
+    apply(
+        &mut rig.host,
+        outer.world(),
+        vec![Command::SetField {
+            entity: EntityRef::Handle(inner.anchor),
+            component: ComponentValue::CANVAS_LAYER_TRANSITION,
+            field: FieldWrite {
+                offset: std::mem::offset_of!(CanvasLayerTransition, progress) as u32,
+                value: FieldValue::F32(1.0),
+            },
+        }],
+    );
+    rig.frame();
+    let publication = rig.host.latest_publication(inner.world().id()).unwrap();
+    let semantic = rig
+        .host
+        .publication(publication)
+        .unwrap()
+        .chunk(crate::systems::canvas::CanvasSystem::ID)
+        .unwrap()
+        .data::<crate::systems::gui::presentation::GuiCanvasPublication>()
+        .unwrap();
+    let slider = semantic.views[&inner.output]
+        .controls
+        .iter()
+        .find(|control| control.record.target.entity == inner.controls[0])
+        .unwrap()
+        .slider
+        .unwrap();
+    let x = f64::from(
+        slider.thumb_centers[0] + 0.75 * (slider.thumb_centers[1] - slider.thumb_centers[0]),
+    );
+    let moved = independent_pixel(false, 0.5, [x, 1.5], 3.0 * f64::from(0.2_f32));
+    let projection = project_composed_point(&rig.host, rig.query(), &path, moved, true, 0)
+        .unwrap()
+        .unwrap();
+    assert!((f64::from(projection.point[0]) - x).abs() < 1e-5);
+    rig.send(movement(74, moved));
+    let GuiTestValue::Scalar(value) = rig.value(inner.world(), inner.controls[0]) else {
+        panic!("missing nested slider")
+    };
+    assert!((value - 0.75).abs() < 1e-5, "{value}");
+    assert_eq!(
+        rig.snapshot(inner.world(), inner.controls[0]).target.entity,
+        identity.entity
+    );
+    assert!(
+        rig.snapshot(inner.world(), inner.controls[0])
+            .interaction
+            .captured
+    );
+    rig.finish();
 }

@@ -29,7 +29,8 @@ pub use crate::systems::render::{
 pub use crate::systems::surface::{CylinderSurface, FlatSurface, SphereSurface, SurfaceCache};
 
 pub use crate::systems::canvas::{
-    CanvasBitmap, CanvasBox, CanvasDrawing, CanvasGlyphRun, CanvasPaint, CanvasStyle, CanvasText,
+    CanvasBitmap, CanvasBox, CanvasDrawing, CanvasGlyphRun, CanvasLayerTransition, CanvasPaint,
+    CanvasStyle, CanvasText,
 };
 
 pub use crate::systems::canvas::CanvasBounds;

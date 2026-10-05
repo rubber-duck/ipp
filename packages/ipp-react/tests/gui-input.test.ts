@@ -47,9 +47,22 @@ const fence: GuiTextFence = {
   generation: 1n,
 };
 
+class NativeStyle {
+  [property: string]: unknown;
+  touchAction = "pan-y";
+
+  setProperty(name: string, value: string): void {
+    this[name] = value;
+  }
+
+  removeProperty(name: string): void {
+    delete this[name];
+  }
+}
+
 class Element {
   readonly listeners = new Map<string, Set<(event: never) => void>>();
-  readonly style: Record<string, string> = { touchAction: "pan-y" };
+  readonly style = new NativeStyle();
   readonly dataset: Record<string, string> = {};
   readonly attributes = new Map<string, string>();
   readonly children: Element[] = [];
@@ -247,6 +260,7 @@ function harness(
       input.observeText({
         fence,
         text: "ab",
+        masked: false,
         selectionStart: 2,
         selectionEnd: 2,
       });
@@ -662,6 +676,7 @@ test("native edit queue uses preceding ACK state and external changes cancel pen
     {
       fence: { ...fence, generation: 2n },
       text: "abc",
+      masked: false,
       selectionStart: 3,
       selectionEnd: 3,
     },
@@ -682,6 +697,7 @@ test("native edit queue uses preceding ACK state and external changes cancel pen
   state.input.observeText({
     fence: { ...fence, generation: 3n },
     text: "reset",
+    masked: false,
     selectionStart: 5,
     selectionEnd: 5,
   });
@@ -895,6 +911,7 @@ test("callback refresh retains captured pointer and text owner and invokes curre
   current.observeText({
     fence,
     text: "ab",
+    masked: false,
     selectionStart: 2,
     selectionEnd: 2,
   });
@@ -1117,4 +1134,32 @@ test("disposal completion waits for late acquisition and its release acknowledge
   await Promise.all([selected, closed]);
   assert.equal(hostCanDispose, true);
   assert.equal(h.opened.length, 1);
+});
+
+test("same-generation reveal synchronizes the native mask without replacing the editor", async (context) => {
+  const state = harness(context);
+  state.focus();
+  const editor = state.area;
+  state.input.observeText({
+    fence,
+    text: "ab",
+    masked: true,
+    selectionStart: 2,
+    selectionEnd: 2,
+  });
+  await flush();
+  assert.equal(editor.style["-webkit-text-security"], "disc");
+  assert.equal(editor.value, "ab");
+  state.input.observeText({
+    fence,
+    text: "ab",
+    masked: false,
+    selectionStart: 2,
+    selectionEnd: 2,
+  });
+  await flush();
+  assert.equal(state.area, editor);
+  assert.equal(editor.style["-webkit-text-security"], "none");
+  assert.equal(editor.value, "ab");
+  assert.equal(editor.selectionEnd, 2);
 });

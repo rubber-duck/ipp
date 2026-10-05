@@ -88,8 +88,15 @@ export function chartCameraTarget(id: string, aspect = 1) {
       pose: lookAt(CHART_RING.center, CHART_CATALOG[0]!.center),
       distance: CHART_RING.radius,
     };
-  if (id === "overview")
-    return framedTarget(CHART_RING.center, [0, 55, 75], [42, 8, 42], aspect);
+  if (id === "overview") {
+    const extent = CHART_RING.radius + 8;
+    return framedTarget(
+      CHART_RING.center,
+      [0, 55, 75],
+      [extent, 8, extent],
+      aspect,
+    );
+  }
   const chart = CHART_CATALOG.find((chart) => chart.id === id);
   if (!chart) throw new Error(`Unknown chart: ${id}`);
   const canvas = chart.component.endsWith("2d");
@@ -144,13 +151,28 @@ function fields(
 /** Camera motion is sampled by AnimationSystem, never a browser animation loop. */
 export class ChartCamera {
   focus: ChartFocus | null = null;
+  // The chart client is the sole manual writer. Re-anchor after Host-owned motion.
+  private authoredPose: CameraPose | undefined;
+  private endpoint:
+    | { pose: CameraPose; distance: number; sx: number; sy: number; sz: number }
+    | undefined;
+  private completed = false;
+  private readonly stopPlaybackObservation: () => void;
   private asset: ClientAssetSource | undefined;
   private nextAsset = 720000n;
   aspect = 1;
   constructor(
     readonly client: AnimationWorldClient,
     readonly entity: bigint,
-  ) {}
+  ) {
+    this.stopPlaybackObservation = client.onPlaybackEvent((event) => {
+      if (
+        event.controller.id === this.focus?.controller &&
+        event.kind === "completed"
+      )
+        this.completed = true;
+    });
+  }
 
   pose(inspection: Inspection): CameraPose {
     const value = fields(
@@ -164,6 +186,17 @@ export class ChartCamera {
         Number(value[name]),
       ]),
     ) as CameraPose;
+  }
+
+  inspect() {
+    return this.client.inspectPage({
+      collection: "entities",
+      target: this.entity,
+    });
+  }
+
+  invalidate() {
+    this.authoredPose = undefined;
   }
 
   async write(pose: CameraPose, distance?: number) {
@@ -190,13 +223,14 @@ export class ChartCamera {
           ),
       ),
     );
+    this.authoredPose = { ...pose };
   }
 
   /** Client-owned look gestures author orientation without moving the camera eye. */
   async turn(yaw: number, pitch: number) {
     if (!Number.isFinite(yaw) || !Number.isFinite(pitch))
       throw new Error("Camera turn requires finite yaw and pitch");
-    const pose = this.pose(await this.client.inspect());
+    const pose = this.authoredPose ?? this.pose(await this.inspect());
     const q = multiply(
       multiply([0, Math.sin(yaw / 2), 0, Math.cos(yaw / 2)], rotation(pose)),
       [Math.sin(pitch / 2), 0, 0, Math.cos(pitch / 2)],
@@ -217,6 +251,13 @@ export class ChartCamera {
         })),
       ),
     );
+    this.authoredPose = {
+      ...pose,
+      qx: q[0] / length,
+      qy: q[1] / length,
+      qz: q[2] / length,
+      qw: q[3] / length,
+    };
   }
 
   async cancel() {
@@ -226,20 +267,29 @@ export class ChartCamera {
       return;
     }
     const focus = this.focus;
-    await this.client.controlAnimationController(focus.controller, {
-      action: "pause",
-    });
-    const inspection = await this.client.inspect();
-    const pose = { ...this.pose(inspection) };
     const camera = this.client.components.Camera!;
-    const distance = Number(
-      fields(inspection, this.entity, camera.id).focus_distance,
-    );
-    const transform = fields(
-      inspection,
-      this.entity,
-      this.client.components.Transform!.id,
-    );
+    let sampled = this.completed ? this.endpoint : undefined;
+    if (!sampled) {
+      await this.client.controlAnimationController(focus.controller, {
+        action: "pause",
+      });
+      const inspection = await this.inspect();
+      const transform = fields(
+        inspection,
+        this.entity,
+        this.client.components.Transform!.id,
+      );
+      sampled = {
+        pose: { ...this.pose(inspection) },
+        distance: Number(
+          fields(inspection, this.entity, camera.id).focus_distance,
+        ),
+        sx: Number(transform.sx),
+        sy: Number(transform.sy),
+        sz: Number(transform.sz),
+      };
+    }
+    const { pose, distance } = sampled;
     // Replace the sampled Transform before invalidation can withdraw its contribution.
     // Camera keeps its incarnation so the root output remains valid.
     successfulBatch(
@@ -250,9 +300,9 @@ export class ChartCamera {
           component: this.client.components.Transform!.id,
           fields: componentFields(this.client, "Transform", {
             ...pose,
-            sx: Number(transform.sx),
-            sy: Number(transform.sy),
-            sz: Number(transform.sz),
+            sx: sampled.sx,
+            sy: sampled.sy,
+            sz: sampled.sz,
           }),
           adopt: false,
         },
@@ -260,6 +310,8 @@ export class ChartCamera {
     );
     await this.client.deleteAnimationController(focus.controller);
     this.focus = null;
+    this.endpoint = undefined;
+    this.completed = false;
     successfulBatch(
       await this.client.batch(
         componentFields(this.client, "Camera", {
@@ -274,12 +326,15 @@ export class ChartCamera {
     );
     if (this.asset) await this.client.releaseAsset(this.asset);
     this.asset = undefined;
+    this.authoredPose = pose;
   }
 
-  async move(id: string) {
+  async move(id: string, current: () => boolean = () => true) {
     const target = chartCameraTarget(id, this.aspect);
     await this.cancel();
-    const inspection = await this.client.inspect();
+    if (!current()) return;
+    const inspection = await this.inspect();
+    if (!current()) return;
     const from = { ...this.pose(inspection) },
       to = target.pose;
     const transform = this.client.components.Transform!,
@@ -308,6 +363,7 @@ export class ChartCamera {
     const currentDistance = Number(
       fields(inspection, this.entity, camera.id).focus_distance,
     );
+    const sampledTransform = fields(inspection, this.entity, transform.id);
     const tracks: AnimationTrack[] = (["x", "y", "z"] as const).map((name) =>
       scalar(
         transform.id,
@@ -364,6 +420,7 @@ export class ChartCamera {
         asset,
         this.client.encodeAnimationClip({ duration: 2, tracks }).buffer,
       );
+      if (!current()) return;
       const controller = await this.client.createAnimationController({
         drivers: tracks.map((track, index) => ({
           source: asset.source,
@@ -380,10 +437,46 @@ export class ChartCamera {
         from,
         to,
       };
+      this.endpoint = {
+        pose: to,
+        distance: target.distance,
+        sx: Number(sampledTransform.sx),
+        sy: Number(sampledTransform.sy),
+        sz: Number(sampledTransform.sz),
+      };
+      this.completed = false;
+      this.invalidate();
+      if (!current()) return;
+      // Registration acknowledges ownership; decoding is a separate Host task.
+      const deadline = performance.now() + 30_000;
+      for (;;) {
+        const resources = await this.client.inspectPage({
+          collection: "resources",
+        });
+        if (!current()) return;
+        const resource = resources.resources.find(
+          (item) => item.source === asset.source,
+        );
+        if (resource?.status === "failed")
+          throw new Error(
+            `Camera focus resource failed: ${resource.error ?? asset.source}`,
+          );
+        if (resource?.status === "loaded" && resource.representation.decoded)
+          break;
+        if (performance.now() > deadline)
+          throw new Error("Camera focus animation did not become ready");
+        await this.client.waitForFrame(resources.tick);
+        if (!current()) return;
+      }
       await this.client.controlAnimationController(controller, {
         action: "play",
       });
-      const started = await this.client.inspect();
+      if (!current()) return;
+      const started = await this.client.inspectPage({
+        collection: "controllers",
+        target: controller,
+      });
+      if (!current()) return;
       const clock =
         started.controllers?.find((item) => item.id === controller)?.time ?? 0;
       this.focus = { ...this.focus, startTime: started.time - clock };
@@ -401,6 +494,10 @@ export class ChartCamera {
   }
 
   async close() {
-    await this.cancel();
+    try {
+      await this.cancel();
+    } finally {
+      this.stopPlaybackObservation();
+    }
   }
 }

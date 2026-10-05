@@ -3,6 +3,8 @@ import type { DatasetPage } from "@ipp/client";
 import {
   assertChartImage,
   assertChartImageChanged,
+  assertChartImageStable,
+  assertNoChartAnimation,
   chartCheck,
   chartTransform,
   chartSurfaceLocalPoint,
@@ -171,6 +173,72 @@ function assertSourceMode(
   }
 }
 
+/** Expected values follow the gallery's source columns, without animation or Plot output. */
+export function assertUndistortedChartSamples(state: StreamingChartsState) {
+  assertNoChartAnimation(state);
+  for (const chart of state.charts) {
+    const source = state.data.sources.find(
+      (item) => item.name === chart.source,
+    );
+    chartCheck(source, `${chart.id}: its raw source is observable`);
+    for (const row of chart.binding.rows) {
+      const rawRow = source.rows.find((item) => item.id === row.id);
+      chartCheck(
+        rawRow,
+        `${chart.id}: evaluated row retains its source identity`,
+      );
+      for (const [index, column] of chart.binding.columns.entries()) {
+        const rawColumn = column.name === "value" ? "y" : column.name;
+        const sourceValue =
+          rawRow.values[
+            source.schema.findIndex((item) => item.name === rawColumn)
+          ];
+        const evaluated = row.values[index];
+        chartCheck(
+          sourceValue && evaluated,
+          `${chart.id}/${column.name}: source and binding column exist`,
+        );
+        if (column.name === "y" || column.name === "y2") {
+          const valid = raw(source, rawRow, "valid");
+          if (valid === 0) {
+            chartCheck(
+              !evaluated.valid,
+              `${chart.id}/${column.name}: invalid source samples remain gaps`,
+            );
+            continue;
+          }
+          chartCheck(
+            evaluated.valid &&
+              evaluated.value.kind === "f32" &&
+              sourceValue.kind === "f32" &&
+              Math.abs(
+                evaluated.value.value - Math.fround(sourceValue.value / valid),
+              ) < 0.0001,
+            `${chart.id}/${column.name}: binding applies only declared gap validity`,
+          );
+        } else {
+          chartCheck(
+            evaluated.valid &&
+              JSON.stringify(evaluated.value) === JSON.stringify(sourceValue),
+            `${chart.id}/${column.name}: binding preserves the raw source value`,
+          );
+        }
+      }
+    }
+  }
+}
+
+function sampleSnapshot(state: StreamingChartsState) {
+  return JSON.stringify(
+    {
+      sequence: state.data.feed.sequence,
+      sources: state.data.sources.map((source) => [source.name, source.rows]),
+      bindings: state.charts.map((chart) => [chart.id, chart.binding.rows]),
+    },
+    (_key, value) => (typeof value === "bigint" ? String(value) : value),
+  );
+}
+
 async function pause(driver: StreamingChartsDriver) {
   await driver.action("streamPlayback", false);
   let lastFailure: string | undefined;
@@ -299,9 +367,9 @@ export async function exerciseStreamingCharts(
   driver: StreamingChartsDriver,
   aspect: number,
 ) {
-  await driver.action("playback", { playing: false, time: 0 });
   const initial = await driver.inspect();
   assertSourceMode(initial, "buffer");
+  assertUndistortedChartSamples(initial);
   const original = {
     world: String(initial.worldReference.id),
     camera: String(initial.camera.entity),
@@ -322,6 +390,7 @@ export async function exerciseStreamingCharts(
   let current = await pause(driver);
   assertSourceMode(current, "streaming");
   assertWindows(current);
+  assertUndistortedChartSamples(current);
   const straight = current.charts.find((chart) => chart.id === "straight")!,
     smooth = current.charts.find((chart) => chart.id === "smooth")!;
   chartCheck(
@@ -422,26 +491,32 @@ export async function exerciseStreamingCharts(
     ),
     "Actual source row identities advance for every chart family",
   );
-  chartCheck(
-    current.charts.every(
-      (chart) =>
-        chart.controllers.length > 0 &&
-        chart.controllers.every((id) => {
-          const controller = chart.inspection.controllers?.find(
-            (item) => item.id === id,
-          );
-          return (
-            controller?.state === "paused" && Math.abs(controller.time) < 0.001
-          );
-        }),
-    ),
-    "Rendered changes come from data ingress while visual animation stays at phase zero",
-  );
+  assertUndistortedChartSamples(current);
   const spatialAfter = await driver.capture("stream-spatial-after");
   assertChartImageChanged(spatialBefore, spatialAfter, "live spatial arrivals");
   await focusChart(driver, "bars");
   const flatAfter = await driver.capture("stream-flat-after");
   assertChartImageChanged(flatBefore, flatAfter, "live flat arrivals");
+  const pausedStream = await pause(driver);
+  const stationaryStream = await until(
+    driver,
+    (state) => state.world.time >= pausedStream.world.time + 0.4,
+    "paused-stream-stationary",
+  );
+  assertUndistortedChartSamples(stationaryStream);
+  chartCheck(
+    sampleSnapshot(pausedStream) === sampleSnapshot(stationaryStream),
+    "Paused stream preserves raw and evaluated samples as Host time advances",
+  );
+  assertChartImageStable(
+    flatAfter,
+    await driver.capture("stream-flat-paused-stationary"),
+    "Paused stream",
+  );
+  await driver.record("stream-paused-stationary", {
+    pausedStream,
+    stationaryStream,
+  });
   await driver.record("stream-arrivals-and-expiry", current);
   const beforeTimeIds = ids(
     current.data.sources.find((source) => source.name === straight.source)!
@@ -509,6 +584,7 @@ export async function exerciseStreamingCharts(
   await driver.action("dataSource", "buffer");
   current = await driver.inspect();
   assertSourceMode(current, "buffer");
+  assertUndistortedChartSamples(current);
   chartCheck(
     !current.data.feed.playing && !current.data.feed.inFlight,
     "Buffer mode stops and drains the synthetic feed",

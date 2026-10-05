@@ -19,6 +19,7 @@ import {
 import { CHART_RING } from "./catalog.js";
 import { ChartContent } from "./content.js";
 import { ChartCamera, chartCameraTarget } from "./camera.js";
+import { ChartActionLane } from "./action-lane.js";
 import { componentFields, successfulBatch } from "./shared/commands.js";
 
 export interface ChartMark {
@@ -32,32 +33,106 @@ export interface ChartMark {
   readonly columns: readonly string[];
 }
 
+type CameraAction =
+  | { kind: "focus"; id: string; generation: number }
+  | { kind: "navigate"; motion: CameraViewMotion; generation: number }
+  | { kind: "interrupt" | "resize"; generation: number };
+
+function sameValue(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (Array.isArray(a) && Array.isArray(b))
+    return (
+      a.length === b.length &&
+      a.every((value, index) => sameValue(value, b[index]))
+    );
+  if (a && b && typeof a === "object" && typeof b === "object") {
+    const first = a as Record<string, unknown>,
+      second = b as Record<string, unknown>;
+    return (
+      Object.keys(first).length === Object.keys(second).length &&
+      Object.entries(first).every(
+        ([name, value]) =>
+          Object.hasOwn(second, name) && sameValue(value, second[name]),
+      )
+    );
+  }
+  return false;
+}
+
+function sameMark(a: ChartMark | null, b: ChartMark | null) {
+  return (
+    a === b ||
+    (a !== null &&
+      b !== null &&
+      a.chart === b.chart &&
+      a.entity === b.entity &&
+      a.world.id === b.world.id &&
+      a.world.incarnation === b.world.incarnation &&
+      a.series === b.series &&
+      a.rowId === b.rowId &&
+      sameValue(a.columns, b.columns) &&
+      sameValue(a.values, b.values))
+  );
+}
+
+function combineCameraAction(previous: CameraAction, next: CameraAction) {
+  if (
+    previous.kind !== "navigate" ||
+    next.kind !== "navigate" ||
+    previous.generation !== next.generation
+  )
+    return next;
+  const a = previous.motion,
+    b = next.motion;
+  if (a.kind === "rotate" && b.kind === "rotate")
+    return {
+      ...next,
+      motion: {
+        kind: "rotate" as const,
+        yaw: a.yaw + b.yaw,
+        pitch: a.pitch + b.pitch,
+      },
+    };
+  if (a.kind === "pan" && b.kind === "pan")
+    return {
+      ...next,
+      motion: { kind: "pan" as const, x: a.x + b.x, y: a.y + b.y },
+    };
+  if (a.kind === "zoom" && b.kind === "zoom")
+    return {
+      ...next,
+      motion: { kind: "zoom" as const, amount: a.amount + b.amount },
+    };
+  return next;
+}
+
 export const chartScene: GallerySceneDefinition = {
   id: "charts",
   label: "Charts",
   shortLabel: "Charts",
   description:
-    "Explore animated Canvas charts curved inward along their ring beside spatial plots, or focus any exhibit in two seconds.",
+    "Explore Canvas charts curved inward along their ring beside spatial plots, or focus any exhibit in two seconds.",
   defaultOptions: {
     dataMode: "buffer",
     dataWindow: "count",
     streamPlaying: true,
     streamError: null,
-    playing: true,
     changed: false,
     focused: "center",
     navigation: "look",
     hover: null,
     selection: null,
+    cameraInputGeneration: 0,
   },
   actions: [
     "focus",
     "resetCamera",
     "navigate",
+    "beginNavigation",
+    "endNavigation",
     "hover",
     "select",
     "clearSelection",
-    "playback",
     "changeSamples",
     "dataSource",
     "dataWindow",
@@ -80,15 +155,31 @@ export const chartScene: GallerySceneDefinition = {
       navigation: "look",
       hover: null,
       selection: null,
+      cameraInputGeneration: 0,
     };
     let navigation: "look" | "orbit" = "look";
     let hover: ChartMark | null = null,
       selection: ChartMark | null = null;
     let closing: Promise<void> | undefined;
     let tail = Promise.resolve();
+    let ready = Promise.resolve();
+    let cameraGeneration = 0,
+      hoverGeneration = 0;
+    let cameraIntent: "focus" | "navigate" = "focus";
+    let viewTransition: Promise<void> | undefined;
+    let finishViewTransition: (() => void) | undefined;
     const listeners = new Set<() => void>();
+    let publishedOptions = options;
     const notify = () => {
       options = { ...options, hover, selection };
+      if (
+        Object.keys(options).length === Object.keys(publishedOptions).length &&
+        Object.entries(options).every(([name, value]) =>
+          Object.is(value, publishedOptions[name]),
+        )
+      )
+        return;
+      publishedOptions = options;
       for (const listener of listeners) listener();
     };
     const enqueue = <T>(operation: () => Promise<T>) => {
@@ -100,6 +191,94 @@ export const chartScene: GallerySceneDefinition = {
         () => {},
       );
       return result;
+    };
+    const highlights = new ChartActionLane<{
+      hover: ChartMark | null;
+      selection: ChartMark | null;
+    }>(async (marks) => content.highlight(marks.hover, marks.selection));
+    const highlight = () => highlights.submit({ hover, selection });
+    const cameraActions = new ChartActionLane<CameraAction>(async (request) => {
+      await ready;
+      const current = () => !closing && request.generation === cameraGeneration;
+      if (!current()) return;
+      if (request.kind === "focus") {
+        await camera.move(request.id, current);
+      } else if (request.kind === "navigate") {
+        await camera.cancel();
+        if (!current()) return;
+        if (navigation === "look" && request.motion.kind === "rotate")
+          await camera.turn(request.motion.yaw, request.motion.pitch);
+        else {
+          camera.invalidate();
+          const currentBinding = await binding();
+          if (!current()) return;
+          await client.navigateCamera({
+            binding: currentBinding,
+            motion: request.motion,
+          });
+        }
+      } else if (request.kind === "interrupt") {
+        await camera.cancel();
+      } else {
+        const focused = options.focused;
+        if (typeof focused !== "string") return;
+        if (camera.focus) await camera.move(focused, current);
+        else {
+          const target = chartCameraTarget(focused, camera.aspect);
+          await camera.write(target.pose, target.distance);
+        }
+      }
+      if (current()) notify();
+    }, combineCameraAction);
+    const hoverActions = new ChartActionLane<{
+      args: unknown;
+      generation: number;
+    }>(async (request) => {
+      await ready;
+      if (viewTransition) await viewTransition;
+      if (closing || request.generation !== hoverGeneration) return;
+      let next: ChartMark | null;
+      try {
+        next = await pick(request.args);
+      } catch (error) {
+        if (closing || request.generation !== hoverGeneration) return;
+        throw error;
+      }
+      if (closing || request.generation !== hoverGeneration) return;
+      if (sameMark(next, hover)) return;
+      hover = next;
+      await highlight();
+      if (!closing && request.generation === hoverGeneration) notify();
+    });
+    const clearHover = () => {
+      ++hoverGeneration;
+      hoverActions.drop();
+      hover = null;
+      return highlight();
+    };
+    const interruptCamera = () => {
+      cameraIntent = "navigate";
+      ++cameraGeneration;
+      cameraActions.drop();
+      options = {
+        ...options,
+        focused: null,
+        cameraInputGeneration: cameraGeneration,
+      };
+    };
+    const changeView = async <T>(change: () => Promise<T>) => {
+      ++hoverGeneration;
+      hoverActions.drop();
+      viewTransition = new Promise<void>((resolve) => {
+        finishViewTransition = resolve;
+      });
+      try {
+        return await change();
+      } finally {
+        finishViewTransition!();
+        finishViewTransition = undefined;
+        viewTransition = undefined;
+      }
     };
     let feedGeneration = 0;
     let reconciliationPending = false;
@@ -115,7 +294,15 @@ export const chartScene: GallerySceneDefinition = {
           chart.entity,
         );
         for (;;) {
-          if (page.rows.some((row) => row.id === mark.rowId)) return mark;
+          const row = page.rows.find((row) => row.id === mark.rowId);
+          if (row) {
+            const current = {
+              ...mark,
+              values: row.values,
+              columns: page.columns.map((column) => column.name),
+            };
+            return sameMark(current, mark) ? mark : current;
+          }
           if (page.nextOffset === null) return null;
           page = await context.canvas.host.datasets.bindingView(
             chart.client.session,
@@ -124,14 +311,19 @@ export const chartScene: GallerySceneDefinition = {
           );
         }
       };
-      hover = await retained(hover);
-      selection = await retained(selection);
-      await content.highlight(hover, selection);
+      const previousHover = hover,
+        previousSelection = selection;
+      const [retainedHover, retainedSelection] = await Promise.all([
+        retained(previousHover),
+        retained(previousSelection),
+      ]);
+      if (hover === previousHover) hover = retainedHover;
+      if (selection === previousSelection) selection = retainedSelection;
+      await highlight();
     };
     const feed = new ChartFeed(
       async (sequence, elapsed) => {
         await content.append(sequence, elapsed);
-        await content.ready();
       },
       () => {
         options = { ...options, streamError: feed.error };
@@ -188,10 +380,6 @@ export const chartScene: GallerySceneDefinition = {
           chart.world.incarnation === hit.world.incarnation,
       );
       if (!chart) return null;
-      const source = (await content.sources()).find(
-        (source) => source.name === chart.source,
-      );
-      if (!source?.rows.some((row) => row.id === hit.row!.rowId)) return null;
       let page = await context.canvas.host.datasets.bindingView(
         chart.client.session,
         chart.entity,
@@ -235,89 +423,119 @@ export const chartScene: GallerySceneDefinition = {
     const actions: Record<string, (args?: unknown) => Promise<unknown>> = {
       async focus(args) {
         const id = String(args ?? "center");
-        await camera.move(id);
+        chartCameraTarget(id, camera.aspect);
+        cameraIntent = "focus";
+        const generation = ++cameraGeneration;
+        cameraActions.drop();
         navigation = id === "center" ? "look" : "orbit";
-        options = { ...options, focused: id, navigation };
+        options = {
+          ...options,
+          focused: id,
+          navigation,
+          cameraInputGeneration: generation,
+        };
+        const pending = [
+          clearHover(),
+          cameraActions.submit({ kind: "focus", id, generation }),
+        ];
+        notify();
+        await Promise.all(pending);
       },
       async resetCamera() {
         await actions.focus!("center");
       },
       async navigate(args) {
-        await camera.cancel();
         const motion = args as CameraViewMotion;
-        if (navigation === "look" && motion.kind === "rotate")
-          await camera.turn(motion.yaw, motion.pitch);
-        else await client.navigateCamera({ binding: await binding(), motion });
+        const values =
+          motion?.kind === "rotate"
+            ? [motion.yaw, motion.pitch]
+            : motion?.kind === "pan"
+              ? [motion.x, motion.y]
+              : motion?.kind === "zoom"
+                ? [motion.amount]
+                : [];
+        if (
+          !values.length ||
+          !values.every(
+            (value) => typeof value === "number" && Number.isFinite(value),
+          )
+        )
+          throw new Error("Chart navigation requires finite camera motion");
+        if (cameraIntent !== "navigate") interruptCamera();
         options = { ...options, focused: null };
+        await cameraActions.submit({
+          kind: "navigate",
+          motion: { ...motion },
+          generation: cameraGeneration,
+        });
+      },
+      async beginNavigation() {
+        interruptCamera();
+        const pending = [
+          clearHover(),
+          cameraActions.submit({
+            kind: "interrupt",
+            generation: cameraGeneration,
+          }),
+        ];
+        notify();
+        await Promise.all(pending);
+      },
+      async endNavigation() {
+        await cameraActions.settled();
       },
       async hover(args) {
-        const next = await pick(args);
-        if (
-          next?.chart === hover?.chart &&
-          next?.series === hover?.series &&
-          next?.rowId === hover?.rowId
-        )
-          return;
-        hover = next;
-        await content.highlight(hover, selection);
+        await hoverActions.submit({ args, generation: ++hoverGeneration });
       },
       async select(args) {
         selection = await pick(args);
-        await content.highlight(hover, selection);
+        await highlight();
       },
       async clearSelection() {
         selection = null;
-        await content.highlight(hover, selection);
-      },
-      async playback(args) {
-        const playback = args as { playing: boolean; time?: number };
-        if (
-          typeof playback?.playing !== "boolean" ||
-          (playback.time !== undefined &&
-            (!Number.isFinite(playback.time) || playback.time < 0))
-        )
-          throw new Error(
-            "Playback requires playing and an optional nonnegative time",
-          );
-        await content.playback(playback.playing, playback.time);
-        options = { ...options, playing: playback.playing };
+        await highlight();
       },
       async dataSource(args) {
         if (args !== "buffer" && args !== "streaming")
           throw new Error("Unknown chart data source");
         const mode: ChartDataMode = args;
         if (mode === content.mode) return;
-        ++feedGeneration;
-        await feed.pause(true);
-        hover = selection = null;
-        await content.highlight(null, null);
-        try {
-          await content.dataSource(mode);
-          options = { ...options, dataMode: mode };
-          if (mode === "streaming") await feed.prime();
-          else if (options.changed) await content.changeSamples(true);
-          await content.ready();
-          await reconcile();
-          resumeFeed();
-        } catch (error) {
-          options = {
-            ...options,
-            dataMode: content.mode,
-            streamError: error instanceof Error ? error.message : String(error),
-          };
-          throw error;
-        }
+        await changeView(async () => {
+          ++feedGeneration;
+          await feed.pause(true);
+          hover = selection = null;
+          await highlight();
+          try {
+            await content.dataSource(mode);
+            options = { ...options, dataMode: mode };
+            if (mode === "streaming") await feed.prime();
+            else if (options.changed) await content.changeSamples(true);
+            await content.ready();
+            await reconcile();
+            resumeFeed();
+          } catch (error) {
+            options = {
+              ...options,
+              dataMode: content.mode,
+              streamError:
+                error instanceof Error ? error.message : String(error),
+            };
+            throw error;
+          }
+        });
       },
       async dataWindow(args) {
         if (args !== "count" && args !== "time")
           throw new Error("Unknown chart data window");
         const profile: ChartWindow = args;
-        ++feedGeneration;
-        await feed.pause(content.mode === "buffer");
-        await content.dataWindow(profile);
-        options = { ...options, dataWindow: profile };
-        if (content.mode === "streaming") await reconcile();
-        resumeFeed();
+        await changeView(async () => {
+          ++feedGeneration;
+          await feed.pause(content.mode === "buffer");
+          await content.dataWindow(profile);
+          options = { ...options, dataWindow: profile };
+          if (content.mode === "streaming") await reconcile();
+          resumeFeed();
+        });
       },
       async streamPlayback(args) {
         if (typeof args !== "boolean")
@@ -331,8 +549,12 @@ export const chartScene: GallerySceneDefinition = {
       },
       async changeSamples(args) {
         const changed = args === undefined ? true : Boolean(args);
-        await content.changeSamples(changed);
-        options = { ...options, changed };
+        await changeView(async () => {
+          await content.changeSamples(changed);
+          await content.client.waitForFrame();
+          options = { ...options, changed };
+          await reconcile();
+        });
       },
     };
     try {
@@ -354,8 +576,7 @@ export const chartScene: GallerySceneDefinition = {
         ),
       );
       await content.open();
-      const ready = content.ready().then(async () => {
-        if (options.playing === false) await content.playback(false);
+      ready = content.ready().then(async () => {
         if (options.changed) await content.changeSamples(true);
         if (options.dataWindow === "time") await content.dataWindow("time");
         if (options.dataMode === "streaming")
@@ -376,26 +597,19 @@ export const chartScene: GallerySceneDefinition = {
           };
         },
         resize(viewport) {
-          return enqueue(async () => {
-            const aspect = viewport.width / viewport.height;
-            if (aspect === camera.aspect) return;
-            camera.aspect = aspect;
-            const focused = options.focused;
-            if (typeof focused !== "string") return;
-            if (camera.focus) await camera.move(focused);
-            else {
-              const target = chartCameraTarget(focused, aspect);
-              await camera.write(target.pose, target.distance);
-            }
+          if (closing)
+            return Promise.reject(new Error("The chart scene is disposed"));
+          const aspect = viewport.width / viewport.height;
+          if (aspect === camera.aspect) return Promise.resolve();
+          camera.aspect = aspect;
+          if (typeof options.focused !== "string") return Promise.resolve();
+          return cameraActions.submit({
+            kind: "resize",
+            generation: cameraGeneration,
           });
         },
         update(patch) {
           return enqueue(async () => {
-            if (
-              patch.playing !== undefined &&
-              patch.playing !== options.playing
-            )
-              await actions.playback!({ playing: Boolean(patch.playing) });
             if (
               patch.changed !== undefined &&
               patch.changed !== options.changed
@@ -423,14 +637,31 @@ export const chartScene: GallerySceneDefinition = {
           const action = actions[name];
           if (!action)
             return Promise.reject(new Error(`Unknown chart action: ${name}`));
-          return enqueue(async () => {
+          if (closing)
+            return Promise.reject(new Error("The chart scene is disposed"));
+          const run = async () => {
             const result = await action(args);
             notify();
             return result ?? options;
-          });
+          };
+          return [
+            "focus",
+            "resetCamera",
+            "navigate",
+            "beginNavigation",
+            "endNavigation",
+            "hover",
+          ].includes(name)
+            ? run()
+            : enqueue(run);
         },
         async inspect() {
-          await tail;
+          await Promise.all([
+            tail,
+            cameraActions.settled(),
+            hoverActions.settled(),
+          ]);
+          await highlights.settled();
           const inspections = await content.inspections();
           const inspection = inspections.get(content.client)!;
           const controller = camera.focus
@@ -440,6 +671,10 @@ export const chartScene: GallerySceneDefinition = {
             : undefined;
           const pose = camera.pose(inspection);
           return {
+            input: {
+              camera: cameraActions.snapshot(),
+              hover: hoverActions.snapshot(),
+            },
             data: {
               mode: content.mode,
               window: content.window,
@@ -487,18 +722,11 @@ export const chartScene: GallerySceneDefinition = {
                   state: controller?.state ?? "stopped",
                 }
               : null,
-            playing: options.playing,
             controllers: [...inspections].flatMap(([owner, state]) =>
               (state.controllers ?? []).map((controller) => ({
                 ...controller,
                 world: owner.worldReference!,
                 session: owner.session,
-                chart:
-                  content.charts.find(
-                    (chart) =>
-                      chart.client === owner &&
-                      chart.controllers.includes(controller.id),
-                  )?.spec.id ?? null,
               })),
             ),
             hover,
@@ -515,7 +743,6 @@ export const chartScene: GallerySceneDefinition = {
                 inspection: inspections.get(chart.client)!,
                 anchor: chart.anchor,
                 surface: chart.surface,
-                controllers: chart.controllers,
                 source: chart.source,
                 sourceKind: chart.sourceKind,
                 bindingComponent: content.bindingComponent(chart),
@@ -537,7 +764,16 @@ export const chartScene: GallerySceneDefinition = {
         dispose() {
           if (!closing) {
             listeners.clear();
-            closing = tail
+            ++cameraGeneration;
+            ++hoverGeneration;
+            cameraActions.drop();
+            hoverActions.drop();
+            closing = Promise.all([
+              tail.catch(() => {}),
+              cameraActions.settled(),
+              hoverActions.settled(),
+              highlights.settled(),
+            ])
               .catch(() => {})
               .then(async () => {
                 ++feedGeneration;

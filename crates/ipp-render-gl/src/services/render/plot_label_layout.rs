@@ -108,7 +108,11 @@ impl PlotLabelLayoutState {
             {
                 place_radial(bounds, preferred, direction, size, &occupied, old)
             } else {
-                if let Some((_, normal)) = perimeter {
+                if matches!(plane.plane.placement, PlotPlanePlacement::Axis { .. }) {
+                    // Edge-on axes and clipped frame corners have no usable
+                    // perimeter normal. Keep numeric stations fixed, and keep
+                    // titles within the same local reach instead of generic fit.
+                    let normal = perimeter.map_or([0.0; 2], |(_, normal)| normal);
                     if matches!(plane.plane.layout, PlotPlaneLayout::Tick(_)) {
                         place_tick(bounds, normal, size, &occupied, old)
                     } else {
@@ -229,14 +233,13 @@ fn axis_perimeter(
             size,
         )?;
     }
-    let height = (bounds[3] - bounds[1]).max(1.0);
-    let padding = (height
+    let height = (bounds[3] - bounds[1]).max(f32::EPSILON);
+    let padding = height
         * if matches!(plane.plane.layout, PlotPlaneLayout::Title(_)) {
             3.0
         } else {
             0.9
-        })
-    .max(PADDING);
+        };
     // One midpoint chooses the side for every tick and title on this axis;
     // individual string width cannot split a lane or choose its opposite side.
     let midpoint = project(
@@ -253,6 +256,7 @@ fn axis_perimeter(
         &corners,
         normal,
         0.0,
+        height * 0.25,
     );
     let mut offset = if axis == 1 {
         perimeter_offset(bounds, &corners, normal, padding)
@@ -279,12 +283,13 @@ fn perimeter_station(
     corners: &[[f32; 2]],
     normal: [f32; 2],
     padding: f32,
+    hysteresis: f32,
 ) -> ([f32; 2], [f32; 2]) {
     let positive = perimeter_offset(bounds, corners, normal, padding);
     let opposite = [-normal[0], -normal[1]];
     let negative = perimeter_offset(bounds, corners, opposite, padding);
     // A deterministic tie band avoids numerical side flips at symmetric views.
-    if negative[0].hypot(negative[1]) + HYSTERESIS < positive[0].hypot(positive[1]) {
+    if negative[0].hypot(negative[1]) + hysteresis < positive[0].hypot(positive[1]) {
         (negative, opposite)
     } else {
         (positive, normal)
@@ -428,7 +433,37 @@ fn place_tick(
     occupied: &Occupancy,
     previous: Option<[f32; 2]>,
 ) -> [f32; 2] {
-    place_radial(bounds, [0.0; 2], normal, size, occupied, previous)
+    let height = (bounds[3] - bounds[1]).max(f32::EPSILON);
+    let padding = height * 0.7;
+    let reach = height * 2.0;
+    let score = |distance: f32| {
+        let offset = [normal[0] * distance, normal[1] * distance];
+        let candidate = translated(bounds, offset);
+        let overflow = (padding - candidate[0]).max(0.0)
+            + (padding - candidate[1]).max(0.0)
+            + (candidate[2] - size[0] as f32 + padding).max(0.0)
+            + (candidate[3] - size[1] as f32 + padding).max(0.0);
+        (occupied.intersections(candidate, padding) + overflow * height) * 10000.0 + distance
+    };
+    let mut best = 0.0;
+    let mut best_score = score(best);
+    for ring in 1..=RINGS {
+        let distance = reach * ring as f32 / RINGS as f32;
+        let value = score(distance);
+        if value < best_score {
+            best = distance;
+            best_score = value;
+        }
+    }
+    // A close view's offset must shrink with its ink after zooming out in the
+    // same viewport. History can prefer a nearby lane, never exceed its reach.
+    if let Some(old) = previous {
+        let distance = (old[0] * normal[0] + old[1] * normal[1]).clamp(0.0, reach);
+        if score(distance) <= best_score + height * 0.25 {
+            best = distance;
+        }
+    }
+    [normal[0] * best, normal[1] * best]
 }
 
 fn panel_edge(anchor: [f32; 16], panel: [f32; 16], bounds: [f32; 4]) -> [f32; 2] {
@@ -564,18 +599,29 @@ fn place_constrained(
     previous: Option<[f32; 2]>,
     outward: Option<[f32; 2]>,
 ) -> [f32; 2] {
-    let height = (bounds[3] - bounds[1]).max(1.0);
+    let height = if outward.is_some() {
+        (bounds[3] - bounds[1]).max(f32::EPSILON)
+    } else {
+        (bounds[3] - bounds[1]).max(1.0)
+    };
     // Ink-relative padding survives a composed camera texture's supersampling
     // and downsampling, unlike a fixed number of offscreen texture pixels.
-    let padding = (height * 0.7).max(PADDING)
-        * if matches!(role, PlotPlaneLayout::Title(_)) {
-            1.5
-        } else {
-            1.0
-        };
-    let lane = match role {
-        PlotPlaneLayout::Title(1) => [0.0, -(height + padding)],
-        PlotPlaneLayout::Title(_) => [0.0, height + padding],
+    let padding = if outward.is_some() {
+        height * 0.7
+    } else {
+        (height * 0.7).max(PADDING)
+    } * if matches!(role, PlotPlaneLayout::Title(_)) {
+        1.5
+    } else {
+        1.0
+    };
+    let lane = match (role, outward) {
+        (PlotPlaneLayout::Title(_), Some(normal)) => [
+            normal[0] * (height + padding),
+            normal[1] * (height + padding),
+        ],
+        (PlotPlaneLayout::Title(1), None) => [0.0, -(height + padding)],
+        (PlotPlaneLayout::Title(_), None) => [0.0, height + padding],
         _ => [0.0; 2],
     };
     let directions: [[f32; 2]; 8] = match role {
@@ -622,7 +668,13 @@ fn place_constrained(
         let distance = (offset[0] - lane[0]).hypot(offset[1] - lane[1]);
         (intersections + overflow * height) * 10000.0 + distance
     };
-    let step = (height + padding).clamp(8.0, 28.0);
+    // Axis titles stay associated with their chart even if neighbouring ink
+    // cannot be separated. General annotations keep their wider fitting range.
+    let reach = outward.map(|_| height * 4.0);
+    let step = reach.map_or_else(
+        || (height + padding).clamp(8.0, 28.0),
+        |reach| reach / RINGS as f32,
+    );
     let clamp = |mut candidate: [f32; 2]| {
         for axis in 0..2 {
             let low = padding - bounds[axis];
@@ -640,6 +692,12 @@ fn place_constrained(
             let inward = (candidate[0] * normal[0] + candidate[1] * normal[1]).min(0.0);
             for axis in 0..2 {
                 candidate[axis] -= normal[axis] * inward;
+            }
+        }
+        if let Some(reach) = reach {
+            let distance = candidate[0].hypot(candidate[1]);
+            if distance > reach {
+                candidate = candidate.map(|value| value * reach / distance);
             }
         }
         candidate
@@ -660,10 +718,15 @@ fn place_constrained(
         }
     }
     // Do not jump between equally good local lanes for a subpixel camera change.
-    if let Some(old) = previous
-        .map(clamp)
-        .filter(|old| score(*old) <= best_score + HYSTERESIS)
-    {
+    if let Some(old) = previous.map(clamp).filter(|old| {
+        score(*old)
+            <= best_score
+                + if outward.is_some() {
+                    height * 0.25
+                } else {
+                    HYSTERESIS
+                }
+    }) {
         old
     } else {
         best

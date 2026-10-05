@@ -129,6 +129,7 @@ REGRESSION_GROUPS = {
             "gallery-gui-camera",
             "gallery-particles",
             "gallery-charts",
+            "gallery-chart-input",
             "gallery-platformer",
             "native-gallery",
         ),

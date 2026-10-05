@@ -1,7 +1,6 @@
 import {
   clientAssetSource,
   type AnimationWorldClient,
-  type AnimationTrack,
   type DatasetProducer,
   type DatasetPage,
   type ClientAssetSource,
@@ -66,7 +65,6 @@ export interface GalleryChart {
   windows: readonly DataWindow[];
   readonly font: ClientAssetSource;
   frame: ChartSpec["frame"];
-  readonly controllers: bigint[];
 }
 
 interface OwnedChild {
@@ -88,12 +86,9 @@ export class ChartContent {
     entity: bigint;
   }[] = [];
   private readonly roots = new Map<string, ReactWorldRoot>();
-  private readonly clips = new Map<string, ClientAssetSource>();
-  private nextClip = 710100n;
   private sourceGeneration = 0;
   mode: ChartDataMode = "buffer";
   window: ChartWindow = "count";
-  playing = true;
   private readonly attachments: ReactWorldRoot[] = [];
   private readonly highlights = new Map<string, string>();
   private readonly producers = new Map<string, DatasetProducer>();
@@ -148,7 +143,6 @@ export class ChartContent {
           temporary: true,
           canvas: { extent: [600, 360], unitsPerMetre: 60 },
           selectedSystems: [
-            "ipp.animation",
             "ipp.asset-dependencies",
             "ipp.data-bindings",
             "ipp.plot",
@@ -299,11 +293,9 @@ export class ChartContent {
         windows: [],
         font,
         frame: spec.frame,
-        controllers: [],
       };
       this.charts.push(chart);
       await this.declare(chart);
-      await this.animate(chart);
     }
   }
 
@@ -338,14 +330,14 @@ export class ChartContent {
       `chart-${spec.id}`,
       spec.component,
       source,
-      chartColumnDefinitions(this.contract, spec),
+      chartColumnDefinitions(this.contract),
       [
         series([0, 0.8, 1, 1]),
         ...(spec.secondSeries ? [series([1, 0.6, 0.1, 1], "y2")] : []),
       ],
       [],
       spec.style,
-      { y: 1, y2: 1, radius: 1, height: 1, value: 0 },
+      {},
       chart.sourceKind === "streaming"
         ? { windows: chart.windows, encodeWindows }
         : undefined,
@@ -361,15 +353,6 @@ export class ChartContent {
 
   private async removeDeclarations() {
     for (const chart of this.charts) {
-      for (const controller of [...chart.controllers]) {
-        await chart.client.deleteAnimationController(controller);
-        chart.controllers.splice(chart.controllers.indexOf(controller), 1);
-      }
-      const clip = this.clips.get(chart.spec.id);
-      if (clip) {
-        await chart.client.releaseAsset(clip);
-        this.clips.delete(chart.spec.id);
-      }
       const root = this.roots.get(chart.spec.id);
       if (root) {
         await root.render(null);
@@ -432,7 +415,6 @@ export class ChartContent {
         ]),
       );
       await this.declare(chart);
-      await this.animate(chart);
     }
     await this.ready();
   }
@@ -482,6 +464,8 @@ export class ChartContent {
       if (outcome.failure)
         throw new Error(`Live ingestion failed: ${outcome.failure.reason}`);
     }
+    // Observe Host evaluation before reconciling picked rows with their current windows.
+    await this.client.waitForFrame();
   }
 
   async sources(): Promise<DatasetPage[]> {
@@ -505,53 +489,6 @@ export class ChartContent {
       pages.push(complete);
     }
     return pages;
-  }
-
-  private async animate(chart: GalleryChart) {
-    const { client, entity, spec } = chart;
-    const binding = client.components[this.bindingComponent(chart)]!;
-    const tracks: AnimationTrack[] = ["y", "y2", "height", "radius"].map(
-      (column) => ({
-        property: { component: binding.id, name: `${column}_parameter` },
-        keys: [1, 0.62, 1].map((value, index) => ({
-          time: index * 3,
-          value: { kind: "dynamic", value: { kind: "f32", value } },
-        })),
-      }),
-    );
-    if (spec.component.includes("Pie")) {
-      tracks.push({
-        property: { component: binding.id, name: "value_parameter" },
-        keys: [0, 1, 0].map((value, index) => ({
-          time: index * 3,
-          value: { kind: "dynamic", value: { kind: "f32", value } },
-        })),
-      });
-    }
-    const asset = clientAssetSource(client.session, 10, this.nextClip++);
-    this.clips.set(spec.id, asset);
-    await client.registerAsset(
-      asset,
-      client.encodeAnimationClip({ duration: 6, tracks }).buffer,
-    );
-    const controller = await client.createAnimationController({
-      looping: true,
-      drivers: tracks.map((track, index) => ({
-        source: asset.source,
-        track: index,
-        target: entity,
-        property: track.property!,
-      })),
-    });
-    chart.controllers.push(controller);
-    await client.controlAnimationController(controller, { action: "play" });
-    if (!this.playing) {
-      await client.controlAnimationController(controller, { action: "pause" });
-      await client.controlAnimationController(controller, {
-        action: "seek",
-        time: 0,
-      });
-    }
   }
 
   async inspections(): Promise<Map<AnimationWorldClient, Inspection>> {
@@ -579,11 +516,44 @@ export class ChartContent {
     );
   }
 
+  private async readiness() {
+    const clients = new Set([
+      this.client,
+      ...this.charts.map((chart) => chart.client),
+    ]);
+    const pages = async (client: AnimationWorldClient) => {
+      const result = [];
+      let after = 0n;
+      do {
+        const page = await client.inspectPage({
+          collection: "resources",
+          after,
+        });
+        result.push(page);
+        after = page.next;
+      } while (after !== 0n);
+      return result;
+    };
+    return new Map(
+      await Promise.all(
+        [...clients].map(async (client) => {
+          const resources = await pages(client);
+          return [
+            client,
+            {
+              resources: resources.flatMap((page) => page.resources),
+            },
+          ] as const;
+        }),
+      ),
+    );
+  }
+
   async ready() {
     const deadline = performance.now() + 30_000;
     for (;;) {
       this.context.signal.throwIfAborted();
-      const inspections = await this.inspections();
+      const inspections = await this.readiness();
       const resources = [...inspections.values()].flatMap(
         (world) => world.resources,
       );
@@ -604,44 +574,13 @@ export class ChartContent {
         views.every(
           (view) => view.availability.reason === "Ready" && !view.dirty,
         ) &&
-        resources.every((resource) => resource.status === "loaded") &&
-        this.charts.every((chart) =>
-          chart.controllers.every((id) =>
-            inspections
-              .get(chart.client)
-              ?.controllers?.some(
-                (controller) =>
-                  controller.id === id &&
-                  controller.state === (this.playing ? "playing" : "paused"),
-              ),
-          ),
-        )
+        resources.every((resource) => resource.status === "loaded")
       )
         return;
       if (performance.now() > deadline)
-        throw new Error("Chart sources and animation did not become ready");
+        throw new Error("Chart sources and assets did not become ready");
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
-  }
-
-  async playback(playing: boolean, time?: number) {
-    this.playing = playing;
-    for (const chart of this.charts)
-      for (const controller of chart.controllers) {
-        if (!playing || time !== undefined)
-          await chart.client.controlAnimationController(controller, {
-            action: "pause",
-          });
-        if (time !== undefined)
-          await chart.client.controlAnimationController(controller, {
-            action: "seek",
-            time,
-          });
-        if (playing)
-          await chart.client.controlAnimationController(controller, {
-            action: "play",
-          });
-      }
   }
 
   async highlight(
@@ -729,9 +668,6 @@ export class ChartContent {
       await attempt(() => root.render(null));
       await attempt(() => root.unmount());
     }
-    for (const chart of this.charts)
-      for (const controller of chart.controllers)
-        await attempt(() => chart.client.deleteAnimationController(controller));
     for (const root of this.roots.values()) {
       await attempt(() => root.render(null));
       await attempt(() => root.unmount());
@@ -746,10 +682,6 @@ export class ChartContent {
       );
     for (const producer of this.producers.values())
       await attempt(() => this.context.canvas.host.datasets.destroy(producer));
-    for (const chart of this.charts) {
-      const clip = this.clips.get(chart.spec.id);
-      if (clip) await attempt(() => chart.client.releaseAsset(clip));
-    }
     for (const { client, asset } of this.assets)
       await attempt(() => client.releaseAsset(asset));
     for (const child of this.children) {

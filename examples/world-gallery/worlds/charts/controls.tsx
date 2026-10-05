@@ -74,21 +74,6 @@ export function ChartControls({
         </div>
       </fieldset>
       <fieldset disabled={!mount}>
-        <legend>Motion</legend>
-        <button
-          id="charts-playback"
-          type="button"
-          className="secondary-button"
-          aria-pressed={Boolean(mount?.options.playing)}
-          onClick={() =>
-            action("playback", { playing: !mount?.options.playing })
-          }
-        >
-          {mount?.options.playing ? "Pause animation" : "Resume animation"}
-        </button>
-        <p>Camera focus continues while chart motion is paused.</p>
-      </fieldset>
-      <fieldset disabled={!mount}>
         <legend>Dataset</legend>
         <label className="mesh-select" htmlFor="charts-data-source">
           <span>Source</span>

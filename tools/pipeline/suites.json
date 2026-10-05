@@ -1,6 +1,6 @@
 {
   "gallery-charts": {
-    "description": "One camera scene with animated Canvas and volumetric charts, smooth focus, free camera navigation, source row hover/selection and disposal through worker WASM/WebGL",
+    "description": "Stationary Canvas and volumetric charts, smooth camera focus, source row interaction and faithful streaming through worker WASM/WebGL",
     "sourceRoots": [
       "examples/world-gallery/worlds/charts/",
       "tests/integration/scenarios/gallery-charts.ts",
@@ -10,6 +10,19 @@
       "tests/render/gallery-charts.test.ts"
     ],
     "files": ["dist/tests/render/gallery-charts.test.js"]
+  },
+  "gallery-chart-input": {
+    "description": "Bounded chart gesture and hover work, newest focus and release behavior through real browser input and generated worker transport",
+    "sourceRoots": [
+      "examples/world-gallery/worlds/charts/",
+      "tests/integration/scenarios/gallery-charts.ts",
+      "tests/integration/scenarios/gallery-chart-streaming.ts",
+      "tests/render/gallery-chart-input.test.ts",
+      "tests/render/gallery-chart-observer.ts",
+      "tests/render/gallery-driver.ts",
+      "tests/render/viewer-browser-helper.ts"
+    ],
+    "files": ["dist/tests/render/gallery-chart-input.test.js"]
   },
   "headless-client": {
     "description": "Maintained headless example CLI against a real native Host with explicit World cleanup",

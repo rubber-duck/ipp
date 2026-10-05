@@ -248,14 +248,24 @@ test("the release gallery is complete and renders at root and project URLs", {
             const controls = page.locator("#controls-toggle");
             if ((await controls.getAttribute("aria-expanded")) === "false")
               await controls.click();
-            await page.locator("#charts-playback").click();
+            assert.equal(
+              await page.locator("#charts-playback").count(),
+              0,
+              "Published charts have no decorative animation control",
+            );
             await page.evaluate(async () => {
-              const deadline = performance.now() + 15_000;
-              while ((await window.ippGalleryScene.inspect()).playing) {
-                if (performance.now() > deadline)
-                  throw new Error("Chart playback did not pause");
-              }
               const state = await window.ippGalleryScene.inspect();
+              for (const chart of state.charts)
+                if (
+                  chart.inspection.controllers?.some((controller) =>
+                    controller.description.drivers.some(
+                      (driver) => driver.target === chart.entity,
+                    ),
+                  )
+                )
+                  throw new Error(
+                    "Published chart data must have no animation controller",
+                  );
               const eye = state.camera.transform;
               if (
                 state.camera.navigation !== "look" ||

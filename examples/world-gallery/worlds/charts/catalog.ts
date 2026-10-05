@@ -141,7 +141,7 @@ const spatialFrame = {
 
 export const CHART_RING = {
   center: [0, 6, 0] as ChartPoint,
-  radius: 34,
+  radius: 28,
 } as const;
 
 /** Canvas chart widths are arc lengths on the same cylinder as the exhibit arrangement. */

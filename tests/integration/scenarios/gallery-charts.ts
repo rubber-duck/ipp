@@ -39,7 +39,10 @@ export interface GalleryChartsState {
     state: string;
     startTime: number;
   };
-  playing: boolean;
+  input: {
+    camera: ChartInputLane;
+    hover: ChartInputLane;
+  };
   charts: readonly {
     id: string;
     component: string;
@@ -53,7 +56,6 @@ export interface GalleryChartsState {
     rotation: readonly number[];
     inspection: Inspection;
     anchor: bigint | null;
-    controllers: readonly bigint[];
     surface: null | {
       anchor: bigint;
       component: "CylinderSurface";
@@ -70,6 +72,17 @@ export interface GalleryChartsState {
   selection: ChartRow | null;
 }
 
+export interface ChartInputLane {
+  inFlight: number;
+  pending: number;
+  submitted: number;
+  executed: number;
+  coalesced: number;
+  dropped: number;
+  maxInFlight: number;
+  maxPending: number;
+}
+
 export interface ChartRow {
   chart: string;
   entity: bigint;
@@ -77,7 +90,8 @@ export interface ChartRow {
   path: readonly unknown[];
   series: number;
   rowId: bigint;
-  values: unknown;
+  values: DataBindingPage["rows"][number]["values"];
+  columns: readonly string[];
 }
 
 export interface ChartImage {
@@ -135,6 +149,57 @@ export function assertChartImageChanged(
   );
 }
 
+export function assertChartImageStable(
+  before: ChartImage,
+  after: ChartImage,
+  label: string,
+) {
+  chartCheck(
+    before.width === after.width && before.height === after.height,
+    `${label}: completed frame dimensions changed`,
+  );
+  chartCheck(
+    before.pixels.every(
+      (pixel, index) => Math.abs(pixel - after.pixels[index]!) <= 1,
+    ),
+    `${label}: stationary chart data retains completed pixels`,
+  );
+}
+
+export function assertNoChartAnimation(state: GalleryChartsState) {
+  chartCheck(
+    state.charts.every(
+      (chart) =>
+        !chart.inspection.controllers?.some((controller) =>
+          controller.description.drivers.some(
+            (driver) => driver.target === chart.entity,
+          ),
+        ),
+    ),
+    "Stationary samples register no data animation controllers",
+  );
+}
+
+export function assertBoundedChartInput(state: GalleryChartsState) {
+  for (const [name, lane] of Object.entries(state.input)) {
+    chartCheck(
+      lane.maxInFlight <= 1 && lane.maxPending <= 1,
+      `${name}: input retains at most one active and one pending operation`,
+    );
+    chartCheck(
+      lane.inFlight === 0 && lane.pending === 0,
+      `${name}: input settles without queued work`,
+    );
+  }
+}
+
+function bindingSamples(state: GalleryChartsState) {
+  return JSON.stringify(
+    state.charts.map((chart) => [chart.id, chart.binding.rows]),
+    (_key, value) => (typeof value === "bigint" ? String(value) : value),
+  );
+}
+
 function distance(a: ChartPose, b: ChartPose) {
   return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
 }
@@ -182,7 +247,7 @@ export function assertCenterCamera(state: GalleryChartsState) {
 
 function assertRingLayout(state: GalleryChartsState) {
   chartCheck(
-    state.ring.radius === 34 &&
+    state.ring.radius === 28 &&
       state.ring.center.every((value, i) => value === [0, 6, 0][i]),
     "The chart ring has its declared center and radius",
   );
@@ -260,8 +325,8 @@ function assertRingLayout(state: GalleryChartsState) {
         }
       }
       chartCheck(
-        Math.abs(chartSurfaceLocalPoint(state, 5, 0)[2]! - 0.367) < 0.001,
-        `${chart.id}: panel edge sag uses radius34 rather than a visually exaggerated radius`,
+        Math.abs(chartSurfaceLocalPoint(state, 5, 0)[2]! - 0.445244) < 0.001,
+        `${chart.id}: panel edge sag uses radius28 rather than a visually exaggerated radius`,
       );
     }
     const size = chart.surface
@@ -271,11 +336,20 @@ function assertRingLayout(state: GalleryChartsState) {
       id: chart.id,
       center,
       angle: (Math.atan2(delta[2]!, delta[0]!) + 2 * Math.PI) % (2 * Math.PI),
-      extent: Math.hypot(...size) / 2,
+      extent:
+        Math.hypot(
+          ...size.map(
+            (value, i) => value * Number(fields[["sx", "sy", "sz"][i]!]),
+          ),
+        ) / 2,
     };
   });
   const ordered = [...exhibits].sort((a, b) => a.angle - b.angle);
+  const adjacentDistances: number[] = [];
+  let minimumClearance = Number.POSITIVE_INFINITY;
+  let closest: readonly string[] = [];
   for (let i = 0; i < ordered.length; i++) {
+    const next = ordered[(i + 1) % ordered.length]!;
     const gap =
       (ordered[(i + 1) % ordered.length]!.angle -
         ordered[i]!.angle +
@@ -285,16 +359,37 @@ function assertRingLayout(state: GalleryChartsState) {
       Math.abs(gap - (2 * Math.PI) / ordered.length) < 0.001,
       "Actual exhibits have equal angular spacing around the ring",
     );
+    const adjacentDistance = Math.hypot(
+      ...ordered[i]!.center.map((value, axis) => value - next.center[axis]!),
+    );
+    adjacentDistances.push(adjacentDistance);
+    chartCheck(
+      Math.abs(adjacentDistance - 2 * 28 * Math.sin(Math.PI / 10)) < 0.001,
+      "The condensed ring retains the expected adjacent exhibit distance",
+    );
     for (let j = i + 1; j < ordered.length; j++) {
       const a = ordered[i]!,
         b = ordered[j]!;
+      const clearance =
+        Math.hypot(...a.center.map((value, axis) => value - b.center[axis]!)) -
+        a.extent -
+        b.extent;
       chartCheck(
-        Math.hypot(...a.center.map((value, axis) => value - b.center[axis]!)) >
-          a.extent + b.extent + 1,
+        clearance > 1,
         `${a.id}/${b.id}: chart volumes have clear space between them`,
       );
+      if (clearance < minimumClearance) {
+        minimumClearance = clearance;
+        closest = [a.id, b.id];
+      }
     }
   }
+  return {
+    radius: state.ring.radius,
+    adjacentDistances,
+    minimumClearance,
+    closest,
+  };
 }
 
 function samePresentation(a: GalleryChartsState, b: GalleryChartsState) {
@@ -357,11 +452,27 @@ export async function focusChart(driver: GalleryChartsDriver, id: string) {
 
 /** Operations rely on the Host's World/controller clocks; polling never advances simulation. */
 export async function exerciseGalleryCharts(driver: GalleryChartsDriver) {
-  await driver.action("playback", { playing: false, time: 0 });
   const initial = await driver.inspect();
+  assertNoChartAnimation(initial);
   await driver.record("charts-initial", initial);
   const center = await driver.capture("ring-center");
   assertChartImage(center, "ring center");
+  const stationary = await waitForCharts(
+    driver,
+    (state) => state.world.time >= initial.world.time + 0.4,
+    "fixed-default-stationary",
+  );
+  assertNoChartAnimation(stationary);
+  chartCheck(
+    bindingSamples(initial) === bindingSamples(stationary),
+    "Default fixed samples remain unchanged as the Host clock advances",
+  );
+  assertChartImageStable(
+    center,
+    await driver.capture("ring-center-stationary"),
+    "Default fixed samples",
+  );
+  await driver.record("charts-default-stationary", stationary);
   const ids = [
     "straight",
     "smooth",
@@ -379,7 +490,7 @@ export async function exerciseGalleryCharts(driver: GalleryChartsDriver) {
       ids.every((id) => initial.charts.some((chart) => chart.id === id)),
     "One scene contains all ten Canvas and volumetric chart families",
   );
-  assertRingLayout(initial);
+  await driver.record("charts-ring-separation", assertRingLayout(initial));
   assertCenterCamera(initial);
   const canvas = initial.charts.filter((chart) =>
     chart.component.endsWith("2d"),
@@ -447,20 +558,6 @@ export async function exerciseGalleryCharts(driver: GalleryChartsDriver) {
       `${chart.id}: Surface presentation supplies the Canvas extent`,
     );
   }
-  const dataControllers = initial.charts.flatMap(
-    (chart) =>
-      chart.inspection.controllers?.filter((controller) =>
-        chart.controllers.includes(controller.id),
-      ) ?? [],
-  );
-  chartCheck(
-    dataControllers.length === 10 &&
-      dataControllers.every(
-        (controller) =>
-          controller.state === "paused" && Math.abs(controller.time) < 0.001,
-      ),
-    "Pause/seek reaches actual data controllers in root and child Worlds",
-  );
   let turned = initial;
   for (const [index, yaw] of [0.22, 0.18, -0.25].entries()) {
     await driver.action("navigate", { kind: "rotate", yaw, pitch: 0 });
@@ -543,6 +640,22 @@ export async function exerciseGalleryCharts(driver: GalleryChartsDriver) {
     !atPose(manual.camera.transform, interrupted.camera.transform),
     "Free navigation changes the camera from its sampled pose",
   );
+  const afterManual = await waitForCharts(
+    driver,
+    (state) => state.world.time >= manual.world.time + 0.4,
+    "manual-focus-cancel-stationary",
+  );
+  chartCheck(
+    afterManual.focus === null &&
+      JSON.stringify(afterManual.camera.transform) ===
+        JSON.stringify(manual.camera.transform) &&
+      !afterManual.world.controllers?.some(
+        (controller) => controller.id === interrupted.focus?.controller,
+      ),
+    "Manual interruption leaves no delayed camera motion or focus controller",
+  );
+  assertBoundedChartInput(afterManual);
+  await driver.record("focus-manual-cancellation", { manual, afterManual });
 
   await driver.action("focus", "overview");
   await waitForCharts(
@@ -568,7 +681,6 @@ export async function exerciseGalleryCharts(driver: GalleryChartsDriver) {
     const measurement = assertFocusedChartImage(focused, id);
     await driver.record(`charts-focus-${id}-pixels`, measurement);
   }
-  await driver.action("playback", { playing: false, time: 0 });
   await focusChart(driver, "bars");
   await driver.action("navigate", { kind: "zoom", amount: 0.3 });
   await driver.action("navigate", { kind: "rotate", yaw: 0.4, pitch: 0.16 });
@@ -580,13 +692,13 @@ export async function exerciseGalleryCharts(driver: GalleryChartsDriver) {
     assertCurvedChartPixels(curvedFrame, curvedView, "bars"),
   );
   await focusChart(driver, "bars");
-  const before = await driver.capture("charts-data-phase-zero");
-  await driver.action("playback", { playing: false, time: 2 });
-  const after = await driver.capture("charts-data-phase-two");
-  assertChartImageChanged(before, after, "Host animation seek");
-  const paused = await driver.inspect();
-  chartCheck(!paused.playing, "Playback pauses the chart visuals");
-  for (const chart of paused.charts) {
+  const before = await driver.capture("charts-fixed-original");
+  await driver.action("changeSamples", true);
+  const after = await driver.capture("charts-fixed-edited");
+  assertChartImageChanged(before, after, "Fixed source edit");
+  const changed = await driver.inspect();
+  assertNoChartAnimation(changed);
+  for (const chart of changed.charts) {
     const original = initial.charts.find((item) => item.id === chart.id)!;
     chartCheck(
       chart.binding.rows.some((row, index) =>
@@ -601,42 +713,31 @@ export async function exerciseGalleryCharts(driver: GalleryChartsDriver) {
           );
         }),
       ),
-      `${chart.id}: animation changes actual evaluated chart data`,
+      `${chart.id}: explicit source edits change actual evaluated chart data`,
     );
   }
-  await driver.action("playback", { playing: true });
-  const advanced = await waitForCharts(
+  const later = await waitForCharts(
     driver,
-    (state) => state.world.time > paused.world.time + 1,
-    "data-playing",
+    (state) => state.world.time > changed.world.time + 0.4,
+    "edited-fixed-stationary",
   );
-  chartCheck(advanced.playing, "Chart playback resumes");
   chartCheck(
-    advanced.charts.every((chart) =>
-      chart.inspection.controllers
-        ?.filter((controller) => chart.controllers.includes(controller.id))
-        .every((controller) => controller.state === "playing"),
-    ),
-    "Resume reaches root and Canvas child data controllers",
+    bindingSamples(changed) === bindingSamples(later),
+    "Edited fixed samples remain unchanged while the Host clock advances",
   );
-  await driver.action("playback", { playing: false });
-  const pausedAgain = await driver.inspect();
-  const stable = await driver.capture("charts-data-paused");
-  assertChartImageChanged(after, stable, "Resumed Host animation");
-  const later = await driver.capture("charts-data-paused-again");
-  chartCheck(
-    stable.pixels.every(
-      (pixel, index) => Math.abs(pixel - later.pixels[index]!) <= 1,
-    ),
-    "Paused chart visuals retain identical completed pixels",
+  assertChartImageStable(
+    after,
+    await driver.capture("charts-fixed-edited-stationary"),
+    "Edited fixed samples",
   );
-  await driver.record("charts-animation", { paused, advanced, pausedAgain });
-  await driver.action("playback", { playing: false, time: 0 });
+  await driver.record("charts-fixed-source-edit", { changed, later });
+  await driver.action("changeSamples", false);
   await focusChart(driver, "grid-bars");
-  const gridBefore = await driver.capture("charts-grid-data-phase-zero");
-  await driver.action("playback", { playing: false, time: 2 });
-  const gridAfter = await driver.capture("charts-grid-data-phase-two");
-  assertChartImageChanged(gridBefore, gridAfter, "Spatial bar Host animation");
+  const gridBefore = await driver.capture("charts-grid-fixed-original");
+  await driver.action("changeSamples", true);
+  const gridAfter = await driver.capture("charts-grid-fixed-edited");
+  assertChartImageChanged(gridBefore, gridAfter, "Spatial fixed source edit");
+  await driver.action("changeSamples", false);
 }
 
 function rotate(vector: readonly number[], quaternion: readonly number[]) {
@@ -655,7 +756,12 @@ function rotate(vector: readonly number[], quaternion: readonly number[]) {
 }
 
 /** Independently project a baseline bar interior, without reading derived Plot geometry. */
-export function baselineBarPointer(state: GalleryChartsState, aspect: number) {
+export function baselineBarPointer(
+  state: GalleryChartsState,
+  aspect: number,
+  sourceX = 2,
+  sourceY = 32.5,
+) {
   const chart = state.charts.find((chart) => chart.id === "bars");
   chartCheck(chart, "Missing bars chart");
   const entity = chart.inspection.entities.find(
@@ -676,12 +782,13 @@ export function baselineBarPointer(state: GalleryChartsState, aspect: number) {
     height = Number(frame.height);
   const x =
     Number(frame.padding_left) +
-    ((2 - Number(frame.min_x)) / (Number(frame.max_x) - Number(frame.min_x))) *
+    ((sourceX - Number(frame.min_x)) /
+      (Number(frame.max_x) - Number(frame.min_x))) *
       (width - Number(frame.padding_left) - Number(frame.padding_right));
   const y =
     height -
     Number(frame.padding_bottom) -
-    (32.5 / (Number(frame.max_y) - Number(frame.min_y))) *
+    (sourceY / (Number(frame.max_y) - Number(frame.min_y))) *
       (height - Number(frame.padding_top) - Number(frame.padding_bottom));
   const density = Number(chart.surface?.unitsPerMetre);
   const point = placePoint(
@@ -779,13 +886,24 @@ export function assertCurvedChartPixels(
   chartCheck(chart.surface, "Curved pixel probe has a Canvas chart");
   const object = chartTransform(state, chart),
     aspect = frame.width / frame.height;
+  const plotFrame = chart.inspection.entities
+    .find((entity) => entity.id === chart.entity)
+    ?.components.find(
+      (component) => "padding_bottom" in component.fields,
+    )?.fields;
+  chartCheck(plotFrame, "Curved pixel probe has the authored Canvas frame");
+  const canvasHeight = Number(plotFrame.height),
+    fontSize = Number(plotFrame.font_size),
+    tickBottom = canvasHeight - Number(plotFrame.padding_bottom) + 8 + fontSize,
+    titleTop = canvasHeight - fontSize - 2;
+  chartCheck(tickBottom < titleTop, "Canvas fixture has a blank bottom margin");
+  // The fixture's numeric labels end above its X title. Sample the middle of
+  // this blank margin, keeping every probe away from grid, bars and glyph ink.
+  const canvasY = (tickBottom + titleTop) / 2,
+    localY = chart.surface.height / 2 - canvasY / chart.surface.unitsPerMetre;
   const probes = [0.05, 0.25, 0.75, 0.95].map((u) => {
     const x = (u - 0.5) * chart.surface!.width;
-    const local = chartSurfaceLocalPoint(
-      state,
-      x,
-      chart.surface!.height * 0.35,
-    );
+    const local = chartSurfaceLocalPoint(state, x, localY);
     const projected = projectChartPoint(
       state,
       placePoint(object, local),
@@ -814,6 +932,7 @@ export function assertCurvedChartPixels(
     );
     return {
       u,
+      canvasY,
       projected,
       flat,
       rgb,
@@ -1030,7 +1149,6 @@ export async function exerciseChartRow(
   driver: GalleryChartsDriver,
   aspect: number,
 ) {
-  await driver.action("playback", { playing: false, time: 0 });
   const state = await focusChart(driver, "bars");
   const point = baselineBarPointer(state, aspect);
   await driver.action("hover", point);
@@ -1056,6 +1174,7 @@ export async function exerciseChartRow(
   );
   await driver.record("charts-source-row", { point, hovered, selected });
   await driver.capture("charts-selected-source-row");
+  await exerciseChartFeedbackEdits(driver, aspect);
   const grid = await focusChart(driver, "grid-bars");
   const gridPoint = baselineGridPointer(grid, aspect);
   await driver.action("hover", gridPoint);
@@ -1121,6 +1240,59 @@ export async function exerciseChartRow(
   });
   await driver.capture("ring-selected-rotated-spatial-row");
   await driver.action("clearSelection");
+}
+
+export async function exerciseChartFeedbackEdits(
+  driver: GalleryChartsDriver,
+  aspect: number,
+) {
+  const state = await focusChart(driver, "bars");
+  // Source row one is x=1,y=35; y=8.75 remains inside it after its value halves.
+  const point = baselineBarPointer(state, aspect, 1, 8.75);
+  await driver.action("hover", point);
+  await driver.action("select", point);
+  const selected = await waitForCharts(
+    driver,
+    (current) =>
+      String(current.hover?.rowId) === "1" &&
+      String(current.selection?.rowId) === "1",
+    "fixed-row-one-feedback",
+  );
+  const number = (mark: ChartRow | null) => {
+    const value = mark?.values[mark.columns.indexOf("y")];
+    return value?.valid && value.value.kind === "f32" ? value.value.value : NaN;
+  };
+  chartCheck(
+    number(selected.hover) === 35 && number(selected.selection) === 35,
+    "Row feedback initially reflects raw source values",
+  );
+  for (const [changed, expected] of [
+    [true, 17.5],
+    [false, 35],
+  ] as const) {
+    await driver.action("changeSamples", changed);
+    const refreshed = await waitForCharts(
+      driver,
+      (current) =>
+        number(current.hover) === expected &&
+        number(current.selection) === expected,
+      `fixed-row-one-feedback-${changed ? "edited" : "restored"}`,
+    );
+    chartCheck(
+      refreshed.hover?.rowId === selected.hover?.rowId &&
+        refreshed.selection?.rowId === selected.selection?.rowId &&
+        refreshed.selection?.entity === selected.selection?.entity &&
+        refreshed.selection?.world.id === selected.selection?.world.id,
+      "Retained feedback keeps its source identity while source values change",
+    );
+    assertNoChartAnimation(refreshed);
+    await driver.record(
+      `charts-feedback-${changed ? "edited" : "restored"}`,
+      refreshed,
+    );
+  }
+  await driver.action("clearSelection");
+  await driver.action("hover", null);
 }
 
 /** Focus places the selected chart in this central plot region; colored ink excludes white labels. */

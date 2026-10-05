@@ -303,7 +303,7 @@ test("native gallery captures all shared scenes, including moving particles and 
   );
 });
 
-test("native unified charts navigate, animate and pick World-qualified source rows without leaked participants", {
+test("native unified charts retain fixed samples, focus and pick World-qualified source rows without leaked participants", {
   timeout: 180_000,
 }, async (context) => {
   await runGallery(

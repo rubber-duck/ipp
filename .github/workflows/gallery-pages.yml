@@ -43,7 +43,7 @@ jobs:
           /snap/bin/blender --version | head -1 | grep '^Blender 5\.2\.'
       - name: Validate the shared gallery in browser and native GLES
         # The build graph fetches pinned fonts and exports the packed Blender scenes.
-        run: python tools/ipp.py regression --suite gallery-site --suite gallery-charts --suite native-gallery --software
+        run: python tools/ipp.py regression --suite gallery-site --suite gallery-charts --suite gallery-chart-input --suite native-gallery --software
       - name: Upload the gallery site
         uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
         with:

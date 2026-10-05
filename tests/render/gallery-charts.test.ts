@@ -4,6 +4,7 @@ import { decodePng } from "../../tools/shared-host/png.js";
 import { runBrowserEnvironment } from "../browser/environment.js";
 import {
   exerciseGalleryCharts,
+  exerciseChartFeedbackEdits,
   baselineBarPointer,
   baselineGridPointer,
   baselineSingleRowPointer,
@@ -20,7 +21,7 @@ import {
 } from "../integration/scenarios/gallery-chart-streaming.js";
 import { openGallery, galleryEnvironment } from "./gallery-driver.js";
 
-test("unified charts compose one camera scene with free camera angles, two second focus, animation and source row interaction", {
+test("unified charts retain fixed samples with free camera angles, two second focus and source row interaction", {
   timeout: 180_000,
 }, async (context) => {
   await runBrowserEnvironment(
@@ -60,7 +61,14 @@ test("unified charts compose one camera scene with free camera angles, two secon
         },
       };
       await exerciseGalleryCharts(driver);
-      await driver.action("playback", { playing: false, time: 0 });
+      const canvasBounds = await g.page
+        .locator("#ipp-world-canvas")
+        .boundingBox();
+      assert.ok(canvasBounds);
+      await exerciseChartFeedbackEdits(
+        driver,
+        canvasBounds.width / canvasBounds.height,
+      );
       await focusChart(driver, "bars");
       const state = await driver.inspect();
       const chart = state.charts.find((chart) => chart.id === "bars")!;
@@ -179,7 +187,7 @@ test("unified charts compose one camera scene with free camera angles, two secon
       assert.equal(reentered.charts.length, 10);
       assert.equal(reentered.hover, null);
       assert.equal(reentered.selection, null);
-      assert.ok(reentered.world.controllers?.length);
+      assert.equal(reentered.world.controllers?.length ?? 0, 0);
       assert.equal((await g.call<string[]>("galleryWorlds")).length, 6);
       await g.capture("charts-reentered");
       assertCenterCamera(reentered);
@@ -210,7 +218,6 @@ test("unified charts compose one camera scene with free camera angles, two secon
           (state.presentation?.viewport.width ?? 0) > bounds.width * 1.5,
         "review-viewport-ready",
       );
-      await driver.action("playback", { playing: false, time: 0 });
       const reviewCapture = async (label: string) => {
         await g.capture(label);
         await g.page.screenshot({

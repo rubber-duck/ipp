@@ -372,6 +372,7 @@ impl System for DataBindingSystem {
     fn update(&mut self, context: &mut SystemUpdateContext<'_, '_>) {
         let tick = context.world.world.tick.saturating_add(1);
         let world = context.world.world.id;
+        let dt = context.dt();
         for &(_, binding) in self.buffers.entries() {
             let value = binding.get_mut(&mut context.world.world.components);
             super::update::evaluate(
@@ -381,6 +382,7 @@ impl System for DataBindingSystem {
                 context.world.asset_acquisition,
                 world,
                 tick,
+                dt,
             );
         }
         for &(_, binding) in self.streams.entries() {
@@ -392,6 +394,7 @@ impl System for DataBindingSystem {
                 context.world.asset_acquisition,
                 world,
                 tick,
+                dt,
             );
         }
     }
@@ -403,6 +406,9 @@ fn notify(runtime: &mut DataBindingRuntime, data: &mut DataService) {
     };
     match data.take_notification(handle) {
         Ok(Some(notification)) => {
+            if notification.state.source != runtime.source {
+                runtime.reset_rows();
+            }
             runtime.needs_evaluate |= notification.changed;
             runtime.needs_prepare |=
                 notification.availability_changed || notification.state.source != runtime.source;

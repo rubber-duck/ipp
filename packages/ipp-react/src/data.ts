@@ -78,11 +78,65 @@ export interface DataColumnBinding {
   readonly definition: AssetReference | ClientAssetSource;
   /** Animatable typed <column>_parameter; null removes it, omission preserves it. */
   readonly parameter?: DynamicPropertyInput | null;
+  /**
+   * Per-lane rate per Host second. Initial/newly valid rows and source
+   * or definition replacements snap; retained row IDs keep motion through windows.
+   * Invalid targets publish immediately. null disables and snaps; omission preserves.
+   */
+  readonly interpolation?: DataColumnInterpolation | null;
+}
+
+/** Positive rates apply independently to each numeric output lane. */
+export type DataColumnInterpolation =
+  | { readonly kind: "fixed"; readonly unitsPerSecond: number }
+  | {
+      readonly kind: "percent";
+      readonly percentage: number;
+      /** Explicit nonnegative scale for headless, non-axis or ambiguous outputs. */
+      readonly reference?: number;
+    };
+
+/** Rate-limit F32/vec2/vec3/vec4 output lanes after pure projection. */
+export function fixed(
+  unitsPerSecond: number,
+): Extract<DataColumnInterpolation, { kind: "fixed" }> {
+  const speed = Math.fround(unitsPerSecond);
+  if (!Number.isFinite(speed) || speed <= 0)
+    throw new RangeError(
+      "Data interpolation speed must be finite and positive",
+    );
+  return { kind: "fixed", unitsPerSecond: speed };
+}
+
+/**
+ * Percent of the reference per Host second, not percent of remaining distance.
+ * Plot supplies its fitted pre-step axis scale when reference is omitted.
+ * An explicit zero reference holds without accumulating missed movement.
+ */
+export function percent(
+  percentage: number,
+  reference?: number,
+): Extract<DataColumnInterpolation, { kind: "percent" }> {
+  const rate = Math.fround(percentage);
+  const maximum = reference === undefined ? undefined : Math.fround(reference);
+  if (!Number.isFinite(rate) || rate <= 0)
+    throw new RangeError(
+      "Data interpolation percentage must be finite and positive",
+    );
+  if (maximum !== undefined && (!Number.isFinite(maximum) || maximum < 0))
+    throw new RangeError(
+      "Data interpolation reference must be finite and nonnegative",
+    );
+  return {
+    kind: "percent",
+    percentage: rate,
+    ...(maximum === undefined ? {} : { reference: maximum }),
+  };
 }
 
 export interface BufferDataSourceBindingProps {
   source: string;
-  /** null removes that output and its parameter; omission preserves stored properties. */
+  /** null removes that output and its companions; omission preserves stored properties. */
   columns: Readonly<Record<string, DataColumnBinding | null>>;
   children?: ReactNode;
 }
@@ -115,11 +169,20 @@ function columnsProperties(columns: BufferDataSourceBindingProps["columns"]) {
     DynamicPropertyInput | AssetReference | null
   > = {};
   for (const [name, column] of Object.entries(columns)) {
-    if (!/^[A-Za-z_][A-Za-z_0-9]*$/.test(name) || name.endsWith("_parameter"))
+    if (
+      !/^[A-Za-z_][A-Za-z_0-9]*$/.test(name) ||
+      name.endsWith("_parameter") ||
+      name.endsWith("_interp") ||
+      name.endsWith("_interp_percent") ||
+      name.endsWith("_interp_reference")
+    )
       throw new Error(`Invalid data column binding name: ${name}`);
     if (column === null) {
       properties[name] = null;
       properties[`${name}_parameter`] = null;
+      properties[`${name}_interp`] = null;
+      properties[`${name}_interp_percent`] = null;
+      properties[`${name}_interp_reference`] = null;
       continue;
     }
     properties[name] =
@@ -128,6 +191,29 @@ function columnsProperties(columns: BufferDataSourceBindingProps["columns"]) {
         : { kind: "asset", value: column.definition };
     if (column.parameter !== undefined)
       properties[`${name}_parameter`] = column.parameter;
+    const interpolation = column.interpolation;
+    if (interpolation === null) {
+      properties[`${name}_interp`] = null;
+      properties[`${name}_interp_percent`] = null;
+      properties[`${name}_interp_reference`] = null;
+    } else if (interpolation?.kind === "fixed") {
+      // Remove the old mode before setting the new one: admission is per write.
+      properties[`${name}_interp_percent`] = null;
+      properties[`${name}_interp_reference`] = null;
+      properties[`${name}_interp`] = fixed(
+        interpolation.unitsPerSecond,
+      ).unitsPerSecond;
+    } else if (interpolation?.kind === "percent") {
+      const normalized = percent(
+        interpolation.percentage,
+        interpolation.reference,
+      );
+      properties[`${name}_interp`] = null;
+      properties[`${name}_interp_reference`] = normalized.reference ?? null;
+      properties[`${name}_interp_percent`] = normalized.percentage;
+    } else if (interpolation !== undefined) {
+      throw new Error("Unsupported data interpolation mode");
+    }
   }
   return properties;
 }

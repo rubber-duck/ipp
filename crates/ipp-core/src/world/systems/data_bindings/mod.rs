@@ -7,6 +7,22 @@
 //! must select an output definition asset. Absent parameters supply `None` to the
 //! evaluator: reached inputs are invalid unless an authored fallback handles them.
 //! Raw schema mismatches and present parameters of the wrong type are unavailable.
+//! A finite positive F32 `foo_interp` companion enables rate-limited displayed
+//! outputs for F32/Vec2/Vec3/Vec4. Each lane advances by at most that many units
+//! per Host second, clamps exactly at its target, and retargets from its display.
+//! Alternatively positive F32 `foo_interp_percent` selects percent per second;
+//! optional nonnegative F32 `foo_interp_reference` supplies an explicit scale.
+//! Fixed and percentage companions are mutually exclusive. Change modes by removing
+//! the old rate companion before setting the new one; displayed values are retained.
+//! A percentage without an explicit scale uses its consumer's temporary reference.
+//! After projection, the consumer checks `SystemUpdateContext::data_binding_interpolation_request`
+//! before skipping clean geometry, fits its pre-step displayed view, ends that read,
+//! and calls `advance_data_binding_interpolation` once with the named references.
+//! All interpolated outputs on that binding advance together. Missing/invalid refs
+//! return typed errors without changing values; projection readiness stays intact.
+//! Zero references hold without earning motion. Settled outputs request no work.
+//! Removing the companion publishes the projection immediately. New row/source
+//! or definition lifetimes and invalid-to-valid results initialize immediately.
 //!
 //! Systems read completed views and register/finish/release their entity-local
 //! consumer through `SystemUpdateContext::world` (`SystemRuntimeAccess`), using
@@ -22,6 +38,12 @@
 //! source data are shared; input resolution, scratch and output storage are local.
 
 mod components;
+mod interpolation;
+mod interpolation_step;
+pub use interpolation_step::{
+    DataBindingInterpolationError, DataBindingInterpolationReference,
+    DataBindingInterpolationRequest,
+};
 mod presentation;
 mod query;
 pub use presentation::DataBindingPresentationConsumer;

@@ -72,6 +72,21 @@ export function ChartControls({
             </button>
           ))}
         </div>
+        <label>
+          <input
+            id="charts-adaptive-axes"
+            type="checkbox"
+            checked={Boolean(mount?.options.adaptiveAxes)}
+            onChange={(event) =>
+              action("adaptiveAxes", event.currentTarget.checked)
+            }
+          />{" "}
+          Adaptive axes
+        </label>
+        <p>
+          Allow axes to move for a chart while its marks are hovered or
+          selected.
+        </p>
       </fieldset>
       <fieldset disabled={!mount}>
         <legend>Dataset</legend>
@@ -135,6 +150,45 @@ export function ChartControls({
           />{" "}
           Use changed samples
         </label>
+        <label>
+          <input
+            id="charts-expanded-samples"
+            disabled={mount?.options.dataMode === "streaming"}
+            type="checkbox"
+            checked={Boolean(mount?.options.expandedSamples)}
+            onChange={(event) =>
+              action("expandedSamples", event.currentTarget.checked)
+            }
+          />{" "}
+          Expand values beyond the fixed range
+        </label>
+        <label>
+          <input
+            id="charts-smooth-changes"
+            disabled={mount?.options.dataMode === "streaming"}
+            type="checkbox"
+            checked={Boolean(mount?.options.smoothChanges ?? true)}
+            onChange={(event) =>
+              action("smoothChanges", event.currentTarget.checked)
+            }
+          />{" "}
+          Smooth changes to existing samples
+        </label>
+        <label>
+          <input
+            id="charts-automatic-range"
+            type="checkbox"
+            checked={Boolean(mount?.options.automaticRange)}
+            onChange={(event) =>
+              action("automaticRange", event.currentTarget.checked)
+            }
+          />{" "}
+          Fit value axes to data
+        </label>
+        <p>
+          Automatic ranges fit immediately inside the same chart box. The height
+          color legend keeps its 0–4 scale and clamps values outside it.
+        </p>
       </fieldset>
       <fieldset disabled={!mount}>
         <legend>Data marks</legend>

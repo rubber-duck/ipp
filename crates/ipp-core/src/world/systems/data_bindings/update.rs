@@ -19,8 +19,10 @@ pub(super) fn evaluate(
     assets: &AssetManagementService,
     world: crate::WorldId,
     tick: u64,
+    dt: f64,
 ) {
     if !runtime.needs_prepare && !runtime.needs_evaluate {
+        super::interpolation::advance_or_defer(runtime, properties, tick, dt);
         return;
     }
     let view = runtime
@@ -35,7 +37,10 @@ pub(super) fn evaluate(
             return;
         }
     };
-    runtime.source = Some(view.source());
+    if runtime.source != Some(view.source()) {
+        runtime.reset_rows();
+        runtime.source = Some(view.source());
+    }
     if runtime.needs_prepare {
         if let Err(reason) = prepare(properties, runtime, view.schema(), assets, world) {
             runtime.unavailable(reason);
@@ -50,15 +55,39 @@ pub(super) fn evaluate(
         runtime.availability = DataBindingAvailability::Ready;
     }
     let count = view.len();
-    if runtime.rows.len() != count {
-        runtime.dirty = true;
-    }
-    runtime.rows.resize(count, DataRowId(0));
-    for (stored, row) in runtime.rows.iter_mut().zip(view.rows()) {
-        runtime.dirty |= *stored != row.id;
-        *stored = row.id;
-    }
+    let rows_changed = runtime.rows.len() != count
+        || runtime
+            .rows
+            .iter()
+            .zip(view.rows())
+            .any(|(stored, row)| *stored != row.id);
+    runtime.dirty |= rows_changed;
+    let row_indices = if rows_changed
+        && runtime
+            .columns
+            .iter()
+            .any(|column| column.interpolation.is_some())
+    {
+        let previous: std::collections::BTreeMap<_, _> = runtime
+            .rows
+            .iter()
+            .enumerate()
+            .map(|(index, &id)| (id, index))
+            .collect();
+        Some(
+            view.rows()
+                .map(|row| previous.get(&row.id).copied())
+                .collect::<Vec<_>>(),
+        )
+    } else {
+        None
+    };
     for column in &mut runtime.columns {
+        if let Some(indices) = &row_indices
+            && column.interpolation.is_some()
+        {
+            super::interpolation::reorder(column, indices);
+        }
         if column.values.len() != count {
             runtime.dirty = true;
         }
@@ -66,16 +95,40 @@ pub(super) fn evaluate(
             count,
             ExpressionResult::Invalid(ExpressionInvalid::Calculation),
         );
+        let interpolated = column.interpolation.is_some();
+        let (values, mut progress) = if let Some(interpolation) = &mut column.interpolation {
+            interpolation.targets.resize(
+                count,
+                ExpressionResult::Invalid(ExpressionInvalid::Calculation),
+            );
+            (
+                &mut interpolation.targets,
+                Some((&mut interpolation.active_rows, &column.values)),
+            )
+        } else {
+            (&mut column.values, None)
+        };
         if let Some(index) = column.raw_identity {
             // Only an exact one-node raw-column identity reaches this path.
             // Data Service admitted each complete value against this schema;
             // preserve its bits and keep the existing owned output materialization.
-            for (stored, row) in column.values.iter_mut().zip(view.rows()) {
+            for (row_index, (stored, row)) in values.iter_mut().zip(view.rows()).enumerate() {
                 let value = &row.values[index];
-                runtime.dirty |=
+                let changed =
                     !matches!(stored, ExpressionResult::Valid(previous) if previous == value);
+                if changed && let Some((progress, displayed)) = &mut progress {
+                    super::interpolation::retarget_progress(
+                        progress,
+                        row_index,
+                        &displayed[row_index],
+                        stored,
+                        &ExpressionResult::Valid(value.clone()),
+                    );
+                }
+                runtime.dirty |= !interpolated && changed;
                 *stored = ExpressionResult::Valid(value.clone());
             }
+            runtime.dirty |= super::interpolation::retarget(column);
             continue;
         }
 
@@ -91,7 +144,7 @@ pub(super) fn evaluate(
         // Borrowed row inputs cannot be retained across service mutation; allocate
         // this reference list once per column, reuse it for every selected row.
         let mut inputs = vec![None; column.inputs.len()];
-        for (stored, row) in column.values.iter_mut().zip(view.rows()) {
+        for (row_index, (stored, row)) in values.iter_mut().zip(view.rows()).enumerate() {
             for ((slot, access), parameter) in inputs
                 .iter_mut()
                 .zip(&column.inputs)
@@ -108,14 +161,31 @@ pub(super) fn evaluate(
                 .plan
                 .evaluate(&mut column.scratch, &inputs)
                 .expect("prepared row inputs");
-            runtime.dirty |= *stored != *result;
+            runtime.dirty |= !interpolated && *stored != *result;
+            if stored != result
+                && let Some((progress, displayed)) = &mut progress
+            {
+                super::interpolation::retarget_progress(
+                    progress,
+                    row_index,
+                    &displayed[row_index],
+                    stored,
+                    result,
+                );
+            }
             stored.clone_from(result);
         }
         // Parameter values are temporary input scratch, never a property mirror.
         column.parameters.clear();
+        runtime.dirty |= super::interpolation::retarget(column);
+    }
+    runtime.rows.resize(count, DataRowId(0));
+    for (stored, row) in runtime.rows.iter_mut().zip(view.rows()) {
+        *stored = row.id;
     }
     runtime.evaluated_tick = Some(tick);
     runtime.needs_evaluate = false;
+    super::interpolation::advance_or_defer(runtime, properties, tick, dt);
 }
 
 fn prepare(
@@ -196,12 +266,57 @@ fn prepare(
             _ => None,
         };
 
-        let values = runtime
+        let interpolation_speed = properties
+            .descriptors()
+            .get(format!("{name}_interp").as_str())
+            .copied();
+        let percentage = properties
+            .descriptors()
+            .get(format!("{name}_interp_percent").as_str())
+            .copied();
+        let reference = properties
+            .descriptors()
+            .get(format!("{name}_interp_reference").as_str())
+            .copied();
+        let rate = interpolation_speed
+            .map(ColumnInterpolationRate::Fixed)
+            .or_else(|| {
+                percentage.map(|percentage| ColumnInterpolationRate::Percent {
+                    percentage,
+                    reference,
+                })
+            });
+        if rate.is_some()
+            && !matches!(
+                plan.output_kind(),
+                DynamicPropertyKind::F32
+                    | DynamicPropertyKind::Vec2
+                    | DynamicPropertyKind::Vec3
+                    | DynamicPropertyKind::Vec4
+            )
+        {
+            return Err(DataBindingUnavailable::InputType {
+                output: name.clone(),
+                input: if interpolation_speed.is_some() {
+                    format!("{name}_interp")
+                } else {
+                    format!("{name}_interp_percent")
+                },
+            });
+        }
+        let previous = runtime
             .columns
             .iter_mut()
-            .find(|old| old.name == name && old.kind == plan.output_kind())
-            .map(|old| std::mem::take(&mut old.values))
+            .find(|old| old.name == name && old.kind == plan.output_kind() && old.asset == key);
+        let (values, previous_interpolation) = previous
+            .map(|old| (std::mem::take(&mut old.values), old.interpolation.take()))
             .unwrap_or_default();
+        let interpolation = rate.map(|rate| {
+            let mut interpolation =
+                previous_interpolation.unwrap_or_else(|| super::interpolation::new(rate));
+            interpolation.rate = rate;
+            interpolation
+        });
         prepared.push(PreparedColumn {
             name,
             kind: plan.output_kind(),
@@ -212,6 +327,7 @@ fn prepare(
             inputs,
             plan,
             values,
+            interpolation,
         });
     }
     runtime.columns = prepared;

@@ -14,6 +14,8 @@ import { exercisePlot3d } from "./scenarios/plots-3d.js";
 import { reactPlots } from "./scenarios/react-plots.js";
 import { exercisePlotAxisSupport } from "./scenarios/plot-axis-support.js";
 import { exercisePlotAxisMotion } from "./scenarios/plot-axis-motion.js";
+import { exercisePlotAxisGating } from "./scenarios/plot-axis-gating.js";
+import { exercisePlotPercentage } from "./scenarios/plot-percentage.js";
 import { exercisePlotViewPlacement } from "./scenarios/plot-view-placement.js";
 import type { Plot2dContract } from "./plot-2d-scene.js";
 import type { Plot3dContract } from "./plot-3d-scene.js";
@@ -34,6 +36,8 @@ for (const [family, offscreen, transformed] of [
   ["axis", undefined, false],
   ["axis", undefined, true],
   ["axis-motion", undefined],
+  ["axis-gating", undefined],
+  ["percentage", undefined],
 ] as const) {
   const suffix = offscreen
     ? ` offscreen ${offscreen.width} ${offscreen.opposite ? "opposite" : "front"}`
@@ -113,33 +117,49 @@ for (const [family, offscreen, transformed] of [
               ? exerciseDenseLines(host, contract, font, capture, record)
               : family === "3d"
                 ? exercisePlot3d(host, contract, font, capture)
-                : family === "axis-motion"
-                  ? exercisePlotAxisMotion(
+                : family === "percentage"
+                  ? exercisePlotPercentage(
                       host,
                       contract,
                       font,
                       capture,
                       record,
                     )
-                  : family === "axis"
-                    ? exercisePlotAxisSupport(
+                  : family === "axis-gating"
+                    ? exercisePlotAxisGating(
                         host,
                         contract,
                         font,
                         capture,
                         record,
-                        transformed ?? false,
                       )
-                    : family === "view"
-                      ? exercisePlotViewPlacement(
+                    : family === "axis-motion"
+                      ? exercisePlotAxisMotion(
                           host,
                           contract,
                           font,
                           capture,
                           record,
-                          offscreen,
                         )
-                      : reactPlots(host, contract, font, capture, record),
+                      : family === "axis"
+                        ? exercisePlotAxisSupport(
+                            host,
+                            contract,
+                            font,
+                            capture,
+                            record,
+                            transformed ?? false,
+                          )
+                        : family === "view"
+                          ? exercisePlotViewPlacement(
+                              host,
+                              contract,
+                              font,
+                              capture,
+                              record,
+                              offscreen,
+                            )
+                          : reactPlots(host, contract, font, capture, record),
         );
       },
     );

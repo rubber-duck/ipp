@@ -22,6 +22,27 @@ export interface TimedPlotFrame {
   sequence: bigint;
 }
 
+export interface PlotMotionFrames {
+  origin: { before: Clock; after: Clock };
+  start: TimedPlotFrame;
+  middle: TimedPlotFrame;
+  interrupted?: TimedPlotFrame;
+  end: TimedPlotFrame;
+}
+
+/** Multiple observations of one continuously selected presentation view. */
+export interface PlotViewCapture {
+  (label: string): Promise<PlotFrame>;
+  afterMotion(label: string, client: Client): Promise<PlotFrame>;
+  motion(
+    label: string,
+    client: Client,
+    change: () => Promise<void>,
+    middleAt?: number,
+    interrupt?: () => Promise<void>,
+  ): Promise<PlotMotionFrames>;
+}
+
 export interface PlotCapture {
   (label: string, binding: RootBinding): Promise<PlotFrame>;
   afterMotion(
@@ -35,12 +56,12 @@ export interface PlotCapture {
     client: Client,
     change: () => Promise<void>,
     middleAt?: number,
-  ): Promise<{
-    origin: { before: Clock; after: Clock };
-    start: TimedPlotFrame;
-    middle: TimedPlotFrame;
-    end: TimedPlotFrame;
-  }>;
+    interrupt?: () => Promise<void>,
+  ): Promise<PlotMotionFrames>;
+  session<T>(
+    binding: RootBinding,
+    run: (capture: PlotViewCapture) => Promise<T>,
+  ): Promise<T>;
 }
 
 /** All retained samples fit inside four negotiated viewports; waits never advance time. */
@@ -61,12 +82,6 @@ export function createPlotCapture(
       await host.presentation.clear(view);
     }
   };
-  const capture = (async (label: string, binding: RootBinding) =>
-    select(binding, async (view) => {
-      const frame = image(await settled(host, view, [binding.output]));
-      await save(label, frame);
-      return frame;
-    })) as PlotCapture;
   const wait = async (client: Client, target: number) => {
     const deadline = performance.now() + 30_000;
     let clock = await client.waitForFrame();
@@ -94,29 +109,33 @@ export function createPlotCapture(
       after = { tick: afterInspection.tick, time: afterInspection.time };
     return { frame: image(capture), before, after, sequence: capture.sequence };
   };
-  capture.afterMotion = (label, binding, client) =>
-    select(binding, async (view) => {
+  const inView = (view: PresentationView): PlotViewCapture => {
+    const capture = (async (label: string) => {
+      const frame = image(await settled(host, view, [view.binding.output]));
+      await save(label, frame);
+      return frame;
+    }) as PlotViewCapture;
+    capture.afterMotion = async (label, client) => {
       const start = await sample(client, view);
       // HostSession advances presentation_time and every unpaused World's time
       // by the same dt. Waiting from the post-draw upper bound prevents an early
       // pair of identical eased-animation pixels from declaring completion.
       await wait(client, start.after.time + 2);
-      const frame = image(await settled(host, view, [binding.output]));
+      const frame = image(await settled(host, view, [view.binding.output]));
       await save(label, frame);
       await record(`${label}-clock`, {
         start: { before: start.before, after: start.after },
         end: await client.waitForFrame(),
       });
       return frame;
-    });
-  capture.motion = (label, binding, client, change, middleAt = 1) =>
-    select(binding, async (view) => {
+    };
+    capture.motion = async (label, client, change, middleAt = 1, interrupt) => {
       if (!(middleAt > 0 && middleAt < 2))
         throw new Error(
           "Plot intermediate capture must fall inside the2s motion",
         );
       // Prepare this camera's retained placement before changing its target.
-      await settled(host, view, [binding.output]);
+      await settled(host, view, [view.binding.output]);
       const originBefore = await client
         .inspect()
         .then(({ tick, time }) => ({ tick, time }));
@@ -128,10 +147,15 @@ export function createPlotCapture(
       const start = await sample(client, view);
       await wait(client, origin.after.time + middleAt);
       const middle = await sample(client, view, start.sequence);
+      let interrupted: TimedPlotFrame | undefined;
+      if (interrupt) {
+        await interrupt();
+        interrupted = await sample(client, view, middle.sequence);
+      }
       await wait(client, origin.after.time + 2);
       const endInspection = await client.inspect(),
         endBefore = { tick: endInspection.tick, time: endInspection.time };
-      const completed = await settled(host, view, [binding.output]);
+      const completed = await settled(host, view, [view.binding.output]);
       const end: TimedPlotFrame = {
         frame: image(completed),
         before: endBefore,
@@ -140,9 +164,14 @@ export function createPlotCapture(
           .then(({ tick, time }) => ({ tick, time })),
         sequence: completed.sequence,
       };
-      // The three immutable images are collected before PNG encoding or a
+      // Immutable images are collected before PNG encoding or a
       // remote evidence callback can consume the transition's capture window.
-      for (const [phase, sample] of Object.entries({ start, middle, end }))
+      for (const [phase, sample] of Object.entries({
+        start,
+        middle,
+        ...(interrupted ? { interrupted } : {}),
+        end,
+      }))
         await save(`${label}-${phase}`, sample.frame);
       await record(`${label}-clock`, {
         origin,
@@ -156,9 +185,36 @@ export function createPlotCapture(
           after: middle.after,
           sequence: middle.sequence,
         },
+        ...(interrupted
+          ? {
+              interrupted: {
+                before: interrupted.before,
+                after: interrupted.after,
+                sequence: interrupted.sequence,
+              },
+            }
+          : {}),
         end: { before: end.before, after: end.after, sequence: end.sequence },
       });
-      return { origin, start, middle, end };
-    });
+      return {
+        origin,
+        start,
+        middle,
+        ...(interrupted ? { interrupted } : {}),
+        end,
+      };
+    };
+    return capture;
+  };
+  const capture = (async (label: string, binding: RootBinding) =>
+    select(binding, (view) => inView(view)(label))) as PlotCapture;
+  capture.afterMotion = (label, binding, client) =>
+    select(binding, (view) => inView(view).afterMotion(label, client));
+  capture.motion = (label, binding, client, change, middleAt, interrupt) =>
+    select(binding, (view) =>
+      inView(view).motion(label, client, change, middleAt, interrupt),
+    );
+  capture.session = (binding, run) =>
+    select(binding, (view) => run(inView(view)));
   return capture;
 }

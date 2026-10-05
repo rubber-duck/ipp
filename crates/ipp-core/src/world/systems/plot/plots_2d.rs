@@ -132,11 +132,7 @@ pub fn prepare_bars(
     let series = samples(&chart.series, input, false)?;
     let highlighted = highlighted_rows(&chart.labels)?;
     let spacing = bar_spacing(&series);
-    let (mut min, mut max) = ranges(frame, &series, true);
-    if frame.automatic_x {
-        min[0] -= spacing / 2.0;
-        max[0] += spacing / 2.0;
-    }
+    let (min, max) = bar_ranges(frame, &series, spacing);
     let mapping = PlotFrameMapping2d::new(frame, min, max)?;
     let mut geometry = CartesianPaint::new(frame, mapping, min, max).prepare();
     let mut anchors = BTreeMap::new();
@@ -382,6 +378,22 @@ fn numeric<'a>(
     }
 }
 
+/// Fit the same Cartesian bounds used by paint and picking without preparing
+/// geometry. Percentage interpolation borrows the pre-step displayed input here.
+pub(super) fn interpolation_ranges(
+    frame: &PlotFrame2d,
+    rows: &Rows<PlotSeriesRow>,
+    input: &PlotPreparedInput<'_>,
+    bars: bool,
+) -> Result<([f64; 2], [f64; 2]), ErrorReason> {
+    let series = samples(rows, input, false)?;
+    Ok(if bars {
+        bar_ranges(frame, &series, bar_spacing(&series))
+    } else {
+        ranges(frame, &series, false)
+    })
+}
+
 fn ranges(frame: &PlotFrame2d, series: &[Series], baseline: bool) -> ([f64; 2], [f64; 2]) {
     let mut min = [f64::INFINITY; 2];
     let mut max = [f64::NEG_INFINITY; 2];
@@ -410,6 +422,15 @@ fn ranges(frame: &PlotFrame2d, series: &[Series], baseline: bool) -> ([f64; 2], 
             min[axis] -= pad;
             max[axis] += pad;
         }
+    }
+    (min, max)
+}
+
+fn bar_ranges(frame: &PlotFrame2d, series: &[Series], spacing: f64) -> ([f64; 2], [f64; 2]) {
+    let (mut min, mut max) = ranges(frame, series, true);
+    if frame.automatic_x {
+        min[0] -= spacing / 2.0;
+        max[0] += spacing / 2.0;
     }
     (min, max)
 }

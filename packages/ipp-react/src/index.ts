@@ -353,6 +353,8 @@ export {
   ColumnBindingAsset,
   BufferDataSourceBinding,
   StreamingDataSourceBinding,
+  fixed,
+  percent,
 } from "./data.js";
 export type {
   DataSourceProps,
@@ -360,6 +362,7 @@ export type {
   ReactDataSourceState,
   ColumnBindingAssetProps,
   DataColumnBinding,
+  DataColumnInterpolation,
   BufferDataSourceBindingProps,
   StreamingDataSourceBindingProps,
   DataWindow,

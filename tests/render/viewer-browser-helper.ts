@@ -37,6 +37,10 @@ import {
   type ViewerObservation,
 } from "./viewer-observation.js";
 import { guiAction } from "../integration/gui-actions.js";
+import {
+  setChartSampleInterpolation,
+  type GalleryChartsState,
+} from "../integration/scenarios/gallery-charts.js";
 
 interface ViewerWindow extends Window {
   ippWorldCanvas?: IppCanvasHandle;
@@ -2622,6 +2626,17 @@ export async function captureGalleryLoadingTail(label: string, target: bigint) {
       );
     await panel.client.waitForFrame(page.tick);
   }
+}
+
+export async function galleryChartSampleInterpolation(
+  chart: GalleryChartsState["charts"][number],
+  unitsPerSecond: number,
+) {
+  await setChartSampleInterpolation(
+    requireCanvas().host,
+    chart,
+    unitsPerSecond,
+  );
 }
 
 /** Sample a naturally playing login lift without controlling either Host clock. */

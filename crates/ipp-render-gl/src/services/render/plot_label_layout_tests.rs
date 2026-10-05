@@ -495,6 +495,7 @@ fn crowded_ticks_are_omitted_in_one_lane_and_return_without_stale_history() {
                     placement: PlotPlanePlacement::Axis {
                         extent: [0.6, 0.1, 0.1],
                         axis: 0,
+                        adaptive: true,
                     },
                     bounds: Some([-0.04, 0.01, 0.04, 0.04]),
                     clip: [-1.0, -1.0, 1.0, 1.0],
@@ -613,6 +614,7 @@ fn moving_face_lane_stays_beside_its_axis_instead_of_the_enclosure_hull() {
         placement: PlotPlanePlacement::Axis {
             extent: [0.8, 0.8, 0.5],
             axis: 1,
+            adaptive: true,
         },
         bounds: Some([-0.015, 0.01, 0.015, 0.03]),
         clip: [-1.0, -1.0, 1.0, 1.0],

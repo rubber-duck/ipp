@@ -61,6 +61,39 @@ pub(super) struct PreparedColumn {
     pub inputs: Vec<InputAccess>,
     pub parameters: Vec<Option<crate::DynamicValue>>,
     pub values: Vec<ExpressionResult>,
+    pub interpolation: Option<ColumnInterpolation>,
+}
+
+pub(super) struct ColumnInterpolation {
+    pub rate: ColumnInterpolationRate,
+    pub targets: Vec<ExpressionResult>,
+    pub active_rows: Vec<ColumnInterpolationRow>,
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum ColumnInterpolationRate {
+    Fixed(DynamicPropertyDescriptor),
+    Percent {
+        percentage: DynamicPropertyDescriptor,
+        reference: Option<DynamicPropertyDescriptor>,
+    },
+}
+
+impl ColumnInterpolationRate {
+    pub fn implicit(self) -> bool {
+        matches!(
+            self,
+            Self::Percent {
+                reference: None,
+                ..
+            }
+        )
+    }
+}
+
+pub(super) struct ColumnInterpolationRow {
+    pub index: usize,
+    pub residual: [f64; 4],
 }
 
 /// Reconstructible state belonging to one occupied binding component incarnation.
@@ -77,6 +110,8 @@ pub struct DataBindingRuntime {
     pub(super) needs_prepare: bool,
     pub(super) needs_evaluate: bool,
     pub(super) presentation: Option<(EntityId, u16, u64)>,
+    // A one-frame work token, never an accumulated clock or an authored-value mirror.
+    pub(super) pending_interpolation: Option<u64>,
 }
 
 impl std::fmt::Debug for PreparedColumn {
@@ -103,6 +138,7 @@ impl Default for DataBindingRuntime {
             needs_prepare: true,
             needs_evaluate: true,
             presentation: None,
+            pending_interpolation: None,
         }
     }
 }
@@ -126,16 +162,31 @@ impl DataBindingRuntime {
     }
 
     pub(super) fn invalidate(&mut self) {
+        self.pending_interpolation = None;
         self.needs_prepare = true;
         self.needs_evaluate = true;
     }
 
     pub(super) fn unavailable(&mut self, reason: DataBindingUnavailable) {
+        self.pending_interpolation = None;
         let availability = DataBindingAvailability::Unavailable(reason);
         self.dirty |= self.availability != availability || !self.rows.is_empty();
         self.availability = availability;
         self.rows.clear();
         self.columns.clear();
         self.needs_prepare = true;
+    }
+
+    pub(super) fn reset_rows(&mut self) {
+        self.pending_interpolation = None;
+        self.dirty |= !self.rows.is_empty();
+        self.rows.clear();
+        for column in &mut self.columns {
+            column.values.clear();
+            if let Some(interpolation) = &mut column.interpolation {
+                interpolation.targets.clear();
+                interpolation.active_rows.clear();
+            }
+        }
     }
 }

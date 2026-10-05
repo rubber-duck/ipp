@@ -234,6 +234,9 @@ pub struct PlotFrame3d {
     pub automatic_y: bool,
     /// Derive depth bounds from visible series.
     pub automatic_z: bool,
+    /// Allow selected-view axes to adapt while the client enables chart interaction.
+    /// False preserves the last displayed perimeter station, initially the standard edges.
+    pub adaptive_axes: bool,
     /// Number of evenly spaced axis intervals.
     pub ticks: u32,
     /// X axis title.
@@ -283,6 +286,7 @@ impl Default for PlotFrame3d {
             automatic_x: true,
             automatic_y: true,
             automatic_z: true,
+            adaptive_axes: false,
             ticks: 5,
             x_title: Arc::default(),
             y_title: Arc::default(),

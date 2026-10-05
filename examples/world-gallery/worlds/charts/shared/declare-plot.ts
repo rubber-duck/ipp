@@ -22,6 +22,7 @@ import {
   type PlotContract,
   type PlotSeries,
   type PlotLabel,
+  fixed,
 } from "@ipp/react";
 
 type Row = Readonly<Record<string, RowPropertyValue>>;
@@ -53,6 +54,7 @@ export async function declarePlot(
     windows: readonly DataWindow[];
     encodeWindows: (windows: readonly DataWindow[]) => Uint8Array<ArrayBuffer>;
   },
+  interpolationRates: Readonly<Record<string, number>> = {},
 ) {
   const root = createRoot(client);
   const seriesRows = {
@@ -100,6 +102,9 @@ export async function declarePlot(
           definition: assetRef(output),
           ...(parameters[output] !== undefined
             ? { parameter: { kind: "f32" as const, value: parameters[output] } }
+            : {}),
+          ...(interpolationRates[output] !== undefined
+            ? { interpolation: fixed(interpolationRates[output]!) }
             : {}),
         },
       ]),

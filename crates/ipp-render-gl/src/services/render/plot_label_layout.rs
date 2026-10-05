@@ -273,6 +273,7 @@ fn axis_perimeter(
     let PlotPlanePlacement::Axis {
         extent,
         axis,
+        ..
     } = plane.plane.placement
     else {
         return None;

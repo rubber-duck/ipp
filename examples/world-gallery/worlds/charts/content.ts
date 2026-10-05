@@ -1,8 +1,10 @@
 import {
   clientAssetSource,
+  DynamicProperty,
   type AnimationWorldClient,
   type DatasetProducer,
   type DatasetPage,
+  type DatasetValue,
   type ClientAssetSource,
   type RowPropertyValue,
   type WorldReference,
@@ -115,6 +117,13 @@ export class ChartContent {
   window: ChartWindow = "count";
   private readonly attachments: ReactWorldRoot[] = [];
   private readonly highlights = new Map<string, string>();
+  private readonly adaptiveAxes = new Map<string, boolean>();
+  private automaticRange = false;
+  private smoothChanges = true;
+  private readonly sampleTargets = new Map<
+    GalleryChart,
+    readonly DatasetValue[]
+  >();
   private readonly producers = new Map<string, DatasetProducer>();
   private readonly assets: {
     client: AnimationWorldClient;
@@ -479,6 +488,7 @@ export class ChartContent {
       chart.sourceKind === "streaming"
         ? { windows: chart.windows, encodeWindows }
         : undefined,
+      this.smoothChanges ? this.interpolationRates(chart) : {},
     );
     this.roots.set(spec.id, root);
   }
@@ -499,6 +509,8 @@ export class ChartContent {
       }
     }
     this.highlights.clear();
+    this.adaptiveAxes.clear();
+    this.sampleTargets.clear();
     for (const [name, producer] of this.producers) {
       await this.context.canvas.host.datasets.destroy(producer);
       this.producers.delete(name);
@@ -506,7 +518,7 @@ export class ChartContent {
   }
 
   /** The caller drains ingestion before replacing consumed sources and bindings. */
-  async dataSource(mode: ChartDataMode) {
+  async dataSource(mode: ChartDataMode, changed = false, expanded = false) {
     if (mode === this.mode) return;
     await this.removeDeclarations();
     this.mode = mode;
@@ -525,7 +537,16 @@ export class ChartContent {
         if (mode === "buffer") {
           const outcome = await this.context.canvas.host.datasets.update(
             producer,
-            [{ operation: "append", rows: chart.spec.rows }],
+            [
+              {
+                operation: "append",
+                rows: chart.spec.rows.map((row, index) =>
+                  index === 0
+                    ? this.firstSample(chart.spec, changed, expanded)
+                    : row,
+                ),
+              },
+            ],
           );
           if (outcome.failure)
             throw new Error(
@@ -542,6 +563,8 @@ export class ChartContent {
         mode === "streaming" && chart.spec.component === "PlotLine2d"
           ? { ...chart.spec.frame, automatic_x: true, x_title: "ELAPSED / S" }
           : chart.spec.frame;
+      if (!chart.spec.component.includes("Pie"))
+        chart.frame = { ...chart.frame, automatic_y: this.automaticRange };
       successfulBatch(
         await chart.client.batch([
           insertComponent(
@@ -726,6 +749,7 @@ export class ChartContent {
   async highlight(
     hover: ChartHitIdentity | null,
     selection: ChartHitIdentity | null,
+    adaptiveAxes = false,
   ) {
     for (const chart of this.charts) {
       const active = [selection, hover].filter(
@@ -751,54 +775,214 @@ export class ChartContent {
       const identity = values
         .map((value) => `${value.series}:${value.row_id}:${value.text}`)
         .join("|");
-      if ((this.highlights.get(chart.spec.id) ?? "") === identity) continue;
+      const labelsChanged =
+        (this.highlights.get(chart.spec.id) ?? "") !== identity;
+      const adaptive = adaptiveAxes && active.length > 0;
+      const axesChanged =
+        chart.spec.component.endsWith("3d") &&
+        (this.adaptiveAxes.get(chart.spec.id) ?? false) !== adaptive;
+      if (!labelsChanged && !axesChanged) continue;
       const component = chart.client.components[chart.spec.component]!,
         labels = component.fields.labels!;
       successfulBatch(
         await chart.client.batch([
-          {
-            kind: "setField",
-            entity: { kind: "handle", id: chart.entity },
-            component: component.id,
-            field: {
-              offset: labels.offset,
-              value: {
-                kind: "rows",
-                value: this.contract.encodeRowsTable(labels.rows!, {
-                  nextSlot: values.length,
-                  rows: new Map(values.map((value, index) => [index, value])),
-                }),
-              },
-            },
-          },
+          ...(axesChanged
+            ? componentFields(chart.client, "PlotFrame3d", {
+                adaptive_axes: adaptive,
+              }).map((field) => ({
+                kind: "setField" as const,
+                entity: { kind: "handle" as const, id: chart.entity },
+                component: chart.client.components.PlotFrame3d!.id,
+                field,
+              }))
+            : []),
+          ...(labelsChanged
+            ? [
+                {
+                  kind: "setField",
+                  entity: { kind: "handle", id: chart.entity },
+                  component: component.id,
+                  field: {
+                    offset: labels.offset,
+                    value: {
+                      kind: "rows",
+                      value: this.contract.encodeRowsTable(labels.rows!, {
+                        nextSlot: values.length,
+                        rows: new Map(
+                          values.map((value, index) => [index, value]),
+                        ),
+                      }),
+                    },
+                  },
+                } as const,
+              ]
+            : []),
         ]),
       );
       this.highlights.set(chart.spec.id, identity);
+      this.adaptiveAxes.set(chart.spec.id, adaptive);
     }
   }
 
-  async changeSamples(changed: boolean) {
+  async setAutomaticRange(enabled: boolean) {
+    this.automaticRange = enabled;
+    for (const chart of this.charts) {
+      if (chart.spec.component.includes("Pie")) continue;
+      chart.frame = { ...chart.frame, automatic_y: enabled };
+      const component = chart.spec.component.endsWith("2d")
+        ? "PlotFrame2d"
+        : "PlotFrame3d";
+      successfulBatch(
+        await chart.client.batch(
+          componentFields(chart.client, component, {
+            automatic_y: enabled,
+          }).map((field) => ({
+            kind: "setField" as const,
+            entity: { kind: "handle" as const, id: chart.entity },
+            component: chart.client.components[component]!.id,
+            field,
+          })),
+        ),
+      );
+    }
+    await this.ready();
+  }
+
+  private interpolationRates(chart: GalleryChart) {
+    const value =
+      Number(chart.spec.frame.max_y) - Number(chart.spec.frame.min_y);
+    return {
+      y: value,
+      y2: value,
+      value,
+      height: Number(chart.spec.frame.height),
+    };
+  }
+
+  async setSmoothChanges(enabled: boolean) {
+    this.smoothChanges = enabled;
+    for (const chart of this.charts) {
+      const component =
+        chart.client.components[this.bindingComponent(chart)]!.id;
+      successfulBatch(
+        await chart.client.batch(
+          Object.entries(this.interpolationRates(chart)).map(
+            ([output, rate]) =>
+              enabled
+                ? DynamicProperty.set(
+                    { kind: "handle", id: chart.entity },
+                    component,
+                    `${output}_interp`,
+                    { kind: "f32", value: rate },
+                  )
+                : DynamicProperty.remove(
+                    { kind: "handle", id: chart.entity },
+                    component,
+                    `${output}_interp`,
+                  ),
+          ),
+        ),
+      );
+    }
+    await this.ready();
+  }
+
+  private firstSample(
+    spec: ChartSpec,
+    changed: boolean,
+    expanded: boolean,
+  ): DatasetValue[] {
+    const original = [...spec.rows[0]!],
+      y = original[1]!;
+    if (y.kind === "f32")
+      original[1] = {
+        kind: "f32",
+        value:
+          expanded && !spec.component.includes("Pie")
+            ? Number(spec.frame.max_y) * 1.5
+            : y.value * (changed ? 0.5 : 1),
+      };
+    if (spec.id === "height-surface" && original[1]!.kind === "f32")
+      original[7] = {
+        kind: "vec4",
+        value: [...plotColorScaleColor(CHART_HEIGHT_SCALE, original[1]!.value)],
+      };
+    return original;
+  }
+
+  async changeSamples(changed: boolean, expanded = false) {
     if (this.mode !== "buffer")
       throw new Error("Changed samples apply to fixed datasets only");
+    // Dataset delivery is serial on this connection; await admission before the next edit.
     for (const chart of this.charts) {
-      const original = [...chart.spec.rows[0]!],
-        y = original[1]!;
-      if (y.kind === "f32")
-        original[1] = { kind: "f32", value: y.value * (changed ? 0.5 : 1) };
-      if (chart.spec.id === "height-surface" && original[1]!.kind === "f32")
-        original[7] = {
-          kind: "vec4",
-          value: [
-            ...plotColorScaleColor(CHART_HEIGHT_SCALE, original[1]!.value),
-          ],
-        };
-      const outcome = await this.context.canvas.host.datasets.update(
-        chart.producer,
-        [{ operation: "edit", row: 1n, values: original }],
-      );
-      if (outcome.failure)
-        throw new Error(`Chart source edit failed: ${outcome.failure.reason}`);
+      const original = this.firstSample(chart.spec, changed, expanded);
+      try {
+        const outcome = await this.context.canvas.host.datasets.update(
+          chart.producer,
+          [{ operation: "edit", row: 1n, values: original }],
+        );
+        if (outcome.failure) throw new Error(outcome.failure.reason);
+        this.sampleTargets.set(chart, original);
+      } catch (error) {
+        throw new Error(
+          `Chart ${chart.spec.id} sample edit failed: ${error instanceof Error ? error.message : String(error)}`,
+          { cause: error },
+        );
+      }
     }
+    await this.client.waitForFrame();
+  }
+
+  async remainingFeedback() {
+    let duration = 0;
+    if (!this.smoothChanges || this.sampleTargets.size === 0)
+      return { duration, time: 0 };
+    // Read edited rows and their current authored rates only at change boundaries.
+    const remaining = await Promise.all(
+      [...this.sampleTargets].map(async ([chart, target]) => {
+        const [view, inspection] = await Promise.all([
+          this.context.canvas.host.datasets.bindingView(
+            chart.client.session,
+            chart.entity,
+            { limit: 1 },
+          ),
+          chart.client.inspectPage({
+            collection: "entities",
+            target: chart.entity,
+            limit: 1,
+          }),
+        ]);
+        const properties = inspection.entities
+          .find((entity) => entity.id === chart.entity)
+          ?.components.find(
+            (component) =>
+              component.component ===
+              chart.client.components[this.bindingComponent(chart)]!.id,
+          )?.properties;
+        const row = view.rows.find((row) => row.id === 1n);
+        const indices = { y: 1, y2: 3, value: 1, height: 6 } as const;
+        let remaining = 0;
+        for (const [output, index] of Object.entries(indices)) {
+          const rate = properties?.[`${output}_interp`];
+          if (rate?.kind !== "f32" || rate.value <= 0) continue;
+          const value =
+            row?.values[
+              view.columns.findIndex((column) => column.name === output)
+            ];
+          const end = target[index];
+          if (value?.valid && value.value.kind === "f32" && end?.kind === "f32")
+            remaining = Math.max(
+              remaining,
+              Math.abs(value.value.value - Math.fround(end.value)) / rate.value,
+            );
+        }
+        return remaining;
+      }),
+    );
+    duration = Math.max(0, ...remaining);
+    // A later completed Host clock is a conservative upper bound for those reads.
+    const frame = await this.client.waitForFrame();
+    return { duration, time: frame.time };
   }
 
   async close() {

@@ -269,6 +269,7 @@ fn shared_axis_driver_preserves_stations_streaming_and_view_lifetimes() {
                     placement: PlotPlanePlacement::Axis {
                         extent,
                         axis,
+                        adaptive: true,
                     },
                     bounds: None,
                     clip: [-1.0, -1.0, 1.0, 1.0],
@@ -355,13 +356,109 @@ fn shared_axis_driver_preserves_stations_streaming_and_view_lifetimes() {
     assert_eq!(Arc::strong_count(&replacement), 1);
     assert_ne!(during[0].model, placed[0].model);
     assert_eq!(&during[0].model[..12], &retained[0].model[..12]);
+    let mut inactive = retained.clone();
+    for plane in &mut inactive {
+        if let PlotPlanePlacement::Axis {
+            adaptive,
+            ..
+        } = &mut plane.placement
+        {
+            *adaptive = false;
+        }
+    }
+    let frozen_planes = |source| {
+        inactive
+            .iter()
+            .map(|plane| ScenePlotPlane {
+                entity: super::super::scene::RenderEntity {
+                    world,
+                    entity,
+                    incarnation: 1,
+                },
+                target,
+                publication,
+                model: plane.model,
+                chart_model: IDENTITY,
+                geometry: source,
+                plane,
+            })
+            .collect::<Vec<_>>()
+    };
+    let frozen = state
+        .place(
+            &frozen_planes(&replacement),
+            rear,
+            projection(rear, [5.0, 3.0, 4.0]),
+            viewport,
+            1.7,
+        )
+        .unwrap();
+    assert_eq!(frozen[0].model, during[0].model);
+    assert!(!state.charts[&(world, target)].axes[0].unwrap().active);
+
+    let changed_content = Arc::new(PlotPreparedGeometry {
+        meshes: vec![PlotMesh {
+            positions: vec![[4.0, 1.0, 2.0], [6.0, 3.0, 4.0]],
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    let inactive_view = state
+        .place(
+            &frozen_planes(&changed_content),
+            front,
+            projection(front, [5.0, 3.0, 4.0]),
+            viewport,
+            5.0,
+        )
+        .unwrap();
+    for index in 0..retained.len() {
+        assert_eq!(
+            inactive_view[index].model[12..15],
+            frozen[index].model[12..15]
+        );
+    }
+    assert_eq!(
+        state.charts[&(world, target)].axes[0].unwrap().target,
+        x.target
+    );
+    assert!(Arc::ptr_eq(
+        &state.charts[&(world, target)].source.upgrade().unwrap(),
+        &replacement
+    ));
+    assert_eq!(
+        state.charts[&(world, target)].content,
+        Some([[0.0; 3], extent])
+    );
+
+    let resumed = state
+        .place(
+            &planes(&replacement),
+            rear,
+            projection(rear, [5.0, 3.0, 4.0]),
+            viewport,
+            6.0,
+        )
+        .unwrap();
+    assert_eq!(resumed[0].model, frozen[0].model);
+    assert_eq!(state.charts[&(world, target)].axes[0].unwrap().started, 6.0);
+    let resuming = state
+        .place(
+            &planes(&replacement),
+            rear,
+            projection(rear, [5.0, 3.0, 4.0]),
+            viewport,
+            7.0,
+        )
+        .unwrap();
+    assert_ne!(resuming[0].model, frozen[0].model);
     let settled = state
         .place(
             &planes(&replacement),
             rear,
             projection(rear, [5.0, 3.0, 4.0]),
             viewport,
-            3.1,
+            8.1,
         )
         .unwrap();
     assert_eq!(
@@ -381,6 +478,37 @@ fn shared_axis_driver_preserves_stations_streaming_and_view_lifetimes() {
     state.place(&[], rear, IDENTITY, viewport, 0.6).unwrap();
     assert!(state.charts.is_empty());
     assert!(PlotViewPlacementState::default().charts.is_empty());
+    let initial_inactive = state
+        .place(
+            &frozen_planes(&replacement),
+            rear,
+            projection(rear, [5.0, 3.0, 4.0]),
+            viewport,
+            0.7,
+        )
+        .unwrap();
+    for axis in 0..3u8 {
+        let standard = perimeter_point(3.0, extent, axis);
+        assert_eq!(
+            &initial_inactive[usize::from(axis) * 3].model[12..15],
+            &standard
+        );
+    }
+    assert!(state.charts[&(world, target)].source.upgrade().is_none());
+    assert_eq!(state.charts[&(world, target)].content, None);
+    state
+        .place(
+            &planes(&changed_content),
+            rear,
+            projection(rear, [5.0, 3.0, 4.0]),
+            viewport,
+            0.8,
+        )
+        .unwrap();
+    assert_eq!(
+        state.charts[&(world, target)].content,
+        Some([[4.0, 1.0, 2.0], [6.0, 3.0, 4.0]])
+    );
 }
 
 #[test]

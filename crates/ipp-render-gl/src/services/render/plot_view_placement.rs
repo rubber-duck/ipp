@@ -114,6 +114,8 @@ struct AxisTransition {
     end: f64,
     started: f64,
     target: u8,
+    displayed: f64,
+    active: bool,
 }
 
 impl AxisTransition {
@@ -123,6 +125,8 @@ impl AxisTransition {
             end: f64::from(target),
             started: time,
             target,
+            displayed: f64::from(target),
+            active: true,
         }
     }
 
@@ -142,7 +146,7 @@ impl AxisTransition {
         policy: AxisPlacementPolicy,
         lengths: [f64; 2],
     ) {
-        if target == self.target {
+        if target == self.target && self.active {
             return;
         }
         let current = self.sample(time, policy.duration);
@@ -172,6 +176,21 @@ impl AxisTransition {
         self.end = self.start + distance;
         self.started = time;
         self.target = target;
+        self.active = true;
+    }
+
+    fn freeze(&mut self, time: f64) {
+        // Preserve the station of the last actual draw, including when a new
+        // publication disables adaptation partway through a transition.
+        self.start = self.displayed;
+        self.end = self.displayed;
+        self.started = time;
+        self.active = false;
+    }
+
+    fn display(&mut self, time: f64, duration: f64) -> f64 {
+        self.displayed = self.sample(time, duration);
+        self.displayed
     }
 }
 
@@ -214,6 +233,7 @@ impl PlotViewPlacementState {
             let PlotPlanePlacement::Axis {
                 extent,
                 axis,
+                adaptive,
             } = plane.plane.placement
             else {
                 continue;
@@ -226,6 +246,13 @@ impl PlotViewPlacementState {
                     content: None,
                     axes: [None; 3],
                 });
+                let standard = self.policy.preferred[usize::from(axis)];
+                if !adaptive {
+                    let driver = chart.axes[usize::from(axis)]
+                        .get_or_insert_with(|| AxisTransition::new(standard, time));
+                    driver.freeze(time);
+                    return perimeter_point(driver.displayed, extent, axis);
+                }
                 if !chart
                     .source
                     .upgrade()
@@ -243,7 +270,6 @@ impl PlotViewPlacementState {
                     axis,
                     chart.content,
                 );
-                let standard = self.policy.preferred[usize::from(axis)];
                 let driver = &mut chart.axes[usize::from(axis)];
                 let target = choose_edge(
                     scores,
@@ -260,7 +286,7 @@ impl PlotViewPlacementState {
                         * f64::from(extent[other])
                 });
                 driver.update(target, scores, time, self.policy, lengths);
-                perimeter_point(driver.sample(time, self.policy.duration), extent, axis)
+                perimeter_point(driver.display(time, self.policy.duration), extent, axis)
             });
             let mut model =
                 ipp_core::systems::camera::multiply(plane.chart_model, plane.plane.model);

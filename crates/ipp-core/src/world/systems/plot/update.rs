@@ -52,6 +52,13 @@ impl PlotSystem {
 
         let members: Vec<_> = self.state.members.iter().copied().collect();
         for (entity, component) in members {
+            if self
+                .advance_interpolation(context, entity, component)
+                .is_err()
+            {
+                self.state.remove((entity, component));
+                continue;
+            }
             let dirty = context.world.data_binding_dirty(entity).unwrap_or(true);
             if !dirty
                 && !self.state.dirty.contains(&entity)
@@ -82,6 +89,43 @@ impl PlotSystem {
             }
         }
         self.state.dirty.clear();
+    }
+
+    fn advance_interpolation(
+        &self,
+        context: &mut SystemUpdateContext<'_, '_>,
+        entity: EntityId,
+        component: u16,
+    ) -> Result<(), ErrorReason> {
+        let consumer = context
+            .world
+            .register_data_binding_presentation_consumer(entity, component)?;
+        let Some(request) = context.data_binding_interpolation_request(consumer)? else {
+            return Ok(());
+        };
+        let references = {
+            let view = context.world.data_binding_prepared_view(entity)?;
+            if !matches!(view.availability, DataBindingAvailability::Ready) {
+                return Err(ErrorReason::InvalidValue);
+            }
+            let input = PlotPreparedInput {
+                row_ids: view.row_ids,
+                columns: view.columns,
+            };
+            super::interpolation_reference::references(
+                &context.world.world.components,
+                entity.index() as usize,
+                component,
+                &input,
+                &request.outputs,
+            )?
+        };
+        // The immutable pre-step borrow ends before the binding-owned operation
+        // consumes this frame's Host delta. Geometry reads the advanced view.
+        context
+            .advance_data_binding_interpolation(consumer, &references)
+            .map_err(|_| ErrorReason::InvalidValue)?;
+        Ok(())
     }
 
     fn prepare_chart(

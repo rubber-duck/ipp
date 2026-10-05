@@ -1,9 +1,12 @@
 /** Backend-independent assertions on the real gallery mount, transport and completed frames. */
-import type {
-  DataBindingPage,
-  Inspection,
-  RootBinding,
-  WorldReference,
+import {
+  DynamicProperty,
+  type Client,
+  type HostClientBase,
+  type DataBindingPage,
+  type Inspection,
+  type RootBinding,
+  type WorldReference,
 } from "@ipp/client";
 
 export interface ChartPose {
@@ -43,11 +46,16 @@ export interface GalleryChartsState {
     camera: ChartInputLane;
     hover: ChartInputLane;
   };
+  adaptiveAxes: boolean;
+  automaticRange: boolean;
+  expandedSamples: boolean;
+  smoothChanges: boolean;
   charts: readonly {
     id: string;
     title: string;
     component: string;
     entity: bigint;
+    source: string;
     world: WorldReference;
     selectedSystems: readonly string[];
     position: readonly number[];
@@ -67,6 +75,12 @@ export interface GalleryChartsState {
       extent: readonly number[];
     };
     frame: Record<string, number>;
+    labels: readonly {
+      series: number;
+      row_id: string;
+      text: string;
+      highlighted: boolean;
+    }[];
     focusBounds: { min: readonly number[]; max: readonly number[] };
     legend: {
       id: string;
@@ -113,6 +127,9 @@ export interface ChartRow {
   path: readonly unknown[];
   series: number;
   rowId: bigint;
+  source: string;
+  sourceIncarnation: bigint;
+  bindingIncarnation: bigint;
   values: DataBindingPage["rows"][number]["values"];
   columns: readonly string[];
 }
@@ -128,6 +145,49 @@ export interface GalleryChartsDriver {
   action(name: string, args?: unknown): Promise<unknown>;
   capture(label: string): Promise<ChartImage>;
   record(label: string, value: unknown): Promise<void>;
+  setSampleInterpolation?(
+    chart: GalleryChartsState["charts"][number],
+    unitsPerSecond: number,
+  ): Promise<void>;
+}
+
+/** Author a fixture rate through the same generated World client as any writer. */
+export async function setChartSampleInterpolation(
+  host: HostClientBase<Client>,
+  chart: GalleryChartsState["charts"][number],
+  unitsPerSecond: number,
+) {
+  chartCheck(
+    Number.isFinite(unitsPerSecond) && unitsPerSecond > 0,
+    "Fixture interpolation rate is positive and finite",
+  );
+  // CLI diagnostics preserve u64 values as decimal strings; author exact typed IDs.
+  const entity = BigInt(chart.entity);
+  const client = await host.openWorld({
+    id: BigInt(chart.world.id),
+    incarnation: BigInt(chart.world.incarnation),
+  });
+  try {
+    const component = client.components.BufferDataSourceBinding;
+    chartCheck(component, "Fixture exposes buffer binding authoring");
+    const outcome = await client.batch(
+      ["y", "y2", "value", "height"]
+        .filter((output) =>
+          chart.binding.columns.some((column) => column.name === output),
+        )
+        .map((output) =>
+          DynamicProperty.set(
+            { kind: "handle", id: entity },
+            component.id,
+            `${output}_interp`,
+            { kind: "f32", value: unitsPerSecond },
+          ),
+        ),
+    );
+    chartCheck(outcome.ok, "Fixture interpolation authoring succeeds");
+  } finally {
+    await client.close();
+  }
 }
 
 export function chartCheck(value: unknown, message: string): asserts value {
@@ -721,16 +781,23 @@ export function assertNoChartAnimation(state: GalleryChartsState) {
   );
 }
 
-export function assertBoundedChartInput(state: GalleryChartsState) {
+export function assertBoundedChartInput(
+  state: GalleryChartsState,
+  settled = true,
+) {
   for (const [name, lane] of Object.entries(state.input)) {
     chartCheck(
-      lane.maxInFlight <= 1 && lane.maxPending <= 1,
+      lane.inFlight <= 1 &&
+        lane.pending <= 1 &&
+        lane.maxInFlight <= 1 &&
+        lane.maxPending <= 1,
       `${name}: input retains at most one active and one pending operation`,
     );
-    chartCheck(
-      lane.inFlight === 0 && lane.pending === 0,
-      `${name}: input settles without queued work`,
-    );
+    if (settled)
+      chartCheck(
+        lane.inFlight === 0 && lane.pending === 0,
+        `${name}: input settles without queued work`,
+      );
   }
 }
 
@@ -1004,8 +1071,9 @@ export async function waitForCharts(
   driver: GalleryChartsDriver,
   predicate: (state: GalleryChartsState) => boolean,
   label: string,
+  timeoutMs = 15_000,
 ) {
-  const deadline = performance.now() + 15_000;
+  const deadline = performance.now() + timeoutMs;
   for (;;) {
     const state = await driver.inspect();
     if (predicate(state)) return state;
@@ -1047,6 +1115,8 @@ export async function focusChart(driver: GalleryChartsDriver, id: string) {
 
 /** Operations rely on the Host's World/controller clocks; polling never advances simulation. */
 export async function exerciseGalleryCharts(driver: GalleryChartsDriver) {
+  // This fixture isolates immediate fixed-data invariants; motion has its own scenario.
+  await driver.action("smoothChanges", false);
   const initial = await driver.inspect();
   assertNoChartAnimation(initial);
   assertChartLegendState(initial);

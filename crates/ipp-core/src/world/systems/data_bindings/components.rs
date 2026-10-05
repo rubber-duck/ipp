@@ -7,7 +7,10 @@ use crate::{
 use std::sync::Arc;
 
 /// Mutable-buffer projection authoring. `foo` is an expression Asset, and
-/// `foo_parameter` is its optional ordinary typed shared parameter.
+/// `foo_parameter` is its optional ordinary typed shared parameter;
+/// positive F32 `foo_interp` rate-limits each displayed numeric lane per second.
+/// Alternatively `foo_interp_percent` supplies percent per second, using optional
+/// nonnegative F32 `foo_interp_reference` or its presentation consumer's reference.
 #[repr(C)]
 #[derive(Clone, Debug, Default, PartialEq, SchemaComponent)]
 pub struct BufferDataSourceBinding {
@@ -79,7 +82,10 @@ fn validate(source: &str, properties: &DynamicProperties) -> Result<(), ErrorRea
     }
     for (name, descriptor) in properties.descriptors() {
         if descriptor.kind == DynamicPropertyKind::Asset {
-            if name.ends_with("_parameter") || name.is_empty() {
+            if name.ends_with("_parameter")
+                || interpolation_property(name).is_some()
+                || name.is_empty()
+            {
                 return Err(ErrorReason::InvalidValue);
             }
             let asset = properties.asset(name).ok_or(ErrorReason::InvalidAsset)?;
@@ -87,11 +93,47 @@ fn validate(source: &str, properties: &DynamicProperties) -> Result<(), ErrorRea
                 return Err(ErrorReason::InvalidAsset);
             }
             asset.validate()?;
+        } else if let Some(reference) = interpolation_property(name) {
+            validate_interpolation_value(
+                &properties
+                    .get_descriptor(*descriptor)
+                    .ok_or(ErrorReason::InvalidField)?,
+                reference,
+            )?;
+            if let Some(output) = name.strip_suffix("_interp")
+                && properties
+                    .descriptors()
+                    .contains_key(format!("{output}_interp_percent").as_str())
+            {
+                return Err(ErrorReason::InvalidValue);
+            }
         } else if !name.ends_with("_parameter") {
             return Err(ErrorReason::InvalidValue);
         }
     }
     Ok(())
+}
+
+fn interpolation_property(name: &str) -> Option<bool> {
+    if name.ends_with("_interp_reference") {
+        Some(true)
+    } else if name.ends_with("_interp") || name.ends_with("_interp_percent") {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+fn validate_interpolation_value(
+    value: &crate::DynamicValue,
+    reference: bool,
+) -> Result<(), ErrorReason> {
+    if matches!(value, crate::DynamicValue::F32(speed) if speed.is_finite() && (*speed > 0.0 || reference && *speed == 0.0))
+    {
+        Ok(())
+    } else {
+        Err(ErrorReason::InvalidValue)
+    }
 }
 
 macro_rules! lifecycle {
@@ -155,6 +197,18 @@ macro_rules! lifecycle {
                         return Err(ErrorReason::InvalidField);
                     }
                     value.validate().map_err(|_| ErrorReason::InvalidValue)?;
+                    if let Some(reference) =
+                        self.properties
+                            .descriptors()
+                            .iter()
+                            .find_map(|(name, descriptor)| {
+                                (descriptor.key == *offset)
+                                    .then(|| interpolation_property(name))
+                                    .flatten()
+                            })
+                    {
+                        validate_interpolation_value(value, reference)?;
+                    }
                 }
                 Ok(())
             }

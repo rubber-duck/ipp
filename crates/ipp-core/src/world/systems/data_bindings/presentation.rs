@@ -8,8 +8,8 @@ use crate::{EntityId, ErrorReason};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DataBindingPresentationConsumer {
     world: crate::WorldRef,
-    entity: EntityId,
-    binding_component: u16,
+    pub(super) entity: EntityId,
+    pub(super) binding_component: u16,
     binding_incarnation: u64,
     consumer_component: u16,
     consumer_incarnation: u64,
@@ -100,7 +100,7 @@ macro_rules! presentation_access {
                 Ok(())
             }
 
-            fn validate_data_binding_consumer(
+            pub(super) fn validate_data_binding_consumer(
                 &self,
                 consumer: DataBindingPresentationConsumer,
             ) -> Result<(), ErrorReason> {

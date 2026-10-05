@@ -178,6 +178,648 @@ fn view(host: &mut HostRuntime, world: WorldId, entity: EntityId) -> DataBinding
         .unwrap()
 }
 
+fn set_binding_property(entity: EntityId, name: &str, value: V) -> Command {
+    Command::SetDynamicProperty {
+        entity: EntityRef::Handle(entity),
+        component: C::BUFFER_DATA_SOURCE_BINDING,
+        name: name.into(),
+        value,
+    }
+}
+
+#[test]
+fn interpolation_uses_host_delta_retargets_and_stops_after_exact_settlement() {
+    let mut host = crate::support::task_scheduler::host();
+    let world = world(&mut host);
+    let source = producer(
+        &mut host,
+        "dataset:interp",
+        DataSourceKind::Buffer,
+        vec![DataColumn::new("x", K::F32)],
+    );
+    append(&mut host, source, vec![vec![V::F32(2.0)]]);
+    let expression = identity(&mut host, world, 1, "x", K::F32);
+    let mut binding = buffer("dataset:interp", "x", expression);
+    binding.properties.set("x_interp", V::F32(4.0)).unwrap();
+    let entity = create(
+        &mut host,
+        world,
+        "interp",
+        C::BufferDataSourceBinding(binding),
+    );
+    assert_eq!(
+        view(&mut host, world, entity).columns[0].values,
+        [R::Valid(V::F32(2.0))]
+    );
+
+    host.data_sources_mut()
+        .apply_batch(
+            source,
+            [DataDelta::Edit {
+                row: DataRowId(1),
+                values: vec![V::F32(12.0)],
+            }],
+        )
+        .unwrap();
+    host.frame_for_test(0.5).unwrap();
+    assert_eq!(
+        view(&mut host, world, entity).columns[0].values,
+        [R::Valid(V::F32(4.0))]
+    );
+    host.frame_for_test(0.25).unwrap();
+    assert_eq!(
+        view(&mut host, world, entity).columns[0].values,
+        [R::Valid(V::F32(5.0))]
+    );
+    assert_eq!(
+        host.data_sources()
+            .read_source(source.source())
+            .unwrap()
+            .rows()
+            .next()
+            .unwrap()
+            .values,
+        [V::F32(12.0)]
+    );
+
+    host.data_sources_mut()
+        .apply_batch(
+            source,
+            [DataDelta::Edit {
+                row: DataRowId(1),
+                values: vec![V::F32(-3.0)],
+            }],
+        )
+        .unwrap();
+    host.frame_for_test(0.25).unwrap();
+    assert_eq!(
+        view(&mut host, world, entity).columns[0].values,
+        [R::Valid(V::F32(4.0))]
+    );
+    apply(
+        &mut host,
+        world,
+        vec![set_binding_property(entity, "x_interp", V::F32(2.0))],
+    )
+    .result
+    .unwrap();
+    host.frame_for_test(0.5).unwrap();
+    assert_eq!(
+        view(&mut host, world, entity).columns[0].values,
+        [R::Valid(V::F32(3.0))]
+    );
+    host.frame_for_test(10.0).unwrap();
+    let settled = view(&mut host, world, entity);
+    assert_eq!(settled.columns[0].values, [R::Valid(V::F32(-3.0))]);
+    #[cfg(feature = "instrumentation")]
+    host.world_mut(world)
+        .unwrap()
+        .acknowledge_data_binding_for_test(entity, settled.binding_incarnation)
+        .unwrap();
+    host.frame_for_test(1.0).unwrap();
+    let idle = view(&mut host, world, entity);
+    assert_eq!(idle.evaluated_tick, settled.evaluated_tick);
+    assert_eq!(idle.dirty, !cfg!(feature = "instrumentation"));
+
+    host.data_sources_mut()
+        .apply_batch(
+            source,
+            [DataDelta::Edit {
+                row: DataRowId(1),
+                values: vec![V::F32(100.0)],
+            }],
+        )
+        .unwrap();
+    host.frame_for_test(0.5).unwrap();
+    assert_eq!(
+        view(&mut host, world, entity).columns[0].values,
+        [R::Valid(V::F32(-2.0))]
+    );
+    apply(
+        &mut host,
+        world,
+        vec![Command::RemoveDynamicProperty {
+            entity: EntityRef::Handle(entity),
+            component: C::BUFFER_DATA_SOURCE_BINDING,
+            name: "x_interp".into(),
+        }],
+    )
+    .result
+    .unwrap();
+    assert_eq!(
+        view(&mut host, world, entity).columns[0].values,
+        [R::Valid(V::F32(100.0))]
+    );
+}
+
+#[test]
+fn interpolation_preserves_only_live_row_identities_and_resets_definition_and_source() {
+    let mut host = crate::support::task_scheduler::host();
+    let world = world(&mut host);
+    let source = producer(
+        &mut host,
+        "dataset:interp-rows",
+        DataSourceKind::Buffer,
+        vec![DataColumn::new("x", K::F32)],
+    );
+    append(
+        &mut host,
+        source,
+        vec![vec![V::F32(0.0)], vec![V::F32(10.0)]],
+    );
+    let expression = identity(&mut host, world, 1, "x", K::F32);
+    let mut binding = buffer("dataset:interp-rows", "x", expression);
+    binding.properties.set("x_interp", V::F32(2.0)).unwrap();
+    let entity = create(
+        &mut host,
+        world,
+        "interp-rows",
+        C::BufferDataSourceBinding(binding),
+    );
+    host.data_sources_mut()
+        .apply_batch(
+            source,
+            [
+                DataDelta::Edit {
+                    row: DataRowId(1),
+                    values: vec![V::F32(20.0)],
+                },
+                DataDelta::Edit {
+                    row: DataRowId(2),
+                    values: vec![V::F32(30.0)],
+                },
+                DataDelta::Insert {
+                    index: 0,
+                    rows: vec![vec![V::F32(50.0)]],
+                },
+            ],
+        )
+        .unwrap();
+    host.frame_for_test(1.0).unwrap();
+    let inserted = view(&mut host, world, entity);
+    assert_eq!(inserted.row_ids, [DataRowId(3), DataRowId(1), DataRowId(2)]);
+    assert_eq!(
+        inserted.columns[0].values,
+        [
+            R::Valid(V::F32(50.0)),
+            R::Valid(V::F32(2.0)),
+            R::Valid(V::F32(12.0))
+        ]
+    );
+    host.data_sources_mut()
+        .apply_batch(
+            source,
+            [DataDelta::Remove {
+                row: DataRowId(1),
+            }],
+        )
+        .unwrap();
+    host.frame_for_test(0.5).unwrap();
+    let removed = view(&mut host, world, entity);
+    assert_eq!(removed.row_ids, [DataRowId(3), DataRowId(2)]);
+    assert_eq!(
+        removed.columns[0].values,
+        [R::Valid(V::F32(50.0)), R::Valid(V::F32(13.0))]
+    );
+
+    let replacement_definition = identity(&mut host, world, 2, "x", K::F32);
+    apply(
+        &mut host,
+        world,
+        vec![set_binding_property(
+            entity,
+            "x",
+            V::Asset(replacement_definition),
+        )],
+    )
+    .result
+    .unwrap();
+    assert_eq!(
+        view(&mut host, world, entity).columns[0].values,
+        [R::Valid(V::F32(50.0)), R::Valid(V::F32(30.0))]
+    );
+
+    host.data_sources_mut().destroy_source(source).unwrap();
+    let replacement = producer(
+        &mut host,
+        "dataset:interp-rows",
+        DataSourceKind::Buffer,
+        vec![DataColumn::new("x", K::F32)],
+    );
+    append(
+        &mut host,
+        replacement,
+        vec![vec![V::F32(-50.0)], vec![V::F32(-30.0)]],
+    );
+    host.frame_for_test(0.25).unwrap();
+    let replaced = view(&mut host, world, entity);
+    assert_ne!(replaced.source, removed.source);
+    assert_eq!(replaced.row_ids, [DataRowId(1), DataRowId(2)]);
+    assert_eq!(
+        replaced.columns[0].values,
+        [R::Valid(V::F32(-50.0)), R::Valid(V::F32(-30.0))]
+    );
+}
+
+#[test]
+fn interpolation_moves_vector_lanes_independently_and_invalid_results_initialize_fresh() {
+    let mut host = crate::support::task_scheduler::host();
+    let world = world(&mut host);
+    let source = producer(
+        &mut host,
+        "dataset:interp-vector",
+        DataSourceKind::Buffer,
+        vec![DataColumn::new("x", K::Vec3)],
+    );
+    append(&mut host, source, vec![vec![V::Vec3([0.0, 10.0, -2.0])]]);
+    let expression = identity(&mut host, world, 1, "x", K::Vec3);
+    let mut binding = buffer("dataset:interp-vector", "x", expression);
+    binding.properties.set("x_interp", V::F32(4.0)).unwrap();
+    let entity = create(
+        &mut host,
+        world,
+        "interp-vector",
+        C::BufferDataSourceBinding(binding),
+    );
+    host.data_sources_mut()
+        .apply_batch(
+            source,
+            [DataDelta::Edit {
+                row: DataRowId(1),
+                values: vec![V::Vec3([10.0, -10.0, -1.0])],
+            }],
+        )
+        .unwrap();
+    host.frame_for_test(0.5).unwrap();
+    assert_eq!(
+        view(&mut host, world, entity).columns[0].values,
+        [R::Valid(V::Vec3([2.0, 8.0, -1.0]))]
+    );
+
+    let expression = asset(
+        &mut host,
+        world,
+        2,
+        definition(&[("parameter", K::F32)], vec![N::Input(0)], 0),
+    );
+    apply(
+        &mut host,
+        world,
+        vec![set_binding_property(entity, "x", V::Asset(expression))],
+    )
+    .result
+    .unwrap();
+    assert_eq!(
+        view(&mut host, world, entity).columns[0].values,
+        [R::Invalid(ExpressionInvalid::MissingInput {
+            slot: 0
+        })]
+    );
+    apply(
+        &mut host,
+        world,
+        vec![set_binding_property(entity, "x_parameter", V::F32(30.0))],
+    )
+    .result
+    .unwrap();
+    assert_eq!(
+        view(&mut host, world, entity).columns[0].values,
+        [R::Valid(V::F32(30.0))]
+    );
+    apply(
+        &mut host,
+        world,
+        vec![set_binding_property(entity, "x_parameter", V::F32(100.0))],
+    )
+    .result
+    .unwrap();
+    host.frame_for_test(0.5).unwrap();
+    assert_eq!(
+        view(&mut host, world, entity).columns[0].values,
+        [R::Valid(V::F32(32.0))]
+    );
+}
+
+#[test]
+fn interpolation_speed_admission_rejects_invalid_values_and_reports_unsupported_outputs() {
+    let mut host = crate::support::task_scheduler::host();
+    let world = world(&mut host);
+    let source = producer(
+        &mut host,
+        "dataset:interp-kind",
+        DataSourceKind::Buffer,
+        vec![DataColumn::new("x", K::U32)],
+    );
+    append(&mut host, source, vec![vec![V::U32(5)]]);
+    let expression = identity(&mut host, world, 1, "x", K::U32);
+    let entity = create(
+        &mut host,
+        world,
+        "interp-kind",
+        C::BufferDataSourceBinding(buffer("dataset:interp-kind", "x", expression)),
+    );
+    for value in [
+        V::F32(0.0),
+        V::F32(-1.0),
+        V::F32(f32::INFINITY),
+        V::F32(f32::NAN),
+        V::U32(2),
+    ] {
+        assert!(
+            apply(
+                &mut host,
+                world,
+                vec![set_binding_property(entity, "x_interp", value)]
+            )
+            .result
+            .is_err()
+        );
+    }
+    apply(
+        &mut host,
+        world,
+        vec![set_binding_property(entity, "x_interp", V::F32(1.0))],
+    )
+    .result
+    .unwrap();
+    assert_eq!(
+        view(&mut host, world, entity).availability,
+        DataBindingAvailability::Unavailable(DataBindingUnavailable::InputType {
+            output: "x".into(),
+            input: "x_interp".into()
+        })
+    );
+    apply(
+        &mut host,
+        world,
+        vec![
+            Command::RemoveDynamicProperty {
+                entity: EntityRef::Handle(entity),
+                component: C::BUFFER_DATA_SOURCE_BINDING,
+                name: "x_interp".into(),
+            },
+            set_binding_property(entity, "x_interp_percent", V::F32(1.0)),
+        ],
+    )
+    .result
+    .unwrap();
+    assert_eq!(
+        view(&mut host, world, entity).availability,
+        DataBindingAvailability::Unavailable(DataBindingUnavailable::InputType {
+            output: "x".into(),
+            input: "x_interp_percent".into()
+        })
+    );
+}
+
+#[test]
+fn interpolation_accumulates_sub_ulp_motion_across_unchanged_projection_and_row_reindexing() {
+    let mut host = crate::support::task_scheduler::host();
+    let world = world(&mut host);
+    let source = producer(
+        &mut host,
+        "dataset:interp-small",
+        DataSourceKind::Buffer,
+        vec![DataColumn::new("x", K::F32)],
+    );
+    let start = 100_000_000.0f32;
+    append(&mut host, source, vec![vec![V::F32(start)]]);
+    let expression = identity(&mut host, world, 1, "x", K::F32);
+    let mut binding = buffer("dataset:interp-small", "x", expression);
+    binding.properties.set("x_interp", V::F32(1.0)).unwrap();
+    let entity = create(
+        &mut host,
+        world,
+        "interp-small",
+        C::BufferDataSourceBinding(binding),
+    );
+    host.data_sources_mut()
+        .apply_batch(
+            source,
+            [DataDelta::Edit {
+                row: DataRowId(1),
+                values: vec![V::F32(start + 16.0)],
+            }],
+        )
+        .unwrap();
+    for frame in 1..=961 {
+        if frame == 300 {
+            host.data_sources_mut()
+                .apply_batch(
+                    source,
+                    [DataDelta::Insert {
+                        index: 0,
+                        rows: vec![vec![V::F32(5.0)]],
+                    }],
+                )
+                .unwrap();
+        }
+        if frame % 60 == 0 {
+            apply(
+                &mut host,
+                world,
+                vec![set_binding_property(
+                    entity,
+                    "unrelated_parameter",
+                    V::F32(frame as f32),
+                )],
+            )
+            .result
+            .unwrap();
+        }
+        host.frame_for_test(1.0 / 60.0).unwrap();
+        let page = view(&mut host, world, entity);
+        let index = page
+            .row_ids
+            .iter()
+            .position(|id| *id == DataRowId(1))
+            .unwrap();
+        let R::Valid(V::F32(displayed)) = page.columns[0].values[index] else {
+            panic!("numeric output")
+        };
+        assert!(f64::from(displayed - start) <= f64::from(frame) / 60.0 + 1e-9);
+    }
+    assert_eq!(
+        view(&mut host, world, entity).columns[0].values,
+        [R::Valid(V::F32(5.0)), R::Valid(V::F32(start + 16.0))]
+    );
+}
+
+#[test]
+fn interpolation_window_changes_keep_retained_rows_and_initialize_reappearing_rows() {
+    let mut host = crate::support::task_scheduler::host();
+    let world = world(&mut host);
+    let source = producer(
+        &mut host,
+        "dataset:interp-window",
+        DataSourceKind::Streaming,
+        vec![DataColumn::new("x", K::F32)],
+    );
+    let expression = asset(
+        &mut host,
+        world,
+        1,
+        definition(
+            &[("column:x", K::F32), ("parameter", K::F32)],
+            vec![
+                N::Input(0),
+                N::Input(1),
+                N::Binary {
+                    operator: BinaryOperator::Add,
+                    left: 0,
+                    right: 1,
+                },
+            ],
+            2,
+        ),
+    );
+    let mut binding = stream(
+        "dataset:interp-window",
+        "x",
+        expression.clone(),
+        &[DataWindow::Count(2)],
+    );
+    binding.properties.set("x_parameter", V::F32(0.0)).unwrap();
+    binding.properties.set("x_interp", V::F32(2.0)).unwrap();
+    let entity = create(
+        &mut host,
+        world,
+        "interp-window",
+        C::StreamingDataSourceBinding(binding),
+    );
+    create(
+        &mut host,
+        world,
+        "retention",
+        C::StreamingDataSourceBinding(stream(
+            "dataset:interp-window",
+            "x",
+            expression,
+            &[DataWindow::Count(2)],
+        )),
+    );
+    append(
+        &mut host,
+        source,
+        vec![vec![V::F32(0.0)], vec![V::F32(10.0)]],
+    );
+    host.frame_for_test(0.0).unwrap();
+    apply(
+        &mut host,
+        world,
+        vec![Command::SetDynamicProperty {
+            entity: EntityRef::Handle(entity),
+            component: C::STREAMING_DATA_SOURCE_BINDING,
+            name: "x_parameter".into(),
+            value: V::F32(20.0),
+        }],
+    )
+    .result
+    .unwrap();
+    host.frame_for_test(0.5).unwrap();
+    assert_eq!(
+        view(&mut host, world, entity).columns[0].values,
+        [R::Valid(V::F32(1.0)), R::Valid(V::F32(11.0))]
+    );
+    apply(&mut host, world, vec![set_count(entity, 1)])
+        .result
+        .unwrap();
+    host.frame_for_test(0.5).unwrap();
+    assert_eq!(
+        view(&mut host, world, entity).columns[0].values,
+        [R::Valid(V::F32(12.0))]
+    );
+    apply(&mut host, world, vec![set_count(entity, 2)])
+        .result
+        .unwrap();
+    let widened = view(&mut host, world, entity);
+    assert_eq!(widened.row_ids, [DataRowId(1), DataRowId(2)]);
+    assert_eq!(
+        widened.columns[0].values,
+        [R::Valid(V::F32(20.0)), R::Valid(V::F32(12.0))]
+    );
+}
+
+#[test]
+fn interpolation_sub_ulp_progress_survives_same_side_retargets_and_other_lane_changes() {
+    let mut host = crate::support::task_scheduler::host();
+    let world = world(&mut host);
+    let source = producer(
+        &mut host,
+        "dataset:interp-retarget",
+        DataSourceKind::Buffer,
+        vec![DataColumn::new("x", K::Vec3)],
+    );
+    let start = 100_000_000.0f32;
+    append(&mut host, source, vec![vec![V::Vec3([start, start, 0.0])]]);
+    let expression = identity(&mut host, world, 1, "x", K::Vec3);
+    let mut binding = buffer("dataset:interp-retarget", "x", expression);
+    binding.properties.set("x_interp", V::F32(1.0)).unwrap();
+    let entity = create(
+        &mut host,
+        world,
+        "interp-retarget",
+        C::BufferDataSourceBinding(binding),
+    );
+    for frame in 1..=961 {
+        host.data_sources_mut()
+            .apply_batch(
+                source,
+                [DataDelta::Edit {
+                    row: DataRowId(1),
+                    values: vec![V::Vec3([
+                        start
+                            + if frame % 2 == 0 {
+                                16.0
+                            } else {
+                                32.0
+                            },
+                        start + 16.0,
+                        if frame % 2 == 0 {
+                            100.0
+                        } else {
+                            -100.0
+                        },
+                    ])],
+                }],
+            )
+            .unwrap();
+        host.frame_for_test(1.0 / 60.0).unwrap();
+    }
+    let page = view(&mut host, world, entity);
+    let R::Valid(V::Vec3(value)) = page.columns[0].values[0] else {
+        panic!("vector output")
+    };
+    assert_eq!(&value[..2], &[start + 16.0, start + 16.0]);
+
+    // A reversal must not spend accrued positive-direction movement backwards.
+    host.data_sources_mut()
+        .apply_batch(
+            source,
+            [DataDelta::Edit {
+                row: DataRowId(1),
+                values: vec![V::Vec3([start + 32.0, start + 16.0, 0.0])],
+            }],
+        )
+        .unwrap();
+    host.frame_for_test(7.0).unwrap();
+    host.data_sources_mut()
+        .apply_batch(
+            source,
+            [DataDelta::Edit {
+                row: DataRowId(1),
+                values: vec![V::Vec3([start, start + 16.0, 0.0])],
+            }],
+        )
+        .unwrap();
+    host.frame_for_test(1.0).unwrap();
+    let reversed = view(&mut host, world, entity);
+    let R::Valid(V::Vec3(value)) = reversed.columns[0].values[0] else {
+        panic!("vector output")
+    };
+    assert_eq!(value[0], start + 16.0);
+}
+
 #[test]
 fn exact_raw_identity_preserves_all_source_kinds_and_float_bits_after_edits() {
     fn bits(value: &V) -> Vec<u32> {
@@ -2745,6 +3387,9 @@ struct ConsumerTestSystem {
     observed: Vec<(bool, Vec<R>)>,
     failures: usize,
     stale_rejections: usize,
+    reference: Option<f64>,
+    interpolation_requests: usize,
+    interpolation_steps: usize,
 }
 
 impl ConsumerTestSystem {
@@ -2809,7 +3454,35 @@ impl ipp_core::systems::System for ConsumerTestSystem {
                     context.world.finish_data_binding_presentation(previous),
                     Err(ErrorReason::InvalidEntity)
                 );
+                assert_eq!(
+                    context.data_binding_interpolation_request(previous),
+                    Err(ErrorReason::InvalidEntity)
+                );
                 self.stale_rejections += 1;
+            }
+            if let Some(request) = context
+                .data_binding_interpolation_request(consumer)
+                .unwrap()
+            {
+                self.interpolation_requests += 1;
+                if matches!(self.mode, ConsumerTestMode::Succeed) {
+                    let references: Vec<_> = request
+                        .outputs
+                        .iter()
+                        .map(|output| DataBindingInterpolationReference {
+                            output,
+                            maximum: self.reference.expect("test reference"),
+                        })
+                        .collect();
+                    context
+                        .advance_data_binding_interpolation(consumer, &references)
+                        .unwrap();
+                    self.interpolation_steps += 1;
+                    assert_eq!(
+                        context.advance_data_binding_interpolation(consumer, &references),
+                        Ok(false)
+                    );
+                }
             }
             let view = context
                 .world
@@ -2834,6 +3507,250 @@ impl ipp_core::systems::System for ConsumerTestSystem {
             }
         }
     }
+}
+
+#[test]
+fn explicit_percentage_reference_changes_and_rate_mode_switches_keep_the_display() {
+    let mut host = crate::support::task_scheduler::host();
+    let world = world(&mut host);
+    let source = producer(
+        &mut host,
+        "dataset:percentage",
+        DataSourceKind::Buffer,
+        vec![DataColumn::new("x", K::F32)],
+    );
+    append(&mut host, source, vec![vec![V::F32(10.0)]]);
+    let expression = identity(&mut host, world, 1, "x", K::F32);
+    let mut binding = buffer("dataset:percentage", "x", expression);
+    binding
+        .properties
+        .set("x_interp_percent", V::F32(10.0))
+        .unwrap();
+    binding
+        .properties
+        .set("x_interp_reference", V::F32(20.0))
+        .unwrap();
+    let entity = create(
+        &mut host,
+        world,
+        "percentage",
+        C::BufferDataSourceBinding(binding),
+    );
+    host.data_sources_mut()
+        .apply_batch(
+            source,
+            [DataDelta::Edit {
+                row: DataRowId(1),
+                values: vec![V::F32(100.0)],
+            }],
+        )
+        .unwrap();
+    let scalar = |host: &mut HostRuntime| view(host, world, entity).columns[0].values[0].clone();
+    host.frame_for_test(0.5).unwrap();
+    assert_eq!(scalar(&mut host), R::Valid(V::F32(11.0)));
+    apply(
+        &mut host,
+        world,
+        vec![set_binding_property(
+            entity,
+            "x_interp_reference",
+            V::F32(0.0),
+        )],
+    )
+    .result
+    .unwrap();
+    host.frame_for_test(100.0).unwrap();
+    assert_eq!(scalar(&mut host), R::Valid(V::F32(11.0)));
+    apply(
+        &mut host,
+        world,
+        vec![set_binding_property(
+            entity,
+            "x_interp_reference",
+            V::F32(40.0),
+        )],
+    )
+    .result
+    .unwrap();
+    host.frame_for_test(0.5).unwrap();
+    assert_eq!(scalar(&mut host), R::Valid(V::F32(13.0)));
+    let remove = |name: &str| Command::RemoveDynamicProperty {
+        entity: EntityRef::Handle(entity),
+        component: C::BUFFER_DATA_SOURCE_BINDING,
+        name: name.into(),
+    };
+    apply(
+        &mut host,
+        world,
+        vec![
+            remove("x_interp_percent"),
+            remove("x_interp_reference"),
+            set_binding_property(entity, "x_interp", V::F32(4.0)),
+        ],
+    )
+    .result
+    .unwrap();
+    assert_eq!(scalar(&mut host), R::Valid(V::F32(13.0)));
+    host.frame_for_test(0.5).unwrap();
+    assert_eq!(scalar(&mut host), R::Valid(V::F32(15.0)));
+    apply(
+        &mut host,
+        world,
+        vec![
+            remove("x_interp"),
+            set_binding_property(entity, "x_interp_reference", V::F32(10.0)),
+            set_binding_property(entity, "x_interp_percent", V::F32(50.0)),
+        ],
+    )
+    .result
+    .unwrap();
+    host.frame_for_test(0.5).unwrap();
+    assert_eq!(scalar(&mut host), R::Valid(V::F32(17.5)));
+    apply(&mut host, world, vec![remove("x_interp_reference")])
+        .result
+        .unwrap();
+    host.frame_for_test(20.0).unwrap();
+    assert_eq!(scalar(&mut host), R::Valid(V::F32(17.5))); // Implicit ref has no consumer; no stale explicit rate.
+    assert_eq!(
+        view(&mut host, world, entity).availability,
+        DataBindingAvailability::Ready
+    );
+}
+
+#[test]
+fn percentage_consumer_authority_advances_once_and_missed_frames_do_not_catch_up() {
+    let mut factories = ipp_core::systems::compiled_system_factories();
+    factories.push(std::sync::Arc::new(ConsumerTestFactory));
+    let mut host = crate::support::task_scheduler::with_factories(factories).unwrap();
+    let world = host
+        .create_world(
+            WorldLimits::default(),
+            &[
+                ConsumerTestSystem::ID,
+                DataBindingSystem::ID,
+                SystemId("ipp.asset-dependencies"),
+            ],
+        )
+        .unwrap();
+    let source = producer(
+        &mut host,
+        "dataset:consumer-percent",
+        DataSourceKind::Buffer,
+        vec![DataColumn::new("x", K::F32)],
+    );
+    append(&mut host, source, vec![vec![V::F32(10.0)]]);
+    let expression = identity(&mut host, world, 1, "x", K::F32);
+    let mut binding = buffer("dataset:consumer-percent", "x", expression.clone());
+    binding
+        .properties
+        .set("x_interp_percent", V::F32(10.0))
+        .unwrap();
+    let entity = create(
+        &mut host,
+        world,
+        "consumer-percent",
+        C::BufferDataSourceBinding(binding),
+    );
+    apply(
+        &mut host,
+        world,
+        vec![Command::insert_value(
+            EntityRef::Handle(entity),
+            C::Scalar(Default::default()),
+        )],
+    )
+    .result
+    .unwrap();
+    let mode = |host: &mut HostRuntime, mode| {
+        host.world_mut(world)
+            .unwrap()
+            .with_system::<ConsumerTestSystem, _>(ConsumerTestSystem::ID, |system, _| {
+                system.mode = mode;
+                system.reference = Some(10.0);
+            })
+            .unwrap()
+    };
+    mode(&mut host, ConsumerTestMode::Succeed);
+    host.frame_for_test(1.0).unwrap();
+    assert_eq!(
+        host.world_mut(world)
+            .unwrap()
+            .system::<ConsumerTestSystem>(ConsumerTestSystem::ID)
+            .unwrap()
+            .interpolation_requests,
+        0
+    );
+    host.data_sources_mut()
+        .apply_batch(
+            source,
+            [DataDelta::Edit {
+                row: DataRowId(1),
+                values: vec![V::F32(100.0)],
+            }],
+        )
+        .unwrap();
+    host.frame_for_test(1.0).unwrap();
+    assert_eq!(
+        view(&mut host, world, entity).columns[0].values,
+        [R::Valid(V::F32(11.0))]
+    );
+    mode(&mut host, ConsumerTestMode::Skip);
+    host.frame_for_test(50.0).unwrap();
+    mode(&mut host, ConsumerTestMode::Succeed);
+    host.frame_for_test(1.0).unwrap();
+    assert_eq!(
+        view(&mut host, world, entity).columns[0].values,
+        [R::Valid(V::F32(12.0))]
+    );
+    apply(
+        &mut host,
+        world,
+        vec![
+            Command::RemoveComponent {
+                entity: EntityRef::Handle(entity),
+                component: C::SCALAR,
+            },
+            Command::insert_value(EntityRef::Handle(entity), C::Scalar(Default::default())),
+        ],
+    )
+    .result
+    .unwrap();
+    host.frame_for_test(1.0).unwrap();
+    assert_eq!(
+        view(&mut host, world, entity).columns[0].values,
+        [R::Valid(V::F32(13.0))]
+    );
+    let mut replacement = buffer("dataset:consumer-percent", "x", expression);
+    replacement
+        .properties
+        .set("x_interp_percent", V::F32(10.0))
+        .unwrap();
+    apply(
+        &mut host,
+        world,
+        vec![
+            Command::RemoveComponent {
+                entity: EntityRef::Handle(entity),
+                component: C::BUFFER_DATA_SOURCE_BINDING,
+            },
+            Command::insert_value(
+                EntityRef::Handle(entity),
+                C::BufferDataSourceBinding(replacement),
+            ),
+        ],
+    )
+    .result
+    .unwrap();
+    assert_eq!(
+        view(&mut host, world, entity).columns[0].values,
+        [R::Valid(V::F32(100.0))]
+    );
+    let context = host.world_mut(world).unwrap();
+    let consumer = context
+        .system::<ConsumerTestSystem>(ConsumerTestSystem::ID)
+        .unwrap();
+    assert_eq!(consumer.stale_rejections, 2);
+    assert_eq!(consumer.interpolation_steps, 3);
 }
 
 #[test]

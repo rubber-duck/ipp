@@ -2,8 +2,8 @@
 
 use super::*;
 use crate::{
-    Batch, Command, ComponentValue, DynamicValue, EntityMetadata, EntityRef, HostRuntime,
-    WorldLimits,
+    Batch, Command, ComponentValue, DynamicValue, EntityMetadata, EntityRef, ErrorReason,
+    HostRuntime, WorldLimits,
     components::schema::FieldValue,
     expressions::*,
     services::{
@@ -164,4 +164,89 @@ fn numeric_parameter_invalidation_reads_the_live_typed_store_and_runtime_clone_i
     );
     assert_eq!(after.binding_incarnation, incarnation);
     assert!(after.dirty);
+}
+
+#[test]
+fn numeric_interpolation_speed_writes_preserve_positive_finite_admission() {
+    use crate::components::schema::ComponentLifecycle;
+
+    let mut binding = BufferDataSourceBinding::default();
+    let speed = binding
+        .properties
+        .set("output_interp", DynamicValue::F32(4.0))
+        .unwrap();
+    let parameter = binding
+        .properties
+        .set("output_parameter", DynamicValue::F32(4.0))
+        .unwrap();
+    for value in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+        assert!(
+            binding
+                .validate_numeric_properties(&[(
+                    speed,
+                    FieldValue::Dynamic(DynamicValue::F32(value))
+                )])
+                .is_err()
+        );
+    }
+    assert_eq!(
+        binding
+            .validate_numeric_properties(&[(speed, FieldValue::Dynamic(DynamicValue::F32(1.0)))]),
+        Ok(())
+    );
+    assert_eq!(
+        binding.validate_numeric_properties(&[(
+            parameter,
+            FieldValue::Dynamic(DynamicValue::F32(-1.0))
+        )]),
+        Ok(())
+    );
+    assert_eq!(
+        binding.properties.get("output_interp"),
+        Some(DynamicValue::F32(4.0))
+    );
+}
+
+#[test]
+fn percentage_rate_and_reference_admission_are_typed_and_modes_are_exclusive() {
+    use crate::components::schema::ComponentLifecycle;
+
+    let mut binding = BufferDataSourceBinding::default();
+    let percentage = binding
+        .properties
+        .set("x_interp_percent", DynamicValue::F32(1.0))
+        .unwrap();
+    let reference = binding
+        .properties
+        .set("x_interp_reference", DynamicValue::F32(0.0))
+        .unwrap();
+    assert_eq!(binding.validate(), Ok(()));
+    assert_eq!(
+        binding.validate_numeric_properties(&[(
+            reference,
+            FieldValue::Dynamic(DynamicValue::F32(0.0))
+        )]),
+        Ok(())
+    );
+    for (key, value) in [
+        (percentage, 0.0),
+        (percentage, -1.0),
+        (reference, -1.0),
+        (reference, f32::INFINITY),
+        (percentage, f32::NAN),
+    ] {
+        assert!(
+            binding
+                .validate_numeric_properties(&[(
+                    key,
+                    FieldValue::Dynamic(DynamicValue::F32(value))
+                )])
+                .is_err()
+        );
+    }
+    binding
+        .properties
+        .set("x_interp", DynamicValue::F32(2.0))
+        .unwrap();
+    assert_eq!(binding.validate(), Err(ErrorReason::InvalidValue));
 }

@@ -426,6 +426,7 @@ fn pie_angles_follow_shares_while_radial_prisms_keep_independent_dimensions() {
 fn text_faces_the_view_and_cartesian_paths_retain_positive_bases_for_far_stations() {
     let mut output = PlotPreparedGeometry::default();
     let frame = fixed_frame();
+    assert!(!frame.adaptive_axes);
     axes(&mut output, &frame, [-1.0, 0.0, -2.0], [3.0, 10.0, 8.0]).unwrap();
     let fixed: Vec<_> = output
         .planes
@@ -458,9 +459,29 @@ fn text_faces_the_view_and_cartesian_paths_retain_positive_bases_for_far_station
         assert!(ticks.iter().all(|p| p.placement
             == PlotPlanePlacement::Axis {
                 extent: frame.size(),
-                axis
+                axis,
+                adaptive: false,
             }));
     }
+    let adaptive_frame = PlotFrame3d {
+        adaptive_axes: true,
+        ..frame
+    };
+    let mut adaptive = PlotPreparedGeometry::default();
+    axes(
+        &mut adaptive,
+        &adaptive_frame,
+        [-1.0, 0.0, -2.0],
+        [3.0, 10.0, 8.0],
+    )
+    .unwrap();
+    assert!(adaptive.planes.iter().all(|plane| match plane.placement {
+        PlotPlanePlacement::Axis {
+            adaptive,
+            ..
+        } => adaptive,
+        _ => true,
+    }));
 }
 
 #[test]

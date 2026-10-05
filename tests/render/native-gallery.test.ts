@@ -12,6 +12,7 @@ import { exerciseNativeGalleryScene } from "./native-gallery-scene-assertions.js
 import {
   exerciseGalleryCharts,
   exerciseChartRow,
+  setChartSampleInterpolation,
   type GalleryChartsState,
   type GalleryChartsDriver,
 } from "../integration/scenarios/gallery-charts.js";
@@ -22,6 +23,12 @@ import {
   type StreamingChartsState,
   type StreamingChartsDriver,
 } from "../integration/scenarios/gallery-chart-streaming.js";
+import {
+  exerciseChartRegeneration,
+  exerciseChartAdaptiveScope,
+  exerciseChartAutomaticRange,
+  exerciseChartSmoothChanges,
+} from "../integration/scenarios/gallery-chart-changes.js";
 
 /** Content must cover a meaningful frame region, independent of the source's own geometry math. */
 function visiblePixels(frame: RgbaImage): number {
@@ -61,6 +68,9 @@ async function runGallery(
     readonly readGuiPanel: () => Promise<Inspection>;
     readonly readDataset: (name: string) => Promise<DatasetPage>;
     readonly record: (kind: string, value: unknown) => Promise<void>;
+    readonly setSampleInterpolation: NonNullable<
+      GalleryChartsDriver["setSampleInterpolation"]
+    >;
   }) => Promise<void>,
   mapped = true,
 ) {
@@ -176,6 +186,8 @@ async function runGallery(
             }
           },
           readDataset: (name) => observer.datasets.read(name),
+          setSampleInterpolation: (chart, rate) =>
+            setChartSampleInterpolation(observer, chart, rate),
           record: (kind, value) => environment.evidence.record(kind, value),
         });
       } catch (error) {
@@ -425,6 +437,65 @@ test("native unified charts retain fixed samples, focus and pick World-qualified
     },
   );
 });
+
+for (const [slug, name, exercise] of [
+  [
+    "chart-regeneration",
+    "native regenerated chart hover follows the stationary pointer and current source lifetime",
+    exerciseChartRegeneration,
+  ],
+  [
+    "chart-adaptive-scope",
+    "native adaptive gallery axes follow only hovered or selected charts",
+    exerciseChartAdaptiveScope,
+  ],
+  [
+    "chart-automatic-range",
+    "native gallery automatic value ranges fit growing samples inside the fixed physical box",
+    exerciseChartAutomaticRange,
+  ],
+  [
+    "chart-smooth-values",
+    "native gallery existing sample edits render and pick intermediate smoothed values",
+    exerciseChartSmoothChanges,
+  ],
+] as const) {
+  // Native startup, captures and the deliberate 23-second descent share this budget.
+  test(name, { timeout: 90_000 }, async (context) => {
+    await runGallery(
+      context.signal,
+      slug,
+      async ({ driver, directory, signal, record, setSampleInterpolation }) => {
+        await driver.start(
+          "charts",
+          ["--width", "720", "--height", "480"],
+          signal,
+        );
+        const charts: GalleryChartsDriver = {
+          setSampleInterpolation,
+          inspect: async () =>
+            (await driver.call("inspect", [], signal)).report
+              .state as unknown as GalleryChartsState,
+          action: (name, args) =>
+            driver.call(
+              "action",
+              [name, ...(args === undefined ? [] : [JSON.stringify(args)])],
+              signal,
+            ),
+          capture: (label) => driver.capture(join(directory, label), signal),
+          record: async (label, value) => {
+            await writeFile(
+              join(directory, `${label}.json`),
+              `${JSON.stringify(value, (_key, item) => (typeof item === "bigint" ? String(item) : item), 2)}\n`,
+            );
+            await record(label, { artifact: `${label}.json` });
+          },
+        };
+        await exercise(charts, 720 / 480);
+      },
+    );
+  });
+}
 
 test("native gallery explains missing saved asset mappings before creating a World", {
   timeout: 30_000,

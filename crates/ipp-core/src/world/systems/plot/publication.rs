@@ -129,6 +129,8 @@ pub enum PlotPlanePlacement {
         extent: [f32; 3],
         /// Increasing data axis X/Y/Z (0/1/2).
         axis: u8,
+        /// Adapt to this view; otherwise retain its last displayed perimeter station.
+        adaptive: bool,
     },
     /// Pie bisector at the slice's own height, independent of authored offset direction.
     Radial {

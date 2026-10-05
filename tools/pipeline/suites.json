@@ -24,6 +24,18 @@
     ],
     "files": ["dist/tests/render/gallery-chart-input.test.js"]
   },
+  "gallery-chart-changes": {
+    "description": "Regenerated hover, interaction-gated axes, growing numeric ranges and interpolated value picking through real browser input",
+    "sourceRoots": [
+      "examples/world-gallery/worlds/charts/",
+      "tests/integration/scenarios/gallery-charts.ts",
+      "tests/integration/scenarios/gallery-chart-changes.ts",
+      "tests/render/gallery-chart-changes.test.ts",
+      "tests/render/gallery-driver.ts",
+      "tests/render/viewer-browser-helper.ts"
+    ],
+    "files": ["dist/tests/render/gallery-chart-changes.test.js"]
+  },
   "headless-client": {
     "description": "Maintained headless example CLI against a real native Host with explicit World cleanup",
     "sourceRoots": [
@@ -2638,6 +2650,7 @@
       "tools/ipp-schema-gen/src/data-authoring.template.ts",
       "tests/integration/data-authoring.test.ts",
       "tests/integration/scenarios/data-authoring.ts",
+      "tests/integration/scenarios/data-interpolation.ts",
       "tests/render/animation-fixture.ts",
       "tests/render/animation.test.ts",
       "packages/ipp-react/src/",
@@ -2789,6 +2802,8 @@
       "tests/integration/scenarios/plot-view-placement.ts",
       "tests/integration/scenarios/plot-axis-support.ts",
       "tests/integration/scenarios/plot-axis-motion.ts",
+      "tests/integration/scenarios/plot-axis-gating.ts",
+      "tests/integration/scenarios/plot-axis-fixture.ts",
       "packages/ipp-react/src/plots.ts",
       "packages/ipp-react/src/plot-legend.tsx",
       "packages/ipp-react/tests/plots.test.ts",
@@ -2796,7 +2811,9 @@
       "tests/integration/plots-runtime.test.ts",
       "tests/integration/plots-driver.ts",
       "tests/integration/tsconfig.plots.json",
-      "tools/build_plots.mjs"
+      "tools/build_plots.mjs",
+      "tests/integration/scenarios/plot-percentage.ts",
+      "crates/ipp-core/tests/plot_interpolation.rs"
     ],
     "commands": [
       {
@@ -2808,6 +2825,22 @@
           "ipp-core",
           "--lib",
           "world::systems::plot",
+          "--locked"
+        ],
+        "builds": [],
+        "requirements": [
+          "rust"
+        ]
+      },
+      {
+        "name": "interpolation-core",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "ipp-core",
+          "--test",
+          "plot_interpolation",
           "--locked"
         ],
         "builds": [],
@@ -3064,6 +3097,100 @@
         "partitionExcludes": [
           "target/gles-host"
         ]
+      },
+      {
+        "name": "axis-gating-native",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern=^axis-gating Plot through native WebSocket/GLES",
+          "target/plots/plots-runtime.test.js"
+        ],
+        "builds": [
+          "plots-fixtures",
+          "gles-host",
+          "font-assets"
+        ],
+        "requirements": [
+          "rust",
+          "node",
+          "npm",
+          "gles"
+        ],
+        "partitionExcludes": [
+          "target/browser-build/render"
+        ]
+      },
+      {
+        "name": "axis-gating-browser",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern=^axis-gating Plot through worker WASM/WebGL",
+          "target/plots/plots-runtime.test.js"
+        ],
+        "builds": [
+          "plots-fixtures",
+          "browser:render",
+          "font-assets"
+        ],
+        "requirements": [
+          "rust",
+          "wasm",
+          "node",
+          "npm",
+          "browser"
+        ],
+        "partitionExcludes": [
+          "target/gles-host"
+        ]
+      },
+      {
+        "name": "percentage-native",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern=^percentage Plot through native WebSocket/GLES",
+          "target/plots/plots-runtime.test.js"
+        ],
+        "builds": [
+          "plots-fixtures",
+          "gles-host",
+          "font-assets"
+        ],
+        "requirements": [
+          "rust",
+          "node",
+          "npm",
+          "gles"
+        ],
+        "partitionExcludes": [
+          "target/browser-build/render"
+        ]
+      },
+      {
+        "name": "percentage-browser",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern=^percentage Plot through worker WASM/WebGL",
+          "target/plots/plots-runtime.test.js"
+        ],
+        "builds": [
+          "plots-fixtures",
+          "browser:render",
+          "font-assets"
+        ],
+        "requirements": [
+          "rust",
+          "wasm",
+          "node",
+          "npm",
+          "browser"
+        ],
+        "partitionExcludes": [
+          "target/gles-host"
+        ]
       }
     ]
   },
@@ -3077,15 +3204,70 @@
       "tests/render/native-gallery-driver.ts",
       "tests/render/native-gallery-scene-assertions.ts",
       "tests/integration/scenarios/gallery-charts.ts",
-      "tests/integration/scenarios/gallery-chart-streaming.ts"
+      "tests/integration/scenarios/gallery-chart-streaming.ts",
+      "tests/integration/scenarios/gallery-chart-changes.ts"
     ],
     "commands": [
+      {
+        "name": "chart-changes",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern=^native (regenerated chart hover|adaptive gallery axes|gallery (automatic value ranges|existing sample edits))",
+          "dist/tests/render/native-gallery.test.js"
+        ],
+        "builds": [
+          "typescript",
+          "gles-host",
+          "font-assets",
+          "gallery-assets",
+          "gallery-platformer-native-assets",
+          "shared-host"
+        ],
+        "requirements": ["node", "npm", "gles"]
+      },
       {
         "name": "charts",
         "command": [
           "@node",
           "--test",
-          "--test-name-pattern=^native (unified charts|gallery (streams bounded data windows|reloads streaming charts))",
+          "--test-name-pattern=^native unified charts",
+          "dist/tests/render/native-gallery.test.js"
+        ],
+        "builds": [
+          "typescript",
+          "gles-host",
+          "font-assets",
+          "gallery-assets",
+          "gallery-platformer-native-assets",
+          "shared-host"
+        ],
+        "requirements": ["node", "npm", "gles"]
+      },
+      {
+        "name": "chart-streaming",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern=^native gallery streams bounded data windows",
+          "dist/tests/render/native-gallery.test.js"
+        ],
+        "builds": [
+          "typescript",
+          "gles-host",
+          "font-assets",
+          "gallery-assets",
+          "gallery-platformer-native-assets",
+          "shared-host"
+        ],
+        "requirements": ["node", "npm", "gles"]
+      },
+      {
+        "name": "chart-reload",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern=^native gallery reloads streaming charts",
           "dist/tests/render/native-gallery.test.js"
         ],
         "builds": [

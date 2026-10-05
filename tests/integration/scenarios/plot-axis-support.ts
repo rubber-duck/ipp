@@ -126,7 +126,7 @@ export async function exercisePlotAxisSupport(
     const fields = async (
       entity: bigint,
       component: string,
-      values: Record<string, number | string>,
+      values: Record<string, number | string | boolean>,
     ) => {
       successfulBatch(
         await chart.client.batch(
@@ -139,6 +139,7 @@ export async function exercisePlotAxisSupport(
         ),
       );
     };
+    await fields(chart.entity, "PlotFrame3d", { adaptive_axes: true });
     await fields(chart.entity, "Transform", {
       x: translation[0]!,
       y: translation[1]!,

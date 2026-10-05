@@ -29,6 +29,7 @@ import {
   datasetSchema,
   type DatasetHost,
 } from "./datasets.js";
+import { dataInterpolation } from "./data-interpolation.js";
 
 type Contract = Pick<
   typeof Generated,
@@ -734,6 +735,7 @@ export async function dataAuthoring(
       assetId,
       checkpoint,
     );
+    await dataInterpolation(host, contract, checkpoint);
     // Metadata snapshot deliberately excludes source rows, expression payloads and prepared output.
     snapshot = await host.saveWorld(client.session);
     await checkpoint("data.snapshot", { snapshotBytes: snapshot.length });

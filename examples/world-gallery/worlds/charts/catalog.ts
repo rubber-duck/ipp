@@ -149,6 +149,7 @@ const spatialFrame = {
   automatic_x: false,
   automatic_y: false,
   automatic_z: false,
+  adaptive_axes: false,
   ticks: 4,
   font_size: 0.27,
   x_title: "POSITION X",

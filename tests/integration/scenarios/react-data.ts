@@ -12,6 +12,9 @@ import {
   StreamingDataSourceBinding,
   ColumnBindingAsset,
   assetRef,
+  fixed,
+  percent,
+  type DataColumnInterpolation,
 } from "../../../packages/ipp-react/src/index.js";
 import type { DatasetHost } from "./datasets.js";
 import { check } from "./datasets.js";
@@ -63,6 +66,28 @@ export async function reactData(
   contract: Contract,
   record: (label: string, value: unknown) => Promise<void> = async () => {},
 ) {
+  let unsupportedModeRejected = false;
+  try {
+    BufferDataSourceBinding({
+      source: "invalid-mode",
+      columns: {
+        value: {
+          definition: assetRef("formula"),
+          interpolation: {
+            unitsPerSecond: 5,
+          } as unknown as DataColumnInterpolation,
+        },
+      },
+    });
+  } catch (error) {
+    unsupportedModeRejected =
+      error instanceof Error &&
+      error.message === "Unsupported data interpolation mode";
+  }
+  check(
+    unsupportedModeRejected,
+    "Unsupported interpolation mode was silently preserved",
+  );
   const world = await host.createWorld({
     selectedSystems: selectSystems(ASSETS, ["ipp.data-bindings"]),
     symbolicId: "react-data",
@@ -112,6 +137,7 @@ export async function reactData(
     includeOwned = true,
     count = 2n,
     includeRaw = true,
+    interpolation?: DataColumnInterpolation | null,
   ) =>
     h(
       DataSource,
@@ -136,6 +162,7 @@ export async function reactData(
                 columns: {
                   scaled: {
                     definition: assetRef("formula"),
+                    ...(interpolation === undefined ? {} : { interpolation }),
                     ...(includeParameter === "omit"
                       ? {}
                       : { parameter: includeParameter ? a : null }),
@@ -276,6 +303,94 @@ export async function reactData(
         JSON.stringify([valid(2), valid(5)]),
       "explicitly removed optional parameter fallback",
     );
+    await root.render(render(4, false, scaled, true, 2n, true, fixed(5)));
+    await root.render(render(4, true, scaled, true, 2n, true, fixed(5)));
+    const smoothed = await until(
+      () => host.datasets.bindingView(client.session, first),
+      (page) => {
+        const value = values(page, "scaled")[0] as ReturnType<typeof valid>;
+        return value.value.value > 2 && value.value.value < 8;
+      },
+      "React interpolation intermediate value",
+    );
+    await root.render(render(4, true));
+    const inspection = await client.inspectPage({ collection: "entities" });
+    const interpolationProperty = inspection.entities
+      .find((entity) => entity.id === first)!
+      .components.find(
+        (component) =>
+          component.component === client.components.BufferDataSourceBinding!.id,
+      )!.properties!.scaled_interp;
+    equal(
+      interpolationProperty,
+      { kind: "f32", value: 5 },
+      "omitted interpolation preserves speed",
+    );
+    await root.render(render(4, true, scaled, true, 2n, true, null));
+    equal(
+      values(await ready(first, 2), "scaled"),
+      [valid(8), valid(20)],
+      "disabled interpolation snaps to projected target",
+    );
+    await record("react-data.interpolation", {
+      smoothed,
+      interpolationProperty,
+    });
+    await root.render(render(4, false));
+    equal(
+      values(await ready(first, 2), "scaled"),
+      [valid(2), valid(5)],
+      "removed interpolation remains disabled",
+    );
+    await root.render(
+      render(4, false, scaled, true, 2n, true, percent(25, 20)),
+    );
+    await root.render(render(4, true, scaled, true, 2n, true, percent(25, 20)));
+    const percentage = await until(
+      () => host.datasets.bindingView(client.session, first),
+      (page) => {
+        const value = values(page, "scaled")[0] as ReturnType<typeof valid>;
+        return value.value.value > 2 && value.value.value < 8;
+      },
+      "React percentage intermediate value",
+    );
+    await root.render(render(4, true, scaled, true, 2n, true, percent(25, 0)));
+    const zero = values(await ready(first, 2), "scaled");
+    let completed = await client.waitForFrame();
+    const started = completed.time;
+    while (completed.time - started < 0.1)
+      completed = await client.waitForFrame(completed.tick);
+    equal(
+      values(await ready(first, 2), "scaled"),
+      zero,
+      "React zero reference holds",
+    );
+    await root.render(render(4, true, scaled, true, 2n, true, fixed(5)));
+    const switched = await client.inspectPage({ collection: "entities" });
+    const properties = switched.entities
+      .find((entity) => entity.id === first)!
+      .components.find(
+        (component) =>
+          component.component === client.components.BufferDataSourceBinding!.id,
+      )!.properties!;
+    equal(
+      properties.scaled_interp,
+      { kind: "f32", value: 5 },
+      "React percentage switches to fixed",
+    );
+    check(
+      !Object.hasOwn(properties, "scaled_interp_percent") &&
+        !Object.hasOwn(properties, "scaled_interp_reference"),
+      "Inactive percentage companions were preserved",
+    );
+    await root.render(render(4, true, scaled, true, 2n, true, null));
+    equal(
+      values(await ready(first, 2), "scaled"),
+      [valid(8), valid(20)],
+      "React percentage disable snaps",
+    );
+    await record("react-data.percentage", { percentage, zero, properties });
+    await root.render(render(4, false));
     await root.render(render(4, false, scaled, true, 1n));
     equal(
       (await ready(streamEntity, 1)).rows.map((row) => row.id),

@@ -462,7 +462,19 @@ export async function exercisePlotViewPlacement(
 ) {
   const scene = await openPlot3d(host, contract, font, "plot-view-placement");
   try {
-    for (const chart of scene.charts)
+    for (const chart of scene.charts) {
+      successfulBatch(
+        await chart.client.batch(
+          componentFields(chart.client, "PlotFrame3d", {
+            adaptive_axes: true,
+          }).map((field) => ({
+            kind: "setField",
+            entity: { kind: "handle", id: chart.entity },
+            component: chart.client.components.PlotFrame3d!.id,
+            field,
+          })),
+        ),
+      );
       successfulBatch(
         await chart.client.batch(
           componentFields(chart.client, "Camera", {
@@ -475,6 +487,7 @@ export async function exercisePlotViewPlacement(
           })),
         ),
       );
+    }
     await readyPlot3d(scene);
     if (offscreen) {
       await offscreenLabels(scene, capture, record, offscreen);

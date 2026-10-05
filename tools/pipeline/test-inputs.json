@@ -1,4 +1,8 @@
 {
+  "dist/tests/render/gallery-chart-changes.test.js": {
+    "builds": ["typescript", "gallery-fixtures"],
+    "requirements": ["node", "npm", "browser"]
+  },
   "dist/tests/render/gallery-chart-input.test.js": {
     "builds": ["typescript", "gallery-fixtures"],
     "requirements": ["node", "npm", "browser"]

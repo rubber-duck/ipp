@@ -107,6 +107,23 @@ fn mapping(
     samples: &[Vec<Sample>],
     baseline: bool,
 ) -> Result<(PlotFrameMapping3d, [f64; 3], [f64; 3]), ErrorReason> {
+    let (min, max) = ranges(frame, samples, baseline);
+    Ok((PlotFrameMapping3d::new(frame, min, max)?, min, max))
+}
+
+/// Fit the same Cartesian bounds used by meshes and picking without preparing
+/// geometry. Invalid surface sites remain excluded from fitted numeric bounds.
+pub(super) fn interpolation_ranges(
+    frame: &PlotFrame3d,
+    series: &Rows<PlotSeriesRow>,
+    input: &PlotPreparedInput<'_>,
+    bars: bool,
+) -> Result<([f64; 3], [f64; 3]), ErrorReason> {
+    let samples = collect(series, input, bars, false)?;
+    Ok(ranges(frame, &samples, bars))
+}
+
+fn ranges(frame: &PlotFrame3d, samples: &[Vec<Sample>], baseline: bool) -> ([f64; 3], [f64; 3]) {
     let mut min = [f64::INFINITY; 3];
     let mut max = [f64::NEG_INFINITY; 3];
     for sample in samples.iter().flatten().filter(|sample| sample.valid) {
@@ -130,7 +147,7 @@ fn mapping(
             max[axis] += pad;
         }
     }
-    Ok((PlotFrameMapping3d::new(frame, min, max)?, min, max))
+    (min, max)
 }
 
 /// Prepare grid-positioned bars, including a single depth row.
@@ -1053,6 +1070,7 @@ fn axes(
             placement: PlotPlanePlacement::Axis {
                 extent,
                 axis,
+                adaptive: frame.adaptive_axes,
             },
             clip: [-font * 3.0, -font * 3.0, length + font * 3.0, font * 3.0],
             primitives,
@@ -1086,6 +1104,7 @@ fn axis_text(
                 PlotPlaneLayout::Tick(axis) | PlotPlaneLayout::Title(axis) => axis,
                 _ => unreachable!(),
             },
+            adaptive: frame.adaptive_axes,
         },
         clip: [
             offset[0] - font,

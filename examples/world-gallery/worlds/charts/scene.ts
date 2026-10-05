@@ -16,9 +16,10 @@ import {
   type ChartDataMode,
   type ChartWindow,
 } from "./streaming.js";
-import { CHART_RING } from "./catalog.js";
+import { CHART_RING, CHART_UNITS_PER_METRE } from "./catalog.js";
+import { CHART_HEIGHT_SCALE } from "./colors.js";
 import { ChartContent } from "./content.js";
-import { ChartCamera, chartCameraTarget } from "./camera.js";
+import { ChartCamera, chartCameraTarget, chartFocusBounds } from "./camera.js";
 import { ChartActionLane } from "./action-lane.js";
 import { componentFields, successfulBatch } from "./shared/commands.js";
 
@@ -670,6 +671,35 @@ export const chartScene: GallerySceneDefinition = {
               )
             : undefined;
           const pose = camera.pose(inspection);
+          const bindingInspection = async (
+            chart: (typeof content.charts)[number],
+          ) => {
+            let page = await context.canvas.host.datasets.bindingView(
+              chart.client.session,
+              chart.entity,
+              { limit: 128 },
+            );
+            const complete = { ...page, rows: [...page.rows] };
+            while (page.nextOffset !== null) {
+              page = await context.canvas.host.datasets.bindingView(
+                chart.client.session,
+                chart.entity,
+                { offset: page.nextOffset, limit: 128 },
+              );
+              if (
+                page.sourceIncarnation !== complete.sourceIncarnation ||
+                page.bindingIncarnation !== complete.bindingIncarnation ||
+                page.evaluatedTick !== complete.evaluatedTick ||
+                page.totalRows !== complete.totalRows
+              )
+                throw new Error("Chart binding changed during diagnostic read");
+              if (complete.rows.length + page.rows.length > 512)
+                throw new Error("Chart binding exceeds diagnostic row bound");
+              complete.rows.push(...page.rows);
+            }
+            complete.nextOffset = null;
+            return complete;
+          };
           return {
             input: {
               camera: cameraActions.snapshot(),
@@ -753,10 +783,29 @@ export const chartScene: GallerySceneDefinition = {
                 yaw: chart.spec.yaw,
                 rotation: chart.spec.rotation,
                 frame: chart.frame,
-                binding: await context.canvas.host.datasets.bindingView(
-                  chart.client.session,
-                  chart.entity,
-                ),
+                focusBounds: chartFocusBounds(chart.spec),
+                legend: {
+                  id: chart.legend.id,
+                  world: chart.legend.world,
+                  session: chart.legend.client.session,
+                  anchor: chart.legend.anchor,
+                  surface: chart.legend.surface,
+                  extent: chart.legend.extent,
+                  unitsPerMetre: CHART_UNITS_PER_METRE,
+                  bounds: chart.legend.bounds,
+                  center: chart.legend.center,
+                  inspection: inspections.get(chart.legend.client)!,
+                  title: chart.spec.legendTitle,
+                  entries: chart.spec.legendEntries ?? null,
+                  scale: chart.spec.legendEntries
+                    ? null
+                    : {
+                        min: CHART_HEIGHT_SCALE.min,
+                        max: CHART_HEIGHT_SCALE.max,
+                        colors: CHART_HEIGHT_SCALE.colors,
+                      },
+                },
+                binding: await bindingInspection(chart),
               })),
             ),
           };

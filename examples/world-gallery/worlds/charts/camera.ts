@@ -11,7 +11,11 @@ import {
   CHART_CATALOG,
   CHART_RING,
   CHART_SURFACE,
+  CHART_LEGEND_GAP,
+  CHART_LEGEND_WIDTH,
+  CHART_UNITS_PER_METRE,
   rotateChartPoint,
+  type ChartSpec,
 } from "./catalog.js";
 
 export type CameraPose = Record<
@@ -80,6 +84,29 @@ function framedTarget(
   return { pose: lookAt(eye, centre), distance };
 }
 
+/** Chart-local enclosure used by focus, including the ordinary legend Surface. */
+export function chartFocusBounds(chart: ChartSpec) {
+  const canvas = chart.component.endsWith("2d");
+  const pie = chart.component === "PlotPie3d";
+  const width = canvas
+    ? CHART_SURFACE.width
+    : Number(chart.frame.width) +
+      (CHART_LEGEND_GAP + CHART_LEGEND_WIDTH) / CHART_UNITS_PER_METRE;
+  const height = canvas ? CHART_SURFACE.height : Number(chart.frame.height);
+  const depth = canvas ? 0 : Number(chart.frame.depth);
+  const half = canvas
+    ? [
+        width / 2,
+        height / 2,
+        CHART_RING.radius * (1 - Math.cos(width / (2 * CHART_RING.radius))),
+      ]
+    : [width / 2 + 0.5, pie ? 3 : height / 2 + 1, depth / 2 + 0.5];
+  return {
+    min: chart.localCenter.map((value, index) => value - half[index]!),
+    max: chart.localCenter.map((value, index) => value + half[index]!),
+  };
+}
+
 export function chartCameraTarget(id: string, aspect = 1) {
   if (!Number.isFinite(aspect) || aspect <= 0)
     throw new Error("Chart camera requires a positive viewport aspect ratio");
@@ -100,20 +127,11 @@ export function chartCameraTarget(id: string, aspect = 1) {
   const chart = CHART_CATALOG.find((chart) => chart.id === id);
   if (!chart) throw new Error(`Unknown chart: ${id}`);
   const canvas = chart.component.endsWith("2d");
-  const pie = chart.component === "PlotPie3d";
-  const width = canvas ? CHART_SURFACE.width : Number(chart.frame.width);
-  const height = canvas ? CHART_SURFACE.height : Number(chart.frame.height);
-  const depth = canvas ? 0 : Number(chart.frame.depth);
+  const bounds = chartFocusBounds(chart);
   return framedTarget(
     chart.center,
     rotateChartPoint(canvas ? [0, 0, 1] : [0, 7, 13], chart.yaw),
-    canvas
-      ? [
-          width / 2,
-          height / 2,
-          CHART_RING.radius * (1 - Math.cos(width / (2 * CHART_RING.radius))),
-        ]
-      : [width / 2 + 0.5, pie ? 3 : height / 2 + 1, depth / 2 + 0.5],
+    bounds.max.map((value, index) => (value - bounds.min[index]!) / 2),
     aspect,
     chart.yaw,
   );

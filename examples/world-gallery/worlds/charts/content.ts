@@ -15,6 +15,11 @@ import {
   createRoot,
   type ReactWorldRoot,
   type DataWindow,
+  PlotLegend,
+  plotLegendPlacement,
+  plotLegendSize,
+  plotColorScaleColor,
+  type PlotLegendProps,
 } from "@ipp/react";
 import type { GallerySceneContext } from "../../shared/scene.js";
 import type { Plot3dContract } from "../charts3d/content.js";
@@ -22,8 +27,13 @@ import {
   CHART_CATALOG,
   CHART_SCHEMA,
   CHART_SURFACE,
+  CHART_CANVAS_EXTENT,
+  CHART_UNITS_PER_METRE,
+  CHART_LEGEND_WIDTH,
+  CHART_LEGEND_GAP,
   type ChartSpec,
 } from "./catalog.js";
+import { CHART_COLORS, CHART_HEIGHT_SCALE } from "./colors.js";
 import { chartColumnDefinitions } from "./columns.js";
 import {
   aliasId,
@@ -65,6 +75,19 @@ export interface GalleryChart {
   windows: readonly DataWindow[];
   readonly font: ClientAssetSource;
   frame: ChartSpec["frame"];
+  readonly legend: GalleryChartLegend;
+}
+
+export interface GalleryChartLegend {
+  readonly client: AnimationWorldClient;
+  readonly world: WorldReference;
+  readonly anchor: bigint;
+  readonly id: string;
+  readonly extent: readonly [number, number];
+  /** Bounds in the plot's own Canvas coordinates or spatial XY plane. */
+  readonly bounds: readonly [number, number, number, number];
+  readonly center: readonly [number, number, number];
+  readonly surface: "CylinderSurface" | "FlatSurface";
 }
 
 interface OwnedChild {
@@ -86,6 +109,7 @@ export class ChartContent {
     entity: bigint;
   }[] = [];
   private readonly roots = new Map<string, ReactWorldRoot>();
+  private readonly legendRoots: ReactWorldRoot[] = [];
   private sourceGeneration = 0;
   mode: ChartDataMode = "buffer";
   window: ChartWindow = "count";
@@ -141,7 +165,10 @@ export class ChartContent {
         const created = await this.context.canvas.host.createWorld({
           symbolicId: `gallery-charts/${this.client.session}/${spec.id}`,
           temporary: true,
-          canvas: { extent: [600, 360], unitsPerMetre: 60 },
+          canvas: {
+            extent: [...CHART_CANVAS_EXTENT],
+            unitsPerMetre: CHART_UNITS_PER_METRE,
+          },
           selectedSystems: [
             "ipp.asset-dependencies",
             "ipp.data-bindings",
@@ -168,7 +195,7 @@ export class ChartContent {
             client,
             "CanvasBox",
             { kind: "alias", alias: 1 },
-            { width: 600, height: 360 },
+            { width: CHART_CANVAS_EXTENT[0], height: CHART_CANVAS_EXTENT[1] },
           ),
           createEntity(2, `chart-title-${spec.id}`),
           insertComponent(
@@ -222,8 +249,8 @@ export class ChartContent {
           anchor,
           component: "CylinderSurface",
           ...CHART_SURFACE,
-          unitsPerMetre: 60,
-          extent: [600, 360],
+          unitsPerMetre: CHART_UNITS_PER_METRE,
+          extent: CHART_CANVAS_EXTENT,
         };
         const root = createRoot(this.client, {
           host: this.context.canvas.host,
@@ -293,10 +320,121 @@ export class ChartContent {
         windows: [],
         font,
         frame: spec.frame,
+        legend: await this.legend(spec, entity, client, font, surface),
       };
       this.charts.push(chart);
       await this.declare(chart);
     }
+  }
+
+  private async legend(
+    spec: ChartSpec,
+    plotEntity: bigint,
+    plotClient: AnimationWorldClient,
+    plotFont: ClientAssetSource,
+    surface: ChartSurface | null,
+  ): Promise<GalleryChartLegend> {
+    const id = `chart-legend-${spec.id}`;
+    const descriptor = {
+      id,
+      font: plotFont.source,
+      title: spec.legendTitle,
+      width: CHART_LEGEND_WIDTH,
+      ...(spec.legendEntries
+        ? { entries: spec.legendEntries }
+        : { scale: CHART_HEIGHT_SCALE }),
+    } satisfies PlotLegendProps;
+    const size = plotLegendSize(descriptor);
+    const canvas = surface !== null;
+    const depth = canvas ? 0 : Number(spec.frame.depth);
+    const density = CHART_UNITS_PER_METRE;
+    const placement = plotLegendPlacement({
+      bounds: [0, 0, Number(spec.frame.width), Number(spec.frame.height)],
+      size: canvas ? size : [size[0] / density, size[1] / density],
+      yDirection: canvas ? "down" : "up",
+      origin: "bottom-left",
+      gap: canvas ? CHART_LEGEND_GAP : CHART_LEGEND_GAP / density,
+    });
+    let client = plotClient,
+      anchor = surface?.anchor ?? 0n;
+    if (!canvas) {
+      const created = await this.context.canvas.host.createWorld({
+        symbolicId: `gallery-charts/${this.client.session}/${spec.id}/legend`,
+        temporary: true,
+        canvas: { extent: [...size], unitsPerMetre: density },
+        selectedSystems: ["ipp.asset-dependencies", "ipp.canvas"],
+      });
+      const child: OwnedChild = { world: created.reference };
+      this.children.push(child);
+      client = (await this.context.canvas.host.openWorld(
+        created.reference,
+      )) as AnimationWorldClient;
+      child.client = client;
+      anchor = await this.create(this.client, [
+        createEntity(1, `chart-legend-surface-${spec.id}`),
+        insertComponent(
+          this.client,
+          "Transform",
+          { kind: "alias", alias: 1 },
+          {
+            x: placement.center[0],
+            y: placement.center[1],
+            z: depth,
+          },
+        ),
+        insertComponent(
+          this.client,
+          "FlatSurface",
+          { kind: "alias", alias: 1 },
+          { width: size[0] / density, height: size[1] / density },
+        ),
+        {
+          kind: "placeEntity",
+          entity: { kind: "alias", alias: 1 },
+          placement: {
+            parent: { kind: "handle", id: plotEntity },
+            before: null,
+          },
+        },
+      ]);
+      const attachment = createRoot(this.client, {
+        host: this.context.canvas.host,
+      });
+      this.attachments.push(attachment);
+      await attachment.render(
+        h(
+          Entity,
+          { bindTo: `chart-legend-surface-${spec.id}` },
+          h(AttachedWorld, {
+            anchor: `chart-legend-surface-${spec.id}`,
+            child: { borrow: created.reference },
+            attachment: { mode: "surface-canvas" },
+          }),
+        ),
+      );
+    }
+    const root = createRoot(client);
+    this.legendRoots.push(root);
+    await root.render(
+      h(PlotLegend, {
+        ...descriptor,
+        font: plotFont.source,
+        x: canvas ? placement.canvasPosition[0] : 0,
+        y: canvas ? placement.canvasPosition[1] : 0,
+      }),
+    );
+    const world = client.worldReference;
+    if (!world) throw new Error(`Legend ${spec.id} has no World`);
+    return {
+      client,
+      world,
+      anchor,
+      id,
+      extent: canvas ? CHART_CANVAS_EXTENT : size,
+      bounds: placement.bounds,
+      center: [placement.center[0], placement.center[1], depth],
+      surface: canvas ? "CylinderSurface" : "FlatSurface",
+    };
   }
 
   private async declare(chart: GalleryChart) {
@@ -312,7 +450,7 @@ export class ChartContent {
       value: spec.component.includes("Pie") ? "value" : y,
       radius: "radius",
       height: "height",
-      color_column: spec.component.includes("Pie") ? "color" : "",
+      color_column: spec.colorByRow ? "color" : "",
       color,
       visible: true,
     });
@@ -332,8 +470,8 @@ export class ChartContent {
       source,
       chartColumnDefinitions(this.contract),
       [
-        series([0, 0.8, 1, 1]),
-        ...(spec.secondSeries ? [series([1, 0.6, 0.1, 1], "y2")] : []),
+        series(CHART_COLORS[0]),
+        ...(spec.secondSeries ? [series(CHART_COLORS[1], "y2")] : []),
       ],
       [],
       spec.style,
@@ -495,6 +633,7 @@ export class ChartContent {
     const clients = new Set([
       this.client,
       ...this.charts.map((chart) => chart.client),
+      ...this.charts.map((chart) => chart.legend.client),
     ]);
     return new Map(
       await Promise.all(
@@ -520,6 +659,7 @@ export class ChartContent {
     const clients = new Set([
       this.client,
       ...this.charts.map((chart) => chart.client),
+      ...this.charts.map((chart) => chart.legend.client),
     ]);
     const pages = async (client: AnimationWorldClient) => {
       const result = [];
@@ -645,6 +785,13 @@ export class ChartContent {
         y = original[1]!;
       if (y.kind === "f32")
         original[1] = { kind: "f32", value: y.value * (changed ? 0.5 : 1) };
+      if (chart.spec.id === "height-surface" && original[1]!.kind === "f32")
+        original[7] = {
+          kind: "vec4",
+          value: [
+            ...plotColorScaleColor(CHART_HEIGHT_SCALE, original[1]!.value),
+          ],
+        };
       const outcome = await this.context.canvas.host.datasets.update(
         chart.producer,
         [{ operation: "edit", row: 1n, values: original }],
@@ -669,6 +816,10 @@ export class ChartContent {
       await attempt(() => root.unmount());
     }
     for (const root of this.roots.values()) {
+      await attempt(() => root.render(null));
+      await attempt(() => root.unmount());
+    }
+    for (const root of this.legendRoots) {
       await attempt(() => root.render(null));
       await attempt(() => root.unmount());
     }

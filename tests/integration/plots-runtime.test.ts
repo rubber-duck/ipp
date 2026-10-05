@@ -3,8 +3,8 @@ import test from "node:test";
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { Client, HostClientBase, RootBinding } from "@ipp/client";
-import { image, settled } from "../../tools/shared-host/presentation.js";
+import type { Client, HostClientBase } from "@ipp/client";
+import { createPlotCapture } from "./plot-capture.js";
 import { encodePng } from "../../tools/shared-host/png.js";
 import { runNativeEnvironment } from "./environment.js";
 import { runBrowserEnvironment } from "../browser/environment.js";
@@ -12,6 +12,7 @@ import { exercisePlot2d } from "./scenarios/plots-2d.js";
 import { exercisePlot3d } from "./scenarios/plots-3d.js";
 import { reactPlots } from "./scenarios/react-plots.js";
 import { exercisePlotAxisSupport } from "./scenarios/plot-axis-support.js";
+import { exercisePlotAxisMotion } from "./scenarios/plot-axis-motion.js";
 import { exercisePlotViewPlacement } from "./scenarios/plot-view-placement.js";
 import type { Plot2dContract } from "./plot-2d-scene.js";
 import type { Plot3dContract } from "./plot-3d-scene.js";
@@ -29,6 +30,7 @@ for (const [family, offscreen, transformed] of [
   ["view", { width: 1280, opposite: true }],
   ["axis", undefined, false],
   ["axis", undefined, true],
+  ["axis-motion", undefined],
 ] as const) {
   const suffix = offscreen
     ? ` offscreen ${offscreen.width} ${offscreen.opposite ? "opposite" : "front"}`
@@ -87,45 +89,45 @@ for (const [family, offscreen, transformed] of [
           }),
         );
         const surface = await host.presentation.surface();
-        const capture = async (label: string, binding: RootBinding) => {
-          const view = await host.presentation.select(surface, binding);
-          try {
-            const frame = image(await settled(host, view, [binding.output]));
+        const record = (label: string, value: unknown) =>
+          environment.evidence.record(label, value);
+        const capture = createPlotCapture(
+          host,
+          surface,
+          async (label, frame) => {
             await writeFile(
               join(environment.evidence.directory, `${label}.png`),
               encodePng(frame),
             );
-            return frame;
-          } finally {
-            await host.presentation.clear(view);
-          }
-        };
-        const record = (label: string, value: unknown) =>
-          environment.evidence.record(label, value);
+          },
+          record,
+        );
         await environment.execute(`plots-${caseName}`, {}, async () =>
           family === "2d"
             ? exercisePlot2d(host, contract, font, capture, record)
             : family === "3d"
               ? exercisePlot3d(host, contract, font, capture)
-              : family === "axis"
-                ? exercisePlotAxisSupport(
-                    host,
-                    contract,
-                    font,
-                    capture,
-                    record,
-                    transformed ?? false,
-                  )
-                : family === "view"
-                  ? exercisePlotViewPlacement(
+              : family === "axis-motion"
+                ? exercisePlotAxisMotion(host, contract, font, capture, record)
+                : family === "axis"
+                  ? exercisePlotAxisSupport(
                       host,
                       contract,
                       font,
                       capture,
                       record,
-                      offscreen,
+                      transformed ?? false,
                     )
-                  : reactPlots(host, contract, font, capture, record),
+                  : family === "view"
+                    ? exercisePlotViewPlacement(
+                        host,
+                        contract,
+                        font,
+                        capture,
+                        record,
+                        offscreen,
+                      )
+                    : reactPlots(host, contract, font, capture, record),
         );
       },
     );
@@ -162,16 +164,22 @@ for (const [family, offscreen, transformed] of [
                 label: string;
                 width: number;
                 height: number;
-                pixels: number[];
+                rgba: string;
               };
+              const pixels = Buffer.from(frame.rgba, "base64");
+              if (pixels.length !== frame.width * frame.height * 4)
+                throw new Error(
+                  "Plot capture RGBA byte count does not match its viewport",
+                );
               await writeFile(
                 join(environment.evidence.directory, `${frame.label}.png`),
-                encodePng({ ...frame, pixels: Uint8Array.from(frame.pixels) }),
+                encodePng({ width: frame.width, height: frame.height, pixels }),
               );
               await environment.evidence.record(label, {
                 label: frame.label,
                 width: frame.width,
                 height: frame.height,
+                bytes: pixels.length,
               });
             } else await environment.evidence.record(label, value);
           },

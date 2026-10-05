@@ -4,6 +4,8 @@
 //! candidates and a small retained offset preference avoid flicker under small
 //! camera movement. History is scoped to the exact camera output and viewport,
 //! with weak geometry ownership; it cannot retain a chart or cross a view lifetime.
+//! Numeric ticks use one compact lane and omit crowded intermediate stations;
+//! endpoint priority and current projected ink determine admission without history.
 //! Projected bounds belong to this presentation. Arranged planes are submitted
 //! independently of headless mesh/mark bounds, which remain picking authority;
 //! future plane culling must use these arranged bounds, never that enclosure.
@@ -33,9 +35,22 @@ struct Previous {
 pub(super) struct PlotLabelLayoutState {
     viewport: [u32; 2],
     previous: BTreeMap<Key, Previous>,
+    axes: super::plot_view_placement::PlotViewPlacementState,
 }
 
 impl PlotLabelLayoutState {
+    pub(super) fn place_axes<'a>(
+        &mut self,
+        planes: &[ScenePlotPlane<'a>],
+        camera: [f32; 16],
+        projection: [f32; 16],
+        viewport: WorldViewport,
+        presentation_time: f64,
+    ) -> Result<Vec<ScenePlotPlane<'a>>, super::RenderError> {
+        self.axes
+            .place(planes, camera, projection, viewport, presentation_time)
+    }
+
     pub(super) fn arrange<'a>(
         &mut self,
         planes: &[ScenePlotPlane<'a>],
@@ -48,6 +63,9 @@ impl PlotLabelLayoutState {
             self.viewport = size;
         }
         let mut arranged = planes.to_vec();
+        let mut retained = vec![true; planes.len()];
+        let policy = self.axes.policy();
+        let endpoints = tick_endpoints(planes, projection, size);
         let mut order: Vec<_> = (0..planes.len())
             .filter(|&index| {
                 matches!(
@@ -59,9 +77,10 @@ impl PlotLabelLayoutState {
         order.sort_by_key(|&index| {
             let plane = &planes[index];
             let priority = match plane.plane.layout {
-                PlotPlaneLayout::Tick(_) => 0,
-                PlotPlaneLayout::Title(_) => 1,
-                _ => 2,
+                PlotPlaneLayout::Tick(_) if endpoints.contains(&index) => 0,
+                PlotPlaneLayout::Tick(_) => 1,
+                PlotPlaneLayout::Title(_) => 2,
+                _ => 3,
             };
             (priority, plane.entity.world, plane.target, plane.plane.part)
         });
@@ -83,7 +102,7 @@ impl PlotLabelLayoutState {
             {
                 continue;
             }
-            let perimeter = axis_perimeter(plane, bounds, projection, size);
+            let perimeter = axis_perimeter(plane, bounds, projection, size, policy.label_clearance);
             if let Some((offset, _)) = perimeter
                 && let Some(model) = shifted_model(staged.model, offset, projection, size)
             {
@@ -114,7 +133,11 @@ impl PlotLabelLayoutState {
                     // titles within the same local reach instead of generic fit.
                     let normal = perimeter.map_or([0.0; 2], |(_, normal)| normal);
                     if matches!(plane.plane.layout, PlotPlaneLayout::Tick(_)) {
-                        place_tick(bounds, normal, size, &occupied, old)
+                        if !tick_fits(bounds, &occupied, policy.tick_clearance) {
+                            retained[index] = false;
+                            continue;
+                        }
+                        [0.0; 2]
                     } else {
                         place_constrained(
                             bounds,
@@ -181,17 +204,71 @@ impl PlotLabelLayoutState {
             }
         }
         arranged
+            .into_iter()
+            .zip(retained)
+            .filter_map(|(plane, retained)| retained.then_some(plane))
+            .collect()
     }
+}
+
+/// Prioritize the first and last visible station on each exact chart axis. Ink
+/// outside this view never participates, even when another chart is visible.
+fn tick_endpoints(
+    planes: &[ScenePlotPlane<'_>],
+    projection: [f32; 16],
+    size: [u32; 2],
+) -> std::collections::BTreeSet<usize> {
+    let mut axes: BTreeMap<(WorldRef, CanvasTarget, u8), Vec<usize>> = BTreeMap::new();
+    for (index, plane) in planes.iter().enumerate() {
+        let PlotPlaneLayout::Tick(axis) = plane.plane.layout else {
+            continue;
+        };
+        if !matches!(plane.plane.placement, PlotPlanePlacement::Axis { .. }) {
+            continue;
+        }
+        let Some(bounds) = plane
+            .plane
+            .bounds
+            .and_then(|bounds| project_bounds(plane.model, bounds, projection, size))
+        else {
+            continue;
+        };
+        if bounds[2] > 0.0
+            && bounds[3] > 0.0
+            && bounds[0] < size[0] as f32
+            && bounds[1] < size[1] as f32
+        {
+            axes.entry((plane.entity.world, plane.target, axis))
+                .or_default()
+                .push(index);
+        }
+    }
+    let mut endpoints = std::collections::BTreeSet::new();
+    for ((_, _, axis), mut indices) in axes {
+        indices.sort_by(|&a, &b| {
+            planes[a].plane.model[12 + usize::from(axis)]
+                .total_cmp(&planes[b].plane.model[12 + usize::from(axis)])
+                .then_with(|| planes[a].plane.part.cmp(&planes[b].plane.part))
+        });
+        if let Some(&first) = indices.first() {
+            endpoints.insert(first);
+        }
+        if let Some(&last) = indices.last() {
+            endpoints.insert(last);
+        }
+    }
+    endpoints
 }
 
 /// Put numeric stations in a parallel projected perimeter lane. Only text moves:
 /// the perimeter axis paint and its increasing data coordinates remain untouched. A
-/// support line over eight retained frame corners clears ordinary data depth.
+/// lane follows the actual animated edge rather than a stationary enclosure hull.
 fn axis_perimeter(
     plane: &ScenePlotPlane<'_>,
     bounds: [f32; 4],
     projection: [f32; 16],
     size: [u32; 2],
+    clearance: f32,
 ) -> Option<([f32; 2], [f32; 2])> {
     let PlotPlanePlacement::Axis {
         extent,
@@ -202,46 +279,34 @@ fn axis_perimeter(
     };
     let station = point(plane.model, [0.0; 2]);
     let origin = project(station, projection, size)?;
+    let start = std::array::from_fn(|row| {
+        station[row]
+            - plane.chart_model[usize::from(axis) * 4 + row]
+                * plane.plane.model[12 + usize::from(axis)]
+    });
+    let axis_origin = project(start, projection, size)?;
     let end = project(
         std::array::from_fn(|row| {
-            station[row]
-                + plane.chart_model[usize::from(axis) * 4 + row] * extent[usize::from(axis)]
+            start[row] + plane.chart_model[usize::from(axis) * 4 + row] * extent[usize::from(axis)]
         }),
         projection,
         size,
     )?;
-    let vector = [end[0] - origin[0], end[1] - origin[1]];
+    let vector = [end[0] - axis_origin[0], end[1] - axis_origin[1]];
     let length = vector[0].hypot(vector[1]);
     if length <= 0.5 {
         return None;
     }
     let normal = [vector[1] / length, -vector[0] / length];
-    let mut corners = [[0.0; 2]; 8];
-    for (index, corner) in corners.iter_mut().enumerate() {
-        *corner = project(
-            super::plot_view_placement::point(
-                plane.chart_model,
-                std::array::from_fn(|axis| {
-                    if index & (1 << axis) == 0 {
-                        0.0
-                    } else {
-                        extent[axis]
-                    }
-                }),
-            ),
-            projection,
-            size,
-        )?;
-    }
     let height = (bounds[3] - bounds[1]).max(f32::EPSILON);
     let padding = height
         * if matches!(plane.plane.layout, PlotPlaneLayout::Title(_)) {
             3.0
         } else {
-            0.9
+            clearance
         };
-    // One midpoint chooses the side for every tick and title on this axis;
-    // individual string width cannot split a lane or choose its opposite side.
+    // One midpoint chooses the outward side for every tick and title. During an
+    // edge transition, keep that lane beside the moving axis on its current face.
     let midpoint = project(
         std::array::from_fn(|row| {
             station[row]
@@ -251,21 +316,21 @@ fn axis_perimeter(
         projection,
         size,
     )?;
-    let (_, normal) = perimeter_station(
-        [midpoint[0], midpoint[1], midpoint[0], midpoint[1]],
-        &corners,
-        normal,
-        0.0,
-        height * 0.25,
-    );
-    let mut offset = if axis == 1 {
-        perimeter_offset(bounds, &corners, normal, padding)
+    let center = project(
+        super::plot_view_placement::point(plane.chart_model, extent.map(|value| value * 0.5)),
+        projection,
+        size,
+    )?;
+    let side = (midpoint[0] - center[0]) * normal[0] + (midpoint[1] - center[1]) * normal[1];
+    let normal = if side < -height * 0.25 {
+        normal.map(|value| -value)
     } else {
-        [0.0; 2]
+        normal
     };
-    if axis == 1 && matches!(plane.plane.layout, PlotPlaneLayout::Tick(1)) {
+    let mut offset = perimeter_offset(bounds, &[origin], normal, padding);
+    if matches!(plane.plane.layout, PlotPlaneLayout::Tick(_)) {
         // Text uses a top-origin font position. Center its prepared ink on the
-        // physical tick along +Y, independently of the perpendicular lane.
+        // physical tick, independently of the perpendicular lane.
         let centered = tick_center_offset(bounds, origin, [vector[0] / length, vector[1] / length]);
         offset = [offset[0] + centered[0], offset[1] + centered[1]];
     }
@@ -276,24 +341,6 @@ fn tick_center_offset(bounds: [f32; 4], station: [f32; 2], axis: [f32; 2]) -> [f
     let center = [(bounds[0] + bounds[2]) * 0.5, (bounds[1] + bounds[3]) * 0.5];
     let distance = (station[0] - center[0]) * axis[0] + (station[1] - center[1]) * axis[1];
     [axis[0] * distance, axis[1] * distance]
-}
-
-fn perimeter_station(
-    bounds: [f32; 4],
-    corners: &[[f32; 2]],
-    normal: [f32; 2],
-    padding: f32,
-    hysteresis: f32,
-) -> ([f32; 2], [f32; 2]) {
-    let positive = perimeter_offset(bounds, corners, normal, padding);
-    let opposite = [-normal[0], -normal[1]];
-    let negative = perimeter_offset(bounds, corners, opposite, padding);
-    // A deterministic tie band avoids numerical side flips at symmetric views.
-    if negative[0].hypot(negative[1]) + hysteresis < positive[0].hypot(positive[1]) {
-        (negative, opposite)
-    } else {
-        (positive, normal)
-    }
 }
 
 fn perimeter_offset(
@@ -424,46 +471,11 @@ fn place_radial(
     best
 }
 
-/// Numeric text may move across its axis lane, never along the axis. This
-/// preserves station association and increasing order even during collision fit.
-fn place_tick(
-    bounds: [f32; 4],
-    normal: [f32; 2],
-    size: [u32; 2],
-    occupied: &Occupancy,
-    previous: Option<[f32; 2]>,
-) -> [f32; 2] {
+/// Collision admission never changes an individual tick's lane or station.
+/// Ink-relative clearance remains useful when a chart occupies only a few pixels.
+fn tick_fits(bounds: [f32; 4], occupied: &Occupancy, clearance: f32) -> bool {
     let height = (bounds[3] - bounds[1]).max(f32::EPSILON);
-    let padding = height * 0.7;
-    let reach = height * 2.0;
-    let score = |distance: f32| {
-        let offset = [normal[0] * distance, normal[1] * distance];
-        let candidate = translated(bounds, offset);
-        let overflow = (padding - candidate[0]).max(0.0)
-            + (padding - candidate[1]).max(0.0)
-            + (candidate[2] - size[0] as f32 + padding).max(0.0)
-            + (candidate[3] - size[1] as f32 + padding).max(0.0);
-        (occupied.intersections(candidate, padding) + overflow * height) * 10000.0 + distance
-    };
-    let mut best = 0.0;
-    let mut best_score = score(best);
-    for ring in 1..=RINGS {
-        let distance = reach * ring as f32 / RINGS as f32;
-        let value = score(distance);
-        if value < best_score {
-            best = distance;
-            best_score = value;
-        }
-    }
-    // A close view's offset must shrink with its ink after zooming out in the
-    // same viewport. History can prefer a nearby lane, never exceed its reach.
-    if let Some(old) = previous {
-        let distance = (old[0] * normal[0] + old[1] * normal[1]).clamp(0.0, reach);
-        if score(distance) <= best_score + height * 0.25 {
-            best = distance;
-        }
-    }
-    [normal[0] * best, normal[1] * best]
+    occupied.intersections(bounds, height * clearance) == 0.0
 }
 
 fn panel_edge(anchor: [f32; 16], panel: [f32; 16], bounds: [f32; 4]) -> [f32; 2] {
@@ -739,7 +751,7 @@ fn point(model: [f32; 16], local: [f32; 2]) -> [f32; 3] {
     })
 }
 
-fn project(world: [f32; 3], projection: [f32; 16], size: [u32; 2]) -> Option<[f32; 2]> {
+pub(super) fn project(world: [f32; 3], projection: [f32; 16], size: [u32; 2]) -> Option<[f32; 2]> {
     let clip: [f32; 4] = std::array::from_fn(|row| {
         projection[row] * world[0]
             + projection[4 + row] * world[1]

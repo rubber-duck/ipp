@@ -5,6 +5,9 @@ import {
   assertChartImageChanged,
   assertChartImageStable,
   assertNoChartAnimation,
+  assertChartLegendState,
+  assertChartLegendPixels,
+  assertHeightBindingColors,
   chartCheck,
   chartTransform,
   chartSurfaceLocalPoint,
@@ -176,6 +179,7 @@ function assertSourceMode(
 /** Expected values follow the gallery's source columns, without animation or Plot output. */
 export function assertUndistortedChartSamples(state: StreamingChartsState) {
   assertNoChartAnimation(state);
+  assertHeightBindingColors(state);
   for (const chart of state.charts) {
     const source = state.data.sources.find(
       (item) => item.name === chart.source,
@@ -317,8 +321,8 @@ function streamingLinePointer(state: StreamingChartsState, aspect: number) {
         chartTransform(state, chart),
         chartSurfaceLocalPoint(
           state,
-          (x - width / 2) / chart.surface.unitsPerMetre,
-          (height / 2 - y) / chart.surface.unitsPerMetre,
+          x / chart.surface.unitsPerMetre - chart.surface.width / 2,
+          chart.surface.height / 2 - y / chart.surface.unitsPerMetre,
         ),
       ),
       aspect,
@@ -362,6 +366,34 @@ export function streamingPointPointer(
   };
 }
 
+/** A separate lifecycle case owns a fresh scene with real live sources. */
+export async function prepareStreamingChartLifecycle(
+  driver: StreamingChartsDriver,
+) {
+  const initial = await driver.inspect();
+  assertSourceMode(initial, "buffer");
+  assertUndistortedChartSamples(initial);
+  await driver.action("dataSource", "streaming");
+  await until(
+    driver,
+    (state) =>
+      state.data.mode === "streaming" &&
+      state.charts.every(
+        (chart) =>
+          chart.binding.availability.reason === "Ready" &&
+          chart.binding.rows.length > 0,
+      ),
+    "lifecycle-live-sources-ready",
+  );
+  const current = await pause(driver);
+  assertSourceMode(current, "streaming");
+  assertWindows(current);
+  assertUndistortedChartSamples(current);
+  assertChartLegendState(current);
+  await driver.record("stream-lifecycle-ready", current);
+  return { sourceNames: current.data.sources.map((source) => source.name) };
+}
+
 /** Fresh environment; client feed and visual animation are independent of the Host clock. */
 export async function exerciseStreamingCharts(
   driver: StreamingChartsDriver,
@@ -370,6 +402,23 @@ export async function exerciseStreamingCharts(
   const initial = await driver.inspect();
   assertSourceMode(initial, "buffer");
   assertUndistortedChartSamples(initial);
+  assertChartLegendState(initial);
+  const legendSnapshot = (state: GalleryChartsState) =>
+    JSON.stringify(
+      state.charts.map((chart) => [
+        chart.id,
+        chart.legend.world,
+        chart.legend.anchor,
+        chart.legend.entries,
+        chart.legend.scale,
+        chart.legend.inspection.entities.map((entity) => [
+          entity.id,
+          entity.metadata.symbolicId,
+        ]),
+      ]),
+      (_key, value) => (typeof value === "bigint" ? String(value) : value),
+    );
+  const originalLegends = legendSnapshot(initial);
   const original = {
     world: String(initial.worldReference.id),
     camera: String(initial.camera.entity),
@@ -391,6 +440,11 @@ export async function exerciseStreamingCharts(
   assertSourceMode(current, "streaming");
   assertWindows(current);
   assertUndistortedChartSamples(current);
+  assertChartLegendState(current);
+  chartCheck(
+    legendSnapshot(current) === originalLegends,
+    "Switching to live data retains the real legend Worlds, entities, categories and numeric range",
+  );
   const straight = current.charts.find((chart) => chart.id === "straight")!,
     smooth = current.charts.find((chart) => chart.id === "smooth")!;
   chartCheck(
@@ -447,6 +501,10 @@ export async function exerciseStreamingCharts(
   await focusChart(driver, "bars");
   const flatBefore = await driver.capture("stream-flat-before");
   assertChartImage(flatBefore, "live flat chart");
+  await driver.record(
+    "stream-flat-legend",
+    assertChartLegendPixels(flatBefore, await driver.inspect(), "bars"),
+  );
   await focusChart(driver, "point-plot");
   current = await driver.inspect();
   const spatialBefore = await driver.capture("stream-spatial-before");
@@ -498,6 +556,10 @@ export async function exerciseStreamingCharts(
   const flatAfter = await driver.capture("stream-flat-after");
   assertChartImageChanged(flatBefore, flatAfter, "live flat arrivals");
   const pausedStream = await pause(driver);
+  chartCheck(
+    legendSnapshot(pausedStream) === originalLegends,
+    "Live arrivals preserve legend colors and identities while source rows advance",
+  );
   const stationaryStream = await until(
     driver,
     (state) => state.world.time >= pausedStream.world.time + 0.4,
@@ -585,6 +647,11 @@ export async function exerciseStreamingCharts(
   current = await driver.inspect();
   assertSourceMode(current, "buffer");
   assertUndistortedChartSamples(current);
+  assertChartLegendState(current);
+  chartCheck(
+    legendSnapshot(current) === originalLegends,
+    "Returning to fixed data retains legend Worlds, labels, colors and endpoint range",
+  );
   chartCheck(
     !current.data.feed.playing && !current.data.feed.inFlight,
     "Buffer mode stops and drains the synthetic feed",

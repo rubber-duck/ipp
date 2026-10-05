@@ -1,4 +1,11 @@
 import { curvedSurfaceFromRadius, type DatasetValue } from "@ipp/client";
+import { plotColorScaleColor, type PlotLegendEntry } from "@ipp/react";
+import {
+  CHART_COLORS,
+  CHART_HEIGHT_SCALE,
+  chartCategoryColor,
+  chartLegendEntries,
+} from "./colors.js";
 
 export type ChartPoint = readonly [number, number, number];
 export interface ChartSpec {
@@ -22,6 +29,9 @@ export interface ChartSpec {
   readonly frame: Readonly<Record<string, number | boolean | string>>;
   readonly style: Readonly<Record<string, number | boolean>>;
   readonly secondSeries?: boolean;
+  readonly colorByRow?: boolean;
+  readonly legendEntries?: readonly PlotLegendEntry[];
+  readonly legendTitle: string;
 }
 
 export const CHART_SCHEMA = [
@@ -35,13 +45,6 @@ export const CHART_SCHEMA = [
   { name: "color", kind: "vec4" },
 ] as const;
 
-const CYAN = [0, 0.8, 1, 1] as const;
-const COLORS = [
-  CYAN,
-  [0.8, 0.85, 0.9, 1],
-  [1, 0.6, 0.1, 1],
-  [0.95, 0.2, 0.55, 1],
-];
 export function chartData(
   x: number,
   y: number,
@@ -50,7 +53,7 @@ export function chartData(
   valid = 1,
   radius = 1,
   height = 0.5,
-  color: readonly number[] = CYAN,
+  color: readonly number[] = CHART_COLORS[0],
 ): DatasetValue[] {
   const values: DatasetValue[] = [x, y, z, y2, valid, radius, height].map(
     (value) => ({ kind: "f32", value }),
@@ -69,7 +72,16 @@ const line = [
   sample(10, 85, 0, 75),
 ];
 const bars = [35, 75, 45, 25, 60, 85, 50, 30, 55, 70, 40, 20].map((value, i) =>
-  sample(i % 4, value, Math.floor(i / 4), 15 + ((i * 17) % 75)),
+  sample(
+    i % 4,
+    value,
+    Math.floor(i / 4),
+    15 + ((i * 17) % 75),
+    1,
+    1,
+    0.5,
+    chartCategoryColor(i),
+  ),
 );
 const pie = [40, 30, 20, 10].map((value, i) =>
   sample(
@@ -80,7 +92,7 @@ const pie = [40, 30, 20, 10].map((value, i) =>
     1,
     [3, 2.4, 2.1, 2.7][i]!,
     [2.4, 1.5, 0.9, 1.8][i]!,
-    COLORS[i],
+    chartCategoryColor(i),
   ),
 );
 const terrain: DatasetValue[][] = [];
@@ -88,15 +100,20 @@ for (let x = 0; x <= 16; x++)
   for (let z = 0; z <= 16; z++) {
     const px = (x * 10) / 16,
       pz = (z * 10) / 16;
+    const height =
+      0.3 +
+      2.5 * Math.exp(-((px - 3) ** 2 + (pz - 4) ** 2) / 5) +
+      2.8 * Math.exp(-((px - 7.5) ** 2 + (pz - 7.5) ** 2) / 4);
     terrain.push(
       sample(
         px,
-        0.3 +
-          2.5 * Math.exp(-((px - 3) ** 2 + (pz - 4) ** 2) / 5) +
-          2.8 * Math.exp(-((px - 7.5) ** 2 + (pz - 7.5) ** 2) / 4),
+        height,
         pz,
         0,
         x === 8 && z === 8 ? 0 : 1,
+        1,
+        0.5,
+        plotColorScaleColor(CHART_HEIGHT_SCALE, height),
       ),
     );
   }
@@ -144,9 +161,17 @@ export const CHART_RING = {
   radius: 28,
 } as const;
 
+export const CHART_CANVAS_EXTENT = [804, 360] as const;
+export const CHART_UNITS_PER_METRE = 60;
+export const CHART_LEGEND_WIDTH = 180;
+export const CHART_LEGEND_GAP = 24;
+
+export const CHART_DISPLAY_WIDTH =
+  (600 + CHART_LEGEND_GAP + CHART_LEGEND_WIDTH) / CHART_UNITS_PER_METRE;
+
 /** Canvas chart widths are arc lengths on the same cylinder as the exhibit arrangement. */
 export const CHART_SURFACE = curvedSurfaceFromRadius({
-  width: 10,
+  width: CHART_DISPLAY_WIDTH,
   height: 6,
   radius: CHART_RING.radius,
   facing: "inside",
@@ -177,6 +202,8 @@ const chartDefinitions: readonly Omit<
     rows: line,
     frame: flatFrame,
     style: { interpolation: 0, line_width: 2.5, marker_size: 7 },
+    legendTitle: "SIGNAL",
+    legendEntries: chartLegendEntries(["Group A"]),
   },
   {
     id: "smooth",
@@ -186,12 +213,16 @@ const chartDefinitions: readonly Omit<
     frame: flatFrame,
     style: { interpolation: 1, line_width: 2.5, marker_size: 6 },
     secondSeries: true,
+    legendTitle: "SIGNALS",
+    legendEntries: chartLegendEntries(["Group A", "Group B"]),
   },
   {
     id: "bars",
     title: "Bar chart",
     component: "PlotBars2d",
-    rows: [35, 65, 50, 80].map((y, i) => sample(i + 1, y)),
+    rows: [35, 65, 50, 80].map((y, i) =>
+      sample(i + 1, y, 0, y, 1, 1, 0.5, chartCategoryColor(i)),
+    ),
     frame: {
       ...flatFrame,
       max_x: 5,
@@ -199,14 +230,22 @@ const chartDefinitions: readonly Omit<
       y_title: "OUTPUT / UNITS",
     },
     style: { gap: 0.28 },
+    colorByRow: true,
+    legendTitle: "NODES",
+    legendEntries: chartLegendEntries(["Node 1", "Node 2", "Node 3", "Node 4"]),
   },
   {
     id: "bins",
     title: "Pre-binned input",
     component: "PlotBars2d",
-    rows: [20, 45, 65, 35].map((y, i) => sample(i + 1, y)),
+    rows: [20, 45, 65, 35].map((y, i) =>
+      sample(i + 1, y, 0, y, 1, 1, 0.5, chartCategoryColor(i)),
+    ),
     frame: { ...flatFrame, max_x: 5, x_title: "BIN", y_title: "COUNT" },
     style: { gap: 0.25 },
+    colorByRow: true,
+    legendTitle: "BINS",
+    legendEntries: chartLegendEntries(["Bin 1", "Bin 2", "Bin 3", "Bin 4"]),
   },
   {
     id: "pie",
@@ -215,6 +254,14 @@ const chartDefinitions: readonly Omit<
     rows: pie,
     frame: flatFrame,
     style: {},
+    colorByRow: true,
+    legendTitle: "RESOURCES",
+    legendEntries: chartLegendEntries([
+      "Compute",
+      "Storage",
+      "Network",
+      "Reserve",
+    ]),
   },
   {
     id: "grid-bars",
@@ -223,14 +270,32 @@ const chartDefinitions: readonly Omit<
     rows: bars,
     frame: spatialFrame,
     style: { bar_width: 1.3, bar_depth: 1.5 },
+    colorByRow: true,
+    legendTitle: "COLUMNS",
+    legendEntries: chartLegendEntries([
+      "Column 1",
+      "Column 2",
+      "Column 3",
+      "Column 4",
+    ]),
   },
   {
     id: "single-row",
     title: "Single row",
     component: "PlotGridBars3d",
-    rows: [30, 50, 35, 45].map((y, i) => sample(i, y)),
-    frame: spatialFrame,
+    rows: [30, 50, 35, 45].map((y, i) =>
+      sample(i, y, 0, y, 1, 1, 0.5, chartCategoryColor(i)),
+    ),
+    frame: { ...spatialFrame, depth: 2, min_z: -1, max_z: 1, z_title: "ROW" },
     style: { bar_width: 1.3, bar_depth: 1.5 },
+    colorByRow: true,
+    legendTitle: "COLUMNS",
+    legendEntries: chartLegendEntries([
+      "Column 1",
+      "Column 2",
+      "Column 3",
+      "Column 4",
+    ]),
   },
   {
     id: "height-surface",
@@ -247,6 +312,8 @@ const chartDefinitions: readonly Omit<
       y_title: "HEIGHT / M",
     },
     style: { wireframe: true, line_width: 0.018 },
+    colorByRow: true,
+    legendTitle: "HEIGHT / M",
   },
   {
     id: "point-plot",
@@ -256,6 +323,8 @@ const chartDefinitions: readonly Omit<
     frame: spatialFrame,
     style: { marker_size: 0.23, marker_shape: 1 },
     secondSeries: true,
+    legendTitle: "GROUPS",
+    legendEntries: chartLegendEntries(["Group A", "Group B"]),
   },
   {
     id: "variable-pie",
@@ -264,6 +333,14 @@ const chartDefinitions: readonly Omit<
     rows: pie,
     frame: spatialFrame,
     style: { start_angle: Math.PI / 2 },
+    colorByRow: true,
+    legendTitle: "RESOURCES",
+    legendEntries: chartLegendEntries([
+      "Compute",
+      "Storage",
+      "Network",
+      "Reserve",
+    ]),
   },
 ];
 
@@ -279,7 +356,7 @@ export const CHART_CATALOG: readonly ChartSpec[] = chartDefinitions.map(
     const localCenter: ChartPoint = spec.component.endsWith("2d")
       ? [0, 0, 0]
       : [
-          Number(spec.frame.width) / 2,
+          CHART_DISPLAY_WIDTH / 2,
           spec.component === "PlotPie3d" ? 1.5 : Number(spec.frame.height) / 2,
           Number(spec.frame.depth) / 2,
         ];

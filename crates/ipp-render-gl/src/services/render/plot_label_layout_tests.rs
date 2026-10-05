@@ -22,23 +22,6 @@ const IDENTITY: [f32; 16] = [
 ];
 
 #[test]
-fn coincident_endpoint_ticks_get_disjoint_local_lanes() {
-    let bounds = [350.0, 270.0, 382.0, 283.0];
-    let x = place(bounds, PlotPlaneLayout::Tick(0), [732, 348], &[], None);
-    let occupied = translated(bounds, x);
-    let z = place(
-        bounds,
-        PlotPlaneLayout::Tick(2),
-        [732, 348],
-        &[occupied],
-        None,
-    );
-    assert_eq!(x, [0.0; 2]);
-    assert_eq!(overlap(occupied, translated(bounds, z), PADDING), 0.0);
-    assert!(z[0].hypot(z[1]) < 70.0);
-}
-
-#[test]
 fn titles_are_outside_ticks_and_each_other_without_shrinking() {
     let tick = [300.0, 200.0, 336.0, 213.0];
     let title = [310.0, 209.0, 445.0, 222.0];
@@ -415,32 +398,6 @@ fn radial_connector_attaches_to_inward_panel_edge_without_changing_anchor() {
 }
 
 #[test]
-fn perimeter_lane_clears_frame_support_without_changing_axis_order() {
-    let corners = [
-        [100.0, 100.0],
-        [400.0, 100.0],
-        [400.0, 300.0],
-        [100.0, 300.0],
-    ];
-    let bounds = [200.0, 180.0, 230.0, 190.0];
-    let (offset, normal) = perimeter_station(bounds, &corners, [0.0, -1.0], 10.0, 2.5);
-    let moved = translated(bounds, offset);
-    assert_eq!(normal, [0.0, -1.0]);
-    assert_eq!(moved[0], bounds[0]);
-    assert_eq!(moved[3], 90.0);
-    let occupied = Occupancy::default();
-    let extra = place_constrained(
-        moved,
-        PlotPlaneLayout::Tick(0),
-        [960, 760],
-        &occupied,
-        Some([0.0, 80.0]),
-        Some(normal),
-    );
-    assert!(extra[0] * normal[0] + extra[1] * normal[1] >= 0.0);
-}
-
-#[test]
 fn repeated_collision_scores_reuse_indices_and_preserve_sum_order() {
     let mut occupied = Occupancy::default();
     let rectangles: Vec<_> = (0..80)
@@ -491,68 +448,19 @@ fn prepared_numeric_ink_centers_on_its_vertical_tick_without_changing_lane() {
 }
 
 #[test]
-fn small_axis_ink_does_not_acquire_fixed_pixel_collision_lanes() {
+fn small_disjoint_tick_ink_is_admitted_without_fixed_pixel_padding() {
     let mut occupied = Occupancy::default();
     for index in 0..5 {
-        // Five readable stations on a projected 20px axis. Their .6px ink is
-        // disjoint; fixed 4px padding formerly pushed alternate ticks by 5px.
         let x = 100.0 + index as f32 * 5.0;
         let bounds = [x, 100.0, x + 2.0, 100.6];
-        let offset = place_tick(bounds, [0.0, 1.0], [720, 480], &occupied, None);
-        assert_eq!(offset, [0.0; 2]);
+        assert!(tick_fits(bounds, &occupied, 0.7));
         occupied.insert(bounds);
     }
-    let bounds = [100.0, 100.0, 102.0, 100.6];
-    let title = place_constrained(
-        bounds,
-        PlotPlaneLayout::Title(0),
-        [720, 480],
-        &occupied,
-        None,
-        Some([0.0, 1.0]),
-    );
-    assert!(title[0].hypot(title[1]) <= 2.4 + 0.0001);
+    assert!(!tick_fits([100.0, 100.0, 102.0, 100.6], &occupied, 0.7));
 }
 
 #[test]
-fn crowded_axis_labels_stay_local_and_reject_distant_history() {
-    let mut occupied = Occupancy::default();
-    occupied.insert([95.0, 95.0, 130.0, 155.0]);
-    let bounds = [100.0, 100.0, 102.0, 100.6];
-    let height = bounds[3] - bounds[1];
-    for normal in [[0.0, 1.0], [0.6, 0.8]] {
-        for previous in [None, Some([0.0, 61.0]), Some([100.0, -200.0])] {
-            let tick = place_tick(bounds, normal, [720, 480], &occupied, previous);
-            assert!(tick[0].hypot(tick[1]) <= height * 2.0 + 0.0001);
-            assert!((tick[0] * normal[1] - tick[1] * normal[0]).abs() < 0.0001);
-            assert!(tick[0] * normal[0] + tick[1] * normal[1] >= 0.0);
-            let title = place_constrained(
-                bounds,
-                PlotPlaneLayout::Title(1),
-                [720, 480],
-                &occupied,
-                previous,
-                Some(normal),
-            );
-            assert!(title[0].hypot(title[1]) <= height * 4.0 + 0.0001);
-            assert!(title[0] * normal[0] + title[1] * normal[1] >= -0.0001);
-        }
-    }
-    // Fixed 6px hysteresis formerly preserved 5.5px even without obstacles.
-    assert_eq!(
-        place_tick(
-            bounds,
-            [0.0, 1.0],
-            [720, 480],
-            &Occupancy::default(),
-            Some([0.0, 5.5]),
-        ),
-        [0.0; 2]
-    );
-}
-
-#[test]
-fn axis_history_shrinks_on_zoom_out_in_the_same_viewport() {
+fn crowded_ticks_are_omitted_in_one_lane_and_return_without_stale_history() {
     let mut host = ipp_core::HostRuntime::new();
     let id = host.create_world(Default::default(), &[]).unwrap();
     host.frame(0.0).unwrap();
@@ -565,159 +473,182 @@ fn axis_history_shrinks_on_zoom_out_in_the_same_viewport() {
         incarnation: 1,
     };
     let source = Arc::new(PlotPreparedGeometry::default());
-    let mut model = IDENTITY;
-    model[5] = -1.0;
-    let retained: Vec<_> = (0..3)
-        .map(|part| ipp_core::systems::plot::PlotPublishedPlane {
-            part,
-            model,
-            facing: ipp_core::systems::plot::PlotPlaneFacing::Camera,
-            layout: if part < 2 {
-                PlotPlaneLayout::Tick(1)
-            } else {
-                PlotPlaneLayout::Title(1)
-            },
-            placement: PlotPlanePlacement::Axis {
-                extent: [0.1, 0.1, 0.1],
-                axis: 1,
-            },
-            bounds: Some([0.0, 0.0, 0.025, 0.02]),
-            clip: [-1.0, -1.0, 1.0, 1.0],
-            primitives: Arc::from([]),
-        })
-        .collect();
-    let planes: Vec<_> = retained
-        .iter()
-        .map(|plane| ScenePlotPlane {
-            entity: super::super::scene::RenderEntity {
-                world,
-                entity,
-                incarnation: 1,
-            },
-            target,
-            publication,
-            model,
-            chart_model: IDENTITY,
-            geometry: &source,
-            plane,
-        })
-        .collect();
     let viewport = WorldViewport {
         width: 720,
         height: 480,
         device_pixel_ratio: 1.0,
     };
-    let mut state = PlotLabelLayoutState::default();
-    let mut near_offset = 0.0;
-    for scale in [1.0, 0.125, 1.0] {
-        let mut projection = IDENTITY;
-        projection[0] = scale;
-        projection[5] = scale;
-        let arranged = state.arrange(&planes, projection, viewport);
-        assert_eq!(arranged.len(), planes.len());
-        assert_eq!(state.viewport, [720, 480]);
-        assert_eq!(state.previous.len(), 3);
-        for (original, arranged) in planes.iter().zip(&arranged) {
-            let bounds = project_bounds(
-                model,
-                original.plane.bounds.unwrap(),
-                projection,
-                state.viewport,
-            )
-            .unwrap();
-            let height = bounds[3] - bounds[1];
-            let (perimeter, normal) =
-                axis_perimeter(original, bounds, projection, state.viewport).unwrap();
-            let origin = project(point(model, [0.0; 2]), projection, state.viewport).unwrap();
-            let moved =
-                project(point(arranged.model, [0.0; 2]), projection, state.viewport).unwrap();
-            let collision = [
-                moved[0] - origin[0] - perimeter[0],
-                moved[1] - origin[1] - perimeter[1],
-            ];
-            let limit = if original.plane.part < 2 {
-                2.0
-            } else {
-                4.0
-            };
-            assert!(collision[0].hypot(collision[1]) <= height * limit + 0.0001);
-            if original.plane.part < 2 {
-                assert!((collision[0] * normal[1] - collision[1] * normal[0]).abs() < 0.0001);
-            }
-            assert_eq!(&arranged.model[..12], &model[..12]);
-            assert_eq!(arranged.model[14], model[14]);
-            if original.plane.part == 1 {
-                let distance = state.previous[&(world, target, 1)].offset[0].abs();
-                if scale == 1.0 {
-                    assert!(distance > 0.0);
-                    near_offset = distance;
-                } else {
-                    assert!(distance < near_offset * 0.2);
+    for projected_axis in [[0.7, 0.0], [0.35, -0.08], [0.0, 0.0]] {
+        let mut chart = IDENTITY;
+        chart[0] = projected_axis[0];
+        chart[1] = projected_axis[1];
+        let retained: Vec<_> = (0..=10)
+            .map(|part| {
+                let mut model = IDENTITY;
+                model[5] = -1.0;
+                model[12] = part as f32 * 0.06;
+                ipp_core::systems::plot::PlotPublishedPlane {
+                    part,
+                    model,
+                    facing: ipp_core::systems::plot::PlotPlaneFacing::Camera,
+                    layout: PlotPlaneLayout::Tick(0),
+                    placement: PlotPlanePlacement::Axis {
+                        extent: [0.6, 0.1, 0.1],
+                        axis: 0,
+                    },
+                    bounds: Some([-0.04, 0.01, 0.04, 0.04]),
+                    clip: [-1.0, -1.0, 1.0, 1.0],
+                    primitives: Arc::from([]),
                 }
-            }
-        }
-    }
-    assert_eq!(Arc::strong_count(&source), 1);
-    assert_eq!(retained[0].model, model);
-
-    for depth in [0.1, 10.0] {
-        // The Z axis projects to a point; the Y axis of a deeper enclosure has
-        // clipped frame corners. Neither fallback may widen the fitting range.
-        let axis = if depth < 1.0 {
-            2
-        } else {
-            1
+            })
+            .collect();
+        let planes: Vec<_> = retained
+            .iter()
+            .map(|plane| {
+                let mut model = plane.model;
+                model[12] *= chart[0];
+                model[13] = plane.model[12] * chart[1];
+                ScenePlotPlane {
+                    entity: super::super::scene::RenderEntity {
+                        world,
+                        entity,
+                        incarnation: 1,
+                    },
+                    target,
+                    publication,
+                    model,
+                    chart_model: chart,
+                    geometry: &source,
+                    plane,
+                }
+            })
+            .collect();
+        let mut state = PlotLabelLayoutState::default();
+        let parts = |arranged: &[ScenePlotPlane<'_>]| {
+            arranged
+                .iter()
+                .map(|plane| plane.plane.part)
+                .collect::<Vec<_>>()
         };
-        let collapsed: Vec<_> = retained
-            .iter()
-            .map(|plane| ipp_core::systems::plot::PlotPublishedPlane {
-                layout: if plane.part < 2 {
-                    PlotPlaneLayout::Tick(axis)
-                } else {
-                    PlotPlaneLayout::Title(axis)
-                },
-                placement: PlotPlanePlacement::Axis {
-                    extent: [0.1, 0.1, depth],
-                    axis,
-                },
-                ..plane.clone()
-            })
-            .collect();
-        let collapsed_planes: Vec<_> = planes
-            .iter()
-            .zip(&collapsed)
-            .map(|(original, plane)| ScenePlotPlane {
-                plane,
-                ..original.clone()
-            })
-            .collect();
-        // Reuse this exact view and inject a previously valid distant lane.
-        for old in state.previous.values_mut() {
-            old.offset = [61.0, 61.0];
+        let dense = state.arrange(&planes, IDENTITY, viewport);
+        assert!(dense.len() < planes.len());
+        assert_eq!(dense[0].plane.part, 0);
+        if projected_axis != [0.0, 0.0] {
+            assert_eq!(dense.last().unwrap().plane.part, 10);
+        } else {
+            assert_eq!(dense.len(), 1);
         }
-        let mut projection = IDENTITY;
-        projection[0] = 0.125;
-        projection[5] = 0.125;
-        let arranged = state.arrange(&collapsed_planes, projection, viewport);
-        for (original, arranged) in collapsed_planes.iter().zip(&arranged) {
+        assert!(parts(&dense).windows(2).all(|pair| pair[0] < pair[1]));
+        let mut occupied = Occupancy::default();
+        for plane in &dense {
+            let original = &planes[plane.plane.part as usize];
             let bounds = project_bounds(
-                model,
-                original.plane.bounds.unwrap(),
-                projection,
-                state.viewport,
+                original.model,
+                plane.plane.bounds.unwrap(),
+                IDENTITY,
+                [720, 480],
             )
             .unwrap();
-            assert!(axis_perimeter(original, bounds, projection, state.viewport).is_none());
-            let old = project(point(model, [0.0; 2]), projection, state.viewport).unwrap();
-            let new = project(point(arranged.model, [0.0; 2]), projection, state.viewport).unwrap();
-            if original.plane.part < 2 {
-                assert_eq!(old, new);
-            } else {
-                assert!(
-                    (new[0] - old[0]).hypot(new[1] - old[1])
-                        <= (bounds[3] - bounds[1]) * 4.0 + 0.0001
-                );
-            }
+            let expected = axis_perimeter(original, bounds, IDENTITY, [720, 480], 0.9)
+                .map_or(original.model, |(offset, _)| {
+                    shifted_model(original.model, offset, IDENTITY, [720, 480]).unwrap()
+                });
+            assert_eq!(
+                plane.model, expected,
+                "tick acquired a separate collision lane"
+            );
+            let moved = project_bounds(
+                plane.model,
+                plane.plane.bounds.unwrap(),
+                IDENTITY,
+                [720, 480],
+            )
+            .unwrap();
+            assert!(tick_fits(moved, &occupied, 0.7));
+            occupied.insert(moved);
+            assert_eq!(&plane.model[..12], &original.model[..12]);
+            assert_eq!(plane.model[14], original.model[14]);
         }
+        let baseline = parts(&dense);
+        assert_eq!(parts(&state.arrange(&planes, IDENTITY, viewport)), baseline);
+        for old in state.previous.values_mut() {
+            old.offset = [100.0, -200.0];
+        }
+        assert_eq!(parts(&state.arrange(&planes, IDENTITY, viewport)), baseline);
+        let mut unfolded = planes.clone();
+        for plane in &mut unfolded {
+            plane.chart_model[0] = 1.0;
+            plane.chart_model[1] = 0.0;
+            plane.model[12] = plane.plane.model[12];
+            plane.model[13] = 0.0;
+        }
+        let opened = state.arrange(&unfolded, IDENTITY, viewport);
+        if projected_axis != [0.0, 0.0] {
+            assert!(
+                opened.len() > dense.len(),
+                "additional room did not restore ticks"
+            );
+        }
+        assert_eq!(parts(&state.arrange(&planes, IDENTITY, viewport)), baseline);
+        assert_eq!(retained[0].model[12], 0.0);
+        assert_eq!(Arc::strong_count(&source), 1);
+    }
+}
+
+#[test]
+fn moving_face_lane_stays_beside_its_axis_instead_of_the_enclosure_hull() {
+    let mut host = ipp_core::HostRuntime::new();
+    let id = host.create_world(Default::default(), &[]).unwrap();
+    host.frame(0.0).unwrap();
+    let world = host.world_ref(id).unwrap();
+    let entity = ipp_core::EntityId::from_bits((1 << 32) | 1);
+    let source = Arc::new(PlotPreparedGeometry::default());
+    let mut model = IDENTITY;
+    model[5] = -1.0;
+    let retained = ipp_core::systems::plot::PlotPublishedPlane {
+        part: 0,
+        model,
+        facing: ipp_core::systems::plot::PlotPlaneFacing::Camera,
+        layout: PlotPlaneLayout::Tick(1),
+        placement: PlotPlanePlacement::Axis {
+            extent: [0.8, 0.8, 0.5],
+            axis: 1,
+        },
+        bounds: Some([-0.015, 0.01, 0.015, 0.03]),
+        clip: [-1.0, -1.0, 1.0, 1.0],
+        primitives: Arc::from([]),
+    };
+    let plane = ScenePlotPlane {
+        entity: super::super::scene::RenderEntity {
+            world,
+            entity,
+            incarnation: 1,
+        },
+        target: CanvasTarget {
+            entity,
+            component: ipp_core::ComponentValue::PLOT_POINTS3D,
+            incarnation: 1,
+        },
+        publication: host.latest_publication(id).unwrap(),
+        model,
+        chart_model: IDENTITY,
+        geometry: &source,
+        plane: &retained,
+    };
+    for x in [0.0, 0.2, 0.4, 0.6, 0.8] {
+        let mut current = plane.clone();
+        current.model[12] = x;
+        let bounds = project_bounds(
+            current.model,
+            retained.bounds.unwrap(),
+            IDENTITY,
+            [720, 480],
+        )
+        .unwrap();
+        let (offset, _) = axis_perimeter(&current, bounds, IDENTITY, [720, 480], 0.9).unwrap();
+        assert!(
+            offset[0].hypot(offset[1]) < 20.0,
+            "moving tick was pulled to the outer hull"
+        );
     }
 }

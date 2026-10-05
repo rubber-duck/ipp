@@ -2762,12 +2762,15 @@
       "crates/ipp-render-gl/src/services/render/plot_view_placement_tests.rs",
       "tests/integration/plot-2d-scene.ts",
       "tests/integration/plot-3d-scene.ts",
+      "tests/integration/plot-capture.ts",
       "tests/integration/scenarios/plots-2d.ts",
       "tests/integration/scenarios/plots-3d.ts",
       "tests/integration/scenarios/react-plots.ts",
       "tests/integration/scenarios/plot-view-placement.ts",
       "tests/integration/scenarios/plot-axis-support.ts",
+      "tests/integration/scenarios/plot-axis-motion.ts",
       "packages/ipp-react/src/plots.ts",
+      "packages/ipp-react/src/plot-legend.tsx",
       "packages/ipp-react/tests/plots.test.ts",
       "examples/chart-showcase/",
       "tests/integration/plots-runtime.test.ts",
@@ -2953,7 +2956,7 @@
         "command": [
           "@node",
           "--test",
-          "--test-name-pattern=^axis Plot through native WebSocket/GLES",
+          "--test-name-pattern=^axis(?:-motion)? Plot through native WebSocket/GLES",
           "target/plots/plots-runtime.test.js"
         ],
         "builds": [
@@ -2976,7 +2979,7 @@
         "command": [
           "@node",
           "--test",
-          "--test-name-pattern=^axis Plot through worker WASM/WebGL",
+          "--test-name-pattern=^axis(?:-motion)? Plot through worker WASM/WebGL",
           "target/plots/plots-runtime.test.js"
         ],
         "builds": [
@@ -3015,7 +3018,7 @@
         "command": [
           "@node",
           "--test",
-          "--test-name-pattern=^native (unified charts|gallery streams bounded data windows)",
+          "--test-name-pattern=^native (unified charts|gallery (streams bounded data windows|reloads streaming charts))",
           "dist/tests/render/native-gallery.test.js"
         ],
         "builds": [

@@ -355,11 +355,11 @@ impl<D: RenderDevice> RenderService<D> {
             }
             match self.paint_camera_child(
                 host,
-                selection,
-                job.publication,
+                (selection, job.publication),
                 camera_viewport,
                 job.projection_extent,
                 work,
+                presentation_time,
             ) {
                 Ok(completed) => {
                     work = completed;
@@ -407,12 +407,13 @@ impl<D: RenderDevice> RenderService<D> {
     fn paint_camera_child(
         &mut self,
         host: &HostRuntime,
-        selection: OutputRef,
-        publication: WorldPublicationId,
+        output: (OutputRef, WorldPublicationId),
         viewport: WorldViewport,
         projection_extent: [f64; 2],
         work: RenderFrameWork,
+        presentation_time: f64,
     ) -> Result<RenderFrameWork, RenderError> {
+        let (selection, publication) = output;
         let scene = RenderScene::new(host, selection, publication)?;
         let (width, height) = (viewport.width, viewport.height);
         let camera = Some(
@@ -448,7 +449,7 @@ impl<D: RenderDevice> RenderService<D> {
         let result = match begun {
             Ok(()) => {
                 self.debug.retain(&scene.debug);
-                let result = self.draw_items(&scene, &scene.items, camera, work, viewport);
+                let result = self.draw_items(&scene, camera, work, viewport, presentation_time);
                 let finished = self.device.borrow_mut().end_surface_cache_target();
                 result.and_then(|work| finished.map(|()| work))
             }

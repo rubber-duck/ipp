@@ -45,6 +45,7 @@ export interface GalleryChartsState {
   };
   charts: readonly {
     id: string;
+    title: string;
     component: string;
     entity: bigint;
     world: WorldReference;
@@ -66,6 +67,28 @@ export interface GalleryChartsState {
       extent: readonly number[];
     };
     frame: Record<string, number>;
+    focusBounds: { min: readonly number[]; max: readonly number[] };
+    legend: {
+      id: string;
+      world: WorldReference;
+      session: bigint;
+      anchor: bigint;
+      surface: "CylinderSurface" | "FlatSurface";
+      extent: readonly number[];
+      unitsPerMetre: number;
+      bounds: readonly number[];
+      center: readonly number[];
+      inspection: Inspection;
+      title: string;
+      entries:
+        | null
+        | readonly { id: string; label: string; color: readonly number[] }[];
+      scale: null | {
+        min: number;
+        max: number;
+        colors: readonly (readonly number[])[];
+      };
+    };
     binding: DataBindingPage;
   }[];
   hover: ChartRow | null;
@@ -109,6 +132,524 @@ export interface GalleryChartsDriver {
 
 export function chartCheck(value: unknown, message: string): asserts value {
   if (!value) throw new Error(message);
+}
+
+const categoryColors = [
+  [0.03, 0.35, 0.88, 1],
+  [1, 0.36, 0.04, 1],
+  [0.08, 0.68, 0.23, 1],
+  [0.7, 0.1, 0.5, 1],
+] as const;
+
+/** Independent linear interpolation of the fixture's 0/2/4 metre scale stops. */
+export function expectedHeightColor(height: number) {
+  const stops = [
+    [0.02, 0.06, 0.25, 1],
+    [0.03, 0.48, 0.4, 1],
+    [0.96, 0.68, 0.12, 1],
+  ];
+  const value = Math.max(0, Math.min(4, height)),
+    start = value <= 2 ? 0 : 1,
+    t = (value - start * 2) / 2;
+  return stops[start]!.map(
+    (channel, index) => channel + (stops[start + 1]![index]! - channel) * t,
+  );
+}
+
+function srgbColor(color: readonly number[]) {
+  return color
+    .slice(0, 3)
+    .map((value) =>
+      Math.round(
+        255 *
+          (value <= 0.0031308
+            ? 12.92 * value
+            : 1.055 * value ** (1 / 2.4) - 0.055),
+      ),
+    );
+}
+
+function probeChartColor(
+  frame: ChartImage,
+  point: { x: number; y: number },
+  color: readonly number[],
+  label: string,
+) {
+  const x = Math.round(point.x * frame.width),
+    y = Math.round(point.y * frame.height),
+    expected = srgbColor(color);
+  chartCheck(
+    x > 2 && x < frame.width - 3 && y > 2 && y < frame.height - 3,
+    `${label}: independently projected color probe is visible in the focused viewport`,
+  );
+  const samples: number[][] = [];
+  for (let py = y - 1; py <= y + 1; py++)
+    for (let px = x - 1; px <= x + 1; px++)
+      samples.push([
+        ...frame.pixels.slice(
+          (py * frame.width + px) * 4,
+          (py * frame.width + px) * 4 + 3,
+        ),
+      ]);
+  chartCheck(
+    samples.some((rgb) =>
+      rgb.every((value, channel) => Math.abs(value - expected[channel]!) < 20),
+    ),
+    `${label}: completed pixels match linear color ${color} (expected ${expected}, actual ${JSON.stringify(samples)})`,
+  );
+  return { point, expected, samples };
+}
+
+function legendFields(
+  chart: GalleryChartsState["charts"][number],
+  id: string,
+  field: string,
+) {
+  const value = chart.legend.inspection.entities
+    .find((entity) => entity.metadata.symbolicId === id)
+    ?.components.find((component) => field in component.fields)?.fields;
+  chartCheck(
+    value,
+    `${chart.id}: actual legend ${id}/${field} is acknowledged`,
+  );
+  return value;
+}
+
+function legendPoint(
+  state: GalleryChartsState,
+  chart: GalleryChartsState["charts"][number],
+  x: number,
+  y: number,
+  aspect: number,
+) {
+  const legend = chart.legend;
+  if (chart.surface)
+    return projectChartPoint(
+      state,
+      placePoint(
+        chartTransform(state, chart),
+        chartSurfaceLocalPoint(
+          state,
+          x / legend.unitsPerMetre - chart.surface.width / 2,
+          chart.surface.height / 2 - y / legend.unitsPerMetre,
+        ),
+      ),
+      aspect,
+    );
+  const anchor = state.world.entities
+    .find((entity) => entity.id === legend.anchor)
+    ?.components.find((component) => "qx" in component.fields)?.fields;
+  chartCheck(
+    anchor,
+    `${chart.id}: spatial legend has an actual local Transform`,
+  );
+  return projectChartPoint(
+    state,
+    placePoint(
+      chartTransform(state, chart),
+      placePoint(anchor, [
+        (x - legend.extent[0]! / 2) / legend.unitsPerMetre,
+        (legend.extent[1]! / 2 - y) / legend.unitsPerMetre,
+        0,
+      ]),
+    ),
+    aspect,
+  );
+}
+
+function assertNumericLegendPixels(
+  frame: ChartImage,
+  state: GalleryChartsState,
+  chart: GalleryChartsState["charts"][number],
+) {
+  const legend = chart.legend,
+    root = legendFields(chart, legend.id, "scale_x"),
+    first = legendFields(chart, `${legend.id}/scale/0`, "scale_x"),
+    last = legendFields(chart, `${legend.id}/scale/31`, "scale_x"),
+    firstBox = legendFields(chart, `${legend.id}/scale/0`, "width"),
+    lastBox = legendFields(chart, `${legend.id}/scale/31`, "width"),
+    left = Number(root.x) + Number(first.x),
+    width = Number(firstBox.width),
+    top = Number(root.y) + Number(first.y),
+    bottom = Number(root.y) + Number(last.y) + Number(lastBox.height),
+    aspect = frame.width / frame.height;
+  const project = (x: number, fraction: number) => {
+    const point = legendPoint(
+      state,
+      chart,
+      x,
+      top + (bottom - top) * fraction,
+      aspect,
+    );
+    return { x: point.x * frame.width, y: point.y * frame.height };
+  };
+  const center = (fraction: number) => project(left + width / 2, fraction),
+    firstPoint = center(0),
+    lastPoint = center(1);
+  chartCheck(
+    lastPoint.y - firstPoint.y >= 8,
+    `${chart.id}: focused numeric ramp spans enough pixels to distinguish its gradient`,
+  );
+  // Invert the independently projected centerline. Pixel centers and their
+  // footprints remain meaningful when the 32 authored bands are subpixel.
+  const fractionAtY = (pixelY: number) => {
+    let low = 0,
+      high = 1;
+    for (let step = 0; step < 20; step++) {
+      const middle = (low + high) / 2;
+      if (center(middle).y < pixelY) low = middle;
+      else high = middle;
+    }
+    return (low + high) / 2;
+  };
+  const samples: {
+    x: number;
+    y: number;
+    fraction: number;
+    rgb: number[];
+    ranges: number[][];
+    expected: number[];
+  }[] = [];
+  for (
+    let y = Math.ceil(firstPoint.y + 0.5);
+    y <= Math.floor(lastPoint.y - 1.5);
+    y++
+  ) {
+    const fraction = fractionAtY(y + 0.5),
+      point = center(fraction),
+      x = Math.floor(point.x),
+      leftPoint = project(left, fraction),
+      rightPoint = project(left + width, fraction);
+    chartCheck(
+      x > 0 &&
+        x < frame.width - 1 &&
+        y > 0 &&
+        y < frame.height - 1 &&
+        x + 0.5 - leftPoint.x >= 0.75 &&
+        rightPoint.x - x - 0.5 >= 0.75,
+      `${chart.id}: gradient pixel lies inside the ramp rather than on an antialiased outer edge`,
+    );
+    const rgb = [
+        ...frame.pixels.slice(
+          (y * frame.width + x) * 4,
+          (y * frame.width + x) * 4 + 3,
+        ),
+      ],
+      low = Math.max(0, fractionAtY(y) - 1 / 31),
+      high = Math.min(1, fractionAtY(y + 1) + 1 / 31),
+      // Include the middle palette stop if the pixel footprint crosses it.
+      colors = [low, high, ...(low < 0.5 && high > 0.5 ? [0.5] : [])].map(
+        (value) => srgbColor(expectedHeightColor(4 * (1 - value))),
+      ),
+      ranges = [0, 1, 2].map((channel) => [
+        Math.min(...colors.map((color) => color[channel]!)),
+        Math.max(...colors.map((color) => color[channel]!)),
+      ]),
+      expected = srgbColor(expectedHeightColor(4 * (1 - fraction)));
+    chartCheck(
+      rgb.every(
+        (value, channel) =>
+          value >= ranges[channel]![0]! - 6 &&
+          value <= ranges[channel]![1]! + 6,
+      ),
+      `${chart.id}: interior gradient pixel matches independently filtered palette coverage (pixel ${x},${y}, RGB ${rgb}, ranges ${JSON.stringify(ranges)})`,
+    );
+    samples.push({ x, y, fraction, rgb, ranges, expected });
+  }
+  chartCheck(
+    samples.length >= 6 &&
+      samples[0]!.fraction < 0.3 &&
+      samples.at(-1)!.fraction > 0.7,
+    `${chart.id}: gradient samples cover distinct high, middle and low scale colors`,
+  );
+  const greenError =
+    samples.reduce(
+      (total, sample) => total + sample.rgb[1]! - sample.expected[1]!,
+      0,
+    ) / samples.length;
+  chartCheck(
+    Math.abs(greenError) <= 6,
+    `${chart.id}: opaque ramp preserves average palette brightness through minification (green error ${greenError})`,
+  );
+  chartCheck(
+    samples.every(
+      (sample, index) =>
+        index === 0 || sample.rgb[1]! <= samples[index - 1]!.rgb[1]! + 3,
+    ) &&
+      samples[0]!.rgb[1]! > samples.at(-1)!.rgb[1]! + 40 &&
+      samples[0]!.rgb[0]! > samples.at(-1)!.rgb[0]! + 80,
+    `${chart.id}: visible gradient preserves high-to-low numeric color order`,
+  );
+  return { firstPoint, lastPoint, samples, greenError };
+}
+
+export function assertChartLegendState(state: GalleryChartsState) {
+  for (const chart of state.charts) {
+    const legend = chart.legend,
+      style = legendFields(chart, legend.id, "scale_x"),
+      height = Number(style.clip_max_y),
+      width = Number(style.clip_max_x);
+    chartCheck(
+      width === 180 && height > 16 && legend.unitsPerMetre === 60,
+      `${chart.id}: legend has explicit readable Canvas dimensions`,
+    );
+    if (chart.surface) {
+      chartCheck(
+        legend.world.id === chart.world.id &&
+          legend.anchor === chart.anchor &&
+          style.x === 624 &&
+          style.y === (360 - height) / 2 &&
+          legend.surface === "CylinderSurface",
+        `${chart.id}: legend stays outside the right edge and centered on the existing curved Canvas`,
+      );
+    } else {
+      const anchor = state.world.entities.find(
+          (entity) => entity.id === legend.anchor,
+        ),
+        transform = anchor?.components.find(
+          (component) => "qx" in component.fields,
+        )?.fields,
+        surface = anchor?.components.find(
+          (component) => component.component === 25,
+        )?.fields;
+      chartCheck(
+        anchor?.link.parent === chart.entity &&
+          transform &&
+          surface &&
+          Math.abs(Number(transform.x) - 11.9) < 0.00001 &&
+          Number(transform.y) === Number(chart.frame.height) / 2 &&
+          Number(transform.z) === Number(chart.frame.depth) &&
+          legend.center[2] === Number(chart.frame.depth) &&
+          Number(transform.qw) === 1 &&
+          [transform.qx, transform.qy, transform.qz].every(
+            (value) => Number(value) === 0,
+          ) &&
+          Number(surface.width) === 3 &&
+          Math.abs(Number(surface.height) - height / 60) < 0.00001 &&
+          legend.world.id !== state.worldReference.id &&
+          style.x === 0 &&
+          style.y === 0 &&
+          legend.surface === "FlatSurface",
+        `${chart.id}: centered flat legend sits beside the front XY face and inherits the rotated chart Transform`,
+      );
+      chartCheck(
+        legend.inspection.canvas?.evaluated?.extent[0] === 180 &&
+          legend.inspection.canvas.evaluated.extent[1] === height,
+        `${chart.id}: the real flat Surface presents its complete legend Canvas`,
+      );
+    }
+    chartCheck(
+      legendFields(chart, `${legend.id}/title`, "text").text === legend.title,
+      `${chart.id}: legend title is real Canvas text`,
+    );
+    if (legend.entries) {
+      for (const [index, entry] of legend.entries.entries()) {
+        chartCheck(
+          entry.color.every(
+            (value, channel) =>
+              Math.abs(value - categoryColors[index % 4]![channel]!) < 0.00001,
+          ) &&
+            legendFields(
+              chart,
+              `${legend.id}/entry/${encodeURIComponent(entry.id)}/label`,
+              "text",
+            ).text === entry.label,
+          `${chart.id}: stable categories label the independently expected palette`,
+        );
+      }
+    } else {
+      chartCheck(
+        legend.scale?.min === 0 &&
+          legend.scale.max === 4 &&
+          legendFields(chart, `${legend.id}/min`, "text").text === "0.0 M" &&
+          legendFields(chart, `${legend.id}/max`, "text").text === "4.0 M",
+        `${chart.id}: height legend labels its fixed numeric endpoint range`,
+      );
+    }
+    const source = legendFields(chart, `${legend.id}/title`, "text").source;
+    chartCheck(
+      legend.inspection.resources.some(
+        (resource) =>
+          resource.source === source &&
+          resource.status === "loaded" &&
+          resource.representation.decoded,
+      ),
+      `${chart.id}: actual legend font is decoded across the World boundary`,
+    );
+  }
+}
+
+export function assertHeightBindingColors(state: GalleryChartsState) {
+  const chart = state.charts.find((chart) => chart.id === "height-surface")!;
+  const heightColumn = chart.binding.columns.findIndex(
+      (column) => column.name === "y",
+    ),
+    colorColumn = chart.binding.columns.findIndex(
+      (column) => column.name === "color",
+    );
+  for (const row of chart.binding.rows) {
+    const height = row.values[heightColumn],
+      color = row.values[colorColumn];
+    if (!height?.valid) {
+      chartCheck(
+        color?.valid && color.value.kind === "vec4",
+        "An intentional height gap retains its independent source color",
+      );
+      continue;
+    }
+    chartCheck(
+      height?.valid &&
+        height.value.kind === "f32" &&
+        color?.valid &&
+        color.value.kind === "vec4",
+      "Height samples retain actual numeric values and source colors",
+    );
+    chartCheck(
+      color.value.value.every(
+        (value, channel) =>
+          Math.abs(
+            value - expectedHeightColor(height.value.value as number)[channel]!,
+          ) < 0.00001,
+      ),
+      "Height binding color independently matches its numeric scale, including source edits and live arrivals",
+    );
+  }
+}
+
+export function assertChartLegendPixels(
+  frame: ChartImage,
+  state: GalleryChartsState,
+  id: string,
+) {
+  const chart = state.charts.find((chart) => chart.id === id)!;
+  const legend = chart.legend,
+    root = legendFields(chart, legend.id, "scale_x"),
+    aspect = frame.width / frame.height;
+  const probes = (legend.entries ?? []).map((entry) => {
+    const probe = {
+      id: `${legend.id}/entry/${encodeURIComponent(entry.id)}/swatch`,
+      color: entry.color,
+    };
+    const style = legendFields(chart, probe.id, "scale_x"),
+      box = legendFields(chart, probe.id, "width");
+    return probeChartColor(
+      frame,
+      legendPoint(
+        state,
+        chart,
+        Number(root.x) + Number(style.x) + Number(box.width) / 2,
+        Number(root.y) + Number(style.y) + Number(box.height) / 2,
+        aspect,
+      ),
+      probe.color,
+      probe.id,
+    );
+  });
+  const ramp = legend.scale
+    ? assertNumericLegendPixels(frame, state, chart)
+    : null;
+  // Check the complete panel, including its title lane, rather than only a
+  // central mark. This also exercises the gallery's deliberately narrow canvas.
+  for (const [x, y] of [
+    [Number(root.x), Number(root.y)],
+    [
+      Number(root.x) + Number(root.clip_max_x),
+      Number(root.y) + Number(root.clip_max_y),
+    ],
+  ]) {
+    const point = legendPoint(state, chart, x!, y!, aspect);
+    chartCheck(
+      point.x > 0.01 && point.x < 0.99 && point.y > 0.01 && point.y < 0.99,
+      `${id}: focus retains the whole legend inside the actual viewport`,
+    );
+  }
+  if (id === "bars") {
+    const xColumn = chart.binding.columns.findIndex(
+        (column) => column.name === "x",
+      ),
+      yColumn = chart.binding.columns.findIndex(
+        (column) => column.name === "y",
+      );
+    const heights = chart.binding.rows.flatMap((row) => {
+      const x = row.values[xColumn],
+        y = row.values[yColumn];
+      return x?.valid &&
+        x.value.kind === "f32" &&
+        x.value.value === 2 &&
+        y?.valid &&
+        y.value.kind === "f32"
+        ? [y.value.value]
+        : [];
+    });
+    chartCheck(heights.length > 0, "Category two retains an actual bar sample");
+    probes.push(
+      probeChartColor(
+        frame,
+        baselineBarPointer(state, aspect, 2, Math.min(...heights) / 2),
+        categoryColors[1],
+        "bars source row two",
+      ),
+    );
+  }
+  if (id === "grid-bars")
+    probes.push(
+      probeChartColor(
+        frame,
+        baselineGridPointer(state, aspect),
+        categoryColors[1],
+        "grid source row six",
+      ),
+    );
+  if (id === "single-row")
+    probes.push(
+      probeChartColor(
+        frame,
+        baselineSingleRowPointer(state, aspect),
+        categoryColors[1],
+        "single-row source row two",
+      ),
+    );
+  if (id === "height-surface") {
+    const value = (
+      row: GalleryChartsState["charts"][number]["binding"]["rows"][number],
+      column: string,
+    ) => {
+      const cell =
+        row.values[
+          chart.binding.columns.findIndex((item) => item.name === column)
+        ];
+      chartCheck(
+        cell?.valid && cell.value.kind === "f32",
+        `Height ${column} is a valid source value`,
+      );
+      return cell.value.value;
+    };
+    const heightColumn = chart.binding.columns.findIndex(
+      (column) => column.name === "y",
+    );
+    const row = chart.binding.rows
+      .filter((row) => row.values[heightColumn]?.valid)
+      .sort((a, b) => value(b, "y") - value(a, "y"))[0]!;
+    const local = ["x", "y", "z"].map(
+      (axis, index) =>
+        ((value(row, axis) - chart.frame[`min_${axis}`]!) /
+          (chart.frame[`max_${axis}`]! - chart.frame[`min_${axis}`]!)) *
+        chart.frame[["width", "height", "depth"][index]!]!,
+    );
+    probes.push(
+      probeChartColor(
+        frame,
+        projectChartPoint(
+          state,
+          placePoint(chartTransform(state, chart), local),
+          aspect,
+        ),
+        expectedHeightColor(value(row, "y")),
+        "height surface peak shares its numeric legend color",
+      ),
+    );
+  }
+  return { id, probes, ramp };
 }
 
 export function assertChartImage(frame: ChartImage, label: string) {
@@ -295,7 +836,7 @@ function assertRingLayout(state: GalleryChartsState) {
           Math.abs(Number(surface.curvature) + 1 / state.ring.radius) < 1e-8 &&
           Math.abs(chart.surface.curvature - Number(surface.curvature)) <
             1e-8 &&
-          Number(surface.width) === 10 &&
+          Math.abs(Number(surface.width) - 13.4) < 0.00001 &&
           Number(surface.height) === 6 &&
           Number(surface.layer_spacing) === 0,
         `${chart.id}: actual cylindrical fields share the arrangement radius and physical extent`,
@@ -325,23 +866,30 @@ function assertRingLayout(state: GalleryChartsState) {
         }
       }
       chartCheck(
-        Math.abs(chartSurfaceLocalPoint(state, 5, 0)[2]! - 0.445244) < 0.001,
+        Math.abs(chartSurfaceLocalPoint(state, 6.7, 0)[2]! - 0.797778) < 0.001,
         `${chart.id}: panel edge sag uses radius28 rather than a visually exaggerated radius`,
       );
     }
-    const size = chart.surface
-      ? [chart.surface.width, chart.surface.height, 0]
-      : [chart.frame.width!, chart.frame.height!, chart.frame.depth ?? 0];
+    // A 13.4 × 10 metre footprint encloses every chart and its legend. Compare
+    // oriented rectangles: bounding circles discard the inward-facing layout.
+    const footprint = [
+      [-6.7, -5],
+      [6.7, -5],
+      [6.7, 5],
+      [-6.7, 5],
+    ].map(([x, z]) => {
+      const point = placePoint(fields, [
+        chart.localCenter[0]! + x!,
+        0,
+        chart.localCenter[2]! + z!,
+      ]);
+      return [point[0]!, point[2]!] as const;
+    });
     return {
       id: chart.id,
       center,
       angle: (Math.atan2(delta[2]!, delta[0]!) + 2 * Math.PI) % (2 * Math.PI),
-      extent:
-        Math.hypot(
-          ...size.map(
-            (value, i) => value * Number(fields[["sx", "sy", "sz"][i]!]),
-          ),
-        ) / 2,
+      footprint,
     };
   });
   const ordered = [...exhibits].sort((a, b) => a.angle - b.angle);
@@ -370,10 +918,7 @@ function assertRingLayout(state: GalleryChartsState) {
     for (let j = i + 1; j < ordered.length; j++) {
       const a = ordered[i]!,
         b = ordered[j]!;
-      const clearance =
-        Math.hypot(...a.center.map((value, axis) => value - b.center[axis]!)) -
-        a.extent -
-        b.extent;
+      const clearance = footprintClearance(a.footprint, b.footprint);
       chartCheck(
         clearance > 1,
         `${a.id}/${b.id}: chart volumes have clear space between them`,
@@ -390,6 +935,56 @@ function assertRingLayout(state: GalleryChartsState) {
     minimumClearance,
     closest,
   };
+}
+
+function footprintClearance(
+  a: readonly (readonly number[])[],
+  b: readonly (readonly number[])[],
+) {
+  const edges = (polygon: readonly (readonly number[])[]) =>
+    polygon.map(
+      (point, index) =>
+        [point, polygon[(index + 1) % polygon.length]!] as const,
+    );
+  const separated = [...edges(a), ...edges(b)].some(([from, to]) => {
+    const axis = [to[1]! - from[1]!, from[0]! - to[0]!];
+    const projected = (polygon: readonly (readonly number[])[]) =>
+      polygon.map((point) => point[0]! * axis[0]! + point[1]! * axis[1]!);
+    const pa = projected(a),
+      pb = projected(b);
+    return (
+      Math.max(...pa) < Math.min(...pb) || Math.max(...pb) < Math.min(...pa)
+    );
+  });
+  if (!separated) return 0;
+  const distance = (
+    point: readonly number[],
+    from: readonly number[],
+    to: readonly number[],
+  ) => {
+    const dx = to[0]! - from[0]!,
+      dy = to[1]! - from[1]!;
+    const t = Math.max(
+      0,
+      Math.min(
+        1,
+        ((point[0]! - from[0]!) * dx + (point[1]! - from[1]!) * dy) /
+          (dx * dx + dy * dy),
+      ),
+    );
+    return Math.hypot(
+      point[0]! - from[0]! - t * dx,
+      point[1]! - from[1]! - t * dy,
+    );
+  };
+  return Math.min(
+    ...a.flatMap((point) =>
+      edges(b).map(([from, to]) => distance(point, from, to)),
+    ),
+    ...b.flatMap((point) =>
+      edges(a).map(([from, to]) => distance(point, from, to)),
+    ),
+  );
 }
 
 function samePresentation(a: GalleryChartsState, b: GalleryChartsState) {
@@ -454,6 +1049,19 @@ export async function focusChart(driver: GalleryChartsDriver, id: string) {
 export async function exerciseGalleryCharts(driver: GalleryChartsDriver) {
   const initial = await driver.inspect();
   assertNoChartAnimation(initial);
+  assertChartLegendState(initial);
+  assertHeightBindingColors(initial);
+  const terrain = initial.charts.find(
+      (chart) => chart.id === "height-surface",
+    )!,
+    terrainY = terrain.binding.columns.findIndex(
+      (column) => column.name === "y",
+    );
+  chartCheck(
+    terrain.binding.rows.filter((row) => !row.values[terrainY]?.valid)
+      .length === 1,
+    "The fixed surface retains its intentional missing-height sample",
+  );
   await driver.record("charts-initial", initial);
   const center = await driver.capture("ring-center");
   assertChartImage(center, "ring center");
@@ -520,6 +1128,18 @@ export async function exerciseGalleryCharts(driver: GalleryChartsDriver) {
     ),
     "Every chart belongs to its reported runtime World",
   );
+  const singleRow = initial.charts.find((chart) => chart.id === "single-row")!;
+  const barDepth = singleRow.inspection.entities
+    .find((entity) => entity.id === singleRow.entity)
+    ?.components.find((component) => "bar_depth" in component.fields)
+    ?.fields.bar_depth;
+  chartCheck(
+    singleRow.frame.depth === 2 &&
+      singleRow.frame.min_z === -1 &&
+      singleRow.frame.max_z === 1 &&
+      Number(barDepth) === 1.5,
+    "The single-row frame is two metres deep and encloses one centred 1.5 metre bar row with 0.25 metre margins",
+  );
   chartCheck(
     !initial.selectedSystems.includes("ipp.canvas") &&
       initial.world.canvas === null,
@@ -534,11 +1154,11 @@ export async function exerciseGalleryCharts(driver: GalleryChartsDriver) {
       .map((component) => ({ entity, fields: component.fields })),
   );
   chartCheck(
-    attachments.length === 5 &&
+    attachments.length === 10 &&
       attachments.every(
         ({ fields }) => Number(fields.mode) === 1 && fields.output === null,
       ),
-    "Five SurfaceCanvas attachments present the curved Canvas exhibits",
+    "SurfaceCanvas attachments present five curved charts and five spatial legends",
   );
   for (const chart of canvas) {
     const attachment = attachments.find(
@@ -553,7 +1173,7 @@ export async function exerciseGalleryCharts(driver: GalleryChartsDriver) {
     chartCheck(
       chart.selectedSystems.includes("ipp.canvas") &&
         chart.inspection.canvas?.state.unitsPerMetre === 60 &&
-        chart.inspection.canvas.evaluated?.extent[0] === 600 &&
+        chart.inspection.canvas.evaluated?.extent[0] === 804 &&
         chart.inspection.canvas.evaluated.extent[1] === 360,
       `${chart.id}: Surface presentation supplies the Canvas extent`,
     );
@@ -680,6 +1300,10 @@ export async function exerciseGalleryCharts(driver: GalleryChartsDriver) {
     const focused = await driver.capture(`charts-focus-${id}`);
     const measurement = assertFocusedChartImage(focused, id);
     await driver.record(`charts-focus-${id}-pixels`, measurement);
+    await driver.record(
+      `charts-focus-${id}-legend`,
+      assertChartLegendPixels(focused, current, id),
+    );
   }
   await focusChart(driver, "bars");
   await driver.action("navigate", { kind: "zoom", amount: 0.3 });
@@ -698,6 +1322,7 @@ export async function exerciseGalleryCharts(driver: GalleryChartsDriver) {
   assertChartImageChanged(before, after, "Fixed source edit");
   const changed = await driver.inspect();
   assertNoChartAnimation(changed);
+  assertHeightBindingColors(changed);
   for (const chart of changed.charts) {
     const original = initial.charts.find((item) => item.id === chart.id)!;
     chartCheck(
@@ -795,16 +1420,16 @@ export function baselineBarPointer(
     object,
     chartSurfaceLocalPoint(
       state,
-      (x - width / 2) / density,
-      (height / 2 - y) / density,
+      x / density - chart.surface!.width / 2,
+      chart.surface!.height / 2 - y / density,
     ),
   );
   assertChartRay(
     state,
     chart,
     point,
-    (x - width / 2) / density,
-    (height / 2 - y) / density,
+    x / density - chart.surface!.width / 2,
+    chart.surface!.height / 2 - y / density,
   );
   return projectChartPoint(state, point, aspect);
 }
@@ -953,8 +1578,11 @@ export function assertCurvedChartPixels(
     4;
   const rgb = [...frame.pixels.slice(offset, offset + 3)];
   chartCheck(
-    rgb[1]! > 120 && rgb[2]! > 180 && rgb[0]! < 70,
-    `${id}: independently projected source-row interior is cyan: ${rgb}`,
+    rgb.every(
+      (value, channel) =>
+        Math.abs(value - srgbColor(categoryColors[1])[channel]!) < 20,
+    ),
+    `${id}: independently projected source-row interior matches its orange legend category: ${rgb}`,
   );
   const silhouette = curvedSilhouetteProbe(frame, state, chart);
   return { probes, bar: { point: bar, rgb }, silhouette };
@@ -1140,7 +1768,7 @@ export function baselineSingleRowPointer(
   chartCheck(chart, "Missing single-row chart");
   return projectChartPoint(
     state,
-    placePoint(chartTransform(state, chart), [3.75, 2.5, 10 / 6]),
+    placePoint(chartTransform(state, chart), [3.75, 2.5, 1]),
     aspect,
   );
 }

@@ -38,4 +38,46 @@ import {
 
 Omitting `series`, `labels` or a component prop preserves its last authored field value. Supply an empty table with its existing `nextSlot` to remove live rows. Replacing a table is a complete field write. Column parameter animation uses the existing `Animation` declarations and `AnimationHandle` playback/seek methods; Hosts still own their clocks.
 
+## Color legends
+
+`PlotLegend` is a reusable Canvas composition for categorical swatches and labels, or a numeric color scale. It reads only caller-authored colors and ranges. Share those inputs with series colors, color-column producers or column expressions so source updates and palette edits retain the same meaning; a legend does not infer categories, query datasets or observe chart state. Colors are straight linear RGBA in `0..1`, matching Canvas tint and Plot color columns.
+
+```tsx
+import {
+  PlotLegend, plotLegendSize, plotLegendPlacement, plotColorScaleColor,
+} from "@ipp/react";
+
+const entries = [
+  { id: "sensor-a", label: "Sensor A", color: [0.1, 0.7, 1, 1] as const },
+  { id: "sensor-b", label: "Sensor B", color: [1, 0.3, 0.1, 1] as const },
+];
+const legend = { entries, title: "SENSORS", width: 180 };
+const size = plotLegendSize(legend);
+const placement = plotLegendPlacement({
+  bounds: [0, 0, 600, 320], size, yDirection: "down",
+});
+
+// In the same Canvas World, alongside the Plot entity.
+<PlotLegend id="sensor-legend" font={assetRef("font")} {...legend}
+  x={placement.canvasPosition[0]} y={placement.canvasPosition[1]} />;
+
+// An authored surface range; use the returned color in each source sample.
+const scale = {
+  min: 0, max: 100,
+  colors: [[0.1, 0.2, 1, 1], [0.1, 1, 0.4, 1], [1, 0.2, 0.1, 1]] as const,
+  format: (value: number) => `${value} °C`,
+};
+const sampleColor = plotColorScaleColor(scale, 25);
+<PlotLegend id="temperature-legend" font={assetRef("font")}
+  scale={scale} title="TEMPERATURE" />;
+```
+
+Series and category entries have stable caller IDs, so reordering or editing a label or color preserves their entities. An empty categorical key without a title declares nothing. `plotLegendSize` returns a positive extent of at least one row even for that empty key, including with zero padding; callers may omit its Surface entirely when empty. The explicit width bounds each label, using Canvas clipping rather than guessing font advances; increase the width for longer text. Text occupies one row and any overflow is clipped. Numeric scales require at least two colors, equally spaced over a finite increasing range; `plotColorScaleColor` clamps finite values to its endpoints and interpolates every RGBA channel. The legend presents that scale using 32 retained vertical strips, with the maximum label at the top and minimum label at the bottom, to the ramp's right. A title or endpoint formatter can state the units.
+
+Placement uses ordered numeric bounds `[minX, minY, maxX, maxY]`, the legend size and gap in the same units. The default gap is one tenth of the legend width, so it scales with logical Canvas units or scene metres. Its default side is the opposite horizontal side of a bottom-left origin: right and vertically centered. `origin` also accepts bottom-right, top-left and top-right; `side` explicitly chooses left, right, top or bottom. Use `yDirection="down"` for Canvas placement and `"up"` for scene XY. The returned `bounds` and `center` stay in that coordinate space; `canvasPosition` names its top-left corner. Include the legend bounds when framing or focusing the chart.
+
+For a 3D chart, derive the size in metres from the Canvas logical size and density, then call the helper with the chart's local XY bounds and `yDirection="up"`. Place an ordinary `FlatSurface` at the returned `center`, and author `PlotLegend` at `[0, 0]` in its attached `CanvasWorld`; the Surface maps +Y-down Canvas content to +Y-up scene XY. Parent or transform the chart and Surface together to retain the chart-local plane. A 2D legend already belongs to its chart's Canvas World, including when that Canvas is presented on a curved Surface; expand that Surface's content extent to include the legend.
+
+The legend creates no Worlds, assets, subscriptions or animation controllers. Supply a font in the containing root's asset scope. Removing its declarations deletes their ordinary entities; unmount follows the root contract and preserves authored state. A caller-owned `CanvasWorld` retains its existing creation and removal rules.
+
 The [chart showcase](../../../examples/chart-showcase/README.md) uses these declarations with actual Data Service sources and native rendering. The maintained [React Plot scenario](../../../tests/integration/scenarios/react-plots.ts) supplies source, parameter-animation and completed-frame assertions for the combined Plot integration suite.

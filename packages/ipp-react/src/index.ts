@@ -374,6 +374,25 @@ export {
   PlotPoints3d,
   PlotPie3d,
 } from "./plots.js";
+
+export {
+  PlotLegend,
+  plotLegendSize,
+  plotLegendPlacement,
+  plotColorScaleColor,
+} from "./plot-legend.js";
+export type {
+  PlotLegendColor,
+  PlotLegendEntry,
+  PlotColorScale,
+  PlotLegendContent,
+  PlotLegendStyle,
+  PlotLegendProps,
+  PlotLegendSide,
+  PlotLegendOrigin,
+  PlotLegendPlacementOptions,
+  PlotLegendPlacement,
+} from "./plot-legend.js";
 export type {
   PlotContract,
   PlotSeries,

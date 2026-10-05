@@ -176,7 +176,7 @@ impl<D: RenderDevice> RenderService<D> {
                     .prepare(width, height)
                     .map(|camera| camera.view_projection),
             );
-            self.draw_items(&scene, &scene.items, camera, prepass, viewport)
+            self.draw_items(&scene, camera, prepass, viewport, presentation_time)
         });
         let finish = self.device.borrow_mut().end_frame();
         #[cfg(feature = "instrumentation")]
@@ -216,17 +216,23 @@ impl<D: RenderDevice> RenderService<D> {
     pub(super) fn draw_items(
         &mut self,
         world: &RenderScene<'_>,
-        items: &[SceneItem<'_>],
         camera: Option<Result<[f32; 16], ipp_core::ErrorReason>>,
         prepass: RenderFrameWork,
         viewport: ipp_core::WorldViewport,
+        presentation_time: f64,
     ) -> Result<RenderFrameWork, RenderError> {
         #[cfg(feature = "instrumentation")]
         let _allocation_scope = ipp_core::profiling::AllocationScope::new(210, "gl.draw");
 
         let mut scratch = std::mem::take(&mut self.frame_scratch);
-        let result =
-            self.draw_prepared_items(world, items, camera, prepass, viewport, &mut scratch);
+        let result = self.draw_prepared_items(
+            world,
+            camera,
+            prepass,
+            viewport,
+            presentation_time,
+            &mut scratch,
+        );
         // Return capacity even after device errors; no borrowed data is retained.
         scratch.clear();
         self.frame_scratch = scratch;
@@ -236,12 +242,13 @@ impl<D: RenderDevice> RenderService<D> {
     fn draw_prepared_items(
         &mut self,
         world: &RenderScene<'_>,
-        items: &[SceneItem<'_>],
         camera: Option<Result<[f32; 16], ipp_core::ErrorReason>>,
         prepass: RenderFrameWork,
         viewport: ipp_core::WorldViewport,
+        presentation_time: f64,
         scratch: &mut RenderFrameScratch,
     ) -> Result<RenderFrameWork, RenderError> {
+        let items = &world.items;
         let view_projection = match camera {
             None => {
                 self.clear_shadows();
@@ -263,16 +270,20 @@ impl<D: RenderDevice> RenderService<D> {
         {
             self.particle_quad = Some(super::super::particles::quad(self.device.clone())?);
         }
-        let plot_planes = self
-            .plot_label_layouts
-            .entry(world.selection)
-            .or_default()
-            .arrange(&world.plot_planes, view_projection, viewport);
         let camera_model = world
             .camera
             .pose
             .render_matrix()
             .map_err(|_| RenderError::InvalidTransform)?;
+        let layout = self.plot_label_layouts.entry(world.selection).or_default();
+        let placed_planes = layout.place_axes(
+            &world.plot_planes,
+            camera_model,
+            view_projection,
+            viewport,
+            presentation_time,
+        )?;
+        let plot_planes = layout.arrange(&placed_planes, view_projection, viewport);
         let frustum = ipp_core::systems::geometry::frustum_planes(view_projection);
         // Cache repaints ran before `begin_frame`; their draws count here.
         let mut stats = prepass;

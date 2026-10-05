@@ -123,7 +123,7 @@ pub enum PlotPlanePlacement {
         /// Normal axis X/Y/Z (0/1/2).
         normal: u8,
     },
-    /// Preserve coordinates; X/Z use visible floor edges, Y uses the rear corner.
+    /// Preserve increasing coordinates on selected-view enclosure edges.
     Axis {
         /// Physical chart enclosure.
         extent: [f32; 3],

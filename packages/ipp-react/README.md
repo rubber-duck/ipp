@@ -55,6 +55,8 @@ await root.unmount();
 
 [Typed Plot declarations](src/plots.md) compose a data binding, frame and chart on one Entity, preserving source-row label identities and stable series slots through the receiving target's generated row codec. The [native chart showcase](../../examples/chart-showcase/README.md) authors both reference studies with real sources and Host-controlled parameter animation.
 
+`PlotLegend` composes a caller-authored categorical key or numeric color scale from ordinary Canvas leaves. Its placement helper keeps the key outside chart bounds in canvas coordinates or a scene's local XY plane; callers retain ownership of the chart, Surface and Canvas World. [The Plot authoring guide](src/plots.md#color-legends) explains shared color mapping and composition.
+
 ## Declaration roots
 
 Connect a matching generated client:

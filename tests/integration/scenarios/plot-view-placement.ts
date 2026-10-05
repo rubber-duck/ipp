@@ -1,10 +1,6 @@
 /** Real transported, completed-frame evidence for camera-only Plot presentation. */
-import type {
-  Client,
-  HostClientBase,
-  PickingWorldClient,
-  RootBinding,
-} from "@ipp/client";
+import type { Client, HostClientBase, PickingWorldClient } from "@ipp/client";
+import type { PlotCapture } from "../plot-capture.js";
 import {
   openPlot3d,
   readyPlot3d,
@@ -28,7 +24,7 @@ interface Frame {
   readonly pixels: Uint8Array;
 }
 
-type Capture = (label: string, binding: RootBinding) => Promise<Frame>;
+type Capture = PlotCapture;
 type RecordResult = (label: string, value: unknown) => Promise<void>;
 export interface PlotOffscreenCase {
   width: 427 | 1280;
@@ -244,13 +240,42 @@ function farGridPixels(frame: Frame, eye: readonly number[]) {
 
 /** Numeric ink must stay beside the actual visible vertical tick station. */
 function verticalTickPixels(frame: Frame, eye: readonly number[]) {
-  // Pick the left outer edge from independently projected fixture corners.
-  // The fixed grid-bar frame is 10 x 5 x 10, with five 0..100 tick labels.
-  const corners = [0, 10].flatMap((x) =>
-    [0, 10].map((z) => ({ x, z, screen: projected([x, 0, z], eye) })),
-  );
-  corners.sort((a, b) => a.screen.x - b.screen.x);
-  const edge = corners[0]!;
+  // The standard front-left upright remains preferred while sufficiently
+  // visible. A camera turn alone does not force its labels to another corner.
+  const edge = { x: 0, z: 10 };
+  const origin = projected([edge.x, 0, edge.z], eye);
+  const fontSpan =
+    Math.abs(projected([0.27, 0, edge.z], eye).x - origin.x) * frame.width;
+  const side = origin.x < projected([5, 2.5, 5], eye).x ? -1 : 1;
+  const pale = (x: number, y: number) => {
+    if (x < 0 || y < 0 || x >= frame.width || y >= frame.height) return false;
+    const index = (y * frame.width + x) * 4;
+    return (
+      frame.pixels[index]! > 100 &&
+      frame.pixels[index + 1]! > 150 &&
+      frame.pixels[index + 2]! > 150
+    );
+  };
+  // Uncrowded intermediate Y stations identify their common numeric lane.
+  // Endpoint crops then exclude the X/Z values sharing the enclosure corners.
+  // Both sides use the same compact search measured in authored font units.
+  const lane = { min: Infinity, max: -Infinity };
+  for (const tick of [1, 2, 3]) {
+    const screen = projected([edge.x, (tick * 5) / 4, edge.z], eye);
+    const x = Math.round(screen.x * frame.width),
+      y = Math.round(screen.y * frame.height);
+    for (let py = y - 14; py <= y + 18; py++)
+      for (
+        let offset = Math.ceil(fontSpan * 0.5);
+        offset <= Math.ceil(fontSpan * 4.5);
+        offset++
+      )
+        if (pale(x + side * offset, py)) {
+          lane.min = Math.min(lane.min, offset);
+          lane.max = Math.max(lane.max, offset);
+        }
+  }
+  check(Number.isFinite(lane.min), "Uncrowded Y numeric lane has no glyph ink");
   const ticks = Array.from({ length: 5 }, (_, tick) => {
     const station = [edge.x, (tick * 5) / 4, edge.z];
     const screen = projected(station, eye);
@@ -259,18 +284,10 @@ function verticalTickPixels(frame: Frame, eye: readonly number[]) {
     let ink = 0;
     let firstInk = Infinity,
       lastInk = -Infinity;
-    // Physical font size 0.27 maps to 12px here. Exclude the axis line itself
-    // and cyan geometry; count pale numeric ink in the short outward lane.
     for (let py = y - 14; py <= y + 18; py++) {
-      for (let px = x - 54; px <= x - 5; px++) {
-        if (px < 0 || py < 0 || px >= frame.width || py >= frame.height)
-          continue;
-        const i = (py * frame.width + px) * 4;
-        if (
-          frame.pixels[i]! > 100 &&
-          frame.pixels[i + 1]! > 150 &&
-          frame.pixels[i + 2]! > 150
-        ) {
+      for (let offset = lane.min - 1; offset <= lane.max + 1; offset++) {
+        const px = x + side * offset;
+        if (pale(px, py)) {
           ink++;
           firstInk = Math.min(firstInk, py);
           lastInk = Math.max(lastInk, py);
@@ -283,7 +300,7 @@ function verticalTickPixels(frame: Frame, eye: readonly number[]) {
       Math.abs(centerError) <= 3,
       `Vertical tick ${tick * 25} numeric center is offset by ${centerError}px`,
     );
-    return { value: tick * 25, station, screen, ink, centerError };
+    return { value: tick * 25, station, screen, lane, ink, centerError };
   });
   return ticks;
 }
@@ -392,7 +409,11 @@ async function offscreenLabels(
     await placeCamera(scene, eye);
     const name = `offscreen-${extent.width}-${index}`;
     await move([10000, 0, 0]);
-    const baseline = await capture(`${name}-reference`, binding);
+    const baseline = await capture.afterMotion(
+      `${name}-reference`,
+      binding,
+      chart.client,
+    );
     // Positive control proves the new label fixture actually renders.
     await move([5, 7, 5]);
     const visible = await capture(`${name}-visible-control`, binding);
@@ -475,7 +496,11 @@ export async function exercisePlotViewPlacement(
       await readyPlot3d(scene);
       for (const name of families) {
         const chart = scene.charts.find((entry) => entry.name === name)!;
-        const frame = await capture(`${view.name}-${name}`, chart.binding);
+        const frame = await capture.afterMotion(
+          `${view.name}-${name}`,
+          chart.binding,
+          chart.client,
+        );
         const count = colors(frame);
         check(count.cyan > 100, `${view.name}/${name}: no data geometry`);
         if (name === "grid-bars") {

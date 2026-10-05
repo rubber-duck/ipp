@@ -1,5 +1,6 @@
 /** Real view-local axis stations around an edge-on support tie. */
-import type { Client, HostClientBase, RootBinding } from "@ipp/client";
+import type { Client, HostClientBase } from "@ipp/client";
+import type { PlotCapture } from "../plot-capture.js";
 import {
   openPlot3d,
   readyPlot3d,
@@ -40,12 +41,22 @@ function white(frame: Frame, x: number, y: number) {
 }
 
 /** These fixed 0..4 values are single glyphs beside the upright axis. */
-function numericTickInk(frame: Frame, screen: readonly number[]) {
+function numericTickInk(
+  frame: Frame,
+  screen: readonly number[],
+  fontSpan: number,
+) {
   const x = Math.round(screen[0]!),
     y = Math.round(screen[1]!);
   const columns = new Map<number, number[]>();
   for (let py = y - 14; py <= y + 18; py++)
-    for (let px = x - 54; px <= x - 5; px++)
+    // This projected font lane excludes the neighbouring Z endpoint at the
+    // shared upper corner, without excluding or shifting the Y endpoint.
+    for (
+      let px = x - Math.ceil(fontSpan * 4.5);
+      px <= x - Math.ceil(fontSpan * 2);
+      px++
+    )
       if (white(frame, px, py)) {
         const column = columns.get(px) ?? [];
         column.push(py);
@@ -93,7 +104,7 @@ export async function exercisePlotAxisSupport(
   host: HostClientBase<Client>,
   contract: Plot3dContract,
   font: Uint8Array<ArrayBuffer>,
-  capture: (label: string, binding: RootBinding) => Promise<Frame>,
+  capture: PlotCapture,
   record: (label: string, value: unknown) => Promise<void>,
   transformed: boolean,
 ) {
@@ -164,7 +175,7 @@ export async function exercisePlotAxisSupport(
         qz: -sy * sx,
         qw: cy * cx,
       });
-      const frame = await capture(label, binding);
+      const frame = await capture.afterMotion(label, binding, chart.client);
       // Independently project authored frame stations; do not read the renderer's
       // selected support edge, model matrices or label-layout metadata.
       const project = (point: readonly number[]) => {
@@ -184,10 +195,11 @@ export async function exercisePlotAxisSupport(
     const stations = (view: Awaited<ReturnType<typeof render>>, z: number) => {
       return Array.from({ length: 5 }, (_, tick) => {
         const screen = view.project([0, (tick * 5) / 4, z]);
+        const fontSpan = Math.abs(view.project([0.27, 0, z])[0]! - screen[0]!);
         return {
           value: tick,
           screen,
-          ...numericTickInk(view.frame, screen),
+          ...numericTickInk(view.frame, screen, fontSpan),
         };
       });
     };
@@ -202,28 +214,28 @@ export async function exercisePlotAxisSupport(
       // Both Z supports have effectively identical screen support at the tie;
       // the near edge keeps its upright and labels clear of the surface.
       const values = stations(view, 10);
-      const right = Math.ceil(view.project([10, 0, 10])[0]!);
-      const floorEnds = [0, 10].map((z) => view.project([10, 0, z])[1]!);
-      // Isolate the outward title lane beside the floor: exclude the selected
-      // annotation above it and the X endpoint tick at the shared corner.
-      let floorTitleInk = 0;
+      const left = Math.floor(view.project([0, 5, 10])[0]!);
+      const upperEnds = [0, 10].map((z) => view.project([0, 5, z])[1]!);
+      // Z now owns the upper-left enclosure edge. Its outward label lane stays
+      // beside that edge while Y retains the front-left upright.
+      let upperTitleInk = 0;
       for (
-        let y = Math.floor(Math.min(...floorEnds)) - 20;
-        y <= Math.ceil(Math.max(...floorEnds)) + 20;
+        let y = Math.floor(Math.min(...upperEnds)) - 20;
+        y <= Math.ceil(Math.max(...upperEnds)) + 20;
         y++
       )
-        for (let x = right + 26; x < view.frame.width; x++)
-          if (white(view.frame, x, y)) floorTitleInk++;
+        for (let x = 0; x < left - 26; x++)
+          if (white(view.frame, x, y)) upperTitleInk++;
       await record(view.label, {
         transformed,
         turn: view.turn,
         z: 10,
         values,
-        floorTitleInk,
+        upperTitleInk,
       });
       check(
-        floorTitleInk >= 50,
-        `${view.label}: Z annotations jumped away from the right floor edge`,
+        upperTitleInk >= 50,
+        `${view.label}: Z annotations left the upper-left enclosure edge`,
       );
       for (const tick of values) {
         check(
@@ -241,7 +253,7 @@ export async function exercisePlotAxisSupport(
         `axis-normal-${turn < 0 ? "negative" : "positive"}`,
         turn,
       );
-      const z = turn < 0 ? 0 : 10;
+      const z = 10;
       const values = stations(view, z);
       await record(view.label, { transformed, turn, z, values });
       for (const tick of values)

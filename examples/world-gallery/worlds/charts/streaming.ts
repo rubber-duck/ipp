@@ -1,6 +1,7 @@
 import type { DatasetValue } from "@ipp/client";
-import type { DataWindow } from "@ipp/react";
+import { plotColorScaleColor, type DataWindow } from "@ipp/react";
 import { CHART_SCHEMA, chartData, type ChartSpec } from "./catalog.js";
+import { CHART_HEIGHT_SCALE, chartCategoryColor } from "./colors.js";
 
 export type ChartDataMode = "buffer" | "streaming";
 export type ChartWindow = "count" | "time";
@@ -80,13 +81,20 @@ export function streamRows(
       const x = (Math.floor(i / 9) * 10) / 8,
         z = ((i % 9) * 10) / 8;
       const peak = 3 + Math.sin(elapsed) * 1.5;
+      const height =
+        0.3 +
+        2.5 * Math.exp(-((x - peak) ** 2 + (z - 4) ** 2) / 5) +
+        2 * Math.exp(-((x - 7.5) ** 2 + (z - 7.5) ** 2) / 4);
       return timed(
         chartData(
           x,
-          0.3 +
-            2.5 * Math.exp(-((x - peak) ** 2 + (z - 4) ** 2) / 5) +
-            2 * Math.exp(-((x - 7.5) ** 2 + (z - 7.5) ** 2) / 4),
+          height,
           z,
+          height,
+          1,
+          1,
+          0.5,
+          plotColorScaleColor(CHART_HEIGHT_SCALE, height),
         ),
       );
     });
@@ -112,6 +120,11 @@ export function streamRows(
         flat ? i + 1 : i % 4,
         55 + 25 * Math.sin(elapsed * 2 + i),
         spec.id === "grid-bars" ? Math.floor(i / 4) : 0,
+        0,
+        1,
+        1,
+        0.5,
+        chartCategoryColor(i),
       ),
     );
   });

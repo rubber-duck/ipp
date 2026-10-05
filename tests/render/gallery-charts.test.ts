@@ -31,7 +31,7 @@ test("unified charts retain fixed samples with free camera angles, two second fo
     async (scenario) => {
       const g = await openGallery(scenario);
       await g.navigate("charts");
-      assert.equal((await g.call<string[]>("galleryWorlds")).length, 6);
+      assert.equal((await g.call<string[]>("galleryWorlds")).length, 11);
       const driver: GalleryChartsDriver = {
         inspect: () => g.call<GalleryChartsState>("gallerySceneState"),
         action: (name, args) => g.call("gallerySceneAction", name, args),
@@ -43,6 +43,9 @@ test("unified charts retain fixed samples with free camera angles, two second fo
               "ring-whole",
               "charts-focus-straight",
               "charts-focus-grid-bars",
+              "charts-focus-bars",
+              "charts-focus-single-row",
+              "charts-focus-height-surface",
               "charts-free-angle",
               "charts-inward-oblique",
             ].includes(label)
@@ -188,7 +191,7 @@ test("unified charts retain fixed samples with free camera angles, two second fo
       assert.equal(reentered.hover, null);
       assert.equal(reentered.selection, null);
       assert.equal(reentered.world.controllers?.length ?? 0, 0);
-      assert.equal((await g.call<string[]>("galleryWorlds")).length, 6);
+      assert.equal((await g.call<string[]>("galleryWorlds")).length, 11);
       await g.capture("charts-reentered");
       assertCenterCamera(reentered);
       let centerPose = reentered.camera.transform;
@@ -349,7 +352,7 @@ test("gallery streaming controls retain real windows, expire source rows and rel
         assert.equal(state.data.mode, "buffer");
         assert.equal(state.selection, null);
         assert.equal(state.hover, null);
-        assert.equal((await g.call<string[]>("galleryWorlds")).length, 6);
+        assert.equal((await g.call<string[]>("galleryWorlds")).length, 11);
         assertCenterCamera(state);
         await driver.record(`stream-reentry-${pass}`, state);
       }

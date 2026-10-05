@@ -18,6 +18,7 @@ import {
 
 import {
   exerciseStreamingCharts,
+  prepareStreamingChartLifecycle,
   type StreamingChartsState,
   type StreamingChartsDriver,
 } from "../integration/scenarios/gallery-chart-streaming.js";
@@ -317,8 +318,8 @@ test("native unified charts retain fixed samples, focus and pick World-qualified
       );
       assert.equal(
         (await worlds()).length,
-        6,
-        "The root camera scene owns five Canvas chart children",
+        11,
+        "The root camera scene owns five Canvas charts and five spatial legend children",
       );
       const chartsDriver: GalleryChartsDriver = {
         inspect: async () =>
@@ -343,7 +344,7 @@ test("native unified charts retain fixed samples, focus and pick World-qualified
       await exerciseChartRow(chartsDriver, 720 / 480);
       const previous = (await worlds())[0]!;
       await driver.call("reload", [], signal);
-      assert.equal((await worlds()).length, 6);
+      assert.equal((await worlds()).length, 11);
       assert.notEqual((await worlds())[0]!.id, previous.id);
       await driver.capture(join(directory, "charts-reloaded"), signal);
       await driver.close();
@@ -377,7 +378,34 @@ test("native gallery explains missing saved asset mappings before creating a Wor
   );
 });
 
-test("native gallery streams bounded data windows, expires picked rows and disposes sources on reload", {
+function streamingChartsDriver(
+  driver: NativeGalleryDriver,
+  directory: string,
+  signal: AbortSignal,
+  record: (kind: string, value: unknown) => Promise<void>,
+): StreamingChartsDriver {
+  return {
+    inspect: async () =>
+      (await driver.call("inspect", [], signal)).report
+        .state as unknown as StreamingChartsState,
+    action: (name, args) =>
+      driver.call(
+        "action",
+        [name, ...(args === undefined ? [] : [JSON.stringify(args)])],
+        signal,
+      ),
+    capture: (label) => driver.capture(join(directory, label), signal),
+    record: async (label, value) => {
+      await writeFile(
+        join(directory, `${label}.json`),
+        `${JSON.stringify(value, (_key, item) => (typeof item === "bigint" ? String(item) : item), 2)}\n`,
+      );
+      await record(label, { artifact: `${label}.json` });
+    },
+  };
+}
+
+test("native gallery streams bounded data windows and expires picked rows", {
   timeout: 150_000,
 }, async (context) => {
   await runGallery(
@@ -389,38 +417,64 @@ test("native gallery streams bounded data windows, expires picked rows and dispo
         ["--width", "720", "--height", "480"],
         signal,
       );
-      const charts: StreamingChartsDriver = {
-        inspect: async () =>
-          (await driver.call("inspect", [], signal)).report
-            .state as unknown as StreamingChartsState,
-        action: (name, args) =>
-          driver.call(
-            "action",
-            [name, ...(args === undefined ? [] : [JSON.stringify(args)])],
-            signal,
-          ),
-        capture: (label) => driver.capture(join(directory, label), signal),
-        record: async (label, value) => {
-          await writeFile(
-            join(directory, `${label}.json`),
-            `${JSON.stringify(value, (_key, item) => (typeof item === "bigint" ? String(item) : item), 2)}\n`,
-          );
-          await record(label, { artifact: `${label}.json` });
-        },
-      };
+      const charts = streamingChartsDriver(driver, directory, signal, record);
       const result = await exerciseStreamingCharts(charts, 720 / 480);
+      for (const name of result.sourceNames)
+        await assert.rejects(readDataset(name), /^Error: MissingSource$/);
+      const finalSources = (await charts.inspect()).data.sources.map(
+        (source) => source.name,
+      );
+      await driver.close();
+      assert.equal((await worlds()).length, 0);
+      for (const name of finalSources)
+        await assert.rejects(readDataset(name), /^Error: MissingSource$/);
+    },
+  );
+});
+
+test("native gallery reloads streaming charts and releases Worlds and sources", {
+  timeout: 150_000,
+}, async (context) => {
+  await runGallery(
+    context.signal,
+    "streaming-chart-lifecycle",
+    async ({ driver, directory, signal, worlds, readDataset, record }) => {
+      await driver.start(
+        "charts",
+        ["--width", "720", "--height", "480"],
+        signal,
+      );
+      const charts = streamingChartsDriver(driver, directory, signal, record);
+      await prepareStreamingChartLifecycle(charts);
       for (let pass = 0; pass < 2; pass++) {
+        const current = await charts.inspect();
+        const sourceNames = current.data.sources.map((source) => source.name);
         const previous = (await worlds()).map((world) => String(world.id));
         await driver.call("reload", [], signal);
         const replacements = await worlds();
-        assert.equal(replacements.length, 6);
+        assert.equal(replacements.length, 11);
         assert.ok(
           replacements.every((world) => !previous.includes(String(world.id))),
         );
-        for (const name of result.sourceNames)
+        for (const name of sourceNames)
           await assert.rejects(readDataset(name), /^Error: MissingSource$/);
         const state = await charts.inspect();
-        assert.equal(state.data.mode, "buffer");
+        assert.equal(state.data.mode, "streaming");
+        assert.equal(state.data.window, current.data.window);
+        assert.equal(state.data.feed.playing, false);
+        assert.equal(state.data.feed.inFlight, false);
+        assert.equal(state.data.feed.error, null);
+        assert.ok(
+          state.data.sources.every((source) => source.kind === "streaming"),
+        );
+        assert.ok(
+          state.charts.every(
+            (chart) =>
+              chart.sourceKind === "streaming" &&
+              chart.bindingComponent === "StreamingDataSourceBinding" &&
+              chart.binding.availability.reason === "Ready",
+          ),
+        );
         assert.equal(state.selection, null);
         assert.equal(state.hover, null);
         await charts.record(`stream-reload-${pass}`, state);
